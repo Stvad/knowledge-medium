@@ -202,8 +202,9 @@ describe('allowsBeadIds', () => {
     expect(allowsBeadIds(table)).toBe(false)
     expect(allowsIssueRefs(table)).toBe(false)
     expect(allowsIssueRefs('cd /r\nKM_ISSUE_REFS_OK=1 gh pr merge 1 --body x')).toBe(true)
-    // a bare assignment prefixes no command
+    // a bare assignment prefixes no command, however many there are
     expect(allowsIssueRefs('KM_ISSUE_REFS_OK=1; gh pr merge 1 --body x')).toBe(false)
+    expect(allowsIssueRefs('KM_ISSUE_REFS_OK=1 X=1; gh pr merge 1 --body x')).toBe(false)
   })
 
   it('ignores the marker quoted inside an argument (it would be published)', () => {
@@ -327,6 +328,8 @@ describe('the pr:reply command', () => {
     expect(matchesAnyPublish('sed -n 1,20p scripts/pr-reply.mjs')).toBe(false)
     expect(matchesAnyPublish('pnpm vitest run scripts/pr-reply.test.ts')).toBe(false)
     expect(matchesAnyPublish('npx eslint scripts/pr-reply.mjs scripts/pr-reply.test.ts')).toBe(false)
+    // a heredoc line is data, even one spelled like the invocation
+    expect(matchesAnyPublish('cat > notes.md <<EOF\npnpm pr:reply 1 2 body.md\nEOF')).toBe(false)
     expect(matchesAnyPublish('pnpm exec prettier --check scripts/pr-reply.mjs')).toBe(false)
   })
 })
@@ -2828,6 +2831,13 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     chmodSync(join(repo, 'locked.txt'), 0o000)
     const locked = hook(`git commit -F ${repo}/locked.txt`)
     const device = hook('git commit -F /dev/null')
+    mkdirSync(join(repo, 'sealed'))
+    writeFileSync(join(repo, 'sealed', 'msg.txt'), 'Fixes #1')
+    chmodSync(join(repo, 'sealed'), 0o000)
+    const sealed = hook(`git commit -F ${repo}/sealed/msg.txt`)
+    chmodSync(join(repo, 'sealed'), 0o755)
+    expect(sealed.status).toBe(2)
+    expect(sealed.stderr).toContain(`${repo}/sealed/msg.txt: cannot be examined by this hook (EACCES)`)
     const home = hook('git commit -F ~/km-no-such-message.txt')
     for (const r of [heredoc, redirect, appended, plain, dir, locked, device, home]) expect(r.status).toBe(2)
     expect(locked.stderr).toContain(`${repo}/locked.txt: is not readable by this hook`)
@@ -3122,6 +3132,10 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     hook('KM_ISSUE_REFS_OK=1 git commit -m "Fixes #653"', { session_id: 'sess-1', agent_id: 'a1' })
     expect(hook('git commit -m "Fixes #653"', { session_id: 'sess-1', agent_id: 'a1' }).status).toBe(0)
     expect(hook('git commit -m "Fixes #653"', { session_id: 'sess-1', agent_id: 'a2' }).status).toBe(2)
+    // an agent id that is not a plain name gets no memo, rather than a path
+    hook('KM_ISSUE_REFS_OK=1 git commit -m "Fixes #653"', { session_id: 'sess-1', agent_id: '../../escape' })
+    expect(existsSync(join(repo, 'escape.json'))).toBe(false)
+    expect(hook('git commit -m "Fixes #653"', { session_id: 'sess-1', agent_id: '../../escape' }).status).toBe(2)
     expect(hook('git commit -m "Fixes #653"', { session_id: 'sess-1' }).status).toBe(2)
   })
 
