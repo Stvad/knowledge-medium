@@ -1,0 +1,1 @@
+import{_w as e,gw as t}from"../../../chunks/app-BMYeL1Tk.js";export{t as ExtensionPromptSurface,e as extensionPromptsExtension};

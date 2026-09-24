@@ -1,0 +1,1 @@
+import{EB as e}from"../../../chunks/app-BMYeL1Tk.js";export{e as agentDispatchCompanionDataExtension};

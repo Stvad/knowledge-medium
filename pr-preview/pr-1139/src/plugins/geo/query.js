@@ -1,0 +1,1 @@
+import{NL as e,PL as t}from"../../../chunks/app-BMYeL1Tk.js";export{e as PLACES_UNDER_BLOCK_QUERY,t as placesUnderBlockQuery};
