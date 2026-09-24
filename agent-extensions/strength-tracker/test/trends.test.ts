@@ -1,6 +1,6 @@
 import {describe, expect, it} from 'vitest'
 
-import {asymmetries, bestWorkingWeight, exerciseSeries, milestoneProgress} from '../src/engine/trends'
+import {asymmetries, bestWorkingWeight, exerciseSeries, liftBalance, milestoneProgress, stalledLifts} from '../src/engine/trends'
 import {DEFAULT_CONFIG} from '../src/program/defaults'
 import type {ProgramConfig} from '../src/engine/types'
 import type {SetRecord, WorkoutRecord} from '../src/engine/types'
@@ -192,5 +192,83 @@ describe('asymmetries — one per-side lift prescribed twice', () => {
     ]), DEFAULT_CONFIG).find(a => a.exercise === 'Waiter carry')!
 
     expect(waiter.rightAhead).toBe(false)
+  })
+})
+
+/** The log's own numbers, trimmed: the press sat at 85 while the other lifts
+ *  moved. */
+const liveLog = (): WorkoutRecord[] => {
+  const b = (day: string, ohp: SetRecord[], extra: WorkoutRecord['exercises'] = []): WorkoutRecord => ({
+    id: `b-${day}`, date: `${day}T12:00:00`, session: 'B',
+    exercises: [{exercise: 'Overhead press', sets: ohp}, ...extra],
+  })
+  return [
+    b('2026-08-23', at(85, 7, 7, 7)),
+    b('2026-09-06', at(85, 8, 8, 7)),
+    b('2026-09-13', at(85, 9, 8, 7)),
+    b('2026-09-20', at(85, 10, 7, 6), [
+      {exercise: 'Squat', sets: at(185, 10, 10, 10)},
+      {exercise: 'Deadlift', sets: at(255, 8, 8)},
+    ]),
+    {
+      id: 'a-2026-09-17', date: '2026-09-17T12:00:00', session: 'A',
+      exercises: [
+        {exercise: 'Bench press', sets: at(140, 10, 9, 8)},
+        {exercise: 'Bent-over row', sets: at(145, 10, 10, 10)},
+      ],
+    },
+  ]
+}
+
+describe('stalledLifts', () => {
+  it('lists a lift held at one load for four sessions, with the reps behind it', () => {
+    const stalls = stalledLifts(liveLog(), DEFAULT_CONFIG)
+    expect(stalls.map(s => [s.exercise, s.weight, s.sessions])).toEqual([['Overhead press', 85, 4]])
+    // Newest first — the fade across sets is the thing to read.
+    expect(stalls[0].recent).toEqual([[10, 7, 6], [9, 8, 7], [8, 8, 7]])
+  })
+
+  it('leaves out a lift that moved', () => {
+    expect(stalledLifts(liveLog(), DEFAULT_CONFIG).some(s => s.exercise === 'Squat')).toBe(false)
+  })
+})
+
+describe('liftBalance', () => {
+  it('reads the review ratios off the latest working weights', () => {
+    const {ratios, heaviest} = liftBalance(liveLog(), DEFAULT_CONFIG)
+    const value = (id: string) => ratios.find(r => r.ratio.id === id)?.value
+    expect(value('row-bench')).toBeCloseTo(145 / 140)
+    expect(value('ohp-bench')).toBeCloseTo(85 / 140)
+    expect(heaviest).toMatchObject({lift: 'Deadlift', weight: 255, holds: true, runnerUp: {lift: 'Squat', weight: 185}})
+  })
+
+  it('says so when the heaviest lift is not ahead', () => {
+    const log = liveLog()
+    log.push({
+      id: 'b-2026-09-27', date: '2026-09-27T12:00:00', session: 'B',
+      exercises: [{exercise: 'Squat', sets: at(265, 10, 10, 10)}],
+    })
+    expect(liftBalance(log, DEFAULT_CONFIG).heaviest).toMatchObject({holds: false, runnerUp: {lift: 'Squat', weight: 265}})
+  })
+
+  it('lets the heavier of two same-named plan lines stand for the lift', () => {
+    // The press's second weekly exposure is its own light track under the same
+    // name; the ratio is about what the lift can do, not about the volume day.
+    const config: ProgramConfig = {
+      ...DEFAULT_CONFIG,
+      exercises: [
+        {name: 'Bench press', defId: 'def-bench', session: 'A', sets: 3, repMin: 6, repMax: 10, increment: 5, perSide: false, freeform: false},
+        {name: 'Overhead press', defId: 'def-light', session: 'A', sets: 2, repMin: 8, repMax: 12, increment: 5, perSide: false, freeform: false},
+        {name: 'Overhead press', defId: 'def-heavy', session: 'B', sets: 3, repMin: 6, repMax: 10, increment: 5, perSide: false, freeform: false},
+      ],
+    }
+    const log: WorkoutRecord[] = [
+      {id: 'b', date: '2026-09-20T12:00:00', session: 'B', exercises: [{exercise: 'Overhead press', definitionId: 'def-heavy', sets: at(85, 10, 7, 6)}]},
+      {id: 'a', date: '2026-09-24T12:00:00', session: 'A', exercises: [
+        {exercise: 'Bench press', definitionId: 'def-bench', sets: at(140, 10, 9, 8)},
+        {exercise: 'Overhead press', definitionId: 'def-light', sets: at(70, 12, 12)},
+      ]},
+    ]
+    expect(liftBalance(log, config).ratios.find(r => r.ratio.id === 'ohp-bench')?.value).toBeCloseTo(85 / 140)
   })
 })

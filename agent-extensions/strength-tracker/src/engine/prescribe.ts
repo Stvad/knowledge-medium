@@ -11,8 +11,7 @@ import {
   nextRung,
   nextWeight,
   roundLoad,
-  sessionsAtWeight,
-  STALL_SESSIONS,
+  stallOf,
   totalReps,
   totalRepsRule,
   workingWeight,
@@ -20,6 +19,7 @@ import {
 } from './progression'
 import {resolveReentry} from './reentry'
 import {daysBetween, resolveSession, trainingDay} from './schedule'
+import {programOccurrences} from './types'
 import type {
   ExerciseConfig,
   LayoffRecord,
@@ -155,18 +155,15 @@ const prescribeExercise = (
     }
   }
 
-  // Unloaded work (0) has no load to be stuck at, so it is never called
-  // stalled — a band exercise logged at 0 for months is on plan.
-  const atWeight = sessionsAtWeight(basis, exercise.name, exercise.defId, occurrence)
-  const stalled = lastWeight > 0 && atWeight >= STALL_SESSIONS
+  const stall = stallOf(basis, exercise.name, exercise.defId, occurrence)
 
   if (exercise.freeform) {
-    if (stalled) {
+    if (stall) {
       const rung = exercise.ladder ? nextRung(exercise.ladder, lastWeight) : undefined
       return {
         ...base,
         weight: lastWeight,
-        rationale: `${lastWeight} for ${atWeight} sessions — ${rung !== undefined ? `step up to ${rung}` : 'add load'} when it feels easy`,
+        rationale: `${lastWeight} for ${stall.sessions} sessions — ${rung !== undefined ? `step up to ${rung}` : 'add load'} when it feels easy`,
       }
     }
     return {
@@ -212,7 +209,7 @@ const prescribeExercise = (
   return {
     ...base,
     weight: step.weight,
-    rationale: `hold ${step.weight} until ${sets}×${repMax}${total}${stalled ? ` · ${atWeight} sessions at ${step.weight}` : ''}`,
+    rationale: `hold ${step.weight} until ${sets}×${repMax}${total}${stall ? ` · ${stall.sessions} sessions at ${stall.weight}` : ''}`,
   }
 }
 
@@ -242,17 +239,10 @@ export const prescribe = (input: PrescribeInput): Prescription => {
   const basis = history.filter(w =>
     trainingDay(w.date, config.dayRolloverHour) <= cutoff)
 
-  // Counted the same way `buildDraft` counts it, over the same list: a lift
-  // prescribed twice is two rows, and each progresses off ITS OWN history.
-  const seen = new Map<string, number>()
-  const exercises = config.exercises
-    .filter(e => e.session === session)
-    .map(e => {
-      const key = e.defId ?? e.name
-      const occurrence = seen.get(key) ?? 0
-      seen.set(key, occurrence + 1)
-      return prescribeExercise(e, basis, reentry, day, config, occurrence)
-    })
+  // A lift prescribed twice is two rows, and each progresses off ITS OWN
+  // history.
+  const exercises = programOccurrences(config.exercises.filter(e => e.session === session))
+    .map(({item, occurrence}) => prescribeExercise(item, basis, reentry, day, config, occurrence))
 
   const notes = [
     ...(config.sessionNotes[session] ?? []),

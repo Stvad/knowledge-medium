@@ -110,6 +110,21 @@ export const lastEntryFor = (
   return best
 }
 
+/** This lift's logged sessions, newest first, each with its working weight. */
+export const sessionsNewestFirst = (
+  history: readonly WorkoutRecord[],
+  exercise: string,
+  defId?: string,
+  occurrence?: number,
+): {workout: WorkoutRecord; entry: ExerciseRecord; weight: number}[] =>
+  history
+    .flatMap(workout => {
+      const entry = entryIn(workout, exercise, defId, occurrence)
+      const weight = entry ? workingWeight(entry) : undefined
+      return entry && weight !== undefined ? [{workout, entry, weight}] : []
+    })
+    .sort((a, b) => compareRecords(b.workout, a.workout))
+
 /** How many of this lift's sessions in a row, counting back from the latest,
  *  were worked at the latest working weight. 0 with no history. */
 export const sessionsAtWeight = (
@@ -118,21 +133,29 @@ export const sessionsAtWeight = (
   defId?: string,
   occurrence?: number,
 ): number => {
-  const weights = history
-    .flatMap(workout => {
-      const entry = entryIn(workout, exercise, defId, occurrence)
-      const weight = entry ? workingWeight(entry) : undefined
-      return weight === undefined ? [] : [{workout, weight}]
-    })
-    .sort((a, b) => compareRecords(b.workout, a.workout))
-    .map(({weight}) => weight)
-  const run = weights.findIndex(weight => weight !== weights[0])
-  return run === -1 ? weights.length : run
+  const sessions = sessionsNewestFirst(history, exercise, defId, occurrence)
+  const run = sessions.findIndex(({weight}) => weight !== sessions[0].weight)
+  return run === -1 ? sessions.length : run
 }
 
 /** A lift at one load for this many sessions is worth a second look, whether
  *  the engine is holding it or the lift is progressed by hand. */
 export const STALL_SESSIONS = 4
+
+/** The load a lift has sat at for `STALL_SESSIONS` or more, and for how long.
+ *  Unloaded work (0) has no load to be stuck at — a band exercise logged at 0
+ *  for months is on plan. */
+export const stallOf = (
+  history: readonly WorkoutRecord[],
+  exercise: string,
+  defId?: string,
+  occurrence?: number,
+): {weight: number; sessions: number} | undefined => {
+  const latest = lastEntryFor(history, exercise, defId, occurrence)
+  const weight = latest ? workingWeight(latest.entry) : undefined
+  const sessions = sessionsAtWeight(history, exercise, defId, occurrence)
+  return weight !== undefined && weight > 0 && sessions >= STALL_SESSIONS ? {weight, sessions} : undefined
+}
 
 /** The prescribed sets done at the working weight, in the order they were
  *  logged — undefined when fewer than the prescribed number were. Everything

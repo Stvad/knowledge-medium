@@ -40,8 +40,8 @@ export interface ExerciseConfig {
   increment: number
   /** Logged per side; the plan's rule is left leads and right matches. */
   perSide: boolean
-  /** Carries and rounds-based work: reps are "lengths"/"rounds", and the
-   *  engine never proposes a weight jump from a rep count. */
+  /** No rep window to progress on (Pallof rounds, a carry with no lengths
+   *  target): logged, never auto-loaded — the load moves by hand. */
   freeform: boolean
   /** Verbatim tail of the plan line ("light (knee-friendly…)"). Shown
    *  under the exercise so the reasoning survives into the gym. */
@@ -85,6 +85,31 @@ export interface AltOption {
  *  `strength:default` and in the user's `altChoices`): the block id when
  *  there is one, else the name — which is all a hand-written plan has. */
 export const altOptionKey = (option: AltOption): string => option.defId ?? option.name
+
+/** Pair each item with how many earlier items shared its key — which time in
+ *  the session a lift is. */
+export const countOccurrences = <T>(
+  items: readonly T[],
+  key: (item: T) => string,
+): {item: T; occurrence: number}[] => {
+  const seen = new Map<string, number>()
+  return items.map(item => {
+    const k = key(item)
+    const occurrence = seen.get(k) ?? 0
+    seen.set(k, occurrence + 1)
+    return {item, occurrence}
+  })
+}
+
+/** The program's lifts, each with its occurrence — counted per session, by
+ *  plan block where there is one, else by name, exactly as `prescribe` counts
+ *  tonight's list. A session can prescribe one lift twice, and every reader
+ *  that walks the program pairs rows through this so they agree which history
+ *  belongs to which row. */
+export const programOccurrences = (
+  exercises: readonly ExerciseConfig[],
+): {item: ExerciseConfig; occurrence: number}[] =>
+  countOccurrences(exercises, e => `${e.session}\u0000${e.defId ?? e.name}`)
 
 export interface ExerciseVideo {
   label: string
@@ -140,6 +165,16 @@ export interface Milestone {
   label: string
 }
 
+/** A ratio between two lifts' current working weights, from the quarterly
+ *  review ("check row:bench and OHP:bench"). Lifts are named as the program
+ *  names them. */
+export interface LiftRatio {
+  id: string
+  label: string
+  numerator: string
+  denominator: string
+}
+
 export interface ProgramConfig {
   unit: 'lb' | 'kg'
   /** Smallest loadable jump; re-entry percentages round to it. */
@@ -166,6 +201,10 @@ export interface ProgramConfig {
   exercises: readonly ExerciseConfig[]
   reentry: readonly ReentryTier[]
   milestones: readonly Milestone[]
+  ratios: readonly LiftRatio[]
+  /** The lift that should carry the clearly biggest number ("deadlift should
+   *  be clearly the biggest"). */
+  heaviestLift?: string
   /** Per-session reminders lifted from the plan (warm-up, RPE cap). */
   sessionNotes: Readonly<Record<SessionType, readonly string[]>>
 }

@@ -4,9 +4,17 @@
  *  bars render from tested functions rather than ad-hoc component logic.
  */
 
-import {lastEntryFor, modalWeight, workingWeight} from './progression'
+import {
+  lastEntryFor,
+  modalWeight,
+  progressionSets,
+  sessionsNewestFirst,
+  stallOf,
+  workingWeight,
+} from './progression'
 import {trainingDay} from './schedule'
-import type {Milestone, ProgramConfig, WorkoutRecord} from './types'
+import {programOccurrences} from './types'
+import type {LiftRatio, Milestone, ProgramConfig, WorkoutRecord} from './types'
 
 export interface SeriesPoint {
   day: string
@@ -141,15 +149,10 @@ export const asymmetries = (
 ): Asymmetry[] => {
   // Counted, not deduplicated. Skipping the second same-named row showed
   // occurrence 0 twice over and hid occurrence 1 entirely — the same fault
-  // `exerciseSeries` had, in its sibling reader. Occurrence is counted here
-  // exactly as `planFromPrescription` and `prescribe` count it, over the same
-  // list, so all three agree about which row is which.
-  const seen = new Map<string, number>()
+  // `exerciseSeries` had, in its sibling reader.
   const out: Asymmetry[] = []
-  for (const exercise of config.exercises.filter(e => e.perSide)) {
-    const identityKey = exercise.defId ?? exercise.name
-    const occurrence = seen.get(identityKey) ?? 0
-    seen.set(identityKey, occurrence + 1)
+  for (const {item: exercise, occurrence} of programOccurrences(config.exercises)) {
+    if (!exercise.perSide) continue
     const key: SeriesKey = {
       exercise: exercise.name,
       ...(exercise.defId !== undefined ? {defId: exercise.defId} : {}),
@@ -172,4 +175,94 @@ export const asymmetries = (
     })
   }
   return out
+}
+
+export interface Stall {
+  exercise: string
+  defId?: string
+  occurrence: number
+  weight: number
+  sessions: number
+  /** The reps behind the stall — each of the latest sessions' counting sets,
+   *  newest first. A set-to-set fade across them is what tells a lift that is
+   *  stuck apart from one that is tired. */
+  recent: readonly (readonly number[])[]
+}
+
+const RECENT_SESSIONS = 3
+
+/** Every lift sitting at one load for long enough to look at, in program
+ *  order. */
+export const stalledLifts = (
+  history: readonly WorkoutRecord[],
+  config: ProgramConfig,
+): Stall[] =>
+  programOccurrences(config.exercises).flatMap(({item, occurrence}) => {
+    const stall = stallOf(history, item.name, item.defId, occurrence)
+    if (!stall) return []
+    const recent = sessionsNewestFirst(history, item.name, item.defId, occurrence)
+      .slice(0, RECENT_SESSIONS)
+      .map(({entry}) => progressionSets(entry.sets).map(set => set.reps))
+    return [{
+      exercise: item.name,
+      ...(item.defId !== undefined ? {defId: item.defId} : {}),
+      occurrence,
+      ...stall,
+      recent,
+    }]
+  })
+
+/** Each load-progressed lift's latest working weight, by name.
+ *
+ *  By name because that is how the review states a ratio. Where two plan lines
+ *  share one (a lift's heavy track and its light second exposure), the heavier
+ *  number stands for the lift — the light track is volume, not a measure of
+ *  what the lift can do. */
+export const currentWeights = (
+  history: readonly WorkoutRecord[],
+  config: ProgramConfig,
+): Map<string, number> => {
+  const weights = new Map<string, number>()
+  for (const {item, occurrence} of programOccurrences(config.exercises)) {
+    if (item.freeform) continue
+    const last = lastEntryFor(history, item.name, item.defId, occurrence)
+    const weight = last ? workingWeight(last.entry) : undefined
+    if (weight === undefined) continue
+    weights.set(item.name, Math.max(weight, weights.get(item.name) ?? weight))
+  }
+  return weights
+}
+
+export interface LiftBalance {
+  ratios: {ratio: LiftRatio; value?: number}[]
+  /** Whether `heaviestLift` is strictly ahead of every other lift, with the
+   *  closest one for comparison. Absent until that lift has been logged. */
+  heaviest?: {lift: string; weight: number; holds: boolean; runnerUp?: {lift: string; weight: number}}
+}
+
+export const liftBalance = (
+  history: readonly WorkoutRecord[],
+  config: ProgramConfig,
+): LiftBalance => {
+  const weights = currentWeights(history, config)
+  const ratios = config.ratios.map(ratio => {
+    const numerator = weights.get(ratio.numerator)
+    const denominator = weights.get(ratio.denominator)
+    return numerator !== undefined && denominator !== undefined && denominator > 0
+      ? {ratio, value: numerator / denominator}
+      : {ratio}
+  })
+  const lift = config.heaviestLift
+  const weight = lift !== undefined ? weights.get(lift) : undefined
+  if (lift === undefined || weight === undefined) return {ratios}
+  let runnerUp: {lift: string; weight: number} | undefined
+  for (const [other, otherWeight] of weights) {
+    if (other !== lift && (runnerUp === undefined || otherWeight > runnerUp.weight)) {
+      runnerUp = {lift: other, weight: otherWeight}
+    }
+  }
+  return {
+    ratios,
+    heaviest: {lift, weight, holds: runnerUp === undefined || weight > runnerUp.weight, ...(runnerUp ? {runnerUp} : {})},
+  }
 }
