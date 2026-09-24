@@ -62,7 +62,6 @@ import {
   extractIssueRefs,
   fetchIssueInfo,
   initializedDbRoot,
-  isMainModule,
   carriesPublishableText,
   isPostVerifiable,
   issueRefsTable,
@@ -72,6 +71,7 @@ import {
   publishableKinds,
   tryRun,
 } from './bd-github-sync.mjs'
+import { isMainModule } from './is-main-module.mjs'
 
 // ---------------------------------------------------------------------------
 // Pure logic (unit-tested in bd-publish-verify.test.ts)

@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, realpathSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import { isSyntheticUuid, parseAllowlist } from './check-staged-pii.mjs'
@@ -107,10 +107,12 @@ const git = (cwd: string, args: string[]) => {
   return r.stdout
 }
 const script = fileURLToPath(new URL('./check-staged-pii.mjs', import.meta.url))
-const runHook = (repo: string, command: string) => {
+const runHook = (repo: string, command: string, scriptPath = script) => {
   const payload = JSON.stringify({ tool_name: 'Bash', cwd: repo, tool_input: { command } })
-  return spawnSync('node', [script], { cwd: repo, input: payload, encoding: 'utf8' })
+  return spawnSync('node', [scriptPath], { cwd: repo, input: payload, encoding: 'utf8' })
 }
+const ALLOWLIST = 'scripts/check-staged-pii.allowlist'
+const shippedAllowlist = readFileSync(new URL('./check-staged-pii.allowlist', import.meta.url), 'utf8')
 // The block message states what was found and where; it never guesses why.
 const expectFactsOnly = (stderr: string) => {
   expect(stderr).toContain('feedback_no_pii_in_commits')
@@ -119,14 +121,25 @@ const expectFactsOnly = (stderr: string) => {
 
 describe('check-staged-pii end-to-end', { timeout: 30_000 }, () => {
   const repo = makeRepo()
+  mkdirSync(join(repo, 'scripts'))
+  writeFileSync(join(repo, ALLOWLIST), shippedAllowlist)
+  git(repo, ['add', ALLOWLIST])
+  git(repo, ['commit', '-qm', 'allowlist'])
   const hook = (command: string) => runHook(repo, command)
   const stage = (file: string, content: string) => {
     writeFileSync(join(repo, file), content)
     git(repo, ['add', file])
   }
-  // A failed assertion must not leave its staged file behind for the next test.
+  // A failed assertion must not leave its staged or edited files behind for the next test.
   afterEach(() => {
-    git(repo, ['reset', '-q'])
+    git(repo, ['reset', '-q', '--hard'])
+  })
+
+  it('still blocks when the hook script is reached through a symlinked directory', () => {
+    const linked = join(realpathSync(mkdtempSync(join(tmpdir(), 'pii-guard-link-'))), 'scripts')
+    symlinkSync(dirname(script), linked)
+    const r = runHook(repo, `git commit -m "touch block ${REAL}"`, join(linked, 'check-staged-pii.mjs'))
+    expect(r.status).toBe(2)
   })
 
   it('blocks a uuid in the -m message', () => {
@@ -194,6 +207,21 @@ describe('check-staged-pii end-to-end', { timeout: 30_000 }, () => {
       expect(hook('git commit -m "touch namespace"').status).toBe(0)
     })
 
+    it('allows a uuid whose allowlist entry is staged in the same commit', () => {
+      writeFileSync(join(repo, ALLOWLIST), `${shippedAllowlist}${REAL_2}  a namespace added with its constant\n`)
+      git(repo, ['add', ALLOWLIST])
+      stage('ns2.ts', `const NEW_NS = '${REAL_2}'\n`)
+      expect(hook('git commit -m "add namespace"').status).toBe(0)
+    })
+
+    it('blocks a uuid whose allowlist entry is only in the working tree', () => {
+      writeFileSync(join(repo, ALLOWLIST), `${shippedAllowlist}${REAL_2}  a namespace added with its constant\n`)
+      stage('ns2.ts', `const NEW_NS = '${REAL_2}'\n`)
+      const r = hook('git commit -m "add namespace"')
+      expect(r.status).toBe(2)
+      expect(r.stderr).toContain(REAL_2)
+    })
+
     it('blocks a high-entropy uuid in a test file', () => {
       stage('real.test.ts', `const id = '${REAL}'\n`)
       const r = hook('git commit -m "add test"')
@@ -213,16 +241,22 @@ describe('check-staged-pii end-to-end', { timeout: 30_000 }, () => {
   describe('VAR= values', () => {
     const scratch = `/private/tmp/claude-501/-Users-someone-project/${REAL}/scratchpad`
 
-    it('allows an absolute path whose uuid is a whole directory component', () => {
+    it('allows the session directory of the Claude Code temp root', () => {
       expect(hook(`S=${scratch} && git commit -F "$S/msg.txt"`).status).toBe(0)
       expect(hook(`S="${scratch}/"; git commit -m "clean"`).status).toBe(0)
+      expect(hook(`S=/tmp/claude-1000/project/${REAL}; git commit -m "clean"`).status).toBe(0)
     })
 
     it.each([
+      ['in an absolute route', `MSG="/page/${REAL}/rendering"`],
       ['after the last slash', `S=/tmp/${REAL}`],
       ['inside a filename', `S=/tmp/x/${REAL}.txt`],
       ['inside a directory name', `S=/tmp/run-${REAL}/x`],
       ['in a relative path', `S=tmp/${REAL}/x`],
+      ['as a session directory under another root', `S=/home/x/tmp/claude-501/project/${REAL}/scratchpad`],
+      ['as the project directory of the temp root', `S=/tmp/claude-501/${REAL}/scratchpad`],
+      ['below the session directory', `S=/tmp/claude-501/project/sub/${REAL}/scratchpad`],
+      ['as a session directory name with a suffix', `S=/tmp/claude-501/project/${REAL}.bak/x`],
     ])('blocks a uuid %s', (_label, assign) => {
       const r = hook(`${assign}; git commit -m "clean"`)
       expect(r.status).toBe(2)

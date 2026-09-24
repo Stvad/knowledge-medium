@@ -10,27 +10,29 @@
  *
  * A uuid is not reported when it cannot be graph data:
  * - it is synthetic (`isSyntheticUuid`);
- * - it is listed in `check-staged-pii.allowlist` (named code constants);
+ * - it is listed in `scripts/check-staged-pii.allowlist` as STAGED (named code
+ *   constants), so an exemption counts only when it is part of the commit;
  * - on the command line, it sits in a path: any token containing '/', or,
- *   inside a VAR= value, a whole directory component of an absolute path.
- *   The rest of a VAR= value is scanned, since an expanded message
- *   (MSG="fix page/<id>") lives there.
+ *   inside a VAR= value, the session directory of the Claude Code temp root
+ *   (<tmp>/claude-<uid>/<project>/<session-uuid>/, which holds the
+ *   scratchpad). The rest of a VAR= value is scanned, since an expanded
+ *   message (MSG="fix page/<id>") lives there.
  * During a merge, a diff line is reported only when it is new relative to
  * HEAD and MERGE_HEAD alike: a line either parent holds is already committed
  * there. An octopus merge compares against its first merge head only.
  *
- * Limits: it catches uuids, NOT free-text page titles / note content. A
- * hand-typed high-entropy fixture is indistinguishable from a real id and is
- * reported. Exit 2 → block (PreToolUse contract); exit 0 → allow. `PII_OK=1`
+ * Limits: it catches uuids, NOT free-text page titles / note content. A uuid
+ * inside a slashed word of a heredoc body slips, since that token reads as a
+ * path. A hand-typed high-entropy fixture is indistinguishable from a real id
+ * and is reported. Exit 2 → block (PreToolUse contract); exit 0 → allow. `PII_OK=1`
  * prefixed to the command skips the check.
  */
 
 import { readFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
-import { resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
-import { shellSegments } from './shell-segments.mjs'
 import { gitInvocations } from './check-stash-worktree.mjs'
+import { isMainModule } from './is-main-module.mjs'
+import { shellSegments } from './shell-segments.mjs'
 
 const UUID_SOURCE = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
 const uuidMatches = text => [...text.matchAll(new RegExp(UUID_SOURCE, 'gi'))]
@@ -85,10 +87,15 @@ export const parseAllowlist = text =>
     }),
   )
 
-// An unreadable allowlist is empty: the guard then reports more, never less.
-const readAllowlist = () => {
+const ALLOWLIST_PATH = 'scripts/check-staged-pii.allowlist'
+
+// Read from the index of the repo being committed. Absent or unreadable, it is
+// empty: the guard then reports more, never less.
+const stagedAllowlist = () => {
   try {
-    return parseAllowlist(readFileSync(new URL('./check-staged-pii.allowlist', import.meta.url), 'utf8'))
+    return parseAllowlist(
+      execFileSync('git', ['show', `:${ALLOWLIST_PATH}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }),
+    )
   } catch {
     return new Set()
   }
@@ -100,10 +107,10 @@ const reportedUuids = (text, allowlist, skipMatch = () => false) =>
     .map(m => m[0])
     .filter(uuid => !isSyntheticUuid(uuid) && !allowlist.has(uuid.toLowerCase()))
 
-// The session scratchpad is a directory named by the session uuid; a uuid in
-// a file or directory NAME is not that shape.
-const isDirectoryComponentOfAbsolutePath = (value, m) =>
-  value.startsWith('/') && value[m.index - 1] === '/' && value[m.index + m[0].length] === '/'
+// Claude Code keeps each session's scratchpad and task output under
+// <tmp>/claude-<uid>/<project>/<session-uuid>/; that uuid names a session.
+const SESSION_TEMP_DIR = new RegExp(`^(?:/private)?/tmp/claude-\\d+/[^/]+/(${UUID_SOURCE})(?:/|$)`, 'id')
+const isSessionTempDir = (value, m) => value.match(SESSION_TEMP_DIR)?.indices[1][0] === m.index
 
 const stagedDiff = base =>
   // --no-ext-diff / --no-textconv / --no-color: force plain unified diff even if
@@ -184,7 +191,7 @@ const main = () => {
     }
   }
 
-  const allowlist = readAllowlist()
+  const allowlist = stagedAllowlist()
   const hits = []
   for (const l of lines) {
     if (ALLOW_PATHS.some(rx => rx.test(l.file))) continue
@@ -218,7 +225,7 @@ const main = () => {
       for (const t of tokens) {
         const assignment = t.match(/^[A-Za-z_][A-Za-z0-9_]*=([\s\S]*)$/)
         const uuids = assignment
-          ? reportedUuids(assignment[1], allowlist, m => isDirectoryComponentOfAbsolutePath(assignment[1], m))
+          ? reportedUuids(assignment[1], allowlist, m => isSessionTempDir(assignment[1], m))
           : t.includes('/')
             ? []
             : reportedUuids(t, allowlist)
@@ -235,8 +242,7 @@ const main = () => {
     ? 'A merge is in progress: diff lines were scanned only where new relative to both HEAD and MERGE_HEAD.\n'
     : ''
   process.stderr.write(
-    'BLOCKED: this commit adds uuid-shaped strings that are neither synthetic nor in ' +
-      'scripts/check-staged-pii.allowlist:\n' +
+    `BLOCKED: this commit adds uuid-shaped strings that are neither synthetic nor in the staged ${ALLOWLIST_PATH}:\n` +
       `${shown}${more}\n` +
       mergeNote +
       'Rule: memory feedback_no_pii_in_commits. PII_OK=1 prefixed to the command skips this check.\n',
@@ -244,7 +250,4 @@ const main = () => {
   process.exit(2)
 }
 
-// Exact-path comparison: a suffix match could run the hook at import time from
-// a future sibling whose name this file's happens to end with.
-const isMain = process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])
-if (isMain) main()
+if (isMainModule(import.meta.url)) main()

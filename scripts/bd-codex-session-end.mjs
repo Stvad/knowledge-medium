@@ -4,7 +4,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { appendFileSync, closeSync, mkdirSync, openSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { isMainModule } from './bd-github-sync.mjs'
+import { isMainModule } from './is-main-module.mjs'
 
 const PROBE_TIMEOUT = 1_000
 const SYNC_SCRIPT = fileURLToPath(new URL('./bd-github-sync.mjs', import.meta.url))
