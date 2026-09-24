@@ -1,0 +1,1 @@
+import{_ as e}from"../../chunks/app-BOGivnP-.js";export{e as staticAppExtensions};

@@ -1,0 +1,1 @@
+import{j as e}from"../../../chunks/app-BOGivnP-.js";export{e as characterCountDecoratorContribution};

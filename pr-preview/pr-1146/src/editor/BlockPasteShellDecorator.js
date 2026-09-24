@@ -1,0 +1,1 @@
+import{aw as e,iw as t}from"../../chunks/app-BOGivnP-.js";export{t as BlockPasteShellDecorator,e as blockPasteShellDecorator};

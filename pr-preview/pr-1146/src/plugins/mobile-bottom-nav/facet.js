@@ -1,0 +1,1 @@
+import{Rg as e}from"../../../chunks/app-BOGivnP-.js";export{e as mobileBottomNavItemsFacet};

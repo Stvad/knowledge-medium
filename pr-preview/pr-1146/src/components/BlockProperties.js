@@ -1,0 +1,1 @@
+import{sA as e}from"../../chunks/app-BOGivnP-.js";export{e as BlockProperties};

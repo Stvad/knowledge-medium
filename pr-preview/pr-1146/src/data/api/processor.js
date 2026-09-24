@@ -1,0 +1,1 @@
+import{b4 as e}from"../../../chunks/app-BOGivnP-.js";export{e as definePostCommitProcessor};

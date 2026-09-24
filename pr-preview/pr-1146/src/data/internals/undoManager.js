@@ -1,0 +1,1 @@
+import{XH as e}from"../../../chunks/app-BOGivnP-.js";export{e as UndoManager};

@@ -1,0 +1,1 @@
+import{ez as e}from"../../../chunks/app-BOGivnP-.js";export{e as characterCounterDataExtension};

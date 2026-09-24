@@ -1,0 +1,1 @@
+import{vw as e,yw as t}from"../../../chunks/app-BOGivnP-.js";export{e as extensionPromptDiagnosticContribution,t as extensionPromptDiagnosticSource};

@@ -1,0 +1,1 @@
+import{X_ as e}from"../../../chunks/app-BOGivnP-.js";export{e as PendingInvitations};

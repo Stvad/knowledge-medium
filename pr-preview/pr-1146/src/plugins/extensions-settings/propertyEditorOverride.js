@@ -1,0 +1,1 @@
+import{vt as e}from"../../../chunks/app-BOGivnP-.js";export{e as extensionsOverridesUi};

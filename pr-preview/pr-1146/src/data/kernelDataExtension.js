@@ -1,0 +1,1 @@
+import{MG as e}from"../../chunks/app-BOGivnP-.js";export{e as kernelDataExtension};

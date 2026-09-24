@@ -1,0 +1,1 @@
+import{Dq as e,Oq as t}from"../../chunks/app-BOGivnP-.js";export{e as agree,t as pluralize};
