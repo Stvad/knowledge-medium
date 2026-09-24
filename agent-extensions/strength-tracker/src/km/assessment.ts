@@ -18,7 +18,8 @@ import {dateProp, leftProp, measureProp, outcomeProp, rightProp} from './schema'
 
 /** Stamp an assessment for `day` as the first child of `parentId` — the log
  *  page, which reads newest first. A second tap stamps a second one: it is on
- *  screen, and deleting it is the ordinary gesture. */
+ *  screen, and deleting it is the ordinary gesture. The parent's type is not
+ *  re-checked: placement is organisation, since assessments are read by type. */
 export const startAssessment = async (
   repo: Repo,
   parentId: string,
