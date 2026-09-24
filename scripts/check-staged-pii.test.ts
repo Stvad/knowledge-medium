@@ -309,6 +309,27 @@ describe('check-staged-pii during a merge', { timeout: 30_000 }, () => {
     const r = hook('git commit -m "merge side"')
     expect(r.status).toBe(2)
     expect(r.stderr).toContain(REAL_2)
-    expect(r.stderr).not.toContain(`id: ${REAL}`)
+    expect(r.stderr).not.toContain(REAL)
+  })
+})
+
+describe('check-staged-pii during a merge where both parents add the same line', { timeout: 30_000 }, () => {
+  const repo = makeRepo()
+  const lines = Array.from({ length: 12 }, (_, i) => `line ${i}`)
+  const withIdAt = (at: number) => [...lines.slice(0, at), `id: ${REAL}`, ...lines.slice(at)].join('\n') + '\n'
+  writeFileSync(join(repo, 'shared.txt'), lines.join('\n') + '\n')
+  git(repo, ['add', 'shared.txt'])
+  git(repo, ['commit', '-qm', 'shared'])
+  git(repo, ['checkout', '-q', '-b', 'side'])
+  writeFileSync(join(repo, 'shared.txt'), withIdAt(2))
+  git(repo, ['commit', '-qam', 'side adds the id near the top'])
+  git(repo, ['checkout', '-q', 'base'])
+  writeFileSync(join(repo, 'shared.txt'), withIdAt(10))
+  git(repo, ['commit', '-qam', 'base adds the id near the bottom'])
+  git(repo, ['merge', '-q', '--no-commit', '--no-ff', 'side'])
+
+  it('does not flag either parent copy of the line', () => {
+    expect(readFileSync(join(repo, 'shared.txt'), 'utf8').split(REAL)).toHaveLength(3)
+    expect(runHook(repo, 'git commit -m "merge side"').status).toBe(0)
   })
 })

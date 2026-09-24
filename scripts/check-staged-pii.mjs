@@ -17,9 +17,11 @@
  *   (<tmp>/claude-<uid>/<project>/<session-uuid>/, which holds the
  *   scratchpad). The rest of a VAR= value is scanned, since an expanded
  *   message (MSG="fix page/<id>") lives there.
- * During a merge, a diff line is reported only when it is new relative to
- * HEAD and MERGE_HEAD alike: a line either parent holds is already committed
- * there. An octopus merge compares against its first merge head only.
+ * During a merge, a diff line is reported only when the same line of the
+ * staged file is added relative to HEAD and to MERGE_HEAD: a line either
+ * parent holds is already committed there. Both diffs share the index as
+ * their new side, so the staged line number identifies the line. An octopus
+ * merge compares against its first merge head only.
  *
  * Limits: it catches uuids, NOT free-text page titles / note content. A uuid
  * inside a slashed word of a heredoc body slips, since that token reads as a
@@ -71,7 +73,10 @@ const longestEqualStepRun = hex => {
   return longest
 }
 
-/** A uuid no random or hash-derived generator would produce. */
+/**
+ * A uuid no random or hash-derived generator would produce. Accepted: a real
+ * block given such an id by hand (explicit ids are allowed) is exempt too.
+ */
 export const isSyntheticUuid = uuid => {
   const lower = uuid.toLowerCase()
   if (DOCUMENTATION_EXAMPLE_PREFIXES.some(prefix => lower.startsWith(prefix))) return true
@@ -154,7 +159,7 @@ const mergeHead = () => {
   }
 }
 
-const lineKey = l => `${l.file}\0${l.text}`
+const lineKey = l => `${l.file}\0${l.lineNo}`
 
 const main = () => {
   const allow = () => process.exit(0)
