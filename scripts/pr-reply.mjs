@@ -11,12 +11,17 @@
  * reply's URL, which is what bd-publish-verify.mjs reads the published text
  * back from. The body is a file on disk and nothing else — stdin would need
  * a pipe or a heredoc, and either takes the command out of the covered shape.
+ *
+ * Its gh call runs in this process, where no hook sees it, so a spelling of
+ * the invocation the hooks fail to recognize is checked by nobody. Bead ids
+ * are therefore refused here, before anything is posted, with the same
+ * KM_ALLOW_BEAD_IDS=1 escape the gate honors.
  */
 
 import { spawnSync } from 'node:child_process'
 import { readFileSync, statSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { REPO, isMainModule } from './bd-github-sync.mjs'
+import { REPO, beadIdDenial, extractBeadIds, isMainModule } from './bd-github-sync.mjs'
 
 export const SIGNATURE = '_🤖 Addressed by [Claude Code](https://claude.com/claude-code)_'
 
@@ -39,19 +44,27 @@ const readBody = file => {
   return text.trim() ? { text } : { error: `${file}: is empty` }
 }
 
+// pnpm runs a package script from the package root and passes the caller's
+// directory as INIT_CWD. Only then is INIT_CWD this invocation's: run any
+// other way, an inherited one belongs to some enclosing pnpm run.
+const callerDir = () =>
+  process.env.npm_lifecycle_event === 'pr:reply' && process.env.INIT_CWD ? process.env.INIT_CWD : process.cwd()
+
+// Returns the error to print, or null once gh has answered success. After a
+// success nothing here reports failure: the post has happened, and a failed
+// exit would tell the read-back that nothing was published.
 const main = argv => {
   if (argv.length !== 3) return USAGE
   const [pr, commentId, file] = argv
   if (!/^\d+$/.test(pr)) return `pr is not a number: ${pr}\n${USAGE}`
   if (!/^\d+$/.test(commentId)) return `comment-id is not a number: ${commentId}\n${USAGE}`
-  // pnpm runs a script from the package root and passes the caller's
-  // directory as INIT_CWD, which is what a relative path was written against.
-  const body = readBody(resolve(process.env.INIT_CWD || process.cwd(), file))
+  const body = readBody(resolve(callerDir(), file))
   if (body.error) return body.error
+  const ids = process.env.KM_ALLOW_BEAD_IDS === '1' ? [] : extractBeadIds(body.text)
+  if (ids.length) return beadIdDenial(ids)
   const r = spawnSync('gh', ['api', `repos/${REPO}/pulls/${pr}/comments/${commentId}/replies`, '--method', 'POST', '--input', '-'], {
     input: JSON.stringify({ body: signedBody(body.text) }),
     encoding: 'utf8',
-    timeout: 60_000,
   })
   if (r.status !== 0) return (r.stderr || r.stdout || r.error?.message || `gh exited ${r.status}`).trimEnd()
   let url
@@ -60,8 +73,9 @@ const main = argv => {
   } catch {
     url = undefined
   }
-  if (typeof url !== 'string') return `gh answered without a reply URL:\n${r.stdout.trimEnd()}`
-  console.log(url)
+  // gh's own answer when it names no reply URL: printed as is, so the
+  // read-back's report of an unnamed object is what follows.
+  console.log(typeof url === 'string' ? url : r.stdout.trimEnd())
   return null
 }
 

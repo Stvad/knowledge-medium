@@ -4,7 +4,7 @@ export declare const REPO: string
 export declare const BEAD_ID: RegExp
 export declare const extractBeadIds: (text: string) => string[]
 export declare const matchesPrCommand: (cmd: string) => boolean
-export declare const matchesReplyCommand: (cmd: string) => boolean
+export declare const matchesCliPublish: (cmd: string) => boolean
 export declare const matchesApiPublish: (cmd: string) => boolean
 export declare const publishableKinds: (cmd: string) => Set<string>
 export declare const matchesAnyPublish: (cmd: string) => boolean
@@ -14,11 +14,12 @@ export declare const tryRun: (file: string, args: string[], opts?: object) => st
 export declare const preconditions: (root?: string | null) => { ok: boolean; reason?: string; root?: string; env?: Record<string, string | undefined> }
 export declare const bdShowRows: (ids: string[], opts?: object) => object[] | null
 export declare const beadIssueLookup: (ids: string[]) => Map<string, number | null>
+export declare const beadIdDenial: (ids: string[]) => string
 export declare const fetchIssueInfo: (
   number: number,
 ) => { title: string; state: string; isPr: boolean } | 'not-found' | null
 export declare const isMainModule: (metaUrl: string) => boolean
-export declare const issueRefsTable: (text: string, refs: number[], mode?: 'pre' | 'post' | 'attested') => string
+export declare const issueRefsTable: (text: string, refs: number[], mode?: 'pre' | 'post') => string
 export declare const allowsBeadIds: (cmd: string) => boolean
 export declare const bodyFilePaths: (cmd: string) => string[]
 export declare const resolveBodyPath: (p: string, cwd: string, home: string) => string

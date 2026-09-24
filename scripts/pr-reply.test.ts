@@ -16,7 +16,7 @@ describe('signedBody', () => {
 describe('pr-reply process behavior', { timeout: 20_000 }, () => {
   const script = fileURLToPath(new URL('./pr-reply.mjs', import.meta.url))
 
-  const setup = (opts: { ghFails?: boolean } = {}) => {
+  const setup = (opts: { ghFails?: boolean; ghAnswer?: string } = {}) => {
     const dir = mkdtempSync(join(tmpdir(), 'pr-reply-'))
     const shimDir = join(dir, 'shim')
     mkdirSync(shimDir)
@@ -30,7 +30,7 @@ describe('pr-reply process behavior', { timeout: 20_000 }, () => {
         `cat > "${dir}/stdin.json"`,
         opts.ghFails
           ? `echo 'HTTP 404: Not Found' >&2; exit 1`
-          : `echo '{"id":42,"html_url":"https://github.com/Stvad/knowledge-medium/pull/652#discussion_r42","body":"x"}'`,
+          : `echo '${opts.ghAnswer ?? '{"id":42,"html_url":"https://github.com/Stvad/knowledge-medium/pull/652#discussion_r42","body":"x"}'}'`,
       ].join('\n') + '\n',
     )
     chmodSync(join(shimDir, 'gh'), 0o755)
@@ -41,8 +41,14 @@ describe('pr-reply process behavior', { timeout: 20_000 }, () => {
     const run = (...args: string[]) => spawnSync('node', [script, ...args], { cwd: dir, env, encoding: 'utf8' })
     // how pnpm runs it: from the package root, with the caller's directory in INIT_CWD
     const runViaPnpm = (callerDir: string, ...args: string[]) =>
-      spawnSync('node', [script, ...args], { cwd: tmpdir(), env: { ...env, INIT_CWD: callerDir }, encoding: 'utf8' })
-    return { dir, run, runViaPnpm, ghCalls: () => readFileSync(log, 'utf8'), sent: () => JSON.parse(readFileSync(join(dir, 'stdin.json'), 'utf8')) }
+      spawnSync('node', [script, ...args], {
+        cwd: tmpdir(),
+        env: { ...env, INIT_CWD: callerDir, npm_lifecycle_event: 'pr:reply' },
+        encoding: 'utf8',
+      })
+    const runWith = (extra: NodeJS.ProcessEnv, ...args: string[]) =>
+      spawnSync('node', [script, ...args], { cwd: dir, env: { ...env, ...extra }, encoding: 'utf8' })
+    return { dir, run, runViaPnpm, runWith, ghCalls: () => readFileSync(log, 'utf8'), sent: () => JSON.parse(readFileSync(join(dir, 'stdin.json'), 'utf8')) }
   }
 
   it('posts the file verbatim plus the signature and prints the reply URL', () => {
@@ -60,6 +66,39 @@ describe('pr-reply process behavior', { timeout: 20_000 }, () => {
     writeFileSync(join(dir, 'body.md'), 'from the caller')
     expect(runViaPnpm(dir, '652', '41', 'body.md').status).toBe(0)
     expect(sent().body.startsWith('from the caller')).toBe(true)
+  })
+
+  // Outside a pnpm run of this script, an inherited INIT_CWD is some other
+  // run's directory and would post a different file.
+  it('ignores an INIT_CWD pnpm did not set for this script', () => {
+    const { dir, runWith, sent } = setup()
+    const elsewhere = mkdtempSync(join(tmpdir(), 'pr-reply-elsewhere-'))
+    writeFileSync(join(elsewhere, 'body.md'), 'the wrong file')
+    writeFileSync(join(dir, 'body.md'), 'the right file')
+    expect(runWith({ INIT_CWD: elsewhere }, '652', '41', 'body.md').status).toBe(0)
+    expect(sent().body.startsWith('the right file')).toBe(true)
+  })
+
+  // The hooks may not have recognized the invocation, so the script refuses
+  // bead ids itself, with the gate's own escape.
+  it('refuses a body with a bead id before posting, unless the escape is set', () => {
+    const { dir, run, runWith, ghCalls } = setup()
+    writeFileSync(join(dir, 'body.md'), 'tracked in km-abcd')
+    const r = run('652', '41', 'body.md')
+    expect(r.status).toBe(1)
+    expect(r.stderr).toContain('km-abcd')
+    expect(ghCalls()).toBe('')
+    expect(runWith({ KM_ALLOW_BEAD_IDS: '1' }, '652', '41', 'body.md').status).toBe(0)
+  })
+
+  // Once gh reports success the reply exists; a failed exit would tell the
+  // read-back that nothing was published.
+  it('exits 0 and prints gh’s answer when a successful post names no URL', () => {
+    const { dir, run } = setup({ ghAnswer: '{"id":42}' })
+    writeFileSync(join(dir, 'body.md'), 'text')
+    const r = run('652', '41', 'body.md')
+    expect(r.status).toBe(0)
+    expect(r.stdout.trim()).toBe('{"id":42}')
   })
 
   // Each refusal is a shape the read-back cannot cover or a post that would

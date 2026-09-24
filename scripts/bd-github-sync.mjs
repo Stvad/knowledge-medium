@@ -141,13 +141,14 @@ export const REPO = 'Stvad/knowledge-medium'
 // Pure logic (unit-tested in bd-github-sync.test.ts)
 // ---------------------------------------------------------------------------
 
-// The two shapes bd mints here: a hash sized to the tracker (min_hash_length
-// 4 up to max_hash_length 8, growing as the tracker does) and the long form a
-// GitHub import creates. A hyphen chain is neither, and a token right after a
-// `/` is a path or ref component (`claude/km-…` branches, scratch dirs), not a
-// reference anyone resolves. Pinning today's length alone would stop matching
-// the first id bd mints longer, which fails OPEN in the gate and the mirror.
-export const BEAD_ID = /(?<![\w/-])km-(?:\d{13}-\d+-[0-9a-f]{8}|[a-z0-9]{4,8})(?![\w-])/g
+// A DETECTOR shared by the gate, the verifier and the comment mirror, so a
+// shape it misses is published unchecked by all three: it over-matches. It
+// takes the shapes bd mints — the long form a GitHub import creates, and a
+// hash sized to the tracker (4 up to 8 characters, growing with it) with an
+// optional wisp/mol/proto kind — and stops at the hash, so an id with a
+// hyphenated suffix still yields the id. Only a branch under an agent prefix
+// (`claude/km-…`, `codex/km-…`) is excluded: it names the branch, not a bead.
+export const BEAD_ID = /(?<![\w-])(?<!\b(?:claude|codex)\/)km-(?:\d{13}-\d+-[0-9a-f]{8}|(?:(?:wisp|mol|proto)-)?[a-z0-9]{4,8})(?!\w)/g
 
 /** Unique bead ids referenced in a blob of text, in first-seen order. */
 export const extractBeadIds = text => [...new Set(text.match(BEAD_ID) ?? [])]
@@ -242,13 +243,28 @@ export const matchesPrCommand = cmd => GH_PUBLISH.test(commandSkeleton(cmd))
 
 // The repo's own review-reply publisher, scripts/pr-reply.mjs: one command
 // that posts a body file and prints the reply's URL, so the read-back covers
-// it like a single gh publish. Recognized as an INVOCATION (pnpm's script
-// name, or node running the file), never by the path alone: reading or
-// testing the script is not a publish.
-const PR_REPLY = /\bpnpm\b[^\n;&|]*\spr:reply(?![\w:-])|\bnode\b[^\n;&|]*\s(?:\S*\/)?scripts\/pr-reply\.mjs\b/
-export const matchesReplyCommand = cmd => PR_REPLY.test(commandSkeleton(cmd))
+// it like a single gh publish. Its gh call runs in a child process no hook
+// sees, so this detector is the only way either hook learns of the publish.
+// It reads real command segments, where quotes are already removed, so every
+// spelling of the invocation counts: the script name after any package
+// manager (`pnpm "pr:reply"`, `npm run pr:reply`), the file after any
+// runner, or the file as the command itself. Naming the file to a reader
+// (`sed`, `cat`, `git log`) is not an invocation. What it still misses is
+// caught by the script, which refuses bead ids itself.
+const PACKAGE_MANAGER = /(?:^|\/)(?:pnpm|npm|yarn|bun|npx)$/
+// Interpreters that execute the file; a tool that merely takes it as an
+// argument (a linter, a test runner, launched through npx or pnpm) does not.
+const SCRIPT_RUNNER = /(?:^|\/)(?:node|bun|deno|tsx)$/
+const REPLY_FILE = /(?:^|\/)pr-reply\.mjs$/
+const invokesReply = tokens =>
+  tokens.some(
+    (t, i) =>
+      (t === 'pr:reply' && tokens.slice(0, i).some(w => PACKAGE_MANAGER.test(w))) ||
+      (REPLY_FILE.test(t) && (i === 0 || tokens.slice(0, i).some(w => SCRIPT_RUNNER.test(w)))),
+  )
+const matchesReplyCommand = cmd => shellSegmentsWithDepth(cmd).some(s => !s.heredoc && invokesReply(s.tokens))
 // Publishers other than `gh api`, whose output names the object they made.
-const matchesCliPublish = cmd => matchesPrCommand(cmd) || matchesReplyCommand(cmd)
+export const matchesCliPublish = cmd => matchesPrCommand(cmd) || matchesReplyCommand(cmd)
 
 // `gh api` mutations (explicit -X/--method POST|PATCH|PUT, or field/input
 // flags, which make gh default to POST) — the channel review replies actually
@@ -310,7 +326,7 @@ export const publishableKinds = cmd => {
   if (/\b(?:pr|issue)\s+comment\b/.test(sk)) kinds.add('comment')
   if (/\bpr\s+review\b/.test(sk)) kinds.add('review').add('review-comment')
   if (/\brelease\s+(?:create|new|edit)\b/.test(sk)) kinds.add('release')
-  if (PR_REPLY.test(sk)) kinds.add('review-comment')
+  if (matchesReplyCommand(cmd)) kinds.add('review-comment')
   return kinds
 }
 
@@ -433,21 +449,40 @@ const OPAQUE_OUTPUT = /(?<![\w-])(?:--(?:silent|jq|template)\b|-t)/
 // The api's graphql endpoint answers with no object URL to read back.
 const GRAPHQL = /\bgraphql\b/
 
+// The coarse rule's signals of text living outside the command, besides
+// expansion: any *file long flag (body-file, file, notes-file, …),
+// --template, --input, -F/-T (matched bare — the CLI accepts ATTACHED values
+// like -Fmsgfile) and an @-reference. Tested command-wide, never by command
+// kind: splitting them by kind is what let a compound mixing api with CLI
+// read the wrong signal. Owned here for the coarse rule and the graphql
+// recognizer below.
+const OUTSIDE_TEXT = /(?<![\w-])--(?:[a-z-]*file|input|template)\b|@|(?<![\w-])-[FT]/
+
 // A graphql call keeps its document, and so everything it can publish, in the
-// command, EXCEPT what arrives by payload file, by field file (`=@path`), or
-// by expansion. graphqlShape recognizes the invocations where none of those
-// can carry text, so a document the gate can read speaks for the command. It
-// is an ALLOW, so it recognizes a shape positively and anything else falls
-// back to the coarse rule.
-const GH_API_CALL = new RegExp(GH + String.raw`api\s`, 'gm')
+// command. graphqlShape recognizes a WHOLE invocation whose graphql calls are
+// its only gh commands and in which nothing else carries text from outside
+// the command, so a document the gate can read speaks for all of it. It is an
+// ALLOW: it recognizes a shape positively and anything else falls back to the
+// coarse rule.
+//
+// Every `gh` word in the raw text must open a recognized graphql call. Counted
+// broadly — quoted, continued or unusually spaced spellings the publish
+// detectors miss all count — so the recognizer cannot vouch for a command
+// holding a gh call it did not examine.
+const GH_WORD = /(?<![\w.-])gh(?![\w.-])/g
 const GH_GRAPHQL_CALL = new RegExp(GH + String.raw`api\s+graphql(?![\w-])`, 'gm')
-const GRAPHQL_UNREADABLE = /(?<![\w-])--(?:input|[a-z-]*file)\b|=\s*['"]?@/
+// A field whose whole value is inline: a literal the gate reads, or a typed
+// `-F name=value` (on the api a value, never a file — a file is `=@path`,
+// which is left in place for OUTSIDE_TEXT to see). Matched on expandable(cmd),
+// so a single-quoted value is already blanked to ''.
+const FIELD_FLAG = String.raw`(?<![\w-])(?:-[fF]|--(?:raw-)?field)(?:=|\s+)?`
+const INLINE_FIELD = new RegExp(FIELD_FLAG + String.raw`(?:''|[A-Za-z_][\w.[\]-]*=(?:''|"[^"$\`\\]*"|(?![@'"\\])[^\s'"$\`;&|<>()]*))(?=[\s;&|)]|$)`, 'g')
 // GraphQL's own scalars that cannot hold prose: an ID is a node id GitHub
 // validates, the rest are numbers and flags. String, custom scalars (URI,
 // HTML, …) and input objects can all carry text.
 const NON_TEXT_SCALARS = new Set(['ID', 'Int', 'Float', 'Boolean'])
-// A list type (`[ID!]`) is not read as its element: gh cannot fill a list from
-// one quoted expansion, so such a variable stays unrecognized.
+// Only a bare scalar type is read. A list (`[ID!]`) stays unrecognized, which
+// keeps the allow narrow at the cost of a list-typed variable's expansion.
 const VARIABLE_DECLARATION = /\$(\w+)\s*:\s*(\w+)/g
 const nonTextVariables = cmd => {
   const types = new Map()
@@ -461,25 +496,30 @@ const nonTextVariables = cmd => {
 //    or when nothing in the invocation is a mutation. Never the `query` field,
 //    which is the document itself.
 //  - inside a double-quoted document, a whole string literal given to an id
-//    argument (`threadId:\"$t\"`). GitHub names every node reference `id` or
-//    `…Id`, and a text argument never ends that way.
+//    argument (`threadId:\"$t\"`). GitHub names node references `id` or
+//    `…Id`; the few `…Id` arguments that take a free string
+//    (clientMutationId, a check run's externalId) are identifiers nobody
+//    reads as prose either.
 // Accepted, not overlooked: a value that closes its own string literal could
 // still rewrite the document around it. This guard defends against
 // accidents; an agent does not smuggle GraphQL through a thread id.
-const VARIABLE_FIELD = /(?<![\w-])(?:-[fF]|--(?:raw-)?field)(?:=|\s+)?(\w+)="\$(?:\w+|\{\w+\})"/g
-const DOUBLE_QUOTED_DOCUMENT = /(?<![\w-])(?:-[fF]|--(?:raw-)?field)(?:=|\s+)?query="(?:\\.|[^"\\])*"/g
-const ID_ARGUMENT_EXPANSION = /\b(?:id|[a-z]\w*Id)\s*:\s*\\"\$(?:\w+|\{\w+\})\\"/g
+const WHOLE_EXPANSION = String.raw`\$(?:\w+|\{\w+\})`
+const VARIABLE_FIELD = new RegExp(FIELD_FLAG + String.raw`(\w+)="${WHOLE_EXPANSION}"`, 'g')
+const DOUBLE_QUOTED_DOCUMENT = new RegExp(FIELD_FLAG + String.raw`query="(?:\\.|[^"\\])*"`, 'g')
+const ID_ARGUMENT_EXPANSION = new RegExp(String.raw`\b(?:id|[a-z]\w*Id)\s*:\s*\\"${WHOLE_EXPANSION}\\"`, 'g')
+// The operation keyword is looked for with quotes and backslashes removed, so
+// a shell spelling that splits it (`'mut''ation'`, `mu\tation`) still counts.
+const MUTATION = /\bmutation\b/
 const graphqlShape = cmd => {
-  const sk = commandSkeleton(cmd)
-  const calls = sk.match(GH_API_CALL)?.length ?? 0
-  if (!calls || calls !== (sk.match(GH_GRAPHQL_CALL)?.length ?? 0) || matchesCliPublish(cmd)) return null
-  if (GRAPHQL_UNREADABLE.test(cmd)) return null
-  const mutates = /\bmutation\b/.test(cmd)
+  const calls = commandSkeleton(cmd).match(GH_GRAPHQL_CALL)?.length ?? 0
+  if (!calls || calls !== (cmd.match(GH_WORD)?.length ?? 0) || matchesReplyCommand(cmd)) return null
+  const mutates = MUTATION.test(cmd.replace(/['"\\]/g, ''))
   const nonText = nonTextVariables(cmd)
-  const unaccounted = expandable(cmd)
+  const residue = expandable(cmd)
     .replace(DOUBLE_QUOTED_DOCUMENT, doc => doc.replace(ID_ARGUMENT_EXPANSION, ''))
     .replace(VARIABLE_FIELD, (m, name) => (name !== 'query' && (!mutates || nonText.has(name)) ? '' : m))
-  return EXPANSION.test(unaccounted) ? null : { mutates }
+    .replace(INLINE_FIELD, '')
+  return EXPANSION.test(residue) || OUTSIDE_TEXT.test(residue) ? null : { mutates }
 }
 // No `mutation` operation anywhere means nothing is written: the keyword is
 // the only way to open one.
@@ -594,19 +634,22 @@ export const isPostVerifiable = cmd => {
 }
 
 
-// The escape hatch must also be in command-prefix position of the SKELETON —
-// honored from quoted prose, a PR body QUOTING it would both bypass the gate
-// and publish the marker.
-// Anchored at the invocation start or after an explicit separator — never
-// after a bare NEWLINE, which is exactly what separates heredoc DATA lines.
-// Heredoc bodies survive into the skeleton (see commandSkeleton), so a line
-// of data would otherwise sit at a command position and attest for a real
-// publish later in the same invocation. No `m` flag, so `^` is the string
-// start rather than every line start. Over-matching a detector is cheap;
-// over-matching a bypass is not.
-const ESCAPE_START = String.raw`(?:^|[;&|]\s*)(?:[A-Za-z_]\w*=\S*\s+)*`
-const ALLOW_MARKER = new RegExp(ESCAPE_START + String.raw`KM_ALLOW_BEAD_IDS=1\s`)
-export const allowsBeadIds = cmd => ALLOW_MARKER.test(commandSkeleton(cmd))
+// An escape is honored only as a prefix assignment of a real command: one of
+// the leading NAME=value words of a command segment. Quoted prose stays
+// inside its token, so a body QUOTING the marker neither bypasses the gate
+// nor attests; heredoc bodies come back as data segments and never count, so
+// neither does a line of data (a markdown table's `| KM_… |` cell included).
+// A newline-separated command line is a real command and counts. Over-matching
+// a detector is cheap; over-matching a bypass is not.
+// The NAME=value words before a segment's command; none when nothing follows
+// them, since a bare assignment prefixes no command.
+const leadingAssignments = tokens => {
+  const command = tokens.findIndex(t => !/^[A-Za-z_]\w*=/.test(t))
+  return command === -1 ? [] : tokens.slice(0, command)
+}
+const escapeAssigned = (cmd, assignment) =>
+  shellSegmentsWithDepth(cmd).some(s => !s.heredoc && leadingAssignments(s.tokens).includes(assignment))
+export const allowsBeadIds = cmd => escapeAssigned(cmd, 'KM_ALLOW_BEAD_IDS=1')
 
 // GitHub-style issue references in publishable text. Guessed numbers are the
 // top hallucination since the #N-not-bead-id policy: a wrong number usually
@@ -638,8 +681,7 @@ const CLOSE_KEYWORD = /\b(?:fix(?:es|ed)?|close[sd]?|resolve[sd]?):?\s+#(\d{1,5}
 export const closeKeywordRefs = text =>
   [...new Set([...normalizeQualifiedRefs(text).matchAll(CLOSE_KEYWORD)].map(m => Number(m[1])))]
 
-const ISSUE_REFS_OK = new RegExp(ESCAPE_START + String.raw`KM_ISSUE_REFS_OK=1\s`)
-export const allowsIssueRefs = cmd => ISSUE_REFS_OK.test(commandSkeleton(cmd))
+export const allowsIssueRefs = cmd => escapeAssigned(cmd, 'KM_ISSUE_REFS_OK=1')
 
 /**
  * The echo table: one line of ground truth per referenced number, warnings
@@ -647,21 +689,27 @@ export const allowsIssueRefs = cmd => ISSUE_REFS_OK.test(commandSkeleton(cmd))
  * [{number, info}] where info is {title, state, isPr} | 'not-found' | null
  * (null = the lookup itself failed).
  */
+// A reference whose lookup gave a real title, rather than a 404 or a failure.
+const isResolved = ({ info }) => info !== null && info !== 'not-found'
+// The shapes wrong regardless of intent, for a resolved reference.
+const referenceWarnings = ({ number, info }, closeNums) => [
+  ...(closeNums.has(number) && info.isPr ? ['⚠ close keyword targets a PR'] : []),
+  ...(closeNums.has(number) && !info.isPr && info.state !== 'open' ? ['⚠ close keyword on an already-closed issue'] : []),
+]
+
 export const buildIssueRefsMessage = (refs, closeNums, mode = 'pre') => {
-  const lines = refs.map(({ number, info }) => {
+  const lines = refs.map(ref => {
+    const { number, info } = ref
     if (info === 'not-found') return `  #${number} → NO SUCH ISSUE OR PR — a guessed number?`
     if (!info) return `  #${number} → COULD NOT VERIFY (gh lookup failed)`
     const kind = info.isPr ? 'PULL REQUEST' : 'issue'
-    const warns = [
-      ...(closeNums.has(number) && info.isPr ? ['⚠ close keyword targets a PR'] : []),
-      ...(closeNums.has(number) && !info.isPr && info.state !== 'open' ? ['⚠ close keyword on an already-closed issue'] : []),
-    ]
+    const warns = referenceWarnings(ref, closeNums)
     return `  #${number} → "${info.title}" (${kind}, ${info.state})${warns.length ? ` ${warns.join(' ')}` : ''}`
   })
   // The bypass footer appears only when every reference resolved to a real
   // title: advertising it over a failed lookup or a nonexistent number would
   // invite bypassing a reference no one has read.
-  const anyUnresolved = refs.some(({ info }) => info === null || info === 'not-found')
+  const anyUnresolved = !refs.every(isResolved)
   if (mode === 'attested')
     return [
       'Issue references this session already attested with KM_ISSUE_REFS_OK=1, so this command was not blocked. Their titles now:',
@@ -725,8 +773,8 @@ export const bodyFilePaths = cmd => messageFileValues(cmd).filter(p => !STDIN_PA
 export const hasStdinBody = cmd => messageFileValues(cmd).some(p => STDIN_PATH.test(p))
 
 /** Resolve a body-file path the way the shell would have: ~, then cwd. */
-export const resolveBodyPath = (p, cwd, home) =>
-  p === '~' || p.startsWith('~/') ? join(home, p.slice(1)) : isAbsolute(p) ? p : resolve(cwd, p)
+const isHomePath = p => p === '~' || p.startsWith('~/')
+export const resolveBodyPath = (p, cwd, home) => (isHomePath(p) ? join(home, p.slice(1)) : isAbsolute(p) ? p : resolve(cwd, p))
 
 /**
  * Priority 0–4 from GitHub label names. The machine label (`priority::high`,
@@ -1123,6 +1171,19 @@ export const mirrorCommentBody = (comment, numberByBeadId, holdIds) => {
 
 export const planCommentMirror = (comments, mirrored) =>
   comments.filter(c => !mirrored.has(c.id)).sort((a, b) => a.created_at.localeCompare(b.created_at))
+
+// The refusal for bead ids found in text about to be published, with each
+// id's issue number where the tracker has one. Looked up, never MINTED: the
+// gate's detectors deliberately over-match — a verb in ordinary unquoted argv
+// (`printf … gh pr create km-new`) reads as a publish — and while an extra
+// check costs a round, an extra mint creates a public issue for a command
+// that is about to be blocked and never runs. The message tells the agent to
+// sync instead. No bd command runs without a DB (see the header).
+export const beadIdDenial = ids => {
+  const byId = initializedDbRoot() ? beadIssueLookup(ids) : new Map()
+  const mapped = ids.filter(id => byId.get(id)).map(id => ({ id, number: byId.get(id) }))
+  return buildDenyMessage(mapped, ids.filter(id => !byId.get(id)))
+}
 
 export const buildDenyMessage = (mapped, unmapped) => {
   const lines = [
@@ -1890,42 +1951,37 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
 // sync path, which relays a whole run's mappings, is the one that converted.
 const allow = () => process.exit(0)
 
-// A path whose text this hook can actually read. A directory or an
-// unreadable file must reach the caller's fail-closed branch rather than
-// throwing out of the hook — see the entry point for why a throw here is
-// worse than a block.
-const readableFile = p => {
+// Why this hook cannot read a message path, as the fact it saw — or null when
+// it can. One stat decides it, so the fact and the verdict cannot disagree,
+// and nothing here throws: a throw out of the hook would allow the commit
+// (see the entry point), where this must block.
+const unreadableFact = p => {
+  let stat
   try {
-    if (!statSync(p).isFile()) return false
+    stat = statSync(p)
+  } catch (e) {
+    return e?.code === 'ENOENT' ? 'does not exist at hook time' : `cannot be examined by this hook (${e?.code ?? 'error'})`
+  }
+  if (stat.isDirectory()) return 'is a directory'
+  if (!stat.isFile()) return 'is not a regular file'
+  try {
     accessSync(p, constants.R_OK)
-    return true
+    return null
   } catch {
-    return false
+    return 'is not readable by this hook'
   }
 }
-
-// What this hook found at each message path, and nothing it inferred: the
-// state it saw, and whether the command's own text redirects into that path
-// (a file the command writes after this hook has already run). The cause is
-// the reader's to draw — a composed diagnosis has to hold for every mix of
-// these facts, and the last one here was wrong for every measured hit.
-const pathFact = p => {
-  if (!existsSync(p)) return 'does not exist at hook time'
-  const stat = statSync(p)
-  if (stat.isDirectory()) return 'is a directory'
-  return stat.isFile() ? 'is not readable by this hook' : 'is not a regular file'
-}
+// The report prints what the hook found at each path and whether the
+// command's own text redirects into it (a file it writes after this hook
+// ran) — never a cause, which is the reader's to draw.
 const escapeRegExp = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 const commandWrites = (cmd, value) =>
-  new RegExp(String.raw`(?:>|\btee\s+(?:-a\s+)?)\s*(['"]?)${escapeRegExp(value)}\1(?=[\s;&|)]|$)`).test(cmd)
+  new RegExp(String.raw`(?:>|\btee(?:\s+-\S+)*\s+)\s*(['"]?)${escapeRegExp(value)}\1(?=[\s;&|)]|$)`).test(cmd)
 const unreadableMessageFilesReport = (files, cmd, cwd) =>
   [
     'Commit message file(s) this gate reads before the commit runs, to check close keywords, and could not read:',
-    ...files.map(({ value, path }) => {
-      const fact = pathFact(path)
-      return `  ${path}: ${fact}${fact.startsWith('does not exist') && commandWrites(cmd, value) ? '; this command writes it' : ''}`
-    }),
-    ...(files.some(({ value }) => !isAbsolute(value) && value !== '~' && !value.startsWith('~/'))
+    ...files.map(({ value, path, fact }) => `  ${path}: ${fact}${commandWrites(cmd, value) ? '; this command writes it' : ''}`),
+    ...(files.some(({ value }) => !isAbsolute(value) && !isHomePath(value))
       ? [`(relative paths resolved against ${cwd})`]
       : []),
     'A KM_ISSUE_REFS_OK=1 prefix attests the references and skips this read.',
@@ -1965,19 +2021,23 @@ export const fetchIssueInfo = number => {
 // The #N leg of the gate: echo every referenced number's ground truth;
 // KM_ISSUE_REFS_OK=1 on the re-run confirms. Also used by
 // bd-publish-verify.mjs (mode 'post', where the text already published).
-export const issueRefsTable = (text, refs, mode = 'pre') =>
-  buildIssueRefsMessage(refs.map(number => ({ number, info: fetchIssueInfo(number) })), new Set(closeKeywordRefs(text)), mode)
+const lookUpRefs = refs => refs.map(number => ({ number, info: fetchIssueInfo(number) }))
+export const issueRefsTable = (text, refs, mode = 'pre') => buildIssueRefsMessage(lookUpRefs(refs), new Set(closeKeywordRefs(text)), mode)
 
-// Numbers this session attested with KM_ISSUE_REFS_OK=1. Keyed by the host's
-// session id, under the OS temp dir rather than the host's own state (whose
-// layout is not ours) or the repo (shared by every session in it). No other
-// session reads it, because session ids are unique; a resumed session keeps
-// its id and so its attestations; the OS reclaims the file. Two hooks racing
-// on it can lose an attestation, which costs one extra block.
-const SESSION_ID = /^[A-Za-z0-9_-]{1,128}$/
-const attestationMemo = sessionId => {
-  if (typeof sessionId !== 'string' || !SESSION_ID.test(sessionId)) return null
-  const path = join(tmpdir(), 'km-publish-gate', `${sessionId}.json`)
+// Numbers an agent attested with KM_ISSUE_REFS_OK=1. Keyed by the host's
+// session id, plus the subagent's id when the call comes from one (subagents
+// share their parent's session id, and an attestation is the word of the
+// agent that read the table). Kept under the OS temp dir rather than the
+// host's own state (whose layout is not ours) or the repo (shared by every
+// session in it). No other session reads it, because session ids are
+// unique; a resumed session keeps its id and so its attestations; the file
+// is left to the OS's temp cleanup. Two hooks racing on it can lose an
+// attestation, which costs one extra block.
+const PLAIN_ID = /^[A-Za-z0-9_-]{1,128}$/
+const isPlainId = id => typeof id === 'string' && PLAIN_ID.test(id)
+const attestationMemo = ({ session_id: sessionId, agent_id: agentId }) => {
+  if (!isPlainId(sessionId) || (agentId !== undefined && !isPlainId(agentId))) return null
+  const path = join(tmpdir(), 'km-publish-gate', `${agentId === undefined ? sessionId : `${sessionId}.${agentId}`}.json`)
   let attested = new Set()
   try {
     const stored = JSON.parse(readFileSync(path, 'utf8'))?.attested
@@ -1985,18 +2045,24 @@ const attestationMemo = sessionId => {
   } catch {
     // no memo yet, or one this hook cannot read: nothing is attested
   }
+  const covers = numbers => numbers.every(n => attested.has(n))
   return {
-    covers: numbers => numbers.every(n => attested.has(n)),
+    covers,
     add: numbers => {
-      if (numbers.every(n => attested.has(n))) return
+      if (covers(numbers)) return
       for (const n of numbers) attested.add(n)
+      const staged = `${path}.${process.pid}`
       try {
         mkdirSync(dirname(path), { recursive: true })
-        const staged = `${path}.${process.pid}`
         writeFileSync(staged, JSON.stringify({ attested: [...attested] }))
         renameSync(staged, path)
       } catch {
         // an unwritable memo only means the next repeat blocks as before
+        try {
+          unlinkSync(staged)
+        } catch {
+          // nothing was staged
+        }
       }
     },
   }
@@ -2004,19 +2070,20 @@ const attestationMemo = sessionId => {
 
 // The echo round, unless the session already attested every number: then the
 // titles go to the agent as context and the host's own permission flow
-// decides. Every number must still resolve now — an attestation vouched for a
-// title, and a number with none gets the blocking table.
+// decides. An attestation vouched for a number's identity, not for this use
+// of it, so the pass also needs every number to resolve now and no close
+// keyword here to draw a warning; otherwise the blocking table, from the
+// same lookups.
 const echoIssueRefs = (text, refs, memo) => {
-  if (memo?.covers(refs)) {
-    const infos = refs.map(number => ({ number, info: fetchIssueInfo(number) }))
-    if (infos.every(({ info }) => info && info !== 'not-found')) {
-      const additionalContext = buildIssueRefsMessage(infos, new Set(closeKeywordRefs(text)), 'attested')
-      // writeSync: a pipe write queued behind exit() can be dropped
-      writeSync(1, JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext } }))
-      allow()
-    }
+  const infos = lookUpRefs(refs)
+  const closeNums = new Set(closeKeywordRefs(text))
+  if (memo?.covers(refs) && infos.every(ref => isResolved(ref) && referenceWarnings(ref, closeNums).length === 0)) {
+    const additionalContext = buildIssueRefsMessage(infos, closeNums, 'attested')
+    // writeSync: a pipe write queued behind exit() can be dropped
+    writeSync(1, JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext } }))
+    allow()
   }
-  console.error(issueRefsTable(text, refs))
+  console.error(buildIssueRefsMessage(infos, closeNums))
   process.exit(2)
 }
 
@@ -2030,7 +2097,7 @@ const hookPrePr = () => {
   const cmd = payload?.tool_input?.command ?? ''
   if (!cmd) allow()
   const cwd = payload?.cwd ?? process.cwd()
-  const memo = attestationMemo(payload?.session_id)
+  const memo = attestationMemo(payload ?? {})
   if (allowsIssueRefs(cmd)) memo?.add(extractIssueRefs(cmd))
 
   // Message/body files, failing CLOSED on text this gate cannot see: a
@@ -2045,10 +2112,11 @@ const hookPrePr = () => {
       )
       process.exit(2)
     }
-    const files = bodyFilePaths(cmd).map(value => ({ value, path: resolveBodyPath(value, cwd, homedir()) }))
-    // A directory or a permission error takes the fail-closed branch below
-    // rather than throwing out of the hook.
-    const unreadable = files.filter(f => !readableFile(f.path))
+    const files = bodyFilePaths(cmd).map(value => {
+      const path = resolveBodyPath(value, cwd, homedir())
+      return { value, path, fact: unreadableFact(path) }
+    })
+    const unreadable = files.filter(f => f.fact)
     if (unreadable.length) {
       console.error(unreadableMessageFilesReport(unreadable, cmd, cwd))
       process.exit(2)
@@ -2102,23 +2170,13 @@ const hookPrePr = () => {
   // that hook (isPostVerifiable), which reports any claim it cannot honour.
   const blind = !isPostVerifiable(cmd)
   if (blind && !(allowsIssueRefs(cmd) && allowsBeadIds(cmd))) {
-    // Any *file long flag (body-file, file, notes-file, …), --template and
-    // --input carry text this gate cannot read, as do -F/-T (matched bare —
-    // the CLI accepts ATTACHED values like -Fmsgfile) and an api @<path>.
-    // All of them tested unconditionally: on `gh api` a -F is an inline
-    // typed field rather than a file, but an inline api publish is COVERED
-    // and never reaches this branch, so telling the two apart would only
-    // matter for commands that are already attesting. Splitting them by
-    // command kind is what let a compound mixing api with CLI read the
-    // wrong signal.
-    // A graphql invocation graphqlShape recognizes has no text outside the
-    // command by construction; a publish that reaches here is a mutation.
+    // A pr:reply always takes its text from a file. A graphql invocation
+    // graphqlShape recognizes has none outside the command by construction.
     const textOutsideCommand =
-      matchesReplyCommand(cmd) ||
-      (!graphqlShape(cmd) && (/(?<![\w-])--(?:[a-z-]*file|input|template)\b|@|(?<![\w-])-[FT]/.test(cmd) || hasExpansion(cmd)))
+      matchesReplyCommand(cmd) || (!graphqlShape(cmd) && (OUTSIDE_TEXT.test(cmd) || hasExpansion(cmd)))
     if (textOutsideCommand) {
       console.error(
-        'This publish is not one the post-publication read-back covers (it must be a single gh command or pnpm pr:reply, with no shell operator, aimed at this repo, whose verb and flags leave a fetchable URL in the output) — and it carries text this gate cannot read from the command either: a file or payload flag, an @-reference, or shell expansion. Publish literal inline text so this gate can read it (a COVERED publish — a single create/edit/comment command with no shell operator — may use --body-file freely, since the read-back checks what it shipped) — or, after checking every reference and bead id in it yourself, re-run with KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 prefixed.',
+        'This publish is not one the post-publication read-back covers (it must be a single gh command or pnpm pr:reply, with no shell operator, aimed at this repo, whose verb and flags leave a fetchable URL in the output) — and it carries text this gate cannot read from the command either: a file or payload flag, a pr:reply body file, an @-reference, or shell expansion. Publish literal inline text so this gate can read it (a COVERED publish — a single create/edit/comment command or pnpm pr:reply, with no shell operator — may take its body from a file freely, since the read-back checks what it shipped) — or, after checking every reference and bead id in it yourself, re-run with KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 prefixed.',
       )
       process.exit(2)
     }
@@ -2134,21 +2192,12 @@ const hookPrePr = () => {
   const refsText = [blind ? text : '', commitText].filter(Boolean).join('\n') || text
   if (ids.length === 0) return echoIssueRefs(refsText, refs, memo)
 
-  // Looked up, never MINTED. The detectors deliberately over-match — a verb
-  // in ordinary unquoted argv (`printf … gh pr create km-new`) reads as a
-  // publish — and while an extra check costs a round, an extra MINT creates a
-  // public issue for a command that is about to be blocked and never runs.
-  // The block below already tells the agent to sync, which is how every bead
-  // in this session got its number anyway.
-  const byId = initializedDbRoot() ? beadIssueLookup(ids) : new Map()
-  const mapped = ids.filter(id => byId.get(id)).map(id => ({ id, number: byId.get(id) }))
-  const unmapped = ids.filter(id => !byId.get(id))
   // The deny message licenses a KM_ISSUE_REFS_OK=1 re-run, so any #N already
   // present in the text must have its ground truth shown in THIS round —
   // otherwise the mixed case would publish unverified numbers under that
   // licence.
   const refsSection = refs.length ? `\n\n${issueRefsTable(refsText, refs)}` : ''
-  console.error(buildDenyMessage(mapped, unmapped) + refsSection)
+  console.error(beadIdDenial(ids) + refsSection)
   process.exit(2)
 }
 

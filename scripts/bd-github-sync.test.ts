@@ -86,21 +86,28 @@ describe('extractBeadIds', () => {
 
   // bd sizes a hash id to the tracker (adaptive length, 4 up to 8), and
   // imports from GitHub carry a long timestamped form. Both are real ids.
-  it('matches every length bd can mint, and the long import form', () => {
+  it('matches every length bd can mint, its kinds, and the long import form', () => {
     expect(extractBeadIds('km-7f3a8 km-7f3a86ab')).toEqual(['km-7f3a8', 'km-7f3a86ab'])
     expect(extractBeadIds('km-1786746045106-1-1eb9b300')).toEqual(['km-1786746045106-1-1eb9b300'])
+    expect(extractBeadIds('km-wisp-abc123, km-mol-a1b2 and km-proto-9f8e7d')).toEqual(['km-wisp-abc123', 'km-mol-a1b2', 'km-proto-9f8e7d'])
   })
 
-  it('does not read shorter words or hyphen chains as ids', () => {
+  it('does not read shorter or longer words as ids', () => {
     expect(extractBeadIds('km-abc km-db km-7f3a86abc')).toEqual([])
-    // a branch named after a bead is a hyphen chain, not the bead
-    expect(extractBeadIds('km-avrg-retain-measure')).toEqual([])
   })
 
-  // A path or ref component is an address, never a reference a reader resolves.
-  it('does not match inside a path or ref', () => {
-    expect(extractBeadIds('--head claude/km-avrg')).toEqual([])
-    expect(extractBeadIds('> /private/tmp/km-merge/threads.txt')).toEqual([])
+  // Over-matching is the cheap direction: a hyphenated suffix, or ids joined
+  // by a slash, still yield every id.
+  it('stops at the hash, so an id followed by a suffix or a slash still counts', () => {
+    expect(extractBeadIds('km-abcd-era and km-avrg-retain-measure')).toEqual(['km-abcd', 'km-avrg'])
+    expect(extractBeadIds('tracks km-abcd/km-efgh')).toEqual(['km-abcd', 'km-efgh'])
+    expect(extractBeadIds('> /private/tmp/km-merge/threads.txt')).toEqual(['km-merge'])
+  })
+
+  // A branch under an agent prefix names the branch, not a bead.
+  it('does not match a branch under an agent prefix', () => {
+    expect(extractBeadIds('--head claude/km-avrg-retain-measure')).toEqual([])
+    expect(extractBeadIds('origin codex/km-abcd')).toEqual([])
   })
 })
 
@@ -188,6 +195,17 @@ describe('allowsBeadIds', () => {
     expect(allowsIssueRefs(forged.replace('KM_ALLOW_BEAD_IDS', 'KM_ISSUE_REFS_OK'))).toBe(false)
   })
 
+  // A heredoc body is data even when a markdown table cell sets the marker
+  // off with pipes; a newline-separated command line is a real command.
+  it('honors a marker on its own command line, never one in heredoc data', () => {
+    const table = 'gh pr comment 5 --body-file - <<EOF\n| KM_ALLOW_BEAD_IDS=1 | x |\n| KM_ISSUE_REFS_OK=1 | y |\nEOF'
+    expect(allowsBeadIds(table)).toBe(false)
+    expect(allowsIssueRefs(table)).toBe(false)
+    expect(allowsIssueRefs('cd /r\nKM_ISSUE_REFS_OK=1 gh pr merge 1 --body x')).toBe(true)
+    // a bare assignment prefixes no command
+    expect(allowsIssueRefs('KM_ISSUE_REFS_OK=1; gh pr merge 1 --body x')).toBe(false)
+  })
+
   it('ignores the marker quoted inside an argument (it would be published)', () => {
     expect(allowsBeadIds('gh pr create --body "mentions KM_ALLOW_BEAD_IDS=1 in prose"')).toBe(false)
     // quoted prose with a fake segment start must not smuggle the marker in
@@ -264,6 +282,12 @@ describe('graphql calls', () => {
     expect(matchesAnyPublish(`for n in 1; do ${read.replace('-F p=5', '-F p="$n"')}; done`)).toBe(false)
   })
 
+  // Shell quoting can split the keyword; the shell rejoins it for gh.
+  it('finds a mutation keyword that shell quoting splits', () => {
+    expect(matchesAnyPublish(`gh api graphql -f query='mut''ation{addComment(input:{body:"x"}){clientMutationId}}'`)).toBe(true)
+    expect(matchesAnyPublish(`gh api graphql -f query=mu\\tation'{addComment(input:{body:"x"}){clientMutationId}}'`)).toBe(true)
+  })
+
   it('keeps a text-free mutation a publish, and uncovered', () => {
     const loop = `for t in a; do gh api graphql -f query='mutation($t:ID!){resolveReviewThread(input:{threadId:$t}){thread{id}}}' -f t="$t"; done`
     expect(matchesAnyPublish(loop)).toBe(true)
@@ -284,10 +308,26 @@ describe('the pr:reply command', () => {
     expect(isPostVerifiable('cd x && pnpm pr:reply 1048 4040271733 body.md')).toBe(false)
   })
 
+  // Its gh call runs where no hook sees it, so every spelling of the
+  // invocation must be seen here.
+  it('is seen however the invocation is spelled', () => {
+    for (const cmd of [
+      'pnpm "pr:reply" 1048 4040271733 body.md',
+      'npm run pr:reply -- 1048 4040271733 body.md',
+      'node "scripts/pr-reply.mjs" 1048 4040271733 body.md',
+      'cd scripts && node pr-reply.mjs 1048 4040271733 body.md',
+      'node "$(git rev-parse --show-toplevel)/scripts/pr-reply.mjs" 1048 4040271733 body.md',
+      'KM_ALLOW_BEAD_IDS=1 pnpm pr:reply 1048 4040271733 body.md',
+    ])
+      expect(matchesAnyPublish(cmd), cmd).toBe(true)
+  })
+
   it('is not read out of prose or from commands that only touch the file', () => {
     expect(matchesAnyPublish('git commit -m "use pnpm pr:reply for replies"')).toBe(false)
     expect(matchesAnyPublish('sed -n 1,20p scripts/pr-reply.mjs')).toBe(false)
     expect(matchesAnyPublish('pnpm vitest run scripts/pr-reply.test.ts')).toBe(false)
+    expect(matchesAnyPublish('npx eslint scripts/pr-reply.mjs scripts/pr-reply.test.ts')).toBe(false)
+    expect(matchesAnyPublish('pnpm exec prettier --check scripts/pr-reply.mjs')).toBe(false)
   })
 })
 
@@ -2781,14 +2821,19 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     mkdirSync(join(repo, 'a-dir'))
     const heredoc = hook(`cat > ${repo}/msg.txt <<'EOF'\nfix: x\nEOF\ngit commit -F ${repo}/msg.txt`)
     const redirect = hook(`git log -1 --format=%B > m2.txt && git commit -q -F m2.txt`)
-    const appended = hook(`echo more >> 'm3.txt' && git commit -F m3.txt`)
+    const appended = hook(`echo more | tee -a 'm3.txt' && git commit -F m3.txt`)
     const plain = hook('git commit -F elsewhere.txt')
     const dir = hook(`git commit -F ${repo}/a-dir`)
     writeFileSync(join(repo, 'locked.txt'), 'Fixes #1')
     chmodSync(join(repo, 'locked.txt'), 0o000)
     const locked = hook(`git commit -F ${repo}/locked.txt`)
-    for (const r of [heredoc, redirect, appended, plain, dir, locked]) expect(r.status).toBe(2)
+    const device = hook('git commit -F /dev/null')
+    const home = hook('git commit -F ~/km-no-such-message.txt')
+    for (const r of [heredoc, redirect, appended, plain, dir, locked, device, home]) expect(r.status).toBe(2)
     expect(locked.stderr).toContain(`${repo}/locked.txt: is not readable by this hook`)
+    expect(device.stderr).toContain('/dev/null: is not a regular file')
+    // a home path is not relative to the cwd
+    expect(home.stderr).not.toContain('resolved against')
     expect(heredoc.stderr).toContain(`${repo}/msg.txt: does not exist at hook time; this command writes it`)
     expect(redirect.stderr).toContain(`${join(repo, 'm2.txt')}: does not exist at hook time; this command writes it`)
     expect(appended.stderr).toContain('m3.txt: does not exist at hook time; this command writes it')
@@ -2932,6 +2977,8 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
       `gh api graphql -f query="$QUERY" -f t=x`,
       // a payload the gate cannot read
       `gh api graphql -f query='mutation($t:ID!){resolveReviewThread(input:{threadId:$t}){thread{id}}}' --input vars.json`,
+      // a commit message file rides along: it is text outside the command
+      `git commit -F msg.txt && git push && gh api graphql -f query='mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{isResolved}}}' -f id=PRRT_x`,
       // one name, two documents: it is text-safe only if every declaration is
       `gh api graphql -f query='mutation($t:ID!){resolveReviewThread(input:{threadId:$t}){thread{id}}}' -f t="$t"; gh api graphql -f query='mutation($t:String!){addComment(input:{subjectId:"X",body:$t}){clientMutationId}}' -f t="$t"`,
     ])
@@ -2977,6 +3024,8 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
       `${read} && gh pr comment 1 --body "see #653"`,
       // a CLI publish beside it keeps its own text-outside-the-command rule
       `${read} && gh pr comment 1 -F notes.md`,
+      // a gh call the publish detectors cannot spell still counts against it
+      `${read} && gh \\\n  api repos/Stvad/knowledge-medium/issues/1/comments -f body="see #653"`,
       // a mutation document anywhere in the invocation is not a read
       `${read}; gh api graphql -f query='mutation{addComment(input:{subjectId:"X",body:"see #653"}){clientMutationId}}'`,
     ])
@@ -3040,6 +3089,40 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     const r = hook('git commit -m "Fixes #999"', session)
     expect(r.status).toBe(2)
     expect(r.stderr).toContain('#999 → NO SUCH ISSUE OR PR')
+  })
+
+  // An attestation vouched for which issue a number is, not for closing it:
+  // a close keyword that draws a warning still blocks.
+  it('still blocks an attested number used with a close keyword that draws a warning', () => {
+    const { hook } = makeRepo({ dbReady: true, ghIssues: { 700: A_PR } })
+    const session = { session_id: 'sess-1' }
+    hook('KM_ISSUE_REFS_OK=1 gh pr merge 12 --body "relates to #700"', session)
+    expect(hook('gh pr merge 12 --body "relates to #700"', session).status).toBe(0)
+    const r = hook('git commit -m "Fixes #700"', session)
+    expect(r.status).toBe(2)
+    expect(r.stderr).toContain('close keyword targets a PR')
+  })
+
+  it('still blocks an attested number whose lookup fails now', () => {
+    const { hook, repo } = makeRepo({ dbReady: true, ghIssues: { 653: AN_ISSUE } })
+    const session = { session_id: 'sess-1' }
+    hook('KM_ISSUE_REFS_OK=1 git commit -m "Fixes #653"', session)
+    // a lookup that answers garbage is a failed lookup, not a title
+    writeFileSync(join(repo, 'gh-issue-653.json'), 'not json')
+    const r = hook('git commit -m "Fixes #653"', session)
+    expect(r.status).toBe(2)
+    expect(r.stderr).toContain('#653 → COULD NOT VERIFY')
+  })
+
+  it('reads only whole numbers from a memo, and keeps a subagent to its own', () => {
+    const { hook, repo } = makeRepo({ dbReady: true, ghIssues: { 653: AN_ISSUE } })
+    mkdirSync(join(repo, 'tmp', 'km-publish-gate'))
+    writeFileSync(join(repo, 'tmp', 'km-publish-gate', 'sess-1.json'), JSON.stringify({ attested: ['653'] }))
+    expect(hook('git commit -m "Fixes #653"', { session_id: 'sess-1' }).status).toBe(2)
+    hook('KM_ISSUE_REFS_OK=1 git commit -m "Fixes #653"', { session_id: 'sess-1', agent_id: 'a1' })
+    expect(hook('git commit -m "Fixes #653"', { session_id: 'sess-1', agent_id: 'a1' }).status).toBe(0)
+    expect(hook('git commit -m "Fixes #653"', { session_id: 'sess-1', agent_id: 'a2' }).status).toBe(2)
+    expect(hook('git commit -m "Fixes #653"', { session_id: 'sess-1' }).status).toBe(2)
   })
 
   // A bead id is substituted, never attested.
