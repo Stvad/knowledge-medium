@@ -1,0 +1,1 @@
+import{jw as e}from"../../chunks/app-B5CQYyMe.js";export{e as approveExtensionHere};
