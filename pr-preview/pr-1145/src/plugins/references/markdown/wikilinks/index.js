@@ -1,1 +1,1 @@
-import{Rd as e}from"../../../../../chunks/app-CTMisOyU.js";export{e as wikilinkMarkdownExtension};
+import{Rd as e}from"../../../../../chunks/app-C4FaFT4d.js";export{e as wikilinkMarkdownExtension};
