@@ -995,8 +995,28 @@ export const buildDenyMessage = (mapped, unmapped) => {
  *  the shared helper, not on whichever call site crosses first. */
 const MAX_OUTPUT_BYTES = 256 * 1024 * 1024
 
+// Wall time per verb across the run, for the run log (noteRunTiming): nearly
+// all of a sync's cost is subprocesses, so this is where a regression shows.
+// The verb, not its operands, so repeated calls aggregate.
+const spawnTimes = new Map()
+const spawnVerb = (file, args) => {
+  const words = args.filter(a => /^[a-z][a-z-]*$/.test(a) && !a.startsWith('km-')).slice(0, 2)
+  const direction = args.find(a => a === '--push-only' || a === '--pull-only')
+  return [file, ...(words.length ? words : args.slice(0, 1)), ...(direction ? [direction] : [])].join(' ')
+}
+const timedSpawnSync = (file, args, opts) => {
+  const started = performance.now()
+  try {
+    return spawnSync(file, args, opts)
+  } finally {
+    const verb = spawnVerb(file, args)
+    const { calls, ms } = spawnTimes.get(verb) ?? { calls: 0, ms: 0 }
+    spawnTimes.set(verb, { calls: calls + 1, ms: ms + performance.now() - started })
+  }
+}
+
 const run = (file, args, opts = {}) => {
-  const r = spawnSync(file, args, {
+  const r = timedSpawnSync(file, args, {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
     maxBuffer: MAX_OUTPUT_BYTES,
@@ -1026,7 +1046,7 @@ export const tryRun = (file, args, opts) => {
  * hold the DB-exists gate (initializedDbRoot) first — see header.
  */
 export const bdShowRows = (ids, opts = {}) => {
-  const r = spawnSync('bd', ['show', ...ids, '--json'], {
+  const r = timedSpawnSync('bd', ['show', ...ids, '--json'], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
     // Scales with the request: `bd show` costs ~0.4s per id.
@@ -1285,7 +1305,7 @@ const GRAPHQL_CHUNK = 50
 const [OWNER, NAME] = REPO.split('/')
 const commentsField = after => `comments(first: ${COMMENT_PAGE}${after ? `, after: "${after}"` : ''}) { pageInfo { hasNextPage endCursor } nodes { body } }`
 const graphqlRepository = (fields, env) => {
-  const r = spawnSync('gh', ['api', 'graphql', '-f', `query=query { repository(owner: "${OWNER}", name: "${NAME}") { ${fields} } }`], {
+  const r = timedSpawnSync('gh', ['api', 'graphql', '-f', `query=query { repository(owner: "${OWNER}", name: "${NAME}") { ${fields} } }`], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
     maxBuffer: MAX_OUTPUT_BYTES,
@@ -1430,6 +1450,78 @@ const mirrorComments = ({ beads, issueByNumber, mintedNumbers, env, dryRun }) =>
 }
 
 // ---------------------------------------------------------------------------
+// Run log: the slow-sync alarm's input
+// ---------------------------------------------------------------------------
+
+// One JSON line per real run, in the main checkout's .beads/ (per device, and
+// gitignored as a *.log): how long it took, whether that was over budget, and
+// the slowest spawns. A converged run is a fixed handful of reads (pinned by
+// the test of that name), so a run over budget means some step began scaling
+// with the tracker — which no single run's output shows, since SessionEnd
+// output reaches nobody. The SessionStart hook reads this log and says so.
+export const SYNC_RUN_LOG = join('.beads', 'github-sync-runs.log')
+// About twice a converged run on the live tracker. The override is for the
+// process tests.
+const SLOW_SYNC_MS = process.env.KM_BD_SYNC_BUDGET_MS ? Number(process.env.KM_BD_SYNC_BUDGET_MS) : 20_000
+const RUN_LOG_KEEP = 200
+const seconds = ms => `${(ms / 1000).toFixed(1)}s`
+const spawnSummary = spawns => spawns.map(s => `${s.cmd}${s.calls > 1 ? ` ×${s.calls}` : ''} ${seconds(s.ms)}`).join(', ')
+
+// Timed from process start: what the user waits on includes node and the
+// probes, not just the steps.
+const noteRunTiming = (root, ok) => {
+  const ms = Math.round(performance.now())
+  const record = {
+    at: new Date().toISOString(),
+    ms,
+    ok,
+    slow: ms > SLOW_SYNC_MS,
+    budgetMs: SLOW_SYNC_MS,
+    spawns: [...spawnTimes]
+      .map(([cmd, t]) => ({ cmd, calls: t.calls, ms: Math.round(t.ms) }))
+      .sort((a, b) => b.ms - a.ms)
+      .slice(0, 5),
+  }
+  if (record.slow)
+    console.log(`bd-github-sync: slow run — ${seconds(ms)} against a ${Math.round(SLOW_SYNC_MS / 1000)}s budget; slowest: ${spawnSummary(record.spawns)}`)
+  try {
+    const path = join(root, SYNC_RUN_LOG)
+    const kept = tryRead(path).split('\n').filter(Boolean).slice(-(RUN_LOG_KEEP - 1))
+    writeFileSync(path, [...kept, JSON.stringify(record)].join('\n') + '\n')
+  } catch {
+    // The log is telemetry: losing a line must never fail the sync it describes.
+  }
+}
+
+// Two slow runs in a row, not one: a single slow run is as often GitHub having
+// a slow minute as a regression. Total over any text — it runs at session
+// start, which must never break.
+export const syncSlownessNotice = logText => {
+  const runs = String(logText ?? '')
+    .split('\n')
+    .flatMap(line => {
+      try {
+        const r = JSON.parse(line)
+        return typeof r?.ms === 'number' ? [r] : []
+      } catch {
+        return []
+      }
+    })
+  const lastTwo = runs.slice(-2)
+  if (lastTwo.length < 2 || !lastTwo.every(r => r.slow)) return ''
+  const [previous, latest] = lastTwo
+  return (
+    `⚠ bd-github-sync is over its ${Math.round(latest.budgetMs / 1000)}s budget: the last two runs took ` +
+    `${seconds(previous.ms)} and ${seconds(latest.ms)} (latest ${latest.at}). Slowest spawns in the latest: ` +
+    `${spawnSummary(latest.spawns ?? [])}. A converged run is a fixed handful of reads (pinned by "makes only the ` +
+    `fixed reads on a converged run" in scripts/bd-github-sync.test.ts), so some step has started scaling with the ` +
+    `tracker — tell the user, and find it before it outgrows the SessionEnd hook's 300s timeout.`
+  )
+}
+
+export const readSyncSlownessNotice = root => syncSlownessNotice(tryRead(join(root, SYNC_RUN_LOG)))
+
+// ---------------------------------------------------------------------------
 // The sync sequence
 // ---------------------------------------------------------------------------
 
@@ -1451,7 +1543,7 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
         `upgrade issue carries the checklist), then add the version here. KM_BD_VERSION_OK=1 proceeds anyway.`,
     )
 
-  const result = withLock(pre.root, () => {
+  const syncSteps = () => {
     const { issueByNumber, maxKnownIssueNumber } = fetchIssues()
     // Every read of the tracker is one `bd export`, taken again only after a
     // step that WROTE: a converged run reads it once.
@@ -1631,10 +1723,18 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
     const changed = actionReported || syncSummary.some(l => /[1-9]/.test(l))
     if (!quiet || changed) console.log(['bd-github-sync:', ...report].join('\n  '))
     return { closes, fixes, closePushes }
-  })
+  }
 
-  if (result?.skipped && !quiet) console.log(`bd-github-sync: skipped (${result.skipped})`)
-  return result
+  let outcome = 'failed'
+  try {
+    const result = withLock(pre.root, syncSteps)
+    outcome = result?.skipped ? 'skipped' : 'ok'
+    if (result?.skipped && !quiet) console.log(`bd-github-sync: skipped (${result.skipped})`)
+    return result
+  } finally {
+    // A run that never took the lock did nothing; its wait was another run's.
+    if (!dryRun && outcome !== 'skipped') noteRunTiming(pre.root, outcome === 'ok')
+  }
 }
 
 // ---------------------------------------------------------------------------

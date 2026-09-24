@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -37,6 +37,7 @@ import {
   planPriorityFixes,
   REPO,
   resolveBodyPath,
+  syncSlownessNotice,
   type BeadRow,
   type IssueInfo,
 } from './bd-github-sync.mjs'
@@ -726,6 +727,33 @@ describe('pullWouldWrite', () => {
   })
 })
 
+describe('syncSlownessNotice', () => {
+  const record = (over: object) =>
+    JSON.stringify({ at: '2026-09-24T20:00:00.000Z', ms: 3_000, ok: true, slow: false, budgetMs: 20_000, spawns: [], ...over })
+  const slow = (ms: number) =>
+    record({ ms, slow: true, spawns: [{ cmd: 'bd show', calls: 2, ms: 20_300 }, { cmd: 'gh issue list', calls: 1, ms: 5_300 }] })
+
+  it('warns when the last two runs both blew the budget, naming the slowest spawns of the latest', () => {
+    const notice = syncSlownessNotice([record({}), slow(35_900), slow(37_200)].join('\n') + '\n')
+    expect(notice).toContain('last two runs took 35.9s and 37.2s')
+    expect(notice).toContain('20s budget')
+    expect(notice).toContain('bd show ×2 20.3s, gh issue list 5.3s')
+  })
+
+  // One slow run is as often GitHub having a slow minute as a regression.
+  it('stays quiet on a single slow run, and once a run is back under', () => {
+    expect(syncSlownessNotice([record({}), slow(37_200)].join('\n'))).toBe('')
+    expect(syncSlownessNotice([slow(35_900), slow(37_200), record({})].join('\n'))).toBe('')
+    expect(syncSlownessNotice(slow(37_200))).toBe('')
+  })
+
+  it('reads past a torn or foreign line instead of failing session start', () => {
+    const noise = ['{"ms": 1', 'not json', '{"unrelated": true}', 'null']
+    expect(syncSlownessNotice([slow(35_900), ...noise, slow(37_200), ...noise].join('\n'))).toContain('35.9s and 37.2s')
+    expect(syncSlownessNotice('')).toBe('')
+  })
+})
+
 describe('bdVersion', () => {
   it('reads the version out of what bd prints, and refuses to invent one', () => {
     expect(bdVersion('bd version 1.2.2 (Homebrew)')).toBe('1.2.2')
@@ -1108,7 +1136,11 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     chmodSync(join(shimDir, 'gh'), 0o755)
     const env = { ...process.env, ...opts.env, PATH: `${shimDir}:${process.env.PATH}` }
     const run = (...args: string[]) => spawnSync('node', [script, ...args], { cwd: repo, env, encoding: 'utf8' })
-    return { run, shimCalls: () => readFileSync(shimLog, 'utf8'), posted: () => readFileSync(postedLog, 'utf8') }
+    const runLog = () => {
+      const log = join(repo, '.beads', 'github-sync-runs.log')
+      return existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map(l => JSON.parse(l)) : []
+    }
+    return { run, runLog, shimCalls: () => readFileSync(shimLog, 'utf8'), posted: () => readFileSync(postedLog, 'utf8') }
   }
 
   // Paired with syncRow to be CONVERGED: same title, body, priority and type,
@@ -1252,6 +1284,34 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(r.status).toBe(1)
     expect(r.stderr).toContain('bd-github-sync: failed')
     expect(r.stdout).toContain('minted: km-t5 → #5')
+  })
+
+  // The alarm's input: every real run leaves one line saying how long it took
+  // and where the time went, and a run over budget says so even under --quiet.
+  it('records each run with its slowest spawns, and flags one over budget', () => {
+    const row = syncRow({ id: 'km-c', external_ref: ref(1), updated_at: '2026-08-19T00:00:00Z' })
+    const { run, runLog } = makeSyncRepo({
+      issues: [ghIssue(1, '2026-08-20T00:00:00Z')],
+      reads: [[row]],
+      env: { KM_BD_SYNC_BUDGET_MS: '1' },
+    })
+    const r = run('--quiet')
+    expect(r.status).toBe(0)
+    expect(r.stdout).toMatch(/^bd-github-sync: slow run — [\d.]+s against a 0s budget; slowest: /m)
+    const [entry] = runLog()
+    expect(entry).toMatchObject({ ok: true, slow: true, budgetMs: 1 })
+    expect(entry.spawns.map((s: { cmd: string }) => s.cmd)).toEqual(expect.arrayContaining(['gh issue list', 'bd export']))
+  })
+
+  it('records a failed run as failed, and leaves no record for a dry run', () => {
+    const row = syncRow({ id: 'km-c', external_ref: ref(1), updated_at: '2026-08-19T00:00:00Z' })
+    const repo = { issues: [ghIssue(1, '2026-08-20T00:00:00Z'), ghIssue(9, '2026-08-20T00:00:00Z')], reads: [[row]] }
+    const failed = makeSyncRepo({ ...repo, failFullSync: true })
+    expect(failed.run().status).toBe(1)
+    expect(failed.runLog()).toMatchObject([{ ok: false, slow: false }])
+    const dry = makeSyncRepo(repo)
+    expect(dry.run('--dry-run').status).toBe(0)
+    expect(dry.runLog()).toEqual([])
   })
 
   // The pre-pull push is SELECTIVE: bd 1.2.2 GETs every linked issue it is

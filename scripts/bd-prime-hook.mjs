@@ -15,7 +15,7 @@
 // (the first bd command would create an empty DB that then refuses to pull).
 import { spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
-import { initializedDbRoot, isMainModule } from './bd-github-sync.mjs'
+import { initializedDbRoot, isMainModule, readSyncSlownessNotice } from './bd-github-sync.mjs'
 
 // Just under the measured 10,000-char inline limit; the margin absorbs a
 // wrapper-side format tweak without re-measuring the host.
@@ -50,7 +50,10 @@ const clip = (s, n) => {
   return `${cut}…`
 }
 
-const render = (memories, previewLen, droppedNote = '') => {
+// `notice` is a one-line alarm (the sync's slowness, readSyncSlownessNotice)
+// that must reach the session whatever the index costs, so it sits above it
+// and inside the same fit.
+const render = (memories, previewLen, droppedNote = '', notice = '') => {
   const clipNote = previewLen > 0 && memories.some(m => m.preview.length > previewLen)
     ? ` · previews clipped to ${previewLen} chars`
     : previewLen === 0
@@ -59,6 +62,7 @@ const render = (memories, previewLen, droppedNote = '') => {
   const lines = [
     '# Beads Issue Tracker Active',
     '',
+    ...(notice ? [notice, ''] : []),
     `## Memories (${memories.length}) — full text: \`bd recall <key>\` · search: \`bd memories <keyword>\`${clipNote}`,
     ...memories.map(m => (previewLen > 0 ? `- **${m.key}**: ${clip(m.preview, previewLen)}` : `- **${m.key}**`)),
   ]
@@ -66,29 +70,29 @@ const render = (memories, previewLen, droppedNote = '') => {
   return lines.join('\n')
 }
 
-export const buildAdditionalContext = ctx => {
+export const buildAdditionalContext = (ctx, notice = '') => {
   const { memories, parseOk } = parsePrimeContext(ctx)
   if (!parseOk) {
-    const notice = '[bd-prime-hook] could not parse `bd prime` output; raw output clipped to fit the host inline limit:\n\n'
-    return notice + clip(String(ctx ?? ''), MAX_CONTEXT_CHARS - notice.length)
+    const head = `${notice ? `${notice}\n\n` : ''}[bd-prime-hook] could not parse \`bd prime\` output; raw output clipped to fit the host inline limit:\n\n`
+    return head + clip(String(ctx ?? ''), MAX_CONTEXT_CHARS - head.length)
   }
   for (const n of PREVIEW_LADDER) {
-    const text = render(memories, n)
+    const text = render(memories, n, '', notice)
     if (text.length <= MAX_CONTEXT_CHARS) return text
   }
-  const keysOnly = render(memories, 0)
+  const keysOnly = render(memories, 0, '', notice)
   if (keysOnly.length <= MAX_CONTEXT_CHARS) return keysOnly
   // Last resort: keep a contiguous prefix of bd's ordering and say what fell off.
   for (let keep = memories.length - 1; keep > 0; keep--) {
     const kept = memories.slice(0, keep)
     const note = `…and ${memories.length - keep} more — run \`bd memories\` for the full index`
-    const text = render(kept, 0, note)
+    const text = render(kept, 0, note, notice)
     if (text.length <= MAX_CONTEXT_CHARS) return text
   }
-  return render([], 0, `…and ${memories.length} more — run \`bd memories\` for the full index`)
+  return render([], 0, `…and ${memories.length} more — run \`bd memories\` for the full index`, notice)
 }
 
-export const transformHookStdout = raw => {
+export const transformHookStdout = (raw, notice = '') => {
   if (!raw) return null
   // Defence in depth: bd's `Error…`-with-exit-0 stdout is not valid JSON, so
   // the parse below already rejects it; this names the failure instead of
@@ -102,7 +106,7 @@ export const transformHookStdout = raw => {
   }
   if (typeof ctx !== 'string' || !ctx.trim()) return null
   return JSON.stringify({
-    hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: buildAdditionalContext(ctx) },
+    hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: buildAdditionalContext(ctx, notice) },
   })
 }
 
@@ -118,13 +122,13 @@ const parseHookEnvelope = raw => {
 }
 
 /** Compact a native lifecycle envelope without changing its event or other fields. */
-export const transformCodexHookStdout = (raw, primeRaw) => {
+export const transformCodexHookStdout = (raw, primeRaw, notice = '') => {
   const native = parseHookEnvelope(raw)
   if (!native) return raw
   const context = parseHookEnvelope(primeRaw)?.context ?? native.context
   native.envelope.hookSpecificOutput = {
     ...native.envelope.hookSpecificOutput,
-    additionalContext: buildAdditionalContext(context),
+    additionalContext: buildAdditionalContext(context, notice),
   }
   return JSON.stringify(native.envelope)
 }
@@ -136,13 +140,13 @@ const runBd = (args, input = undefined) => spawnSync('bd', args, {
   stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
 })
 
-const runClaudeSessionStart = () => {
+const runClaudeSessionStart = notice => {
   const r = runBd(['prime', '--hook-json', '--mcp'])
-  const out = r.status === 0 && !/^Error/m.test(r.stderr ?? '') ? transformHookStdout(r.stdout) : null
+  const out = r.status === 0 && !/^Error/m.test(r.stderr ?? '') ? transformHookStdout(r.stdout, notice) : null
   if (out) process.stdout.write(out)
 }
 
-const runCodexHook = event => {
+const runCodexHook = (event, notice) => {
   let input = ''
   try {
     input = readFileSync(0, 'utf8')
@@ -166,15 +170,18 @@ const runCodexHook = event => {
   const compacted = transformCodexHookStdout(
     nativeRaw,
     prime?.status === 0 && !/^Error/m.test(prime.stderr ?? '') ? prime.stdout : null,
+    notice,
   )
   if (compacted) process.stdout.write(compacted)
 }
 
 if (isMainModule(import.meta.url)) {
   try {
-    if (initializedDbRoot()) {
-      if (process.argv[2] === '--codex') runCodexHook(process.argv[3] ?? '')
-      else runClaudeSessionStart()
+    const root = initializedDbRoot()
+    if (root) {
+      const notice = readSyncSlownessNotice(root)
+      if (process.argv[2] === '--codex') runCodexHook(process.argv[3] ?? '', notice)
+      else runClaudeSessionStart(notice)
     }
   } catch (e) {
     console.error(`[bd-prime-hook] ${e?.message ?? e}`)

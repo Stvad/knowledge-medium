@@ -89,6 +89,17 @@ describe('buildAdditionalContext', () => {
         expect(out).not.toContain('decoy_not_a_memory')
     })
 
+    // The sync alarm rides at the top of the same fitted context: it has to
+    // survive the clipping, and must not push the index past the host limit.
+    it('carries a notice at the top without breaking the fit', () => {
+        const notice = '⚠ bd-github-sync is over its 20s budget'
+        const out = buildAdditionalContext(makeContext(synthetic(135, 150)), notice)
+        expect(out.length).toBeLessThanOrEqual(MAX_CONTEXT_CHARS)
+        expect(out).toContain(notice)
+        expect(out.indexOf(notice)).toBeLessThan(out.indexOf('## Memories'))
+        expect(out).toContain('feedback_synthetic_memory_key_134')
+    })
+
     it('keeps full previews when the index is small', () => {
         const out = buildAdditionalContext(makeContext(synthetic(5, 120)))
         expect(out).not.toContain('…')
@@ -199,6 +210,8 @@ describe('bd-prime-hook process behavior', { timeout: 20_000 }, () => {
 
     const makeRepo = (opts: {
         dbReady: boolean
+        /** Lines of the sync's run log (`.beads/github-sync-runs.log`). */
+        syncRuns?: object[]
         primeStdout?: string
         primeStderr?: string
         codexStdout?: string
@@ -207,6 +220,8 @@ describe('bd-prime-hook process behavior', { timeout: 20_000 }, () => {
         spawnSync('git', ['init', '-q'], { cwd: repo })
         mkdirSync(join(repo, '.beads'))
         if (opts.dbReady) mkdirSync(join(repo, '.beads', 'embeddeddolt'))
+        if (opts.syncRuns)
+            writeFileSync(join(repo, '.beads', 'github-sync-runs.log'), opts.syncRuns.map(r => JSON.stringify(r)).join('\n') + '\n')
         const shimDir = join(repo, 'shim')
         mkdirSync(shimDir)
         const shimLog = join(repo, 'bd-shim.log')
@@ -258,6 +273,31 @@ describe('bd-prime-hook process behavior', { timeout: 20_000 }, () => {
         expect(parsed.hookSpecificOutput.additionalContext).not.toContain('SESSION CLOSE PROTOCOL')
         expect(shimCalls()).toContain('bd --version')
         expect(shimCalls()).toContain('bd prime --hook-json --mcp')
+    })
+
+    it('opens the context with the sync alarm when the last two syncs were over budget', () => {
+        const slowRun = { at: '2026-09-24T20:00:00.000Z', ms: 37_200, ok: true, slow: true, budgetMs: 20_000, spawns: [{ cmd: 'bd show', calls: 2, ms: 20_300 }] }
+        const { run } = makeRepo({
+            dbReady: true,
+            syncRuns: [slowRun, slowRun],
+            primeStdout: wrap(makeContext([['feedback_alpha', 'preview']])),
+        })
+        const r = run()
+        expect(r.status).toBe(0)
+        const context = JSON.parse(r.stdout).hookSpecificOutput.additionalContext
+        expect(context).toContain('bd-github-sync is over its 20s budget')
+        expect(context).toContain('bd show ×2 20.3s')
+        expect(context).toContain('feedback_alpha')
+
+        const codex = makeRepo({
+            dbReady: true,
+            syncRuns: [slowRun, slowRun],
+            codexStdout: wrap('native full context'),
+            primeStdout: wrap(makeContext([['feedback_alpha', 'preview']])),
+        })
+        const viaCodex = codex.run(['--codex', 'SessionStart'], '{}')
+        expect(viaCodex.status).toBe(0)
+        expect(JSON.parse(viaCodex.stdout).hookSpecificOutput.additionalContext).toContain('bd-github-sync is over its 20s budget')
     })
 
     it('forwards the Codex event and stdin, then compacts native context in place', () => {
