@@ -1,0 +1,1 @@
+import{hB as e}from"../../../chunks/app-VP6PCuha.js";export{e as aliasDataExtension};
