@@ -1,0 +1,1 @@
+import{nT as e,rT as t}from"../../chunks/app-cizT4YS4.js";export{e as dispatchPointerAction,t as setPointerActionDispatcher};

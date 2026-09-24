@@ -1,0 +1,1 @@
+import{_w as e,gw as t}from"../../../chunks/app-cizT4YS4.js";export{t as ExtensionPromptSurface,e as extensionPromptsExtension};

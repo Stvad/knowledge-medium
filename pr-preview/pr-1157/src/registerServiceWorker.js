@@ -1,0 +1,1 @@
+import{Gw as e,Kw as t}from"../chunks/app-cizT4YS4.js";export{e as checkForAppUpdate,t as registerServiceWorker};

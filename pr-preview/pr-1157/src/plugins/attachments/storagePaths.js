@@ -1,0 +1,1 @@
+import{_m as e,vm as t}from"../../../chunks/app-cizT4YS4.js";export{e as attachmentObjectPath,t as authenticatedObjectUrl};

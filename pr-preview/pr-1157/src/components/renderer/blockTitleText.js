@@ -1,0 +1,1 @@
+import{Ck as e,Sk as t}from"../../../chunks/app-cizT4YS4.js";export{t as BLOCK_TITLE_TEXT_CLASS,e as useBlockTitleTextClass};
