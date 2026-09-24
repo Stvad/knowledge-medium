@@ -308,6 +308,22 @@ describe('bd-prime-hook process behavior', { timeout: 20_000 }, () => {
         expect(refreshed).not.toContain('bd-github-sync is over')
     })
 
+    // The alarm does not depend on the memory index, so a failing prime must
+    // not take it down with it.
+    it('still raises the sync alarm when bd prime fails', () => {
+        const slowRun = { at: '2026-09-24T20:00:00.000Z', ms: 37_200, ok: true, budgetMs: 20_000, spawns: [] }
+        const { run } = makeRepo({
+            dbReady: true,
+            syncRuns: [slowRun, slowRun],
+            primeStdout: 'Error: workspace database locked\n',
+        })
+        const r = run()
+        expect(r.status).toBe(0)
+        const parsed = JSON.parse(r.stdout)
+        expect(parsed.hookSpecificOutput.hookEventName).toBe('SessionStart')
+        expect(parsed.hookSpecificOutput.additionalContext).toContain('bd-github-sync is over its 20s budget')
+    })
+
     it('forwards the Codex event and stdin, then compacts native context in place', () => {
         const native = JSON.stringify({
             continue: true,

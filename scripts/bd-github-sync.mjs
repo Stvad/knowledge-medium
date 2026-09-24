@@ -1004,6 +1004,14 @@ const spawnVerb = (file, args) => {
   const direction = args.find(a => a === '--push-only' || a === '--pull-only')
   return [file, ...(words.length ? words : args.slice(0, 1)), ...(direction ? [direction] : [])].join(' ')
 }
+// Time spent waiting on purpose — pacing posts, queueing on another run's
+// lock. The run log records it apart, and the budget does not count it.
+let idleMs = 0
+const pause = ms => {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+  idleMs += ms
+}
+
 const noteSpawn = (file, args, started) => {
   const verb = spawnVerb(file, args)
   spawnTimes.set(verb, [...(spawnTimes.get(verb) ?? []), [started, performance.now()]])
@@ -1182,7 +1190,7 @@ const withLock = async (root, fn) => {
         } catch {}
         continue
       }
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500)
+      pause(500)
     }
   }
   const unlock = () => {
@@ -1424,7 +1432,6 @@ const POST_PAUSE_MS = 800
 // Bounds one run under the SessionEnd hook's timeout (.claude/settings.json);
 // the rest resumes next run. The env override exists for the process tests.
 const POST_CAP = Number(process.env.KM_MIRROR_POST_CAP) || 60
-const pause = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
 const mirrorComments = async ({ beads, issueByNumber, mintedNumbers, env, dryRun }) => {
   // A ref is trusted only where the run-start listing shows an issue, or
   // where this run's push minted it: a ref pointed at a PR or a deleted
@@ -1525,25 +1532,31 @@ export const SYNC_RUN_LOG = join('.beads', 'github-sync-runs.log')
 const SLOW_SYNC_MS = process.env.KM_BD_SYNC_BUDGET_MS ? Number(process.env.KM_BD_SYNC_BUDGET_MS) : 15_000
 const RUN_LOG_KEEP = 200
 const seconds = ms => `${(ms / 1000).toFixed(1)}s`
+// The one definition, for the line a run prints and for the notice: what the
+// run spent working, against the budget it ran under.
+const activeMs = run => run.ms - (run.idleMs ?? 0)
+const overBudget = run => activeMs(run) > run.budgetMs
 const spawnSummary = spawns => spawns.map(s => `${s.cmd}${s.calls > 1 ? ` ×${s.calls}` : ''} ${seconds(s.ms)}`).join(', ')
 
 // Timed from process start: what the user waits on includes node and the
 // probes, not just the steps.
 const noteRunTiming = (root, ok) => {
-  const ms = Math.round(performance.now())
   const record = {
     at: new Date().toISOString(),
-    ms,
+    ms: Math.round(performance.now()),
+    idleMs: Math.round(idleMs),
     ok,
-    slow: ms > SLOW_SYNC_MS,
     budgetMs: SLOW_SYNC_MS,
     spawns: [...spawnTimes]
       .map(([cmd, intervals]) => ({ cmd, calls: intervals.length, ms: Math.round(coveredMs(intervals)) }))
       .sort((a, b) => b.ms - a.ms)
       .slice(0, 5),
   }
-  if (record.slow)
-    console.log(`bd-github-sync: slow run — ${seconds(ms)} against a ${Math.round(SLOW_SYNC_MS / 1000)}s budget; slowest: ${spawnSummary(record.spawns)}`)
+  if (overBudget(record))
+    console.log(
+      `bd-github-sync: slow run — ${seconds(activeMs(record))} against a ${Math.round(SLOW_SYNC_MS / 1000)}s budget; ` +
+        `slowest: ${spawnSummary(record.spawns)}${record.idleMs ? `; plus ${seconds(record.idleMs)} of deliberate waits` : ''}`,
+    )
   try {
     const path = join(root, SYNC_RUN_LOG)
     const kept = tryRead(path).split('\n').filter(Boolean).slice(-(RUN_LOG_KEEP - 1))
@@ -1553,8 +1566,8 @@ const noteRunTiming = (root, ok) => {
   }
 }
 
-// Two slow runs in a row, not one: a single slow run is as often GitHub having
-// a slow minute as a regression. Total over any text — it runs at session
+// Two runs over budget in a row, not one: a single slow run is as often GitHub
+// having a slow minute as a regression. Total over any text — it runs at session
 // start, which must never break.
 export const syncSlownessNotice = logText => {
   const runs = String(logText ?? '')
@@ -1568,11 +1581,11 @@ export const syncSlownessNotice = logText => {
       }
     })
   const lastTwo = runs.slice(-2)
-  if (lastTwo.length < 2 || !lastTwo.every(r => r.slow)) return ''
+  if (lastTwo.length < 2 || !lastTwo.every(overBudget)) return ''
   const [previous, latest] = lastTwo
   return (
     `⚠ bd-github-sync is over its ${Math.round(latest.budgetMs / 1000)}s budget: the last two runs took ` +
-    `${seconds(previous.ms)} and ${seconds(latest.ms)} (latest ${latest.at}). Slowest spawns in the latest: ` +
+    `${seconds(activeMs(previous))} and ${seconds(activeMs(latest))} (latest ${latest.at}). Slowest spawns in the latest: ` +
     `${spawnSummary(latest.spawns ?? [])}. A converged run is a fixed handful of reads (pinned by "makes only the ` +
     `fixed reads on a converged run" in scripts/bd-github-sync.test.ts), so some step has started scaling with the ` +
     `tracker — tell the user, and find it before it outgrows the SessionEnd hook's 300s timeout.`
@@ -1638,8 +1651,7 @@ const runSync = async ({ quiet = false, dryRun = false } = {}) => {
       )
     // Re-read after the closes: a close bumps updated_at, and the pre-adoption
     // row would look converged to the push plan below. A dry run makes no
-    // closes, so the rows it would have bumped are moved from the pull to the
-    // push by hand.
+    // closes, so the rows it would have bumped are added to the push by hand.
     const exported = closes.length && !dryRun ? exportBeads(env) : preBeads
     const dryRunBumped = dryRun ? closes.map(c => c.id) : []
 
@@ -1660,7 +1672,9 @@ const runSync = async ({ quiet = false, dryRun = false } = {}) => {
     // leaves it for the next run, which sees GitHub newer and pulls it.
     const pushSet = [...new Set([...planPrePullPush(exported, issueByNumber), ...dryRunBumped])]
     const withheld = planLossyReapplies(exported, issueByNumber)
-    const pullExcluded = new Set([...withheld.map(w => w.id), ...dryRunBumped])
+    // The push set itself, not only the local-newer rule in planPullSet: a bead
+    // with no timestamp goes to the push, and that rule cannot judge it.
+    const pullExcluded = new Set([...withheld.map(w => w.id), ...pushSet])
     // Reported, but never counted as news: withholding changes nothing on
     // either side and recurs for as long as the divergence does, so letting it
     // answer "did anything change" would un-quiet every SessionEnd run.

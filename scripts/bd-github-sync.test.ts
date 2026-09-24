@@ -800,6 +800,15 @@ describe('syncSlownessNotice', () => {
     expect(syncSlownessNotice(slow(37_200))).toBe('')
   })
 
+  // Pacing a comment backlog, or waiting on another run's lock, is not the
+  // tracker getting slower: only the time the run spent working counts.
+  it('does not count deliberate waits against the budget', () => {
+    const draining = record({ ms: 52_000, idleMs: 47_000 })
+    expect(syncSlownessNotice([draining, draining].join('\n'))).toBe('')
+    const working = record({ ms: 52_000, idleMs: 20_000 })
+    expect(syncSlownessNotice([working, working].join('\n'))).toContain('32.0s and 32.0s')
+  })
+
   it('reads past a torn or foreign line instead of failing session start', () => {
     const noise = ['{"ms": 1', 'not json', '{"unrelated": true}', 'null']
     expect(syncSlownessNotice([slow(35_900), ...noise, slow(37_200), ...noise].join('\n'))).toContain('35.9s and 37.2s')
@@ -1222,7 +1231,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
         else if (mark === '-') inFlight--
       return peak
     }
-    return { run, runLog, graphqlPeak, shimCalls: () => readFileSync(shimLog, 'utf8'), posted: () => readFileSync(postedLog, 'utf8') }
+    return { repo, run, runLog, graphqlPeak, shimCalls: () => readFileSync(shimLog, 'utf8'), posted: () => readFileSync(postedLog, 'utf8') }
   }
 
   // Paired with syncRow to be CONVERGED: same title, body, priority and type,
@@ -1381,7 +1390,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(r.status).toBe(0)
     expect(r.stdout).toMatch(/^bd-github-sync: slow run — [\d.]+s against a 0s budget; slowest: /m)
     const [entry] = runLog()
-    expect(entry).toMatchObject({ ok: true, slow: true, budgetMs: 1 })
+    expect(entry).toMatchObject({ ok: true, budgetMs: 1 })
     expect(entry.spawns.map((s: { cmd: string }) => s.cmd)).toEqual(expect.arrayContaining(['gh issue list', 'bd export']))
   })
 
@@ -1390,7 +1399,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const repo = { issues: [ghIssue(1, '2026-08-20T00:00:00Z'), ghIssue(9, '2026-08-20T00:00:00Z')], reads: [[row]] }
     const failed = makeSyncRepo({ ...repo, failFullSync: true })
     expect(failed.run().status).toBe(1)
-    expect(failed.runLog()).toMatchObject([{ ok: false, slow: false }])
+    expect(failed.runLog()).toMatchObject([{ ok: false }])
     const dry = makeSyncRepo(repo)
     expect(dry.run('--dry-run').status).toBe(0)
     expect(dry.runLog()).toEqual([])
@@ -1443,6 +1452,22 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(log).toContain('bd github sync --push-only --issues km-p\n')
     expect(log).toContain('bd github sync --pull-only --issues 9\n')
     expect(log).not.toContain('bd show')
+  })
+
+  // A bead with no timestamp still goes to the push (bd decides with a fresh
+  // read), and the local-newer rule cannot judge it — so the push's own set is
+  // what keeps it out of the pull.
+  it('never names a bead the push carries out to the pull, even one with no timestamp', () => {
+    const row = pushable({ id: 'km-t', external_ref: ref(4) })
+    const { run, shimCalls } = makeSyncRepo({
+      issues: [ghIssue(4, '2026-08-20T00:00:00Z'), ghIssue(9, '2026-08-20T00:00:00Z')],
+      reads: [[row]],
+    })
+    const r = run()
+    expect(r.status).toBe(0)
+    const log = shimCalls()
+    expect(log).toContain('bd github sync --push-only --issues km-t\n')
+    expect(log).toContain('bd github sync --pull-only --issues 9\n')
   })
 
   // The documented asymmetry: a GitHub-side reopen does not stick — not even
@@ -1793,6 +1818,34 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(push).toBeGreaterThan(-1)
     expect(push).toBeLessThan(pull)
     expect(pull).toBeLessThan(firstPost)
+  })
+
+  // The pause between two posts is recorded as idle, so a backlog drain does
+  // not read as the sync slowing down.
+  it('records the pacing between posts as idle time', () => {
+    const { run, runLog } = makeSyncRepo({
+      issues: twoIssues(),
+      reads: [commentedRows()],
+      comments: { 'km-m': twoComments },
+      graphql: { data: { repository: { i7: issueComments([]) } } },
+    })
+    expect(run().status).toBe(0)
+    const [entry] = runLog()
+    expect(entry.idleMs).toBeGreaterThanOrEqual(800)
+    expect(entry.idleMs).toBeLessThan(entry.ms)
+  })
+
+  // Queueing behind another run is that run's time, not this one's. The holder
+  // is an orphaned `sleep`, so the OS reaps it when it ends and the dead-pid
+  // steal lets this run through well inside the lock's 20s deadline.
+  it('records a wait on another run\'s lock as idle time', () => {
+    const row = syncRow({ id: 'km-c', external_ref: ref(1), updated_at: '2026-08-19T00:00:00Z' })
+    const { repo, run, runLog } = makeSyncRepo({ issues: [ghIssue(1, '2026-08-20T00:00:00Z')], reads: [[row]] })
+    const holder = spawnSync('sh', ['-c', 'sleep 1.2 >/dev/null 2>&1 & echo $!'], { encoding: 'utf8' }).stdout.trim()
+    writeFileSync(join(repo, '.beads', 'github-sync.lock'), holder)
+    expect(run().status).toBe(0)
+    const [entry] = runLog()
+    expect(entry.idleMs).toBeGreaterThanOrEqual(1000)
   })
 
   it('caps the posts of one run and leaves the rest for the next', () => {

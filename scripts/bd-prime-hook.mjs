@@ -143,7 +143,9 @@ const runBd = (args, input = undefined) => spawnSync('bd', args, {
 const runClaudeSessionStart = notice => {
   const r = runBd(['prime', '--hook-json', '--mcp'])
   const out = r.status === 0 && !/^Error/m.test(r.stderr ?? '') ? transformHookStdout(r.stdout, notice) : null
-  if (out) process.stdout.write(out)
+  // The alarm does not come from the index, so a failing prime still delivers it.
+  const alarmOnly = notice && JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: notice } })
+  if (out || alarmOnly) process.stdout.write(out || alarmOnly)
 }
 
 const runCodexHook = (event, notice) => {
