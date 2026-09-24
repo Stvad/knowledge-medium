@@ -1,4 +1,4 @@
-# Roam timestamp backfill (ff-vlad-dev)
+# Roam timestamp backfill
 
 One-time restore of real Roam `create-time`/`edit-time` onto the ~312K
 already-imported blocks (currently all stamped at the 2026-05-13 import time).

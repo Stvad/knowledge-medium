@@ -1,9 +1,9 @@
 # Cleanup plan: junk `#tag` pages from the `isa::` hashtag bug
 
-Status: **executed on `ff-vlad-dev` (2026-06-13).** Code fix shipped in
+Status: **executed on the live graph (2026-06-13).** Code fix shipped in
 `fa347605` (`fix(roam-import): rewrite #tags in isa:: values before alias
 extraction`). This doc covered cleaning up the 91 junk pages that the bug
-already created in the `ff-vlad-dev` graph.
+already created in the live graph.
 
 **Result:** 91 junk pages tombstoned, 122 `roam:isa` arrays repointed to
 existing pages (0 new pages needed — all targets resolved via
@@ -25,7 +25,7 @@ raw hashtag string (`#CFAR #Coaching`, `#Kotlin #Java #JVM #DSL`, …).
 See `src/plugins/roam-import/properties.ts` and the fix's tests for the
 mechanism.
 
-## Blast radius (measured on `ff-vlad-dev`)
+## Blast radius (measured on the live client)
 
 - **91 junk pages**, all in a single workspace.
   - 47 single-tag (`#CFAR`, `#Python`, …) — pure duplicates of the real page.
@@ -73,7 +73,7 @@ appendix; summary:
 
 ## Migration algorithm (idempotent, workspace-scoped)
 
-Run via a one-shot `pnpm agent --profile ff-vlad-dev eval` script using
+Run via a one-shot `pnpm agent --profile <profile> eval` script using
 **repo/tx APIs** (not raw SQL), so `references_json`, backlinks, history,
 and sync all stay consistent. Scope every write to the affected
 workspace (per the "don't touch unopened workspaces" rule).

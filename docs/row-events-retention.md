@@ -2,7 +2,7 @@
 
 ## Problem
 
-`row_events` on ff-vlad-dev: ~1.17M rows, ~2 KB JSON per event, grows monotonically. The hot path it lives on is every block write — the trigger inlines a full domain-shape snapshot of the block in both `before_json` AND `after_json` (`blockJsonObjectSql`, [clientSchema.ts:238](src/data/internals/clientSchema.ts:238)), so write-tx tail latency tracks the JSON-build + insert cost.
+`row_events` on one live client: ~1.17M rows, ~2 KB JSON per event, grows monotonically. The hot path it lives on is every block write — the trigger inlines a full domain-shape snapshot of the block in both `before_json` AND `after_json` (`blockJsonObjectSql`, [clientSchema.ts:238](src/data/internals/clientSchema.ts:238)), so write-tx tail latency tracks the JSON-build + insert cost.
 
 Pruning alone treats the symptom (storage) but not the cause (per-write cost). Adopt the server-side `blocks_history` shape first; prune second.
 
