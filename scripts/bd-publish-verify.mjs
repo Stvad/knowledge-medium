@@ -69,6 +69,7 @@ import {
   matchesAnyPublish,
   matchesApiPublish,
   matchesPrCommand,
+  matchesReplyCommand,
   publishableKinds,
   tryRun,
 } from './bd-github-sync.mjs'
@@ -149,7 +150,7 @@ export const publishedTargets = (cmd, output) => {
   // whenever a CLI publisher rode along. In that mixed case the CLI scan also
   // sees the api response's body, so a URL quoted there can be reported as
   // published; with nothing writing any more, that costs an echoed line.
-  if (matchesPrCommand(cmd)) collect(output, publishableKinds(cmd))
+  if (matchesPrCommand(cmd) || matchesReplyCommand(cmd)) collect(output, publishableKinds(cmd))
   if (matchesApiPublish(cmd)) collect(topLevelUrls(output).join('\n'), null)
   return [...seen.values()]
 }

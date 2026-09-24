@@ -36,6 +36,7 @@
     "check": "node scripts/check.mjs",
     "bd:sync": "node scripts/bd-github-sync.mjs",
     "bd:labels": "node scripts/bd-label-colors.mjs",
+    "pr:reply": "node scripts/pr-reply.mjs",
     "fuzz": "node scripts/fuzz.mjs",
     "agent:server": "node packages/agent-cli/dist/server.js",
     "agent": "node packages/agent-cli/dist/cli.js",
