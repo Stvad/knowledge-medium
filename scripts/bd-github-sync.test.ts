@@ -2976,7 +2976,7 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
       `${read} && gh api repos/Stvad/knowledge-medium/issues/1/comments -f body="see #653"`,
       `${read} && gh pr comment 1 --body "see #653"`,
       // a CLI publish beside it keeps its own text-outside-the-command rule
-      `${read} && gh pr comment 1 --body-file notes.md`,
+      `${read} && gh pr comment 1 -F notes.md`,
       // a mutation document anywhere in the invocation is not a read
       `${read}; gh api graphql -f query='mutation{addComment(input:{subjectId:"X",body:"see #653"}){clientMutationId}}'`,
     ])
