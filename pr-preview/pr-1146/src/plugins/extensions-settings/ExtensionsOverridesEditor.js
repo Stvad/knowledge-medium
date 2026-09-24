@@ -1,1 +1,1 @@
-import{yt as e}from"../../../chunks/app-BOGivnP-.js";export{e as ExtensionsOverridesEditor};
+import{yt as e}from"../../../chunks/app-zSG49SJm.js";export{e as ExtensionsOverridesEditor};
