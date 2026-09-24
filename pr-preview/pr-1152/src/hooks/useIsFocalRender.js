@@ -1,0 +1,1 @@
+import{$k as e,Qk as t}from"../../chunks/app-CGemhbx4.js";export{t as isFocalRender,e as useIsFocalRender};

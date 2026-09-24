@@ -1,0 +1,1 @@
+import{nT as e,rT as t}from"../../chunks/app-CGemhbx4.js";export{e as dispatchPointerAction,t as setPointerActionDispatcher};

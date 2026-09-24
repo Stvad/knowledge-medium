@@ -1,0 +1,1 @@
+import{JC as e,YC as t}from"../../chunks/app-CGemhbx4.js";export{e as resolveStructuralEditPolicy,t as structuralEditPolicyForBlock};
