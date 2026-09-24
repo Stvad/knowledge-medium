@@ -1,1 +1,1 @@
-import{pA as e}from"../../../chunks/app-BYApIDs1.js";export{e as PropertyRow};
+import{mA as e}from"../../../chunks/app-ck1BCm1w.js";export{e as PropertyRow};

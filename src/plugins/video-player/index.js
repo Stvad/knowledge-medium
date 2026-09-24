@@ -1,1 +1,1 @@
-import{ym as e}from"../../../chunks/app-BYApIDs1.js";export{e as videoPlayerPlugin};
+import{bm as e}from"../../../chunks/app-ck1BCm1w.js";export{e as videoPlayerPlugin};

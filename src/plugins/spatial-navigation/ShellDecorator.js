@@ -1,1 +1,1 @@
-import{Ph as e}from"../../../chunks/app-BYApIDs1.js";export{e as SpatialNavigationShellDecorator};
+import{Fh as e}from"../../../chunks/app-ck1BCm1w.js";export{e as SpatialNavigationShellDecorator};

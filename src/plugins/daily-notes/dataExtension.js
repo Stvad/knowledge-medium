@@ -1,1 +1,1 @@
-import{FR as e}from"../../../chunks/app-BYApIDs1.js";export{e as dailyNotesDataExtension};
+import{IR as e}from"../../../chunks/app-ck1BCm1w.js";export{e as dailyNotesDataExtension};

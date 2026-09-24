@@ -1,1 +1,1 @@
-import{MC as e}from"../../chunks/app-BYApIDs1.js";export{e as ensureMetricsConsoleHook};
+import{NC as e}from"../../chunks/app-ck1BCm1w.js";export{e as ensureMetricsConsoleHook};

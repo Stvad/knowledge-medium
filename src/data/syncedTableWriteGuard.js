@@ -1,1 +1,1 @@
-import{BB as e,HB as t,UB as n,VB as r}from"../../chunks/app-BYApIDs1.js";export{r as SYNCED_TABLES,e as guardSyncedTableWrites,t as syncedWriteTarget,n as writeTargets};
+import{HB as e,UB as t,VB as n,WB as r}from"../../chunks/app-ck1BCm1w.js";export{e as SYNCED_TABLES,n as guardSyncedTableWrites,t as syncedWriteTarget,r as writeTargets};

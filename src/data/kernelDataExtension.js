@@ -1,1 +1,1 @@
-import{MG as e}from"../../chunks/app-BYApIDs1.js";export{e as kernelDataExtension};
+import{NG as e}from"../../chunks/app-ck1BCm1w.js";export{e as kernelDataExtension};

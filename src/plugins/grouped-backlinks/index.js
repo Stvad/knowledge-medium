@@ -1,1 +1,1 @@
-import{Nu as e}from"../../../chunks/app-BYApIDs1.js";export{e as groupedBacklinksPlugin};
+import{Pu as e}from"../../../chunks/app-ck1BCm1w.js";export{e as groupedBacklinksPlugin};

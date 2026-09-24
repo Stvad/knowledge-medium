@@ -1,1 +1,1 @@
-import{oz as e}from"../../../chunks/app-BYApIDs1.js";export{e as backlinksDataExtension};
+import{sz as e}from"../../../chunks/app-ck1BCm1w.js";export{e as backlinksDataExtension};

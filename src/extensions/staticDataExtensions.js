@@ -1,1 +1,1 @@
-import{wF as e}from"../../chunks/app-BYApIDs1.js";export{e as staticDataExtensions};
+import{TF as e}from"../../chunks/app-ck1BCm1w.js";export{e as staticDataExtensions};
