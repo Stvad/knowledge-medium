@@ -1,1 +1,0 @@
-import{_w as e,gw as t}from"../../../chunks/app-DNxAGQUh.js";export{t as ExtensionPromptSurface,e as extensionPromptsExtension};

@@ -1,1 +1,0 @@
-import{bs as e}from"../../../chunks/app-DNxAGQUh.js";export{e as blockTagsConfigUi};
