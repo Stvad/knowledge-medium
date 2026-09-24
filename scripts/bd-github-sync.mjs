@@ -124,7 +124,7 @@
  * from both streams, never from the exit code alone.
  */
 
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { accessSync, constants, existsSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
@@ -995,33 +995,56 @@ export const buildDenyMessage = (mapped, unmapped) => {
  *  the shared helper, not on whichever call site crosses first. */
 const MAX_OUTPUT_BYTES = 256 * 1024 * 1024
 
-// Wall time per verb across the run, for the run log (noteRunTiming): nearly
-// all of a sync's cost is subprocesses, so this is where a regression shows.
-// The verb, not its operands, so repeated calls aggregate.
+// When each verb's spawns ran, for the run log (noteRunTiming): nearly all of
+// a sync's cost is subprocesses, so this is where a regression shows. Keyed
+// by the verb, not its operands, so repeated calls aggregate.
 const spawnTimes = new Map()
 const spawnVerb = (file, args) => {
   const words = args.filter(a => /^[a-z][a-z-]*$/.test(a) && !a.startsWith('km-')).slice(0, 2)
   const direction = args.find(a => a === '--push-only' || a === '--pull-only')
   return [file, ...(words.length ? words : args.slice(0, 1)), ...(direction ? [direction] : [])].join(' ')
 }
+const noteSpawn = (file, args, started) => {
+  const verb = spawnVerb(file, args)
+  spawnTimes.set(verb, [...(spawnTimes.get(verb) ?? []), [started, performance.now()]])
+}
+// The wall time the intervals cover, not their sum: concurrent spawns of one
+// verb would otherwise report several times the time the run spent on them.
+export const coveredMs = intervals => {
+  let total = 0
+  let end = -Infinity
+  for (const [from, to] of [...intervals].sort((a, b) => a[0] - b[0])) {
+    if (to <= end) continue
+    total += to - Math.max(from, end)
+    end = to
+  }
+  return total
+}
 const timedSpawnSync = (file, args, opts) => {
   const started = performance.now()
   try {
     return spawnSync(file, args, opts)
   } finally {
-    const verb = spawnVerb(file, args)
-    const { calls, ms } = spawnTimes.get(verb) ?? { calls: 0, ms: 0 }
-    spawnTimes.set(verb, { calls: calls + 1, ms: ms + performance.now() - started })
+    noteSpawn(file, args, started)
   }
 }
-
-const run = (file, args, opts = {}) => {
-  const r = timedSpawnSync(file, args, {
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-    maxBuffer: MAX_OUTPUT_BYTES,
-    ...opts,
+// spawnSync's result shape, without blocking: for reads that do not depend on
+// each other.
+const spawnAsync = (file, args, opts = {}) =>
+  new Promise(resolve => {
+    const started = performance.now()
+    const out = { stdout: '', stderr: '' }
+    const child = spawn(file, args, { stdio: ['ignore', 'pipe', 'pipe'], ...opts })
+    child.stdout.setEncoding('utf8').on('data', d => (out.stdout += d))
+    child.stderr.setEncoding('utf8').on('data', d => (out.stderr += d))
+    child.on('error', error => resolve({ ...out, error }))
+    child.on('close', status => {
+      noteSpawn(file, args, started)
+      resolve({ ...out, status })
+    })
   })
+
+const checkedStdout = (file, args, r) => {
   if (r.error) throw r.error
   const combined = `${r.stdout ?? ''}\n${r.stderr ?? ''}`
   if (r.status !== 0) throw new Error(`${file} ${args[0]} exited ${r.status}: ${combined.trim().slice(0, 500)}`)
@@ -1029,6 +1052,9 @@ const run = (file, args, opts = {}) => {
   if (file === 'bd' && /^Error/m.test(combined)) throw new Error(`bd ${args[0]}: ${combined.trim().slice(0, 500)}`)
   return r.stdout ?? ''
 }
+const run = (file, args, opts = {}) =>
+  checkedStdout(file, args, timedSpawnSync(file, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: MAX_OUTPUT_BYTES, ...opts }))
+const runAsync = async (file, args, opts) => checkedStdout(file, args, await spawnAsync(file, args, opts))
 
 export const tryRun = (file, args, opts) => {
   try {
@@ -1116,7 +1142,7 @@ const processAlive = pid => {
  * concurrent runs of converging operations, and closing it fully needs
  * primitives the filesystem doesn't offer.
  */
-const withLock = (root, fn) => {
+const withLock = async (root, fn) => {
   const lock = join(root, '.beads', 'github-sync.lock')
   const deadline = Date.now() + 20_000
   for (;;) {
@@ -1153,7 +1179,7 @@ const withLock = (root, fn) => {
   process.on('SIGTERM', onSignal)
   process.on('SIGINT', onSignal)
   try {
-    return fn()
+    return await fn()
   } finally {
     process.off('SIGTERM', onSignal)
     process.off('SIGINT', onSignal)
@@ -1175,12 +1201,15 @@ const tryRead = p => {
 // to see. About half a second for the whole tracker, where `bd show` costs
 // ~0.4s per id, so runSync re-reads only after a step that wrote. Callers
 // slice by status; nothing here pre-filters.
-const exportBeads = env =>
-  run('bd', ['export'], { env: { ...env, BD_IGNORE_SCHEMA_SKEW: '1' } })
+const parseExport = out =>
+  out
     .split('\n')
     .filter(Boolean)
     .map(l => JSON.parse(l))
     .filter(r => r._type === 'issue')
+const exportOpts = env => ({ env: { ...env, BD_IGNORE_SCHEMA_SKEW: '1' } })
+const exportBeads = env => parseExport(run('bd', ['export'], exportOpts(env)))
+const exportBeadsAsync = async env => parseExport(await runAsync('bd', ['export'], exportOpts(env)))
 
 // Every guard in this file is calibrated to ONE bd version's MEASURED
 // behaviour: what the pull reaches and how, the push's timestamp rule, the
@@ -1194,9 +1223,9 @@ const VERIFIED_BD_VERSIONS = ['1.2.2']
 export const bdVersion = out => out?.match(/\bversion\s+(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.+-]*)?)/i)?.[1] ?? null
 
 const FETCH_LIMIT = 5000
-const fetchIssues = () => {
+const fetchIssues = async () => {
   const rows = JSON.parse(
-    run('gh', [
+    await runAsync('gh', [
       'issue',
       'list',
       '--repo',
@@ -1294,23 +1323,20 @@ const pushBeads = (ids, env) => {
 }
 
 // One GraphQL call per chunk reads the comment bodies of every commented
-// bead's issue, so a converged run costs one request rather than one per
-// issue; an issue past the first page costs one more query per page.
+// bead's issue, the chunks at once: GitHub resolves the aliases of one query
+// in turn, so a run costs about one chunk's time, not one request per issue
+// or per chunk. An issue past the first page costs one more query per page.
 // `issue(number)` resolves a PR or a deleted issue to null — with a NOT_FOUND
 // error and a non-zero gh exit that still carries the data, so the parse
 // reads stdout and ignores the status. Returns number → { bodies } | null
 // (not an issue).
 const COMMENT_PAGE = 100
 const GRAPHQL_CHUNK = 50
+const COMMENT_READS_AT_ONCE = 8
 const [OWNER, NAME] = REPO.split('/')
 const commentsField = after => `comments(first: ${COMMENT_PAGE}${after ? `, after: "${after}"` : ''}) { pageInfo { hasNextPage endCursor } nodes { body } }`
-const graphqlRepository = (fields, env) => {
-  const r = timedSpawnSync('gh', ['api', 'graphql', '-f', `query=query { repository(owner: "${OWNER}", name: "${NAME}") { ${fields} } }`], {
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-    maxBuffer: MAX_OUTPUT_BYTES,
-    env,
-  })
+const graphqlRepository = async (fields, env) => {
+  const r = await spawnAsync('gh', ['api', 'graphql', '-f', `query=query { repository(owner: "${OWNER}", name: "${NAME}") { ${fields} } }`], { env })
   let repo
   try {
     repo = JSON.parse(r.stdout).data.repository
@@ -1318,11 +1344,13 @@ const graphqlRepository = (fields, env) => {
   if (!repo) throw new Error(`gh api graphql: ${(r.stderr || r.stdout || '').trim().slice(0, 300)}`)
   return repo
 }
-const fetchIssueComments = (numbers, env) => {
+const fetchIssueComments = async (numbers, env) => {
   const byNumber = new Map()
-  for (let i = 0; i < numbers.length; i += GRAPHQL_CHUNK) {
-    const chunk = numbers.slice(i, i + GRAPHQL_CHUNK)
-    const repo = graphqlRepository(chunk.map(n => `i${n}: issue(number: ${n}) { ${commentsField()} }`).join(' '), env)
+  const size = Math.min(GRAPHQL_CHUNK, Math.ceil(numbers.length / COMMENT_READS_AT_ONCE))
+  const chunks = []
+  for (let i = 0; i < numbers.length; i += size) chunks.push(numbers.slice(i, i + size))
+  const readChunk = async chunk => {
+    const repo = await graphqlRepository(chunk.map(n => `i${n}: issue(number: ${n}) { ${commentsField()} }`).join(' '), env)
     for (const n of chunk) {
       const issue = repo[`i${n}`]
       if (!issue) {
@@ -1335,7 +1363,7 @@ const fetchIssueComments = (numbers, env) => {
       const bodies = issue.comments.nodes.map(c => c.body)
       let page = issue.comments.pageInfo
       while (page.hasNextPage) {
-        const more = graphqlRepository(`issue(number: ${n}) { ${commentsField(page.endCursor)} }`, env).issue
+        const more = (await graphqlRepository(`issue(number: ${n}) { ${commentsField(page.endCursor)} }`, env)).issue
         if (!more) throw new Error(`issue #${n} vanished between comment pages`)
         bodies.push(...more.comments.nodes.map(c => c.body))
         page = more.comments.pageInfo
@@ -1343,6 +1371,7 @@ const fetchIssueComments = (numbers, env) => {
       byNumber.set(n, { bodies })
     }
   }
+  await Promise.all(chunks.map(readChunk))
   return byNumber
 }
 
@@ -1365,7 +1394,7 @@ const POST_PAUSE_MS = 800
 // the rest resumes next run. The env override exists for the process tests.
 const POST_CAP = Number(process.env.KM_MIRROR_POST_CAP) || 60
 const pause = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
-const mirrorComments = ({ beads, issueByNumber, mintedNumbers, env, dryRun }) => {
+const mirrorComments = async ({ beads, issueByNumber, mintedNumbers, env, dryRun }) => {
   // A ref is trusted only where the run-start listing shows an issue, or
   // where this run's push minted it: a ref pointed at a PR or a deleted
   // issue would otherwise turn a bead id into a confidently wrong #N,
@@ -1384,7 +1413,7 @@ const mirrorComments = ({ beads, issueByNumber, mintedNumbers, env, dryRun }) =>
   if (!commented.length) return { report }
   let ghComments
   try {
-    ghComments = fetchIssueComments(commented.map(b => numberByBeadId.get(b.id)), env)
+    ghComments = await fetchIssueComments(commented.map(b => numberByBeadId.get(b.id)), env)
   } catch (e) {
     return { report: [...report, `FAILED to read GitHub comments (${e.message}) — comment mirror skipped this run`] }
   }
@@ -1460,9 +1489,9 @@ const mirrorComments = ({ beads, issueByNumber, mintedNumbers, env, dryRun }) =>
 // with the tracker — which no single run's output shows, since SessionEnd
 // output reaches nobody. The SessionStart hook reads this log and says so.
 export const SYNC_RUN_LOG = join('.beads', 'github-sync-runs.log')
-// About twice a converged run on the live tracker. The override is for the
-// process tests.
-const SLOW_SYNC_MS = process.env.KM_BD_SYNC_BUDGET_MS ? Number(process.env.KM_BD_SYNC_BUDGET_MS) : 20_000
+// About twice a converged run on the live tracker, leaving room for a run that
+// also pushes. The override is for the process tests.
+const SLOW_SYNC_MS = process.env.KM_BD_SYNC_BUDGET_MS ? Number(process.env.KM_BD_SYNC_BUDGET_MS) : 15_000
 const RUN_LOG_KEEP = 200
 const seconds = ms => `${(ms / 1000).toFixed(1)}s`
 const spawnSummary = spawns => spawns.map(s => `${s.cmd}${s.calls > 1 ? ` ×${s.calls}` : ''} ${seconds(s.ms)}`).join(', ')
@@ -1478,7 +1507,7 @@ const noteRunTiming = (root, ok) => {
     slow: ms > SLOW_SYNC_MS,
     budgetMs: SLOW_SYNC_MS,
     spawns: [...spawnTimes]
-      .map(([cmd, t]) => ({ cmd, calls: t.calls, ms: Math.round(t.ms) }))
+      .map(([cmd, intervals]) => ({ cmd, calls: intervals.length, ms: Math.round(coveredMs(intervals)) }))
       .sort((a, b) => b.ms - a.ms)
       .slice(0, 5),
   }
@@ -1525,7 +1554,7 @@ export const readSyncSlownessNotice = root => syncSlownessNotice(tryRead(join(ro
 // The sync sequence
 // ---------------------------------------------------------------------------
 
-const runSync = ({ quiet = false, dryRun = false } = {}) => {
+const runSync = async ({ quiet = false, dryRun = false } = {}) => {
   const pre = preconditions()
   if (!pre.ok) {
     if (!quiet) console.log(`bd-github-sync: skipped (${pre.reason})`)
@@ -1543,11 +1572,11 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
         `upgrade issue carries the checklist), then add the version here. KM_BD_VERSION_OK=1 proceeds anyway.`,
     )
 
-  const syncSteps = () => {
-    const { issueByNumber, maxKnownIssueNumber } = fetchIssues()
+  const syncSteps = async () => {
     // Every read of the tracker is one `bd export`, taken again only after a
-    // step that WROTE: a converged run reads it once.
-    const preBeads = exportBeads(env)
+    // step that WROTE: a converged run reads it once. The first runs under
+    // the issue listing, which is paging-bound and the run's longest step.
+    const [{ issueByNumber, maxKnownIssueNumber }, preBeads] = await Promise.all([fetchIssues(), exportBeadsAsync(env)])
     const report = []
     // The km→#N mapping for every issue this run's push minted. Printed
     // IMMEDIATELY, not via the end-of-run report: any later step failing
@@ -1708,7 +1737,7 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
     // because the pull is only ever handed ids we chose (see 1.2 and guard 5).
     // postBeads already carries this run's minted refs, and no step since it
     // touches a ref or a comment.
-    const mirror = mirrorComments({
+    const mirror = await mirrorComments({
       beads: postBeads,
       issueByNumber,
       mintedNumbers: new Set(planMintedRefs(preBeads, freshBeads).map(m => m.number)),
@@ -1727,7 +1756,7 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
 
   let outcome = 'failed'
   try {
-    const result = withLock(pre.root, syncSteps)
+    const result = await withLock(pre.root, syncSteps)
     outcome = result?.skipped ? 'skipped' : 'ok'
     if (result?.skipped && !quiet) console.log(`bd-github-sync: skipped (${result.skipped})`)
     return result
@@ -1968,16 +1997,12 @@ if (isMainModule(import.meta.url)) {
       allow()
     }
   } else {
-    try {
-      runSync({ quiet: args.has('--quiet'), dryRun: args.has('--dry-run') })
-    } catch (e) {
+    runSync({ quiet: args.has('--quiet'), dryRun: args.has('--dry-run') }).catch(e => {
       console.error(`bd-github-sync: failed — ${e.message ?? e}`)
       // `exitCode`, never `exit()`: a failed push may still have minted issues,
       // and the km→#N mappings printed above are this run's only record of
       // them, but `exit()` drops whatever is still queued on a piped stdout.
-      // Nothing holds the loop open here (spawnSync adds no handles), so the
-      // process still ends promptly.
       process.exitCode = 1
-    }
+    })
   }
 }

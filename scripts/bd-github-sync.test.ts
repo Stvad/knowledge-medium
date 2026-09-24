@@ -16,6 +16,7 @@ import {
   extractBeadIds,
   issueNumberFromRef,
   commitsInCommandPosition,
+  coveredMs,
   matchesCommitCommand,
   matchesUnverifiableCommand,
   hasStdinBody,
@@ -727,6 +728,16 @@ describe('pullWouldWrite', () => {
   })
 })
 
+// The run log reports time the run SPENT on a verb, so eight concurrent reads
+// of one second each are one second, not eight.
+describe('coveredMs', () => {
+  it('counts overlapping and nested intervals once, and gaps not at all', () => {
+    expect(coveredMs([[0, 10], [2, 5], [5, 12], [20, 25]])).toBe(17)
+    expect(coveredMs([[20, 25], [0, 10]])).toBe(15)
+    expect(coveredMs([])).toBe(0)
+  })
+})
+
 describe('syncSlownessNotice', () => {
   const record = (over: object) =>
     JSON.stringify({ at: '2026-09-24T20:00:00.000Z', ms: 3_000, ok: true, slow: false, budgetMs: 20_000, spawns: [], ...over })
@@ -1427,8 +1438,9 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const r = run('--quiet')
     expect(r.status).toBe(0)
     expect(r.stdout).toBe('')
+    // Sorted: the listing and the first read run concurrently.
     const spawned = shimCalls().trim().split('\n').map(l => l.split(' ').slice(0, 3).join(' '))
-    expect(spawned).toEqual(['bd --version', 'gh auth token', 'gh issue list', 'bd export'])
+    expect(spawned.sort()).toEqual(['bd --version', 'bd export', 'gh auth token', 'gh issue list'])
   })
 
   // A closed, assigned bead whose issue GitHub touched last: bd's pull would
@@ -1876,6 +1888,28 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(r.stdout).toContain('SKIPPED comments of km-m: its external_ref does not point at an issue of this repo')
     expect(shimCalls()).not.toContain('gh api graphql')
     expect(posted()).toBe('')
+  })
+
+  // The read is split into chunks that run at once; each chunk must pick its
+  // own issues out of its own response, whatever order they come back in.
+  it('reads the comments of many issues in concurrent chunks and posts only what is missing', () => {
+    const numbers = [11, 12, 13, 14, 15, 16, 17, 18, 19]
+    const commentId = (n: number) => `0000c0de-0000-7000-8000-0000000000${n}`
+    const rows = numbers.map(n => syncRow({ id: `km-c${n}`, external_ref: ref(n), updated_at: '2026-08-19T00:00:00Z', comment_count: 1 }))
+    const comments = Object.fromEntries(numbers.map(n => [`km-c${n}`, [beadComment(commentId(n), `on #${n}`, '2026-09-03T20:16:36Z')]]))
+    const onGitHub = Object.fromEntries(numbers.map(n => [`i${n}`, issueComments(n === 15 ? [] : [`<!-- bd-comment ${commentId(n)} -->\nmirrored`])]))
+    const { run, shimCalls, posted } = makeSyncRepo({
+      issues: numbers.map(n => ghIssue(n, '2026-08-20T00:00:00Z')),
+      reads: [rows],
+      comments,
+      graphql: { data: { repository: onGitHub } },
+    })
+    const r = run()
+    expect(r.status).toBe(0)
+    expect(shimCalls().match(/gh api graphql/g)).toHaveLength(5)
+    const posts = postsOf(posted())
+    expect(posts).toHaveLength(1)
+    expect(posts[0]).toContain(`repos/${REPO}/issues/15/comments`)
   })
 
   it('reports what it would mirror under --dry-run and posts nothing', () => {
