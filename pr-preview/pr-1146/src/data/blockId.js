@@ -1,1 +1,1 @@
-import{lQ as e,uQ as t}from"../../chunks/app-BZ9g7FgW.js";export{e as InvalidBlockIdError,t as assertCanonicalBlockId};
+import{lQ as e,uQ as t}from"../../chunks/app-zJHzXJrU.js";export{e as InvalidBlockIdError,t as assertCanonicalBlockId};

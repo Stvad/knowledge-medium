@@ -1,1 +1,1 @@
-import{zd as e}from"../../../../../chunks/app-BZ9g7FgW.js";export{e as Wikilink};
+import{zd as e}from"../../../../../chunks/app-zJHzXJrU.js";export{e as Wikilink};
