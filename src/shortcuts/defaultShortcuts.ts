@@ -288,12 +288,12 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
 
   const openFocusedInPanelBlock: BlockAction = {
     id: 'open_focused_in_panel',
-    description: 'Open focused block in a side panel',
+    description: 'Open focused block in the sidebar stack',
     icon: PanelRightOpen,
     handler: async ({block, uiStateBlock}: BlockShortcutDependencies) => {
-      navigate(repo, {
+      await navigate(repo, {
         blockId: block.id,
-        target: 'new-panel',
+        target: 'sidebar-stack',
         sourcePanelId: uiStateBlock.id,
         origin: 'open-in-panel',
       })
