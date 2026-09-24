@@ -1,9 +1,10 @@
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
+import { NOTE_BUDGET } from './hook-context.mjs'
 import { pushInvocations } from './push-scope.mjs'
 
 describe('pushInvocations', () => {
@@ -54,7 +55,7 @@ describe('hook end-to-end', { timeout: 30_000 }, () => {
   git(seed, ['init', '-q', '-b', 'master'])
   git(seed, ['config', 'user.email', 't@example.com'])
   git(seed, ['config', 'user.name', 't'])
-  commitFiles(seed, { 'a.ts': 'a\n', 'a.test.ts': 'test a\n', 'b.ts': 'b\n' }, 'base')
+  commitFiles(seed, { 'a.ts': 'a\n', 'z.test.ts': 'test a\n', 'b.ts': 'b\n' }, 'base')
   git(seed, ['remote', 'add', 'origin', origin])
   git(seed, ['push', '-q', 'origin', 'master'])
 
@@ -63,7 +64,7 @@ describe('hook end-to-end', { timeout: 30_000 }, () => {
   git(work, ['config', 'user.email', 't@example.com'])
   git(work, ['config', 'user.name', 't'])
   git(work, ['checkout', '-qb', 'feat'])
-  git(work, ['rm', '-q', 'a.test.ts'])
+  git(work, ['rm', '-q', 'z.test.ts'])
   commitFiles(work, { 'b.ts': 'b changed\n', 'c.ts': 'c\n' }, 'feat work')
 
   it('prints the branch scope against origin/master, deletions first', () => {
@@ -71,9 +72,10 @@ describe('hook end-to-end', { timeout: 30_000 }, () => {
     expect(ctx).toContain('3 files changed')
     const lines = ctx.split('\n')
     const at = (l: string) => lines.indexOf(l)
-    expect(at('D\ta.test.ts')).toBeGreaterThan(-1)
-    expect(at('M\tb.ts')).toBeGreaterThan(at('D\ta.test.ts'))
-    expect(at('A\tc.ts')).toBeGreaterThan(at('D\ta.test.ts'))
+    expect(at('D\tz.test.ts')).toBeGreaterThan(-1)
+    // z.test.ts sorts after b.ts and c.ts, so only the reorder puts it first
+    expect(at('M\tb.ts')).toBeGreaterThan(at('D\tz.test.ts'))
+    expect(at('A\tc.ts')).toBeGreaterThan(at('D\tz.test.ts'))
     expect(ctx).toContain('1 ahead, 0 behind')
   })
 
@@ -105,7 +107,7 @@ describe('hook end-to-end', { timeout: 30_000 }, () => {
 
   it('evaluates the repository an in-command cd moves to', () => {
     const elsewhere = tmp('push-scope-elsewhere-')
-    expect(context(hook(`cd ${work} && git push`, elsewhere))).toContain('D\ta.test.ts')
+    expect(context(hook(`cd ${work} && git push`, elsewhere))).toContain('D\tz.test.ts')
   })
 
   it('reports a missing origin/master instead of a scope', () => {
@@ -119,10 +121,38 @@ describe('hook end-to-end', { timeout: 30_000 }, () => {
     expect(ctx).not.toContain('files changed')
   })
 
-  it('reports an unresolvable cd target instead of guessing a repository', () => {
-    const ctx = context(hook('cd "$WT" && git push', work))
-    expect(ctx).toContain('$WT')
-    expect(ctx).not.toContain('files changed')
+  it('reports an unresolvable cd or -C target instead of guessing a repository', () => {
+    for (const cmd of ['cd "$WT" && git push', 'git -C "$WT" push']) {
+      const ctx = context(hook(cmd, work))
+      expect(ctx).toContain('$WT')
+      expect(ctx).not.toContain('files changed')
+    }
+  })
+
+  it('says so when the branch has no file differences', () => {
+    const same = tmp('push-scope-same-')
+    git(same, ['clone', '-q', origin, '.'])
+    expect(context(hook('git push', same))).toContain('no file differences')
+  })
+
+  it('prints one scope for repeated pushes from the same repository', () => {
+    const ctx = context(hook('git push && git push --tags', work))
+    expect(ctx.match(/push-scope:/g)).toHaveLength(1)
+  })
+
+  it('lists files within the context budget and counts the rest', () => {
+    const wide = tmp('push-scope-wide-')
+    git(wide, ['clone', '-q', origin, '.'])
+    git(wide, ['config', 'user.email', 't@example.com'])
+    git(wide, ['config', 'user.name', 't'])
+    git(wide, ['checkout', '-qb', 'wide'])
+    const dir = 'deeply-nested-directory-name/'.repeat(3)
+    mkdirSync(join(wide, dir), { recursive: true })
+    commitFiles(wide, Object.fromEntries(Array.from({ length: 150 }, (_, i) => [`${dir}file-${i}.ts`, 'x\n'])), 'wide')
+    const ctx = context(hook('git push', wide))
+    expect(ctx).toContain('150 files changed')
+    expect(ctx.split('\n').at(-1)).toMatch(/^…and \d+ more$/)
+    expect(ctx.length).toBeLessThanOrEqual(NOTE_BUDGET + 100)
   })
 
   it('prints nothing for other commands, prose, a garbled payload, or outside a repo', () => {

@@ -46,10 +46,9 @@ import {
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { effectiveCwd, gitInvocations } from './check-stash-worktree.mjs'
+import { emitPreToolUseContext, fitLines } from './hook-context.mjs'
 
 const WHOLE_TREE = ':/'
-const LISTED_FILES = 100
-const CONTEXT_MAX = 9_000
 
 // Long checkout options that make it a branch operation rather than a restore.
 const CHECKOUT_BRANCH_OPS = new Set(['--orphan', '--detach', '--track'])
@@ -117,28 +116,27 @@ const parseRestore = rest => {
   return staged && !worktree ? null : { pathspecs, fromFile }
 }
 
+/** Why a restore's pathspecs cannot be read statically, or null when they can. */
+const unreadablePathspecs = (parsed, cmd) => {
+  if (parsed.fromFile) return 'it reads its pathspecs from a file (--pathspec-from-file)'
+  const variable = parsed.pathspecs.find(p => p.includes('$'))
+  if (variable) return `its pathspec \`${variable}\` is not literal`
+  // A substitution or xargs supplies paths the parsed tokens do not show.
+  if (/\$\(|`/.test(cmd)) return 'the command contains a command substitution'
+  if (/\bxargs\b/.test(cmd)) return 'the command runs through xargs'
+  return null
+}
+
 /**
  * Worktree-overwriting checkout/restore invocations in a command. pathspecs is
  * what to copy; widened names why it became the whole tree, when it did.
  */
-export const restoreInvocations = cmd => {
-  // A substitution or xargs supplies paths the parsed tokens do not show.
-  const substituted = /\$\(|`/.test(cmd)
-  const piped = /\bxargs\b/.test(cmd)
-  return gitInvocations(cmd).flatMap(g => {
+export const restoreInvocations = cmd =>
+  gitInvocations(cmd).flatMap(g => {
     const parsed =
       g.word === 'checkout' ? parseCheckout(g.rest) : g.word === 'restore' ? parseRestore(g.rest) : null
     if (!parsed) return []
-    const variable = parsed.pathspecs.find(p => p.includes('$'))
-    const widened = parsed.fromFile
-      ? 'it reads its pathspecs from a file (--pathspec-from-file)'
-      : variable
-        ? `its pathspec \`${variable}\` is not literal`
-        : substituted
-          ? 'the command contains a command substitution'
-          : piped
-            ? 'the command runs through xargs'
-            : null
+    const widened = unreadablePathspecs(parsed, cmd)
     if (!widened && parsed.pathspecs.length === 0) return []
     return [
       {
@@ -150,7 +148,6 @@ export const restoreInvocations = cmd => {
       },
     ]
   })
-}
 
 // ---------------------------------------------------------------------------
 
@@ -162,18 +159,33 @@ const git = (cwd, cArgs, args) =>
     maxBuffer: 64 * 1024 * 1024,
   })
 
-/** Files under the pathspecs that differ from HEAD, repo-relative; counts null for binary. */
-const changedFiles = (cwd, cArgs, pathspecs) =>
-  git(cwd, cArgs, [
-    'diff', '--numstat', '-z', '--no-renames', '--no-ext-diff', '--no-textconv', 'HEAD', '--', ...pathspecs,
-  ])
+const diffHead = (cwd, cArgs, mode, pathspecs) =>
+  git(cwd, cArgs, ['diff', mode, '-z', '--no-renames', '--no-ext-diff', '--no-textconv', 'HEAD', '--', ...pathspecs])
     .split('\0')
     .filter(Boolean)
-    .map(rec => {
+
+/**
+ * Files under the pathspecs that differ from HEAD, repo-relative. The list
+ * comes from --name-only, which lists a file it cannot read; --numstat must
+ * read every file and fails outright on one it cannot, so line counts are
+ * best-effort: countsError is that failure, and a file with no counts has
+ * added === undefined (binary files get null).
+ */
+const changedFiles = (cwd, cArgs, pathspecs) => {
+  const paths = diffHead(cwd, cArgs, '--name-only', pathspecs)
+  const counts = new Map()
+  let countsError = null
+  try {
+    for (const rec of diffHead(cwd, cArgs, '--numstat', pathspecs)) {
       const [added, deleted, ...path] = rec.split('\t')
       const count = n => (n === '-' ? null : Number(n))
-      return { path: path.join('\t'), added: count(added), deleted: count(deleted) }
-    })
+      counts.set(path.join('\t'), { added: count(added), deleted: count(deleted) })
+    }
+  } catch (e) {
+    countsError = String(e?.stderr || e?.message || e).trim().split('\n')[0]
+  }
+  return { files: paths.map(path => ({ path, ...counts.get(path) })), countsError }
+}
 
 /** Copy one file (or symlink, as a link). Returns null, 'absent', or an error code. */
 const copyOne = (src, dst) => {
@@ -194,22 +206,22 @@ const copyOne = (src, dst) => {
   }
 }
 
-const countsOf = f => (f.added === null ? 'binary' : `+${f.added} -${f.deleted}`)
+const countsOf = f => (f.added === undefined ? '?' : f.added === null ? 'binary' : `+${f.added} -${f.deleted}`)
 
-const report = ({ dir, copied, failed, widened }) => {
-  const lines = [
-    `backup-before-restore: copied ${copied.length === 1 ? '1 file that differs' : `${copied.length} files that differ`} ` +
-      `from HEAD, before this command ran, to:`,
-    dir,
-    ...copied.slice(0, LISTED_FILES).map(f => `  ${countsOf(f)}  ${f.path}`),
-  ]
-  if (copied.length > LISTED_FILES) {
-    lines.push(`  …and ${copied.length - LISTED_FILES} more, listed in manifest.txt`)
-  }
-  for (const f of failed) lines.push(`not copied: ${f.path} (${f.reason})`)
-  for (const w of widened) lines.push(`Every file that differs from HEAD was copied, because ${w}.`)
-  return lines.join('\n')
-}
+// Widening and failures come before the listing, so a clipped listing never hides them.
+const report = ({ dir, copied, failed, widened, countsError }) =>
+  fitLines(
+    [
+      `backup-before-restore: copied ${copied.length === 1 ? '1 file that differs' : `${copied.length} files that differ`} ` +
+        `from HEAD, before this command ran, to:`,
+      dir,
+      ...widened.map(w => `Every file that differs from HEAD was copied, because ${w}.`),
+      ...failed.map(f => `not copied: ${f.path} (${f.reason})`),
+      ...(countsError ? [`line counts unavailable: git diff --numstat failed: ${countsError}`] : []),
+    ],
+    copied.map(f => `  ${countsOf(f)}  ${f.path}`),
+    n => `  …and ${n} more, listed in manifest.txt`,
+  ).join('\n')
 
 const backUp = ({ payload, cmd, invocations }) => {
   const payloadCwd = payload.cwd || process.cwd()
@@ -217,7 +229,7 @@ const backUp = ({ payload, cmd, invocations }) => {
     String(payload.session_id ?? '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 8) || 'nosession'
   const now = new Date()
   const stamp = `${now.toISOString().replace(/:/g, '-')}-${process.pid}`
-  const repos = new Map() // gitDir → {top, files: Map<path, file>, widened: Set<string>}
+  const repos = new Map() // gitDir → {top, files: Map<path, file>, widened: Set<string>, countsError}
   const notes = []
 
   for (const inv of invocations) {
@@ -230,20 +242,20 @@ const backUp = ({ payload, cmd, invocations }) => {
       )
       continue
     }
-    let top, gitDir, files
+    let top, gitDir, files, countsError
     try {
       ;[top, gitDir] = git(cwd, inv.cArgs, ['rev-parse', '--show-toplevel', '--absolute-git-dir'])
         .trim()
         .split('\n')
-      files = changedFiles(cwd, inv.cArgs, inv.pathspecs)
+      ;({ files, countsError } = changedFiles(cwd, inv.cArgs, inv.pathspecs))
     } catch {
       continue // not a repository, unborn HEAD, bad pathspec: the command itself reports these
     }
-    if (!files.length) continue
-    const repo = repos.get(gitDir) ?? { top, files: new Map(), widened: new Set() }
+    const repo = repos.get(gitDir) ?? { top, files: new Map(), widened: new Set(), countsError: null }
     repos.set(gitDir, repo)
     for (const f of files) repo.files.set(f.path, f)
     if (inv.widened) repo.widened.add(inv.widened)
+    repo.countsError ??= countsError
   }
 
   for (const [gitDir, repo] of repos) {
@@ -256,35 +268,23 @@ const backUp = ({ payload, cmd, invocations }) => {
       else if (reason !== 'absent') failed.push({ path: f.path, reason })
     }
     if (!copied.length && !failed.length) continue
-    if (copied.length) {
-      writeFileSync(
-        join(dir, 'manifest.txt'),
-        [
-          `command: ${cmd}`,
-          `cwd: ${payloadCwd}`,
-          `session: ${payload.session_id ?? ''}`,
-          `time: ${now.toISOString()}`,
-          ...copied.map(f => `${countsOf(f)}\t${f.path}`),
-          '',
-        ].join('\n'),
-      )
-    }
-    notes.push(report({ dir, copied, failed, widened: [...repo.widened] }))
+    // Every entry went through copyOne's mkdir under dir; if that mkdir failed,
+    // this write throws too, and main reports it.
+    writeFileSync(
+      join(dir, 'manifest.txt'),
+      [
+        `command: ${cmd}`,
+        `cwd: ${payloadCwd}`,
+        `session: ${payload.session_id ?? ''}`,
+        `time: ${now.toISOString()}`,
+        ...copied.map(f => `${countsOf(f)}\t${f.path}`),
+        ...failed.map(f => `not copied (${f.reason})\t${f.path}`),
+        '',
+      ].join('\n'),
+    )
+    notes.push(report({ dir, copied, failed, widened: [...repo.widened], countsError: repo.countsError }))
   }
   return notes
-}
-
-const emit = notes => {
-  if (!notes.length) return
-  const text = notes.join('\n\n')
-  process.stdout.write(
-    JSON.stringify({
-      hookSpecificOutput: {
-        hookEventName: 'PreToolUse',
-        additionalContext: text.length > CONTEXT_MAX ? text.slice(0, CONTEXT_MAX) : text,
-      },
-    }) + '\n',
-  )
 }
 
 const main = () => {
@@ -295,13 +295,11 @@ const main = () => {
     return // not a hook payload
   }
   const cmd = payload?.tool_input?.command ?? ''
-  if (!/\b(checkout|restore)\b/.test(cmd)) return
-  const invocations = restoreInvocations(cmd)
-  if (!invocations.length) return
+  if (!/\b(checkout|restore)\b/.test(cmd)) return // fast path only: restoreInvocations decides
   try {
-    emit(backUp({ payload, cmd, invocations }))
+    emitPreToolUseContext(backUp({ payload, cmd, invocations: restoreInvocations(cmd) }))
   } catch (e) {
-    emit([`backup-before-restore: failed before copying everything: ${e?.message ?? e}`])
+    emitPreToolUseContext([`backup-before-restore: failed before copying everything: ${e?.message ?? e}`])
   }
 }
 

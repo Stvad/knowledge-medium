@@ -1,10 +1,23 @@
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  readlinkSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { restoreInvocations } from './backup-before-restore.mjs'
+import { NOTE_BUDGET } from './hook-context.mjs'
 
 const specs = (cmd: string) => restoreInvocations(cmd).map(r => r.pathspecs)
 
@@ -19,6 +32,10 @@ describe('restoreInvocations', () => {
     // a rev or branch name matches no file, so only real paths get copied
     expect(specs('git checkout .')).toEqual([['.']])
     expect(specs('git checkout HEAD f.ts')).toEqual([['HEAD', 'f.ts']])
+  })
+
+  it('does not read a checkout option value as an operand', () => {
+    expect(specs('git checkout --conflict merge f.ts')).toEqual([['f.ts']])
   })
 
   it('skips branch-creating and detaching checkouts', () => {
@@ -45,12 +62,18 @@ describe('restoreInvocations', () => {
     expect(specs('git restore --source=HEAD -- f.ts')).toEqual([['f.ts']])
   })
 
+  it('reads a dash-leading restore path after --', () => {
+    expect(specs('git restore -- -odd.ts')).toEqual([['-odd.ts']])
+  })
+
   it('skips a restore that touches only the index', () => {
     expect(specs('git restore --staged f.ts')).toEqual([])
     expect(specs('git restore -S f.ts')).toEqual([])
     expect(specs('git restore --staged --worktree f.ts')).toEqual([['f.ts']])
     expect(specs('git restore -SW f.ts')).toEqual([['f.ts']])
     expect(specs('git restore -W f.ts')).toEqual([['f.ts']])
+    // the W inside an attached -s value is part of the rev, not --worktree
+    expect(specs('git restore --staged -sWORK f.ts')).toEqual([])
   })
 
   it('widens to the whole tree when the pathspec is not literal, and says why', () => {
@@ -66,6 +89,9 @@ describe('restoreInvocations', () => {
     const fromFile = restoreInvocations('git restore --pathspec-from-file=list.txt')
     expect(fromFile.map(r => r.pathspecs)).toEqual([[':/']])
     expect(fromFile[0].widened).toContain('--pathspec-from-file')
+    const checkoutFromFile = restoreInvocations('git checkout --pathspec-from-file list.txt')
+    expect(checkoutFromFile.map(r => r.pathspecs)).toEqual([[':/']])
+    expect(checkoutFromFile[0].widened).toContain('--pathspec-from-file')
   })
 
   it('ignores a command that only mentions checkout or restore', () => {
@@ -98,7 +124,7 @@ describe('hook end-to-end', { timeout: 30_000 }, () => {
     const session_id = `sess${++sessions}-0000-4000-8000-000000000000`
     const payload = JSON.stringify({ session_id, tool_name: 'Bash', cwd, tool_input: { command }, ...over })
     const r = spawnSync('node', [script], { cwd, input: payload, encoding: 'utf8' })
-    return { ...r, session: session_id.slice(0, 8) }
+    return { ...r, session: session_id.slice(0, 8), sessionId: session_id }
   }
   const context = (stdout: string): string => {
     const out = JSON.parse(stdout)
@@ -191,6 +217,12 @@ describe('hook end-to-end', { timeout: 30_000 }, () => {
     expect(ctx).not.toContain('restore-backups')
   })
 
+  it('reports an unresolvable -C target the same way', () => {
+    const ctx = context(hook('git -C "$WT" checkout -- a.txt', repo).stdout)
+    expect(ctx).toContain('$WT')
+    expect(ctx).not.toContain('restore-backups')
+  })
+
   it('copies nothing for a branch switch or a mention in prose', () => {
     expect(hook('git checkout main', repo).stdout).toBe('')
     expect(hook('echo "git checkout -- a.txt"', repo).stdout).toBe('')
@@ -207,10 +239,95 @@ describe('hook end-to-end', { timeout: 30_000 }, () => {
     expect(readFileSync(join(dir, 'a.txt'), 'utf8')).toBe('worktree edit\n')
   })
 
-  it('writes a manifest naming the command next to the copies', () => {
-    const dir = backupDir(context(hook('git checkout -- b.txt', repo).stdout))
+  it('writes a manifest naming the command, cwd, session and copies', () => {
+    const r = hook('git checkout -- b.txt', repo)
+    const dir = backupDir(context(r.stdout))
     expect(readdirSync(dir).sort()).toEqual(['b.txt', 'manifest.txt'])
-    expect(readFileSync(join(dir, 'manifest.txt'), 'utf8')).toContain('git checkout -- b.txt')
+    const manifest = readFileSync(join(dir, 'manifest.txt'), 'utf8')
+    expect(manifest).toContain('command: git checkout -- b.txt')
+    expect(manifest).toContain(`cwd: ${repo}`)
+    expect(manifest).toContain(`session: ${r.sessionId}`)
+    expect(manifest).toContain('+0 -2\tb.txt')
+    expect(manifest).toMatch(/^time: \d{4}-\d\d-\d\dT/m)
+  })
+
+  it('keys the backup by a sanitized session prefix, with a fallback for none', () => {
+    const odd = backupDir(context(hook('git checkout -- b.txt', repo, { session_id: '../a/b' }).stdout))
+    expect(odd.startsWith(join(gitDir, 'restore-backups', 'ab', ''))).toBe(true)
+    const bare = backupDir(context(hook('git checkout -- b.txt', repo, { session_id: undefined }).stdout))
+    expect(bare.startsWith(join(gitDir, 'restore-backups', 'nosession', ''))).toBe(true)
+  })
+
+  it('reports a failure to write the backup instead of crashing', () => {
+    const locked = makeRepo('restore-backup-locked-')
+    writeFileSync(join(locked, 'a.txt'), 'edit\n')
+    const lockedGitDir = git(locked, ['rev-parse', '--absolute-git-dir'])
+    chmodSync(lockedGitDir, 0o555)
+    try {
+      const r = hook('git checkout -- a.txt', locked)
+      expect(r.status).toBe(0)
+      expect(context(r.stdout)).toContain('backup-before-restore: failed before copying everything')
+    } finally {
+      chmodSync(lockedGitDir, 0o755)
+    }
+  })
+
+  // Working-tree shapes other than an edited regular file.
+  const edge = makeRepo('restore-backup-edge-')
+  symlinkSync('a.txt', join(edge, 'link'))
+  writeFileSync(join(edge, 'gone.txt'), 'x\n')
+  writeFileSync(join(edge, 'dir-now'), 'x\n')
+  writeFileSync(join(edge, 'locked.txt'), 'x\n')
+  git(edge, ['add', '.'])
+  git(edge, ['commit', '-qm', 'edge files'])
+  rmSync(join(edge, 'link'))
+  symlinkSync('b.txt', join(edge, 'link')) // retargeted
+  rmSync(join(edge, 'gone.txt')) // deleted: HEAD still holds it
+  rmSync(join(edge, 'dir-now'))
+  mkdirSync(join(edge, 'dir-now')) // tracked file replaced by a directory
+  writeFileSync(join(edge, 'locked.txt'), 'edited\n')
+  chmodSync(join(edge, 'locked.txt'), 0o000)
+
+  it('copies a retargeted symlink as a link', () => {
+    const dir = backupDir(context(hook('git checkout -- link', edge).stdout))
+    expect(readlinkSync(join(dir, 'link'))).toBe('b.txt')
+  })
+
+  it('stays silent for a file deleted in the working tree', () => {
+    expect(hook('git checkout -- gone.txt', edge).stdout).toBe('')
+  })
+
+  it('reports what it could not copy, with the reason, and still writes the manifest', () => {
+    const ctx = context(hook('git checkout -- dir-now locked.txt', edge).stdout)
+    expect(ctx).toContain('copied 0 files')
+    expect(ctx).toContain('not copied: dir-now (not a regular file)')
+    expect(ctx).toContain('not copied: locked.txt (EACCES)')
+    expect(ctx).toContain('line counts unavailable')
+    expect(readFileSync(join(backupDir(ctx), 'manifest.txt'), 'utf8')).toContain('not copied (EACCES)\tlocked.txt')
+  })
+
+  it('copies the other named files when one of them is unreadable', () => {
+    writeFileSync(join(edge, 'a.txt'), 'edge edit\n')
+    const ctx = context(hook('git checkout -- a.txt locked.txt', edge).stdout)
+    expect(ctx).toContain('copied 1 file')
+    expect(ctx).toMatch(/\?\s+a\.txt/)
+    expect(readFileSync(join(backupDir(ctx), 'a.txt'), 'utf8')).toBe('edge edit\n')
+  })
+
+  it('lists files within the context budget and counts the rest', () => {
+    const many = makeRepo('restore-backup-many-')
+    const names = Array.from({ length: 150 }, (_, i) => `${'deeply-nested-directory-name/'.repeat(3)}file-${i}.txt`)
+    mkdirSync(join(many, 'deeply-nested-directory-name/'.repeat(3)), { recursive: true })
+    for (const n of names) writeFileSync(join(many, n), 'x\n')
+    git(many, ['add', '.'])
+    git(many, ['commit', '-qm', 'many'])
+    for (const n of names) writeFileSync(join(many, n), 'y\n')
+    const ctx = context(hook('git checkout -- .', many).stdout)
+    expect(ctx).toContain('150 files')
+    expect(ctx.split('\n').at(-1)).toMatch(/^ {2}…and \d+ more, listed in manifest\.txt$/)
+    expect(ctx.length).toBeLessThanOrEqual(NOTE_BUDGET + 100)
+    const manifest = readFileSync(join(backupDir(ctx), 'manifest.txt'), 'utf8')
+    for (const n of names) expect(manifest).toContain(`\t${n}\n`)
   })
 
   it('stays silent on a garbled or empty payload and outside a repo', () => {
@@ -223,7 +340,8 @@ describe('hook end-to-end', { timeout: 30_000 }, () => {
   })
 
   it('falls back to the process cwd when the payload has none', () => {
-    const r = hook('git checkout -- b.txt', repo, { cwd: undefined })
-    expect(context(r.stdout)).toContain('1 file')
+    const ctx = context(hook('cd sub && git checkout -- g.txt', repo, { cwd: undefined }).stdout)
+    expect(ctx).toContain('1 file')
+    expect(readFileSync(join(backupDir(ctx), 'manifest.txt'), 'utf8')).toContain(`cwd: ${repo}\n`)
   })
 })

@@ -27,10 +27,9 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { effectiveCwd, gitInvocations } from './check-stash-worktree.mjs'
+import { emitPreToolUseContext, fitLines } from './hook-context.mjs'
 
 const BASE = 'origin/master'
-const LISTED_FILES = 300
-const CONTEXT_MAX = 9_000
 
 export const pushInvocations = cmd => gitInvocations(cmd).filter(g => g.word === 'push')
 
@@ -52,31 +51,26 @@ const scopeOf = (cwd, cArgs) => {
     return null // not a repository: the push itself reports that
   }
   const range = `${BASE}...HEAD`
-  let names, shortstat, counts
+  let names, shortstat, counts, branch
   try {
     names = git(cwd, cArgs, ['diff', '--name-status', '--no-ext-diff', '--no-renames', range])
     shortstat = git(cwd, cArgs, ['diff', '--shortstat', '--no-ext-diff', range]).trim()
     counts = git(cwd, cArgs, ['rev-list', '--left-right', '--count', range]).split(/\s+/)
+    branch = git(cwd, cArgs, ['rev-parse', '--abbrev-ref', 'HEAD'])
   } catch (e) {
     return `push-scope: \`git diff ${range}\` failed: ${firstLine(e)}`
   }
-  const branch = (() => {
-    try {
-      return git(cwd, cArgs, ['rev-parse', '--abbrev-ref', 'HEAD'])
-    } catch {
-      return 'HEAD'
-    }
-  })()
   const lines = names ? names.split('\n') : []
-  const ordered = [...lines.filter(l => l.startsWith('D\t')), ...lines.filter(l => !l.startsWith('D\t'))]
-  const out = [
-    `push-scope: ${branch} against ${BASE} as last fetched here (merge-base diff, deletions first):`,
-    `HEAD is ${counts[1]} ahead, ${counts[0]} behind ${BASE}`,
-    shortstat || 'no file differences',
-    ...ordered.slice(0, LISTED_FILES),
-  ]
-  if (ordered.length > LISTED_FILES) out.push(`…and ${ordered.length - LISTED_FILES} more`)
-  return out.join('\n')
+  const deletions = lines.filter(l => l.startsWith('D\t'))
+  return fitLines(
+    [
+      `push-scope: ${branch} against ${BASE} as last fetched here (merge-base diff, deletions first):`,
+      `HEAD is ${counts[1]} ahead, ${counts[0]} behind ${BASE}`,
+      shortstat || 'no file differences',
+    ],
+    [...deletions, ...lines.filter(l => !l.startsWith('D\t'))],
+    n => `…and ${n} more`,
+  ).join('\n')
 }
 
 const main = () => {
@@ -87,7 +81,7 @@ const main = () => {
     return // not a hook payload
   }
   const cmd = payload?.tool_input?.command ?? ''
-  if (!/\bpush\b/.test(cmd)) return
+  if (!/\bpush\b/.test(cmd)) return // fast path only: pushInvocations decides
   const payloadCwd = payload.cwd || process.cwd()
   const notes = []
   const seen = new Set()
@@ -104,16 +98,7 @@ const main = () => {
     const note = scopeOf(cwd, inv.cArgs)
     if (note) notes.push(note)
   }
-  if (!notes.length) return
-  const text = notes.join('\n\n')
-  process.stdout.write(
-    JSON.stringify({
-      hookSpecificOutput: {
-        hookEventName: 'PreToolUse',
-        additionalContext: text.length > CONTEXT_MAX ? text.slice(0, CONTEXT_MAX) : text,
-      },
-    }) + '\n',
-  )
+  emitPreToolUseContext(notes)
 }
 
 const isMain = process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])

@@ -1,5 +1,15 @@
 import { spawn, spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -30,6 +40,7 @@ describe('parseMutateArgs', () => {
     expect(() => parseMutateArgs([...base, '--delete', 'x', '--edit', 'y'], '/r')).toThrow(/not both/)
     expect(() => parseMutateArgs(['--test', 't', '--delete', 'x'], '/r')).toThrow(/--file/)
     expect(() => parseMutateArgs(['--file', 'f', '--delete', 'x'], '/r')).toThrow(/--test/)
+    expect(() => parseMutateArgs([...base, '--delete', ''], '/r')).toThrow(/empty/)
   })
 })
 
@@ -132,7 +143,9 @@ describe('mutate end-to-end', { timeout: 60_000 }, () => {
     expect(r.stdout).toContain('- if (x === 0) return false // pinned guard')
     expect(readFileSync(join(dir, 'mod.mjs'), 'utf8')).toBe(MOD)
     expect(existsSync(join(dir, 'git-calls'))).toBe(false)
-    expect(existsSync(journalPaths(join(dir, 'mod.mjs')).journal)).toBe(false)
+    const { journal, snapshot } = journalPaths(join(dir, 'mod.mjs'))
+    expect(existsSync(journal)).toBe(false)
+    expect(existsSync(snapshot)).toBe(false)
   })
 
   it('reports UNPINNED with a distinct exit code and restores the bytes', () => {
@@ -160,12 +173,86 @@ describe('mutate end-to-end', { timeout: 60_000 }, () => {
     expect(readFileSync(join(dir, 'mod.mjs'), 'utf8')).toBe(MOD)
   })
 
-  it('gives no verdict and leaves the file alone when a --delete literal is ambiguous', () => {
+  it('gives no verdict and never rewrites the file when a --delete literal is ambiguous', () => {
     const dir = fixture()
+    const before = statSync(join(dir, 'mod.mjs')).mtimeMs
     const r = mutate(dir, ['--delete', 'return false', '--no-baseline'])
     expect(r.status).toBe(2)
     expect(r.stdout + r.stderr).toMatch(/occurs 2 times/)
     expect(readFileSync(join(dir, 'mod.mjs'), 'utf8')).toBe(MOD)
+    expect(statSync(join(dir, 'mod.mjs')).mtimeMs).toBe(before)
+  })
+
+  it('gives no verdict when the --edit command fails', () => {
+    const dir = fixture()
+    const r = mutate(dir, ['--edit', 'exit 3', '--no-baseline'])
+    expect(r.status).toBe(2)
+    expect(lastLine(r.stdout)).toMatch(/--edit command exited 3/)
+  })
+
+  it('gives no verdict for a test path that does not exist', () => {
+    const dir = fixture()
+    const r = spawnSync(
+      'node',
+      [script, '--file', join(dir, 'mod.mjs'), '--test', join(dir, 'nope.test.mjs'), '--delete', GUARD],
+      { cwd: dir, env: env(dir), encoding: 'utf8' },
+    )
+    expect(r.status).toBe(2)
+    expect(lastLine(r.stdout)).toMatch(/nope\.test\.mjs does not exist/)
+  })
+
+  it('reports a baseline that cannot load without touching the file', () => {
+    const dir = fixture()
+    writeFileSync(join(dir, 'mod.test.mjs'), 'this is not javascript (\n')
+    const r = mutate(dir, ['--delete', GUARD])
+    expect(r.status).toBe(2)
+    expect(lastLine(r.stdout)).toMatch(/^NO VERDICT: baseline: .*failed to load/)
+    expect(r.stdout).not.toContain('edit:')
+  })
+
+  it('exits 3 and keeps the snapshot when the restore cannot be verified', () => {
+    const dir = fixture()
+    const target = join(dir, 'mod.mjs')
+    const { journal, snapshot } = journalPaths(target)
+    try {
+      const r = mutate(dir, ['--edit', 'printf x >> "$MUTATE_FILE" && chmod 444 "$MUTATE_FILE"', '--no-baseline'])
+      expect(r.status).toBe(3)
+      expect(lastLine(r.stdout)).toMatch(/^RESTORE FAILED/)
+      expect(readFileSync(snapshot, 'utf8')).toBe(MOD)
+      expect(existsSync(journal)).toBe(true)
+    } finally {
+      chmodSync(target, 0o644)
+      rmSync(journal, { force: true })
+      rmSync(snapshot, { force: true })
+    }
+  })
+
+  it('refuses while another live run holds the file', () => {
+    const dir = fixture()
+    const target = join(dir, 'mod.mjs')
+    const { journal, snapshot } = journalPaths(target)
+    mkdirSync(join(journal, '..'), { recursive: true })
+    writeFileSync(journal, JSON.stringify({ target, snapshot, pid: process.pid, started: 'now' }))
+    try {
+      const r = mutate(dir, ['--delete', GUARD, '--no-baseline'])
+      expect(r.status).toBe(2)
+      expect(r.stdout).toContain(`another pnpm mutate (pid ${process.pid}`)
+      expect(readFileSync(target, 'utf8')).toBe(MOD)
+    } finally {
+      rmSync(journal, { force: true })
+    }
+  })
+
+  it('clears a leftover journal whose snapshot matches the file, then runs', () => {
+    const dir = fixture()
+    const target = join(dir, 'mod.mjs')
+    const { journal, snapshot } = journalPaths(target)
+    mkdirSync(join(journal, '..'), { recursive: true })
+    writeFileSync(snapshot, MOD)
+    writeFileSync(journal, JSON.stringify({ target, snapshot, pid: 2 ** 22 + 7, started: 'earlier' }))
+    const r = mutate(dir, ['--delete', UNPINNED, '--no-baseline'])
+    expect(r.status, r.stdout).toBe(1)
+    expect(existsSync(journal)).toBe(false)
   })
 
   it('refuses to mutate over a failing baseline', () => {
@@ -208,7 +295,8 @@ describe('mutate end-to-end', { timeout: 60_000 }, () => {
     const dir = fixture()
     writeFileSync(
       join(dir, 'mod.test.mjs'),
-      "it('slow', async () => { await new Promise(r => setTimeout(r, 20_000)) }, 30_000)\n",
+      // Outlives this test's own timeout, so only a forwarded SIGINT ends it in time.
+      "it('slow', async () => { await new Promise(r => setTimeout(r, 120_000)) }, 200_000)\n",
     )
     const child = spawn(
       'node',

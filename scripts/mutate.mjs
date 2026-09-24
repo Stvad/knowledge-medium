@@ -149,6 +149,9 @@ let active = null
 
 const run = (cmd, args, opts) =>
   new Promise(done => {
+    // Defence in depth: a signal between two steps finds no child to kill, so
+    // the next step must not start one. The window is too narrow to pin.
+    if (interrupted) return done({ code: null, stderr: `not started: ${interrupted}` })
     let stderr = ''
     let settled = false
     const settle = code => {
@@ -194,11 +197,10 @@ const printEdit = (before, after) => {
   if (shown.length > DIFF_LINES) log(`  …and ${shown.length - DIFF_LINES} more changed lines`)
 }
 
-/** Baseline, edit, mutated run. Returns a verdict, or null once interrupted. */
+/** Baseline, edit, mutated run → verdict. An interrupt surfaces as a killed run's none. */
 const mutateAndRun = async (cfg, paths, original) => {
   if (cfg.baseline) {
     const b = await runVitest(cfg, paths, 'baseline')
-    if (interrupted) return null
     if (b.kind === 'none') return none(`baseline: ${b.reason}`)
     if (b.kind === 'pinned') {
       log(`baseline: ${b.passed} passed, ${b.names.length} failed (${b.names.join('; ')})`)
@@ -220,13 +222,11 @@ const mutateAndRun = async (cfg, paths, original) => {
       cwd: cfg.cwd,
       env: { ...process.env, MUTATE_FILE: cfg.file },
     })
-    if (interrupted) return null
     if (r.code !== 0) return none(`the --edit command exited ${r.code}: ${tail(r.stderr)}`)
     mutated = readOrNull(cfg.file) ?? Buffer.alloc(0)
   }
   if (mutated.equals(original)) return none(`the edit did not change ${relative(cfg.cwd, cfg.file)}`)
   printEdit(original, mutated)
-  if (interrupted) return null
   return runVitest(cfg, paths, 'mutated')
 }
 
