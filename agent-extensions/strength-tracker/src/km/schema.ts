@@ -453,9 +453,9 @@ export const perSideProp = seedProperty({
 })
 
 /** main | accessory | carry | bodyweight — kept as free text rather than an
- *  enum: it's a human classification the parser only consults for the two
- *  values that change behaviour, and a plan should be able to invent a word
- *  without the property rejecting the write. */
+ *  enum: it's a human classification, and a plan should be able to invent a
+ *  word without the property rejecting the write. `alt-group` is the one value
+ *  the parser reads (the older way to mark an or-group). */
 export const kindProp = seedProperty({
   seedKey: extensionPropertySeedKey('kind'),
   revision: 1,

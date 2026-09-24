@@ -97,8 +97,8 @@ export const FIELD = {
   increment: 'strength:increment',
   perSide: 'strength:perSide',
   /** Free-form movement classification (main | accessory | carry |
-   *  bodyweight). `carry`/`bodyweight` mark work the engine never
-   *  load-progresses from a rep count. */
+   *  bodyweight) — a label only. Whether a lift is load-progressed is decided
+   *  by whether it has a rep window, never by its kind. */
   kind: 'strength:kind',
   catchUpIncrement: 'strength:catchUpIncrement',
   catchUpRpe: 'strength:catchUpRpe',

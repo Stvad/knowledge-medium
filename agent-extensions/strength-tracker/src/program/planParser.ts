@@ -172,8 +172,13 @@ export const parseExercise = (
   const repMax = numProp(props, FIELD.repMax) ?? proseRepMax
   const increment = numProp(props, FIELD.increment) ?? incrementFor(name, increments.upper, increments.lower)
   const perSide = boolProp(props, FIELD.perSide) ?? PER_SIDE.test(rest)
-  const kind = strProp(props, FIELD.kind)
-  const freeform = kind === 'carry' || kind === 'bodyweight' ? true : repMax === undefined || FREEFORM.test(rest)
+  // A rep window is what double progression runs on, so having one is the
+  // whole test — `kind` is a label and decides nothing. A window stated as a
+  // property outranks the prose's "carry"/"lengths" wording, the same way
+  // every other property outranks the line it sits on: for a carry, reps
+  // are lengths.
+  const statedWindow = numProp(props, FIELD.repMax) !== undefined
+  const freeform = repMax === undefined || (!statedWindow && FREEFORM.test(rest))
 
   // Description: the line's own prose tail, plus every child's plain text —
   // a description sub-bullet ("light, knee-friendly") or a demo link lives

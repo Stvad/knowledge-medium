@@ -162,6 +162,29 @@ describe('parseExercise', () => {
     expect(ex?.repMin).toBe(6)
   })
 
+  it('load-progresses any lift with a rep window, whatever its kind says', () => {
+    const pullUps = parseExercise(
+      node('Pull-ups — 3 sets, add weight at 3×8', [], {properties: {[FIELD.kind]: 'bodyweight', [FIELD.targetSets]: 3}}),
+      'B',
+      {upper: 5, lower: 10},
+    )
+    expect(pullUps?.freeform).toBe(false)
+  })
+
+  it('reads a carry with a stated window as progressed on lengths, over its own prose', () => {
+    const props = {[FIELD.kind]: 'carry', [FIELD.targetSets]: 2}
+    const line = 'Waiter carry (one arm, overhead) — 2 lengths per side'
+    // "lengths" and "carry" in the prose read as freeform only while nothing
+    // stated a window.
+    expect(parseExercise(node(line, [], {properties: props}), 'B', {upper: 5, lower: 10})?.freeform).toBe(true)
+    const windowed = parseExercise(
+      node(line, [], {properties: {...props, [FIELD.repMin]: 2, [FIELD.repMax]: 4}}),
+      'B',
+      {upper: 5, lower: 10},
+    )
+    expect(windowed).toMatchObject({freeform: false, repMin: 2, repMax: 4})
+  })
+
   it('gathers the description from plain child bullets, including a video child', () => {
     const ex = parseExercise(
       node('Split squat — 2×8–12/leg', [node('light, knee-friendly'), node('[video](https://youtu.be/x)')]),
