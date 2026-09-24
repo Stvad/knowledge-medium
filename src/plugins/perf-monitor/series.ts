@@ -354,22 +354,23 @@ export const MIN_FANOUT_WRITES = 100
  *  over-broad invalidation dep re-resolves on writes that don't concern it,
  *  so p95 never moves.
  *
- *  Counts what the synchronous invalidation walk decides, which is all `fanout`
- *  is measured across: re-resolves the write started, plus those it queued
- *  behind a load already in flight (which of the two a handle lands in is
- *  timing, not fan-out). The walk matches every dep a handle has registered —
- *  the prior run's and those declared so far — so an over-broad one is always
- *  seen. A rerun the settle path finds against a dep declared AFTER the write is
- *  left out, ACCEPTED: the handle did not depend on that row when it landed.
+ *  The re-resolves the synchronous invalidation walk STARTED — the only ones a
+ *  write can be charged with, since `fanout` is measured across that walk
+ *  alone. Anything a load's settle decides is left out, ACCEPTED: a rerun a
+ *  write queued behind a load in flight runs or is dropped by who is subscribed
+ *  THEN, and a change matched against a dep declared after the write was not a
+ *  dep when it landed. A write that finds the handle idle — the common case —
+ *  is counted against every dep the handle has registered, over-broad or not.
+ *  An exact count of queued reruns needs the handle store to count subscribed
+ *  invalidations at the write; not done, since records without that counter
+ *  could not be told from sessions where it never moved.
  *
  *  Not `loaderInvalidations`: an invalidation that finds no subscriber only
  *  marks the handle stale, and how many such handles are alive moves with the
  *  session, not the code. Not the page-wide `loaderRuns` either, which a
  *  mount's cold `load()` also bumps; none lands inside the walk. */
 export const reResolvesPerWrite = (r: InteractionComparable): number | null =>
-  r.writes >= MIN_FANOUT_WRITES
-    ? ((r.fanout.loaderRuns ?? 0) + (r.fanout.midLoadInvalidations ?? 0)) / r.writes
-    : null
+  r.writes >= MIN_FANOUT_WRITES ? (r.fanout.loaderRuns ?? 0) / r.writes : null
 
 export const fanoutRegression = (
   current: InteractionComparable,

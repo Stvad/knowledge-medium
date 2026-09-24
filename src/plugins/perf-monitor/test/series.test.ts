@@ -365,15 +365,14 @@ describe('fanoutRegression', () => {
     expect(fanoutRegression(now(), sinceRegressed(now, base)).status).toBe('steady')
   })
 
-  // A write landing on a load already in flight queues its re-resolve for after
-  // the load settles, outside the walk `loaderRuns` is counted across. Whether a
-  // handle was mid-load when the write landed is timing, not fan-out.
-  it('counts a re-resolve queued behind a load in flight, not only one started', () => {
+  // A write landing on a load already in flight only queues a rerun, which the
+  // load's settle then runs or drops by who is subscribed THEN — a long
+  // imperative read with nobody listening drops every one. Counting them reads
+  // those reads as fan-out.
+  it('does not count a rerun a write only queued behind a load in flight', () => {
     const writes = MIN_FANOUT_WRITES
-    const now = () => sample({ writes, fanout: {
-      loaderRuns: writes / 4, midLoadInvalidations: 15 * writes / 4,
-    } })
-    expect(reg(fanoutRegression(now(), sinceRegressed(now, rate(1))))).toMatchObject({ ratio: 4 })
+    const now = () => sample({ writes, fanout: { loaderRuns: writes, midLoadInvalidations: 8 * writes } })
+    expect(fanoutRegression(now(), sinceRegressed(now, rate(1))).status).toBe('steady')
   })
 
   it('reports nothing for a session that has not written', () => {
