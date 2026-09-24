@@ -34,6 +34,7 @@ import {
   planLossyReapplies,
   pullWouldWrite,
   planPrePullPush,
+  planPullSet,
   planMintedRefs,
   planPriorityFixes,
   REPO,
@@ -949,6 +950,21 @@ describe('planPrePullPush', () => {
   })
 })
 
+describe('planPullSet', () => {
+  const converged: IssueInfo = { state: 'OPEN', labels: ['priority::high', 'type::task'], title: 'T', body: 'D', assignee: '' }
+  const local = (over: Partial<BeadRow>) => bead({ title: 'T', description: 'D', priority: 1, issue_type: 'task', ...over })
+
+  // The pull applies its copy whatever the timestamps (#647), so the only row
+  // it may be handed is one GitHub last moved — however the local row got
+  // newer, a plan or another worktree's edit after it.
+  it('never names a bead whose local row is newer than its listed issue', () => {
+    const edited = { ...converged, title: 'edited on GitHub', updatedAt: '2026-08-20T00:00:00Z' }
+    const byIssue = issues([[1, edited]])
+    expect(planPullSet([local({ updated_at: '2026-08-19T00:00:00Z' })], byIssue, new Set())).toEqual([1])
+    expect(planPullSet([local({ updated_at: '2026-08-21T00:00:00Z' })], byIssue, new Set())).toEqual([])
+  })
+})
+
 describe('planMintedRefs', () => {
   it('reports every ref that appeared between the listings, open beads included', () => {
     const pre = [
@@ -1414,13 +1430,32 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   it('re-derives the priority of a bead the pull created, and pushes it back out', () => {
     const created = syncRow({ id: 'km-new', priority: 2, external_ref: ref(9), updated_at: '2026-08-20T00:00:01Z' })
     const handFiled = { ...ghIssue(9, '2026-08-20T00:00:00Z'), labels: [{ name: 'P1' }] }
-    const { run, shimCalls } = makeSyncRepo({ issues: [handFiled], reads: [[], [created]] })
+    // Run start, just before the pull, after it.
+    const { run, shimCalls } = makeSyncRepo({ issues: [handFiled], reads: [[], [], [created]] })
     const r = run()
     expect(r.status).toBe(0)
     expect(r.stdout).toContain('priority km-new → 1')
     const log = afterPull(shimCalls())
     expect(log).toContain('bd update km-new -p 1')
     expect(log).toContain('bd github sync --push-only --issues km-new')
+  })
+
+  // The pull is planned on a read taken just before it, not the one the run
+  // started from: a bead another worktree edits in between is newer locally
+  // by then, and the pull would apply the older GitHub copy over the edit.
+  it('re-reads before the pull, and drops a bead edited locally since the run began', () => {
+    const before = syncRow({ id: 'km-e', external_ref: ref(4), updated_at: '2026-08-19T00:00:00Z' })
+    const editedMeanwhile = { ...before, description: 'edited in another worktree', updated_at: '2026-08-21T00:00:00Z' }
+    const { run, shimCalls } = makeSyncRepo({
+      // #4 was edited on GitHub, so the run-start plan pulls it; #9 has no bead.
+      issues: [{ ...ghIssue(4, '2026-08-20T00:00:00Z'), title: 'edited on GitHub' }, ghIssue(9, '2026-08-20T00:00:00Z')],
+      reads: [[before], [editedMeanwhile]],
+    })
+    const r = run()
+    expect(r.status).toBe(0)
+    const log = shimCalls()
+    expect(log.match(/^bd export/gm)?.length).toBeGreaterThanOrEqual(2)
+    expect(log).toContain('bd github sync --pull-only --issues 9\n')
   })
 
   // A converged run's whole cost: the probes, one issue listing, one read of the
@@ -1547,6 +1582,8 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(r.stdout).toContain('[dry-run] would push 1 bead(s) out before the pull: km-a')
     expect(shimCalls()).not.toContain('bd close')
     expect(shimCalls()).not.toContain('--push-only')
+    // …and out of the pull, which a real close would have made it newer than.
+    expect(shimCalls()).not.toContain('--pull-only')
   })
 
   // bd takes the ids as ONE --issues argument, which has a per-argument

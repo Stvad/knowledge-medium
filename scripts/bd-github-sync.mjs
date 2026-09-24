@@ -1282,9 +1282,14 @@ const fetchIssues = async () => {
 //     hand-filed issue becomes a bead.
 //   - a bead the pull would carry faithfully: the edit import.
 // A bead the pull would damage is simply never named, so it cannot be written.
-// `excludedIds` is every bead another step owns (see runSync). A GitHub-side
-// REOPEN of a closed bead is never named either, faithful or not: it does not
-// stick (header, trap 3), and step 4 closes the issue again.
+// `excludedIds` is every bead another step owns (see runSync). Never named
+// either, faithful or not:
+//   - a bead whose local row is newer than its listed issue: the pull applies
+//     its copy whatever the timestamps (#647). runSync plans on a read taken
+//     just before the pull, so this also covers an edit another worktree
+//     made after the run began.
+//   - a GitHub-side REOPEN of a closed bead: it does not stick (header, trap
+//     3), and step 4 closes the issue again.
 export const planPullSet = (beads, issueByNumber, excludedIds) => {
   const linked = new Set()
   const faithful = []
@@ -1294,7 +1299,8 @@ export const planPullSet = (beads, issueByNumber, excludedIds) => {
     linked.add(number)
     const issue = issueByNumber.get(number)
     const reopened = b.status === 'closed' && issue.state === 'OPEN'
-    if (!excludedIds.has(b.id) && !reopened && pullWouldWrite(b, issue)) faithful.push(number)
+    const localNewer = !!(issue.updatedAt && b.updated_at) && Date.parse(b.updated_at) > Date.parse(issue.updatedAt)
+    if (!excludedIds.has(b.id) && !reopened && !localNewer && pullWouldWrite(b, issue)) faithful.push(number)
   }
   const unlinked = [...issueByNumber.keys()].filter(n => !linked.has(n))
   return [...new Set([...unlinked, ...faithful])].sort((a, b) => a - b)
@@ -1607,7 +1613,8 @@ const runSync = async ({ quiet = false, dryRun = false } = {}) => {
       )
     // Re-read after the closes: a close bumps updated_at, and the pre-adoption
     // row would look converged to the push plan below. A dry run makes no
-    // closes, so the rows it would have bumped are added to the push by hand.
+    // closes, so the rows it would have bumped are moved from the pull to the
+    // push by hand.
     const exported = closes.length && !dryRun ? exportBeads(env) : preBeads
     const dryRunBumped = dryRun ? closes.map(c => c.id) : []
 
@@ -1617,8 +1624,9 @@ const runSync = async ({ quiet = false, dryRun = false } = {}) => {
     //     BEFORE the pull and is selective — bd 1.2.2 GETs every bead it is
     //     handed, so a converged run costs no request per bead.
     //   - the PULL is handed, BY IDENTIFIER, the issues with no bead and the
-    //     beads it would carry faithfully (planPullSet) — never one the push
-    //     owns, and never one it would damage (planLossyReapplies).
+    //     beads GitHub last moved that it would carry faithfully (planPullSet,
+    //     step 2) — so never one the push owns, whose local row is the newer,
+    //     and never one it would damage (planLossyReapplies).
     // bd's pull applies a strictly OLDER GitHub copy over a newer local row
     // (#647), so naming one bead to both steps IS the revert; with the sets
     // disjoint, and the pull reaching nothing it is not named, no pull can
@@ -1627,7 +1635,7 @@ const runSync = async ({ quiet = false, dryRun = false } = {}) => {
     // leaves it for the next run, which sees GitHub newer and pulls it.
     const pushSet = [...new Set([...planPrePullPush(exported, issueByNumber), ...dryRunBumped])]
     const withheld = planLossyReapplies(exported, issueByNumber)
-    const pullSet = planPullSet(exported, issueByNumber, new Set([...withheld.map(w => w.id), ...pushSet]))
+    const pullExcluded = new Set([...withheld.map(w => w.id), ...dryRunBumped])
     // Reported, but never counted as news: withholding changes nothing on
     // either side and recurs for as long as the divergence does, so letting it
     // answer "did anything change" would un-quiet every SessionEnd run.
@@ -1677,8 +1685,17 @@ const runSync = async ({ quiet = false, dryRun = false } = {}) => {
     const freshBeads = pushed ? exportBeads(env) : exported
     printMinted(freshBeads)
 
-    // 2. The pull. Pull-only, not bidirectional: the push leg would GET every
-    // linked bead again and could only PATCH rows step 1.5 just pushed.
+    // 2. The pull, planned on a read taken just before it, not the one the push
+    // was planned on: a bead another worktree edited since is newer locally by
+    // now, and planPullSet leaves it out. A run with nothing to pull pays no
+    // re-read, and after a push the post-push read is that read. Accepted: an
+    // edit landing while bd's pull runs can still be overwritten — seconds,
+    // and no compare-and-swap verb exists to close it.
+    // Pull-only, not bidirectional: the push leg would GET every linked bead
+    // again and could only PATCH rows step 1.5 just pushed.
+    const pullPlan = beads => planPullSet(beads, issueByNumber, pullExcluded)
+    const staleForPull = !pushed && !dryRun && pullPlan(freshBeads).length > 0
+    const pullSet = pullPlan(staleForPull ? exportBeads(env) : freshBeads)
     const syncOut = pullIssues(pullSet, env, dryRun)
     const syncSummary = syncOut
       .split('\n')
