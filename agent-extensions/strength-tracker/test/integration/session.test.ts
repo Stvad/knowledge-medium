@@ -1186,7 +1186,7 @@ describe('RPE, from the plan to the next prescription', () => {
     const logged = history[0].exercises[0]
 
     expect(logged.sets.map(s => s.rpe)).toEqual([7, 7])
-    expect(nextWeight(logged, config)).toEqual({weight: 295, progressed: true})
+    expect(nextWeight(logged, config)).toEqual({weight: 295, progressed: true, rule: 'catch-up'})
   })
 
   it('progresses at the normal increment when the RPE was never logged', async () => {
@@ -1204,7 +1204,7 @@ describe('RPE, from the plan to the next prescription', () => {
       await childrenOf(entry.id, SET_TYPE),
     )
 
-    expect(nextWeight(history[0].exercises[0], config)).toEqual({weight: 285, progressed: true})
+    expect(nextWeight(history[0].exercises[0], config)).toEqual({weight: 285, progressed: true, rule: 'increment'})
   })
 
   it('withholds the jump when only some of the sets were rated', async () => {
@@ -1224,7 +1224,7 @@ describe('RPE, from the plan to the next prescription', () => {
       await childrenOf(entry.id, SET_TYPE),
     )
 
-    expect(nextWeight(history[0].exercises[0], config)).toEqual({weight: 285, progressed: true})
+    expect(nextWeight(history[0].exercises[0], config)).toEqual({weight: 285, progressed: true, rule: 'increment'})
   })
 })
 
