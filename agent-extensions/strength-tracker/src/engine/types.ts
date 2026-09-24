@@ -7,6 +7,8 @@
  *  from leaking into UI components.
  */
 
+import type {AssessmentTest} from './assessment'
+
 export type SessionType = 'A' | 'B' | 'mini'
 
 /** Full sessions are the ones the re-entry clock counts. Mini days are
@@ -205,6 +207,8 @@ export interface ProgramConfig {
   /** The lift that should carry the clearly biggest number ("deadlift should
    *  be clearly the biggest"). */
   heaviestLift?: string
+  /** The quarterly battery, one result block per test. */
+  assessments: readonly AssessmentTest[]
   /** Per-session reminders lifted from the plan (warm-up, RPE cap). */
   sessionNotes: Readonly<Record<SessionType, readonly string[]>>
 }

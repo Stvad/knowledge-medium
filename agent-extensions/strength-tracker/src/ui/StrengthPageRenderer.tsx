@@ -19,12 +19,15 @@ import {getBlockTypes} from '@/data/properties.js'
 import {useWorkspaceId} from '@/hooks/block.js'
 import type {BlockRenderer, BlockRendererProps} from '@/types.js'
 
+import {trainingDay} from '../engine/schedule'
 import type {ProgramConfig} from '../engine/types'
 import {DEFAULT_CONFIG} from '../program/defaults'
+import {startAssessment} from '../km/assessment'
 import {STRENGTH_LOG_TYPE} from '../km/fields'
 import {readProgram} from '../km/tonight'
 import {HistoryView} from './HistoryView'
 import {placeOnPage} from './placement'
+import {showSession} from './showSession'
 import {runStartSession} from './startAction'
 import {useSessionRows} from './decorations/sessionRows'
 
@@ -66,6 +69,44 @@ const StartSessionButton = ({block}: {block: BlockRendererProps['block']}) => {
   )
 }
 
+/** The quarterly battery, stamped on this page for today, one result block per
+ *  test. A form rather than a flow: it opens, you type the numbers in. */
+const LogAssessmentButton = ({block, config, workspaceId}: {
+  block: BlockRendererProps['block']
+  config: ProgramConfig
+  workspaceId: string
+}) => {
+  const {panelId} = useBlockContext()
+  const [busy, setBusy] = useState(false)
+  const [problem, setProblem] = useState<string | null>(null)
+  if (block.repo.isReadOnly) return null
+
+  return (
+    <div className="flex items-center gap-3">
+      <button
+        type="button"
+        disabled={busy}
+        data-block-interaction="ignore"
+        className="rounded border border-border px-3 py-1.5 text-sm hover:bg-muted disabled:opacity-50"
+        onClick={event => {
+          event.stopPropagation()
+          setBusy(true)
+          setProblem(null)
+          const day = trainingDay(new Date(), config.dayRolloverHour)
+          startAssessment(block.repo, block.id, day, config.assessments)
+            .then(id => showSession(block.repo, {workspaceId, blockId: id, panelId, what: 'the assessment was logged'}))
+            .catch((error: unknown) => {
+              console.error('[strength] could not log the assessment', error)
+              setProblem('Could not log an assessment — nothing was saved.')
+            })
+            .finally(() => setBusy(false))
+        }}
+      >{busy ? 'Logging…' : 'Log an assessment'}</button>
+      {problem ? <span className="text-xs text-destructive">{problem}</span> : null}
+    </div>
+  )
+}
+
 const StrengthLogContent: BlockRenderer = ({block}: BlockRendererProps) => {
   const repo = useRepo()
   const workspaceId = useWorkspaceId(block)
@@ -95,7 +136,10 @@ const StrengthLogContent: BlockRenderer = ({block}: BlockRendererProps) => {
 
   return (
     <div className="strength-tracker flex w-full max-w-2xl flex-col gap-8 py-2">
-      <StartSessionButton block={block}/>
+      <div className="flex flex-wrap items-center gap-3">
+        <StartSessionButton block={block}/>
+        <LogAssessmentButton block={block} config={config} workspaceId={workspaceId}/>
+      </div>
       <HistoryView config={config} history={history}/>
     </div>
   )

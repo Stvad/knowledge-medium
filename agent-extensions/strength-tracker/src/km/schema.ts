@@ -35,6 +35,8 @@ import type {SessionType} from '../engine/types'
 import {
   ALT_CHOICE_TYPE,
   ALT_GROUP_TYPE,
+  ASSESSMENT_RESULT_TYPE,
+  ASSESSMENT_TYPE,
   EXERCISE_DEF_TYPE,
   EXERCISE_ENTRY_TYPE,
   FIELD,
@@ -50,6 +52,8 @@ import {
 export {
   ALT_CHOICE_TYPE,
   ALT_GROUP_TYPE,
+  ASSESSMENT_RESULT_TYPE,
+  ASSESSMENT_TYPE,
   EXERCISE_DEF_TYPE,
   EXERCISE_ENTRY_TYPE,
   LAYOFF_TYPE,
@@ -597,6 +601,50 @@ export const rampPerSessionProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 
+// ──── Assessment result ────
+
+export const measureProp = seedProperty({
+  seedKey: extensionPropertySeedKey('measure'),
+  revision: 1,
+  name: FIELD.measure,
+  preset: 'optional-string',
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+
+export const leftProp = seedProperty({
+  seedKey: extensionPropertySeedKey('left'),
+  revision: 1,
+  name: FIELD.left,
+  preset: 'optional-number',
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+
+export const rightProp = seedProperty({
+  seedKey: extensionPropertySeedKey('right'),
+  revision: 1,
+  name: FIELD.right,
+  preset: 'optional-number',
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+
+/** `enum`, not `strict-enum`: its empty value is the "not tested yet" a
+ *  freshly stamped result has to start from. */
+export const outcomeProp = seedProperty({
+  seedKey: extensionPropertySeedKey('outcome'),
+  revision: 1,
+  name: FIELD.outcome,
+  preset: 'enum',
+  config: {options: [
+    {value: 'pass', label: 'Pass'},
+    {value: 'fail', label: 'Fail'},
+  ]},
+  defaultValue: '',
+  changeScope: ChangeScope.BlockDefault,
+})
+
 // ──── Types ────
 
 export const strengthLogType = seedType({
@@ -751,6 +799,26 @@ export const settingsType = seedType({
   properties: [planRootProp, rolloverHourProp, cadenceDaysProp, roundToProp],
 })
 
+export const assessmentType = seedType({
+  seedKey: extensionTypeSeedKey('assessment'),
+  revision: 1,
+  id: ASSESSMENT_TYPE,
+  label: 'Assessment',
+  description: 'One sitting of the quarterly assessment battery; its children are the results.',
+  hideFromCompletion: true,
+  properties: [dateProp],
+})
+
+export const assessmentResultType = seedType({
+  seedKey: extensionTypeSeedKey('assessment-result'),
+  revision: 1,
+  id: ASSESSMENT_RESULT_TYPE,
+  label: 'Assessment result',
+  description: 'One test of the battery: a number per side, or pass / fail.',
+  hideFromCompletion: true,
+  properties: [measureProp, leftProp, rightProp, outcomeProp],
+})
+
 export const altChoiceType = seedType({
   seedKey: extensionTypeSeedKey('alt-choice'),
   revision: 1,
@@ -772,6 +840,8 @@ export const STRENGTH_TYPES = [
   altGroupType,
   altChoiceType,
   reentryTierType,
+  assessmentType,
+  assessmentResultType,
 ]
 
 export const STRENGTH_PROPS = [
@@ -822,4 +892,8 @@ export const STRENGTH_PROPS = [
   setsOverrideSessionsProp,
   sessionsToNormalProp,
   rampPerSessionProp,
+  measureProp,
+  leftProp,
+  rightProp,
+  outcomeProp,
 ]

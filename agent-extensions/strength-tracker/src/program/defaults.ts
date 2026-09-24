@@ -141,4 +141,13 @@ export const DEFAULT_CONFIG: ProgramConfig = {
     {id: 'ohp-bench', label: 'OHP : bench', numerator: 'Overhead press', denominator: 'Bench press'},
   ],
   heaviestLift: 'Deadlift',
+  assessments: [
+    {name: 'Split squat reps @ fixed weight', measure: 'reps'},
+    {name: 'Single-leg RDL', measure: 'reps'},
+    {name: 'Side plank hold', measure: 'seconds'},
+    {name: 'Band external rotation reps', measure: 'reps'},
+    {name: 'Back-to-wall overhead reach', measure: 'pass-fail'},
+    {name: 'Knee-to-wall ankle dorsiflexion', measure: 'cm'},
+    {name: 'Single-leg calf raises to fatigue', measure: 'reps'},
+  ],
 }

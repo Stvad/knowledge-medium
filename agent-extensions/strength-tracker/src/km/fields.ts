@@ -14,6 +14,11 @@ export const EXERCISE_ENTRY_TYPE = 'strength-exercise'
 export const SET_TYPE = 'strength-set'
 export const LAYOFF_TYPE = 'strength-layoff'
 export const SETTINGS_TYPE = 'strength-settings'
+/** One sitting of the quarterly battery; its children are the results. */
+export const ASSESSMENT_TYPE = 'strength-assessment'
+/** One test's result — its own block, so a test's history across quarters is
+ *  a query and each number is edited where it sits. */
+export const ASSESSMENT_RESULT_TYPE = 'strength-assessment-result'
 
 // Program side — blocks in the plan outline itself. The plan stays
 // hand-written prose, but a typed block is a declaration: it gets the
@@ -89,6 +94,14 @@ export const FIELD = {
   choiceGroup: 'strength:group',
   /** Ref to the option being tracked. */
   choiceOption: 'strength:option',
+  // assessment result
+  /** What the result is counted in — copied from the battery at stamp time,
+   *  so the block reads on its own. */
+  measure: 'strength:measure',
+  left: 'strength:left',
+  right: 'strength:right',
+  /** pass | fail, for a test with no sides. */
+  outcome: 'strength:outcome',
   // program (blocks in the plan outline) — the parser reads these; they
   // override whatever the prose on the same line would have implied.
   targetSets: 'strength:targetSets',

@@ -20,11 +20,14 @@ import {hasBlockType} from '@/data/properties'
 import type {Repo} from '@/data/repo'
 import {statusProp as todoStatusProp, todoType} from '@/plugins/todo/schema'
 
-import {ALT_CHOICE_TYPE, FIELD, LAYOFF_TYPE, SET_TYPE, EXERCISE_ENTRY_TYPE, WORKOUT_TYPE} from '../../src/km/fields'
+import {
+  ALT_CHOICE_TYPE, ASSESSMENT_RESULT_TYPE, ASSESSMENT_TYPE, EXERCISE_ENTRY_TYPE, FIELD, LAYOFF_TYPE, SET_TYPE, WORKOUT_TYPE,
+} from '../../src/km/fields'
 import {SETTINGS_TYPE} from '../../src/km/schema'
 import {buildHistory, buildLayoffs} from '../../src/km/history'
 import {dayToDate, storedDate} from '../../src/km/day'
 import {DEFAULT_PLAN_ROOT_ID, loadConfig} from '../../src/km/config'
+import {recordResult, startAssessment} from '../../src/km/assessment'
 import {DEFAULT_CONFIG} from '../../src/program/defaults'
 import {findSettingsBlock, findStrengthLogPage, getOrCreateSettingsBlock, settingsIdentity} from '../../src/km/page'
 import {adjustSet, finishSession, mostRecentlyStarted, startSession as startSessionReporting} from '../../src/km/session'
@@ -1279,6 +1282,40 @@ describe('the plan outline', () => {
       {scope: ChangeScope.BlockDefault, description: 'press first'})
 
     expect(await sessionB()).toEqual(['Overhead press', 'Squat'])
+  })
+})
+
+describe('an assessment', () => {
+  it('stamps one dated block with a result per test, first on the page', async () => {
+    const id = await startAssessment(repo, PAGE_ID, '2026-09-29', DEFAULT_CONFIG.assessments)
+
+    const page = await repo.block(PAGE_ID).children.load()
+    expect(page[0].id).toBe(id)
+    expect(hasBlockType(page[0], ASSESSMENT_TYPE)).toBe(true)
+    expect(repo.block(id).peekProperty(dateProp)).toEqual(dayToDate('2026-09-29'))
+
+    const results = await repo.block(id).children.load()
+    expect(results.map(r => r.content)).toEqual(DEFAULT_CONFIG.assessments.map(t => t.name))
+    expect(results.every(r => hasBlockType(r, ASSESSMENT_RESULT_TYPE))).toBe(true)
+    expect(results.map(r => r.properties[FIELD.measure])).toEqual(DEFAULT_CONFIG.assessments.map(t => t.measure))
+  })
+
+  it('records a side, clears it, and records an outcome', async () => {
+    const id = await startAssessment(repo, PAGE_ID, '2026-09-29', [
+      {name: 'Side plank hold', measure: 'seconds'},
+      {name: 'Back-to-wall overhead reach', measure: 'pass-fail'},
+    ])
+    const [plank, reach] = await repo.block(id).children.load()
+
+    await recordResult(repo, plank.id, {side: 'L', value: 40})
+    await recordResult(repo, plank.id, {side: 'R', value: 52})
+    expect(repo.block(plank.id).peek()?.properties).toMatchObject({[FIELD.left]: 40, [FIELD.right]: 52})
+
+    await recordResult(repo, plank.id, {side: 'L', value: undefined})
+    expect(FIELD.left in (repo.block(plank.id).peek()?.properties ?? {})).toBe(false)
+
+    await recordResult(repo, reach.id, {outcome: 'fail'})
+    expect(repo.block(reach.id).peek()?.properties[FIELD.outcome]).toBe('fail')
   })
 })
 

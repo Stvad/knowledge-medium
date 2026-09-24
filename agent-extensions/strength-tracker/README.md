@@ -21,7 +21,12 @@ plain km blocks.
   plan's re-entry table and recorded as `strength-layoff` blocks; the comeback
   ramp shows until you're back to pre-break weights.
 - **Trends & milestones.** Per-lift progression sparklines, dance-lift
-  milestone bars, and a left/right asymmetry view for single-arm work.
+  milestone bars, the review's lift ratios, a left/right asymmetry view for
+  single-arm work, and the lifts that have sat at one load for four sessions
+  or more, with the reps behind them.
+- **Assessments.** *Log an assessment* on the log page stamps the quarterly
+  battery as one block per test. Type each side's number beside it; a gap
+  over 15% is flagged with the side that needs the extra set.
 
 ## Design
 
