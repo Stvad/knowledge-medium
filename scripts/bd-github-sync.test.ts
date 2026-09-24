@@ -2784,7 +2784,11 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     const appended = hook(`echo more >> 'm3.txt' && git commit -F m3.txt`)
     const plain = hook('git commit -F elsewhere.txt')
     const dir = hook(`git commit -F ${repo}/a-dir`)
-    for (const r of [heredoc, redirect, appended, plain, dir]) expect(r.status).toBe(2)
+    writeFileSync(join(repo, 'locked.txt'), 'Fixes #1')
+    chmodSync(join(repo, 'locked.txt'), 0o000)
+    const locked = hook(`git commit -F ${repo}/locked.txt`)
+    for (const r of [heredoc, redirect, appended, plain, dir, locked]) expect(r.status).toBe(2)
+    expect(locked.stderr).toContain(`${repo}/locked.txt: is not readable by this hook`)
     expect(heredoc.stderr).toContain(`${repo}/msg.txt: does not exist at hook time; this command writes it`)
     expect(redirect.stderr).toContain(`${join(repo, 'm2.txt')}: does not exist at hook time; this command writes it`)
     expect(appended.stderr).toContain('m3.txt: does not exist at hook time; this command writes it')
@@ -2928,6 +2932,8 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
       `gh api graphql -f query="$QUERY" -f t=x`,
       // a payload the gate cannot read
       `gh api graphql -f query='mutation($t:ID!){resolveReviewThread(input:{threadId:$t}){thread{id}}}' --input vars.json`,
+      // one name, two documents: it is text-safe only if every declaration is
+      `gh api graphql -f query='mutation($t:ID!){resolveReviewThread(input:{threadId:$t}){thread{id}}}' -f t="$t"; gh api graphql -f query='mutation($t:String!){addComment(input:{subjectId:"X",body:$t}){clientMutationId}}' -f t="$t"`,
     ])
       expect(hook(cmd).status, cmd).toBe(2)
   })
@@ -2956,6 +2962,8 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
       `${read} --jq '[.data.x[] | .id] | @sh'`,
       `gh api graphql -f query='query($o:String!,$n:String!,$p:Int!){repository(owner:$o,name:$n){pullRequest(number:$p){id}}}' -F o=Stvad -F n=knowledge-medium -F p=506`,
       `for n in 1 2; do gh api graphql -f query='query($p:Int!){repository(owner:"Stvad",name:"knowledge-medium"){pullRequest(number:$p){id}}}' -F p="$n"; done`,
+      // in a read even a String variable writes nothing
+      `for o in Stvad; do gh api graphql -f query='query($o:String!){repositoryOwner(login:$o){id}}' -f o="$o"; done`,
     ])
       expect(hook(cmd).status, cmd).toBe(0)
     expect(shimCalls()).toBe('')
@@ -3005,8 +3013,9 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     expect(out).not.toHaveProperty('permissionDecision')
     // readable text of a blind publish reads the same memo
     expect(hook('gh pr merge 12 --squash --body "relates to #653"', session).status).toBe(0)
-    // another session has attested nothing, and neither has a payload with no session
+    // another session has attested nothing, and payloads with no session share no memo
     expect(hook('git commit -m "Fixes #653"', { session_id: 'sess-2' }).status).toBe(2)
+    expect(hook('KM_ISSUE_REFS_OK=1 git commit -m "Fixes #653"').status).toBe(0)
     expect(hook('git commit -m "Fixes #653"').status).toBe(2)
   })
 

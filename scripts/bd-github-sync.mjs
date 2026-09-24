@@ -446,7 +446,9 @@ const GRAPHQL_UNREADABLE = /(?<![\w-])--(?:input|[a-z-]*file)\b|=\s*['"]?@/
 // validates, the rest are numbers and flags. String, custom scalars (URI,
 // HTML, …) and input objects can all carry text.
 const NON_TEXT_SCALARS = new Set(['ID', 'Int', 'Float', 'Boolean'])
-const VARIABLE_DECLARATION = /\$(\w+)\s*:\s*\[?\s*(\w+)/g
+// A list type (`[ID!]`) is not read as its element: gh cannot fill a list from
+// one quoted expansion, so such a variable stays unrecognized.
+const VARIABLE_DECLARATION = /\$(\w+)\s*:\s*(\w+)/g
 const nonTextVariables = cmd => {
   const types = new Map()
   for (const [, name, type] of cmd.matchAll(VARIABLE_DECLARATION)) types.set(name, [...(types.get(name) ?? []), type])
