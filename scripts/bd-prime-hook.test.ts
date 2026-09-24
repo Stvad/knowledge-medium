@@ -10,6 +10,7 @@ import {
     parsePrimeContext,
     transformCodexHookStdout,
     transformHookStdout,
+    withNotice,
 } from './bd-prime-hook.mjs'
 
 const bullet = (key: string, preview: string) => `- **${key}**: ${preview}`
@@ -169,6 +170,30 @@ describe('transformHookStdout', () => {
     })
 })
 
+// The alarm does not come from the index, so whatever the index path produced
+// — nothing, a malformed envelope, one without context — still carries it.
+describe('withNotice', () => {
+    const notice = '⚠ bd-github-sync is over its 15s budget'
+    const context = (raw: string | null) => JSON.parse(withNotice(raw, notice) ?? 'null').hookSpecificOutput
+
+    it('builds a SessionStart envelope when the index path produced nothing usable', () => {
+        for (const raw of [null, '', 'Error: not json', 'null', '[]'])
+            expect(context(raw)).toEqual({ hookEventName: 'SessionStart', additionalContext: notice })
+    })
+
+    it('adds the notice to an envelope that has no context, keeping its other fields', () => {
+        const out = JSON.parse(withNotice('{"continue":true,"hookSpecificOutput":{"hookEventName":"SessionStart"}}', notice) ?? '')
+        expect(out).toEqual({ continue: true, hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: notice } })
+    })
+
+    it('leaves output that already carries it, and output with no notice to add, untouched', () => {
+        const carried = wrap(`# Beads\n\n${notice}\n\n## Memories`)
+        expect(withNotice(carried, notice)).toBe(carried)
+        expect(withNotice('{"continue":true}', '')).toBe('{"continue":true}')
+        expect(withNotice(null, '')).toBeNull()
+    })
+})
+
 describe('transformCodexHookStdout', () => {
     it('compacts additionalContext while preserving the native envelope', () => {
         const native = JSON.stringify({
@@ -322,6 +347,14 @@ describe('bd-prime-hook process behavior', { timeout: 20_000 }, () => {
         const parsed = JSON.parse(r.stdout)
         expect(parsed.hookSpecificOutput.hookEventName).toBe('SessionStart')
         expect(parsed.hookSpecificOutput.additionalContext).toContain('bd-github-sync is over its 20s budget')
+    })
+
+    it('still raises the sync alarm when the Codex session-start hook returns nothing', () => {
+        const slowRun = { at: '2026-09-24T20:00:00.000Z', ms: 37_200, ok: true, budgetMs: 20_000, spawns: [] }
+        const { run } = makeRepo({ dbReady: true, syncRuns: [slowRun, slowRun], codexStdout: '' })
+        const r = run(['--codex', 'SessionStart'], '{}')
+        expect(r.status).toBe(0)
+        expect(JSON.parse(r.stdout).hookSpecificOutput.additionalContext).toContain('bd-github-sync is over its 20s budget')
     })
 
     it('forwards the Codex event and stdin, then compacts native context in place', () => {

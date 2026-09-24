@@ -133,6 +133,31 @@ export const transformCodexHookStdout = (raw, primeRaw, notice = '') => {
   return JSON.stringify(native.envelope)
 }
 
+/**
+ * The hook's output, guaranteed to carry the sync alarm. The alarm does not
+ * come from the index, so nothing the index path produced — no output, a
+ * malformed or foreign envelope, one without context — may drop it. The
+ * renderers above already put it inside the fit; this is the one place that
+ * covers every path they do not reach.
+ */
+export const withNotice = (raw, notice) => {
+  if (!notice) return raw
+  let envelope = null
+  try {
+    envelope = JSON.parse(raw)
+  } catch {}
+  if (!envelope || typeof envelope !== 'object' || Array.isArray(envelope)) envelope = {}
+  const hookOutput = envelope.hookSpecificOutput ?? {}
+  const context = typeof hookOutput.additionalContext === 'string' ? hookOutput.additionalContext : ''
+  if (context.includes(notice)) return raw
+  envelope.hookSpecificOutput = {
+    hookEventName: 'SessionStart',
+    ...hookOutput,
+    additionalContext: context ? `${notice}\n\n${context}` : notice,
+  }
+  return JSON.stringify(envelope)
+}
+
 const runBd = (args, input = undefined) => spawnSync('bd', args, {
   encoding: 'utf8',
   input,
@@ -142,10 +167,7 @@ const runBd = (args, input = undefined) => spawnSync('bd', args, {
 
 const runClaudeSessionStart = notice => {
   const r = runBd(['prime', '--hook-json', '--mcp'])
-  const out = r.status === 0 && !/^Error/m.test(r.stderr ?? '') ? transformHookStdout(r.stdout, notice) : null
-  // The alarm does not come from the index, so a failing prime still delivers it.
-  const alarmOnly = notice && JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: notice } })
-  if (out || alarmOnly) process.stdout.write(out || alarmOnly)
+  return r.status === 0 && !/^Error/m.test(r.stderr ?? '') ? transformHookStdout(r.stdout, notice) : null
 }
 
 const runCodexHook = (event, notice) => {
@@ -158,10 +180,7 @@ const runCodexHook = (event, notice) => {
 
   const native = runBd(['codex-hook', event], input)
   const nativeRaw = native.stdout ?? ''
-  if (!parseHookEnvelope(nativeRaw)) {
-    if (nativeRaw) process.stdout.write(nativeRaw)
-    return
-  }
+  if (!parseHookEnvelope(nativeRaw)) return nativeRaw
 
   // Native SessionStart currently includes the full prime output. Read a
   // fresh prime so the existing compact renderer remains the one source of
@@ -169,24 +188,23 @@ const runCodexHook = (event, notice) => {
   const prime = native.status === 0 && !/^Error/m.test(native.stderr ?? '')
     ? runBd(['prime', '--hook-json', '--mcp'])
     : null
-  const compacted = transformCodexHookStdout(
+  return transformCodexHookStdout(
     nativeRaw,
     prime?.status === 0 && !/^Error/m.test(prime.stderr ?? '') ? prime.stdout : null,
     notice,
   )
-  if (compacted) process.stdout.write(compacted)
 }
 
 if (isMainModule(import.meta.url)) {
   try {
     const root = initializedDbRoot()
     if (root) {
-      const notice = readSyncSlownessNotice(root)
       const codexEvent = process.argv[2] === '--codex' ? (process.argv[3] ?? '') : null
       // The alarm opens a session. The other lifecycle events re-inject context
       // mid-session (UserPromptSubmit, compaction), where it would repeat.
-      if (codexEvent !== null) runCodexHook(codexEvent, codexEvent === 'SessionStart' ? notice : '')
-      else runClaudeSessionStart(notice)
+      const notice = codexEvent === null || codexEvent === 'SessionStart' ? readSyncSlownessNotice(root) : ''
+      const out = withNotice(codexEvent === null ? runClaudeSessionStart(notice) : runCodexHook(codexEvent, notice), notice)
+      if (out) process.stdout.write(out)
     }
   } catch (e) {
     console.error(`[bd-prime-hook] ${e?.message ?? e}`)
