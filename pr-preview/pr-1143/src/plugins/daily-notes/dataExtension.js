@@ -1,0 +1,1 @@
+import{FR as e}from"../../../chunks/app-DNxAGQUh.js";export{e as dailyNotesDataExtension};
