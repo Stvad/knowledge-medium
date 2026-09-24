@@ -298,6 +298,14 @@ describe('bd-prime-hook process behavior', { timeout: 20_000 }, () => {
         const viaCodex = codex.run(['--codex', 'SessionStart'], '{}')
         expect(viaCodex.status).toBe(0)
         expect(JSON.parse(viaCodex.stdout).hookSpecificOutput.additionalContext).toContain('bd-github-sync is over its 20s budget')
+
+        // A mid-session refresh re-injects the index, not the alarm: it would
+        // otherwise repeat on every turn the refresh fires.
+        const refresh = codex.run(['--codex', 'UserPromptSubmit'], '{}')
+        expect(refresh.status).toBe(0)
+        const refreshed = JSON.parse(refresh.stdout).hookSpecificOutput.additionalContext
+        expect(refreshed).toContain('feedback_alpha')
+        expect(refreshed).not.toContain('bd-github-sync is over')
     })
 
     it('forwards the Codex event and stdin, then compacts native context in place', () => {

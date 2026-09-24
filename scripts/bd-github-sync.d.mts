@@ -80,6 +80,12 @@ export declare const pullWouldWrite: (bead: BeadRow, issue: IssueInfo) => boolea
 export declare const bdVersion: (out: string | null | undefined) => string | null
 export declare const SYNC_RUN_LOG: string
 export declare const coveredMs: (intervals: [number, number][]) => number
+export declare const spawnAsync: (
+  file: string,
+  args: readonly string[],
+  opts?: { maxBuffer?: number; env?: NodeJS.ProcessEnv },
+) => Promise<{ stdout: string; stderr: string; status?: number | null; error?: Error }>
+export declare const inPool: <T>(items: T[], width: number, fn: (item: T) => Promise<unknown>) => Promise<void>
 export declare const syncSlownessNotice: (logText: string | null | undefined) => string
 export declare const readSyncSlownessNotice: (root: string) => string
 export declare const planLossyReapplies: (

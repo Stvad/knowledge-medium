@@ -20,6 +20,7 @@ import {
   matchesCommitCommand,
   matchesUnverifiableCommand,
   hasStdinBody,
+  inPool,
   carriesPublishableText,
   isPostVerifiable,
   matchesAnyPublish,
@@ -39,6 +40,7 @@ import {
   planPriorityFixes,
   REPO,
   resolveBodyPath,
+  spawnAsync,
   syncSlownessNotice,
   type BeadRow,
   type IssueInfo,
@@ -739,6 +741,45 @@ describe('coveredMs', () => {
   })
 })
 
+describe('inPool', () => {
+  // The comment read runs its chunks through this, so a tracker with thousands
+  // of commented issues still has at most `width` requests in flight.
+  it('runs every item, never more than width at once', async () => {
+    let inFlight = 0
+    let peak = 0
+    const seen: number[] = []
+    await inPool(Array.from({ length: 20 }, (_, i) => i), 8, async i => {
+      peak = Math.max(peak, ++inFlight)
+      await new Promise(resolve => setImmediate(resolve))
+      seen.push(i)
+      inFlight--
+    })
+    expect(peak).toBe(8)
+    expect(seen.sort((a, b) => a - b)).toEqual(Array.from({ length: 20 }, (_, i) => i))
+  })
+})
+
+describe('spawnAsync', () => {
+  const print = (n: number) => [process.execPath, ['-e', `process.stdout.write('x'.repeat(${n}))`]] as const
+
+  // The same ceiling spawnSync's maxBuffer gives the sync readers: past it the
+  // child is killed and the result is an error, never an unbounded string.
+  // The child here never exits on its own, so only the kill settles it.
+  it('kills a child whose output crosses maxBuffer, and reports it as an error', async () => {
+    const endless = [process.execPath, ['-e', `setInterval(() => process.stdout.write('x'.repeat(1000)), 5)`]] as const
+    const r = await spawnAsync(...endless, { maxBuffer: 100 })
+    expect(r.error?.message).toContain('exceeded 100 bytes')
+    expect(r.stdout.length).toBeLessThanOrEqual(100)
+  })
+
+  it('returns output under the ceiling whole', async () => {
+    const r = await spawnAsync(...print(10_000), { maxBuffer: 20_000 })
+    expect(r.error).toBeUndefined()
+    expect(r.status).toBe(0)
+    expect(r.stdout).toHaveLength(10_000)
+  })
+})
+
 describe('syncSlownessNotice', () => {
   const record = (over: object) =>
     JSON.stringify({ at: '2026-09-24T20:00:00.000Z', ms: 3_000, ok: true, slow: false, budgetMs: 20_000, spawns: [], ...over })
@@ -1087,6 +1128,8 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     /** `gh api graphql` responses, one per call (the last one repeats). */
     graphql?: object | object[]
     failPostCall?: number
+    /** Seconds each `gh api graphql` call takes, so overlapping calls show in `graphqlPeak`. */
+    graphqlDelay?: number
     /** Extra environment for the script (the mirror's post cap override). */
     env?: Record<string, string>
     /** What `bd --version` prints (default: a verified version). */
@@ -1147,6 +1190,9 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
         // the data — the shim mirrors that exit so the parser is pinned to
         // stdout, not the status.
         '  "api graphql")',
+        ...(opts.graphqlDelay
+          ? [`    echo + >> "${repo}/graphql-flight.log"; sleep ${opts.graphqlDelay}; echo - >> "${repo}/graphql-flight.log"`]
+          : []),
         `    g=$(cat "${repo}/graphql-count" 2>/dev/null || echo 0); g=$((g+1)); echo $g > "${repo}/graphql-count"`,
         `    f="${repo}/gh-graphql-$g.json"; [ -f "$f" ] || f="${repo}/gh-graphql-last.json"`,
         `    cat "$f"; grep -q '"errors"' "$f" && exit 1;;`,
@@ -1167,7 +1213,16 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
       const log = join(repo, '.beads', 'github-sync-runs.log')
       return existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map(l => JSON.parse(l)) : []
     }
-    return { run, runLog, shimCalls: () => readFileSync(shimLog, 'utf8'), posted: () => readFileSync(postedLog, 'utf8') }
+    // Most GraphQL calls ever in flight at once, from the delay log.
+    const graphqlPeak = () => {
+      let inFlight = 0
+      let peak = 0
+      for (const mark of readFileSync(join(repo, 'graphql-flight.log'), 'utf8').split('\n'))
+        if (mark === '+') peak = Math.max(peak, ++inFlight)
+        else if (mark === '-') inFlight--
+      return peak
+    }
+    return { run, runLog, graphqlPeak, shimCalls: () => readFileSync(shimLog, 'utf8'), posted: () => readFileSync(postedLog, 'utf8') }
   }
 
   // Paired with syncRow to be CONVERGED: same title, body, priority and type,
@@ -1947,6 +2002,27 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const posts = postsOf(posted())
     expect(posts).toHaveLength(1)
     expect(posts[0]).toContain(`repos/${REPO}/issues/15/comments`)
+  })
+
+  // Past 400 commented issues the chunks are full and outnumber the width, so
+  // the read has to queue them rather than start them all.
+  it('keeps at most eight comment reads in flight, however many chunks there are', () => {
+    const numbers = Array.from({ length: 401 }, (_, i) => 1000 + i)
+    const commentId = (n: number) => `0000c0de-0000-7000-8000-00000000${n}`
+    const rows = numbers.map(n => syncRow({ id: `km-c${n}`, external_ref: ref(n), updated_at: '2026-08-19T00:00:00Z', comment_count: 1 }))
+    const comments = Object.fromEntries(numbers.map(n => [`km-c${n}`, [beadComment(commentId(n), 'c', '2026-09-03T20:16:36Z')]]))
+    const onGitHub = Object.fromEntries(numbers.map(n => [`i${n}`, issueComments([`<!-- bd-comment ${commentId(n)} -->\nmirrored`])]))
+    const { run, shimCalls, graphqlPeak } = makeSyncRepo({
+      issues: numbers.map(n => ghIssue(n, '2026-08-20T00:00:00Z')),
+      reads: [rows],
+      comments,
+      graphql: { data: { repository: onGitHub } },
+      graphqlDelay: 0.3,
+    })
+    const r = run()
+    expect(r.status).toBe(0)
+    expect(shimCalls().match(/gh api graphql/g)).toHaveLength(9)
+    expect(graphqlPeak()).toBe(8)
   })
 
   it('reports what it would mirror under --dry-run and posts nothing', () => {

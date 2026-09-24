@@ -180,7 +180,10 @@ if (isMainModule(import.meta.url)) {
     const root = initializedDbRoot()
     if (root) {
       const notice = readSyncSlownessNotice(root)
-      if (process.argv[2] === '--codex') runCodexHook(process.argv[3] ?? '', notice)
+      const codexEvent = process.argv[2] === '--codex' ? (process.argv[3] ?? '') : null
+      // The alarm opens a session. The other lifecycle events re-inject context
+      // mid-session (UserPromptSubmit, compaction), where it would repeat.
+      if (codexEvent !== null) runCodexHook(codexEvent, codexEvent === 'SessionStart' ? notice : '')
       else runClaudeSessionStart(notice)
     }
   } catch (e) {

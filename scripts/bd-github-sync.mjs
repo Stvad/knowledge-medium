@@ -1029,20 +1029,41 @@ const timedSpawnSync = (file, args, opts) => {
   }
 }
 // spawnSync's result shape, without blocking: for reads that do not depend on
-// each other.
-const spawnAsync = (file, args, opts = {}) =>
+// each other. `maxBuffer` is spawnSync's too, so the async readers keep the
+// same ceiling (MAX_OUTPUT_BYTES): past it the child is killed and the result
+// carries the error.
+export const spawnAsync = (file, args, { maxBuffer = MAX_OUTPUT_BYTES, ...opts } = {}) =>
   new Promise(resolve => {
     const started = performance.now()
     const out = { stdout: '', stderr: '' }
+    let bytes = 0
+    let overflow
     const child = spawn(file, args, { stdio: ['ignore', 'pipe', 'pipe'], ...opts })
-    child.stdout.setEncoding('utf8').on('data', d => (out.stdout += d))
-    child.stderr.setEncoding('utf8').on('data', d => (out.stderr += d))
+    const collect = stream => chunk => {
+      if (overflow) return
+      bytes += Buffer.byteLength(chunk)
+      if (bytes > maxBuffer) {
+        overflow = new Error(`${file} ${args[0]}: output exceeded ${maxBuffer} bytes`)
+        child.kill()
+      } else out[stream] += chunk
+    }
+    child.stdout.setEncoding('utf8').on('data', collect('stdout'))
+    child.stderr.setEncoding('utf8').on('data', collect('stderr'))
     child.on('error', error => resolve({ ...out, error }))
     child.on('close', status => {
       noteSpawn(file, args, started)
-      resolve({ ...out, status })
+      resolve({ ...out, status, ...(overflow && { error: overflow }) })
     })
   })
+
+// At most `width` of `items` in flight at once.
+export const inPool = async (items, width, fn) => {
+  let next = 0
+  const worker = async () => {
+    while (next < items.length) await fn(items[next++])
+  }
+  await Promise.all(Array.from({ length: Math.min(width, items.length) }, worker))
+}
 
 const checkedStdout = (file, args, r) => {
   if (r.error) throw r.error
@@ -1329,9 +1350,10 @@ const pushBeads = (ids, env) => {
 }
 
 // One GraphQL call per chunk reads the comment bodies of every commented
-// bead's issue, the chunks at once: GitHub resolves the aliases of one query
-// in turn, so a run costs about one chunk's time, not one request per issue
-// or per chunk. An issue past the first page costs one more query per page.
+// bead's issue, up to COMMENT_READS_AT_ONCE chunks at a time: GitHub resolves
+// the aliases of one query in turn, so a run costs about one chunk's time, not
+// one request per issue or per chunk. An issue past the first page costs one
+// more query per page.
 // `issue(number)` resolves a PR or a deleted issue to null — with a NOT_FOUND
 // error and a non-zero gh exit that still carries the data, so the parse
 // reads stdout and ignores the status. Returns number → { bodies } | null
@@ -1343,6 +1365,9 @@ const [OWNER, NAME] = REPO.split('/')
 const commentsField = after => `comments(first: ${COMMENT_PAGE}${after ? `, after: "${after}"` : ''}) { pageInfo { hasNextPage endCursor } nodes { body } }`
 const graphqlRepository = async (fields, env) => {
   const r = await spawnAsync('gh', ['api', 'graphql', '-f', `query=query { repository(owner: "${OWNER}", name: "${NAME}") { ${fields} } }`], { env })
+  // Names an overflow as one: its truncated stdout would fail the parse below
+  // anyway, but reading as bad JSON.
+  if (r.error) throw r.error
   let repo
   try {
     repo = JSON.parse(r.stdout).data.repository
@@ -1377,7 +1402,7 @@ const fetchIssueComments = async (numbers, env) => {
       byNumber.set(n, { bodies })
     }
   }
-  await Promise.all(chunks.map(readChunk))
+  await inPool(chunks, COMMENT_READS_AT_ONCE, readChunk)
   return byNumber
 }
 
