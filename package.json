@@ -37,6 +37,7 @@
     "bd:sync": "node scripts/bd-github-sync.mjs",
     "bd:labels": "node scripts/bd-label-colors.mjs",
     "fuzz": "node scripts/fuzz.mjs",
+    "mutate": "node scripts/mutate.mjs",
     "agent:server": "node packages/agent-cli/dist/server.js",
     "agent": "node packages/agent-cli/dist/cli.js",
     "agent-dispatch": "node packages/agent-dispatch/dist/daemon.js"
