@@ -354,13 +354,18 @@ export const MIN_FANOUT_WRITES = 100
  *  over-broad invalidation dep re-resolves on writes that don't concern it,
  *  so p95 never moves.
  *
- *  `loaderRuns`, not `loaderInvalidations`: an invalidation that finds no
+ *  Re-resolves the write started plus those it queued behind a load already in
+ *  flight — the latter run after settle, outside the walk `loaderRuns` is
+ *  counted across, and which of the two a handle lands in is timing, not
+ *  fan-out. Not `loaderInvalidations`: an invalidation that finds no
  *  subscriber only marks the handle stale, and how many such handles are alive
  *  moves with the session, not the code. `fanout` is counted across the
  *  synchronous invalidation walk alone, so the cold `load()` of a mount — which
  *  makes the page-wide `loaderRuns` unusable here — cannot reach it. */
 export const reResolvesPerWrite = (r: InteractionComparable): number | null =>
-  r.writes >= MIN_FANOUT_WRITES ? (r.fanout.loaderRuns ?? 0) / r.writes : null
+  r.writes >= MIN_FANOUT_WRITES
+    ? ((r.fanout.loaderRuns ?? 0) + (r.fanout.midLoadInvalidations ?? 0)) / r.writes
+    : null
 
 export const fanoutRegression = (
   current: InteractionComparable,
@@ -372,6 +377,8 @@ export const fanoutRegression = (
   if (now === null) return NO_CURRENT_SAMPLE
   // Filtered BEFORE windowing: light sessions are routine, and sliced first, one
   // among the last two leaves the recent side short and the metric unjudged.
+  // Within the loaded window only: reaching past `HISTORY_LIMIT` for more
+  // editing sessions would judge against builds the recency cap exists to drop.
   const rates = history.map(reResolvesPerWrite).filter((v): v is number => v !== null)
   return trendRegression(
     { metric: 'fanout:reResolvesPerWrite', label: 're-resolves per write', unit: 'ratio', minAbsolute: 0 },
