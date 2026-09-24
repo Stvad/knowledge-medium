@@ -354,14 +354,18 @@ export const MIN_FANOUT_WRITES = 100
  *  over-broad invalidation dep re-resolves on writes that don't concern it,
  *  so p95 never moves.
  *
- *  Re-resolves the write started plus those it queued behind a load already in
- *  flight — the latter run after settle, outside the walk `loaderRuns` is
- *  counted across, and which of the two a handle lands in is timing, not
- *  fan-out. Not `loaderInvalidations`: an invalidation that finds no
- *  subscriber only marks the handle stale, and how many such handles are alive
- *  moves with the session, not the code. `fanout` is counted across the
- *  synchronous invalidation walk alone, so the cold `load()` of a mount — which
- *  makes the page-wide `loaderRuns` unusable here — cannot reach it. */
+ *  Counts what the synchronous invalidation walk decides, which is all `fanout`
+ *  is measured across: re-resolves the write started, plus those it queued
+ *  behind a load already in flight (which of the two a handle lands in is
+ *  timing, not fan-out). The walk matches every dep a handle has registered —
+ *  the prior run's and those declared so far — so an over-broad one is always
+ *  seen. A rerun the settle path finds against a dep declared AFTER the write is
+ *  left out, ACCEPTED: the handle did not depend on that row when it landed.
+ *
+ *  Not `loaderInvalidations`: an invalidation that finds no subscriber only
+ *  marks the handle stale, and how many such handles are alive moves with the
+ *  session, not the code. Not the page-wide `loaderRuns` either, which a
+ *  mount's cold `load()` also bumps; none lands inside the walk. */
 export const reResolvesPerWrite = (r: InteractionComparable): number | null =>
   r.writes >= MIN_FANOUT_WRITES
     ? ((r.fanout.loaderRuns ?? 0) + (r.fanout.midLoadInvalidations ?? 0)) / r.writes
