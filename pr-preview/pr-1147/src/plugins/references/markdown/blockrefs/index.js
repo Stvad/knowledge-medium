@@ -1,1 +1,1 @@
-import{Vd as e}from"../../../../../chunks/app-BpS1zKZ-.js";export{e as blockrefMarkdownExtension};
+import{Vd as e}from"../../../../../chunks/app-BntJZO5i.js";export{e as blockrefMarkdownExtension};
