@@ -110,6 +110,21 @@ const strProp = (properties: Record<string, unknown> | undefined, key: string): 
   const value = properties?.[key]
   return typeof value === 'string' ? value : undefined
 }
+/** A load or a count that only means something above zero. */
+const positiveProp = (properties: Record<string, unknown> | undefined, key: string): number | undefined => {
+  const value = numProp(properties, key)
+  return value !== undefined && value > 0 ? value : undefined
+}
+/** A list of loads, ascending and deduplicated. The list editor writes text,
+ *  so numeric strings count; anything else is not a load and is skipped. */
+const loadsProp = (properties: Record<string, unknown> | undefined, key: string): number[] | undefined => {
+  const value = properties?.[key]
+  if (!Array.isArray(value)) return undefined
+  const loads = value
+    .map(entry => typeof entry === 'string' && entry.trim() !== '' ? Number(entry) : entry)
+    .filter((entry): entry is number => typeof entry === 'number' && Number.isFinite(entry) && entry > 0)
+  return loads.length > 0 ? [...new Set(loads)].sort((a, b) => a - b) : undefined
+}
 const boolProp = (properties: Record<string, unknown> | undefined, key: string): boolean | undefined => {
   const value = properties?.[key]
   return typeof value === 'boolean' ? value : undefined
@@ -202,6 +217,10 @@ export const parseExercise = (
     note: noteParts.length > 0 ? noteParts.join('\n') : undefined,
     catchUpIncrement: numProp(props, FIELD.catchUpIncrement),
     catchUpRpe: numProp(props, FIELD.catchUpRpe),
+    totalRepsThreshold: positiveProp(props, FIELD.totalRepsThreshold),
+    microIncrement: positiveProp(props, FIELD.microIncrement),
+    ladder: loadsProp(props, FIELD.ladder),
+    startWeight: positiveProp(props, FIELD.startWeight),
     videos: videos.length > 0 ? videos : undefined,
     // Only a real block can be referenced back to; the line-only wrapper
     // below passes an empty id and gets no definition link.

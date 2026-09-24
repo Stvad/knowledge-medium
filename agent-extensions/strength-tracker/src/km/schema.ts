@@ -483,6 +483,44 @@ export const catchUpRpeProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 
+export const totalRepsThresholdProp = seedProperty({
+  seedKey: extensionPropertySeedKey('total-reps-threshold'),
+  revision: 1,
+  name: FIELD.totalRepsThreshold,
+  preset: 'optional-number',
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+
+export const microIncrementProp = seedProperty({
+  seedKey: extensionPropertySeedKey('micro-increment'),
+  revision: 1,
+  name: FIELD.microIncrement,
+  preset: 'optional-number',
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+
+/** A list of strings because that is what the list editor writes; the parser
+ *  reads each entry as a number and ignores anything that is not one. */
+export const ladderProp = seedProperty({
+  seedKey: extensionPropertySeedKey('ladder'),
+  revision: 1,
+  name: FIELD.ladder,
+  preset: 'string-list',
+  defaultValue: [],
+  changeScope: ChangeScope.BlockDefault,
+})
+
+export const startWeightProp = seedProperty({
+  seedKey: extensionPropertySeedKey('start-weight'),
+  revision: 1,
+  name: FIELD.startWeight,
+  preset: 'optional-number',
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+
 /** Which option an `or`-group tracks until the user picks another. A ref to
  *  the option block, so renaming the option doesn't silently reset the slot
  *  to the first alternative (the parser still accepts a bare name for a
@@ -615,7 +653,8 @@ export const exerciseEntryType = seedType({
  *  block, and the property editors then spell out what the parser reads. */
 export const exerciseDefType = seedType({
   seedKey: extensionTypeSeedKey('exercise-def'),
-  revision: 1,
+  // 2: the total-reps rule, the ladder and the start weight joined.
+  revision: 2,
   id: EXERCISE_DEF_TYPE,
   label: 'Exercise (program)',
   description: 'An exercise the program prescribes — a line in the plan outline.',
@@ -628,6 +667,10 @@ export const exerciseDefType = seedType({
     kindProp,
     catchUpIncrementProp,
     catchUpRpeProp,
+    totalRepsThresholdProp,
+    microIncrementProp,
+    ladderProp,
+    startWeightProp,
   ],
 })
 
@@ -768,6 +811,10 @@ export const STRENGTH_PROPS = [
   kindProp,
   catchUpIncrementProp,
   catchUpRpeProp,
+  totalRepsThresholdProp,
+  microIncrementProp,
+  ladderProp,
+  startWeightProp,
   altDefaultProp,
   tierIdProp,
   maxGapDaysProp,

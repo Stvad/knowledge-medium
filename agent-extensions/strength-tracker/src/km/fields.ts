@@ -102,6 +102,15 @@ export const FIELD = {
   kind: 'strength:kind',
   catchUpIncrement: 'strength:catchUpIncrement',
   catchUpRpe: 'strength:catchUpRpe',
+  /** Total reps across the prescribed sets that earns `microIncrement` when
+   *  the top of the range was missed on some set. */
+  totalRepsThreshold: 'strength:totalRepsThreshold',
+  microIncrement: 'strength:microIncrement',
+  /** The loads that exist for this lift (a list of numbers, as text) — a
+   *  progression step goes to the next one instead of adding the increment. */
+  ladder: 'strength:ladder',
+  /** What to load the first time, before there is any history. */
+  startWeight: 'strength:startWeight',
   // re-entry tier (a row of the plan's re-entry table). `reentryPct`,
   // `targetSets`, `repMin` and `repMax` are the SAME properties the layoff
   // record and the exercise definitions use — one vocabulary, so "90% of

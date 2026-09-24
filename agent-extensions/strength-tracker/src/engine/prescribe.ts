@@ -6,7 +6,18 @@
  *  logic.
  */
 
-import {lastEntryFor, nextWeight, roundLoad, workingWeight} from './progression'
+import {
+  lastEntryFor,
+  nextRung,
+  nextWeight,
+  roundLoad,
+  sessionsAtWeight,
+  STALL_SESSIONS,
+  totalReps,
+  totalRepsRule,
+  workingWeight,
+  type ProgressionRule,
+} from './progression'
 import {resolveReentry} from './reentry'
 import {daysBetween, resolveSession, trainingDay} from './schedule'
 import type {
@@ -65,6 +76,22 @@ const repsFor = (
 
 const shortDay = (day: string): string => day.slice(5)
 
+/** Why the weight went up, in the plan's own terms. */
+const progressedBecause = (
+  rule: ProgressionRule,
+  exercise: ExerciseConfig,
+  lastWeight: number,
+  weight: number,
+  cleared: string,
+): string => {
+  switch (rule) {
+    case 'increment': return `${cleared} → +${weight - lastWeight}`
+    case 'catch-up': return `${cleared} → +${weight - lastWeight} (catch-up, RPE ≤ ${exercise.catchUpRpe})`
+    case 'ladder': return `${cleared} → next rung, ${weight}`
+    case 'total-reps': return `${exercise.totalRepsThreshold}+ total reps at ${lastWeight} → +${weight - lastWeight}`
+  }
+}
+
 const prescribeExercise = (
   exercise: ExerciseConfig,
   basis: readonly WorkoutRecord[],
@@ -107,6 +134,9 @@ const prescribeExercise = (
   }
 
   if (!last || lastWeight === undefined) {
+    if (exercise.startWeight !== undefined) {
+      return {...base, weight: exercise.startWeight, rationale: `first session — start at ${exercise.startWeight}, per the plan`}
+    }
     return {
       ...base,
       weight: undefined,
@@ -125,7 +155,20 @@ const prescribeExercise = (
     }
   }
 
+  // Unloaded work (0) has no load to be stuck at, so it is never called
+  // stalled — a band exercise logged at 0 for months is on plan.
+  const atWeight = sessionsAtWeight(basis, exercise.name, exercise.defId, occurrence)
+  const stalled = lastWeight > 0 && atWeight >= STALL_SESSIONS
+
   if (exercise.freeform) {
+    if (stalled) {
+      const rung = exercise.ladder ? nextRung(exercise.ladder, lastWeight) : undefined
+      return {
+        ...base,
+        weight: lastWeight,
+        rationale: `${lastWeight} for ${atWeight} sessions — ${rung !== undefined ? `step up to ${rung}` : 'add load'} when it feels easy`,
+      }
+    }
     return {
       ...base,
       weight: lastWeight,
@@ -154,21 +197,22 @@ const prescribeExercise = (
   }
   if (step.progressed) {
     const target = last.entry.prescribedSets ?? exercise.sets
-    const jump = step.weight - lastWeight
-    const catchUp = exercise.catchUpIncrement !== undefined && jump === exercise.catchUpIncrement && jump !== exercise.increment
     return {
       ...base,
       weight: step.weight,
-      rationale: `${target}×${repMax} at ${lastWeight} cleared → +${jump}${catchUp ? ' (catch-up, RPE ≤ ' + exercise.catchUpRpe + ')' : ''}`,
+      rationale: progressedBecause(step.rule, exercise, lastWeight, step.weight, `${target}×${repMax} at ${lastWeight} cleared`),
     }
   }
   const reps = lastTime!.reps.join(', ')
+  if (repMax === undefined) return {...base, weight: step.weight, rationale: `${step.weight} last time (${reps})`}
+  const totalRule = totalRepsRule(exercise)
+  const total = totalRule
+    ? ` or ${totalRule.threshold} total (last: ${reps} = ${totalReps(last.entry, exercise) ?? '—'})`
+    : ` (last: ${reps})`
   return {
     ...base,
     weight: step.weight,
-    rationale: repMax === undefined
-      ? `${step.weight} last time (${reps})`
-      : `hold ${step.weight} until ${sets}×${repMax} (last: ${reps})`,
+    rationale: `hold ${step.weight} until ${sets}×${repMax}${total}${stalled ? ` · ${atWeight} sessions at ${step.weight}` : ''}`,
   }
 }
 

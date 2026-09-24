@@ -52,6 +52,18 @@ export interface ExerciseConfig {
    *  so it needs RPE data; without it the normal `increment` is used. */
   catchUpIncrement?: number
   catchUpRpe?: number
+  /** A smaller step for a session that fell short of the top of the range on
+   *  some set but still did at least this many reps across the prescribed
+   *  sets — so one fading set does not gate the whole lift. Both or neither:
+   *  the top-of-range `increment` still wins whenever it applies. */
+  totalRepsThreshold?: number
+  microIncrement?: number
+  /** The loads that actually exist for this lift (kettlebells, fixed
+   *  dumbbells), ascending. When set, a progression step goes to the next rung
+   *  instead of adding `increment`, and a stalled lift names that rung. */
+  ladder?: readonly number[]
+  /** What to load the first time, before there is any history to read. */
+  startWeight?: number
   /** Demo/technique links lifted from the plan line's markdown links. */
   videos?: readonly ExerciseVideo[]
   /** When this exercise is the resolved option of a plan `or`-group: the

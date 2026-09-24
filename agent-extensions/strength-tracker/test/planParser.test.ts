@@ -185,6 +185,25 @@ describe('parseExercise', () => {
     expect(windowed).toMatchObject({freeform: false, repMin: 2, repMax: 4})
   })
 
+  it('reads a ladder written as text, in ascending order, skipping what is not a load', () => {
+    const carry = parseExercise(
+      node('Waiter carry — 2 lengths', [], {properties: {[FIELD.ladder]: ['35', '20', 'kb', '53', '35', 25]}}),
+      'B',
+      {upper: 5, lower: 10},
+    )
+    expect(carry?.ladder).toEqual([20, 25, 35, 53])
+  })
+
+  it('treats a zero or negative load as not stated', () => {
+    const ex = parseExercise(
+      node('Overhead press — 2×8–12', [], {properties: {[FIELD.startWeight]: 0, [FIELD.microIncrement]: -2}}),
+      'A',
+      {upper: 5, lower: 10},
+    )
+    expect(ex?.startWeight).toBeUndefined()
+    expect(ex?.microIncrement).toBeUndefined()
+  })
+
   it('gathers the description from plain child bullets, including a video child', () => {
     const ex = parseExercise(
       node('Split squat — 2×8–12/leg', [node('light, knee-friendly'), node('[video](https://youtu.be/x)')]),
