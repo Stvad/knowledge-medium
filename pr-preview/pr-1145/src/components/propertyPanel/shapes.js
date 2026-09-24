@@ -1,1 +1,1 @@
-import{vP as e}from"../../../chunks/app-D7tRRKxX.js";export{e as propertyShapeLabel};
+import{vP as e}from"../../../chunks/app-CDkNXWs8.js";export{e as propertyShapeLabel};
