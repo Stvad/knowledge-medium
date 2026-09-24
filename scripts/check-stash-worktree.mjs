@@ -412,7 +412,12 @@ const amendState = (cwd, cArgs, all) => {
   }
 }
 
-const effectiveCwd = (payloadCwd, cdPath) => {
+/**
+ * Directory a git invocation runs in: the payload cwd, moved by an in-command
+ * `cd`. exact=false when the cd target holds an unexpanded variable, in which
+ * case the returned cwd is the payload's and says nothing about the target.
+ */
+export const effectiveCwd = (payloadCwd, cdPath) => {
   if (!cdPath) return { cwd: payloadCwd, exact: true }
   if (cdPath.includes('$')) return { cwd: payloadCwd, exact: false } // unexpanded variable
   const p =

@@ -37,6 +37,10 @@ export declare const explicitEntry: (args: string[]) => string | null
 export declare const hasMessage: (sub: string | null, args: string[]) => boolean
 export declare const renumbersStack: (inv: Pick<StashInvocation, 'sub'>) => boolean
 export declare const gitInvocations: (cmd: string) => GitInvocation[]
+export declare const effectiveCwd: (
+  payloadCwd: string,
+  cdPath: string | null,
+) => { cwd: string; exact: boolean }
 export declare const baseBranch: (subject: string) => string | null
 export declare const decide: (
   inv: Pick<StashInvocation, 'sub' | 'args'>,
