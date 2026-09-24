@@ -163,6 +163,8 @@ export interface Milestone {
   id: string
   exercise: string
   weight: number
+  /** Reps a set at `weight` has to reach. 0 for work that logs no reps (a
+   *  carry), where reaching the load is the milestone. */
   reps: number
   label: string
 }

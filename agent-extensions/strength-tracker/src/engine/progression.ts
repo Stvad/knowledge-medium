@@ -157,18 +157,28 @@ export const stallOf = (
   return weight !== undefined && weight > 0 && sessions >= STALL_SESSIONS ? {weight, sessions} : undefined
 }
 
-/** The prescribed sets done at the working weight, in the order they were
- *  logged — undefined when fewer than the prescribed number were. Everything
- *  a progression rule judges a session by comes from these. */
+/** The sets that count toward progression, at the working weight, in the
+ *  order they were logged. Warm-ups, drop sets and back-offs at other loads are
+ *  not evidence about the working weight, so nothing that judges or shows a
+ *  session by it reads them. */
+export const setsAtWorkingWeight = (
+  entry: ExerciseRecord,
+): {weight: number; sets: readonly SetRecord[]} | undefined => {
+  const weight = workingWeight(entry)
+  if (weight === undefined) return undefined
+  return {weight, sets: progressionSets(entry.sets).filter(s => s.weight === weight)}
+}
+
+/** `setsAtWorkingWeight`, undefined when fewer than the prescribed number
+ *  were done. Everything a progression rule judges a session by comes from
+ *  these. */
 const workingSets = (
   entry: ExerciseRecord,
   config: Pick<ExerciseConfig, 'sets'>,
 ): {weight: number; sets: readonly SetRecord[]} | undefined => {
-  const weight = workingWeight(entry)
-  if (weight === undefined) return undefined
+  const working = setsAtWorkingWeight(entry)
   const target = entry.prescribedSets ?? config.sets
-  const atWeight = progressionSets(entry.sets).filter(s => s.weight === weight)
-  return atWeight.length < target ? undefined : {weight, sets: atWeight}
+  return working && working.sets.length >= target ? working : undefined
 }
 
 /** True when every prescribed set hit the top of the range at the working

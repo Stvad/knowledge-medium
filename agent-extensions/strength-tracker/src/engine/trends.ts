@@ -7,8 +7,8 @@
 import {
   lastEntryFor,
   modalWeight,
-  progressionSets,
   sessionsNewestFirst,
+  setsAtWorkingWeight,
   stallOf,
   workingWeight,
 } from './progression'
@@ -65,17 +65,20 @@ export interface MilestoneProgress {
   hit: boolean
 }
 
-/** Best (heaviest) working weight ever logged for an exercise. */
+/** Best (heaviest) working weight ever logged for an exercise, counting only
+ *  sessions where a set at that weight reached `minReps` — "115×3" is three
+ *  reps at 115, not one. */
 export const bestWorkingWeight = (
   history: readonly WorkoutRecord[],
   exercise: string,
+  minReps = 0,
 ): number | undefined => {
   let best: number | undefined
   for (const workout of history) {
     const entry = workout.exercises.find(e => e.exercise === exercise)
-    if (!entry) continue
-    const weight = workingWeight(entry)
-    if (weight !== undefined && (best === undefined || weight > best)) best = weight
+    const working = entry ? setsAtWorkingWeight(entry) : undefined
+    if (!working || !working.sets.some(s => s.reps >= minReps)) continue
+    if (best === undefined || working.weight > best) best = working.weight
   }
   return best
 }
@@ -85,7 +88,7 @@ export const milestoneProgress = (
   config: ProgramConfig,
 ): MilestoneProgress[] =>
   config.milestones.map(milestone => {
-    const best = bestWorkingWeight(history, milestone.exercise)
+    const best = bestWorkingWeight(history, milestone.exercise, milestone.reps)
     const fraction = best === undefined ? 0 : Math.max(0, Math.min(1, best / milestone.weight))
     return {milestone, best, fraction, hit: best !== undefined && best >= milestone.weight}
   })
@@ -202,7 +205,7 @@ export const stalledLifts = (
     if (!stall) return []
     const recent = sessionsNewestFirst(history, item.name, item.defId, occurrence)
       .slice(0, RECENT_SESSIONS)
-      .map(({entry}) => progressionSets(entry.sets).map(set => set.reps))
+      .map(({entry}) => setsAtWorkingWeight(entry)?.sets.map(set => set.reps) ?? [])
     return [{
       exercise: item.name,
       ...(item.defId !== undefined ? {defId: item.defId} : {}),

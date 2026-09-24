@@ -70,10 +70,13 @@ const StartSessionButton = ({block}: {block: BlockRendererProps['block']}) => {
 }
 
 /** The quarterly battery, stamped on this page for today, one result block per
- *  test. A form rather than a flow: it opens, you type the numbers in. */
-const LogAssessmentButton = ({block, config, workspaceId}: {
+ *  test. A form rather than a flow: it opens, you type the numbers in.
+ *
+ *  The program is read inside the gesture, as Start reads it: the page's own
+ *  copy is the defaults until its read lands, and a rollover hour taken from
+ *  that would date the assessment by the wrong training day. */
+const LogAssessmentButton = ({block, workspaceId}: {
   block: BlockRendererProps['block']
-  config: ProgramConfig
   workspaceId: string
 }) => {
   const {panelId} = useBlockContext()
@@ -92,8 +95,10 @@ const LogAssessmentButton = ({block, config, workspaceId}: {
           event.stopPropagation()
           setBusy(true)
           setProblem(null)
-          const day = trainingDay(new Date(), config.dayRolloverHour)
-          startAssessment(block.repo, block.id, day, config.assessments)
+          readProgram(block.repo, workspaceId)
+            .then(({config}) => startAssessment(
+              block.repo, block.id, trainingDay(new Date(), config.dayRolloverHour), config.assessments,
+            ))
             .then(id => showSession(block.repo, {workspaceId, blockId: id, panelId, what: 'the assessment was logged'}))
             .catch((error: unknown) => {
               console.error('[strength] could not log the assessment', error)
@@ -138,7 +143,7 @@ const StrengthLogContent: BlockRenderer = ({block}: BlockRendererProps) => {
     <div className="strength-tracker flex w-full max-w-2xl flex-col gap-8 py-2">
       <div className="flex flex-wrap items-center gap-3">
         <StartSessionButton block={block}/>
-        <LogAssessmentButton block={block} config={config} workspaceId={workspaceId}/>
+        <LogAssessmentButton block={block} workspaceId={workspaceId}/>
       </div>
       <HistoryView config={config} history={history}/>
     </div>

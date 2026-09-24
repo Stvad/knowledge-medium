@@ -133,7 +133,7 @@ export const DEFAULT_CONFIG: ProgramConfig = {
   milestones: [
     {id: 'ohp-strict', exercise: 'Overhead press', weight: 115, reps: 3, label: 'Strict OHP 115–120×3 (dance-lift phase 1)'},
     {id: 'phase-2-gate', exercise: 'Overhead press', weight: 110, reps: 6, label: 'Phase 2 gate: strict OHP working weight ~110–115'},
-    {id: 'waiter-carry', exercise: 'Waiter carry', weight: 53, reps: 1, label: 'Waiter carry with the 53 lb KB (one arm, overhead)'},
+    {id: 'waiter-carry', exercise: 'Waiter carry', weight: 53, reps: 0, label: 'Waiter carry with the 53 lb KB (one arm, overhead)'},
     {id: 'push-press', exercise: 'Push press', weight: 135, reps: 2, label: 'Push press 135–150×2 (dance-lift phase 2)'},
   ],
   ratios: [

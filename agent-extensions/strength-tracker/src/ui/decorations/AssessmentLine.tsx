@@ -23,9 +23,10 @@ const SIDE_NAME = {L: 'left', R: 'right'} as const
 
 /** Local state until blur, so the shared block never holds a half-typed
  *  number. Blank clears the side; anything unparseable reverts. */
-const SideInput = ({side, value, onCommit}: {
+const SideInput = ({side, value, disabled, onCommit}: {
   side: 'L' | 'R'
   value: number | undefined
+  disabled: boolean
   onCommit: (next: number | undefined) => void
 }) => {
   const [typing, setTyping] = useState<string | null>(null)
@@ -49,6 +50,7 @@ const SideInput = ({side, value, onCommit}: {
         inputMode="decimal"
         aria-label={`${SIDE_NAME[side]} side`}
         data-block-interaction="ignore"
+        disabled={disabled}
         className="h-7 w-14 rounded border border-border bg-transparent px-1 text-center text-xs tabular-nums text-foreground"
         value={typing ?? (value === undefined ? '' : String(value))}
         onClick={event => event.stopPropagation()}
@@ -85,7 +87,10 @@ const AssessmentLine = ({block, Inner}: Props) => {
 
   // A block typed by hand with no measure, or one this version does not know,
   // is left as plain text rather than given controls that would guess.
-  if (measure === undefined || block.repo.isReadOnly) return <Inner block={block}/>
+  if (measure === undefined) return <Inner block={block}/>
+  // Read-only still SHOWS the result — the numbers live only in these
+  // properties, so dropping the controls would drop the record with them.
+  const readOnly = block.repo.isReadOnly
 
   const gap = measure === 'pass-fail' ? undefined : sideGap(left, right)
 
@@ -100,6 +105,7 @@ const AssessmentLine = ({block, Inner}: Props) => {
               key={value}
               type="button"
               aria-pressed={outcome === value}
+              disabled={readOnly}
               data-block-interaction="ignore"
               className={outcome === value
                 ? 'h-7 rounded bg-primary px-2 text-xs font-medium text-primary-foreground'
@@ -126,8 +132,8 @@ const AssessmentLine = ({block, Inner}: Props) => {
             <span className="text-xs tabular-nums text-muted-foreground">{Math.round(gap.gap * 100)}% gap</span>
           )}
           <div className="flex shrink-0 items-center gap-2">
-            <SideInput side="L" value={left} onCommit={value => write({side: 'L', value})}/>
-            <SideInput side="R" value={right} onCommit={value => write({side: 'R', value})}/>
+            <SideInput side="L" value={left} disabled={readOnly} onCommit={value => write({side: 'L', value})}/>
+            <SideInput side="R" value={right} disabled={readOnly} onCommit={value => write({side: 'R', value})}/>
             <span className="w-8 text-xs text-muted-foreground">{UNIT[measure]}</span>
           </div>
         </div>

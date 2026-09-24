@@ -75,6 +75,26 @@ describe('milestoneProgress', () => {
   })
 })
 
+describe('milestoneProgress — the rep target', () => {
+  it('does not count a load that never reached the milestone\'s reps', () => {
+    const history: WorkoutRecord[] = [{
+      id: 'b', date: '2026-07-19T23:00:00', session: 'B',
+      exercises: [{exercise: 'Overhead press', sets: at(120, 1)}],
+    }]
+    const ohp = milestoneProgress(history, DEFAULT_CONFIG).find(m => m.milestone.id === 'ohp-strict')!
+    expect(ohp.hit).toBe(false)
+    expect(ohp.best).toBeUndefined()
+  })
+
+  it('counts a carry, which logs no reps, on its load alone', () => {
+    const history: WorkoutRecord[] = [{
+      id: 'b', date: '2026-07-19T23:00:00', session: 'B',
+      exercises: [{exercise: 'Waiter carry', sets: [{weight: 53, reps: 0, side: 'L'}, {weight: 53, reps: 0, side: 'R'}]}],
+    }]
+    expect(milestoneProgress(history, DEFAULT_CONFIG).find(m => m.milestone.id === 'waiter-carry')!.hit).toBe(true)
+  })
+})
+
 describe('bestWorkingWeight', () => {
   it('takes the heaviest working weight across sessions', () => {
     const history = [A('2026-07-09', ...at(140, 10, 10, 10)), A('2026-07-16', ...at(135, 10, 10, 10))]
@@ -226,6 +246,18 @@ describe('stalledLifts', () => {
     expect(stalls.map(s => [s.exercise, s.weight, s.sessions])).toEqual([['Overhead press', 85, 4]])
     // Newest first — the fade across sets is the thing to read.
     expect(stalls[0].recent).toEqual([[10, 7, 6], [9, 8, 7], [8, 8, 7]])
+  })
+
+  it('shows only the sets at the working weight as the evidence', () => {
+    // A warm-up at 45 fading into the working sets would read as a fade that
+    // never happened at 85.
+    const log = liveLog().map(w => ({
+      ...w,
+      exercises: w.exercises.map(e => e.exercise === 'Overhead press'
+        ? {...e, sets: [...at(45, 5), ...e.sets]}
+        : e),
+    }))
+    expect(stalledLifts(log, DEFAULT_CONFIG)[0].recent[0]).toEqual([10, 7, 6])
   })
 
   it('leaves out a lift that moved', () => {
