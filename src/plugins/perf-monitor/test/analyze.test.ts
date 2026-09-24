@@ -19,7 +19,7 @@ import {
 } from '@/plugins/interaction-metrics/record'
 import { metricsSessionContext, observeWorkspace, resetMetricsSession } from '@/plugins/interaction-metrics/sessionContext'
 import { awaitingSample, runPerfAnalysis, unjudgedReason } from '../analyze'
-import type { TrendResult } from '../series'
+import { MIN_FANOUT_WRITES, type TrendResult } from '../series'
 import { nextAnalysisDelayMs, perfAnalysisEffect, runPerfAnalysisNow } from '../schedule'
 import { resetMonitorRun, startMonitorRun } from '../monitorRun'
 import { getPerfAnalysisFor, resetPerfAnalysisStore } from '../store'
@@ -74,7 +74,7 @@ const stamp = async (id: string, over: Partial<InteractionRecordData>): Promise<
   }, { scope: ChangeScope.Automation })
 }
 
-const USABLE = { writes: 100, fanout: { loaderInvalidations: 10 } }
+const USABLE = { writes: MIN_FANOUT_WRITES, fanout: { loaderRuns: MIN_FANOUT_WRITES / 10 } }
 
 /** Each call stands in for a separate past page session. */
 const pastSession = async (over?: Partial<InteractionRecordData>): Promise<string> => {
@@ -91,10 +91,26 @@ const pastSession = async (over?: Partial<InteractionRecordData>): Promise<strin
   return id
 }
 
+/** This session's own editing — enough writes for its fan-out rate to be
+ *  judged at all. One block, rewritten: each committed tx that changes a row is
+ *  one write, and creating a block per write would move the graph size that
+ *  another test here measures. */
+const editEnoughToJudgeFanout = async (): Promise<void> => {
+  await repo.tx(async (tx) => {
+    await tx.create({ id: 'live-edits', workspaceId: WS, parentId: null, orderKey: 'z',
+      content: '', properties: {} })
+  }, { scope: ChangeScope.BlockDefault })
+  for (let i = 0; i < MIN_FANOUT_WRITES; i++) {
+    await repo.tx(async (tx) => { await tx.update('live-edits', { content: `edit ${i}` }) },
+      { scope: ChangeScope.BlockDefault })
+  }
+}
+
 /**
- * History in which the fan-out comparison genuinely fires, whatever the live
- * counters happen to be: a long cheap baseline, and a recent window already
- * expensive enough to carry the smoothed median on its own.
+ * History in which the fan-out comparison genuinely fires: a long cheap
+ * baseline, a recent window already expensive enough to carry the smoothed
+ * median on its own, and a live session that has written enough to be judged —
+ * whatever its own rate turns out to be.
  *
  * Without this the guard under test is unpinnable — with a short or flat
  * history no comparison runs at all, so removing the guard changes nothing and
@@ -106,11 +122,12 @@ const seedFiringHistory = async (): Promise<void> => {
   // and a stray record carrying no writes is (correctly) not usable history —
   // which would leave the live sample standing alone and report insufficient.
   for (let i = 0; i < 8; i++) {
-    await pastSession({ recordedAt: 3e12 + i, writes: 100, fanout: { loaderInvalidations: 10 } })
+    await pastSession({ recordedAt: 3e12 + i, ...USABLE })
   }
   for (let i = 0; i < 2; i++) {
-    await pastSession({ recordedAt: 4e12 + i, writes: 10, fanout: { loaderInvalidations: 100 } })
+    await pastSession({ recordedAt: 4e12 + i, writes: MIN_FANOUT_WRITES, fanout: { loaderRuns: MIN_FANOUT_WRITES } })
   }
+  await editEnoughToJudgeFanout()
 }
 
 /** Runs an analysis with the recorder committing this session's first record
@@ -373,7 +390,7 @@ describe('runPerfAnalysis', () => {
     await writeInteractionSample(repo, WS)
     const analysis = await runPerfAnalysis(repo, WS, 1000)
     expect(analysis.unjudgedBecause.interaction).not.toBe('blended-workspaces')
-    expect(analysis.regressions.map((r) => r.metric)).toContain('fanout:invalidationsPerWrite')
+    expect(analysis.regressions.map((r) => r.metric)).toContain('fanout:reResolvesPerWrite')
   })
 
   it('does not compare interaction counters once the session is unattributable', async () => {
@@ -407,6 +424,9 @@ describe('runPerfAnalysis', () => {
     // The control: the same analysis with nothing committed mid-read. Asserting
     // against it rather than a number keeps this test off the windowing math.
     const control = await runPerfAnalysis(repo, WS, 1000)
+    // A comparison that judged nothing reports a zero baseline both times, and
+    // the equality below would hold with the exclusion deleted.
+    expect(control.baseline.interaction).toBeGreaterThan(0)
 
     const { analysis, committed } = await analyzeWithRecordCommittedMidRead()
 

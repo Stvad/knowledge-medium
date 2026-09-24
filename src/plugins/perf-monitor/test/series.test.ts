@@ -16,6 +16,7 @@ import {
   hasClusteredTail,
   startupRegression,
   MIN_BASELINE_SESSIONS,
+  MIN_FANOUT_WRITES,
   MIN_HISTORY_SESSIONS,
   regressionsIn,
   slowestQuery,
@@ -59,9 +60,9 @@ const noUncontendedSamples = (p95Ms: number, calls = 100) =>
   ({ calls, p50Ms: p95Ms / 2, p95Ms, totalMs: p95Ms * calls })
 
 const sample = (over: Partial<InteractionComparable> = {}): InteractionComparable => ({
-  writes: 100,
+  writes: MIN_FANOUT_WRITES,
   queries: { 'backlinks.forBlock': q(10) },
-  fanout: { loaderInvalidations: 50 },
+  fanout: { loaderRuns: MIN_FANOUT_WRITES / 2 },
   ...over,
 })
 
@@ -336,24 +337,73 @@ describe('the clustered-tail caveat', () => {
 })
 
 describe('fanoutRegression', () => {
+  /** A session re-resolving `perWrite` loaders per write, over `writes` writes. */
+  const rate = (perWrite: number, writes = MIN_FANOUT_WRITES) => () =>
+    sample({ writes, fanout: { loaderRuns: perWrite * writes } })
+
   // The signal for an over-broad invalidation dep: every resolve stays fast, so
   // no latency metric moves -- there are simply many times more of them.
   it('flags a rise in re-resolves per write even with unchanged latencies', () => {
-    const base = () => sample({ writes: 100, fanout: { loaderInvalidations: 50 } })
-    const now = () => sample({ writes: 100, fanout: { loaderInvalidations: 400 } })
-    expect(reg(fanoutRegression(now(), sinceRegressed(now, base)))).toMatchObject({
-      metric: 'fanout:invalidationsPerWrite', baseline: 0.5, current: 4, ratio: 8,
+    const now = rate(4)
+    expect(reg(fanoutRegression(now(), sinceRegressed(now, rate(0.5))))).toMatchObject({
+      metric: 'fanout:reResolvesPerWrite', baseline: 0.5, current: 4, ratio: 8,
     })
+  })
+
+  // An invalidation landing on a handle nobody subscribes to marks it stale and
+  // runs nothing. How many such handles are alive moves with what the session
+  // did, not with the code, so counting them fired on sessions whose re-resolves
+  // had barely moved.
+  it('does not count invalidations that re-resolved nothing', () => {
+    const writes = MIN_FANOUT_WRITES
+    const base = () => sample({ writes, fanout: {
+      loaderRuns: writes, loaderInvalidations: writes, loaderInvalidationsDeferred: 0,
+    } })
+    const now = () => sample({ writes, fanout: {
+      loaderRuns: writes, loaderInvalidations: 8 * writes, loaderInvalidationsDeferred: 7 * writes,
+    } })
+    expect(fanoutRegression(now(), sinceRegressed(now, base)).status).toBe('steady')
   })
 
   it('reports nothing for a session that has not written', () => {
     expect(reg(fanoutRegression(sample({ writes: 0 }), history(8, sample)))).toBeNull()
   })
 
+  // A handful of writes is not a rate, and an idle session's writes sit at a
+  // different rate from an editing session's. Judging one against the other
+  // measures which kind of session it was.
+  it('waits for this session to write enough before judging it', () => {
+    const light = rate(4, MIN_FANOUT_WRITES - 1)
+    expect(fanoutRegression(light(), sinceRegressed(rate(4), rate(0.5))))
+      .toEqual({ status: 'insufficient', reason: 'no-current-sample' })
+  })
+
+  // The alarm this exists to stop: a baseline half made of idle sessions has a
+  // median set by how many of them it holds, so a run of editing sessions read
+  // as a regression against it.
+  it('leaves sessions too light to judge out of the baseline', () => {
+    const editing = rate(1)
+    const idle = rate(0.1, MIN_FANOUT_WRITES - 1)
+    const result = fanoutRegression(editing(), [
+      editing(), editing(), ...history(6, idle), ...history(MIN_BASELINE_SESSIONS, editing),
+    ])
+    expect(result).toEqual({ status: 'steady', baselineCount: MIN_BASELINE_SESSIONS })
+  })
+
+  // Idle sessions are about half of a real history. Windowed before filtering,
+  // one of them among the last two voids the recent side, and the metric goes
+  // unjudged for the next two sessions each time.
+  it('smooths over the latest judgeable sessions, skipping light ones between them', () => {
+    const now = rate(4)
+    const idle = rate(4, MIN_FANOUT_WRITES - 1)
+    expect(reg(fanoutRegression(now(), [idle(), now(), ...history(8, rate(0.5))])))
+      .toMatchObject({ metric: 'fanout:reResolvesPerWrite', ratio: 8 })
+  })
+
   // No ratio exists against a zero baseline; reporting one as infinite would
   // turn "this has always been zero" into the loudest possible finding.
   it('treats an unchanged zero as unchanged, not as an infinite regression', () => {
-    const zero = () => sample({ writes: 100, fanout: { loaderInvalidations: 0 } })
+    const zero = rate(0)
     expect(fanoutRegression(zero(), history(10, zero)).status).toBe('steady')
   })
 
@@ -361,9 +411,8 @@ describe('fanoutRegression', () => {
   // positive health claim, so reporting it here would let the chip certify an
   // arbitrarily large move from nothing as "no slowdowns".
   it('will not certify a move from a zero baseline as healthy', () => {
-    const base = () => sample({ writes: 100, fanout: { loaderInvalidations: 0 } })
-    const now = () => sample({ writes: 100, fanout: { loaderInvalidations: 6000 } })
-    const result = fanoutRegression(now(), [now(), now(), ...history(8, base)])
+    const now = rate(60)
+    const result = fanoutRegression(now(), [now(), now(), ...history(8, rate(0))])
     expect(result.status).toBe('insufficient')
     expect(result.status).not.toBe('steady')
     // ...and under its own reason. Reported as short history, the verdict tells

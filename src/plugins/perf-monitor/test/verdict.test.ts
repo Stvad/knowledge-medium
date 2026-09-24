@@ -204,7 +204,7 @@ describe('summarize', () => {
   // feature exists to catch.
   it('says a rate got higher, not slower', () => {
     const v = summarize(analysis({
-      regressions: [regression({ label: 'handle invalidations per write', unit: 'ratio', ratio: 4 })],
+      regressions: [regression({ label: 're-resolves per write', unit: 'ratio', ratio: 4 })],
     }))
     expect(v.headline).toContain('higher than baseline')
     expect(v.headline).not.toContain('slower')

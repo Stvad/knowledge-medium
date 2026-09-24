@@ -22,7 +22,7 @@ import type { DialogContextProps } from '@/utils/dialogs.js'
 import type { InteractionRecordData } from '@/plugins/interaction-metrics/record.js'
 import type { StartupRecordData } from '@/plugins/startup-metrics/record.js'
 import { INTERACTION_SERIES, STARTUP_SERIES, loadRecords, rowTime } from './load.js'
-import { bootstrapGapMs, invalidationsPerWrite, round2, slowestQuery } from './series.js'
+import { bootstrapGapMs, reResolvesPerWrite, round2, slowestQuery } from './series.js'
 import { summarize } from './verdict.js'
 import { recordingBlockedBy } from '@/plugins/interaction-metrics/sessionContext.js'
 import { runPerfAnalysisNow } from './schedule.js'
@@ -45,11 +45,11 @@ const when = (epochMs: number): string =>
     month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
   })
 
-/** Shares `invalidationsPerWrite` with the comparison rather than recomputing
+/** Shares `reResolvesPerWrite` with the comparison rather than recomputing
  *  it: a table charting a different number than the alarm fires on is worse
  *  than no table. */
 const perWrite = (r: InteractionRecordData): string => {
-  const rate = invalidationsPerWrite(r)
+  const rate = reResolvesPerWrite(r)
   return rate === null ? '—' : round2(rate).toFixed(2)
 }
 
@@ -348,9 +348,9 @@ export function PerfTrendDialog({ resolve, workspaceId }: DialogContextProps<voi
                 <thead>
                   <tr>
                     <Th>Session</Th><Th>Build</Th><Th>Blocks</Th><Th>Writes</Th>
-                    {/* Invalidations per write is the ratio that catches an
+                    {/* Re-resolves per write is the ratio that catches an
                         over-broad invalidation dep, which no latency column can. */}
-                    <Th>Invalidations / write</Th><Th>Slowest query p95 (uncontended)</Th>
+                    <Th>Re-resolves / write</Th><Th>Slowest query p95 (uncontended)</Th>
                   </tr>
                 </thead>
                 <tbody>
