@@ -9,7 +9,7 @@ already created in the `ff-vlad-dev` graph.
 existing pages (0 new pages needed — all targets resolved via
 `aliasLookup`), 2 UI-state rows cleaned. Post-run verification: 0 junk
 pages remain, 0 blocks with a dangling `isa`, 0 UI dangling; the one
-user-authored block `3cd128fe` left untouched (its `((…))` ref to the
+user-authored block left untouched (its `((…))` ref to the
 deleted `#capitalism …` page dangles by design). Spot-checks (Gradle →
 `build tool, Kotlin, Java, JVM, DSL`; HPMOR → `book, favorite,
 rationality, fiction, inspiration`) all resolve to live pages. Migration
@@ -25,9 +25,9 @@ raw hashtag string (`#CFAR #Coaching`, `#Kotlin #Java #JVM #DSL`, …).
 See `src/plugins/roam-import/properties.ts` and the fix's tests for the
 mechanism.
 
-## Blast radius (measured on `ff-vlad-dev`, workspace `ef43b424…`)
+## Blast radius (measured on `ff-vlad-dev`)
 
-- **91 junk pages**, all in the single workspace `ef43b424-80ba-4967-b587-a4c32efd8071`.
+- **91 junk pages**, all in a single workspace.
   - 47 single-tag (`#CFAR`, `#Python`, …) — pure duplicates of the real page.
   - 44 multi-tag (`#CFAR #Coaching`, …).
 - **126 referrer rows**, almost entirely `roam:isa`:
@@ -36,7 +36,7 @@ mechanism.
     `topLevelBlockId` 2, `focusedBlockLocation` 2
 - **1 real content wikilink**: a user-authored block
   `[[#capitalism #critique #coordination #civilization]] (generally see
-  all aliases file I've derived)` — block `3cd128fe-2c9a-4ff3-80f2-6204340e4574`.
+  all aliases file I've derived)`.
   This is the one place a human typed the junk title on purpose.
 - `references_json` mirrors `roam:isa` (123 hits) — it's a derived index
   and recomputes when we rewrite the property through the repo API.
@@ -75,8 +75,8 @@ appendix; summary:
 
 Run via a one-shot `pnpm agent --profile ff-vlad-dev eval` script using
 **repo/tx APIs** (not raw SQL), so `references_json`, backlinks, history,
-and sync all stay consistent. Scope every write to workspace
-`ef43b424…` (per the "don't touch unopened workspaces" rule).
+and sync all stay consistent. Scope every write to the affected
+workspace (per the "don't touch unopened workspaces" rule).
 
 1. **Collect** all pages where `content LIKE '#%'` and type `page` in the
    workspace → the junk set `J`.
@@ -94,7 +94,7 @@ and sync all stay consistent. Scope every write to workspace
    `focusedBlockLocation` — 3 rows): drop `j.id`; if an open panel/focus
    points at a junk page, repoint to its first target or clear. Low
    stakes.
-6. **Content wikilink** (the 1 user-authored block `3cd128fe`):
+6. **Content wikilink** (the 1 user-authored block):
    **leave the block untouched.** Its `[[#capitalism …]]` link is the
    user's own note recording the bug; after the page is deleted it
    becomes a deliberate dangling reference. Do not rewrite its content.
@@ -114,7 +114,7 @@ other clients drained (small fleet) to avoid mid-flight reprojection.
 
 ## Decisions — resolved
 
-1. **The user-authored `[[#capitalism …]]` block (`3cd128fe`)** — delete
+1. **The user-authored `[[#capitalism …]]` block** — delete
    the page along with all the others; **leave the block untouched** (its
    link dangles intentionally as the user's record of the bug).
 2. **Typo targets** (`Pocker`, `epistomology`, `medecine`) — keep

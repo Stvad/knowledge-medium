@@ -188,8 +188,8 @@ Rejected row (`ps_crud_rejected`):
 SELECT data, error_code, error_message FROM ps_crud_rejected;
 ```
 ```json
-{"op":"PATCH","type":"blocks","id":"469ecc66-34de-5a0e-a85a-a69c69477fb2",
- "data":{"properties_json":"{\"activePanelId\":\"e18a1e8e-982f-426f-be7c-9219cfb5a4eb\"}",
+{"op":"PATCH","type":"blocks","id":"<block-id>",
+ "data":{"properties_json":"{\"activePanelId\":\"<panel-id>\"}",
          "updated_at":1780927417279}}
 ```
 - `error_code` 23514, message: *"blocks in an e2ee workspace must carry a
@@ -232,7 +232,7 @@ keep tripping the ciphertext trigger unless they're sealed like any other block.
 1. **Identify the block + its write path:**
    ```
    pnpm agent --profile ff-vlad-dev sql all \
-     "SELECT id, workspace_id, substr(content,1,60) content, substr(properties_json,1,120) props FROM blocks WHERE id='469ecc66-34de-5a0e-a85a-a69c69477fb2'"
+     "SELECT id, workspace_id, substr(content,1,60) content, substr(properties_json,1,120) props FROM blocks WHERE id='<block-id>'"
    ```
    Confirm it's the layout-session/panel-state block (`getLayoutSessionBlock` /
    `stateBlocks.ts`) and how it's created in the e2ee workspace.
