@@ -32,7 +32,16 @@
 
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { createRequire } from 'node:module'
 import { constants, tmpdir } from 'node:os'
 import { basename, dirname, join, relative, resolve } from 'node:path'
@@ -121,7 +130,7 @@ export const verdictOf = (report, testFile) => {
 }
 
 export const journalPaths = target => {
-  const dir = join(tmpdir(), 'km-mutate')
+  const dir = join(tmpdir(), `km-mutate-${process.getuid?.() ?? 'user'}`)
   const key = createHash('sha256').update(resolve(target)).digest('hex').slice(0, 16)
   return {
     dir,
@@ -186,7 +195,12 @@ const runVitest = async (cfg, paths, label) => {
   const raw = readOrNull(out)
   rmSync(out, { force: true })
   if (!raw) return none(`vitest exited ${code} without a report: ${tail(stderr)}`)
-  return verdictOf(JSON.parse(raw.toString('utf8')), cfg.test)
+  const verdict = verdictOf(JSON.parse(raw.toString('utf8')), cfg.test)
+  // A suite-level error (an unhandled rejection) fails the run with every test passed.
+  if (verdict.kind === 'unpinned' && code !== 0) {
+    return none(`vitest exited ${code} though no test failed: ${tail(stderr)}`)
+  }
+  return verdict
 }
 
 const printEdit = (before, after) => {
@@ -240,6 +254,25 @@ const restore = (file, original) => {
   return readOrNull(file)?.equals(original) ?? false
 }
 
+/**
+ * The journal directory holds pre-mutation source: private to this user, and
+ * never one another account could have planted as a symlink.
+ */
+const ensurePrivateDir = dir => {
+  mkdirSync(dir, { recursive: true })
+  const st = lstatSync(dir)
+  const mine = process.getuid ? st.uid === process.getuid() : true
+  if (!st.isDirectory() || !mine) throw new Error(`${dir} is not a directory this user owns`)
+  chmodSync(dir, 0o700) // a mkdir mode would reach only a directory it creates
+}
+
+/** Create a private file, replacing any leftover without following a link there. */
+const writePrivate = (path, data) => {
+  rmSync(path, { force: true })
+  // 'wx': defence in depth; nothing else can write in the private directory.
+  writeFileSync(path, data, { mode: 0o600, flag: 'wx' })
+}
+
 const isAlive = pid => {
   try {
     process.kill(pid, 0)
@@ -291,6 +324,12 @@ const main = async () => {
     }
   }
   const paths = journalPaths(cfg.file)
+  try {
+    ensurePrivateDir(paths.dir)
+  } catch (e) {
+    log(`NO VERDICT: ${e.message}`)
+    return 2
+  }
   const leftover = leftoverJournal(paths, cfg.file)
   if (leftover) {
     log(`${leftover}\nNO VERDICT: refusing to snapshot ${cfg.file} over that journal`)
@@ -298,9 +337,8 @@ const main = async () => {
   }
 
   const original = readFileSync(cfg.file)
-  mkdirSync(paths.dir, { recursive: true })
-  writeFileSync(paths.snapshot, original)
-  writeFileSync(
+  writePrivate(paths.snapshot, original)
+  writePrivate(
     paths.journal,
     JSON.stringify({ target: cfg.file, snapshot: paths.snapshot, pid: process.pid, started: new Date().toISOString() }),
   )

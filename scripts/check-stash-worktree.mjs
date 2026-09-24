@@ -36,7 +36,7 @@
 import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { resolve } from 'node:path'
+import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { shellSegmentsWithDepth } from './shell-segments.mjs'
 
@@ -46,6 +46,9 @@ const RESERVED = new Set(['{', '}', '!', 'if', 'then', 'elif', 'else', 'fi', 'wh
 const SUBCOMMANDS = new Set([
   'push', 'save', 'pop', 'apply', 'drop', 'clear', 'list', 'show', 'branch', 'create', 'store',
 ])
+
+/** The shell's tilde expansion of one word: `~` and `~/…` only. */
+const expandTilde = w => (w === '~' ? homedir() : w.startsWith('~/') ? join(homedir(), w.slice(2)) : w)
 
 /**
  * Walk a command string and yield each git invocation with its shell context:
@@ -86,7 +89,10 @@ export const gitInvocations = cmd => {
       i++
     }
     if (tokens[i] === 'cd' && tokens[i + 1] !== undefined) {
-      cdPath = tokens[i + 1] // same prefix skip as for git: `{ cd /x && …` counts
+      // same prefix skip as for git: `{ cd /x && …` counts. A relative target
+      // moves from the previous cd, so `cd a && cd b` lands in a/b.
+      const target = expandTilde(tokens[i + 1])
+      cdPath = cdPath && !target.startsWith('/') ? join(cdPath, target) : target
       continue
     }
     if ((tokens[i] || '').replace(/.*\//, '') !== 'git') continue
@@ -95,7 +101,7 @@ export const gitInvocations = cmd => {
     while (i < tokens.length && tokens[i].startsWith('-')) {
       const t = tokens[i]
       if ((t === '-C' || t === '--git-dir' || t === '--work-tree') && tokens[i + 1] !== undefined) {
-        cArgs.push(t, tokens[i + 1])
+        cArgs.push(t, expandTilde(tokens[i + 1]))
         i += 2
       } else if (t.startsWith('--git-dir=') || t.startsWith('--work-tree=')) {
         cArgs.push(t)
@@ -420,9 +426,7 @@ const amendState = (cwd, cArgs, all) => {
 export const effectiveCwd = (payloadCwd, cdPath) => {
   if (!cdPath) return { cwd: payloadCwd, exact: true }
   if (cdPath.includes('$')) return { cwd: payloadCwd, exact: false } // unexpanded variable
-  const p =
-    cdPath === '~' ? homedir() : cdPath.startsWith('~/') ? resolve(homedir(), cdPath.slice(2)) : cdPath
-  return { cwd: resolve(payloadCwd, p), exact: true }
+  return { cwd: resolve(payloadCwd, cdPath), exact: true }
 }
 
 const stateFor = (inv, payloadCwd, cache) => {

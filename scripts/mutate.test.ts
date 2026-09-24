@@ -8,6 +8,7 @@ import {
   realpathSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -210,6 +211,59 @@ describe('mutate end-to-end', { timeout: 60_000 }, () => {
     expect(r.stdout).not.toContain('edit:')
   })
 
+  it('gives no verdict when vitest fails the run with every test passed', () => {
+    const dir = fixture()
+    writeFileSync(
+      join(dir, 'mod.test.mjs'),
+      "import { ok } from './mod.mjs'\n" +
+        "it('passes, but leaks a rejection', () => { Promise.reject(new Error('leak')); expect(ok(1)).toBe(true) })\n",
+    )
+    const r = mutate(dir, ['--delete', UNPINNED, '--no-baseline'])
+    expect(r.status, r.stdout).toBe(2)
+    expect(lastLine(r.stdout)).toMatch(/^NO VERDICT: vitest exited 1 though no test failed/)
+    expect(readFileSync(join(dir, 'mod.mjs'), 'utf8')).toBe(MOD)
+  })
+
+  it('makes its journal directory private to this user, even one that already exists', () => {
+    const dir = fixture()
+    const tmp = realpathSync(mkdtempSync(join(tmpdir(), 'mutate-tmp-')))
+    const journalDir = join(tmp, `km-mutate-${process.getuid!()}`)
+    mkdirSync(journalDir, { mode: 0o755 })
+    const r = spawnSync(
+      'node',
+      [script, '--file', join(dir, 'mod.mjs'), '--test', join(dir, 'mod.test.mjs'), '--delete', UNPINNED, '--no-baseline'],
+      { cwd: dir, env: { ...env(dir), TMPDIR: tmp }, encoding: 'utf8' },
+    )
+    expect(r.status, r.stdout).toBe(1)
+    expect(statSync(journalDir).mode & 0o777).toBe(0o700)
+  })
+
+  it('replaces a snapshot left without a journal', () => {
+    const dir = fixture()
+    const { dir: journalDir, snapshot } = journalPaths(join(dir, 'mod.mjs'))
+    mkdirSync(journalDir, { recursive: true })
+    writeFileSync(snapshot, 'stale bytes from an interrupted run\n')
+    const r = mutate(dir, ['--delete', UNPINNED, '--no-baseline'])
+    expect(r.status, r.stdout).toBe(1)
+    expect(existsSync(snapshot)).toBe(false)
+    expect(readFileSync(join(dir, 'mod.mjs'), 'utf8')).toBe(MOD)
+  })
+
+  it('refuses a journal directory that is a symlink', () => {
+    const dir = fixture()
+    const tmp = realpathSync(mkdtempSync(join(tmpdir(), 'mutate-tmp-')))
+    const elsewhere = realpathSync(mkdtempSync(join(tmpdir(), 'mutate-elsewhere-')))
+    symlinkSync(elsewhere, join(tmp, `km-mutate-${process.getuid!()}`))
+    const r = spawnSync(
+      'node',
+      [script, '--file', join(dir, 'mod.mjs'), '--test', join(dir, 'mod.test.mjs'), '--delete', GUARD, '--no-baseline'],
+      { cwd: dir, env: { ...env(dir), TMPDIR: tmp }, encoding: 'utf8' },
+    )
+    expect(r.status).toBe(2)
+    expect(lastLine(r.stdout)).toMatch(/is not a directory this user owns/)
+    expect(readFileSync(join(dir, 'mod.mjs'), 'utf8')).toBe(MOD)
+  })
+
   it('exits 3 and keeps the snapshot when the restore cannot be verified', () => {
     const dir = fixture()
     const target = join(dir, 'mod.mjs')
@@ -219,6 +273,7 @@ describe('mutate end-to-end', { timeout: 60_000 }, () => {
       expect(r.status).toBe(3)
       expect(lastLine(r.stdout)).toMatch(/^RESTORE FAILED/)
       expect(readFileSync(snapshot, 'utf8')).toBe(MOD)
+      expect(statSync(snapshot).mode & 0o777).toBe(0o600)
       expect(existsSync(journal)).toBe(true)
     } finally {
       chmodSync(target, 0o644)

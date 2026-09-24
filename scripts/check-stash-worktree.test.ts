@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process'
 import { mkdtempSync, realpathSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
@@ -108,6 +108,20 @@ describe('stashInvocations', () => {
 
   it('recognizes cd behind a reserved-word prefix', () => {
     expect(stashInvocations('{ cd /wt && git stash pop stash@{0}; }')[0].cdPath).toBe('/wt')
+  })
+
+  it('accumulates consecutive relative cds, and an absolute one resets', () => {
+    expect(stashInvocations('cd packages && cd app && git stash pop')[0].cdPath).toBe('packages/app')
+    expect(stashInvocations('cd /a && cd b && git stash pop')[0].cdPath).toBe('/a/b')
+    expect(stashInvocations('cd a && cd /b && git stash pop')[0].cdPath).toBe('/b')
+    expect(stashInvocations('cd a && cd ~/b && git stash pop')[0].cdPath).toBe(join(homedir(), 'b'))
+    expect(stashInvocations('cd ~ && cd b && git stash pop')[0].cdPath).toBe(join(homedir(), 'b'))
+    expect(stashInvocations('cd a && (cd b && true); git stash pop')[0].cdPath).toBe('a')
+  })
+
+  it('expands a leading tilde in -C, --git-dir and --work-tree values', () => {
+    expect(stashInvocations('git -C ~/repo stash list')[0].cArgs).toEqual(['-C', join(homedir(), 'repo')])
+    expect(stashInvocations('git --work-tree ~ stash list')[0].cArgs).toEqual(['--work-tree', homedir()])
   })
 
   it('scopes a subshell cd to its subshell', () => {
