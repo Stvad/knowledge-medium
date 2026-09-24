@@ -113,10 +113,11 @@ const AssessmentLine = ({block, Inner}: Props) => {
           ))}
         </div>
       ) : (
-        <div className="flex shrink-0 items-center gap-2">
-          <SideInput side="L" value={left} onCommit={value => write({side: 'L', value})}/>
-          <SideInput side="R" value={right} onCommit={value => write({side: 'R', value})}/>
-          <span className="text-xs text-muted-foreground">{UNIT[measure]}</span>
+        <div className="flex max-w-full flex-wrap items-center justify-end gap-x-2 gap-y-1">
+          {/* The gap sits BEFORE the inputs and the unit has a fixed width, so
+              the inputs keep one column down the whole battery — and on a
+              narrow screen the gap wraps above them rather than pushing them
+              off the edge. */}
           {gap === undefined ? null : gap.flagged ? (
             <span className="rounded bg-amber-500/15 px-1 text-xs text-amber-600 dark:text-amber-400">
               {Math.round(gap.gap * 100)}% gap · extra set on the {SIDE_NAME[gap.weaker]}
@@ -124,6 +125,11 @@ const AssessmentLine = ({block, Inner}: Props) => {
           ) : (
             <span className="text-xs tabular-nums text-muted-foreground">{Math.round(gap.gap * 100)}% gap</span>
           )}
+          <div className="flex shrink-0 items-center gap-2">
+            <SideInput side="L" value={left} onCommit={value => write({side: 'L', value})}/>
+            <SideInput side="R" value={right} onCommit={value => write({side: 'R', value})}/>
+            <span className="w-8 text-xs text-muted-foreground">{UNIT[measure]}</span>
+          </div>
         </div>
       )}
     </div>
