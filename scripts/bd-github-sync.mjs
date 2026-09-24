@@ -1917,7 +1917,7 @@ const pathFact = p => {
 }
 const escapeRegExp = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 const commandWrites = (cmd, value) =>
-  new RegExp(String.raw`(?:>>?|\btee\s+(?:-a\s+)?)\s*(['"]?)${escapeRegExp(value)}\1(?=[\s;&|)]|$)`).test(cmd)
+  new RegExp(String.raw`(?:>|\btee\s+(?:-a\s+)?)\s*(['"]?)${escapeRegExp(value)}\1(?=[\s;&|)]|$)`).test(cmd)
 const unreadableMessageFilesReport = (files, cmd, cwd) =>
   [
     'Commit message file(s) this gate reads before the commit runs, to check close keywords, and could not read:',

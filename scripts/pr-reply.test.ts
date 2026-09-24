@@ -84,6 +84,8 @@ describe('pr-reply process behavior', { timeout: 20_000 }, () => {
       expect(r.stdout, args.join(' ')).toBe('')
     }
     expect(ghCalls()).toBe('')
+    // a directory is refused by what it is, not by a read crashing on it
+    expect(run('652', '41', 'a-dir').stderr).toContain('a-dir: is not a regular file')
   })
 
   it('exits non-zero with gh’s own error and prints no URL when the post fails', () => {
