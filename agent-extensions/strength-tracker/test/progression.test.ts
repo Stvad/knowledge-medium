@@ -6,7 +6,8 @@ import {
   nextWeight,
   progressionSets,
   roundLoad,
-  sessionsAtWeight,
+  rungAtOrBelow,
+  stallOf,
   toppedOut,
   workingWeight,
 } from '../src/engine/progression'
@@ -214,6 +215,11 @@ describe('nextWeight', () => {
     expect(nextWeight(dl([rep(225, 8, 7), rep(225, 8, 8)]), CATCHUP)).toEqual({weight: 235, progressed: true, rule: 'increment'})
   })
 
+  it('reads the RPE of the working sets only, so an unrated warm-up does not withhold the jump', () => {
+    expect(nextWeight(dl([{weight: 135, reps: 5}, rep(225, 8, 6), rep(225, 8, 7)]), CATCHUP))
+      .toEqual({weight: 245, progressed: true, rule: 'catch-up'})
+  })
+
   it('takes only the normal jump when RPE is not logged (no evidence it was easy)', () => {
     expect(nextWeight(dl(at(225, 8, 8)), CATCHUP)).toEqual({weight: 235, progressed: true, rule: 'increment'})
   })
@@ -237,6 +243,10 @@ describe('nextWeight', () => {
 
     it('lets the full increment win when every set topped out', () => {
       expect(nextWeight(ohp(at(85, 10, 10, 10)), OHP)).toEqual({weight: 90, progressed: true, rule: 'increment'})
+    })
+
+    it('judges a top-out by the prescribed sets, so an extra fading set cannot demote it to the micro step', () => {
+      expect(nextWeight(ohp(at(85, 10, 10, 10, 7)), OHP)).toEqual({weight: 90, progressed: true, rule: 'increment'})
     })
 
     it('counts only the prescribed sets, so an extra set cannot buy the step', () => {
@@ -283,25 +293,32 @@ describe('nextRung', () => {
   })
 })
 
-describe('sessionsAtWeight', () => {
+describe('stallOf', () => {
   const workout = (id: string, day: string, sets: SetRecord[]): WorkoutRecord => ({
     id, date: `${day}T12:00:00`, session: 'B', exercises: [{exercise: 'Waiter carry', sets}],
   })
+  const days = ['2026-07-25', '2026-08-02', '2026-08-16', '2026-08-23', '2026-09-06']
 
-  it('counts the latest run of sessions at one weight', () => {
-    const history = [
-      workout('1', '2026-07-25', at(25, 0)),
-      workout('2', '2026-08-02', at(30, 0)),
-      workout('3', '2026-08-16', at(30, 0)),
-      workout('4', '2026-08-23', at(30, 0)),
-    ]
-    expect(sessionsAtWeight(history, 'Waiter carry')).toBe(3)
+  it('counts the latest run of sessions at one load', () => {
+    const history = days.map((day, i) => workout(String(i), day, at(i === 0 ? 25 : 30, 0)))
+    expect(stallOf(history, 'Waiter carry')).toEqual({weight: 30, sessions: 4})
     // Order of arrival is not order of training.
-    expect(sessionsAtWeight([...history].reverse(), 'Waiter carry')).toBe(3)
+    expect(stallOf([...history].reverse(), 'Waiter carry')).toEqual({weight: 30, sessions: 4})
   })
 
-  it('is 0 with no history', () => {
-    expect(sessionsAtWeight([], 'Waiter carry')).toBe(0)
+  it('stays quiet below four sessions, and with no history', () => {
+    const history = days.slice(2).map((day, i) => workout(String(i), day, at(30, 0)))
+    expect(stallOf(history, 'Waiter carry')).toBeUndefined()
+    expect(stallOf([], 'Waiter carry')).toBeUndefined()
+  })
+})
+
+describe('rungAtOrBelow', () => {
+  it('puts a cut load onto a rung that exists', () => {
+    expect(rungAtOrBelow([20, 25, 35, 53], 47.7)).toBe(35)
+    expect(rungAtOrBelow([20, 25, 35, 53], 35)).toBe(35)
+    // Nothing lighter exists.
+    expect(rungAtOrBelow([20, 25, 35, 53], 12)).toBe(20)
   })
 })
 

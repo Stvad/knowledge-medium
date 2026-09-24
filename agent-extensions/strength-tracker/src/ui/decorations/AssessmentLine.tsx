@@ -22,7 +22,10 @@ const UNIT = {reps: 'reps', seconds: 's', cm: 'cm'} as const
 const SIDE_NAME = {L: 'left', R: 'right'} as const
 
 /** Local state until blur, so the shared block never holds a half-typed
- *  number. Blank clears the side; anything unparseable reverts. */
+ *  number. Blank clears the side; anything unparseable reverts.
+ *
+ *  A text field, not `type="number"`: a number field reports a typo as the
+ *  empty string, which would read as "clear" and drop the stored value. */
 const SideInput = ({side, value, disabled, onCommit}: {
   side: 'L' | 'R'
   value: number | undefined
@@ -38,7 +41,7 @@ const SideInput = ({side, value, disabled, onCommit}: {
       if (value !== undefined) onCommit(undefined)
       return
     }
-    const next = Number(raw)
+    const next = Number(raw.trim().replace(',', '.'))
     if (!Number.isFinite(next) || next < 0 || next === value) return
     onCommit(next)
   }
@@ -46,7 +49,7 @@ const SideInput = ({side, value, disabled, onCommit}: {
     <label className="flex items-center gap-1 text-xs text-muted-foreground">
       {side}
       <input
-        type="number"
+        type="text"
         inputMode="decimal"
         aria-label={`${SIDE_NAME[side]} side`}
         data-block-interaction="ignore"
@@ -113,7 +116,7 @@ const AssessmentLine = ({block, Inner}: Props) => {
               onClick={event => {
                 event.stopPropagation()
                 // Pressing the chosen one again takes it back to untested.
-                write({outcome: outcome === value ? '' : value})
+                write({outcome: outcome === value ? undefined : value})
               }}
             >{value === 'pass' ? 'Pass' : 'Fail'}</button>
           ))}
@@ -124,9 +127,9 @@ const AssessmentLine = ({block, Inner}: Props) => {
               the inputs keep one column down the whole battery — and on a
               narrow screen the gap wraps above them rather than pushing them
               off the edge. */}
-          {gap === undefined ? null : gap.flagged ? (
+          {gap === undefined ? null : gap.extraSetOn ? (
             <span className="rounded bg-amber-500/15 px-1 text-xs text-amber-600 dark:text-amber-400">
-              {Math.round(gap.gap * 100)}% gap · extra set on the {SIDE_NAME[gap.weaker]}
+              {Math.round(gap.gap * 100)}% gap · extra set on the {SIDE_NAME[gap.extraSetOn]}
             </span>
           ) : (
             <span className="text-xs tabular-nums text-muted-foreground">{Math.round(gap.gap * 100)}% gap</span>

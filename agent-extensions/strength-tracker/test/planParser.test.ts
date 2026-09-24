@@ -186,12 +186,14 @@ describe('parseExercise', () => {
   })
 
   it('reads a ladder written as text, in ascending order, skipping what is not a load', () => {
-    const carry = parseExercise(
-      node('Waiter carry — 2 lengths', [], {properties: {[FIELD.ladder]: ['35', '20', 'kb', '53', '35', 25]}}),
+    const ladder = (entries: string[]) => parseExercise(
+      node('Waiter carry — 2 lengths', [], {properties: {[FIELD.ladder]: entries}}),
       'B',
       {upper: 5, lower: 10},
-    )
-    expect(carry?.ladder).toEqual([20, 25, 35, 53])
+    )?.ladder
+    expect(ladder(['35', '20', 'kb', '53', '35', '25'])).toEqual([20, 25, 35, 53])
+    // The whole list typed into one item, units and all.
+    expect(ladder(['20, 25, 35 lb, 53'])).toEqual([20, 25, 35, 53])
   })
 
   it('treats a zero or negative load as not stated', () => {

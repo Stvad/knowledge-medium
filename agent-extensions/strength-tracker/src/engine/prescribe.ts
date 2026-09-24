@@ -7,12 +7,15 @@
  */
 
 import {
+  countedReps,
   lastEntryFor,
   nextRung,
   nextWeight,
   roundLoad,
+  rungAtOrBelow,
+  setTarget,
   stallOf,
-  totalReps,
+  sum,
   totalRepsRule,
   workingWeight,
   type ProgressionRule,
@@ -124,7 +127,7 @@ const prescribeExercise = (
     videos: exercise.videos,
     altGroupKey: exercise.altGroupKey,
     altOptions: exercise.altOptions,
-    // Both, or neither: `incrementFor` only consults the ceiling when there
+    // Both, or neither: `toppedStep` only consults the ceiling when there
     // is a bigger jump to award, so a plan that sets one without the other
     // would otherwise have the UI collecting an RPE nothing ever reads.
     ...(exercise.catchUpIncrement !== undefined && exercise.catchUpRpe !== undefined
@@ -147,7 +150,8 @@ const prescribeExercise = (
   // Deep recorded layoff (pct < 1): the whole body is detrained, so cut
   // load off the pre-break weight regardless of the individual lift.
   if (reentry && reentry.factor < 1) {
-    const weight = roundLoad(lastWeight * reentry.factor, config.roundTo)
+    const cut = lastWeight * reentry.factor
+    const weight = exercise.ladder ? rungAtOrBelow(exercise.ladder, cut) : roundLoad(cut, config.roundTo)
     return {
       ...base,
       weight,
@@ -155,15 +159,17 @@ const prescribeExercise = (
     }
   }
 
-  const stall = stallOf(basis, exercise.name, exercise.defId, occurrence)
+  const stall = (): {weight: number; sessions: number} | undefined =>
+    stallOf(basis, exercise.name, exercise.defId, occurrence)
 
   if (exercise.freeform) {
-    if (stall) {
-      const rung = exercise.ladder ? nextRung(exercise.ladder, lastWeight) : undefined
+    const stalled = stall()
+    if (stalled) {
+      const rung = nextRung(exercise.ladder, lastWeight)
       return {
         ...base,
         weight: lastWeight,
-        rationale: `${lastWeight} for ${stall.sessions} sessions — ${rung !== undefined ? `step up to ${rung}` : 'add load'} when it feels easy`,
+        rationale: `${lastWeight} for ${stalled.sessions} sessions — ${rung !== undefined ? `step up to ${rung}` : 'add load'} when it feels easy`,
       }
     }
     return {
@@ -193,7 +199,7 @@ const prescribeExercise = (
     return {...base, weight: step.weight, rationale: why}
   }
   if (step.progressed) {
-    const target = last.entry.prescribedSets ?? exercise.sets
+    const target = setTarget(last.entry, exercise)
     return {
       ...base,
       weight: step.weight,
@@ -202,14 +208,17 @@ const prescribeExercise = (
   }
   const reps = lastTime!.reps.join(', ')
   if (repMax === undefined) return {...base, weight: step.weight, rationale: `${step.weight} last time (${reps})`}
+  // The total names the reps it counted, which are not always every set logged.
   const totalRule = totalRepsRule(exercise)
-  const total = totalRule
-    ? ` or ${totalRule.threshold} total (last: ${reps} = ${totalReps(last.entry, exercise) ?? '—'})`
+  const counted = totalRule ? countedReps(last.entry, exercise) : undefined
+  const total = totalRule && counted
+    ? ` or ${totalRule.threshold} total (last: ${counted.join(', ')} = ${sum(counted)})`
     : ` (last: ${reps})`
+  const stalled = stall()
   return {
     ...base,
     weight: step.weight,
-    rationale: `hold ${step.weight} until ${sets}×${repMax}${total}${stall ? ` · ${stall.sessions} sessions at ${stall.weight}` : ''}`,
+    rationale: `hold ${step.weight} until ${sets}×${repMax}${total}${stalled ? ` · ${stalled.sessions} sessions at ${stalled.weight}` : ''}`,
   }
 }
 

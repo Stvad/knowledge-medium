@@ -6,10 +6,10 @@
 
 import {
   lastEntryFor,
-  modalWeight,
   sessionsNewestFirst,
+  setsAtModalWeight,
   setsAtWorkingWeight,
-  stallOf,
+  stallIn,
   workingWeight,
 } from './progression'
 import {trainingDay} from './schedule'
@@ -95,12 +95,8 @@ export const milestoneProgress = (
 
 export interface Asymmetry {
   exercise: string
-  /** The plan block this row is, when it has one. Carried alongside
-   *  `occurrence` because occurrence alone does NOT identify a row: two
-   *  DISTINCT definitions can share a display name, and each is counted under
-   *  its own id — so both land on occurrence 0 and a name+occurrence key
-   *  collides. React then reuses or discards the wrong row and one
-   *  definition's left/right numbers end up under the other's heading. */
+  /** Unique to the row — see `programOccurrences`. */
+  key: string
   defId?: string
   /** Which of several rows sharing one identity this is — see `SeriesKey`. */
   occurrence: number
@@ -134,14 +130,8 @@ const sidePerformance = (
   side: 'L' | 'R',
 ): SidePerformance | undefined => {
   const last = lastEntryFor(history, key.exercise, key.defId, key.occurrence)
-  if (!last) return undefined
-  const sets = last.entry.sets.filter(s => s.side === side)
-  const weight = modalWeight(sets)
-  if (weight === undefined) return undefined
-  // Reps AT the modal weight, not across the whole side: a warm-up or a
-  // drop-off at another load says nothing about how the two sides compare.
-  const reps = sets.filter(s => s.weight === weight).map(s => s.reps)
-  return {weight, reps: reps.length > 0 ? Math.max(...reps) : 0}
+  const atWeight = last ? setsAtModalWeight(last.entry.sets.filter(s => s.side === side)) : undefined
+  return atWeight && {weight: atWeight.weight, reps: Math.max(...atWeight.sets.map(s => s.reps))}
 }
 
 /** Latest left/right comparison for every single-arm lift that has sided
@@ -150,11 +140,8 @@ export const asymmetries = (
   history: readonly WorkoutRecord[],
   config: ProgramConfig,
 ): Asymmetry[] => {
-  // Counted, not deduplicated. Skipping the second same-named row showed
-  // occurrence 0 twice over and hid occurrence 1 entirely — the same fault
-  // `exerciseSeries` had, in its sibling reader.
   const out: Asymmetry[] = []
-  for (const {item: exercise, occurrence} of programOccurrences(config.exercises)) {
+  for (const {item: exercise, occurrence, key: rowKey} of programOccurrences(config.exercises)) {
     if (!exercise.perSide) continue
     const key: SeriesKey = {
       exercise: exercise.name,
@@ -166,6 +153,7 @@ export const asymmetries = (
     if (left === undefined && right === undefined) continue
     out.push({
       exercise: exercise.name,
+      key: rowKey,
       ...(exercise.defId !== undefined ? {defId: exercise.defId} : {}),
       occurrence,
       left: left?.weight,
@@ -182,7 +170,8 @@ export const asymmetries = (
 
 export interface Stall {
   exercise: string
-  defId?: string
+  /** Unique to the row — see `programOccurrences`. */
+  key: string
   occurrence: number
   weight: number
   sessions: number
@@ -200,19 +189,14 @@ export const stalledLifts = (
   history: readonly WorkoutRecord[],
   config: ProgramConfig,
 ): Stall[] =>
-  programOccurrences(config.exercises).flatMap(({item, occurrence}) => {
-    const stall = stallOf(history, item.name, item.defId, occurrence)
+  programOccurrences(config.exercises).flatMap(({item, occurrence, key}) => {
+    const sessions = sessionsNewestFirst(history, item.name, item.defId, occurrence)
+    const stall = stallIn(sessions)
     if (!stall) return []
-    const recent = sessionsNewestFirst(history, item.name, item.defId, occurrence)
+    const recent = sessions
       .slice(0, RECENT_SESSIONS)
       .map(({entry}) => setsAtWorkingWeight(entry)?.sets.map(set => set.reps) ?? [])
-    return [{
-      exercise: item.name,
-      ...(item.defId !== undefined ? {defId: item.defId} : {}),
-      occurrence,
-      ...stall,
-      recent,
-    }]
+    return [{exercise: item.name, key, occurrence, ...stall, recent}]
   })
 
 /** Each load-progressed lift's latest working weight, by name.

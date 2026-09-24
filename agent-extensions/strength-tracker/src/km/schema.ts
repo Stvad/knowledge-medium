@@ -31,6 +31,7 @@ import {
   extensionTypeSeedKey,
 } from '@/extensions/dynamicExtensionSeeds.js'
 
+import {ASSESSMENT_MEASURES, type AssessmentMeasure} from '../engine/assessment'
 import type {SessionType} from '../engine/types'
 import {
   ALT_CHOICE_TYPE,
@@ -603,12 +604,22 @@ export const rampPerSessionProp = seedProperty({
 
 // ──── Assessment result ────
 
+const MEASURE_LABEL: Record<AssessmentMeasure, string> = {
+  'reps': 'Reps',
+  'seconds': 'Seconds',
+  'cm': 'cm',
+  'pass-fail': 'Pass / fail',
+}
+
+/** `enum`, so a hand edit picks from the set the row knows how to render;
+ *  empty is "unknown", which renders as plain text. */
 export const measureProp = seedProperty({
   seedKey: extensionPropertySeedKey('measure'),
   revision: 1,
   name: FIELD.measure,
-  preset: 'optional-string',
-  defaultValue: undefined,
+  preset: 'enum',
+  config: {options: ASSESSMENT_MEASURES.map(value => ({value, label: MEASURE_LABEL[value]}))},
+  defaultValue: '',
   changeScope: ChangeScope.BlockDefault,
 })
 

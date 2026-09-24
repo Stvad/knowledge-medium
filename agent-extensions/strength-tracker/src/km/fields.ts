@@ -109,9 +109,7 @@ export const FIELD = {
   repMax: 'strength:repMax',
   increment: 'strength:increment',
   perSide: 'strength:perSide',
-  /** Free-form movement classification (main | accessory | carry |
-   *  bodyweight) — a label only. Whether a lift is load-progressed is decided
-   *  by whether it has a rep window, never by its kind. */
+  /** Free-form movement classification — see `kindProp`. */
   kind: 'strength:kind',
   catchUpIncrement: 'strength:catchUpIncrement',
   catchUpRpe: 'strength:catchUpRpe',

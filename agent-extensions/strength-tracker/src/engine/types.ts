@@ -42,8 +42,8 @@ export interface ExerciseConfig {
   increment: number
   /** Logged per side; the plan's rule is left leads and right matches. */
   perSide: boolean
-  /** No rep window to progress on (Pallof rounds, a carry with no lengths
-   *  target): logged, never auto-loaded — the load moves by hand. */
+  /** Not load-progressed: logged, never auto-loaded — the load moves by
+   *  hand. See `parseExercise` for what makes a line freeform. */
   freeform: boolean
   /** Verbatim tail of the plan line ("light (knee-friendly…)"). Shown
    *  under the exercise so the reasoning survives into the gym. */
@@ -61,8 +61,9 @@ export interface ExerciseConfig {
   totalRepsThreshold?: number
   microIncrement?: number
   /** The loads that actually exist for this lift (kettlebells, fixed
-   *  dumbbells), ascending. When set, a progression step goes to the next rung
-   *  instead of adding `increment`, and a stalled lift names that rung. */
+   *  dumbbells), ascending. A progression step goes to the next rung instead
+   *  of adding `increment`, a re-entry cut lands on a rung, and a stalled
+   *  hand-progressed lift names the rung to step to. */
   ladder?: readonly number[]
   /** What to load the first time, before there is any history to read. */
   startWeight?: number
@@ -88,18 +89,18 @@ export interface AltOption {
  *  there is one, else the name — which is all a hand-written plan has. */
 export const altOptionKey = (option: AltOption): string => option.defId ?? option.name
 
-/** Pair each item with how many earlier items shared its key — which time in
- *  the session a lift is. */
+/** Pair each item with how many earlier items shared its identity — which
+ *  time in the session a lift is — and a `key` unique to the row. */
 export const countOccurrences = <T>(
   items: readonly T[],
-  key: (item: T) => string,
-): {item: T; occurrence: number}[] => {
+  identity: (item: T) => string,
+): {item: T; occurrence: number; key: string}[] => {
   const seen = new Map<string, number>()
   return items.map(item => {
-    const k = key(item)
-    const occurrence = seen.get(k) ?? 0
-    seen.set(k, occurrence + 1)
-    return {item, occurrence}
+    const id = identity(item)
+    const occurrence = seen.get(id) ?? 0
+    seen.set(id, occurrence + 1)
+    return {item, occurrence, key: `${id}#${occurrence}`}
   })
 }
 
@@ -110,7 +111,7 @@ export const countOccurrences = <T>(
  *  belongs to which row. */
 export const programOccurrences = (
   exercises: readonly ExerciseConfig[],
-): {item: ExerciseConfig; occurrence: number}[] =>
+): {item: ExerciseConfig; occurrence: number; key: string}[] =>
   countOccurrences(exercises, e => `${e.session}\u0000${e.defId ?? e.name}`)
 
 export interface ExerciseVideo {
@@ -313,7 +314,7 @@ export interface PrescribedExercise {
    *  log an RPE at all.
    *
    *  Set only when the lift ALSO has a `catchUpIncrement`, because
-   *  `incrementFor` reads the two together: a ceiling with no bigger jump
+   *  `toppedStep` reads the two together: a ceiling with no bigger jump
    *  behind it changes no prescription, and surfacing an RPE control for it
    *  would collect a number nothing reads. Carried through onto the stamped
    *  set blocks, so the row that asks for RPE knows whether it matters

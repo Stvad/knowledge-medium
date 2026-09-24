@@ -31,10 +31,10 @@ export function HistoryView({config, history}: Props) {
   const trendLifts = useMemo(
     () => programOccurrences(config.exercises)
       .filter(({item}) => !item.freeform)
-      .map(({item: e, occurrence}) => ({
+      .map(({item: e, occurrence, key}) => ({
         name: e.name,
-        key: `${e.session}:${e.defId ?? e.name}#${occurrence}`,
-        label: occurrence === 0 ? e.name : `${e.name} (${occurrence + 1})`,
+        key,
+        label: rowLabel(e.name, occurrence),
         unit: config.unit,
         series: exerciseSeries(
           history,
@@ -60,9 +60,9 @@ export function HistoryView({config, history}: Props) {
         <Section title="Stalled">
           <ul className="flex flex-col gap-1.5">
             {stalls.map(stall => (
-              <li key={`${stall.defId ?? stall.exercise}#${stall.occurrence}`} className="flex flex-col text-sm">
+              <li key={stall.key} className="flex flex-col text-sm">
                 <span>
-                  {stall.exercise}{' '}
+                  {rowLabel(stall.exercise, stall.occurrence)}{' '}
                   <span className="tabular-nums text-muted-foreground">
                     {stall.weight}{config.unit} for {stall.sessions} sessions
                   </span>
@@ -152,8 +152,8 @@ export function HistoryView({config, history}: Props) {
         <Section title="Left / right">
           <ul className="flex flex-col gap-1.5">
             {asym.map(a => (
-              <li key={`${a.defId ?? a.exercise}#${a.occurrence}`} className="flex items-center justify-between gap-2 text-sm">
-                <span>{a.occurrence === 0 ? a.exercise : `${a.exercise} (${a.occurrence + 1})`}</span>
+              <li key={a.key} className="flex items-center justify-between gap-2 text-sm">
+                <span>{rowLabel(a.exercise, a.occurrence)}</span>
                 <span className="flex items-center gap-2 tabular-nums">
                   {/* Reps beside the load: at equal weight the flag turns on
                       REPS, and showing weight alone would put "right ahead"
@@ -208,6 +208,11 @@ export function HistoryView({config, history}: Props) {
   )
 }
 HistoryView.displayName = 'HistoryView'
+
+/** A lift the plan prescribes twice in a session is numbered from its second
+ *  row on. */
+const rowLabel = (name: string, occurrence: number): string =>
+  occurrence === 0 ? name : `${name} (${occurrence + 1})`
 
 const topWeight = (sets: readonly {weight: number}[]): number =>
   sets.reduce((max, s) => Math.max(max, s.weight), 0)

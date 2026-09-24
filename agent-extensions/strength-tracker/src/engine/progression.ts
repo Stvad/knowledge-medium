@@ -60,7 +60,10 @@ export const workingWeight = (entry: ExerciseRecord): number | undefined =>
  *  progression line, and two same-named definitions stay separate lines.
  *  Whenever either side lacks one (entries logged before the plan blocks
  *  were typed, a hand-written plan, callers that only know a name) it falls
- *  back to matching the name, which is what the log has always used. */
+ *  back to matching the name, which is what the log has always used.
+ *
+ *  So an untagged entry matches EVERY definition of its name. Legacy entries
+ *  are backfilled with their definition rather than disambiguated here. */
 const entryMatches = (entry: ExerciseRecord, exercise: string, defId?: string): boolean =>
   defId !== undefined && entry.definitionId !== undefined
     ? entry.definitionId === defId
@@ -125,61 +128,73 @@ export const sessionsNewestFirst = (
     })
     .sort((a, b) => compareRecords(b.workout, a.workout))
 
-/** How many of this lift's sessions in a row, counting back from the latest,
- *  were worked at the latest working weight. 0 with no history. */
-export const sessionsAtWeight = (
-  history: readonly WorkoutRecord[],
-  exercise: string,
-  defId?: string,
-  occurrence?: number,
-): number => {
-  const sessions = sessionsNewestFirst(history, exercise, defId, occurrence)
-  const run = sessions.findIndex(({weight}) => weight !== sessions[0].weight)
-  return run === -1 ? sessions.length : run
-}
-
 /** A lift at one load for this many sessions is worth a second look, whether
  *  the engine is holding it or the lift is progressed by hand. */
 export const STALL_SESSIONS = 4
 
-/** The load a lift has sat at for `STALL_SESSIONS` or more, and for how long.
- *  Unloaded work (0) has no load to be stuck at — a band exercise logged at 0
- *  for months is on plan. */
+/** The load a lift has sat at for `STALL_SESSIONS` or more, and for how many
+ *  sessions, read off one newest-first list so the weight and the count
+ *  describe the same run. Unloaded work (0) has no load to be stuck at — a
+ *  band exercise logged at 0 for months is on plan. */
+export const stallIn = (
+  sessions: readonly {weight: number}[],
+): {weight: number; sessions: number} | undefined => {
+  const weight = sessions[0]?.weight
+  if (weight === undefined || weight <= 0) return undefined
+  const end = sessions.findIndex(session => session.weight !== weight)
+  const run = end === -1 ? sessions.length : end
+  return run >= STALL_SESSIONS ? {weight, sessions: run} : undefined
+}
+
 export const stallOf = (
   history: readonly WorkoutRecord[],
   exercise: string,
   defId?: string,
   occurrence?: number,
-): {weight: number; sessions: number} | undefined => {
-  const latest = lastEntryFor(history, exercise, defId, occurrence)
-  const weight = latest ? workingWeight(latest.entry) : undefined
-  const sessions = sessionsAtWeight(history, exercise, defId, occurrence)
-  return weight !== undefined && weight > 0 && sessions >= STALL_SESSIONS ? {weight, sessions} : undefined
+): {weight: number; sessions: number} | undefined =>
+  stallIn(sessionsNewestFirst(history, exercise, defId, occurrence))
+
+/** The sets at the modal weight of `sets`, in the order they were logged. */
+export const setsAtModalWeight = (
+  sets: readonly SetRecord[],
+): {weight: number; sets: readonly SetRecord[]} | undefined => {
+  const weight = modalWeight(sets)
+  return weight === undefined ? undefined : {weight, sets: sets.filter(s => s.weight === weight)}
 }
 
-/** The sets that count toward progression, at the working weight, in the
- *  order they were logged. Warm-ups, drop sets and back-offs at other loads are
- *  not evidence about the working weight, so nothing that judges or shows a
- *  session by it reads them. */
+/** The sets that count toward progression, at the working weight. Warm-ups,
+ *  drop sets and back-offs at other loads say nothing about the working
+ *  weight. */
 export const setsAtWorkingWeight = (
   entry: ExerciseRecord,
-): {weight: number; sets: readonly SetRecord[]} | undefined => {
-  const weight = workingWeight(entry)
-  if (weight === undefined) return undefined
-  return {weight, sets: progressionSets(entry.sets).filter(s => s.weight === weight)}
-}
+): {weight: number; sets: readonly SetRecord[]} | undefined =>
+  setsAtModalWeight(progressionSets(entry.sets))
 
-/** `setsAtWorkingWeight`, undefined when fewer than the prescribed number
- *  were done. Everything a progression rule judges a session by comes from
- *  these. */
+/** How many sets a session is judged against: what was prescribed at the
+ *  time, not today's config. */
+export const setTarget = (entry: ExerciseRecord, config: Pick<ExerciseConfig, 'sets'>): number =>
+  entry.prescribedSets ?? config.sets
+
+/** The first `setTarget` sets at the working weight — the one set of sets
+ *  every progression rule judges a session by, so a set added past the
+ *  prescription neither blocks a top-out nor buys a step. Undefined when fewer
+ *  than that were done at the weight. */
 const workingSets = (
   entry: ExerciseRecord,
   config: Pick<ExerciseConfig, 'sets'>,
 ): {weight: number; sets: readonly SetRecord[]} | undefined => {
   const working = setsAtWorkingWeight(entry)
-  const target = entry.prescribedSets ?? config.sets
-  return working && working.sets.length >= target ? working : undefined
+  const target = setTarget(entry, config)
+  return working && working.sets.length >= target
+    ? {weight: working.weight, sets: working.sets.slice(0, target)}
+    : undefined
 }
+
+const toppedIn = (
+  sets: readonly SetRecord[],
+  config: Pick<ExerciseConfig, 'repMax' | 'freeform'>,
+): boolean =>
+  !config.freeform && config.repMax !== undefined && sets.every(s => s.reps >= config.repMax!)
 
 /** True when every prescribed set hit the top of the range at the working
  *  weight. Freeform work (no rep range) never tops out — it isn't
@@ -188,22 +203,18 @@ export const toppedOut = (
   entry: ExerciseRecord,
   config: Pick<ExerciseConfig, 'sets' | 'repMax' | 'freeform'>,
 ): boolean => {
-  if (config.freeform || config.repMax === undefined) return false
-  return workingSets(entry, config)?.sets.every(s => s.reps >= config.repMax!) ?? false
+  const working = workingSets(entry, config)
+  return working !== undefined && toppedIn(working.sets, config)
 }
 
-/** Reps across the prescribed sets at the working weight — the first N of
- *  them, so a set added past the prescription cannot buy a step. Undefined
- *  when fewer than the prescribed sets were done at that weight. */
-export const totalReps = (
+/** The reps the total-reps rule counts, in order. Undefined when fewer than
+ *  the prescribed sets were done at the working weight. */
+export const countedReps = (
   entry: ExerciseRecord,
   config: Pick<ExerciseConfig, 'sets'>,
-): number | undefined => {
-  const working = workingSets(entry, config)
-  if (!working) return undefined
-  const target = entry.prescribedSets ?? config.sets
-  return working.sets.slice(0, target).reduce((sum, s) => sum + s.reps, 0)
-}
+): number[] | undefined => workingSets(entry, config)?.sets.map(s => s.reps)
+
+export const sum = (values: readonly number[]): number => values.reduce((total, value) => total + value, 0)
 
 /** Which rule moved the weight. The rationale names it, so it is returned
  *  rather than re-derived from the size of the jump. */
@@ -213,17 +224,14 @@ export type ProgressionStep =
   | {weight: number; progressed: false}
   | {weight: number; progressed: true; rule: ProgressionRule}
 
-/** The lightest rung above `weight`, or undefined at the top of the ladder. */
-export const nextRung = (ladder: readonly number[], weight: number): number | undefined =>
-  ladder.find(rung => rung > weight)
+/** The lightest rung above `weight`; undefined with no ladder, or at its top. */
+export const nextRung = (ladder: readonly number[] | undefined, weight: number): number | undefined =>
+  ladder?.find(rung => rung > weight)
 
-/** True when every progression set carries an RPE at or below `threshold`.
- *  False if any set lacks an RPE — the catch-up jump is deliberate and needs
- *  evidence the set was genuinely easy, not just unlogged. */
-const allSetsAtOrBelowRpe = (entry: ExerciseRecord, threshold: number): boolean => {
-  const sets = progressionSets(entry.sets)
-  return sets.length > 0 && sets.every(s => s.rpe !== undefined && s.rpe <= threshold)
-}
+/** The heaviest rung at or below `weight` — a cut load put onto a weight that
+ *  exists. Below the bottom rung, the bottom rung: nothing lighter exists. */
+export const rungAtOrBelow = (ladder: readonly number[], weight: number): number =>
+  ladder.filter(rung => rung <= weight).at(-1) ?? ladder[0]
 
 type StepConfig = Pick<
   ExerciseConfig,
@@ -233,16 +241,23 @@ type StepConfig = Pick<
 
 /** The step for a session that topped out. A ladder lists the loads that
  *  exist, so it outranks both increments; past its top rung there is nothing
- *  listed, and the increment applies as if there were no ladder. */
-const toppedStep = (entry: ExerciseRecord, weight: number, config: StepConfig): ProgressionStep => {
-  const rung = config.ladder ? nextRung(config.ladder, weight) : undefined
+ *  listed, and the increment applies as if there were no ladder.
+ *
+ *  The catch-up jump needs every working set rated at or below the ceiling —
+ *  an unrated set is no evidence it was easy. */
+const toppedStep = (
+  working: {weight: number; sets: readonly SetRecord[]},
+  config: StepConfig,
+): ProgressionStep => {
+  const {weight, sets} = working
+  const rung = nextRung(config.ladder, weight)
   if (rung !== undefined) return {weight: rung, progressed: true, rule: 'ladder'}
+  const {catchUpIncrement, catchUpRpe} = config
   if (
-    config.catchUpIncrement !== undefined &&
-    config.catchUpRpe !== undefined &&
-    allSetsAtOrBelowRpe(entry, config.catchUpRpe)
+    catchUpIncrement !== undefined && catchUpRpe !== undefined &&
+    sets.length > 0 && sets.every(s => s.rpe !== undefined && s.rpe <= catchUpRpe)
   ) {
-    return {weight: weight + config.catchUpIncrement, progressed: true, rule: 'catch-up'}
+    return {weight: weight + catchUpIncrement, progressed: true, rule: 'catch-up'}
   }
   return {weight: weight + config.increment, progressed: true, rule: 'increment'}
 }
@@ -257,14 +272,6 @@ export const totalRepsRule = (
     ? undefined
     : {threshold: config.totalRepsThreshold, increment: config.microIncrement}
 
-/** The micro step a session earns when it did not top out, if any. */
-const microStep = (entry: ExerciseRecord, config: StepConfig): number | undefined => {
-  const rule = totalRepsRule(config)
-  if (!rule) return undefined
-  const total = totalReps(entry, config)
-  return total !== undefined && total >= rule.threshold ? rule.increment : undefined
-}
-
 /** Next weight for an exercise given its last logged entry. `hold`
  *  suppresses the jump — the "missed 1 session → repeat last weights" row. */
 export const nextWeight = (
@@ -274,10 +281,13 @@ export const nextWeight = (
 ): ProgressionStep | undefined => {
   const weight = workingWeight(entry)
   if (weight === undefined) return undefined
-  if (opts.hold) return {weight, progressed: false}
-  if (toppedOut(entry, config)) return toppedStep(entry, weight, config)
-  const micro = microStep(entry, config)
-  if (micro !== undefined) return {weight: weight + micro, progressed: true, rule: 'total-reps'}
+  const working = opts.hold ? undefined : workingSets(entry, config)
+  if (!working) return {weight, progressed: false}
+  if (toppedIn(working.sets, config)) return toppedStep(working, config)
+  const rule = totalRepsRule(config)
+  if (rule && sum(working.sets.map(s => s.reps)) >= rule.threshold) {
+    return {weight: weight + rule.increment, progressed: true, rule: 'total-reps'}
+  }
   return {weight, progressed: false}
 }
 

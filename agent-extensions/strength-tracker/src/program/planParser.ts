@@ -116,13 +116,19 @@ const positiveProp = (properties: Record<string, unknown> | undefined, key: stri
   return value !== undefined && value > 0 ? value : undefined
 }
 /** A list of loads, ascending and deduplicated. The list editor writes text,
- *  so numeric strings count; anything else is not a load and is skipped. */
+ *  one entry per item — but "20, 25, 35" typed into a single item is the same
+ *  statement, so each entry is split on commas and spaces. A word ("lb",
+ *  "kb") is not a load and is skipped. */
 const loadsProp = (properties: Record<string, unknown> | undefined, key: string): number[] | undefined => {
   const value = properties?.[key]
   if (!Array.isArray(value)) return undefined
-  const loads = value
-    .map(entry => typeof entry === 'string' && entry.trim() !== '' ? Number(entry) : entry)
-    .filter((entry): entry is number => typeof entry === 'number' && Number.isFinite(entry) && entry > 0)
+  const tokens: unknown[] = value.flatMap((entry: unknown) =>
+    typeof entry === 'string' ? entry.split(/[\s,]+/) : [entry])
+  const loads = tokens
+    .map(token => typeof token === 'number' ? token
+      : typeof token === 'string' ? Number(/^\d+(?:\.\d+)?/.exec(token)?.[0])
+      : NaN)
+    .filter(load => Number.isFinite(load) && load > 0)
   return loads.length > 0 ? [...new Set(loads)].sort((a, b) => a - b) : undefined
 }
 const boolProp = (properties: Record<string, unknown> | undefined, key: string): boolean | undefined => {
@@ -184,16 +190,15 @@ export const parseExercise = (
   if (sets === undefined) return null
 
   const repMin = numProp(props, FIELD.repMin) ?? proseRepMin
-  const repMax = numProp(props, FIELD.repMax) ?? proseRepMax
+  const statedRepMax = numProp(props, FIELD.repMax)
+  const repMax = statedRepMax ?? proseRepMax
   const increment = numProp(props, FIELD.increment) ?? incrementFor(name, increments.upper, increments.lower)
   const perSide = boolProp(props, FIELD.perSide) ?? PER_SIDE.test(rest)
-  // A rep window is what double progression runs on, so having one is the
-  // whole test — `kind` is a label and decides nothing. A window stated as a
-  // property outranks the prose's "carry"/"lengths" wording, the same way
-  // every other property outranks the line it sits on: for a carry, reps
-  // are lengths.
-  const statedWindow = numProp(props, FIELD.repMax) !== undefined
-  const freeform = repMax === undefined || (!statedWindow && FREEFORM.test(rest))
+  // `kind` decides nothing here. A rep window stated as a property always
+  // load-progresses — it outranks the line's "carry"/"lengths" wording, and for
+  // a carry the reps are lengths. A window read only from prose does not, on a
+  // line that reads as rounds, lengths or carries.
+  const freeform = repMax === undefined || (statedRepMax === undefined && FREEFORM.test(rest))
 
   // Description: the line's own prose tail, plus every child's plain text —
   // a description sub-bullet ("light, knee-friendly") or a demo link lives

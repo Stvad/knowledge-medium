@@ -599,7 +599,7 @@ describe('adjustSet', () => {
   })
 
   it('clears an RPE back to absent rather than to a number', async () => {
-    // Absence is the load-bearing state: `allSetsAtOrBelowRpe` asks whether
+    // Absence is the load-bearing state: the catch-up in `toppedStep` asks whether
     // the value is THERE, so a clear that wrote 0 would be evidence the set
     // was easy — the opposite of the mis-tap it is meant to undo.
     const {setId} = await oneSet()

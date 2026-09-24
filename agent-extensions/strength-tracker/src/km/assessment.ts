@@ -47,21 +47,21 @@ export const startAssessment = async (
   }, {scope: ChangeScope.BlockDefault, description: 'Log an assessment'})
 }
 
+/** Undefined clears — by unsetting, so a result never recorded and one
+ *  cleared again are stored the same way: without the key. */
 export type ResultEntry =
-  /** A side's number; undefined clears it. */
   | {side: 'L' | 'R'; value: number | undefined}
-  /** Empty clears it. */
-  | {outcome: 'pass' | 'fail' | ''}
+  | {outcome: 'pass' | 'fail' | undefined}
 
 export const recordResult = (repo: Repo, resultId: string, entry: ResultEntry): Promise<void> =>
   repo.tx(async tx => {
     if ('outcome' in entry) {
-      await tx.setProperties(resultId, {set: [propertyValue(outcomeProp, entry.outcome)]})
+      await tx.setProperties(resultId, entry.outcome === undefined
+        ? {unset: [outcomeProp]}
+        : {set: [propertyValue(outcomeProp, entry.outcome)]})
       return
     }
     const prop = entry.side === 'L' ? leftProp : rightProp
-    // Unset rather than written as undefined: only `unset` takes the key back
-    // out of the bag, and the gap is computed from whether it is there.
     await tx.setProperties(resultId, entry.value === undefined
       ? {unset: [prop]}
       : {set: [propertyValue(prop, entry.value)]})

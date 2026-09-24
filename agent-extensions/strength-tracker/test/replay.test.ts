@@ -1,10 +1,8 @@
 /** The live program's shapes, replayed through parser + engine together.
  *
- *  The unit suites build configs by hand, which is how a typed `kind` that
- *  silently switched progression off got past them: every hand-built pull-up
- *  config said `freeform: false`, and only the parser ever said otherwise.
- *  These fixtures copy the typed blocks as they sit in the outline, so a rule
- *  that reads a property differently shows up as a wrong prescription.
+ *  The unit suites build configs by hand; these fixtures copy the typed
+ *  blocks' shapes as they sit in the outline, so a rule that reads a property
+ *  differently shows up as a wrong prescription.
  */
 
 import {describe, expect, it} from 'vitest'
@@ -36,7 +34,7 @@ const MAIN = (sets: number, repMin: number, repMax: number, increment: number) =
 
 const PULL_UPS = def(
   'def-pullups',
-  'Pull-ups — 3 sets, add weight at 3×8 (+5 lb). 2026-09-24: hit 3×8 @+5 four sessions running without a bump',
+  'Pull-ups — 3 sets, add weight at 3×8 (+5 lb)',
   {[FIELD.kind]: 'bodyweight', [FIELD.targetSets]: 3},
 )
 
@@ -114,6 +112,21 @@ describe('replaying the live log', () => {
       .exercises.find(e => e.defId === 'def-ohp')!
     expect(row.weight).toBe(87)
     expect(row.rationale).toContain('26')
+  })
+
+  it('totals only the sets it counts, and lists those', () => {
+    // A back-off set at another load is not part of the total, so it is not
+    // part of the sum shown either.
+    const row = prescribeB([ohp('2026-09-20', [...at(85, 10, 7, 6), ...at(65, 12)])], '2026-09-27T23:00:00')
+      .exercises.find(e => e.defId === 'def-ohp')!
+    expect(row.rationale).toContain('last: 10, 7, 6 = 23')
+  })
+
+  it('cuts a laddered lift onto a rung after a layoff', () => {
+    const history = [waiter('2026-08-02', 53)]
+    const row = prescribeB(history, '2026-08-30T23:00:00').exercises.find(e => e.defId === 'def-waiter')!
+    // 28 days off is the 90% row: 47.7 is no kettlebell, 35 is.
+    expect(row.weight).toBe(35)
   })
 
   it('holds the press below the threshold, and says how far off it was', () => {

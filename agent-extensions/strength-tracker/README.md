@@ -64,7 +64,7 @@ engine reads:
   increment.
 - `strength:catchUpIncrement` + `strength:catchUpRpe` — a bigger step while
   every set is logged at or below the RPE. It needs the RPE logged.
-- `strength:ladder` — the loads that exist (`20, 25, 35, 53`). A step goes to
+- `strength:ladder` — the loads that exist, one per list item or comma-separated (`20, 25, 35, 53`). A step goes to
   the next rung instead of adding the increment, and a lift stuck at one load
   names the rung to step to.
 - `strength:startWeight` — the first session's load, before any history.

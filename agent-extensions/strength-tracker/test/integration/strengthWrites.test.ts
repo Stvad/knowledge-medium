@@ -1316,6 +1316,9 @@ describe('an assessment', () => {
 
     await recordResult(repo, reach.id, {outcome: 'fail'})
     expect(repo.block(reach.id).peek()?.properties[FIELD.outcome]).toBe('fail')
+    // Back to untested is the same shape as never tested: no key.
+    await recordResult(repo, reach.id, {outcome: undefined})
+    expect(FIELD.outcome in (repo.block(reach.id).peek()?.properties ?? {})).toBe(false)
   })
 })
 

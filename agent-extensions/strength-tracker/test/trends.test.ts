@@ -147,9 +147,7 @@ describe('asymmetries — two definitions sharing a display name', () => {
 
     expect(out.map(a => [a.defId, a.occurrence, a.left, a.right]))
       .toEqual([['def-front', 0, 60, 60], ['def-rear', 0, 30, 40]])
-    // What the row key is built from — distinct is the whole point.
-    const keys = out.map(a => `${a.defId ?? a.exercise}#${a.occurrence}`)
-    expect(new Set(keys).size).toBe(2)
+    expect(new Set(out.map(a => a.key)).size).toBe(2)
   })
 })
 
@@ -262,6 +260,28 @@ describe('stalledLifts', () => {
 
   it('leaves out a lift that moved', () => {
     expect(stalledLifts(liveLog(), DEFAULT_CONFIG).some(s => s.exercise === 'Squat')).toBe(false)
+  })
+})
+
+describe('row keys', () => {
+  it('stay distinct for one name-keyed lift in two sessions', () => {
+    // Occurrence is counted per session, so both rows are occurrence 0; only
+    // the session keeps their React keys apart.
+    const config = {
+      ...DEFAULT_CONFIG,
+      exercises: [
+        {name: 'Split squat', session: 'A' as const, sets: 2, repMin: 8, repMax: 12, increment: 5, perSide: true, freeform: false},
+        {name: 'Split squat', session: 'B' as const, sets: 2, repMin: 8, repMax: 12, increment: 5, perSide: true, freeform: false},
+      ],
+    }
+    const history: WorkoutRecord[] = ['2026-07-05', '2026-07-12', '2026-07-19', '2026-07-26'].map(day => ({
+      id: day, date: `${day}T12:00:00`, session: 'A',
+      exercises: [{exercise: 'Split squat', sets: [{weight: 20, reps: 8, side: 'L'}, {weight: 20, reps: 8, side: 'R'}]}],
+    }))
+    // Counted as `prescribe` counts them — each is the first of its session.
+    expect(asymmetries(history, config).map(a => a.occurrence)).toEqual([0, 0])
+    expect(new Set(asymmetries(history, config).map(a => a.key)).size).toBe(2)
+    expect(new Set(stalledLifts(history, config).map(s => s.key)).size).toBe(2)
   })
 })
 

@@ -245,7 +245,7 @@ describe('prescribe — the RPE ceiling', () => {
   })
 
   it('withholds a ceiling that has no catch-up increment behind it', () => {
-    // `incrementFor` reads the two together, so a ceiling on its own changes
+    // `toppedStep` reads the two together, so a ceiling on its own changes
     // no prescription. Carrying it anyway would put an RPE control on the
     // row and collect a number nothing ever reads back.
     const config = {
