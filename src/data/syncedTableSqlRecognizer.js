@@ -1,1 +1,1 @@
-import{HB as e,UB as t,WB as n}from"../../chunks/app-ck1BCm1w.js";export{e as SYNCED_TABLES,t as syncedWriteTarget,n as writeTargets};
+import{HB as e,UB as t,VB as n}from"../../chunks/app-OAN4xHep.js";export{n as SYNCED_TABLES,e as syncedWriteTarget,t as writeTargets};
