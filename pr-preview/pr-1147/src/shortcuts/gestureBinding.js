@@ -1,1 +1,1 @@
-import{eT as e,tT as t}from"../../chunks/app-B5CQYyMe.js";export{e as gestureBindingDescriptor,t as matchesGestureEvent};
+import{eT as e,tT as t}from"../../chunks/app-BpS1zKZ-.js";export{e as gestureBindingDescriptor,t as matchesGestureEvent};
