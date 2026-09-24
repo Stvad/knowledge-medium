@@ -3,7 +3,7 @@ import { mkdtempSync, realpathSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { isSyntheticUuid, parseAllowlist } from './check-staged-pii.mjs'
 
 // High-entropy ids assembled at runtime, so this file carries no uuid literal
@@ -124,7 +124,10 @@ describe('check-staged-pii end-to-end', { timeout: 30_000 }, () => {
     writeFileSync(join(repo, file), content)
     git(repo, ['add', file])
   }
-  const unstage = (file: string) => git(repo, ['rm', '-q', '--cached', file])
+  // A failed assertion must not leave its staged file behind for the next test.
+  afterEach(() => {
+    git(repo, ['reset', '-q'])
+  })
 
   it('blocks a uuid in the -m message', () => {
     const r = hook(`git commit -m "touch block ${REAL}"`)
@@ -166,7 +169,6 @@ describe('check-staged-pii end-to-end', { timeout: 30_000 }, () => {
     expect(r.status).toBe(2)
     expect(r.stderr).toContain('g.txt')
     expectFactsOnly(r.stderr)
-    unstage('g.txt')
   })
 
   describe('synthetic and allowlisted uuids', () => {
@@ -180,7 +182,6 @@ describe('check-staged-pii end-to-end', { timeout: 30_000 }, () => {
         ].join('\n') + '\n',
       )
       expect(hook('git commit -m "add fixtures"').status).toBe(0)
-      unstage('fixtures.test.ts')
     })
 
     it('allows a synthetic uuid in the message and in an expanded variable', () => {
@@ -191,7 +192,6 @@ describe('check-staged-pii end-to-end', { timeout: 30_000 }, () => {
     it('allows an allowlisted namespace constant', () => {
       stage('ns.ts', `const READWISE_NS = '${READWISE_NS}'\n`)
       expect(hook('git commit -m "touch namespace"').status).toBe(0)
-      unstage('ns.ts')
     })
 
     it('blocks a high-entropy uuid in a test file', () => {
@@ -199,7 +199,6 @@ describe('check-staged-pii end-to-end', { timeout: 30_000 }, () => {
       const r = hook('git commit -m "add test"')
       expect(r.status).toBe(2)
       expect(r.stderr).toContain('real.test.ts')
-      unstage('real.test.ts')
     })
 
     it('blocks a high-entropy uuid on a line that also holds exempt ones', () => {
@@ -208,7 +207,6 @@ describe('check-staged-pii end-to-end', { timeout: 30_000 }, () => {
       expect(r.status).toBe(2)
       expect(r.stderr).toContain(REAL)
       expect(r.stderr).not.toContain(READWISE_NS)
-      unstage('mixed.ts')
     })
   })
 
