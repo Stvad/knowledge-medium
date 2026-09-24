@@ -1,1 +1,1 @@
-import{ed as e,td as t}from"../../../../chunks/app-DTpA_zn1.js";export{e as BACKLINKS_COUNT_FOR_BLOCK_QUERY,t as backlinksCountForBlockQuery};
+import{ed as e,td as t}from"../../../../chunks/app-DEpX7jvY.js";export{e as BACKLINKS_COUNT_FOR_BLOCK_QUERY,t as backlinksCountForBlockQuery};
