@@ -13,11 +13,13 @@
 import { v5 as uuidv5 } from 'uuid'
 import fs from 'fs'
 
-const [WS, EXPORT = 'tmp/roam-export.json'] = process.argv.slice(2)
-if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(WS ?? '')) {
+const [wsArg = '', EXPORT = 'tmp/roam-export.json'] = process.argv.slice(2)
+if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(wsArg)) {
   console.error('usage: node build_ts_map.mjs <workspace-id> [export.json]')
   process.exit(1)
 }
+// v5 names are case-sensitive and the importer derived ids from the lowercase id.
+const WS = wsArg.toLowerCase()
 const ROAM_IMPORT_NS = 'b8d6f1c2-7e9a-4f4d-a4f1-2c0a3a6e7f01'   // ids.ts
 const DAILY_NOTE_NS = '53421e08-2f31-42f8-b73a-43830bb718f1'    // dailyNotes.ts
 

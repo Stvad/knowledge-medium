@@ -24,8 +24,9 @@
 
 \if :{?ws}
 \else
-  \echo 'usage: psql <supabase-url> -v ws=<workspace-id> -f backfill.sql'
-  \quit
+  -- psql's \quit always exits 0; a raised error under ON_ERROR_STOP exits 3.
+  \set ON_ERROR_STOP on
+  DO $$ BEGIN RAISE EXCEPTION 'usage: psql <supabase-url> -v ws=<workspace-id> -f backfill.sql'; END $$;
 \endif
 
 -- ---------------------------------------------------------------------------

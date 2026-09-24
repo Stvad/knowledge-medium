@@ -64,7 +64,9 @@ still preserves.
   locally (only imported blocks can be in the backfill set; this drops native
   UI/prefs noise). Starts with `WITH` so it passes the bridge cleanly; the
   workspace is its one bound parameter:
-  `pnpm agent sql all "$(cat preserve_list.sql)" '["<workspace-id>"]'`
+  `pnpm agent --profile <profile> sql all "$(cat preserve_list.sql)" '["<workspace-id>"]'`,
+  where `<profile>` is paired to the client whose `row_events` history is
+  being classified (a bare `pnpm agent` targets the `default` profile).
 
 ## Run (held)
 1. Drain clients (coordinated window). **Drain = each client's upload queue
