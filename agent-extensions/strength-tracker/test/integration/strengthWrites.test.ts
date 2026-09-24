@@ -24,7 +24,7 @@ import {ALT_CHOICE_TYPE, FIELD, LAYOFF_TYPE, SET_TYPE, EXERCISE_ENTRY_TYPE, WORK
 import {SETTINGS_TYPE} from '../../src/km/schema'
 import {buildHistory, buildLayoffs} from '../../src/km/history'
 import {dayToDate, storedDate} from '../../src/km/day'
-import {loadConfig} from '../../src/km/config'
+import {DEFAULT_PLAN_ROOT_ID, loadConfig} from '../../src/km/config'
 import {DEFAULT_CONFIG} from '../../src/program/defaults'
 import {findSettingsBlock, findStrengthLogPage, getOrCreateSettingsBlock, settingsIdentity} from '../../src/km/page'
 import {adjustSet, finishSession, mostRecentlyStarted, startSession as startSessionReporting} from '../../src/km/session'
@@ -1250,6 +1250,35 @@ describe('a layoff mint filed away from the log page', () => {
     expect(buildLayoffs(
       await repo.query.typedBlocks({workspaceId: WORKSPACE_ID, types: [LAYOFF_TYPE]}).load(),
     )).toHaveLength(1)
+  })
+})
+
+describe('the plan outline', () => {
+  it('prescribes in outline order, so moving a block moves the lift', async () => {
+    // Created squat-first; the press is then MOVED ahead of it, the way the
+    // plan is reordered by hand. Creation time and any cached order both
+    // still say squat first — only the outline says otherwise.
+    await repo.tx(async tx => {
+      await tx.create({
+        id: DEFAULT_PLAN_ROOT_ID, workspaceId: WORKSPACE_ID, parentId: null, orderKey: 'b0',
+        content: '**Strength Plan v2**',
+      })
+      await tx.create({
+        id: 'plan-b', workspaceId: WORKSPACE_ID, parentId: DEFAULT_PLAN_ROOT_ID, orderKey: 'a0',
+        content: '**Session B (Sun late, lower-lean)**',
+      })
+      await tx.create({id: 'plan-warmup', workspaceId: WORKSPACE_ID, parentId: 'plan-b', orderKey: 'a0', content: 'Warm-up: shoulder prep'})
+      await tx.create({id: 'plan-squat', workspaceId: WORKSPACE_ID, parentId: 'plan-b', orderKey: 'a1', content: 'Squat — 3×6–10'})
+      await tx.create({id: 'plan-ohp', workspaceId: WORKSPACE_ID, parentId: 'plan-b', orderKey: 'a2', content: 'Overhead press — 3×6–10'})
+    }, {scope: ChangeScope.BlockDefault, description: 'a plan'})
+    const sessionB = async () => (await loadConfig(repo, WORKSPACE_ID, null)).config.exercises
+      .filter(e => e.session === 'B').map(e => e.name)
+    expect(await sessionB()).toEqual(['Squat', 'Overhead press'])
+
+    await repo.tx(tx => tx.move('plan-ohp', {parentId: 'plan-b', orderKey: 'a05'}),
+      {scope: ChangeScope.BlockDefault, description: 'press first'})
+
+    expect(await sessionB()).toEqual(['Overhead press', 'Squat'])
   })
 })
 
