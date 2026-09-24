@@ -1,1 +1,0 @@
-import{Tw as e,gt as t,ww as n}from"../../../chunks/app-BAAigNq5.js";export{n as extensionsOverridesProp,e as extensionsPrefsType,t as extensionsSettingsPlugin};

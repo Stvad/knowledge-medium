@@ -1,1 +1,0 @@
-import{i_ as e,n_ as t,r_ as n,t_ as r}from"../../../chunks/app-BAAigNq5.js";export{r as WorkspaceSwitcherSidebarSection,t as pendingInvitationsHeaderItem,n as workspaceHeaderPlugin,e as workspaceSwitcherSidebarSection};

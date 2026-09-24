@@ -1,1 +1,0 @@
-import{aw as e,ow as t}from"../../chunks/app-BAAigNq5.js";export{e as BlockPasteShellDecorator,t as blockPasteShellDecorator};

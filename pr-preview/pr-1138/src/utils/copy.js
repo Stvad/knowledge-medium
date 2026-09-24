@@ -1,1 +1,0 @@
-import{GC as e,HC as t,KC as n,UC as r,WC as i}from"../../chunks/app-BAAigNq5.js";export{t as copyBlockIdsToClipboard,r as copyBlockToClipboard,i as copySelectedBlocksToClipboard,e as serializeBlock,n as serializeSelectedBlocks};

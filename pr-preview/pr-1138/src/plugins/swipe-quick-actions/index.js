@@ -1,1 +1,0 @@
-import{ES as e,JS as t,KS as n,TS as r,bS as i}from"../../../chunks/app-BAAigNq5.js";export{e as SWIPE_QUICK_ACTIONS_GESTURE_ID,n as SWIPE_RIGHT_BLOCK_ACTION_ID,r as SwipeActionMenu,t as quickActionItemsFacet,i as swipeQuickActionsPlugin};

@@ -1,1 +1,0 @@
-import{XC as e,YC as t}from"../../chunks/app-BAAigNq5.js";export{t as resolveStructuralEditPolicy,e as structuralEditPolicyForBlock};

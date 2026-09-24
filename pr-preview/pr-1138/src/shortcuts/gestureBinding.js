@@ -1,1 +1,0 @@
-import{nT as e,tT as t}from"../../chunks/app-BAAigNq5.js";export{t as gestureBindingDescriptor,e as matchesGestureEvent};

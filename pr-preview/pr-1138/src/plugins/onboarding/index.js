@@ -1,1 +1,0 @@
-import{Xm as e,ch as t,dh as n,lh as r,uh as i}from"../../../chunks/app-BAAigNq5.js";export{r as EXTENSIONS_PAGE_TITLE,i as TUTORIAL_DEFAULT_TITLE,n as TUTORIAL_VIM_TITLE,e as onboardingPlugin,t as seedTutorial};

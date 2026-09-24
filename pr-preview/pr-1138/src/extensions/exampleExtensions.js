@@ -1,1 +1,0 @@
-import{JC as e,qC as t}from"../../chunks/app-BAAigNq5.js";export{t as exampleExtensions,e as insertExampleExtensionsUnder};

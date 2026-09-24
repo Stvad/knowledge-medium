@@ -1,1 +1,0 @@
-import{Bl as e,Ll as t,Rl as n,zl as r}from"../../../chunks/app-BAAigNq5.js";export{t as PROVENANCE_BLOCKS_PER_KEY,n as PROVENANCE_KEY_LIMIT,r as auditPropertyRegistration,e as describeUnregisteredProperty};

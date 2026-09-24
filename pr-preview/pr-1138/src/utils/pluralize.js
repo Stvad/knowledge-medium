@@ -1,1 +1,0 @@
-import{Oq as e,kq as t}from"../../chunks/app-BAAigNq5.js";export{e as agree,t as pluralize};

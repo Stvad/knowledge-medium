@@ -1,1 +1,0 @@
-import{__ as e,v_ as t,y_ as n}from"../../../chunks/app-BAAigNq5.js";export{e as getOrCreateShortcutsBlock,t as journalShortcutBlockId,n as shortcutsBlockId};

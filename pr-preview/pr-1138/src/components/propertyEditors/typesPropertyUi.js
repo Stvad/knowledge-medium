@@ -1,1 +1,0 @@
-import{dC as e,fC as t,uC as n}from"../../../chunks/app-BAAigNq5.js";export{n as kernelPropertyUiExtension,e as typesPropertyUi,t as typesPropertyUiExtension};

@@ -1,1 +1,0 @@
-import{Cy as e,Sy as t,Ty as n,wy as r}from"../../chunks/app-BAAigNq5.js";export{t as CRUMB_MAX_CHARS,e as CRUMB_MAX_SEGMENTS,r as collapseCrumbs,n as crumbsFromAncestors};

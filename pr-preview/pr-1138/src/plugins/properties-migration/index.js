@@ -1,1 +1,0 @@
-import{Mr as e,Or as t}from"../../../chunks/app-BAAigNq5.js";export{e as migratePropertiesToBlocksAction,t as propertiesMigrationPlugin};

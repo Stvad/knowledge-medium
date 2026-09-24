@@ -1,1 +1,0 @@
-import{FA as e,IA as t}from"../../../chunks/app-BAAigNq5.js";export{e as declarationOnlyDefinitionForName,t as declarationOnlyStatusText};

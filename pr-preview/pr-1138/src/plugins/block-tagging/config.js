@@ -1,1 +1,0 @@
-import{As as e,Ds as t,Es as n,Os as r,Ts as i,js as a,ks as o,ws as s}from"../../../chunks/app-BAAigNq5.js";export{s as blockTaggingPrefsType,i as blockTagsConfigCodec,n as blockTagsConfigPresetCore,t as blockTagsConfigProp,r as isValidTagName,o as normalizeBlockTagsConfig,e as selectableTagNames,a as tagNameIssue};
