@@ -63,7 +63,8 @@ export const workingWeight = (entry: ExerciseRecord): number | undefined =>
  *  back to matching the name, which is what the log has always used.
  *
  *  So an untagged entry matches EVERY definition of its name. Legacy entries
- *  are backfilled with their definition rather than disambiguated here. */
+ *  are backfilled with their definition rather than disambiguated here, and in
+ *  a plan without blocks one name in two sessions is one lift, not two. */
 const entryMatches = (entry: ExerciseRecord, exercise: string, defId?: string): boolean =>
   defId !== undefined && entry.definitionId !== undefined
     ? entry.definitionId === defId
@@ -175,19 +176,25 @@ export const setsAtWorkingWeight = (
 export const setTarget = (entry: ExerciseRecord, config: Pick<ExerciseConfig, 'sets'>): number =>
   entry.prescribedSets ?? config.sets
 
-/** The first `setTarget` sets at the working weight — the one set of sets
- *  every progression rule judges a session by, so a set added past the
- *  prescription neither blocks a top-out nor buys a step. Undefined when fewer
- *  than that were done at the weight. */
-const workingSets = (
+/** The first `setTarget` sets at the working weight — the sets a session is
+ *  judged by, and the ones shown as its evidence. A set added past the
+ *  prescription neither blocks a top-out, buys a step, nor reads as a fade. */
+export const judgedSets = (
   entry: ExerciseRecord,
   config: Pick<ExerciseConfig, 'sets'>,
 ): {weight: number; sets: readonly SetRecord[]} | undefined => {
   const working = setsAtWorkingWeight(entry)
-  const target = setTarget(entry, config)
-  return working && working.sets.length >= target
-    ? {weight: working.weight, sets: working.sets.slice(0, target)}
-    : undefined
+  return working && {weight: working.weight, sets: working.sets.slice(0, setTarget(entry, config))}
+}
+
+/** `judgedSets`, when every prescribed set was done at the weight — the
+ *  progression rules judge nothing less. */
+const workingSets = (
+  entry: ExerciseRecord,
+  config: Pick<ExerciseConfig, 'sets'>,
+): {weight: number; sets: readonly SetRecord[]} | undefined => {
+  const judged = judgedSets(entry, config)
+  return judged && judged.sets.length >= setTarget(entry, config) ? judged : undefined
 }
 
 const toppedIn = (

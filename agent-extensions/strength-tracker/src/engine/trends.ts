@@ -5,6 +5,7 @@
  */
 
 import {
+  judgedSets,
   lastEntryFor,
   sessionsNewestFirst,
   setsAtModalWeight,
@@ -175,7 +176,7 @@ export interface Stall {
   occurrence: number
   weight: number
   sessions: number
-  /** The reps behind the stall — each of the latest sessions' counting sets,
+  /** The reps behind the stall — each of the latest sessions' `judgedSets`,
    *  newest first. A set-to-set fade across them is what tells a lift that is
    *  stuck apart from one that is tired. */
   recent: readonly (readonly number[])[]
@@ -195,7 +196,7 @@ export const stalledLifts = (
     if (!stall) return []
     const recent = sessions
       .slice(0, RECENT_SESSIONS)
-      .map(({entry}) => setsAtWorkingWeight(entry)?.sets.map(set => set.reps) ?? [])
+      .map(({entry}) => judgedSets(entry, item)?.sets.map(set => set.reps) ?? [])
     return [{exercise: item.name, key, occurrence, ...stall, recent}]
   })
 

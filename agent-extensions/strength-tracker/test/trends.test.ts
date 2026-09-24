@@ -258,6 +258,16 @@ describe('stalledLifts', () => {
     expect(stalledLifts(log, DEFAULT_CONFIG)[0].recent[0]).toEqual([10, 7, 6])
   })
 
+  it('shows the prescribed sets, so an extra set does not read as a fade', () => {
+    const log = liveLog().map(w => ({
+      ...w,
+      exercises: w.exercises.map(e => e.exercise === 'Overhead press'
+        ? {...e, prescribedSets: 3, sets: [...e.sets, ...at(85, 3)]}
+        : e),
+    }))
+    expect(stalledLifts(log, DEFAULT_CONFIG)[0].recent[0]).toEqual([10, 7, 6])
+  })
+
   it('leaves out a lift that moved', () => {
     expect(stalledLifts(liveLog(), DEFAULT_CONFIG).some(s => s.exercise === 'Squat')).toBe(false)
   })

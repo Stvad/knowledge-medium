@@ -1320,6 +1320,25 @@ describe('an assessment', () => {
     await recordResult(repo, reach.id, {outcome: undefined})
     expect(FIELD.outcome in (repo.block(reach.id).peek()?.properties ?? {})).toBe(false)
   })
+
+  it('refuses an entry the row no longer takes, checked at write time', async () => {
+    const id = await startAssessment(repo, PAGE_ID, '2026-09-29', [
+      {name: 'Side plank hold', measure: 'seconds'},
+      {name: 'Back-to-wall overhead reach', measure: 'pass-fail'},
+    ])
+    const [plank, reach] = await repo.block(id).children.load()
+    // Rendered as a pass/fail row; a peer turns it into a numeric one before the tap lands.
+    await repo.tx(tx => tx.update(reach.id, {properties: {...reach.properties, [FIELD.measure]: 'cm'}}),
+      {scope: ChangeScope.BlockDefault, description: 're-measure'})
+
+    expect(await recordResult(repo, reach.id, {outcome: 'pass'})).toBe('refused')
+    expect(await recordResult(repo, plank.id, {outcome: 'pass'})).toBe('refused')
+    expect(FIELD.outcome in (repo.block(reach.id).peek()?.properties ?? {})).toBe(false)
+    expect(FIELD.outcome in (repo.block(plank.id).peek()?.properties ?? {})).toBe(false)
+
+    await repo.tx(tx => tx.run(deleteBlock, {id: plank.id}), {scope: ChangeScope.BlockDefault, description: 'gone'})
+    expect(await recordResult(repo, plank.id, {side: 'L', value: 40})).toBe('refused')
+  })
 })
 
 describe('the day-rollover setting', () => {

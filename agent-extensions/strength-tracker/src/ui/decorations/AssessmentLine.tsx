@@ -82,10 +82,12 @@ const AssessmentLine = ({block, Inner}: Props) => {
 
   const write = (entry: ResultEntry) => {
     setProblem(null)
-    recordResult(block.repo, block.id, entry).catch((error: unknown) => {
-      console.error('[strength] could not record the result', error)
-      setProblem('Could not save that — try again.')
-    })
+    recordResult(block.repo, block.id, entry)
+      .then(outcome => setProblem(outcome === 'written' ? null : 'This is no longer a result that takes that.'))
+      .catch((error: unknown) => {
+        console.error('[strength] could not record the result', error)
+        setProblem('Could not save that — try again.')
+      })
   }
 
   // A block typed by hand with no measure, or one this version does not know,

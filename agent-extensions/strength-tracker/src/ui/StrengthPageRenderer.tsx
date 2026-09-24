@@ -89,8 +89,11 @@ const logAssessment = async (
   workspaceId: string,
   panelId: string | undefined,
 ): Promise<void> => {
+  // The instant of the tap, not of the read's return: a read that lands after
+  // the rollover hour would otherwise date a Sunday-night tap as Monday.
+  const now = new Date()
   const {config} = await readProgram(repo, workspaceId)
-  const id = await startAssessment(repo, pageId, trainingDay(new Date(), config.dayRolloverHour), config.assessments)
+  const id = await startAssessment(repo, pageId, trainingDay(now, config.dayRolloverHour), config.assessments)
   await showSession(repo, {workspaceId, blockId: id, panelId, what: 'the assessment was logged'})
 }
 

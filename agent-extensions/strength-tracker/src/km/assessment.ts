@@ -7,12 +7,13 @@
  */
 
 import {ChangeScope, propertyValue} from '@/data/api/index.js'
+import {hasBlockType} from '@/data/properties.js'
 import type {Repo} from '@/data/repo.js'
 import {createTypedChild} from '@/data/typedRecords.js'
 
-import type {AssessmentTest} from '../engine/assessment'
+import {asMeasure, type AssessmentTest} from '../engine/assessment'
 import {dayToDate} from './day'
-import {ASSESSMENT_RESULT_TYPE, ASSESSMENT_TYPE} from './fields'
+import {ASSESSMENT_RESULT_TYPE, ASSESSMENT_TYPE, FIELD} from './fields'
 import {dateProp, leftProp, measureProp, outcomeProp, rightProp} from './schema'
 
 /** Stamp an assessment for `day` as the first child of `parentId` — the log
@@ -53,16 +54,31 @@ export type ResultEntry =
   | {side: 'L' | 'R'; value: number | undefined}
   | {outcome: 'pass' | 'fail' | undefined}
 
-export const recordResult = (repo: Repo, resultId: string, entry: ResultEntry): Promise<void> =>
+/** `refused` when the row stopped being a result this entry fits — deleted,
+ *  retyped, or given another measure — between the control rendering and the
+ *  write. Checked inside the transaction, against the row as it is now. */
+export const recordResult = (
+  repo: Repo,
+  resultId: string,
+  entry: ResultEntry,
+): Promise<'written' | 'refused'> =>
   repo.tx(async tx => {
+    const row = await tx.get(resultId)
+    const measure = row && !row.deleted && hasBlockType(row, ASSESSMENT_RESULT_TYPE)
+      ? asMeasure(row.properties[FIELD.measure])
+      : undefined
+    const fits = 'outcome' in entry ? measure === 'pass-fail' : measure !== undefined && measure !== 'pass-fail'
+    if (!fits) return 'refused' as const
+
     if ('outcome' in entry) {
       await tx.setProperties(resultId, entry.outcome === undefined
         ? {unset: [outcomeProp]}
         : {set: [propertyValue(outcomeProp, entry.outcome)]})
-      return
+    } else {
+      const prop = entry.side === 'L' ? leftProp : rightProp
+      await tx.setProperties(resultId, entry.value === undefined
+        ? {unset: [prop]}
+        : {set: [propertyValue(prop, entry.value)]})
     }
-    const prop = entry.side === 'L' ? leftProp : rightProp
-    await tx.setProperties(resultId, entry.value === undefined
-      ? {unset: [prop]}
-      : {set: [propertyValue(prop, entry.value)]})
+    return 'written' as const
   }, {scope: ChangeScope.BlockDefault, description: 'Record an assessment result'})
