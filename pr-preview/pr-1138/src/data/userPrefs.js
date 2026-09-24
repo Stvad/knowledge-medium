@@ -1,1 +1,1 @@
-import{A1 as e,j1 as t,k1 as n}from"../../chunks/app-ftvdvy5L.js";export{n as UI_STATE_PATH_PART,e as USER_PREFS_PATH_PART,t as USER_STATE_ROOT_PATHS};
+import{A1 as e,j1 as t,k1 as n}from"../../chunks/app-BAAigNq5.js";export{n as UI_STATE_PATH_PART,e as USER_PREFS_PATH_PART,t as USER_STATE_ROOT_PATHS};

@@ -1,1 +1,1 @@
-import{BC as e}from"../../chunks/app-ftvdvy5L.js";export{e as withRowSlide};
+import{BC as e}from"../../chunks/app-BAAigNq5.js";export{e as withRowSlide};

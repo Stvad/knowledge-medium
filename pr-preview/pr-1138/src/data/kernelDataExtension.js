@@ -1,1 +1,1 @@
-import{NG as e}from"../../chunks/app-ftvdvy5L.js";export{e as kernelDataExtension};
+import{NG as e}from"../../chunks/app-BAAigNq5.js";export{e as kernelDataExtension};

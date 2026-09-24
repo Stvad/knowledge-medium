@@ -1,1 +1,1 @@
-import{m as e}from"../../../../chunks/app-ftvdvy5L.js";export{e as unlockWorkspaceWithKey};
+import{m as e}from"../../../../chunks/app-BAAigNq5.js";export{e as unlockWorkspaceWithKey};
