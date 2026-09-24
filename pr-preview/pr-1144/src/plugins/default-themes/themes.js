@@ -1,1 +1,1 @@
-import{Av as e,hv as t,jv as n}from"../../../chunks/app-1vR7eNSt.js";export{e as DEFAULT_THEME_ID_DARK,n as DEFAULT_THEME_ID_LIGHT,t as defaultThemeContributions};
+import{Av as e,hv as t,jv as n}from"../../../chunks/app-BPxPIDUd.js";export{e as DEFAULT_THEME_ID_DARK,n as DEFAULT_THEME_ID_LIGHT,t as defaultThemeContributions};

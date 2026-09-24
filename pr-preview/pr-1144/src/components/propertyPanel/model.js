@@ -1,1 +1,1 @@
-import{hA as e,mA as t}from"../../../chunks/app-1vR7eNSt.js";export{t as HIDDEN_SECTION,e as buildPropertyPanelModel};
+import{hA as e,mA as t}from"../../../chunks/app-BPxPIDUd.js";export{t as HIDDEN_SECTION,e as buildPropertyPanelModel};
