@@ -22,7 +22,7 @@
  *  be guessed at, and so program edits happen in your notes.
  *
  *  There is also a small **settings** block for the engine knobs the plan
- *  prose doesn't state (rollover hour, per-lift cadence, plan-root id).
+ *  prose doesn't state (rollover hour, per-lift cadence, which plan).
  */
 
 import {ChangeScope, seedProperty, seedType} from '@/data/api/index.js'
@@ -332,14 +332,15 @@ export const layoffPctProp = seedProperty({
 
 // ──── Settings ────
 
-/** Block id of the plan outline root the config is read from. Unset, the
- *  plan is found by its alias (`PLAN_ALIAS` in config.ts). */
-export const planRootProp = seedProperty({
-  seedKey: extensionPropertySeedKey('plan-root'),
+/** The plan outline root the config is read from. Unset, the plan is found
+ *  by its alias (`PLAN_ALIAS` in config.ts). Retired and not to be reclaimed:
+ *  `strength:planRoot`, the same pointer as an id in a string. */
+export const planProp = seedProperty({
+  seedKey: extensionPropertySeedKey('plan'),
   revision: 1,
-  name: FIELD.planRoot,
-  preset: 'string',
-  defaultValue: '',
+  name: FIELD.plan,
+  preset: 'optional-ref',
+  defaultValue: undefined,
   changeScope: ChangeScope.UserPrefs,
 })
 
@@ -799,14 +800,15 @@ export const layoffType = seedType({
   properties: [layoffFromProp, layoffToProp, layoffDaysProp, layoffTierProp, layoffPctProp],
 })
 
+// 2: `plan` (a ref) replaces `planRoot` (a string).
 export const settingsType = seedType({
   seedKey: extensionTypeSeedKey('settings'),
-  revision: 1,
+  revision: 2,
   id: SETTINGS_TYPE,
   label: 'Strength settings',
   description: 'Engine knobs the plan prose does not state.',
   hideFromCompletion: true,
-  properties: [planRootProp, rolloverHourProp, cadenceDaysProp, roundToProp],
+  properties: [planProp, rolloverHourProp, cadenceDaysProp, roundToProp],
 })
 
 export const assessmentType = seedType({
@@ -877,7 +879,7 @@ export const STRENGTH_PROPS = [
   layoffDaysProp,
   layoffTierProp,
   layoffPctProp,
-  planRootProp,
+  planProp,
   rolloverHourProp,
   cadenceDaysProp,
   roundToProp,

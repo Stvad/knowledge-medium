@@ -19,12 +19,12 @@ import {configFromPlan, type PlanNode} from '../program/planParser'
 import {readAltChoices} from './store'
 import {
   cadenceDaysProp,
-  planRootProp,
+  planProp,
   rolloverHourProp,
   roundToProp,
 } from './schema'
 
-/** Resolves the plan outline when the settings block's `plan-root` points
+/** Resolves the plan outline when the settings block's `plan` points
  *  nowhere live. */
 export const PLAN_ALIAS = 'Strength Plan v2'
 
@@ -50,8 +50,8 @@ const resolvePlanRoot = async (
   workspaceId: string,
   settings: BlockData | null,
 ): Promise<string | null> => {
-  const configured = read(settings, planRootProp)
-  if (configured.length > 0) {
+  const configured = read(settings, planProp)
+  if (configured !== undefined) {
     const block = await repo.block(configured).load()
     if (block && !block.deleted) return configured
   }
@@ -128,7 +128,7 @@ export const configFor = (
   if (!source.planRootId) {
     return {
       config: base,
-      warnings: ['Strength Plan v2 outline not found — using the built-in program. Set the plan-root in strength settings to read from your notes.'],
+      warnings: ['Strength Plan v2 outline not found — using the built-in program. Set the plan in strength settings to read from your notes.'],
       planRootId: null,
     }
   }

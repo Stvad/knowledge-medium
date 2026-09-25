@@ -42,7 +42,7 @@ import {
   dateProp,
   layoffFromProp,
   layoffTierProp,
-  planRootProp,
+  planProp,
   rolloverHourProp,
   sessionProp,
   statusProp,
@@ -1276,7 +1276,7 @@ describe('the plan outline', () => {
       await tx.create({id: 'plan-squat', workspaceId: WORKSPACE_ID, parentId: 'plan-b', orderKey: 'a1', content: 'Squat — 3×6–10'})
       await tx.create({id: 'plan-ohp', workspaceId: WORKSPACE_ID, parentId: 'plan-b', orderKey: 'a2', content: 'Overhead press — 3×6–10'})
     }, {scope: ChangeScope.BlockDefault, description: 'a plan'})
-    await repo.tx(tx => tx.setProperty(settingsBlockId, planRootProp, 'plan-root'),
+    await repo.tx(tx => tx.setProperty(settingsBlockId, planProp, 'plan-root'),
       {scope: ChangeScope.UserPrefs, description: 'point at the plan'})
     const sessionB = async () => (await loadConfig(repo, WORKSPACE_ID, settingsBlockId)).config.exercises
       .filter(e => e.session === 'B').map(e => e.name)
