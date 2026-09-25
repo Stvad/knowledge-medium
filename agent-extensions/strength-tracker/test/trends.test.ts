@@ -304,6 +304,14 @@ describe('liftBalance', () => {
     expect(heaviest).toMatchObject({lift: 'Deadlift', weight: 255, holds: true, runnerUp: {lift: 'Squat', weight: 185}})
   })
 
+  it('makes no heaviest-lift claim with nothing to compare against', () => {
+    const log: WorkoutRecord[] = [{
+      id: 'b', date: '2026-09-20T12:00:00', session: 'B',
+      exercises: [{exercise: 'Deadlift', sets: at(255, 8, 8)}],
+    }]
+    expect(liftBalance(log, DEFAULT_CONFIG).heaviest).toBeUndefined()
+  })
+
   it('says so when the heaviest lift is not ahead', () => {
     const log = liveLog()
     log.push({

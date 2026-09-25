@@ -172,7 +172,7 @@ export interface Milestone {
 
 /** A ratio between two lifts' current working weights, from the quarterly
  *  review ("check row:bench and OHP:bench"). Lifts are named as the program
- *  names them. */
+ *  names them, so a lift renamed in the plan drops out, as from a milestone. */
 export interface LiftRatio {
   id: string
   label: string

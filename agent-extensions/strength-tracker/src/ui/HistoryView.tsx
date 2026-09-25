@@ -110,9 +110,7 @@ export function HistoryView({config, history}: Props) {
                 <span>{balance.heaviest.lift} is the heaviest lift</span>
                 <span className={'shrink-0 tabular-nums ' + (balance.heaviest.holds ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400')}>
                   {balance.heaviest.holds ? '✓' : '✗'} {balance.heaviest.weight}
-                  {balance.heaviest.runnerUp
-                    ? ` vs ${balance.heaviest.runnerUp.lift.toLowerCase()} ${balance.heaviest.runnerUp.weight}`
-                    : ''}
+                  {` vs ${balance.heaviest.runnerUp.lift.toLowerCase()} ${balance.heaviest.runnerUp.weight}`}
                 </span>
               </li>
             ) : null}

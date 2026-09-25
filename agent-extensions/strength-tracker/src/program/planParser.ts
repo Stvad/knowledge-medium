@@ -128,7 +128,8 @@ const loadsProp = (properties: Record<string, unknown> | undefined, key: string)
     .map(token => typeof token === 'number' ? token
       : typeof token === 'string' ? Number(/^\d+(?:\.\d+)?/.exec(token)?.[0])
       : NaN)
-    .filter(load => Number.isFinite(load) && load > 0)
+    // Zero stays: it is bodyweight, the bottom rung of a bodyweight lift.
+    .filter(load => Number.isFinite(load) && load >= 0)
   return loads.length > 0 ? [...new Set(loads)].sort((a, b) => a - b) : undefined
 }
 const boolProp = (properties: Record<string, unknown> | undefined, key: string): boolean | undefined => {

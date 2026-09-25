@@ -224,8 +224,9 @@ export const currentWeights = (
 export interface LiftBalance {
   ratios: {ratio: LiftRatio; value?: number}[]
   /** Whether `heaviestLift` is strictly ahead of every other lift, with the
-   *  closest one for comparison. Absent until that lift has been logged. */
-  heaviest?: {lift: string; weight: number; holds: boolean; runnerUp?: {lift: string; weight: number}}
+   *  closest one for comparison. Absent until it and one other lift have been
+   *  logged — with nothing to compare, "heaviest" says nothing. */
+  heaviest?: {lift: string; weight: number; holds: boolean; runnerUp: {lift: string; weight: number}}
 }
 
 export const liftBalance = (
@@ -249,8 +250,6 @@ export const liftBalance = (
       runnerUp = {lift: other, weight: otherWeight}
     }
   }
-  return {
-    ratios,
-    heaviest: {lift, weight, holds: runnerUp === undefined || weight > runnerUp.weight, ...(runnerUp ? {runnerUp} : {})},
-  }
+  if (runnerUp === undefined) return {ratios}
+  return {ratios, heaviest: {lift, weight, holds: weight > runnerUp.weight, runnerUp}}
 }

@@ -57,7 +57,11 @@ export type ResultEntry =
 
 /** `refused` when the row stopped being a result this entry fits — deleted,
  *  retyped, or given another measure — between the control rendering and the
- *  write. Checked inside the transaction, against the row as it is now. */
+ *  write. Checked inside the transaction, against the row as it is now.
+ *
+ *  Writing one shape leaves the other's values alone: a measure changes only
+ *  by hand, the row reads only the shape it names, and switching back finds
+ *  them where they were. */
 export const recordResult = (
   repo: Repo,
   resultId: string,

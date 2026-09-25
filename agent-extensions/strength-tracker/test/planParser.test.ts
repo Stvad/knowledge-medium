@@ -194,6 +194,8 @@ describe('parseExercise', () => {
     expect(ladder(['35', '20', 'kb', '53', '35', '25'])).toEqual([20, 25, 35, 53])
     // The whole list typed into one item, units and all.
     expect(ladder(['20, 25, 35 lb, 53'])).toEqual([20, 25, 35, 53])
+    // Bodyweight is a rung.
+    expect(ladder(['0', '5', '10'])).toEqual([0, 5, 10])
   })
 
   it('treats a zero or negative load as not stated', () => {
