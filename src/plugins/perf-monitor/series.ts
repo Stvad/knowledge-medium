@@ -152,22 +152,24 @@ const trendRegression = (
   }
 }
 
-/** The sessions a per-query comparison reads, in the two roles it reads them
- *  as. Named once: the caveat reports on exactly what the comparison consumed,
- *  and a second copy of this slicing is how the two would come to disagree
- *  about which samples were involved. */
-const comparisonWindows = <T>(history: readonly T[]): {
-  recentPast: readonly T[]
-  baselineSessions: readonly T[]
-} => ({
-  recentPast: history.slice(0, RECENT_WINDOW - 1),
-  baselineSessions: baselineWindow(history),
-})
-
-/** Entries used as BASELINE from a newest-first history. The leading entries
- *  are consumed smoothing "current", so describing the baseline must derive from this same slice. */
-export const baselineWindow = <T>(history: readonly T[]): readonly T[] =>
-  history.slice(RECENT_WINDOW - 1)
+/** The samples a comparison reads from a newest-first history, in the two roles
+ *  it reads them as: the latest ones smoothing the current reading, the rest as
+ *  baseline. Every comparison, and the caveat, windows through this; a second
+ *  copy of the slicing is how they would come to disagree about what was read.
+ *
+ *  Filtered BEFORE windowing: a session with no usable sample is routine — an
+ *  idle session for fan-out, a query that never ran uncontended, a boot hidden
+ *  until paint — and sliced first, one among the latest leaves the recent side
+ *  short and the metric unjudged for the sessions after it. Within the loaded
+ *  history only: reaching past `HISTORY_LIMIT` for more usable sessions would
+ *  judge against builds the recency cap exists to drop. */
+const comparisonWindows = <T, S>(
+  history: readonly T[],
+  sampleOf: (r: T) => S | null,
+): { recentPast: S[]; baseline: S[] } => {
+  const samples = history.map(sampleOf).filter((s): s is S => s !== null)
+  return { recentPast: samples.slice(0, RECENT_WINDOW - 1), baseline: samples.slice(RECENT_WINDOW - 1) }
+}
 
 /** A series is READY when at least one metric could be judged — row count alone isn't readiness; some rows carry no usable sample. */
 export const anyJudged = (results: readonly TrendResult[]): boolean =>
@@ -247,7 +249,6 @@ export const queryRegressions = (
   current: InteractionComparable,
   history: readonly InteractionComparable[],
 ): QueryComparison => {
-  const { recentPast, baselineSessions } = comparisonWindows(history)
   const results: TrendResult[] = []
   const clusteredTail: string[] = []
   /** Current queries the comparison could not judge. KEPT, not dropped: see below. */
@@ -257,27 +258,22 @@ export const queryRegressions = (
     // `trendRegression` after the recent median, so one fast session can't drop a sustainably-regressed query.
     const currentSamples = comparableSamples(sample)
     if (currentSamples === null) { skipped.push(sample); continue }
-    // ONE statement of which sessions carry a usable sample for this query,
-    // read by both the comparison and the caveat below.
-    const sampleIn = (r: InteractionComparable) => comparableSamples(r.queries[name])
-    const measured = (r: InteractionComparable): number | null => sampleIn(r)?.p95Ms ?? null
-    const recent = [currentSamples.p95Ms, ...recentPast.map(measured).filter((v): v is number => v !== null)]
-    const baseline = baselineSessions.map(measured).filter((v): v is number => v !== null)
+    // ONE read of this query's samples, shared by the comparison and the caveat below.
+    const { recentPast, baseline } = comparisonWindows(history, (r) => comparableSamples(r.queries[name]))
     const result = trendRegression(
       // The label says WHICH p95: this is the query measured with no queue to
       // be in, which is a smaller number than the wall-clock the same session
       // stores and than what a user waited. Reading one as the other is the
       // confusion the whole change exists to end.
       { metric: `query:${name}`, label: `${name} p95 (uncontended)`, unit: 'ms', minAbsolute: MIN_ABSOLUTE_MS },
-      recent,
-      baseline,
+      [currentSamples.p95Ms, ...recentPast.map((u) => u.p95Ms)],
+      baseline.map((u) => u.p95Ms),
     )
     results.push(result)
     // Only a comparison that reached a verdict can be qualified: telling a
     // reader to distrust a trend that was never produced points at nothing.
-    const consumed = [currentSamples, ...[...recentPast, ...baselineSessions].map(sampleIn)]
-    if (result.status !== 'insufficient' &&
-        consumed.some((q) => q !== null && hasClusteredTail(q))) {
+    const consumed = [currentSamples, ...recentPast, ...baseline]
+    if (result.status !== 'insufficient' && consumed.some((u) => hasClusteredTail(u))) {
       clusteredTail.push(name)
     }
   }
@@ -380,15 +376,11 @@ export const fanoutRegression = (
   // Too few writes means no rate to compare — a missing CURRENT sample, not short
   // history: more stored sessions can't supply this session's rate, though a live edit can.
   if (now === null) return NO_CURRENT_SAMPLE
-  // Filtered BEFORE windowing: light sessions are routine, and sliced first, one
-  // among the last two leaves the recent side short and the metric unjudged.
-  // Within the loaded window only: reaching past `HISTORY_LIMIT` for more
-  // editing sessions would judge against builds the recency cap exists to drop.
-  const rates = history.map(reResolvesPerWrite).filter((v): v is number => v !== null)
+  const { recentPast, baseline } = comparisonWindows(history, reResolvesPerWrite)
   return trendRegression(
     { metric: 'fanout:reResolvesPerWrite', label: 're-resolves per write', unit: 'ratio', minAbsolute: 0 },
-    [now, ...rates.slice(0, RECENT_WINDOW - 1)],
-    baselineWindow(rates),
+    [now, ...recentPast],
+    baseline,
   )
 }
 
@@ -413,11 +405,10 @@ export const startupRegression = (
   // and never in the baseline it is judged against. As a gate alone it would
   // report on the boots BEFORE this one — a slowdown starting now stays
   // invisible until enough later sessions have been recorded.
-  const gaps = (rs: readonly StartupRecordData[]) =>
-    rs.map(bootstrapGapMs).filter((v): v is number => v !== null)
+  const { recentPast, baseline } = comparisonWindows(series, bootstrapGapMs)
   return trendRegression(
     { metric: 'startup:bootstrapGapMs', label: 'repo-ready to first paint', unit: 'ms', minAbsolute: MIN_ABSOLUTE_MS },
-    [now, ...gaps(series.slice(0, RECENT_WINDOW - 1))],
-    gaps(baselineWindow(series)),
+    [now, ...recentPast],
+    baseline,
   )
 }

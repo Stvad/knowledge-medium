@@ -120,6 +120,16 @@ describe('queryRegressions', () => {
     })
   })
 
+  // Most sessions leave some query without a comparable sample. Windowed before
+  // filtering, one such session among the last two leaves the recent side short
+  // and the query unjudged for the next two sessions, however much history it has.
+  it('smooths over the latest sessions that sampled the query, skipping ones between them', () => {
+    const slow = () => sample({ queries: { 'backlinks.forBlock': q(40) } })
+    const unsampled = sample({ queries: { 'backlinks.forBlock': noUncontendedSamples(40) } })
+    expect(reg(qr(slow(), [unsampled, slow(), ...history(8, sample)])[0]))
+      .toMatchObject({ metric: 'query:backlinks.forBlock', ratio: 4 })
+  })
+
   // A newly mounted surface is not a regression. Reporting one as infinitely
   // regressed is how an alarm teaches its reader to ignore it.
   it('ignores a query with no baseline rather than treating it as regressed', () => {
@@ -466,6 +476,14 @@ describe('startupRegression', () => {
     const incomplete = { recordedAt: 0, timeOriginMs: THIS_BOOT } as StartupRecordData
     expect(startupRegression(held(11), incomplete))
       .toEqual({ status: 'insufficient', reason: 'no-current-sample' })
+  })
+
+  // Same rule as the interaction comparisons: a past boot hidden until paint
+  // has no gap, and must not void the recent window for the boots after it.
+  it('smooths over the latest boots with a gap, skipping ones without', () => {
+    const hidden = { recordedAt: 0, timeOriginMs: THIS_BOOT - 1 } as StartupRecordData
+    expect(reg(startupRegression([hidden, ...stepped(10)], gap(5000))))
+      .toMatchObject({ metric: 'startup:bootstrapGapMs' })
   })
 
   // ...as distinct from a series that genuinely has too little history, which

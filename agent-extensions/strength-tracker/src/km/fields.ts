@@ -14,6 +14,11 @@ export const EXERCISE_ENTRY_TYPE = 'strength-exercise'
 export const SET_TYPE = 'strength-set'
 export const LAYOFF_TYPE = 'strength-layoff'
 export const SETTINGS_TYPE = 'strength-settings'
+/** One sitting of the quarterly battery; its children are the results. */
+export const ASSESSMENT_TYPE = 'strength-assessment'
+/** One test's result — its own block, so a test's history across quarters is
+ *  a query and each number is edited where it sits. */
+export const ASSESSMENT_RESULT_TYPE = 'strength-assessment-result'
 
 // Program side — blocks in the plan outline itself. The plan stays
 // hand-written prose, but a typed block is a declaration: it gets the
@@ -89,6 +94,14 @@ export const FIELD = {
   choiceGroup: 'strength:group',
   /** Ref to the option being tracked. */
   choiceOption: 'strength:option',
+  // assessment result
+  /** What the result is counted in — copied from the battery at stamp time,
+   *  so the block reads on its own. */
+  measure: 'strength:measure',
+  left: 'strength:left',
+  right: 'strength:right',
+  /** pass | fail, for a test with no sides. */
+  outcome: 'strength:outcome',
   // program (blocks in the plan outline) — the parser reads these; they
   // override whatever the prose on the same line would have implied.
   targetSets: 'strength:targetSets',
@@ -96,12 +109,19 @@ export const FIELD = {
   repMax: 'strength:repMax',
   increment: 'strength:increment',
   perSide: 'strength:perSide',
-  /** Free-form movement classification (main | accessory | carry |
-   *  bodyweight). `carry`/`bodyweight` mark work the engine never
-   *  load-progresses from a rep count. */
+  /** Free-form movement classification — see `kindProp`. */
   kind: 'strength:kind',
   catchUpIncrement: 'strength:catchUpIncrement',
   catchUpRpe: 'strength:catchUpRpe',
+  /** Total reps across the prescribed sets that earns `microIncrement` when
+   *  the top of the range was missed on some set. */
+  totalRepsThreshold: 'strength:totalRepsThreshold',
+  microIncrement: 'strength:microIncrement',
+  /** The loads that exist for this lift (a list of numbers, as text) — a
+   *  progression step goes to the next one instead of adding the increment. */
+  ladder: 'strength:ladder',
+  /** What to load the first time, before there is any history. */
+  startWeight: 'strength:startWeight',
   // re-entry tier (a row of the plan's re-entry table). `reentryPct`,
   // `targetSets`, `repMin` and `repMax` are the SAME properties the layoff
   // record and the exercise definitions use — one vocabulary, so "90% of
