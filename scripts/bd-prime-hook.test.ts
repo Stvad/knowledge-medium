@@ -12,6 +12,7 @@ import {
     transformHookStdout,
     withNotice,
 } from './bd-prime-hook.mjs'
+import { SYNC_RUN_LOG } from './bd-github-sync.mjs'
 
 const bullet = (key: string, preview: string) => `- **${key}**: ${preview}`
 
@@ -240,9 +241,11 @@ describe('transformCodexHookStdout', () => {
 describe('bd-prime-hook process behavior', { timeout: 20_000 }, () => {
     const script = fileURLToPath(new URL('./bd-prime-hook.mjs', import.meta.url))
 
+    const slowRun = { at: '2026-09-24T20:00:00.000Z', ms: 37_200, ok: true, budgetMs: 20_000, spawns: [{ cmd: 'bd show', calls: 2, ms: 20_300 }] }
+
     const makeRepo = (opts: {
         dbReady: boolean
-        /** Lines of the sync's run log (`.beads/github-sync-runs.log`). */
+        /** Lines of the sync's run log (SYNC_RUN_LOG). */
         syncRuns?: object[]
         primeStdout?: string
         primeStderr?: string
@@ -253,7 +256,7 @@ describe('bd-prime-hook process behavior', { timeout: 20_000 }, () => {
         mkdirSync(join(repo, '.beads'))
         if (opts.dbReady) mkdirSync(join(repo, '.beads', 'embeddeddolt'))
         if (opts.syncRuns)
-            writeFileSync(join(repo, '.beads', 'github-sync-runs.log'), opts.syncRuns.map(r => JSON.stringify(r)).join('\n') + '\n')
+            writeFileSync(join(repo, SYNC_RUN_LOG), opts.syncRuns.map(r => JSON.stringify(r)).join('\n') + '\n')
         const shimDir = join(repo, 'shim')
         mkdirSync(shimDir)
         const shimLog = join(repo, 'bd-shim.log')
@@ -308,7 +311,6 @@ describe('bd-prime-hook process behavior', { timeout: 20_000 }, () => {
     })
 
     it('opens the context with the sync alarm when the last two syncs were over budget', () => {
-        const slowRun = { at: '2026-09-24T20:00:00.000Z', ms: 37_200, ok: true, slow: true, budgetMs: 20_000, spawns: [{ cmd: 'bd show', calls: 2, ms: 20_300 }] }
         const { run } = makeRepo({
             dbReady: true,
             syncRuns: [slowRun, slowRun],
@@ -343,7 +345,6 @@ describe('bd-prime-hook process behavior', { timeout: 20_000 }, () => {
     // The alarm does not depend on the memory index, so a failing prime must
     // not take it down with it.
     it('still raises the sync alarm when bd prime fails', () => {
-        const slowRun = { at: '2026-09-24T20:00:00.000Z', ms: 37_200, ok: true, budgetMs: 20_000, spawns: [] }
         const { run } = makeRepo({
             dbReady: true,
             syncRuns: [slowRun, slowRun],
@@ -357,7 +358,6 @@ describe('bd-prime-hook process behavior', { timeout: 20_000 }, () => {
     })
 
     it('still raises the sync alarm when the Codex session-start hook returns nothing', () => {
-        const slowRun = { at: '2026-09-24T20:00:00.000Z', ms: 37_200, ok: true, budgetMs: 20_000, spawns: [] }
         const { run } = makeRepo({ dbReady: true, syncRuns: [slowRun, slowRun], codexStdout: '' })
         const r = run(['--codex', 'SessionStart'], '{}')
         expect(r.status).toBe(0)

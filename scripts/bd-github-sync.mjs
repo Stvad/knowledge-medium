@@ -37,14 +37,13 @@
  *    SELECTIVE and the pull runs alone: bd 1.2.2 GETs every linked bead it is
  *    handed and PATCHes only the local-newer ones, so the listing already
  *    names the beads it could touch, and a converged run costs seconds rather
- *    than one GET per bead per leg (measured: 387 beads, 90s per leg, two
- *    legs).
+ *    than one GET per bead per leg.
  *
  * 5. The pull re-applies a GitHub copy onto a bead and drops what GitHub does
  *    not carry back: the assignee (bd's push never sets one), the close date
  *    (the status write restamps it, and no bd verb can put it back), and a
  *    type the labels do not spell uniquely (#955). So the pull is never given
- *    such a bead. It runs BY IDENTIFIER (planPullSet + pullIssues) over the
+ *    such a bead. It runs BY IDENTIFIER (planPullSet + syncIssues) over the
  *    issues with no bead and the beads it would carry faithfully, which takes
  *    doPull's other branch: it fetches each issue by number, ignores
  *    `last_sync`, and never hydrates. Both of a bulk pull's routes to a bead —
@@ -890,7 +889,7 @@ export const planPrePullPush = (beads, issueByNumber) =>
     .filter(b => {
       const issue = issueByNumber.get(issueNumberFromRef(b.external_ref))
       if (!issue) return true
-      if (issue.updatedAt && b.updated_at && Date.parse(issue.updatedAt) >= Date.parse(b.updated_at)) return false
+      if (Date.parse(issue.updatedAt) >= Date.parse(b.updated_at)) return false
       return pushWouldChange(b, issue) || pullWouldWrite(b, issue)
     })
     .map(b => b.id)
@@ -1028,14 +1027,6 @@ export const coveredMs = intervals => {
   }
   return total
 }
-const timedSpawnSync = (file, args, opts) => {
-  const started = performance.now()
-  try {
-    return spawnSync(file, args, opts)
-  } finally {
-    noteSpawn(file, args, started)
-  }
-}
 // spawnSync's result shape, without blocking: for reads that do not depend on
 // each other. `maxBuffer` is spawnSync's too, so the async readers keep the
 // same ceiling (MAX_OUTPUT_BYTES): past it the child is killed and the result
@@ -1100,8 +1091,16 @@ const checkedStdout = (file, args, r) => {
   if (file === 'bd' && /^Error/m.test(combined)) throw new Error(`bd ${args[0]}: ${combined.trim().slice(0, 500)}`)
   return r.stdout ?? ''
 }
-const run = (file, args, opts = {}) =>
-  checkedStdout(file, args, timedSpawnSync(file, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: MAX_OUTPUT_BYTES, ...opts }))
+const run = (file, args, opts = {}) => {
+  const started = performance.now()
+  let r
+  try {
+    r = spawnSync(file, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: MAX_OUTPUT_BYTES, ...opts })
+  } finally {
+    noteSpawn(file, args, started)
+  }
+  return checkedStdout(file, args, r)
+}
 const runAsync = async (file, args, opts) => checkedStdout(file, args, await spawnAsync(file, args, opts))
 
 export const tryRun = (file, args, opts) => {
@@ -1119,14 +1118,13 @@ export const tryRun = (file, args, opts) => {
  * Returns the rows, or null when stdout is not a JSON array. Callers must
  * hold the DB-exists gate (initializedDbRoot) first — see header.
  */
-export const bdShowRows = (ids, opts = {}) => {
-  const r = timedSpawnSync('bd', ['show', ...ids, '--json'], {
+const bdShowRows = ids => {
+  const r = spawnSync('bd', ['show', ...ids, '--json'], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
-    // Scales with the request: `bd show` costs ~0.4s per id.
+    // Scales with the request.
     timeout: Math.max(15_000, ids.length * 2_000),
     maxBuffer: MAX_OUTPUT_BYTES,
-    ...opts,
   })
   try {
     const rows = JSON.parse(r.stdout ?? '')
@@ -1181,7 +1179,7 @@ const processAlive = pid => {
 /**
  * One sync at a time across sessions/worktrees (they share the one DB). The
  * lock only serializes THIS script; bd itself may still run concurrently
- * elsewhere — which is why listBeads failures abort instead of soft-failing.
+ * elsewhere — which is why exportBeads failures abort instead of soft-failing.
  * The lock file holds the holder's pid, so the common leak — a holder killed
  * before its cleanup ran — self-heals on the next attempt via a dead-pid
  * check instead of waiting out a staleness window. A narrow TOCTOU remains
@@ -1247,18 +1245,16 @@ const tryRead = p => {
 // The ONE read of the tracker; throws on failure. Every stored status, and the
 // only row that carries assignee, labels, closed_at and comments — a check
 // reading a narrower row passes silently on exactly the divergence it exists
-// to see. About half a second for the whole tracker, where `bd show` costs
-// ~0.4s per id, so runSync re-reads only after a step that wrote. Callers
-// slice by status; nothing here pre-filters.
-const parseExport = out =>
-  out
+// to see. runSync re-reads only after a step that wrote. Callers slice by
+// status; nothing here pre-filters.
+const exportBeads = async env => {
+  const out = await runAsync('bd', ['export'], { env: { ...env, BD_IGNORE_SCHEMA_SKEW: '1' } })
+  return out
     .split('\n')
     .filter(Boolean)
     .map(l => JSON.parse(l))
     .filter(r => r._type === 'issue')
-const exportOpts = env => ({ env: { ...env, BD_IGNORE_SCHEMA_SKEW: '1' } })
-const exportBeads = env => parseExport(run('bd', ['export'], exportOpts(env)))
-const exportBeadsAsync = async env => parseExport(await runAsync('bd', ['export'], exportOpts(env)))
+}
 
 // Every guard in this file is calibrated to ONE bd version's MEASURED
 // behaviour: what the pull reaches and how, the push's timestamp rule, the
@@ -1316,17 +1312,7 @@ const fetchIssues = async () => {
   }
 }
 
-// One owner for "push these beads". bd takes the ids as a single --issues
-// argument, which has a per-argument ceiling (128 KiB on Linux), so a large
-// set is split across invocations instead of failing the spawn before bd
-// starts. Returns the concatenated bd output.
-// Issues to hand the pull, BY IDENTIFIER. That takes doPull's other branch:
-// it fetches each issue by number, ignores `last_sync` entirely, and never
-// hydrates — so a bulk pull's two ways of reaching a bead we are protecting
-// (the incremental window, and fetchPrelinkedIssues bypassing the skip for a
-// locally-modified row) are both out of reach, and there is no window to
-// close. That is what lets the mirror stay bidirectional while a lossy
-// re-apply stays impossible (#955).
+// Issues to hand the pull, BY IDENTIFIER (see header guard 5 for why).
 //   - an issue with no bead yet: the GitHub→beads direction, where a
 //     hand-filed issue becomes a bead.
 //   - a bead the pull would carry faithfully: the edit import.
@@ -1348,32 +1334,24 @@ export const planPullSet = (beads, issueByNumber, excludedIds) => {
     linked.add(number)
     const issue = issueByNumber.get(number)
     const reopened = b.status === 'closed' && issue.state === 'OPEN'
-    const localNewer = !!(issue.updatedAt && b.updated_at) && Date.parse(b.updated_at) > Date.parse(issue.updatedAt)
+    const localNewer = Date.parse(b.updated_at) > Date.parse(issue.updatedAt)
     if (!excludedIds.has(b.id) && !reopened && !localNewer && pullWouldWrite(b, issue)) faithful.push(number)
   }
   const unlinked = [...issueByNumber.keys()].filter(n => !linked.has(n))
   return [...new Set([...unlinked, ...faithful])].sort((a, b) => a - b)
 }
 
-const PUSH_CHUNK = 200
-// bd takes the ids as one --issues argument, so a large set is split the same
-// way the push is. An EMPTY set must not fall through to a bulk pull, which is
-// the whole class this avoids — it is simply not run.
-const pullIssues = (numbers, env, dryRun) => {
-  if (!numbers.length) return ''
+// One owner for "push these beads out, or pull them in". bd takes the ids as
+// a single --issues argument, which has a per-argument ceiling (128 KiB on
+// Linux), so a large set is split across invocations instead of failing the
+// spawn before bd starts. Returns the concatenated bd output.
+const ISSUES_PER_CALL = 200
+const syncIssues = (direction, ids, env, extraArgs = []) => {
+  // An empty list must never reach bd as a bare `--pull-only` — that would be a bulk pull.
+  if (!ids.length) return ''
   let out = ''
-  for (let i = 0; i < numbers.length; i += PUSH_CHUNK)
-    out +=
-      run('bd', ['github', 'sync', '--pull-only', '--issues', numbers.slice(i, i + PUSH_CHUNK).join(','), ...(dryRun ? ['--dry-run'] : [])], {
-        env,
-      }) + '\n'
-  return out
-}
-
-const pushBeads = (ids, env) => {
-  let out = ''
-  for (let i = 0; i < ids.length; i += PUSH_CHUNK)
-    out += run('bd', ['github', 'sync', '--push-only', '--issues', ids.slice(i, i + PUSH_CHUNK).join(',')], { env }) + '\n'
+  for (let i = 0; i < ids.length; i += ISSUES_PER_CALL)
+    out += run('bd', ['github', 'sync', direction, '--issues', ids.slice(i, i + ISSUES_PER_CALL).join(','), ...extraArgs], { env }) + '\n'
   return out
 }
 
@@ -1686,14 +1664,18 @@ const runSync = async ({ quiet = false, dryRun = false } = {}) => {
     // Every read of the tracker is one `bd export`, taken again only after a
     // step that WROTE: a converged run reads it once. The first runs under
     // the issue listing, which is paging-bound and the run's longest step.
-    const [{ issueByNumber, maxKnownIssueNumber }, preBeads] = await settleAll([fetchIssues(), exportBeadsAsync(env)])
+    const [{ issueByNumber, maxKnownIssueNumber }, preBeads] = await settleAll([fetchIssues(), exportBeads(env)])
     const report = []
     // The km→#N mapping for every issue this run's push minted. Printed
     // IMMEDIATELY, not via the end-of-run report: any later step failing
     // would swallow the report, and by the next run the bead already carries
-    // its ref, so the mapping would never be printed at all.
+    // its ref, so the mapping would never be printed at all. Returns what it
+    // printed, so a caller that also needs the mapping (the comment mirror)
+    // does not re-derive it.
     const printMinted = post => {
-      for (const { id, number } of planMintedRefs(preBeads, post)) console.log(`bd-github-sync: minted: ${id} → #${number}`)
+      const minted = planMintedRefs(preBeads, post)
+      for (const { id, number } of minted) console.log(`bd-github-sync: minted: ${id} → #${number}`)
+      return minted
     }
 
     // 1. Adopt GitHub-side closes BEFORE pushing (see header). A failed close
@@ -1718,7 +1700,7 @@ const runSync = async ({ quiet = false, dryRun = false } = {}) => {
     // Re-read after the closes: a close bumps updated_at, and the pre-adoption
     // row would look converged to the push plan below. A dry run makes no
     // closes, so the rows it would have bumped are added to the push by hand.
-    const exported = closes.length && !dryRun ? exportBeads(env) : preBeads
+    const exported = closes.length && !dryRun ? await exportBeads(env) : preBeads
     const dryRunBumped = dryRun ? closes.map(c => c.id) : []
 
     // 1.2 Split the linked beads between the push and the pull, disjointly.
@@ -1769,13 +1751,13 @@ const runSync = async ({ quiet = false, dryRun = false } = {}) => {
     } else if (pushed) {
       let pushOut
       try {
-        pushOut = pushBeads(pushSet, env)
+        pushOut = syncIssues('--push-only', pushSet, env)
       } catch (e) {
         // A failed push may still have minted issues (an earlier chunk, or bd
         // aborting midway) — print their mapping from a fresh read before
         // the failure propagates; the read's own failure yields to it.
         try {
-          printMinted(exportBeads(env))
+          printMinted(await exportBeads(env))
         } catch {
           // Silence here would be a permanent loss, not a skipped nicety: any
           // mapping this push minted is unrecoverable once the next run's
@@ -1790,8 +1772,8 @@ const runSync = async ({ quiet = false, dryRun = false } = {}) => {
     }
     // Re-read after the push: it mints the refs the mint report and the
     // comment mirror resolve bead ids through.
-    const freshBeads = pushed ? exportBeads(env) : exported
-    printMinted(freshBeads)
+    const freshBeads = pushed ? await exportBeads(env) : exported
+    const minted = printMinted(freshBeads)
 
     // 2. The pull, planned on a read taken just before it, not the one the push
     // was planned on: a bead another worktree edited since is newer locally by
@@ -1803,14 +1785,14 @@ const runSync = async ({ quiet = false, dryRun = false } = {}) => {
     // again and could only PATCH rows step 1.5 just pushed.
     const pullPlan = beads => planPullSet(beads, issueByNumber, pullExcluded)
     const staleForPull = !pushed && !dryRun && pullPlan(freshBeads).length > 0
-    const pullSet = pullPlan(staleForPull ? exportBeads(env) : freshBeads)
-    const syncOut = pullIssues(pullSet, env, dryRun)
+    const pullSet = pullPlan(staleForPull ? await exportBeads(env) : freshBeads)
+    const syncOut = syncIssues('--pull-only', pullSet, env, dryRun ? ['--dry-run'] : [])
     const syncSummary = syncOut
       .split('\n')
       .filter(l => /Pulled|Pushed|Created|Updated|dry-run/.test(l))
       .map(l => l.trim())
     report.push(...syncSummary)
-    const postBeads = pullSet.length && !dryRun ? exportBeads(env) : freshBeads
+    const postBeads = pullSet.length && !dryRun ? await exportBeads(env) : freshBeads
 
     // 3. Un-flatten priorities (pre/post comparison — see header), and push
     // the repaired rows back out.
@@ -1828,7 +1810,7 @@ const runSync = async ({ quiet = false, dryRun = false } = {}) => {
       if (!dryRun) run('bd', ['update', id, '-p', String(to)], { env })
       report.push(`priority ${id} → ${to} (re-derived after pull-flattening)`)
     }
-    if (fixes.length && !dryRun) pushBeads(fixes.map(f => f.id), env)
+    if (fixes.length && !dryRun) syncIssues('--push-only', fixes.map(f => f.id), env)
 
     // 4. Carry bead closes out to issues still open (see header: via gh, not
     // a selective bd push, which skips a close once the issue was touched
@@ -1863,16 +1845,13 @@ const runSync = async ({ quiet = false, dryRun = false } = {}) => {
     // 5. Mirror bead comments onto their issues (mirrorComments). It runs
     // after the push, because a post bumps the issue past the local row and bd
     // PATCHes only local-newer rows; and after the pull, so a GitHub-side edit
-    // waiting on a bead is imported before the post.
-    // The touch-push-repull dance this used to need is gone with the bulk
-    // pull: a post cannot make the next run re-apply the issue onto its bead,
-    // because the pull is only ever handed ids we chose (see 1.2 and guard 5).
-    // postBeads already carries this run's minted refs, and no step since it
-    // touches a ref or a comment.
+    // waiting on a bead is imported before the post. postBeads already
+    // carries this run's minted refs, and no step since it touches a ref or a
+    // comment.
     const mirror = await mirrorComments({
       beads: postBeads,
       issueByNumber,
-      mintedNumbers: new Set(planMintedRefs(preBeads, freshBeads).map(m => m.number)),
+      mintedNumbers: new Set(minted.map(m => m.number)),
       env,
       dryRun,
     })
@@ -1883,7 +1862,6 @@ const runSync = async ({ quiet = false, dryRun = false } = {}) => {
     const actionReported = report.some(l => !syncSummary.includes(l) && !routine.has(l))
     const changed = actionReported || syncSummary.some(l => /[1-9]/.test(l))
     if (!quiet || changed) console.log(['bd-github-sync:', ...report].join('\n  '))
-    return { closes, fixes, closePushes }
   }
 
   // Everything from here is on record, a refusal or a missing token included:
