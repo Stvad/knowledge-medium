@@ -824,11 +824,27 @@ const resolveAltGroups = (
   return {...config, exercises}
 }
 
+/** A micro step is SMALLER than what topping out earns. One at or above the
+ *  lift's increment would pay a session that fell short more than one that
+ *  cleared every set — so that lift loses the total-reps rule, and says so. */
+const withSaneMicroSteps = (config: ProgramConfig, warnings: string[]): ProgramConfig => ({
+  ...config,
+  exercises: config.exercises.map(exercise => {
+    if (exercise.microIncrement === undefined || exercise.microIncrement < exercise.increment) return exercise
+    warnings.push(
+      `"${exercise.name}": \`${FIELD.microIncrement}\` ${exercise.microIncrement} is not smaller than its `
+      + `increment ${exercise.increment}, so the total-reps rule is off for it until it is.`,
+    )
+    return {...exercise, microIncrement: undefined, totalRepsThreshold: undefined}
+  }),
+})
+
 export const configFromPlan = (
   root: PlanNode,
   altChoices: Record<string, string> = {},
 ): {config: ProgramConfig; warnings: readonly string[]} => {
   const overlay = parsePlan(root)
-  const config = resolveAltGroups(mergePlan(overlay), overlay.altDefaults ?? {}, altChoices)
-  return {config, warnings: overlay.warnings}
+  const warnings = [...overlay.warnings]
+  const resolved = resolveAltGroups(mergePlan(overlay), overlay.altDefaults ?? {}, altChoices)
+  return {config: withSaneMicroSteps(resolved, warnings), warnings}
 }

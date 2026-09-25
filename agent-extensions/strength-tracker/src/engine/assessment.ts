@@ -16,11 +16,14 @@ export interface AssessmentTest {
   measure: AssessmentMeasure
 }
 
-const SIDE_GAP_FLAG = 0.15
+/** In whole percent: the rule is "over ~15%", and the row shows the gap
+ *  rounded to a percent — flagging on that same number keeps a row from
+ *  reading "15% gap · extra set", and keeps float noise off the boundary. */
+const SIDE_GAP_FLAG_PERCENT = 15
 
 export interface SideGap {
-  /** |L − R| as a fraction of the better side. */
-  gap: number
+  /** |L − R| as a whole percent of the better side. */
+  percent: number
   /** The weaker side, when the gap is over the flag — the plan's "extra set on
    *  the weak side until a retest closes it". */
   extraSetOn?: 'L' | 'R'
@@ -32,6 +35,6 @@ export const sideGap = (left: number | undefined, right: number | undefined): Si
   if (left === undefined || right === undefined) return undefined
   const better = Math.max(left, right)
   if (better <= 0) return undefined
-  const gap = Math.abs(left - right) / better
-  return gap > SIDE_GAP_FLAG ? {gap, extraSetOn: left < right ? 'L' : 'R'} : {gap}
+  const percent = Math.round((Math.abs(left - right) / better) * 100)
+  return percent > SIDE_GAP_FLAG_PERCENT ? {percent, extraSetOn: left < right ? 'L' : 'R'} : {percent}
 }

@@ -131,10 +131,10 @@ const AssessmentLine = ({block, Inner}: Props) => {
               off the edge. */}
           {gap === undefined ? null : gap.extraSetOn ? (
             <span className="rounded bg-amber-500/15 px-1 text-xs text-amber-600 dark:text-amber-400">
-              {Math.round(gap.gap * 100)}% gap · extra set on the {SIDE_NAME[gap.extraSetOn]}
+              {gap.percent}% gap · extra set on the {SIDE_NAME[gap.extraSetOn]}
             </span>
           ) : (
-            <span className="text-xs tabular-nums text-muted-foreground">{Math.round(gap.gap * 100)}% gap</span>
+            <span className="text-xs tabular-nums text-muted-foreground">{gap.percent}% gap</span>
           )}
           <div className="flex shrink-0 items-center gap-2">
             <SideInput side="L" value={left} disabled={readOnly} onCommit={value => write({side: 'L', value})}/>

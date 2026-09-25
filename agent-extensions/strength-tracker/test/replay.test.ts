@@ -129,6 +129,21 @@ describe('replaying the live log', () => {
     expect(row.weight).toBe(35)
   })
 
+  it('turns the total-reps rule off, and says so, when its step is not smaller than the increment', () => {
+    // A micro step of 10 on a +5 lift would pay 10/8/8 more than 10/10/10.
+    const tree = plan()
+    const sessionB = tree.children[1]
+    const group = sessionB.children[1]
+    const ohpDef = group.children[0]
+    ohpDef.properties = {...ohpDef.properties, [FIELD.microIncrement]: 10}
+    const {config, warnings} = configFromPlan(tree)
+    expect(warnings.some(w => w.includes(FIELD.microIncrement))).toBe(true)
+    const row = prescribe({
+      history: [ohp('2026-09-20', at(85, 10, 8, 8))], layoffs: [], config, now: '2026-09-27T23:00:00', session: 'B',
+    }).exercises.find(e => e.defId === 'def-ohp')!
+    expect(row.weight).toBe(85)
+  })
+
   it('holds the press below the threshold, and says how far off it was', () => {
     const row = prescribeB([ohp('2026-09-20', at(85, 10, 7, 6))], '2026-09-27T23:00:00')
       .exercises.find(e => e.defId === 'def-ohp')!
