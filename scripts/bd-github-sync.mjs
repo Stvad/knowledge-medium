@@ -156,7 +156,7 @@ export const extractBeadIds = text => [...new Set(text.match(BEAD_ID) ?? [])]
 // A PR's head and base branches are its address, not text it publishes, so
 // their values leave the command text the gate scans. Quoted spans match
 // first and come back whole: a flag spelled inside a body is still body text.
-const BRANCH_FLAG_VALUE = /'[^']*'|"(?:\\.|[^"\\])*"|((?<![\w-])(?:--head|--base|-H|-B)(?:=|\s+))(?:'[^']*'|"(?:\\.|[^"\\])*"|[^\s'";&|<>()]+)/g
+const BRANCH_FLAG_VALUE = /'[^']*'|"(?:\\.|[^"\\])*"|((?<![\w-])(?:--head|--base)(?:=|\s+)|(?<![\w-])-[HB](?:=|\s+)?)(?:'[^']*'|"(?:\\.|[^"\\])*"|[^\s'";&|<>()]+)/g
 const withoutBranchValues = cmd => cmd.replace(BRANCH_FLAG_VALUE, (m, flag) => flag ?? m)
 
 // gh must sit in COMMAND position — matching it anywhere in the text lets a
@@ -484,12 +484,24 @@ const OUTSIDE_TEXT = /(?<![\w-])--(?:[a-z-]*file|input|template)\b|@|(?<![\w-])-
 // holding a gh call it did not examine.
 const GH_WORD = /(?<![\w.-])gh(?![\w.-])/g
 const GH_GRAPHQL_CALL = new RegExp(GH + String.raw`api\s+graphql(?![\w-])`, 'gm')
-// A field whose whole value is inline: a literal the gate reads, or a typed
-// `-F name=value` (on the api a value, never a file — a file is `=@path`,
-// which is left in place for OUTSIDE_TEXT to see). Matched on expandable(cmd),
-// so a single-quoted value is already blanked to ''.
+// The pieces of a graphql invocation that carry nothing from outside the
+// command, removed from the RAW text before the leftover is checked, so a
+// flag or file marker inside quotes still reaches OUTSIDE_TEXT the way it
+// reaches gh:
+//  - a field whose whole value is inline: a literal, quoted or bare, or a
+//    typed `-F name=value`. A value starting with `@` is a file or stdin
+//    (gh's `@path` / `@-`), in any quoting, and stays in place.
+//  - a --jq filter, whose `@sh` or `@csv` is a jq format, not a file.
 const FIELD_FLAG = String.raw`(?<![\w-])(?:-[fF]|--(?:raw-)?field)(?:=|\s+)?`
-const INLINE_FIELD = new RegExp(FIELD_FLAG + String.raw`(?:''|[A-Za-z_][\w.[\]-]*=(?:''|"[^"$\`\\]*"|(?![@'"\\])[^\s'"$\`;&|<>()]*))(?=[\s;&|)]|$)`, 'g')
+const FIELD_NAME = String.raw`[A-Za-z_][\w.[\]-]*`
+const SINGLE_QUOTED_LITERAL = String.raw`'(?!@)[^']*'`
+const DOUBLE_QUOTED_LITERAL = String.raw`"(?!@)[^"$\`\\]*"`
+const INLINE_FIELD = new RegExp(
+  FIELD_FLAG +
+    String.raw`(?:${FIELD_NAME}=(?:${SINGLE_QUOTED_LITERAL}|${DOUBLE_QUOTED_LITERAL}|(?![@'"\\])[^\s'"$\`;&|<>()]*)|'${FIELD_NAME}=(?!@)[^']*'|"${FIELD_NAME}=(?!@)[^"$\`\\]*")(?=[\s;&|)]|$)`,
+  'g',
+)
+const JQ_FILTER = /(?<![\w-])(?:--jq|-q)(?:=|\s+)(?:'[^']*'|"[^"$`\\]*")/g
 // GraphQL's own scalars that cannot hold prose: an ID is a node id GitHub
 // validates, the rest are numbers and flags. String, custom scalars (URI,
 // HTML, …) and input objects can all carry text.
@@ -522,6 +534,9 @@ const DOUBLE_QUOTED_DOCUMENT = new RegExp(FIELD_FLAG + String.raw`query="(?:\\.|
 const ID_ARGUMENT_EXPANSION = new RegExp(String.raw`\b(?:id|[a-z]\w*Id)\s*:\s*\\"${WHOLE_EXPANSION}\\"`, 'g')
 // The operation keyword is looked for with quotes and backslashes removed, so
 // a shell spelling that splits it (`'mut''ation'`, `mu\tation`) still counts.
+// Any occurrence counts, a `$mutation` variable or a search string included:
+// misreading a read as a write costs one attested re-run, and telling the
+// keyword's position apart after shell unquoting is parsing this avoids.
 const MUTATION = /\bmutation\b/
 // A pr:reply beside the graphql calls publishes a file this recognizer never
 // sees, so it is refused here too. Defence in depth: the coarse rule checks
@@ -531,11 +546,12 @@ const graphqlShape = lastCall(cmd => {
   if (!calls || calls !== (cmd.match(GH_WORD)?.length ?? 0) || matchesReplyCommand(cmd)) return null
   const mutates = MUTATION.test(cmd.replace(/['"\\]/g, ''))
   const nonText = nonTextVariables(cmd)
-  const residue = expandable(cmd)
+  const residue = cmd
     .replace(DOUBLE_QUOTED_DOCUMENT, doc => doc.replace(ID_ARGUMENT_EXPANSION, ''))
     .replace(VARIABLE_FIELD, (m, name) => (name !== 'query' && (!mutates || nonText.has(name)) ? '' : m))
     .replace(INLINE_FIELD, '')
-  return EXPANSION.test(residue) || OUTSIDE_TEXT.test(residue) ? null : { mutates }
+    .replace(JQ_FILTER, '')
+  return hasExpansion(residue) || OUTSIDE_TEXT.test(residue) ? null : { mutates }
 })
 // No `mutation` operation anywhere means nothing is written: the keyword is
 // the only way to open one.

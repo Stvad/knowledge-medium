@@ -63,6 +63,19 @@ const byId = (beads: BeadRow[]) => new Map(beads.map(b => [b.id, b]))
 // at a PR is the case the gate warns about, and spotting that in an inline
 // literal took a second look every time.
 const AN_ISSUE = { title: 'Real GC failure', state: 'open' }
+
+// Whether this process reads through permission bits, as root does.
+const permissionBitsIgnored = () => {
+  const probe = join(mkdtempSync(join(tmpdir(), 'perm-probe-')), 'f')
+  writeFileSync(probe, '')
+  chmodSync(probe, 0o000)
+  try {
+    readFileSync(probe)
+    return true
+  } catch {
+    return false
+  }
+}
 const A_PR = { title: 'Some PR', state: 'open', pull_request: {} }
 
 describe('extractBeadIds', () => {
@@ -2830,20 +2843,9 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     const appended = hook(`echo more | tee -a 'm3.txt' && git commit -F m3.txt`)
     const plain = hook('git commit -F elsewhere.txt')
     const dir = hook(`git commit -F ${repo}/a-dir`)
-    writeFileSync(join(repo, 'locked.txt'), 'Fixes #1')
-    chmodSync(join(repo, 'locked.txt'), 0o000)
-    const locked = hook(`git commit -F ${repo}/locked.txt`)
     const device = hook('git commit -F /dev/null')
-    mkdirSync(join(repo, 'sealed'))
-    writeFileSync(join(repo, 'sealed', 'msg.txt'), 'Fixes #1')
-    chmodSync(join(repo, 'sealed'), 0o000)
-    const sealed = hook(`git commit -F ${repo}/sealed/msg.txt`)
-    chmodSync(join(repo, 'sealed'), 0o755)
-    expect(sealed.status).toBe(2)
-    expect(sealed.stderr).toContain(`${repo}/sealed/msg.txt: cannot be examined by this hook (EACCES)`)
     const home = hook('git commit -F ~/km-no-such-message.txt')
-    for (const r of [heredoc, redirect, appended, plain, dir, locked, device, home]) expect(r.status).toBe(2)
-    expect(locked.stderr).toContain(`${repo}/locked.txt: is not readable by this hook`)
+    for (const r of [heredoc, redirect, appended, plain, dir, device, home]) expect(r.status).toBe(2)
     expect(device.stderr).toContain('/dev/null: is not a regular file')
     // a home path is not relative to the cwd
     expect(home.stderr).not.toContain('resolved against')
@@ -2858,6 +2860,24 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     expect(heredoc.stderr).not.toContain('resolved against')
     for (const r of [heredoc, redirect, appended, plain, dir])
       expect(r.stderr).not.toMatch(/\bcd\b|chains|Run from|probably|likely|should|try /i)
+  })
+
+  // Root, and some sandboxes, read through permission bits, so these cases
+  // run only where a mode-000 file is actually unreadable.
+  it.skipIf(permissionBitsIgnored())('prints the fact for a file or directory the hook may not read', () => {
+    const { hook, repo } = makeRepo({ dbReady: true })
+    writeFileSync(join(repo, 'locked.txt'), 'Fixes #1')
+    chmodSync(join(repo, 'locked.txt'), 0o000)
+    mkdirSync(join(repo, 'sealed'))
+    writeFileSync(join(repo, 'sealed', 'msg.txt'), 'Fixes #1')
+    chmodSync(join(repo, 'sealed'), 0o000)
+    const locked = hook(`git commit -F ${repo}/locked.txt`)
+    const sealed = hook(`git commit -F ${repo}/sealed/msg.txt`)
+    chmodSync(join(repo, 'sealed'), 0o755)
+    expect(locked.status).toBe(2)
+    expect(locked.stderr).toContain(`${repo}/locked.txt: is not readable by this hook`)
+    expect(sealed.status).toBe(2)
+    expect(sealed.stderr).toContain(`${repo}/sealed/msg.txt: cannot be examined by this hook (EACCES)`)
   })
 
   // No foreign-repo shortcut: three rounds of target-parse bypasses retired
@@ -2989,6 +3009,10 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
       `gh api graphql -f query="$QUERY" -f t=x`,
       // a payload the gate cannot read
       `gh api graphql -f query='${RESOLVE}' --input vars.json`,
+      // quoting a file field or a payload flag does not hide it from gh
+      `gh api graphql -f query='mutation($b:String!){addComment(input:{subjectId:"X",body:$b}){clientMutationId}}' --field 'b=@body.md'`,
+      `gh api graphql -f query='mutation($b:String!){addComment(input:{subjectId:"X",body:$b}){clientMutationId}}' -F b='@-'`,
+      `gh api graphql -f query='${RESOLVE}' '--input' vars.json`,
       // a commit message file rides along: it is text outside the command
       `git commit -F msg.txt && git push && gh api graphql -f query='mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{isResolved}}}' -f id=PRRT_x`,
       // one name, two documents: it is text-safe only if every declaration is
@@ -3166,6 +3190,8 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     expect(hook('gh pr create --base master --head claude/km-avrg-retain-measure --title t --body-file pr-body.md').status).toBe(0)
     expect(hook('gh pr create --base master --head km-zzzz --title t --body "clean"').status).toBe(0)
     expect(hook("gh pr create -B master -H 'km-zzzz' --title t --body clean").status).toBe(0)
+    // gh takes the short flags' values attached too
+    expect(hook('gh pr create -Brelease/km-zzzz -Hfeature/km-zzzz --title t --body clean').status).toBe(0)
     expect(shimCalls()).toBe('')
     // the strip stops at the flag's own value: body text still counts
     const body = hook('gh pr create --head km-zzzz --title t --body "tracks km-zzzz"')
