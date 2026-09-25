@@ -3021,7 +3021,9 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
       // declaration split by either must still be seen, and a decoy in a
       // comment must not vouch for it
       `gh api graphql -f query='mutation($b # note\n: String!){addComment(input:{subjectId:"X",body:$b}){clientMutationId}} # $b:ID' -f b="$BODY"`,
-      `gh api graphql -f query='mutation($b ,: String!){addComment(input:{subjectId:"X",body:$b}){clientMutationId}} # $b:ID' -f b="$BODY"`,
+      `gh api graphql -f query='mutation($b ,: String!){addComment(input:{subjectId:"$b:ID",body:$b}){clientMutationId}}' -f b="$BODY"`,
+      // shell quoting that splits a declaration is rejoined before it is read
+      `gh api graphql -f query='mutation($b'':'' String!){addComment(input:{subjectId:"$b:ID",body:$b}){clientMutationId}}' -f b="$BODY"`,
       // one name, two documents: it is text-safe only if every declaration is
       `gh api graphql -f query='${RESOLVE}' -f t="$t"; gh api graphql -f query='mutation($t:String!){addComment(input:{subjectId:"X",body:$t}){clientMutationId}}' -f t="$t"`,
     ])
