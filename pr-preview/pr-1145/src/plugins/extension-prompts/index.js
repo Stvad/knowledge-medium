@@ -1,1 +1,0 @@
-import{_w as e,gw as t}from"../../../chunks/app-72f18UKL.js";export{t as ExtensionPromptSurface,e as extensionPromptsExtension};

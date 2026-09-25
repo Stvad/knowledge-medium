@@ -1,1 +1,0 @@
-import{Cw as e,gt as t,ww as n}from"../../../chunks/app-72f18UKL.js";export{e as extensionsOverridesProp,n as extensionsPrefsType,t as extensionsSettingsPlugin};
