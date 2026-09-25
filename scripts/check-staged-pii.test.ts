@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, onTestFinished } from 'vitest'
-import { isSyntheticUuid, parseAllowlist } from './check-staged-pii.mjs'
+import { ALLOWLIST_PATH as ALLOWLIST, isSyntheticUuid, parseAllowlist } from './check-staged-pii.mjs'
 
 // High-entropy ids assembled at runtime, so this file carries no uuid literal
 // the guard would flag when it is committed.
@@ -129,8 +129,7 @@ const runHook = (repo: string, command: string, { scriptPath = script, cwd = rep
   const payload = JSON.stringify({ tool_name: 'Bash', cwd, tool_input: { command } })
   return spawnSync('node', [scriptPath], { cwd, input: payload, encoding: 'utf8' })
 }
-const ALLOWLIST = 'scripts/check-staged-pii.allowlist'
-const shippedAllowlist = readFileSync(new URL('./check-staged-pii.allowlist', import.meta.url), 'utf8')
+const shippedAllowlist = readFileSync(new URL(`../${ALLOWLIST}`, import.meta.url), 'utf8')
 // The block message states what was found and where; it never guesses why.
 const expectFactsOnly = (stderr: string) => {
   expect(stderr).toContain('feedback_no_pii_in_commits')

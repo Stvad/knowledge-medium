@@ -14,10 +14,9 @@
  *   constants), so a new entry takes one PII_OK=1 commit, and later touches
  *   of the constant none;
  * - on the command line, it sits in a path: any token containing '/', or,
- *   inside a VAR= value, the session directory of the Claude Code temp root
- *   (<tmp>/claude-<uid>/<project>/<session-uuid>/, which holds the
- *   scratchpad). The rest of a VAR= value is scanned, since an expanded
- *   message (MSG="fix page/<id>") lives there.
+ *   inside a VAR= value, a Claude Code session temp dir (`SESSION_TEMP_DIR`).
+ *   The rest of a VAR= value is scanned, since an expanded message
+ *   (MSG="fix page/<id>") lives there.
  * During a merge, a diff line is reported only when the same line of the
  * staged file is added relative to HEAD and to every merge head: a line any
  * parent holds is already committed there. All the diffs share the index as
@@ -40,7 +39,7 @@ const UUID_SOURCE = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 // A match at every start, overlapping ones included, so an exempt uuid glued
 // onto a longer hex run cannot hide one that begins inside it.
 const UUID_AT_EVERY_START = new RegExp(`(?=(${UUID_SOURCE}))`, 'gi')
-const uuidMatches = text => [...text.matchAll(UUID_AT_EVERY_START)].map(m => ({ index: m.index, uuid: m[1] }))
+const uuidsIn = text => [...text.matchAll(UUID_AT_EVERY_START)].map(m => m[1])
 
 // Paths where uuids are legitimate (generated / vendored / migrations / snapshots).
 const ALLOW_PATHS = [
@@ -87,15 +86,16 @@ export const isSyntheticUuid = uuid => {
 }
 
 /** One entry per line: a uuid, whitespace, then why it is not graph data. */
+const ALLOWLIST_ENTRY = new RegExp(`^\\s*(${UUID_SOURCE})\\s+\\S`, 'i')
 export const parseAllowlist = text =>
   new Set(
     text.split('\n').flatMap(line => {
-      const m = line.match(new RegExp(`^\\s*(${UUID_SOURCE})\\s+\\S`, 'i'))
+      const m = line.match(ALLOWLIST_ENTRY)
       return m ? [m[1].toLowerCase()] : []
     }),
   )
 
-const ALLOWLIST_PATH = 'scripts/check-staged-pii.allowlist'
+export const ALLOWLIST_PATH = 'scripts/check-staged-pii.allowlist'
 
 // git's stdout, or null when git fails. Its stderr never reaches the hook's
 // output, which states only what the hook found.
@@ -115,16 +115,17 @@ const gitOut = args => {
 // no exemption yet. Absent or unreadable, it is empty and the guard reports more.
 const committedAllowlist = () => parseAllowlist(gitOut(['show', `HEAD:${ALLOWLIST_PATH}`]) ?? '')
 
-const reportedUuids = (text, allowlist, skipMatch = () => false) =>
-  uuidMatches(text)
-    .filter(m => !skipMatch(m))
-    .map(m => m.uuid)
-    .filter(uuid => !isSyntheticUuid(uuid) && !allowlist.has(uuid.toLowerCase()))
-
 // Claude Code keeps each session's scratchpad and task output under
 // <tmp>/claude-<uid>/<project>/<session-uuid>/; that uuid names a session.
-const SESSION_TEMP_DIR = new RegExp(`^(?:/private)?/tmp/claude-\\d+/[^/]+/(${UUID_SOURCE})(?:/|$)`, 'id')
-const isSessionTempDir = (value, m) => value.match(SESSION_TEMP_DIR)?.indices[1][0] === m.index
+const SESSION_TEMP_DIR = new RegExp(`^((?:/private)?/tmp/claude-\\d+/[^/]+/)${UUID_SOURCE}(?=/|$)`, 'i')
+
+// The part of a command-line token that can carry commit content: nothing of
+// a path, and all of a VAR= value but a session temp dir's uuid.
+const scannedText = token => {
+  const assignment = token.match(/^[A-Za-z_][A-Za-z0-9_]*=([\s\S]*)$/)
+  if (assignment) return assignment[1].replace(SESSION_TEMP_DIR, '$1')
+  return token.includes('/') ? '' : token
+}
 
 // Every option that shapes the diff text is pinned, so no local git config
 // (external drivers, colour, path prefixes, path quoting, relative paths)
@@ -241,10 +242,11 @@ const main = () => {
   }
 
   const allowlist = committedAllowlist()
+  const reportedUuids = text => uuidsIn(text).filter(u => !isSyntheticUuid(u) && !allowlist.has(u.toLowerCase()))
   const hits = []
   for (const l of lines) {
     if (ALLOW_PATHS.some(rx => rx.test(l.file))) continue
-    for (const uuid of reportedUuids(l.text, allowlist)) hits.push(`  ${l.file}:${l.lineNo}: ${uuid}`)
+    for (const uuid of reportedUuids(l.text)) hits.push(`  ${l.file}:${l.lineNo}: ${uuid}`)
   }
   // The commit message rides in the command itself, but ONLY in the -m/--message
   // arguments — a uuid elsewhere on the command line (a scratchpad path in a
@@ -263,7 +265,7 @@ const main = () => {
       }
     }
   }
-  const messageUuids = messageArgs.flatMap(text => reportedUuids(text, allowlist))
+  const messageUuids = messageArgs.flatMap(reportedUuids)
   if (messageUuids.length) {
     for (const uuid of messageUuids) hits.push(`  (commit message): ${uuid}`)
   } else {
@@ -272,13 +274,7 @@ const main = () => {
     // this (already commit-gated) command — except inside paths.
     for (const tokens of shellSegments(cmd)) {
       for (const t of tokens) {
-        const assignment = t.match(/^[A-Za-z_][A-Za-z0-9_]*=([\s\S]*)$/)
-        const uuids = assignment
-          ? reportedUuids(assignment[1], allowlist, m => isSessionTempDir(assignment[1], m))
-          : t.includes('/')
-            ? []
-            : reportedUuids(t, allowlist)
-        for (const uuid of uuids) hits.push(`  (command line): ${uuid}`)
+        for (const uuid of reportedUuids(scannedText(t))) hits.push(`  (command line): ${uuid}`)
       }
     }
   }
