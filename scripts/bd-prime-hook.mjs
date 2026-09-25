@@ -15,7 +15,7 @@
 // (the first bd command would create an empty DB that then refuses to pull).
 import { spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
-import { initializedDbRoot, readSyncSlownessNotice } from './bd-github-sync.mjs'
+import { initializedDbRoot, readSyncAlarm } from './bd-github-sync.mjs'
 import { isMainModule } from './is-main-module.mjs'
 
 // Just under the measured 10,000-char inline limit; the margin absorbs a
@@ -51,7 +51,7 @@ const clip = (s, n) => {
   return `${cut}…`
 }
 
-// `notice` is a one-line alarm (the sync's slowness, readSyncSlownessNotice)
+// `notice` is a one-line alarm (a failing or slowing sync, readSyncAlarm)
 // that must reach the session whatever the index costs, so it sits above it
 // and inside the same fit.
 const render = (memories, previewLen, droppedNote = '', notice = '') => {
@@ -144,17 +144,21 @@ export const transformCodexHookStdout = (raw, primeRaw, notice = '') => {
 export const withNotice = (raw, notice) => {
   if (!notice) return raw
   let envelope = null
+  // Output that is not JSON is plain-text context in its own right, and kept.
+  let text = ''
   try {
     envelope = JSON.parse(raw)
-  } catch {}
+  } catch {
+    text = raw ?? ''
+  }
   if (!envelope || typeof envelope !== 'object' || Array.isArray(envelope)) envelope = {}
   const hookOutput = envelope.hookSpecificOutput ?? {}
-  const context = typeof hookOutput.additionalContext === 'string' ? hookOutput.additionalContext : ''
+  const context = typeof hookOutput.additionalContext === 'string' ? hookOutput.additionalContext : text
   if (context.includes(notice)) return raw
   envelope.hookSpecificOutput = {
     hookEventName: 'SessionStart',
     ...hookOutput,
-    additionalContext: context ? `${notice}\n\n${context}` : notice,
+    additionalContext: clip(context ? `${notice}\n\n${context}` : notice, MAX_CONTEXT_CHARS),
   }
   return JSON.stringify(envelope)
 }
@@ -203,7 +207,7 @@ if (isMainModule(import.meta.url)) {
       const codexEvent = process.argv[2] === '--codex' ? (process.argv[3] ?? '') : null
       // The alarm opens a session. The other lifecycle events re-inject context
       // mid-session (UserPromptSubmit, compaction), where it would repeat.
-      const notice = codexEvent === null || codexEvent === 'SessionStart' ? readSyncSlownessNotice(root) : ''
+      const notice = codexEvent === null || codexEvent === 'SessionStart' ? readSyncAlarm(root) : ''
       const out = withNotice(codexEvent === null ? runClaudeSessionStart(notice) : runCodexHook(codexEvent, notice), notice)
       if (out) process.stdout.write(out)
     }

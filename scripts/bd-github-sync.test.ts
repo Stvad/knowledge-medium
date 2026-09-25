@@ -42,7 +42,7 @@ import {
   resolveBodyPath,
   settleAll,
   spawnAsync,
-  syncSlownessNotice,
+  syncAlarm,
   type BeadRow,
   type IssueInfo,
 } from './bd-github-sync.mjs'
@@ -814,14 +814,14 @@ describe('spawnAsync', () => {
   })
 })
 
-describe('syncSlownessNotice', () => {
+describe('syncAlarm', () => {
   const record = (over: object) =>
     JSON.stringify({ at: '2026-09-24T20:00:00.000Z', ms: 3_000, ok: true, slow: false, budgetMs: 20_000, spawns: [], ...over })
   const slow = (ms: number) =>
     record({ ms, slow: true, spawns: [{ cmd: 'bd show', calls: 2, ms: 20_300 }, { cmd: 'gh issue list', calls: 1, ms: 5_300 }] })
 
   it('warns when the last two runs both blew the budget, naming the slowest spawns of the latest', () => {
-    const notice = syncSlownessNotice([record({}), slow(35_900), slow(37_200)].join('\n') + '\n')
+    const notice = syncAlarm([record({}), slow(35_900), slow(37_200)].join('\n') + '\n')
     expect(notice).toContain('last two runs took 35.9s and 37.2s')
     expect(notice).toContain('20s budget')
     expect(notice).toContain('bd show ×2 20.3s, gh issue list 5.3s')
@@ -829,33 +829,45 @@ describe('syncSlownessNotice', () => {
 
   // One slow run is as often GitHub having a slow minute as a regression.
   it('stays quiet on a single slow run, and once a run is back under', () => {
-    expect(syncSlownessNotice([record({}), slow(37_200)].join('\n'))).toBe('')
-    expect(syncSlownessNotice([slow(35_900), slow(37_200), record({})].join('\n'))).toBe('')
-    expect(syncSlownessNotice(slow(37_200))).toBe('')
+    expect(syncAlarm([record({}), slow(37_200)].join('\n'))).toBe('')
+    expect(syncAlarm([slow(35_900), slow(37_200), record({})].join('\n'))).toBe('')
+    expect(syncAlarm(slow(37_200))).toBe('')
+  })
+
+  // A sync that cannot run at all is the loudest case, and the latest run says
+  // which of the two the alarm is about.
+  it('reports two failed runs as a failing sync, naming the latest reason', () => {
+    const failed = (failure: string) => record({ ok: false, failure })
+    const notice = syncAlarm([failed('network'), failed('refusing to sync: bd reports 1.3.0')].join('\n'))
+    expect(notice).toContain('failed its last two runs')
+    expect(notice).toContain('refusing to sync: bd reports 1.3.0')
+    expect(syncAlarm([slow(35_900), failed('network')].join('\n'))).toContain('failed its last two runs')
+    expect(syncAlarm([failed('network'), slow(37_200)].join('\n'))).toContain('over its 20s budget')
+    expect(syncAlarm([record({}), failed('network')].join('\n'))).toBe('')
   })
 
   // Pacing a comment backlog, or waiting on another run's lock, is not the
   // tracker getting slower: only the time the run spent working counts.
   it('does not count deliberate waits against the budget', () => {
     const draining = record({ ms: 52_000, idleMs: 47_000 })
-    expect(syncSlownessNotice([draining, draining].join('\n'))).toBe('')
+    expect(syncAlarm([draining, draining].join('\n'))).toBe('')
     const working = record({ ms: 52_000, idleMs: 20_000 })
-    expect(syncSlownessNotice([working, working].join('\n'))).toContain('32.0s and 32.0s')
+    expect(syncAlarm([working, working].join('\n'))).toContain('32.0s and 32.0s')
   })
 
   // Valid JSON in an older or damaged shape must not throw: at session start
   // a throw here would take the whole memory index down with the alarm.
   it('formats records with a damaged spawns list instead of throwing', () => {
     const damaged = (ms: number) => record({ ms, spawns: {} })
-    expect(syncSlownessNotice([damaged(35_900), damaged(37_200)].join('\n'))).toContain('35.9s and 37.2s')
+    expect(syncAlarm([damaged(35_900), damaged(37_200)].join('\n'))).toContain('35.9s and 37.2s')
     const odd = (ms: number) => record({ ms, spawns: [null, { cmd: 7 }, { cmd: 'bd show', calls: 2, ms: 20_300 }] })
-    expect(syncSlownessNotice([odd(35_900), odd(37_200)].join('\n'))).toContain('Slowest spawns in the latest: bd show ×2 20.3s.')
+    expect(syncAlarm([odd(35_900), odd(37_200)].join('\n'))).toContain('Slowest spawns in the latest: bd show ×2 20.3s.')
   })
 
   it('reads past a torn or foreign line instead of failing session start', () => {
     const noise = ['{"ms": 1', 'not json', '{"unrelated": true}', 'null', '{"ms": 50000}']
-    expect(syncSlownessNotice([slow(35_900), ...noise, slow(37_200), ...noise].join('\n'))).toContain('35.9s and 37.2s')
-    expect(syncSlownessNotice('')).toBe('')
+    expect(syncAlarm([slow(35_900), ...noise, slow(37_200), ...noise].join('\n'))).toContain('35.9s and 37.2s')
+    expect(syncAlarm('')).toBe('')
   })
 })
 
@@ -1184,6 +1196,8 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     graphqlDelay?: number
     /** Seconds the issue listing takes. */
     issueListDelay?: number
+    /** `gh auth token` prints nothing, as on a machine that is logged out. */
+    noGhToken?: boolean
     /** Extra environment for the script (the mirror's post cap override). */
     env?: Record<string, string>
     /** What `bd --version` prints (default: a verified version). */
@@ -1238,7 +1252,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
         '#!/bin/sh',
         `echo "gh $@" >> "${shimLog}"`,
         'case "$1 $2" in',
-        '  "auth token") echo shim-token;;',
+        `  "auth token") ${opts.noGhToken ? 'true' : 'echo shim-token'};;`,
         `  "issue list") ${opts.issueListDelay ? `sleep ${opts.issueListDelay}; ` : ''}cat "${repo}/gh-issues.json";;`,
         // The real gh exits 1 when any alias is NOT_FOUND but still prints
         // the data — the shim mirrors that exit so the parser is pinned to
@@ -1264,8 +1278,10 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const env = { ...process.env, ...opts.env, PATH: `${shimDir}:${process.env.PATH}` }
     const run = (...args: string[]) => spawnSync('node', [script, ...args], { cwd: repo, env, encoding: 'utf8' })
     // For a test that has to act while the sync runs (release a lock it waits on).
-    const runInBackground = (...args: string[]) =>
-      new Promise<number | null>(resolve => spawn('node', [script, ...args], { cwd: repo, env, stdio: 'ignore' }).on('close', resolve))
+    const runInBackground = (...args: string[]) => {
+      const child = spawn('node', [script, ...args], { cwd: repo, env, stdio: 'ignore' })
+      return { child, done: new Promise<number | null>(resolve => child.on('close', resolve)) }
+    }
     const runLog = () => {
       const log = join(repo, '.beads', 'github-sync-runs.log')
       return existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map(l => JSON.parse(l)) : []
@@ -1330,11 +1346,14 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   it('refuses to sync on a bd version the guards were not verified against', () => {
     const row = syncRow({ id: 'km-v', external_ref: null, updated_at: '2026-08-19T00:00:00Z' })
     const repo = { issues: [ghIssue(1, '2026-08-20T00:00:00Z')], reads: [[row]], bdVersionOutput: 'bd version 1.3.0' }
-    const { run, shimCalls } = makeSyncRepo(repo)
+    const { run, shimCalls, runLog } = makeSyncRepo(repo)
     const r = run()
     expect(r.status).toBe(1)
     expect(r.stderr).toContain('verified against bd 1.2.2')
     expect(r.stderr).toContain('1.3.0')
+    // …and on record: a sync that refuses every run is the failure the alarm
+    // most needs to see.
+    expect(runLog()).toMatchObject([{ ok: false, failure: expect.stringContaining('refusing to sync') }])
     // Nothing was read or written past the probe.
     expect(shimCalls()).not.toContain('--pull-only')
     expect(shimCalls()).not.toContain('--push-only')
@@ -1463,10 +1482,50 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const repo = { issues: [ghIssue(1, '2026-08-20T00:00:00Z'), ghIssue(9, '2026-08-20T00:00:00Z')], reads: [[row]] }
     const failed = makeSyncRepo({ ...repo, failFullSync: true })
     expect(failed.run().status).toBe(1)
-    expect(failed.runLog()).toMatchObject([{ ok: false }])
+    expect(failed.runLog()).toMatchObject([{ ok: false, failure: expect.stringContaining('pull exploded') }])
     const dry = makeSyncRepo(repo)
     expect(dry.run('--dry-run').status).toBe(0)
     expect(dry.runLog()).toEqual([])
+  })
+
+  // A machine that lost its gh login stops syncing without failing anything:
+  // the run exits clean, and the record is what says it did nothing.
+  it('records a run with no gh token as failed, while still exiting clean', () => {
+    const { run, runLog } = makeSyncRepo({ issues: [ghIssue(1, '2026-08-20T00:00:00Z')], reads: [[]], noGhToken: true })
+    const r = run()
+    expect(r.status).toBe(0)
+    expect(r.stdout).toContain('skipped (no gh token)')
+    expect(runLog()).toMatchObject([{ ok: false, failure: 'no gh token' }])
+  })
+
+  // The record is written as the run starts, so one killed before it ends —
+  // the SessionEnd hook's time limit, a crash — is still on the log.
+  it('leaves a killed run on record as one that did not finish', { timeout: 40_000 }, async () => {
+    const row = syncRow({ id: 'km-c', external_ref: ref(1), updated_at: '2026-08-19T00:00:00Z' })
+    const { repo, runInBackground, runLog } = makeSyncRepo({ issues: [ghIssue(1, '2026-08-20T00:00:00Z')], reads: [[row]] })
+    // Parked on a lock this test holds, so the kill lands mid-run.
+    writeFileSync(join(repo, '.beads', 'github-sync.lock'), String(process.pid))
+    const { child, done } = runInBackground()
+    await vi.waitFor(() => expect(runLog()).toHaveLength(1), { timeout: 15_000, interval: 50 })
+    child.kill('SIGKILL')
+    await done
+    expect(runLog()).toMatchObject([{ ok: false, failure: expect.stringContaining('did not finish') }])
+  })
+
+  // Only the pull can flatten a priority, and it reaches only what it is
+  // named: a bead that went to 2 locally during the run is left alone.
+  it('repairs priorities only on beads the pull was handed', () => {
+    const p1 = syncRow({ id: 'km-p', external_ref: ref(4), updated_at: '2026-08-19T00:00:00Z' })
+    const { run, shimCalls } = makeSyncRepo({
+      // #9 has no bead, so a pull runs; #4 is converged and not in it.
+      issues: [ghIssue(4, '2026-08-20T00:00:00Z'), ghIssue(9, '2026-08-20T00:00:00Z')],
+      // Run start, just before the pull, after it: set to P2 locally meanwhile.
+      reads: [[p1], [p1], [{ ...p1, priority: 2 }]],
+    })
+    const r = run()
+    expect(r.status).toBe(0)
+    expect(shimCalls()).toContain('bd github sync --pull-only --issues 9\n')
+    expect(shimCalls()).not.toContain('bd update km-p')
   })
 
   // The pre-pull push is SELECTIVE: bd 1.2.2 GETs every linked issue it is
@@ -1910,7 +1969,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const { repo, runInBackground, runLog, shimCalls } = makeSyncRepo({ issues: [ghIssue(1, '2026-08-20T00:00:00Z')], reads: [[row]] })
     const lock = join(repo, '.beads', 'github-sync.lock')
     writeFileSync(lock, String(process.pid))
-    const done = runInBackground()
+    const { done } = runInBackground()
     await vi.waitFor(() => expect(shimCalls()).toContain('gh auth token'), { timeout: 15_000, interval: 50 })
     await new Promise(resolve => setTimeout(resolve, 1_200))
     unlinkSync(lock)

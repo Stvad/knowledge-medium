@@ -177,8 +177,15 @@ describe('withNotice', () => {
     const context = (raw: string | null) => JSON.parse(withNotice(raw, notice) ?? 'null').hookSpecificOutput
 
     it('builds a SessionStart envelope when the index path produced nothing usable', () => {
-        for (const raw of [null, '', 'Error: not json', 'null', '[]'])
+        for (const raw of [null, '', 'null', '[]'])
             expect(context(raw)).toEqual({ hookEventName: 'SessionStart', additionalContext: notice })
+    })
+
+    it('keeps plain-text output as context, after the notice', () => {
+        expect(context('# Beads\nplain-text index')).toEqual({
+            hookEventName: 'SessionStart',
+            additionalContext: `${notice}\n\n# Beads\nplain-text index`,
+        })
     })
 
     it('adds the notice to an envelope that has no context, keeping its other fields', () => {
