@@ -1,1 +1,0 @@
-import{Bl as e,Gl as t,Hl as n,Kl as r,Ul as i,Vl as a,Wl as o,ql as s}from"../../../chunks/app-DXFkuHUF.js";export{e as PROVE_DISTINCT_VALUE_LIMIT,a as applyPropertyDefinitionSynthesis,n as flipBlockedBySynthesis,i as keyCannotBeDefined,o as planPropertyDefinitionSynthesis,t as provePresetId,r as resolveSynthesisNamespace,s as synthesizedPropertyDefinitionBlockId};

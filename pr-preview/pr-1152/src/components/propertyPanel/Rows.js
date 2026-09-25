@@ -1,1 +1,0 @@
-import{cA as e,lA as t}from"../../../chunks/app-DXFkuHUF.js";export{e as MetadataRow,t as PropertySectionLabel};

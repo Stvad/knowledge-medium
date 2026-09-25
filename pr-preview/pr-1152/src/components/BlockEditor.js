@@ -1,1 +1,0 @@
-import{MO as e}from"../../chunks/app-DXFkuHUF.js";export{e as BlockEditor};

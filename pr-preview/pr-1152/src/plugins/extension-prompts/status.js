@@ -1,1 +1,0 @@
-import{vw as e,yw as t}from"../../../chunks/app-DXFkuHUF.js";export{e as extensionPromptDiagnosticContribution,t as extensionPromptDiagnosticSource};

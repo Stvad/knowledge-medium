@@ -1,1 +1,0 @@
-"use client";import{aA as e,iA as t,rA as n}from"../../../chunks/app-DXFkuHUF.js";export{n as Collapsible,t as CollapsibleContent,e as CollapsibleTrigger};

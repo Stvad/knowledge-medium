@@ -1,1 +1,0 @@
-import{mP as e}from"../../chunks/app-DXFkuHUF.js";export{e as usePropertySchemas};
