@@ -175,7 +175,16 @@ const withoutBranchValues = cmd => cmd.replace(BRANCH_FLAG_VALUE, (m, flag) => f
 // position and blocks, and the escape hatch covers it; parsing heredocs is
 // more surface than this guard warrants. (Commands arrive from the Bash
 // tool, so quotes are balanced; this is a guard, not a shell parser.)
-const commandSkeleton = cmd => {
+// The predicates below each re-derive the same whole-command views, several
+// times per hook call; remembering the last input keeps that linear.
+const lastCall = fn => {
+  let last
+  return cmd => {
+    if (last?.cmd !== cmd) last = { cmd, value: fn(cmd) }
+    return last.value
+  }
+}
+const commandSkeleton = lastCall(cmd => {
   const lifted = []
   const liftSubstitutions = span => {
     for (const m of span.matchAll(/\$\(([^)]*)\)/g)) lifted.push(m[1])
@@ -209,7 +218,7 @@ const commandSkeleton = cmd => {
     return "''"
   })
   return [skeleton, ...lifted].join('\n')
-}
+})
 
 // The DETECTORS below scan the skeleton for their verb wherever it occurs.
 // They deliberately do NOT require it to sit at a recognized command
@@ -256,12 +265,16 @@ const PACKAGE_MANAGER = /(?:^|\/)(?:pnpm|npm|yarn|bun|npx)$/
 // argument (a linter, a test runner, launched through npx or pnpm) does not.
 const SCRIPT_RUNNER = /(?:^|\/)(?:node|bun|deno|tsx)$/
 const REPLY_FILE = /(?:^|\/)pr-reply\.mjs$/
-const invokesReply = tokens =>
-  tokens.some(
-    (t, i) =>
-      (t === 'pr:reply' && tokens.slice(0, i).some(w => PACKAGE_MANAGER.test(w))) ||
-      (REPLY_FILE.test(t) && (i === 0 || tokens.slice(0, i).some(w => SCRIPT_RUNNER.test(w)))),
-  )
+const invokesReply = tokens => {
+  let afterManager = false
+  let afterRunner = false
+  return tokens.some((t, i) => {
+    if ((t === 'pr:reply' && afterManager) || (REPLY_FILE.test(t) && (i === 0 || afterRunner))) return true
+    afterManager ||= PACKAGE_MANAGER.test(t)
+    afterRunner ||= SCRIPT_RUNNER.test(t)
+    return false
+  })
+}
 const matchesReplyCommand = cmd => shellSegmentsWithDepth(cmd).some(s => !s.heredoc && invokesReply(s.tokens))
 // Publishers other than `gh api`, whose output names the object they made.
 export const matchesCliPublish = cmd => matchesPrCommand(cmd) || matchesReplyCommand(cmd)
@@ -510,7 +523,10 @@ const ID_ARGUMENT_EXPANSION = new RegExp(String.raw`\b(?:id|[a-z]\w*Id)\s*:\s*\\
 // The operation keyword is looked for with quotes and backslashes removed, so
 // a shell spelling that splits it (`'mut''ation'`, `mu\tation`) still counts.
 const MUTATION = /\bmutation\b/
-const graphqlShape = cmd => {
+// A pr:reply beside the graphql calls publishes a file this recognizer never
+// sees, so it is refused here too. Defence in depth: the coarse rule checks
+// for a reply first, so no caller reaches this clause today.
+const graphqlShape = lastCall(cmd => {
   const calls = commandSkeleton(cmd).match(GH_GRAPHQL_CALL)?.length ?? 0
   if (!calls || calls !== (cmd.match(GH_WORD)?.length ?? 0) || matchesReplyCommand(cmd)) return null
   const mutates = MUTATION.test(cmd.replace(/['"\\]/g, ''))
@@ -520,7 +536,7 @@ const graphqlShape = cmd => {
     .replace(VARIABLE_FIELD, (m, name) => (name !== 'query' && (!mutates || nonText.has(name)) ? '' : m))
     .replace(INLINE_FIELD, '')
   return EXPANSION.test(residue) || OUTSIDE_TEXT.test(residue) ? null : { mutates }
-}
+})
 // No `mutation` operation anywhere means nothing is written: the keyword is
 // the only way to open one.
 const isGraphqlRead = cmd => graphqlShape(cmd)?.mutates === false
@@ -568,7 +584,7 @@ const GH_CREATE = new RegExp(GH + String.raw`(?:pr|issue|release)\s+(?:create|ne
 // then read as "carries no text" — which would suppress the warning rather
 // than add one, the direction that actually hurts. What the field CARRIES is
 // decided by its name.
-const FIELD_ANY = /(?<![\w-])(?:-[fF]|--(?:raw-)?field)(?:=|\s+)?['"]?([A-Za-z_][\w.[\]-]*)=/g
+const FIELD_ANY = new RegExp(FIELD_FLAG + String.raw`['"]?([A-Za-z_][\w.[\]-]*)=`, 'g')
 // Matched as a SUBSTRING, not an exact name: the api's compound fields
 // (commit_title, commit_message on the merge endpoint) carry text every bit
 // as much as `body` does, and an exact list would have to grow once per

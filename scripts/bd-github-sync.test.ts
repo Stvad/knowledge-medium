@@ -274,6 +274,9 @@ describe('carriesPublishableText', () => {
   })
 })
 
+// The thread-resolve mutation the graphql cases share: its one variable is an ID.
+const RESOLVE = 'mutation($t:ID!){resolveReviewThread(input:{threadId:$t}){thread{id}}}'
+
 describe('graphql calls', () => {
   it('reads a document with no mutation as publishing nothing, for both hooks', () => {
     const read = `gh api graphql -f query='query($p:Int!){repository(owner:"o",name:"r"){pullRequest(number:$p){id}}}' -F p=5 --jq '.x | @sh'`
@@ -290,7 +293,7 @@ describe('graphql calls', () => {
   })
 
   it('keeps a text-free mutation a publish, and uncovered', () => {
-    const loop = `for t in a; do gh api graphql -f query='mutation($t:ID!){resolveReviewThread(input:{threadId:$t}){thread{id}}}' -f t="$t"; done`
+    const loop = `for t in a; do gh api graphql -f query='${RESOLVE}' -f t="$t"; done`
     expect(matchesAnyPublish(loop)).toBe(true)
     expect(isPostVerifiable(loop)).toBe(false)
   })
@@ -2816,9 +2819,9 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     expect(shimCalls()).toBe('')
   })
 
-  // The block prints what it found, never a cause: the old "cd chains are not
-  // followed" diagnosis was wrong for every measured hit, where the SAME
-  // command wrote the file after this hook ran.
+  // The block prints what it found, never a cause: a composed diagnosis must
+  // hold for every mix of these facts, and a file the same command writes
+  // after this hook ran is one of them.
   it('prints facts about each unreadable message file, never a diagnosis', () => {
     const { hook, repo } = makeRepo({ dbReady: true })
     mkdirSync(join(repo, 'a-dir'))
@@ -2948,10 +2951,9 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     expect(shimCalls()).toContain('bd show km-zzzz --json')
   })
 
-  // The measured bulk of graphql blocks: a thread-resolve loop. Its only
-  // expansion is a thread id, which lands in an ID position — a node id
-  // GitHub validates, not text anyone reads — so nothing it carries is
-  // outside what the gate can see.
+  // A thread-resolve loop: its only expansion is a thread id, which lands in
+  // an ID position — a node id GitHub validates, not text anyone reads — so
+  // nothing it carries is outside what the gate can see.
   it('lets a graphql mutation through when every expansion lands in an ID position', () => {
     const { hook, shimCalls } = makeRepo({ dbReady: true })
     const doc = 'mutation($t:ID!){resolveReviewThread(input:{threadId:$t}){thread{isResolved}}}'
@@ -2980,17 +2982,17 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
       `gh api graphql -f query="mutation { addComment(input:{subjectId:\\"X\\", body:\\"$B\\"}) { clientMutationId } }"`,
       `gh api graphql -f query="mutation { enablePullRequestAutoMerge(input:{pullRequestId:\\"X\\", commitHeadline:\\"$H\\"}) { clientMutationId } }"`,
       // unquoted: word splitting can add arguments of its own
-      `for t in a; do gh api graphql -f query='mutation($t:ID!){resolveReviewThread(input:{threadId:$t}){thread{id}}}' -f t=$t; done`,
+      `for t in a; do gh api graphql -f query='${RESOLVE}' -f t=$t; done`,
       // an expansion outside any field: its value is not visible anywhere
-      `for t in $(cat ids); do gh api graphql -f query='mutation($t:ID!){resolveReviewThread(input:{threadId:$t}){thread{id}}}' -f t="$t"; done`,
+      `for t in $(cat ids); do gh api graphql -f query='${RESOLVE}' -f t="$t"; done`,
       // the document itself from a variable is never a variable field
       `gh api graphql -f query="$QUERY" -f t=x`,
       // a payload the gate cannot read
-      `gh api graphql -f query='mutation($t:ID!){resolveReviewThread(input:{threadId:$t}){thread{id}}}' --input vars.json`,
+      `gh api graphql -f query='${RESOLVE}' --input vars.json`,
       // a commit message file rides along: it is text outside the command
       `git commit -F msg.txt && git push && gh api graphql -f query='mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{isResolved}}}' -f id=PRRT_x`,
       // one name, two documents: it is text-safe only if every declaration is
-      `gh api graphql -f query='mutation($t:ID!){resolveReviewThread(input:{threadId:$t}){thread{id}}}' -f t="$t"; gh api graphql -f query='mutation($t:String!){addComment(input:{subjectId:"X",body:$t}){clientMutationId}}' -f t="$t"`,
+      `gh api graphql -f query='${RESOLVE}' -f t="$t"; gh api graphql -f query='mutation($t:String!){addComment(input:{subjectId:"X",body:$t}){clientMutationId}}' -f t="$t"`,
     ])
       expect(hook(cmd).status, cmd).toBe(2)
   })
@@ -3000,7 +3002,7 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
   it('still echoes numbers visible in a graphql mutation command', () => {
     const { hook } = makeRepo({ dbReady: true, ghIssues: { 653: AN_ISSUE } })
     const r = hook(
-      `for t in PRRT_a; do gh api graphql -f query='mutation($t:ID!){resolveReviewThread(input:{threadId:$t}){thread{id}}}' -f t="$t" --jq '"done for #653"'; done`,
+      `for t in PRRT_a; do gh api graphql -f query='${RESOLVE}' -f t="$t" --jq '"done for #653"'; done`,
     )
     expect(r.status).toBe(2)
     expect(r.stderr).toContain('#653 → "Real GC failure" (issue, open)')
@@ -3008,8 +3010,8 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
 
   // A document with no `mutation` operation writes nothing, whatever its
   // variables hold, so the command publishes nothing and nothing in it is
-  // published text — the measured blocks were bead ids in a sibling `bd`
-  // command and in a scratch path, and jq's `@sh` read as a file reference.
+  // published text: not a bead id in a sibling `bd` command or a path, and
+  // not jq's `@sh`, which is no file reference.
   it('treats a graphql read as publishing nothing', () => {
     const { hook, shimCalls } = makeRepo({ dbReady: true })
     const read = `gh api graphql -f query='query{repository(owner:"Stvad",name:"knowledge-medium"){pullRequest(number:506){reviewThreads(first:100){nodes{id isResolved comments(first:1){nodes{databaseId}}}}}}}'`
@@ -3158,8 +3160,7 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     expect(hook('git commit -m "Fixes #653"', { session_id: '../escape' }).status).toBe(2)
   })
 
-  // A branch is an address, not a reference: the measured shape put a bead id
-  // in the head branch name of a covered PR create.
+  // A branch is an address, not a reference, even one named after a bead.
   it('does not read --head/--base values as bead-id references', () => {
     const { hook, shimCalls } = makeRepo({ dbReady: true })
     expect(hook('gh pr create --base master --head claude/km-avrg-retain-measure --title t --body-file pr-body.md').status).toBe(0)
