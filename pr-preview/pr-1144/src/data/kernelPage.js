@@ -1,1 +1,1 @@
-import{n$ as e,t$ as t}from"../../chunks/app-BPxPIDUd.js";export{t as getOrCreateKernelPage,e as kernelPageBlockId};
+import{n$ as e,t$ as t}from"../../chunks/app-C2oUvK4u.js";export{t as getOrCreateKernelPage,e as kernelPageBlockId};
