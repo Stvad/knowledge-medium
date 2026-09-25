@@ -10,18 +10,18 @@
  *
  * A uuid is not reported when it cannot be graph data:
  * - it is synthetic (`isSyntheticUuid`);
- * - it is listed in `scripts/check-staged-pii.allowlist` as STAGED (named code
- *   constants), so an exemption counts only when it is part of the commit;
+ * - it is listed in HEAD's `scripts/check-staged-pii.allowlist` (named code
+ *   constants), so a new entry takes one PII_OK=1 commit, and later touches
+ *   of the constant none;
  * - on the command line, it sits in a path: any token containing '/', or,
  *   inside a VAR= value, the session directory of the Claude Code temp root
  *   (<tmp>/claude-<uid>/<project>/<session-uuid>/, which holds the
  *   scratchpad). The rest of a VAR= value is scanned, since an expanded
  *   message (MSG="fix page/<id>") lives there.
  * During a merge, a diff line is reported only when the same line of the
- * staged file is added relative to HEAD and to MERGE_HEAD: a line either
- * parent holds is already committed there. Both diffs share the index as
- * their new side, so the staged line number identifies the line. An octopus
- * merge compares against its first merge head only.
+ * staged file is added relative to HEAD and to every merge head: a line any
+ * parent holds is already committed there. All the diffs share the index as
+ * their new side, so the staged line number identifies the line.
  *
  * Limits: it catches uuids, NOT free-text page titles / note content. A uuid
  * inside a slashed word of a heredoc body slips, since that token reads as a
@@ -37,7 +37,10 @@ import { isMainModule } from './is-main-module.mjs'
 import { shellSegments } from './shell-segments.mjs'
 
 const UUID_SOURCE = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
-const uuidMatches = text => [...text.matchAll(new RegExp(UUID_SOURCE, 'gi'))]
+// A match at every start, overlapping ones included, so an exempt uuid glued
+// onto a longer hex run cannot hide one that begins inside it.
+const UUID_AT_EVERY_START = new RegExp(`(?=(${UUID_SOURCE}))`, 'gi')
+const uuidMatches = text => [...text.matchAll(UUID_AT_EVERY_START)].map(m => ({ index: m.index, uuid: m[1] }))
 
 // Paths where uuids are legitimate (generated / vendored / migrations / snapshots).
 const ALLOW_PATHS = [
@@ -94,22 +97,28 @@ export const parseAllowlist = text =>
 
 const ALLOWLIST_PATH = 'scripts/check-staged-pii.allowlist'
 
-// Read from the index of the repo being committed. Absent or unreadable, it is
-// empty: the guard then reports more, never less.
-const stagedAllowlist = () => {
+// git's stdout, or null when git fails. Its stderr never reaches the hook's
+// output, which states only what the hook found.
+const gitOut = args => {
   try {
-    return parseAllowlist(
-      execFileSync('git', ['show', `:${ALLOWLIST_PATH}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }),
-    )
+    return execFileSync('git', args, {
+      encoding: 'utf8',
+      maxBuffer: 128 * 1024 * 1024,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    })
   } catch {
-    return new Set()
+    return null
   }
 }
+
+// HEAD's copy of the repo being committed: an entry the commit itself adds is
+// no exemption yet. Absent or unreadable, it is empty and the guard reports more.
+const committedAllowlist = () => parseAllowlist(gitOut(['show', `HEAD:${ALLOWLIST_PATH}`]) ?? '')
 
 const reportedUuids = (text, allowlist, skipMatch = () => false) =>
   uuidMatches(text)
     .filter(m => !skipMatch(m))
-    .map(m => m[0])
+    .map(m => m.uuid)
     .filter(uuid => !isSyntheticUuid(uuid) && !allowlist.has(uuid.toLowerCase()))
 
 // Claude Code keeps each session's scratchpad and task output under
@@ -117,45 +126,83 @@ const reportedUuids = (text, allowlist, skipMatch = () => false) =>
 const SESSION_TEMP_DIR = new RegExp(`^(?:/private)?/tmp/claude-\\d+/[^/]+/(${UUID_SOURCE})(?:/|$)`, 'id')
 const isSessionTempDir = (value, m) => value.match(SESSION_TEMP_DIR)?.indices[1][0] === m.index
 
+// Every option that shapes the diff text is pinned, so no local git config
+// (external drivers, colour, path prefixes, path quoting, relative paths)
+// changes what `addedLines` reads.
 const stagedDiff = base =>
-  // --no-ext-diff / --no-textconv / --no-color: force plain unified diff even if
-  // the user has an external diff driver (difftastic, delta) configured, so the
-  // `+`-line parser below works regardless of local git config.
-  execFileSync(
-    'git',
-    ['--no-pager', 'diff', '--cached', '-U0', '--no-ext-diff', '--no-textconv', '--no-color', ...(base ? [base] : [])],
-    { encoding: 'utf8', maxBuffer: 128 * 1024 * 1024 },
-  )
+  gitOut([
+    '-c',
+    'core.quotePath=false',
+    '--no-pager',
+    'diff',
+    '--cached',
+    '-U0',
+    '--no-ext-diff',
+    '--no-textconv',
+    '--no-color',
+    '--no-relative',
+    '--dst-prefix=b/',
+    ...(base ? [base] : []),
+  ])
 
-/** Added lines of a -U0 unified diff, with their line numbers in the new file. */
+// `+++ b/<path>`, quoted with C escapes when git still quotes the name (kept
+// escaped: it is a key and a printed fact), and tab-terminated when it holds a space.
+const headerPath = rest => {
+  const quoted = rest.match(/^"b\/(.*)"$/)
+  if (quoted) return quoted[1]
+  const plain = rest.replace(/\t$/, '')
+  return plain.startsWith('b/') ? plain.slice(2) : plain
+}
+
+/**
+ * Added lines of a unified diff, with their line numbers in the new file.
+ * A hunk's header counts say how many body lines follow, so a content line
+ * that begins with `+++` is never read as a file header, and context lines
+ * advance the line number.
+ */
 const addedLines = diff => {
   const out = []
   let file = null
+  let oldLeft = 0
+  let newLeft = 0
   let lineNo = 0
   for (const line of diff.split('\n')) {
-    const header = line.match(/^\+\+\+ b\/(.*)$/)
-    if (header) {
-      file = header[1]
+    if (oldLeft > 0 || newLeft > 0) {
+      if (line.startsWith('+')) {
+        out.push({ file, lineNo: lineNo++, text: line.slice(1) })
+        newLeft--
+      } else if (line.startsWith('-')) {
+        oldLeft--
+      } else if (!line.startsWith('\\')) {
+        lineNo++ // context: ' ', or '' under diff.suppressBlankEmpty
+        oldLeft--
+        newLeft--
+      }
       continue
     }
-    const hunk = line.match(/^@@ -\S+ \+(\d+)/)
+    if (line.startsWith('+++ ')) {
+      file = headerPath(line.slice(4))
+      continue
+    }
+    const hunk = line.match(/^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/)
     if (hunk) {
-      lineNo = Number(hunk[1])
-      continue
+      oldLeft = hunk[1] === undefined ? 1 : Number(hunk[1])
+      lineNo = Number(hunk[2])
+      newLeft = hunk[3] === undefined ? 1 : Number(hunk[3])
     }
-    if (file && line.startsWith('+') && !line.startsWith('+++')) out.push({ file, lineNo: lineNo++, text: line.slice(1) })
   }
   return out
 }
 
-const mergeHead = () => {
+// The heads `git commit` will record as parents besides HEAD: the lines of
+// $GIT_DIR/MERGE_HEAD, which no branch or tag of that name can stand in for.
+const mergeHeads = () => {
+  const path = gitOut(['rev-parse', '--git-path', 'MERGE_HEAD'])?.trim()
+  if (!path) return []
   try {
-    return execFileSync('git', ['rev-parse', '-q', '--verify', 'MERGE_HEAD'], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim()
+    return readFileSync(path, 'utf8').split('\n').map(s => s.trim()).filter(Boolean)
   } catch {
-    return null
+    return []
   }
 }
 
@@ -180,23 +227,20 @@ const main = () => {
   const commits = gitInvocations(cmd).filter(g => g.word === 'commit')
   if (commits.length === 0) allow()
 
-  let lines
-  try {
-    lines = addedLines(stagedDiff())
-  } catch {
-    allow() // no repo / nothing staged — let git itself handle it
-  }
-  const merging = mergeHead()
-  if (merging) {
-    try {
-      const newToMergeHead = new Set(addedLines(stagedDiff(merging)).map(lineKey))
-      lines = lines.filter(l => newToMergeHead.has(lineKey(l)))
-    } catch {
-      // MERGE_HEAD unreadable: every line added relative to HEAD stays scanned.
+  const headDiff = stagedDiff()
+  if (headDiff === null) allow() // no repo / nothing staged — let git itself handle it
+  let lines = addedLines(headDiff)
+  const heads = mergeHeads()
+  const headDiffs = heads.map(stagedDiff)
+  const mergeFiltered = heads.length > 0 && headDiffs.every(d => d !== null)
+  if (mergeFiltered) {
+    for (const d of headDiffs) {
+      const added = new Set(addedLines(d).map(lineKey))
+      lines = lines.filter(l => added.has(lineKey(l)))
     }
   }
 
-  const allowlist = stagedAllowlist()
+  const allowlist = committedAllowlist()
   const hits = []
   for (const l of lines) {
     if (ALLOW_PATHS.some(rx => rx.test(l.file))) continue
@@ -243,11 +287,13 @@ const main = () => {
 
   const shown = hits.slice(0, 20).join('\n')
   const more = hits.length > 20 ? `\n  …and ${hits.length - 20} more` : ''
-  const mergeNote = merging
-    ? 'A merge is in progress: diff lines were scanned only where new relative to both HEAD and MERGE_HEAD.\n'
-    : ''
+  const mergeNote = mergeFiltered
+    ? 'A merge is in progress: diff lines were scanned only where new relative to HEAD and every merge head.\n'
+    : heads.length > 0
+      ? 'A merge is in progress, but a merge head could not be diffed, so every line added relative to HEAD was scanned.\n'
+      : ''
   process.stderr.write(
-    `BLOCKED: this commit adds uuid-shaped strings that are neither synthetic nor in the staged ${ALLOWLIST_PATH}:\n` +
+    `BLOCKED: this commit adds uuid-shaped strings that are neither synthetic nor in HEAD's ${ALLOWLIST_PATH}:\n` +
       `${shown}${more}\n` +
       mergeNote +
       'Rule: memory feedback_no_pii_in_commits. PII_OK=1 prefixed to the command skips this check.\n',
