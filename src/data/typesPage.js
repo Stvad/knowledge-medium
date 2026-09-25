@@ -1,1 +1,1 @@
-import{b1 as e,x1 as t}from"../../chunks/app-iKygvH2W.js";export{e as getOrCreateTypesPage,t as typesPageBlockId};
+import{b1 as e,x1 as t}from"../../chunks/app-Cf1JpHVo.js";export{e as getOrCreateTypesPage,t as typesPageBlockId};
