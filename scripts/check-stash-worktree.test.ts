@@ -8,6 +8,7 @@ import {
   amendInvocations,
   baseBranch,
   decide,
+  effectiveCwd,
   explicitEntry,
   hasMessage,
   renumbersStack,
@@ -79,6 +80,8 @@ describe('shellSegments', () => {
     expect(shellSegments('cat <<< word')).toEqual([['cat']])
     expect(shellSegments(String.raw`echo ">" '2>&1' \>`)).toEqual([['echo', '>', '2>&1', '>']])
     expect(shellSegments('sleep 1 & ls')).toEqual([['sleep', '1'], ['ls']])
+    expect(shellSegments('git &>/dev/null restore f')).toEqual([['git', 'restore', 'f']])
+    expect(shellSegments('git &>> log restore f')).toEqual([['git', 'restore', 'f']])
     expect(shellSegments('echo x >& both.log; ls')).toEqual([['echo', 'x'], ['ls']])
     expect(shellSegments('a > ; b')).toEqual([['a'], ['b']]) // a dangling redirect eats nothing past its segment
   })
@@ -150,6 +153,12 @@ describe('stashInvocations', () => {
     expect(cdPath('pushd')).toBe('$DIRSTACK')
     expect(cdPath('pushd +1')).toBe('$DIRSTACK')
     expect(cdPath('pushd /wt && popd')).toBe('$DIRSTACK')
+  })
+
+  it('keeps the starting directory when a cd target does not exist', () => {
+    const start = realpathSync(tmpdir())
+    expect(effectiveCwd(start, '/no/such/dir/anywhere')).toEqual({ cwd: start, exact: true })
+    expect(effectiveCwd('/', start)).toEqual({ cwd: start, exact: true })
   })
 
   it('names the cd or -C target a static reading cannot resolve', () => {

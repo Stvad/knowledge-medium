@@ -266,6 +266,25 @@ describe('mutate end-to-end', { timeout: 60_000 }, () => {
 
   })
 
+  it('reports a target deleted during the run, and restores it', () => {
+    const dir = fixture(
+      "import { unlinkSync } from 'node:fs'\nimport './mod.mjs'\n" +
+        "it('deletes its own target', () => { unlinkSync(new URL('./mod.mjs', import.meta.url)) })\n",
+    )
+    const r = mutate(dir, ['--delete', UNPINNED, '--no-baseline'])
+    expect(r.status, r.stdout).toBe(3)
+    expect(lastLine(r.stdout)).toBe('CHANGED DURING RUN: mod.mjs was deleted during the run')
+    expect(mod(dir)).toBe(MOD)
+  })
+
+  it('treats an --edit that deletes the file as the mutation, not a change during the run', () => {
+    const dir = fixture()
+    const r = mutate(dir, ['--edit', 'rm "$MUTATE_FILE"', '--no-baseline'])
+    expect(lastLine(r.stdout)).toMatch(/^PINNED by:|^NO VERDICT: .*failed to load/)
+    expect(r.stdout).not.toContain('CHANGED DURING RUN')
+    expect(mod(dir)).toBe(MOD)
+  })
+
   it('stops before an --edit when the baseline run changed the file', () => {
     // Only the first run of the test file (the baseline) writes the target.
     const dir = fixture(

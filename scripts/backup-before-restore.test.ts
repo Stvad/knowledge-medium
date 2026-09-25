@@ -345,6 +345,11 @@ describe('hook end-to-end', { timeout: 30_000 }, () => {
     }
   })
 
+  it('backs up in the starting directory when a cd target does not exist', () => {
+    const ctx = context(hook('cd /no/such/dir/anywhere || git checkout -- a.txt', repo).stdout)
+    expect(readFileSync(join(backupDir(ctx), 'a.txt'), 'utf8')).toBe('one\nTWO\nthree\nfour\n')
+  })
+
   it('reports a cd - target instead of guessing a repository', () => {
     const ctx = context(hook('cd - && git restore a.txt', repo).stdout)
     expect(ctx).toContain('$OLDPWD')

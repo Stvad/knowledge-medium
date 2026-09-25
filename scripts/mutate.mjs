@@ -237,9 +237,12 @@ const printEdit = (before, after) => {
 
 class ChangedDuringRun extends Error {}
 
+// File contents, with null for a file that does not exist.
+const sameBytes = (a, b) => (a === null || b === null ? a === b : a.equals(b))
+
 /** Write the target, unless something else changed it since this run last wrote it. */
 const writeTarget = (cfg, state, bytes) => {
-  if (!readOrNull(cfg.file)?.equals(state.expected)) throw new ChangedDuringRun()
+  if (!sameBytes(readOrNull(cfg.file), state.expected)) throw new ChangedDuringRun()
   writeFileSync(cfg.file, bytes)
   state.expected = bytes
 }
@@ -269,18 +272,18 @@ const mutateAndRun = async (cfg, paths, state) => {
   if (deleted) {
     writeTarget(cfg, state, deleted)
   } else {
-    if (!readOrNull(cfg.file)?.equals(state.expected)) throw new ChangedDuringRun()
+    if (!sameBytes(readOrNull(cfg.file), state.expected)) throw new ChangedDuringRun()
     const r = await run(
       '/bin/sh',
       ['-c', cfg.mutation.command],
       { cwd: cfg.cwd, env: { ...process.env, MUTATE_FILE: cfg.file } },
       cfg.timeoutMs,
     )
-    state.expected = readOrNull(cfg.file) ?? Buffer.alloc(0)
+    state.expected = readOrNull(cfg.file) // null: the edit deleted the file
     if (r.code !== 0) return none(`the --edit command exited ${r.code}: ${tail(r.stderr)}`)
   }
-  if (state.expected.equals(original)) return none(`the edit did not change ${relative(cfg.cwd, cfg.file)}`)
-  printEdit(original, state.expected)
+  if (sameBytes(state.expected, original)) return none(`the edit did not change ${relative(cfg.cwd, cfg.file)}`)
+  printEdit(original, state.expected ?? Buffer.alloc(0))
 
   const verdict = await runVitest(cfg, paths)
   if (verdict.kind !== 'unpinned') return verdict
@@ -295,22 +298,23 @@ const mutateAndRun = async (cfg, paths, state) => {
 }
 
 /**
- * Put the original bytes back and compare. Bytes this run did not write are
- * saved aside first, so an edit made during the run is not lost to the restore.
+ * Put the original bytes back and compare. A file this run did not leave as it
+ * is (other bytes, or deleted) is reported, and other bytes are saved aside
+ * first, so a change made during the run is not lost to the restore.
  */
 const restore = (cfg, paths, state) => {
   const current = readOrNull(cfg.file)
-  let savedAside = null
-  if (current && !current.equals(state.expected) && !current.equals(state.original)) {
-    writeFileSync(paths.duringRun, current)
-    savedAside = paths.duringRun
+  let changed = null
+  if (!sameBytes(current, state.expected) && !sameBytes(current, state.original)) {
+    if (current) writeFileSync(paths.duringRun, current)
+    changed = current ? `held bytes this run did not write; saved at ${paths.duringRun}` : 'was deleted during the run'
   }
   try {
-    if (!current?.equals(state.original)) writeFileSync(cfg.file, state.original)
+    if (!sameBytes(current, state.original)) writeFileSync(cfg.file, state.original)
   } catch {
     /* the comparison below reports it */
   }
-  return { verified: readOrNull(cfg.file)?.equals(state.original) ?? false, savedAside }
+  return { verified: sameBytes(readOrNull(cfg.file), state.original), changed }
 }
 
 const isAlive = pid => {
@@ -398,8 +402,8 @@ const mutateLocked = async (cfg, paths) => {
   rmSync(paths.journal, { force: true })
   rmSync(paths.snapshot, { force: true })
   log(`restored: ${rel}, bytes verified`)
-  if (restored.savedAside) {
-    log(`CHANGED DURING RUN: ${rel} held bytes this run did not write; saved at ${restored.savedAside}`)
+  if (restored.changed) {
+    log(`CHANGED DURING RUN: ${rel} ${restored.changed}`)
     return 3
   }
   if (interrupted) {

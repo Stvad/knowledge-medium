@@ -192,6 +192,14 @@ export const shellSegmentsWithDepth = cmd => {
       cur += ch
       continue
     }
+    // `&>` and `&>>` redirect both streams; anywhere in a command, even
+    // between `git` and its verb, they must not end the segment.
+    if (ch === '&' && cmd[i + 1] === '>') {
+      pushToken()
+      cur = ch
+      started = true
+      continue
+    }
     if (ch === ';' || ch === '&' || ch === '|' || ch === '\n') {
       pushSegment()
       continue
