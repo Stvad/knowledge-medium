@@ -140,6 +140,18 @@ describe('stashInvocations', () => {
     expect(stashInvocations('git --work-tree ~ stash list')[0].cArgs).toEqual(['--work-tree', homedir()])
   })
 
+  it('follows only named directories; other cd, pushd and popd forms stay unknown', () => {
+    const cdPath = (cmd: string) => stashInvocations(`${cmd} && git stash list`)[0].cdPath
+    expect(cdPath('cd')).toBe(homedir())
+    expect(cdPath('cd -P /wt')).toBe('/wt')
+    expect(cdPath('cd -')).toBe('$OLDPWD')
+    expect(cdPath('cd - && cd sub')).toBe('$OLDPWD/sub')
+    expect(cdPath('pushd /wt')).toBe('/wt')
+    expect(cdPath('pushd')).toBe('$DIRSTACK')
+    expect(cdPath('pushd +1')).toBe('$DIRSTACK')
+    expect(cdPath('pushd /wt && popd')).toBe('$DIRSTACK')
+  })
+
   it('names the cd or -C target a static reading cannot resolve', () => {
     const target = (cmd: string) => unresolvedTarget(stashInvocations(cmd)[0])
     expect(target('cd "$WT" && git stash list')).toBe('$WT')

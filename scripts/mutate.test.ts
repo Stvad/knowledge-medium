@@ -164,6 +164,7 @@ describe('mutate end-to-end', { timeout: 60_000 }, () => {
     expect(mod(dir)).toBe(MOD)
     expect(existsSync(join(dir, 'git-calls'))).toBe(false)
     expect(readdirSync(paths(dir).dir)).toEqual([]) // lock, journal and snapshot all removed
+    expect(statSync(paths(dir).dir).mode & 0o777).toBe(0o700)
   })
 
   it('runs a shell edit with MUTATE_FILE, honours -t, and reports UNPINNED', () => {

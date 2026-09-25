@@ -6,8 +6,9 @@
  * `git checkout [<rev>] -- <paths>` and `git restore <paths>` overwrite the
  * working tree from the index or a commit, not from the tree as it stood before
  * the edit being undone, so every uncommitted edit in a named file goes with it,
- * silently. Before such a command runs, every named path that differs from HEAD
- * (the empty tree before the first commit) is copied to
+ * silently. Before such a command runs, every named path with uncommitted
+ * changes, measured against HEAD (the empty tree before the first commit), is
+ * copied to
  *
  *   <git rev-parse --absolute-git-dir>/restore-backups/<session>/<timestamp>/<repo path>
  *
@@ -19,14 +20,12 @@
  * backups out of the tree and out of other worktrees; they outlive the session,
  * go with `git worktree remove`, and nothing prunes them.
  *
- * Paths the hook cannot read statically widen the copy to every file that
- * differs from HEAD (unreadablePathspecs says when). A command that reads from a
- * named commit also has the untracked files that commit tracks copied, since it
- * overwrites them.
+ * Untracked files under the named paths are copied too. Paths the hook cannot
+ * read statically widen the copy to the whole tree (unreadablePathspecs says
+ * when).
  *
- * Not covered, and accepted: a restore inside a script file, `bash -c`, a
- * heredoc or after `pushd`; untracked files under `checkout <rev> <path>`
- * without `--`; staged content that differs from the working tree when the
+ * Not covered, and accepted: a restore inside a script file, `bash -c` or a
+ * heredoc; staged content that differs from the working tree when the
  * command also rewrites the index (it survives as an unreachable blob until
  * gc); edits `git diff` does not report, under assume-unchanged or
  * skip-worktree bits or inside submodules (this repository uses neither); and
@@ -46,10 +45,7 @@ const WHOLE_TREE = ':/'
 const CHECKOUT_BRANCH_OPS = new Set(['--orphan', '--detach', '--track'])
 const CHECKOUT_VALUE_OPTS = new Set(['--orphan', '--conflict', '--pathspec-from-file'])
 
-/**
- * null → not a path restore. Else the pathspecs, and source: the commit the
- * files come from when the command names one (null: the index, or unknown).
- */
+/** null → not a path restore; else operands to try as pathspecs. */
 const parseCheckout = rest => {
   const operands = []
   let force = false
@@ -57,7 +53,7 @@ const parseCheckout = rest => {
   let fromFile = false
   for (let i = 0; i < rest.length; i++) {
     const t = rest[i]
-    if (t === '--') return { pathspecs: rest.slice(i + 1), source: operands[0] ?? null, fromFile }
+    if (t === '--') return { pathspecs: rest.slice(i + 1), fromFile }
     if (t.startsWith('--')) {
       const name = t.split('=')[0]
       if (CHECKOUT_BRANCH_OPS.has(name)) branchOp = true
@@ -81,18 +77,17 @@ const parseCheckout = rest => {
     operands.push(t)
   }
   // A forced checkout discards every local change, branch operation or not.
-  if (force) return { pathspecs: [WHOLE_TREE], source: operands[0] ?? 'HEAD', fromFile }
+  if (force) return { pathspecs: [WHOLE_TREE], fromFile }
   if (branchOp) return null
-  return { pathspecs: operands, source: null, fromFile }
+  return { pathspecs: operands, fromFile }
 }
 
-/** null → touches only the index; else its pathspecs and --source. */
+/** null → touches only the index; else its pathspecs. */
 const parseRestore = rest => {
   const pathspecs = []
   let staged = false
   let worktree = false
   let fromFile = false
-  let source = null
   for (let i = 0; i < rest.length; i++) {
     const t = rest[i]
     if (t === '--') {
@@ -100,13 +95,12 @@ const parseRestore = rest => {
       break
     }
     if (t.startsWith('--')) {
-      const [name, value] = t.split(/=(.*)/s)
+      const name = t.split('=')[0]
       if (name === '--staged') staged = true
       if (name === '--worktree') worktree = true
       if (name === '--pathspec-from-file') fromFile = true
-      if (name === '--source') source = value ?? rest[i + 1] ?? null
       const takesValue = ['--source', '--conflict', '--pathspec-from-file'].includes(name)
-      if (takesValue && value === undefined) i++
+      if (takesValue && !t.includes('=')) i++
       continue
     }
     if (/^-[A-Za-z]/.test(t)) {
@@ -114,8 +108,7 @@ const parseRestore = rest => {
         if (t[k] === 'S') staged = true
         if (t[k] === 'W') worktree = true
         if (t[k] === 's') {
-          // `-s <tree>`; `-s<tree>` carries it attached
-          source = k === t.length - 1 ? (rest[++i] ?? null) : t.slice(k + 1)
+          if (k === t.length - 1) i++ // `-s <tree>`; `-s<tree>` carries it attached
           break
         }
       }
@@ -123,7 +116,7 @@ const parseRestore = rest => {
     }
     pathspecs.push(t)
   }
-  return staged && !worktree ? null : { pathspecs, source, fromFile }
+  return staged && !worktree ? null : { pathspecs, fromFile }
 }
 
 // Characters a pathspec may hold and still mean exactly what it says to both
@@ -157,7 +150,6 @@ export const restoreInvocations = cmd =>
       {
         verb: g.word,
         pathspecs: widened ? [WHOLE_TREE] : parsed.pathspecs,
-        source: parsed.source,
         widened,
         cArgs: g.cArgs,
         cdPath: g.cdPath,
@@ -182,26 +174,14 @@ const headOrEmptyTree = (cwd, cArgs) => {
 }
 
 /**
- * Untracked files under the pathspecs that `source` tracks: a checkout from
- * that commit overwrites them. Repo-relative.
- */
-const untrackedIn = (cwd, cArgs, pathspecs, source) => {
-  const untracked = git(cwd, cArgs, ['ls-files', '-z', '--others', '--exclude-standard', '--full-name', '--', ...pathspecs])
-    .split('\0')
-    .filter(Boolean)
-  if (!untracked.length) return [] // fast path: cat-file would find nothing to match
-  const input = untracked.map(p => `${source}:${p}\n`).join('')
-  const kinds = git(cwd, cArgs, ['cat-file', '--batch-check=%(objecttype)'], input).split('\n')
-  return untracked.filter((_, i) => kinds[i] === 'blob')
-}
-
-/**
- * Files under the pathspecs that differ from HEAD, repo-relative, plus the
- * untracked ones `source` would overwrite. --numstat reads every file and fails
+ * What `git status` calls uncommitted under the pathspecs, repo-relative: the
+ * files that differ from HEAD, and the untracked ones. Untracked files go
+ * whatever the command reads from, since a tracked file it restores can
+ * replace the directory they sit in. --numstat reads every file and fails
  * outright on one it cannot read; --name-only still lists that file, so it is
  * the fallback and countsError says why the counts are missing.
  */
-const changedFiles = (cwd, cArgs, pathspecs, source) => {
+const changedFiles = (cwd, cArgs, pathspecs) => {
   const base = headOrEmptyTree(cwd, cArgs)
   let files
   let countsError = null
@@ -215,8 +195,9 @@ const changedFiles = (cwd, cArgs, pathspecs, source) => {
     countsError = firstLine(e)
     files = diffAgainst(cwd, cArgs, base, '--name-only', pathspecs).map(path => ({ path }))
   }
-  // Fast path: with no source (an index restore) no untracked file is at risk.
-  const untracked = source ? untrackedIn(cwd, cArgs, pathspecs, source) : []
+  const untracked = git(cwd, cArgs, ['ls-files', '-z', '--others', '--exclude-standard', '--full-name', '--', ...pathspecs])
+    .split('\0')
+    .filter(Boolean)
   return { files: [...files, ...untracked.map(path => ({ path, untracked: true }))], countsError }
 }
 
@@ -249,7 +230,7 @@ const report = ({ dir, copied, failed, widened, countsError }) =>
       `backup-before-restore: copied ${copied.length === 1 ? '1 file' : `${copied.length} files`} ` +
         `before this command ran, to:`,
       dir,
-      ...widened.map(w => `Every file that differs from HEAD was copied, because ${w}.`),
+      ...widened.map(w => `Every uncommitted file in the repository was copied, because ${w}.`),
       ...failed.map(f => `not copied: ${f.path} (${f.reason})`),
       ...(countsError ? [`line counts unavailable: git diff --numstat failed: ${countsError}`] : []),
     ],
@@ -278,7 +259,7 @@ const backUp = ({ payload, cmd, cwd: payloadCwd, invocations }) => {
     let top, gitDir, files, countsError
     try {
       ;[top, gitDir] = git(cwd, inv.cArgs, ['rev-parse', '--show-toplevel', '--absolute-git-dir']).split('\n')
-      ;({ files, countsError } = changedFiles(cwd, inv.cArgs, inv.pathspecs, inv.source))
+      ;({ files, countsError } = changedFiles(cwd, inv.cArgs, inv.pathspecs))
     } catch {
       continue // not a repository, bad pathspec: the command itself reports these
     }

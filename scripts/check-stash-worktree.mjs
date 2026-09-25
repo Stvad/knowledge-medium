@@ -50,6 +50,22 @@ const SUBCOMMANDS = new Set([
 /** The shell's tilde expansion of one word: `~` and `~/…` only. */
 const expandTilde = w => (w === '~' ? homedir() : w.startsWith('~/') ? join(homedir(), w.slice(2)) : w)
 
+const DIR_CHANGES = new Set(['cd', 'pushd', 'popd'])
+
+/**
+ * The directory after a cd, pushd or popd. Only a named path is followed; the
+ * forms that move to a directory a static reading cannot know come back as the
+ * shell variable holding it, which callers treat as unresolved.
+ */
+const moveDir = (cdPath, verb, args) => {
+  const [raw] = args.filter(a => !/^-[LPe@]+$/.test(a)) // cd -P / -L options
+  if (verb === 'popd' || (verb === 'pushd' && (raw === undefined || /^[+-]\d+$/.test(raw)))) return '$DIRSTACK'
+  if (raw === '-') return '$OLDPWD'
+  const target = expandTilde(raw ?? '~') // a bare cd goes home
+  // Concatenated, not joined: normalizing `$S/..` would erase the unknown part.
+  return cdPath && !target.startsWith('/') ? `${cdPath}/${target}` : target
+}
+
 /**
  * Walk a command string and yield each git invocation with its shell context:
  * word (the token after git's global flags), rest (tokens after it), cArgs
@@ -88,12 +104,10 @@ export const gitInvocations = cmd => {
       if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) assigns.push(tokens[i])
       i++
     }
-    if (tokens[i] === 'cd' && tokens[i + 1] !== undefined) {
+    if (DIR_CHANGES.has(tokens[i])) {
       // same prefix skip as for git: `{ cd /x && …` counts. A relative target
       // moves from the previous cd, so `cd a && cd b` lands in a/b.
-      const target = expandTilde(tokens[i + 1])
-      // Concatenated, not joined: normalizing `$S/..` would erase the unknown part.
-      cdPath = cdPath && !target.startsWith('/') ? `${cdPath}/${target}` : target
+      cdPath = moveDir(cdPath, tokens[i], tokens.slice(i + 1))
       continue
     }
     if ((tokens[i] || '').replace(/.*\//, '') !== 'git') continue

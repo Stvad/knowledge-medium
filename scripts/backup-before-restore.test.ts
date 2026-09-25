@@ -51,23 +51,7 @@ describe('restoreInvocations', () => {
   it('takes the whole tree for a forced branch operation too', () => {
     expect(specs('git checkout -f --detach HEAD')).toEqual([[':/']])
     expect(specs('git checkout -fb new')).toEqual([[':/']])
-    expect(restoreInvocations('git checkout -f -b new origin/x')[0]).toMatchObject({
-      pathspecs: [':/'],
-      source: 'origin/x',
-    })
-  })
-
-  it('records the commit a restore reads from, when it names one', () => {
-    const source = (cmd: string) => restoreInvocations(cmd)[0].source
-    expect(source('git checkout other -- f.ts')).toBe('other')
-    expect(source('git checkout -- f.ts')).toBeNull()
-    expect(source('git checkout -f other')).toBe('other')
-    expect(source('git checkout -f')).toBe('HEAD')
-    expect(source('git restore --source=main f.ts')).toBe('main')
-    expect(source('git restore --source main f.ts')).toBe('main')
-    expect(source('git restore -smain f.ts')).toBe('main')
-    expect(source('git restore -s main f.ts')).toBe('main')
-    expect(source('git restore f.ts')).toBeNull()
+    expect(specs('git checkout -f -b new origin/x')).toEqual([[':/']])
   })
 
   it('takes the whole tree for a forced checkout with no --', () => {
@@ -345,23 +329,26 @@ describe('hook end-to-end', { timeout: 30_000 }, () => {
     expect(readFileSync(`${dir}.manifest.txt`, 'utf8')).toContain('command: git checkout -- manifest.txt')
   })
 
-  it('copies untracked files that the commit a checkout reads from would overwrite', () => {
+  it('copies untracked files under the named paths, whatever the command reads from', () => {
     const u = makeRepo('restore-backup-untracked-')
     git(u, ['checkout', '-qb', 'other'])
-    writeFileSync(join(u, 'new.txt'), 'other branch\n')
-    git(u, ['add', 'new.txt'])
-    git(u, ['commit', '-qm', 'other tracks new.txt'])
+    writeFileSync(join(u, 'dir'), 'other tracks dir as a file\n')
+    git(u, ['add', 'dir'])
+    git(u, ['commit', '-qm', 'other tracks dir'])
     git(u, ['checkout', '-q', 'main'])
-    writeFileSync(join(u, 'new.txt'), 'my untracked work\n') // other tracks it, main does not
-    writeFileSync(join(u, 'scratch.txt'), 'untracked, in no commit\n')
-    for (const cmd of ['git checkout -f other', 'git checkout other -- .']) {
+    mkdirSync(join(u, 'dir'))
+    writeFileSync(join(u, 'dir', 'file'), 'my untracked work\n') // other replaces dir with a file
+    for (const cmd of ['git checkout -f other', 'git checkout -f "$BRANCH"', 'git checkout other -- .']) {
       const ctx = context(hook(cmd, u).stdout)
-      expect(ctx).toMatch(/untracked\s+new\.txt/)
-      expect(ctx).not.toContain('scratch.txt')
-      expect(readFileSync(join(backupDir(ctx), 'new.txt'), 'utf8')).toBe('my untracked work\n')
+      expect(ctx).toMatch(/untracked\s+dir\/file/)
+      expect(readFileSync(join(backupDir(ctx), 'dir/file'), 'utf8')).toBe('my untracked work\n')
     }
-    // restoring from HEAD cannot touch a file HEAD does not track
-    expect(hook('git checkout HEAD -- .', u).stdout).toBe('')
+  })
+
+  it('reports a cd - target instead of guessing a repository', () => {
+    const ctx = context(hook('cd - && git restore a.txt', repo).stdout)
+    expect(ctx).toContain('$OLDPWD')
+    expect(ctx).not.toContain('restore-backups')
   })
 
   it('follows consecutive relative cds to the right directory', () => {

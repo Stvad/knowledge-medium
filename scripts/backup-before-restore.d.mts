@@ -3,8 +3,6 @@
 export interface RestoreInvocation {
   verb: 'checkout' | 'restore'
   pathspecs: string[]
-  /** the commit the files come from, when the command names one */
-  source: string | null
   widened: string | null
   cArgs: string[]
   cdPath: string | null

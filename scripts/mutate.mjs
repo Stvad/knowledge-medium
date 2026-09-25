@@ -22,12 +22,13 @@
  * original. An UNPINNED result is re-checked with the file made to throw on
  * load: a test that still passes never loaded it (it imports a built copy, or
  * another checkout's), which is no verdict. Not restored: other files an --edit
- * command writes.
+ * command writes. Accepted: bytes another process writes to the file while the
+ * --edit command itself runs read as part of the edit and are not saved aside.
  */
 
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { constants } from 'node:os'
 import { basename, dirname, join, relative, resolve, sep } from 'node:path'
@@ -439,6 +440,7 @@ const main = async () => {
   }
   const paths = statePaths(root, cfg.file)
   mkdirSync(paths.dir, { recursive: true })
+  chmodSync(paths.dir, 0o700) // snapshots hold source; a mkdir mode would reach only a new directory
   const held = takeLock(paths.lock)
   if (held) {
     log(`NO VERDICT: ${held}`)
