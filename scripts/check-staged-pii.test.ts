@@ -471,6 +471,16 @@ describe('check-staged-pii during other merge shapes', SPAWNS_GIT, () => {
     expect(runHook(repo, 'git commit -m "merge side"').status).toBe(0)
   })
 
+  it.each([
+    ['upper to lower', REAL.toUpperCase(), REAL],
+    ['lower to upper', REAL, REAL.toUpperCase()],
+  ])('does not flag an inherited uuid whose case the resolution changes %s', (_label, inherited, resolved) => {
+    const repo = makeRepo()
+    startMerge(repo, { side: { 'side.txt': `id: ${inherited}\n` } })
+    stage(repo, 'side.txt', `id: ${resolved}\n`)
+    expect(runHook(repo, 'git commit -m "merge side"').status).toBe(0)
+  })
+
   it('does not flag a HEAD uuid whose line the resolution edits', () => {
     const repo = makeRepo()
     git(repo, ['checkout', '-q', '-b', 'side'])

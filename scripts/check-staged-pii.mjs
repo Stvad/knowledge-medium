@@ -147,8 +147,9 @@ const stagedDiff = () =>
     '--dst-prefix=b/',
   ])
 
-// `+++ b/<path>`, quoted with C escapes when git still quotes the name (kept
-// escaped: it is a key and a printed fact), and tab-terminated when it holds a space.
+// `+++ b/<path>`, quoted with C escapes when git still quotes the name, and
+// tab-terminated when it holds a space. Accepted: a quoted name stays escaped,
+// so a merge cannot find its parent copies and reports its inherited uuids.
 const headerPath = rest => {
   const quoted = rest.match(/^"b\/(.*)"$/)
   if (quoted) return quoted[1]
@@ -233,11 +234,11 @@ const main = () => {
   const parentCopies = new Map()
   const parentCopy = (rev, file) => {
     const key = `${rev}\0${file}`
-    if (!parentCopies.has(key)) parentCopies.set(key, gitOut(['show', `${rev}:${file}`]) ?? '')
+    if (!parentCopies.has(key)) parentCopies.set(key, gitOut(['show', `${rev}:${file}`])?.toLowerCase() ?? '')
     return parentCopies.get(key)
   }
   const carriedIn = (file, uuid) =>
-    heads.length > 0 && ['HEAD', ...heads].some(rev => parentCopy(rev, file).includes(uuid))
+    heads.length > 0 && ['HEAD', ...heads].some(rev => parentCopy(rev, file).includes(uuid.toLowerCase()))
 
   const allowlist = committedAllowlist()
   const reportedUuids = text => uuidsIn(text).filter(u => !isSyntheticUuid(u) && !allowlist.has(u.toLowerCase()))
