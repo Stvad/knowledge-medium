@@ -1,1 +1,1 @@
-import{LD as e}from"../../../chunks/app-CgemdFVp.js";export{e as BlockInfoDialog};
+import{LD as e}from"../../../chunks/app-nDliTNXL.js";export{e as BlockInfoDialog};

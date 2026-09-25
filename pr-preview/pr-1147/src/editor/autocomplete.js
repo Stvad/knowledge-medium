@@ -1,1 +1,1 @@
-import{pw as e}from"../../chunks/app-CgemdFVp.js";export{e as editorAutocompleteExtension};
+import{pw as e}from"../../chunks/app-nDliTNXL.js";export{e as editorAutocompleteExtension};
