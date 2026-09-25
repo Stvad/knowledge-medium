@@ -224,6 +224,11 @@ describe('nextWeight', () => {
     expect(nextWeight(dl(at(225, 8, 8)), CATCHUP)).toEqual({weight: 235, progressed: true, rule: 'increment'})
   })
 
+  it('judges a hand-edited target of 0 as one set, never as an empty list', () => {
+    // An empty list passes every rule: 3×8 on a 3×10 lift would earn the jump.
+    expect(nextWeight(bench(at(135, 8, 8, 8), 0), CONFIG)).toEqual({weight: 135, progressed: false})
+  })
+
   it('holds when the caller says to', () => {
     expect(nextWeight(bench(at(135, 10, 10, 10)), CONFIG, {hold: true}))
       .toEqual({weight: 135, progressed: false})

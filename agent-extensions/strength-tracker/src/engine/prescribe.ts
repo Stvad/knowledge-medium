@@ -138,7 +138,15 @@ const prescribeExercise = (
 
   if (!last || lastWeight === undefined) {
     if (exercise.startWeight !== undefined) {
-      return {...base, weight: exercise.startWeight, rationale: `first session — start at ${exercise.startWeight}, per the plan`}
+      const {startWeight, ladder} = exercise
+      const start = ladder ? rungAtOrBelow(ladder, startWeight) : startWeight
+      return {
+        ...base,
+        weight: start,
+        rationale: start === startWeight
+          ? `first session — start at ${start}, per the plan`
+          : `first session — start at ${start}, the rung at or below the plan's ${startWeight}`,
+      }
     }
     return {
       ...base,

@@ -162,6 +162,16 @@ describe('replaying the live log', () => {
     expect(rows[1].weight).toBe(70)
   })
 
+  it('starts a laddered lift on a rung that exists', () => {
+    const tree = plan()
+    const waiterDef = tree.children[1].children.find(c => c.id === 'def-waiter')!
+    waiterDef.properties = {...waiterDef.properties, [FIELD.startWeight]: 30}
+    const {config} = configFromPlan(tree)
+    const row = prescribe({history: [], layoffs: [], config, now: '2026-09-27T23:00:00', session: 'B'})
+      .exercises.find(e => e.defId === 'def-waiter')!
+    expect(row.weight).toBe(25)
+  })
+
   it('does not let the heavy press history stand in for the light press', () => {
     const rows = prescribeA([ohp('2026-09-20', at(85, 10, 7, 6))], '2026-09-24T23:00:00').exercises
     expect(rows.find(e => e.defId === 'def-ohp-light')!.weight).toBe(70)

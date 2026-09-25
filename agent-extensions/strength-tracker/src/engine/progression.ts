@@ -172,13 +172,20 @@ export const setsAtWorkingWeight = (
   setsAtModalWeight(progressionSets(entry.sets))
 
 /** How many sets a session is judged against: what was prescribed at the
- *  time, not today's config. */
-export const setTarget = (entry: ExerciseRecord, config: Pick<ExerciseConfig, 'sets'>): number =>
-  entry.prescribedSets ?? config.sets
+ *  time, not today's config. At least one, always — `prescribedSets` is
+ *  hand-editable, and a target of 0 would judge an empty list, which every
+ *  rule passes. */
+export const setTarget = (entry: ExerciseRecord, config: Pick<ExerciseConfig, 'sets'>): number => {
+  const count = (n: number | undefined): number | undefined =>
+    n !== undefined && Number.isInteger(n) && n > 0 ? n : undefined
+  return count(entry.prescribedSets) ?? count(config.sets) ?? 1
+}
 
 /** The first `setTarget` sets at the working weight — the sets a session is
  *  judged by, and the ones shown as its evidence. A set added past the
- *  prescription neither blocks a top-out, buys a step, nor reads as a fade. */
+ *  prescription neither blocks a top-out, buys a step, nor reads as a fade.
+ *  Chosen by load, not by position, so a warm-up or a mis-loaded bar anywhere
+ *  in the list does not disqualify the working sets around it. */
 export const judgedSets = (
   entry: ExerciseRecord,
   config: Pick<ExerciseConfig, 'sets'>,

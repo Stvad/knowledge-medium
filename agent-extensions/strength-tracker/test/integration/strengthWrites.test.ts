@@ -26,7 +26,7 @@ import {
 import {SETTINGS_TYPE} from '../../src/km/schema'
 import {buildHistory, buildLayoffs} from '../../src/km/history'
 import {dayToDate, storedDate} from '../../src/km/day'
-import {DEFAULT_PLAN_ROOT_ID, loadConfig} from '../../src/km/config'
+import {loadConfig} from '../../src/km/config'
 import {recordResult, startAssessment} from '../../src/km/assessment'
 import {DEFAULT_CONFIG} from '../../src/program/defaults'
 import {findSettingsBlock, findStrengthLogPage, getOrCreateSettingsBlock, settingsIdentity} from '../../src/km/page'
@@ -42,6 +42,7 @@ import {
   dateProp,
   layoffFromProp,
   layoffTierProp,
+  planRootProp,
   rolloverHourProp,
   sessionProp,
   statusProp,
@@ -1261,20 +1262,23 @@ describe('the plan outline', () => {
     // Created squat-first; the press is then MOVED ahead of it, the way the
     // plan is reordered by hand. Creation time and any cached order both
     // still say squat first — only the outline says otherwise.
+    const {settingsBlockId} = await ensureStrengthHome(repo, WORKSPACE_ID)
     await repo.tx(async tx => {
       await tx.create({
-        id: DEFAULT_PLAN_ROOT_ID, workspaceId: WORKSPACE_ID, parentId: null, orderKey: 'b0',
+        id: 'plan-root', workspaceId: WORKSPACE_ID, parentId: null, orderKey: 'b0',
         content: '**Strength Plan v2**',
       })
       await tx.create({
-        id: 'plan-b', workspaceId: WORKSPACE_ID, parentId: DEFAULT_PLAN_ROOT_ID, orderKey: 'a0',
+        id: 'plan-b', workspaceId: WORKSPACE_ID, parentId: 'plan-root', orderKey: 'a0',
         content: '**Session B (Sun late, lower-lean)**',
       })
       await tx.create({id: 'plan-warmup', workspaceId: WORKSPACE_ID, parentId: 'plan-b', orderKey: 'a0', content: 'Warm-up: shoulder prep'})
       await tx.create({id: 'plan-squat', workspaceId: WORKSPACE_ID, parentId: 'plan-b', orderKey: 'a1', content: 'Squat — 3×6–10'})
       await tx.create({id: 'plan-ohp', workspaceId: WORKSPACE_ID, parentId: 'plan-b', orderKey: 'a2', content: 'Overhead press — 3×6–10'})
     }, {scope: ChangeScope.BlockDefault, description: 'a plan'})
-    const sessionB = async () => (await loadConfig(repo, WORKSPACE_ID, null)).config.exercises
+    await repo.tx(tx => tx.setProperty(settingsBlockId, planRootProp, 'plan-root'),
+      {scope: ChangeScope.UserPrefs, description: 'point at the plan'})
+    const sessionB = async () => (await loadConfig(repo, WORKSPACE_ID, settingsBlockId)).config.exercises
       .filter(e => e.session === 'B').map(e => e.name)
     expect(await sessionB()).toEqual(['Squat', 'Overhead press'])
 
