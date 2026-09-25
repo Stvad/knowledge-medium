@@ -92,7 +92,8 @@ export const gitInvocations = cmd => {
       // same prefix skip as for git: `{ cd /x && …` counts. A relative target
       // moves from the previous cd, so `cd a && cd b` lands in a/b.
       const target = expandTilde(tokens[i + 1])
-      cdPath = cdPath && !target.startsWith('/') ? join(cdPath, target) : target
+      // Concatenated, not joined: normalizing `$S/..` would erase the unknown part.
+      cdPath = cdPath && !target.startsWith('/') ? `${cdPath}/${target}` : target
       continue
     }
     if ((tokens[i] || '').replace(/.*\//, '') !== 'git') continue
@@ -429,6 +430,9 @@ export const effectiveCwd = (payloadCwd, cdPath) => {
   return { cwd: resolve(payloadCwd, cdPath), exact: true }
 }
 
+/** The cd or -C/--git-dir/--work-tree value holding an unexpanded variable, or null. */
+export const unresolvedTarget = inv => [inv.cdPath, ...inv.cArgs].find(a => a?.includes('$')) ?? null
+
 const stateFor = (inv, payloadCwd, cache) => {
   const key = `${inv.cdPath ?? ''} ${inv.cArgs.join(' ')}`
   if (cache.has(key)) return cache.get(key)
@@ -499,8 +503,7 @@ const main = () => {
       // With -i/--include the index rides along, so the comparison still runs
       // (the named files themselves stay exempt below).
       if (inv.paths.length && !inv.include) continue
-      const { cwd, exact } = effectiveCwd(payloadCwd, inv.cdPath)
-      if (!exact || inv.cArgs.some(a => a.includes('$'))) {
+      if (unresolvedTarget(inv)) {
         process.stderr.write(
           `BLOCKED: the cd/-C target before this --amend is not a literal path, so the ` +
             `guard cannot check which worktree's index the amend would commit. AMEND_OK=1 ` +
@@ -508,7 +511,7 @@ const main = () => {
         )
         process.exit(2)
       }
-      const st = amendState(cwd, inv.cArgs, inv.all)
+      const st = amendState(effectiveCwd(payloadCwd, inv.cdPath).cwd, inv.cArgs, inv.all)
       if (!st) continue
       const grown = st.staged.filter(p => !st.prev.has(p) && !inv.paths.includes(p))
       if (grown.length) {

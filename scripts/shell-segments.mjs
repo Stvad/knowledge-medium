@@ -16,29 +16,46 @@
  * lines come back as segments flagged `heredoc: true` — data for scanners,
  * never command positions.
  *
+ * Redirections (`2>&1`, `> f`, `&> f`, `2>/dev/null`, `<<< w`) are neither
+ * segment boundaries nor arguments: the operator and its target are dropped,
+ * so `git push origin 2>&1 | tail` yields ['git', 'push', 'origin'].
+ *
  * Deliberately not a full shell parser: no expansions, and a close-paren
  * inside a double-quoted string nested in a substitution closes early. Guards
  * built on this defend against accidents, not adversaries.
  */
+// An unquoted word that is a redirection operator, with its target attached
+// (capture group) or empty when the target is the next word.
+const REDIRECT = /^(?:\d+|&)?(?:<<<|>>|>\||>&|>|<)(.*)$/s
+
 export const shellSegmentsWithDepth = cmd => {
   const segments = []
   let tokens = []
   let cur = ''
   let started = false // distinguishes '' (a real empty token) from no token
+  let literal = false // the current token holds a quoted or escaped character
+  let dropNext = false // the next token is the target of a redirection
   let quote = null // ' or " while inside a quoted span
   let escaped = false
   const scopes = [] // open subshell scopes; length IS the current depth
   const heredocs = [] // delimiters announced on this line, awaiting their bodies
 
   const pushToken = () => {
-    if (started) tokens.push(cur)
+    if (started) {
+      const redirect = !literal && cur.match(REDIRECT)
+      if (dropNext) dropNext = false
+      else if (redirect) dropNext = redirect[1] === ''
+      else tokens.push(cur)
+    }
     cur = ''
     started = false
+    literal = false
   }
   // Every scope change closes the segment first, so a segment's tokens all
   // live at one depth — scopes.length at push time.
   const pushSegment = () => {
     pushToken()
+    dropNext = false
     if (tokens.length) segments.push({ tokens, depth: scopes.length })
     tokens = []
   }
@@ -50,6 +67,7 @@ export const shellSegmentsWithDepth = cmd => {
       if (ch === '\n') continue // \<newline> is a continuation — bash drops it
       cur += ch
       started = true
+      literal = true
       continue
     }
     if (quote === "'") {
@@ -91,6 +109,7 @@ export const shellSegmentsWithDepth = cmd => {
     if (ch === "'" || ch === '"') {
       quote = ch
       started = true
+      literal = true
       continue
     }
     if (ch === '(') {
@@ -166,6 +185,11 @@ export const shellSegmentsWithDepth = cmd => {
         if (words.length) segments.push({ tokens: words, depth: scopes.length, heredoc: true })
       }
       i = Math.min(j, cmd.length + 1) - 1
+      continue
+    }
+    // `2>&1`, `>&2`, `>|`: the & or | belongs to the redirection before it.
+    if ((ch === '&' || ch === '|') && !literal && /^\d*[<>]$/.test(cur)) {
+      cur += ch
       continue
     }
     if (ch === ';' || ch === '&' || ch === '|' || ch === '\n') {

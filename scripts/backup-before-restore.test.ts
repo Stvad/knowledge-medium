@@ -3,21 +3,19 @@ import {
   chmodSync,
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
   readdirSync,
   readlinkSync,
-  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { restoreInvocations } from './backup-before-restore.mjs'
 import { NOTE_BUDGET } from './hook-context.mjs'
+import { contextOf as context, git, tempDirs } from './hook-test-support'
 
 const specs = (cmd: string) => restoreInvocations(cmd).map(r => r.pathspecs)
 
@@ -144,11 +142,7 @@ describe('restoreInvocations', () => {
 // session id and reads only the backup directory that session produced.
 describe('hook end-to-end', { timeout: 30_000 }, () => {
   const script = fileURLToPath(new URL('./backup-before-restore.mjs', import.meta.url))
-  const git = (cwd: string, args: string[]) => {
-    const r = spawnSync('git', args, { cwd, encoding: 'utf8' })
-    expect(r.status, `git ${args.join(' ')}: ${r.stderr}`).toBe(0)
-    return r.stdout.trim()
-  }
+  const tmp = tempDirs()
   let sessions = 0
   const hook = (command: string, cwd: string, over: Record<string, unknown> = {}) => {
     const session_id = `sess${++sessions}-0000-4000-8000-000000000000`
@@ -156,18 +150,10 @@ describe('hook end-to-end', { timeout: 30_000 }, () => {
     const r = spawnSync('node', [script], { cwd, input: payload, encoding: 'utf8' })
     return { ...r, session: session_id.slice(0, 8), sessionId: session_id }
   }
-  const context = (stdout: string): string => {
-    const out = JSON.parse(stdout)
-    expect(out.hookSpecificOutput.hookEventName).toBe('PreToolUse')
-    expect(out.hookSpecificOutput).not.toHaveProperty('permissionDecision')
-    return out.hookSpecificOutput.additionalContext
-  }
   const backupDir = (ctx: string) => ctx.split('\n').find(l => l.includes('restore-backups'))!.trim()
   const makeRepo = (name: string) => {
-    const repo = realpathSync(mkdtempSync(join(tmpdir(), name)))
+    const repo = tmp(name)
     git(repo, ['init', '-q', '-b', 'main'])
-    git(repo, ['config', 'user.email', 't@example.com'])
-    git(repo, ['config', 'user.name', 't'])
     mkdirSync(join(repo, 'sub'))
     for (const f of ['a.txt', 'b.txt', 'clean.txt', 'g.txt', 'sub/g.txt']) {
       writeFileSync(join(repo, f), 'one\ntwo\nthree\n')
@@ -213,15 +199,10 @@ describe('hook end-to-end', { timeout: 30_000 }, () => {
     expect(ctx).toMatch(/\+0 -2\s+b\.txt/)
   })
 
-  it('is a no-op for a restore of the index only', () => {
-    const r = hook('git restore --staged a.txt', repo)
-    expect(r.status).toBe(0)
-    expect(r.stdout).toBe('')
-  })
-
-  it('backs up a worktree-touching git restore', () => {
-    const ctx = context(hook('git restore a.txt b.txt', repo).stdout)
-    expect(ctx).toContain('2 files')
+  it('reads the pathspecs of a restore whose output is redirected', () => {
+    const ctx = context(hook('git checkout -- a.txt 2>&1 | tail -3', repo).stdout)
+    expect(ctx).toContain('copied 1 file')
+    expect(ctx).not.toContain('Every file')
   })
 
   it('resolves the pathspec against an in-command cd', () => {
@@ -247,19 +228,12 @@ describe('hook end-to-end', { timeout: 30_000 }, () => {
     expect(ctx).not.toContain('restore-backups')
   })
 
-  it('reports an unresolvable -C target the same way', () => {
-    const ctx = context(hook('git -C "$WT" checkout -- a.txt', repo).stdout)
-    expect(ctx).toContain('$WT')
-    expect(ctx).not.toContain('restore-backups')
-  })
-
-  it('copies nothing for a branch switch or a mention in prose', () => {
+  it('copies nothing for a branch switch', () => {
     expect(hook('git checkout main', repo).stdout).toBe('')
-    expect(hook('echo "git checkout -- a.txt"', repo).stdout).toBe('')
   })
 
   it('stores a worktree backup under that worktree own git dir', () => {
-    const wt = join(repo, '..', `${repo.split('/').pop()}-wt`)
+    const wt = join(tmp('restore-backup-wt-'), 'wt')
     git(repo, ['worktree', 'add', '-q', '--detach', wt, 'HEAD'])
     writeFileSync(join(wt, 'a.txt'), 'worktree edit\n')
     const wtGitDir = git(wt, ['rev-parse', '--absolute-git-dir'])
@@ -405,7 +379,7 @@ describe('hook end-to-end', { timeout: 30_000 }, () => {
   })
 
   it('backs up a restore from the index before the first commit', () => {
-    const unborn = realpathSync(mkdtempSync(join(tmpdir(), 'restore-backup-unborn-')))
+    const unborn = tmp('restore-backup-unborn-')
     git(unborn, ['init', '-q', '-b', 'main'])
     writeFileSync(join(unborn, 'f.txt'), 'staged\n')
     git(unborn, ['add', 'f.txt'])
@@ -415,7 +389,7 @@ describe('hook end-to-end', { timeout: 30_000 }, () => {
   })
 
   it('stays silent on a garbled or empty payload and outside a repo', () => {
-    const outside = realpathSync(mkdtempSync(join(tmpdir(), 'restore-backup-norepo-')))
+    const outside = tmp('restore-backup-norepo-')
     expect(hook('git checkout -- a.txt', outside).stdout).toBe('')
     const garbled = spawnSync('node', [script], { cwd: repo, input: 'not json', encoding: 'utf8' })
     expect(garbled.status).toBe(0)

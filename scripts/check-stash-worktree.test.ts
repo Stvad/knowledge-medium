@@ -12,6 +12,7 @@ import {
   hasMessage,
   renumbersStack,
   stashInvocations,
+  unresolvedTarget,
   type RepoStashState,
 } from './check-stash-worktree.mjs'
 import { shellSegments, shellSegmentsWithDepth } from './shell-segments.mjs'
@@ -52,7 +53,7 @@ describe('shellSegments', () => {
 
   it('returns heredoc bodies as data segments, not command positions', () => {
     expect(shellSegmentsWithDepth('cat <<EOF > f\ngit stash pop\nEOF\necho done')).toEqual([
-      { tokens: ['cat', '>', 'f'], depth: 0 },
+      { tokens: ['cat'], depth: 0 },
       { tokens: ['git', 'stash', 'pop'], depth: 0, heredoc: true },
       { tokens: ['echo', 'done'], depth: 0 },
     ])
@@ -66,6 +67,20 @@ describe('shellSegments', () => {
       tokens: ['ls'],
       depth: 0,
     })
+  })
+
+  it('drops redirections and their targets instead of splitting on them', () => {
+    expect(shellSegments('git push origin 2>&1 | tail -5')).toEqual([['git', 'push', 'origin'], ['tail', '-5']])
+    expect(shellSegments('git push origin > /tmp/log 2>&1; ls')).toEqual([['git', 'push', 'origin'], ['ls']])
+    expect(shellSegments('git restore f 2>/dev/null >>log')).toEqual([['git', 'restore', 'f']])
+    expect(shellSegments('git restore f >> log 2> err')).toEqual([['git', 'restore', 'f']])
+    expect(shellSegments('make &> out.txt && ls')).toEqual([['make'], ['ls']])
+    expect(shellSegments('echo x >| forced')).toEqual([['echo', 'x']])
+    expect(shellSegments('cat <<< word')).toEqual([['cat']])
+    expect(shellSegments(String.raw`echo ">" '2>&1' \>`)).toEqual([['echo', '>', '2>&1', '>']])
+    expect(shellSegments('sleep 1 & ls')).toEqual([['sleep', '1'], ['ls']])
+    expect(shellSegments('echo x >& both.log; ls')).toEqual([['echo', 'x'], ['ls']])
+    expect(shellSegments('a > ; b')).toEqual([['a'], ['b']]) // a dangling redirect eats nothing past its segment
   })
 
   it('annotates each segment with its subshell depth', () => {
@@ -117,11 +132,20 @@ describe('stashInvocations', () => {
     expect(stashInvocations('cd a && cd ~/b && git stash pop')[0].cdPath).toBe(join(homedir(), 'b'))
     expect(stashInvocations('cd ~ && cd b && git stash pop')[0].cdPath).toBe(join(homedir(), 'b'))
     expect(stashInvocations('cd a && (cd b && true); git stash pop')[0].cdPath).toBe('a')
+    expect(stashInvocations('cd "$S" && cd .. && git stash pop')[0].cdPath).toBe('$S/..')
   })
 
   it('expands a leading tilde in -C, --git-dir and --work-tree values', () => {
     expect(stashInvocations('git -C ~/repo stash list')[0].cArgs).toEqual(['-C', join(homedir(), 'repo')])
     expect(stashInvocations('git --work-tree ~ stash list')[0].cArgs).toEqual(['--work-tree', homedir()])
+  })
+
+  it('names the cd or -C target a static reading cannot resolve', () => {
+    const target = (cmd: string) => unresolvedTarget(stashInvocations(cmd)[0])
+    expect(target('cd "$WT" && git stash list')).toBe('$WT')
+    expect(target('git -C "$WT" stash list')).toBe('$WT')
+    expect(target('git --git-dir=$G stash list')).toBe('--git-dir=$G')
+    expect(target('cd /wt && git -C sub stash list')).toBeNull()
   })
 
   it('scopes a subshell cd to its subshell', () => {

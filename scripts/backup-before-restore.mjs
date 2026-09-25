@@ -1,63 +1,44 @@
 #!/usr/bin/env node
 /**
- * Backup before checkout/restore (wired as a PreToolUse(Bash) hook). It NEVER
- * blocks: exit 0 always, and its only output is additionalContext.
+ * Backup before checkout/restore (PreToolUse(Bash) hook). It never blocks:
+ * exit 0 always, and its only output is additionalContext.
  *
  * `git checkout [<rev>] -- <paths>` and `git restore <paths>` overwrite the
- * working tree from the index or a commit: they restore HEAD, not the tree as
- * it stood before the edit being undone, so every uncommitted edit in a named
- * file goes with it, silently. Advice to check `git status` first did not stop
- * that, and a blocking guard would cost a re-run on each of the many legitimate
- * restores, so this makes the loss recoverable and visible instead. Before the
- * command runs, every named path that differs from HEAD is copied to
+ * working tree from the index or a commit, not from the tree as it stood before
+ * the edit being undone, so every uncommitted edit in a named file goes with it,
+ * silently. Before such a command runs, every named path that differs from HEAD
+ * (the empty tree before the first commit) is copied to
  *
  *   <git rev-parse --absolute-git-dir>/restore-backups/<session>/<timestamp>/<repo path>
  *
- * with <timestamp>.manifest.txt beside that directory (never inside it, where a
- * repository path could land on it) naming the command, and the context
- * reports the count, the directory, and each file's added/deleted lines versus
- * HEAD. Facts only: no cause, no remedy. <session> is the first 8 characters of
- * the payload's session_id, so no uuid-shaped string reaches a command that
- * reads a backup.
+ * with <timestamp>.manifest.txt beside that directory, never inside it where a
+ * repository path could land on it. The context reports the count, the
+ * directory and each file's added/deleted lines: facts only, no cause, no
+ * remedy. <session> is the first 8 characters of the payload's session_id, so
+ * backup paths hold no uuid-shaped string. The per-worktree git dir keeps
+ * backups out of the tree and out of other worktrees; they outlive the session,
+ * go with `git worktree remove`, and nothing prunes them.
  *
- * Location: the per-worktree git dir keeps backups out of the tree and out of
- * every other worktree, and they outlive the session. `git worktree remove`
- * deletes them along with that worktree's own work. Nothing prunes them.
+ * Paths the hook cannot read statically widen the copy to every file that
+ * differs from HEAD (unreadablePathspecs says when). A command that reads from a
+ * named commit also has the untracked files that commit tracks copied, since it
+ * overwrites them.
  *
- * What counts as named: checkout operands after `--`, or every operand when
- * there is no `--` (a branch or rev name matches no file); the whole tree for
- * a forced checkout (-f), branch operation or not, since it discards every
- * local change; `git restore` pathspecs unless it touches only the index
- * (`--staged` without `--worktree`). A pathspec that is not a plain path (a
- * `$var`, braces, a glob), a command substitution, xargs or
- * --pathspec-from-file widens the copy to every file that differs from HEAD,
- * and the context says which applied. When the command reads from a named
- * commit (`checkout <rev> --`, a forced checkout, `restore --source`), the
- * untracked files under the pathspecs that commit tracks are copied too,
- * since it overwrites them.
- * HEAD is the empty tree before the first commit.
- *
- * Not covered, and accepted: a restore that runs inside a script file,
- * `bash -c`, or a heredoc; untracked files under `checkout <rev> <path>`
- * without `--`; edits `git diff` does not report, in files whose index entry
- * is marked assume-unchanged or skip-worktree and in files inside submodules
- * (this repository uses neither).
+ * Not covered, and accepted: a restore inside a script file, `bash -c`, a
+ * heredoc or after `pushd`; untracked files under `checkout <rev> <path>`
+ * without `--`; staged content that differs from the working tree when the
+ * command also rewrites the index (it survives as an unreachable blob until
+ * gc); edits `git diff` does not report, under assume-unchanged or
+ * skip-worktree bits or inside submodules (this repository uses neither); and
+ * other commands that discard work: reset --hard, switch -f or
+ * --discard-changes, checkout-index -f, clean.
  */
 
-import { execFileSync } from 'node:child_process'
-import {
-  copyFileSync,
-  lstatSync,
-  mkdirSync,
-  readFileSync,
-  readlinkSync,
-  symlinkSync,
-  writeFileSync,
-} from 'node:fs'
+import { copyFileSync, lstatSync, mkdirSync, readlinkSync, symlinkSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { effectiveCwd, gitInvocations } from './check-stash-worktree.mjs'
-import { emitPreToolUseContext, fitLines } from './hook-context.mjs'
+import { effectiveCwd, gitInvocations, unresolvedTarget } from './check-stash-worktree.mjs'
+import { emitPreToolUseContext, firstLine, fitLines, git, readHookPayload } from './hook-context.mjs'
 
 const WHOLE_TREE = ':/'
 
@@ -186,14 +167,6 @@ export const restoreInvocations = cmd =>
 
 // ---------------------------------------------------------------------------
 
-const git = (cwd, cArgs, args) =>
-  execFileSync('git', [...cArgs, ...args], {
-    cwd,
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-    maxBuffer: 64 * 1024 * 1024,
-  })
-
 const diffAgainst = (cwd, cArgs, base, mode, pathspecs) =>
   git(cwd, cArgs, ['diff', mode, '-z', '--no-renames', '--no-ext-diff', '--no-textconv', base, '--', ...pathspecs])
     .split('\0')
@@ -202,9 +175,9 @@ const diffAgainst = (cwd, cArgs, base, mode, pathspecs) =>
 /** HEAD, or the empty tree before the first commit, when every file is new. */
 const headOrEmptyTree = (cwd, cArgs) => {
   try {
-    return git(cwd, cArgs, ['rev-parse', '--verify', '--quiet', 'HEAD']).trim()
+    return git(cwd, cArgs, ['rev-parse', '--verify', '--quiet', 'HEAD'])
   } catch {
-    return git(cwd, cArgs, ['hash-object', '-t', 'tree', '--stdin']).trim() // stdin is empty
+    return git(cwd, cArgs, ['hash-object', '-t', 'tree', '--stdin']) // stdin is empty
   }
 }
 
@@ -217,43 +190,34 @@ const untrackedIn = (cwd, cArgs, pathspecs, source) => {
     .split('\0')
     .filter(Boolean)
   if (!untracked.length) return [] // fast path: cat-file would find nothing to match
-  const kinds = execFileSync('git', [...cArgs, 'cat-file', '--batch-check=%(objecttype)'], {
-    cwd,
-    encoding: 'utf8',
-    input: untracked.map(p => `${source}:${p}\n`).join(''),
-    stdio: ['pipe', 'pipe', 'pipe'],
-  }).split('\n')
+  const input = untracked.map(p => `${source}:${p}\n`).join('')
+  const kinds = git(cwd, cArgs, ['cat-file', '--batch-check=%(objecttype)'], input).split('\n')
   return untracked.filter((_, i) => kinds[i] === 'blob')
 }
 
 /**
  * Files under the pathspecs that differ from HEAD, repo-relative, plus the
- * untracked ones `source` would overwrite. The list comes from --name-only,
- * which lists a file it cannot read; --numstat must read every file and fails
- * outright on one it cannot, so line counts are best-effort: countsError is
- * that failure, and a file with no counts has added === undefined (binary
- * files get null).
+ * untracked ones `source` would overwrite. --numstat reads every file and fails
+ * outright on one it cannot read; --name-only still lists that file, so it is
+ * the fallback and countsError says why the counts are missing.
  */
 const changedFiles = (cwd, cArgs, pathspecs, source) => {
   const base = headOrEmptyTree(cwd, cArgs)
-  const paths = diffAgainst(cwd, cArgs, base, '--name-only', pathspecs)
-  const counts = new Map()
+  let files
   let countsError = null
   try {
-    for (const rec of diffAgainst(cwd, cArgs, base, '--numstat', pathspecs)) {
+    files = diffAgainst(cwd, cArgs, base, '--numstat', pathspecs).map(rec => {
       const [added, deleted, ...path] = rec.split('\t')
       const count = n => (n === '-' ? null : Number(n))
-      counts.set(path.join('\t'), { added: count(added), deleted: count(deleted) })
-    }
+      return { path: path.join('\t'), added: count(added), deleted: count(deleted) }
+    })
   } catch (e) {
-    countsError = String(e?.stderr || e?.message || e).trim().split('\n')[0]
+    countsError = firstLine(e)
+    files = diffAgainst(cwd, cArgs, base, '--name-only', pathspecs).map(path => ({ path }))
   }
   // Fast path: with no source (an index restore) no untracked file is at risk.
   const untracked = source ? untrackedIn(cwd, cArgs, pathspecs, source) : []
-  return {
-    files: [...paths.map(path => ({ path, ...counts.get(path) })), ...untracked.map(path => ({ path, untracked: true }))],
-    countsError,
-  }
+  return { files: [...files, ...untracked.map(path => ({ path, untracked: true }))], countsError }
 }
 
 /** Copy one file (or symlink, as a link). Returns null, 'absent', or an error code. */
@@ -293,8 +257,7 @@ const report = ({ dir, copied, failed, widened, countsError }) =>
     n => `  …and ${n} more, listed in ${basename(dir)}.manifest.txt beside it`,
   ).join('\n')
 
-const backUp = ({ payload, cmd, invocations }) => {
-  const payloadCwd = payload.cwd || process.cwd()
+const backUp = ({ payload, cmd, cwd: payloadCwd, invocations }) => {
   const session =
     String(payload.session_id ?? '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 8) || 'nosession'
   const now = new Date()
@@ -303,8 +266,7 @@ const backUp = ({ payload, cmd, invocations }) => {
   const notes = []
 
   for (const inv of invocations) {
-    const { cwd, exact } = effectiveCwd(payloadCwd, inv.cdPath)
-    const unresolved = exact ? inv.cArgs.find(a => a.includes('$')) : inv.cdPath
+    const unresolved = unresolvedTarget(inv)
     if (unresolved) {
       notes.push(
         `backup-before-restore: nothing copied for \`git ${inv.verb}\`: its target \`${unresolved}\` ` +
@@ -312,11 +274,10 @@ const backUp = ({ payload, cmd, invocations }) => {
       )
       continue
     }
+    const { cwd } = effectiveCwd(payloadCwd, inv.cdPath)
     let top, gitDir, files, countsError
     try {
-      ;[top, gitDir] = git(cwd, inv.cArgs, ['rev-parse', '--show-toplevel', '--absolute-git-dir'])
-        .trim()
-        .split('\n')
+      ;[top, gitDir] = git(cwd, inv.cArgs, ['rev-parse', '--show-toplevel', '--absolute-git-dir']).split('\n')
       ;({ files, countsError } = changedFiles(cwd, inv.cArgs, inv.pathspecs, inv.source))
     } catch {
       continue // not a repository, bad pathspec: the command itself reports these
@@ -358,16 +319,10 @@ const backUp = ({ payload, cmd, invocations }) => {
 }
 
 const main = () => {
-  let payload
+  const hook = readHookPayload(/\b(checkout|restore)\b/)
+  if (!hook) return
   try {
-    payload = JSON.parse(readFileSync(0, 'utf8'))
-  } catch {
-    return // not a hook payload
-  }
-  const cmd = payload?.tool_input?.command ?? ''
-  if (!/\b(checkout|restore)\b/.test(cmd)) return // fast path only: restoreInvocations decides
-  try {
-    emitPreToolUseContext(backUp({ payload, cmd, invocations: restoreInvocations(cmd) }))
+    emitPreToolUseContext(backUp({ ...hook, invocations: restoreInvocations(hook.cmd) }))
   } catch (e) {
     emitPreToolUseContext([`backup-before-restore: failed before copying everything: ${e?.message ?? e}`])
   }

@@ -1,35 +1,28 @@
 #!/usr/bin/env node
 /**
- * Push-time scope print (wired as a PreToolUse(Bash) hook). It NEVER blocks:
- * exit 0 always, and its only output is additionalContext.
+ * Push-time scope print (PreToolUse(Bash) hook). It never blocks and never
+ * fetches: exit 0 always, and its only output is additionalContext.
  *
- * On `git push` it prints what each pushed source changes against
- * origin/master, as this clone last fetched it:
+ * On `git push` it prints, for each pushed source (each refspec's <src>, or
+ * HEAD when the push names none), the merge-base diff against origin/master as
+ * this clone last fetched it: the files by status with deletions first, the
+ * shortstat, and the ahead/behind commit counts. A push that names no single
+ * source (every branch, tags only, deletions, a refspec that is not literal)
+ * says so instead.
  *
- *   git diff --shortstat   --no-ext-diff origin/master...<source>
- *   git diff --name-status --no-ext-diff origin/master...<source>   (deletions first)
+ * A squash onto a master that moved after the fetch keeps the old tree over the
+ * new base and reverts whatever master merged meanwhile, tests included, so the
+ * gate stays green. Here that revert is a `D <test file>` line, printed before
+ * anything leaves the machine. Facts only: no verdict, no advice.
  *
- * plus the ahead/behind commit counts. The source is each refspec's <src>, or
- * HEAD when the push names none; a push of every branch, of tags only, or of
- * deletions names no single source and says so instead. A squash onto a master that moved after
- * the fetch keeps the old tree over the new base, so it reverts whatever master
- * merged meanwhile, tests included, and the gate stays green because the tests
- * left with the code. In this listing that revert is a `D <test file>` line,
- * printed before anything leaves the machine, and a diff that grows across
- * review rounds is visible push by push. Facts only: no verdict, no advice.
- * It never fetches: a stale origin/master is part of what it reports.
- *
- * Separate from backup-before-restore.mjs on purpose: that hook answers
- * uncommitted work lost to a restore, this one answers committed history
- * rewritten against the wrong base. Different root causes, different triggers.
+ * Kept apart from backup-before-restore.mjs: a different root cause (history
+ * rewritten against the wrong base, not uncommitted work lost to a restore).
  */
 
-import { execFileSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { effectiveCwd, gitInvocations } from './check-stash-worktree.mjs'
-import { emitPreToolUseContext, fitLines } from './hook-context.mjs'
+import { effectiveCwd, gitInvocations, unresolvedTarget } from './check-stash-worktree.mjs'
+import { emitPreToolUseContext, firstLine, fitLines, git, readHookPayload } from './hook-context.mjs'
 
 const BASE = 'origin/master'
 
@@ -66,20 +59,13 @@ export const pushSources = rest => {
   if (!refspecs.length) {
     return tags ? { sources: [], declined: 'it pushes tags only (--tags)' } : { sources: ['HEAD'], declined: null }
   }
+  // A quoted substitution leaves an empty word; a variable leaves its name.
+  const unread = refspecs.find(r => r === '' || r.includes('$'))
+  if (unread !== undefined) return { sources: [], declined: 'it names a refspec that is not literal' }
   // [+]<src>[:<dst>]; an empty src deletes <dst>
-  const sources = [...new Set(refspecs.map(r => r.replace(/^\+/, '').split(':')[0]).filter(Boolean))]
+  const sources = refspecs.map(r => r.replace(/^\+/, '').split(':')[0]).filter(Boolean)
   return sources.length ? { sources, declined: null } : { sources: [], declined: 'it only deletes remote refs' }
 }
-
-const git = (cwd, cArgs, args) =>
-  execFileSync('git', [...cArgs, ...args], {
-    cwd,
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-    maxBuffer: 64 * 1024 * 1024,
-  }).trimEnd()
-
-const firstLine = e => String(e?.stderr || e?.message || e).trim().split('\n')[0]
 
 /** Scope facts for one pushed source, or null when cwd is not inside a repository. */
 const scopeOf = (cwd, cArgs, src) => {
@@ -112,24 +98,17 @@ const scopeOf = (cwd, cArgs, src) => {
 }
 
 const main = () => {
-  let payload
-  try {
-    payload = JSON.parse(readFileSync(0, 'utf8'))
-  } catch {
-    return // not a hook payload
-  }
-  const cmd = payload?.tool_input?.command ?? ''
-  if (!/\bpush\b/.test(cmd)) return // fast path only: pushInvocations decides
-  const payloadCwd = payload.cwd || process.cwd()
+  const hook = readHookPayload(/\bpush\b/)
+  if (!hook) return
   const notes = []
-  const seen = new Set()
-  for (const inv of pushInvocations(cmd)) {
-    const { cwd, exact } = effectiveCwd(payloadCwd, inv.cdPath)
-    const unresolved = exact ? inv.cArgs.find(a => a.includes('$')) : inv.cdPath
+  const seen = new Set() // one scope per repository and source, however often it is pushed
+  for (const inv of pushInvocations(hook.cmd)) {
+    const unresolved = unresolvedTarget(inv)
     if (unresolved) {
       notes.push(`push-scope: no scope for this push: its target \`${unresolved}\` is not a literal path.`)
       continue
     }
+    const { cwd } = effectiveCwd(hook.cwd, inv.cdPath)
     const { sources, declined } = pushSources(inv.rest)
     if (declined) notes.push(`push-scope: no scope for this push: ${declined}.`)
     for (const src of sources) {

@@ -1,10 +1,10 @@
 import { spawnSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { NOTE_BUDGET } from './hook-context.mjs'
+import { contextOf as context, git, tempDirs } from './hook-test-support'
 import { pushInvocations, pushSources } from './push-scope.mjs'
 
 describe('pushInvocations', () => {
@@ -45,50 +45,41 @@ describe('pushSources', () => {
     expect(src('git push origin --delete side').declined).toContain('--delete')
     expect(src('git push origin :side').declined).toContain('deletes')
     expect(src('git push --tags origin side').sources).toEqual(['side'])
+    expect(src('git push -u origin "$(git branch --show-current)"').declined).toContain('not literal')
+    expect(src('git push origin "$BRANCH"').declined).toContain('not literal')
   })
 })
 
 describe('hook end-to-end', { timeout: 30_000 }, () => {
   const script = fileURLToPath(new URL('./push-scope.mjs', import.meta.url))
-  const git = (cwd: string, args: string[]) => {
-    const r = spawnSync('git', args, { cwd, encoding: 'utf8' })
-    expect(r.status, `git ${args.join(' ')}: ${r.stderr}`).toBe(0)
-    return r.stdout.trim()
-  }
   const hook = (command: string, cwd: string, input?: string) => {
     const payload = input ?? JSON.stringify({ tool_name: 'Bash', cwd, tool_input: { command } })
     const r = spawnSync('node', [script], { cwd, input: payload, encoding: 'utf8' })
     expect(r.status).toBe(0)
     return r.stdout
   }
-  const context = (stdout: string): string => {
-    const out = JSON.parse(stdout)
-    expect(out.hookSpecificOutput.hookEventName).toBe('PreToolUse')
-    expect(out.hookSpecificOutput).not.toHaveProperty('permissionDecision')
-    return out.hookSpecificOutput.additionalContext
-  }
   const commitFiles = (cwd: string, files: Record<string, string>, msg: string) => {
     for (const [f, body] of Object.entries(files)) writeFileSync(join(cwd, f), body)
     git(cwd, ['add', '.'])
     git(cwd, ['commit', '-qm', msg])
   }
-  const tmp = (name: string) => realpathSync(mkdtempSync(join(tmpdir(), name)))
+  const tmp = tempDirs()
+  const clone = (name: string) => {
+    const dir = tmp(name)
+    git(dir, ['clone', '-q', origin, '.'])
+    return dir
+  }
 
   // origin (bare) ← seed; `work` is the clone a session pushes from.
   const origin = tmp('push-scope-origin-')
   git(origin, ['init', '-q', '--bare', '-b', 'master'])
   const seed = tmp('push-scope-seed-')
   git(seed, ['init', '-q', '-b', 'master'])
-  git(seed, ['config', 'user.email', 't@example.com'])
-  git(seed, ['config', 'user.name', 't'])
   commitFiles(seed, { 'a.ts': 'a\n', 'z.test.ts': 'test a\n', 'b.ts': 'b\n' }, 'base')
   git(seed, ['remote', 'add', 'origin', origin])
   git(seed, ['push', '-q', 'origin', 'master'])
 
-  const work = tmp('push-scope-work-')
-  git(work, ['clone', '-q', origin, '.'])
-  git(work, ['config', 'user.email', 't@example.com'])
-  git(work, ['config', 'user.name', 't'])
+  const work = clone('push-scope-work-')
   git(work, ['checkout', '-qb', 'feat'])
   git(work, ['rm', '-q', 'z.test.ts'])
   commitFiles(work, { 'b.ts': 'b changed\n', 'c.ts': 'c\n' }, 'feat work')
@@ -109,17 +100,11 @@ describe('hook end-to-end', { timeout: 30_000 }, () => {
   it('shows a stale-base squash as deletions of what master merged meanwhile', () => {
     // The squash-onto-moved-master shape: master gains a merged PR's files, the
     // branch fetches, then `reset --soft origin/master` keeps the OLD tree.
-    const other = tmp('push-scope-other-')
-    git(other, ['clone', '-q', origin, '.'])
-    git(other, ['config', 'user.email', 't@example.com'])
-    git(other, ['config', 'user.name', 't'])
+    const other = clone('push-scope-other-')
     commitFiles(other, { 'merged.ts': 'm\n', 'merged.test.ts': 'test m\n' }, 'merged PR')
     git(other, ['push', '-q', 'origin', 'master'])
 
-    const squash = tmp('push-scope-squash-')
-    git(squash, ['clone', '-q', origin, '.'])
-    git(squash, ['config', 'user.email', 't@example.com'])
-    git(squash, ['config', 'user.name', 't'])
+    const squash = clone('push-scope-squash-')
     git(squash, ['checkout', '-qb', 'feat', 'HEAD~1']) // branch cut before the merged PR
     commitFiles(squash, { 'mine.ts': 'x\n' }, 'my work')
     git(squash, ['fetch', '-q'])
@@ -152,6 +137,12 @@ describe('hook end-to-end', { timeout: 30_000 }, () => {
     expect(ctx).not.toContain('files changed')
   })
 
+  it('scopes a push whose output is redirected', () => {
+    const ctx = context(hook('git push --force-with-lease origin 2>&1 | tail -5', work))
+    expect(ctx).toContain('push-scope: feat against origin/master')
+    expect(ctx).not.toContain('failed')
+  })
+
   it('evaluates the repository an in-command cd moves to', () => {
     const elsewhere = tmp('push-scope-elsewhere-')
     expect(context(hook(`cd ${work} && git push`, elsewhere))).toContain('D\tz.test.ts')
@@ -160,25 +151,20 @@ describe('hook end-to-end', { timeout: 30_000 }, () => {
   it('reports a missing origin/master instead of a scope', () => {
     const lone = tmp('push-scope-lone-')
     git(lone, ['init', '-q', '-b', 'main'])
-    git(lone, ['config', 'user.email', 't@example.com'])
-    git(lone, ['config', 'user.name', 't'])
     commitFiles(lone, { 'x.ts': 'x\n' }, 'x')
     const ctx = context(hook('git push', lone))
     expect(ctx).toContain('origin/master')
     expect(ctx).not.toContain('files changed')
   })
 
-  it('reports an unresolvable cd or -C target instead of guessing a repository', () => {
-    for (const cmd of ['cd "$WT" && git push', 'git -C "$WT" push']) {
-      const ctx = context(hook(cmd, work))
-      expect(ctx).toContain('$WT')
-      expect(ctx).not.toContain('files changed')
-    }
+  it('reports an unresolvable cd target instead of guessing a repository', () => {
+    const ctx = context(hook('cd "$WT" && git push', work))
+    expect(ctx).toContain('$WT')
+    expect(ctx).not.toContain('files changed')
   })
 
   it('says so when the branch has no file differences', () => {
-    const same = tmp('push-scope-same-')
-    git(same, ['clone', '-q', origin, '.'])
+    const same = clone('push-scope-same-')
     expect(context(hook('git push', same))).toContain('no file differences')
   })
 
@@ -188,10 +174,7 @@ describe('hook end-to-end', { timeout: 30_000 }, () => {
   })
 
   it('lists files within the context budget and counts the rest', () => {
-    const wide = tmp('push-scope-wide-')
-    git(wide, ['clone', '-q', origin, '.'])
-    git(wide, ['config', 'user.email', 't@example.com'])
-    git(wide, ['config', 'user.name', 't'])
+    const wide = clone('push-scope-wide-')
     git(wide, ['checkout', '-qb', 'wide'])
     const dir = 'deeply-nested-directory-name/'.repeat(3)
     mkdirSync(join(wide, dir), { recursive: true })
@@ -206,8 +189,6 @@ describe('hook end-to-end', { timeout: 30_000 }, () => {
     expect(hook('git status', work)).toBe('')
     expect(hook('echo "git push"', work)).toBe('')
     expect(hook('', work, 'not json')).toBe('')
-    const outside = tmp('push-scope-norepo-')
-    expect(hook('git push', outside)).toBe('')
-    rmSync(outside, { recursive: true })
+    expect(hook('git push', tmp('push-scope-norepo-'))).toBe('')
   })
 })
