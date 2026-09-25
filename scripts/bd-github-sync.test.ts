@@ -1,9 +1,9 @@
-import { spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { spawn, spawnSync } from 'node:child_process'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   allowsBeadIds,
   allowsIssueRefs,
@@ -40,6 +40,7 @@ import {
   planPriorityFixes,
   REPO,
   resolveBodyPath,
+  settleAll,
   spawnAsync,
   syncSlownessNotice,
   type BeadRow,
@@ -757,6 +758,39 @@ describe('inPool', () => {
     expect(peak).toBe(8)
     expect(seen.sort((a, b) => a - b)).toEqual(Array.from({ length: 20 }, (_, i) => i))
   })
+
+  // Every chunk is a child process: rejecting while siblings still run would
+  // let them outlive the lock and the run's timing record.
+  it('starts nothing after a failure, and rejects only once every started item has settled', async () => {
+    let inFlight = 0
+    const started: number[] = []
+    const tick = () => new Promise(resolve => setImmediate(resolve))
+    const pool = inPool(Array.from({ length: 20 }, (_, i) => i), 4, async i => {
+      started.push(i)
+      inFlight++
+      try {
+        await tick()
+        if (i === 1) throw new Error('chunk 1 failed')
+        await tick()
+        await tick()
+      } finally {
+        inFlight--
+      }
+    })
+    await expect(pool).rejects.toThrow('chunk 1 failed')
+    expect(inFlight).toBe(0)
+    expect(started).toEqual([0, 1, 2, 3])
+  })
+})
+
+describe('settleAll', () => {
+  it('waits for every promise before rejecting with the first failure', async () => {
+    let slowDone = false
+    const slow = new Promise(resolve => setTimeout(() => resolve((slowDone = true)), 20))
+    await expect(settleAll([Promise.reject(new Error('fast failure')), slow])).rejects.toThrow('fast failure')
+    expect(slowDone).toBe(true)
+    await expect(settleAll([Promise.resolve(1), Promise.resolve('two')])).resolves.toEqual([1, 'two'])
+  })
 })
 
 describe('spawnAsync', () => {
@@ -809,8 +843,17 @@ describe('syncSlownessNotice', () => {
     expect(syncSlownessNotice([working, working].join('\n'))).toContain('32.0s and 32.0s')
   })
 
+  // Valid JSON in an older or damaged shape must not throw: at session start
+  // a throw here would take the whole memory index down with the alarm.
+  it('formats records with a damaged spawns list instead of throwing', () => {
+    const damaged = (ms: number) => record({ ms, spawns: {} })
+    expect(syncSlownessNotice([damaged(35_900), damaged(37_200)].join('\n'))).toContain('35.9s and 37.2s')
+    const odd = (ms: number) => record({ ms, spawns: [null, { cmd: 7 }, { cmd: 'bd show', calls: 2, ms: 20_300 }] })
+    expect(syncSlownessNotice([odd(35_900), odd(37_200)].join('\n'))).toContain('Slowest spawns in the latest: bd show ×2 20.3s.')
+  })
+
   it('reads past a torn or foreign line instead of failing session start', () => {
-    const noise = ['{"ms": 1', 'not json', '{"unrelated": true}', 'null']
+    const noise = ['{"ms": 1', 'not json', '{"unrelated": true}', 'null', '{"ms": 50000}']
     expect(syncSlownessNotice([slow(35_900), ...noise, slow(37_200), ...noise].join('\n'))).toContain('35.9s and 37.2s')
     expect(syncSlownessNotice('')).toBe('')
   })
@@ -1139,6 +1182,8 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     failPostCall?: number
     /** Seconds each `gh api graphql` call takes, so overlapping calls show in `graphqlPeak`. */
     graphqlDelay?: number
+    /** Seconds the issue listing takes. */
+    issueListDelay?: number
     /** Extra environment for the script (the mirror's post cap override). */
     env?: Record<string, string>
     /** What `bd --version` prints (default: a verified version). */
@@ -1194,7 +1239,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
         `echo "gh $@" >> "${shimLog}"`,
         'case "$1 $2" in',
         '  "auth token") echo shim-token;;',
-        `  "issue list") cat "${repo}/gh-issues.json";;`,
+        `  "issue list") ${opts.issueListDelay ? `sleep ${opts.issueListDelay}; ` : ''}cat "${repo}/gh-issues.json";;`,
         // The real gh exits 1 when any alias is NOT_FOUND but still prints
         // the data — the shim mirrors that exit so the parser is pinned to
         // stdout, not the status.
@@ -1218,6 +1263,9 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     chmodSync(join(shimDir, 'gh'), 0o755)
     const env = { ...process.env, ...opts.env, PATH: `${shimDir}:${process.env.PATH}` }
     const run = (...args: string[]) => spawnSync('node', [script, ...args], { cwd: repo, env, encoding: 'utf8' })
+    // For a test that has to act while the sync runs (release a lock it waits on).
+    const runInBackground = (...args: string[]) =>
+      new Promise<number | null>(resolve => spawn('node', [script, ...args], { cwd: repo, env, stdio: 'ignore' }).on('close', resolve))
     const runLog = () => {
       const log = join(repo, '.beads', 'github-sync-runs.log')
       return existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map(l => JSON.parse(l)) : []
@@ -1231,7 +1279,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
         else if (mark === '-') inFlight--
       return peak
     }
-    return { repo, run, runLog, graphqlPeak, shimCalls: () => readFileSync(shimLog, 'utf8'), posted: () => readFileSync(postedLog, 'utf8') }
+    return { repo, run, runInBackground, runLog, graphqlPeak, shimCalls: () => readFileSync(shimLog, 'utf8'), posted: () => readFileSync(postedLog, 'utf8') }
   }
 
   // Paired with syncRow to be CONVERGED: same title, body, priority and type,
@@ -1392,6 +1440,22 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const [entry] = runLog()
     expect(entry).toMatchObject({ ok: true, budgetMs: 1 })
     expect(entry.spawns.map((s: { cmd: string }) => s.cmd)).toEqual(expect.arrayContaining(['gh issue list', 'bd export']))
+  })
+
+  // The listing and the first read run at once; when one fails, the run still
+  // waits for the other before it fails, so no child outlives the lock or the
+  // timing record. The record's duration shows the wait.
+  it('waits for the issue listing before failing on a tracker read that failed first', () => {
+    const { run, runLog } = makeSyncRepo({
+      issues: [ghIssue(1, '2026-08-20T00:00:00Z')],
+      reads: [[]],
+      failReadCall: 1,
+      issueListDelay: 2,
+    })
+    const r = run()
+    expect(r.status).toBe(1)
+    expect(r.stderr).toContain('export exploded')
+    expect(runLog()[0].ms).toBeGreaterThanOrEqual(2000)
   })
 
   it('records a failed run as failed, and leaves no record for a dry run', () => {
@@ -1835,17 +1899,24 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(entry.idleMs).toBeLessThan(entry.ms)
   })
 
-  // Queueing behind another run is that run's time, not this one's. The holder
-  // is an orphaned `sleep`, so the OS reaps it when it ends and the dead-pid
-  // steal lets this run through well inside the lock's 20s deadline.
-  it('records a wait on another run\'s lock as idle time', () => {
+  // Queueing behind another run is that run's time, not this one's. The lock
+  // is held under this test's own pid, which stays alive, and released by the
+  // test itself: no reaping to depend on. The release waits for the token
+  // probe, the last spawn before the lock, so the run is queued by then. The
+  // timeout clears the lock's 20s deadline, so a lock that is never released
+  // fails the assertion below (a skipped run writes no record), not the clock.
+  it('records a wait on another run\'s lock as idle time', { timeout: 40_000 }, async () => {
     const row = syncRow({ id: 'km-c', external_ref: ref(1), updated_at: '2026-08-19T00:00:00Z' })
-    const { repo, run, runLog } = makeSyncRepo({ issues: [ghIssue(1, '2026-08-20T00:00:00Z')], reads: [[row]] })
-    const holder = spawnSync('sh', ['-c', 'sleep 1.2 >/dev/null 2>&1 & echo $!'], { encoding: 'utf8' }).stdout.trim()
-    writeFileSync(join(repo, '.beads', 'github-sync.lock'), holder)
-    expect(run().status).toBe(0)
+    const { repo, runInBackground, runLog, shimCalls } = makeSyncRepo({ issues: [ghIssue(1, '2026-08-20T00:00:00Z')], reads: [[row]] })
+    const lock = join(repo, '.beads', 'github-sync.lock')
+    writeFileSync(lock, String(process.pid))
+    const done = runInBackground()
+    await vi.waitFor(() => expect(shimCalls()).toContain('gh auth token'), { timeout: 15_000, interval: 50 })
+    await new Promise(resolve => setTimeout(resolve, 1_200))
+    unlinkSync(lock)
+    expect(await done).toBe(0)
     const [entry] = runLog()
-    expect(entry.idleMs).toBeGreaterThanOrEqual(1000)
+    expect(entry?.idleMs).toBeGreaterThanOrEqual(1000)
   })
 
   it('caps the posts of one run and leaves the rest for the next', () => {

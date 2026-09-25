@@ -1064,13 +1064,32 @@ export const spawnAsync = (file, args, { maxBuffer = MAX_OUTPUT_BYTES, ...opts }
     })
   })
 
-// At most `width` of `items` in flight at once.
+// Concurrent work here is child processes, and a rejection that leaves its
+// siblings running lets them outlive the lock and the run's timing record. So
+// both helpers settle everything they started before failing.
+export const settleAll = async promises => {
+  const results = await Promise.allSettled(promises)
+  const failed = results.find(r => r.status === 'rejected')
+  if (failed) throw failed.reason
+  return results.map(r => r.value)
+}
+
+// At most `width` of `items` in flight at once; after a failure, nothing new
+// starts and the first failure is thrown once the rest have settled.
 export const inPool = async (items, width, fn) => {
   let next = 0
+  let failure = null
   const worker = async () => {
-    while (next < items.length) await fn(items[next++])
+    while (!failure && next < items.length) {
+      try {
+        await fn(items[next++])
+      } catch (error) {
+        failure ??= { error }
+      }
+    }
   }
   await Promise.all(Array.from({ length: Math.min(width, items.length) }, worker))
+  if (failure) throw failure.error
 }
 
 const checkedStdout = (file, args, r) => {
@@ -1569,24 +1588,38 @@ const noteRunTiming = (root, ok) => {
 // Two runs over budget in a row, not one: a single slow run is as often GitHub
 // having a slow minute as a regression. Total over any text — it runs at session
 // start, which must never break.
+// A record as the notice may use it, or null: the log is per-device text that
+// older builds and damaged writes also left behind, and formatting must only
+// ever see the shape noteRunTiming writes.
+const parseRunRecord = line => {
+  let r
+  try {
+    r = JSON.parse(line)
+  } catch {
+    return null
+  }
+  if (typeof r?.ms !== 'number' || typeof r.budgetMs !== 'number') return null
+  return {
+    at: typeof r.at === 'string' ? r.at : 'unknown',
+    ms: r.ms,
+    idleMs: typeof r.idleMs === 'number' ? r.idleMs : 0,
+    budgetMs: r.budgetMs,
+    spawns: (Array.isArray(r.spawns) ? r.spawns : []).filter(s => typeof s?.cmd === 'string' && typeof s.ms === 'number'),
+  }
+}
+
 export const syncSlownessNotice = logText => {
   const runs = String(logText ?? '')
     .split('\n')
-    .flatMap(line => {
-      try {
-        const r = JSON.parse(line)
-        return typeof r?.ms === 'number' ? [r] : []
-      } catch {
-        return []
-      }
-    })
+    .map(parseRunRecord)
+    .filter(Boolean)
   const lastTwo = runs.slice(-2)
   if (lastTwo.length < 2 || !lastTwo.every(overBudget)) return ''
   const [previous, latest] = lastTwo
   return (
     `⚠ bd-github-sync is over its ${Math.round(latest.budgetMs / 1000)}s budget: the last two runs took ` +
     `${seconds(activeMs(previous))} and ${seconds(activeMs(latest))} (latest ${latest.at}). Slowest spawns in the latest: ` +
-    `${spawnSummary(latest.spawns ?? [])}. A converged run is a fixed handful of reads (pinned by "makes only the ` +
+    `${spawnSummary(latest.spawns)}. A converged run is a fixed handful of reads (pinned by "makes only the ` +
     `fixed reads on a converged run" in scripts/bd-github-sync.test.ts), so some step has started scaling with the ` +
     `tracker — tell the user, and find it before it outgrows the SessionEnd hook's 300s timeout.`
   )
@@ -1620,7 +1653,7 @@ const runSync = async ({ quiet = false, dryRun = false } = {}) => {
     // Every read of the tracker is one `bd export`, taken again only after a
     // step that WROTE: a converged run reads it once. The first runs under
     // the issue listing, which is paging-bound and the run's longest step.
-    const [{ issueByNumber, maxKnownIssueNumber }, preBeads] = await Promise.all([fetchIssues(), exportBeadsAsync(env)])
+    const [{ issueByNumber, maxKnownIssueNumber }, preBeads] = await settleAll([fetchIssues(), exportBeadsAsync(env)])
     const report = []
     // The km→#N mapping for every issue this run's push minted. Printed
     // IMMEDIATELY, not via the end-of-run report: any later step failing

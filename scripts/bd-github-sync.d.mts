@@ -85,6 +85,7 @@ export declare const spawnAsync: (
   args: readonly string[],
   opts?: { maxBuffer?: number; env?: NodeJS.ProcessEnv },
 ) => Promise<{ stdout: string; stderr: string; status?: number | null; error?: Error }>
+export declare const settleAll: <T extends readonly unknown[]>(promises: T) => Promise<{ -readonly [K in keyof T]: Awaited<T[K]> }>
 export declare const inPool: <T>(items: T[], width: number, fn: (item: T) => Promise<unknown>) => Promise<void>
 export declare const syncSlownessNotice: (logText: string | null | undefined) => string
 export declare const readSyncSlownessNotice: (root: string) => string
