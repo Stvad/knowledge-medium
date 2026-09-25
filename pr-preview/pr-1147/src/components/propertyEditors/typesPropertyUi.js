@@ -1,1 +1,0 @@
-import{dC as e,lC as t,uC as n}from"../../../chunks/app-B5RQ7jq8.js";export{t as kernelPropertyUiExtension,n as typesPropertyUi,e as typesPropertyUiExtension};
