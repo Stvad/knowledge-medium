@@ -1,0 +1,1 @@
+import{_ as e}from"../../chunks/app-oAQ3RAR0.js";export{e as staticAppExtensions};
