@@ -19,10 +19,9 @@
  * rewritten against the wrong base, not uncommitted work lost to a restore).
  */
 
-import { resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { effectiveCwd, gitInvocations, unresolvedTarget } from './check-stash-worktree.mjs'
 import { emitPreToolUseContext, firstLine, fitLines, git, readHookPayload } from './hook-context.mjs'
+import { isMainModule } from './is-main-module.mjs'
 
 const BASE = 'origin/master'
 
@@ -122,5 +121,4 @@ const main = () => {
   emitPreToolUseContext(notes)
 }
 
-const isMain = process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])
-if (isMain) main()
+if (isMainModule(import.meta.url)) main()

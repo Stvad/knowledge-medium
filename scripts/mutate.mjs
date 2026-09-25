@@ -32,8 +32,8 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, w
 import { createRequire } from 'node:module'
 import { constants } from 'node:os'
 import { basename, dirname, join, relative, resolve, sep } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
+import { isMainModule } from './is-main-module.mjs'
 
 const USAGE =
   'usage: pnpm mutate --file <path> (--delete <literal> | --edit <shell command>) ' +
@@ -461,8 +461,7 @@ const main = async () => {
   }
 }
 
-const isMain = process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])
-if (isMain) {
+if (isMainModule(import.meta.url)) {
   main().then(
     code => {
       process.exitCode = code

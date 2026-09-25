@@ -34,10 +34,10 @@
  */
 
 import { copyFileSync, lstatSync, mkdirSync, readlinkSync, symlinkSync, writeFileSync } from 'node:fs'
-import { basename, dirname, join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { basename, dirname, join } from 'node:path'
 import { effectiveCwd, gitInvocations, unresolvedTarget } from './check-stash-worktree.mjs'
 import { emitPreToolUseContext, firstLine, fitLines, git, readHookPayload } from './hook-context.mjs'
+import { isMainModule } from './is-main-module.mjs'
 
 const WHOLE_TREE = ':/'
 
@@ -309,5 +309,4 @@ const main = () => {
   }
 }
 
-const isMain = process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])
-if (isMain) main()
+if (isMainModule(import.meta.url)) main()
