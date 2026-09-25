@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-describe('isMainModule', { timeout: 30_000 }, () => {
+describe('isMainModule', () => {
   const helper = new URL('./is-main-module.mjs', import.meta.url).href
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'is-main-module-')))
   writeFileSync(join(dir, 'probe.mjs'), `import { isMainModule } from '${helper}'\nconsole.log(isMainModule(import.meta.url))\n`)

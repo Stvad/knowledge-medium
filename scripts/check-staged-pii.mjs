@@ -8,8 +8,10 @@
  * rule is the `feedback_no_pii_in_commits` memory; this narrows only what the
  * detector reports, never the rule.
  *
- * A uuid is not reported when it cannot be graph data:
- * - it is synthetic (`isSyntheticUuid`);
+ * A uuid is not reported when:
+ * - it is synthetic (`isSyntheticUuid`) — a shape no id generator mints, and
+ *   an accepted exemption rather than proof: a real block can be given such
+ *   an id by hand;
  * - it is listed in HEAD's `scripts/check-staged-pii.allowlist` (named code
  *   constants), so a new entry takes one PII_OK=1 commit, and later touches
  *   of the constant none;
@@ -17,10 +19,10 @@
  *   inside a VAR= value, a Claude Code session temp dir (`SESSION_TEMP_DIR`).
  *   The rest of a VAR= value is scanned, since an expanded message
  *   (MSG="fix page/<id>") lives there.
- * During a merge, a diff line is reported only when the same line of the
- * staged file is added relative to HEAD and to every merge head: a line any
- * parent holds is already committed there. All the diffs share the index as
- * their new side, so the staged line number identifies the line.
+ * During a merge, a uuid on an added line is not reported when HEAD's or a
+ * merge head's copy of the same file already holds it: that parent committed
+ * it, and the merge only carries it in, whatever the resolution did to the
+ * text around it.
  *
  * Limits: it catches uuids, NOT free-text page titles / note content. A uuid
  * inside a slashed word of a heredoc body slips, since that token reads as a
@@ -130,7 +132,7 @@ const scannedText = token => {
 // Every option that shapes the diff text is pinned, so no local git config
 // (external drivers, colour, path prefixes, path quoting, relative paths)
 // changes what `addedLines` reads.
-const stagedDiff = base =>
+const stagedDiff = () =>
   gitOut([
     '-c',
     'core.quotePath=false',
@@ -143,7 +145,6 @@ const stagedDiff = base =>
     '--no-color',
     '--no-relative',
     '--dst-prefix=b/',
-    ...(base ? [base] : []),
   ])
 
 // `+++ b/<path>`, quoted with C escapes when git still quotes the name (kept
@@ -207,8 +208,6 @@ const mergeHeads = () => {
   }
 }
 
-const lineKey = l => `${l.file}\0${l.lineNo}`
-
 const main = () => {
   const allow = () => process.exit(0)
 
@@ -230,23 +229,24 @@ const main = () => {
 
   const headDiff = stagedDiff()
   if (headDiff === null) allow() // no repo / nothing staged — let git itself handle it
-  let lines = addedLines(headDiff)
   const heads = mergeHeads()
-  const headDiffs = heads.map(stagedDiff)
-  const mergeFiltered = heads.length > 0 && headDiffs.every(d => d !== null)
-  if (mergeFiltered) {
-    for (const d of headDiffs) {
-      const added = new Set(addedLines(d).map(lineKey))
-      lines = lines.filter(l => added.has(lineKey(l)))
-    }
+  const parentCopies = new Map()
+  const parentCopy = (rev, file) => {
+    const key = `${rev}\0${file}`
+    if (!parentCopies.has(key)) parentCopies.set(key, gitOut(['show', `${rev}:${file}`]) ?? '')
+    return parentCopies.get(key)
   }
+  const carriedIn = (file, uuid) =>
+    heads.length > 0 && ['HEAD', ...heads].some(rev => parentCopy(rev, file).includes(uuid))
 
   const allowlist = committedAllowlist()
   const reportedUuids = text => uuidsIn(text).filter(u => !isSyntheticUuid(u) && !allowlist.has(u.toLowerCase()))
   const hits = []
-  for (const l of lines) {
+  for (const l of addedLines(headDiff)) {
     if (ALLOW_PATHS.some(rx => rx.test(l.file))) continue
-    for (const uuid of reportedUuids(l.text)) hits.push(`  ${l.file}:${l.lineNo}: ${uuid}`)
+    for (const uuid of reportedUuids(l.text)) {
+      if (!carriedIn(l.file, uuid)) hits.push(`  ${l.file}:${l.lineNo}: ${uuid}`)
+    }
   }
   // The commit message rides in the command itself, but ONLY in the -m/--message
   // arguments — a uuid elsewhere on the command line (a scratchpad path in a
@@ -283,10 +283,9 @@ const main = () => {
 
   const shown = hits.slice(0, 20).join('\n')
   const more = hits.length > 20 ? `\n  …and ${hits.length - 20} more` : ''
-  const mergeNote = mergeFiltered
-    ? 'A merge is in progress: diff lines were scanned only where new relative to HEAD and every merge head.\n'
-    : heads.length > 0
-      ? 'A merge is in progress, but a merge head could not be diffed, so every line added relative to HEAD was scanned.\n'
+  const mergeNote =
+    heads.length > 0
+      ? "A merge is in progress: uuids that HEAD's or a merge head's copy of the same file holds were not reported.\n"
       : ''
   process.stderr.write(
     `BLOCKED: this commit adds uuid-shaped strings that are neither synthetic nor in HEAD's ${ALLOWLIST_PATH}:\n` +

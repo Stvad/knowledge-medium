@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -124,6 +124,10 @@ const startMerge = (repo: string, sides: Record<string, Record<string, string>>)
   commitFile(repo, 'f.txt', 'clean\nbase change\n')
   git(repo, ['merge', '-q', '--no-commit', '--no-ff', ...Object.keys(sides)])
 }
+// Each test spawns git and node, and some build their repo inside the test: the
+// slowest (an octopus merge) measures about 1s alone, which the 5s default does
+// not cover under the gate's load.
+const SPAWNS_GIT = { timeout: 30_000 }
 const script = fileURLToPath(new URL('./check-staged-pii.mjs', import.meta.url))
 const runHook = (repo: string, command: string, { scriptPath = script, cwd = repo } = {}) => {
   const payload = JSON.stringify({ tool_name: 'Bash', cwd, tool_input: { command } })
@@ -136,7 +140,7 @@ const expectFactsOnly = (stderr: string) => {
   expect(stderr).not.toMatch(/\b(likely|probably|perhaps|maybe|looks like|seems|you may want)\b/i)
 }
 
-describe('check-staged-pii end-to-end', { timeout: 30_000 }, () => {
+describe('check-staged-pii end-to-end', SPAWNS_GIT, () => {
   const repo = makeRepo()
   mkdirSync(join(repo, 'scripts'))
   // REAL_3 is listed only in this repo's committed allowlist, not the shipped one.
@@ -194,6 +198,14 @@ describe('check-staged-pii end-to-end', { timeout: 30_000 }, () => {
     expect(r.status).toBe(2)
     expect(r.stderr).toContain(`  g.txt:1: ${REAL}`)
     expectFactsOnly(r.stderr)
+  })
+
+  it("blocks a uuid HEAD's copy of the file already holds when no merge is in progress", () => {
+    commitFile(repo, 'held.txt', `id: ${REAL}\n`)
+    stage(repo, 'held.txt', `id: ${REAL}\nagain: ${REAL}\n`)
+    const r = hook('git commit -m "repeat"')
+    expect(r.status).toBe(2)
+    expect(r.stderr).toContain(`  held.txt:2: ${REAL}`)
   })
 
   it('blocks a uuid on a content line that reads like a +++ file header', () => {
@@ -314,7 +326,7 @@ describe('check-staged-pii end-to-end', { timeout: 30_000 }, () => {
   })
 })
 
-describe('check-staged-pii under git configuration that reshapes the diff', { timeout: 30_000 }, () => {
+describe('check-staged-pii under git configuration that reshapes the diff', SPAWNS_GIT, () => {
   it.each([
     ['diff.noprefix', 'true'],
     ['diff.mnemonicPrefix', 'true'],
@@ -368,7 +380,7 @@ describe('check-staged-pii under git configuration that reshapes the diff', { ti
   })
 })
 
-describe('check-staged-pii during a merge', { timeout: 30_000 }, () => {
+describe('check-staged-pii during a merge', SPAWNS_GIT, () => {
   const repo = makeRepo()
   const hook = (command: string) => runHook(repo, command)
   startMerge(repo, { side: { 'side.txt': `id: ${REAL}\n` } })
@@ -388,7 +400,7 @@ describe('check-staged-pii during a merge', { timeout: 30_000 }, () => {
     expect(r.status).toBe(2)
     expect(r.stderr).toContain('resolution.txt')
     expect(r.stderr).not.toContain('side.txt')
-    expect(r.stderr).toContain('scanned only where new relative to HEAD and every merge head')
+    expect(r.stderr).toContain("uuids that HEAD's or a merge head's copy of the same file holds were not reported")
     expectFactsOnly(r.stderr)
   })
 
@@ -401,7 +413,7 @@ describe('check-staged-pii during a merge', { timeout: 30_000 }, () => {
   })
 })
 
-describe('check-staged-pii during other merge shapes', { timeout: 30_000 }, () => {
+describe('check-staged-pii during other merge shapes', SPAWNS_GIT, () => {
   it('does not flag either parent copy of a line both parents add', () => {
     const repo = makeRepo()
     const lines = Array.from({ length: 12 }, (_, i) => `line ${i}`)
@@ -442,7 +454,7 @@ describe('check-staged-pii during other merge shapes', { timeout: 30_000 }, () =
     expect(runHook(repo, 'git commit -m "clean"').status).toBe(2)
   })
 
-  it('scans every staged line, and says so, when a merge head cannot be diffed', () => {
+  it('still blocks a new uuid when a merge head cannot be read', () => {
     const repo = makeRepo()
     stage(repo, 'g.txt', `id: ${REAL}\n`)
     const mergeHeadFile = git(repo, ['rev-parse', '--git-path', 'MERGE_HEAD']).trim()
@@ -450,7 +462,33 @@ describe('check-staged-pii during other merge shapes', { timeout: 30_000 }, () =
     const r = runHook(repo, 'git commit -m "clean"')
     expect(r.status).toBe(2)
     expect(r.stderr).toContain(`  g.txt:1: ${REAL}`)
-    expect(r.stderr).not.toContain('scanned only where new')
-    expect(r.stderr).toContain('every line added relative to HEAD was scanned')
+  })
+
+  it('does not flag a merged branch uuid whose line the resolution edits', () => {
+    const repo = makeRepo()
+    startMerge(repo, { side: { 'side.txt': `id: ${REAL} mode: side\n` } })
+    stage(repo, 'side.txt', `id: ${REAL} mode: resolved\n`)
+    expect(runHook(repo, 'git commit -m "merge side"').status).toBe(0)
+  })
+
+  it('does not flag a HEAD uuid whose line the resolution edits', () => {
+    const repo = makeRepo()
+    git(repo, ['checkout', '-q', '-b', 'side'])
+    commitFile(repo, 'side.txt', 'side line\n')
+    git(repo, ['checkout', '-q', 'base'])
+    commitFile(repo, 'base.txt', `id: ${REAL} mode: base\n`)
+    git(repo, ['merge', '-q', '--no-commit', '--no-ff', 'side'])
+    stage(repo, 'base.txt', `id: ${REAL} mode: resolved\n`)
+    expect(existsSync(join(repo, git(repo, ['rev-parse', '--git-path', 'MERGE_HEAD']).trim()))).toBe(true)
+    expect(runHook(repo, 'git commit -m "merge side"').status).toBe(0)
+  })
+
+  it('blocks a uuid that a parent holds only in a different file', () => {
+    const repo = makeRepo()
+    startMerge(repo, { side: { 'side.txt': `id: ${REAL}\n` } })
+    stage(repo, 'other.txt', `id: ${REAL}\n`)
+    const r = runHook(repo, 'git commit -m "merge side"')
+    expect(r.status).toBe(2)
+    expect(r.stderr).toContain(`  other.txt:1: ${REAL}`)
   })
 })
