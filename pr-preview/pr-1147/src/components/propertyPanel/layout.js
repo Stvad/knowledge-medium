@@ -1,1 +1,1 @@
-import{RA as e,zA as t}from"../../../chunks/app-nDliTNXL.js";export{e as METADATA_ROW_GRID_STYLE,t as PROPERTY_ROW_GRID_STYLE};
+import{RA as e,zA as t}from"../../../chunks/app-B5RQ7jq8.js";export{e as METADATA_ROW_GRID_STYLE,t as PROPERTY_ROW_GRID_STYLE};
