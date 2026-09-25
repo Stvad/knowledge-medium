@@ -1,1 +1,1 @@
-import{nE as e,rE as t}from"../../chunks/app-C2oUvK4u.js";export{e as BlockChildren,t as BlockComponent};
+import{nE as e,rE as t}from"../../chunks/app-Cq8OSHAC.js";export{e as BlockChildren,t as BlockComponent};
