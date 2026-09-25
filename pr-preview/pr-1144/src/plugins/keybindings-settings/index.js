@@ -1,1 +1,1 @@
-import{Ix as e,Lx as t,ct as n}from"../../../chunks/app-Cp-HOoB6.js";export{e as keybindingOverridesProp,t as keybindingsPrefsType,n as keybindingsSettingsPlugin};
+import{Ix as e,Lx as t,ct as n}from"../../../chunks/app-hl3S552B.js";export{e as keybindingOverridesProp,t as keybindingsPrefsType,n as keybindingsSettingsPlugin};
