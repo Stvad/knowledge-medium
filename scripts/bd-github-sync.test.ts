@@ -3017,6 +3017,11 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
       `gh api graphql -f query='${RESOLVE}' '--input' vars.json`,
       // a commit message file rides along: it is text outside the command
       `git commit -F msg.txt && git push && gh api graphql -f query='mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{isResolved}}}' -f id=PRRT_x`,
+      // GraphQL ignores comments and commas between tokens: a real String
+      // declaration split by either must still be seen, and a decoy in a
+      // comment must not vouch for it
+      `gh api graphql -f query='mutation($b # note\n: String!){addComment(input:{subjectId:"X",body:$b}){clientMutationId}} # $b:ID' -f b="$BODY"`,
+      `gh api graphql -f query='mutation($b ,: String!){addComment(input:{subjectId:"X",body:$b}){clientMutationId}} # $b:ID' -f b="$BODY"`,
       // one name, two documents: it is text-safe only if every declaration is
       `gh api graphql -f query='${RESOLVE}' -f t="$t"; gh api graphql -f query='mutation($t:String!){addComment(input:{subjectId:"X",body:$t}){clientMutationId}}' -f t="$t"`,
     ])

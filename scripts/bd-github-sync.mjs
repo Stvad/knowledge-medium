@@ -492,9 +492,11 @@ const GH_GRAPHQL_CALL = new RegExp(GH + String.raw`api\s+graphql(?![\w-])`, 'gm'
 // flag or file marker inside quotes still reaches OUTSIDE_TEXT the way it
 // reaches gh:
 //  - a field whose whole value is inline: a literal, quoted or bare, or a
-//    typed `-F name=value`. A value starting with `@` is a file or stdin
-//    (gh's `@path` / `@-`), in any quoting, and stays in place.
-//  - a --jq filter, whose `@sh` or `@csv` is a jq format, not a file.
+//    typed `-F name=value`. A value starting with `@` stays in place, in any
+//    quoting: on -F it is a file or stdin (`@path`, `@-`); on -f it is a
+//    literal, over-blocked by the same rule rather than split by flag.
+//  - a --jq filter in quotes, whose `@sh` or `@csv` is a jq format, not a
+//    file. A bare one (`--jq @sh`) is not recognized and over-blocks.
 const FIELD_FLAG = String.raw`(?<![\w-])(?:-[fF]|--(?:raw-)?field)(?:=|\s+)?`
 const FIELD_NAME = String.raw`[A-Za-z_][\w.[\]-]*`
 const SINGLE_QUOTED_LITERAL = String.raw`'(?!@)[^']*'`
@@ -512,13 +514,21 @@ const NON_TEXT_SCALARS = new Set(['ID', 'Int', 'Float', 'Boolean'])
 // Only a bare scalar type is read. A list (`[ID!]`) stays unrecognized, which
 // keeps the allow narrow at the cost of a list-typed variable's expansion.
 const VARIABLE_DECLARATION = /\$(\w+)\s*:\s*(\w+)/g
-const nonTextVariables = cmd => {
+// Declarations are read from the documents as GraphQL reads them — the argv
+// words the shell builds, with GraphQL's ignored tokens (comments, commas)
+// turned into whitespace — so no real declaration hides from the scan. Text
+// that only looks like one (in a comment, in a string) can only ADD a
+// declaration, and a name is non-text only when every declaration of it is.
+// A `#` inside a string literal ends that line early too; that can only hide
+// a declaration, which leaves its variable unrecognized.
+const nonTextVariables = words => {
+  const graphqlView = words.replace(/#[^\n]*/g, ' ').replace(/,/g, ' ')
   const types = new Map()
-  for (const [, name, type] of cmd.matchAll(VARIABLE_DECLARATION)) types.set(name, [...(types.get(name) ?? []), type])
+  for (const [, name, type] of graphqlView.matchAll(VARIABLE_DECLARATION)) types.set(name, [...(types.get(name) ?? []), type])
   return new Set([...types].filter(([, ts]) => ts.every(t => NON_TEXT_SCALARS.has(t))).map(([name]) => name))
 }
-// The two places an expansion can sit and publish nothing, both tested on
-// expandable(cmd) so single-quoted text is already out of the way:
+// The two places an expansion can sit and publish nothing, both matched on
+// the raw command (a match inside single quotes removes only literal text):
 //  - a whole double-quoted field value (`-f t="$t"`), one argv word that
 //    becomes one variable — harmless when the variable is a non-text scalar,
 //    or when nothing in the invocation is a mutation. Never the `query` field,
@@ -551,8 +561,9 @@ const MUTATION = /\bmutation\b/
 const graphqlShape = lastCall(cmd => {
   const calls = commandSkeleton(cmd).match(GH_GRAPHQL_CALL)?.length ?? 0
   if (!calls || calls !== (cmd.match(GH_WORD)?.length ?? 0) || matchesReplyCommand(cmd)) return null
-  const mutates = MUTATION.test(shellSegmentsWithDepth(cmd).flatMap(s => s.tokens).join(' '))
-  const nonText = nonTextVariables(cmd)
+  const words = shellSegmentsWithDepth(cmd).flatMap(s => s.tokens).join(' ')
+  const mutates = MUTATION.test(words)
+  const nonText = nonTextVariables(words)
   const residue = cmd
     .replace(DOUBLE_QUOTED_DOCUMENT, doc => doc.replace(ID_ARGUMENT_EXPANSION, ''))
     .replace(VARIABLE_FIELD, (m, name) => (name !== 'query' && (!mutates || nonText.has(name)) ? '' : m))
