@@ -1,1 +1,1 @@
-import{IR as e}from"../../../chunks/app-B8nfZP3v.js";export{e as dailyNotesLocalSchema};
+import{IR as e}from"../../../chunks/app-Bny_7llC.js";export{e as dailyNotesLocalSchema};
