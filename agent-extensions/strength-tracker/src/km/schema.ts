@@ -332,9 +332,8 @@ export const layoffPctProp = seedProperty({
 
 // ──── Settings ────
 
-/** Block id of the plan outline root the config is read from. Defaults to
- *  the known Strength Plan v2 root; editable so the same extension works in
- *  a workspace where the plan lives elsewhere. */
+/** Block id of the plan outline root the config is read from. Unset, the
+ *  plan is found by its alias (`PLAN_ALIAS` in config.ts). */
 export const planRootProp = seedProperty({
   seedKey: extensionPropertySeedKey('plan-root'),
   revision: 1,
