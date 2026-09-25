@@ -122,6 +122,16 @@ describe('pr-reply process behavior', { timeout: 20_000 }, () => {
     expect(r.stdout).toContain('#78 → NO SUCH ISSUE OR PR')
   })
 
+  // What GitHub stored is the ground truth, not the file as it was read.
+  it('echoes the numbers from the body GitHub answered with', () => {
+    const answer = JSON.stringify({ id: 42, html_url: 'https://github.com/Stvad/knowledge-medium/pull/652#discussion_r42', body: 'stored #78' })
+    const { dir, run } = setup({ ghAnswer: answer })
+    writeFileSync(join(dir, 'body.md'), 'sent #77')
+    const r = run('652', '41', 'body.md')
+    expect(r.stdout).toContain('#78 →')
+    expect(r.stdout).not.toContain('#77 →')
+  })
+
   // Each refusal is a shape the read-back cannot cover or a post that would
   // fail anyway; none of them may reach gh.
   it('refuses what it cannot post as one covered reply, without calling gh', () => {

@@ -154,13 +154,13 @@ export const BEAD_ID = /(?<![\w-])(?<!\b(?:claude|codex)\/)km-(?:\d{13}-\d+-[0-9
 export const extractBeadIds = text => [...new Set(text.match(BEAD_ID) ?? [])]
 
 // A PR's head and base branches are its address, not text it publishes, so
-// their values leave the command text the gate scans — only in a command that
-// runs a `gh pr` verb, and only for a flag that starts its own word. Quoted
-// spans match first and come back whole, so a flag spelled inside a body is
-// still body text, and one glued into a payload value (`body=--head=…`) is
-// not a flag at all. Removing text from the scan is an allow: it under-matches.
+// their values leave the command text the gate scans — only for a flag that
+// starts its own word. Quoted spans match first and come back whole, so a
+// flag spelled inside a body is still body text, and one glued into a value
+// (`--body=--head=…`, `body=--head=…`) is not a flag at all. Removing text from
+// the scan is an allow: it under-matches.
 const BRANCH_FLAG_VALUE = /'[^']*'|"(?:\\.|[^"\\])*"|((?<=^|\s)(?:--head|--base)(?:=|\s+)|(?<=^|\s)-[HB](?:=|\s+)?)(?:'[^']*'|"(?:\\.|[^"\\])*"|[^\s'";&|<>()]+)/g
-const withoutBranchValues = cmd => (matchesPrCommand(cmd) ? cmd.replace(BRANCH_FLAG_VALUE, (m, flag) => flag ?? m) : cmd)
+const withoutBranchValues = cmd => cmd.replace(BRANCH_FLAG_VALUE, (m, flag) => flag ?? m)
 
 // gh must sit in COMMAND position — matching it anywhere in the text lets a
 // commit message that merely mentions "gh pr comment" trip the gate and mint
@@ -537,10 +537,9 @@ const WHOLE_EXPANSION = String.raw`\$(?:\w+|\{\w+\})`
 const VARIABLE_FIELD = new RegExp(FIELD_FLAG + String.raw`(\w+)="${WHOLE_EXPANSION}"`, 'g')
 const DOUBLE_QUOTED_DOCUMENT = new RegExp(FIELD_FLAG + String.raw`query="(?:\\.|[^"\\])*"`, 'g')
 const ID_ARGUMENT_EXPANSION = new RegExp(String.raw`\b(?:id|[a-z]\w*Id)\s*:\s*\\"${WHOLE_EXPANSION}\\"`, 'g')
-// The operation keyword is looked for in the argv words the shell builds
-// (quotes removed, escapes and line continuations applied), and in the raw
-// text with quotes and backslashes removed. Either finding it makes a
-// mutation, so no shell spelling that splits it (`'mut''ation'`,
+// The operation keyword is looked for in the argv words the shell builds —
+// quotes removed, escapes and line continuations applied, heredoc data
+// included — so no shell spelling that splits it (`'mut''ation'`,
 // `mu\tation`, a backslash-newline) reads as a read.
 // Any occurrence counts, a `$mutation` variable or a search string included:
 // misreading a read as a write costs one attested re-run, and telling the
@@ -552,9 +551,7 @@ const MUTATION = /\bmutation\b/
 const graphqlShape = lastCall(cmd => {
   const calls = commandSkeleton(cmd).match(GH_GRAPHQL_CALL)?.length ?? 0
   if (!calls || calls !== (cmd.match(GH_WORD)?.length ?? 0) || matchesReplyCommand(cmd)) return null
-  const mutates =
-    MUTATION.test(cmd.replace(/['"\\]/g, '')) ||
-    MUTATION.test(shellSegmentsWithDepth(cmd).flatMap(s => s.tokens).join(' '))
+  const mutates = MUTATION.test(shellSegmentsWithDepth(cmd).flatMap(s => s.tokens).join(' '))
   const nonText = nonTextVariables(cmd)
   const residue = cmd
     .replace(DOUBLE_QUOTED_DOCUMENT, doc => doc.replace(ID_ARGUMENT_EXPANSION, ''))

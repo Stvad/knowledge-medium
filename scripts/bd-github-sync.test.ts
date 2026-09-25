@@ -3199,6 +3199,10 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     const body = hook('gh pr create --head km-zzzz --title t --body "tracks km-zzzz"')
     expect(body.status).toBe(2)
     expect(body.stderr).toContain('km-zzzz')
+    // a branch flag glued into a value is the value's text, not a flag
+    const glued = hook('gh pr create --title t --body=--head=km-zzzz')
+    expect(glued.status).toBe(2)
+    expect(glued.stderr).toContain('km-zzzz')
     // a branch flag spelled inside an api payload value is payload text
     const payload = hook('gh api --silent repos/Stvad/knowledge-medium/issues/1/comments -f body=--head=km-zzzz')
     expect(payload.status).toBe(2)
