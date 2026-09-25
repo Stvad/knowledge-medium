@@ -132,7 +132,22 @@ export const DEFAULT_CONFIG: ProgramConfig = {
   ],
   milestones: [
     {id: 'ohp-strict', exercise: 'Overhead press', weight: 115, reps: 3, label: 'Strict OHP 115–120×3 (dance-lift phase 1)'},
-    {id: 'waiter-carry', exercise: 'Waiter carry', weight: 53, reps: 1, label: 'Waiter carry with the 53 lb KB (one arm, overhead)'},
+    {id: 'phase-2-gate', exercise: 'Overhead press', weight: 110, reps: 6, label: 'Phase 2 gate: strict OHP working weight ~110–115'},
+    {id: 'waiter-carry', exercise: 'Waiter carry', weight: 53, reps: 0, label: 'Waiter carry with the 53 lb KB (one arm, overhead)'},
     {id: 'push-press', exercise: 'Push press', weight: 135, reps: 2, label: 'Push press 135–150×2 (dance-lift phase 2)'},
+  ],
+  ratios: [
+    {id: 'row-bench', label: 'Row : bench', numerator: 'Bent-over row', denominator: 'Bench press'},
+    {id: 'ohp-bench', label: 'OHP : bench', numerator: 'Overhead press', denominator: 'Bench press'},
+  ],
+  heaviestLift: 'Deadlift',
+  assessments: [
+    {name: 'Split squat reps @ fixed weight', measure: 'reps'},
+    {name: 'Single-leg RDL', measure: 'reps'},
+    {name: 'Side plank hold', measure: 'seconds'},
+    {name: 'Band external rotation reps', measure: 'reps'},
+    {name: 'Back-to-wall overhead reach', measure: 'pass-fail'},
+    {name: 'Knee-to-wall ankle dorsiflexion', measure: 'cm'},
+    {name: 'Single-leg calf raises to fatigue', measure: 'reps'},
   ],
 }

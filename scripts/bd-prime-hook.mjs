@@ -15,7 +15,8 @@
 // (the first bd command would create an empty DB that then refuses to pull).
 import { spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
-import { initializedDbRoot, isMainModule, readSyncSlownessNotice } from './bd-github-sync.mjs'
+import { initializedDbRoot, readSyncSlownessNotice } from './bd-github-sync.mjs'
+import { isMainModule } from './is-main-module.mjs'
 
 // Just under the measured 10,000-char inline limit; the margin absorbs a
 // wrapper-side format tweak without re-measuring the host.

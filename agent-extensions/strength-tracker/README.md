@@ -21,7 +21,12 @@ plain km blocks.
   plan's re-entry table and recorded as `strength-layoff` blocks; the comeback
   ramp shows until you're back to pre-break weights.
 - **Trends & milestones.** Per-lift progression sparklines, dance-lift
-  milestone bars, and a left/right asymmetry view for single-arm work.
+  milestone bars, the review's lift ratios, a left/right asymmetry view for
+  single-arm work, and the lifts that have sat at one load for four sessions
+  or more, with the reps behind them.
+- **Assessments.** *Log an assessment* on the log page stamps the quarterly
+  battery as one block per test. Type each side's number beside it; a gap
+  over 15% is flagged with the side that needs the extra set.
 
 ## Design
 
@@ -43,6 +48,28 @@ plain km blocks.
   The entry keeps a denormalised working weight so "last weight for lift X"
   stays a flat scan — a snapshot taken at Finish, not a maintained cache: see
   the SQL section for why to read the sets instead.
+
+## Tuning a lift
+
+Type a plan line as *Exercise (program)* and its properties are what the
+engine reads:
+
+- `strength:targetSets`, `strength:repMin`/`strength:repMax`,
+  `strength:increment` — double progression. A lift with a rep window is
+  load-progressed, whatever its `strength:kind` says; a carry given a window
+  progresses on lengths (reps are lengths for a carry).
+- `strength:totalRepsThreshold` + `strength:microIncrement` — a smaller step
+  when the sets total the threshold but one fell short of the top ("26 reps
+  across 3×6–10 → +2"). Clearing the top on every set still takes the full
+  increment.
+- `strength:catchUpIncrement` + `strength:catchUpRpe` — a bigger step while
+  every set is logged at or below the RPE. It needs the RPE logged.
+- `strength:ladder` — the loads that exist, one per list item or comma-separated (`20, 25, 35, 53`). A step goes to
+  the next rung instead of adding the increment, and a lift stuck at one load
+  names the rung to step to.
+- `strength:startWeight` — the first session's load, before any history.
+
+A lift at one load for four sessions or more says so in its rationale.
 
 The one non-obvious modelling call: the re-entry table's *load-cutting* tiers
 are global (a real break detrains everything), but "repeat, no jump" is

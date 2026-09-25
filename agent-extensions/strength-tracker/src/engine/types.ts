@@ -7,6 +7,8 @@
  *  from leaking into UI components.
  */
 
+import type {AssessmentTest} from './assessment'
+
 export type SessionType = 'A' | 'B' | 'mini'
 
 /** Full sessions are the ones the re-entry clock counts. Mini days are
@@ -40,8 +42,8 @@ export interface ExerciseConfig {
   increment: number
   /** Logged per side; the plan's rule is left leads and right matches. */
   perSide: boolean
-  /** Carries and rounds-based work: reps are "lengths"/"rounds", and the
-   *  engine never proposes a weight jump from a rep count. */
+  /** Not load-progressed: logged, never auto-loaded — the load moves by
+   *  hand. See `parseExercise` for what makes a line freeform. */
   freeform: boolean
   /** Verbatim tail of the plan line ("light (knee-friendly…)"). Shown
    *  under the exercise so the reasoning survives into the gym. */
@@ -52,6 +54,19 @@ export interface ExerciseConfig {
    *  so it needs RPE data; without it the normal `increment` is used. */
   catchUpIncrement?: number
   catchUpRpe?: number
+  /** A smaller step for a session that fell short of the top of the range on
+   *  some set but still did at least this many reps across the prescribed
+   *  sets — so one fading set does not gate the whole lift. Both or neither:
+   *  the top-of-range `increment` still wins whenever it applies. */
+  totalRepsThreshold?: number
+  microIncrement?: number
+  /** The loads that actually exist for this lift (kettlebells, fixed
+   *  dumbbells), ascending. A progression step goes to the next rung instead
+   *  of adding `increment`, a re-entry cut lands on a rung, and a stalled
+   *  hand-progressed lift names the rung to step to. */
+  ladder?: readonly number[]
+  /** What to load the first time, before there is any history to read. */
+  startWeight?: number
   /** Demo/technique links lifted from the plan line's markdown links. */
   videos?: readonly ExerciseVideo[]
   /** When this exercise is the resolved option of a plan `or`-group: the
@@ -73,6 +88,31 @@ export interface AltOption {
  *  `strength:default` and in the user's `altChoices`): the block id when
  *  there is one, else the name — which is all a hand-written plan has. */
 export const altOptionKey = (option: AltOption): string => option.defId ?? option.name
+
+/** Pair each item with how many earlier items shared its identity — which
+ *  time in the session a lift is — and a `key` unique to the row. */
+export const countOccurrences = <T>(
+  items: readonly T[],
+  identity: (item: T) => string,
+): {item: T; occurrence: number; key: string}[] => {
+  const seen = new Map<string, number>()
+  return items.map(item => {
+    const id = identity(item)
+    const occurrence = seen.get(id) ?? 0
+    seen.set(id, occurrence + 1)
+    return {item, occurrence, key: `${id}#${occurrence}`}
+  })
+}
+
+/** The program's lifts, each with its occurrence — counted per session, by
+ *  plan block where there is one, else by name, exactly as `prescribe` counts
+ *  tonight's list. A session can prescribe one lift twice, and every reader
+ *  that walks the program pairs rows through this so they agree which history
+ *  belongs to which row. */
+export const programOccurrences = (
+  exercises: readonly ExerciseConfig[],
+): {item: ExerciseConfig; occurrence: number; key: string}[] =>
+  countOccurrences(exercises, e => `${e.session}\u0000${e.defId ?? e.name}`)
 
 export interface ExerciseVideo {
   label: string
@@ -124,8 +164,20 @@ export interface Milestone {
   id: string
   exercise: string
   weight: number
+  /** Reps a set at `weight` has to reach. 0 for work that logs no reps (a
+   *  carry), where reaching the load is the milestone. */
   reps: number
   label: string
+}
+
+/** A ratio between two lifts' current working weights, from the quarterly
+ *  review ("check row:bench and OHP:bench"). Lifts are named as the program
+ *  names them, so a lift renamed in the plan drops out, as from a milestone. */
+export interface LiftRatio {
+  id: string
+  label: string
+  numerator: string
+  denominator: string
 }
 
 export interface ProgramConfig {
@@ -154,6 +206,12 @@ export interface ProgramConfig {
   exercises: readonly ExerciseConfig[]
   reentry: readonly ReentryTier[]
   milestones: readonly Milestone[]
+  ratios: readonly LiftRatio[]
+  /** The lift that should carry the clearly biggest number ("deadlift should
+   *  be clearly the biggest"). */
+  heaviestLift?: string
+  /** The quarterly battery, one result block per test. */
+  assessments: readonly AssessmentTest[]
   /** Per-session reminders lifted from the plan (warm-up, RPE cap). */
   sessionNotes: Readonly<Record<SessionType, readonly string[]>>
 }
@@ -256,7 +314,7 @@ export interface PrescribedExercise {
    *  log an RPE at all.
    *
    *  Set only when the lift ALSO has a `catchUpIncrement`, because
-   *  `incrementFor` reads the two together: a ceiling with no bigger jump
+   *  `toppedStep` reads the two together: a ceiling with no bigger jump
    *  behind it changes no prescription, and surfacing an RPE control for it
    *  would collect a number nothing reads. Carried through onto the stamped
    *  set blocks, so the row that asks for RPE knows whether it matters
