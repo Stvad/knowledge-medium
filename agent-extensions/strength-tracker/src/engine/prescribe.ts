@@ -6,9 +6,23 @@
  *  logic.
  */
 
-import {lastEntryFor, nextWeight, roundLoad, workingWeight} from './progression'
+import {
+  countedReps,
+  lastEntryFor,
+  nextRung,
+  nextWeight,
+  roundLoad,
+  rungAtOrBelow,
+  setTarget,
+  stallOf,
+  sum,
+  totalRepsRule,
+  workingWeight,
+  type ProgressionRule,
+} from './progression'
 import {resolveReentry} from './reentry'
 import {daysBetween, resolveSession, trainingDay} from './schedule'
+import {programOccurrences} from './types'
 import type {
   ExerciseConfig,
   LayoffRecord,
@@ -65,6 +79,22 @@ const repsFor = (
 
 const shortDay = (day: string): string => day.slice(5)
 
+/** Why the weight went up, in the plan's own terms. */
+const progressedBecause = (
+  rule: ProgressionRule,
+  exercise: ExerciseConfig,
+  lastWeight: number,
+  weight: number,
+  cleared: string,
+): string => {
+  switch (rule) {
+    case 'increment': return `${cleared} → +${weight - lastWeight}`
+    case 'catch-up': return `${cleared} → +${weight - lastWeight} (catch-up, RPE ≤ ${exercise.catchUpRpe})`
+    case 'ladder': return `${cleared} → next rung, ${weight}`
+    case 'total-reps': return `${exercise.totalRepsThreshold}+ total reps at ${lastWeight} → +${weight - lastWeight}`
+  }
+}
+
 const prescribeExercise = (
   exercise: ExerciseConfig,
   basis: readonly WorkoutRecord[],
@@ -97,7 +127,7 @@ const prescribeExercise = (
     videos: exercise.videos,
     altGroupKey: exercise.altGroupKey,
     altOptions: exercise.altOptions,
-    // Both, or neither: `incrementFor` only consults the ceiling when there
+    // Both, or neither: `toppedStep` only consults the ceiling when there
     // is a bigger jump to award, so a plan that sets one without the other
     // would otherwise have the UI collecting an RPE nothing ever reads.
     ...(exercise.catchUpIncrement !== undefined && exercise.catchUpRpe !== undefined
@@ -107,6 +137,17 @@ const prescribeExercise = (
   }
 
   if (!last || lastWeight === undefined) {
+    if (exercise.startWeight !== undefined) {
+      const {startWeight, ladder} = exercise
+      const start = ladder ? rungAtOrBelow(ladder, startWeight) : startWeight
+      return {
+        ...base,
+        weight: start,
+        rationale: start === startWeight
+          ? `first session — start at ${start}, per the plan`
+          : `first session — start at ${start}, the rung at or below the plan's ${startWeight}`,
+      }
+    }
     return {
       ...base,
       weight: undefined,
@@ -117,7 +158,8 @@ const prescribeExercise = (
   // Deep recorded layoff (pct < 1): the whole body is detrained, so cut
   // load off the pre-break weight regardless of the individual lift.
   if (reentry && reentry.factor < 1) {
-    const weight = roundLoad(lastWeight * reentry.factor, config.roundTo)
+    const cut = lastWeight * reentry.factor
+    const weight = exercise.ladder ? rungAtOrBelow(exercise.ladder, cut) : roundLoad(cut, config.roundTo)
     return {
       ...base,
       weight,
@@ -125,7 +167,19 @@ const prescribeExercise = (
     }
   }
 
+  const stall = (): {weight: number; sessions: number} | undefined =>
+    stallOf(basis, exercise.name, exercise.defId, occurrence)
+
   if (exercise.freeform) {
+    const stalled = stall()
+    if (stalled) {
+      const rung = nextRung(exercise.ladder, lastWeight)
+      return {
+        ...base,
+        weight: lastWeight,
+        rationale: `${lastWeight} for ${stalled.sessions} sessions — ${rung !== undefined ? `step up to ${rung}` : 'add load'} when it feels easy`,
+      }
+    }
     return {
       ...base,
       weight: lastWeight,
@@ -153,22 +207,26 @@ const prescribeExercise = (
     return {...base, weight: step.weight, rationale: why}
   }
   if (step.progressed) {
-    const target = last.entry.prescribedSets ?? exercise.sets
-    const jump = step.weight - lastWeight
-    const catchUp = exercise.catchUpIncrement !== undefined && jump === exercise.catchUpIncrement && jump !== exercise.increment
+    const target = setTarget(last.entry, exercise)
     return {
       ...base,
       weight: step.weight,
-      rationale: `${target}×${repMax} at ${lastWeight} cleared → +${jump}${catchUp ? ' (catch-up, RPE ≤ ' + exercise.catchUpRpe + ')' : ''}`,
+      rationale: progressedBecause(step.rule, exercise, lastWeight, step.weight, `${target}×${repMax} at ${lastWeight} cleared`),
     }
   }
   const reps = lastTime!.reps.join(', ')
+  if (repMax === undefined) return {...base, weight: step.weight, rationale: `${step.weight} last time (${reps})`}
+  // The total names the reps it counted, which are not always every set logged.
+  const totalRule = totalRepsRule(exercise)
+  const counted = totalRule ? countedReps(last.entry, exercise) : undefined
+  const total = totalRule && counted
+    ? ` or ${totalRule.threshold} total (last: ${counted.join(', ')} = ${sum(counted)})`
+    : ` (last: ${reps})`
+  const stalled = stall()
   return {
     ...base,
     weight: step.weight,
-    rationale: repMax === undefined
-      ? `${step.weight} last time (${reps})`
-      : `hold ${step.weight} until ${sets}×${repMax} (last: ${reps})`,
+    rationale: `hold ${step.weight} until ${sets}×${repMax}${total}${stalled ? ` · ${stalled.sessions} sessions at ${stalled.weight}` : ''}`,
   }
 }
 
@@ -198,17 +256,10 @@ export const prescribe = (input: PrescribeInput): Prescription => {
   const basis = history.filter(w =>
     trainingDay(w.date, config.dayRolloverHour) <= cutoff)
 
-  // Counted the same way `buildDraft` counts it, over the same list: a lift
-  // prescribed twice is two rows, and each progresses off ITS OWN history.
-  const seen = new Map<string, number>()
-  const exercises = config.exercises
-    .filter(e => e.session === session)
-    .map(e => {
-      const key = e.defId ?? e.name
-      const occurrence = seen.get(key) ?? 0
-      seen.set(key, occurrence + 1)
-      return prescribeExercise(e, basis, reentry, day, config, occurrence)
-    })
+  // A lift prescribed twice is two rows, and each progresses off ITS OWN
+  // history.
+  const exercises = programOccurrences(config.exercises.filter(e => e.session === session))
+    .map(({item, occurrence}) => prescribeExercise(item, basis, reentry, day, config, occurrence))
 
   const notes = [
     ...(config.sessionNotes[session] ?? []),
