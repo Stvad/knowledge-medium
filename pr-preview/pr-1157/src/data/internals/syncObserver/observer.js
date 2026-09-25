@@ -1,1 +1,1 @@
-import{QW as e,ZW as t}from"../../../../chunks/app-DwCA1Ncv.js";export{t as cycleScanCandidatesByWorkspace,e as startBlocksSyncedObserver};
+import{QW as e,ZW as t}from"../../../../chunks/app-B8nfZP3v.js";export{t as cycleScanCandidatesByWorkspace,e as startBlocksSyncedObserver};

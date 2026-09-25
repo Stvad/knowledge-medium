@@ -1,1 +1,1 @@
-import{mu as e}from"../../../chunks/app-DwCA1Ncv.js";export{e as DATA_MODEL_GUIDE};
+import{mu as e}from"../../../chunks/app-B8nfZP3v.js";export{e as DATA_MODEL_GUIDE};
