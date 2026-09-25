@@ -1,1 +1,1 @@
-import{LD as e}from"../../../chunks/app-B_3bgkCM.js";export{e as BlockInfoDialog};
+import{LD as e}from"../../../chunks/app-DUnIsnvM.js";export{e as BlockInfoDialog};
