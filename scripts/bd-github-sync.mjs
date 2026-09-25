@@ -129,10 +129,10 @@
  */
 
 import { spawnSync } from 'node:child_process'
-import { accessSync, constants, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs'
+import { accessSync, constants, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { isMainModule } from './is-main-module.mjs'
 import { shellSegmentsWithDepth } from './shell-segments.mjs'
 
 export const REPO = 'Stvad/knowledge-medium'
@@ -2252,22 +2252,6 @@ const hookPrePr = () => {
 }
 
 // ---------------------------------------------------------------------------
-
-/**
- * Exact-path comparison: a suffix match would run a live sync at import time
- * from any future sibling whose name this file's happens to end with. Both
- * sides realpathed: node resolves the ESM entry through symlinks while argv
- * keeps the literal path, and a mismatch silently disables the hook. Shared
- * by every hook script in scripts/.
- */
-export const isMainModule = metaUrl => {
-  if (!process.argv[1]) return false
-  try {
-    return realpathSync(fileURLToPath(metaUrl)) === realpathSync(resolve(process.argv[1]))
-  } catch {
-    return fileURLToPath(metaUrl) === resolve(process.argv[1])
-  }
-}
 
 if (isMainModule(import.meta.url)) {
   const args = new Set(process.argv.slice(2))

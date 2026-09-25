@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, realpathSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
@@ -362,6 +362,14 @@ describe('hook end-to-end', { timeout: 30_000 }, () => {
   const restoredSha = git(rwt, ['rev-parse', 'stash@{0}'])
   git(rwt, ['stash', 'drop', '-q', 'stash@{0}'])
   git(rwt, ['stash', 'store', '-m', 'restored: orig — accidentally popped elsewhere', restoredSha])
+
+  it('still blocks when the hook script is reached through a symlinked directory', () => {
+    const linked = join(realpathSync(mkdtempSync(join(tmpdir(), 'stash-guard-link-'))), 'scripts')
+    symlinkSync(dirname(script), linked)
+    const payload = JSON.stringify({ tool_name: 'Bash', cwd: multi, tool_input: { command: 'git stash pop' } })
+    const r = spawnSync('node', [join(linked, 'check-stash-worktree.mjs')], { cwd: multi, input: payload, encoding: 'utf8' })
+    expect(r.status).toBe(2)
+  })
 
   it('is a no-op in a single-worktree repo', () => {
     expect(hook('git stash pop', single).status).toBe(0)

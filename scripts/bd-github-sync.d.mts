@@ -18,7 +18,6 @@ export declare const beadIdDenial: (ids: string[]) => string
 export declare const fetchIssueInfo: (
   number: number,
 ) => { title: string; state: string; isPr: boolean } | 'not-found' | null
-export declare const isMainModule: (metaUrl: string) => boolean
 export declare const issueRefsTable: (text: string, refs: number[], mode?: 'pre' | 'post') => string
 export declare const allowsBeadIds: (cmd: string) => boolean
 export declare const bodyFilePaths: (cmd: string) => string[]

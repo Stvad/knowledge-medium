@@ -20,11 +20,14 @@ import {hasBlockType} from '@/data/properties'
 import type {Repo} from '@/data/repo'
 import {statusProp as todoStatusProp, todoType} from '@/plugins/todo/schema'
 
-import {ALT_CHOICE_TYPE, FIELD, LAYOFF_TYPE, SET_TYPE, EXERCISE_ENTRY_TYPE, WORKOUT_TYPE} from '../../src/km/fields'
+import {
+  ALT_CHOICE_TYPE, ASSESSMENT_RESULT_TYPE, ASSESSMENT_TYPE, EXERCISE_ENTRY_TYPE, FIELD, LAYOFF_TYPE, SET_TYPE, WORKOUT_TYPE,
+} from '../../src/km/fields'
 import {SETTINGS_TYPE} from '../../src/km/schema'
 import {buildHistory, buildLayoffs} from '../../src/km/history'
 import {dayToDate, storedDate} from '../../src/km/day'
 import {loadConfig} from '../../src/km/config'
+import {recordResult, startAssessment} from '../../src/km/assessment'
 import {DEFAULT_CONFIG} from '../../src/program/defaults'
 import {findSettingsBlock, findStrengthLogPage, getOrCreateSettingsBlock, settingsIdentity} from '../../src/km/page'
 import {adjustSet, finishSession, mostRecentlyStarted, startSession as startSessionReporting} from '../../src/km/session'
@@ -39,6 +42,7 @@ import {
   dateProp,
   layoffFromProp,
   layoffTierProp,
+  planRootProp,
   rolloverHourProp,
   sessionProp,
   statusProp,
@@ -1250,6 +1254,94 @@ describe('a layoff mint filed away from the log page', () => {
     expect(buildLayoffs(
       await repo.query.typedBlocks({workspaceId: WORKSPACE_ID, types: [LAYOFF_TYPE]}).load(),
     )).toHaveLength(1)
+  })
+})
+
+describe('the plan outline', () => {
+  it('prescribes in outline order, so moving a block moves the lift', async () => {
+    // Created squat-first; the press is then MOVED ahead of it, the way the
+    // plan is reordered by hand. Creation time and any cached order both
+    // still say squat first — only the outline says otherwise.
+    const {settingsBlockId} = await ensureStrengthHome(repo, WORKSPACE_ID)
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'plan-root', workspaceId: WORKSPACE_ID, parentId: null, orderKey: 'b0',
+        content: '**Strength Plan v2**',
+      })
+      await tx.create({
+        id: 'plan-b', workspaceId: WORKSPACE_ID, parentId: 'plan-root', orderKey: 'a0',
+        content: '**Session B (Sun late, lower-lean)**',
+      })
+      await tx.create({id: 'plan-warmup', workspaceId: WORKSPACE_ID, parentId: 'plan-b', orderKey: 'a0', content: 'Warm-up: shoulder prep'})
+      await tx.create({id: 'plan-squat', workspaceId: WORKSPACE_ID, parentId: 'plan-b', orderKey: 'a1', content: 'Squat — 3×6–10'})
+      await tx.create({id: 'plan-ohp', workspaceId: WORKSPACE_ID, parentId: 'plan-b', orderKey: 'a2', content: 'Overhead press — 3×6–10'})
+    }, {scope: ChangeScope.BlockDefault, description: 'a plan'})
+    await repo.tx(tx => tx.setProperty(settingsBlockId, planRootProp, 'plan-root'),
+      {scope: ChangeScope.UserPrefs, description: 'point at the plan'})
+    const sessionB = async () => (await loadConfig(repo, WORKSPACE_ID, settingsBlockId)).config.exercises
+      .filter(e => e.session === 'B').map(e => e.name)
+    expect(await sessionB()).toEqual(['Squat', 'Overhead press'])
+
+    await repo.tx(tx => tx.move('plan-ohp', {parentId: 'plan-b', orderKey: 'a05'}),
+      {scope: ChangeScope.BlockDefault, description: 'press first'})
+
+    expect(await sessionB()).toEqual(['Overhead press', 'Squat'])
+  })
+})
+
+describe('an assessment', () => {
+  it('stamps one dated block with a result per test, first on the page', async () => {
+    const id = await startAssessment(repo, PAGE_ID, '2026-09-29', DEFAULT_CONFIG.assessments)
+
+    const page = await repo.block(PAGE_ID).children.load()
+    expect(page[0].id).toBe(id)
+    expect(hasBlockType(page[0], ASSESSMENT_TYPE)).toBe(true)
+    expect(repo.block(id).peekProperty(dateProp)).toEqual(dayToDate('2026-09-29'))
+
+    const results = await repo.block(id).children.load()
+    expect(results.map(r => r.content)).toEqual(DEFAULT_CONFIG.assessments.map(t => t.name))
+    expect(results.every(r => hasBlockType(r, ASSESSMENT_RESULT_TYPE))).toBe(true)
+    expect(results.map(r => r.properties[FIELD.measure])).toEqual(DEFAULT_CONFIG.assessments.map(t => t.measure))
+  })
+
+  it('records a side, clears it, and records an outcome', async () => {
+    const id = await startAssessment(repo, PAGE_ID, '2026-09-29', [
+      {name: 'Side plank hold', measure: 'seconds'},
+      {name: 'Back-to-wall overhead reach', measure: 'pass-fail'},
+    ])
+    const [plank, reach] = await repo.block(id).children.load()
+
+    await recordResult(repo, plank.id, {side: 'L', value: 40})
+    await recordResult(repo, plank.id, {side: 'R', value: 52})
+    expect(repo.block(plank.id).peek()?.properties).toMatchObject({[FIELD.left]: 40, [FIELD.right]: 52})
+
+    await recordResult(repo, plank.id, {side: 'L', value: undefined})
+    expect(FIELD.left in (repo.block(plank.id).peek()?.properties ?? {})).toBe(false)
+
+    await recordResult(repo, reach.id, {outcome: 'fail'})
+    expect(repo.block(reach.id).peek()?.properties[FIELD.outcome]).toBe('fail')
+    // Back to untested is the same shape as never tested: no key.
+    await recordResult(repo, reach.id, {outcome: undefined})
+    expect(FIELD.outcome in (repo.block(reach.id).peek()?.properties ?? {})).toBe(false)
+  })
+
+  it('refuses an entry the row no longer takes, checked at write time', async () => {
+    const id = await startAssessment(repo, PAGE_ID, '2026-09-29', [
+      {name: 'Side plank hold', measure: 'seconds'},
+      {name: 'Back-to-wall overhead reach', measure: 'pass-fail'},
+    ])
+    const [plank, reach] = await repo.block(id).children.load()
+    // Rendered as a pass/fail row; a peer turns it into a numeric one before the tap lands.
+    await repo.tx(tx => tx.update(reach.id, {properties: {...reach.properties, [FIELD.measure]: 'cm'}}),
+      {scope: ChangeScope.BlockDefault, description: 're-measure'})
+
+    expect(await recordResult(repo, reach.id, {outcome: 'pass'})).toBe('refused')
+    expect(await recordResult(repo, plank.id, {outcome: 'pass'})).toBe('refused')
+    expect(FIELD.outcome in (repo.block(reach.id).peek()?.properties ?? {})).toBe(false)
+    expect(FIELD.outcome in (repo.block(plank.id).peek()?.properties ?? {})).toBe(false)
+
+    await repo.tx(tx => tx.run(deleteBlock, {id: plank.id}), {scope: ChangeScope.BlockDefault, description: 'gone'})
+    expect(await recordResult(repo, plank.id, {side: 'L', value: 40})).toBe('refused')
   })
 })
 

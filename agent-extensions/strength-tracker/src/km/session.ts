@@ -527,7 +527,7 @@ const writeSet = async (
         ...(typeof rpe === 'number' ? [propertyValue(rpeProp, rpe)] : []),
       ],
       // Cleared, not written as undefined: `unset` is the only thing that
-      // takes the key back OUT of the bag, and `allSetsAtOrBelowRpe` asks
+      // takes the key back OUT of the bag, and the catch-up in `toppedStep` asks
       // whether the value is there at all.
       ...(rpe === null ? {unset: [rpeProp]} : {}),
     })

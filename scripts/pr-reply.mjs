@@ -23,7 +23,8 @@
 import { spawnSync } from 'node:child_process'
 import { readFileSync, statSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { REPO, beadIdDenial, extractBeadIds, extractIssueRefs, isMainModule, issueRefsTable } from './bd-github-sync.mjs'
+import { REPO, beadIdDenial, extractBeadIds, extractIssueRefs, issueRefsTable } from './bd-github-sync.mjs'
+import { isMainModule } from './is-main-module.mjs'
 
 export const SIGNATURE = '_🤖 Addressed by [Claude Code](https://claude.com/claude-code)_'
 
