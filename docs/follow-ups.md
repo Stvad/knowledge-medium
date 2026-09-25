@@ -242,7 +242,7 @@ The shape suggests an ordering race: when run alongside the rest of the suite, t
 
 ### Legacy alias-seat cleanup tombstones — leave in place
 
-Audited 2026-05-26 on `ff-vlad-dev` (workspace `4bb3ac62-0487-4586-bee4-6a5f28003899`): 424 tombstoned alias seats match the exact restorability predicate the probe now uses (pristine seed shape, `content === alias[0]`, no live children, no inbound `block_references`). Worst-offender prefix: `browser em` at 20 tombstones — accumulated en route to typing `[[browser emacs]]`. The full table:
+Audited 2026-05-26 on a live client: 424 tombstoned alias seats match the exact restorability predicate the probe now uses (pristine seed shape, `content === alias[0]`, no live children, no inbound `block_references`). Worst-offender prefix: `browser em` at 20 tombstones — accumulated en route to typing `[[browser emacs]]`. The full table:
 
 | prefix | tombstones |
 |---|---:|
