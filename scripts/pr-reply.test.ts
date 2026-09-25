@@ -16,7 +16,7 @@ describe('signedBody', () => {
 describe('pr-reply process behavior', { timeout: 20_000 }, () => {
   const script = fileURLToPath(new URL('./pr-reply.mjs', import.meta.url))
 
-  const setup = (opts: { ghFails?: boolean; ghAnswer?: string } = {}) => {
+  const setup = (opts: { ghFails?: boolean; ghAnswer?: string; issues?: Record<number, object> } = {}) => {
     const dir = mkdtempSync(join(tmpdir(), 'pr-reply-'))
     const shimDir = join(dir, 'shim')
     mkdirSync(shimDir)
@@ -27,13 +27,21 @@ describe('pr-reply process behavior', { timeout: 20_000 }, () => {
       [
         '#!/bin/sh',
         `echo "gh $@" >> "${log}"`,
-        `cat > "${dir}/stdin.json"`,
+        'case "$2" in',
+        '  */replies)',
+        `    cat > "${dir}/stdin.json"`,
         opts.ghFails
-          ? `echo 'HTTP 404: Not Found' >&2; exit 1`
-          : `echo '${opts.ghAnswer ?? '{"id":42,"html_url":"https://github.com/Stvad/knowledge-medium/pull/652#discussion_r42","body":"x"}'}'`,
+          ? `    echo 'HTTP 404: Not Found' >&2; exit 1;;`
+          : `    echo '${opts.ghAnswer ?? '{"id":42,"html_url":"https://github.com/Stvad/knowledge-medium/pull/652#discussion_r42","body":"x"}'}';;`,
+        '  */issues/*)',
+        '    n=$(basename "$2")',
+        `    if [ -f "${dir}/issue-$n.json" ]; then cat "${dir}/issue-$n.json"; exit 0; fi`,
+        `    echo '{"message":"Not Found"}'; exit 1;;`,
+        'esac',
       ].join('\n') + '\n',
     )
     chmodSync(join(shimDir, 'gh'), 0o755)
+    for (const [n, issue] of Object.entries(opts.issues ?? {})) writeFileSync(join(dir, `issue-${n}.json`), JSON.stringify(issue))
     // GH_TOKEN/GH_HOST: a broken shim must not fall through to the real gh.
     // INIT_CWD is dropped: a test run under `pnpm run` inherits pnpm's own.
     const env: NodeJS.ProcessEnv = { ...process.env, PATH: `${shimDir}:${process.env.PATH}`, GH_TOKEN: '', GH_HOST: '127.0.0.1' }
@@ -56,7 +64,7 @@ describe('pr-reply process behavior', { timeout: 20_000 }, () => {
     writeFileSync(join(dir, 'body.md'), 'Real — fixed in `abc123`; see #77.\n')
     const r = run('652', '41', 'body.md')
     expect(r.status).toBe(0)
-    expect(r.stdout.trim()).toBe('https://github.com/Stvad/knowledge-medium/pull/652#discussion_r42')
+    expect(r.stdout.split('\n')[0]).toBe('https://github.com/Stvad/knowledge-medium/pull/652#discussion_r42')
     expect(ghCalls()).toContain('gh api repos/Stvad/knowledge-medium/pulls/652/comments/41/replies --method POST --input -')
     expect(sent()).toEqual({ body: `Real — fixed in \`abc123\`; see #77.\n\n${SIGNATURE}` })
   })
@@ -99,6 +107,19 @@ describe('pr-reply process behavior', { timeout: 20_000 }, () => {
     const r = run('652', '41', 'body.md')
     expect(r.status).toBe(0)
     expect(r.stdout.trim()).toBe('{"id":42}')
+  })
+
+  // The publisher checks its own text, so a spelling of the invocation the
+  // hooks do not recognize is checked all the same: every #N the reply
+  // published comes back with its real title.
+  it('echoes the real title of every number the posted reply carries', () => {
+    const answer = JSON.stringify({ id: 42, html_url: 'https://github.com/Stvad/knowledge-medium/pull/652#discussion_r42', body: 'see #77 and #78' })
+    const { dir, run } = setup({ ghAnswer: answer, issues: { 77: { title: 'Referenced', state: 'open' } } })
+    writeFileSync(join(dir, 'body.md'), 'see #77 and #78')
+    const r = run('652', '41', 'body.md')
+    expect(r.status).toBe(0)
+    expect(r.stdout).toContain('#77 → "Referenced" (issue, open)')
+    expect(r.stdout).toContain('#78 → NO SUCH ISSUE OR PR')
   })
 
   // Each refusal is a shape the read-back cannot cover or a post that would

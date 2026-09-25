@@ -303,6 +303,8 @@ describe('graphql calls', () => {
   it('finds a mutation keyword that shell quoting splits', () => {
     expect(matchesAnyPublish(`gh api graphql -f query='mut''ation{addComment(input:{body:"x"}){clientMutationId}}'`)).toBe(true)
     expect(matchesAnyPublish(`gh api graphql -f query=mu\\tation'{addComment(input:{body:"x"}){clientMutationId}}'`)).toBe(true)
+    // the shell drops a backslash-newline, joining the keyword again
+    expect(matchesAnyPublish(`gh api graphql -f query=muta\\\ntion'{addComment(input:{body:"x"}){clientMutationId}}'`)).toBe(true)
   })
 
   it('keeps a text-free mutation a publish, and uncovered', () => {
@@ -3197,6 +3199,10 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     const body = hook('gh pr create --head km-zzzz --title t --body "tracks km-zzzz"')
     expect(body.status).toBe(2)
     expect(body.stderr).toContain('km-zzzz')
+    // a branch flag spelled inside an api payload value is payload text
+    const payload = hook('gh api --silent repos/Stvad/knowledge-medium/issues/1/comments -f body=--head=km-zzzz')
+    expect(payload.status).toBe(2)
+    expect(payload.stderr).toContain('km-zzzz')
     // and a flag quoted inside the published body is text, not a flag
     const quoted = hook('gh pr create --title t --body "branch --head km-zzzz"')
     expect(quoted.status).toBe(2)

@@ -13,15 +13,17 @@
  * a pipe or a heredoc, and either takes the command out of the covered shape.
  *
  * Its gh call runs in this process, where no hook sees it, so a spelling of
- * the invocation the hooks fail to recognize is checked by nobody. Bead ids
- * are therefore refused here, before anything is posted, with the same
- * KM_ALLOW_BEAD_IDS=1 escape the gate honors.
+ * the invocation the hooks fail to recognize would be checked by nobody. The
+ * script therefore checks its own text, whatever the spelling: bead ids are
+ * refused before anything is posted, with the same KM_ALLOW_BEAD_IDS=1 escape
+ * the gate honors, and every #N in the posted reply is echoed with its real
+ * title, read from GitHub's answer, as the read-back would.
  */
 
 import { spawnSync } from 'node:child_process'
 import { readFileSync, statSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { REPO, beadIdDenial, extractBeadIds, isMainModule } from './bd-github-sync.mjs'
+import { REPO, beadIdDenial, extractBeadIds, extractIssueRefs, isMainModule, issueRefsTable } from './bd-github-sync.mjs'
 
 export const SIGNATURE = '_🤖 Addressed by [Claude Code](https://claude.com/claude-code)_'
 
@@ -67,15 +69,18 @@ const main = argv => {
     encoding: 'utf8',
   })
   if (r.status !== 0) return (r.stderr || r.stdout || r.error?.message || `gh exited ${r.status}`).trimEnd()
-  let url
+  let reply
   try {
-    url = JSON.parse(r.stdout).html_url
+    reply = JSON.parse(r.stdout)
   } catch {
-    url = undefined
+    reply = null
   }
   // gh's own answer when it names no reply URL: printed as is, so the
   // read-back's report of an unnamed object is what follows.
-  console.log(typeof url === 'string' ? url : r.stdout.trimEnd())
+  console.log(typeof reply?.html_url === 'string' ? reply.html_url : r.stdout.trimEnd())
+  const published = typeof reply?.body === 'string' ? reply.body : signedBody(body.text)
+  const refs = extractIssueRefs(published)
+  if (refs.length) console.log(`\n${issueRefsTable(published, refs, 'post')}`)
   return null
 }
 
