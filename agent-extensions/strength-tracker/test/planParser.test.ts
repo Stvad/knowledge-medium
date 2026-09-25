@@ -198,14 +198,13 @@ describe('parseExercise', () => {
     expect(ladder(['0', '5', '10'])).toEqual([0, 5, 10])
   })
 
-  it('treats a zero or negative load as not stated', () => {
-    const ex = parseExercise(
-      node('Overhead press — 2×8–12', [], {properties: {[FIELD.startWeight]: 0, [FIELD.microIncrement]: -2}}),
-      'A',
-      {upper: 5, lower: 10},
-    )
-    expect(ex?.startWeight).toBeUndefined()
-    expect(ex?.microIncrement).toBeUndefined()
+  it('reads a zero start weight as bodyweight, and a non-positive step or a negative load as not stated', () => {
+    const read = (properties: Record<string, unknown>) =>
+      parseExercise(node('Pull-ups — 3×5–8', [], {properties}), 'B', {upper: 5, lower: 10})
+    expect(read({[FIELD.startWeight]: 0})?.startWeight).toBe(0)
+    expect(read({[FIELD.startWeight]: -5})?.startWeight).toBeUndefined()
+    expect(read({[FIELD.microIncrement]: 0})?.microIncrement).toBeUndefined()
+    expect(read({[FIELD.microIncrement]: -2})?.microIncrement).toBeUndefined()
   })
 
   it('gathers the description from plain child bullets, including a video child', () => {

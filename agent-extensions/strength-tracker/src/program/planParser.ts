@@ -110,10 +110,15 @@ const strProp = (properties: Record<string, unknown> | undefined, key: string): 
   const value = properties?.[key]
   return typeof value === 'string' ? value : undefined
 }
-/** A load or a count that only means something above zero. */
+/** A count or a step, which only means something above zero. */
 const positiveProp = (properties: Record<string, unknown> | undefined, key: string): number | undefined => {
   const value = numProp(properties, key)
   return value !== undefined && value > 0 ? value : undefined
+}
+/** A load: zero is bodyweight, and only a negative one is not a load. */
+const loadProp = (properties: Record<string, unknown> | undefined, key: string): number | undefined => {
+  const value = numProp(properties, key)
+  return value !== undefined && value >= 0 ? value : undefined
 }
 /** A list of loads, ascending and deduplicated. The list editor writes text,
  *  one entry per item — but "20, 25, 35" typed into a single item is the same
@@ -226,7 +231,7 @@ export const parseExercise = (
     totalRepsThreshold: positiveProp(props, FIELD.totalRepsThreshold),
     microIncrement: positiveProp(props, FIELD.microIncrement),
     ladder: loadsProp(props, FIELD.ladder),
-    startWeight: positiveProp(props, FIELD.startWeight),
+    startWeight: loadProp(props, FIELD.startWeight),
     videos: videos.length > 0 ? videos : undefined,
     // Only a real block can be referenced back to; the line-only wrapper
     // below passes an empty id and gets no definition link.
