@@ -22,6 +22,16 @@
             "type": "command"
           },
           {
+            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/backup-before-restore.mjs\"",
+            "statusMessage": "Backing up files a checkout/restore would overwrite…",
+            "type": "command"
+          },
+          {
+            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/push-scope.mjs\"",
+            "statusMessage": "Listing what this push changes against origin/master…",
+            "type": "command"
+          },
+          {
             "command": "node \"$CLAUDE_PROJECT_DIR/scripts/bd-github-sync.mjs\" --hook-pre-pr",
             "statusMessage": "Checking for publishable bead ids…",
             "timeout": 180,
