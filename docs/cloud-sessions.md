@@ -1,6 +1,6 @@
 # Cloud / remote sessions — operational runbook
 
-> **Status:** operational runbook (not a design doc). Last verified 2026-08-19 against bd 1.2.2 and Claude Code cloud containers (PRs #578–#580).
+> **Status:** operational runbook (not a design doc). Last verified 2026-08-19 against bd 1.2.2 and Claude Code cloud containers (PRs #578–#580); the remote-adoption section was re-checked against bd 1.3.0 on 2026-09-25, the rest not yet.
 
 Applies to Claude Code on the web and any other fresh-clone remote container. A local **worktree is not a cloud session** — worktrees share the main checkout's git objects and beads DB and need none of this.
 
@@ -54,7 +54,7 @@ Ref deletion 403s here with or without a PAT and no MCP tool deletes a branch, s
 
 ## An empty Dolt remote registry offers to adopt git origin — the public repo
 
-`bd dolt push` reads `bd dolt remote list`, not the `sync.remote` config key. The registry lives in gitignored `.beads/embeddeddolt/`, so a fresh CLONE starts empty. bd 1.2.x then silently ADOPTED git origin with no prompt, which is how beads data briefly landed on the public repo during setup. Since 1.3.0 adoption takes consent — `--yes`, or a yes at an interactive prompt — and a run with neither refuses; never give it. In a new clone, run this BEFORE any `bd dolt push`:
+`bd dolt push` reads `bd dolt remote list`, not the `sync.remote` config key. The registry lives in gitignored `.beads/embeddeddolt/`, so a fresh CLONE starts empty. bd 1.2.2 (like 1.1.x) silently ADOPTED git origin with no prompt, which is how beads data briefly landed on the public repo during setup. Since 1.3.0 adoption takes consent — `--yes`, or a yes at an interactive prompt — and a run with neither refuses with exit 1, naming the URL (observed); never give it. In a new clone, run this BEFORE any `bd dolt push`:
 
 ```bash
 bd dolt remote add origin git+ssh://git@github.com/Stvad/knowledge-medium-beads.git
