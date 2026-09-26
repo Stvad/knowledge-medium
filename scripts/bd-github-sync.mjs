@@ -17,10 +17,10 @@
  *    signal.
  * 3. A bead closed BEFORE its first sync stays closed locally but its issue is
  *    minted OPEN. So after syncing, closed beads whose issue is open get the
- *    issue closed via gh — NOT via a selective bd push: bd PATCHes a linked
- *    bead only when the local row is strictly newer than the issue's
- *    updated_at, so anything that touched the issue after the close (a
- *    comment, a label, a cross-reference) makes bd skip it for good
+ *    issue closed via gh — NOT via a selective bd push: the push is handed
+ *    only beads whose local row is strictly newer than the issue's
+ *    updated_at (step 4), so anything that touched the issue after the close
+ *    (a comment, a label, a cross-reference) keeps it out for good
  *    (observed live: a day-old close never pushed). gh-closing is safe in
  *    exactly this direction because the bead is already closed: the states
  *    agree afterwards, so the next sync has nothing to revert.
@@ -34,11 +34,12 @@
  *    open bead cannot re-open its issue), and beads whose local row is still
  *    newer than their GitHub copy — a failed push or a mid-run touch of the
  *    issue can leave such a row unpushed — are snapshotted before the pull
- *    and restored + re-pushed if it reverted them. That push is SELECTIVE and the pull runs alone (see step 1.5):
- *    bd 1.2.2 GETs every linked bead it is handed and PATCHes only the
- *    local-newer ones, so the listing already names the beads it could
- *    touch, and a converged run costs seconds rather than one GET per bead
- *    per leg (measured: 387 beads, 90s per leg, two legs).
+ *    and restored + re-pushed if it reverted them. That push is SELECTIVE and the pull runs alone (see step 1.5).
+ *    The selection is load-bearing: bd 1.3.0 PATCHes a handed bead whenever
+ *    its title, body, state or labels differ, whichever side changed last,
+ *    so handing it a bead whose issue is newer would overwrite that GitHub
+ *    edit. It also keeps a converged run to seconds rather than one GET per
+ *    bead per leg (measured on 1.2.2: 387 beads, 90s per leg, two legs).
  *
  * 5. The pull re-applies a GitHub copy onto a bead and drops what GitHub does
  *    not carry back: the assignee (bd's push never sets one), the close date
@@ -756,8 +757,8 @@ export const planLocalWins = (beads, issueByNumber) =>
 
 // ---- what bd's pull would write ----
 // The pull overwrites a bead from its GitHub copy, and the decision to let it
-// happen has to be made BEFORE it runs — so these replicate bd 1.2.2's
-// GitHub→beads mapping (internal/github/mapping.go, unchanged in 1.3.0-rc.2).
+// happen has to be made BEFORE it runs — so these replicate bd's
+// GitHub→beads mapping (internal/github/mapping.go, unchanged 1.2.2 → 1.3.0).
 // Both ways of being wrong are bounded: reading a divergence bd would not see
 // costs one needless touch and push, and missing one leaves today's behaviour.
 // bd splits a label on the FIRST `::`, compares the prefix case-sensitively
@@ -843,11 +844,9 @@ const labelFieldsWhere = (bead, issue, keep) =>
   LABEL_FIELDS.filter(([, read]) => keep(labelVerdict(bead, issue, read))).map(([field]) => field)
 
 /**
- * Whether a push would CHANGE the issue — bd 1.2.2 does not ask (it PATCHes on
- * the timestamp alone), so the wrapper asks on its behalf and spares the
- * tracker a PATCH that ships nothing. Only ever a THRIFT: a push that ships
- * nothing still moves the issue, which planPrePullPush needs whenever the pull
- * would write the bead, so this never decides that case on its own.
+ * Whether a push would CHANGE the issue — the question bd 1.3.0 asks itself
+ * (PushFieldsEqual) after fetching the issue, asked here from the listing so a
+ * bead bd would skip is never handed over.
  * Mirrors bd's BeadsIssueToGitHubFields — title, body, open/closed, and the
  * whole label set, scoped labels derived from the bead plus its own.
  */
@@ -906,34 +905,22 @@ export const planLossyReapplies = (beads, issueByNumber) =>
     return losses.length ? [{ id: b.id, number, losses, overwrites }] : []
   })
 
-// Beads to hand the pre-pull push, skipping the two kinds bd would waste a
-// GET on. bd 1.2.2 wires no content hook — its GitHub command sets PullHooks
-// and never PushHooks, so doPush's ContentEqual is nil and it falls back to
-// the timestamp rule: it GETs every linked bead and PATCHes whenever the local
-// row is STRICTLY newer, content identical or not.
-//   - GitHub is same-or-newer: bd would skip it anyway.
-//   - the push would change nothing AND the pull would write nothing
-//     (pullIssueEqual): bd would PATCH for no reason, re-stamping the issue.
-// A content-identical push is NOT skippable when the pull would write, even
-// though it ships no content — because of HYDRATION. bd's pull explicitly
-// fetches every bead modified since last_sync whose issue the incremental
-// query did not already return, and those bypass the "skip locally modified"
-// guard (fetchPrelinkedIssues + prelinkedHydrateIDs; the ref-changed test
-// falls back to `UpdatedAt.After(lastSync)` because the embedded Dolt store
-// exposes no pooled *sql.DB). So the pull writes a bead exactly when ONE of
-// the two sides moved since last_sync, and the push is what moves the issue
-// so that BOTH did. That is #647's mechanism, and why this push cannot be
-// optimized away on content alone.
-// Everything the listing cannot prove bd would skip (no ref, a foreign ref, an
-// issue missing from the listing, a missing timestamp) still goes to bd, which
-// decides with a fresh GET as the full push did.
+// Beads to hand the pre-pull push. bd 1.3.0 PATCHes a handed bead whenever its
+// pushed fields differ (its ContentEqual hook replaced 1.2.2's timestamp rule),
+// whichever side changed last — so this filter is what keeps the push from
+// overwriting a newer GitHub-side edit:
+//   - GitHub is same-or-newer: left for the pull.
+//   - the push would change nothing: bd would spend a GET only to skip it.
+// Everything the listing cannot judge (no ref, a foreign ref, an issue missing
+// from the listing, a missing timestamp) still goes to bd, which fetches the
+// issue and pushes if the content differs.
 export const planPrePullPush = (beads, issueByNumber) =>
   beads
     .filter(b => {
       const issue = issueByNumber.get(issueNumberFromRef(b.external_ref))
       if (!issue) return true
       if (issue.updatedAt && b.updated_at && Date.parse(issue.updatedAt) >= Date.parse(b.updated_at)) return false
-      return pushWouldChange(b, issue) || pullWouldWrite(b, issue)
+      return pushWouldChange(b, issue)
     })
     .map(b => b.id)
 
@@ -959,17 +946,29 @@ export const detectReverts = (snapshotRows, postById) =>
 export const planRestoreArgs = (row, post) => {
   const update = ['update', row.id, '--title', row.title ?? '', '-d', row.description ?? '', '-p', String(row.priority)]
   if (row.issue_type) update.push('-t', row.issue_type)
-  // Always passed: `-a ''` CLEARS the assignee (verified against bd 1.2.2),
+  // Always passed: `-a ''` CLEARS the assignee (verified against bd 1.3.0),
   // so an unassigned snapshot can undo a pulled stale assignment.
   update.push('-a', row.assignee ?? '')
   const snapLabels = new Set(row.labels ?? [])
   const postLabels = new Set(post?.labels ?? [])
   for (const l of snapLabels) if (!postLabels.has(l)) update.push('--add-label', l)
   for (const l of postLabels) if (!snapLabels.has(l)) update.push('--remove-label', l)
+  // --force: bd refuses to close a bead with an open child or an open blocker,
+  // and this only replays a close the bead already had.
   if (row.status === 'closed')
-    return [update, ['close', row.id, '-r', row.close_reason || 'restored by bd-github-sync after a pull revert (#647)']]
+    return [update, ['close', row.id, '--force', '-r', row.close_reason || 'restored by bd-github-sync after a pull revert (#647)']]
   return [[...update, '-s', row.status]]
 }
+
+// --force for the same close policy: a GitHub close is authoritative here, as
+// it is for bd's own pull, which forces the policy on every pulled update.
+export const planAdoptCloseArgs = (id, number) => [
+  'close',
+  id,
+  '--force',
+  '--reason',
+  `Closed on GitHub (issue #${number}); reconciled by bd-github-sync.`,
+]
 
 export const planPriorityFixes = (preById, postBeads, issueByNumber) =>
   postBeads
@@ -1233,11 +1232,12 @@ const exportBeads = env =>
     .filter(r => r._type === 'issue')
 
 // Every guard in this file is calibrated to ONE bd version's MEASURED
-// behaviour: what the pull reaches and how, the push's timestamp rule, the
-// close that only gh can carry. An upgrade moves them together and silently,
-// and a wrong guess loses an assignee and a close date without reporting it.
-// So an unverified bd REFUSES to sync rather than syncing on stale reasoning.
-const VERIFIED_BD_VERSIONS = ['1.2.2']
+// behaviour: what the pull reaches and how, what makes the push PATCH, the
+// close that only gh can carry, the close policy. An upgrade moves them
+// together and silently, and a wrong guess loses an assignee and a close date
+// without reporting it. So an unverified bd REFUSES to sync rather than
+// syncing on stale reasoning.
+const VERIFIED_BD_VERSIONS = ['1.3.0']
 // The WHOLE token, prerelease and build metadata included: `1.2.2-rc.1` is a
 // different engine from `1.2.2` (the retracted 1.2.1 was one such), and
 // truncating it would let an unmeasured build through the allowlist.
@@ -1394,11 +1394,11 @@ const fetchIssueComments = (numbers, env) => {
   return byNumber
 }
 
-// Bead comments → issue comments, one way and append-only: bd 1.2.2's sync
-// carries comments in neither direction (nothing in its GitHub client, mapper
-// or tracker reads or writes them), so a mirrored comment never comes back as
-// a new bead comment. The beads come from one `bd export` (exportBeads), so
-// nothing is read per bead. Posts are paced under GitHub's
+// Bead comments → issue comments, one way and append-only: bd's sync (1.2.2
+// and 1.3.0) carries comments in neither direction (nothing in its GitHub
+// client, mapper or tracker reads or writes them), so a mirrored comment never
+// comes back as a new bead comment. The beads come from one `bd export`
+// (exportBeads), so nothing is read per bead. Posts are paced under GitHub's
 // content-creation limit (80/min), and a bead stops at its first failed post
 // so the thread keeps bead order; the next run resumes where it stopped.
 // Every failure is a report line, never a throw: a throw here would swallow
@@ -1542,7 +1542,7 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
     for (const { id, number } of closes) {
       if (dryRun) {
         report.push(`[dry-run] would close ${id} (issue #${number} was closed on GitHub)`)
-      } else if (tryRun('bd', ['close', id, '--reason', `Closed on GitHub (issue #${number}); reconciled by bd-github-sync.`], { env }) !== null) {
+      } else if (tryRun('bd', planAdoptCloseArgs(id, number), { env }) !== null) {
         report.push(`closed ${id} (issue #${number} was closed on GitHub)`)
       } else {
         closeFailures.push(id)
@@ -1729,6 +1729,12 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
     // stamp GitHub newer and bury the loss (see the restore loop above).
     const failedRestoreIds = new Set(restoreFailures)
     const pushBack = [...new Set([...fixes.map(f => f.id), ...restoredOk])].filter(id => !failedRestoreIds.has(id))
+    // Accepted: bd skips, without fetching the issue, a bead whose pushed
+    // fields equal its last successful push (a clone-local hash no bd verb
+    // clears in embedded mode). A repair that returns a bead to exactly that
+    // content is not re-sent, so GitHub keeps the pulled copy and the next run
+    // repeats the repair. Such repairs are rare; forcing this one through gh
+    // would mean duplicating bd's field mapping as a write path.
     if (pushBack.length && !dryRun) pushBeads(pushBack, env)
 
     // 4. Carry bead closes out to issues still open (see header: via gh, not

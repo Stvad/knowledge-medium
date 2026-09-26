@@ -35,6 +35,7 @@ import {
   planLossyReapplies,
   pullWouldWrite,
   planMintedNonOpen,
+  planAdoptCloseArgs,
   planPrePullPush,
   planMintedRefs,
   planReopenedClosed,
@@ -939,17 +940,22 @@ describe('planPrePullPush', () => {
     expect(planPrePullPush([{ ...row, status: 'closed' }], issues([[1, converged]]))).toEqual(['km-q'])
   })
 
-  // The push carries no content here — its job is to move the ISSUE. bd's pull
-  // explicitly fetches a bead modified since last_sync whose issue the
-  // incremental query did not return, and those bypass its skip-locally-
-  // modified guard; the push is what puts the issue in that query. Without it
-  // the pull re-applies the row, clearing the assignee and restamping a close
-  // date nothing can restore.
-  it('pushes a content-identical local-newer row the pull would still write', () => {
+  // A difference only the pull sees (here the assignee, which GitHub never
+  // carries) is not the push's to fix: bd would fetch the issue and skip it.
+  it('does not hand bd a local-newer row whose pushed fields already match', () => {
     const converged = { state: 'CLOSED' as const, labels: ['type::task', 'priority::high'], title: 'T', body: 'D', assignee: '', updatedAt: '2026-08-20T01:00:00Z' }
     const row = bead({ id: 'km-q', external_ref: ref(1), updated_at: '2026-08-25T00:00:00Z', title: 'T', description: 'D', priority: 1, issue_type: 'task', status: 'closed' })
-    expect(planPrePullPush([row], issues([[1, converged]]))).toEqual([])
-    expect(planPrePullPush([{ ...row, assignee: 'Someone' }], issues([[1, converged]]))).toEqual(['km-q'])
+    expect(planPrePullPush([{ ...row, assignee: 'Someone' }], issues([[1, converged]]))).toEqual([])
+  })
+})
+
+describe('planAdoptCloseArgs', () => {
+  // bd's close policy refuses a bead with an open child or an open blocker; a
+  // refused adoption aborts the whole sync, so the GitHub close must be forced.
+  it('forces the close past the close policy', () => {
+    expect(planAdoptCloseArgs('km-a', 12)).toEqual([
+      'close', 'km-a', '--force', '--reason', 'Closed on GitHub (issue #12); reconciled by bd-github-sync.',
+    ])
   })
 })
 
@@ -1069,11 +1075,11 @@ describe('planRestoreArgs', () => {
     ])
   })
 
-  it('restores a closed row via close, clearing the assignee it never had', () => {
+  it('restores a closed row via a forced close, clearing the assignee it never had', () => {
     const row = bead({ id: 'km-a', status: 'closed', priority: 2, title: 'T', description: 'D', close_reason: 'done' })
     expect(planRestoreArgs(row)).toEqual([
       ['update', 'km-a', '--title', 'T', '-d', 'D', '-p', '2', '-a', ''],
-      ['close', 'km-a', '-r', 'done'],
+      ['close', 'km-a', '--force', '-r', 'done'],
     ])
   })
 
@@ -1224,7 +1230,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
         '#!/bin/sh',
         `echo "bd $@" >> "${shimLog}"`,
         'case "$1" in',
-        `  --version) echo "${opts.bdVersionOutput ?? 'bd version 1.2.2 (shim)'}";;`,
+        `  --version) echo "${opts.bdVersionOutput ?? 'bd version 1.3.0 (shim)'}";;`,
         '  list)',
         `    n=$(cat "${repo}/list-count" 2>/dev/null || echo 0)`,
         `    n=$((n+1)); echo $n > "${repo}/list-count"`,
@@ -1330,18 +1336,18 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   // silent assignee/close-date loss is not.
   it('refuses to sync on a bd version the guards were not verified against', () => {
     const row = syncRow({ id: 'km-v', external_ref: null, updated_at: '2026-08-19T00:00:00Z' })
-    const repo = { issues: [ghIssue(1, '2026-08-20T00:00:00Z')], lists: [[row]], bdVersionOutput: 'bd version 1.3.0' }
+    const repo = { issues: [ghIssue(1, '2026-08-20T00:00:00Z')], lists: [[row]], bdVersionOutput: 'bd version 1.2.2' }
     const { run, shimCalls } = makeSyncRepo(repo)
     const r = run()
     expect(r.status).toBe(1)
-    expect(r.stderr).toContain('verified against bd 1.2.2')
-    expect(r.stderr).toContain('1.3.0')
+    expect(r.stderr).toContain('verified against bd 1.3.0')
+    expect(r.stderr).toContain('1.2.2')
     // Nothing was read or written past the probe.
     expect(shimCalls()).not.toContain('--pull-only')
     expect(shimCalls()).not.toContain('--push-only')
 
     // A prerelease of a verified release is a different engine.
-    const rc = makeSyncRepo({ ...repo, bdVersionOutput: 'bd version 1.2.2-rc.1' })
+    const rc = makeSyncRepo({ ...repo, bdVersionOutput: 'bd version 1.3.0-rc.2' })
     expect(rc.run().status).toBe(1)
     expect(rc.shimCalls()).not.toContain('--pull-only')
 
@@ -1562,7 +1568,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const r = run()
     expect(r.status).toBe(0)
     expect(r.stdout).toContain('restored km-tC')
-    expect(shimCalls()).toContain('bd close km-tC -r done')
+    expect(shimCalls()).toContain('bd close km-tC --force -r done')
     expect(afterPull(shimCalls())).toContain('--issues km-tC')
   })
 
@@ -1581,7 +1587,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const r = run()
     expect(r.status).toBe(0)
     expect(r.stdout).toContain('restored km-tD')
-    expect(shimCalls()).toContain('bd close km-tD -r done')
+    expect(shimCalls()).toContain('bd close km-tD --force -r done')
     expect(afterPull(shimCalls())).toContain('--issues km-tD')
   })
 
@@ -1601,10 +1607,10 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(shimCalls()).not.toContain('--pull-only')
   })
 
-  // The pre-pull push is SELECTIVE: bd 1.2.2 GETs every linked issue it is
-  // handed and PATCHes only the local-newer ones, so beads whose listed
-  // GitHub copy is same-or-newer are skipped up front — the run's cost is
-  // proportional to what changed, not to the tracker.
+  // The pre-pull push is SELECTIVE: bd 1.3.0 PATCHes a handed bead whenever
+  // its content differs, whichever side is newer, so beads whose listed
+  // GitHub copy is same-or-newer must never reach it — and the run's cost
+  // stays proportional to what changed, not to the tracker.
   it('hands the pre-pull push only the beads bd could update', () => {
     const converged = pushable({ id: 'km-c', external_ref: ref(1), updated_at: '2026-08-19T00:00:00Z' })
     const newer = pushable({ id: 'km-n', external_ref: ref(2), updated_at: '2026-08-21T00:00:00Z' })
