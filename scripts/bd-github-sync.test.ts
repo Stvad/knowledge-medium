@@ -1826,6 +1826,14 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(r.stdout).not.toContain('minted:')
   })
 
+  it('reports a listing it could not run after a push that succeeded', () => {
+    const rows = Array.from({ length: 2 }, (_, i) => syncRow({ id: `km-b${i}`, external_ref: null }))
+    const { run } = makeSyncRepo({ issues: [ghIssue(1, '2026-08-20T00:00:00Z')], lists: [rows, rows], failListCall: 2 })
+    const r = run()
+    expect(r.status).toBe(1)
+    expect(r.stderr).toContain('could not re-list beads')
+  })
+
   // Withholding is not an action: a bead that is simply not handed to the pull
   // changes nothing on either side, so a converged run stays silent.
   it('stays silent under --quiet when the only bead is a withheld one', () => {
@@ -1979,6 +1987,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(r.status).toBe(0)
     expect(r.stdout).toContain('minted: km-new → #9')
     expect(r.stdout).toContain('could not re-read the pushed issues')
+    expect(r.stdout).not.toContain('push did not land')
     expect(r.stdout).toContain('SKIPPED comments of km-m')
     expect(posted()).toBe('')
   })

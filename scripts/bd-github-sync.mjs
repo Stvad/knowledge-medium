@@ -73,12 +73,15 @@
  *    touch that changes no pushed field is neither imported nor overwritten:
  *    GitHub keeps its copy, reported each run as a push that did not land,
  *    until the bead's next pushed change overwrites it or a GitHub-side touch
- *    makes the pull take it. Forcing the write through gh instead would make
+ *    makes the pull take it; the bead's comments, and comments naming it,
+ *    wait with it. Forcing the write through gh instead would make
  *    the wrapper a second implementation of bd's push mapping.
- *  - A local edit that was never pushed loses to any later GitHub-side touch
- *    (a comment, a label, a cross-reference): the touch makes GitHub the
- *    newer side, and the next pull takes its copy. Direction is decided by
- *    timestamps, not by content against a last-synced base.
+ *  - A local edit that was never pushed can lose to a later GitHub-side touch
+ *    (a comment, a label, a cross-reference): once GitHub is the newer side
+ *    the bead goes to the pull, and bd's guard stops covering the edit as
+ *    soon as any sync — this wrapper's pre-pull push included — stamps
+ *    `last_sync` past it. Direction is decided by timestamps, not by content
+ *    against a last-synced base.
  *
  * Beyond the guards, the wrapper carries what bd's sync does not: bead
  * COMMENTS are mirrored onto their issues, one way and append-only
@@ -1605,40 +1608,41 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
     const dryRunBumped = dryRun ? closes.map(c => c.id) : []
     const pushSet = [...new Set([...planPrePullPush(exported, issueByNumber), ...dryRunBumped])]
     const unlanded = new Set()
+    let pushErr = null
     if (dryRun) {
       report.push(`[dry-run] would push ${pushSet.length} bead(s) out before the pull${pushSet.length ? `: ${pushSet.join(', ')}` : ''}`)
     } else if (pushSet.length) {
-      let pushOut
       try {
-        pushOut = pushBeads(pushSet, env)
+        // Zero-count lines stay out of the report: they would flip `changed`
+        // below and un-quiet every converged SessionEnd run.
+        const pushOut = pushBeads(pushSet, env)
+        report.push(...pushOut.split('\n').filter(l => /Pushed|Created|Updated/.test(l) && /[1-9]/.test(l)).map(l => `pre-pull: ${l.trim()}`))
       } catch (e) {
-        // A failed push may still have minted issues (an earlier chunk, or bd
-        // aborting midway) — print their mapping from a fresh listing before
-        // the failure propagates; the listing's own failure yields to it.
-        try {
-          printMinted(listAllBeads())
-        } catch {
-          // Silence here would be a permanent loss, not a skipped nicety: any
-          // mapping this push minted is unrecoverable once the next run's
-          // listing shows the ref as pre-existing.
-          console.error('bd-github-sync: could not re-list beads — any km→#N mapping this push minted is unprinted')
-        }
-        throw e
+        pushErr = e
       }
-      // Zero-count lines stay out of the report: they would flip `changed`
-      // below and un-quiet every converged SessionEnd run.
-      report.push(...pushOut.split('\n').filter(l => /Pushed|Created|Updated/.test(l) && /[1-9]/.test(l)).map(l => `pre-pull: ${l.trim()}`))
     }
-    // Fresh list: the push just minted refs. Printed before anything else can
-    // fail — the mapping is this run's only record of what it minted.
-    const freshBeads = dryRun ? exported : listAllBeads()
+    // Fresh list: the push just minted refs — and a failed push may have
+    // minted some too (an earlier chunk, or bd aborting midway). The km→#N
+    // mapping is this run's only record of what it minted: once the next
+    // run's listing shows a ref as pre-existing it is unrecoverable, so it
+    // prints before anything else can fail, a listing that fails says so, and
+    // the push's own failure outranks the listing's.
+    let freshBeads = exported
+    if (!dryRun)
+      try {
+        freshBeads = listAllBeads()
+      } catch (e) {
+        if (pushSet.length) console.error('bd-github-sync: could not re-list beads — any km→#N mapping this push minted is unprinted')
+        throw pushErr ?? e
+      }
     printMinted(freshBeads)
+    if (pushErr) throw pushErr
 
     // 1.55 Which pushes landed, judged by content on a fresh listing: bd only
     // warns on a failed PATCH, and its push cache skips a bead equal to its
     // last push. An unlanded row is held out of the comment mirror (skipIds).
-    // A listing that cannot be read leaves every handed bead unlanded — the
-    // direction that only delays a post.
+    // A listing that cannot be read leaves every linked handed bead unlanded —
+    // the direction that only delays a post.
     if (!dryRun && pushSet.length) {
       const handed = new Set(pushSet)
       const linkedHanded = exported.filter(b => handed.has(b.id) && issueByNumber.has(issueNumberFromRef(b.external_ref)))
@@ -1647,7 +1651,7 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
         try {
           afterPush = fetchIssues().issueByNumber
         } catch (e) {
-          report.push(`could not re-read the pushed issues (${e.message}) — holding back the comments of ${linkedHanded.map(b => b.id).join(', ')} this run`)
+          report.push(`could not re-read the pushed issues (${e.message}) — treating ${linkedHanded.map(b => b.id).join(', ')} as unlanded this run`)
         }
       const notLanded = afterPush
         ? planUnlandedPushes(linkedHanded, afterPush)
@@ -1741,10 +1745,10 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
         restoreFailures.push(row.id)
       }
     }
-    // Failed restores stay OUT of the push-back: pushing a half-restored row
-    // would publish it.
+    // Failed restores stay OUT of this run's push-back: pushing a
+    // half-restored row would publish it.
     if (restoreFailures.length)
-      report.push(`FAILED to restore after a pull revert: ${restoreFailures.join(', ')} — left un-pushed; check them by hand (bd show)`)
+      report.push(`FAILED to restore after a pull revert: ${restoreFailures.join(', ')} — left out of this run's push; the next sync pushes whatever the row holds, so fix it first (bd show)`)
 
     // 3. Un-flatten priorities (pre/post comparison — see header), push back
     // together with the restored rows.
