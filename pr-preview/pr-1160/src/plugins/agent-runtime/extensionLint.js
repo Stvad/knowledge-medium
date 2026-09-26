@@ -1,1 +1,1 @@
-import{ru as e}from"../../../chunks/app-BffKWrLR.js";export{e as lintExtensionSource};
+import{ru as e}from"../../../chunks/app-CIx0YQxe.js";export{e as lintExtensionSource};

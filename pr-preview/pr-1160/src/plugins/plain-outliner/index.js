@@ -1,1 +1,1 @@
-import{Yg as e}from"../../../chunks/app-BffKWrLR.js";export{e as plainOutlinerPlugin};
+import{Yg as e}from"../../../chunks/app-CIx0YQxe.js";export{e as plainOutlinerPlugin};
