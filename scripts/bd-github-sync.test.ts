@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -25,6 +25,7 @@ import {
   matchesAnyPublish,
   matchesApiPublish,
   matchesPrCommand,
+  publishableKinds,
   mirrorCommentBody,
   mirroredCommentIds,
   planCommentMirror,
@@ -62,6 +63,19 @@ const byId = (beads: BeadRow[]) => new Map(beads.map(b => [b.id, b]))
 // at a PR is the case the gate warns about, and spotting that in an inline
 // literal took a second look every time.
 const AN_ISSUE = { title: 'Real GC failure', state: 'open' }
+
+// Whether this process reads through permission bits, as root does.
+const permissionBitsIgnored = () => {
+  const probe = join(mkdtempSync(join(tmpdir(), 'perm-probe-')), 'f')
+  writeFileSync(probe, '')
+  chmodSync(probe, 0o000)
+  try {
+    readFileSync(probe)
+    return true
+  } catch {
+    return false
+  }
+}
 const A_PR = { title: 'Some PR', state: 'open', pull_request: {} }
 
 describe('extractBeadIds', () => {
@@ -74,13 +88,39 @@ describe('extractBeadIds', () => {
   it('does not match inside larger words or hyphen chains', () => {
     // "km-" must start the token: a branch or package name containing the
     // letters must not trip the PR gate.
-    expect(extractBeadIds('vkm-abc akm-def wikm-1')).toEqual([])
+    expect(extractBeadIds('vkm-abcd akm-defg wikm-1234')).toEqual([])
     expect(extractBeadIds('beads-github-sync-workflow km-')).toEqual([])
   })
 
   it('matches ids embedded in punctuation but not uppercase variants', () => {
-    expect(extractBeadIds('(km-abc), km-def.')).toEqual(['km-abc', 'km-def'])
-    expect(extractBeadIds('KM-ABC')).toEqual([])
+    expect(extractBeadIds('(km-abcd), km-dt2e, km-defg.')).toEqual(['km-abcd', 'km-dt2e', 'km-defg'])
+    expect(extractBeadIds('KM-ABCD')).toEqual([])
+  })
+
+  // bd sizes a hash id to the tracker (adaptive length, 4 up to 8), and
+  // imports from GitHub carry a long timestamped form. Both are real ids.
+  it('matches every length bd can mint, its kinds, and the long import form', () => {
+    expect(extractBeadIds('km-7f3a8 km-7f3a86ab')).toEqual(['km-7f3a8', 'km-7f3a86ab'])
+    expect(extractBeadIds('km-1786746045106-1-1eb9b300')).toEqual(['km-1786746045106-1-1eb9b300'])
+    expect(extractBeadIds('km-wisp-abc123, km-mol-a1b2 and km-proto-9f8e7d')).toEqual(['km-wisp-abc123', 'km-mol-a1b2', 'km-proto-9f8e7d'])
+  })
+
+  it('does not read shorter or longer words as ids', () => {
+    expect(extractBeadIds('km-abc km-db km-7f3a86abc')).toEqual([])
+  })
+
+  // Over-matching is the cheap direction: a hyphenated suffix, or ids joined
+  // by a slash, still yield every id.
+  it('stops at the hash, so an id followed by a suffix or a slash still counts', () => {
+    expect(extractBeadIds('km-abcd-era and km-avrg-retain-measure')).toEqual(['km-abcd', 'km-avrg'])
+    expect(extractBeadIds('tracks km-abcd/km-efgh')).toEqual(['km-abcd', 'km-efgh'])
+    expect(extractBeadIds('> /private/tmp/km-merge/threads.txt')).toEqual(['km-merge'])
+  })
+
+  // A branch under an agent prefix names the branch, not a bead.
+  it('does not match a branch under an agent prefix', () => {
+    expect(extractBeadIds('--head claude/km-avrg-retain-measure')).toEqual([])
+    expect(extractBeadIds('origin codex/km-abcd')).toEqual([])
   })
 })
 
@@ -168,6 +208,18 @@ describe('allowsBeadIds', () => {
     expect(allowsIssueRefs(forged.replace('KM_ALLOW_BEAD_IDS', 'KM_ISSUE_REFS_OK'))).toBe(false)
   })
 
+  // A heredoc body is data even when a markdown table cell sets the marker
+  // off with pipes; a newline-separated command line is a real command.
+  it('honors a marker on its own command line, never one in heredoc data', () => {
+    const table = 'gh pr comment 5 --body-file - <<EOF\n| KM_ALLOW_BEAD_IDS=1 | x |\n| KM_ISSUE_REFS_OK=1 | y |\nEOF'
+    expect(allowsBeadIds(table)).toBe(false)
+    expect(allowsIssueRefs(table)).toBe(false)
+    expect(allowsIssueRefs('cd /r\nKM_ISSUE_REFS_OK=1 gh pr merge 1 --body x')).toBe(true)
+    // a bare assignment prefixes no command, however many there are
+    expect(allowsIssueRefs('KM_ISSUE_REFS_OK=1; gh pr merge 1 --body x')).toBe(false)
+    expect(allowsIssueRefs('KM_ISSUE_REFS_OK=1 X=1; gh pr merge 1 --body x')).toBe(false)
+  })
+
   it('ignores the marker quoted inside an argument (it would be published)', () => {
     expect(allowsBeadIds('gh pr create --body "mentions KM_ALLOW_BEAD_IDS=1 in prose"')).toBe(false)
     // quoted prose with a fake segment start must not smuggle the marker in
@@ -232,6 +284,71 @@ describe('carriesPublishableText', () => {
     // gh documents nested key[subkey]=value fields, and gist file content is
     // its own example; FIELD_ANY captures the bracketed name whole
     expect(carriesPublishableText(`gh api gists -f public=true -f 'files[a.md][content]=Fixes #700'`)).toBe(true)
+  })
+})
+
+// The thread-resolve mutation the graphql cases share: its one variable is an ID.
+const RESOLVE = 'mutation($t:ID!){resolveReviewThread(input:{threadId:$t}){thread{id}}}'
+
+describe('graphql calls', () => {
+  it('reads a document with no mutation as publishing nothing, for both hooks', () => {
+    const read = `gh api graphql -f query='query($p:Int!){repository(owner:"o",name:"r"){pullRequest(number:$p){id}}}' -F p=5 --jq '.x | @sh'`
+    expect(matchesApiPublish(read)).toBe(false)
+    expect(matchesAnyPublish(read)).toBe(false)
+    // an expanded variable cannot turn a read into a write
+    expect(matchesAnyPublish(`for n in 1; do ${read.replace('-F p=5', '-F p="$n"')}; done`)).toBe(false)
+  })
+
+  // Shell quoting can split the keyword; the shell rejoins it for gh.
+  it('finds a mutation keyword that shell quoting splits', () => {
+    expect(matchesAnyPublish(`gh api graphql -f query='mut''ation{addComment(input:{body:"x"}){clientMutationId}}'`)).toBe(true)
+    expect(matchesAnyPublish(`gh api graphql -f query=mu\\tation'{addComment(input:{body:"x"}){clientMutationId}}'`)).toBe(true)
+    // the shell drops a backslash-newline, joining the keyword again
+    expect(matchesAnyPublish(`gh api graphql -f query=muta\\\ntion'{addComment(input:{body:"x"}){clientMutationId}}'`)).toBe(true)
+  })
+
+  it('keeps a text-free mutation a publish, and uncovered', () => {
+    const loop = `for t in a; do gh api graphql -f query='${RESOLVE}' -f t="$t"; done`
+    expect(matchesAnyPublish(loop)).toBe(true)
+    expect(isPostVerifiable(loop)).toBe(false)
+  })
+})
+
+// The repo's own review-reply command: one invocation whose output is the
+// reply's URL, so the read-back covers it like a single gh publish.
+describe('the pr:reply command', () => {
+  it('is a covered publish of a review comment when run bare', () => {
+    for (const cmd of ['pnpm pr:reply 1048 4040271733 body.md', 'node scripts/pr-reply.mjs 1048 4040271733 body.md']) {
+      expect(matchesAnyPublish(cmd), cmd).toBe(true)
+      expect(isPostVerifiable(cmd), cmd).toBe(true)
+      expect(carriesPublishableText(cmd), cmd).toBe(true)
+      expect([...publishableKinds(cmd)], cmd).toEqual(['review-comment'])
+    }
+    expect(isPostVerifiable('cd x && pnpm pr:reply 1048 4040271733 body.md')).toBe(false)
+  })
+
+  // Its gh call runs where no hook sees it, so every spelling of the
+  // invocation must be seen here.
+  it('is seen however the invocation is spelled', () => {
+    for (const cmd of [
+      'pnpm "pr:reply" 1048 4040271733 body.md',
+      'npm run pr:reply -- 1048 4040271733 body.md',
+      'node "scripts/pr-reply.mjs" 1048 4040271733 body.md',
+      'cd scripts && node pr-reply.mjs 1048 4040271733 body.md',
+      'node "$(git rev-parse --show-toplevel)/scripts/pr-reply.mjs" 1048 4040271733 body.md',
+      'KM_ALLOW_BEAD_IDS=1 pnpm pr:reply 1048 4040271733 body.md',
+    ])
+      expect(matchesAnyPublish(cmd), cmd).toBe(true)
+  })
+
+  it('is not read out of prose or from commands that only touch the file', () => {
+    expect(matchesAnyPublish('git commit -m "use pnpm pr:reply for replies"')).toBe(false)
+    expect(matchesAnyPublish('sed -n 1,20p scripts/pr-reply.mjs')).toBe(false)
+    expect(matchesAnyPublish('pnpm vitest run scripts/pr-reply.test.ts')).toBe(false)
+    expect(matchesAnyPublish('npx eslint scripts/pr-reply.mjs scripts/pr-reply.test.ts')).toBe(false)
+    // a heredoc line is data, even one spelled like the invocation
+    expect(matchesAnyPublish('cat > notes.md <<EOF\npnpm pr:reply 1 2 body.md\nEOF')).toBe(false)
+    expect(matchesAnyPublish('pnpm exec prettier --check scripts/pr-reply.mjs')).toBe(false)
   })
 })
 
@@ -1120,12 +1237,12 @@ describe('mirroredCommentIds', () => {
 
 describe('mirrorCommentBody', () => {
   const numbers = new Map([
-    ['km-abc', 12],
+    ['km-abcd', 12],
     ['km-1786746066130-174-003836b1', 502],
   ])
   // Ids to HOLD: beads whose issue is still to be minted.
-  const hold = new Set(['km-new'])
-  const comment = { id: '0000c0de-0000-7000-8000-000000000001', text: 'see km-abc and km-1786746066130-174-003836b1; km-zzz is nobody', created_at: '2026-09-03T20:16:36Z' }
+  const hold = new Set(['km-nw01'])
+  const comment = { id: '0000c0de-0000-7000-8000-000000000001', text: 'see km-abcd and km-1786746066130-174-003836b1; km-zzz9 is nobody', created_at: '2026-09-03T20:16:36Z' }
 
   it('opens with the marker, stamps the original time, and rewrites mapped bead ids to issue numbers', () => {
     const { body, unmapped, leftover } = mirrorCommentBody(comment, numbers, hold)
@@ -1133,22 +1250,22 @@ describe('mirrorCommentBody', () => {
     expect(body).toContain('2026-09-03 20:16 UTC')
     // An id that matches no bead is text (a fixture, a typo), not a reference
     // — published, and named as a leftover.
-    expect(body.endsWith('see #12 and #502; km-zzz is nobody')).toBe(true)
+    expect(body.endsWith('see #12 and #502; km-zzz9 is nobody')).toBe(true)
     expect(unmapped).toEqual([])
-    expect(leftover).toEqual(['km-zzz'])
+    expect(leftover).toEqual(['km-zzz9'])
   })
 
   it('reports an id that names a bead without an issue instead of publishing it', () => {
-    const { body, unmapped } = mirrorCommentBody({ ...comment, text: 'blocked on km-new (twice: km-new) and km-abc' }, numbers, hold)
-    expect(unmapped).toEqual(['km-new'])
-    expect(body.endsWith('blocked on km-new (twice: km-new) and #12')).toBe(true)
+    const { body, unmapped } = mirrorCommentBody({ ...comment, text: 'blocked on km-nw01 (twice: km-nw01) and km-abcd' }, numbers, hold)
+    expect(unmapped).toEqual(['km-nw01'])
+    expect(body.endsWith('blocked on km-nw01 (twice: km-nw01) and #12')).toBe(true)
   })
 
   it('rewrites inside code too, and does not count a held id as a leftover', () => {
-    const { body, unmapped, leftover } = mirrorCommentBody({ ...comment, text: 'km-new and `bd show km-abc`, km-zzz' }, numbers, hold)
-    expect(body.endsWith('km-new and `bd show #12`, km-zzz')).toBe(true)
-    expect(unmapped).toEqual(['km-new'])
-    expect(leftover).toEqual(['km-zzz'])
+    const { body, unmapped, leftover } = mirrorCommentBody({ ...comment, text: 'km-nw01 and `bd show km-abcd`, km-zzz9' }, numbers, hold)
+    expect(body.endsWith('km-nw01 and `bd show #12`, km-zzz9')).toBe(true)
+    expect(unmapped).toEqual(['km-nw01'])
+    expect(leftover).toEqual(['km-zzz9'])
   })
 })
 
@@ -1829,16 +1946,16 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   // ---- comment mirror (step 5) ----
   const C1 = '0000c0de-0000-7000-8000-000000000001'
   const C2 = '0000c0de-0000-7000-8000-000000000002'
-  const beadComment = (id: string, text: string, created_at: string) => ({ id, issue_id: 'km-m', author: 'A', text, created_at })
-  const twoComments = [beadComment(C2, 'second, mentions km-o', '2026-09-03T21:13:50Z'), beadComment(C1, 'first', '2026-09-03T20:16:36Z')]
+  const beadComment = (id: string, text: string, created_at: string) => ({ id, issue_id: 'km-mmmm', author: 'A', text, created_at })
+  const twoComments = [beadComment(C2, 'second, mentions km-oooo', '2026-09-03T21:13:50Z'), beadComment(C1, 'first', '2026-09-03T20:16:36Z')]
   const issueComments = (bodies: string[], next?: string) => ({
     comments: { pageInfo: { hasNextPage: !!next, endCursor: next ?? null }, nodes: bodies.map(body => ({ body })) },
   })
-  // A commented bead (km-m → #7) beside an uncommented one (km-o → #8) that
+  // A commented bead (km-mmmm → #7) beside an uncommented one (km-oooo → #8) that
   // exists only to be referenced from a comment.
   const commentedRows = () => [
-    syncRow({ id: 'km-m', external_ref: ref(7), updated_at: '2026-08-19T00:00:00Z', comment_count: 2 }),
-    syncRow({ id: 'km-o', external_ref: ref(8), updated_at: '2026-08-19T00:00:00Z', comment_count: 0 }),
+    syncRow({ id: 'km-mmmm', external_ref: ref(7), updated_at: '2026-08-19T00:00:00Z', comment_count: 2 }),
+    syncRow({ id: 'km-oooo', external_ref: ref(8), updated_at: '2026-08-19T00:00:00Z', comment_count: 0 }),
   ]
   // #3 has no bead, so the pull always has something to do — without it the
   // id list is empty, no pull runs, and the mirror's slot pins mean nothing.
@@ -1853,12 +1970,12 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const { run, shimCalls, posted } = makeSyncRepo({
       issues: twoIssues(),
       lists: [commentedRows()],
-      comments: { 'km-m': twoComments },
+      comments: { 'km-mmmm': twoComments },
       graphql: { data: { repository: { i7: issueComments([]) } } },
     })
     const r = run()
     expect(r.status).toBe(0)
-    expect(r.stdout).toContain('mirrored 2 comment(s) of km-m to #7')
+    expect(r.stdout).toContain('mirrored 2 comment(s) of km-mmmm to #7')
     expect(shimCalls()).toContain('bd export')
     // Slot pin: the pull comes first, so a waiting GitHub-side edit lands
     // before the post. The touch-push-repull dance the bulk pull used to need
@@ -1867,7 +1984,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const calls = shimCalls()
     expect(calls.match(/bd github sync --pull-only/g)).toHaveLength(1)
     expect(calls.indexOf('bd github sync --pull-only')).toBeLessThan(calls.indexOf('gh api -X POST'))
-    expect(calls).not.toContain('bd update km-m')
+    expect(calls).not.toContain('bd update km-mmmm')
     const log = posted()
     const posts = postsOf(log)
     expect(posts).toHaveLength(2)
@@ -1884,19 +2001,19 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   // the issue past the local row, and bd PATCHes only local-newer rows), and
   // after the pull, so a waiting GitHub-side edit lands before the post.
   it('mirrors after the pre-pull push has carried the bead out and the pull has run', () => {
-    const newer = pushable({ id: 'km-m', external_ref: ref(7), updated_at: '2026-08-21T00:00:00Z', comment_count: 2 })
+    const newer = pushable({ id: 'km-mmmm', external_ref: ref(7), updated_at: '2026-08-21T00:00:00Z', comment_count: 2 })
     const { run, shimCalls } = makeSyncRepo({
       issues: twoIssues(),
       lists: [[newer]],
       shows: [[newer]],
-      comments: { 'km-m': twoComments },
+      comments: { 'km-mmmm': twoComments },
       graphql: { data: { repository: { i7: issueComments([]) } } },
     })
     const r = run()
     expect(r.status).toBe(0)
-    expect(r.stdout).toContain('mirrored 2 comment(s) of km-m to #7')
+    expect(r.stdout).toContain('mirrored 2 comment(s) of km-mmmm to #7')
     const calls = shimCalls()
-    const push = calls.indexOf('bd github sync --push-only --issues km-m')
+    const push = calls.indexOf('bd github sync --push-only --issues km-mmmm')
     const pull = calls.indexOf('bd github sync --pull-only')
     const firstPost = calls.indexOf('gh api -X POST')
     expect(push).toBeGreaterThan(-1)
@@ -1908,13 +2025,13 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const { run, posted } = makeSyncRepo({
       issues: twoIssues(),
       lists: [commentedRows()],
-      comments: { 'km-m': twoComments },
+      comments: { 'km-mmmm': twoComments },
       graphql: { data: { repository: { i7: issueComments([]) } } },
       env: { KM_MIRROR_POST_CAP: '1' },
     })
     const r = run()
     expect(r.status).toBe(0)
-    expect(r.stdout).toContain('mirrored 1 comment(s) of km-m to #7 — 1 left for the next run (post cap)')
+    expect(r.stdout).toContain('mirrored 1 comment(s) of km-mmmm to #7 — 1 left for the next run (post cap)')
     expect(postsOf(posted())).toHaveLength(1)
   })
 
@@ -1922,12 +2039,12 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const { run, posted } = makeSyncRepo({
       issues: twoIssues(),
       lists: [commentedRows()],
-      comments: { 'km-m': [beadComment(C1, 'see km-o; km-zzz is a fixture', '2026-09-03T20:16:36Z')] },
+      comments: { 'km-mmmm': [beadComment(C1, 'see km-oooo; km-zzz9 is a fixture', '2026-09-03T20:16:36Z')] },
       graphql: { data: { repository: { i7: issueComments([]) } } },
     })
     const r = run()
     expect(r.status).toBe(0)
-    expect(r.stdout).toContain(`posted comment ${C1} of km-m to #7 with bead id(s) it could not resolve (km-zzz)`)
+    expect(r.stdout).toContain(`posted comment ${C1} of km-mmmm to #7 with bead id(s) it could not resolve (km-zzz9)`)
     expect(postsOf(posted())).toHaveLength(1)
   })
 
@@ -1936,7 +2053,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const { run, posted } = makeSyncRepo({
       issues: [...twoIssues(), ghIssue(9, '2026-08-20T00:00:00Z')],
       lists: [[...commentedRows(), converged]],
-      comments: { 'km-m': twoComments },
+      comments: { 'km-mmmm': twoComments },
       graphql: {
         data: {
           repository: {
@@ -1948,7 +2065,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     })
     const r = run()
     expect(r.status).toBe(0)
-    expect(r.stdout).toContain('mirrored 1 comment(s) of km-m to #7')
+    expect(r.stdout).toContain('mirrored 1 comment(s) of km-mmmm to #7')
     const posts = postsOf(posted())
     expect(posts).toHaveLength(1)
     expect(posts[0]).toContain(`bd-comment ${C2}`)
@@ -1962,12 +2079,12 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const { run, posted } = makeSyncRepo({
       issues: twoIssues(),
       lists: [commentedRows()],
-      comments: { 'km-m': twoComments },
+      comments: { 'km-mmmm': twoComments },
       graphql: { data: { repository: { i7: issueComments([foreign(1), foreign(2)]) } } },
     })
     const r = run()
     expect(r.status).toBe(0)
-    expect(r.stdout).toContain('mirrored 2 comment(s) of km-m to #7')
+    expect(r.stdout).toContain('mirrored 2 comment(s) of km-mmmm to #7')
     expect(postsOf(posted())).toHaveLength(2)
   })
 
@@ -1975,12 +2092,12 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const { run, posted } = makeSyncRepo({
       issues: twoIssues(),
       lists: [commentedRows()],
-      comments: { 'km-m': twoComments },
+      comments: { 'km-mmmm': twoComments },
       graphql: { data: { repository: { i7: null } }, errors: [{ type: 'NOT_FOUND', path: ['repository', 'i7'] }] },
     })
     const r = run()
     expect(r.status).toBe(0)
-    expect(r.stdout).toContain('SKIPPED comments of km-m: #7 is not an issue')
+    expect(r.stdout).toContain('SKIPPED comments of km-mmmm: #7 is not an issue')
     expect(posted()).toBe('')
   })
 
@@ -1988,44 +2105,44 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const { run, posted, shimCalls } = makeSyncRepo({
       issues: twoIssues(),
       lists: [commentedRows()],
-      comments: { 'km-m': twoComments },
+      comments: { 'km-mmmm': twoComments },
       graphql: { data: { repository: { i7: issueComments([]) } } },
       failPostCall: 1,
     })
     const r = run()
     expect(r.status).toBe(0)
-    expect(r.stdout).toContain(`FAILED to mirror comment ${C1} of km-m to #7 — 2 left for the next run`)
+    expect(r.stdout).toContain(`FAILED to mirror comment ${C1} of km-mmmm to #7 — 2 left for the next run`)
     expect(r.stdout).not.toContain('mirrored ')
     expect(posted()).toBe('')
     // A failed post needs no repair pass now: nothing was touched, and the
     // pull can only ever be handed ids we chose.
     const calls = shimCalls()
-    expect(calls.indexOf('bd github sync --push-only --issues km-m')).toBe(-1)
+    expect(calls.indexOf('bd github sync --push-only --issues km-mmmm')).toBe(-1)
     expect(calls.match(/--pull-only/g)).toHaveLength(1)
   })
 
   it('holds a bead at a comment naming an unminted bead, publishing nothing after it', () => {
-    const unminted = syncRow({ id: 'km-u', external_ref: null, updated_at: '2026-08-19T00:00:00Z', comment_count: 0 })
+    const unminted = syncRow({ id: 'km-uuuu', external_ref: null, updated_at: '2026-08-19T00:00:00Z', comment_count: 0 })
     const { run, posted, shimCalls } = makeSyncRepo({
       issues: twoIssues(),
       lists: [[...commentedRows(), unminted]],
-      comments: { 'km-m': [beadComment(C1, 'waits on km-u', '2026-09-03T20:16:36Z'), twoComments[0]] },
+      comments: { 'km-mmmm': [beadComment(C1, 'waits on km-uuuu', '2026-09-03T20:16:36Z'), twoComments[0]] },
       graphql: { data: { repository: { i7: issueComments([]) } } },
     })
     const r = run()
     expect(r.status).toBe(0)
-    expect(r.stdout).toContain(`SKIPPED comment ${C1} of km-m: it names bead(s) with no issue yet (km-u) — 2 left for the next run`)
+    expect(r.stdout).toContain(`SKIPPED comment ${C1} of km-mmmm: it names bead(s) with no issue yet (km-uuuu) — 2 left for the next run`)
     expect(posted()).toBe('')
     // Nothing publishable, so no touch either: a touch with no post would
     // just push the bead out next run for nothing.
-    expect(shimCalls()).not.toContain('bd update km-m')
+    expect(shimCalls()).not.toContain('bd update km-mmmm')
   })
 
   it('reads every comment page, so a marker beyond the first still counts', () => {
     const { run, shimCalls, posted } = makeSyncRepo({
       issues: twoIssues(),
       lists: [commentedRows()],
-      comments: { 'km-m': twoComments },
+      comments: { 'km-mmmm': twoComments },
       graphql: [
         { data: { repository: { i7: issueComments(['a human comment'], 'cursor-1') } } },
         { data: { repository: { issue: issueComments([`<!-- bd-comment ${C1} -->\nfirst`, `<!-- bd-comment ${C2} -->\nsecond`]) } } },
@@ -2044,20 +2161,20 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   // #N, which the repo treats as worse than an opaque bead id.
   it('does not rewrite a reference whose bead points at no issue of this repo, and says so', () => {
     const rows = [
-      syncRow({ id: 'km-m', external_ref: ref(7), updated_at: '2026-08-19T00:00:00Z', comment_count: 1 }),
-      syncRow({ id: 'km-o', external_ref: ref(5), updated_at: '2026-08-19T00:00:00Z', comment_count: 0 }),
+      syncRow({ id: 'km-mmmm', external_ref: ref(7), updated_at: '2026-08-19T00:00:00Z', comment_count: 1 }),
+      syncRow({ id: 'km-oooo', external_ref: ref(5), updated_at: '2026-08-19T00:00:00Z', comment_count: 0 }),
     ]
     const { run, posted } = makeSyncRepo({
       issues: twoIssues(),
       lists: [rows],
-      comments: { 'km-m': [beadComment(C1, 'see km-o', '2026-09-03T20:16:36Z')] },
+      comments: { 'km-mmmm': [beadComment(C1, 'see km-oooo', '2026-09-03T20:16:36Z')] },
       graphql: { data: { repository: { i7: issueComments([]) } } },
     })
     const r = run()
     expect(r.status).toBe(0)
-    expect(r.stdout).toContain(`posted comment ${C1} of km-m to #7 with bead id(s) it could not resolve (km-o)`)
+    expect(r.stdout).toContain(`posted comment ${C1} of km-mmmm to #7 with bead id(s) it could not resolve (km-oooo)`)
     const [post] = postsOf(posted())
-    expect(JSON.parse(post.slice(post.indexOf('\n') + 1)).body.endsWith('see km-o')).toBe(true)
+    expect(JSON.parse(post.slice(post.indexOf('\n') + 1)).body.endsWith('see km-oooo')).toBe(true)
   })
 
   // PRs share the number sequence, so a ref beyond the listing's last issue
@@ -2065,18 +2182,18 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   // is trusted unseen.
   it('does not trust a ref beyond the listing unless this run minted it', () => {
     const rows = (oRef: string | null) => [
-      syncRow({ id: 'km-m', external_ref: ref(7), updated_at: '2026-08-19T00:00:00Z', comment_count: 1 }),
-      syncRow({ id: 'km-o', external_ref: oRef, updated_at: '2026-08-19T00:00:00Z', comment_count: 0 }),
+      syncRow({ id: 'km-mmmm', external_ref: ref(7), updated_at: '2026-08-19T00:00:00Z', comment_count: 1 }),
+      syncRow({ id: 'km-oooo', external_ref: oRef, updated_at: '2026-08-19T00:00:00Z', comment_count: 0 }),
     ]
-    const comments = { 'km-m': [beadComment(C1, 'see km-o', '2026-09-03T20:16:36Z')] }
+    const comments = { 'km-mmmm': [beadComment(C1, 'see km-oooo', '2026-09-03T20:16:36Z')] }
     const graphql = { data: { repository: { i7: issueComments([]) } } }
 
     const preExisting = makeSyncRepo({ issues: twoIssues(), lists: [rows(ref(9))], comments, graphql })
-    expect(preExisting.run().stdout).toContain(`posted comment ${C1} of km-m to #7 with bead id(s) it could not resolve (km-o)`)
+    expect(preExisting.run().stdout).toContain(`posted comment ${C1} of km-mmmm to #7 with bead id(s) it could not resolve (km-oooo)`)
 
     const minted = makeSyncRepo({ issues: twoIssues(), lists: [rows(null), rows(ref(9))], comments, graphql })
     const r = minted.run()
-    expect(r.stdout).toContain('minted: km-o → #9')
+    expect(r.stdout).toContain('minted: km-oooo → #9')
     const [post] = postsOf(minted.posted())
     expect(JSON.parse(post.slice(post.indexOf('\n') + 1)).body.endsWith('see #9')).toBe(true)
   })
@@ -2102,11 +2219,11 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   })
 
   it('skips a commented bead whose own ref points at no issue of this repo, before any GitHub read', () => {
-    const rows = [syncRow({ id: 'km-m', external_ref: ref(5), updated_at: '2026-08-19T00:00:00Z', comment_count: 2 })]
-    const { run, shimCalls, posted } = makeSyncRepo({ issues: twoIssues(), lists: [rows], comments: { 'km-m': twoComments } })
+    const rows = [syncRow({ id: 'km-mmmm', external_ref: ref(5), updated_at: '2026-08-19T00:00:00Z', comment_count: 2 })]
+    const { run, shimCalls, posted } = makeSyncRepo({ issues: twoIssues(), lists: [rows], comments: { 'km-mmmm': twoComments } })
     const r = run()
     expect(r.status).toBe(0)
-    expect(r.stdout).toContain('SKIPPED comments of km-m: its external_ref does not point at an issue of this repo')
+    expect(r.stdout).toContain('SKIPPED comments of km-mmmm: its external_ref does not point at an issue of this repo')
     expect(shimCalls()).not.toContain('gh api graphql')
     expect(posted()).toBe('')
   })
@@ -2115,12 +2232,12 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const { run, posted, shimCalls } = makeSyncRepo({
       issues: twoIssues(),
       lists: [commentedRows()],
-      comments: { 'km-m': twoComments },
+      comments: { 'km-mmmm': twoComments },
       graphql: { data: { repository: { i7: issueComments([]) } } },
     })
     const r = run('--dry-run')
     expect(r.status).toBe(0)
-    expect(r.stdout).toContain('[dry-run] would mirror 2 comment(s) of km-m to #7')
+    expect(r.stdout).toContain('[dry-run] would mirror 2 comment(s) of km-mmmm to #7')
     expect(posted()).toBe('')
     expect(shimCalls()).not.toContain('bd update')
     expect(shimCalls().match(/--pull-only/g)).toHaveLength(1)
@@ -2130,7 +2247,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const { run, posted } = makeSyncRepo({
       issues: twoIssues(),
       lists: [commentedRows()],
-      comments: { 'km-m': twoComments },
+      comments: { 'km-mmmm': twoComments },
       graphql: { message: 'Bad credentials' },
     })
     const r = run()
@@ -2212,9 +2329,12 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
       GH_TOKEN: '',
       GH_HOST: '127.0.0.1',
       BD_GITHUB_SYNC_DRY: '1',
+      // the session attestation memo lives under the OS temp dir
+      TMPDIR: join(repo, 'tmp'),
     }
-    const hook = (command: string) => {
-      const payload = JSON.stringify({ tool_name: 'Bash', cwd: repo, tool_input: { command } })
+    mkdirSync(join(repo, 'tmp'))
+    const hook = (command: string, extra: Record<string, unknown> = {}) => {
+      const payload = JSON.stringify({ tool_name: 'Bash', cwd: repo, tool_input: { command }, ...extra })
       return spawnSync('node', [script, '--hook-pre-pr'], { cwd: repo, env, input: payload, encoding: 'utf8' })
     }
     return { hook, repo, shimCalls: () => readFileSync(shimLog, 'utf8') }
@@ -2388,13 +2508,13 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     const api = hook('git commit -m ok && gh api repos/Stvad/knowledge-medium/issues/1/comments -F body=hello')
     expect(api.status).toBe(2)
     expect(api.stderr).toContain('post-publication read-back covers')
-    expect(api.stderr).not.toContain('Run from the directory')
+    expect(api.stderr).not.toContain('does not exist at hook time')
     // the body-file belongs to the publish, so the compound attests under the
     // coarse rule — it must never fail closed on an unreadable COMMIT message
     const r = hook('git commit -m ok && gh pr create --title t --body-file missing.md')
     expect(r.status).toBe(2)
     expect(r.stderr).toContain('post-publication read-back covers')
-    expect(r.stderr).not.toContain('Run from the directory')
+    expect(r.stderr).not.toContain('does not exist at hook time')
   })
 
   // gh pr review output names no URL, so the verifier cannot find the
@@ -2541,12 +2661,12 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
   // The same, through the shape that made this urgent: a verb in argv, where
   // blanking quoted spans protects nothing.
   it('does not spawn a sync for a bead id in a non-publishing command', () => {
-    const { hook, shimCalls } = makeRepo({ dbReady: true, shows: [[{ id: 'km-new', external_ref: null }]] })
+    const { hook, shimCalls } = makeRepo({ dbReady: true, shows: [[{ id: 'km-nw01', external_ref: null }]] })
     const verb = ['gh', 'pr', 'create'].join(' ')
-    const r = hook(`printf '%s' ${verb} km-new`)
+    const r = hook(`printf '%s' ${verb} km-nw01`)
     expect(shimCalls()).not.toContain('bd github sync')
     // the id is still surfaced rather than silently allowed
-    if (r.status === 2) expect(r.stderr).toContain('km-new')
+    if (r.status === 2) expect(r.stderr).toContain('km-nw01')
   })
 
   // A COVERED publish gets no body inspection at all: one gh command, no
@@ -2622,7 +2742,7 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     // branch (exit 2 with the block message), not a stack trace
     const dir = hook(`git commit -F ${join(repo, 'a-directory.txt')} -m x`)
     expect(dir.status).toBe(2)
-    expect(dir.stderr).toContain('Cannot read message file')
+    expect(dir.stderr).toContain('a-directory.txt: is a directory')
     expect(dir.stderr).not.toContain('at readFileSync')
     // and a payload the hook cannot make sense of at all allows explicitly,
     // rather than throwing its way to the same outcome with a stack trace
@@ -2680,10 +2800,10 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
   // the verifier read-only, the gate takes the case it can see for free —
   // an id in the raw command blocks whether or not the publish is covered.
   it('blocks bead ids in a covered api publish', () => {
-    const { hook } = makeRepo({ dbReady: true, shows: [[{ id: 'km-abc', external_ref: 'https://github.com/Stvad/knowledge-medium/issues/12' }]] })
-    const r = hook('gh api repos/Stvad/knowledge-medium/issues/1/comments -f body="tracks km-abc"')
+    const { hook } = makeRepo({ dbReady: true, shows: [[{ id: 'km-abcd', external_ref: 'https://github.com/Stvad/knowledge-medium/issues/12' }]] })
+    const r = hook('gh api repos/Stvad/knowledge-medium/issues/1/comments -f body="tracks km-abcd"')
     expect(r.status).toBe(2)
-    expect(r.stderr).toContain('km-abc')
+    expect(r.stderr).toContain('km-abcd')
   })
 
   // The commit leg: close keywords act when the commit reaches the default
@@ -2710,8 +2830,56 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     const { hook, shimCalls } = makeRepo({ dbReady: true })
     const r = hook('cd subdir && git commit -F msg.txt')
     expect(r.status).toBe(2)
-    expect(r.stderr).toContain('Cannot read message file')
+    expect(r.stderr).toContain('msg.txt: does not exist at hook time')
     expect(shimCalls()).toBe('')
+  })
+
+  // The block prints what it found, never a cause: a composed diagnosis must
+  // hold for every mix of these facts, and a file the same command writes
+  // after this hook ran is one of them.
+  it('prints facts about each unreadable message file, never a diagnosis', () => {
+    const { hook, repo } = makeRepo({ dbReady: true })
+    mkdirSync(join(repo, 'a-dir'))
+    const heredoc = hook(`cat > ${repo}/msg.txt <<'EOF'\nfix: x\nEOF\ngit commit -F ${repo}/msg.txt`)
+    const redirect = hook(`git log -1 --format=%B > m2.txt && git commit -q -F m2.txt`)
+    const appended = hook(`echo more | tee -a 'm3.txt' && git commit -F m3.txt`)
+    const plain = hook('git commit -F elsewhere.txt')
+    const dir = hook(`git commit -F ${repo}/a-dir`)
+    const device = hook('git commit -F /dev/null')
+    const home = hook('git commit -F ~/km-no-such-message.txt')
+    for (const r of [heredoc, redirect, appended, plain, dir, device, home]) expect(r.status).toBe(2)
+    expect(device.stderr).toContain('/dev/null: is not a regular file')
+    // a home path is not relative to the cwd
+    expect(home.stderr).not.toContain('resolved against')
+    expect(heredoc.stderr).toContain(`${repo}/msg.txt: does not exist at hook time; this command writes it`)
+    expect(redirect.stderr).toContain(`${join(repo, 'm2.txt')}: does not exist at hook time; this command writes it`)
+    expect(appended.stderr).toContain('m3.txt: does not exist at hook time; this command writes it')
+    expect(plain.stderr).toContain(`${join(repo, 'elsewhere.txt')}: does not exist at hook time`)
+    expect(plain.stderr).not.toContain('this command writes it')
+    expect(dir.stderr).toContain(`${repo}/a-dir: is a directory`)
+    // a relative path says what it was resolved against; an absolute one has nothing to say
+    expect(plain.stderr).toContain(`relative paths resolved against ${repo}`)
+    expect(heredoc.stderr).not.toContain('resolved against')
+    for (const r of [heredoc, redirect, appended, plain, dir])
+      expect(r.stderr).not.toMatch(/\bcd\b|chains|Run from|probably|likely|should|try /i)
+  })
+
+  // Root, and some sandboxes, read through permission bits, so these cases
+  // run only where a mode-000 file is actually unreadable.
+  it.skipIf(permissionBitsIgnored())('prints the fact for a file or directory the hook may not read', () => {
+    const { hook, repo } = makeRepo({ dbReady: true })
+    writeFileSync(join(repo, 'locked.txt'), 'Fixes #1')
+    chmodSync(join(repo, 'locked.txt'), 0o000)
+    mkdirSync(join(repo, 'sealed'))
+    writeFileSync(join(repo, 'sealed', 'msg.txt'), 'Fixes #1')
+    chmodSync(join(repo, 'sealed'), 0o000)
+    const locked = hook(`git commit -F ${repo}/locked.txt`)
+    const sealed = hook(`git commit -F ${repo}/sealed/msg.txt`)
+    chmodSync(join(repo, 'sealed'), 0o755)
+    expect(locked.status).toBe(2)
+    expect(locked.stderr).toContain(`${repo}/locked.txt: is not readable by this hook`)
+    expect(sealed.status).toBe(2)
+    expect(sealed.stderr).toContain(`${repo}/sealed/msg.txt: cannot be examined by this hook (EACCES)`)
   })
 
   // No foreign-repo shortcut: three rounds of target-parse bypasses retired
@@ -2803,5 +2971,252 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     expect(r.status).toBe(2)
     expect(shimCalls()).toContain('bd --version')
     expect(shimCalls()).toContain('bd show km-zzzz --json')
+  })
+
+  // A thread-resolve loop: its only expansion is a thread id, which lands in
+  // an ID position — a node id GitHub validates, not text anyone reads — so
+  // nothing it carries is outside what the gate can see.
+  it('lets a graphql mutation through when every expansion lands in an ID position', () => {
+    const { hook, shimCalls } = makeRepo({ dbReady: true })
+    const doc = 'mutation($t:ID!){resolveReviewThread(input:{threadId:$t}){thread{isResolved}}}'
+    for (const cmd of [
+      `for t in PRRT_a PRRT_b; do gh api graphql -f query='${doc}' -f t="$t" --jq '.data.resolveReviewThread.thread.isResolved'; done`,
+      `for t in PRRT_a; do gh api graphql -f query='mutation($id:ID!){ resolveReviewThread(input:{threadId:$id}){ thread { id isResolved } } }' -F id="$t" --jq '.data | "\\(.x) resolved"'; done`,
+      // the document itself double-quoted, the id interpolated as a string literal
+      `for t in PRRT_a PRRT_b; do\n  gh api graphql -f query="mutation { resolveReviewThread(input:{threadId:\\"$t\\"}) { thread { id isResolved } } }" --jq '.data.resolveReviewThread.thread | "\\(.id) resolved=\\(.isResolved)"'\ndone`,
+    ])
+      expect(hook(cmd).status, cmd).toBe(0)
+    expect(shimCalls()).toBe('')
+  })
+
+  // What keeps it closed: an expansion anywhere a value could become text.
+  it('keeps blocking a graphql mutation whose expansion could carry text', () => {
+    const { hook } = makeRepo({ dbReady: true })
+    for (const cmd of [
+      // a String variable can be published
+      `gh api graphql -f query='mutation($b:String!){addComment(input:{subjectId:"X",body:$b}){clientMutationId}}' -f b="$BODY"`,
+      // an undeclared variable, and a custom scalar
+      `gh api graphql -f query='mutation{resolveReviewThread(input:{threadId:"X"}){thread{id}}}' -f t="$t"`,
+      `gh api graphql -f query='mutation($u:URI!){x(input:{url:$u}){id}}' -f u="$U"`,
+      // an input object carries whatever fields its value holds
+      `gh api graphql -f query='mutation($i:AddCommentInput!){addComment(input:$i){clientMutationId}}' -F i="$INPUT"`,
+      // interpolated into a text argument, or into one that is not an id
+      `gh api graphql -f query="mutation { addComment(input:{subjectId:\\"X\\", body:\\"$B\\"}) { clientMutationId } }"`,
+      `gh api graphql -f query="mutation { enablePullRequestAutoMerge(input:{pullRequestId:\\"X\\", commitHeadline:\\"$H\\"}) { clientMutationId } }"`,
+      // unquoted: word splitting can add arguments of its own
+      `for t in a; do gh api graphql -f query='${RESOLVE}' -f t=$t; done`,
+      // an expansion outside any field: its value is not visible anywhere
+      `for t in $(cat ids); do gh api graphql -f query='${RESOLVE}' -f t="$t"; done`,
+      // the document itself from a variable is never a variable field
+      `gh api graphql -f query="$QUERY" -f t=x`,
+      // a payload the gate cannot read
+      `gh api graphql -f query='${RESOLVE}' --input vars.json`,
+      // quoting a file field or a payload flag does not hide it from gh
+      `gh api graphql -f query='mutation($b:String!){addComment(input:{subjectId:"X",body:$b}){clientMutationId}}' --field 'b=@body.md'`,
+      `gh api graphql -f query='mutation($b:String!){addComment(input:{subjectId:"X",body:$b}){clientMutationId}}' -F b='@-'`,
+      `gh api graphql -f query='${RESOLVE}' '--input' vars.json`,
+      // a commit message file rides along: it is text outside the command
+      `git commit -F msg.txt && git push && gh api graphql -f query='mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{isResolved}}}' -f id=PRRT_x`,
+      // GraphQL ignores comments and commas between tokens: a real String
+      // declaration split by either must still be seen, and a decoy in a
+      // comment must not vouch for it
+      `gh api graphql -f query='mutation($b # note\n: String!){addComment(input:{subjectId:"X",body:$b}){clientMutationId}} # $b:ID' -f b="$BODY"`,
+      `gh api graphql -f query='mutation($b ,: String!){addComment(input:{subjectId:"$b:ID",body:$b}){clientMutationId}}' -f b="$BODY"`,
+      // shell quoting that splits a declaration is rejoined before it is read
+      `gh api graphql -f query='mutation($b'':'' String!){addComment(input:{subjectId:"$b:ID",body:$b}){clientMutationId}}' -f b="$BODY"`,
+      // one name, two documents: it is text-safe only if every declaration is
+      `gh api graphql -f query='${RESOLVE}' -f t="$t"; gh api graphql -f query='mutation($t:String!){addComment(input:{subjectId:"X",body:$t}){clientMutationId}}' -f t="$t"`,
+    ])
+      expect(hook(cmd).status, cmd).toBe(2)
+  })
+
+  // Readable text of a text-free mutation keeps the usual treatment: a
+  // visible number is echoed with its title, a bead id denied.
+  it('still echoes numbers visible in a graphql mutation command', () => {
+    const { hook } = makeRepo({ dbReady: true, ghIssues: { 653: AN_ISSUE } })
+    const r = hook(
+      `for t in PRRT_a; do gh api graphql -f query='${RESOLVE}' -f t="$t" --jq '"done for #653"'; done`,
+    )
+    expect(r.status).toBe(2)
+    expect(r.stderr).toContain('#653 → "Real GC failure" (issue, open)')
+  })
+
+  // A document with no `mutation` operation writes nothing, whatever its
+  // variables hold, so the command publishes nothing and nothing in it is
+  // published text: not a bead id in a sibling `bd` command or a path, and
+  // not jq's `@sh`, which is no file reference.
+  it('treats a graphql read as publishing nothing', () => {
+    const { hook, shimCalls } = makeRepo({ dbReady: true })
+    const read = `gh api graphql -f query='query{repository(owner:"Stvad",name:"knowledge-medium"){pullRequest(number:506){reviewThreads(first:100){nodes{id isResolved comments(first:1){nodes{databaseId}}}}}}}'`
+    for (const cmd of [
+      `bd dep relate km-dt2e km-6l79 2>&1 | tail -2\n${read} --jq '.data | "\\(.id)"'`,
+      `${read} --jq '.data.x' > /private/tmp/claude-501/km-merge/threads.txt`,
+      `${read} --jq '[.data.x[] | .id] | @sh'`,
+      `gh api graphql -f query='query($o:String!,$n:String!,$p:Int!){repository(owner:$o,name:$n){pullRequest(number:$p){id}}}' -F o=Stvad -F n=knowledge-medium -F p=506`,
+      `for n in 1 2; do gh api graphql -f query='query($p:Int!){repository(owner:"Stvad",name:"knowledge-medium"){pullRequest(number:$p){id}}}' -F p="$n"; done`,
+      // in a read even a String variable writes nothing
+      `for o in Stvad; do gh api graphql -f query='query($o:String!){repositoryOwner(login:$o){id}}' -f o="$o"; done`,
+    ])
+      expect(hook(cmd).status, cmd).toBe(0)
+    expect(shimCalls()).toBe('')
+  })
+
+  it('does not extend the read exemption to anything beside a graphql read', () => {
+    const { hook } = makeRepo({ dbReady: true, ghIssues: { 653: AN_ISSUE } })
+    const read = `gh api graphql -f query='query{viewer{login}}'`
+    for (const cmd of [
+      `${read} && gh api repos/Stvad/knowledge-medium/issues/1/comments -f body="see #653"`,
+      `${read} && gh pr comment 1 --body "see #653"`,
+      // a CLI publish beside it keeps its own text-outside-the-command rule
+      `${read} && gh pr comment 1 -F notes.md`,
+      // a gh call the publish detectors cannot spell still counts against it
+      `${read} && gh \\\n  api repos/Stvad/knowledge-medium/issues/1/comments -f body="see #653"`,
+      // a mutation document anywhere in the invocation is not a read
+      `${read}; gh api graphql -f query='mutation{addComment(input:{subjectId:"X",body:"see #653"}){clientMutationId}}'`,
+    ])
+      expect(hook(cmd).status, cmd).toBe(2)
+  })
+
+  // The Autofix reply as one covered command: the read-back owns its body,
+  // exactly as it owns a --body-file on a covered gh publish.
+  it('lets a bare pr:reply through unread, and blocks one behind an operator', () => {
+    const { hook, shimCalls } = makeRepo({ dbReady: true })
+    expect(hook('pnpm pr:reply 1048 4040271733 missing-body.md').status).toBe(0)
+    expect(shimCalls()).toBe('')
+    // its text is always in a file, so uncovered it is text outside the command
+    const r = hook('cd sub && pnpm pr:reply 1048 4040271733 missing-body.md')
+    expect(r.status).toBe(2)
+    expect(r.stderr).toContain('post-publication read-back covers')
+    // beside a graphql read it is still a publish in its own right
+    expect(hook(`gh api graphql -f query='query{viewer{login}}' && pnpm pr:reply 1 2 b.md`).status).toBe(2)
+  })
+
+  // An attestation is the agent's word that it read the number. Review loops
+  // repeat the same #N in every commit and reply, so once a session has given
+  // it, a command repeating only attested numbers passes, with their titles
+  // as context rather than a block.
+  it('passes numbers attested earlier in the same session, with their titles as context', () => {
+    const { hook } = makeRepo({ dbReady: true, ghIssues: { 653: AN_ISSUE } })
+    const session = { session_id: 'sess-1' }
+    expect(hook('git commit -m "Fixes #653"', session).status).toBe(2)
+    expect(hook('KM_ISSUE_REFS_OK=1 git commit -m "Fixes #653"', session).status).toBe(0)
+    const again = hook('git commit -m "follow-up\n\nFixes #653"', session)
+    expect(again.status).toBe(0)
+    const out = JSON.parse(again.stdout).hookSpecificOutput
+    expect(out.hookEventName).toBe('PreToolUse')
+    expect(out.additionalContext).toContain('#653 → "Real GC failure" (issue, open)')
+    // context only: the host's own permission flow still decides
+    expect(out).not.toHaveProperty('permissionDecision')
+    // readable text of a blind publish reads the same memo
+    expect(hook('gh pr merge 12 --squash --body "relates to #653"', session).status).toBe(0)
+    // another session has attested nothing, and payloads with no session share no memo
+    expect(hook('git commit -m "Fixes #653"', { session_id: 'sess-2' }).status).toBe(2)
+    expect(hook('KM_ISSUE_REFS_OK=1 git commit -m "Fixes #653"').status).toBe(0)
+    expect(hook('git commit -m "Fixes #653"').status).toBe(2)
+  })
+
+  it('still blocks when any number in the command was not attested', () => {
+    const { hook } = makeRepo({ dbReady: true, ghIssues: { 653: AN_ISSUE, 700: A_PR } })
+    const session = { session_id: 'sess-1' }
+    hook('KM_ISSUE_REFS_OK=1 git commit -m "Fixes #653"', session)
+    const r = hook('git commit -m "Fixes #653, fixes #700"', session)
+    expect(r.status).toBe(2)
+    expect(r.stderr).toContain('#700 → "Some PR"')
+    expect(r.stderr).toContain('#653 → "Real GC failure"')
+  })
+
+  // The attestation vouched for a title; a number that no longer resolves
+  // has none to vouch for.
+  it('still blocks an attested number that does not resolve now', () => {
+    const { hook } = makeRepo({ dbReady: true, ghIssues: { 653: AN_ISSUE } })
+    const session = { session_id: 'sess-1' }
+    expect(hook('KM_ISSUE_REFS_OK=1 git commit -m "Fixes #999"', session).status).toBe(0)
+    const r = hook('git commit -m "Fixes #999"', session)
+    expect(r.status).toBe(2)
+    expect(r.stderr).toContain('#999 → NO SUCH ISSUE OR PR')
+  })
+
+  // An attestation vouched for which issue a number is, not for closing it:
+  // a close keyword that draws a warning still blocks.
+  it('still blocks an attested number used with a close keyword that draws a warning', () => {
+    const { hook } = makeRepo({ dbReady: true, ghIssues: { 700: A_PR } })
+    const session = { session_id: 'sess-1' }
+    hook('KM_ISSUE_REFS_OK=1 gh pr merge 12 --body "relates to #700"', session)
+    expect(hook('gh pr merge 12 --body "relates to #700"', session).status).toBe(0)
+    const r = hook('git commit -m "Fixes #700"', session)
+    expect(r.status).toBe(2)
+    expect(r.stderr).toContain('close keyword targets a PR')
+  })
+
+  it('still blocks an attested number whose lookup fails now', () => {
+    const { hook, repo } = makeRepo({ dbReady: true, ghIssues: { 653: AN_ISSUE } })
+    const session = { session_id: 'sess-1' }
+    hook('KM_ISSUE_REFS_OK=1 git commit -m "Fixes #653"', session)
+    // a lookup that answers garbage is a failed lookup, not a title
+    writeFileSync(join(repo, 'gh-issue-653.json'), 'not json')
+    const r = hook('git commit -m "Fixes #653"', session)
+    expect(r.status).toBe(2)
+    expect(r.stderr).toContain('#653 → COULD NOT VERIFY')
+  })
+
+  it('reads only whole numbers from a memo, and keeps a subagent to its own', () => {
+    const { hook, repo } = makeRepo({ dbReady: true, ghIssues: { 653: AN_ISSUE } })
+    mkdirSync(join(repo, 'tmp', 'km-publish-gate'))
+    writeFileSync(join(repo, 'tmp', 'km-publish-gate', 'sess-1.json'), JSON.stringify({ attested: ['653'] }))
+    expect(hook('git commit -m "Fixes #653"', { session_id: 'sess-1' }).status).toBe(2)
+    hook('KM_ISSUE_REFS_OK=1 git commit -m "Fixes #653"', { session_id: 'sess-1', agent_id: 'a1' })
+    expect(hook('git commit -m "Fixes #653"', { session_id: 'sess-1', agent_id: 'a1' }).status).toBe(0)
+    expect(hook('git commit -m "Fixes #653"', { session_id: 'sess-1', agent_id: 'a2' }).status).toBe(2)
+    // an agent id that is not a plain name gets no memo, rather than a path
+    hook('KM_ISSUE_REFS_OK=1 git commit -m "Fixes #653"', { session_id: 'sess-1', agent_id: '../../escape' })
+    expect(existsSync(join(repo, 'escape.json'))).toBe(false)
+    expect(hook('git commit -m "Fixes #653"', { session_id: 'sess-1', agent_id: '../../escape' }).status).toBe(2)
+    expect(hook('git commit -m "Fixes #653"', { session_id: 'sess-1' }).status).toBe(2)
+  })
+
+  // A bead id is substituted, never attested.
+  it('keeps bead ids blocked in a session that attested every number', () => {
+    const { hook } = makeRepo({ dbReady: true, ghIssues: { 653: AN_ISSUE } })
+    const session = { session_id: 'sess-1' }
+    hook('KM_ISSUE_REFS_OK=1 git commit -m "Fixes #653"', session)
+    const r = hook('gh pr merge 12 --body "tracks km-zzzz, relates to #653"', session)
+    expect(r.status).toBe(2)
+    expect(r.stderr).toContain('km-zzzz')
+  })
+
+  it('keys the memo by session id under the temp dir, and ignores an id that is not a plain name', () => {
+    const { hook, repo } = makeRepo({ dbReady: true, ghIssues: { 653: AN_ISSUE } })
+    hook('KM_ISSUE_REFS_OK=1 git commit -m "Fixes #653"', { session_id: 'sess-1' })
+    expect(existsSync(join(repo, 'tmp', 'km-publish-gate', 'sess-1.json'))).toBe(true)
+    hook('KM_ISSUE_REFS_OK=1 git commit -m "Fixes #653"', { session_id: '../escape' })
+    expect(existsSync(join(repo, 'tmp', 'escape.json'))).toBe(false)
+    expect(hook('git commit -m "Fixes #653"', { session_id: '../escape' }).status).toBe(2)
+  })
+
+  // A branch is an address, not a reference, even one named after a bead.
+  it('does not read --head/--base values as bead-id references', () => {
+    const { hook, shimCalls } = makeRepo({ dbReady: true })
+    expect(hook('gh pr create --base master --head claude/km-avrg-retain-measure --title t --body-file pr-body.md').status).toBe(0)
+    expect(hook('gh pr create --base master --head km-zzzz --title t --body "clean"').status).toBe(0)
+    expect(hook("gh pr create -B master -H 'km-zzzz' --title t --body clean").status).toBe(0)
+    // gh takes the short flags' values attached too
+    expect(hook('gh pr create -Brelease/km-zzzz -Hfeature/km-zzzz --title t --body clean').status).toBe(0)
+    expect(shimCalls()).toBe('')
+    // the strip stops at the flag's own value: body text still counts
+    const body = hook('gh pr create --head km-zzzz --title t --body "tracks km-zzzz"')
+    expect(body.status).toBe(2)
+    expect(body.stderr).toContain('km-zzzz')
+    // a branch flag glued into a value is the value's text, not a flag
+    const glued = hook('gh pr create --title t --body=--head=km-zzzz')
+    expect(glued.status).toBe(2)
+    expect(glued.stderr).toContain('km-zzzz')
+    // a branch flag spelled inside an api payload value is payload text
+    const payload = hook('gh api --silent repos/Stvad/knowledge-medium/issues/1/comments -f body=--head=km-zzzz')
+    expect(payload.status).toBe(2)
+    expect(payload.stderr).toContain('km-zzzz')
+    // and a flag quoted inside the published body is text, not a flag
+    const quoted = hook('gh pr create --title t --body "branch --head km-zzzz"')
+    expect(quoted.status).toBe(2)
+    expect(quoted.stderr).toContain('km-zzzz')
   })
 })
