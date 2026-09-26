@@ -16,30 +16,24 @@
  *    fall back to label derivation, since for them the label is the only
  *    signal.
  * 3. A bead closed BEFORE its first sync stays closed locally but its issue is
- *    minted OPEN. So after syncing, closed beads whose issue is open get the
- *    issue closed via gh — NOT via a selective bd push: the push is handed
- *    only beads whose local row is strictly newer than the issue's
- *    updated_at (step 4), so anything that touched the issue after the close
- *    (a comment, a label, a cross-reference) keeps it out for good
- *    (observed live: a day-old close never pushed). gh-closing is safe in
- *    exactly this direction because the bead is already closed: the states
- *    agree afterwards, so the next sync has nothing to revert.
+ *    minted OPEN — and bd records the bead's closed content as already
+ *    pushed, so its push skips that bead from then on and can never carry the
+ *    close. So after syncing, closed beads whose issue is open get the issue
+ *    closed via gh. gh-closing is safe in exactly this direction because the
+ *    bead is already closed: the states agree afterwards, so the next sync
+ *    has nothing to revert.
  *    Note the deliberate asymmetry with (1): GitHub-side CLOSES are adopted
  *    (they come from PR merges), GitHub-side REOPENS do not stick (beads is
  *    the source of truth; reopen the bead instead).
  * 4. The pull applies a strictly OLDER GitHub copy over newer local rows —
  *    text edits, claims and closes alike — despite the documented
- *    prefer-newer default (#647; measured live). Guarded twice: local state
- *    is pushed out BEFORE the pull (after close-adoption, so an un-adopted
- *    open bead cannot re-open its issue), and beads whose local row is still
- *    newer than their GitHub copy — a failed push or a mid-run touch of the
- *    issue can leave such a row unpushed — are snapshotted before the pull
- *    and restored + re-pushed if it reverted them. That push is SELECTIVE and the pull runs alone (see step 1.5).
- *    The selection is load-bearing: bd 1.3.0 PATCHes a handed bead whenever
- *    its title, body, state or labels differ, whichever side changed last,
- *    so handing it a bead whose issue is newer would overwrite that GitHub
- *    edit. It also keeps a converged run to seconds rather than one GET per
- *    bead per leg (measured on 1.2.2: 387 beads, 90s per leg, two legs).
+ *    prefer-newer default (#647). So a bead whose local row is newer than its
+ *    issue is never handed to the pull (planPullSet): the push carries that
+ *    direction, run BEFORE the pull (after close-adoption, so an un-adopted
+ *    open bead cannot re-open its issue) over the beads planPrePullPush
+ *    selects. Rows the pull can still revert — a bead this run minted
+ *    non-open, a closed bead whose issue was reopened — are snapshotted
+ *    before the pull and restored + re-pushed if it reverted them.
  *
  * 5. The pull re-applies a GitHub copy onto a bead and drops what GitHub does
  *    not carry back: the assignee (bd's push never sets one), the close date
@@ -61,12 +55,23 @@
  *    an edit are the same window, and only a pull by identifier has neither.
  *
  *    A withheld bead is REPORTED, with the fields that also differ on GitHub:
- *    the next push sends the local value over them, and nothing here can say
- *    which side was edited last.
- * Accepted race: an issue closed on GitHub DURING the sync window can be
- * re-opened by the in-flight push, and because the reopen is then the state
- * every later fetch sees, no later run re-adopts the close. Inherent to a
- * push-based mirror; close the bead instead if it happens.
+ *    the bead's next push sends the local value over them, and nothing here
+ *    can say which side was edited last.
+ * Accepted:
+ *  - An issue closed or edited on GitHub DURING the sync window can be
+ *    re-opened or overwritten by the in-flight push, which compares content
+ *    against the issue, not timestamps, and was selected from a listing taken
+ *    at the start of the run. A reopen is then the state every later fetch
+ *    sees, so no later run re-adopts the close. Inherent to a push-based
+ *    mirror; close the bead instead if it happens.
+ *  - bd's push skips a bead whose content equals what it last pushed, without
+ *    fetching the issue — a clone-local cache the pull never refreshes and no
+ *    bd verb clears in embedded mode. A GitHub edit that was imported and
+ *    later undone locally, or one followed by a local touch that changes no
+ *    pushed field, therefore stays on GitHub until the bead changes again.
+ *    Guard 4 keeps such a bead out of the pull, so the divergence is stable,
+ *    not a revert loop; forcing the write through gh instead would make the
+ *    wrapper a second implementation of bd's push mapping.
  *
  * Beyond the guards, the wrapper carries what bd's sync does not: bead
  * COMMENTS are mirrored onto their issues, one way and append-only
@@ -743,16 +748,20 @@ export const planReopenedClosed = (beads, issueByNumber) =>
     return b.status === 'closed' && issue?.state === 'OPEN' ? [{ id: b.id, number }] : []
   })
 
+// Which side of a linked bead changed last: true when the local row is
+// strictly newer than its GitHub copy, false when GitHub is same-or-newer,
+// null when a timestamp is missing and neither side can be claimed.
+const localNewer = (bead, issue) =>
+  issue?.updatedAt && bead.updated_at ? Date.parse(bead.updated_at) > Date.parse(issue.updatedAt) : null
+
 // Beads whose local row is strictly newer than their GitHub copy. bd's pull
 // applies GitHub state over these despite the documented prefer-newer default
-// (#647), so they are exactly the rows a pull can revert. Missing timestamps
-// on either side mean "cannot claim local is newer" — not a suspect.
+// (#647), so they are exactly the rows a pull can revert.
 export const planLocalWins = (beads, issueByNumber) =>
   beads.flatMap(b => {
     const number = issueNumberFromRef(b.external_ref)
     const issue = number === null ? undefined : issueByNumber.get(number)
-    if (!issue?.updatedAt || !b.updated_at) return []
-    return Date.parse(b.updated_at) > Date.parse(issue.updatedAt) ? [{ id: b.id, number }] : []
+    return localNewer(b, issue) ? [{ id: b.id, number }] : []
   })
 
 // ---- what bd's pull would write ----
@@ -919,7 +928,7 @@ export const planPrePullPush = (beads, issueByNumber) =>
     .filter(b => {
       const issue = issueByNumber.get(issueNumberFromRef(b.external_ref))
       if (!issue) return true
-      if (issue.updatedAt && b.updated_at && Date.parse(issue.updatedAt) >= Date.parse(b.updated_at)) return false
+      if (localNewer(b, issue) === false) return false
       return pushWouldChange(b, issue)
     })
     .map(b => b.id)
@@ -944,7 +953,10 @@ export const detectReverts = (snapshotRows, postById) =>
 // without it (the conservative path) every snapshot label is re-added —
 // duplicate adds are idempotent — and none removed.
 export const planRestoreArgs = (row, post) => {
-  const update = ['update', row.id, '--title', row.title ?? '', '-d', row.description ?? '', '-p', String(row.priority)]
+  // --force, here and on the close: bd refuses to overwrite another actor's
+  // live claim and to close a bead with an open child or blocker, and a
+  // restore only replays the bead's own snapshot.
+  const update = ['update', row.id, '--force', '--title', row.title ?? '', '-d', row.description ?? '', '-p', String(row.priority)]
   if (row.issue_type) update.push('-t', row.issue_type)
   // Always passed: `-a ''` CLEARS the assignee (verified against bd 1.3.0),
   // so an unassigned snapshot can undo a pulled stale assignment.
@@ -953,8 +965,6 @@ export const planRestoreArgs = (row, post) => {
   const postLabels = new Set(post?.labels ?? [])
   for (const l of snapLabels) if (!postLabels.has(l)) update.push('--add-label', l)
   for (const l of postLabels) if (!snapLabels.has(l)) update.push('--remove-label', l)
-  // --force: bd refuses to close a bead with an open child or an open blocker,
-  // and this only replays a close the bead already had.
   if (row.status === 'closed')
     return [update, ['close', row.id, '--force', '-r', row.close_reason || 'restored by bd-github-sync after a pull revert (#647)']]
   return [[...update, '-s', row.status]]
@@ -1306,6 +1316,9 @@ const fetchIssues = () => {
 //     hand-filed issue becomes a bead.
 //   - a bead the pull would carry faithfully: the edit import.
 // A bead the pull would damage is simply never named, so it cannot be written.
+// Nor is a bead whose local row is newer: the push carries that direction,
+// and where bd's push skips it (its push cache) a pull would revert the very
+// row the push did not send.
 export const planPullSet = (beads, issueByNumber, lossyIds) => {
   const linked = new Set()
   const faithful = []
@@ -1313,7 +1326,8 @@ export const planPullSet = (beads, issueByNumber, lossyIds) => {
     const number = issueNumberFromRef(b.external_ref)
     if (number === null || !issueByNumber.has(number)) continue
     linked.add(number)
-    if (!lossyIds.has(b.id) && pullWouldWrite(b, issueByNumber.get(number))) faithful.push(number)
+    const issue = issueByNumber.get(number)
+    if (!lossyIds.has(b.id) && !localNewer(b, issue) && pullWouldWrite(b, issue)) faithful.push(number)
   }
   const unlinked = [...issueByNumber.keys()].filter(n => !linked.has(n))
   return [...new Set([...unlinked, ...faithful])].sort((a, b) => a - b)
@@ -1554,12 +1568,12 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
           (report.length ? ` (already applied: ${report.join('; ')})` : ''),
       )
 
-    // 1.2 Decide what the pull may touch. A bead whose re-apply would lose
-    // something is simply WITHHELD from the pull's id list (planLossyReapplies
-    // names it and why); everything else — an issue with no bead, and a bead
-    // the pull would carry faithfully — is handed to it by identifier, so the
-    // mirror stays bidirectional. No touching, no forced push, no timestamps:
-    // the pull cannot reach what it is not given.
+    // 1.2 Decide what the pull may touch (planPullSet). A bead whose re-apply
+    // would lose something is WITHHELD from the pull's id list
+    // (planLossyReapplies names it and why), and a local-newer bead is left to
+    // the push; everything else — an issue with no bead, and a bead the pull
+    // would carry faithfully — is handed to it by identifier, so the mirror
+    // stays bidirectional. The pull cannot reach what it is not given.
     // `bd export` rather than the listing: only it carries assignee, labels
     // and closed_at, and it is one read for the whole tracker either way. Read
     // after close-adoption, so it already reflects the closes.
@@ -1574,7 +1588,7 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
       const line =
         `withheld ${id} (#${number}) from the pull: it would lose ${losses.join(', ')} (#955)` +
         (overwrites.length
-          ? `; its ${overwrites.join(', ')} also differ(s) on GitHub and the next push sends the local value — compare them by hand`
+          ? `; its ${overwrites.join(', ')} also differ(s) on GitHub and the bead's next push sends the local value — compare them by hand`
           : '')
       // Only the content-identical withhold is routine. One that also names a
       // GitHub-side divergence is the warning that makes the trade visible —
@@ -1621,12 +1635,11 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
       report.push(...pushOut.split('\n').filter(l => /Pushed|Created|Updated/.test(l) && /[1-9]/.test(l)).map(l => `pre-pull: ${l.trim()}`))
     }
 
-    // 1.6 A push can leave a local-newer row unpushed (it failed, or bd's
-    // strictly-newer test against the issue's updated_at, re-read at push
-    // time, said no), so snapshot every bead whose local row is STILL newer
-    // than its GitHub copy — the pull may revert exactly those; step 2.5
-    // restores any it does. Fresh
-    // list: the push just minted refs. Snapshot via a direct spawn, not
+    // 1.6 Snapshot the rows the pull could revert; step 2.5 restores any it
+    // does. Local-newer beads are kept out of the pull (1.2), so for them this
+    // is defence in depth; a bead this run minted non-open and a closed bead
+    // whose issue was reopened can still be handed to it. Fresh list: the
+    // push just minted refs. Snapshot via a direct spawn, not
     // run(): `bd show` output is pretty-printed JSON, and a description line
     // starting with "Error" would trip run()'s bd check.
     const freshBeads = dryRun ? exported : listAllBeads()
@@ -1658,10 +1671,10 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
         )
     }
 
-    // 2. The pull. Pull-only, not bidirectional: the push leg would GET every
-    // linked bead again and could only PATCH rows step 1.5 just pushed (GitHub
-    // is the newer side once it has), and the conflict pass keys off
-    // last_sync, which that push just advanced — a second full-price no-op.
+    // 2. The pull. Pull-only, not bidirectional: a push leg would PATCH any
+    // handed bead whose content differs, whichever side is newer — the
+    // selection 1.5 exists to make — and the conflict pass keys off
+    // last_sync, which that push just advanced.
     const syncOut = pullIssues(pullSet, env, dryRun)
     const syncSummary = syncOut
       .split('\n')
@@ -1669,9 +1682,9 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
       .map(l => l.trim())
     report.push(...syncSummary)
 
-    // 2.5 Restore local rows the pull reverted anyway (#647 — 1.5's push
-    // left them unpushed). The restore bumps updated_at, so the
-    // push-back below carries them out and the next pull leaves them alone.
+    // 2.5 Restore local rows the pull reverted anyway (#647). The restore
+    // bumps updated_at, so the push-back below carries them out, and the
+    // next run keeps them out of the pull while the local row stays newer.
     //
     // ACCEPTED residuals (reviewed 2026-08-20; each is a failure INSIDE this
     // fallback, needs a mid-run bd failure or a seconds-wide race, and ends
@@ -1729,17 +1742,10 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
     // stamp GitHub newer and bury the loss (see the restore loop above).
     const failedRestoreIds = new Set(restoreFailures)
     const pushBack = [...new Set([...fixes.map(f => f.id), ...restoredOk])].filter(id => !failedRestoreIds.has(id))
-    // Accepted: bd skips, without fetching the issue, a bead whose pushed
-    // fields equal its last successful push (a clone-local hash no bd verb
-    // clears in embedded mode). A repair that returns a bead to exactly that
-    // content is not re-sent, so GitHub keeps the pulled copy and the next run
-    // repeats the repair. Such repairs are rare; forcing this one through gh
-    // would mean duplicating bd's field mapping as a write path.
     if (pushBack.length && !dryRun) pushBeads(pushBack, env)
 
-    // 4. Carry bead closes out to issues still open (see header: via gh, not
-    // a selective bd push, which skips a close once the issue was touched
-    // after it).
+    // 4. Carry bead closes out to issues still open, via gh (header 3 says
+    // why bd's push cannot).
     const closePushes = planClosePushes(postBeads, issueByNumber, maxKnownIssueNumber)
     for (const { id, number } of closePushes) {
       if (dryRun) {
@@ -1768,9 +1774,9 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
     }
 
     // 5. Mirror bead comments onto their issues (mirrorComments). It runs
-    // after the push, because a post bumps the issue past the local row and bd
-    // PATCHes only local-newer rows; and after the pull, so a GitHub-side edit
-    // waiting on a bead is imported before the post.
+    // after the push, because a post bumps the issue past the local row and
+    // the push is handed only local-newer rows; and after the pull, so a
+    // GitHub-side edit waiting on a bead is imported before the post.
     // The touch-push-repull dance this used to need is gone with the bulk
     // pull: a post cannot make the next run re-apply the issue onto its bead,
     // because the pull is only ever handed ids we chose (see 1.2 and guard 5).

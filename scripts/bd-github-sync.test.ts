@@ -37,6 +37,7 @@ import {
   planMintedNonOpen,
   planAdoptCloseArgs,
   planPrePullPush,
+  planPullSet,
   planMintedRefs,
   planReopenedClosed,
   planPriorityFixes,
@@ -949,6 +950,30 @@ describe('planPrePullPush', () => {
   })
 })
 
+describe('planPullSet', () => {
+  const gh = (updatedAt?: string): IssueInfo => ({ state: 'OPEN', labels: [], title: 'GitHub title', body: 'D', updatedAt })
+  const row = (id: string, n: number, updated_at?: string) =>
+    bead({ id, external_ref: ref(n), title: 'local title', description: 'D', updated_at })
+
+  // The push carries a local-newer row. Where bd's push skips it (its push
+  // cache), handing it to the pull would revert the very row it did not send.
+  it('hands the pull a faithful bead only when GitHub is not the older side', () => {
+    const map = issues([[1, gh('2026-08-20T01:00:00Z')], [2, gh('2026-08-20T01:00:00Z')], [3, gh()], [4, gh('2026-08-20T01:00:00Z')]])
+    const beads = [
+      row('km-local-newer', 1, '2026-08-21T00:00:00Z'),
+      row('km-github-newer', 2, '2026-08-19T00:00:00Z'),
+      row('km-no-gh-ts', 3, '2026-08-19T00:00:00Z'),
+    ]
+    // #4 has no bead: the GitHub→beads direction is always pulled.
+    expect(planPullSet(beads, map, new Set())).toEqual([2, 3, 4])
+  })
+
+  it('never names a withheld bead', () => {
+    const map = issues([[2, gh('2026-08-20T01:00:00Z')]])
+    expect(planPullSet([row('km-lossy', 2, '2026-08-19T00:00:00Z')], map, new Set(['km-lossy']))).toEqual([])
+  })
+})
+
 describe('planAdoptCloseArgs', () => {
   // bd's close policy refuses a bead with an open child or an open blocker; a
   // refused adoption aborts the whole sync, so the GitHub close must be forced.
@@ -1071,14 +1096,14 @@ describe('planRestoreArgs', () => {
   it('restores an open-lifecycle row with one update carrying the status', () => {
     const row = bead({ id: 'km-a', status: 'in_progress', priority: 1, title: 'T', description: 'D', assignee: 'V', issue_type: 'bug' })
     expect(planRestoreArgs(row)).toEqual([
-      ['update', 'km-a', '--title', 'T', '-d', 'D', '-p', '1', '-t', 'bug', '-a', 'V', '-s', 'in_progress'],
+      ['update', 'km-a', '--force', '--title', 'T', '-d', 'D', '-p', '1', '-t', 'bug', '-a', 'V', '-s', 'in_progress'],
     ])
   })
 
   it('restores a closed row via a forced close, clearing the assignee it never had', () => {
     const row = bead({ id: 'km-a', status: 'closed', priority: 2, title: 'T', description: 'D', close_reason: 'done' })
     expect(planRestoreArgs(row)).toEqual([
-      ['update', 'km-a', '--title', 'T', '-d', 'D', '-p', '2', '-a', ''],
+      ['update', 'km-a', '--force', '--title', 'T', '-d', 'D', '-p', '2', '-a', ''],
       ['close', 'km-a', '--force', '-r', 'done'],
     ])
   })
@@ -1087,7 +1112,7 @@ describe('planRestoreArgs', () => {
     const row = bead({ id: 'km-a', status: 'open', priority: 2, title: 'T', description: 'D', labels: ['ui', 'keep'] })
     const post = bead({ ...row, labels: ['keep', 'stale'] })
     expect(planRestoreArgs(row, post)[0]).toEqual([
-      'update', 'km-a', '--title', 'T', '-d', 'D', '-p', '2', '-a', '', '--add-label', 'ui', '--remove-label', 'stale', '-s', 'open',
+      'update', 'km-a', '--force', '--title', 'T', '-d', 'D', '-p', '2', '-a', '', '--add-label', 'ui', '--remove-label', 'stale', '-s', 'open',
     ])
   })
 
@@ -1452,12 +1477,15 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(r.stdout).toContain('minted: km-t6 → #6')
   })
 
+  // A local-newer bead is never handed to the pull (planPullSet), so the rows
+  // these tests revert stand for a bd pull writing beyond its id list: the
+  // restore is defence in depth there. Issue #99 has no bead, so the pull runs.
   it('restores a newer local row the pull reverted, then pushes it back out', () => {
     const newer = { id: 'km-t2', status: 'in_progress', priority: 1, title: 'T', description: 'D-new', external_ref: ref(2), updated_at: '2026-08-20T02:00:00Z' }
     const revertedRow = { ...newer, status: 'open', description: 'D-old' }
     const snapshot = { ...newer, assignee: 'Vlad' }
     const { run, shimCalls } = makeSyncRepo({
-      issues: [ghIssue(2, '2026-08-20T01:00:00Z')],
+      issues: [ghIssue(2, '2026-08-20T01:00:00Z'), ghIssue(99, '2026-08-20T00:00:00Z')],
       lists: [[newer], [newer], [revertedRow]],
       shows: [[snapshot], [revertedRow]],
     })
@@ -1466,7 +1494,8 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(r.stdout).toContain('restored km-t2')
     const log = shimCalls()
     expect(log).toContain('bd show km-t2 --json')
-    expect(log).toContain('bd update km-t2 --title T -d D-new -p 1 -a Vlad -s in_progress')
+    expect(log).toContain('bd github sync --pull-only --issues 99\n')
+    expect(log).toContain('bd update km-t2 --force --title T -d D-new -p 1 -a Vlad -s in_progress')
     expect(afterPull(log)).toContain('bd github sync --push-only --issues km-t2')
   })
 
@@ -1479,7 +1508,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const closedLocal = syncRow({ id: 'km-t4', status: 'closed', external_ref: ref(4), updated_at: '2026-08-20T02:00:00Z' })
     const revertedRow = { ...closedLocal, status: 'open', priority: 2 }
     const { run, shimCalls } = makeSyncRepo({
-      issues: [ghIssue(4, '2026-08-20T01:00:00Z')],
+      issues: [ghIssue(4, '2026-08-20T01:00:00Z'), ghIssue(99, '2026-08-20T00:00:00Z')],
       lists: [[closedLocal], [closedLocal], [revertedRow]],
       shows: [[{ ...closedLocal, close_reason: 'done' }], [revertedRow]],
       failCloseId: 'km-t4',
@@ -1503,7 +1532,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const r = run()
     expect(r.status).toBe(0)
     expect(r.stdout).toContain('restored km-t9')
-    expect(shimCalls()).toContain('bd update km-t9 --title T -d D -p 1 -t task -a  -s open')
+    expect(shimCalls()).toContain('bd update km-t9 --force --title T -d D -p 1 -t task -a  -s open')
     expect(afterPull(shimCalls())).toContain('--issues km-t9')
   })
 
@@ -1525,7 +1554,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   it('restores a labels-only revert via the label delta', () => {
     const newer = syncRow({ id: 'km-tA', external_ref: ref(10), updated_at: '2026-08-20T02:00:00Z', labels: ['ui'] })
     const { run, shimCalls } = makeSyncRepo({
-      issues: [ghIssue(10, '2026-08-20T01:00:00Z')],
+      issues: [ghIssue(10, '2026-08-20T01:00:00Z'), ghIssue(99, '2026-08-20T00:00:00Z')],
       lists: [[newer], [newer], [newer]],
       shows: [[newer], [{ ...newer, labels: [] }]],
     })
@@ -1550,7 +1579,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(r.status).toBe(0)
     expect(r.stdout).toContain('conservatively restoring')
     expect(r.stdout).toContain('restored km-tB')
-    expect(shimCalls()).toContain('bd update km-tB --title T -d D-new -p 1 -a  -s open')
+    expect(shimCalls()).toContain('bd update km-tB --force --title T -d D-new -p 1 -a  -s open')
   })
 
   // Trap 3 meets the pre-push: the mint creates the issue OPEN with a fresh
@@ -1716,7 +1745,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     })
     const r = run()
     expect(r.status).toBe(0)
-    expect(r.stdout).toContain('its title also differ(s) on GitHub and the next push sends the local value')
+    expect(r.stdout).toContain("its title also differ(s) on GitHub and the bead's next push sends the local value")
   })
 
   // The set is computed from a listing taken AFTER close-adoption: a close
