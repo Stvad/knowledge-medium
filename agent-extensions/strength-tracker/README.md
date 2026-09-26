@@ -112,8 +112,9 @@ gestures:
   workout** button, which runs the same flow but files the session on the log
   page rather than at your cursor.
 
-Configure the program by editing the settings block on that page (plan root,
-day-rollover hour, cadence, rounding).
+Configure the program by editing the settings block on that page (plan,
+day-rollover hour, cadence, rounding). The plan is a link to the outline the
+program is read from; left unset, the block aliased *Strength Plan v2* is used.
 
 ## SQL sanity checks
 

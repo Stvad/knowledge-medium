@@ -85,7 +85,7 @@ export const FIELD = {
   layoffTier: 'strength:tier',
   layoffPct: 'strength:reentryPct',
   // settings
-  planRoot: 'strength:planRoot',
+  plan: 'strength:plan',
   rolloverHour: 'strength:rolloverHour',
   cadenceDays: 'strength:cadenceDays',
   roundTo: 'strength:roundTo',

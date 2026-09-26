@@ -16,7 +16,7 @@ import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo, isBlockDeleted} from '@/data/test/createTestRepo'
 import {definitionSeedsFacet, typeSeedsFacet} from '@/data/facets'
 import {deleteBlock} from '@/data/mutators'
-import {hasBlockType} from '@/data/properties'
+import {aliasesProp, hasBlockType} from '@/data/properties'
 import type {Repo} from '@/data/repo'
 import {statusProp as todoStatusProp, todoType} from '@/plugins/todo/schema'
 
@@ -26,7 +26,7 @@ import {
 import {SETTINGS_TYPE} from '../../src/km/schema'
 import {buildHistory, buildLayoffs} from '../../src/km/history'
 import {dayToDate, storedDate} from '../../src/km/day'
-import {loadConfig} from '../../src/km/config'
+import {loadConfig, loadPlanSource, PLAN_ALIAS} from '../../src/km/config'
 import {recordResult, startAssessment} from '../../src/km/assessment'
 import {DEFAULT_CONFIG} from '../../src/program/defaults'
 import {findSettingsBlock, findStrengthLogPage, getOrCreateSettingsBlock, settingsIdentity} from '../../src/km/page'
@@ -42,7 +42,7 @@ import {
   dateProp,
   layoffFromProp,
   layoffTierProp,
-  planRootProp,
+  planProp,
   rolloverHourProp,
   sessionProp,
   statusProp,
@@ -1276,7 +1276,7 @@ describe('the plan outline', () => {
       await tx.create({id: 'plan-squat', workspaceId: WORKSPACE_ID, parentId: 'plan-b', orderKey: 'a1', content: 'Squat — 3×6–10'})
       await tx.create({id: 'plan-ohp', workspaceId: WORKSPACE_ID, parentId: 'plan-b', orderKey: 'a2', content: 'Overhead press — 3×6–10'})
     }, {scope: ChangeScope.BlockDefault, description: 'a plan'})
-    await repo.tx(tx => tx.setProperty(settingsBlockId, planRootProp, 'plan-root'),
+    await repo.tx(tx => tx.setProperty(settingsBlockId, planProp, 'plan-root'),
       {scope: ChangeScope.UserPrefs, description: 'point at the plan'})
     const sessionB = async () => (await loadConfig(repo, WORKSPACE_ID, settingsBlockId)).config.exercises
       .filter(e => e.session === 'B').map(e => e.name)
@@ -1286,6 +1286,25 @@ describe('the plan outline', () => {
       {scope: ChangeScope.BlockDefault, description: 'press first'})
 
     expect(await sessionB()).toEqual(['Overhead press', 'Squat'])
+  })
+
+  it('finds the plan by its alias when the pointer is unset or its block is gone', async () => {
+    const {settingsBlockId} = await ensureStrengthHome(repo, WORKSPACE_ID)
+    await repo.tx(async tx => {
+      await tx.create({id: 'aliased', workspaceId: WORKSPACE_ID, parentId: null, orderKey: 'b0', content: 'Plan'})
+      await tx.setProperty('aliased', aliasesProp, [PLAN_ALIAS])
+      await tx.create({id: 'pointed', workspaceId: WORKSPACE_ID, parentId: null, orderKey: 'b1', content: 'Other plan'})
+    }, {scope: ChangeScope.BlockDefault, description: 'two plans'})
+    const planRoot = async () => (await loadPlanSource(repo, WORKSPACE_ID, settingsBlockId)).planRootId
+    expect(await planRoot()).toBe('aliased')
+
+    await repo.tx(tx => tx.setProperty(settingsBlockId, planProp, 'pointed'),
+      {scope: ChangeScope.UserPrefs, description: 'point elsewhere'})
+    expect(await planRoot()).toBe('pointed')
+
+    await repo.tx(tx => tx.run(deleteBlock, {id: 'pointed'}),
+      {scope: ChangeScope.BlockDefault, description: 'delete it'})
+    expect(await planRoot()).toBe('aliased')
   })
 })
 

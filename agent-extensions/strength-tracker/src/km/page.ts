@@ -17,9 +17,8 @@ import {
   adoptTypedBlock, createTypedChild, derivedBlockId, getOrCreateTypedChild, type DerivedIdentity,
 } from '@/data/typedRecords.js'
 
-import {FIELD} from './fields'
 import {asAltChoice} from './records'
-import {SETTINGS_TYPE, STRENGTH_LOG_TYPE} from './schema'
+import {SETTINGS_TYPE, settingsType, STRENGTH_LOG_TYPE} from './schema'
 
 type TypeSnapshot = ReturnType<Repo['snapshotTypeRegistries']>
 
@@ -59,8 +58,7 @@ export const findSettingsBlock = async (
 /** Any of the settings values, which is what makes a block the settings block
  *  when its type tag is not there to say so. */
 const carriesKnobs = (block: BlockData): boolean =>
-  [FIELD.planRoot, FIELD.rolloverHour, FIELD.cadenceDays, FIELD.roundTo]
-    .some(name => block.properties[name] !== undefined)
+  (settingsType.properties ?? []).some(prop => block.properties[prop.name] !== undefined)
 
 /** …or any recorded `or`-group choice among its children.
  *
