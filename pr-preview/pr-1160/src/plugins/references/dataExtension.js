@@ -1,1 +1,1 @@
-import{BF as e}from"../../../chunks/app-B5BCL3Y-.js";export{e as referencesDataExtension};
+import{BF as e}from"../../../chunks/app-Bpa33QHs.js";export{e as referencesDataExtension};

@@ -1,1 +1,1 @@
-import{Bm as e,Lm as t,Rm as n,zm as r}from"../../../chunks/app-B5BCL3Y-.js";export{t as closeVideoNotesView,n as ensureEditableVideoNoteChild,r as enterVideoNotesView,e as focusVideoNote};
+import{Bm as e,Lm as t,Rm as n,zm as r}from"../../../chunks/app-Bpa33QHs.js";export{t as closeVideoNotesView,n as ensureEditableVideoNoteChild,r as enterVideoNotesView,e as focusVideoNote};
