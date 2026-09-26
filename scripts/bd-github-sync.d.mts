@@ -109,18 +109,5 @@ export declare const planMintedRefs: (
   preBeads: BeadRow[],
   postBeads: BeadRow[],
 ) => { id: string; number: number }[]
-export declare const planMintedNonOpen: (
-  preBeads: BeadRow[],
-  freshBeads: BeadRow[],
-) => { id: string; number: number }[]
-export declare const planReopenedClosed: (
-  beads: BeadRow[],
-  issueByNumber: Map<number, IssueInfo>,
-) => { id: string; number: number }[]
-export declare const planLocalWins: (
-  beads: BeadRow[],
-  issueByNumber: Map<number, IssueInfo>,
-) => { id: string; number: number }[]
 export declare const planPrePullPush: (beads: BeadRow[], issueByNumber: Map<number, IssueInfo>) => string[]
-export declare const detectReverts: (snapshotRows: BeadRow[], postById: Map<string, BeadRow>) => BeadRow[]
-export declare const planRestoreArgs: (row: BeadRow, post?: BeadRow) => string[][]
+export declare const planUnlandedPushes: (beads: BeadRow[], issueByNumber: Map<number, IssueInfo>) => { id: string; number: number }[]
