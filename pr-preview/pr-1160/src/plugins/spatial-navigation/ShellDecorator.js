@@ -1,0 +1,1 @@
+import{Ph as e}from"../../../chunks/app-BffKWrLR.js";export{e as SpatialNavigationShellDecorator};

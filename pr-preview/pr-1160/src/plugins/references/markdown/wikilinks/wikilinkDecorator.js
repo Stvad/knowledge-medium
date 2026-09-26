@@ -1,0 +1,1 @@
+import{Fb as e,Ib as t,Lb as n}from"../../../../../chunks/app-BffKWrLR.js";export{e as isWikilinkDisplayParts,t as resolveWikilinkDisplay,n as wikilinkDisplayDecoratorFacet};

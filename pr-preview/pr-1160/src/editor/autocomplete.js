@@ -1,0 +1,1 @@
+import{pw as e}from"../../chunks/app-BffKWrLR.js";export{e as editorAutocompleteExtension};

@@ -1,0 +1,1 @@
+import{sN as e}from"../../chunks/app-BffKWrLR.js";export{e as withMoveTransition};

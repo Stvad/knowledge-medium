@@ -1,0 +1,1 @@
+import{BO as e}from"../../chunks/app-BffKWrLR.js";export{e as useShortcutSurfaceActivations};

@@ -1,0 +1,1 @@
+import{MO as e}from"../../chunks/app-BffKWrLR.js";export{e as BlockEditor};

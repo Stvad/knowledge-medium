@@ -1,0 +1,1 @@
+import{Kg as e}from"../../../chunks/app-BffKWrLR.js";export{e as getBreadcrumbContentPreview};

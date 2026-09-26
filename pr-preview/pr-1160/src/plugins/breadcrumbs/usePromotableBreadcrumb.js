@@ -1,0 +1,1 @@
+import{Ug as e}from"../../../chunks/app-BffKWrLR.js";export{e as usePromotableBreadcrumb};

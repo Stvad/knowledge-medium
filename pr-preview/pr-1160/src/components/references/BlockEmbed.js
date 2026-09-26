@@ -1,0 +1,1 @@
+import{aC as e}from"../../../chunks/app-BffKWrLR.js";export{e as BlockEmbed};

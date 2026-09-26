@@ -1,0 +1,1 @@
+import{Rd as e}from"../../../../../chunks/app-BffKWrLR.js";export{e as wikilinkMarkdownExtension};

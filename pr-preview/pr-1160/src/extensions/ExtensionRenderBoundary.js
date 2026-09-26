@@ -1,0 +1,1 @@
+import{RD as e}from"../../chunks/app-BffKWrLR.js";export{e as ExtensionRenderBoundary};

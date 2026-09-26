@@ -1,0 +1,1 @@
+import{bm as e}from"../../../chunks/app-BffKWrLR.js";export{e as videoPlayerMarkdownExtension};

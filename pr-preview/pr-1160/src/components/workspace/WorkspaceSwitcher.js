@@ -1,0 +1,1 @@
+import{S_ as e}from"../../../chunks/app-BffKWrLR.js";export{e as WorkspaceSwitcher};

@@ -1,0 +1,1 @@
+import{pA as e}from"../../../chunks/app-BffKWrLR.js";export{e as PropertyRow};

@@ -1,0 +1,1 @@
+import{hC as e}from"../../../chunks/app-BffKWrLR.js";export{e as chipStyle};

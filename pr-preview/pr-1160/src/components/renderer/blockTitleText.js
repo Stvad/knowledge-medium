@@ -1,0 +1,1 @@
+import{Ck as e,Sk as t}from"../../../chunks/app-BffKWrLR.js";export{t as BLOCK_TITLE_TEXT_CLASS,e as useBlockTitleTextClass};

@@ -1,0 +1,1 @@
+import{xs as e}from"../../../chunks/app-BffKWrLR.js";export{e as BlockTagsConfigEditor};

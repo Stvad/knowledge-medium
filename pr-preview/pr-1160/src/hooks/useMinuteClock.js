@@ -1,0 +1,1 @@
+import{Kv as e}from"../../chunks/app-BffKWrLR.js";export{e as useMinuteClock};

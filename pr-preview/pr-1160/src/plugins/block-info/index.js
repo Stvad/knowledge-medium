@@ -1,0 +1,1 @@
+import{Cu as e}from"../../../chunks/app-BffKWrLR.js";export{e as blockInfoPlugin};

@@ -1,0 +1,1 @@
+import{Nb as e}from"../../../chunks/app-BffKWrLR.js";export{e as dailyDateWikilinkDecorator};

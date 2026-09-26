@@ -1,0 +1,1 @@
+import{_ as e}from"../../chunks/app-BffKWrLR.js";export{e as staticAppExtensions};

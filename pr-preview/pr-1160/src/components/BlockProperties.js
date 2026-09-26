@@ -1,0 +1,1 @@
+import{sA as e}from"../../chunks/app-BffKWrLR.js";export{e as BlockProperties};
