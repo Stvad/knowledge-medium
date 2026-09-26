@@ -1,0 +1,1 @@
+import{MO as e}from"../../chunks/app-CvVoUiHM.js";export{e as BlockEditor};

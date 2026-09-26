@@ -1,0 +1,1 @@
+import{HF as e,VF as t}from"../../../chunks/app-CvVoUiHM.js";export{t as REFERENCES_TARGET_INVALIDATION_CHANNEL,e as referencesInvalidationRule};

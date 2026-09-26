@@ -1,0 +1,1 @@
+import{BH as e}from"../../chunks/app-CvVoUiHM.js";export{e as FacetBridge};

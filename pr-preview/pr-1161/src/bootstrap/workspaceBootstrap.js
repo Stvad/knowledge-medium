@@ -1,0 +1,1 @@
+import{c as e}from"../../chunks/app-CvVoUiHM.js";export{e as bootstrapWorkspace};

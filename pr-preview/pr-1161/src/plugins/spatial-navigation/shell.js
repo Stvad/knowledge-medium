@@ -1,0 +1,1 @@
+import{Nh as e}from"../../../chunks/app-CvVoUiHM.js";export{e as spatialNavigationShellDecorator};

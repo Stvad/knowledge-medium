@@ -1,0 +1,1 @@
+import{nT as e,rT as t}from"../../chunks/app-CvVoUiHM.js";export{e as dispatchPointerAction,t as setPointerActionDispatcher};

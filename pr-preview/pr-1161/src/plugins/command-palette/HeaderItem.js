@@ -1,0 +1,1 @@
+import{mS as e}from"../../../chunks/app-CvVoUiHM.js";export{e as CommandPaletteHeaderItem};

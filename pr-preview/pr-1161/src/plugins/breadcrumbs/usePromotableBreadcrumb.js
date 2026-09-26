@@ -1,0 +1,1 @@
+import{Ug as e}from"../../../chunks/app-CvVoUiHM.js";export{e as usePromotableBreadcrumb};

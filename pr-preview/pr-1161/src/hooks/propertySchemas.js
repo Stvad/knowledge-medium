@@ -1,0 +1,1 @@
+import{mP as e}from"../../chunks/app-CvVoUiHM.js";export{e as usePropertySchemas};

@@ -1,0 +1,1 @@
+import{sE as e}from"../../chunks/app-CvVoUiHM.js";export{e as BlockLoadingPlaceholder};
