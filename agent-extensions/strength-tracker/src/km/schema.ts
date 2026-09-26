@@ -334,7 +334,8 @@ export const layoffPctProp = seedProperty({
 
 /** The plan outline root the config is read from. Unset, the plan is found
  *  by its alias (`PLAN_ALIAS` in config.ts). Retired and not to be reclaimed:
- *  `strength:planRoot`, the same pointer as an id in a string. */
+ *  the name `strength:planRoot` and the seed key `plan-root`, the same pointer
+ *  as an id in a string. */
 export const planProp = seedProperty({
   seedKey: extensionPropertySeedKey('plan'),
   revision: 1,
