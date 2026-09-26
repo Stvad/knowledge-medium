@@ -1199,6 +1199,8 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     blockedCloseIds?: string[]
     /** What `gh issue list` serves from its second call on — the state after the pre-pull push. */
     issuesAfterPush?: object[]
+    /** Fail `gh issue list` from its second call on. */
+    failListAfterPush?: boolean
     failFullSync?: boolean
     failPushCall?: number
     failListCall?: number
@@ -1290,6 +1292,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
         '  "auth token") echo shim-token;;',
         '  "issue list")',
         `    n=$(cat "${repo}/gh-list-count" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "${repo}/gh-list-count"`,
+        ...(opts.failListAfterPush ? ['    if [ "$n" -gt 1 ]; then echo "HTTP 502: Bad Gateway" >&2; exit 1; fi'] : []),
         `    if [ "$n" -gt 1 ] && [ -f "${repo}/gh-issues-after.json" ]; then cat "${repo}/gh-issues-after.json"; else cat "${repo}/gh-issues.json"; fi;;`,
         // The real gh exits 1 when any alias is NOT_FOUND but still prints
         // the data — the shim mirrors that exit so the parser is pinned to
@@ -1958,6 +1961,47 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(posted()).toBe('')
   })
 
+  // The mapping is the run's only record of what it minted, so a failed
+  // re-read must neither lose it nor let a post through.
+  it('prints the minted mapping and holds comments when the post-push re-read fails', () => {
+    const unminted = syncRow({ id: 'km-new', external_ref: null, updated_at: '2026-08-19T00:00:00Z' })
+    const newer = pushable({ id: 'km-m', external_ref: ref(7), updated_at: '2026-08-21T00:00:00Z', comment_count: 2 })
+    const { run, posted } = makeSyncRepo({
+      issues: twoIssues(),
+      failListAfterPush: true,
+      lists: [[unminted, newer], [{ ...unminted, external_ref: ref(9) }, newer]],
+      exportRows: [[unminted, newer]],
+      shows: [[newer]],
+      comments: { 'km-m': twoComments },
+      graphql: { data: { repository: { i7: issueComments([]) } } },
+    })
+    const r = run()
+    expect(r.status).toBe(0)
+    expect(r.stdout).toContain('minted: km-new → #9')
+    expect(r.stdout).toContain('could not re-read the pushed issues')
+    expect(r.stdout).toContain('SKIPPED comments of km-m')
+    expect(posted()).toBe('')
+  })
+
+  // A cross-reference touches the named issue as a post does.
+  it('holds a comment that names a bead whose push did not land', () => {
+    const quiet = syncRow({ id: 'km-m', external_ref: ref(7), updated_at: '2026-08-19T00:00:00Z', comment_count: 2 })
+    const unlanded = pushable({ id: 'km-o', external_ref: ref(8), updated_at: '2026-08-21T00:00:00Z' })
+    const { run, posted } = makeSyncRepo({
+      issues: twoIssues(),
+      issuesAfterPush: twoIssues(),
+      lists: [[quiet, unlanded]],
+      shows: [[unlanded]],
+      comments: { 'km-m': twoComments },
+      graphql: { data: { repository: { i7: issueComments([]) } } },
+    })
+    const r = run()
+    expect(r.status).toBe(0)
+    expect(r.stdout).toContain(`SKIPPED comment ${C2} of km-m: it names bead(s) not referenceable this run (km-o)`)
+    expect(posted()).toContain(C1)
+    expect(posted()).not.toContain(C2)
+  })
+
   it('caps the posts of one run and leaves the rest for the next', () => {
     const { run, posted } = makeSyncRepo({
       issues: twoIssues(),
@@ -2068,7 +2112,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     })
     const r = run()
     expect(r.status).toBe(0)
-    expect(r.stdout).toContain(`SKIPPED comment ${C1} of km-m: it names bead(s) with no issue yet (km-u) — 2 left for the next run`)
+    expect(r.stdout).toContain(`SKIPPED comment ${C1} of km-m: it names bead(s) not referenceable this run (km-u) — 2 left for the next run`)
     expect(posted()).toBe('')
     // Nothing publishable, so no touch either: a touch with no post would
     // just push the bead out next run for nothing.
