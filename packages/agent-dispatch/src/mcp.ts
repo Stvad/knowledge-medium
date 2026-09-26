@@ -10,6 +10,8 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { createGraphMcpServer } from '@knowledge-medium/agent-cli/mcpServer'
 import { BLOCKED_WIKILINKS_ENV, createBlockedWikilinkWriteGuard, decodeBlockedWikilinks } from './blockedWikilinks.js'
 import { CHANNEL_PORT_ENV, CHANNEL_SECRET_HEADER, loadOrCreateChannelSecret } from './channelSecret.js'
+import { createDeliveryDedup } from './deliveryDedup.js'
+import { handleChannelPost } from './channelListener.js'
 
 const channelPort = Number(process.env[CHANNEL_PORT_ENV] ?? '') || null
 const blockedWikilinks = decodeBlockedWikilinks(process.env[BLOCKED_WIKILINKS_ENV])
@@ -37,6 +39,8 @@ await server.connect(new StdioServerTransport())
 if (channelPort) {
   const secret = await loadOrCreateChannelSecret()
 
+  const dedup = createDeliveryDedup()
+
   const listener = http.createServer((request, response) => {
     if (request.method !== 'POST') {
       response.writeHead(405).end()
@@ -54,23 +58,15 @@ if (channelPort) {
     request.on('data', chunk => { body += chunk })
     request.on('end', () => {
       void (async () => {
-        try {
-          const parsed = JSON.parse(body) as {content?: unknown, meta?: unknown}
-          if (typeof parsed.content !== 'string') throw new Error('content required')
-          const meta = parsed.meta && typeof parsed.meta === 'object'
-            ? Object.fromEntries(
-                Object.entries(parsed.meta as Record<string, unknown>)
-                  .filter(([, value]) => typeof value === 'string'),
-              ) as Record<string, string>
-            : undefined
-          await server.server.notification({
+        const {status, body: replyBody} = await handleChannelPost({
+          body,
+          dedup,
+          dispatch: event => server.server.notification({
             method: 'notifications/claude/channel',
-            params: {content: parsed.content, ...(meta ? {meta} : {})},
-          })
-          response.writeHead(200).end('ok')
-        } catch {
-          response.writeHead(400).end('expected JSON {content, meta?}')
-        }
+            params: event,
+          }),
+        })
+        response.writeHead(status).end(replyBody)
       })()
     })
   })

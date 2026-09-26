@@ -241,7 +241,25 @@ That puts `km-agent-dispatch` and `kmagent` on your PATH. Then:
 5. Reply text lands as a child block (marked `agent:reply` so it can never re-trigger), status flips to `done`, and the session id is stored as `agent:session`.
 6. **Threads:** a later `[[claude]]` mention anywhere under that block — including directly under Claude's reply — finds the nearest ancestor `agent:session` and `--resume`s it (never two concurrent resumes of one session).
 
-Failures reply visibly (`⚠️ …`) and set `agent:status=error` + `agent:error` — including infrastructure failures (bridge blip, spawn error), not just failed runs. A `running` block older than 30 min is treated as a crashed run and re-queued, at most 3 attempts total. To re-run a mention manually, delete its `agent:*` properties.
+A failed RUN replies visibly (`⚠️ …`) and sets `agent:status=error` + `agent:error`. An infrastructure failure the daemon recognises does **not** — it goes to `agent:status=queued` with `agent:retry-after` and retries itself; see "Out of credits" below, and check the daemon log for a cooldown before hunting for failed tasks. A `running` block older than 30 min is treated as a crashed run and re-queued, at most 3 attempts total. To re-run a mention, use the chip's **Retry** action (or delete its `agent:*` properties).
+
+## "Out of credits" is not a failed task
+
+A run that never reached the model — spent credits, subscription usage limit, expired `claude`/`codex` login, rate limit, network down, the executor binary not on the daemon's `PATH`, the bridge or channel listener unreachable — is classified **retryable** (`runFailure.ts`, matched only against text the CLI itself produced: its stderr and the structured error message of a failed transcript, never the assistant's answer). Such a run does **not** park the task:
+
+- the task goes back to `agent:status=queued` with `agent:retry-after` (epoch ms) and the reason in `agent:error`, and its reply block says `⏳ … retrying automatically` instead of `⚠️ … failed`;
+- **the attempt is handed back** (`agent:attempts` is decremented). Attempts cap a task that keeps *crashing*; counting an outage against them would park the queue after three ticks;
+- the `runsPerHour` slot is refunded — the run billed nothing, and spending budget on doomed launches would defer real work for an hour once the outage lifts;
+- the failing **lane** enters a **cooldown** (30 s → 60 s → 2 min → 5 min, reset by any run on that lane that reaches the model). This is the half that matters: without it the daemon just picks up the next item and chews it into the same state a second later. During a cooldown no new run launches on that lane; when it lapses exactly one probe goes out, reserved as it launches so a `maxConcurrent` above 1 can't fire a batch of them. A query watcher additionally **rolls its cursor back**, since it has no graph-side task state to sweep and would otherwise drop the rows silently.
+- a lane is one executor (`claude`, `codex`) or `channel` for delivery watchers — the granularity at which an outage is actually true. A spent Claude subscription must not stall a Codex watcher, and a Codex success must not clear the Claude cooldown and let it resume chewing its queue.
+
+A retryable *cause* is only a deferral when nothing actually ran. A run that streamed (or returned) assistant text and then died on a transport error reached the model and spent its tokens, so it parks as a normal `error` with the partial preserved — handing back its attempt and its `runsPerHour` slot would let a repeating mid-stream disconnect re-bill one task outside the spend cap entirely.
+
+The same classification applies to a failure that **throws** instead of returning a result (spawn error, bridge blip, channel listener down) — but only when it lands *before* `runTask` returns. Past that point a throw is about delivering an answer that was already billed, so it stays terminal rather than paying for the run twice. Nothing re-attempts on its own until the next poll sweep notices, so keep `pollIntervalMs` at or below the shortest backoff step you care about (the 30 s default sweep is fine).
+
+Retryable deferral is deliberately **unbounded** — an outage can outlast any attempt cap, and a probe every ≤5 min costs a process spawn and no tokens. The escape hatches are the chip's **Stop retrying** (parks the task `error: cancelled`) and **Retry now**, which skips both halves of the clock — the block's `agent:retry-after` and the lane cooldown, so a top-up or a fresh `claude login` takes effect at once rather than at the end of the current backoff. A cause the classifier does not recognise stays a terminal `error`, i.e. exactly the behaviour that predates this.
+
+**Retrying by hand.** The chip menu offers **Retry task** on a failed task; the command palette's **Retry all failed Agent tasks** re-queues every `agent:status=error` block in the active workspace in one transaction (one undo entry), which is the shape an outage leaves behind — skipping tasks you deliberately stopped (`agent:error: cancelled`), which a per-block Retry can still re-run. Neither touches block content — the mention that triggered the task is already there and need not be `[[claude]]`. Both keep `agent:session`, so a retry resumes the thread.
 
 **One daemon per fleet.** A pidfile prevents two daemons on one machine (launchd + a manual run would double-claim and double-bill). Across machines there is no claim atomicity over LWW sync — install the LaunchAgent on exactly one device.
 
@@ -280,6 +298,8 @@ Registrations are ephemeral tab state: they die with the tab and expire after 10
 ## Query watchers
 
 Rows must select a stable `id` column. First tick establishes a baseline without firing (no backlog replay); afterwards, new ids fire one batched run. Cursors live in `~/.config/knowledge-medium/agent-dispatch-state.json` (alongside the backlink-watcher baselines); the cursor advances **before** the run so a failing prompt can't re-bill every tick (failures are logged, not retried).
+
+**`ORDER BY` if you set `maxRowsPerFire`.** With truncation and no ordering, which rows land in a batch is whatever order SQLite returned — so a retry after an outage can carry a *different subset*, which is genuinely different work. The delivery identity is order-independent (ids are sorted), so the same rows are always recognised as the same delivery; what an unordered query cannot promise is that the same rows are the ones chosen.
 
 ## km MCP server standalone
 
@@ -327,7 +347,7 @@ Claude Code's channels primitive (research preview, v2.1.80+) can push watcher e
 
 3. Mark watchers `"delivery": "channel"` in the daemon config.
 
-The daemon then claims the task (`agent:status=running`) and POSTs the rendered event to `127.0.0.1:8790`; it arrives as a `<channel source="km">` event and the ambient session **finishes the lifecycle itself** — reply block + `agent:status=done` via the km tools (the event says exactly how). If the ambient session drops it, the stale-`running` sweep re-delivers after 30 min (3 attempts max, then parked as `error`). If the listener is down, mention tasks are marked `error`; query rows keep their cursor and re-fire when it's back.
+The daemon then claims the task (`agent:status=running`) and POSTs the rendered event to `127.0.0.1:8790`; it arrives as a `<channel source="km">` event and the ambient session **finishes the lifecycle itself** — reply block + `agent:status=done` via the km tools (the event says exactly how). If the ambient session drops it, the stale-`running` sweep re-delivers after 30 min (3 attempts max, then parked as `error`). If the listener is down, mention tasks are **deferred** like any other infrastructure failure (see "Out of credits" above) rather than marked `error`; query rows keep their cursor and re-fire when it's back.
 
 **Listener auth:** loopback is not an auth boundary (any local process — or a browser page POSTing at `127.0.0.1` — could otherwise inject prompts into a write-capable session). Requests must carry `x-km-channel-secret` from `~/.config/knowledge-medium/agent-dispatch-channel.secret` (0600, auto-generated; the daemon sends it automatically) and be `application/json` with no `Origin` header.
 
