@@ -1,1 +1,1 @@
-import{_C as e,gC as t,vC as n}from"../../chunks/app-oAQ3RAR0.js";export{t as DEFAULT_TYPE_COLORS,e as defaultTypeColor,n as pickLeastUsedTypeColor};
+import{_C as e,gC as t,vC as n}from"../../chunks/app-XKHuPRbo.js";export{t as DEFAULT_TYPE_COLORS,e as defaultTypeColor,n as pickLeastUsedTypeColor};

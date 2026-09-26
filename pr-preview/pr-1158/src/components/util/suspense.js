@@ -1,1 +1,1 @@
-import{JP as e}from"../../../chunks/app-oAQ3RAR0.js";export{e as SuspenseFallback};
+import{JP as e}from"../../../chunks/app-XKHuPRbo.js";export{e as SuspenseFallback};

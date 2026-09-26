@@ -1,1 +1,1 @@
-import{KC as e,qC as t}from"../../chunks/app-oAQ3RAR0.js";export{e as exampleExtensions,t as insertExampleExtensionsUnder};
+import{KC as e,qC as t}from"../../chunks/app-XKHuPRbo.js";export{e as exampleExtensions,t as insertExampleExtensionsUnder};
