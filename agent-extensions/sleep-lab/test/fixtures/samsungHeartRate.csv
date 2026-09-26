@@ -1,0 +1,7 @@
+#com.samsung.health.heart_rate,,,com.samsung.shealth,1.0,
+com.samsung.health.heart_rate.start_time,com.samsung.health.heart_rate.end_time,com.samsung.health.heart_rate.time_offset,com.samsung.health.heart_rate.heart_rate
+2026-09-07 09:00:00.000,2026-09-07 09:01:00.000,UTC-0700,58
+2026-09-07 09:01:00.000,2026-09-07 09:02:00.000,UTC-0700,56
+2026-09-07 09:02:00.000,2026-09-07 09:03:00.000,UTC-0700,
+2026-09-07 09:03:00.000,2026-09-07 09:04:00.000,UTC-0700,60
+2026-09-07 21:10:00.000,2026-09-07 21:11:00.000,UTC-0700,65
