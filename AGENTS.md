@@ -225,7 +225,7 @@ beads (`bd`) — how the two generated blocks above apply HERE (installed 2026-0
   bd dolt remote add origin git+ssh://git@github.com/Stvad/knowledge-medium-beads.git
   ```
   and prefer `BD_NO_REMOTE_ADOPT=1 bd dolt push`, which rules adoption out. On a missing registry it prints `No remote is configured — skipping` and exits 0 — read the output, not the exit code.
-- **`bd config set` auto-commits to the current branch.** Changing config writes a `bd: …` commit without asking. Expect stray commits on your branch after config changes; that is bd, not you.
+- **`bd dolt remote add origin` / `remove origin` commit `.beads/config.yaml` to the current branch.** They rewrite `sync.remote` and write a `bd: update sync.remote` / `bd: clear sync.remote` commit without asking (remote adoption does the same). Expect that commit on your branch; that is bd, not you. `bd config set` of a yaml-only key rewrites the file without committing.
 - `.beads/hooks/` is wired through `core.hooksPath`, so it OVERRIDES `.git/hooks` for this clone. Anything that installs git hooks later (husky et al.) must chain into it rather than replace it. Hook cost is ~130ms per commit.
 - `bd init` stages whole tool directories (`.beads/`, `.claude/`, `.codex/`, `.agents/`) and commits them itself. That is why `.codex/worktrees/` is gitignored — without it, re-running init would commit three full worktree checkouts.
 - never `bd edit` (opens `$EDITOR` and hangs an agent); use `bd update` flags.
