@@ -922,9 +922,6 @@ export const planPriorityFixes = (preById, postBeads, issueByNumber) =>
     .filter(b => b.status !== 'closed' && b.priority === 2 && !preById.has(b.id))
     .map(b => {
       const issue = issueByNumber.get(issueNumberFromRef(b.external_ref))
-      // A sole `priority::medium` MEANS 2, whatever a hand label says.
-      const spelled = issue ? pullPriorities(issue.labels) : null
-      if (spelled?.size === 1 && spelled.has(2)) return { id: b.id, to: null }
       return { id: b.id, to: issue ? deriveLabelPriority(issue.labels) : null }
     })
     .filter(({ to }) => to !== null && to !== 2)
