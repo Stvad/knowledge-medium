@@ -767,9 +767,10 @@ export const planLocalWins = (beads, issueByNumber) =>
 // ---- what bd's pull would write ----
 // The pull overwrites a bead from its GitHub copy, and the decision to let it
 // happen has to be made BEFORE it runs — so these replicate bd's
-// GitHub→beads mapping (internal/github/mapping.go, unchanged 1.2.2 → 1.3.0).
+// GitHub→beads mapping (internal/github/mapping.go).
 // Both ways of being wrong are bounded: reading a divergence bd would not see
-// costs one needless touch and push, and missing one leaves today's behaviour.
+// costs a no-op pull of that issue or a spurious withheld report, and missing
+// one leaves today's behaviour.
 // bd splits a label on the FIRST `::`, compares the prefix case-sensitively
 // and the value case-insensitively.
 // A Map for the same reason as PRIORITY_WORDS above.
@@ -853,7 +854,7 @@ const labelFieldsWhere = (bead, issue, keep) =>
   LABEL_FIELDS.filter(([, read]) => keep(labelVerdict(bead, issue, read))).map(([field]) => field)
 
 /**
- * Whether a push would CHANGE the issue — the question bd 1.3.0 asks itself
+ * Whether a push would CHANGE the issue — the question bd's push asks itself
  * (PushFieldsEqual) after fetching the issue, asked here from the listing so a
  * bead bd would skip is never handed over.
  * Mirrors bd's BeadsIssueToGitHubFields — title, body, open/closed, and the
@@ -914,10 +915,9 @@ export const planLossyReapplies = (beads, issueByNumber) =>
     return losses.length ? [{ id: b.id, number, losses, overwrites }] : []
   })
 
-// Beads to hand the pre-pull push. bd 1.3.0 PATCHes a handed bead whenever its
-// pushed fields differ (its ContentEqual hook replaced 1.2.2's timestamp rule),
-// whichever side changed last — so this filter is what keeps the push from
-// overwriting a newer GitHub-side edit:
+// Beads to hand the pre-pull push. bd's push PATCHes a handed bead whenever
+// its pushed fields differ, whichever side changed last — so this filter is
+// what keeps the push from overwriting a newer GitHub-side edit:
 //   - GitHub is same-or-newer: left for the pull.
 //   - the push would change nothing: bd would spend a GET only to skip it.
 // Everything the listing cannot judge (no ref, a foreign ref, an issue missing
@@ -952,13 +952,17 @@ export const detectReverts = (snapshotRows, postById) =>
 // `post` is the row's post-pull state, used only to compute the label delta;
 // without it (the conservative path) every snapshot label is re-added —
 // duplicate adds are idempotent — and none removed.
+// Every close the wrapper runs replays one already made — GitHub's, or the
+// bead's own snapshot — so it is forced past bd's close policy (an open child,
+// an open blocker, another actor's claim), as bd's own pull forces it.
+const forcedCloseArgs = (id, reason) => ['close', id, '--force', '-r', reason]
+
 export const planRestoreArgs = (row, post) => {
-  // --force, here and on the close: bd refuses to overwrite another actor's
-  // live claim and to close a bead with an open child or blocker, and a
+  // --force: bd refuses to overwrite another actor's live claim, and a
   // restore only replays the bead's own snapshot.
   const update = ['update', row.id, '--force', '--title', row.title ?? '', '-d', row.description ?? '', '-p', String(row.priority)]
   if (row.issue_type) update.push('-t', row.issue_type)
-  // Always passed: `-a ''` CLEARS the assignee (verified against bd 1.3.0),
+  // Always passed: `-a ''` CLEARS the assignee,
   // so an unassigned snapshot can undo a pulled stale assignment.
   update.push('-a', row.assignee ?? '')
   const snapLabels = new Set(row.labels ?? [])
@@ -966,19 +970,9 @@ export const planRestoreArgs = (row, post) => {
   for (const l of snapLabels) if (!postLabels.has(l)) update.push('--add-label', l)
   for (const l of postLabels) if (!snapLabels.has(l)) update.push('--remove-label', l)
   if (row.status === 'closed')
-    return [update, ['close', row.id, '--force', '-r', row.close_reason || 'restored by bd-github-sync after a pull revert (#647)']]
+    return [update, forcedCloseArgs(row.id, row.close_reason || 'restored by bd-github-sync after a pull revert (#647)')]
   return [[...update, '-s', row.status]]
 }
-
-// --force for the same close policy: a GitHub close is authoritative here, as
-// it is for bd's own pull, which forces the policy on every pulled update.
-export const planAdoptCloseArgs = (id, number) => [
-  'close',
-  id,
-  '--force',
-  '--reason',
-  `Closed on GitHub (issue #${number}); reconciled by bd-github-sync.`,
-]
 
 export const planPriorityFixes = (preById, postBeads, issueByNumber) =>
   postBeads
@@ -1408,10 +1402,10 @@ const fetchIssueComments = (numbers, env) => {
   return byNumber
 }
 
-// Bead comments → issue comments, one way and append-only: bd's sync (1.2.2
-// and 1.3.0) carries comments in neither direction (nothing in its GitHub
-// client, mapper or tracker reads or writes them), so a mirrored comment never
-// comes back as a new bead comment. The beads come from one `bd export`
+// Bead comments → issue comments, one way and append-only: bd's sync carries
+// comments in neither direction (nothing in its GitHub client, mapper or
+// tracker reads or writes them), so a mirrored comment never comes back as a
+// new bead comment. The beads come from one `bd export`
 // (exportBeads), so nothing is read per bead. Posts are paced under GitHub's
 // content-creation limit (80/min), and a bead stops at its first failed post
 // so the thread keeps bead order; the next run resumes where it stopped.
@@ -1556,7 +1550,7 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
     for (const { id, number } of closes) {
       if (dryRun) {
         report.push(`[dry-run] would close ${id} (issue #${number} was closed on GitHub)`)
-      } else if (tryRun('bd', planAdoptCloseArgs(id, number), { env }) !== null) {
+      } else if (tryRun('bd', forcedCloseArgs(id, `Closed on GitHub (issue #${number}); reconciled by bd-github-sync.`), { env }) !== null) {
         report.push(`closed ${id} (issue #${number} was closed on GitHub)`)
       } else {
         closeFailures.push(id)

@@ -35,7 +35,6 @@ import {
   planLossyReapplies,
   pullWouldWrite,
   planMintedNonOpen,
-  planAdoptCloseArgs,
   planPrePullPush,
   planPullSet,
   planMintedRefs,
@@ -930,24 +929,18 @@ describe('planPrePullPush', () => {
     expect(planPrePullPush([bead({ external_ref: ref(1), updated_at: '2026-08-20T00:00:00Z' })], map)).toEqual([])
   })
 
-  // A PATCH bd would make for no reason still re-stamps the issue, so it is
-  // skipped — but ONLY when the pull would also write nothing.
-  it('declines a push that would change nothing, when the pull would write nothing either', () => {
-    const converged = { state: 'OPEN' as const, labels: ['type::task', 'priority::high'], title: 'T', body: 'D', updatedAt: '2026-08-20T01:00:00Z' }
+  // bd would only spend a GET to skip it. A difference only the pull sees (the
+  // assignee, which GitHub never carries) is not the push's to fix either.
+  it('hands bd a local-newer row only when a pushed field differs', () => {
+    const converged = { state: 'OPEN' as const, labels: ['type::task', 'priority::high'], title: 'T', body: 'D', assignee: '', updatedAt: '2026-08-20T01:00:00Z' }
     const row = bead({ id: 'km-q', external_ref: ref(1), updated_at: '2026-08-25T00:00:00Z', title: 'T', description: 'D', priority: 1, issue_type: 'task' })
     expect(planPrePullPush([row], issues([[1, converged]]))).toEqual([])
+    expect(planPrePullPush([{ ...row, assignee: 'Someone' }], issues([[1, converged]]))).toEqual([])
     expect(planPrePullPush([{ ...row, title: 'edited locally' }], issues([[1, converged]]))).toEqual(['km-q'])
     expect(planPrePullPush([{ ...row, labels: ['ui'] }], issues([[1, converged]]))).toEqual(['km-q'])
     expect(planPrePullPush([{ ...row, status: 'closed' }], issues([[1, converged]]))).toEqual(['km-q'])
   })
 
-  // A difference only the pull sees (here the assignee, which GitHub never
-  // carries) is not the push's to fix: bd would fetch the issue and skip it.
-  it('does not hand bd a local-newer row whose pushed fields already match', () => {
-    const converged = { state: 'CLOSED' as const, labels: ['type::task', 'priority::high'], title: 'T', body: 'D', assignee: '', updatedAt: '2026-08-20T01:00:00Z' }
-    const row = bead({ id: 'km-q', external_ref: ref(1), updated_at: '2026-08-25T00:00:00Z', title: 'T', description: 'D', priority: 1, issue_type: 'task', status: 'closed' })
-    expect(planPrePullPush([{ ...row, assignee: 'Someone' }], issues([[1, converged]]))).toEqual([])
-  })
 })
 
 describe('planPullSet', () => {
@@ -971,16 +964,6 @@ describe('planPullSet', () => {
   it('never names a withheld bead', () => {
     const map = issues([[2, gh('2026-08-20T01:00:00Z')]])
     expect(planPullSet([row('km-lossy', 2, '2026-08-19T00:00:00Z')], map, new Set(['km-lossy']))).toEqual([])
-  })
-})
-
-describe('planAdoptCloseArgs', () => {
-  // bd's close policy refuses a bead with an open child or an open blocker; a
-  // refused adoption aborts the whole sync, so the GitHub close must be forced.
-  it('forces the close past the close policy', () => {
-    expect(planAdoptCloseArgs('km-a', 12)).toEqual([
-      'close', 'km-a', '--force', '--reason', 'Closed on GitHub (issue #12); reconciled by bd-github-sync.',
-    ])
   })
 })
 
@@ -1275,9 +1258,11 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
         `    e=$(cat "${repo}/export-count" 2>/dev/null || echo 0)`,
         `    e=$((e+1)); echo $e > "${repo}/export-count"`,
         `    if [ -f "${repo}/export-$e.jsonl" ]; then cat "${repo}/export-$e.jsonl"; else cat "${repo}/export-last.jsonl"; fi;;`,
-        ...(opts.failCloseId
-          ? [`  close) if [ "$2" = "${opts.failCloseId}" ]; then echo "Error: cannot close"; else echo ok; fi;;`]
-          : []),
+        // bd's close policy: an unforced close of a bead with an open child or
+        // blocker prints Error and exits 0, which aborts close adoption.
+        '  close)',
+        '    case "$*" in *--force*) ;; *) echo "Error: cannot close: open child or blocker"; exit 0;; esac',
+        `    if [ "$2" = "${opts.failCloseId ?? ''}" ]; then echo "Error: cannot close"; else echo ok; fi;;`,
         '  *) echo ok;;',
         'esac',
         'exit 0',
@@ -1636,7 +1621,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(shimCalls()).not.toContain('--pull-only')
   })
 
-  // The pre-pull push is SELECTIVE: bd 1.3.0 PATCHes a handed bead whenever
+  // The pre-pull push is SELECTIVE: bd's push PATCHes a handed bead whenever
   // its content differs, whichever side is newer, so beads whose listed
   // GitHub copy is same-or-newer must never reach it — and the run's cost
   // stays proportional to what changed, not to the tracker.
