@@ -103,6 +103,10 @@ import {
 } from './referenceTargetProcessor'
 import { tryBuildSchema } from '@/data/userSchemasService'
 import {
+  FANOUT_REPORT_STRIDE,
+  reportPropertyDefinitionFanout,
+} from '@/data/propertyDefinitionFanout'
+import {
   STRANDED_CLAIM_RECOVERY,
   isGraphBackfillClaimActive,
 } from './graphBackfillClaim'
@@ -523,20 +527,63 @@ export const consumingParentIds = async (
   const set = new Set<string>()
   for (let i = 0; i < fieldIds.length; i += chunkSize) {
     const chunk = fieldIds.slice(i, i + chunkSize)
-    // §9 selection discipline: field-row discovery keys on the BIT plus the
-    // target (an unmarked `((fieldId))` link row is not a consumer), and
-    // `parent_id IS NOT NULL` — a marked workspace-root row is user content,
-    // not a field row (§9 root half) — never re-key it.
     const rows = await db.getAll<{parent_id: string | null}>(
-      `SELECT DISTINCT parent_id FROM blocks
-        WHERE workspace_id = ? AND reference_target_id IN (${chunk.map(() => '?').join(', ')})
-          AND is_field_form = 1
-          AND deleted = 0 AND parent_id IS NOT NULL`,
+      `SELECT DISTINCT field.parent_id FROM ${consumingParentsFromSql(chunk.length)}`,
       [workspaceId, ...chunk],
     )
     for (const row of rows) if (row.parent_id !== null) set.add(row.parent_id)
   }
   return [...set]
+}
+
+/** §9 selection discipline: field-row discovery keys on the BIT plus the
+ *  target (an unmarked `((fieldId))` link row is not a consumer), and
+ *  `parent_id IS NOT NULL` — a marked workspace-root row is user content, not
+ *  a field row (§9 root half) — never re-key it.
+ *
+ *  The OWNER must be live too, and that is the half a `deleted = 0` on the
+ *  field row does not cover: a soft-deleted block can still own live field
+ *  rows. Its bag is history and re-keying it is declined — the live set is
+ *  bounded by current usage while the tombstoned set is bounded by ALL-TIME
+ *  usage, so re-keying it would put an unbounded write in the user's own
+ *  transaction, and #1023 fixes the restore case where it belongs, at
+ *  restore. Asked HERE rather than skipped during the walk, so that the
+ *  COUNT excludes them as well: on a graph with a long delete history that
+ *  number is what decides whether the user is asked at all, and it must not
+ *  promise blocks the change will pass over.
+ *
+ *  Spelled once because two callers ask the same question for one gesture:
+ *  {@link countConsumingParents} sizes the fan-out for the confirmation, and
+ *  {@link consumingParentIds} then walks it. A drifted copy would show the
+ *  user a number that is not the work they consented to. */
+const consumingParentsFromSql = (targetCount: number): string =>
+  `blocks field
+    WHERE field.workspace_id = ?
+      AND field.reference_target_id IN (${Array.from({length: targetCount}, () => '?').join(', ')})
+      AND field.is_field_form = 1
+      AND field.deleted = 0 AND field.parent_id IS NOT NULL
+      AND EXISTS (
+        SELECT 1 FROM blocks owner
+         WHERE owner.id = field.parent_id AND owner.deleted = 0
+      )`
+
+/** How many parents a change to ONE definition would re-key.
+ *
+ *  Single definition rather than the set {@link consumingParentIds} takes: a
+ *  count across several needs that function's cross-chunk `Set` to avoid
+ *  double-counting a parent consuming two of them, and no caller has that
+ *  question — a gesture edits one definition row. */
+export const countConsumingParents = async (
+  db: Pick<SameTxCtx['db'], 'getOptional'>,
+  workspaceId: string,
+  fieldId: string,
+): Promise<number> => {
+  const row = await db.getOptional<{count: number}>(
+    `SELECT COUNT(DISTINCT field.parent_id) AS count
+       FROM ${consumingParentsFromSql(1)}`,
+    [workspaceId, fieldId],
+  )
+  return row?.count ?? 0
 }
 
 /** How many values this change takes away from ONE parent, comparing what the
@@ -630,14 +677,10 @@ const applyToParent = async (
   lostParents: Set<string>,
 ): Promise<void> => {
   const parent = await ctx.tx.get(parentId)
-  // A soft-deleted parent can still own live field rows, so the query that
-  // found it does return one. Skipped by choice, not by necessity — `tx.update`
-  // accepts a tombstone: a deleted block's bag is history, and the live set is
-  // bounded by current usage while the tombstoned set is bounded by ALL-TIME
-  // usage, so re-keying it would put an unbounded write in the user's own
-  // transaction. The cost is that restoring such a block revives it under the
-  // old key; #1023 fixes that where it belongs, at restore.
-  if (parent === null || parent.deleted) return
+  // Tombstoned owners are excluded by `consumingParentsFromSql`, which is the
+  // one place that decides what a consumer is — so this is only the row
+  // vanishing between the probe and here.
+  if (parent === null) return
   const referenceLookups = sameTxReferenceTargetLookups(ctx.tx)
   const siblings = await ctx.tx.childrenOf(parentId, undefined)
   // Collected across EVERY change, then applied in two phases below — see the
@@ -875,10 +918,30 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
       )
     const lostByField = new Map<string, number>()
     const lostParents = new Set<string>()
+    const changingFieldIds = changes.map(change => change.fieldId)
+    let done = 0
     for (const parentId of parentIds) {
       await applyToParent(
         ctx, parentId, changes, isFieldDefinition, lostByField, lostParents,
       )
+      done += 1
+      // Unconditional, and a no-op unless a gesture opened a run for this
+      // workspace — the processor does not decide whether anyone is watching.
+      //
+      // Three moments, and each is a state the surface cannot reach without
+      // it. The FIRST turns "Starting…" into a number, which is when the user
+      // is likeliest to think nothing is happening. Every STRIDE moves the
+      // bar. And the LAST says the consumers are done and the commit is what
+      // remains — a total that is not a multiple of the stride would
+      // otherwise sit at the previous one for the whole tail, reading
+      // "1,000 of 1,124" while the transaction commits, and then vanish.
+      // Still not the END of the run: the commit and the post-commit walk
+      // come after it, and the gesture that opened the run is what closes it.
+      if (done === 1 || done === parentIds.length || done % FANOUT_REPORT_STRIDE === 0) {
+        reportPropertyDefinitionFanout(
+          event.workspaceId, changingFieldIds, done, parentIds.length,
+        )
+      }
     }
     // REFUSE rather than commit a change that takes a value away. Every write
     // above rolls back with the definition row, so the graph is left exactly as
