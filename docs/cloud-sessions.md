@@ -54,7 +54,7 @@ Ref deletion 403s here with or without a PAT and no MCP tool deletes a branch, s
 
 ## An empty Dolt remote registry offers to adopt git origin — the public repo
 
-`bd dolt push` reads `bd dolt remote list`, not the `sync.remote` config key. The registry lives in gitignored `.beads/embeddeddolt/`, so a fresh CLONE starts empty. bd 1.2.2 (like 1.1.x) silently ADOPTED git origin with no prompt, which is how beads data briefly landed on the public repo during setup. Since 1.3.0 adoption takes consent — `--yes`, or a yes at an interactive prompt — and a run with neither refuses with exit 1, naming the URL (observed); never give it. In a new clone, run this BEFORE any `bd dolt push`:
+`bd dolt push` reads `bd dolt remote list`, not the `sync.remote` config key. The registry lives in gitignored `.beads/embeddeddolt/`, so a fresh CLONE has none until `bd bootstrap` wires it from `sync.remote` (step 3 above). bd 1.2.2 (like 1.1.x) silently ADOPTED git origin with no prompt, which is how beads data briefly landed on the public repo during setup. Since 1.3.0 adoption takes consent — `--yes`, or a yes at an interactive prompt — and a run with neither refuses with exit 1, naming the URL (observed); never give it. In a new clone, run this BEFORE any `bd dolt push`:
 
 ```bash
 bd dolt remote add origin git+ssh://git@github.com/Stvad/knowledge-medium-beads.git
