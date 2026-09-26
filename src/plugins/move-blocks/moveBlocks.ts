@@ -29,8 +29,10 @@
  * order-safe.
  */
 import type { Repo } from '@/data/repo.js'
-import type { InsertPosition } from '@/data/mutators.js'
+import { move as moveMutator, type InsertPosition } from '@/data/mutators.js'
+import { ChangeScope } from '@/data/api'
 import { validateSelectionHierarchy } from '@/utils/selection.js'
+import { isWithinSubtreeOfAny } from './blockSubtreeMembership.ts'
 import { isCollapsedProp } from '@/data/properties.js'
 
 /** Where a batch should land: a parent (`null` = workspace root) plus
@@ -48,6 +50,23 @@ export interface MoveBlocksResult {
    *  Callers need these (not just the count) to subtract them from the
    *  ui-state selection — see `moveAction`. */
   movedIds: readonly string[]
+  /** Requested roots the move SKIPPED because the row was gone by the time
+   *  its transaction ran — tombstoned or not present locally. They are not
+   *  in `movedIds` (nothing moved) and not in `accountedIds` (nothing
+   *  carried them), but a caller holding UI state must still drop them:
+   *  they no longer exist to be selected. */
+  skippedIds: readonly string[]
+  /** Every REQUESTED id that ended up at the destination — `movedIds`
+   *  plus the ones pruned away because an ancestor in the same request
+   *  carried them along.
+   *
+   *  Reported here rather than re-derived by callers: pruning is this
+   *  function's decision, so anyone reconstructing "did my whole request
+   *  land?" from `movedIds` alone has to duplicate the hierarchy rule and
+   *  will disagree the moment the tree changed between the two reads.
+   *  `pasteAsMoveImpl` counted a carried-along block as left behind and
+   *  never finished the cut. */
+  accountedIds: readonly string[]
 }
 
 /**
@@ -68,7 +87,17 @@ export class PartialMoveError extends Error {
    *  have already relocated. */
   readonly movedIds: readonly string[]
 
-  constructor(movedIds: readonly string[], override readonly cause: unknown) {
+  /** Sources the batch skipped before it failed — see `skippedIds` on
+   *  {@link MoveBlocksResult}. Carried here for the same reason
+   *  `movedIds` is: the caller has UI state to correct either way, and a
+   *  failure part-way through is exactly when it can't re-derive it. */
+  readonly skippedIds: readonly string[]
+
+  constructor(
+    movedIds: readonly string[],
+    skippedIds: readonly string[],
+    override readonly cause: unknown,
+  ) {
     const detail = cause instanceof Error ? cause.message : String(cause)
     const moved = movedIds.length
     super(
@@ -77,6 +106,7 @@ export class PartialMoveError extends Error {
     )
     this.name = 'PartialMoveError'
     this.movedIds = movedIds
+    this.skippedIds = skippedIds
   }
 
   get moved(): number { return this.movedIds.length }
@@ -109,20 +139,31 @@ export const moveBlocksTo = async (
   target: MoveTarget,
 ): Promise<MoveBlocksResult> => {
   const prunedIds = await validateSelectionHierarchy([...blockIds], repo)
-  if (prunedIds.length === 0) return { moved: 0, movedIds: [] }
+  if (prunedIds.length === 0) return { moved: 0, movedIds: [], accountedIds: [], skippedIds: [] }
 
   let moved = 0
+  const skippedIds: string[] = []
+  const movedIds: string[] = []
   try {
     await repo.undoGroup(async grouped => {
       // Chain each block after the previous one — see the ordering rule.
       let position = target.position
       for (const id of prunedIds) {
-        await grouped.mutate.move({
-          id,
-          parentId: target.parentId,
-          position,
-        })
+        // Liveness is checked in the SAME transaction that relocates the
+        // block, against its own row. `core.move` deliberately permits
+        // moving a tombstone (materialization and undo replay need that),
+        // so a caller that pre-filtered with a separate query counts a
+        // block deleted in the meantime as moved — and reports success for
+        // a batch that visibly did nothing.
+        const relocated = await grouped.tx(async tx => {
+          const row = await tx.get(id)
+          if (!row || row.deleted) return false
+          await tx.run(moveMutator, {id, parentId: target.parentId, position})
+          return true
+        }, {scope: ChangeScope.BlockDefault, description: `move ${id}`})
+        if (!relocated) { skippedIds.push(id); continue }
         moved += 1
+        movedIds.push(id)
         // Reveal after the FIRST block lands, not after the loop. Each
         // move commits its own tx, so a failure partway through would
         // skip an end-of-loop reveal and leave the blocks that DID move
@@ -138,9 +179,41 @@ export const moveBlocksTo = async (
     // Nothing committed yet → the original error is the whole story.
     // Otherwise the caller needs the ids (see `PartialMoveError`).
     if (moved === 0) throw error
-    throw new PartialMoveError(prunedIds.slice(0, moved), error)
+    throw new PartialMoveError([...movedIds], [...skippedIds], error)
   }
-  return { moved, movedIds: prunedIds.slice(0, moved) }
+  // Accounting is a convenience for callers, not part of the move, and it
+  // runs after every transaction has committed. A transient failure in its
+  // ancestry read must not discard a result whose moves all landed — the
+  // caller would take its generic-error branch and leave relocated blocks
+  // in the live selection. Degrade to `movedIds`, which UNDER-reports
+  // coverage: that errs toward keeping a cut retryable rather than
+  // spending one that didn't fully land.
+  let accountedIds: readonly string[] = movedIds
+  try {
+    accountedIds = await accountFor(repo, blockIds, movedIds)
+  } catch (error) {
+    console.warn('[move-blocks] could not account for carried-along blocks', error)
+  }
+  return { moved, movedIds, accountedIds, skippedIds }
+}
+
+/** Which of the originally REQUESTED ids are now at the destination.
+ *
+ *  A requested id that isn't in `movedIds` was pruned as a descendant; it
+ *  travelled if the root that swallowed it moved. Checked against the
+ *  post-move tree, which is what makes this agree with the pruning rather
+ *  than re-deriving it from a stale read. */
+const accountFor = async (
+  repo: Repo,
+  requested: readonly string[],
+  movedIds: readonly string[],
+): Promise<string[]> => {
+  const moved = new Set(movedIds)
+  const accounted: string[] = []
+  for (const id of requested) {
+    if (moved.has(id) || await isWithinSubtreeOfAny(repo, id, moved)) accounted.push(id)
+  }
+  return accounted
 }
 
 /**

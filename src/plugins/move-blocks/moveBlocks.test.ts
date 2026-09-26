@@ -6,7 +6,18 @@
  * destination inside the movers' own subtree.
  */
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+
+// Delegates to the real helper; individual tests reject it once to drive
+// the post-commit accounting failure.
+const isWithinSubtreeOfAnyMock = vi.hoisted(() => vi.fn())
+const realIsWithinSubtreeOfAny = vi.hoisted(() => ({} as { current?: unknown })) as never
+vi.mock('./blockSubtreeMembership.ts', async importOriginal => {
+  const actual = await importOriginal<typeof import('./blockSubtreeMembership.ts')>()
+  ;(realIsWithinSubtreeOfAny as never as {current: unknown}).current = actual.isWithinSubtreeOfAny
+  isWithinSubtreeOfAnyMock.mockImplementation(actual.isWithinSubtreeOfAny)
+  return { ...actual, isWithinSubtreeOfAny: isWithinSubtreeOfAnyMock }
+})
 import { CycleError, ChangeScope } from '@/data/api'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -23,6 +34,9 @@ beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 
 beforeEach(async () => {
+  isWithinSubtreeOfAnyMock.mockReset()
+  isWithinSubtreeOfAnyMock.mockImplementation(
+    (realIsWithinSubtreeOfAny as never as {current: never}).current)
   lastKeyByParent.clear()
   await resetTestDb(sharedDb.db)
   repo = createTestRepo({ db: sharedDb.db, user: { id: 'user-1' } }).repo
@@ -71,6 +85,73 @@ const INTO_DEST = {parentId: 'dest', position: {kind: 'last'}} as const
 const depths = () => repo.undoManager.depths(ChangeScope.BlockDefault)
 
 describe('moveBlocksTo', () => {
+  it('carries skipped sources through a PARTIAL failure too', async () => {
+    // A batch can skip a vanished source and then fail on a later block.
+    // The error branch is the only one that runs, so if the skipped ids
+    // don't reach it the stale selection survives exactly the case this
+    // reporting exists for. Same cycle setup as the partial-failure test
+    // below: 'x' lands in 'd', then 'p' can't because 'd' is inside it.
+    await seed('gone', null)
+    await seed('x', null)
+    await seed('p', null)
+    await seed('d', 'p')
+    await repo.block('gone').delete()
+
+    const error = await moveBlocksTo(repo, ['gone', 'x', 'p'], {
+      parentId: 'd', position: {kind: 'last'},
+    }).then(
+      () => { throw new Error('expected the batch to fail part-way') },
+      (e: unknown) => e,
+    )
+
+    expect(error).toBeInstanceOf(PartialMoveError)
+    expect((error as PartialMoveError).movedIds).toEqual(['x'])
+    expect((error as PartialMoveError).skippedIds).toEqual(['gone'])
+  })
+
+  it('reports a source the transaction skipped, so callers can unselect it', async () => {
+    // The row was gone by the time its own transaction ran (tombstoned, or
+    // not present locally). It moved nothing and carried nothing, so it is
+    // in neither `movedIds` nor `accountedIds` — but a caller holding UI
+    // state still has to drop it, or multi-select shortcuts stay pointed
+    // at a row that isn't there.
+    await seed('dest', null)
+    await seed('a', null)
+    await seed('gone', null)
+    await repo.block('gone').delete()
+
+    const result = await moveBlocksTo(repo, ['a', 'gone'], INTO_DEST)
+
+    expect(result.movedIds).toEqual(['a'])
+    expect(result.skippedIds).toEqual(['gone'])
+  })
+
+  it('still returns the committed move when post-commit accounting fails', async () => {
+    // `accountFor` runs after every transaction has committed. Letting its
+    // failure escape made the caller take its generic-error branch, so the
+    // relocated blocks stayed in the live selection and later multi-select
+    // shortcuts could act on them at their new home.
+    //
+    // 'kid' is pruned (it rides along inside 'a'), which is the only shape
+    // that reaches the ancestry read — an id that moved on its own
+    // short-circuits before it.
+    await seed('dest', null)
+    await seed('a', null)
+    await seed('kid', 'a')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    isWithinSubtreeOfAnyMock.mockRejectedValueOnce(new Error('db blipped'))
+
+    const result = await moveBlocksTo(repo, ['a', 'kid'], INTO_DEST)
+
+    expect(result.moved).toBe(1)
+    expect(result.movedIds).toEqual(['a'])
+    // Degraded, not lost: 'kid' is omitted, which under-reports coverage
+    // and so errs toward keeping a cut retryable.
+    expect(result.accountedIds).toEqual(['a'])
+    expect(warn).toHaveBeenCalled()
+    warn.mockRestore()
+  })
+
   it('moves N blocks contiguously under the destination, preserving input order', async () => {
     await seed('dest', null)
     await seed('src', null)
@@ -83,7 +164,7 @@ describe('moveBlocksTo', () => {
 
     const result = await moveBlocksTo(repo, ['c2', 'c1', 'c3'], INTO_DEST)
 
-    expect(result).toEqual({ moved: 3, movedIds: ['c2', 'c1', 'c3'] })
+    expect(result).toEqual({ moved: 3, movedIds: ['c2', 'c1', 'c3'], accountedIds: ['c2', 'c1', 'c3'], skippedIds: [] })
     expect(await childIds('dest')).toEqual(['already-there', 'c2', 'c1', 'c3'])
     expect(await childIds('src')).toEqual([])
   })
@@ -97,7 +178,9 @@ describe('moveBlocksTo', () => {
 
     // Only 'a' actually moves; 'b' rides along as a's child, not as a
     // separate move.
-    expect(result).toEqual({ moved: 1, movedIds: ['a'] })
+    // 'b' is accounted for: it rode along inside 'a'. A caller that
+    // subtracted only `movedIds` would treat it as left behind.
+    expect(result).toEqual({ moved: 1, movedIds: ['a'], accountedIds: ['a', 'b'], skippedIds: [] })
     expect(await childIds('dest')).toEqual(['a'])
     expect(await parentOf('b')).toBe('a')
   })
@@ -296,6 +379,39 @@ describe('moveBlocksTo', () => {
   it('is a no-op for an empty selection', async () => {
     await seed('dest', null)
     const result = await moveBlocksTo(repo, [], INTO_DEST)
-    expect(result).toEqual({ moved: 0, movedIds: [] })
+    expect(result).toEqual({ moved: 0, movedIds: [], accountedIds: [], skippedIds: [] })
+  })
+
+  it('skips a tombstoned block and does not count it as moved', async () => {
+    // `core.move` deliberately permits relocating a tombstone
+    // (materialization and undo replay need that), so a caller that
+    // pre-filtered with a separate query would count a block deleted since
+    // as moved — and report success for a batch that visibly did nothing.
+    // The check therefore lives in the transaction that relocates.
+    await seed('dest', null)
+    await seed('live', null)
+    await seed('dead', null)
+    await repo.block('dead').delete()
+
+    const result = await moveBlocksTo(repo, ['dead', 'live'], {
+      parentId: 'dest', position: {kind: 'last'},
+    })
+
+    expect(result.moved).toBe(1)
+    expect(result.movedIds).toEqual(['live'])
+    expect(await childIds('dest')).toEqual(['live'])
+  })
+
+  it('reports nothing moved when every block is a tombstone', async () => {
+    await seed('dest', null)
+    await seed('dead', null)
+    await repo.block('dead').delete()
+
+    const result = await moveBlocksTo(repo, ['dead'], {
+      parentId: 'dest', position: {kind: 'last'},
+    })
+
+    expect(result.moved).toBe(0)
+    expect(result.movedIds).toEqual([])
   })
 })

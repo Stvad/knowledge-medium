@@ -36,6 +36,7 @@ import { useNavigate } from '@/utils/navigation.js'
 import { buildAppHash } from '@/utils/routing.js'
 import { useRepo } from '@/context/repo.js'
 import { showError } from '@/utils/toast.js'
+import { writeTextToClipboard } from '@/utils/copy.js'
 import type { DialogContextProps } from '@/utils/dialogs.js'
 import {
   getConsistencyAuditSnapshotFor,
@@ -112,7 +113,7 @@ function SampleRow({ id, onOpen }: { id: string; onOpen: (id: string) => void })
     try {
       // Throws synchronously in an insecure context / older webview where
       // `navigator.clipboard` is undefined — caught below.
-      await navigator.clipboard.writeText(id)
+      await writeTextToClipboard(id)
       setCopied(true)
       window.setTimeout(() => setCopied(false), 1200)
     } catch (error) {
