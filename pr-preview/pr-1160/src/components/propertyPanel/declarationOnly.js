@@ -1,1 +1,1 @@
-import{FA as e,PA as t}from"../../../chunks/app-CIx0YQxe.js";export{t as declarationOnlyDefinitionForName,e as declarationOnlyStatusText};
+import{FA as e,PA as t}from"../../../chunks/app-B5BCL3Y-.js";export{t as declarationOnlyDefinitionForName,e as declarationOnlyStatusText};
