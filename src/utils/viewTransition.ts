@@ -1,3 +1,4 @@
+import { prefersReducedMotion } from './dom.js'
 /**
  * View Transitions wrapper for structural block moves.
  *
@@ -51,8 +52,7 @@ export const withMoveTransition = async (
   }
   // Reduced-motion users opt out of the crossfade — fall back to the
   // direct path so they don't get an animation they didn't ask for.
-  if (typeof window !== 'undefined'
-    && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+  if (prefersReducedMotion()) {
     await run()
     return
   }

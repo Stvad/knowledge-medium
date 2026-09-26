@@ -52,6 +52,7 @@
 */
 
 import { activeLayoutSessionElement } from '@/utils/layoutSessionDom'
+import { prefersReducedMotion } from './dom.js'
 
 const FLIP_MS = 180
 const SETTLE_TIMEOUT_MS = 400
@@ -79,10 +80,6 @@ const rowKey = (el: HTMLElement): string | null => {
   if (!blockId) return null
   return `${el.getAttribute('data-render-scope-id') ?? ''}::${blockId}`
 }
-
-const prefersReducedMotion = (): boolean =>
-  typeof window.matchMedia === 'function' &&
-  window.matchMedia('(prefers-reduced-motion: reduce)').matches
 
 /** Run a structural mutation and FLIP-slide the rows it displaced.
  *  A mutation that reports it did nothing (resolves `false`) skips the

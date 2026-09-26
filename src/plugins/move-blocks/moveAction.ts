@@ -14,6 +14,8 @@ import type { Block } from '@/data/block'
 import type { Repo } from '@/data/repo.js'
 import { defineBlocksAction, type BlocksActionContext } from '@/shortcuts/utils.js'
 import { showError, showSuccess } from '@/utils/toast.js'
+import { showReceipt } from '@/plugins/action-receipts'
+import { moveReceipt } from './receipts.ts'
 import { getSelectionStateSnapshot } from '@/data/stateBlocks.js'
 import { selectionStateProp } from '@/data/properties.js'
 import { openDialog } from '@/utils/dialogs.js'
@@ -146,7 +148,9 @@ export const runMoveFlow = async (
           await selectedIdsCoveredByMove(repo, context.uiStateBlock, new Set(result.movedIds)),
         )
       }
-      showSuccess(`Moved ${result.moved} block${result.moved === 1 ? '' : 's'}`)
+      const receipt = moveReceipt(repo, firstData.workspaceId, result.movedIds, choice.destinationId)
+      if (receipt !== null) void showReceipt(receipt, repo)
+      else showSuccess(`Moved ${result.moved} block${result.moved === 1 ? '' : 's'}`)
     } else {
       showError('No blocks were moved')
     }

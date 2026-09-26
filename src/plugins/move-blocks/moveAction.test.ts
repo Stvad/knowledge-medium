@@ -31,6 +31,7 @@ vi.mock('@/utils/dialogs.js', () => ({
 vi.mock('@/utils/toast.js', () => ({
   showError: vi.fn(),
   showSuccess: vi.fn(),
+  showInfo: vi.fn(),
 }))
 
 const { runMoveFlow } = await import('./moveAction.ts')

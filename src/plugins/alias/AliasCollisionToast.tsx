@@ -11,7 +11,7 @@
  * The merge is one-click — no confirmation step — because (a) the user
  * explicitly picked "Merge" knowing what it does, (b) `repo.undo()`
  * (and Cmd-Z) revert the whole tx if they change their mind. Mirrors
- * `RescheduleToast`'s direct-action-with-Undo philosophy.
+ * the action receipts' direct-action-with-Undo philosophy.
  */
 import { useState } from 'react'
 import { truncate } from '@/utils/string'
