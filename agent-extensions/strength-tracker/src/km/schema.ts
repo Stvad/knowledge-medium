@@ -801,9 +801,9 @@ export const layoffType = seedType({
   properties: [layoffFromProp, layoffToProp, layoffDaysProp, layoffTierProp, layoffPctProp],
 })
 
-// 2: `plan` (a ref) replaces `planRoot` (a string).
 export const settingsType = seedType({
   seedKey: extensionTypeSeedKey('settings'),
+  // 2: `plan` (a ref) replaces `planRoot` (a string).
   revision: 2,
   id: SETTINGS_TYPE,
   label: 'Strength settings',

@@ -55,10 +55,8 @@ const resolvePlanRoot = async (
     const block = await repo.block(configured).load()
     if (block && !block.deleted) return configured
   }
-  const aliased = await repo.runQuery<{id: string} | null>('core.aliasLookup', {
-    alias: PLAN_ALIAS,
-    workspaceId,
-  }).catch(() => null)
+  const aliased = await repo.query.aliasLookup({alias: PLAN_ALIAS, workspaceId}).load()
+    .catch(() => null)
   return aliased?.id ?? null
 }
 
