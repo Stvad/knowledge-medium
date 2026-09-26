@@ -37,6 +37,7 @@ import {
   planMintedNonOpen,
   planPrePullPush,
   planPullSet,
+  planUnlandedPushes,
   planMintedRefs,
   planReopenedClosed,
   planPriorityFixes,
@@ -943,6 +944,15 @@ describe('planPrePullPush', () => {
 
 })
 
+describe('planUnlandedPushes', () => {
+  it('names a handed bead whose issue still differs after the push', () => {
+    const landed = { state: 'OPEN' as const, labels: ['type::task', 'priority::high'], title: 'T', body: 'D', updatedAt: '2026-08-26T00:00:00Z' }
+    const row = bead({ id: 'km-q', external_ref: ref(1), updated_at: '2026-08-25T00:00:00Z', title: 'T', description: 'D', priority: 1, issue_type: 'task' })
+    expect(planUnlandedPushes([row], issues([[1, landed]]))).toEqual([])
+    expect(planUnlandedPushes([{ ...row, title: 'not on GitHub' }], issues([[1, landed]]))).toEqual([{ id: 'km-q', number: 1 }])
+  })
+})
+
 describe('planPullSet', () => {
   const gh = (updatedAt?: string): IssueInfo => ({ state: 'OPEN', labels: [], title: 'GitHub title', body: 'D', updatedAt })
   const row = (id: string, n: number, updated_at?: string) =>
@@ -1079,15 +1089,15 @@ describe('planRestoreArgs', () => {
   it('restores an open-lifecycle row with one update carrying the status', () => {
     const row = bead({ id: 'km-a', status: 'in_progress', priority: 1, title: 'T', description: 'D', assignee: 'V', issue_type: 'bug' })
     expect(planRestoreArgs(row)).toEqual([
-      ['update', 'km-a', '--force', '--title', 'T', '-d', 'D', '-p', '1', '-t', 'bug', '-a', 'V', '-s', 'in_progress'],
+      ['update', 'km-a', '--title', 'T', '-d', 'D', '-p', '1', '-t', 'bug', '-a', 'V', '-s', 'in_progress'],
     ])
   })
 
-  it('restores a closed row via a forced close, clearing the assignee it never had', () => {
+  it('restores a closed row via close, clearing the assignee it never had', () => {
     const row = bead({ id: 'km-a', status: 'closed', priority: 2, title: 'T', description: 'D', close_reason: 'done' })
     expect(planRestoreArgs(row)).toEqual([
-      ['update', 'km-a', '--force', '--title', 'T', '-d', 'D', '-p', '2', '-a', ''],
-      ['close', 'km-a', '--force', '-r', 'done'],
+      ['update', 'km-a', '--title', 'T', '-d', 'D', '-p', '2', '-a', ''],
+      ['close', 'km-a', '-r', 'done'],
     ])
   })
 
@@ -1095,7 +1105,7 @@ describe('planRestoreArgs', () => {
     const row = bead({ id: 'km-a', status: 'open', priority: 2, title: 'T', description: 'D', labels: ['ui', 'keep'] })
     const post = bead({ ...row, labels: ['keep', 'stale'] })
     expect(planRestoreArgs(row, post)[0]).toEqual([
-      'update', 'km-a', '--force', '--title', 'T', '-d', 'D', '-p', '2', '-a', '', '--add-label', 'ui', '--remove-label', 'stale', '-s', 'open',
+      'update', 'km-a', '--title', 'T', '-d', 'D', '-p', '2', '-a', '', '--add-label', 'ui', '--remove-label', 'stale', '-s', 'open',
     ])
   })
 
@@ -1187,6 +1197,10 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     lists: object[][]
     shows?: (object[] | string)[]
     failCloseId?: string
+    /** Beads bd's close policy refuses to close without --force (an open child or blocker). */
+    blockedCloseIds?: string[]
+    /** What `gh issue list` serves from its second call on — the state after the pre-pull push. */
+    issuesAfterPush?: object[]
     failFullSync?: boolean
     failPushCall?: number
     failListCall?: number
@@ -1210,6 +1224,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const shimLog = join(repo, 'shim.log')
     writeFileSync(shimLog, '')
     writeFileSync(join(repo, 'gh-issues.json'), JSON.stringify(opts.issues))
+    if (opts.issuesAfterPush) writeFileSync(join(repo, 'gh-issues-after.json'), JSON.stringify(opts.issuesAfterPush))
     opts.lists.forEach((rows, i) => writeFileSync(join(repo, `list-${i + 1}.json`), JSON.stringify(rows)))
     writeFileSync(join(repo, 'list-last.json'), JSON.stringify(opts.lists[opts.lists.length - 1]))
     const shows = opts.shows ?? []
@@ -1258,10 +1273,10 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
         `    e=$(cat "${repo}/export-count" 2>/dev/null || echo 0)`,
         `    e=$((e+1)); echo $e > "${repo}/export-count"`,
         `    if [ -f "${repo}/export-$e.jsonl" ]; then cat "${repo}/export-$e.jsonl"; else cat "${repo}/export-last.jsonl"; fi;;`,
-        // bd's close policy: an unforced close of a bead with an open child or
-        // blocker prints Error and exits 0, which aborts close adoption.
+        // bd's close policy: an unforced close of a blocked bead prints the
+        // refusal on stderr and exits 1.
         '  close)',
-        '    case "$*" in *--force*) ;; *) echo "Error: cannot close: open child or blocker"; exit 0;; esac',
+        `    case " ${(opts.blockedCloseIds ?? []).join(' ')} " in *" $2 "*) case "$*" in *--force*) ;; *) echo "cannot close $2: blocked (use --force to override)" >&2; exit 1;; esac;; esac`,
         `    if [ "$2" = "${opts.failCloseId ?? ''}" ]; then echo "Error: cannot close"; else echo ok; fi;;`,
         '  *) echo ok;;',
         'esac',
@@ -1275,7 +1290,9 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
         `echo "gh $@" >> "${shimLog}"`,
         'case "$1 $2" in',
         '  "auth token") echo shim-token;;',
-        `  "issue list") cat "${repo}/gh-issues.json";;`,
+        '  "issue list")',
+        `    n=$(cat "${repo}/gh-list-count" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "${repo}/gh-list-count"`,
+        `    if [ "$n" -gt 1 ] && [ -f "${repo}/gh-issues-after.json" ]; then cat "${repo}/gh-issues-after.json"; else cat "${repo}/gh-issues.json"; fi;;`,
         // The real gh exits 1 when any alias is NOT_FOUND but still prints
         // the data — the shim mirrors that exit so the parser is pinned to
         // stdout, not the status.
@@ -1396,9 +1413,11 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
 
   // Position pin: the pre-pull push must run AFTER close-adoption — swapped,
   // a still-open bead's push would re-open its GitHub-closed issue (trap 1).
+  // km-t3 is blocked, so an unforced adoption would be refused and abort.
   it('adopts GitHub-side closes BEFORE the pre-pull push', () => {
     const row = pushable({ id: 'km-t3', external_ref: ref(3), updated_at: '2026-08-19T00:00:00Z' })
     const { run, shimCalls } = makeSyncRepo({
+      blockedCloseIds: ['km-t3'],
       issues: [ghIssue(3, '2026-08-20T00:00:00Z', 'CLOSED')],
       lists: [[row], [{ ...row, status: 'closed', updated_at: '2026-08-21T00:00:00Z' }]],
       shows: [[{ ...row, status: 'closed', updated_at: '2026-08-21T00:00:00Z' }]],
@@ -1480,7 +1499,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const log = shimCalls()
     expect(log).toContain('bd show km-t2 --json')
     expect(log).toContain('bd github sync --pull-only --issues 99\n')
-    expect(log).toContain('bd update km-t2 --force --title T -d D-new -p 1 -a Vlad -s in_progress')
+    expect(log).toContain('bd update km-t2 --title T -d D-new -p 1 -a Vlad -s in_progress')
     expect(afterPull(log)).toContain('bd github sync --push-only --issues km-t2')
   })
 
@@ -1517,7 +1536,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const r = run()
     expect(r.status).toBe(0)
     expect(r.stdout).toContain('restored km-t9')
-    expect(shimCalls()).toContain('bd update km-t9 --force --title T -d D -p 1 -t task -a  -s open')
+    expect(shimCalls()).toContain('bd update km-t9 --title T -d D -p 1 -t task -a  -s open')
     expect(afterPull(shimCalls())).toContain('--issues km-t9')
   })
 
@@ -1564,7 +1583,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(r.status).toBe(0)
     expect(r.stdout).toContain('conservatively restoring')
     expect(r.stdout).toContain('restored km-tB')
-    expect(shimCalls()).toContain('bd update km-tB --force --title T -d D-new -p 1 -a  -s open')
+    expect(shimCalls()).toContain('bd update km-tB --title T -d D-new -p 1 -a  -s open')
   })
 
   // Trap 3 meets the pre-push: the mint creates the issue OPEN with a fresh
@@ -1582,7 +1601,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const r = run()
     expect(r.status).toBe(0)
     expect(r.stdout).toContain('restored km-tC')
-    expect(shimCalls()).toContain('bd close km-tC --force -r done')
+    expect(shimCalls()).toContain('bd close km-tC -r done')
     expect(afterPull(shimCalls())).toContain('--issues km-tC')
   })
 
@@ -1601,7 +1620,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const r = run()
     expect(r.status).toBe(0)
     expect(r.stdout).toContain('restored km-tD')
-    expect(shimCalls()).toContain('bd close km-tD --force -r done')
+    expect(shimCalls()).toContain('bd close km-tD -r done')
     expect(afterPull(shimCalls())).toContain('--issues km-tD')
   })
 
@@ -1901,12 +1920,14 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   })
 
   // Position pin for the mirror's slot: after the pre-pull push (a post bumps
-  // the issue past the local row, and bd PATCHes only local-newer rows), and
-  // after the pull, so a waiting GitHub-side edit lands before the post.
+  // the issue past the local row, and the push is handed only local-newer
+  // rows), and after the pull, so a waiting GitHub-side edit lands before the
+  // post.
   it('mirrors after the pre-pull push has carried the bead out and the pull has run', () => {
     const newer = pushable({ id: 'km-m', external_ref: ref(7), updated_at: '2026-08-21T00:00:00Z', comment_count: 2 })
     const { run, shimCalls } = makeSyncRepo({
       issues: twoIssues(),
+      issuesAfterPush: [{ ...ghIssue(7, '2026-08-21T00:00:01Z'), title: 'T (edited locally)' }, ...twoIssues().slice(1)],
       lists: [[newer]],
       shows: [[newer]],
       comments: { 'km-m': twoComments },
@@ -1922,6 +1943,26 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(push).toBeGreaterThan(-1)
     expect(push).toBeLessThan(pull)
     expect(pull).toBeLessThan(firstPost)
+  })
+
+  // bd only warns on a failed PATCH, and its push cache skips a bead equal to
+  // its last push: GitHub still holds the old copy, and a post would make it
+  // the newer side for the next pull.
+  it('holds back the comments of a bead whose push did not land, and says so', () => {
+    const newer = pushable({ id: 'km-m', external_ref: ref(7), updated_at: '2026-08-21T00:00:00Z', comment_count: 2 })
+    const { run, posted } = makeSyncRepo({
+      issues: twoIssues(),
+      issuesAfterPush: twoIssues(),
+      lists: [[newer]],
+      shows: [[newer]],
+      comments: { 'km-m': twoComments },
+      graphql: { data: { repository: { i7: issueComments([]) } } },
+    })
+    const r = run()
+    expect(r.status).toBe(0)
+    expect(r.stdout).toContain('push did not land for km-m (#7)')
+    expect(r.stdout).toContain('SKIPPED comments of km-m: GitHub does not hold its local row this run')
+    expect(posted()).toBe('')
   })
 
   it('caps the posts of one run and leaves the rest for the next', () => {
@@ -2101,8 +2142,8 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(JSON.parse(post.slice(post.indexOf('\n') + 1)).body.endsWith('see #9')).toBe(true)
   })
 
-  // A bead the restore left half-repaired is kept out of the push-back; the
-  // mirror's touch would push it just the same.
+  // A bead the restore left half-repaired is kept out of the push-back, and
+  // its post would make GitHub the newer side for the next pull.
   it('does not touch or post a bead whose restore failed this run', () => {
     const closedLocal = syncRow({ id: 'km-t4', status: 'closed', external_ref: ref(4), updated_at: '2026-08-20T02:00:00Z', comment_count: 2 })
     const revertedRow = { ...closedLocal, status: 'open', priority: 2 }
@@ -2117,7 +2158,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const r = run()
     expect(r.status).toBe(0)
     expect(r.stdout).toContain('FAILED to restore')
-    expect(r.stdout).toContain('SKIPPED comments of km-t4: its restore failed this run')
+    expect(r.stdout).toContain('SKIPPED comments of km-t4: GitHub does not hold its local row this run')
     expect(posted()).toBe('')
   })
 

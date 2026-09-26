@@ -17,8 +17,8 @@
  *    signal.
  * 3. A bead closed BEFORE its first sync stays closed locally but its issue is
  *    minted OPEN — and bd records the bead's closed content as already
- *    pushed, so its push skips that bead from then on and can never carry the
- *    close. So after syncing, closed beads whose issue is open get the issue
+ *    pushed, so its push skips that bead until its pushed content changes.
+ *    So after syncing, closed beads whose issue is open get the issue
  *    closed via gh. gh-closing is safe in exactly this direction because the
  *    bead is already closed: the states agree afterwards, so the next sync
  *    has nothing to revert.
@@ -31,9 +31,10 @@
  *    issue is never handed to the pull (planPullSet): the push carries that
  *    direction, run BEFORE the pull (after close-adoption, so an un-adopted
  *    open bead cannot re-open its issue) over the beads planPrePullPush
- *    selects. Rows the pull can still revert — a bead this run minted
- *    non-open, a closed bead whose issue was reopened — are snapshotted
- *    before the pull and restored + re-pushed if it reverted them.
+ *    selects; a push that did not land holds back that bead's comment
+ *    mirror, whose post would make GitHub the newer side. The snapshot and
+ *    restore around the pull (1.6, 2.5) are defence in depth: the pull is
+ *    never handed the rows they cover.
  *
  * 5. The pull re-applies a GitHub copy onto a bead and drops what GitHub does
  *    not carry back: the assignee (bd's push never sets one), the close date
@@ -66,12 +67,13 @@
  *    mirror; close the bead instead if it happens.
  *  - bd's push skips a bead whose content equals what it last pushed, without
  *    fetching the issue — a clone-local cache the pull never refreshes and no
- *    bd verb clears in embedded mode. A GitHub edit that was imported and
- *    later undone locally, or one followed by a local touch that changes no
- *    pushed field, therefore stays on GitHub until the bead changes again.
- *    Guard 4 keeps such a bead out of the pull, so the divergence is stable,
- *    not a revert loop; forcing the write through gh instead would make the
- *    wrapper a second implementation of bd's push mapping.
+ *    bd verb clears in embedded mode. So a GitHub edit that was imported and
+ *    later undone locally is not pushed back, and one followed by a local
+ *    touch that changes no pushed field is neither imported nor overwritten:
+ *    GitHub keeps its copy, reported each run as a push that did not land,
+ *    until the bead's next pushed change overwrites it or a GitHub-side touch
+ *    makes the pull take it. Forcing the write through gh instead would make
+ *    the wrapper a second implementation of bd's push mapping.
  *
  * Beyond the guards, the wrapper carries what bd's sync does not: bead
  * COMMENTS are mirrored onto their issues, one way and append-only
@@ -725,27 +727,28 @@ export const planMintedRefs = (preBeads, postBeads) => {
 }
 
 // Beads in any non-open status whose FIRST issue the pre-pull push just
-// minted: the mint creates the issue OPEN with a fresh timestamp, so the
-// timestamp-based suspect test above can never flag them, yet the pull can
-// apply that OPEN copy over the local lifecycle state — closes (trap 3's
-// population, re-exposed by pushing before the pull), claims, blocks and
-// deferrals alike.
+// minted OPEN — the timestamp test cannot flag them.
 export const planMintedNonOpen = (preBeads, freshBeads) => {
   const nonOpen = new Set(freshBeads.filter(b => b.status !== 'open').map(b => b.id))
   return planMintedRefs(preBeads, freshBeads).filter(m => nonOpen.has(m.id))
 }
 
-// Closed beads whose linked issue is OPEN after close-adoption ran: that is a
-// GitHub-side REOPEN, which per the documented asymmetry must not stick —
-// beads is the source of truth; reopen the bead instead. The reopen bumps the
-// issue timestamp, so the newer-local test below structurally cannot flag
-// these; snapshotting them lets the restore + push-back undo the reopen on
-// both sides.
+// Closed beads whose linked issue is OPEN after close-adoption ran — a
+// GitHub-side REOPEN, which the timestamp test cannot flag.
 export const planReopenedClosed = (beads, issueByNumber) =>
   beads.flatMap(b => {
     const number = issueNumberFromRef(b.external_ref)
     const issue = number === null ? undefined : issueByNumber.get(number)
     return b.status === 'closed' && issue?.state === 'OPEN' ? [{ id: b.id, number }] : []
+  })
+
+// Linked beads whose issue, re-read after the push, still differs in a pushed
+// field — the push did not land.
+export const planUnlandedPushes = (beads, issueByNumber) =>
+  beads.flatMap(b => {
+    const number = issueNumberFromRef(b.external_ref)
+    const issue = number === null ? undefined : issueByNumber.get(number)
+    return issue && pushWouldChange(b, issue) ? [{ id: b.id, number }] : []
   })
 
 // Which side of a linked bead changed last: true when the local row is
@@ -754,9 +757,7 @@ export const planReopenedClosed = (beads, issueByNumber) =>
 const localNewer = (bead, issue) =>
   issue?.updatedAt && bead.updated_at ? Date.parse(bead.updated_at) > Date.parse(issue.updatedAt) : null
 
-// Beads whose local row is strictly newer than their GitHub copy. bd's pull
-// applies GitHub state over these despite the documented prefer-newer default
-// (#647), so they are exactly the rows a pull can revert.
+// Beads whose local row is strictly newer than their GitHub copy.
 export const planLocalWins = (beads, issueByNumber) =>
   beads.flatMap(b => {
     const number = issueNumberFromRef(b.external_ref)
@@ -952,15 +953,12 @@ export const detectReverts = (snapshotRows, postById) =>
 // `post` is the row's post-pull state, used only to compute the label delta;
 // without it (the conservative path) every snapshot label is re-added —
 // duplicate adds are idempotent — and none removed.
-// Every close the wrapper runs replays one already made — GitHub's, or the
-// bead's own snapshot — so it is forced past bd's close policy (an open child,
-// an open blocker, another actor's claim), as bd's own pull forces it.
-const forcedCloseArgs = (id, reason) => ['close', id, '--force', '-r', reason]
-
 export const planRestoreArgs = (row, post) => {
-  // --force: bd refuses to overwrite another actor's live claim, and a
-  // restore only replays the bead's own snapshot.
-  const update = ['update', row.id, '--force', '--title', row.title ?? '', '-d', row.description ?? '', '-p', String(row.priority)]
+  // Unforced on purpose: the pull is never handed these rows, so a difference
+  // is most likely another session's write in the pull window — bd's refusal
+  // to overwrite a live claim or close past an open child should surface as a
+  // failed restore, not be overridden.
+  const update = ['update', row.id, '--title', row.title ?? '', '-d', row.description ?? '', '-p', String(row.priority)]
   if (row.issue_type) update.push('-t', row.issue_type)
   // Always passed: `-a ''` CLEARS the assignee,
   // so an unassigned snapshot can undo a pulled stale assignment.
@@ -970,7 +968,7 @@ export const planRestoreArgs = (row, post) => {
   for (const l of snapLabels) if (!postLabels.has(l)) update.push('--add-label', l)
   for (const l of postLabels) if (!snapLabels.has(l)) update.push('--remove-label', l)
   if (row.status === 'closed')
-    return [update, forcedCloseArgs(row.id, row.close_reason || 'restored by bd-github-sync after a pull revert (#647)')]
+    return [update, ['close', row.id, '-r', row.close_reason || 'restored by bd-github-sync after a pull revert (#647)']]
   return [[...update, '-s', row.status]]
 }
 
@@ -1434,9 +1432,10 @@ const mirrorComments = ({ beads, issueByNumber, mintedNumbers, skipIds, env, dry
   const commented = []
   for (const b of beads) {
     if (!b.comments?.length) continue
-    // skipIds: beads the restore left half-repaired — the touch would push
-    // that row and bury the loss the push-back exclusion protects.
-    if (skipIds.has(b.id)) report.push(`SKIPPED comments of ${b.id}: its restore failed this run — touching it would push the half-restored row`)
+    // skipIds: beads whose local row GitHub does not hold this run (a failed
+    // restore, a push that did not land). A post makes GitHub the newer side,
+    // and the next pull would take GitHub's copy over that row.
+    if (skipIds.has(b.id)) report.push(`SKIPPED comments of ${b.id}: GitHub does not hold its local row this run — a post would let the next pull overwrite it`)
     else if (numberByBeadId.has(b.id)) commented.push(b)
     else if (b.external_ref) report.push(`SKIPPED comments of ${b.id}: its external_ref does not point at an issue of this repo (a PR, or deleted) — fix the ref`)
   }
@@ -1550,7 +1549,12 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
     for (const { id, number } of closes) {
       if (dryRun) {
         report.push(`[dry-run] would close ${id} (issue #${number} was closed on GitHub)`)
-      } else if (tryRun('bd', forcedCloseArgs(id, `Closed on GitHub (issue #${number}); reconciled by bd-github-sync.`), { env }) !== null) {
+      } else if (
+        // --force: bd refuses to close a bead with an open child, an open
+        // blocker or another actor's claim, and a GitHub close is
+        // authoritative here, as it is for bd's own pull.
+        tryRun('bd', ['close', id, '--force', '-r', `Closed on GitHub (issue #${number}); reconciled by bd-github-sync.`], { env }) !== null
+      ) {
         report.push(`closed ${id} (issue #${number} was closed on GitHub)`)
       } else {
         closeFailures.push(id)
@@ -1591,19 +1595,12 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
       report.push(line)
     }
 
-    // 1.5 Push local state out BEFORE anything pulls. bd's pull applies a
-    // strictly OLDER GitHub copy over newer local rows (#647) — closes and
-    // edits included — so the pull must never see a GitHub copy that lags
-    // local. Runs after close-adoption (an un-adopted open bead would
-    // re-open its GitHub-closed issue). Handed only the beads bd could update
-    // (planPrePullPush) — listed AFTER close-adoption, since a close bumps
-    // updated_at and the pre-adoption row would look converged.
-    // EXPORT rows, not a listing: `bd list` carries neither assignee nor
-    // labels. `exported` was read after close-adoption, so the closes are in
-    // it; a dry run makes no closes, so the rows it would have bumped are
-    // added by hand.
+    // 1.5 Push local-newer rows out (planPrePullPush; header 4). `exported` was
+    // read after close-adoption, so the closes are in it; a dry run makes no
+    // closes, so the rows it would have bumped are added by hand.
     const dryRunBumped = dryRun ? closes.map(c => c.id) : []
     const pushSet = [...new Set([...planPrePullPush(exported, issueByNumber), ...dryRunBumped])]
+    const unlanded = new Set()
     if (dryRun) {
       report.push(`[dry-run] would push ${pushSet.length} bead(s) out before the pull${pushSet.length ? `: ${pushSet.join(', ')}` : ''}`)
     } else if (pushSet.length) {
@@ -1627,13 +1624,26 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
       // Zero-count lines stay out of the report: they would flip `changed`
       // below and un-quiet every converged SessionEnd run.
       report.push(...pushOut.split('\n').filter(l => /Pushed|Created|Updated/.test(l) && /[1-9]/.test(l)).map(l => `pre-pull: ${l.trim()}`))
+      // Which pushes landed, judged by content on a fresh listing: bd only
+      // warns on a failed PATCH, and its push cache skips a bead equal to its
+      // last push. An unlanded row stays local-only, so step 5 must not post
+      // to its issue — a post makes GitHub the newer side, and the next pull
+      // would take GitHub's copy over it.
+      const handed = new Set(pushSet)
+      const linkedHanded = exported.filter(b => handed.has(b.id) && issueByNumber.has(issueNumberFromRef(b.external_ref)))
+      if (linkedHanded.length)
+        for (const { id, number } of planUnlandedPushes(linkedHanded, fetchIssues().issueByNumber)) {
+          unlanded.add(id)
+          report.push(`push did not land for ${id} (#${number}): GitHub still differs from the local row, and a GitHub-side touch before a later push lands would let the pull overwrite it`)
+        }
     }
 
-    // 1.6 Snapshot the rows the pull could revert; step 2.5 restores any it
-    // does. Local-newer beads are kept out of the pull (1.2), so for them this
-    // is defence in depth; a bead this run minted non-open and a closed bead
-    // whose issue was reopened can still be handed to it. Fresh list: the
-    // push just minted refs. Snapshot via a direct spawn, not
+    // 1.6 Snapshot the rows a pull could revert; step 2.5 restores any it
+    // does. Defence in depth: none of them is handed to the pull — a
+    // local-newer bead is left to the push (1.2), a minted issue is absent
+    // from the listing the pull set is built from, and a closed bead whose
+    // issue was reopened is withheld (its close date) and re-closed by
+    // step 4. Fresh list: the push just minted refs. Snapshot via a direct spawn, not
     // run(): `bd show` output is pretty-printed JSON, and a description line
     // starting with "Error" would trip run()'s bd check.
     const freshBeads = dryRun ? exported : listAllBeads()
@@ -1665,10 +1675,8 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
         )
     }
 
-    // 2. The pull. Pull-only, not bidirectional: a push leg would PATCH any
-    // handed bead whose content differs, whichever side is newer — the
-    // selection 1.5 exists to make — and the conflict pass keys off
-    // last_sync, which that push just advanced.
+    // 2. The pull. Pull-only: a push leg would bypass planPrePullPush's
+    // selection.
     const syncOut = pullIssues(pullSet, env, dryRun)
     const syncSummary = syncOut
       .split('\n')
@@ -1770,10 +1778,8 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
     // 5. Mirror bead comments onto their issues (mirrorComments). It runs
     // after the push, because a post bumps the issue past the local row and
     // the push is handed only local-newer rows; and after the pull, so a
-    // GitHub-side edit waiting on a bead is imported before the post.
-    // The touch-push-repull dance this used to need is gone with the bulk
-    // pull: a post cannot make the next run re-apply the issue onto its bead,
-    // because the pull is only ever handed ids we chose (see 1.2 and guard 5).
+    // GitHub-side edit waiting on a bead is imported before the post. A bead
+    // whose local row GitHub does not hold this run is skipped (skipIds).
     // Read fresh here, not from postBeads: this run's push may have minted the
     // external_refs the mirror resolves bead ids through, and postBeads is a
     // listing, which carries no comments.
@@ -1781,7 +1787,7 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
       beads: exportBeads(env),
       issueByNumber,
       mintedNumbers: new Set(planMintedRefs(preBeads, freshBeads).map(m => m.number)),
-      skipIds: failedRestoreIds,
+      skipIds: new Set([...failedRestoreIds, ...unlanded]),
       env,
       dryRun,
     })
