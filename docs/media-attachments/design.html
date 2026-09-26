@@ -139,7 +139,8 @@ no re-upload; present + mismatch → stay <code>failed</code>, §17). Transient 
 quarantined permanent-ish set (plus that rare aged-out transient), for which manual retry (not an automatic
 re-drive loop) is the right, and the codebase-consistent, UX. The user is the rate limiter, so there is no
 automatic re-drive bound.
-Last verified against code 2026-07-13. Treat as current intent. The least-settled part is the byte-lane
+Last verified against code 2026-09-22 (§7.3/§8 byte-store write path + read-side verify + empty-entry repair;
+the rest re-checked 2026-07-13). Treat as current intent. The least-settled part is the byte-lane
 lifecycle / failure-recovery machinery (§8–§9, §16): the happy path and the crypto / threat model are
 solid; §16 GC is the remaining recovery edge still on the spec.
 </aside>
@@ -660,6 +661,22 @@ amount of wiping addresses.
     <code>block.properties.hash</code> (§5.1) the resolver <em>discards</em> the bytes — never writes
     them to the OPFS byte store — and renders the broken-asset placeholder; unverified bytes are
     never served or stored.</li>
+  <li><strong>A local hit is verified too — the store is a cache, not an authority.</strong> "Verified
+    when stored" is a premise about the write path, and the write path is not atomic on every engine:
+    <code>getFileHandle(name, {create: true})</code> mints an <em>empty</em> entry before any byte lands,
+    so a <code>put</code> whose write then fails (WebKit before Safari 26 had no
+    <code>createWritable</code> — every asset on an iPad was an empty local hit after its first open) or a
+    writer killed mid-write leaves an entry that was never verified. So a local read is accepted only if its
+    <code>sha256</code> matches the block's <code>hash</code> — <strong>the hash is the authority</strong>
+    (<code>media:size</code> is cosmetic and user-editable, so it decides nothing) — the same rule a download
+    passes, over bytes already in memory. Anything else is a <em>defect</em>: the resolve proceeds exactly as a
+    miss (the remote fetch → decode → verify → store path), and if the remote also fails it fails closed
+    (<code>fetch-failed</code>, placeholder) — empty or short bytes are never served. The defective entry is
+    <em>deleted only when it is safe to</em>: an entry younger than the settle window (60&nbsp;s) may be a peer's
+    write still in flight, read truncated through its open handle — deleting it would destroy the peer's
+    completed write a moment later — so a young defect is a miss that leaves the entry alone. The down-lane's
+    presence probes agree: an empty entry is <em>not</em> present (neither <code>has()</code> nor the one-shot
+    <code>listWorkspaceKeys()</code> enumeration reports it), and neither is one a peer holds open.</li>
   <li><strong>Stored bytes are not an independent authority — revocation rides the block claw-back.</strong>
     The OPFS byte store is namespaced by <code>user_id</code> (account isolation); on workspace leave/revoke
     PowerSync drops the workspace's block rows from the local DB, and the out-of-band OPFS bytes need their
@@ -678,8 +695,9 @@ amount of wiping addresses.
     member's local <code>blocks</code> are dropped and the bytes are reclaimed on the next GC sweep, and an
     already-synced member who keeps a copy in the meantime is the same accepted exposure for bytes as for text
     (§8) — RLS still blocks any <em>new</em> fetch. WK-absence gates the <em>decode of new downloads</em>
-    (fail-closed, above), <em>not</em> the serving of already-stored, already-verified bytes — lock doesn't
-    scrub the store, exactly as it doesn't scrub the decrypted <code>blocks</code> table (§8).</li>
+    (fail-closed, above), <em>not</em> the serving of already-stored bytes (which are still hash-verified on
+    read, per the bullet above) — lock doesn't scrub the store, exactly as it doesn't scrub the decrypted
+    <code>blocks</code> table (§8).</li>
 </ul>
 
 <div class="decision">
@@ -708,9 +726,11 @@ investigation).
   path (<code>&lt;ws&gt;/&lt;content-key&gt;</code>, §10). It is both the offline replica <em>and</em> the
   render source — there is no second tier. Decryption happens <strong>once, when bytes enter the
   store</strong> (a download decrypts + hash-verifies before writing, §9; a paste already holds plaintext),
-  not on every render — so the render path is a plain local read → object URL, and plaintext and E2EE
-  workspaces are <strong>identical locally</strong>, differing only in the at-rest format on the
-  <em>server</em>.</p>
+  not on every render — so the render path is a local read → <em>verify</em> (<code>sha256</code> = the
+  block's <code>hash</code>; §7.3) → object URL, with no decrypt step, and plaintext and E2EE workspaces are <strong>identical locally</strong>,
+  differing only in the at-rest format on the <em>server</em>. The read-side verify is not optional
+  belt-and-braces: the store's write is not atomic on every engine (below), so a stored entry is not by
+  itself proof of verified bytes.</p>
 
 <div class="decision">
 <strong>Why decrypted-at-rest, not a ciphertext replica.</strong> An earlier draft kept two tiers — a
@@ -733,7 +753,46 @@ half the E2EE on-disk footprint, no decrypt-on-render, and one store instead of 
     Because the object is <strong>content-addressed</strong> (§10) it is immutable by construction — an edit
     is new content at a new path, so a stored entry's bytes never change; a freshly-downloaded byte is
     accepted only if it matches the block's expected <code>hash</code> (read directly from the decrypted
-    block in-thread, §5.1); never serve a content key's bytes for a different hash.</li>
+    block in-thread, §5.1), and a stored byte is re-checked against it on every read (§7.3); never serve a
+    content key's bytes for a different hash.</li>
+  <li><strong>Writing the store: two invariants OPFS does not give for free.</strong>
+    (a) <em>A failed <code>put</code> leaves no <u>incomplete</u> entry.</em> <code>getFileHandle(create)</code>
+    mints an empty file before any byte lands, so a write that then fails (quota, a thrown API, a dead or
+    timed-out worker) must remove the entry — otherwise the empty file is a permanent local hit. The stream
+    path aborts the writable and <code>removeEntry</code>s; the worker path removes the entry itself; a
+    worker killed by the client's timeout gets the same clean-up from the store. The one exception is
+    load-bearing: an entry whose size already equals the bytes being written is a <em>peer's</em> complete
+    copy of the same content-addressed bytes — another tab, the home-screen PWA, or this page's other
+    resolver (the demand and down-lane resolvers don't share an in-flight map) — and is never deleted; the
+    failed writer treats it as its own write having landed. Likewise a peer's <em>open</em> sync access handle
+    (exclusive per file — a second opener is refused) is waited for with back-off, not failed on, and the
+    write resolves once the file's size equals ours. Same-path writes are serialized on both sides (the
+    client coalesces in-flight paths; the worker chains per path), so a page never races itself for the
+    lock. There is no temp-file-then-rename: WebKit's <code>FileSystemFileHandle.move()</code> takes
+    different arguments from Chromium's, so atomicity is delete-on-failure plus the read-side verify, not a
+    rename. (b) <em>A <code>put</code> works on every engine with OPFS.</em> Where
+    <code>FileSystemFileHandle.prototype.createWritable</code> exists (Chromium, Firefox, Safari 26+) the
+    store writes through it on the main thread; where it does not (Safari 16.4–18 — every iOS 18 browser is
+    WKWebView) only <code>createSyncAccessHandle</code> can write, and only inside a Worker, so the store
+    posts the file's <em>path</em> plus a transferred copy of the bytes to a small module worker
+    (<code>byteStoreWriter.worker.ts</code>) that re-walks the path, truncates, writes, flushes, and answers
+    — a handle cannot be structured-cloned to a worker on that engine. The choice is read off the prototype
+    once per store, never by trying and failing. Either path resolves only once the bytes are durable, so
+    the paste hot-path's "bytes before the block tx" ordering (§9/§11) is unchanged. The up-lane applies the
+    same rule on its way out: the §9 drain hash-verifies the local bytes against the record before sealing
+    and uploading them (a partial must never be uploaded under the content hash — that would poison the
+    path, §17); a mismatch deletes the entry and quarantines the record.</li>
+  <li><strong>Repairing an already-poisoned store.</strong> A device that ran the pre-fix build holds empty
+    entries the presence scans would otherwise count as replicated forever. <code>sweepEmpty(user, ws)</code>
+    reaps a workspace's empty entries older than 60&nbsp;s (a younger one may be a <code>put</code> mid-flight
+    — its entry is minted before its bytes land); the down-lane pass runs it <em>once per (user, workspace)
+    per page</em>, under its single-owner lock and right <em>before</em> its one-shot presence enumeration,
+    so the scan sees the repaired tree (a second pass arriving mid-sweep awaits the same sweep). Cheap (one
+    listing + a size read per entry, active workspace only) and idempotent; it rides the down-lane's gating
+    (remote sync on), which is exactly where the entries it reaps came from — a local-only paste never
+    reaches the failing write. The resolver never depends on it: a defective entry is refused and deleted on
+    read regardless (§7.3); the sweep is what turns "broken until re-opened" into "healed in the
+    background".</li>
   <li><strong>Demand beats prefetch.</strong> The render path and the background replicator call the
     <em>same</em> fetch primitive (fetch ciphertext → decrypt → verify hash → store decrypted bytes) over
     <em>one in-flight map</em>, so a demand fetch and a queued backlog item for the same asset
@@ -1515,7 +1574,8 @@ vNext; the v1 commitment is only the reserved property + audience flag.
       sync, WK-presence resolves on the async render path; not two-valued <code>getMode</code>; §7.3) →
       verify against the block's
       <code>hash</code> (§5.1) → write plaintext to the OPFS byte cache → hand <code>&lt;img&gt;</code> an
-      object URL (revoke on unmount). No SW route, token handshake, IDB hash mirror, or
+      object URL (revoke on unmount). A local hit runs the same size + hash verify before it is served, and a
+      defective entry is deleted and re-fetched (§7.3/§8). No SW route, token handshake, IDB hash mirror, or
       per-<code>clientId</code> session — those were the rejected SW path (§7.1–§7.2 / §7.3). Destruction
       is the coarse platform clear (§7.2), so no per-store wipe purge.</td></tr>
 <tr><td>4 — block model + renderer</td>
