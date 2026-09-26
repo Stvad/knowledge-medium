@@ -1,6 +1,9 @@
 // @vitest-environment happy-dom
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+
+const grabSoftKeyboard = vi.hoisted(() => vi.fn())
+vi.mock('@/utils/softKeyboardGrab.js', () => ({ grabSoftKeyboard }))
 import { waitFor } from '@testing-library/react'
 import { EditorView } from '@codemirror/view'
 import { ChangeScope, type User } from '@/data/api'
@@ -472,6 +475,28 @@ describe('default CodeMirror shortcuts', () => {
     const action = findGlobalAction(env.repo, RELOAD_IN_SAFE_MODE_ACTION_ID)
 
     expect(action.description).toBe('Reload in safe mode')
+  })
+
+  it('grabs the soft keyboard inside the gesture, before any await, unless the workspace is read-only', async () => {
+    // The assertion is made synchronously after the call: the grab must run
+    // before the handler's first await, or it is outside the tap's gesture.
+    grabSoftKeyboard.mockClear()
+    const rootUiState = await getUIStateBlock(env.repo, WS, USER, {})
+    const action = findGlobalAction(env.repo, CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID)
+    const trigger = {preventDefault: vi.fn()} as unknown as ActionTrigger
+
+    const run = action.handler({uiStateBlock: rootUiState}, trigger)
+    expect(grabSoftKeyboard).toHaveBeenCalledOnce()
+    await run
+
+    grabSoftKeyboard.mockClear()
+    env.repo.setReadOnly(true)
+    try {
+      await action.handler({uiStateBlock: rootUiState}, trigger)
+      expect(grabSoftKeyboard).not.toHaveBeenCalled()
+    } finally {
+      env.repo.setReadOnly(false)
+    }
   })
 
   it('creates a new editable child in the active panel from the global action', async () => {
