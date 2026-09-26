@@ -14,8 +14,10 @@ last-touched
 # These are beads data on a PUBLIC repo, so a `git add -A` would publish them.
 interactions.jsonl
 dolt-backup.json
-config.local.yaml
 dolt-backup-state.json
+
+# Machine-local bd settings, merged over config.yaml (e.g. dolt.auto-push)
+config.local.yaml
 
 # Daemon runtime (lock, log, pid)
 daemon.*

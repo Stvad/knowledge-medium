@@ -52,12 +52,12 @@ Do not expect the git hooks to do it for you: `bd hooks run post-merge` does NOT
 
 Ref deletion 403s here with or without a PAT and no MCP tool deletes a branch, so the temptation is a throwaway probe made safe with `--atomic` plus a poison-pill refspec. That shape is a TRAP: if the client rejects the poison locally (a non-fast-forward, or any ref whose remote object you lack — "fetch first"), `--atomic` aborts in `send-pack` and **no bytes are ever sent**. It reports `atomic push failed for ref …. status: 5`, which is git's own `REF_STATUS_REJECT_FETCH_FIRST`, not a server reply — so a probe that tested nothing reads exactly like a probe that passed. Always push with `--progress` and require `Writing objects: 100% … done.` before believing any conclusion about what the remote accepts.
 
-## The Dolt remote registry self-adopts git origin in every fresh clone
+## An empty Dolt remote registry offers to adopt git origin — the public repo
 
-`bd dolt push` reads `bd dolt remote list`, not the `sync.remote` config key. With the registry empty it silently ADOPTS git origin — in a non-TTY agent shell it does this with no prompt, which is how beads data briefly landed on the public repo during setup. The registry lives in gitignored `.beads/embeddeddolt/`, so a fresh CLONE starts empty and will re-adopt the public origin on first push. In a new clone, run this BEFORE any `bd dolt push`:
+`bd dolt push` reads `bd dolt remote list`, not the `sync.remote` config key. The registry lives in gitignored `.beads/embeddeddolt/`, so a fresh CLONE starts empty. bd 1.2.x then silently ADOPTED git origin with no prompt, which is how beads data briefly landed on the public repo during setup. Since 1.3.0 adoption takes consent — `--yes`, or a yes at an interactive prompt — and a run with neither refuses; never give it. In a new clone, run this BEFORE any `bd dolt push`:
 
 ```bash
 bd dolt remote add origin git+ssh://git@github.com/Stvad/knowledge-medium-beads.git
 ```
 
-and prefer `BD_NO_REMOTE_ADOPT=1 bd dolt push` so a missing registry fails loudly instead of adopting. (AGENTS.md carries the short form of this rule; it applies to any new machine, not just cloud.)
+and prefer `BD_NO_REMOTE_ADOPT=1 bd dolt push`, which rules adoption out even at a prompt. On a missing registry it prints `No remote is configured — skipping` and exits 0, so read the output, not the exit code. (AGENTS.md carries the short form of this rule; it applies to any new machine, not just cloud.)
