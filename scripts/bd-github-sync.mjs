@@ -1293,17 +1293,7 @@ const fetchIssues = () => {
   }
 }
 
-// One owner for "push these beads". bd takes the ids as a single --issues
-// argument, which has a per-argument ceiling (128 KiB on Linux), so a large
-// set is split across invocations instead of failing the spawn before bd
-// starts. Returns the concatenated bd output.
-// Issues to hand the pull, BY IDENTIFIER. That takes doPull's other branch:
-// it fetches each issue by number, ignores `last_sync` entirely, and never
-// hydrates — so a bulk pull's two ways of reaching a bead we are protecting
-// (the incremental window, and fetchPrelinkedIssues bypassing the skip for a
-// locally-modified row) are both out of reach, and there is no window to
-// close. That is what lets the mirror stay bidirectional while a lossy
-// re-apply stays impossible (#955).
+// Issues to hand the pull, BY IDENTIFIER (header 5 says why):
 //   - an issue with no bead yet: the GitHub→beads direction, where a
 //     hand-filed issue becomes a bead.
 //   - a bead the pull would carry faithfully: the edit import.
@@ -1340,6 +1330,10 @@ const pullIssues = (numbers, env, dryRun) => {
   return out
 }
 
+// One owner for "push these beads". bd takes the ids as a single --issues
+// argument, which has a per-argument ceiling (128 KiB on Linux), so a large
+// set is split across invocations instead of failing the spawn before bd
+// starts. Returns the concatenated bd output.
 const pushBeads = (ids, env) => {
   let out = ''
   for (let i = 0; i < ids.length; i += PUSH_CHUNK)

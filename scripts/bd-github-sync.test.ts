@@ -958,8 +958,6 @@ describe('planPullSet', () => {
   const row = (id: string, n: number, updated_at?: string) =>
     bead({ id, external_ref: ref(n), title: 'local title', description: 'D', updated_at })
 
-  // The push carries a local-newer row. Where bd's push skips it (its push
-  // cache), handing it to the pull would revert the very row it did not send.
   it('hands the pull a faithful bead only when GitHub is not the older side', () => {
     const map = issues([[1, gh('2026-08-20T01:00:00Z')], [2, gh('2026-08-20T01:00:00Z')], [3, gh()], [4, gh('2026-08-20T01:00:00Z')]])
     const beads = [
@@ -1349,6 +1347,8 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   // and the pre-pull push declines it. A test whose subject is the push wants
   // this instead: the same row with one field GitHub does not yet have.
   const pushable = <T extends object>(over: T) => syncRow({ title: 'T (edited locally)', ...over })
+  // An issue with no bead: it is always handed to the pull, so the pull runs.
+  const unlinkedIssue = () => ghIssue(99, '2026-08-20T00:00:00Z')
 
   // The pre-pull push and the push-back both spell `--push-only --issues`, so
   // a push-back pin reads only the log AFTER the pull.
@@ -1452,7 +1452,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const unminted = syncRow({ id: 'km-t5', external_ref: null, updated_at: '2026-08-19T00:00:00Z' })
     const minted = { ...unminted, external_ref: ref(5) }
     const { run } = makeSyncRepo({
-      issues: [ghIssue(5, '2026-08-20T00:00:00Z'), ghIssue(99, '2026-08-20T00:00:00Z')],
+      issues: [ghIssue(5, '2026-08-20T00:00:00Z'), unlinkedIssue()],
       lists: [[unminted], [minted], [minted]],
       failFullSync: true,
     })
@@ -1481,15 +1481,14 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(r.stdout).toContain('minted: km-t6 → #6')
   })
 
-  // A local-newer bead is never handed to the pull (planPullSet), so the rows
-  // these tests revert stand for a bd pull writing beyond its id list: the
-  // restore is defence in depth there. Issue #99 has no bead, so the pull runs.
+  // The pull is never handed a local-newer bead (planPullSet), so these
+  // reverts stand for a bd pull writing beyond its id list.
   it('restores a newer local row the pull reverted, then pushes it back out', () => {
     const newer = { id: 'km-t2', status: 'in_progress', priority: 1, title: 'T', description: 'D-new', external_ref: ref(2), updated_at: '2026-08-20T02:00:00Z' }
     const revertedRow = { ...newer, status: 'open', description: 'D-old' }
     const snapshot = { ...newer, assignee: 'Vlad' }
     const { run, shimCalls } = makeSyncRepo({
-      issues: [ghIssue(2, '2026-08-20T01:00:00Z'), ghIssue(99, '2026-08-20T00:00:00Z')],
+      issues: [ghIssue(2, '2026-08-20T01:00:00Z'), unlinkedIssue()],
       lists: [[newer], [newer], [revertedRow]],
       shows: [[snapshot], [revertedRow]],
     })
@@ -1512,7 +1511,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const closedLocal = syncRow({ id: 'km-t4', status: 'closed', external_ref: ref(4), updated_at: '2026-08-20T02:00:00Z' })
     const revertedRow = { ...closedLocal, status: 'open', priority: 2 }
     const { run, shimCalls } = makeSyncRepo({
-      issues: [ghIssue(4, '2026-08-20T01:00:00Z'), ghIssue(99, '2026-08-20T00:00:00Z')],
+      issues: [ghIssue(4, '2026-08-20T01:00:00Z'), unlinkedIssue()],
       lists: [[closedLocal], [closedLocal], [revertedRow]],
       shows: [[{ ...closedLocal, close_reason: 'done' }], [revertedRow]],
       failCloseId: 'km-t4',
@@ -1529,7 +1528,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   it('detects and restores an assignment-only revert', () => {
     const newer = syncRow({ id: 'km-t9', external_ref: ref(9), updated_at: '2026-08-20T02:00:00Z' })
     const { run, shimCalls } = makeSyncRepo({
-      issues: [ghIssue(9, '2026-08-20T01:00:00Z'), ghIssue(99, '2026-08-20T00:00:00Z')],
+      issues: [ghIssue(9, '2026-08-20T01:00:00Z'), unlinkedIssue()],
       lists: [[newer], [newer], [newer]],
       shows: [[newer], [{ ...newer, assignee: 'stale-import' }]],
     })
@@ -1558,7 +1557,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   it('restores a labels-only revert via the label delta', () => {
     const newer = syncRow({ id: 'km-tA', external_ref: ref(10), updated_at: '2026-08-20T02:00:00Z', labels: ['ui'] })
     const { run, shimCalls } = makeSyncRepo({
-      issues: [ghIssue(10, '2026-08-20T01:00:00Z'), ghIssue(99, '2026-08-20T00:00:00Z')],
+      issues: [ghIssue(10, '2026-08-20T01:00:00Z'), unlinkedIssue()],
       lists: [[newer], [newer], [newer]],
       shows: [[newer], [{ ...newer, labels: [] }]],
     })
@@ -1613,7 +1612,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const closedRow = syncRow({ id: 'km-tD', status: 'closed', external_ref: ref(14), updated_at: '2026-08-19T00:00:00Z' })
     const revertedRow = { ...closedRow, status: 'open' }
     const { run, shimCalls } = makeSyncRepo({
-      issues: [ghIssue(14, '2026-08-20T05:00:00Z'), ghIssue(99, '2026-08-20T00:00:00Z')],
+      issues: [ghIssue(14, '2026-08-20T05:00:00Z'), unlinkedIssue()],
       lists: [[closedRow], [closedRow], [revertedRow]],
       shows: [[{ ...closedRow, close_reason: 'done' }], [revertedRow]],
     })
@@ -1640,10 +1639,6 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(shimCalls()).not.toContain('--pull-only')
   })
 
-  // The pre-pull push is SELECTIVE: bd's push PATCHes a handed bead whenever
-  // its content differs, whichever side is newer, so beads whose listed
-  // GitHub copy is same-or-newer must never reach it — and the run's cost
-  // stays proportional to what changed, not to the tracker.
   it('hands the pre-pull push only the beads bd could update', () => {
     const converged = pushable({ id: 'km-c', external_ref: ref(1), updated_at: '2026-08-19T00:00:00Z' })
     const newer = pushable({ id: 'km-n', external_ref: ref(2), updated_at: '2026-08-21T00:00:00Z' })
@@ -1661,7 +1656,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   it('skips the pre-pull push entirely when every bead is converged, and still pulls', () => {
     const row = syncRow({ id: 'km-c', external_ref: ref(1), updated_at: '2026-08-19T00:00:00Z' })
     const { run, shimCalls } = makeSyncRepo({
-      issues: [ghIssue(1, '2026-08-20T00:00:00Z'), ghIssue(99, '2026-08-20T00:00:00Z')],
+      issues: [ghIssue(1, '2026-08-20T00:00:00Z'), unlinkedIssue()],
       lists: [[row]],
     })
     const r = run()
@@ -1672,8 +1667,6 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(log).not.toContain('bd github sync\n')
   })
 
-  // A closed, assigned bead whose issue GitHub touched last: bd's pull would
-  // clear the assignee and restamp the close date, and neither comes back.
   // A closed, assigned bead: bd's pull would clear the assignee and restamp the
   // close date, and neither comes back — so it must never be handed to the pull.
   const lossyRepo = () => {
