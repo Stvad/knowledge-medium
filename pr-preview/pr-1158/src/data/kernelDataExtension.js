@@ -1,1 +1,0 @@
-import{MG as e}from"../../chunks/app-XKHuPRbo.js";export{e as kernelDataExtension};
