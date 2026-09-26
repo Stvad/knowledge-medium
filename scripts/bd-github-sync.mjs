@@ -9,12 +9,10 @@
  *    a failure to read or adopt ABORTS the run: proceeding with a partial
  *    view is exactly the clobber this step exists to prevent.
  * 2. A pull flattens bead priority to P2 when the issue lacks a priority::*
- *    machine label. Flattening is detected by comparing each bead's priority
- *    BEFORE and AFTER the sync (≠2 → 2 means this run's pull did it) and
- *    restoring the pre-sync value — never by guessing from labels, which
- *    would fight a deliberate P2. Only beads NEW this run (no pre-sync row)
- *    fall back to label derivation, since for them the label is the only
- *    signal.
+ *    machine label. A linked bead is never flattened — the pull is not handed
+ *    one whose priority it would default (guard 5) — so this only concerns a
+ *    bead the pull CREATES from a GitHub-filed issue: it takes the value its
+ *    hand-applied labels spell (planPriorityFixes), and is pushed back.
  * 3. A bead closed BEFORE its first sync stays closed locally but its issue is
  *    minted OPEN — and bd records the bead's closed content as already
  *    pushed, so its push skips that bead until its pushed content changes.
@@ -32,9 +30,7 @@
  *    direction, run BEFORE the pull (after close-adoption, so an un-adopted
  *    open bead cannot re-open its issue) over the beads planPrePullPush
  *    selects; a push that did not land holds back that bead's comment
- *    mirror (mirrorComments). The snapshot and
- *    restore around the pull (1.6, 2.5) are defence in depth: the pull is
- *    never handed the rows they cover.
+ *    mirror (mirrorComments).
  *
  * 5. The pull re-applies a GitHub copy onto a bead and drops what GitHub does
  *    not carry back: the assignee (bd's push never sets one), the close date
@@ -65,7 +61,9 @@
  *    against the issue, not timestamps, and was selected from a listing taken
  *    at the start of the run. A reopen is then the state every later fetch
  *    sees, so no later run re-adopts the close. Inherent to a push-based
- *    mirror; close the bead instead if it happens.
+ *    mirror; close the bead instead if it happens. Likewise a local edit made
+ *    in that window, before the pre-pull push stamps `last_sync`, can be
+ *    taken by the same run's pull.
  *  - bd's push skips a bead whose content equals what it last pushed, without
  *    fetching the issue — a clone-local cache the pull never refreshes and no
  *    bd verb clears in embedded mode. So a GitHub edit that was imported and
@@ -719,7 +717,7 @@ export const planClosePushes = (beads, issueByNumber, maxKnownIssueNumber) =>
 // between the two listings at either call site, so a fresh-only row is a
 // concurrent local creation (worktrees share the DB) whose issue this push
 // may still have minted — excluding it loses the mapping forever, while
-// including it costs at most a redundant line or snapshot suspect.
+// including it costs at most a redundant line.
 export const planMintedRefs = (preBeads, postBeads) => {
   const preRefs = new Map(preBeads.map(b => [b.id, b.external_ref ?? null]))
   return postBeads.flatMap(b => {
@@ -727,22 +725,6 @@ export const planMintedRefs = (preBeads, postBeads) => {
     return number !== null && (preRefs.get(b.id) ?? null) === null ? [{ id: b.id, number }] : []
   })
 }
-
-// Beads in any non-open status whose FIRST issue the pre-pull push just
-// minted OPEN — the timestamp test cannot flag them.
-export const planMintedNonOpen = (preBeads, freshBeads) => {
-  const nonOpen = new Set(freshBeads.filter(b => b.status !== 'open').map(b => b.id))
-  return planMintedRefs(preBeads, freshBeads).filter(m => nonOpen.has(m.id))
-}
-
-// Closed beads whose linked issue is OPEN after close-adoption ran — a
-// GitHub-side REOPEN, which the timestamp test cannot flag.
-export const planReopenedClosed = (beads, issueByNumber) =>
-  beads.flatMap(b => {
-    const number = issueNumberFromRef(b.external_ref)
-    const issue = number === null ? undefined : issueByNumber.get(number)
-    return b.status === 'closed' && issue?.state === 'OPEN' ? [{ id: b.id, number }] : []
-  })
 
 // Linked beads whose issue, re-read after the push, still differs in a pushed
 // field — the push did not land.
@@ -758,14 +740,6 @@ export const planUnlandedPushes = (beads, issueByNumber) =>
 // null when a timestamp is missing and neither side can be claimed.
 const localNewer = (bead, issue) =>
   issue?.updatedAt && bead.updated_at ? Date.parse(bead.updated_at) > Date.parse(issue.updatedAt) : null
-
-// Beads whose local row is strictly newer than their GitHub copy.
-export const planLocalWins = (beads, issueByNumber) =>
-  beads.flatMap(b => {
-    const number = issueNumberFromRef(b.external_ref)
-    const issue = number === null ? undefined : issueByNumber.get(number)
-    return localNewer(b, issue) ? [{ id: b.id, number }] : []
-  })
 
 // ---- what bd's pull would write ----
 // The pull overwrites a bead from its GitHub copy, and the decision to let it
@@ -936,62 +910,21 @@ export const planPrePullPush = (beads, issueByNumber) =>
     })
     .map(b => b.id)
 
-// Both sides of the comparison are `bd show` rows (list rows lack assignee),
-// so assignment-only reverts are visible too; the restore replays the full
-// snapshot, close reason included. Together with the set-compared labels,
-// this covers every field the pull writes (the issue-backed set) — fields
-// GitHub issues don't carry (notes, design, estimates, deps) cannot be
-// pull-reverted and are deliberately absent.
-const REVERT_FIELDS = ['title', 'description', 'status', 'priority', 'issue_type', 'assignee']
-const labelKey = row => [...(row.labels ?? [])].sort().join('\n')
-export const detectReverts = (snapshotRows, postById) =>
-  snapshotRows.filter(s => {
-    const post = postById.get(s.id)
-    return post && (REVERT_FIELDS.some(f => (s[f] ?? null) !== (post[f] ?? null)) || labelKey(s) !== labelKey(post))
-  })
-
-// A closed bead cannot be restored by `bd update -s closed` alone: close is
-// its own verb and carries the reason. Everything else is one update.
-// `post` is the row's post-pull state, used only to compute the label delta;
-// without it (the conservative path) every snapshot label is re-added —
-// duplicate adds are idempotent — and none removed.
-export const planRestoreArgs = (row, post) => {
-  // Unforced on purpose: the pull is never handed these rows, so a difference
-  // is most likely another session's write in the pull window — bd's refusal
-  // to overwrite a live claim or close past an open child should surface as a
-  // failed restore, not be overridden.
-  const update = ['update', row.id, '--title', row.title ?? '', '-d', row.description ?? '', '-p', String(row.priority)]
-  if (row.issue_type) update.push('-t', row.issue_type)
-  // Always passed: `-a ''` CLEARS the assignee,
-  // so an unassigned snapshot can undo a pulled stale assignment.
-  update.push('-a', row.assignee ?? '')
-  const snapLabels = new Set(row.labels ?? [])
-  const postLabels = new Set(post?.labels ?? [])
-  for (const l of snapLabels) if (!postLabels.has(l)) update.push('--add-label', l)
-  for (const l of postLabels) if (!snapLabels.has(l)) update.push('--remove-label', l)
-  if (row.status === 'closed')
-    return [update, ['close', row.id, '-r', row.close_reason || 'restored by bd-github-sync after a pull revert (#647)']]
-  return [[...update, '-s', row.status]]
-}
-
 /**
- * Beads to un-flatten after a sync. A bead that WAS ≠2 before this run and is
- * 2 after was flattened by this run's pull → restore its pre-sync value. A
- * bead new this run at 2 takes the label-derived value if one exists. A bead
- * already at 2 before the run is untouched — 2 may be deliberate.
+ * Beads this run's pull created from GitHub-filed issues (no pre-sync row) and
+ * left at P2, which bd gives any issue without a `priority::*` machine label:
+ * they take the value their hand-applied labels spell, if any. A linked bead
+ * is never flattened — the pull is not handed one whose priority it would
+ * default (planLossyReapplies).
  */
 export const planPriorityFixes = (preById, postBeads, issueByNumber) =>
   postBeads
-    .filter(b => b.status !== 'closed' && b.priority === 2)
+    .filter(b => b.status !== 'closed' && b.priority === 2 && !preById.has(b.id))
     .map(b => {
       const issue = issueByNumber.get(issueNumberFromRef(b.external_ref))
-      // A sole `priority::medium` MEANS 2. Restoring over it would revert a
-      // deliberate GitHub-side edit — the mirror image of the flattening this
-      // repairs, and indistinguishable from it by the post-pull value alone.
+      // A sole `priority::medium` MEANS 2, whatever a hand label says.
       const spelled = issue ? pullPriorities(issue.labels) : null
       if (spelled?.size === 1 && spelled.has(2)) return { id: b.id, to: null }
-      const pre = preById.get(b.id)
-      if (pre) return { id: b.id, to: pre.priority !== 2 ? pre.priority : null }
       return { id: b.id, to: issue ? deriveLabelPriority(issue.labels) : null }
     })
     .filter(({ to }) => to !== null && to !== 2)
@@ -1109,9 +1042,7 @@ export const bdShowRows = (ids, opts = {}) => {
   const r = spawnSync('bd', ['show', ...ids, '--json'], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
-    // Scales with the request: `bd show` costs ~0.3s per id, and a failed
-    // pre-pull snapshot ABORTS the whole sync — a fixed ceiling turns a
-    // growing suspect set into a sync that stops working and stays stopped.
+    // Scales with the request: `bd show` costs ~0.3s per id.
     timeout: Math.max(15_000, ids.length * 2_000),
     maxBuffer: MAX_OUTPUT_BYTES,
     ...opts,
@@ -1439,9 +1370,8 @@ const mirrorComments = ({ beads, issueByNumber, mintedNumbers, skipIds, env, dry
   const commented = []
   for (const b of beads) {
     if (!b.comments?.length) continue
-    // skipIds: beads whose local row GitHub does not hold this run (a failed
-    // restore, a push that did not land). A post makes GitHub the newer side,
-    // and the next pull would take GitHub's copy over that row.
+    // skipIds: beads whose push did not land this run. A post makes GitHub the
+    // newer side, and the next pull would take GitHub's copy over that row.
     if (skipIds.has(b.id)) report.push(`SKIPPED comments of ${b.id}: GitHub does not hold its local row this run — a post would let the next pull overwrite it`)
     else if (numberByBeadId.has(b.id)) commented.push(b)
     else if (b.external_ref) report.push(`SKIPPED comments of ${b.id}: its external_ref does not point at an issue of this repo (a PR, or deleted) — fix the ref`)
@@ -1662,40 +1592,6 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
       }
     }
 
-    // 1.6 Snapshot the rows a pull could revert; step 2.5 restores any it
-    // does. Defence in depth: none of them is handed to the pull — a
-    // local-newer bead is left to the push (1.2), a minted issue is absent
-    // from the listing the pull set is built from, and a closed bead whose
-    // issue was reopened is withheld (its close date) and re-closed by
-    // step 4. Snapshot via a direct spawn, not run(): `bd show` output is
-    // pretty-printed JSON, and a description line starting with "Error" would
-    // trip run()'s bd check.
-    const suspects = [
-      ...new Map(
-        [
-          ...planLocalWins(freshBeads, issueByNumber),
-          ...planMintedNonOpen(preBeads, freshBeads),
-          ...planReopenedClosed(freshBeads, issueByNumber),
-        ].map(s => [s.id, s]),
-      ).values(),
-    ]
-    // The length check catches bd's partial-output shape (see bdShowRows):
-    // a snapshot missing any suspect is no snapshot at all.
-    const showSuspects = () => {
-      const rows = bdShowRows(suspects.map(s => s.id), { env })
-      return rows && rows.length === suspects.length ? rows : null
-    }
-    let snapshot = []
-    if (suspects.length && !dryRun) {
-      snapshot = showSuspects()
-      // Abort rather than pull without the snapshot: a bd write beyond the
-      // pull's id list would then go undetected.
-      if (!snapshot)
-        throw new Error(
-          `aborting before pull: could not snapshot ${suspects.map(s => s.id).join(', ')} — a pull writing beyond its id list would go undetected (#647)`,
-        )
-    }
-
     // 2. The pull. Pull-only: a push leg would bypass planPrePullPush's
     // selection.
     const syncOut = pullIssues(pullSet, env, dryRun)
@@ -1704,67 +1600,17 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
       .filter(l => /Pulled|Pushed|Created|Updated|dry-run/.test(l))
       .map(l => l.trim())
     report.push(...syncSummary)
-
-    // 2.5 Restore local rows the pull reverted anyway (#647). The restore
-    // bumps updated_at, so the push-back below carries them out, and the
-    // next run keeps them out of the pull while the local row stays newer.
-    //
-    // ACCEPTED residuals (reviewed 2026-08-20; each is a failure INSIDE this
-    // fallback, needs a mid-run bd failure or a seconds-wide race, and ends
-    // in a report line naming the bead for hand-recovery — do not add
-    // machinery for them here, it recreates transactions over a store that
-    // has none; the class ends upstream when bd's pull honors prefer-newer):
-    // a close restore whose second step fails leaves the row open with the
-    // reason only in the FAILED line; a concurrent edit from another
-    // worktree during the pull window can be read as a revert and lose the
-    // seconds-wide delta between two local edits (no compare-and-swap verb
-    // exists to close this); the conservative no-post path cannot compute
-    // label REMOVALS, so a pulled-back stale label survives until edited.
     const postBeads = dryRun ? preBeads : listAllBeads()
-    // Post-pull state for the suspects comes from `bd show`, not the list:
-    // list rows lack assignee, so a list-based comparison would miss
-    // assignment-only reverts (and false-positive every assigned suspect).
-    const postSuspects = snapshot.length ? showSuspects() : []
-    const postById = new Map((postSuspects ?? []).map(b => [b.id, b]))
-    // A failed post-read must not discard the snapshot: the DB may already
-    // hold the reverted row, and the next sync's snapshot would capture THAT
-    // — the newer local edit would be gone for good. Conservatively restore
-    // every snapshotted suspect instead; for an untouched row that rewrites
-    // identical content, which the push-back then skips.
-    const reverted = dryRun ? [] : postSuspects ? detectReverts(snapshot, postById) : snapshot
-    if (!postSuspects)
-      report.push(`FAILED to re-read ${suspects.map(s => s.id).join(', ')} after the pull — conservatively restoring every snapshotted suspect`)
-    const restoredOk = []
-    const restoreFailures = []
-    for (const row of reverted) {
-      const ok = planRestoreArgs(row, postById.get(row.id)).every(args => tryRun('bd', args, { env }) !== null)
-      if (ok) {
-        restoredOk.push(row.id)
-        report.push(`restored ${row.id} — the pull reverted a newer local row (#647)`)
-      } else {
-        restoreFailures.push(row.id)
-      }
-    }
-    // Failed restores stay OUT of this run's push-back: pushing a
-    // half-restored row would publish it.
-    if (restoreFailures.length)
-      report.push(`FAILED to restore after a pull revert: ${restoreFailures.join(', ')} — left out of this run's push; the next sync pushes whatever the row holds, so fix it first (bd show)`)
 
-    // 3. Un-flatten priorities (pre/post comparison — see header), push back
-    // together with the restored rows.
+    // 3. Priorities for beads this run's pull created (header 2), pushed back.
     const preById = new Map(preBeads.map(b => [b.id, b]))
-    if (dryRun) report.push('[dry-run] priority un-flattening not simulated — it needs the post-sync state')
+    if (dryRun) report.push('[dry-run] priority derivation not simulated — it needs the post-sync state')
     const fixes = planPriorityFixes(preById, postBeads, issueByNumber)
     for (const { id, to } of fixes) {
       if (!dryRun) run('bd', ['update', id, '-p', String(to)], { env })
-      report.push(`priority ${id} → ${to} (re-derived after pull-flattening)`)
+      report.push(`priority ${id} → ${to} (derived from its labels)`)
     }
-    // restoreFailures subtracted from the WHOLE union: a half-restored row
-    // can also enter through the priority-fix leg, and pushing it would
-    // stamp GitHub newer and bury the loss (see the restore loop above).
-    const failedRestoreIds = new Set(restoreFailures)
-    const pushBack = [...new Set([...fixes.map(f => f.id), ...restoredOk])].filter(id => !failedRestoreIds.has(id))
-    if (pushBack.length && !dryRun) pushBeads(pushBack, env)
+    if (fixes.length && !dryRun) pushBeads(fixes.map(f => f.id), env)
 
     // 4. Carry bead closes out to issues still open, via gh (header 3 says
     // why bd's push skips them).
@@ -1807,7 +1653,7 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
       beads: exportBeads(env),
       issueByNumber,
       mintedNumbers: new Set(planMintedRefs(preBeads, freshBeads).map(m => m.number)),
-      skipIds: new Set([...failedRestoreIds, ...unlanded]),
+      skipIds: unlanded,
       env,
       dryRun,
     })
