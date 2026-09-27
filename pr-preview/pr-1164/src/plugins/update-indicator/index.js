@@ -1,1 +1,1 @@
-import{Tu as e}from"../../../chunks/app-CIvc3E24.js";export{e as updateIndicatorPlugin};
+import{Tu as e}from"../../../chunks/app-B3vaFfnK.js";export{e as updateIndicatorPlugin};

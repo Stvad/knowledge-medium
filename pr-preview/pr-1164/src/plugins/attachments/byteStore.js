@@ -1,1 +1,1 @@
-import{cm as e,dm as t,fm as n,lm as r,sm as i,um as a}from"../../../chunks/app-CIvc3E24.js";export{i as ASSETS_ROOT,e as InMemoryByteStore,r as OpfsByteStore,a as assetPathSegments,t as createByteStore,n as getByteStore};
+import{cm as e,dm as t,fm as n,lm as r,sm as i,um as a}from"../../../chunks/app-B3vaFfnK.js";export{i as ASSETS_ROOT,e as InMemoryByteStore,r as OpfsByteStore,a as assetPathSegments,t as createByteStore,n as getByteStore};

@@ -1,1 +1,1 @@
-import{nT as e,rT as t}from"../../chunks/app-CIvc3E24.js";export{e as dispatchPointerAction,t as setPointerActionDispatcher};
+import{nT as e,rT as t}from"../../chunks/app-B3vaFfnK.js";export{e as dispatchPointerAction,t as setPointerActionDispatcher};

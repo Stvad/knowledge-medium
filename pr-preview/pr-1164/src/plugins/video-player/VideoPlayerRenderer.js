@@ -1,1 +1,1 @@
-import{Am as e,Om as t,km as n}from"../../../chunks/app-CIvc3E24.js";export{t as VideoPlayerContentRenderer,n as VideoPlayerRenderer,e as isPlayableVideoBlock};
+import{Am as e,Om as t,km as n}from"../../../chunks/app-B3vaFfnK.js";export{t as VideoPlayerContentRenderer,n as VideoPlayerRenderer,e as isPlayableVideoBlock};

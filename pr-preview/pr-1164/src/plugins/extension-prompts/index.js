@@ -1,1 +1,1 @@
-import{_w as e,gw as t}from"../../../chunks/app-CIvc3E24.js";export{t as ExtensionPromptSurface,e as extensionPromptsExtension};
+import{_w as e,gw as t}from"../../../chunks/app-B3vaFfnK.js";export{t as ExtensionPromptSurface,e as extensionPromptsExtension};
