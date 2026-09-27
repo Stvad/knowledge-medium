@@ -273,15 +273,18 @@ const convergedColumns = (rows: ReadonlyArray<Record<string, unknown>>) =>
   rows.map(row => Object.fromEntries(
     Object.entries(row).filter(([name]) => name !== UNCONVERGED_COLUMN)))
 
-/** The clamp trigger's `least(coalesce(NEW.user_updated_at, NEW.updated_at),
- *  server_now_ms)` (20260803000000) can move the display stamp but never unsets
- *  it, and `txEngine` stamps it on every local write.
+/** The display stamp reads back non-null everywhere at quiescence: `txEngine`
+ *  stamps it on every local write, a CREATE carries it, and a PATCH that omits
+ *  it leaves the server's existing value — so the clamp trigger's
+ *  `coalesce(NEW.user_updated_at, NEW.updated_at)` backfill (20260803000000) is
+ *  unreached here, and dropping it fails nothing.
  *
- *  DEFENCE IN DEPTH, and the only assertion left on this column once it is out
- *  of the comparison: no generated case reaches a NULL, because every upload in
- *  this universe carries the column — dropping the fake server's backfill fails
- *  nothing. It is here so an upload or `txEngine` change that stops stamping it
- *  cannot go unnoticed now that convergence no longer covers it. */
+ *  END-TO-END only, and it pins NEITHER stamping layer: an upload that stops
+ *  carrying the column also passes, because that same `coalesce` repairs the
+ *  server row and the echo then overwrites the local one (measured). Asserting
+ *  the payload instead would be wrong — a PATCH legitimately omits the column
+ *  when it did not change. So the carve-out above does cost this suite that
+ *  coverage; what is left is only that nothing ever reads back NULL. */
 const expectDisplayStampPopulated = (
   rows: ReadonlyArray<Record<string, unknown>>,
   who: string,
