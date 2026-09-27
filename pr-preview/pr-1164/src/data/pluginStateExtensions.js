@@ -1,1 +1,1 @@
-import{Oz as e,kz as t}from"../../chunks/app-B3vaFfnK.js";export{e as pluginPrefsExtension,t as pluginUIStateExtension};
+import{Oz as e,kz as t}from"../../chunks/app-Dncxr33V.js";export{e as pluginPrefsExtension,t as pluginUIStateExtension};
