@@ -1,0 +1,1 @@
+import{mS as e}from"../../../chunks/app-CIvc3E24.js";export{e as CommandPaletteHeaderItem};

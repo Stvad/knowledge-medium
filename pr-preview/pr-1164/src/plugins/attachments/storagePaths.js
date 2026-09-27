@@ -1,0 +1,1 @@
+import{_m as e,vm as t}from"../../../chunks/app-CIvc3E24.js";export{e as attachmentObjectPath,t as authenticatedObjectUrl};

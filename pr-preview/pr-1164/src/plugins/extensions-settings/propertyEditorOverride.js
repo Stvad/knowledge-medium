@@ -1,0 +1,1 @@
+import{vt as e}from"../../../chunks/app-CIvc3E24.js";export{e as extensionsOverridesUi};
