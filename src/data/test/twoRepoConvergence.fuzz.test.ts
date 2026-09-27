@@ -91,17 +91,11 @@
  *
  * KNOWN ISSUE (fuzz): issue #1163 — a PRODUCT bug this suite can reach,
  * not an oracle fault. Two devices end up permanently disagreeing on
- * `content`, at zero clock skew, surviving reload. Counterexample
- * (`prngSeed: 1`, ROOT only): A splits ROOT, B splits ROOT, roundTrip, A
- * setReferences(ROOT→ROOT), B setContent(''), A setContent('!'). Replay:
- *   FUZZ_SEED=340680830
- *   FUZZ_PATH="30:4:3:3:4:3:4:6:5:7:7:8:7:8:8:13:14:14:17:17:17:17:18:19:18:20:19:19:19:19:19:20:20:20:20:20:20:20"
- * Rarer than the display stamp it hid, because it needs the two devices
- * to write DIFFERENT content on top of the same stamp coincidence: a
- * 50-minute random-seed deep run did not hit it, so the nightly may well
- * pass. It is deliberately still asserted — the ONLY thing relaxed here
- * is the display stamp (above) — so a deep run that DOES go red with this
- * shape is #1163 and not a new find.
+ * `content`, at zero clock skew, surviving reload. It is deliberately
+ * still asserted — the ONLY thing relaxed here is the display stamp
+ * (above) — so a deep run red on a content column is #1163 until shown
+ * otherwise. The counterexample, the replay seed and how often a random
+ * deep run reaches it are in that issue.
  *
  * What it falsifies, and why the argument looked sound: the reconcile
  * gate's I1 assumption (equal nonzero stamps ⟺ same write —
@@ -309,9 +303,10 @@ const setUpTwoDevices = async (): Promise<Universe> => {
   await resetTestDb(dbB.db)
 
   // Server clock strictly ahead of both device clocks (1.8e12 vs 1.7e12)
-  // and monotonic — the future-clamp path stays quiet so the oracle only
-  // reasons about the floor+bump (see fakeSyncServer.ts on why the fake
-  // requires a monotonic clock at all).
+  // and monotonic (see fakeSyncServer.ts on why the fake requires a
+  // monotonic clock at all). This does NOT keep the future-clamp quiet:
+  // I3's local bump can still carry a device's own stamp past server-now,
+  // which is the first step of #1163 in the docblock.
   let serverClock = 1_800_000_000_000
   const server = createFakeSyncServer({ now: () => ++serverClock })
   const rejections: unknown[] = []
@@ -325,8 +320,8 @@ const setUpTwoDevices = async (): Promise<Universe> => {
       // would mint COLLIDING gen-* ids (createTestRepo.ts caveat). The
       // shared default `now` counter (1.7e12+n per repo) is deliberate:
       // cross-device stamp coincidences on the same row are the
-      // interesting LWW inputs, and the docblock argues why they can't
-      // produce divergent-content equal stamps in this universe.
+      // interesting LWW inputs — and they DO reach divergent content at an
+      // equal stamp here (#1163 in the docblock).
       newId: () => `${tag}-gen-${++idCursor}`,
     })
     repo.setActiveWorkspaceId(WS)
@@ -351,6 +346,58 @@ const quiesce = async ({ server, devices, rejections }: Universe): Promise<void>
     for (const device of devices) await upload(device, server, rejections)
     for (const device of devices) await deliverAndDrain(device, server)
   }
+}
+
+/**
+ * Oracle 1, in full: the fixpoint held, and every row agrees.
+ *
+ * ONE owner, called by the property and by the canary below. The canary asserts
+ * a DIVERGENCE, which is only meaningful once the fixpoint is proven — a
+ * delivery or materialization change that left work pending after `quiesce`'s
+ * fixed rounds would otherwise let it read a transient mismatch as permanent.
+ * A second, narrower copy of these checks beside it is how that guarantee comes
+ * to differ from the property's.
+ *
+ * Returns the compared rows so a caller can go on to inspect one of them.
+ */
+const expectQuiescedAndConverged = async (
+  { server, devices, rejections }: Universe,
+): Promise<{
+  rowsA: Array<Record<string, unknown>>
+  rowsB: Array<Record<string, unknown>>
+  rowsServer: Array<Record<string, unknown>>
+}> => {
+  expect(rejections, 'no upload may be quarantined in this universe').toEqual([])
+  for (const device of devices) {
+    expect(
+      await device.db.getAll('SELECT id FROM ps_crud'),
+      'upload queue drained at quiescence',
+    ).toEqual([])
+    expect(
+      await device.db.getAll('SELECT seq FROM blocks_synced_changes'),
+      'staging change queue drained at quiescence',
+    ).toEqual([])
+    expect(device.cursor, 'delivery cursor caught up to the server version').toBe(server.version())
+  }
+
+  // Sync-materialization is a different write shape than kernel txs and
+  // could desync a trigger-maintained derived index (block_references/
+  // block_aliases/block_types/blocks_fts) while the column comparison
+  // below stays green. Reuse repoMutators' sweep (workspace-agnostic
+  // recompute — see its docblock in fuzzKernelHarness.ts — so it
+  // transfers unchanged to this suite's one-workspace, ROOT-pinned pool).
+  for (const device of devices) await sweepDerivedIndexes(device.db)
+
+  const [rowsA, rowsB] = [await allBlockColumns(dbA.db), await allBlockColumns(dbB.db)]
+  const rowsServer = server.rows()
+  expect(convergedColumns(rowsA), 'device A == device B after quiescence')
+    .toEqual(convergedColumns(rowsB))
+  expect(convergedColumns(rowsA), 'devices == server ground truth after quiescence')
+    .toEqual(convergedColumns(rowsServer))
+  expectDisplayStampPopulated(rowsA, 'device A')
+  expectDisplayStampPopulated(rowsB, 'device B')
+  expectDisplayStampPopulated(rowsServer, 'server')
+  return { rowsA, rowsB, rowsServer }
 }
 
 const runCase = async ({ steps }: { steps: readonly Step[] }): Promise<void> => {
@@ -387,36 +434,7 @@ const runCase = async ({ steps }: { steps: readonly Step[] }): Promise<void> => 
   // strictly suffice; the assertions below prove it.
   await quiesce(universe)
 
-  expect(rejections, 'no upload may be quarantined in this universe').toEqual([])
-  for (const device of devices) {
-    expect(
-      await device.db.getAll('SELECT id FROM ps_crud'),
-      'upload queue drained at quiescence',
-    ).toEqual([])
-    expect(
-      await device.db.getAll('SELECT seq FROM blocks_synced_changes'),
-      'staging change queue drained at quiescence',
-    ).toEqual([])
-    expect(device.cursor, 'delivery cursor caught up to the server version').toBe(server.version())
-  }
-
-  // Sync-materialization is a different write shape than kernel txs and
-  // could desync a trigger-maintained derived index (block_references/
-  // block_aliases/block_types/blocks_fts) while the 13-column `blocks`
-  // comparison below stays green. Reuse repoMutators' sweep (workspace-
-  // agnostic recompute — see its docblock in fuzzKernelHarness.ts — so it
-  // transfers unchanged to this suite's one-workspace, ROOT-pinned pool).
-  for (const device of devices) await sweepDerivedIndexes(device.db)
-
-  const [rowsA, rowsB] = [await allBlockColumns(dbA.db), await allBlockColumns(dbB.db)]
-  const rowsServer = server.rows()
-  expect(convergedColumns(rowsA), 'device A == device B after quiescence')
-    .toEqual(convergedColumns(rowsB))
-  expect(convergedColumns(rowsA), 'devices == server ground truth after quiescence')
-    .toEqual(convergedColumns(rowsServer))
-  expectDisplayStampPopulated(rowsA, 'device A')
-  expectDisplayStampPopulated(rowsB, 'device B')
-  expectDisplayStampPopulated(rowsServer, 'server')
+  await expectQuiescedAndConverged(universe)
 }
 
 describe('two-repo sync convergence (issue #372 Batch 3)', () => {
@@ -470,12 +488,16 @@ describe('two-repo sync convergence — stranded display stamp canary (accepted 
       }
     }
     await quiesce(universe)
-    expect(rejections, 'no upload may be quarantined in this universe').toEqual([])
 
-    const rowOf = async (device: Device) =>
-      (await allBlockColumns(device.db)).find(row => row.id === ROOT)!
-    const [rootA, rootB] = [await rowOf(devices[0]), await rowOf(devices[1])]
-    const rootServer = server.rows().find(row => row.id === ROOT)!
+    // The fixpoint and EVERY row's convergence, via the property's own owner —
+    // so the divergence below is read against a settled universe, and a child
+    // row that diverged would fail here rather than hide behind a ROOT-only
+    // comparison.
+    const { rowsA, rowsB, rowsServer } = await expectQuiescedAndConverged(universe)
+
+    const rootOf = (rows: ReadonlyArray<Record<string, unknown>>) =>
+      rows.find(row => row.id === ROOT)!
+    const [rootA, rootB, rootServer] = [rowsA, rowsB, rowsServer].map(rootOf)
 
     // The precondition, asserted rather than assumed: the stranding needs B's
     // drift bump to land exactly on the `updated_at` A proposed, which is the
@@ -485,19 +507,16 @@ describe('two-repo sync convergence — stranded display stamp canary (accepted 
     expect(rootA.updated_at, "A holds the server's version for ROOT (I1's equal-stamp skip applies)")
       .toBe(rootServer.updated_at)
 
-    // Everything the sync protocol does promise still converges.
-    expect(convergedColumns([rootA]), 'A == B on every converged column')
-      .toEqual(convergedColumns([rootB]))
-    expect(convergedColumns([rootA]), 'A == server on every converged column')
-      .toEqual(convergedColumns([rootServer]))
-
-    // And the residual itself: A kept the display stamp it authored, the server
-    // took B's, and nothing will carry the correction back.
+    // The residual itself: A kept the display stamp it authored, the server took
+    // B's, and nothing will carry the correction back.
     expect(rootB[UNCONVERGED_COLUMN], "B's display stamp is the server's")
       .toBe(rootServer[UNCONVERGED_COLUMN])
     expect(rootA[UNCONVERGED_COLUMN], "A's display stamp is stranded — NOT the server's")
       .not.toBe(rootServer[UNCONVERGED_COLUMN])
-  }, 30_000)
+    // Body measured at ~200ms standalone. The budget is not for the body: the
+    // barrier above can wait on an abandoned deep-tier case, which the 5000ms
+    // default would not cover.
+  }, 20_000)
 })
 
 // Non-fuzz pin: in the convergence universe above, per-device id generators
