@@ -1,1 +1,1 @@
-import{HF as e,VF as t}from"../../../chunks/app-Dncxr33V.js";export{t as REFERENCES_TARGET_INVALIDATION_CHANNEL,e as referencesInvalidationRule};
+import{HF as e,VF as t}from"../../../chunks/app-B5_pot1W.js";export{t as REFERENCES_TARGET_INVALIDATION_CHANNEL,e as referencesInvalidationRule};
