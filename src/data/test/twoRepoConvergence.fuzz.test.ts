@@ -8,7 +8,10 @@
  * monotonic-clamp / insert-or-touch / patch-RPC semantics, cited there).
  * Random interleaved kernel-mutator sequences run on device A and device
  * B with random sync points; after a final quiescing round-trip, both
- * devices' `blocks` tables and the server's rows must be IDENTICAL.
+ * devices' `blocks` tables and the server's rows must agree on every
+ * column oracle 1 below compares. What that excludes, and why, is stated
+ * there and not restated here — `expectQuiescedAndConverged` is the one
+ * place the answer lives in code.
  *
  * The sync plumbing on each side is the REAL code, not a reimplementation:
  *  - upload: `__runUploadLoopForTest` (`src/services/powersync.ts`) — the
@@ -513,10 +516,12 @@ describe('two-repo sync convergence — stranded display stamp canary (accepted 
       .toBe(rootServer[UNCONVERGED_COLUMN])
     expect(rootA[UNCONVERGED_COLUMN], "A's display stamp is stranded — NOT the server's")
       .not.toBe(rootServer[UNCONVERGED_COLUMN])
-    // Body measured at ~200ms standalone. The budget is not for the body: the
-    // barrier above can wait on an abandoned deep-tier case, which the 5000ms
-    // default would not cover.
-  }, 20_000)
+    // Body measured at ~200ms standalone, and the budget is not for the body:
+    // the barrier above awaits the in-flight case fast-check abandoned, which
+    // is the same wait `fuzzTestTimeout` reserves its 300s for. Hence the
+    // property's own budget rather than a number of my own — a second answer
+    // here is one that can disagree with that reserve.
+  }, fuzzTestTimeout())
 })
 
 // Non-fuzz pin: in the convergence universe above, per-device id generators

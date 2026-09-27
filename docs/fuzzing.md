@@ -374,8 +374,8 @@ binding oracle + an 11-suite discovery sweep) found six more:
   drifted bump can then land on it. Needs no clock skew and survives
   reload. Rarer than #381 was (the two devices must also write different
   content), so it is not a standing red: a 50-minute random-seed deep run
-  did not hit it. The suite docblock carries the counterexample and the
-  replay; the property is again left strict rather than relaxed.
+  did not hit it. Issue #1163 carries the counterexample and the replay
+  seed; the property is again left strict rather than relaxed.
 - The binding-oracle sweep found that a long-form date literal bound to
   its resolved target was never CLAIMED by it — any later block could
   legitimately claim the spelling and existing bindings stayed silently
