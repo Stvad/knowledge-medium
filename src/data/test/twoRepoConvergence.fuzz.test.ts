@@ -352,7 +352,11 @@ const quiesce = async ({ server, devices, rejections }: Universe): Promise<void>
 }
 
 /**
- * Oracle 1, in full: the fixpoint held, and every row agrees.
+ * Oracle 1, in full: the fixpoint held, and every row agrees on
+ * {@link convergedColumns} — every synced column but the display stamp, which
+ * the canary below expects to disagree. This is the authoritative statement of
+ * what convergence means here; the module header points at it rather than
+ * restating it.
  *
  * ONE owner, called by the property and by the canary below. The canary asserts
  * a DIVERGENCE, which is only meaningful once the fixpoint is proven — a
@@ -441,6 +445,9 @@ const runCase = async ({ steps }: { steps: readonly Step[] }): Promise<void> => 
 }
 
 describe('two-repo sync convergence (issue #372 Batch 3)', () => {
+  // "identical" is loose now that the display stamp is carved out, and the name
+  // stays anyway: it is the `-t` handle every recorded replay uses (#1162,
+  // #1163, docs/fuzzing.md). Renaming for precision would break those.
   it('interleaved mutator sequences with random sync points converge to identical state', async () => {
     await fc.assert(
       fc.asyncProperty(caseArb, ({ steps, prngSeed }) =>
