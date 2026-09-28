@@ -52,6 +52,7 @@ import {
 } from './api/errors'
 import { runTx, type PowerSyncDb } from './internals/commitPipeline'
 import { STRANDED_CLAIM_RECOVERY } from './internals/graphBackfillClaim'
+import { countConsumingParents } from './internals/propertyDefinitionChangeProcessor'
 import { onSyncSettled } from './internals/firstSync'
 import { devAssertionsEnabled } from './internals/devAssertions'
 import type { BlockCache } from '@/data/blockCache'
@@ -2547,6 +2548,26 @@ export class Repo {
       [wsId, jsonPathForProperty(name)],
     )
     return row?.count ?? 0
+  }
+
+  /** How many blocks a change to the definition at `fieldId` would re-key —
+   *  the fan-out `core.migratePropertyDefinition` performs inside whatever
+   *  transaction edits that definition row, counted BEFORE the gesture commits
+   *  to it. Workspace defaults to the active one; missing workspace returns 0.
+   *
+   *  Not {@link countBlocksUsingProperty}, which counts cells by NAME. That is
+   *  the right question for a delete (the values that stay behind) and the
+   *  wrong one for a change: the fan-out walks FIELD ROWS, so it reaches a
+   *  parent the cell-to-children backfill has not got to yet exactly never,
+   *  and a name count would promise work that does not happen. The predicate
+   *  is shared with the walk itself. */
+  async countPropertyDefinitionConsumers(
+    fieldId: string,
+    workspaceId?: string,
+  ): Promise<number> {
+    const wsId = workspaceId ?? this.activeWorkspaceId
+    if (!wsId) return 0
+    return countConsumingParents(this.db, wsId, fieldId)
   }
 
   /** Read-only handle on the currently-installed FacetRuntime. Used by

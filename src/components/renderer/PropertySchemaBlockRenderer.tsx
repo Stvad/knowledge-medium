@@ -18,7 +18,15 @@ import {
   presetIdProp,
   propertyNameProp,
 } from '@/data/properties.js'
-import { ChangeScope, propertyValue, type AnyJoinedValuePreset } from '@/data/api'
+import {
+  ChangeScope,
+  ProcessorRejection,
+  propertyValue,
+  type AnyJoinedValuePreset,
+  type Tx,
+} from '@/data/api'
+import { decodeRowProperty } from '@/data/rowProperty.js'
+import { parsePropertyDefinitionMetadata } from '@/data/propertyDefinitionMetadata.js'
 import { Input } from '@/components/ui/input.js'
 import { Button } from '@/components/ui/button.js'
 import type { BlockRenderer, BlockRendererProps } from '@/types.js'
@@ -26,15 +34,90 @@ import { PropertyShapeGlyph } from '@/components/propertyPanel/shapeUi.js'
 import { DefaultBlockRenderer } from './DefaultBlockRenderer.tsx'
 import { deleteBlockThroughUi } from '@/utils/deleteBlockThroughUi.js'
 import { trimIfEdited } from '@/utils/nameFieldCommit.js'
+import { openDialog } from '@/utils/dialogs.js'
+import {
+  beginPropertyDefinitionFanout,
+  isLargeFanout,
+  markPropertyDefinitionFanoutRunning,
+  queueDefinitionChange,
+} from '@/data/propertyDefinitionFanout.js'
+import {
+  ConfirmDefinitionChangeDialog,
+  type ConfirmDefinitionChangeDialogProps,
+  type DefinitionChangeKind,
+} from './ConfirmDefinitionChangeDialog.tsx'
+import { showError } from '@/utils/toast.js'
+
+/** The three bag keys this editor writes, read the ONE way.
+ *
+ *  The render and the guard that re-reads the row inside the writing
+ *  transaction must share it: "what the user was shown" and "what is there
+ *  now" are only comparable through the same decode. `undefined` properties
+ *  (no row yet) read as the defaults. */
+const definitionFacts = (properties: Record<string, unknown> | undefined) => {
+  const row = {properties: properties ?? {}}
+  return {
+    name: decodeRowProperty(row, propertyNameProp),
+    presetId: decodeRowProperty(row, presetIdProp),
+    config: decodeRowProperty(row, presetConfigProp),
+  }
+}
+
+type DefinitionFacts = ReturnType<typeof definitionFacts>
+
+/** Preset configs compared as stored text. Both sides come from the same
+ *  round trip, so a re-ordering that is only cosmetically different costs a
+ *  retry rather than a lost write. */
+const sameConfig = (a: unknown, b: unknown): boolean =>
+  JSON.stringify(a) === JSON.stringify(b)
+
+/** What a gesture turns out to want, decided against the definition as it
+ *  stands when the queue admits it. */
+interface PlannedChange {
+  change: Omit<ConfirmDefinitionChangeDialogProps, 'blockCount'>
+  /** Everything the write REPLACES, still as the planner found it. Checked
+   *  inside the writing transaction, so it covers the confirmation's pause. */
+  stillCurrent: (now: DefinitionFacts) => boolean
+  write: (tx: Tx) => Promise<void>
+}
+
+/** A planner that is not making a change says why: `null` when the row
+ *  already reads the way the gesture wanted, and a message when the gesture
+ *  was composed against a definition that has since moved out from under it
+ *  — which is not the same thing as a peer edit landing mid-confirmation, and
+ *  must not be reported as one. */
+type PlanResult = PlannedChange | {skip: string | null}
+
+const OVERTAKEN = (name: string): string =>
+  `“${name}” changed before this was applied, so nothing was written. `
+  + 'The editor is showing where it stands now — make the change again from there.'
+
+const TX_DESCRIPTIONS: Record<DefinitionChangeKind, string> = {
+  rename: 'rename property',
+  type: 'change property type',
+  options: 'change property options',
+}
 
 const renderConfigEditor = (
   preset: AnyJoinedValuePreset,
   value: unknown,
   onChange: (next: unknown) => void,
+  /** Bumped when a config change did NOT land, which remounts the editor.
+   *
+   *  A config editor holds its own in-progress state and learns nothing from
+   *  `onChange`, which returns void — so a change that is cancelled at the
+   *  confirmation, or refused in its transaction, leaves it showing options
+   *  the definition never got, and a later edit resubmits them. Nothing it
+   *  can do about that by itself: the outcome is the HOST's to know. Saying
+   *  "forget what you thought" is the one instruction that needs no contract
+   *  and reaches every config editor, including ones this repo did not
+   *  write. The cost is the caret, and only on a path where the change did
+   *  not happen. */
+  generation: number,
 ): React.ReactNode => {
   if (!preset.ConfigEditor) return null
   const ConfigEditor = preset.ConfigEditor
-  return <ConfigEditor value={value} onChange={onChange} />
+  return <ConfigEditor key={generation} value={value} onChange={onChange} />
 }
 
 /** Exported for the read-only regression test; production mounts it only
@@ -62,25 +145,149 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
   const readOnly = block.repo.isReadOnly || isSeedBacked
 
 
-  const presetId = useMemo<string>(() => {
-    if (!data) return ''
-    const raw = data.properties[presetIdProp.name]
-    return raw === undefined ? presetIdProp.defaultValue : presetIdProp.codec.decode(raw)
-  }, [data])
-
-  const propertyName = useMemo<string>(() => {
-    if (!data) return ''
-    const raw = data.properties[propertyNameProp.name]
-    return raw === undefined ? propertyNameProp.defaultValue : propertyNameProp.codec.decode(raw)
-  }, [data])
-
-  const persistedConfig = useMemo<Record<string, unknown>>(() => {
-    if (!data) return {}
-    const raw = data.properties[presetConfigProp.name]
-    return raw === undefined ? presetConfigProp.defaultValue : presetConfigProp.codec.decode(raw)
-  }, [data])
+  const facts = useMemo(() => definitionFacts(data?.properties), [data])
+  const {presetId, name: propertyName, config: persistedConfig} = facts
 
   const preset = presets.get(presetId) ?? null
+
+  /** Ask before a change that stops the app, hold the progress surface up for
+   *  as long as the user is waiting on it, and write only what the definition
+   *  in front of the planner still supports.
+   *
+   *  The first two live here rather than in the processor that does the work:
+   *  the count is a query the gesture can afford and the transaction cannot
+   *  (it already holds the writer by then), and the wait the user is owed a
+   *  surface for is the whole `repo.tx`, not the consumer loop inside it — the
+   *  commit and the post-commit walk over every row it touched come after.
+   *  One predicate (`isLargeFanout`) decides both, so a change can never ask
+   *  and then run silently, or run for a minute without having asked.
+   *
+   *  PLANNED AT START, NOT AT THE GESTURE. Changes are serialised, so one can
+   *  wait behind another that rewrites the very row it is about; the planner
+   *  therefore runs when the queue admits it, against a freshly read row, and
+   *  everything derived from the row's current state — the name in the
+   *  dialog, the baseline a peer edit is judged against, whether there is
+   *  anything left to do at all — comes from THAT read. Snapshotting it at
+   *  the gesture instead labelled dialogs with names that had moved, and made
+   *  a change's own predecessor look like somebody else's edit.
+   *
+   *  What a planner may NOT re-aim is a payload it computed FROM the old row.
+   *  A rename and a re-type carry a whole replacement value and mean the same
+   *  thing whatever is there; a config edit is the editor's view of the
+   *  stored object with one part changed, so applying it over a row that has
+   *  moved would put back what the previous change removed. Those abandon
+   *  with a message rather than rebase, and say so in their own words.
+   *
+   *  `stillCurrent` is then checked INSIDE the writing transaction, and
+   *  covers the only window left: the human pause of the confirmation, in
+   *  which sync keeps running. It names everything the write REPLACES —
+   *  nothing more, so a peer changing the type while this renames is not a
+   *  reason to refuse the rename, and nothing less, so a re-type that also
+   *  resets the config cannot drop a config edit it never looked at.
+   *
+   *  Uniform across both sides of the threshold on purpose. Under it the
+   *  window is one await and a refusal is all but unreachable — but two write
+   *  paths, one guarded and one not, is how the guarded one stops being the
+   *  one that runs.
+   *
+   *  The COUNT is deliberately not re-checked in the transaction, unlike the
+   *  row. It would prevent no wrong write — only add a confirmation, which
+   *  nothing can raise from inside a transaction that already holds the
+   *  writer, so closing it means a rejection code, a retry loop and a bypass
+   *  flag at every call site, permanently. DECLINED against the alternative
+   *  of a fan-out that turns out large going unasked, whose outcome is the
+   *  behaviour this gate replaced. */
+  const throughFanoutGate = useCallback((
+    plan: (atStart: DefinitionFacts) => PlanResult,
+  ): Promise<boolean> => queueDefinitionChange(async () => {
+    // The definition's OWN workspace, never the active one — this renderer is
+    // mounted per block. With no row loaded there is nothing to scope the
+    // count to, and no gesture either: every control below renders from `data`.
+    const workspaceId = data?.workspaceId
+    if (workspaceId === undefined) return false
+    // From SQL, not from the render snapshot this closure captured: the point
+    // of planning at start is that the row may have moved since.
+    const atStart = await block.repo.load(block.id)
+    if (atStart === null) return false
+    const planned = plan(definitionFacts(atStart.properties))
+    if ('skip' in planned) {
+      if (planned.skip !== null) showError(planned.skip)
+      return false
+    }
+    const {change, stillCurrent, write} = planned
+    const consumers = await block.repo.countPropertyDefinitionConsumers(
+      block.id, workspaceId,
+    )
+    const large = isLargeFanout(consumers)
+    if (large) {
+      const confirmed = await openDialog(
+        ConfirmDefinitionChangeDialog, {...change, blockCount: consumers},
+      )
+      if (confirmed !== true) return false
+    }
+    const run = large
+      ? beginPropertyDefinitionFanout(
+        workspaceId, block.id, change.propertyName, consumers,
+      )
+      : null
+    // Three outcomes, not two. A kernel REFUSAL (a re-type that would discard
+    // stored values, say) comes out of `repo.tx` as a throw, and a caller
+    // that let it escape leaves its cleanup unrun and a void event handler
+    // holding an unhandled rejection.
+    //
+    // `guardPassed` is what the CALLBACK reached, `wrote` is what the
+    // TRANSACTION did, and they are not the same moment: same-tx processors
+    // run after the callback returns, so the fan-out this change asks for
+    // can still refuse it — the commonest refusal there is. Success is
+    // therefore only assignable once `repo.tx` resolves.
+    let guardPassed = false
+    let wrote = false
+    let refused = false
+    try {
+      await block.repo.tx(async tx => {
+        const current = await tx.get(block.id)
+        // A row that is no longer a PUBLISHED definition is not one to edit,
+        // and a tombstone is the reachable case: `tx.get` hands one back, its
+        // bag still reads as it did, so comparing the bag alone would write
+        // through to a deleted row. The fan-out then skips it — the processor
+        // stops at a deleted `after` — and a later restore fans nothing out
+        // either, because by then both sides of the restore carry the edit.
+        // Consumers are left under the old name or encoding with nothing to
+        // re-derive them. `parsePropertyDefinitionMetadata` is the existing
+        // owner of that question, so it answers it here rather than a list of
+        // states kept in step by hand.
+        if (current === null || parsePropertyDefinitionMetadata(current) === null) return
+        if (!stillCurrent(definitionFacts(current.properties))) return
+        // From INSIDE the transaction, which is the only thing that makes a
+        // progress report attributable: a run opens at the confirmation, and
+        // a headless change to the same definition can hold the writer in
+        // that gap. The writer is exclusive, so once this is set, whatever
+        // reports next is this transaction's fan-out.
+        markPropertyDefinitionFanoutRunning(workspaceId, block.id)
+        await write(tx)
+        guardPassed = true
+      }, {scope: ChangeScope.BlockDefault, description: TX_DESCRIPTIONS[change.kind]})
+      wrote = guardPassed
+    } catch (error) {
+      refused = true
+      // `repo.tx` notifies the user-error channel before it rethrows, so a
+      // rejection has already said why in the kernel's own words and ours
+      // would only contradict it. Anything else has told nobody.
+      if (!(error instanceof ProcessorRejection)) {
+        console.error('[PropertySchemaContentRenderer] the change failed:', error)
+        showError(`“${change.propertyName}” could not be changed. See the console.`)
+      }
+    } finally {
+      run?.end()
+    }
+    if (!wrote && !refused) {
+      showError(
+        `“${change.propertyName}” changed somewhere else while you were deciding, `
+        + 'so nothing was written. Take another look and try again.',
+      )
+    }
+    return wrote
+  }), [block, data])
 
   const decodedConfig = useMemo<unknown>(() => {
     if (!preset?.configCodec) return undefined
@@ -91,19 +298,36 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
     }
   }, [persistedConfig, preset])
 
-  // Render-phase resync via two pieces of derived state. When the
-  // committed `propertyName` changes (remote edit, undo/redo, sync),
-  // we adopt it as the draft in the same render — React supports
-  // setState-during-render for this exact case. Focus is intentionally
-  // not preserved: if a remote write lands mid-edit, accepting the
-  // new committed name beats letting a stale draft overwrite it on
-  // the next blur.
-  const [draftName, setDraftName] = useState(propertyName)
+  // The draft is an OVERRIDE that exists only while the user is typing, not a
+  // copy of the name kept in step with it. `null` means "show what the
+  // definition says", so dropping it is how every path that does not write
+  // gets back to the truth — including the ones that hold a name from before
+  // they started, which a captured value cannot do (see `writeName`).
+  //
+  // Render-phase resync when the committed name changes: React supports
+  // setState-during-render for this exact case. Focus is intentionally not
+  // preserved — if a remote write lands mid-edit, accepting the new
+  // committed name beats letting a stale draft overwrite it on the next
+  // blur.
+  //
+  // SOMEBODY ELSE'S change, though, and `requestedName` is what tells them
+  // apart. A rename is not instant — it is planned, counted, sometimes
+  // confirmed, then committed — and the field is live throughout below the
+  // threshold, so the user can be typing the next name when the last one
+  // lands. Its own acknowledgement arriving then must not read as a remote
+  // edit and take that typing away. The enum options editor learned the
+  // same thing about its own writes (`pending`, there); both are working
+  // around a seam that tells an editor nothing about its request, which is
+  // what #1117 is for.
+  const [draftName, setDraftName] = useState<string | null>(null)
   const [committedName, setCommittedName] = useState(propertyName)
+  const [requestedName, setRequestedName] = useState<string | null>(null)
   if (propertyName !== committedName) {
     setCommittedName(propertyName)
-    setDraftName(propertyName)
+    if (propertyName !== requestedName) setDraftName(null)
+    setRequestedName(null)
   }
+  const shownName = draftName ?? propertyName
 
   const writeName = useCallback(async (draft: string) => {
     const next = trimIfEdited(draft, propertyName)
@@ -121,11 +345,39 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
     // them is `]]`-lossy) while reading as a reference to some other block
     // wherever the name is rendered.
     if (!isRoundTrippableReferenceLabel(next) || isGrammarShapedLabel(next)) {
-      setDraftName(propertyName)
+      setDraftName(null)
       return
     }
-    await block.set(propertyNameProp, next)
-  }, [block, propertyName])
+    setRequestedName(next)
+    const wrote = await throughFanoutGate(atStart => {
+      // Re-aimed at whatever the definition is called NOW: a rename carries
+      // a whole replacement name and means the same thing from any starting
+      // point, so a predecessor in the queue changes which name it is
+      // replacing, not whether to.
+      if (atStart.name === next) return {skip: null}
+      return {
+        change: {kind: 'rename', propertyName: atStart.name, nextName: next},
+        stillCurrent: now => now.name === atStart.name,
+        write: tx => tx.setProperty(block.id, propertyNameProp, next),
+      }
+    })
+    // Anything that did not write has to put the FIELD back too: the draft is
+    // what the user typed, and leaving it there shows a name the definition
+    // does not have — one a later blur would then submit as a fresh rename.
+    // DROPPED rather than restored to the name this closure captured, and
+    // that distinction is the whole of it: when the write was refused BECAUSE
+    // a peer renamed, the resync has already adopted the peer's name, so
+    // writing the captured one back sticks and the next blur undoes exactly
+    // the edit the refusal protected.
+    //
+    // Only THIS request's draft, though — the user may have typed past it
+    // while it was in flight, and that newer name is not this one's to
+    // discard.
+    if (!wrote) {
+      setRequestedName(null)
+      setDraftName(current => current === next ? null : current)
+    }
+  }, [block, propertyName, throughFanoutGate])
 
   const writePresetId = useCallback(async (next: string) => {
     if (next === presetId) return
@@ -134,20 +386,34 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
     // setProperties applies a two-key DELTA read against the fresh in-tx row —
     // NOT a whole-bag replace off the (possibly stale) `data` render snapshot,
     // which would clobber any sibling key written between render and commit.
-    await block.repo.tx(async tx => {
-      await tx.setProperties(block.id, {
-        set: [
-          propertyValue(presetIdProp, next),
-          // Reset config to the new preset's defaultConfig (re-encoded through
-          // its configCodec, if any), since the previous preset's config shape
-          // doesn't apply.
-          propertyValue(presetConfigProp, target.configCodec
-            ? target.configCodec.encode(target.defaultConfig as never) as Record<string, unknown>
-            : {}),
-        ],
-      })
-    }, {scope: ChangeScope.BlockDefault, description: `change preset to ${next}`})
-  }, [block, presetId, presets])
+    await throughFanoutGate(atStart => {
+      if (atStart.presetId === next) return {skip: null}
+      return {
+        change: {kind: 'type', propertyName: atStart.name},
+        // The CONFIG as well as the preset, because the write below replaces
+        // both: resetting it to the new preset's default is the point, and a
+        // config edit that landed since the planner looked is one this would
+        // discard without ever having seen it.
+        stillCurrent: now => now.presetId === atStart.presetId
+          && sameConfig(now.config, atStart.config),
+        write: tx => tx.setProperties(block.id, {
+          set: [
+            propertyValue(presetIdProp, next),
+            // Reset config to the new preset's defaultConfig (re-encoded
+            // through its configCodec, if any), since the previous preset's
+            // config shape doesn't apply.
+            propertyValue(presetConfigProp, target.configCodec
+              ? target.configCodec.encode(target.defaultConfig as never) as Record<string, unknown>
+              : {}),
+          ],
+        }),
+      }
+    })
+  }, [block, presetId, presets, throughFanoutGate])
+
+  // See `renderConfigEditor`: bumping this remounts the config editor, which
+  // is how a change that did not land takes its optimistic state with it.
+  const [configGeneration, setConfigGeneration] = useState(0)
 
   const writeConfig = useCallback(async (next: unknown) => {
     if (!preset?.configCodec) return
@@ -158,8 +424,30 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
       console.warn(`[PropertySchemaContentRenderer] cannot encode config:`, err)
       return
     }
-    await block.set(presetConfigProp, encoded)
-  }, [block, preset])
+    const wrote = await throughFanoutGate(atStart => {
+      // The ONE gesture that cannot be re-aimed: `encoded` is the editor's
+      // view of the STORED object with one part changed, and the codec that
+      // produced it is this preset's. Applied over a row that has moved it
+      // would put back whatever the change before it removed — so removing
+      // two choices in quick succession would silently restore the first.
+      if (atStart.presetId !== presetId || !sameConfig(atStart.config, persistedConfig)) {
+        return {skip: OVERTAKEN(atStart.name)}
+      }
+      // Nothing to write, so nothing to ask about. Reachable without any
+      // editing at all: the ref picker re-emits its list when a target type
+      // already on it is entered again, and counting a whole graph to
+      // confirm a write of the same bytes is the confirmation at its least
+      // trustworthy.
+      if (sameConfig(atStart.config, encoded)) return {skip: null}
+      return {
+        change: {kind: 'options', propertyName: atStart.name},
+        stillCurrent: now => now.presetId === presetId
+          && sameConfig(now.config, persistedConfig),
+        write: tx => tx.setProperty(block.id, presetConfigProp, encoded),
+      }
+    })
+    if (!wrote) setConfigGeneration(generation => generation + 1)
+  }, [block, persistedConfig, preset, presetId, throughFanoutGate])
 
   // Lazy delete-confirm: first click counts users; if any, ask for a
   // second click; second click (or no users) deletes. Confirm state
@@ -221,11 +509,11 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
           className={preset ? 'text-fuchsia-500' : 'text-muted-foreground'}
         />
         <Input
-          value={draftName}
+          value={shownName}
           placeholder="property name"
           disabled={readOnly}
           onChange={(e: ChangeEvent<HTMLInputElement>) => setDraftName(e.target.value)}
-          onBlur={() => { void writeName(draftName) }}
+          onBlur={() => { void writeName(shownName) }}
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
               e.preventDefault()
@@ -243,15 +531,10 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
             className="h-9 w-full appearance-none rounded-md border border-input bg-background px-2 pr-9 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
             value={presetId}
             disabled={readOnly}
-            onChange={(e) => {
-              // A refusal is already surfaced: `repo.tx` notifies the
-              // user-error channel before it rethrows, and the toast layer
-              // listens. Catching keeps the rethrow from becoming an unhandled
-              // rejection — nothing here has anything to add to it. Routine
-              // now that a re-type over values the new type cannot read is one
-              // of the refusals (#1024).
-              writePresetId(e.target.value).catch(() => {})
-            }}
+            // The gate owns the refusal now — it catches it, leaves the
+            // kernel's own message standing, and reports a non-write to the
+            // caller — so there is nothing left here to catch.
+            onChange={(e) => { void writePresetId(e.target.value) }}
           >
             {presetEntries.map(p => (
               <option key={p.id} value={p.id}>{p.label}</option>
@@ -283,7 +566,7 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
             className={`m-0 min-w-0 border-0 p-0${
               readOnly ? ' pointer-events-none opacity-60' : ''}`}
           >
-            {renderConfigEditor(preset, decodedConfig, writeConfig)}
+            {renderConfigEditor(preset, decodedConfig, writeConfig, configGeneration)}
           </fieldset>
         </div>
       )}
