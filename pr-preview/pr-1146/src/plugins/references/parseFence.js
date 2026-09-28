@@ -1,1 +1,1 @@
-import{SI as e,xI as t}from"../../../chunks/app-BTGIjagl.js";export{t as mergeReferrers,e as wikilinkSourcesByContent};
+import{SI as e,xI as t}from"../../../chunks/app-CiCfJ_YF.js";export{t as mergeReferrers,e as wikilinkSourcesByContent};
