@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { useRepo } from '@/context/repo.js'
 import type { DialogContextProps } from '@/utils/dialogs.js'
+import { writeTextToClipboard } from '@/utils/copy.js'
 import {
   agentTokenStore,
   notifyAgentTokensChanged,
@@ -102,7 +103,7 @@ function AgentTokensDialogBody({
 
   const copy = async (text: string) => {
     try {
-      await navigator.clipboard.writeText(text)
+      await writeTextToClipboard(text)
       setCopyState('copied')
       window.setTimeout(() => setCopyState('idle'), 1500)
     } catch (error) {

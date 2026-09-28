@@ -14,12 +14,56 @@ import {
   resolvePasteWithMediaCapture,
 } from '@/paste/operations.js'
 import type { PasteRequest } from '@/paste/decision.js'
+import { tryPasteAsMoveAt, type PasteAsMoveResult } from '@/paste/moveOnPasteVerb.js'
+import type { ClipboardPayload } from '@/paste/clipboardPayload.js'
+import { readPasteEventContent } from '@/paste/pasteEventContent.js'
 import { useRepo } from '@/context/repo.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { codeMirrorExtensionsFacet } from '@/editor/codeMirrorExtensions.js'
 import { createFieldCreationKeydownExtension } from './fieldCreationKeydown.js'
 import { useBlockContext } from '@/context/block.js'
 import { useBlockTitleTextClass } from './blockTitleText.js'
+import type { Block } from '@/data/block.js'
+import type { Repo } from '@/data/repo.js'
+
+/**
+ * Does an EDITOR-surface paste (this component's `handlePaste`) complete a
+ * pending cut→move rather than inserting text?
+ *
+ * Resolved through `resolvePasteMoveTarget` with `placement: 'sibling'`,
+ * matching what `pasteEditModeMultilineText` passes to its own
+ * `resolveRootDestination`. 'sibling' does NOT mean "always a sibling":
+ * it suppresses only the visible-children rule, and the root rules still
+ * apply — which is why `scopeRootId` is threaded in. A hardcoded sibling
+ * target moves the cut blocks OUTSIDE the rendered surface when the edited
+ * block is the render-scope root, so they never visibly arrive.
+ *
+ * Extracted from `handlePaste` so it's directly testable: rendering a live
+ * CodeMirror instance to exercise a real `ClipboardEvent` isn't practical
+ * in this suite (no existing harness renders `BlockEditor`/`CodeMirror`
+ * with a working view + dispatch), so `CodeMirrorContentRenderer.test.ts`
+ * calls this function directly against a real repo instead. `handlePaste`
+ * itself just calls this and returns early on `true` — same production
+ * code path either way.
+ */
+export const resolveEditorPasteMove = (
+  repo: Repo,
+  block: Block,
+  payload: ClipboardPayload | null,
+  scopeRootId: string | undefined,
+  intent: PasteRequest['intent'] = 'split',
+): Promise<PasteAsMoveResult> =>
+  // `single-block` is Cmd/Ctrl+Shift+V — "insert the clipboard text
+  // verbatim into this block". Completing a cut there would relocate the
+  // source blocks and insert nothing at the caret, taking the explicit
+  // command away from the user. The decision lives in here rather than in
+  // `handlePaste` so it's reachable from a test: this whole function is
+  // extracted for that reason (see the doc above).
+  tryPasteAsMoveAt(
+    repo, block, 'after', scopeRootId,
+    intent === 'single-block' ? null : payload,
+    'sibling',
+  )
 
 export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
   const repo = useRepo()
@@ -58,13 +102,8 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
     // Read-only editors leave paste to the browser (a no-op on a
     // non-editable surface) — matches the historical single-block guard.
     if (repo.isReadOnly) return
-    // File(s) on the clipboard (a pasted image) carry no text/plain, so read
-    // them BEFORE the no-text early return below — otherwise an image paste
-    // would fall through to the browser.
-    const files = e.clipboardData?.files
-    const fileList = files && files.length > 0 ? Array.from(files) : []
-    const text = e.clipboardData?.getData('text/plain') ?? ''
-    if (!text && fileList.length === 0) return
+    const {text, html, files: fileList, payload, hasAnything} = readPasteEventContent(e)
+    if (!hasAnything) return
 
     // Latch + reset the chord intent — the paste event can't see modifiers,
     // so the keydown handler latched it. `preventDefault` MUST run
@@ -72,8 +111,22 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
     // always takes over the paste.
     const intent = pasteIntentRef.current
     pasteIntentRef.current = 'split'
-    const html = e.clipboardData?.getData('text/html') || undefined
     e.preventDefault()
+
+    // Is this a cut being completed? Checked before any of the
+    // paste-decision machinery below: a move relocates the ORIGINAL blocks
+    // rather than inserting text at all, and cut→paste means move whichever
+    // surface the paste lands on — the clipboard text IS those blocks, so
+    // inserting it as text would duplicate them. This is the mouse-driven
+    // path (click a destination to enter edit mode, then ⌘V). If the move
+    // completes (or is refused as a would-be cycle — see `pasteAsMoveImpl`),
+    // the paste is fully handled and nothing below should also run.
+    // Both 'moved' and 'refused' mean the paste is consumed; only
+    // 'not-a-move' falls through to the text path below.
+    if (await resolveEditorPasteMove(repo, block, payload, blockContext.scopeRootId, intent) !== 'not-a-move') {
+      return
+    }
+    if (!text && fileList.length === 0) return
 
     // Read the live editor state once: the decision is SYNCHRONOUS (`runSync`),
     // so it resolves before any `await` below and the caret it keys on can't
