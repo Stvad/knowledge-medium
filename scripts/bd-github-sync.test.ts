@@ -819,7 +819,8 @@ describe('spawnAsync', () => {
 })
 
 describe('foldRunLog', () => {
-  const start = (id: string, pid = 4242) => JSON.stringify({ id, event: 'start', pid, at: `at-${id}`, budgetMs: 15_000 })
+  const NOW = Date.parse('2026-09-27T12:00:00Z')
+  const start = (id: string, pid = 4242, at = '2026-09-27T11:59:00Z') => JSON.stringify({ id, event: 'start', pid, at, budgetMs: 15_000 })
   const end = (id: string, over: object = {}) => JSON.stringify({ id, event: 'end', at: `at-${id}`, ms: 3_000, idleMs: 0, ok: true, budgetMs: 15_000, spawns: [], ...over })
   const dead = () => false
   const alive = () => true
@@ -832,8 +833,15 @@ describe('foldRunLog', () => {
   })
 
   it('reads a start with no end as a run still going while its process lives, and as killed once it does not', () => {
-    expect(foldRunLog(start('a'), alive)).toEqual([])
-    expect(foldRunLog(start('a'), dead)).toMatchObject([{ id: 'a', ok: false, failure: expect.stringContaining('did not finish') }])
+    expect(foldRunLog(start('a'), alive, NOW)).toEqual([])
+    expect(foldRunLog(start('a'), dead, NOW)).toMatchObject([{ id: 'a', ok: false, failure: expect.stringContaining('did not finish') }])
+  })
+
+  // A pid is not proof of life: pids are reused, and an orphan no init reaps
+  // stays a zombie that reads as alive. Past the staleness bound the lock also
+  // uses, a start with no end is a run that did not finish.
+  it('reads a start past the staleness bound as a run that did not finish, whatever its pid says', () => {
+    expect(foldRunLog(start('a', 4242, '2026-09-27T11:49:00Z'), alive, NOW)).toMatchObject([{ id: 'a', failure: expect.stringContaining('did not finish') }])
   })
 
   it('drops a run that never took the lock, and keeps an older build\'s id-less lines as runs', () => {
@@ -866,10 +874,11 @@ describe('syncAlarm', () => {
   // A SessionStart that overlaps a sync still running must not read it as one
   // that failed.
   it('does not count a run that is still going', () => {
-    const running = JSON.stringify({ id: 'r', event: 'start', pid: 4242, at: 'now', budgetMs: 20_000 })
+    const running = JSON.stringify({ id: 'r', event: 'start', pid: 4242, at: '2026-09-27T11:59:00Z', budgetMs: 20_000 })
     const failed = record({ ok: false, failure: 'network' })
-    expect(syncAlarm([failed, running].join('\n'), () => true)).toBe('')
-    expect(syncAlarm([failed, running].join('\n'), () => false)).toContain('failed its last two runs')
+    const now = Date.parse('2026-09-27T12:00:00Z')
+    expect(syncAlarm([failed, running].join('\n'), () => true, now)).toBe('')
+    expect(syncAlarm([failed, running].join('\n'), () => false, now)).toContain('failed its last two runs')
   })
 
   // A sync that cannot run at all is the loudest case, and the latest run says
@@ -1247,6 +1256,8 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     issueListDelay?: number
     /** `gh auth token` prints nothing, as on a machine that is logged out. */
     noGhToken?: boolean
+    /** `bd --version` fails, as when bd is missing from PATH. */
+    bdBroken?: boolean
     /** Extra environment for the script (the mirror's post cap override). */
     env?: Record<string, string>
     /** What `bd --version` prints (default: a verified version). */
@@ -1276,7 +1287,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
         '#!/bin/sh',
         `echo "bd $@" >> "${shimLog}"`,
         'case "$1" in',
-        `  --version) echo "${opts.bdVersionOutput ?? 'bd version 1.3.0 (shim)'}";;`,
+        `  --version) ${opts.bdBroken ? 'exit 127' : `echo "${opts.bdVersionOutput ?? 'bd version 1.3.0 (shim)'}"`};;`,
         '  github)',
         '    case "$*" in *--push-only*)',
         `      k=$(cat "${repo}/push-count" 2>/dev/null || echo 0); k=$((k+1)); echo $k > "${repo}/push-count"`,
@@ -1560,6 +1571,17 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const dry = makeSyncRepo(repo)
     expect(dry.run('--dry-run').status).toBe(0)
     expect(dry.runLog()).toEqual([])
+  })
+
+  // A checkout with a beads DB whose bd cannot run has stopped syncing: that is
+  // on record, where a checkout with no DB at all stays silent.
+  it('records a run whose bd cannot run as failed', () => {
+    const { run, runLog, shimCalls } = makeSyncRepo({ issues: [ghIssue(1, '2026-08-20T00:00:00Z')], reads: [[]], bdBroken: true })
+    const r = run()
+    expect(r.status).toBe(0)
+    expect(r.stdout).toContain('skipped (bd is not runnable')
+    expect(runLog()).toMatchObject([{ ok: false, failure: expect.stringContaining('bd is not runnable') }])
+    expect(shimCalls()).not.toContain('bd export')
   })
 
   // A machine that lost its gh login stops syncing without failing anything:
@@ -2045,7 +2067,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   // the newer side for the next pull.
   it('holds back the comments of a bead whose push did not land, and says so', () => {
     const newer = pushable({ id: 'km-m', external_ref: ref(7), updated_at: '2026-08-21T00:00:00Z', comment_count: 2 })
-    const { run, posted } = makeSyncRepo({
+    const { run, posted, runLog } = makeSyncRepo({
       issues: twoIssues(),
       issuesAfterPush: twoIssues(),
       reads: [[newer]],
@@ -2057,6 +2079,9 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(r.stdout).toContain('push did not land for km-m (#7)')
     expect(r.stdout).toContain('SKIPPED comments of km-m: GitHub does not hold its local row this run')
     expect(posted()).toBe('')
+    // A documented steady state, reported every run until it resolves — not a
+    // failure the alarm should count.
+    expect(runLog()).toMatchObject([{ ok: true }])
   })
 
   // The mapping is the run's only record of what it minted, so a failed
@@ -2179,7 +2204,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   })
 
   it('stops a bead at its first failed post so the thread keeps bead order, and leaves the rest for the next run', () => {
-    const { run, posted, shimCalls } = makeSyncRepo({
+    const { run, posted, shimCalls, runLog } = makeSyncRepo({
       issues: twoIssues(),
       reads: [commentedRows()],
       comments: { 'km-m': twoComments },
@@ -2190,6 +2215,8 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(r.status).toBe(0)
     expect(r.stdout).toContain(`FAILED to mirror comment ${C1} of km-m to #7 — 2 left for the next run`)
     expect(r.stdout).not.toContain('mirrored ')
+    // The report reaches nobody, so the step it could not do is on record.
+    expect(runLog()).toMatchObject([{ ok: false, failure: expect.stringContaining(`FAILED to mirror comment ${C1}`) }])
     expect(posted()).toBe('')
     // A failed post needs no repair pass now: nothing was touched, and the
     // pull can only ever be handed ids we chose.

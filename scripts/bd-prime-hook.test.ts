@@ -250,6 +250,8 @@ describe('bd-prime-hook process behavior', { timeout: 20_000 }, () => {
         primeStdout?: string
         primeStderr?: string
         codexStdout?: string
+        /** `bd --version` fails, as when bd is missing from PATH. */
+        bdBroken?: boolean
     }) => {
         const repo = mkdtempSync(join(tmpdir(), 'bd-prime-hook-'))
         spawnSync('git', ['init', '-q'], { cwd: repo })
@@ -273,7 +275,7 @@ describe('bd-prime-hook process behavior', { timeout: 20_000 }, () => {
         // make the assertions vacuous.
         writeFileSync(
             join(shimDir, 'bd'),
-            `#!/bin/sh\necho "bd $@" >> "${shimLog}"\ncase "$1" in\n  --version) echo "bd-shim 0.0.0";;\n  codex-hook) cat > "${codexInput}"; cat "${codexFixture}";;\n  prime) cat "${fixture}"; cat "${stderrFixture}" >&2;;\nesac\nexit 0\n`,
+            `#!/bin/sh\necho "bd $@" >> "${shimLog}"\ncase "$1" in\n  --version) ${opts.bdBroken ? 'exit 127' : 'echo "bd-shim 0.0.0"'};;\n  codex-hook) cat > "${codexInput}"; cat "${codexFixture}";;\n  prime) cat "${fixture}"; cat "${stderrFixture}" >&2;;\nesac\nexit 0\n`,
         )
         chmodSync(join(shimDir, 'bd'), 0o755)
         const env = { ...process.env, PATH: `${shimDir}:${process.env.PATH}` }
@@ -362,6 +364,17 @@ describe('bd-prime-hook process behavior', { timeout: 20_000 }, () => {
         const r = run(['--codex', 'SessionStart'], '{}')
         expect(r.status).toBe(0)
         expect(JSON.parse(r.stdout).hookSpecificOutput.additionalContext).toContain('bd-github-sync is over its 20s budget')
+    })
+
+    // bd itself can be what broke; the alarm reads only the log, so it still
+    // opens the session, with no index to go with it.
+    it('still raises the sync alarm when bd cannot run', () => {
+        const failed = { at: '2026-09-24T20:00:00.000Z', ms: 400, ok: false, failure: 'bd is not runnable', budgetMs: 15_000, spawns: [] }
+        const { run, shimCalls } = makeRepo({ dbReady: true, bdBroken: true, syncRuns: [failed, failed] })
+        const r = run()
+        expect(r.status).toBe(0)
+        expect(JSON.parse(r.stdout).hookSpecificOutput.additionalContext).toContain('failed its last two runs')
+        expect(shimCalls()).not.toContain('bd prime')
     })
 
     it('forwards the Codex event and stdin, then compacts native context in place', () => {

@@ -127,10 +127,11 @@
  *       runs carry it. This mode writes NOTHING, so
  *       it needs no dry-run valve: it reads, and it blocks or allows.
  *
- * Every path no-ops silently when bd, the beads DB, or a gh token is missing
- * (cloud sessions) — and no bd command runs before the DB's existence is
+ * Every path no-ops silently when the beads DB is missing (a fresh clone, a
+ * cloud session) — and no bd command runs before the DB's existence is
  * confirmed, because the FIRST bd command in a fresh clone creates an empty
- * DB that then refuses to pull. The hook's bead-id block still fires without
+ * DB that then refuses to pull. A checkout that HAS a DB but no runnable bd
+ * or no gh token skips the sync too, and its run log records a failed run. The hook's bead-id block still fires without
  * a DB: an unmappable reference is worth blocking even where the sync can't
  * run.
  *
@@ -1164,19 +1165,36 @@ const mainRepoRoot = () => {
 let bdVersionOutput = null
 const probeBdVersion = () => (bdVersionOutput ??= tryRun('bd', ['--version'], { timeout: PROBE_TIMEOUT }))
 
-// The DB's PRIOR existence gates every bd invocation — see header.
-// Exported for bd-prime-hook.mjs, which shares the same fresh-clone invariant.
-export const initializedDbRoot = () => {
+// The DB's PRIOR existence gates every bd invocation — see header. Kept apart
+// from whether bd runs: no DB is a fresh clone or a cloud session, which stays
+// silent, while a DB with no runnable bd is a broken install the run log and
+// its alarm must see.
+export const beadsDbRoot = () => {
   const root = mainRepoRoot()
-  return root && existsSync(join(root, '.beads', 'embeddeddolt')) && probeBdVersion() ? root : null
+  return root && existsSync(join(root, '.beads', 'embeddeddolt')) ? root : null
+}
+export const bdRunnable = () => probeBdVersion() !== null
+
+// Exported for bd-prime-hook.mjs and bd-publish-verify.mjs, which share the
+// same fresh-clone invariant.
+export const initializedDbRoot = () => {
+  const root = beadsDbRoot()
+  return root && bdRunnable() ? root : null
 }
 
-export const preconditions = (root = initializedDbRoot()) => {
-  if (!root) return { ok: false, reason: 'no initialized beads DB (or bd not on PATH)' }
+export const preconditions = () => {
+  const root = beadsDbRoot()
+  if (!root) return { ok: false, reason: 'no initialized beads DB' }
+  if (!bdRunnable()) return { ok: false, root, reason: 'bd is not runnable (not on PATH, or its version probe failed)' }
   const token = tryRun('gh', ['auth', 'token'], { timeout: PROBE_TIMEOUT })?.trim()
   if (!token) return { ok: false, root, reason: 'no gh token' }
   return { ok: true, root, env: { ...process.env, GITHUB_TOKEN: token, BD_NO_REMOTE_ADOPT: '1' } }
 }
+
+// A run holding the lock, or started and never finished, for longer than this
+// is presumed dead whatever its pid says: pids are reused, and an orphan that
+// no init reaps stays a zombie that reads as alive.
+const STALE_RUN_MS = 10 * 60_000
 
 const processAlive = pid => {
   try {
@@ -1212,7 +1230,7 @@ const withLock = async (root, fn) => {
       if (Date.now() > deadline) return { skipped: `lock at ${lock} could not be acquired in 20s` }
       const holder = Number(tryRead(lock))
       const age = Date.now() - (statSync(lock, { throwIfNoEntry: false })?.mtimeMs ?? Date.now())
-      if ((holder && !processAlive(holder)) || age > 10 * 60_000) {
+      if ((holder && !processAlive(holder)) || age > STALE_RUN_MS) {
         try {
           unlinkSync(lock)
         } catch {}
@@ -1609,9 +1627,9 @@ const openRunRecord = root => {
 
 // Every run the log holds, oldest first, as its end record: a skipped run is
 // dropped, and a start with no end is a run still going while its process
-// lives (left out) or one that was killed or crashed once it does not. A line
-// with no id — an older build's — stands as a run of its own.
-export const foldRunLog = (logText, isAlive = processAlive) => {
+// lives and it is not stale (left out), or one that was killed or crashed. A
+// line with no id — an older build's — stands as a run of its own.
+export const foldRunLog = (logText, isAlive = processAlive, now = Date.now()) => {
   const slots = new Map()
   for (const line of String(logText ?? '').split('\n')) {
     let r
@@ -1627,7 +1645,7 @@ export const foldRunLog = (logText, isAlive = processAlive) => {
   }
   return [...slots.values()].flatMap(({ start, end }) => {
     if (end) return end.event === 'skipped' ? [] : [end]
-    if (Number.isInteger(start.pid) && isAlive(start.pid)) return []
+    if (Number.isInteger(start.pid) && isAlive(start.pid) && now - Date.parse(start.at) < STALE_RUN_MS) return []
     return [{ ...start, ms: 0, idleMs: 0, ok: false, failure: DID_NOT_FINISH, spawns: [] }]
   })
 }
@@ -1652,8 +1670,8 @@ const parseRunRecord = r => {
 // GitHub having a bad minute as a regression. The latest run decides which of
 // the two it reports. Total over any text — it runs at session start, which
 // must never break.
-export const syncAlarm = (logText, isAlive = processAlive) => {
-  const runs = foldRunLog(logText, isAlive).map(parseRunRecord).filter(Boolean)
+export const syncAlarm = (logText, isAlive = processAlive, now = Date.now()) => {
+  const runs = foldRunLog(logText, isAlive, now).map(parseRunRecord).filter(Boolean)
   const lastTwo = runs.slice(-2)
   const bad = record => record.failure !== null || overBudget(record)
   if (lastTwo.length < 2 || !lastTwo.every(bad)) return ''
@@ -1910,6 +1928,11 @@ const runSync = async ({ quiet = false, dryRun = false } = {}) => {
     const actionReported = report.some(l => !syncSummary.includes(l) && !routine.has(l))
     const changed = actionReported || syncSummary.some(l => /[1-9]/.test(l))
     if (!quiet || changed) console.log(['bd-github-sync:', ...report].join('\n  '))
+    // FAILED is the report's word for a step it could not do (a post, a close,
+    // a read); the run is on record as failed, since the report reaches nobody
+    // and the same failure can recur every run. What the report states as
+    // expected — a withheld bead, a push that did not land — is not a failure.
+    return { failures: report.filter(l => l.startsWith('FAILED')) }
   }
 
   // Everything from here is on record, a refusal or a missing token included:
@@ -1924,7 +1947,12 @@ const runSync = async ({ quiet = false, dryRun = false } = {}) => {
     }
     refuseUnverifiedBd()
     const result = await withLock(pre.root, syncSteps)
-    outcome = result?.skipped ? { skipped: true } : {}
+    const failures = result.failures ?? []
+    outcome = result.skipped
+      ? { skipped: true }
+      : failures.length
+        ? { failure: `${failures[0].slice(0, 300)}${failures.length > 1 ? ` (+${failures.length - 1} more)` : ''}` }
+        : {}
     if (result?.skipped && !quiet) console.log(`bd-github-sync: skipped (${result.skipped})`)
     return result
   } catch (e) {

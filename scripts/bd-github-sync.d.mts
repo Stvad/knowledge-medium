@@ -11,6 +11,8 @@ export declare const isPostVerifiable: (cmd: string) => boolean
 export declare const carriesPublishableText: (cmd: string) => boolean
 export declare const tryRun: (file: string, args: string[], opts?: object) => string | null
 export declare const preconditions: (root?: string | null) => { ok: boolean; reason?: string; root?: string; env?: Record<string, string | undefined> }
+export declare const beadsDbRoot: () => string | null
+export declare const bdRunnable: () => boolean
 export declare const beadIssueLookup: (ids: string[]) => Map<string, number | null>
 export declare const fetchIssueInfo: (
   number: number,
@@ -84,8 +86,12 @@ export declare const spawnAsync: (
 ) => Promise<{ stdout: string; stderr: string; status?: number | null; error?: Error }>
 export declare const settleAll: <T extends readonly unknown[]>(promises: T) => Promise<{ -readonly [K in keyof T]: Awaited<T[K]> }>
 export declare const inPool: <T>(items: T[], width: number, fn: (item: T) => Promise<unknown>) => Promise<void>
-export declare const syncAlarm: (logText: string | null | undefined, isAlive?: (pid: number) => boolean) => string
-export declare const foldRunLog: (logText: string | null | undefined, isAlive?: (pid: number) => boolean) => Record<string, unknown>[]
+export declare const syncAlarm: (logText: string | null | undefined, isAlive?: (pid: number) => boolean, now?: number) => string
+export declare const foldRunLog: (
+  logText: string | null | undefined,
+  isAlive?: (pid: number) => boolean,
+  now?: number,
+) => Record<string, unknown>[]
 export declare const readSyncAlarm: (root: string) => string
 export declare const planLossyReapplies: (
   beads: BeadRow[],

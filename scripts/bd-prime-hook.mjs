@@ -15,7 +15,7 @@
 // (the first bd command would create an empty DB that then refuses to pull).
 import { spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
-import { initializedDbRoot, readSyncAlarm } from './bd-github-sync.mjs'
+import { bdRunnable, beadsDbRoot, readSyncAlarm } from './bd-github-sync.mjs'
 import { isMainModule } from './is-main-module.mjs'
 
 // Just under the measured 10,000-char inline limit; the margin absorbs a
@@ -202,13 +202,16 @@ const runCodexHook = (event, notice) => {
 
 if (isMainModule(import.meta.url)) {
   try {
-    const root = initializedDbRoot()
+    const root = beadsDbRoot()
     if (root) {
       const codexEvent = process.argv[2] === '--codex' ? (process.argv[3] ?? '') : null
       // The alarm opens a session. The other lifecycle events re-inject context
       // mid-session (UserPromptSubmit, compaction), where it would repeat.
       const notice = codexEvent === null || codexEvent === 'SessionStart' ? readSyncAlarm(root) : ''
-      const out = withNotice(codexEvent === null ? runClaudeSessionStart(notice) : runCodexHook(codexEvent, notice), notice)
+      // The alarm reads only the log, so it still goes out when bd itself is
+      // what is broken.
+      const index = !bdRunnable() ? null : codexEvent === null ? runClaudeSessionStart(notice) : runCodexHook(codexEvent, notice)
+      const out = withNotice(index, notice)
       if (out) process.stdout.write(out)
     }
   } catch (e) {
