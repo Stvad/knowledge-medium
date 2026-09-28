@@ -13,6 +13,7 @@ import {
   closeKeywordRefs,
   coveredMs,
   extractIssueRefs,
+  foldRunLog,
   deriveLabelPriority,
   extractBeadIds,
   inPool,
@@ -817,6 +818,31 @@ describe('spawnAsync', () => {
   })
 })
 
+describe('foldRunLog', () => {
+  const start = (id: string, pid = 4242) => JSON.stringify({ id, event: 'start', pid, at: `at-${id}`, budgetMs: 15_000 })
+  const end = (id: string, over: object = {}) => JSON.stringify({ id, event: 'end', at: `at-${id}`, ms: 3_000, idleMs: 0, ok: true, budgetMs: 15_000, spawns: [], ...over })
+  const dead = () => false
+  const alive = () => true
+
+  // Runs in several worktrees start and end outside the sync lock, so their
+  // lines interleave; each start pairs with its own end, in start order.
+  it('pairs each start with its own end, oldest start first', () => {
+    const text = [start('a'), start('b'), end('b', { ms: 2 }), end('a', { ms: 1 })].join('\n')
+    expect(foldRunLog(text, dead).map(r => [r.id, r.ms])).toEqual([['a', 1], ['b', 2]])
+  })
+
+  it('reads a start with no end as a run still going while its process lives, and as killed once it does not', () => {
+    expect(foldRunLog(start('a'), alive)).toEqual([])
+    expect(foldRunLog(start('a'), dead)).toMatchObject([{ id: 'a', ok: false, failure: expect.stringContaining('did not finish') }])
+  })
+
+  it('drops a run that never took the lock, and keeps an older build\'s id-less lines as runs', () => {
+    const legacy = JSON.stringify({ at: 'old', ms: 1, ok: true, budgetMs: 15_000, spawns: [] })
+    const text = [legacy, start('a'), JSON.stringify({ id: 'a', event: 'skipped' })].join('\n')
+    expect(foldRunLog(text, dead).map(r => r.at)).toEqual(['old'])
+  })
+})
+
 describe('syncAlarm', () => {
   const record = (over: object) =>
     JSON.stringify({ at: '2026-09-24T20:00:00.000Z', ms: 3_000, ok: true, budgetMs: 20_000, spawns: [], ...over })
@@ -835,6 +861,15 @@ describe('syncAlarm', () => {
     expect(syncAlarm([record({}), slow(37_200)].join('\n'))).toBe('')
     expect(syncAlarm([slow(35_900), slow(37_200), record({})].join('\n'))).toBe('')
     expect(syncAlarm(slow(37_200))).toBe('')
+  })
+
+  // A SessionStart that overlaps a sync still running must not read it as one
+  // that failed.
+  it('does not count a run that is still going', () => {
+    const running = JSON.stringify({ id: 'r', event: 'start', pid: 4242, at: 'now', budgetMs: 20_000 })
+    const failed = record({ ok: false, failure: 'network' })
+    expect(syncAlarm([failed, running].join('\n'), () => true)).toBe('')
+    expect(syncAlarm([failed, running].join('\n'), () => false)).toContain('failed its last two runs')
   })
 
   // A sync that cannot run at all is the loudest case, and the latest run says
@@ -1303,9 +1338,10 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
       const child = spawn('node', [script, ...args], { cwd: repo, env, stdio: 'ignore' })
       return { child, done: new Promise<number | null>(resolve => child.on('close', resolve)) }
     }
+    // The records as the alarm reads them: each run's start folded with its end.
     const runLog = () => {
       const log = join(repo, SYNC_RUN_LOG)
-      return existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map(l => JSON.parse(l)) : []
+      return existsSync(log) ? (foldRunLog(readFileSync(log, 'utf8')) as ReturnType<typeof JSON.parse>[]) : []
     }
     // Most GraphQL calls ever in flight at once, from the delay log.
     const graphqlPeak = () => {
@@ -1503,6 +1539,18 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(runLog()[0].ms).toBeGreaterThanOrEqual(2000)
   })
 
+  // The log only grows by appends, so the run holding the lock trims it.
+  it('trims a log past twice its kept length back to the newest runs', () => {
+    const row = syncRow({ id: 'km-c', external_ref: ref(1), updated_at: '2026-08-19T00:00:00Z' })
+    const { repo, run } = makeSyncRepo({ issues: [ghIssue(1, '2026-08-20T00:00:00Z')], reads: [[row]] })
+    const old = Array.from({ length: 401 }, (_, i) => JSON.stringify({ at: `old-${i}`, ms: 1, ok: true, budgetMs: 15_000, spawns: [] }))
+    writeFileSync(join(repo, SYNC_RUN_LOG), old.join('\n') + '\n')
+    expect(run().status).toBe(0)
+    const lines = readFileSync(join(repo, SYNC_RUN_LOG), 'utf8').trim().split('\n')
+    expect(lines.length).toBeLessThanOrEqual(202)
+    expect(lines.at(-1)).toContain('"event":"end"')
+  })
+
   it('records a failed run as failed, and leaves no record for a dry run', () => {
     const row = syncRow({ id: 'km-c', external_ref: ref(1), updated_at: '2026-08-19T00:00:00Z' })
     const repo = { issues: [ghIssue(1, '2026-08-20T00:00:00Z'), unlinkedIssue()], reads: [[row]] }
@@ -1532,7 +1580,13 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     // Parked on a lock this test holds, so the kill lands mid-run.
     writeFileSync(join(repo, '.beads', 'github-sync.lock'), String(process.pid))
     const { child, done } = runInBackground()
-    await vi.waitFor(() => expect(runLog()).toHaveLength(1), { timeout: 15_000, interval: 50 })
+    // While its process lives the run is left out of the records, so fence on
+    // the start line itself.
+    await vi.waitFor(() => expect(readFileSync(join(repo, SYNC_RUN_LOG), 'utf8')).toContain('"event":"start"'), {
+      timeout: 15_000,
+      interval: 50,
+    })
+    expect(runLog()).toEqual([])
     child.kill('SIGKILL')
     await done
     expect(runLog()).toMatchObject([{ ok: false, failure: expect.stringContaining('did not finish') }])
@@ -1661,6 +1715,25 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const log = shimCalls()
     expect(log.match(/^bd export/gm)?.length).toBeGreaterThanOrEqual(2)
     expect(log).toContain('bd github sync --pull-only --issues 9\n')
+  })
+
+  // After a push the run waits on the network again (the landed check), so the
+  // pull is still planned on a read taken right before it.
+  it('re-reads before the pull after a push too', () => {
+    const pushed = pushable({ id: 'km-p', external_ref: ref(4), updated_at: '2026-08-21T00:00:00Z' })
+    const pulled = syncRow({ id: 'km-e', external_ref: ref(5), updated_at: '2026-08-19T00:00:00Z' })
+    const editedMeanwhile = { ...pulled, description: 'edited in another worktree', updated_at: '2026-08-22T00:00:00Z' }
+    const { run, shimCalls } = makeSyncRepo({
+      // #5 was edited on GitHub, so the run-start plan pulls it.
+      issues: [ghIssue(4, '2026-08-20T00:00:00Z'), { ...ghIssue(5, '2026-08-20T00:00:00Z'), title: 'edited on GitHub' }, unlinkedIssue()],
+      // Run start, after the push, just before the pull.
+      reads: [[pushed, pulled], [pushed, pulled], [pushed, editedMeanwhile]],
+    })
+    const r = run()
+    expect(r.status).toBe(0)
+    const log = shimCalls()
+    expect(log).toContain('bd github sync --push-only --issues km-p\n')
+    expect(log).toContain('bd github sync --pull-only --issues 99\n')
   })
 
   // A converged run's whole cost: the probes, one issue listing, one read of the

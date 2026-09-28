@@ -139,7 +139,7 @@
  */
 
 import { spawn, spawnSync } from 'node:child_process'
-import { accessSync, constants, existsSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { accessSync, appendFileSync, constants, existsSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { isMainModule } from './is-main-module.mjs'
@@ -1532,13 +1532,15 @@ const mirrorComments = async ({ beads, issueByNumber, mintedNumbers, skipIds, en
 // Run log: the slow-sync alarm's input
 // ---------------------------------------------------------------------------
 
-// One JSON line per real run, in the main checkout's .beads/ (per device, and
-// gitignored as a *.log): whether it finished, how long it took, and the
-// slowest spawns. The line is written when the run STARTS, as one that did not
-// finish, and completed when it ends — so a run that is killed or crashes is
-// on record too. SessionEnd output reaches nobody, so this log is the only
-// place a failing or slowing sync shows; the SessionStart hook reads it
-// (syncAlarm).
+// Each real run appends two lines to the main checkout's .beads/ (per device,
+// gitignored as a *.log): a `start` as it begins, and as it ends either its
+// record — whether it finished, how long it took, the slowest spawns — or a
+// `skipped` when it never took the lock (a wait that was another run's).
+// Appends only: runs in several worktrees start and end outside the sync lock,
+// and appending is what keeps one from writing over another's line. Readers
+// fold the pair by id (foldRunLog). SessionEnd output reaches nobody, so this
+// log is the only place a failing or slowing sync shows; the SessionStart hook
+// reads it (syncAlarm).
 export const SYNC_RUN_LOG = join('.beads', 'github-sync-runs.log')
 // About twice a converged run on the live tracker, leaving room for a run that
 // also pushes. The override is for the process tests.
@@ -1552,31 +1554,41 @@ const activeMs = record => record.ms - record.idleMs
 const overBudget = record => activeMs(record) > record.budgetMs
 const spawnSummary = spawns => spawns.map(s => `${s.cmd}${s.calls > 1 ? ` ×${s.calls}` : ''} ${seconds(s.ms)}`).join(', ')
 
-const rewriteRunLog = (root, edit) => {
+const appendRunLog = (root, entry) => {
   try {
-    const path = join(root, SYNC_RUN_LOG)
-    const lines = edit(tryRead(path).split('\n').filter(Boolean)).slice(-RUN_LOG_KEEP)
-    writeFileSync(path, lines.length ? lines.join('\n') + '\n' : '')
+    appendFileSync(join(root, SYNC_RUN_LOG), JSON.stringify(entry) + '\n')
   } catch {
     // The log is telemetry: losing a line must never fail the sync it describes.
   }
 }
 
-// Opens this run's record as one that did not finish, and returns what closes
-// it: `{}` when the run finished, `{ failure }` when it failed, `{ skipped }`
-// when it never took the lock — a wait that was another run's, so its line is
-// dropped. Timed from process start: what the user waits on includes node and
+// Called under the sync lock, and only once the log is twice the kept length.
+// Accepted: a line another run appends while this rewrite runs is lost.
+const trimRunLog = root => {
+  try {
+    const path = join(root, SYNC_RUN_LOG)
+    const lines = tryRead(path).split('\n').filter(Boolean)
+    if (lines.length > 2 * RUN_LOG_KEEP) writeFileSync(path, lines.slice(-RUN_LOG_KEEP).join('\n') + '\n')
+  } catch {
+    // Telemetry, as above.
+  }
+}
+
+// Logs this run's start, and returns what logs its end: `{}` when the run
+// finished, `{ failure }` when it failed, `{ skipped }` when it never took the
+// lock. Timed from process start: what the user waits on includes node and
 // the probes, not just the steps.
 const openRunRecord = root => {
   const id = `${process.pid}-${Math.round(performance.timeOrigin)}`
-  const base = { id, at: new Date().toISOString(), budgetMs: SLOW_SYNC_MS }
-  const line = record => JSON.stringify(record)
-  const isThisRun = l => l.includes(`"id":"${id}"`)
-  rewriteRunLog(root, lines => [...lines, line({ ...base, ms: 0, idleMs: 0, ok: false, failure: DID_NOT_FINISH, spawns: [] })])
+  const at = new Date().toISOString()
+  appendRunLog(root, { id, event: 'start', pid: process.pid, at, budgetMs: SLOW_SYNC_MS })
   return ({ failure, skipped }) => {
-    if (skipped) return rewriteRunLog(root, lines => lines.filter(l => !isThisRun(l)))
+    if (skipped) return appendRunLog(root, { id, event: 'skipped' })
     const record = {
-      ...base,
+      id,
+      event: 'end',
+      at,
+      budgetMs: SLOW_SYNC_MS,
       ms: Math.round(performance.now()),
       idleMs: Math.round(idleMs),
       ok: !failure,
@@ -1591,21 +1603,40 @@ const openRunRecord = root => {
         `bd-github-sync: slow run — ${seconds(activeMs(record))} against a ${Math.round(SLOW_SYNC_MS / 1000)}s budget; ` +
           `slowest: ${spawnSummary(record.spawns)}${record.idleMs ? `; plus ${seconds(record.idleMs)} of deliberate waits` : ''}`,
       )
-    rewriteRunLog(root, lines => [...lines.filter(l => !isThisRun(l)), line(record)])
+    appendRunLog(root, record)
   }
+}
+
+// Every run the log holds, oldest first, as its end record: a skipped run is
+// dropped, and a start with no end is a run still going while its process
+// lives (left out) or one that was killed or crashed once it does not. A line
+// with no id — an older build's — stands as a run of its own.
+export const foldRunLog = (logText, isAlive = processAlive) => {
+  const slots = new Map()
+  for (const line of String(logText ?? '').split('\n')) {
+    let r
+    try {
+      r = JSON.parse(line)
+    } catch {
+      continue
+    }
+    if (!r || typeof r !== 'object' || Array.isArray(r)) continue
+    const key = typeof r.id === 'string' ? r.id : Symbol('unkeyed')
+    if (!slots.has(key)) slots.set(key, {})
+    slots.get(key)[r.event === 'start' ? 'start' : 'end'] = r
+  }
+  return [...slots.values()].flatMap(({ start, end }) => {
+    if (end) return end.event === 'skipped' ? [] : [end]
+    if (Number.isInteger(start.pid) && isAlive(start.pid)) return []
+    return [{ ...start, ms: 0, idleMs: 0, ok: false, failure: DID_NOT_FINISH, spawns: [] }]
+  })
 }
 
 // A record as the alarm may use it, or null: the log is per-device text that
 // older builds and damaged writes also left behind, and formatting must only
 // ever see the shape openRunRecord writes. `failure` is null for a run that
 // finished.
-const parseRunRecord = line => {
-  let r
-  try {
-    r = JSON.parse(line)
-  } catch {
-    return null
-  }
+const parseRunRecord = r => {
   if (typeof r?.ms !== 'number' || typeof r.budgetMs !== 'number') return null
   return {
     at: typeof r.at === 'string' ? r.at : 'unknown',
@@ -1621,11 +1652,8 @@ const parseRunRecord = line => {
 // GitHub having a bad minute as a regression. The latest run decides which of
 // the two it reports. Total over any text — it runs at session start, which
 // must never break.
-export const syncAlarm = logText => {
-  const runs = String(logText ?? '')
-    .split('\n')
-    .map(parseRunRecord)
-    .filter(Boolean)
+export const syncAlarm = (logText, isAlive = processAlive) => {
+  const runs = foldRunLog(logText, isAlive).map(parseRunRecord).filter(Boolean)
   const lastTwo = runs.slice(-2)
   const bad = record => record.failure !== null || overBudget(record)
   if (lastTwo.length < 2 || !lastTwo.every(bad)) return ''
@@ -1674,6 +1702,7 @@ const runSync = async ({ quiet = false, dryRun = false } = {}) => {
   const { env } = pre
 
   const syncSteps = async () => {
+    trimRunLog(pre.root)
     // Every read of the tracker is one `bd export` — the only row carrying
     // assignee, labels, closed_at and comments — taken again only after a step
     // that WROTE: a converged run reads it once. The first runs under the
@@ -1804,13 +1833,13 @@ const runSync = async ({ quiet = false, dryRun = false } = {}) => {
       }
     }
 
-    // 2. The pull, planned on a read taken just before it, not the one the
-    // push was planned on: a bead another worktree edited since is newer
-    // locally by now, and planPullSet leaves it out. A run with nothing to pull
-    // pays no re-read, and after a push the post-push read is that read.
+    // 2. The pull, planned on a read taken right before it — after the push,
+    // its landed check and any other step that waits: a bead another worktree
+    // edited meanwhile is newer locally by now, and planPullSet leaves it out.
+    // A run with nothing to pull pays no re-read.
     // Pull-only: a push leg would bypass planPrePullPush's selection.
     const pullPlan = beads => planPullSet(beads, issueByNumber, pullExcluded)
-    const staleForPull = !pushed && !dryRun && pullPlan(freshBeads).length > 0
+    const staleForPull = !dryRun && pullPlan(freshBeads).length > 0
     const pullSet = pullPlan(staleForPull ? await exportBeads(env) : freshBeads)
     const syncOut = syncIssues('--pull-only', pullSet, env, dryRun ? ['--dry-run'] : [])
     const syncSummary = syncOut
