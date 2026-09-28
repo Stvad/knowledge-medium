@@ -28,11 +28,11 @@
  *  Google client, and `createOrFindPlace` happens in the geo plugin's
  *  CodeMirror extension. */
 
-import { EditorSelection } from '@codemirror/state'
 import type { EditorView } from '@codemirror/view'
 import { isInsideLiteralMarkdown } from '@/editor/syntaxContext'
 import { flushEditorContent } from '@/editor/contentFlush'
 import { matchCharTrigger, type TriggerMatch } from '@/editor/triggerMatch'
+import { replaceInView } from './blockTextReplace'
 import type {
   Completion,
   CompletionContext,
@@ -121,49 +121,6 @@ export interface PlaceAutocompleteOptions {
 export const matchAtTrigger = (text: string, pos: number): TriggerMatch | null =>
   matchCharTrigger(text, pos, '@')
 
-/** Where to apply the trigger-text → wikilink replacement once the
- *  resolution settles. Prefers the recorded span if the text is still
- *  there; re-locates by content when the doc drifted around it (other
- *  edits landed while the resolution was pending); `null` when the
- *  trigger text is gone — the user deleted it, nothing to replace.
- *  Exported for direct testing. */
-export const planResolvedInsert = (
-  doc: string,
-  span: {from: number; to: number},
-  triggerText: string,
-): {from: number; to: number} | null => {
-  if (triggerText.length === 0) return null
-  if (doc.slice(span.from, span.to) === triggerText) return span
-  const idx = doc.indexOf(triggerText)
-  if (idx === -1) return null
-  return {from: idx, to: idx + triggerText.length}
-}
-
-/** Try to deliver the insert through the editor view. False when the
- *  view is unmounted/destroyed or the trigger text is no longer in its
- *  doc — the caller falls back to `persistInsert`. */
-const applyInsertToView = (
-  view: EditorView,
-  span: {from: number; to: number},
-  triggerText: string,
-  insert: string,
-): boolean => {
-  // `EditorView.destroyed` is private API; a detached root is the
-  // observable signature of an unmounted per-block editor.
-  if (!view.dom.isConnected) return false
-  const plan = planResolvedInsert(view.state.doc.toString(), span, triggerText)
-  if (plan === null) return false
-  try {
-    view.dispatch({
-      changes: {from: plan.from, to: plan.to, insert},
-      selection: EditorSelection.cursor(plan.from + insert.length),
-    })
-    return true
-  } catch {
-    return false
-  }
-}
-
 const candidateToOption = (
   candidate: PlaceAutocompleteCandidate,
   options: PlaceAutocompleteOptions,
@@ -182,7 +139,7 @@ const candidateToOption = (
       if (!resolved) return
       if (resolved.kind === 'handled') return
       const insert = `[[${resolved.name}]]`
-      const delivered = applyInsertToView(
+      const delivered = replaceInView(
         view, {from: applyFrom, to: applyTo}, triggerText, insert,
       )
       if (delivered) {

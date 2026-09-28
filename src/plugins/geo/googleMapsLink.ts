@@ -1,0 +1,155 @@
+/** Google Maps share links → what they say about a place. Pure parsing;
+ *  resolving the result to a Place is `resolveMapsLink.ts`.
+ *
+ *  A full place URL carries two coordinate pairs that mean different
+ *  things: `!3d<lat>!4d<lng>` in the `data=` blob is the place itself,
+ *  while `/@<lat>,<lng>,<zoom>z` is only where the map was centred when
+ *  the link was copied — often the same spot, but not after the user
+ *  panned away. They are kept apart (`coords` vs `viewport`) so nothing
+ *  pins a place at the map centre by mistake.
+ *
+ *  Short links (`maps.app.goo.gl/…`) carry nothing until expanded, which
+ *  a browser cannot do (the redirect has no CORS headers). */
+
+export interface LatLng {
+  lat: number
+  lng: number
+}
+
+export type ParsedMapsLink =
+  | {kind: 'short'}
+  | {
+      kind: 'full'
+      /** Place name or search text — what Google Maps would search for. */
+      query?: string
+      placeId?: string
+      /** Google's numeric feature id, decimal — the `cid` in the
+       *  `googleMapsUri` the Places API returns for the same place. */
+      cid?: string
+      /** The place's own position. */
+      coords?: LatLng
+      /** The map centre at share time. */
+      viewport?: LatLng
+    }
+
+export interface MapsLinkMatch {
+  /** Span to replace — includes a markdown-link or autolink wrapper. */
+  from: number
+  to: number
+  url: string
+}
+
+const GOOGLE_HOST = /^(?:www\.|maps\.)?google\.[a-z]{2,3}(?:\.[a-z]{2})?$/
+
+const isShortLinkUrl = (u: URL): boolean =>
+  u.hostname === 'maps.app.goo.gl'
+  || (u.hostname === 'goo.gl' && u.pathname.startsWith('/maps/'))
+
+const isFullMapsUrl = (u: URL): boolean =>
+  GOOGLE_HOST.test(u.hostname)
+  && (u.hostname.startsWith('maps.') || u.pathname === '/maps' || u.pathname.startsWith('/maps/'))
+
+const COORD_PAIR = /^(-?\d{1,3}(?:\.\d+)?),\s*(-?\d{1,3}(?:\.\d+)?)$/
+
+const parseCoordPair = (text: string): LatLng | undefined => {
+  const m = COORD_PAIR.exec(text.trim())
+  if (!m) return undefined
+  const lat = Number(m[1])
+  const lng = Number(m[2])
+  if (Math.abs(lat) > 90 || Math.abs(lng) > 180) return undefined
+  return {lat, lng}
+}
+
+const PLACE_COORDS = /!3d(-?\d+(?:\.\d+)?)!4d(-?\d+(?:\.\d+)?)/
+const FEATURE_ID = /^0x[0-9a-f]+:(0x[0-9a-f]+)$/i
+const DATA_FEATURE_ID = /!1s(0x[0-9a-f]+:0x[0-9a-f]+)/i
+const PLACE_ID_PREFIX = 'place_id:'
+
+/** `0x<cell>:0x<cid>` → the cid, in decimal. */
+const cidFromFeatureId = (featureId: string): string | undefined => {
+  const m = FEATURE_ID.exec(featureId)
+  return m ? BigInt(m[1]).toString() : undefined
+}
+
+const decodeSegment = (segment: string): string => {
+  try {
+    return decodeURIComponent(segment.replace(/\+/g, ' '))
+  } catch {
+    return segment
+  }
+}
+
+type FullLink = Extract<ParsedMapsLink, {kind: 'full'}>
+
+/** Folds a name-or-coords-or-place-id text (a `/place/<…>` segment, a `q`
+ *  parameter) into the result. The first source to set a field wins. */
+const readPlaceText = (out: FullLink, raw: string | null | undefined): void => {
+  const text = raw?.trim()
+  if (!text) return
+  if (text.startsWith(PLACE_ID_PREFIX)) {
+    out.placeId ??= text.slice(PLACE_ID_PREFIX.length)
+    return
+  }
+  const coords = parseCoordPair(text)
+  if (coords) out.coords ??= coords
+  else out.query ??= text
+}
+
+export const parseGoogleMapsUrl = (url: string): ParsedMapsLink | null => {
+  let u: URL
+  try {
+    u = new URL(url)
+  } catch {
+    return null
+  }
+  if (u.protocol !== 'https:' && u.protocol !== 'http:') return null
+  if (isShortLinkUrl(u)) return {kind: 'short'}
+  if (!isFullMapsUrl(u)) return null
+
+  const out: FullLink = {kind: 'full'}
+  const segments = u.pathname.split('/')
+
+  const nameAt = segments.findIndex(s => s === 'place' || s === 'search') + 1
+  const nameSegment = nameAt > 0 ? segments[nameAt] : undefined
+  if (nameSegment && !nameSegment.startsWith('@') && !nameSegment.startsWith('data=')) {
+    readPlaceText(out, decodeSegment(nameSegment))
+  }
+
+  const dataCoords = PLACE_COORDS.exec(u.pathname)
+  if (dataCoords) out.coords ??= {lat: Number(dataCoords[1]), lng: Number(dataCoords[2])}
+
+  const viewportSegment = segments.find(s => s.startsWith('@'))
+  if (viewportSegment) {
+    const [lat, lng] = viewportSegment.slice(1).split(',')
+    const viewport = parseCoordPair(`${lat},${lng}`)
+    if (viewport) out.viewport = viewport
+  }
+
+  const dataFeatureId = DATA_FEATURE_ID.exec(u.pathname)
+  const featureId = dataFeatureId?.[1] ?? u.searchParams.get('ftid')
+  const cid = (featureId ? cidFromFeatureId(featureId) : undefined) ?? u.searchParams.get('cid') ?? undefined
+  if (cid) out.cid = cid
+
+  readPlaceText(out, u.searchParams.get('q'))
+  readPlaceText(out, u.searchParams.get('query'))
+  const queryPlaceId = u.searchParams.get('query_place_id')
+  if (queryPlaceId) out.placeId ??= queryPlaceId
+
+  return out
+}
+
+const LINK_CANDIDATE =
+  /\[[^\]\n]*\]\((https?:\/\/[^\s)]+)\)|<(https?:\/\/[^\s>]+)>|(https?:\/\/[^\s<>()[\]]+)/g
+const TRAILING_PUNCTUATION = /[.,;:!?'"]+$/
+
+export const findGoogleMapsLinks = (text: string): MapsLinkMatch[] => {
+  const out: MapsLinkMatch[] = []
+  for (const m of text.matchAll(LINK_CANDIDATE)) {
+    const from = m.index
+    const wrapped = m[1] ?? m[2]
+    const url = wrapped ?? m[3].replace(TRAILING_PUNCTUATION, '')
+    const to = wrapped !== undefined ? from + m[0].length : from + url.length
+    if (parseGoogleMapsUrl(url) !== null) out.push({from, to, url})
+  }
+  return out
+}
