@@ -219,6 +219,11 @@ describe('allowsBeadIds', () => {
     expect(allowsBeadIds(table)).toBe(false)
     expect(allowsIssueRefs(table)).toBe(false)
     expect(allowsIssueRefs('cd /r\nKM_ISSUE_REFS_OK=1 gh pr merge 1 --body x')).toBe(true)
+    // bash keeps a backslash before an ordinary character in double quotes,
+    // so this sets the variable to \\1, not 1; a quoted 1 is still 1
+    expect(allowsIssueRefs('KM_ISSUE_REFS_OK="\\1" gh pr merge 1 --body x')).toBe(false)
+    expect(allowsBeadIds('KM_ALLOW_BEAD_IDS="\\1" gh pr merge 1 --body x')).toBe(false)
+    expect(allowsIssueRefs('KM_ISSUE_REFS_OK="1" gh pr merge 1 --body x')).toBe(true)
     // a bare assignment prefixes no command, however many there are
     expect(allowsIssueRefs('KM_ISSUE_REFS_OK=1; gh pr merge 1 --body x')).toBe(false)
     expect(allowsIssueRefs('KM_ISSUE_REFS_OK=1 X=1; gh pr merge 1 --body x')).toBe(false)
@@ -3498,6 +3503,22 @@ describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
     expect(existsSync(join(repo, 'escape.json'))).toBe(false)
     expect(hook('git commit -m "Fixes #653"', { session_id: 'sess-1', agent_id: '../../escape' }).status).toBe(2)
     expect(hook('git commit -m "Fixes #653"', { session_id: 'sess-1' }).status).toBe(2)
+  })
+
+  // An attestation covers what the echo showed: not a positional target
+  // address, not a plain mention in a commit message (only close keywords are
+  // echoed there), and nothing for a covered publish, which echoes nothing.
+  it('records only the numbers an echo would have shown', () => {
+    const { hook } = makeRepo({ dbReady: true, ghIssues: { 653: AN_ISSUE, 700: A_PR } })
+    const session = { session_id: 'sess-1' }
+    hook('KM_ISSUE_REFS_OK=1 gh issue close https://github.com/Stvad/knowledge-medium/issues/653 -c "see #700"', session)
+    hook('KM_ISSUE_REFS_OK=1 git commit -m "see #653"', session)
+    hook('KM_ISSUE_REFS_OK=1 gh pr comment 1 --body "relates to #653"', session)
+    const r = hook('gh pr merge 12 --body "relates to #653"', session)
+    expect(r.status).toBe(2)
+    expect(r.stderr).toContain('#653 → "Real GC failure"')
+    // the number that was shown is attested
+    expect(hook('gh pr merge 12 --body "relates to #700"', session).status).toBe(0)
   })
 
   // A bead id is substituted, never attested.

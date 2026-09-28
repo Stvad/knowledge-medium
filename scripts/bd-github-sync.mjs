@@ -486,7 +486,9 @@ const GRAPHQL = /\bgraphql\b/
 // like -Fmsgfile) and an @-reference. Tested command-wide, never by command
 // kind: splitting them by kind is what let a compound mixing api with CLI
 // read the wrong signal. Owned here for the coarse rule and the graphql
-// recognizer below.
+// recognizer below. Tilde, glob and brace expansion are not counted: markdown
+// in a heredoc beside a publish reads as globs, and #672 declines expansion
+// coverage.
 const OUTSIDE_TEXT = /(?<![\w-])--(?:[a-z-]*file|input|template)\b|@|(?<![\w-])-[FT]/
 
 // A graphql call keeps its document, and so everything it can publish, in the
@@ -2380,7 +2382,6 @@ const hookPrePr = () => {
   if (!cmd) allow()
   const cwd = payload?.cwd ?? process.cwd()
   const memo = attestationMemo(payload ?? {})
-  if (allowsIssueRefs(cmd)) memo?.add(extractIssueRefs(cmd))
 
   // Message/body files, failing CLOSED on text this gate cannot see: a
   // stdin-fed body would need pipeline simulation (heredoc stdin passes — its
@@ -2429,11 +2430,6 @@ const hookPrePr = () => {
       : ''
   const commitRefs = commitText ? closeKeywordRefs(commitText) : []
 
-  if (!publishes) {
-    if (commitRefs.length === 0) allow()
-    return echoIssueRefs(commitText, commitRefs, memo)
-  }
-
   // A positional target URL (`gh pr comment <url> --body …`) is the command's
   // addressee, not published text — stripped so it does not cost a
   // title-confirmation round. Two guards keep the strip away from published
@@ -2444,13 +2440,26 @@ const hookPrePr = () => {
   // target also gets stripped — accepted over parsing argument positions.
   const targetUrl = () => /((?:\S*\/)?gh\s+(?:-\S+\s+(?:[^-\s]\S*\s+)?)*(?:pr|issue)\s+\w+\s+)https?:\/\/\S+/g
   const text = withoutBranchValues(targetUrl().test(commandSkeleton(cmd)) ? cmd.replace(targetUrl(), '$1') : cmd)
+  // Uncovered publishes keep the pre-publish checks; covered ones are read
+  // back after publication instead (isPostVerifiable, shared with that hook).
+  const blind = publishes && !isPostVerifiable(cmd)
 
-  // Uncovered publishes keep the pre-publish checks: readable text gets the
-  // refs/ids tables below, text living OUTSIDE the command blocks outright
-  // (#683). The merge COMMIT of a merged PR is read back post-merge by
-  // bd-publish-verify regardless. The coverage test itself is shared with
-  // that hook (isPostVerifiable), which reports any claim it cannot honour.
-  const blind = !isPostVerifiable(cmd)
+  // A KM_ISSUE_REFS_OK=1 run attests exactly what the echo it answers would
+  // have shown: a commit's close keywords and every number in a blind
+  // publish's scanned text. A message file goes unread under the escape, so
+  // its keywords are not recorded; a covered publish echoes nothing.
+  if (allowsIssueRefs(cmd))
+    memo?.add([...new Set([...(matchesCommitCommand(cmd) ? closeKeywordRefs(cmd) : []), ...(blind ? extractIssueRefs(text) : [])])])
+
+  if (!publishes) {
+    if (commitRefs.length === 0) allow()
+    return echoIssueRefs(commitText, commitRefs, memo)
+  }
+
+  // Uncovered publishes: readable text gets the refs/ids tables below, text
+  // living OUTSIDE the command blocks outright (#683). The merge COMMIT of a
+  // merged PR is read back post-merge by bd-publish-verify regardless, and
+  // that hook reports any coverage claim it cannot honour.
   if (blind && !(allowsIssueRefs(cmd) && allowsBeadIds(cmd))) {
     // A pr:reply always takes its text from a file. A graphql invocation
     // graphqlShape recognizes has none outside the command by construction.
