@@ -1,1 +1,0 @@
-import{FA as e,PA as t}from"../../../chunks/app-DTLlcnAS.js";export{t as declarationOnlyDefinitionForName,e as declarationOnlyStatusText};

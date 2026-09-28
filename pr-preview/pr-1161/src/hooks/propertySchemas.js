@@ -1,1 +1,0 @@
-import{mP as e}from"../../chunks/app-DTLlcnAS.js";export{e as usePropertySchemas};

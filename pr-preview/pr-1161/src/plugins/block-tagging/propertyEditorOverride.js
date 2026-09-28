@@ -1,1 +1,0 @@
-import{bs as e}from"../../../chunks/app-DTLlcnAS.js";export{e as blockTagsConfigUi};

@@ -1,1 +1,0 @@
-import{t as e}from"../../chunks/app-DTLlcnAS.js";export{e as installIdleCallbackPolyfill};
