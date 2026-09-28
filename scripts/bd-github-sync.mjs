@@ -1195,6 +1195,9 @@ export const preconditions = () => {
 // is presumed dead whatever its pid says: pids are reused, and an orphan that
 // no init reaps stays a zombie that reads as alive.
 const STALE_RUN_MS = 10 * 60_000
+// How long a run waits on another run's lock. The override is for the process
+// tests.
+const LOCK_WAIT_MS = Number(process.env.KM_BD_SYNC_LOCK_WAIT_MS) || 20_000
 
 const processAlive = pid => {
   try {
@@ -1219,16 +1222,21 @@ const processAlive = pid => {
  */
 const withLock = async (root, fn) => {
   const lock = join(root, '.beads', 'github-sync.lock')
-  const deadline = Date.now() + 20_000
+  const deadline = Date.now() + LOCK_WAIT_MS
   for (;;) {
     try {
       writeFileSync(lock, String(process.pid), { flag: 'wx' })
       break
     } catch {
-      // The deadline bounds EVERY loop path — an unremovable lock path (e.g.
-      // a stray directory unlink can't clear) must skip, not spin forever.
-      if (Date.now() > deadline) return { skipped: `lock at ${lock} could not be acquired in 20s` }
       const holder = Number(tryRead(lock))
+      // The deadline bounds EVERY loop path. Past it, a live holder is
+      // contention and this run skips; a lock path nothing live holds that
+      // still could not be taken (a stray directory, no permission) is broken,
+      // and fails the run so its record says so.
+      if (Date.now() > deadline) {
+        if (holder && processAlive(holder)) return { skipped: `lock at ${lock} held by pid ${holder} past the wait` }
+        throw new Error(`could not take the sync lock at ${lock}, and nothing live holds it`)
+      }
       const age = Date.now() - (statSync(lock, { throwIfNoEntry: false })?.mtimeMs ?? Date.now())
       if ((holder && !processAlive(holder)) || age > STALE_RUN_MS) {
         try {
@@ -1558,7 +1566,8 @@ const mirrorComments = async ({ beads, issueByNumber, mintedNumbers, skipIds, en
 // and appending is what keeps one from writing over another's line. Readers
 // fold the pair by id (foldRunLog). SessionEnd output reaches nobody, so this
 // log is the only place a failing or slowing sync shows; the SessionStart hook
-// reads it (syncAlarm).
+// reads it (syncAlarm). What it cannot see is a sync that never starts — no
+// hook fires, or the script cannot load — which leaves no line at all.
 export const SYNC_RUN_LOG = join('.beads', 'github-sync-runs.log')
 // About twice a converged run on the live tracker, leaving room for a run that
 // also pushes. The override is for the process tests.
@@ -1678,13 +1687,18 @@ export const syncAlarm = (logText, isAlive = processAlive, now = Date.now()) => 
   const [previous, latest] = lastTwo
   if (latest.failure !== null)
     return (
-      `⚠ bd-github-sync has failed its last two runs (latest ${latest.at}): ${latest.failure}. The beads↔GitHub ` +
-      `mirror is not syncing until that is fixed — tell the user.`
+      (previous.failure !== null
+        ? `⚠ bd-github-sync has failed its last two runs (latest ${latest.at}): ${latest.failure}.`
+        : `⚠ bd-github-sync's latest run failed (${latest.at}): ${latest.failure}, after one that took ` +
+          `${seconds(activeMs(previous))} against its ${Math.round(previous.budgetMs / 1000)}s budget.`) +
+      ` The beads↔GitHub mirror is not syncing until that is fixed — tell the user.`
     )
   return (
-    `⚠ bd-github-sync is over its ${Math.round(latest.budgetMs / 1000)}s budget: the last two runs took ` +
-    `${previous.failure === null ? seconds(activeMs(previous)) : 'a failed run'} and ${seconds(activeMs(latest))} ` +
-    `(latest ${latest.at}). Slowest spawns in the latest: ${spawnSummary(latest.spawns)}. A converged run is a fixed ` +
+    `⚠ bd-github-sync is over its ${Math.round(latest.budgetMs / 1000)}s budget: ` +
+    (previous.failure === null
+      ? `the last two runs took ${seconds(activeMs(previous))} and ${seconds(activeMs(latest))}`
+      : `the latest run took ${seconds(activeMs(latest))}, after one that failed (${previous.failure})`) +
+    ` (latest ${latest.at}). Slowest spawns in the latest: ${spawnSummary(latest.spawns)}. A converged run is a fixed ` +
     `handful of reads (pinned by "makes only the fixed reads on a converged run" in scripts/bd-github-sync.test.ts), ` +
     `so some step has started scaling with the tracker — tell the user, and find it before runs start being cut off ` +
     `by the SessionEnd hook's time limit.`

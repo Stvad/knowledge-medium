@@ -888,8 +888,12 @@ describe('syncAlarm', () => {
     const notice = syncAlarm([failed('network'), failed('refusing to sync: bd reports 1.3.0')].join('\n'))
     expect(notice).toContain('failed its last two runs')
     expect(notice).toContain('refusing to sync: bd reports 1.3.0')
-    expect(syncAlarm([slow(35_900), failed('network')].join('\n'))).toContain('failed its last two runs')
-    expect(syncAlarm([failed('network'), slow(37_200)].join('\n'))).toContain('over its 20s budget')
+    // A mixed pair says what each run was, not two failures.
+    const failedAfterSlow = syncAlarm([slow(35_900), failed('network')].join('\n'))
+    expect(failedAfterSlow).toContain('latest run failed')
+    expect(failedAfterSlow).toContain('network, after one that took 35.9s against its 20s budget')
+    const slowAfterFailed = syncAlarm([failed('network'), slow(37_200)].join('\n'))
+    expect(slowAfterFailed).toContain('over its 20s budget: the latest run took 37.2s, after one that failed (network)')
     expect(syncAlarm([record({}), failed('network')].join('\n'))).toBe('')
   })
 
@@ -1582,6 +1586,28 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(r.stdout).toContain('skipped (bd is not runnable')
     expect(runLog()).toMatchObject([{ ok: false, failure: expect.stringContaining('bd is not runnable') }])
     expect(shimCalls()).not.toContain('bd export')
+  })
+
+  // Past the lock wait, a live holder is contention: the run skips, and a run
+  // that did nothing leaves no record. A lock path nothing live holds that
+  // still cannot be taken is broken, and the run fails on record.
+  it('skips on a lock a live run holds, and fails on a lock path it cannot take', () => {
+    const row = syncRow({ id: 'km-c', external_ref: ref(1), updated_at: '2026-08-19T00:00:00Z' })
+    const repo = { issues: [ghIssue(1, '2026-08-20T00:00:00Z')], reads: [[row]], env: { KM_BD_SYNC_LOCK_WAIT_MS: '600' } }
+
+    const held = makeSyncRepo(repo)
+    writeFileSync(join(held.repo, '.beads', 'github-sync.lock'), String(process.pid))
+    const skipped = held.run()
+    expect(skipped.status).toBe(0)
+    expect(skipped.stdout).toContain('skipped (lock at')
+    expect(held.runLog()).toEqual([])
+
+    const broken = makeSyncRepo(repo)
+    mkdirSync(join(broken.repo, '.beads', 'github-sync.lock'))
+    const failed = broken.run()
+    expect(failed.status).toBe(1)
+    expect(failed.stderr).toContain('could not take the sync lock')
+    expect(broken.runLog()).toMatchObject([{ ok: false, failure: expect.stringContaining('could not take the sync lock') }])
   })
 
   // A machine that lost its gh login stops syncing without failing anything:
