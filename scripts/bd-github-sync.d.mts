@@ -12,7 +12,8 @@ export declare const isPostVerifiable: (cmd: string) => boolean
 export declare const carriesPublishableText: (cmd: string) => boolean
 export declare const tryRun: (file: string, args: string[], opts?: object) => string | null
 export declare const preconditions: (root?: string | null) => { ok: boolean; reason?: string; root?: string; env?: Record<string, string | undefined> }
-export declare const bdShowRows: (ids: string[], opts?: object) => object[] | null
+export declare const beadsDbRoot: () => string | null
+export declare const bdRunnable: () => boolean
 export declare const beadIssueLookup: (ids: string[]) => Map<string, number | null>
 export declare const beadIdDenial: (ids: string[]) => string
 export declare const fetchIssueInfo: (
@@ -47,11 +48,9 @@ export interface BeadRow {
   title?: string
   description?: string
   assignee?: string
-  close_reason?: string
   issue_type?: string
   labels?: string[]
   closed_at?: string | null
-  comment_count?: number
 }
 export interface BeadComment {
   id: string
@@ -80,6 +79,22 @@ export interface IssueInfo {
 }
 export declare const pullWouldWrite: (bead: BeadRow, issue: IssueInfo) => boolean
 export declare const bdVersion: (out: string | null | undefined) => string | null
+export declare const SYNC_RUN_LOG: string
+export declare const coveredMs: (intervals: [number, number][]) => number
+export declare const spawnAsync: (
+  file: string,
+  args: readonly string[],
+  opts?: { maxBuffer?: number; env?: NodeJS.ProcessEnv },
+) => Promise<{ stdout: string; stderr: string; status?: number | null; error?: Error }>
+export declare const settleAll: <T extends readonly unknown[]>(promises: T) => Promise<{ -readonly [K in keyof T]: Awaited<T[K]> }>
+export declare const inPool: <T>(items: T[], width: number, fn: (item: T) => Promise<unknown>) => Promise<void>
+export declare const syncAlarm: (logText: string | null | undefined, isAlive?: (pid: number) => boolean, now?: number) => string
+export declare const foldRunLog: (
+  logText: string | null | undefined,
+  isAlive?: (pid: number) => boolean,
+  now?: number,
+) => Record<string, unknown>[]
+export declare const readSyncAlarm: (root: string) => string
 export declare const planLossyReapplies: (
   beads: BeadRow[],
   issueByNumber: Map<number, IssueInfo>,
@@ -87,7 +102,7 @@ export declare const planLossyReapplies: (
 export declare const planPullSet: (
   beads: BeadRow[],
   issueByNumber: Map<number, IssueInfo>,
-  lossyIds: Set<string>,
+  excludedIds: Set<string>,
 ) => number[]
 export declare const planCloseReconciliation: (
   beads: BeadRow[],

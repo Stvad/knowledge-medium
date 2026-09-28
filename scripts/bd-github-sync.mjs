@@ -36,7 +36,7 @@
  *    not carry back: the assignee (bd's push never sets one), the close date
  *    (the status write restamps it, and no bd verb can put it back), and a
  *    type the labels do not spell uniquely (#955). So the pull is never given
- *    such a bead. It runs BY IDENTIFIER (planPullSet + pullIssues) over the
+ *    such a bead. It runs BY IDENTIFIER (planPullSet + syncIssues) over the
  *    issues with no bead and the beads it would carry faithfully, which takes
  *    doPull's other branch: it fetches each issue by number, with no
  *    `last_sync` window, and never hydrates (bd's skip-locally-modified guard
@@ -61,9 +61,9 @@
  *    against the issue, not timestamps, and was selected from a listing taken
  *    at the start of the run. A reopen is then the state every later fetch
  *    sees, so no later run re-adopts the close. Inherent to a push-based
- *    mirror; close the bead instead if it happens. Likewise a local edit made
- *    in that window, before the pre-pull push stamps `last_sync`, can be
- *    taken by the same run's pull.
+ *    mirror; close the bead instead if it happens. The pull is planned on a
+ *    read taken just before it, so of the local edits made during a run only
+ *    one landing while bd's pull itself runs can be taken by it.
  *  - bd's push skips a bead whose content equals what it last pushed, without
  *    fetching the issue — a clone-local cache the pull never refreshes and no
  *    bd verb clears in embedded mode. So a GitHub edit that was imported and
@@ -126,15 +126,16 @@
  *       same session with its title as context (attestationMemo); a bead id
  *       is never attested.
  *       The FULL sync does not run here: even converged it costs several
- *       seconds (an issue listing, bead listings, a pull) plus the lock,
+ *       seconds (an issue listing and one tracker read) plus the lock,
  *       which is too slow to sit in front of every PR. SessionEnd and manual
  *       runs carry it. This mode writes NOTHING, so
  *       it needs no dry-run valve: it reads, and it blocks or allows.
  *
- * Every path no-ops silently when bd, the beads DB, or a gh token is missing
- * (cloud sessions) — and no bd command runs before the DB's existence is
+ * Every path no-ops silently when the beads DB is missing (a fresh clone, a
+ * cloud session) — and no bd command runs before the DB's existence is
  * confirmed, because the FIRST bd command in a fresh clone creates an empty
- * DB that then refuses to pull. The hook's bead-id block still fires without
+ * DB that then refuses to pull. A checkout that HAS a DB but no runnable bd
+ * or no gh token skips the sync too, and its run log records a failed run. The hook's bead-id block still fires without
  * a DB: an unmappable reference is worth blocking even where the sync can't
  * run.
  *
@@ -142,8 +143,8 @@
  * from both streams, never from the exit code alone.
  */
 
-import { spawnSync } from 'node:child_process'
-import { accessSync, constants, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs'
+import { spawn, spawnSync } from 'node:child_process'
+import { accessSync, appendFileSync, constants, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { isMainModule } from './is-main-module.mjs'
@@ -1202,13 +1203,96 @@ export const buildDenyMessage = (mapped, unmapped) => {
  *  the shared helper, not on whichever call site crosses first. */
 const MAX_OUTPUT_BYTES = 256 * 1024 * 1024
 
-const run = (file, args, opts = {}) => {
-  const r = spawnSync(file, args, {
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-    maxBuffer: MAX_OUTPUT_BYTES,
-    ...opts,
+// When each verb's spawns ran, for the run log (openRunRecord): nearly all of
+// a sync's cost is subprocesses, so this is where a regression shows. Keyed
+// by the verb, not its operands, so repeated calls aggregate.
+const spawnTimes = new Map()
+const spawnVerb = (file, args) => {
+  const words = args.filter(a => /^[a-z][a-z-]*$/.test(a) && !a.startsWith('km-')).slice(0, 2)
+  const direction = args.find(a => a === '--push-only' || a === '--pull-only')
+  return [file, ...(words.length ? words : args.slice(0, 1)), ...(direction ? [direction] : [])].join(' ')
+}
+// Time spent waiting on purpose — pacing posts, queueing on another run's
+// lock. The run log records it apart, and the budget does not count it.
+let idleMs = 0
+const pause = ms => {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+  idleMs += ms
+}
+
+const noteSpawn = (file, args, started) => {
+  const verb = spawnVerb(file, args)
+  spawnTimes.set(verb, [...(spawnTimes.get(verb) ?? []), [started, performance.now()]])
+}
+// The wall time the intervals cover, not their sum: concurrent spawns of one
+// verb would otherwise report several times the time the run spent on them.
+export const coveredMs = intervals => {
+  let total = 0
+  let end = -Infinity
+  for (const [from, to] of [...intervals].sort((a, b) => a[0] - b[0])) {
+    if (to <= end) continue
+    total += to - Math.max(from, end)
+    end = to
+  }
+  return total
+}
+// spawnSync's result shape, without blocking: for reads that do not depend on
+// each other. `maxBuffer` is spawnSync's too, so the async readers keep the
+// same ceiling (MAX_OUTPUT_BYTES): past it the child is killed and the result
+// carries the error.
+export const spawnAsync = (file, args, { maxBuffer = MAX_OUTPUT_BYTES, ...opts } = {}) =>
+  new Promise(resolve => {
+    const started = performance.now()
+    const out = { stdout: '', stderr: '' }
+    let bytes = 0
+    let overflow
+    const child = spawn(file, args, { stdio: ['ignore', 'pipe', 'pipe'], ...opts })
+    const collect = stream => chunk => {
+      if (overflow) return
+      bytes += Buffer.byteLength(chunk)
+      if (bytes > maxBuffer) {
+        overflow = new Error(`${file} ${args[0]}: output exceeded ${maxBuffer} bytes`)
+        child.kill()
+      } else out[stream] += chunk
+    }
+    child.stdout.setEncoding('utf8').on('data', collect('stdout'))
+    child.stderr.setEncoding('utf8').on('data', collect('stderr'))
+    child.on('error', error => resolve({ ...out, error }))
+    child.on('close', status => {
+      noteSpawn(file, args, started)
+      resolve({ ...out, status, ...(overflow && { error: overflow }) })
+    })
   })
+
+// Concurrent work here is child processes, and a rejection that leaves its
+// siblings running lets them outlive the lock and the run's timing record. So
+// both helpers settle everything they started before failing.
+export const settleAll = async promises => {
+  const results = await Promise.allSettled(promises)
+  const failed = results.find(r => r.status === 'rejected')
+  if (failed) throw failed.reason
+  return results.map(r => r.value)
+}
+
+// At most `width` of `items` in flight at once; after a failure, nothing new
+// starts and the first failure is thrown once the rest have settled.
+export const inPool = async (items, width, fn) => {
+  let next = 0
+  let failure = null
+  const worker = async () => {
+    while (!failure && next < items.length) {
+      try {
+        await fn(items[next++])
+      } catch (error) {
+        failure ??= { error }
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(width, items.length) }, worker))
+  if (failure) throw failure.error
+}
+
+const checkedStdout = (file, args, r) => {
   if (r.error) throw r.error
   const combined = `${r.stdout ?? ''}\n${r.stderr ?? ''}`
   if (r.status !== 0) throw new Error(`${file} ${args[0]} exited ${r.status}: ${combined.trim().slice(0, 500)}`)
@@ -1216,6 +1300,17 @@ const run = (file, args, opts = {}) => {
   if (file === 'bd' && /^Error/m.test(combined)) throw new Error(`bd ${args[0]}: ${combined.trim().slice(0, 500)}`)
   return r.stdout ?? ''
 }
+const run = (file, args, opts = {}) => {
+  const started = performance.now()
+  let r
+  try {
+    r = spawnSync(file, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: MAX_OUTPUT_BYTES, ...opts })
+  } finally {
+    noteSpawn(file, args, started)
+  }
+  return checkedStdout(file, args, r)
+}
+const runAsync = async (file, args, opts) => checkedStdout(file, args, await spawnAsync(file, args, opts))
 
 export const tryRun = (file, args, opts) => {
   try {
@@ -1232,14 +1327,13 @@ export const tryRun = (file, args, opts) => {
  * Returns the rows, or null when stdout is not a JSON array. Callers must
  * hold the DB-exists gate (initializedDbRoot) first — see header.
  */
-export const bdShowRows = (ids, opts = {}) => {
+const bdShowRows = ids => {
   const r = spawnSync('bd', ['show', ...ids, '--json'], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
-    // Scales with the request: `bd show` costs ~0.3s per id.
+    // Scales with the request.
     timeout: Math.max(15_000, ids.length * 2_000),
     maxBuffer: MAX_OUTPUT_BYTES,
-    ...opts,
   })
   try {
     const rows = JSON.parse(r.stdout ?? '')
@@ -1263,21 +1357,44 @@ const mainRepoRoot = () => {
   return commonDir ? dirname(commonDir.trim()) : null
 }
 
-// The DB's PRIOR existence gates every bd invocation — see header.
-// Exported for bd-prime-hook.mjs, which shares the same fresh-clone invariant.
-export const initializedDbRoot = () => {
+// One spawn per process: the DB gate below and runSync's version gate read the
+// same output.
+let bdVersionOutput = null
+const probeBdVersion = () => (bdVersionOutput ??= tryRun('bd', ['--version'], { timeout: PROBE_TIMEOUT }))
+
+// The DB's PRIOR existence gates every bd invocation — see header. Kept apart
+// from whether bd runs: no DB is a fresh clone or a cloud session, which stays
+// silent, while a DB with no runnable bd is a broken install the run log and
+// its alarm must see.
+export const beadsDbRoot = () => {
   const root = mainRepoRoot()
-  return root && existsSync(join(root, '.beads', 'embeddeddolt')) && tryRun('bd', ['--version'], { timeout: PROBE_TIMEOUT })
-    ? root
-    : null
+  return root && existsSync(join(root, '.beads', 'embeddeddolt')) ? root : null
+}
+export const bdRunnable = () => probeBdVersion() !== null
+
+// Exported for bd-prime-hook.mjs and bd-publish-verify.mjs, which share the
+// same fresh-clone invariant.
+export const initializedDbRoot = () => {
+  const root = beadsDbRoot()
+  return root && bdRunnable() ? root : null
 }
 
-export const preconditions = (root = initializedDbRoot()) => {
-  if (!root) return { ok: false, reason: 'no initialized beads DB (or bd not on PATH)' }
+export const preconditions = () => {
+  const root = beadsDbRoot()
+  if (!root) return { ok: false, reason: 'no initialized beads DB' }
+  if (!bdRunnable()) return { ok: false, root, reason: 'bd is not runnable (not on PATH, or its version probe failed)' }
   const token = tryRun('gh', ['auth', 'token'], { timeout: PROBE_TIMEOUT })?.trim()
-  if (!token) return { ok: false, reason: 'no gh token' }
+  if (!token) return { ok: false, root, reason: 'no gh token' }
   return { ok: true, root, env: { ...process.env, GITHUB_TOKEN: token, BD_NO_REMOTE_ADOPT: '1' } }
 }
+
+// A run holding the lock, or started and never finished, for longer than this
+// is presumed dead whatever its pid says: pids are reused, and an orphan that
+// no init reaps stays a zombie that reads as alive.
+const STALE_RUN_MS = 10 * 60_000
+// How long a run waits on another run's lock. The override is for the process
+// tests.
+const LOCK_WAIT_MS = Number(process.env.KM_BD_SYNC_LOCK_WAIT_MS) || 20_000
 
 const processAlive = pid => {
   try {
@@ -1291,7 +1408,7 @@ const processAlive = pid => {
 /**
  * One sync at a time across sessions/worktrees (they share the one DB). The
  * lock only serializes THIS script; bd itself may still run concurrently
- * elsewhere — which is why listBeads failures abort instead of soft-failing.
+ * elsewhere — which is why exportBeads failures abort instead of soft-failing.
  * The lock file holds the holder's pid, so the common leak — a holder killed
  * before its cleanup ran — self-heals on the next attempt via a dead-pid
  * check instead of waiting out a staleness window. A narrow TOCTOU remains
@@ -1300,26 +1417,31 @@ const processAlive = pid => {
  * concurrent runs of converging operations, and closing it fully needs
  * primitives the filesystem doesn't offer.
  */
-const withLock = (root, fn) => {
+const withLock = async (root, fn) => {
   const lock = join(root, '.beads', 'github-sync.lock')
-  const deadline = Date.now() + 20_000
+  const deadline = Date.now() + LOCK_WAIT_MS
   for (;;) {
     try {
       writeFileSync(lock, String(process.pid), { flag: 'wx' })
       break
     } catch {
-      // The deadline bounds EVERY loop path — an unremovable lock path (e.g.
-      // a stray directory unlink can't clear) must skip, not spin forever.
-      if (Date.now() > deadline) return { skipped: `lock at ${lock} could not be acquired in 20s` }
       const holder = Number(tryRead(lock))
+      // The deadline bounds EVERY loop path. Past it, a live holder is
+      // contention and this run skips; a lock path nothing live holds that
+      // still could not be taken (a stray directory, no permission) is broken,
+      // and fails the run so its record says so.
+      if (Date.now() > deadline) {
+        if (holder && processAlive(holder)) return { skipped: `lock at ${lock} held by pid ${holder} past the wait` }
+        throw new Error(`could not take the sync lock at ${lock}, and nothing live holds it`)
+      }
       const age = Date.now() - (statSync(lock, { throwIfNoEntry: false })?.mtimeMs ?? Date.now())
-      if ((holder && !processAlive(holder)) || age > 10 * 60_000) {
+      if ((holder && !processAlive(holder)) || age > STALE_RUN_MS) {
         try {
           unlinkSync(lock)
         } catch {}
         continue
       }
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500)
+      pause(500)
     }
   }
   const unlock = () => {
@@ -1327,9 +1449,10 @@ const withLock = (root, fn) => {
       unlinkSync(lock)
     } catch {}
   }
-  // Covers a kill landing while this process is between children. While a
-  // spawnSync child runs, the event loop is blocked and no handler fires —
-  // that leak is what the dead-pid steal above then heals.
+  // A kill releases the lock and exits; the run's log record then stays as
+  // one that did not finish. A signal that lands while a spawnSync child runs
+  // is handled once the child returns. A SIGKILL leaks the lock, which the
+  // dead-pid steal above heals.
   const onSignal = sig => {
     unlock()
     process.exit(sig === 'SIGINT' ? 130 : 143)
@@ -1337,7 +1460,7 @@ const withLock = (root, fn) => {
   process.on('SIGTERM', onSignal)
   process.on('SIGINT', onSignal)
   try {
-    return fn()
+    return await fn()
   } finally {
     process.off('SIGTERM', onSignal)
     process.off('SIGINT', onSignal)
@@ -1353,19 +1476,19 @@ const tryRead = p => {
   }
 }
 
-// All five statuses in one call; throws on failure. Callers slice by status —
-// the plan functions own status selection, so nothing here pre-filters.
-// --limit 0 is explicit: the documented default is 50, and a truncated bead
-// list would put every unlisted open bead back on the re-open-the-issue path.
-// One `bd export` carries every bead with its comments (id, text, time) in
-// about a second, where `bd comments` costs a spawn per bead — and it lets
-// the mirrored/pending split be exact, comment id by comment id.
-const exportBeads = env =>
-  run('bd', ['export'], { env: { ...env, BD_IGNORE_SCHEMA_SKEW: '1' } })
+// The ONE read of the tracker; throws on failure. Every stored status, and the
+// only row that carries assignee, labels, closed_at and comments — a check
+// reading a narrower row passes silently on exactly the divergence it exists
+// to see. runSync re-reads only after a step that wrote. Callers slice by
+// status; nothing here pre-filters.
+const exportBeads = async env => {
+  const out = await runAsync('bd', ['export'], { env: { ...env, BD_IGNORE_SCHEMA_SKEW: '1' } })
+  return out
     .split('\n')
     .filter(Boolean)
     .map(l => JSON.parse(l))
     .filter(r => r._type === 'issue')
+}
 
 // Every guard in this file is calibrated to ONE bd version's MEASURED
 // behaviour: what the pull reaches and how, what makes the push PATCH, the
@@ -1379,13 +1502,10 @@ const VERIFIED_BD_VERSIONS = ['1.3.0']
 // truncating it would let an unmeasured build through the allowlist.
 export const bdVersion = out => out?.match(/\bversion\s+(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.+-]*)?)/i)?.[1] ?? null
 
-const listAllBeads = () =>
-  JSON.parse(run('bd', ['list', '--status', 'open,in_progress,blocked,deferred,closed', '--limit', '0', '--json']))
-
 const FETCH_LIMIT = 5000
-const fetchIssues = () => {
+const fetchIssues = async () => {
   const rows = JSON.parse(
-    run('gh', [
+    await runAsync('gh', [
       'issue',
       'list',
       '--repo',
@@ -1434,8 +1554,9 @@ const fetchIssues = () => {
 // A bead the pull would damage is simply never named, so it cannot be written.
 // Nor is a bead whose local row is newer: the push carries that direction,
 // and where bd's push skips it (its push cache) a pull would revert the very
-// row the push did not send.
-export const planPullSet = (beads, issueByNumber, lossyIds) => {
+// row the push did not send. `excludedIds` is every bead another step owns
+// (see runSync).
+export const planPullSet = (beads, issueByNumber, excludedIds) => {
   const linked = new Set()
   const faithful = []
   for (const b of beads) {
@@ -1443,56 +1564,45 @@ export const planPullSet = (beads, issueByNumber, lossyIds) => {
     if (number === null || !issueByNumber.has(number)) continue
     linked.add(number)
     const issue = issueByNumber.get(number)
-    if (!lossyIds.has(b.id) && !localNewer(b, issue) && pullWouldWrite(b, issue)) faithful.push(number)
+    if (!excludedIds.has(b.id) && !localNewer(b, issue) && pullWouldWrite(b, issue)) faithful.push(number)
   }
   const unlinked = [...issueByNumber.keys()].filter(n => !linked.has(n))
   return [...new Set([...unlinked, ...faithful])].sort((a, b) => a - b)
 }
 
-const PUSH_CHUNK = 200
-// bd takes the ids as one --issues argument, so a large set is split the same
-// way the push is. An EMPTY set must not fall through to a bulk pull, which is
-// the whole class this avoids — it is simply not run.
-const pullIssues = (numbers, env, dryRun) => {
-  if (!numbers.length) return ''
+// One owner for "push these beads out, or pull them in". bd takes the ids as
+// a single --issues argument, which has a per-argument ceiling (128 KiB on
+// Linux), so a large set is split across invocations instead of failing the
+// spawn before bd starts. Returns the concatenated bd output.
+const ISSUES_PER_CALL = 200
+const syncIssues = (direction, ids, env, extraArgs = []) => {
+  // An empty list must never reach bd as a bare `--pull-only` — that would be a bulk pull.
+  if (!ids.length) return ''
   let out = ''
-  for (let i = 0; i < numbers.length; i += PUSH_CHUNK)
-    out +=
-      run('bd', ['github', 'sync', '--pull-only', '--issues', numbers.slice(i, i + PUSH_CHUNK).join(','), ...(dryRun ? ['--dry-run'] : [])], {
-        env,
-      }) + '\n'
-  return out
-}
-
-// One owner for "push these beads". bd takes the ids as a single --issues
-// argument, which has a per-argument ceiling (128 KiB on Linux), so a large
-// set is split across invocations instead of failing the spawn before bd
-// starts. Returns the concatenated bd output.
-const pushBeads = (ids, env) => {
-  let out = ''
-  for (let i = 0; i < ids.length; i += PUSH_CHUNK)
-    out += run('bd', ['github', 'sync', '--push-only', '--issues', ids.slice(i, i + PUSH_CHUNK).join(',')], { env }) + '\n'
+  for (let i = 0; i < ids.length; i += ISSUES_PER_CALL)
+    out += run('bd', ['github', 'sync', direction, '--issues', ids.slice(i, i + ISSUES_PER_CALL).join(','), ...extraArgs], { env }) + '\n'
   return out
 }
 
 // One GraphQL call per chunk reads the comment bodies of every commented
-// bead's issue, so a converged run costs one request rather than one per
-// issue; an issue past the first page costs one more query per page.
+// bead's issue, up to COMMENT_READS_AT_ONCE chunks at a time: GitHub resolves
+// the aliases of one query in turn, so a run costs about one chunk's time, not
+// one request per issue or per chunk. An issue past the first page costs one
+// more query per page.
 // `issue(number)` resolves a PR or a deleted issue to null — with a NOT_FOUND
 // error and a non-zero gh exit that still carries the data, so the parse
 // reads stdout and ignores the status. Returns number → { bodies } | null
 // (not an issue).
 const COMMENT_PAGE = 100
 const GRAPHQL_CHUNK = 50
+const COMMENT_READS_AT_ONCE = 8
 const [OWNER, NAME] = REPO.split('/')
 const commentsField = after => `comments(first: ${COMMENT_PAGE}${after ? `, after: "${after}"` : ''}) { pageInfo { hasNextPage endCursor } nodes { body } }`
-const graphqlRepository = (fields, env) => {
-  const r = spawnSync('gh', ['api', 'graphql', '-f', `query=query { repository(owner: "${OWNER}", name: "${NAME}") { ${fields} } }`], {
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-    maxBuffer: MAX_OUTPUT_BYTES,
-    env,
-  })
+const graphqlRepository = async (fields, env) => {
+  const r = await spawnAsync('gh', ['api', 'graphql', '-f', `query=query { repository(owner: "${OWNER}", name: "${NAME}") { ${fields} } }`], { env })
+  // Names an overflow as one: its truncated stdout would fail the parse below
+  // anyway, but reading as bad JSON.
+  if (r.error) throw r.error
   let repo
   try {
     repo = JSON.parse(r.stdout).data.repository
@@ -1500,11 +1610,13 @@ const graphqlRepository = (fields, env) => {
   if (!repo) throw new Error(`gh api graphql: ${(r.stderr || r.stdout || '').trim().slice(0, 300)}`)
   return repo
 }
-const fetchIssueComments = (numbers, env) => {
+const fetchIssueComments = async (numbers, env) => {
   const byNumber = new Map()
-  for (let i = 0; i < numbers.length; i += GRAPHQL_CHUNK) {
-    const chunk = numbers.slice(i, i + GRAPHQL_CHUNK)
-    const repo = graphqlRepository(chunk.map(n => `i${n}: issue(number: ${n}) { ${commentsField()} }`).join(' '), env)
+  const size = Math.min(GRAPHQL_CHUNK, Math.ceil(numbers.length / COMMENT_READS_AT_ONCE))
+  const chunks = []
+  for (let i = 0; i < numbers.length; i += size) chunks.push(numbers.slice(i, i + size))
+  const readChunk = async chunk => {
+    const repo = await graphqlRepository(chunk.map(n => `i${n}: issue(number: ${n}) { ${commentsField()} }`).join(' '), env)
     for (const n of chunk) {
       const issue = repo[`i${n}`]
       if (!issue) {
@@ -1517,7 +1629,7 @@ const fetchIssueComments = (numbers, env) => {
       const bodies = issue.comments.nodes.map(c => c.body)
       let page = issue.comments.pageInfo
       while (page.hasNextPage) {
-        const more = graphqlRepository(`issue(number: ${n}) { ${commentsField(page.endCursor)} }`, env).issue
+        const more = (await graphqlRepository(`issue(number: ${n}) { ${commentsField(page.endCursor)} }`, env)).issue
         if (!more) throw new Error(`issue #${n} vanished between comment pages`)
         bodies.push(...more.comments.nodes.map(c => c.body))
         page = more.comments.pageInfo
@@ -1525,6 +1637,7 @@ const fetchIssueComments = (numbers, env) => {
       byNumber.set(n, { bodies })
     }
   }
+  await inPool(chunks, COMMENT_READS_AT_ONCE, readChunk)
   return byNumber
 }
 
@@ -1543,11 +1656,11 @@ const fetchIssueComments = (numbers, env) => {
 // is visible and deletable; a cross-device claim is more machinery than that
 // warrants.
 const POST_PAUSE_MS = 800
-// Bounds one run under the SessionEnd hook's timeout (.claude/settings.json);
-// the rest resumes next run. The env override exists for the process tests.
-const POST_CAP = Number(process.env.KM_MIRROR_POST_CAP) || 60
-const pause = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
-const mirrorComments = ({ beads, issueByNumber, mintedNumbers, skipIds, env, dryRun }) => {
+// Keeps a draining run's pacing to about 25s, well inside the SessionEnd
+// hook's time limit; the rest resumes next run. The env override exists for
+// the process tests.
+const POST_CAP = Number(process.env.KM_MIRROR_POST_CAP) || 30
+const mirrorComments = async ({ beads, reread, issueByNumber, mintedNumbers, skipIds, env, dryRun }) => {
   // A ref is trusted only where the run-start listing shows an issue, or
   // where this run's push minted it: a ref pointed at a PR or a deleted
   // issue would otherwise turn a bead id into a confidently wrong #N,
@@ -1573,11 +1686,12 @@ const mirrorComments = ({ beads, issueByNumber, mintedNumbers, skipIds, env, dry
   if (!commented.length) return { report }
   let ghComments
   try {
-    ghComments = fetchIssueComments(commented.map(b => numberByBeadId.get(b.id)), env)
+    ghComments = await fetchIssueComments(commented.map(b => numberByBeadId.get(b.id)), env)
   } catch (e) {
     return { report: [...report, `FAILED to read GitHub comments (${e.message}) — comment mirror skipped this run`] }
   }
   let posts = 0
+  let fresh = null
   for (const bead of commented) {
     if (posts >= POST_CAP) {
       report.push(`comment mirror stopped at ${POST_CAP} post(s) this run — the rest resumes next run`)
@@ -1612,6 +1726,23 @@ const mirrorComments = ({ beads, issueByNumber, mintedNumbers, skipIds, env, dry
       report.push(`[dry-run] would mirror ${publishable.length} comment(s) of ${bead.id} to #${number}`)
       continue
     }
+    // Re-read once, right before the first post: a bead another worktree
+    // edited during the run holds a row GitHub does not have yet, and a post
+    // would make GitHub the newer side for the next pull. It waits a run.
+    // Accepted: an edit landing while the loop itself posts — a check before
+    // every post would still leave the gap to that post, at a tracker read
+    // apiece; it is the header's never-pushed-edit trade.
+    if (!fresh)
+      try {
+        fresh = new Map((await reread()).map(r => [r.id, r]))
+      } catch (e) {
+        report.push(`FAILED to re-read the beads before posting (${e.message}) — comment mirror stopped this run`)
+        break
+      }
+    if (fresh.get(bead.id)?.updated_at !== bead.updated_at) {
+      report.push(`SKIPPED comments of ${bead.id}: edited during this run — they go out with the next run, after its push`)
+      continue
+    }
     let posted = 0
     for (const { id, body, leftover } of publishable) {
       if (posts >= POST_CAP) break
@@ -1639,18 +1770,173 @@ const mirrorComments = ({ beads, issueByNumber, mintedNumbers, skipIds, env, dry
 }
 
 // ---------------------------------------------------------------------------
+// Run log: the slow-sync alarm's input
+// ---------------------------------------------------------------------------
+
+// Each real run appends two lines to the main checkout's .beads/ (per device,
+// gitignored as a *.log): a `start` as it begins, and as it ends either its
+// record — whether it finished, how long it took, the slowest spawns — or a
+// `skipped` when it never took the lock (a wait that was another run's).
+// Appends only: runs in several worktrees start and end outside the sync lock,
+// and appending is what keeps one from writing over another's line. Readers
+// fold the pair by id (foldRunLog). SessionEnd output reaches nobody, so this
+// log is the only place a failing or slowing sync shows; the SessionStart hook
+// reads it (syncAlarm). What it cannot see is a sync that never starts — no
+// hook fires, or the script cannot load — which leaves no line at all.
+export const SYNC_RUN_LOG = join('.beads', 'github-sync-runs.log')
+// About twice a converged run on the live tracker, leaving room for a run that
+// also pushes. The override is for the process tests.
+const SLOW_SYNC_MS = process.env.KM_BD_SYNC_BUDGET_MS ? Number(process.env.KM_BD_SYNC_BUDGET_MS) : 15_000
+const RUN_LOG_KEEP = 200
+const DID_NOT_FINISH = 'did not finish (killed or crashed)'
+const seconds = ms => `${(ms / 1000).toFixed(1)}s`
+// The one definition, for the line a run prints and for the alarm: what the
+// run spent working, against the budget it ran under.
+const activeMs = record => record.ms - record.idleMs
+const overBudget = record => activeMs(record) > record.budgetMs
+const spawnSummary = spawns => spawns.map(s => `${s.cmd}${s.calls > 1 ? ` ×${s.calls}` : ''} ${seconds(s.ms)}`).join(', ')
+
+const appendRunLog = (root, entry) => {
+  try {
+    appendFileSync(join(root, SYNC_RUN_LOG), JSON.stringify(entry) + '\n')
+  } catch {
+    // The log is telemetry: losing a line must never fail the sync it describes.
+  }
+}
+
+// Called under the sync lock, and only once the log is twice the kept length.
+// Accepted: a line another run appends while this rewrite runs is lost.
+const trimRunLog = root => {
+  try {
+    const path = join(root, SYNC_RUN_LOG)
+    const lines = tryRead(path).split('\n').filter(Boolean)
+    if (lines.length > 2 * RUN_LOG_KEEP) writeFileSync(path, lines.slice(-RUN_LOG_KEEP).join('\n') + '\n')
+  } catch {
+    // Telemetry, as above.
+  }
+}
+
+// Logs this run's start, and returns what logs its end: `{}` when the run
+// finished, `{ failure }` when it failed, `{ skipped }` when it never took the
+// lock. Timed from process start: what the user waits on includes node and
+// the probes, not just the steps.
+const openRunRecord = root => {
+  const id = `${process.pid}-${Math.round(performance.timeOrigin)}`
+  const at = new Date().toISOString()
+  appendRunLog(root, { id, event: 'start', pid: process.pid, at, budgetMs: SLOW_SYNC_MS })
+  return ({ failure, skipped }) => {
+    if (skipped) return appendRunLog(root, { id, event: 'skipped' })
+    const record = {
+      id,
+      event: 'end',
+      at,
+      budgetMs: SLOW_SYNC_MS,
+      ms: Math.round(performance.now()),
+      idleMs: Math.round(idleMs),
+      ok: !failure,
+      ...(failure && { failure }),
+      spawns: [...spawnTimes]
+        .map(([cmd, intervals]) => ({ cmd, calls: intervals.length, ms: Math.round(coveredMs(intervals)) }))
+        .sort((a, b) => b.ms - a.ms)
+        .slice(0, 5),
+    }
+    if (!failure && overBudget(record))
+      console.log(
+        `bd-github-sync: slow run — ${seconds(activeMs(record))} against a ${Math.round(SLOW_SYNC_MS / 1000)}s budget; ` +
+          `slowest: ${spawnSummary(record.spawns)}${record.idleMs ? `; plus ${seconds(record.idleMs)} of deliberate waits` : ''}`,
+      )
+    appendRunLog(root, record)
+  }
+}
+
+// Every run the log holds, as its end record, in the order the runs ENDED —
+// runs queued on the lock start in one order and take it in another, and the
+// alarm reads the sequence they actually ran in. A skipped run is dropped; a
+// start with no end is a run still going while its process lives and it is
+// not stale (left out), or one that was killed or crashed, placed where it
+// started. A line with no id — an older build's — stands as a run of its own.
+export const foldRunLog = (logText, isAlive = processAlive, now = Date.now()) => {
+  const slots = new Map()
+  String(logText ?? '')
+    .split('\n')
+    .forEach((line, at) => {
+      let r
+      try {
+        r = JSON.parse(line)
+      } catch {
+        return
+      }
+      if (!r || typeof r !== 'object' || Array.isArray(r)) return
+      const key = typeof r.id === 'string' ? r.id : Symbol('unkeyed')
+      if (!slots.has(key)) slots.set(key, {})
+      const slot = slots.get(key)
+      if (r.event === 'start') Object.assign(slot, { start: r, startAt: at })
+      else Object.assign(slot, { end: r, endAt: at })
+    })
+  return [...slots.values()]
+    .flatMap(({ start, startAt, end, endAt }) => {
+      if (end) return end.event === 'skipped' ? [] : [{ record: end, at: endAt }]
+      if (Number.isInteger(start.pid) && isAlive(start.pid) && now - Date.parse(start.at) < STALE_RUN_MS) return []
+      return [{ record: { ...start, ms: 0, idleMs: 0, ok: false, failure: DID_NOT_FINISH, spawns: [] }, at: startAt }]
+    })
+    .sort((a, b) => a.at - b.at)
+    .map(({ record }) => record)
+}
+
+// A record as the alarm may use it, or null: the log is per-device text that
+// older builds and damaged writes also left behind, and formatting must only
+// ever see the shape openRunRecord writes. `failure` is null for a run that
+// finished.
+const parseRunRecord = r => {
+  if (typeof r?.ms !== 'number' || typeof r.budgetMs !== 'number') return null
+  return {
+    at: typeof r.at === 'string' ? r.at : 'unknown',
+    ms: r.ms,
+    idleMs: typeof r.idleMs === 'number' ? r.idleMs : 0,
+    budgetMs: r.budgetMs,
+    failure: r.ok === false ? (typeof r.failure === 'string' ? r.failure : 'failed') : null,
+    spawns: (Array.isArray(r.spawns) ? r.spawns : []).filter(s => typeof s?.cmd === 'string' && typeof s.ms === 'number'),
+  }
+}
+
+// Two bad runs in a row, not one: a single failure or slow run is as often
+// GitHub having a bad minute as a regression. The latest run decides which of
+// the two it reports. Total over any text — it runs at session start, which
+// must never break.
+export const syncAlarm = (logText, isAlive = processAlive, now = Date.now()) => {
+  const runs = foldRunLog(logText, isAlive, now).map(parseRunRecord).filter(Boolean)
+  const lastTwo = runs.slice(-2)
+  const bad = record => record.failure !== null || overBudget(record)
+  if (lastTwo.length < 2 || !lastTwo.every(bad)) return ''
+  const [previous, latest] = lastTwo
+  if (latest.failure !== null)
+    return (
+      (previous.failure !== null
+        ? `⚠ bd-github-sync has failed its last two runs (latest ${latest.at}): ${latest.failure}.`
+        : `⚠ bd-github-sync's latest run failed (${latest.at}): ${latest.failure}, after one that took ` +
+          `${seconds(activeMs(previous))} against its ${Math.round(previous.budgetMs / 1000)}s budget.`) +
+      ` The beads↔GitHub mirror is not syncing until that is fixed — tell the user.`
+    )
+  return (
+    `⚠ bd-github-sync is over its ${Math.round(latest.budgetMs / 1000)}s budget: ` +
+    (previous.failure === null
+      ? `the last two runs took ${seconds(activeMs(previous))} and ${seconds(activeMs(latest))}`
+      : `the latest run took ${seconds(activeMs(latest))}, after one that failed (${previous.failure})`) +
+    ` (latest ${latest.at}). Slowest spawns in the latest: ${spawnSummary(latest.spawns)}. A converged run is a fixed ` +
+    `handful of reads (pinned by "makes only the fixed reads on a converged run" in scripts/bd-github-sync.test.ts), ` +
+    `so some step has started scaling with the tracker — tell the user, and find it before runs start being cut off ` +
+    `by the SessionEnd hook's time limit.`
+  )
+}
+
+export const readSyncAlarm = root => syncAlarm(tryRead(join(root, SYNC_RUN_LOG)))
+
+// ---------------------------------------------------------------------------
 // The sync sequence
 // ---------------------------------------------------------------------------
 
-const runSync = ({ quiet = false, dryRun = false } = {}) => {
-  const pre = preconditions()
-  if (!pre.ok) {
-    if (!quiet) console.log(`bd-github-sync: skipped (${pre.reason})`)
-    return { skipped: pre.reason }
-  }
-  const { env } = pre
-
-  const version = bdVersion(tryRun('bd', ['--version'], { env, timeout: PROBE_TIMEOUT }))
+const refuseUnverifiedBd = () => {
+  const version = bdVersion(probeBdVersion())
   // Exactly '1', like the two hook escapes, which match a literal `=1`:
   // read for truthiness, `KM_BD_VERSION_OK=0` would turn the refusal OFF.
   if (process.env.KM_BD_VERSION_OK !== '1' && !VERIFIED_BD_VERSIONS.includes(version))
@@ -1659,17 +1945,35 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
         `${version ?? 'a version this could not read'}. Re-verify them against the new engine before syncing (the bd ` +
         `upgrade issue carries the checklist), then add the version here. KM_BD_VERSION_OK=1 proceeds anyway.`,
     )
+}
 
-  const result = withLock(pre.root, () => {
-    const { issueByNumber, maxKnownIssueNumber } = fetchIssues()
-    const preBeads = listAllBeads()
+const runSync = async ({ quiet = false, dryRun = false } = {}) => {
+  const pre = preconditions()
+  // No beads DB here (a fresh clone, a cloud session): nothing to sync, and
+  // nowhere to log it.
+  if (!pre.root) {
+    if (!quiet) console.log(`bd-github-sync: skipped (${pre.reason})`)
+    return { skipped: pre.reason }
+  }
+  const { env } = pre
+
+  const syncSteps = async () => {
+    trimRunLog(pre.root)
+    // Every read of the tracker is one `bd export` — the only row carrying
+    // assignee, labels, closed_at and comments — taken again only after a step
+    // that WROTE: a converged run reads it once. The first runs under the
+    // issue listing, which is paging-bound and the run's longest step.
+    const [{ issueByNumber, maxKnownIssueNumber }, preBeads] = await settleAll([fetchIssues(), exportBeads(env)])
     const report = []
     // The km→#N mapping for every issue this run's push minted. Printed
     // IMMEDIATELY, not via the end-of-run report: any later step failing
     // would swallow the report, and by the next run the bead already carries
-    // its ref, so the mapping would never be printed at all.
+    // its ref, so the mapping would never be printed at all. Returns what it
+    // printed, for the comment mirror.
     const printMinted = post => {
-      for (const { id, number } of planMintedRefs(preBeads, post)) console.log(`bd-github-sync: minted: ${id} → #${number}`)
+      const minted = planMintedRefs(preBeads, post)
+      for (const { id, number } of minted) console.log(`bd-github-sync: minted: ${id} → #${number}`)
+      return minted
     }
 
     // 1. Adopt GitHub-side closes BEFORE pushing (see header). A failed close
@@ -1696,23 +2000,19 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
         `aborting before push: could not adopt GitHub closes for ${closeFailures.join(', ')}` +
           (report.length ? ` (already applied: ${report.join('; ')})` : ''),
       )
+    // Re-read after the closes: a close bumps updated_at, and the pre-adoption
+    // row would look converged to the push plan below. A dry run makes no
+    // closes, so the rows it would have bumped are added to the push by hand.
+    const exported = closes.length && !dryRun ? await exportBeads(env) : preBeads
+    const dryRunBumped = dryRun ? closes.map(c => c.id) : []
 
-    // 1.2 Decide what the pull may touch (planPullSet). A bead whose re-apply
-    // would lose something is WITHHELD from the pull's id list
-    // (planLossyReapplies names it and why), and a local-newer bead is left to
-    // the push; everything else — an issue with no bead, and a bead the pull
-    // would carry faithfully — is handed to it by identifier, so the mirror
-    // stays bidirectional. The pull cannot reach what it is not given.
-    // `bd export` rather than the listing: only it carries assignee, labels
-    // and closed_at, and it is one read for the whole tracker either way. Read
-    // after close-adoption, so it already reflects the closes.
-    const exported = exportBeads(env)
+    // 1.2 A bead whose re-apply would lose something is WITHHELD from the pull
+    // (planLossyReapplies names it and why). Reported, but never counted as
+    // news: withholding changes nothing on either side and recurs for as long
+    // as the divergence does, so letting it answer "did anything change"
+    // would un-quiet every SessionEnd run.
     const withheld = planLossyReapplies(exported, issueByNumber)
-    // Reported, but never counted as news: withholding changes nothing on
-    // either side and recurs for as long as the divergence does, so letting it
-    // answer "did anything change" would un-quiet every SessionEnd run.
     const routine = new Set()
-    const pullSet = planPullSet(exported, issueByNumber, new Set(withheld.map(w => w.id)))
     for (const { id, number, losses, overwrites } of withheld) {
       const line =
         `withheld ${id} (#${number}) from the pull: it would lose ${losses.join(', ')} (#955)` +
@@ -1726,40 +2026,43 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
       report.push(line)
     }
 
-    // 1.5 Push local-newer and not-yet-linked rows out (planPrePullPush). `exported` was
-    // read after close-adoption, so the closes are in it; a dry run makes no
-    // closes, so the rows it would have bumped are added by hand.
-    const dryRunBumped = dryRun ? closes.map(c => c.id) : []
+    // 1.5 Push local-newer and not-yet-linked rows out (planPrePullPush). The
+    // push and the pull get disjoint sets: the pull is never handed a bead the
+    // push was — the local-newer rule in planPullSet covers most of them, and
+    // the push set itself covers the rest (a bead with no timestamp goes to
+    // the push unjudged).
     const pushSet = [...new Set([...planPrePullPush(exported, issueByNumber), ...dryRunBumped])]
+    const pullExcluded = new Set([...withheld.map(w => w.id), ...pushSet])
+    const pushed = pushSet.length > 0 && !dryRun
     const unlanded = new Set()
     let pushErr = null
     if (dryRun) {
       report.push(`[dry-run] would push ${pushSet.length} bead(s) out before the pull${pushSet.length ? `: ${pushSet.join(', ')}` : ''}`)
-    } else if (pushSet.length) {
+    } else if (pushed) {
       try {
         // Zero-count lines stay out of the report: they would flip `changed`
         // below and un-quiet every converged SessionEnd run.
-        const pushOut = pushBeads(pushSet, env)
+        const pushOut = syncIssues('--push-only', pushSet, env)
         report.push(...pushOut.split('\n').filter(l => /Pushed|Created|Updated/.test(l) && /[1-9]/.test(l)).map(l => `pre-pull: ${l.trim()}`))
       } catch (e) {
         pushErr = e
       }
     }
-    // Fresh list: the push just minted refs — and a failed push may have
-    // minted some too (an earlier chunk, or bd aborting midway). The km→#N
-    // mapping is this run's only record of what it minted: once the next
-    // run's listing shows a ref as pre-existing it is unrecoverable, so it
-    // prints before anything else can fail, a listing that fails says so, and
-    // the push's own failure outranks the listing's.
+    // Re-read after a push: it mints refs — and a failed push may have minted
+    // some too (an earlier chunk, or bd aborting midway). The km→#N mapping is
+    // this run's only record of what it minted: once the next run's read shows
+    // a ref as pre-existing it is unrecoverable, so it prints before anything
+    // else can fail, a read that fails says so, and the push's own failure
+    // outranks the read's.
     let freshBeads = exported
-    if (!dryRun)
+    if (pushed)
       try {
-        freshBeads = listAllBeads()
+        freshBeads = await exportBeads(env)
       } catch (e) {
-        if (pushSet.length) console.error('bd-github-sync: could not re-list beads — any km→#N mapping this push minted is unprinted')
+        console.error('bd-github-sync: could not re-read beads — any km→#N mapping this push minted is unprinted')
         throw pushErr ?? e
       }
-    printMinted(freshBeads)
+    const minted = printMinted(freshBeads)
     if (pushErr) throw pushErr
 
     // 1.55 Which pushes landed, judged by content on a fresh listing: bd only
@@ -1767,15 +2070,15 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
     // last push. An unlanded row is held out of the comment mirror (skipIds).
     // A listing that cannot be read leaves every linked handed bead unlanded —
     // the direction that only delays a post.
-    if (!dryRun && pushSet.length) {
+    if (pushed) {
       const handed = new Set(pushSet)
       const linkedHanded = exported.filter(b => handed.has(b.id) && issueByNumber.has(issueNumberFromRef(b.external_ref)))
       let afterPush = null
       if (linkedHanded.length)
         try {
-          afterPush = fetchIssues().issueByNumber
+          afterPush = (await fetchIssues()).issueByNumber
         } catch (e) {
-          report.push(`could not re-read the pushed issues (${e.message}) — treating ${linkedHanded.map(b => b.id).join(', ')} as unlanded this run`)
+          report.push(`FAILED to re-read the pushed issues (${e.message}) — treating ${linkedHanded.map(b => b.id).join(', ')} as unlanded this run`)
         }
       const notLanded = afterPush
         ? planUnlandedPushes(linkedHanded, afterPush)
@@ -1786,15 +2089,29 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
       }
     }
 
-    // 2. The pull. Pull-only: a push leg would bypass planPrePullPush's
-    // selection.
-    const syncOut = pullIssues(pullSet, env, dryRun)
+    // Every step below that writes from a bead's state plans on a read taken
+    // right before it, whenever it has anything to do: another worktree can
+    // edit a bead at any point in the run, and a plan from an earlier read
+    // acts on the old row. A step with nothing to do pays no re-read.
+    let latest = freshBeads
+    const planFresh = async plan => {
+      if (dryRun || !plan(latest).length) return plan(latest)
+      latest = await exportBeads(env)
+      return plan(latest)
+    }
+
+    // 2. The pull: a bead another worktree edited since the push was planned
+    // is newer locally by now, and planPullSet leaves it out.
+    // Pull-only: a push leg would bypass planPrePullPush's selection.
+    const pullSet = await planFresh(beads => planPullSet(beads, issueByNumber, pullExcluded))
+    const syncOut = syncIssues('--pull-only', pullSet, env, dryRun ? ['--dry-run'] : [])
     const syncSummary = syncOut
       .split('\n')
       .filter(l => /Pulled|Pushed|Created|Updated|dry-run/.test(l))
       .map(l => l.trim())
     report.push(...syncSummary)
-    const postBeads = dryRun ? preBeads : listAllBeads()
+    if (pullSet.length && !dryRun) latest = await exportBeads(env)
+    const postBeads = latest
 
     // 3. Priorities for beads this run's pull created (header 2), pushed back.
     const preById = new Map(preBeads.map(b => [b.id, b]))
@@ -1804,11 +2121,12 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
       if (!dryRun) run('bd', ['update', id, '-p', String(to)], { env })
       report.push(`priority ${id} → ${to} (derived from its labels)`)
     }
-    if (fixes.length && !dryRun) pushBeads(fixes.map(f => f.id), env)
+    if (fixes.length && !dryRun) syncIssues('--push-only', fixes.map(f => f.id), env)
 
     // 4. Carry bead closes out to issues still open, via gh (header 3 says
     // why bd's push skips them).
-    const closePushes = planClosePushes(postBeads, issueByNumber, maxKnownIssueNumber)
+    // A bead reopened in another worktree meanwhile is no longer a candidate.
+    const closePushes = await planFresh(beads => planClosePushes(beads, issueByNumber, maxKnownIssueNumber))
     for (const { id, number } of closePushes) {
       if (dryRun) {
         report.push(`[dry-run] would close issue #${number} to match closed bead ${id}`)
@@ -1840,13 +2158,13 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
     // the push is handed only local-newer rows; and after the pull, so a
     // GitHub-side edit waiting on a bead is imported before the post. A bead
     // whose local row GitHub does not hold this run is skipped (skipIds).
-    // Read fresh here, not from postBeads: this run's push may have minted the
-    // external_refs the mirror resolves bead ids through, and postBeads is a
-    // listing, which carries no comments.
-    const mirror = mirrorComments({
-      beads: exportBeads(env),
+    // postBeads already carries this run's minted refs, and no step since it
+    // touches a ref or a comment.
+    const mirror = await mirrorComments({
+      beads: latest,
+      reread: () => exportBeads(env),
       issueByNumber,
-      mintedNumbers: new Set(planMintedRefs(preBeads, freshBeads).map(m => m.number)),
+      mintedNumbers: new Set(minted.map(m => m.number)),
       skipIds: unlanded,
       env,
       dryRun,
@@ -1858,11 +2176,39 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
     const actionReported = report.some(l => !syncSummary.includes(l) && !routine.has(l))
     const changed = actionReported || syncSummary.some(l => /[1-9]/.test(l))
     if (!quiet || changed) console.log(['bd-github-sync:', ...report].join('\n  '))
-    return { closes, fixes, closePushes }
-  })
+    // FAILED is the report's word for a step it could not do (a post, a close,
+    // a read); the run is on record as failed, since the report reaches nobody
+    // and the same failure can recur every run. What the report states as
+    // expected — a withheld bead, a push that did not land — is not a failure.
+    return { failures: report.filter(l => l.startsWith('FAILED')) }
+  }
 
-  if (result?.skipped && !quiet) console.log(`bd-github-sync: skipped (${result.skipped})`)
-  return result
+  // Everything from here is on record, a refusal or a missing token included:
+  // a sync that cannot run is the failure the alarm most needs to see.
+  const closeRecord = dryRun ? () => {} : openRunRecord(pre.root)
+  let outcome = { failure: DID_NOT_FINISH }
+  try {
+    if (!pre.ok) {
+      outcome = { failure: pre.reason }
+      if (!quiet) console.log(`bd-github-sync: skipped (${pre.reason})`)
+      return { skipped: pre.reason }
+    }
+    refuseUnverifiedBd()
+    const result = await withLock(pre.root, syncSteps)
+    const failures = result.failures ?? []
+    outcome = result.skipped
+      ? { skipped: true }
+      : failures.length
+        ? { failure: `${failures[0].slice(0, 300)}${failures.length > 1 ? ` (+${failures.length - 1} more)` : ''}` }
+        : {}
+    if (result?.skipped && !quiet) console.log(`bd-github-sync: skipped (${result.skipped})`)
+    return result
+  } catch (e) {
+    outcome = { failure: String(e.message ?? e).split('\n')[0].slice(0, 300) }
+    throw e
+  } finally {
+    closeRecord(outcome)
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -2144,16 +2490,12 @@ if (isMainModule(import.meta.url)) {
       allow()
     }
   } else {
-    try {
-      runSync({ quiet: args.has('--quiet'), dryRun: args.has('--dry-run') })
-    } catch (e) {
+    runSync({ quiet: args.has('--quiet'), dryRun: args.has('--dry-run') }).catch(e => {
       console.error(`bd-github-sync: failed — ${e.message ?? e}`)
       // `exitCode`, never `exit()`: a failed push may still have minted issues,
       // and the km→#N mappings printed above are this run's only record of
       // them, but `exit()` drops whatever is still queued on a piped stdout.
-      // Nothing holds the loop open here (spawnSync adds no handles), so the
-      // process still ends promptly.
       process.exitCode = 1
-    }
+    })
   }
 }
