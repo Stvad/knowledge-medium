@@ -825,11 +825,11 @@ describe('foldRunLog', () => {
   const dead = () => false
   const alive = () => true
 
-  // Runs in several worktrees start and end outside the sync lock, so their
-  // lines interleave; each start pairs with its own end, in start order.
-  it('pairs each start with its own end, oldest start first', () => {
-    const text = [start('a'), start('b'), end('b', { ms: 2 }), end('a', { ms: 1 })].join('\n')
-    expect(foldRunLog(text, dead).map(r => [r.id, r.ms])).toEqual([['a', 1], ['b', 2]])
+  // Runs in several worktrees start outside the sync lock and take it in
+  // another order; each start pairs with its own end, in the order they ended.
+  it('pairs each start with its own end, in the order the runs ended', () => {
+    const text = [start('a'), start('b'), start('c'), end('b', { ms: 2 }), end('a', { ms: 1 }), end('c', { ms: 3 })].join('\n')
+    expect(foldRunLog(text, dead, NOW).map(r => [r.id, r.ms])).toEqual([['b', 2], ['a', 1], ['c', 3]])
   })
 
   it('reads a start with no end as a run still going while its process lives, and as killed once it does not', () => {
@@ -2115,7 +2115,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   it('prints the minted mapping and holds comments when the post-push re-read fails', () => {
     const unminted = syncRow({ id: 'km-new', external_ref: null, updated_at: '2026-08-19T00:00:00Z' })
     const newer = pushable({ id: 'km-m', external_ref: ref(7), updated_at: '2026-08-21T00:00:00Z', comment_count: 2 })
-    const { run, posted } = makeSyncRepo({
+    const { run, posted, runLog } = makeSyncRepo({
       issues: twoIssues(),
       failListAfterPush: true,
       reads: [[unminted, newer], [{ ...unminted, external_ref: ref(9) }, newer]],
@@ -2125,7 +2125,8 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const r = run()
     expect(r.status).toBe(0)
     expect(r.stdout).toContain('minted: km-new → #9')
-    expect(r.stdout).toContain('could not re-read the pushed issues')
+    expect(r.stdout).toContain('FAILED to re-read the pushed issues')
+    expect(runLog()).toMatchObject([{ ok: false, failure: expect.stringContaining('FAILED to re-read the pushed issues') }])
     expect(r.stdout).not.toContain('push did not land')
     expect(r.stdout).toContain('SKIPPED comments of km-m')
     expect(posted()).toBe('')

@@ -1634,29 +1634,38 @@ const openRunRecord = root => {
   }
 }
 
-// Every run the log holds, oldest first, as its end record: a skipped run is
-// dropped, and a start with no end is a run still going while its process
-// lives and it is not stale (left out), or one that was killed or crashed. A
-// line with no id — an older build's — stands as a run of its own.
+// Every run the log holds, as its end record, in the order the runs ENDED —
+// runs queued on the lock start in one order and take it in another, and the
+// alarm reads the sequence they actually ran in. A skipped run is dropped; a
+// start with no end is a run still going while its process lives and it is
+// not stale (left out), or one that was killed or crashed, placed where it
+// started. A line with no id — an older build's — stands as a run of its own.
 export const foldRunLog = (logText, isAlive = processAlive, now = Date.now()) => {
   const slots = new Map()
-  for (const line of String(logText ?? '').split('\n')) {
-    let r
-    try {
-      r = JSON.parse(line)
-    } catch {
-      continue
-    }
-    if (!r || typeof r !== 'object' || Array.isArray(r)) continue
-    const key = typeof r.id === 'string' ? r.id : Symbol('unkeyed')
-    if (!slots.has(key)) slots.set(key, {})
-    slots.get(key)[r.event === 'start' ? 'start' : 'end'] = r
-  }
-  return [...slots.values()].flatMap(({ start, end }) => {
-    if (end) return end.event === 'skipped' ? [] : [end]
-    if (Number.isInteger(start.pid) && isAlive(start.pid) && now - Date.parse(start.at) < STALE_RUN_MS) return []
-    return [{ ...start, ms: 0, idleMs: 0, ok: false, failure: DID_NOT_FINISH, spawns: [] }]
-  })
+  String(logText ?? '')
+    .split('\n')
+    .forEach((line, at) => {
+      let r
+      try {
+        r = JSON.parse(line)
+      } catch {
+        return
+      }
+      if (!r || typeof r !== 'object' || Array.isArray(r)) return
+      const key = typeof r.id === 'string' ? r.id : Symbol('unkeyed')
+      if (!slots.has(key)) slots.set(key, {})
+      const slot = slots.get(key)
+      if (r.event === 'start') Object.assign(slot, { start: r, startAt: at })
+      else Object.assign(slot, { end: r, endAt: at })
+    })
+  return [...slots.values()]
+    .flatMap(({ start, startAt, end, endAt }) => {
+      if (end) return end.event === 'skipped' ? [] : [{ record: end, at: endAt }]
+      if (Number.isInteger(start.pid) && isAlive(start.pid) && now - Date.parse(start.at) < STALE_RUN_MS) return []
+      return [{ record: { ...start, ms: 0, idleMs: 0, ok: false, failure: DID_NOT_FINISH, spawns: [] }, at: startAt }]
+    })
+    .sort((a, b) => a.at - b.at)
+    .map(({ record }) => record)
 }
 
 // A record as the alarm may use it, or null: the log is per-device text that
@@ -1854,7 +1863,7 @@ const runSync = async ({ quiet = false, dryRun = false } = {}) => {
         try {
           afterPush = (await fetchIssues()).issueByNumber
         } catch (e) {
-          report.push(`could not re-read the pushed issues (${e.message}) — treating ${linkedHanded.map(b => b.id).join(', ')} as unlanded this run`)
+          report.push(`FAILED to re-read the pushed issues (${e.message}) — treating ${linkedHanded.map(b => b.id).join(', ')} as unlanded this run`)
         }
       const notLanded = afterPush
         ? planUnlandedPushes(linkedHanded, afterPush)
