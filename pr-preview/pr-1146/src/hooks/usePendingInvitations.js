@@ -1,1 +1,1 @@
-import{Z_ as e}from"../../chunks/app-hd4ZbiaX.js";export{e as usePendingInvitations};
+import{Z_ as e}from"../../chunks/app-Czj0Ag4q.js";export{e as usePendingInvitations};
