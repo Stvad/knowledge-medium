@@ -1532,11 +1532,16 @@ const mirrorComments = async ({ beads, reread, issueByNumber, mintedNumbers, ski
     // Re-read once, right before the first post: a bead another worktree
     // edited during the run holds a row GitHub does not have yet, and a post
     // would make GitHub the newer side for the next pull. It waits a run.
-    // A read that fails holds every bead, the direction that only delays a post.
-    fresh ??= await reread().then(
-      rows => new Map(rows.map(r => [r.id, r])),
-      () => new Map(),
-    )
+    // Accepted: an edit landing while the loop itself posts — a check before
+    // every post would still leave the gap to that post, at a tracker read
+    // apiece; it is the header's never-pushed-edit trade.
+    if (!fresh)
+      try {
+        fresh = new Map((await reread()).map(r => [r.id, r]))
+      } catch (e) {
+        report.push(`FAILED to re-read the beads before posting (${e.message}) — comment mirror stopped this run`)
+        break
+      }
     if (fresh.get(bead.id)?.updated_at !== bead.updated_at) {
       report.push(`SKIPPED comments of ${bead.id}: edited during this run — they go out with the next run, after its push`)
       continue

@@ -2186,6 +2186,25 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(posted()).toBe('')
   })
 
+  // A re-read that fails is a failed step, not a bead edited meanwhile: nothing
+  // is posted, and the run is on record as failed.
+  it('stops the mirror, and records a failed run, when the pre-post re-read fails', () => {
+    const { run, posted, runLog } = makeSyncRepo({
+      issues: twoIssues(),
+      // Run start, just before the pull (#3 has no bead), after it, before the first post.
+      reads: [commentedRows()],
+      failReadCall: 4,
+      comments: { 'km-m': twoComments },
+      graphql: { data: { repository: { i7: issueComments([]) } } },
+    })
+    const r = run()
+    expect(r.status).toBe(0)
+    expect(r.stdout).toContain('FAILED to re-read the beads before posting')
+    expect(r.stdout).not.toContain('edited during this run')
+    expect(posted()).toBe('')
+    expect(runLog()).toMatchObject([{ ok: false, failure: expect.stringContaining('FAILED to re-read the beads before posting') }])
+  })
+
   it('caps the posts of one run and leaves the rest for the next', () => {
     const { run, posted } = makeSyncRepo({
       issues: twoIssues(),
