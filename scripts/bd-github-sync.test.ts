@@ -1784,6 +1784,23 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(log).toContain('bd github sync --pull-only --issues 99\n')
   })
 
+  // Step 4 plans on a read taken right before it: a bead the user reopened in
+  // another worktree during the run is no longer closed, so its issue stays
+  // open (the documented way to undo a GitHub-side reopen is to reopen the
+  // bead; closing the issue here would have the next run close the bead again).
+  it('does not close an issue whose bead was reopened during the run', () => {
+    const closedRow = syncRow({ id: 'km-c', status: 'closed', external_ref: ref(14), updated_at: '2026-08-19T00:00:00Z' })
+    const { run, shimCalls } = makeSyncRepo({
+      issues: [ghIssue(14, '2026-08-20T00:00:00Z')],
+      // Run start, then just before step 4: reopened meanwhile.
+      reads: [[closedRow], [{ ...closedRow, status: 'open', updated_at: '2026-08-21T00:00:00Z' }]],
+    })
+    const r = run()
+    expect(r.status).toBe(0)
+    expect(shimCalls()).not.toContain(`gh api repos/${REPO}/issues/14`)
+    expect(shimCalls()).not.toContain('gh issue close')
+  })
+
   // A converged run's whole cost: the probes, one issue listing, one read of the
   // tracker — nothing per bead, however many carry a local timestamp past their
   // issue's (bd stamps a freshly minted bead a second after its issue, so that
@@ -2148,6 +2165,25 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(r.stdout).toContain(`SKIPPED comment ${C2} of km-m: it names bead(s) not referenceable this run (km-o)`)
     expect(posted()).toContain(C1)
     expect(posted()).not.toContain(C2)
+  })
+
+  // Posting makes GitHub the newer side, so a bead edited in another worktree
+  // during the run waits: its edit has not been pushed yet, and the next pull
+  // would take GitHub's copy over it.
+  it('holds the comments of a bead edited during the run', () => {
+    const [m, o] = commentedRows()
+    const edited = { ...m, description: 'edited in another worktree', updated_at: '2026-08-22T00:00:00Z' }
+    // Run start, just before the pull (#3 has no bead), after it, before the first post.
+    const { run, posted } = makeSyncRepo({
+      issues: twoIssues(),
+      reads: [[m, o], [m, o], [m, o], [edited, o]],
+      comments: { 'km-m': twoComments },
+      graphql: { data: { repository: { i7: issueComments([]) } } },
+    })
+    const r = run()
+    expect(r.status).toBe(0)
+    expect(r.stdout).toContain('SKIPPED comments of km-m: edited during this run')
+    expect(posted()).toBe('')
   })
 
   it('caps the posts of one run and leaves the rest for the next', () => {

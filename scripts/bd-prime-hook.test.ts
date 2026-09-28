@@ -194,6 +194,14 @@ describe('withNotice', () => {
         expect(out).toEqual({ continue: true, hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: notice } })
     })
 
+    // The notice goes out only at session start; an envelope naming another
+    // event, malformed or foreign, must not carry it anywhere else.
+    it('names the session-start event whatever the envelope said', () => {
+        const foreign = (ctx: string) => JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreCompact', additionalContext: ctx } })
+        expect(context(foreign('index'))).toEqual({ hookEventName: 'SessionStart', additionalContext: `${notice}\n\nindex` })
+        expect(context(foreign(`${notice}\n\nindex`)).hookEventName).toBe('SessionStart')
+    })
+
     it('leaves output that already carries it, and output with no notice to add, untouched', () => {
         const carried = wrap(`# Beads\n\n${notice}\n\n## Memories`)
         expect(withNotice(carried, notice)).toBe(carried)

@@ -154,11 +154,12 @@ export const withNotice = (raw, notice) => {
   if (!envelope || typeof envelope !== 'object' || Array.isArray(envelope)) envelope = {}
   const hookOutput = envelope.hookSpecificOutput ?? {}
   const context = typeof hookOutput.additionalContext === 'string' ? hookOutput.additionalContext : text
-  if (context.includes(notice)) return raw
+  // The notice goes out only at session start, so the event is forced after
+  // the envelope's own fields: a foreign or malformed one cannot misroute it.
   envelope.hookSpecificOutput = {
-    hookEventName: 'SessionStart',
     ...hookOutput,
-    additionalContext: clip(context ? `${notice}\n\n${context}` : notice, MAX_CONTEXT_CHARS),
+    hookEventName: 'SessionStart',
+    additionalContext: context.includes(notice) ? context : clip(context ? `${notice}\n\n${context}` : notice, MAX_CONTEXT_CHARS),
   }
   return JSON.stringify(envelope)
 }

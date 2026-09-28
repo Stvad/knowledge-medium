@@ -1463,7 +1463,7 @@ const POST_PAUSE_MS = 800
 // hook's time limit; the rest resumes next run. The env override exists for
 // the process tests.
 const POST_CAP = Number(process.env.KM_MIRROR_POST_CAP) || 30
-const mirrorComments = async ({ beads, issueByNumber, mintedNumbers, skipIds, env, dryRun }) => {
+const mirrorComments = async ({ beads, reread, issueByNumber, mintedNumbers, skipIds, env, dryRun }) => {
   // A ref is trusted only where the run-start listing shows an issue, or
   // where this run's push minted it: a ref pointed at a PR or a deleted
   // issue would otherwise turn a bead id into a confidently wrong #N,
@@ -1494,6 +1494,7 @@ const mirrorComments = async ({ beads, issueByNumber, mintedNumbers, skipIds, en
     return { report: [...report, `FAILED to read GitHub comments (${e.message}) — comment mirror skipped this run`] }
   }
   let posts = 0
+  let fresh = null
   for (const bead of commented) {
     if (posts >= POST_CAP) {
       report.push(`comment mirror stopped at ${POST_CAP} post(s) this run — the rest resumes next run`)
@@ -1526,6 +1527,18 @@ const mirrorComments = async ({ beads, issueByNumber, mintedNumbers, skipIds, en
     if (!publishable.length) continue
     if (dryRun) {
       report.push(`[dry-run] would mirror ${publishable.length} comment(s) of ${bead.id} to #${number}`)
+      continue
+    }
+    // Re-read once, right before the first post: a bead another worktree
+    // edited during the run holds a row GitHub does not have yet, and a post
+    // would make GitHub the newer side for the next pull. It waits a run.
+    // A read that fails holds every bead, the direction that only delays a post.
+    fresh ??= await reread().then(
+      rows => new Map(rows.map(r => [r.id, r])),
+      () => new Map(),
+    )
+    if (fresh.get(bead.id)?.updated_at !== bead.updated_at) {
+      report.push(`SKIPPED comments of ${bead.id}: edited during this run — they go out with the next run, after its push`)
       continue
     }
     let posted = 0
@@ -1874,21 +1887,29 @@ const runSync = async ({ quiet = false, dryRun = false } = {}) => {
       }
     }
 
-    // 2. The pull, planned on a read taken right before it — after the push,
-    // its landed check and any other step that waits: a bead another worktree
-    // edited meanwhile is newer locally by now, and planPullSet leaves it out.
-    // A run with nothing to pull pays no re-read.
+    // Every step below that writes from a bead's state plans on a read taken
+    // right before it, whenever it has anything to do: another worktree can
+    // edit a bead at any point in the run, and a plan from an earlier read
+    // acts on the old row. A step with nothing to do pays no re-read.
+    let latest = freshBeads
+    const planFresh = async plan => {
+      if (dryRun || !plan(latest).length) return plan(latest)
+      latest = await exportBeads(env)
+      return plan(latest)
+    }
+
+    // 2. The pull: a bead another worktree edited since the push was planned
+    // is newer locally by now, and planPullSet leaves it out.
     // Pull-only: a push leg would bypass planPrePullPush's selection.
-    const pullPlan = beads => planPullSet(beads, issueByNumber, pullExcluded)
-    const staleForPull = !dryRun && pullPlan(freshBeads).length > 0
-    const pullSet = pullPlan(staleForPull ? await exportBeads(env) : freshBeads)
+    const pullSet = await planFresh(beads => planPullSet(beads, issueByNumber, pullExcluded))
     const syncOut = syncIssues('--pull-only', pullSet, env, dryRun ? ['--dry-run'] : [])
     const syncSummary = syncOut
       .split('\n')
       .filter(l => /Pulled|Pushed|Created|Updated|dry-run/.test(l))
       .map(l => l.trim())
     report.push(...syncSummary)
-    const postBeads = pullSet.length && !dryRun ? await exportBeads(env) : freshBeads
+    if (pullSet.length && !dryRun) latest = await exportBeads(env)
+    const postBeads = latest
 
     // 3. Priorities for beads this run's pull created (header 2), pushed back.
     const preById = new Map(preBeads.map(b => [b.id, b]))
@@ -1902,7 +1923,8 @@ const runSync = async ({ quiet = false, dryRun = false } = {}) => {
 
     // 4. Carry bead closes out to issues still open, via gh (header 3 says
     // why bd's push skips them).
-    const closePushes = planClosePushes(postBeads, issueByNumber, maxKnownIssueNumber)
+    // A bead reopened in another worktree meanwhile is no longer a candidate.
+    const closePushes = await planFresh(beads => planClosePushes(beads, issueByNumber, maxKnownIssueNumber))
     for (const { id, number } of closePushes) {
       if (dryRun) {
         report.push(`[dry-run] would close issue #${number} to match closed bead ${id}`)
@@ -1937,7 +1959,8 @@ const runSync = async ({ quiet = false, dryRun = false } = {}) => {
     // postBeads already carries this run's minted refs, and no step since it
     // touches a ref or a comment.
     const mirror = await mirrorComments({
-      beads: postBeads,
+      beads: latest,
+      reread: () => exportBeads(env),
       issueByNumber,
       mintedNumbers: new Set(minted.map(m => m.number)),
       skipIds: unlanded,
