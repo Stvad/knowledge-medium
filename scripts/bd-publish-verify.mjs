@@ -67,8 +67,11 @@ import {
   issueRefsTable,
   matchesAnyPublish,
   matchesApiPublish,
+  matchesCliPublish,
   matchesPrCommand,
+  moreRefsNote,
   publishableKinds,
+  refsCap,
   tryRun,
 } from './bd-github-sync.mjs'
 import { isMainModule } from './is-main-module.mjs'
@@ -149,7 +152,7 @@ export const publishedTargets = (cmd, output) => {
   // whenever a CLI publisher rode along. In that mixed case the CLI scan also
   // sees the api response's body, so a URL quoted there can be reported as
   // published; with nothing writing any more, that costs an echoed line.
-  if (matchesPrCommand(cmd)) collect(output, publishableKinds(cmd))
+  if (matchesCliPublish(cmd)) collect(output, publishableKinds(cmd))
   if (matchesApiPublish(cmd)) collect(topLevelUrls(output).join('\n'), null)
   return [...seen.values()]
 }
@@ -193,12 +196,6 @@ export const apiPathFor = t =>
             ? `repos/${REPO}/pulls/${t.pr}/reviews/${t.id}`
             : `repos/${REPO}/releases/tags/${encodeTag(t.tag)}`
 
-// The echo sizes itself to the time left: each lookup is bounded by
-// GH_TIMEOUT, so echoing more refs than the remaining budget divides into
-// could overrun the deadline and lose the whole report.
-const refsCap = deadline => Math.min(REFS_CAP, Math.max(0, Math.floor((deadline - Date.now()) / GH_TIMEOUT) - 1))
-const moreRefsNote = (total, cap) => (total > cap ? `\n  …and ${total - cap} more references not echoed` : '')
-
 // additionalContext shares the host's ~10K inline budget with every other
 // hook on the event (measured for SessionStart in issue #643; assume the
 // same order here). The trailing surrogate strip keeps a clipped emoji from
@@ -214,10 +211,6 @@ export const clipContext = (s, max = 9_000) =>
 
 const MAX_TARGETS = 5
 const MAX_MERGED_PRS = 2
-// Defence in depth: with the shipped DEADLINE_MS the budget term below caps
-// at 6, and this would need ~160s of remaining budget to bind. It is here so
-// raising the deadline cannot uncap the echo by accident.
-const REFS_CAP = 15
 const GH_TIMEOUT = 10_000
 // Self-imposed budget well under the 120s hook timeout in settings.json, so
 // the host's kill never lands with the report unemitted. Every step is one
