@@ -2265,13 +2265,14 @@ const unreadableMessageFilesReport = (files, cmd, cwd) =>
  * mapping validation and again for the echo table, across several targets,
  * inside a killable hook timeout. Only definite answers are cached.
  */
+const ISSUE_LOOKUP_TIMEOUT = 10_000
 const issueInfoCache = new Map()
 export const fetchIssueInfo = number => {
   if (issueInfoCache.has(number)) return issueInfoCache.get(number)
   const r = spawnSync('gh', ['api', `repos/${REPO}/issues/${number}`], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
-    timeout: 10_000,
+    timeout: ISSUE_LOOKUP_TIMEOUT,
   })
   let info = null
   try {
@@ -2293,6 +2294,16 @@ export const fetchIssueInfo = number => {
 // KM_ISSUE_REFS_OK=1 on the re-run confirms. Also used by
 // bd-publish-verify.mjs (mode 'post', where the text already published).
 const lookUpRefs = refs => refs.map(number => ({ number, info: fetchIssueInfo(number) }))
+
+// How many references an echo after publication may look up before a
+// deadline. The text is already out by then, so an echo that overran would
+// read as a failed publish. Each lookup may take ISSUE_LOOKUP_TIMEOUT, so the
+// cap is what the time left divides into; the references past it are counted
+// by moreRefsNote. REFS_CAP is defence in depth: every shipped budget binds
+// first, and it keeps a larger one from uncapping the echo.
+const REFS_CAP = 15
+export const refsCap = deadline => Math.min(REFS_CAP, Math.max(0, Math.floor((deadline - Date.now()) / ISSUE_LOOKUP_TIMEOUT) - 1))
+export const moreRefsNote = (total, cap) => (total > cap ? `\n  …and ${total - cap} more references not echoed` : '')
 export const issueRefsTable = (text, refs, mode = 'pre') => buildIssueRefsMessage(lookUpRefs(refs), new Set(closeKeywordRefs(text)), mode)
 
 // Numbers an agent attested with KM_ISSUE_REFS_OK=1. Keyed by the host's

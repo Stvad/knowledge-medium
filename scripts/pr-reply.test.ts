@@ -16,7 +16,7 @@ describe('signedBody', () => {
 describe('pr-reply process behavior', { timeout: 20_000 }, () => {
   const script = fileURLToPath(new URL('./pr-reply.mjs', import.meta.url))
 
-  const setup = (opts: { ghFails?: boolean; ghAnswer?: string; issues?: Record<number, object> } = {}) => {
+  const setup = (opts: { ghFails?: boolean; ghAnswer?: string; issues?: Record<number, object>; lookupSleep?: number } = {}) => {
     const dir = mkdtempSync(join(tmpdir(), 'pr-reply-'))
     const shimDir = join(dir, 'shim')
     mkdirSync(shimDir)
@@ -34,6 +34,7 @@ describe('pr-reply process behavior', { timeout: 20_000 }, () => {
           ? `    echo 'HTTP 404: Not Found' >&2; exit 1;;`
           : `    echo '${opts.ghAnswer ?? '{"id":42,"html_url":"https://github.com/Stvad/knowledge-medium/pull/652#discussion_r42","body":"x"}'}';;`,
         '  */issues/*)',
+        ...(opts.lookupSleep ? [`    sleep ${opts.lookupSleep}`] : []),
         '    n=$(basename "$2")',
         `    if [ -f "${dir}/issue-$n.json" ]; then cat "${dir}/issue-$n.json"; exit 0; fi`,
         `    echo '{"message":"Not Found"}'; exit 1;;`,
@@ -120,6 +121,43 @@ describe('pr-reply process behavior', { timeout: 20_000 }, () => {
     expect(r.status).toBe(0)
     expect(r.stdout).toContain('#77 → "Referenced" (issue, open)')
     expect(r.stdout).toContain('#78 → NO SUCH ISSUE OR PR')
+  })
+
+  // The reply is already posted, so the echo must not run long enough to
+  // look like a failed post: it looks up only as many references as its
+  // budget fits full lookups of, and counts the rest.
+  it('bounds the reference echo by a cap and a time budget', () => {
+    const many = Array.from({ length: 20 }, (_, i) => `#${100 + i}`).join(' ')
+    const answer = JSON.stringify({ id: 42, html_url: 'https://github.com/Stvad/knowledge-medium/pull/652#discussion_r42', body: many })
+    const capped = setup({ ghAnswer: answer })
+    writeFileSync(join(capped.dir, 'body.md'), many)
+    const r = capped.run('652', '41', 'body.md')
+    expect(r.status).toBe(0)
+    // the default budget fits five lookups of the full lookup timeout
+    expect(capped.ghCalls().match(/\/issues\//g)).toHaveLength(5)
+    expect(r.stdout).toContain('…and 15 more references not echoed')
+    const broke = setup({ ghAnswer: answer })
+    writeFileSync(join(broke.dir, 'body.md'), many)
+    const none = broke.runWith({ KM_PR_REPLY_ECHO_BUDGET_MS: '0' }, '652', '41', 'body.md')
+    expect(none.status).toBe(0)
+    expect(broke.ghCalls()).not.toContain('/issues/')
+    expect(none.stdout).toContain('20 issue references in the reply not echoed (out of time budget)')
+  })
+
+  // The URL is what the read-back needs; a kill during the lookups that
+  // follow must not take it with them.
+  it('has written the reply URL before the lookups start', () => {
+    const answer = JSON.stringify({ id: 42, html_url: 'https://github.com/Stvad/knowledge-medium/pull/652#discussion_r42', body: 'see #77' })
+    const { dir } = setup({ ghAnswer: answer, lookupSleep: 10 })
+    writeFileSync(join(dir, 'body.md'), 'see #77')
+    const r = spawnSync('node', [script, '652', '41', 'body.md'], {
+      cwd: dir,
+      env: { ...process.env, PATH: `${join(dir, 'shim')}:${process.env.PATH}`, GH_TOKEN: '', GH_HOST: '127.0.0.1', INIT_CWD: '' },
+      encoding: 'utf8',
+      timeout: 2_500,
+    })
+    expect(r.signal).toBe('SIGTERM')
+    expect(r.stdout).toContain('https://github.com/Stvad/knowledge-medium/pull/652#discussion_r42')
   })
 
   // What GitHub stored is the ground truth, not the file as it was read.

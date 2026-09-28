@@ -23,7 +23,7 @@
 import { spawnSync } from 'node:child_process'
 import { readFileSync, statSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { REPO, beadIdDenial, extractBeadIds, extractIssueRefs, issueRefsTable } from './bd-github-sync.mjs'
+import { REPO, beadIdDenial, extractBeadIds, extractIssueRefs, issueRefsTable, moreRefsNote, refsCap } from './bd-github-sync.mjs'
 import { isMainModule } from './is-main-module.mjs'
 
 export const SIGNATURE = '_🤖 Addressed by [Claude Code](https://claude.com/claude-code)_'
@@ -34,6 +34,13 @@ export const signedBody = text => {
 }
 
 const USAGE = 'usage: pnpm pr:reply <pr> <comment-id> <body-file>'
+
+// The time the reference echo may take after the post, well inside the Bash
+// tool's own timeout; refsCap turns it into how many lookups fit.
+const ECHO_BUDGET_MS = (() => {
+  const v = Number(process.env.KM_PR_REPLY_ECHO_BUDGET_MS)
+  return Number.isFinite(v) && v >= 0 ? v : 60_000
+})()
 
 const readBody = file => {
   let stat
@@ -81,7 +88,13 @@ const main = argv => {
   console.log(typeof reply?.html_url === 'string' ? reply.html_url : r.stdout.trimEnd())
   const published = typeof reply?.body === 'string' ? reply.body : signedBody(body.text)
   const refs = extractIssueRefs(published)
-  if (refs.length) console.log(`\n${issueRefsTable(published, refs, 'post')}`)
+  if (!refs.length) return null
+  const cap = refsCap(Date.now() + ECHO_BUDGET_MS)
+  console.log(
+    cap > 0
+      ? `\n${issueRefsTable(published, refs.slice(0, cap), 'post')}${moreRefsNote(refs.length, cap)}`
+      : `\n${refs.length} issue references in the reply not echoed (out of time budget) — check them yourself`,
+  )
   return null
 }
 

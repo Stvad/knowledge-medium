@@ -19,6 +19,8 @@ export declare const beadIdDenial: (ids: string[]) => string
 export declare const fetchIssueInfo: (
   number: number,
 ) => { title: string; state: string; isPr: boolean } | 'not-found' | null
+export declare const refsCap: (deadline: number) => number
+export declare const moreRefsNote: (total: number, cap: number) => string
 export declare const issueRefsTable: (text: string, refs: number[], mode?: 'pre' | 'post') => string
 export declare const allowsBeadIds: (cmd: string) => boolean
 export declare const bodyFilePaths: (cmd: string) => string[]
