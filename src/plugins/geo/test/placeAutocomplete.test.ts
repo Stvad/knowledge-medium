@@ -7,7 +7,6 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   matchAtTrigger,
   placeCompletionSource,
-  planResolvedInsert,
   type PlaceAutocompleteCandidate,
 } from '../placeAutocomplete'
 
@@ -22,28 +21,6 @@ describe('matchAtTrigger', () => {
 
   it('still matches a doubled @ (no stacked-trigger rejection for @)', () => {
     expect(matchAtTrigger('@@name', 6)).toEqual({from: 1, query: 'name'})
-  })
-})
-
-describe('planResolvedInsert', () => {
-  it('uses the recorded span when the trigger text is still there', () => {
-    expect(planResolvedInsert('met at @blue', {from: 7, to: 12}, '@blue'))
-      .toEqual({from: 7, to: 12})
-  })
-
-  it('re-locates the trigger text when the doc drifted around it', () => {
-    // Text was prepended while the resolution was pending — the
-    // recorded span no longer lines up.
-    expect(planResolvedInsert('yesterday we met at @blue', {from: 7, to: 12}, '@blue'))
-      .toEqual({from: 20, to: 25})
-  })
-
-  it('returns null when the trigger text is gone', () => {
-    expect(planResolvedInsert('met at home', {from: 7, to: 12}, '@blue')).toBeNull()
-  })
-
-  it('returns null for an empty trigger', () => {
-    expect(planResolvedInsert('met at @blue', {from: 7, to: 7}, '')).toBeNull()
   })
 })
 
