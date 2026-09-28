@@ -1,0 +1,1 @@
+import{BG as e,VG as t}from"../../chunks/app-CxRfAWcK.js";export{e as Block,t as requireLoadedBlock};

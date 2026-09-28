@@ -1,0 +1,1 @@
+import{r_ as e}from"../../../chunks/app-CxRfAWcK.js";export{e as plainOutlinerPlugin};

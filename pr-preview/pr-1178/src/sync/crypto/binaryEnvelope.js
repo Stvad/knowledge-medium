@@ -1,0 +1,1 @@
+import{cm as e,dm as t,fm as n,lm as r,mm as i,pm as a,um as o}from"../../../chunks/app-CxRfAWcK.js";export{e as BINARY_ENVELOPE_MAGIC,r as BINARY_ENVELOPE_MIN_BYTES,o as BINARY_ENVELOPE_OVERHEAD_BYTES,t as BINARY_MAGIC_BYTES,n as decodeBinaryEnvelope,a as encodeBinaryEnvelope,i as hasBinaryEnvelopeMagic};

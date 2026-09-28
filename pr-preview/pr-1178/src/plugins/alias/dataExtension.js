@@ -1,0 +1,1 @@
+import{EB as e}from"../../../chunks/app-CxRfAWcK.js";export{e as aliasDataExtension};

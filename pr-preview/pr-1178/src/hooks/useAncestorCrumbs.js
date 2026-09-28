@@ -1,0 +1,1 @@
+import{Oy as e}from"../../chunks/app-CxRfAWcK.js";export{e as useAncestorCrumbs};

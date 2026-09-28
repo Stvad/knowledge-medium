@@ -1,0 +1,1 @@
+import{C4 as e}from"../../../chunks/app-CxRfAWcK.js";export{e as defineQuery};

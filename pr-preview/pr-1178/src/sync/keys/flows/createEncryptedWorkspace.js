@@ -1,0 +1,1 @@
+import{N_ as e}from"../../../../chunks/app-CxRfAWcK.js";export{e as createEncryptedWorkspace};

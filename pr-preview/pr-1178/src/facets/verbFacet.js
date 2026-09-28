@@ -1,0 +1,1 @@
+import{mN as e}from"../../chunks/app-CxRfAWcK.js";export{e as defineVerbFacet};
