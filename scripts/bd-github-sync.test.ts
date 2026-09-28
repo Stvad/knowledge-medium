@@ -11,16 +11,16 @@ import {
   buildDenyMessage,
   buildIssueRefsMessage,
   closeKeywordRefs,
+  coveredMs,
   extractIssueRefs,
   deriveLabelPriority,
   extractBeadIds,
+  inPool,
   issueNumberFromRef,
   commitsInCommandPosition,
-  coveredMs,
   matchesCommitCommand,
   matchesUnverifiableCommand,
   hasStdinBody,
-  inPool,
   carriesPublishableText,
   isPostVerifiable,
   matchesAnyPublish,
@@ -36,6 +36,7 @@ import {
   pullWouldWrite,
   planPrePullPush,
   planPullSet,
+  planUnlandedPushes,
   planMintedRefs,
   planPriorityFixes,
   REPO,
@@ -446,13 +447,12 @@ describe('planClosePushes', () => {
 })
 
 describe('planPriorityFixes', () => {
-  it('restores beads this run flattened (pre ≠2 → post 2) to their pre-sync value', () => {
-    const pre = byId([bead({ id: 'km-flat', priority: 1 }), bead({ id: 'km-was2', priority: 2 })])
-    const post = [
-      bead({ id: 'km-flat', priority: 2 }), // flattened by this run → restore 1
-      bead({ id: 'km-was2', priority: 2 }), // was already 2 → possibly deliberate → untouched
-    ]
-    expect(planPriorityFixes(pre, post, issues([]))).toEqual([{ id: 'km-flat', to: 1 }])
+  // The pull is never handed a linked bead whose priority it would default,
+  // so a bead that existed before the run at 2 is 2 on purpose.
+  it('leaves every bead that existed before the run alone', () => {
+    const pre = byId([bead({ id: 'km-a', priority: 1, external_ref: ref(1) })])
+    const post = [bead({ id: 'km-a', priority: 2, external_ref: ref(1) })]
+    expect(planPriorityFixes(pre, post, issues([[1, { state: 'OPEN', labels: ['P1'] }]]))).toEqual([])
   })
 
   it('does not fight a deliberate P2 even when a stale hand label disagrees', () => {
@@ -467,6 +467,7 @@ describe('planPriorityFixes', () => {
       bead({ id: 'km-new-machine', priority: 2, external_ref: ref(2) }), // new + machine label → derive
       bead({ id: 'km-new-none', priority: 2, external_ref: ref(3) }), // new, no label → leave
       bead({ id: 'km-new-p2', priority: 2, external_ref: ref(4) }), // new, label agrees → leave
+      bead({ id: 'km-new-medium', priority: 2, external_ref: ref(5) }), // machine label says 2 → leave
       bead({ id: 'km-closed', status: 'closed', priority: 2, external_ref: ref(1) }), // closed → not ours
     ]
     expect(
@@ -478,6 +479,7 @@ describe('planPriorityFixes', () => {
           [2, { state: 'OPEN', labels: ['priority::high'] }],
           [3, { state: 'OPEN', labels: ['bug'] }],
           [4, { state: 'OPEN', labels: ['P2'] }],
+          [5, { state: 'OPEN', labels: ['priority::medium', 'P1'] }],
         ]),
       ),
     ).toEqual([
@@ -1031,43 +1033,48 @@ describe('planPrePullPush', () => {
     expect(planPrePullPush([bead({ external_ref: ref(1), updated_at: '2026-08-20T00:00:00Z' })], map)).toEqual([])
   })
 
-  // A PATCH bd would make for no reason still re-stamps the issue, so it is
-  // skipped — but ONLY when the pull would also write nothing.
-  it('declines a push that would change nothing, when the pull would write nothing either', () => {
-    const converged = { state: 'OPEN' as const, labels: ['type::task', 'priority::high'], title: 'T', body: 'D', updatedAt: '2026-08-20T01:00:00Z' }
+  // bd would only spend a GET to skip it. A difference only the pull sees (the
+  // assignee, which GitHub never carries) is not the push's to fix either.
+  it('hands bd a local-newer row only when a pushed field differs', () => {
+    const converged = { state: 'OPEN' as const, labels: ['type::task', 'priority::high'], title: 'T', body: 'D', assignee: '', updatedAt: '2026-08-20T01:00:00Z' }
     const row = bead({ id: 'km-q', external_ref: ref(1), updated_at: '2026-08-25T00:00:00Z', title: 'T', description: 'D', priority: 1, issue_type: 'task' })
     expect(planPrePullPush([row], issues([[1, converged]]))).toEqual([])
+    expect(planPrePullPush([{ ...row, assignee: 'Someone' }], issues([[1, converged]]))).toEqual([])
     expect(planPrePullPush([{ ...row, title: 'edited locally' }], issues([[1, converged]]))).toEqual(['km-q'])
     expect(planPrePullPush([{ ...row, labels: ['ui'] }], issues([[1, converged]]))).toEqual(['km-q'])
     expect(planPrePullPush([{ ...row, status: 'closed' }], issues([[1, converged]]))).toEqual(['km-q'])
   })
 
-  // The push carries no content here — its job is to move the ISSUE. bd's pull
-  // explicitly fetches a bead modified since last_sync whose issue the
-  // incremental query did not return, and those bypass its skip-locally-
-  // modified guard; the push is what puts the issue in that query. Without it
-  // the pull re-applies the row, clearing the assignee and restamping a close
-  // date nothing can restore.
-  it('pushes a content-identical local-newer row the pull would still write', () => {
-    const converged = { state: 'CLOSED' as const, labels: ['type::task', 'priority::high'], title: 'T', body: 'D', assignee: '', updatedAt: '2026-08-20T01:00:00Z' }
-    const row = bead({ id: 'km-q', external_ref: ref(1), updated_at: '2026-08-25T00:00:00Z', title: 'T', description: 'D', priority: 1, issue_type: 'task', status: 'closed' })
-    expect(planPrePullPush([row], issues([[1, converged]]))).toEqual([])
-    expect(planPrePullPush([{ ...row, assignee: 'Someone' }], issues([[1, converged]]))).toEqual(['km-q'])
+})
+
+describe('planUnlandedPushes', () => {
+  it('names a handed bead whose issue still differs after the push', () => {
+    const landed = { state: 'OPEN' as const, labels: ['type::task', 'priority::high'], title: 'T', body: 'D', updatedAt: '2026-08-26T00:00:00Z' }
+    const row = bead({ id: 'km-q', external_ref: ref(1), updated_at: '2026-08-25T00:00:00Z', title: 'T', description: 'D', priority: 1, issue_type: 'task' })
+    expect(planUnlandedPushes([row], issues([[1, landed]]))).toEqual([])
+    expect(planUnlandedPushes([{ ...row, title: 'not on GitHub' }], issues([[1, landed]]))).toEqual([{ id: 'km-q', number: 1 }])
   })
 })
 
 describe('planPullSet', () => {
-  const converged: IssueInfo = { state: 'OPEN', labels: ['priority::high', 'type::task'], title: 'T', body: 'D', assignee: '' }
-  const local = (over: Partial<BeadRow>) => bead({ title: 'T', description: 'D', priority: 1, issue_type: 'task', ...over })
+  const gh = (updatedAt?: string): IssueInfo => ({ state: 'OPEN', labels: [], title: 'GitHub title', body: 'D', updatedAt })
+  const row = (id: string, n: number, updated_at?: string) =>
+    bead({ id, external_ref: ref(n), title: 'local title', description: 'D', updated_at })
 
-  // The pull applies its copy whatever the timestamps (#647), so the only row
-  // it may be handed is one GitHub last moved — however the local row got
-  // newer, a plan or another worktree's edit after it.
-  it('never names a bead whose local row is newer than its listed issue', () => {
-    const edited = { ...converged, title: 'edited on GitHub', updatedAt: '2026-08-20T00:00:00Z' }
-    const byIssue = issues([[1, edited]])
-    expect(planPullSet([local({ updated_at: '2026-08-19T00:00:00Z' })], byIssue, new Set())).toEqual([1])
-    expect(planPullSet([local({ updated_at: '2026-08-21T00:00:00Z' })], byIssue, new Set())).toEqual([])
+  it('hands the pull a faithful bead only when GitHub is not the older side', () => {
+    const map = issues([[1, gh('2026-08-20T01:00:00Z')], [2, gh('2026-08-20T01:00:00Z')], [3, gh()], [4, gh('2026-08-20T01:00:00Z')]])
+    const beads = [
+      row('km-local-newer', 1, '2026-08-21T00:00:00Z'),
+      row('km-github-newer', 2, '2026-08-19T00:00:00Z'),
+      row('km-no-gh-ts', 3, '2026-08-19T00:00:00Z'),
+    ]
+    // #4 has no bead: the GitHub→beads direction is always pulled.
+    expect(planPullSet(beads, map, new Set())).toEqual([2, 3, 4])
+  })
+
+  it('never names a withheld bead', () => {
+    const map = issues([[2, gh('2026-08-20T01:00:00Z')]])
+    expect(planPullSet([row('km-lossy', 2, '2026-08-19T00:00:00Z')], map, new Set(['km-lossy']))).toEqual([])
   })
 })
 
@@ -1172,11 +1179,11 @@ describe('planCommentMirror', () => {
   })
 })
 
-// Process-level pins for runSync's ordering and for which sets it hands the
-// push and the pull, which unit tests on the plan functions cannot see. bd
-// and gh are PATH-fronted shims; the bd shim serves a different `bd export`
-// fixture per read, so a step that writes can show its effect on the next.
-// Measured ~150ms per spawn solo; budgeted for the 6x load stretch.
+// Process-level pins for runSync's ordering and wiring, which unit tests on
+// the plan functions cannot see. bd and gh are PATH-fronted shims; the bd shim
+// serves a different `bd list` fixture per call so a listing can show what a
+// step changed. Measured ~150ms per spawn solo; budgeted for the 6x load
+// stretch.
 describe('runSync process behavior', { timeout: 20_000 }, () => {
   const script = fileURLToPath(new URL('./bd-github-sync.mjs', import.meta.url))
 
@@ -1184,6 +1191,13 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     issues: object[]
     /** What `bd export` serves, one row set per read with the last repeating, each joined with its `comments` fixture. */
     reads: object[][]
+    failCloseId?: string
+    /** Beads bd's close policy refuses to close without --force (an open child or blocker). */
+    blockedCloseIds?: string[]
+    /** What `gh issue list` serves from its second call on — the state after the pre-pull push. */
+    issuesAfterPush?: object[]
+    /** Fail `gh issue list` from its second call on. */
+    failListAfterPush?: boolean
     failFullSync?: boolean
     failPushCall?: number
     failReadCall?: number
@@ -1211,6 +1225,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const shimLog = join(repo, 'shim.log')
     writeFileSync(shimLog, '')
     writeFileSync(join(repo, 'gh-issues.json'), JSON.stringify(opts.issues))
+    if (opts.issuesAfterPush) writeFileSync(join(repo, 'gh-issues-after.json'), JSON.stringify(opts.issuesAfterPush))
     const serialize = (rows: object[]) =>
       rows.map(r => JSON.stringify({ _type: 'issue', ...r, comments: opts.comments?.[(r as { id: string }).id] ?? [] })).join('\n') + '\n'
     opts.reads.forEach((rows, i) => writeFileSync(join(repo, `export-${i + 1}.jsonl`), serialize(rows)))
@@ -1226,7 +1241,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
         '#!/bin/sh',
         `echo "bd $@" >> "${shimLog}"`,
         'case "$1" in',
-        `  --version) echo "${opts.bdVersionOutput ?? 'bd version 1.2.2 (shim)'}";;`,
+        `  --version) echo "${opts.bdVersionOutput ?? 'bd version 1.3.0 (shim)'}";;`,
         '  github)',
         '    case "$*" in *--push-only*)',
         `      k=$(cat "${repo}/push-count" 2>/dev/null || echo 0); k=$((k+1)); echo $k > "${repo}/push-count"`,
@@ -1238,6 +1253,11 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
         `    e=$((e+1)); echo $e > "${repo}/export-count"`,
         `    if [ "$e" = "${opts.failReadCall ?? 0}" ]; then echo "Error: export exploded";`,
         `    elif [ -f "${repo}/export-$e.jsonl" ]; then cat "${repo}/export-$e.jsonl"; else cat "${repo}/export-last.jsonl"; fi;;`,
+        // bd's close policy: an unforced close of a blocked bead prints the
+        // refusal on stderr and exits 1.
+        '  close)',
+        `    case " ${(opts.blockedCloseIds ?? []).join(' ')} " in *" $2 "*) case "$*" in *--force*) ;; *) echo "cannot close $2: blocked (use --force to override)" >&2; exit 1;; esac;; esac`,
+        `    if [ "$2" = "${opts.failCloseId ?? ''}" ]; then echo "Error: cannot close"; else echo ok; fi;;`,
         '  *) echo ok;;',
         'esac',
         'exit 0',
@@ -1250,7 +1270,11 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
         `echo "gh $@" >> "${shimLog}"`,
         'case "$1 $2" in',
         `  "auth token") ${opts.noGhToken ? 'true' : 'echo shim-token'};;`,
-        `  "issue list") ${opts.issueListDelay ? `sleep ${opts.issueListDelay}; ` : ''}cat "${repo}/gh-issues.json";;`,
+        '  "issue list")',
+        `    n=$(cat "${repo}/gh-list-count" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "${repo}/gh-list-count"`,
+        ...(opts.issueListDelay ? [`    sleep ${opts.issueListDelay}`] : []),
+        ...(opts.failListAfterPush ? ['    if [ "$n" -gt 1 ]; then echo "HTTP 502: Bad Gateway" >&2; exit 1; fi'] : []),
+        `    if [ "$n" -gt 1 ] && [ -f "${repo}/gh-issues-after.json" ]; then cat "${repo}/gh-issues-after.json"; else cat "${repo}/gh-issues.json"; fi;;`,
         // The real gh exits 1 when any alias is NOT_FOUND but still prints
         // the data — the shim mirrors that exit so the parser is pinned to
         // stdout, not the status.
@@ -1309,7 +1333,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     assignees: [],
   })
 
-  // The wider row shape `bd list --json` emits — the plan functions' BeadRow
+  // The wider row shape `bd export` emits — the plan functions' BeadRow
   // is a subset of it. Only the boilerplate lives here: external_ref and
   // updated_at stay at the call site because half these tests pin an ORDERING
   // between a local row and its GitHub issue, or the absence of a link, and
@@ -1328,6 +1352,8 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   // and the pre-pull push declines it. A test whose subject is the push wants
   // this instead: the same row with one field GitHub does not yet have.
   const pushable = <T extends object>(over: T) => syncRow({ title: 'T (edited locally)', ...over })
+  // An issue with no bead: it is always handed to the pull, so the pull runs.
+  const unlinkedIssue = () => ghIssue(99, '2026-08-20T00:00:00Z')
 
   // The push-back is now only step 3's priority repair, which also spells
   // `--push-only --issues`, so a push-back pin reads only the log AFTER the
@@ -1343,12 +1369,12 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   // silent assignee/close-date loss is not.
   it('refuses to sync on a bd version the guards were not verified against', () => {
     const row = syncRow({ id: 'km-v', external_ref: null, updated_at: '2026-08-19T00:00:00Z' })
-    const repo = { issues: [ghIssue(1, '2026-08-20T00:00:00Z')], reads: [[row]], bdVersionOutput: 'bd version 1.3.0' }
+    const repo = { issues: [ghIssue(1, '2026-08-20T00:00:00Z')], reads: [[row]], bdVersionOutput: 'bd version 1.2.2' }
     const { run, shimCalls, runLog } = makeSyncRepo(repo)
     const r = run()
     expect(r.status).toBe(1)
-    expect(r.stderr).toContain('verified against bd 1.2.2')
-    expect(r.stderr).toContain('1.3.0')
+    expect(r.stderr).toContain('verified against bd 1.3.0')
+    expect(r.stderr).toContain('1.2.2')
     // …and on record: a sync that refuses every run is the failure the alarm
     // most needs to see.
     expect(runLog()).toMatchObject([{ ok: false, failure: expect.stringContaining('refusing to sync') }])
@@ -1357,7 +1383,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(shimCalls()).not.toContain('--push-only')
 
     // A prerelease of a verified release is a different engine.
-    const rc = makeSyncRepo({ ...repo, bdVersionOutput: 'bd version 1.2.2-rc.1' })
+    const rc = makeSyncRepo({ ...repo, bdVersionOutput: 'bd version 1.3.0-rc.2' })
     expect(rc.run().status).toBe(1)
     expect(rc.shimCalls()).not.toContain('--pull-only')
 
@@ -1374,7 +1400,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     }
   })
 
-  it('pushes local state out BEFORE the pull, and touches nothing else', () => {
+  it('pushes local state out BEFORE the pull, and stays quiet with no suspects', () => {
     const row = syncRow({ id: 'km-t1', external_ref: null, updated_at: '2026-08-19T00:00:00Z' })
     const { run, shimCalls } = makeSyncRepo({
       issues: [ghIssue(1, '2026-08-20T00:00:00Z')],
@@ -1396,9 +1422,11 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
 
   // Position pin: the pre-pull push must run AFTER close-adoption — swapped,
   // a still-open bead's push would re-open its GitHub-closed issue (trap 1).
+  // km-t3 is blocked, so an unforced adoption would be refused and abort.
   it('adopts GitHub-side closes BEFORE the pre-pull push', () => {
     const row = pushable({ id: 'km-t3', external_ref: ref(3), updated_at: '2026-08-19T00:00:00Z' })
     const { run, shimCalls } = makeSyncRepo({
+      blockedCloseIds: ['km-t3'],
       issues: [ghIssue(3, '2026-08-20T00:00:00Z', 'CLOSED')],
       reads: [[row], [{ ...row, status: 'closed', updated_at: '2026-08-21T00:00:00Z' }]],
     })
@@ -1432,7 +1460,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const unminted = syncRow({ id: 'km-t5', external_ref: null, updated_at: '2026-08-19T00:00:00Z' })
     const minted = { ...unminted, external_ref: ref(5) }
     const { run } = makeSyncRepo({
-      issues: [ghIssue(5, '2026-08-20T00:00:00Z'), ghIssue(99, '2026-08-20T00:00:00Z')],
+      issues: [ghIssue(5, '2026-08-20T00:00:00Z'), unlinkedIssue()],
       reads: [[unminted], [minted], [minted]],
       failFullSync: true,
     })
@@ -1477,7 +1505,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
 
   it('records a failed run as failed, and leaves no record for a dry run', () => {
     const row = syncRow({ id: 'km-c', external_ref: ref(1), updated_at: '2026-08-19T00:00:00Z' })
-    const repo = { issues: [ghIssue(1, '2026-08-20T00:00:00Z'), ghIssue(9, '2026-08-20T00:00:00Z')], reads: [[row]] }
+    const repo = { issues: [ghIssue(1, '2026-08-20T00:00:00Z'), unlinkedIssue()], reads: [[row]] }
     const failed = makeSyncRepo({ ...repo, failFullSync: true })
     expect(failed.run().status).toBe(1)
     expect(failed.runLog()).toMatchObject([{ ok: false, failure: expect.stringContaining('pull exploded') }])
@@ -1510,6 +1538,22 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(runLog()).toMatchObject([{ ok: false, failure: expect.stringContaining('did not finish') }])
   })
 
+  // The documented asymmetry, enforced: the pull is never handed a closed
+  // bead whose issue was reopened (it would lose the close), and step 4
+  // re-closes the issue.
+  it('keeps a GitHub-side reopen of a closed bead from sticking', () => {
+    const closedRow = syncRow({ id: 'km-tD', status: 'closed', external_ref: ref(14), updated_at: '2026-08-19T00:00:00Z' })
+    const { run, shimCalls } = makeSyncRepo({
+      issues: [ghIssue(14, '2026-08-20T05:00:00Z'), unlinkedIssue()],
+      reads: [[closedRow]],
+    })
+    const r = run()
+    expect(r.status).toBe(0)
+    expect(r.stdout).toContain('withheld km-tD (#14) from the pull')
+    expect(shimCalls()).toContain('bd github sync --pull-only --issues 99\n')
+    expect(shimCalls()).toContain('gh api repos/Stvad/knowledge-medium/issues/14')
+  })
+
   // Only the pull can flatten a priority, and it reaches only what it is
   // named: a bead that went to 2 locally during the run is left alone.
   it('repairs priorities only on beads the pull was handed', () => {
@@ -1526,10 +1570,6 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(shimCalls()).not.toContain('bd update km-p')
   })
 
-  // The pre-pull push is SELECTIVE: bd 1.2.2 GETs every linked issue it is
-  // handed and PATCHes only the local-newer ones, so beads whose listed
-  // GitHub copy is same-or-newer are skipped up front — the run's cost is
-  // proportional to what changed, not to the tracker.
   it('hands the pre-pull push only the beads bd could update', () => {
     const converged = pushable({ id: 'km-c', external_ref: ref(1), updated_at: '2026-08-19T00:00:00Z' })
     const newer = pushable({ id: 'km-n', external_ref: ref(2), updated_at: '2026-08-21T00:00:00Z' })
@@ -1546,7 +1586,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   it('skips the pre-pull push entirely when every bead is converged, and still pulls', () => {
     const row = syncRow({ id: 'km-c', external_ref: ref(1), updated_at: '2026-08-19T00:00:00Z' })
     const { run, shimCalls } = makeSyncRepo({
-      issues: [ghIssue(1, '2026-08-20T00:00:00Z'), ghIssue(99, '2026-08-20T00:00:00Z')],
+      issues: [ghIssue(1, '2026-08-20T00:00:00Z'), unlinkedIssue()],
       reads: [[row]],
     })
     const r = run()
@@ -1571,24 +1611,6 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const log = shimCalls()
     expect(log).toContain('bd github sync --push-only --issues km-t\n')
     expect(log).toContain('bd github sync --pull-only --issues 9\n')
-  })
-
-  // The documented asymmetry: a GitHub-side reopen does not stick — not even
-  // one the pull would carry faithfully (a status label spelling the new state,
-  // no close date to lose). Step 4 closes the issue again instead.
-  it('never pulls a GitHub-side reopen of a closed bead, and closes the issue again', () => {
-    const closedRow = syncRow({ id: 'km-r', status: 'closed', external_ref: ref(14), updated_at: '2026-08-19T00:00:00Z' })
-    const reopened = ghIssue(14, '2026-08-20T05:00:00Z')
-    reopened.labels = [...reopened.labels, { name: 'status::in_progress' }]
-    const { run, shimCalls } = makeSyncRepo({
-      issues: [reopened, ghIssue(99, '2026-08-20T00:00:00Z')],
-      reads: [[closedRow]],
-    })
-    const r = run()
-    expect(r.status).toBe(0)
-    const log = shimCalls()
-    expect(log).toContain('bd github sync --pull-only --issues 99\n')
-    expect(log).toContain(`gh api repos/${REPO}/issues/14\n`)
   })
 
   // The pull set comes from the run-start listing, so an issue this run's push
@@ -1682,6 +1704,18 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(log).not.toContain('bd update km-l')
     expect(log).not.toContain('--push-only')
     expect(log).not.toMatch(/--pull-only --issues \S*\b4\b/)
+  })
+
+  it('hands the pull the issues that have no bead, so a hand-filed one becomes one', () => {
+    const row = syncRow({ id: 'km-a', external_ref: ref(4), updated_at: '2026-08-19T00:00:00Z' })
+    const { run, shimCalls } = makeSyncRepo({
+      // #9 is on GitHub with no bead; #4 is converged, so it needs no pull.
+      issues: [ghIssue(4, '2026-08-20T00:00:00Z'), ghIssue(9, '2026-08-20T00:00:00Z')],
+      reads: [[row]],
+    })
+    const r = run()
+    expect(r.status).toBe(0)
+    expect(shimCalls()).toContain('bd github sync --pull-only --issues 9')
   })
 
   it('hands the pull a bead it would carry faithfully, alongside the bead-less issues', () => {
@@ -1788,6 +1822,14 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(r.stdout).not.toContain('minted:')
   })
 
+  it('reports a read it could not run after a push that succeeded', () => {
+    const rows = Array.from({ length: 2 }, (_, i) => syncRow({ id: `km-b${i}`, external_ref: null }))
+    const { run } = makeSyncRepo({ issues: [ghIssue(1, '2026-08-20T00:00:00Z')], reads: [rows, rows], failReadCall: 2 })
+    const r = run()
+    expect(r.status).toBe(1)
+    expect(r.stderr).toContain('could not re-read beads')
+  })
+
   // Withholding is not an action: a bead that is simply not handed to the pull
   // changes nothing on either side, so a converged run stays silent.
   it('stays silent under --quiet when the only bead is a withheld one', () => {
@@ -1807,7 +1849,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     })
     const r = run('--quiet')
     expect(r.status).toBe(0)
-    expect(r.stdout).toContain('its title also differ(s) on GitHub and the next push sends the local value')
+    expect(r.stdout).toContain("its title also differ(s) on GitHub and the bead's next push sends the local value")
   })
 
   it('stays silent under --quiet when a converged run changed nothing', () => {
@@ -1832,22 +1874,12 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   // A commented bead (km-m → #7) beside an uncommented one (km-o → #8) that
   // exists only to be referenced from a comment.
   const commentedRows = () => [
-    syncRow({ id: 'km-m', external_ref: ref(7), updated_at: '2026-08-19T00:00:00Z' }),
-    syncRow({ id: 'km-o', external_ref: ref(8), updated_at: '2026-08-19T00:00:00Z' }),
+    syncRow({ id: 'km-m', external_ref: ref(7), updated_at: '2026-08-19T00:00:00Z', comment_count: 2 }),
+    syncRow({ id: 'km-o', external_ref: ref(8), updated_at: '2026-08-19T00:00:00Z', comment_count: 0 }),
   ]
   // #3 has no bead, so the pull always has something to do — without it the
   // id list is empty, no pull runs, and the mirror's slot pins mean nothing.
   const twoIssues = () => [ghIssue(7, '2026-08-20T00:00:00Z'), ghIssue(8, '2026-08-20T00:00:00Z'), ghIssue(3, '2026-08-20T00:00:00Z')]
-  // The base fixture most comment-mirror tests share: a commented bead and an
-  // uncommented one, both linked, with GitHub carrying no comments yet.
-  const mirrorRepo = (over: Partial<Parameters<typeof makeSyncRepo>[0]> = {}) =>
-    makeSyncRepo({
-      issues: twoIssues(),
-      reads: [commentedRows()],
-      comments: { 'km-m': twoComments },
-      graphql: { data: { repository: { i7: issueComments([]) } } },
-      ...over,
-    })
   // One entry per post: the args themselves carry `-X POST`, so split on the
   // shim's line head, not the word.
   const postsOf = (log: string) => log.split(/^POST api /m).filter(Boolean)
@@ -1856,7 +1888,12 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   // backfill costs one pause on top of the spawns — recorded as idle time, so
   // a backlog drain does not read as the sync slowing down.
   it('mirrors unmirrored bead comments onto the issue oldest-first, marker-tagged, with bead ids rewritten', () => {
-    const { run, shimCalls, posted, runLog } = mirrorRepo()
+    const { run, shimCalls, posted, runLog } = makeSyncRepo({
+      issues: twoIssues(),
+      reads: [commentedRows()],
+      comments: { 'km-m': twoComments },
+      graphql: { data: { repository: { i7: issueComments([]) } } },
+    })
     const r = run()
     expect(r.status).toBe(0)
     expect(r.stdout).toContain('mirrored 2 comment(s) of km-m to #7')
@@ -1886,12 +1923,14 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   })
 
   // Position pin for the mirror's slot: after the pre-pull push (a post bumps
-  // the issue past the local row, and bd PATCHes only local-newer rows), and
-  // after the pull, so a waiting GitHub-side edit lands before the post.
+  // the issue past the local row, and the push is handed only local-newer
+  // rows), and after the pull, so a waiting GitHub-side edit lands before the
+  // post.
   it('mirrors after the pre-pull push has carried the bead out and the pull has run', () => {
-    const newer = pushable({ id: 'km-m', external_ref: ref(7), updated_at: '2026-08-21T00:00:00Z' })
+    const newer = pushable({ id: 'km-m', external_ref: ref(7), updated_at: '2026-08-21T00:00:00Z', comment_count: 2 })
     const { run, shimCalls } = makeSyncRepo({
       issues: twoIssues(),
+      issuesAfterPush: [{ ...ghIssue(7, '2026-08-21T00:00:01Z'), title: 'T (edited locally)' }, ...twoIssues().slice(1)],
       reads: [[newer]],
       comments: { 'km-m': twoComments },
       graphql: { data: { repository: { i7: issueComments([]) } } },
@@ -1928,8 +1967,72 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(entry?.idleMs).toBeGreaterThanOrEqual(1000)
   })
 
+  // bd only warns on a failed PATCH, and its push cache skips a bead equal to
+  // its last push: GitHub still holds the old copy, and a post would make it
+  // the newer side for the next pull.
+  it('holds back the comments of a bead whose push did not land, and says so', () => {
+    const newer = pushable({ id: 'km-m', external_ref: ref(7), updated_at: '2026-08-21T00:00:00Z', comment_count: 2 })
+    const { run, posted } = makeSyncRepo({
+      issues: twoIssues(),
+      issuesAfterPush: twoIssues(),
+      reads: [[newer]],
+      comments: { 'km-m': twoComments },
+      graphql: { data: { repository: { i7: issueComments([]) } } },
+    })
+    const r = run()
+    expect(r.status).toBe(0)
+    expect(r.stdout).toContain('push did not land for km-m (#7)')
+    expect(r.stdout).toContain('SKIPPED comments of km-m: GitHub does not hold its local row this run')
+    expect(posted()).toBe('')
+  })
+
+  // The mapping is the run's only record of what it minted, so a failed
+  // re-read must neither lose it nor let a post through.
+  it('prints the minted mapping and holds comments when the post-push re-read fails', () => {
+    const unminted = syncRow({ id: 'km-new', external_ref: null, updated_at: '2026-08-19T00:00:00Z' })
+    const newer = pushable({ id: 'km-m', external_ref: ref(7), updated_at: '2026-08-21T00:00:00Z', comment_count: 2 })
+    const { run, posted } = makeSyncRepo({
+      issues: twoIssues(),
+      failListAfterPush: true,
+      reads: [[unminted, newer], [{ ...unminted, external_ref: ref(9) }, newer]],
+      comments: { 'km-m': twoComments },
+      graphql: { data: { repository: { i7: issueComments([]) } } },
+    })
+    const r = run()
+    expect(r.status).toBe(0)
+    expect(r.stdout).toContain('minted: km-new → #9')
+    expect(r.stdout).toContain('could not re-read the pushed issues')
+    expect(r.stdout).not.toContain('push did not land')
+    expect(r.stdout).toContain('SKIPPED comments of km-m')
+    expect(posted()).toBe('')
+  })
+
+  // A cross-reference touches the named issue as a post does.
+  it('holds a comment that names a bead whose push did not land', () => {
+    const quiet = syncRow({ id: 'km-m', external_ref: ref(7), updated_at: '2026-08-19T00:00:00Z', comment_count: 2 })
+    const unlanded = pushable({ id: 'km-o', external_ref: ref(8), updated_at: '2026-08-21T00:00:00Z' })
+    const { run, posted } = makeSyncRepo({
+      issues: twoIssues(),
+      issuesAfterPush: twoIssues(),
+      reads: [[quiet, unlanded]],
+      comments: { 'km-m': twoComments },
+      graphql: { data: { repository: { i7: issueComments([]) } } },
+    })
+    const r = run()
+    expect(r.status).toBe(0)
+    expect(r.stdout).toContain(`SKIPPED comment ${C2} of km-m: it names bead(s) not referenceable this run (km-o)`)
+    expect(posted()).toContain(C1)
+    expect(posted()).not.toContain(C2)
+  })
+
   it('caps the posts of one run and leaves the rest for the next', () => {
-    const { run, posted } = mirrorRepo({ env: { KM_MIRROR_POST_CAP: '1' } })
+    const { run, posted } = makeSyncRepo({
+      issues: twoIssues(),
+      reads: [commentedRows()],
+      comments: { 'km-m': twoComments },
+      graphql: { data: { repository: { i7: issueComments([]) } } },
+      env: { KM_MIRROR_POST_CAP: '1' },
+    })
     const r = run()
     expect(r.status).toBe(0)
     expect(r.stdout).toContain('mirrored 1 comment(s) of km-m to #7 — 1 left for the next run (post cap)')
@@ -1937,7 +2040,12 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   })
 
   it('publishes an id it cannot rewrite — unknown here — and says so', () => {
-    const { run, posted } = mirrorRepo({ comments: { 'km-m': [beadComment(C1, 'see km-o; km-zzz is a fixture', '2026-09-03T20:16:36Z')] } })
+    const { run, posted } = makeSyncRepo({
+      issues: twoIssues(),
+      reads: [commentedRows()],
+      comments: { 'km-m': [beadComment(C1, 'see km-o; km-zzz is a fixture', '2026-09-03T20:16:36Z')] },
+      graphql: { data: { repository: { i7: issueComments([]) } } },
+    })
     const r = run()
     expect(r.status).toBe(0)
     expect(r.stdout).toContain(`posted comment ${C1} of km-m to #7 with bead id(s) it could not resolve (km-zzz)`)
@@ -1945,7 +2053,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   })
 
   it('posts only the comments GitHub lacks', () => {
-    const converged = syncRow({ id: 'km-c', external_ref: ref(9), updated_at: '2026-08-19T00:00:00Z' })
+    const converged = syncRow({ id: 'km-c', external_ref: ref(9), updated_at: '2026-08-19T00:00:00Z', comment_count: 1 })
     const { run, posted } = makeSyncRepo({
       issues: [...twoIssues(), ghIssue(9, '2026-08-20T00:00:00Z')],
       reads: [[...commentedRows(), converged]],
@@ -1972,7 +2080,12 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   // happily post onto the PR, so a null alias must never reach it.
   it('compares marker ids to the bead\'s own comments instead of counting markers', () => {
     const foreign = (n: number) => `<!-- bd-comment 0000c0de-0000-7000-8000-00000000f00${n} -->\nnot ours`
-    const { run, posted } = mirrorRepo({ graphql: { data: { repository: { i7: issueComments([foreign(1), foreign(2)]) } } } })
+    const { run, posted } = makeSyncRepo({
+      issues: twoIssues(),
+      reads: [commentedRows()],
+      comments: { 'km-m': twoComments },
+      graphql: { data: { repository: { i7: issueComments([foreign(1), foreign(2)]) } } },
+    })
     const r = run()
     expect(r.status).toBe(0)
     expect(r.stdout).toContain('mirrored 2 comment(s) of km-m to #7')
@@ -1980,7 +2093,12 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   })
 
   it('never posts onto a number GraphQL cannot resolve as an issue, and reports the mis-pointed ref', () => {
-    const { run, posted } = mirrorRepo({ graphql: { data: { repository: { i7: null } }, errors: [{ type: 'NOT_FOUND', path: ['repository', 'i7'] }] } })
+    const { run, posted } = makeSyncRepo({
+      issues: twoIssues(),
+      reads: [commentedRows()],
+      comments: { 'km-m': twoComments },
+      graphql: { data: { repository: { i7: null } }, errors: [{ type: 'NOT_FOUND', path: ['repository', 'i7'] }] },
+    })
     const r = run()
     expect(r.status).toBe(0)
     expect(r.stdout).toContain('SKIPPED comments of km-m: #7 is not an issue')
@@ -1988,7 +2106,13 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   })
 
   it('stops a bead at its first failed post so the thread keeps bead order, and leaves the rest for the next run', () => {
-    const { run, posted, shimCalls } = mirrorRepo({ failPostCall: 1 })
+    const { run, posted, shimCalls } = makeSyncRepo({
+      issues: twoIssues(),
+      reads: [commentedRows()],
+      comments: { 'km-m': twoComments },
+      graphql: { data: { repository: { i7: issueComments([]) } } },
+      failPostCall: 1,
+    })
     const r = run()
     expect(r.status).toBe(0)
     expect(r.stdout).toContain(`FAILED to mirror comment ${C1} of km-m to #7 — 2 left for the next run`)
@@ -2002,7 +2126,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   })
 
   it('holds a bead at a comment naming an unminted bead, publishing nothing after it', () => {
-    const unminted = syncRow({ id: 'km-u', external_ref: null, updated_at: '2026-08-19T00:00:00Z' })
+    const unminted = syncRow({ id: 'km-u', external_ref: null, updated_at: '2026-08-19T00:00:00Z', comment_count: 0 })
     const { run, posted, shimCalls } = makeSyncRepo({
       issues: twoIssues(),
       reads: [[...commentedRows(), unminted]],
@@ -2011,7 +2135,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     })
     const r = run()
     expect(r.status).toBe(0)
-    expect(r.stdout).toContain(`SKIPPED comment ${C1} of km-m: it names bead(s) with no issue yet (km-u) — 2 left for the next run`)
+    expect(r.stdout).toContain(`SKIPPED comment ${C1} of km-m: it names bead(s) not referenceable this run (km-u) — 2 left for the next run`)
     expect(posted()).toBe('')
     // Nothing publishable, so no touch either: a touch with no post would
     // just push the bead out next run for nothing.
@@ -2019,7 +2143,10 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   })
 
   it('reads every comment page, so a marker beyond the first still counts', () => {
-    const { run, shimCalls, posted } = mirrorRepo({
+    const { run, shimCalls, posted } = makeSyncRepo({
+      issues: twoIssues(),
+      reads: [commentedRows()],
+      comments: { 'km-m': twoComments },
       graphql: [
         { data: { repository: { i7: issueComments(['a human comment'], 'cursor-1') } } },
         { data: { repository: { issue: issueComments([`<!-- bd-comment ${C1} -->\nfirst`, `<!-- bd-comment ${C2} -->\nsecond`]) } } },
@@ -2038,8 +2165,8 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   // #N, which the repo treats as worse than an opaque bead id.
   it('does not rewrite a reference whose bead points at no issue of this repo, and says so', () => {
     const rows = [
-      syncRow({ id: 'km-m', external_ref: ref(7), updated_at: '2026-08-19T00:00:00Z' }),
-      syncRow({ id: 'km-o', external_ref: ref(5), updated_at: '2026-08-19T00:00:00Z' }),
+      syncRow({ id: 'km-m', external_ref: ref(7), updated_at: '2026-08-19T00:00:00Z', comment_count: 1 }),
+      syncRow({ id: 'km-o', external_ref: ref(5), updated_at: '2026-08-19T00:00:00Z', comment_count: 0 }),
     ]
     const { run, posted } = makeSyncRepo({
       issues: twoIssues(),
@@ -2059,8 +2186,8 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   // is trusted unseen.
   it('does not trust a ref beyond the listing unless this run minted it', () => {
     const rows = (oRef: string | null) => [
-      syncRow({ id: 'km-m', external_ref: ref(7), updated_at: '2026-08-19T00:00:00Z' }),
-      syncRow({ id: 'km-o', external_ref: oRef, updated_at: '2026-08-19T00:00:00Z' }),
+      syncRow({ id: 'km-m', external_ref: ref(7), updated_at: '2026-08-19T00:00:00Z', comment_count: 1 }),
+      syncRow({ id: 'km-o', external_ref: oRef, updated_at: '2026-08-19T00:00:00Z', comment_count: 0 }),
     ]
     const comments = { 'km-m': [beadComment(C1, 'see km-o', '2026-09-03T20:16:36Z')] }
     const graphql = { data: { repository: { i7: issueComments([]) } } }
@@ -2076,7 +2203,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   })
 
   it('skips a commented bead whose own ref points at no issue of this repo, before any GitHub read', () => {
-    const rows = [syncRow({ id: 'km-m', external_ref: ref(5), updated_at: '2026-08-19T00:00:00Z' })]
+    const rows = [syncRow({ id: 'km-m', external_ref: ref(5), updated_at: '2026-08-19T00:00:00Z', comment_count: 2 })]
     const { run, shimCalls, posted } = makeSyncRepo({ issues: twoIssues(), reads: [rows], comments: { 'km-m': twoComments } })
     const r = run()
     expect(r.status).toBe(0)
@@ -2129,7 +2256,12 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   })
 
   it('reports what it would mirror under --dry-run and posts nothing', () => {
-    const { run, posted, shimCalls } = mirrorRepo()
+    const { run, posted, shimCalls } = makeSyncRepo({
+      issues: twoIssues(),
+      reads: [commentedRows()],
+      comments: { 'km-m': twoComments },
+      graphql: { data: { repository: { i7: issueComments([]) } } },
+    })
     const r = run('--dry-run')
     expect(r.status).toBe(0)
     expect(r.stdout).toContain('[dry-run] would mirror 2 comment(s) of km-m to #7')
@@ -2139,7 +2271,12 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   })
 
   it('skips the mirror, without failing the run, when the GitHub comment read is unusable', () => {
-    const { run, posted } = mirrorRepo({ graphql: { message: 'Bad credentials' } })
+    const { run, posted } = makeSyncRepo({
+      issues: twoIssues(),
+      reads: [commentedRows()],
+      comments: { 'km-m': twoComments },
+      graphql: { message: 'Bad credentials' },
+    })
     const r = run()
     expect(r.status).toBe(0)
     expect(r.stdout).toContain('FAILED to read GitHub comments')

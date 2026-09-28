@@ -118,3 +118,4 @@ export declare const planMintedRefs: (
   postBeads: BeadRow[],
 ) => { id: string; number: number }[]
 export declare const planPrePullPush: (beads: BeadRow[], issueByNumber: Map<number, IssueInfo>) => string[]
+export declare const planUnlandedPushes: (beads: BeadRow[], issueByNumber: Map<number, IssueInfo>) => { id: string; number: number }[]

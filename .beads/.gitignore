@@ -16,6 +16,9 @@ interactions.jsonl
 dolt-backup.json
 dolt-backup-state.json
 
+# Machine-local bd settings, merged over config.yaml (e.g. dolt.auto-push)
+config.local.yaml
+
 # Daemon runtime (lock, log, pid)
 daemon.*
 
