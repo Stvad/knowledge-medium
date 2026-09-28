@@ -54,7 +54,11 @@ import {
 // it's bound to. Only `runRescheduleWithFeedback` calls `showCustom`, and no
 // other test in this file invokes that path, so overriding it (while keeping
 // the rest of the toast module real) is side-effect-free here.
-const { showCustomMock } = vi.hoisted(() => ({ showCustomMock: vi.fn() }))
+const { showCustomMock, showReceiptMock } = vi.hoisted(() => ({ showCustomMock: vi.fn(), showReceiptMock: vi.fn() }))
+vi.mock('@/plugins/action-receipts', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/plugins/action-receipts')>(),
+  showReceipt: showReceiptMock,
+}))
 vi.mock('@/utils/toast.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/utils/toast.js')>()),
   showCustom: showCustomMock,
@@ -341,7 +345,7 @@ describe('srsReschedulingPlugin', () => {
     // workspace: pre-fix it read `activeWorkspaceId` / the active manager
     // after the `rescheduleBlock` await, so a workspace switch in that
     // window bound the toast (and its Undo) to an unrelated workspace.
-    showCustomMock.mockClear()
+    showReceiptMock.mockClear()
     const { repo } = createTestRepo({
       db: sharedDb.db,
       user: {id: 'user-1'},
@@ -364,16 +368,18 @@ describe('srsReschedulingPlugin', () => {
     await reschedule.handler?.({block, uiStateBlock: block}, new CustomEvent('test'))
 
     // Old behavior: workspaceId = activeWorkspaceId ('ws-2'), peekUndo on
-    // ws-2's (empty) manager → `if (!top) return` → no toast at all.
-    expect(showCustomMock).toHaveBeenCalledTimes(1)
-    const element = showCustomMock.mock.calls[0][0]('toast-id') as { props: { workspaceId: string; groupId: string } }
-    expect(element.props.workspaceId).toBe('ws-1')
+    // ws-2's (empty) manager → `if (!top) return` → no receipt at all.
+    expect(showReceiptMock).toHaveBeenCalledTimes(1)
+    const [receipt] = showReceiptMock.mock.calls[0] as [{revert: {workspaceId: string; entry: unknown}; subject: {id: string}}]
+    expect(receipt.revert.workspaceId).toBe('ws-1')
+    expect(receipt.subject.id).toBe('card')
     const top = repo.undoManagerFor('ws-1').peekUndo(ChangeScope.BlockDefault)
     expect(top).not.toBeNull()
-    // The toast matches the merged group entry by its group token (#306).
+    // The receipt's Undo matches the merged group entry by identity (#306);
+    // a same-group merge mutates it in place, so the match survives one.
     expect(top?.groupId).toBeDefined()
-    expect(element.props.groupId).toBe(top?.groupId)
-    // The active (ws-2) manager has nothing — the toast did not bind to it.
+    expect(receipt.revert.entry).toBe(top)
+    // The active (ws-2) manager has nothing — the receipt did not bind to it.
     expect(repo.undoManagerFor('ws-2').peekUndo(ChangeScope.BlockDefault)).toBeNull()
   })
 

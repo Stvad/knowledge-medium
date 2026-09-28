@@ -599,6 +599,26 @@ export type OperatorBackfillClaimOutcome<T = void> =
   | {readonly claimed: true; readonly value: T}
   | {readonly claimed: false; readonly result: OperatorBackfillResult}
 
+/** What a cmd-Z / cmd-shift-Z gesture did, handed to `onHistoryReplay`
+ *  listeners once it is over. `entry` is the replayed entry — its snapshots
+ *  name every block the gesture touched, `description` / `groupId` /
+ *  `steps` are what the recording tx said about itself — or `null` when the
+ *  stack was empty and nothing happened. Fired for every path into
+ *  `undo()` / `redo()` (shortcut, menu, a toast's own Undo button,
+ *  programmatic), which is why this is a repo event and not a dispatch
+ *  observer on the `undo` action. */
+export interface HistoryReplayEvent {
+  kind: 'undo' | 'redo'
+  scope: ChangeScope
+  workspaceId: string
+  entry: UndoEntry | null
+  /** Whether `entry` reached the opposite stack, so the inverse gesture
+   *  is available. False when the history was dropped while the replay
+   *  was in flight (the replay still committed). Always false with a null
+   *  entry. */
+  inverseOffered: boolean
+}
+
 export class Repo {
   readonly db: PowerSyncDb
   readonly cache: BlockCache
@@ -672,6 +692,7 @@ export class Repo {
    *  processors. Subscribers are responsible for the UI side
    *  (toast routing); the data layer stays UI-agnostic. */
   private readonly userErrorListeners = new CallbackSet<[ProcessorRejection]>('Repo.userErrors')
+  private readonly historyReplayListeners = new CallbackSet<[HistoryReplayEvent]>('Repo.historyReplays')
   private readonly readOnlyListeners = new CallbackSet('Repo.readOnly')
   private readonly metricsResetListeners = new CallbackSet('Repo.metricsReset')
   /** Global query-registry epoch. Bumped by `swapQueries` (via
@@ -1935,9 +1956,16 @@ export class Repo {
     // applies a minute later against rows it no longer describes.
     if (manager.historyDropInProgress) return false
     const clearEpoch = manager.clearEpoch
+    const workspaceId = this.client.activeWorkspaceId
     const opposite = action === 'undo' ? 'redo' : 'undo'
     const entry = action === 'undo' ? manager.popUndo(scope) : manager.popRedo(scope)
-    if (entry === null) return false
+    if (entry === null) {
+      // An empty stack is a gesture that did nothing, and that is worth
+      // telling the user; a drop-in-progress refusal above is not, since the
+      // pass that owns the drop has its own surface.
+      this.historyReplayListeners.notify({kind: action, scope, workspaceId, entry: null, inverseOffered: false})
+      return false
+    }
     /** Put `entry` on a stack — unless the history was DROPPED while this
      *  gesture was in flight.
      *
@@ -1949,10 +1977,11 @@ export class Repo {
      *  emptied, with an entry describing a pre-pass row — and the next gesture
      *  samples the new epoch, passes, and replays it over the pass's committed
      *  writes. Dropping that entry is the whole point of the clear. */
-    const push = (onto: 'undo' | 'redo'): void => {
-      if (manager.clearEpoch !== clearEpoch) return
+    const push = (onto: 'undo' | 'redo'): boolean => {
+      if (manager.clearEpoch !== clearEpoch) return false
       if (onto === 'undo') manager.pushUndo(scope, entry)
       else manager.pushRedo(scope, entry)
+      return true
     }
     try {
       await this._replay(entry, action, {manager, clearEpoch})
@@ -1966,15 +1995,18 @@ export class Repo {
       // grouping the inversion additionally makes a same-group tx merge
       // into the pushed-back entry rather than the newer one. We keep
       // the groupId on pushback anyway: stripping it would break the
-      // legitimate retry path (RescheduleToast re-matches the restored
-      // entry by groupId once read-only clears), which is a far more
-      // common sequence than a mid-replay same-group commit.
+      // legitimate retry path (a receipt's Undo re-matches the restored
+      // entry — the same object — once read-only clears), which is a far
+      // more common sequence than a mid-replay same-group commit.
       push(action)
       throw err
     }
     // True even when the push above was refused: the replay COMMITTED, so the
     // gesture did what the user asked. All that is withheld is the inverse.
-    push(opposite)
+    const inverseOffered = push(opposite)
+    // After the push, so a listener that peeks the opposite stack to decide
+    // whether the inverse is still offered sees the entry already there.
+    this.historyReplayListeners.notify({kind: action, scope, workspaceId, entry, inverseOffered})
     return true
   }
 
@@ -2655,6 +2687,15 @@ export class Repo {
    *  or break the underlying `repo.tx` error propagation. */
   onUserError(listener: (error: ProcessorRejection) => void): () => void {
     return this.userErrorListeners.add(listener)
+  }
+
+  /** Subscribe to completed undo / redo gestures (see
+   *  {@link HistoryReplayEvent}). Fires after the replay committed and the
+   *  entry moved to the opposite stack, and for an empty-stack no-op with
+   *  `entry: null`; a replay that threw fires nothing — the error reaches
+   *  the caller. Same listener contract as {@link onUserError}. */
+  onHistoryReplay(listener: (event: HistoryReplayEvent) => void): () => void {
+    return this.historyReplayListeners.add(listener)
   }
 
   /** Translate a parsed alias-collision RAISE into a fully-populated

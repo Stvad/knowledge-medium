@@ -1,0 +1,637 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Action Receipts</title>
+<style>
+  :root {
+    --bg: hsl(30 30% 98%);
+    --surface: hsl(0 0% 100%);
+    --ink: hsl(20 30% 12%);
+    --ink-2: hsl(20 12% 42%);
+    --ink-3: hsl(20 12% 60%);
+    --line: hsl(20 25% 88%);
+    --line-soft: hsl(20 25% 93%);
+    --accent: hsl(14 90% 46%);
+    --accent-soft: hsl(14 90% 53% / .10);
+    --code-bg: hsl(20 30% 95%);
+    --good: hsl(142 55% 34%);
+    --warn: hsl(35 90% 40%);
+    --shadow: 0 10px 24px -8px hsl(20 30% 12% / .18), 0 2px 6px -2px hsl(20 30% 12% / .10);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: hsl(20 30% 7%);
+      --surface: hsl(20 30% 9%);
+      --ink: hsl(30 20% 93%);
+      --ink-2: hsl(20 12% 66%);
+      --ink-3: hsl(20 10% 48%);
+      --line: hsl(20 25% 18%);
+      --line-soft: hsl(20 25% 14%);
+      --accent: hsl(14 90% 64%);
+      --accent-soft: hsl(14 90% 60% / .14);
+      --code-bg: hsl(20 25% 12%);
+      --good: hsl(142 50% 52%);
+      --warn: hsl(35 90% 60%);
+      --shadow: 0 10px 24px -8px hsl(0 0% 0% / .6), 0 2px 6px -2px hsl(0 0% 0% / .4);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: hsl(20 30% 7%);
+    --surface: hsl(20 30% 9%);
+    --ink: hsl(30 20% 93%);
+    --ink-2: hsl(20 12% 66%);
+    --ink-3: hsl(20 10% 48%);
+    --line: hsl(20 25% 18%);
+    --line-soft: hsl(20 25% 14%);
+    --accent: hsl(14 90% 64%);
+    --accent-soft: hsl(14 90% 60% / .14);
+    --code-bg: hsl(20 25% 12%);
+    --good: hsl(142 50% 52%);
+    --warn: hsl(35 90% 60%);
+    --shadow: 0 10px 24px -8px hsl(0 0% 0% / .6), 0 2px 6px -2px hsl(0 0% 0% / .4);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 15.5px;
+    line-height: 1.55;
+    padding-block: 40px 96px;
+    padding-inline: clamp(16px, 4vw, 40px);
+    font-feature-settings: "ss01";
+  }
+  .wrap { max-width: 1120px; margin-inline: auto; }
+  .prose { max-width: 70ch; }
+  h1, h2, h3 { text-wrap: balance; line-height: 1.15; margin: 0; font-weight: 600; letter-spacing: -0.01em; }
+  h1 { font-size: clamp(30px, 4vw, 40px); }
+  h2 { font-size: 23px; margin-block: 56px 14px; padding-top: 22px; border-top: 1px solid var(--line); }
+  h3 { font-size: 17px; margin-block: 28px 8px; }
+  p { margin-block: 0 14px; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .eyebrow { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-2); font-weight: 500; margin-bottom: 14px; }
+  .dek { font-size: 18px; color: var(--ink-2); max-width: 62ch; margin-top: 14px; }
+  nav.toc { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 28px; font-size: 14px; }
+  nav.toc a { color: var(--ink-2); }
+  nav.toc a b { color: var(--ink); font-weight: 500; }
+  code, kbd, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  code { font-size: .86em; background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+  pre { background: var(--code-bg); border: 1px solid var(--line-soft); border-radius: 8px; padding: 14px 16px; font-size: 12.5px; line-height: 1.5; overflow-x: auto; margin-block: 8px 18px; }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  .c { color: var(--ink-3); }
+  .k { color: var(--accent); }
+  ul, ol { padding-left: 22px; margin-block: 0 14px; }
+  li { margin-bottom: 5px; }
+  li b { font-weight: 600; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; margin-block: 10px 20px; }
+  th, td { text-align: left; vertical-align: top; padding: 9px 12px 9px 0; border-bottom: 1px solid var(--line-soft); }
+  th { font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-2); font-weight: 500; }
+  td.rc { font-family: ui-sans-serif, system-ui, sans-serif; }
+  .tbl { overflow-x: auto; }
+  .callout { border-left: 3px solid var(--accent); background: var(--accent-soft); padding: 12px 16px; border-radius: 0 8px 8px 0; margin-block: 14px 20px; max-width: 70ch; }
+  .callout p:last-child { margin-bottom: 0; }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 18px 28px; }
+  .fail { border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; background: var(--surface); }
+  .fail b { display: block; font-weight: 600; margin-bottom: 4px; }
+  .fail p { margin: 0; color: var(--ink-2); font-size: 14px; }
+
+  /* ---- diagram ---- */
+  .diagram { overflow-x: auto; margin-block: 10px 24px; }
+  .diagram svg { min-width: 760px; width: 100%; height: auto; display: block; }
+  .diagram .box { fill: var(--surface); stroke: var(--line); }
+  .diagram .box.hot { stroke: var(--accent); stroke-width: 1.5; }
+  .diagram .box.core { stroke-dasharray: 4 3; }
+  .diagram text { fill: var(--ink); font-family: ui-sans-serif, system-ui, sans-serif; font-size: 12.5px; }
+  .diagram text.sm { font-size: 11px; fill: var(--ink-2); }
+  .diagram text.mono { font-family: ui-monospace, Menlo, monospace; font-size: 11px; }
+  .diagram .arrow { stroke: var(--ink-2); fill: none; stroke-width: 1.2; marker-end: url(#ah); }
+  .diagram .lbl { fill: var(--accent); font-size: 11px; font-weight: 500; }
+
+  /* ---- option artboards ---- */
+  .option { margin-top: 36px; border-top: 1px dashed var(--line); padding-top: 22px; }
+  .option-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 16px; }
+  .option-head h3 { margin: 0; font-size: 20px; }
+  .option-head .tag { font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-2); }
+  .option .why { max-width: 70ch; color: var(--ink-2); margin-block: 8px 14px; }
+  .tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+  .tabs button {
+    font: inherit; font-size: 13px; font-weight: 500; color: var(--ink-2);
+    background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 5px 12px; cursor: pointer;
+  }
+  .tabs button[aria-selected="true"] { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+  .tabs button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .boards { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 16px; }
+  .board-label { font-size: 12px; color: var(--ink-3); margin-top: 6px; letter-spacing: .04em; text-transform: uppercase; }
+  .verdict { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 10px 28px; margin-top: 16px; font-size: 14px; }
+  .verdict b { font-weight: 600; }
+  .verdict p { margin: 0; color: var(--ink-2); }
+  .verdict .g b { color: var(--good); }
+  .verdict .w b { color: var(--warn); }
+
+  /* ---- mock app frame (fixed themes, deliberately independent of the doc theme) ---- */
+  .km {
+    --bg: 30 40% 99%; --fg: 20 30% 12%; --card: 0 0% 100%; --muted: 20 25% 95%; --mutedfg: 20 12% 42%;
+    --accent: 5 80% 92%; --accentfg: 5 70% 30%; --primary: 14 90% 53%; --border: 20 25% 88%;
+    --success: 142 55% 38%; --destructive: 0 84% 55%; --wikilink: 0 75% 50%;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-size: 12.5px; line-height: 1.45;
+    background: hsl(var(--bg)); color: hsl(var(--fg));
+    position: relative; overflow: hidden; height: 330px;
+    border: 1px solid hsl(var(--border)); border-radius: 10px;
+  }
+  .km[data-km="dark"] {
+    --bg: 20 30% 7%; --fg: 30 20% 95%; --card: 20 30% 9%; --muted: 20 20% 14%; --mutedfg: 20 12% 65%;
+    --accent: 5 55% 25%; --accentfg: 5 80% 92%; --primary: 14 90% 60%; --border: 20 25% 18%;
+    --success: 142 50% 50%; --destructive: 0 62% 45%; --wikilink: 0 85% 70%;
+  }
+  .km-header { display: flex; align-items: center; gap: 10px; padding: 7px 12px; border-bottom: 1px solid hsl(var(--border)); color: hsl(var(--mutedfg)); font-size: 11.5px; }
+  .km-header .sp { flex: 1; }
+  .km-header .pill { border: 1px solid hsl(var(--border)); border-radius: 5px; padding: 0 6px; font-size: 10.5px; }
+  .km-page { padding: 18px 26px 12px 34px; }
+  .km-title { font-size: 17px; font-weight: 600; margin-bottom: 10px; letter-spacing: -0.01em; }
+  .km-block { position: relative; display: flex; gap: 8px; padding: 3px 6px; border-radius: 4px; margin-left: -6px; }
+  .km-block .dot { width: 5px; height: 5px; border-radius: 50%; background: hsl(var(--mutedfg)); flex: none; margin-top: 7px; }
+  .km-block.focus { background: hsl(var(--accent) / .4); }
+  .km-block.flash { animation: kmflash 1.8s ease-out both; }
+  @keyframes kmflash { 0% { background: hsl(var(--primary) / .30); } 35% { background: hsl(var(--primary) / .22); } 100% { background: hsl(var(--accent) / .4); } }
+  .km s { color: hsl(var(--mutedfg)); text-decoration-color: hsl(var(--destructive) / .8); }
+  .km .wl { color: hsl(var(--wikilink)); }
+  .km .crumbs { color: hsl(var(--mutedfg)); }
+  .km .crumbs i { font-style: normal; opacity: .55; margin-inline: 3px; }
+  .km kbd {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; color: hsl(var(--mutedfg));
+    border: 1px solid hsl(var(--border)); border-bottom-width: 2px; border-radius: 4px; padding: 0 4px; line-height: 1.5; background: hsl(var(--card));
+  }
+  .km .btn { color: hsl(var(--primary)); font-weight: 500; padding: 3px 7px; border-radius: 5px; white-space: nowrap; }
+  .km .btn.ghost { color: hsl(var(--fg)); }
+  .km .btn.dim { color: hsl(var(--mutedfg)); font-weight: 400; }
+  .km .arr { font-size: 13px; line-height: 1; color: hsl(var(--primary)); }
+  .km .arr.muted { color: hsl(var(--mutedfg)); }
+
+  /* toast surfaces */
+  .toast {
+    position: absolute; left: 50%; top: 10px; transform: translateX(-50%);
+    background: hsl(var(--bg)); border: 1px solid hsl(var(--border)); border-radius: 7px;
+    box-shadow: 0 10px 15px -3px rgb(0 0 0 / .12), 0 4px 6px -4px rgb(0 0 0 / .10);
+    font-size: 12.5px; z-index: 3; animation: drop .35s cubic-bezier(.2,.8,.2,1) both;
+  }
+  @keyframes drop { from { opacity: 0; transform: translate(-50%, -8px); } to { opacity: 1; transform: translate(-50%, 0); } }
+  .toast.strip { display: flex; align-items: center; gap: 10px; padding: 8px 12px; white-space: nowrap; max-width: 96%; }
+  .toast.strip .msg { overflow: hidden; text-overflow: ellipsis; }
+  .toast.card { width: 400px; max-width: 94%; padding: 10px 12px 9px; }
+  .toast.card .lbl { display: flex; align-items: center; gap: 8px; font-size: 10.5px; letter-spacing: .07em; text-transform: uppercase; color: hsl(var(--mutedfg)); margin-bottom: 4px; }
+  .toast.card .lbl .sp { flex: 1; }
+  .toast.card .subj { font-weight: 500; font-size: 13px; }
+  .toast.card .meta { color: hsl(var(--mutedfg)); font-size: 12px; }
+  .toast.card .peek { margin-top: 5px; padding: 4px 8px; border-radius: 4px; background: hsl(var(--muted)); font-size: 12px; }
+  .toast.card .acts { display: flex; justify-content: flex-end; gap: 4px; margin-top: 6px; }
+  .toast.card .rows { margin-top: 4px; }
+  .toast.card .rows div { display: flex; gap: 8px; padding: 2px 0; font-size: 12px; }
+  .toast.card .rows .k { color: hsl(var(--mutedfg)); width: 34px; flex: none; }
+  .toast.corner { left: auto; right: 12px; bottom: 12px; top: auto; transform: none; width: 260px; padding: 9px 11px; animation: rise .35s cubic-bezier(.2,.8,.2,1) both; }
+  @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+  /* margin marker */
+  .marg { position: absolute; right: 14px; display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: hsl(var(--mutedfg)); white-space: nowrap; animation: rise .3s both; }
+  .marg .ln { width: 14px; height: 1px; background: hsl(var(--border)); }
+  .gut { position: absolute; left: -22px; top: 3px; color: hsl(var(--primary)); font-size: 12px; }
+
+  /* ledger tray */
+  .tray { position: absolute; left: 12px; bottom: 12px; width: 300px; max-width: 94%; background: hsl(var(--bg)); border: 1px solid hsl(var(--border)); border-radius: 8px; box-shadow: 0 10px 15px -3px rgb(0 0 0 / .12), 0 4px 6px -4px rgb(0 0 0 / .10); font-size: 12px; animation: rise .35s both; z-index: 3; }
+  .tray .th { display: flex; align-items: center; gap: 10px; padding: 6px 10px; border-bottom: 1px solid hsl(var(--border)); color: hsl(var(--mutedfg)); font-size: 11px; letter-spacing: .05em; text-transform: uppercase; }
+  .tray .th .sp { flex: 1; }
+  .tray .th .cnt { font-family: ui-monospace, Menlo, monospace; letter-spacing: 0; text-transform: none; font-variant-numeric: tabular-nums; }
+  .tray .row { display: grid; grid-template-columns: 16px 1fr auto; gap: 8px; align-items: start; padding: 6px 10px; border-bottom: 1px solid hsl(var(--border) / .6); }
+  .tray .row:last-child { border-bottom: 0; }
+  .tray .row .t { color: hsl(var(--mutedfg)); font-size: 11px; }
+  .tray .row.muted { color: hsl(var(--mutedfg)); }
+  .tray .row .acts { display: flex; gap: 2px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .toast, .tray, .marg, .km-block.flash { animation: none; }
+    .km-block.flash { background: hsl(var(--primary) / .22); }
+  }
+  @media (max-width: 480px) {
+    .km { height: 340px; }
+    .km-page { padding-inline: 18px 16px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+<aside class="doc-status" style="margin:0 0 1.25rem;padding:.6rem .9rem;border:1px solid #b8860b;border-radius:6px;background:rgba(184,134,11,.12);font-size:.85rem;line-height:1.45">
+<strong>Status: current</strong> &middot; design intent with an as-built section (&sect;6). Sections 1&ndash;4 are the design as pitched, including the three options that were not chosen; the code under <code>src/plugins/action-receipts/</code> is authoritative. <strong>Last verified against code:</strong> 2026-09-21, after the first review round (the PR that added the plugin).
+</aside>
+  <div class="eyebrow">Knowledge Medium · core plugin design · 2026-09-17, decided and built 2026-09-21</div>
+  <h1>Action Receipts</h1>
+  <p class="dek">A small core plugin that hands the user a receipt after actions whose effect they cannot see: what just happened, to which block, where it lives, and how to take it back. Undo is the first customer.</p>
+  <nav class="toc">
+    <a href="#why"><b>1</b> Why</a>
+    <a href="#what"><b>2</b> What gets a receipt</a>
+    <a href="#shape"><b>3</b> Plugin shape</a>
+    <a href="#options"><b>4</b> Four visual options</a>
+    <a href="#rec"><b>5</b> Decisions</a>
+    <a href="#built"><b>6</b> As built</a>
+  </nav>
+
+  <h2 id="why">1. Why: undo is currently silent</h2>
+  <div class="prose">
+    <p>Cmd-Z runs <code>repo.undo()</code>, which pops the top entry of the active workspace's <code>BlockDefault</code> stack and replays its <code>before</code> snapshots. The only feedback is whatever happens to be on screen. Three shapes of that go wrong in daily use:</p>
+  </div>
+  <div class="grid2">
+    <div class="fail"><b>The revert lands off-screen.</b><p>You edited a task on the agenda, opened a note, pressed cmd-Z out of habit. The task reverted three panes away. Nothing on this page moved, so it reads as "undo is broken".</p></div>
+    <div class="fail"><b>The stack is empty, or belongs to another workspace.</b><p>Undo is per workspace and starts fresh each session. Cmd-Z after a reload or a workspace switch does nothing at all, and nothing says so.</p></div>
+    <div class="fail"><b>One press, unknown blast radius.</b><p>A grouped entry (a reschedule, a paste of fourteen blocks, a delete with a subtree) reverts as one step. The user sees one thing move and does not know eleven others did too.</p></div>
+    <div class="fail"><b>The same silence after the action itself.</b><p>Refile a block to another page, delete a parent with children folded, move a block out of the visible window. The effect is real and invisible, and the undo affordance is nowhere.</p></div>
+  </div>
+
+  <h2 id="what">2. What gets a receipt</h2>
+  <div class="callout"><p><b>Rule:</b> an action earns a receipt when its effect is not fully visible where the user is looking. Off-screen, aggregate (a count the viewport hides), or no visible effect at all. Actions whose result is on screen get nothing. Receipts are for closing a perception gap, not for narrating the app.</p></div>
+  <div class="tbl">
+  <table>
+    <thead><tr><th>Action</th><th>Receipt reads</th><th>Buttons</th><th>Why it qualifies</th></tr></thead>
+    <tbody>
+      <tr><td><code>undo</code> / <code>redo</code></td><td class="rc">Undid edit · <i>Ship the sidenote rail</i> <s>by Friday</s></td><td>Redo · Go to (only when off-screen)</td><td>The change may be anywhere; the entry knows exactly which blocks and what changed.</td></tr>
+      <tr><td><code>undo</code> on an empty stack</td><td class="rc">Nothing to undo</td><td>none</td><td>Silent no-op today. The one hint worth adding: history is per workspace and per session.</td></tr>
+      <tr><td><code>undo</code> of a grouped entry</td><td class="rc">Undid reschedule · 3 blocks in <i>2026-09-17</i></td><td>Redo</td><td>A group reverts several txs; the count is the whole point of the receipt.</td></tr>
+      <tr><td>rapid cmd-Z burst</td><td class="rc">+2 Undid edit · <i>Ship the sidenote rail</i> <s>by Friday</s></td><td>Redo</td><td>Presses inside ~1.5 s coalesce into one receipt that counts up, instead of a stack of toasts.</td></tr>
+      <tr><td>delete with descendants</td><td class="rc">Deleted <i>Perf baseline</i> and 7 children</td><td>Undo</td><td>Folded children vanish unseen. Single leaf deletes stay silent.</td></tr>
+      <tr><td>move / refile to another parent</td><td class="rc">Moved <i>Book covers</i> to References ▸ Books</td><td>Undo · Go to</td><td>The block leaves the viewport; the destination is the information.</td></tr>
+      <tr><td>SRS reschedule (existing toast)</td><td class="rc">Rescheduled · next review Sep 24</td><td>Undo</td><td>Already exists as a bespoke toast. Migrates onto the receipts facet and deletes its own undo-button lifecycle.</td></tr>
+      <tr><td>workspace switch</td><td class="rc">Now in <i>Weave</i> · separate undo history</td><td>none</td><td>Optional, low priority. Explains the empty-stack surprise before it happens.</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="prose">
+    <p><b>Deliberately no receipt:</b> indent/outdent, move up/down, paste, type changes, fold cycling, mode toggles. All visible. Sync-applied remote changes are not actions and are a different design.</p>
+  </div>
+
+  <h2 id="shape">3. Plugin shape</h2>
+  <div class="prose">
+    <p><code>src/plugins/action-receipts/</code>, a <code>systemToggle</code> like <code>recents</code>. It owns the surface (rendering, coalescing, the live Undo/Redo button, Go to) and nothing about any particular action. Two seams feed it.</p>
+  </div>
+
+  <div class="diagram">
+    <svg viewBox="0 0 960 300" role="img" aria-label="Data flow: triggers reach repo.undo through the dispatch verb; the repo emits a history-replay event; the plugin summarizes it and shows a toast. Other plugins contribute describers through the receipts facet.">
+      <defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="context-stroke"/></marker></defs>
+      <!-- row 1: undo path -->
+      <rect class="box" x="10" y="30" width="130" height="58" rx="8"/>
+      <text x="75" y="53" text-anchor="middle">⌘Z · Edit menu</text>
+      <text x="75" y="70" text-anchor="middle" class="sm">toast Undo button</text>
+      <path class="arrow" d="M140 59 H180"/>
+      <rect class="box" x="180" y="30" width="150" height="58" rx="8"/>
+      <text x="255" y="53" text-anchor="middle" class="mono">actionDispatchVerb</text>
+      <text x="255" y="70" text-anchor="middle" class="sm">undo / redo action</text>
+      <path class="arrow" d="M330 59 H370"/>
+      <rect class="box" x="370" y="30" width="130" height="58" rx="8"/>
+      <text x="435" y="53" text-anchor="middle" class="mono">repo.undo()</text>
+      <text x="435" y="70" text-anchor="middle" class="sm">pop · replay before</text>
+      <path class="arrow" d="M500 59 H540"/>
+      <rect class="box hot core" x="540" y="24" width="170" height="70" rx="8"/>
+      <text x="625" y="47" text-anchor="middle" class="mono">onHistoryReplay</text>
+      <text x="625" y="64" text-anchor="middle" class="sm">{kind, scope, workspaceId,</text>
+      <text x="625" y="79" text-anchor="middle" class="sm">entry | null}</text>
+      <text x="625" y="14" text-anchor="middle" class="lbl">new core hook · ~15 lines</text>
+      <path class="arrow" d="M710 59 H750"/>
+      <rect class="box hot" x="750" y="20" width="200" height="78" rx="8"/>
+      <text x="850" y="43" text-anchor="middle">action-receipts plugin</text>
+      <text x="850" y="61" text-anchor="middle" class="sm">summarize → locate → coalesce</text>
+      <text x="850" y="78" text-anchor="middle" class="sm">showCustom(ReceiptToast)</text>
+      <!-- row 2: describers -->
+      <rect class="box" x="10" y="180" width="200" height="58" rx="8"/>
+      <text x="110" y="203" text-anchor="middle">move-blocks · delete verb</text>
+      <text x="110" y="220" text-anchor="middle" class="sm">srs-rescheduling · any plugin</text>
+      <path class="arrow" d="M210 209 H250"/>
+      <rect class="box hot" x="250" y="180" width="200" height="58" rx="8"/>
+      <text x="350" y="203" text-anchor="middle" class="mono">actionReceiptsFacet</text>
+      <text x="350" y="220" text-anchor="middle" class="sm">{actionId, describe(invocation, outcome)}</text>
+      <path class="arrow" d="M450 209 H490"/>
+      <rect class="box" x="490" y="180" width="180" height="58" rx="8"/>
+      <text x="580" y="203" text-anchor="middle" class="mono">actionDispatchVerb.after</text>
+      <text x="580" y="220" text-anchor="middle" class="sm">one observer, looks up describer</text>
+      <path class="arrow" d="M670 209 H760 V98"/>
+      <!-- toaster -->
+      <path class="arrow" d="M850 98 V140"/>
+      <rect class="box" x="770" y="140" width="160" height="40" rx="8"/>
+      <text x="850" y="165" text-anchor="middle" class="sm">sonner Toaster (core.toast)</text>
+      <text x="480" y="285" text-anchor="middle" class="sm">dashed = core change · solid orange = this plugin's contract · everything else exists today</text>
+    </svg>
+  </div>
+
+  <h3>Seam A: a history-replay event on the repo (small core change)</h3>
+  <div class="prose">
+    <p><code>repo.undo()</code> returns a boolean and nothing observes the entry it replayed. <code>UndoManager.subscribe</code> reports stack shape only. So the repo emits one event at the end of <code>undo()</code> / <code>redo()</code>, in both the replayed and the empty case, carrying the entry itself:</p>
+  </div>
+<pre><code><span class="c">// src/data/repo.ts</span>
+export interface HistoryReplayEvent {
+  kind: <span class="k">'undo'</span> | <span class="k">'redo'</span>
+  scope: ChangeScope
+  workspaceId: string
+  entry: UndoEntry | null      <span class="c">// null: the stack was empty</span>
+}
+onHistoryReplay(listener: (e: HistoryReplayEvent) =&gt; void): () =&gt; void</code></pre>
+  <div class="prose">
+    <p>Emitted after the replay commits, before the redo push returns, so a listener that peeks the redo stack sees the entry on top. A failed replay rethrows as today and emits nothing; the error keeps its existing route. This catches every path (keyboard, palette, Edit menu, the reschedule toast's own Undo button, programmatic calls), which is why it beats the alternative below.</p>
+    <p><b>Fallback with zero core change:</b> a <code>before</code> observer on <code>actionDispatchVerb</code> for the <code>undo</code> action stashes <code>peekUndo()</code>, and the <code>after</code> observer compares it to <code>peekRedo()</code>. It works for cmd-Z and the palette only. Anything that calls <code>repo.undo()</code> directly is invisible to it, and the reschedule toast already does. Not recommended, but it is how a prototype can be tried in a dynamic extension before the core PR.</p>
+  </div>
+
+  <h3>Seam B: describers, keyed by action id</h3>
+  <div class="prose">
+    <p>Mirrors <code>rejectionToastFacet</code>: a keyed-map facet where the plugin that owns an action says what its receipt reads. The receipts plugin registers a single <code>actionDispatchVerb.after</code> observer that looks the action up and renders the result. Ownership stays with the action's plugin; core never learns about receipts.</p>
+  </div>
+<pre><code><span class="c">// src/plugins/action-receipts/facet.ts</span>
+export interface Receipt {
+  key: string                      <span class="c">// same key within coalesceMs updates the toast in place</span>
+  verb: string                     <span class="c">// 'Undid edit' · 'Restored' · 'Moved' · 'Deleted'</span>
+  subject?: {blockId: string; workspaceId: string; label: string}
+  count?: number                   <span class="c">// blocks touched beyond the subject ("and 7 children")</span>
+  peek?: {before: string; after: string}   <span class="c">// one-line content delta, truncated</span>
+  tone?: <span class="k">'neutral'</span> | <span class="k">'empty'</span>
+  hint?: string                    <span class="c">// 'Undo history is per workspace'</span>
+  revert?: {kind: <span class="k">'undo'</span> | <span class="k">'redo'</span>; workspaceId: string; groupId?: string; txId: string}
+}
+
+export interface ReceiptDescriber {
+  actionId: string
+  context?: ActionContextType
+  describe(
+    invocation: ActionInvocation,
+    outcome: VerbOutcome&lt;ActionHandlerResult&gt;,
+    repo: Repo,
+  ): Receipt | null | Promise&lt;Receipt | null&gt;
+}
+export const actionReceiptsFacet = keyedMapFacet&lt;ReceiptDescriber&gt;(<span class="k">'action-receipts'</span>, d =&gt; d.actionId)</code></pre>
+
+  <h3>Turning an undo entry into words</h3>
+  <div class="prose">
+    <p><code>entry.description</code> is free-form and often missing (<code>'paste multiline text'</code>, <code>'addType todo'</code>, or nothing). The uniform source is the snapshot map: per block, <code>before</code> and <code>after</code>. A pure <code>summarizeEntry(entry, ctx)</code> classifies each delta and picks a subject. It is plain vitest, the same way <code>bucketing.ts</code> is for the agenda.</p>
+  </div>
+  <div class="tbl">
+  <table>
+    <thead><tr><th>Snapshot delta</th><th>Undo receipt</th><th>Redo receipt</th></tr></thead>
+    <tbody>
+      <tr><td>content differs</td><td class="rc">Undid edit · <i>label</i> + peek</td><td class="rc">Redid edit</td></tr>
+      <tr><td><code>before</code> present, <code>after</code> null</td><td class="rc">Restored <i>label</i> and N children</td><td class="rc">Deleted <i>label</i> again</td></tr>
+      <tr><td><code>before</code> null, <code>after</code> present</td><td class="rc">Removed <i>label</i> (undid create / paste)</td><td class="rc">Re-created <i>label</i></td></tr>
+      <tr><td>parent or order differs</td><td class="rc">Moved <i>label</i> back to A ▸ B</td><td class="rc">Moved <i>label</i> to C ▸ D</td></tr>
+      <tr><td>only properties differ</td><td class="rc">Undid <i>status</i> change on <i>label</i></td><td class="rc">Redid …</td></tr>
+      <tr><td>mixed, many blocks</td><td class="rc">Undid N-block change · dominant kind named</td><td class="rc">Redid …</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="prose">
+    <p>Subject = the topmost touched block (its parent is not in the map), labeled with <code>labelForBlockData</code>; crumbs from <code>repo.query.ancestors</code>, the same helper Quick Find uses. A recognized <code>description</code> can override the verb ("Undid reschedule"), unknown ones are ignored rather than shown raw.</p>
+  </div>
+
+  <h3>Lifecycle rules</h3>
+  <ul class="prose">
+    <li><b>Where.</b> After the replay, the plugin checks whether the subject has a rendered instance in the active panel. Visible: the block flashes and the receipt stays short. Not visible: the receipt carries crumbs and a Go to button (<code>navigateFromGlobalCommand</code>). Undo never moves focus by itself.</li>
+    <li><b>Live revert button.</b> Enabled while the entry is top of the opposite stack of its workspace, re-checked at click time. This is the reschedule toast's <code>groupId</code> check, lifted into the plugin so every receipt gets it and that toast loses its copy.</li>
+    <li><b>Coalescing.</b> Same <code>key</code> within 1.5 s updates the same toast id: the count climbs, the subject shows the latest step. Sonner's id reuse does the update; no stacking.</li>
+    <li><b>Duration.</b> 5 s, paused on hover. "Nothing to undo" 2.5 s. One receipt at a time per key; a new key replaces, it does not stack.</li>
+    <li><b>Scope.</b> <code>BlockDefault</code> and <code>References</code> only, the undoable scopes. Automation and UI-state writes never produce receipts.</li>
+    <li><b>Off switch.</b> The systemToggle, plus a per-key mute in the toggle's settings if a receipt turns out noisy.</li>
+  </ul>
+
+  <h2 id="options">4. Four visual options</h2>
+  <div class="prose">
+    <p>Each artboard is the same page in the app's own sunset-warm palette, light and dark side by side, system font stack as in the app. Switch the scenario with the tabs: the state the mockups share is the one that matters most, an undo of an edit that is on screen, an undo of a delete that is not, an empty stack, and a burst of three presses.</p>
+  </div>
+  <div id="options-root"></div>
+
+  <h2 id="rec">5. Decisions (2026-09-21)</h2>
+  <ul class="prose">
+    <li><b>Core hook, not the dispatch-observer prototype.</b> <code>repo.onHistoryReplay</code> fires for every path into undo and redo, with the entry, or null for an empty stack.</li>
+    <li><b>Option A, the Strip, is the surface.</b> Every receipt carries a history button that opens the Ledger (Option D) as a session tray; the tray is also reachable from the palette as "Recent actions".</li>
+    <li><b>Go to is explicit.</b> A receipt never moves focus by itself. When the subject is on screen the row flashes instead and the button is not offered.</li>
+    <li><b>Second wave in the same PR:</b> delete with children, and move / refile. No receipt for a workspace switch.</li>
+    <li><b>The SRS reschedule toast folds in</b> and its bespoke live-button lifecycle is deleted.</li>
+  </ul>
+
+  <h2 id="built">6. As built</h2>
+  <div class="prose">
+    <p>The plugin lives in <code>src/plugins/action-receipts/</code>; the design maps onto files one to one.</p>
+  </div>
+  <div class="tbl">
+  <table>
+    <thead><tr><th>File</th><th>Owns</th></tr></thead>
+    <tbody>
+      <tr><td><code>src/data/repo.ts</code></td><td><code>HistoryReplayEvent</code> + <code>onHistoryReplay</code>, emitted at the end of <code>replayGesture</code> after the entry moved to the opposite stack; <code>inverseOffered</code> says whether that push landed (a history drop mid-replay refuses it). A replay that threw emits nothing; a drop-in-progress refusal emits nothing either, since the pass owning the drop has its own surface.</td></tr>
+      <tr><td><code>facet.ts</code></td><td><code>Receipt</code>, <code>ReceiptDescriber</code>, <code>actionReceiptsFacet</code> (keyed by action id), and the builders: <code>recordedReceipt</code> for an entry an action just recorded, <code>historyReceipt</code> for an undo / redo event, <code>subjectOf</code> / <code>locationOf</code> for the state a gesture leaves behind. A subject the gesture left deleted is <code>navigable: false</code>: no Go to, no flash.</td></tr>
+      <tr><td><code>summarize.ts</code></td><td>Undo entry → words. Rows are classified (create / delete / move / content / properties), field rows are excluded, the subject is the topmost row of the highest-priority kind (content, move, delete, properties, create: the row the user acted on beats the rows a helper touched, so a move into a collapsed destination names the moved row, not the destination whose collapse flag flipped), riders are the rows under the subject, and a content change gets a prefix / suffix / two-middles peek. <code>phrase()</code> renders a direction: undo, redo, or forward.</td></tr>
+      <tr><td><code>receipts.ts</code></td><td>The toast slot (one receipt on screen; presses inside 1.5 s fold into one toast that shows the latest press in full with a +N chip for the earlier ones; each non-folded receipt gets a fresh sonner id because a dismissed id stays deleted; the empty "Nothing to undo" never touches the slot), the session ledger (50 entries; the toast holds only a ledger id, since sonner retains every toast's closure for the session), the on-screen check (<code>data-block-shell</code> row in the active panel, inside every scrollport, waited for up to 300 ms because a structural change reaches the DOM a query round-trip and a lazy mount after the commit) and the row flash. With the plugin off, <code>showReceipt</code> degrades to a plain toast so the flows that call it directly still confirm.</td></tr>
+      <tr><td><code>dispatch.ts</code></td><td>Before / after observers on <code>actionDispatchVerb</code>: sample the undo stack before, await the handler, ask the action's describer with the entry it recorded. Attribution is "the top changed while the handler ran", so a flow that can call <code>showReceipt</code> itself should.</td></tr>
+      <tr><td><code>describers.ts</code></td><td>Receipts for core actions: <code>delete_block</code> and <code>multi_select.delete_block</code> when the deleted subtree took children along. A multi-select delete records one entry per block; the receipt names the last, which is what its Undo reverts.</td></tr>
+      <tr><td><code>src/plugins/move-blocks/receipts.ts</code></td><td>The move receipt, built by the move flow from its own result (the moved ids and the picked destination) so a dialog-backed flow cannot be misattributed; destination read live ("→ References"). Replaces the "Moved N blocks" success toast.</td></tr>
+      <tr><td><code>src/plugins/srs-rescheduling/index.ts</code></td><td>Calls <code>showReceipt</code> with the reschedule message and the group entry; <code>RescheduleToast.tsx</code> and its test are gone, the liveness semantics moved to <code>ReceiptToast.test.tsx</code>.</td></tr>
+      <tr><td><code>ReceiptToast.tsx</code> / <code>LedgerTray.tsx</code></td><td>The two surfaces. The inverse button is enabled while the entry is the top of the matching stack of its workspace (entry identity, not group id) and re-checks at click time; its chord comes from the live binding. Go to is offered only in the active workspace and checks the block still exists. The buttons wrap under the sentence inside sonner's 356 px. The tray never takes focus (that would end edit mode), subscribes to nothing while closed, and follows the active workspace.</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="prose">
+    <p><b>Verified live</b> on a local-only dev build, driven through the agent bridge: undo of an on-screen edit (peek, flash, live Redo), redo, a foreign write disabling the button in place, a programmatic <code>repo.undo()</code> with no dispatch, three presses folding into "Undid 3 steps", cmd-Z on an empty stack, undo of a create (no Go to), a real cmd-Z keydown, delete with three children and its Undo, a leaf delete producing nothing, an off-screen undo with Go to landing on the block, the same receipt key arriving while an earlier toast is still up, move through the picker and its "Moved back", the SRS reschedule receipt and its Undo, and the ledger's counts, rows, Redo, focus and Escape.</p>
+  </div>
+</div>
+
+<script>
+(function () {
+  const BLOCKS = [
+    'Phase 5 — surface coherence',
+    'Sidenote rail reads from the metadata block',
+    'Ship the sidenote rail',
+    'Dimmed syntax waits on the CodeMirror exports PR',
+    'Paper theme: warm ground, ink at 12% lightness',
+    'Open: § anchors on headings only?',
+  ];
+  const FOCUS = 2;
+
+  const SCENARIOS = [
+    {id: 'edit', label: 'Undo an edit (visible)'},
+    {id: 'offscreen', label: 'Undo a delete (off-screen)'},
+    {id: 'empty', label: 'Nothing to undo'},
+    {id: 'burst', label: 'Three presses in a row'},
+  ];
+
+  const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+
+  function frame(theme, opts) {
+    const o = Object.assign({flash: -1, marker: null, gutter: null, blocks: null, overlay: ''}, opts);
+    const blocks = (o.blocks || BLOCKS).map((t, i) => {
+      const cls = ['km-block', i === FOCUS ? 'focus' : '', i === o.flash ? 'flash' : ''].join(' ');
+      const gut = (o.gutter && o.gutter.idx === i) ? `<span class="gut">${o.gutter.html}</span>` : '';
+      return `<div class="${cls}">${gut}<span class="dot"></span><span>${t}</span></div>`;
+    }).join('');
+    const marker = o.marker ? `<div class="marg" style="top:${o.marker.top}px">${o.marker.html}<span class="ln"></span></div>` : '';
+    return `<div class="km" data-km="${theme}">
+      <div class="km-header"><span>☰</span><span>Marginalia design</span><span class="sp"></span><span class="pill">⌘K</span><span class="pill">Weave</span></div>
+      <div class="km-page"><div class="km-title">Marginalia design</div>${blocks}</div>
+      ${marker}${o.overlay}
+    </div>`;
+  }
+
+  const kbd = k => `<kbd>${k}</kbd>`;
+  const arr = (c, m) => `<span class="arr${m ? ' muted' : ''}">${c}</span>`;
+  const RE = `<span class="btn">Redo</span>`;
+  const GO = `<span class="btn">Go to</span>`;
+  const UN = `<span class="btn">Undo</span>`;
+
+  // ---------- Option A: Strip ----------
+  function optionA(s, theme) {
+    let overlay = '', flash = -1;
+    if (s === 'edit') {
+      flash = FOCUS;
+      overlay = `<div class="toast strip">${arr('↶')}<span class="msg">Undid edit · Ship the sidenote rail <s>by Friday</s></span>${RE}${kbd('⌘⇧Z')}</div>`;
+    } else if (s === 'offscreen') {
+      overlay = `<div class="toast strip">${arr('↶')}<span class="msg">Restored <b>Perf baseline</b> + 7 children · <span class="crumbs">Docs<i>▸</i>Perf audit</span></span>${GO}${RE}</div>`;
+    } else if (s === 'empty') {
+      overlay = `<div class="toast strip">${arr('↶', true)}<span class="msg" style="color:hsl(var(--mutedfg))">Nothing to undo</span></div>`;
+    } else {
+      flash = 1;
+      overlay = `<div class="toast strip">${arr('↶')}<span class="msg">Undid <b>3 steps</b> · 2 edits, 1 move</span>${RE}${kbd('⌘⇧Z')}</div>`;
+    }
+    return frame(theme, {flash, overlay});
+  }
+
+  // ---------- Option B: Receipt card ----------
+  function optionB(s, theme) {
+    let body = '', flash = -1;
+    if (s === 'edit') {
+      flash = FOCUS;
+      body = `<div class="lbl">${arr('↶')} Undone · edit <span class="sp"></span>${kbd('⌘Z')}</div>
+        <div class="subj">Ship the sidenote rail</div>
+        <div class="meta">on this page · Marginalia design</div>
+        <div class="peek">Ship the sidenote rail <s>by Friday</s></div>
+        <div class="acts">${RE}</div>`;
+    } else if (s === 'offscreen') {
+      body = `<div class="lbl">${arr('↶')} Undone · delete <span class="sp"></span>${kbd('⌘Z')}</div>
+        <div class="subj">Perf baseline <span class="meta">and 7 children restored</span></div>
+        <div class="meta"><span class="crumbs">Docs<i>▸</i>Perf audit</span> · not on this page</div>
+        <div class="acts">${GO}${RE}</div>`;
+    } else if (s === 'empty') {
+      body = `<div class="lbl">${arr('↶', true)} Undo <span class="sp"></span>${kbd('⌘Z')}</div>
+        <div class="subj" style="color:hsl(var(--mutedfg))">Nothing to undo</div>
+        <div class="meta">History is per workspace and starts fresh each session.</div>`;
+    } else {
+      flash = 1;
+      body = `<div class="lbl">${arr('↶')} Undone · 3 steps <span class="sp"></span>${kbd('⌘Z')} ×3</div>
+        <div class="rows">
+          <div><span class="k">edit</span><span>Sidenote rail reads from <s>a</s> the metadata block</span></div>
+          <div><span class="k">edit</span><span>Ship the sidenote rail <s>by Friday</s></span></div>
+          <div><span class="k">move</span><span>Book covers → <span class="crumbs">References<i>▸</i>Books</span></span></div>
+        </div>
+        <div class="acts"><span class="btn dim">Redo steps back one</span>${RE}</div>`;
+    }
+    return frame(theme, {flash, overlay: `<div class="toast card">${body}</div>`});
+  }
+
+  // ---------- Option C: Margin marker ----------
+  function optionC(s, theme) {
+    const rowTop = i => 84 + i * 24.5; // page padding + title + row pitch, centred on the row
+    if (s === 'edit') {
+      return frame(theme, {
+        flash: FOCUS,
+        gutter: {idx: FOCUS, html: '↶'},
+        marker: {top: rowTop(FOCUS), html: `<span>undid edit · <s>by Friday</s></span>${RE}${kbd('⌘⇧Z')}`},
+      });
+    }
+    if (s === 'offscreen') {
+      return frame(theme, {overlay: `<div class="toast corner">
+        <div style="display:flex;gap:8px;align-items:flex-start">${arr('↶')}<div>
+          <div style="font-weight:500">Perf baseline <span style="color:hsl(var(--mutedfg));font-weight:400">+ 7 children restored</span></div>
+          <div class="crumbs" style="font-size:11.5px">Docs<i>▸</i>Perf audit · not on this page</div>
+        </div></div>
+        <div style="display:flex;justify-content:flex-end;gap:4px;margin-top:4px">${GO}${RE}</div>
+      </div>`});
+    }
+    if (s === 'empty') {
+      return frame(theme, {marker: {top: rowTop(FOCUS), html: `<span>nothing to undo</span>`}});
+    }
+    return frame(theme, {
+      flash: 1,
+      gutter: {idx: 1, html: '↶<small style="font-size:9px">×3</small>'},
+      marker: {top: rowTop(1), html: `<span>undid 3 steps · last: <s>a</s></span>${RE}`},
+    });
+  }
+
+  // ---------- Option D: Ledger tray ----------
+  function optionD(s, theme) {
+    const row = (icon, html, t, acts, muted) => `<div class="row${muted ? ' muted' : ''}">${arr(icon, muted)}<div>${html}<div class="t">${t}</div></div><div class="acts">${acts}</div></div>`;
+    let rows = '', cnt = '↶ 12 · ↷ 1', flash = -1;
+    if (s === 'edit') {
+      flash = FOCUS;
+      rows = row('↶', 'edit · Ship the sidenote rail <s>by Friday</s>', 'just now · this page', RE);
+    } else if (s === 'offscreen') {
+      rows = row('↶', 'delete · <b>Perf baseline</b> + 7 children', 'Docs ▸ Perf audit', GO + RE);
+    } else if (s === 'empty') {
+      cnt = '↶ 0 · ↷ 3';
+      rows = row('↶', 'Nothing to undo', 'history is per workspace', '', true);
+    } else {
+      flash = 1; cnt = '↶ 9 · ↷ 3';
+      rows = row('↶', 'edit · Sidenote rail reads from <s>a</s> the…', 'just now', RE)
+        + row('↶', 'edit · Ship the sidenote rail <s>by Friday</s>', '1 s ago', '')
+        + row('↶', 'move · Book covers → References ▸ Books', '2 s ago', GO);
+    }
+    const tray = `<div class="tray"><div class="th"><span>History</span><span class="sp"></span><span class="cnt">${cnt}</span></div>${rows}</div>`;
+    return frame(theme, {flash, overlay: tray});
+  }
+
+  const OPTIONS = [
+    {id: 'A', name: 'Strip', tag: 'one line · top center', render: optionA,
+      why: 'The current toast shape carrying the new data. Verb, subject, peek and buttons on one line, truncating from the right. Smallest footprint, closest to what ships today.',
+      wins: 'Zero visual novelty; reads at a glance; fits the existing Toaster with no layout work.',
+      loses: 'Crumbs and the peek fight for the same line, so the off-screen case truncates exactly the part that matters. No room for the burst breakdown.'},
+    {id: 'B', name: 'Receipt card', tag: 'two tiers · top center', render: optionB,
+      why: 'A small ledger line. An uppercase label names the operation and echoes the chord, the subject gets its own line, the where goes underneath, and the content peek sits in a muted well. The burst case becomes a three-row list.',
+      wins: 'Every field has a home; the off-screen case reads fully. Same Toaster, same lifecycle as the reschedule toast.',
+      loses: 'Taller. For a visible edit it says more than the flash already shows, which is why the recommendation pairs it with the flash and keeps the peek out when the block is on screen.'},
+    {id: 'C', name: 'Margin marker', tag: 'in place · falls back to a corner card', render: optionC,
+      why: 'The receipt lives where the change is: a gutter glyph on the block, the block flashes, and a marginal note carries the delta and the Redo. This is the marginalia language the notes UI already speaks. When the subject is not rendered, the note has nowhere to anchor and becomes a compact bottom-right card with crumbs and Go to.',
+      wins: 'The where is literal. Nothing covers the page; the eye is drawn to the block, not to a banner. Distinctly KM.',
+      loses: 'Two surfaces to build and keep consistent. Positioning needs the block instance in the DOM and the panel width to spare a margin; narrow panes and phones fall back to the corner card every time.'},
+    {id: 'D', name: 'Ledger tray', tag: 'persistent · bottom left', render: optionD,
+      why: 'Receipts accumulate into a small history tray with live undo and redo depth counters, each row keeping its Go to and Redo. It answers "what did I just do, three steps ago" as well as "what just happened".',
+      wins: 'The burst case is native. Depth counters explain the empty stack before it surprises. A natural home for a later history feature.',
+      loses: 'A persistent surface competes with the page; it is a second app mount rather than a toast. Bigger product decision than feedback on a keypress, and easy to over-build.'},
+  ];
+
+  const root = document.getElementById('options-root');
+  OPTIONS.forEach(opt => {
+    const sec = document.createElement('section');
+    sec.className = 'option';
+    sec.id = 'option-' + opt.id;
+    sec.innerHTML = `
+      <div class="option-head"><h3>Option ${opt.id} · ${opt.name}</h3><span class="tag">${opt.tag}</span></div>
+      <p class="why">${opt.why}</p>
+      <div class="tabs" role="tablist"></div>
+      <div class="boards"></div>
+      <div class="verdict"><div class="g"><b>Wins</b><p>${opt.wins}</p></div><div class="w"><b>Loses</b><p>${opt.loses}</p></div></div>`;
+    const tabs = sec.querySelector('.tabs');
+    const boards = sec.querySelector('.boards');
+    const key = 'receipts-scn-' + opt.id;
+    let current = 'edit';
+    try { current = localStorage.getItem(key) || 'edit'; } catch (e) {}
+    if (!SCENARIOS.some(s => s.id === current)) current = 'edit';
+
+    const paint = () => {
+      boards.innerHTML = ['light', 'dark'].map(t =>
+        `<div>${opt.render(current, t)}<div class="board-label">${t}</div></div>`).join('');
+      tabs.querySelectorAll('button').forEach(b => b.setAttribute('aria-selected', String(b.dataset.s === current)));
+    };
+    SCENARIOS.forEach(s => {
+      const b = document.createElement('button');
+      b.type = 'button'; b.role = 'tab'; b.dataset.s = s.id; b.id = `tab-${opt.id}-${s.id}`; b.textContent = s.label;
+      b.addEventListener('click', () => { current = s.id; try { localStorage.setItem(key, current); } catch (e) {} paint(); });
+      tabs.appendChild(b);
+    });
+    paint();
+    root.appendChild(sec);
+  });
+})();
+</script>
+</body>
+</html>

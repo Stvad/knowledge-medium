@@ -25,7 +25,7 @@ import { ChangeScope, ReadOnlyError } from '@/data/api'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo, isBlockDeleted } from '@/data/test/createTestRepo'
 import { aliasesProp } from '@/data/properties'
-import { Repo } from '../repo'
+import { Repo, type HistoryReplayEvent } from '../repo'
 import type { HistoryDrop } from '@/data/internals/undoManager'
 import { TxImpl } from '@/data/internals/txEngine'
 
@@ -333,6 +333,62 @@ describe('repo.undo / redo on empty stack', () => {
   it('returns false when there is nothing to undo / redo', async () => {
     expect(await env.repo.undo()).toBe(false)
     expect(await env.repo.redo()).toBe(false)
+  })
+})
+
+describe('repo.onHistoryReplay', () => {
+  it('reports the replayed entry after it moved to the opposite stack', async () => {
+    const {repo} = env
+    await seedRoot(repo, 'a', 'original')
+    await repo.tx(async (tx) => {
+      await tx.update('a', {content: 'edited'})
+    }, {scope: ChangeScope.BlockDefault, description: 'edit a'})
+    const events: HistoryReplayEvent[] = []
+    const redoTopAtEvent: unknown[] = []
+    const off = repo.onHistoryReplay(event => {
+      events.push(event)
+      // Sampled inside the listener, asserted outside: the CallbackSet
+      // swallows a throw here.
+      redoTopAtEvent.push(repo.undoManager.peekRedo(ChangeScope.BlockDefault))
+    })
+
+    expect(await repo.undo()).toBe(true)
+    expect(events).toHaveLength(1)
+    expect(events[0].kind).toBe('undo')
+    expect(events[0].inverseOffered).toBe(true)
+    expect(redoTopAtEvent[0]).toBe(events[0].entry)
+    expect(events[0].workspaceId).toBe(WS)
+    expect(events[0].entry?.description).toBe('edit a')
+    expect([...events[0].entry!.snapshots.keys()]).toEqual(['a'])
+
+    expect(await repo.redo()).toBe(true)
+    expect(events[1].kind).toBe('redo')
+    expect(events[1].entry).toBe(events[0].entry)
+    off()
+    await repo.undo()
+    expect(events).toHaveLength(2)
+  })
+
+  it('reports an empty stack as a null entry', async () => {
+    const events: HistoryReplayEvent[] = []
+    env.repo.onHistoryReplay(event => { events.push(event) })
+    expect(await env.repo.undo()).toBe(false)
+    expect(events).toEqual([
+      {kind: 'undo', scope: ChangeScope.BlockDefault, workspaceId: WS, entry: null, inverseOffered: false},
+    ])
+  })
+
+  it('reports nothing for a replay that failed', async () => {
+    const {repo} = env
+    await seedRoot(repo, 'a', 'original')
+    await repo.tx(async (tx) => {
+      await tx.update('a', {content: 'edited'})
+    }, {scope: ChangeScope.BlockDefault, description: 'edit a'})
+    const events: HistoryReplayEvent[] = []
+    repo.onHistoryReplay(event => { events.push(event) })
+    repo.setReadOnly(true)
+    await expect(repo.undo()).rejects.toBeInstanceOf(ReadOnlyError)
+    expect(events).toEqual([])
   })
 })
 
