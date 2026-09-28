@@ -7,7 +7,7 @@
  *  Same gutter pattern as the inline backlink count badge: with no
  *  chip, content renders untouched (no wrapper). */
 import { useEffect, useState, useSyncExternalStore } from 'react'
-import { ClipboardCopy, Square } from 'lucide-react'
+import { ClipboardCopy, RotateCcw, Square } from 'lucide-react'
 import type { Block } from '@/data/block'
 import { useHandle } from '@/hooks/block.js'
 import {
@@ -21,26 +21,31 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { chipStateFor, chipTitle, type ChipState } from './chipState.ts'
+import { chipStateFor, chipTitle, isDeferredRetry, type ChipState } from './chipState.ts'
 import { clearAskedAgent, isAskedAgent, subscribeAskedAgent } from './askedStore.ts'
 import { cancelAgent } from './cancelAgent.ts'
+import { retryAgentTask } from './retryAgent.ts'
 import { agentResumeCommandForProperties, copyAgentResumeCommand } from './resumeCommand.ts'
 
-/** Ticks once a second while mounted — only running chips mount it. */
-const useElapsedLabel = (sinceMs: number | null): string | null => {
+/** Ticks once a second while mounted — only the chips with a live clock
+ *  (running, waiting to retry) mount it. */
+const useNowTick = (): number => {
   const [nowMs, setNowMs] = useState(() => Date.now())
   useEffect(() => {
     const timer = setInterval(() => setNowMs(Date.now()), 1_000)
     return () => clearInterval(timer)
   }, [])
-  if (sinceMs === null) return null
-  const seconds = Math.max(0, Math.round((nowMs - sinceMs) / 1_000))
-  if (seconds < 100) return `${seconds}s`
-  return `${Math.round(seconds / 60)}m`
+  return nowMs
 }
 
+const durationLabel = (seconds: number): string =>
+  seconds < 100 ? `${seconds}s` : `${Math.round(seconds / 60)}m`
+
 const RunningChip = ({ chip }: { chip: ChipState }) => {
-  const elapsed = useElapsedLabel(chip.updatedAtMs)
+  const nowMs = useNowTick()
+  const elapsed = chip.updatedAtMs === null
+    ? null
+    : durationLabel(Math.max(0, Math.round((nowMs - chip.updatedAtMs) / 1_000)))
   return (
     <>
       <span className="animate-pulse text-amber-600">●</span>
@@ -56,9 +61,25 @@ const RunningChip = ({ chip }: { chip: ChipState }) => {
   )
 }
 
+/** A task the daemon could not even attempt (out of credits, expired
+ *  login, network) and will re-run by itself. Distinct from a plain
+ *  "queued" chip on purpose: nothing is wrong with the task, and the user
+ *  needs to see that a clock — not a person — is what it's waiting on. */
+const DeferredChip = ({ chip }: { chip: ChipState }) => {
+  const nowMs = useNowTick()
+  const remaining = Math.round(((chip.retryAfterMs ?? 0) - nowMs) / 1_000)
+  return (
+    <>
+      <span className="text-amber-600">⏳</span>
+      <span>{chip.executorLabel} · {remaining > 0 ? `retry in ${durationLabel(remaining)}` : 'retrying…'}</span>
+    </>
+  )
+}
+
 const chipBody = (chip: ChipState) => {
   switch (chip.kind) {
     case 'queued':
+      if (isDeferredRetry(chip)) return <DeferredChip chip={chip} />
       return (
         <>
           <span className="text-muted-foreground">●</span>
@@ -95,8 +116,14 @@ const AgentStatusChipMenu = ({
   chip: ChipViewState
   block: Block
 }) => {
-  const canStop = chip.kind === 'running' && !chip.cancelling
-  if (!chip.resumeCommand && !canStop) {
+  const deferred = isDeferredRetry(chip)
+  // Stop covers both "kill the child" (running) and "stop waiting to
+  // retry" (deferred) — the daemon honors agent:cancel for each.
+  const canStop = (chip.kind === 'running' && !chip.cancelling) || deferred
+  // A failed task retries on demand; a deferred one is already retrying,
+  // so the offer is to skip its wait.
+  const canRetry = chip.kind === 'error' || deferred
+  if (!chip.resumeCommand && !canStop && !canRetry) {
     return (
       <span
         title={chipTitle(chip)}
@@ -123,6 +150,12 @@ const AgentStatusChipMenu = ({
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-56">
+        {canRetry && (
+          <DropdownMenuItem onSelect={() => { void retryAgentTask(block) }}>
+            <RotateCcw className="h-4 w-4" />
+            {deferred ? 'Retry now' : 'Retry task'}
+          </DropdownMenuItem>
+        )}
         {chip.resumeCommand && (
           <DropdownMenuItem onSelect={() => { void copyAgentResumeCommand(block) }}>
             <ClipboardCopy className="h-4 w-4" />
@@ -132,7 +165,7 @@ const AgentStatusChipMenu = ({
         {canStop && (
           <DropdownMenuItem onSelect={() => { void cancelAgent(block) }}>
             <Square className="h-4 w-4" />
-            Stop running task
+            {deferred ? 'Stop retrying' : 'Stop running task'}
           </DropdownMenuItem>
         )}
       </DropdownMenuContent>
@@ -142,7 +175,7 @@ const AgentStatusChipMenu = ({
 
 /** Optimistic "queued" shown between the Ask Agent action and the
  *  daemon's claim writing real props. */
-const OPTIMISTIC_QUEUED: ChipState = {kind: 'queued', executor: 'claude', executorLabel: 'Claude', updatedAtMs: null, attempts: 1, errorMessage: '', activity: '', cancelling: false}
+const OPTIMISTIC_QUEUED: ChipState = {kind: 'queued', executor: 'claude', executorLabel: 'Claude', updatedAtMs: null, attempts: 1, errorMessage: '', activity: '', cancelling: false, retryAfterMs: null}
 
 const AgentStatusChipRow = ({
   block,

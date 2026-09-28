@@ -102,6 +102,7 @@ export const FROZEN_PROPERTY_SEEDS: readonly FrozenPropertySeed[] = [
   ['system:agent-dispatch-companion/property/executor', 'agent:executor', 'string', 'string'],
   ['system:agent-dispatch-companion/property/reply', 'agent:reply', 'boolean', 'boolean'],
   ['system:agent-dispatch-companion/property/resume-options', 'agent:resume-options', 'optional-json', 'object'],
+  ['system:agent-dispatch-companion/property/retry-after', 'agent:retry-after', 'number', 'number'],
   ['system:agent-dispatch-companion/property/session', 'agent:session', 'string', 'string'],
   ['system:agent-dispatch-companion/property/status', 'agent:status', 'string', 'string'],
   ['system:agent-dispatch-companion/property/updated-at', 'agent:updated-at', 'number', 'number'],

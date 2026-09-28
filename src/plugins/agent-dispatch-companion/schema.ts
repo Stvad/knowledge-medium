@@ -22,6 +22,8 @@
  *  - `agent:cancel` holds a `Date.now()` number when the app requests a stop
  *    and `''` when the daemon clears it — a mixed number|string, so it takes
  *    the identity (`raw-json`) codec to round-trip both without a codec break.
+ *  - `agent:retry-after` is epoch-ms while a task is deferred and `0` once
+ *    cleared (the daemon writes 0, not '', precisely so it stays a number).
  *  - `agent:resume-options` is a structured object or absent (`optional-json`).
  */
 
@@ -138,6 +140,16 @@ export const agentAskedAtProp = seedProperty({
   hidden: true,
 })
 
+export const agentRetryAfterProp = seedProperty({
+  seedKey: 'system:agent-dispatch-companion/property/retry-after',
+  revision: 1,
+  name: 'agent:retry-after',
+  preset: 'number',
+  defaultValue: 0,
+  changeScope: scope,
+  hidden: true,
+})
+
 export const agentCancelProp = seedProperty({
   seedKey: 'system:agent-dispatch-companion/property/cancel',
   revision: 1,
@@ -157,6 +169,7 @@ export const agentProtocolSeeds = [
   agentUpdatedAtProp,
   agentAttemptsProp,
   agentErrorProp,
+  agentRetryAfterProp,
   agentReplyProp,
   agentActivityProp,
   agentAskedAtProp,
