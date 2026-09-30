@@ -34,7 +34,8 @@ import {
   MEDIA_TYPE_CONTRIBUTION,
   mediaHashProp,
 } from './mediaBlock.js'
-import { collectReplicationRequests, runDownLaneReconcile } from './assetDownLane.js'
+import { collectReplicationRequests, resetSweptScopesForTests, runDownLaneReconcile } from './assetDownLane.js'
+import { ENTRY_SETTLE_MS, getByteStore } from './byteStore.js'
 import { trackTestRepo } from '@/data/test/testRepoScope'
 
 const WS = 'ws-1'
@@ -107,6 +108,7 @@ beforeEach(async () => {
   h.remoteActive = true
   h.replicate.mockClear()
   h.resolverForUserCalls.length = 0
+  resetSweptScopesForTests()
 })
 afterEach(() => {
   repo.stopSyncObserver()
@@ -189,6 +191,37 @@ describe('runDownLaneReconcile — gating', () => {
     h.remoteActive = false
     await runDownLaneReconcile(repo, WS)
     expect(h.replicate).not.toHaveBeenCalled()
+  })
+
+  it('sweeps the byte store’s stale empty entries ONCE per (user, workspace), before the presence scan', async () => {
+    await addMediaBlock('m1', 'a0', 'sha256:aaaa')
+    const byteStore = getByteStore()
+    const sweep = vi.spyOn(byteStore, 'sweepEmpty')
+    const list = vi.spyOn(byteStore, 'listWorkspaceKeys')
+
+    await runDownLaneReconcile(repo, WS)
+    await runDownLaneReconcile(repo, WS)
+
+    expect(sweep).toHaveBeenCalledTimes(1)
+    expect(sweep).toHaveBeenCalledWith(USER, WS, { minAgeMs: ENTRY_SETTLE_MS })
+    expect(list).toHaveBeenCalledTimes(2)
+    expect(sweep.mock.invocationCallOrder[0]).toBeLessThan(list.mock.invocationCallOrder[0]) // repaired tree is what gets scanned
+    // Another scope gets its own sweep.
+    await runDownLaneReconcile(buildRepo('user-2'), WS)
+    expect(sweep).toHaveBeenCalledTimes(2)
+    sweep.mockRestore()
+    list.mockRestore()
+  })
+
+  it('a failed sweep never fails the pass, and is retried on the next one', async () => {
+    await addMediaBlock('m1', 'a0', 'sha256:aaaa')
+    const sweep = vi.spyOn(getByteStore(), 'sweepEmpty').mockRejectedValueOnce(new Error('locked'))
+
+    await expect(runDownLaneReconcile(repo, WS)).resolves.toBeUndefined()
+    expect(h.replicate).toHaveBeenCalledTimes(1) // the pass went on
+    await runDownLaneReconcile(repo, WS)
+    expect(sweep).toHaveBeenCalledTimes(2)
+    sweep.mockRestore()
   })
 
   // The "signed out" no-op used to be exercised here by nulling a global

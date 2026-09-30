@@ -171,6 +171,16 @@ const drainOne = async (
     await ctx.store.markFailed(userId, rec.assetBlockId, rec.stagedAt)
     return 'failed'
   }
+  // (2b) The bytes must BE the record's content before they are sealed and uploaded
+  //     under its hash. The store's write is not atomic on every engine, so the entry
+  //     can be a partial (a write cut short) rather than the capture's plaintext —
+  //     uploading that would poison the content path (§17). Quarantine, and drop the
+  //     entry so no read serves it; a re-paste re-arms the record with fresh bytes.
+  if (plaintext.byteLength === 0 || !(await verifyContentHash(plaintext, rec.contentHash))) {
+    await ctx.byteStore.delete(userId, rec.workspaceId, rec.contentKey).catch(() => {})
+    await ctx.store.markFailed(userId, rec.assetBlockId, rec.stagedAt)
+    return 'failed'
+  }
 
   // (3) Encode at drain + direct upload. A fresh 200 write → delete the record;
   //     a 409 (path already occupied) → verify the existing object before clearing.
