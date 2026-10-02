@@ -23,8 +23,19 @@ export const useRenderer = ({block, context}: BlockRendererProps) => {
   const runtime = useAppRuntime()
   const registry = runtime.read(blockRenderersFacet)
 
-  if (rendererKey && registry[rendererKey]) {
-    return registry[rendererKey]
+  if (rendererKey) {
+    if (registry[rendererKey]) {
+      return registry[rendererKey]
+    }
+    // Explicit override was set but is missing (typo, plugin not loaded, rename).
+    // Fall through to canRender resolution, but surface the lost override.
+    const available = Object.keys(registry)
+    console.warn(
+      `[useRenderer] renderer id ${JSON.stringify(rendererKey)} is not registered; ` +
+        `falling back to canRender resolution. Available ids: ${
+          available.length > 0 ? available.map(id => JSON.stringify(id)).join(', ') : '(none)'
+        }`,
+    )
   }
 
   /**
