@@ -1,6 +1,9 @@
 // @vitest-environment happy-dom
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+
+const grabSoftKeyboard = vi.hoisted(() => vi.fn())
+vi.mock('@/utils/softKeyboardGrab.js', () => ({ grabSoftKeyboard }))
 import { ChangeScope, type User } from '@/data/api'
 import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks'
 import {
@@ -66,6 +69,27 @@ afterEach(async () => {
 })
 
 describe('dailyNotesActions', () => {
+  it('grabs the soft keyboard inside the gesture, before any await, unless the workspace is read-only', async () => {
+    grabSoftKeyboard.mockClear()
+    const rootUiState = await getUIStateBlock(env.repo, WS, USER, {})
+    const action = dailyNotesActions({repo: env.repo})
+      .find(candidate => candidate.id === 'append_today_daily_block')!
+    const trigger = {preventDefault: vi.fn()} as unknown as KeyboardEvent
+
+    const run = action.handler({uiStateBlock: rootUiState}, trigger)
+    expect(grabSoftKeyboard).toHaveBeenCalledOnce()
+    await run
+
+    grabSoftKeyboard.mockClear()
+    env.repo.setReadOnly(true)
+    try {
+      await action.handler({uiStateBlock: rootUiState}, trigger)
+      expect(grabSoftKeyboard).not.toHaveBeenCalled()
+    } finally {
+      env.repo.setReadOnly(false)
+    }
+  })
+
   it('appends an empty block to today and opens it in an editing stacked panel', async () => {
     const daily = await getOrCreateDailyNote(env.repo, WS, '2026-05-13')
     await env.repo.mutate.createChild({
