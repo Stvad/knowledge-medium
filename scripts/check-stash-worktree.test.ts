@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process'
 import { mkdtempSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
@@ -8,10 +8,12 @@ import {
   amendInvocations,
   baseBranch,
   decide,
+  effectiveCwd,
   explicitEntry,
   hasMessage,
   renumbersStack,
   stashInvocations,
+  unresolvedTarget,
   type RepoStashState,
 } from './check-stash-worktree.mjs'
 import { shellSegments, shellSegmentsWithDepth } from './shell-segments.mjs'
@@ -52,7 +54,7 @@ describe('shellSegments', () => {
 
   it('returns heredoc bodies as data segments, not command positions', () => {
     expect(shellSegmentsWithDepth('cat <<EOF > f\ngit stash pop\nEOF\necho done')).toEqual([
-      { tokens: ['cat', '>', 'f'], depth: 0 },
+      { tokens: ['cat'], depth: 0 },
       { tokens: ['git', 'stash', 'pop'], depth: 0, heredoc: true },
       { tokens: ['echo', 'done'], depth: 0 },
     ])
@@ -66,6 +68,22 @@ describe('shellSegments', () => {
       tokens: ['ls'],
       depth: 0,
     })
+  })
+
+  it('drops redirections and their targets instead of splitting on them', () => {
+    expect(shellSegments('git push origin 2>&1 | tail -5')).toEqual([['git', 'push', 'origin'], ['tail', '-5']])
+    expect(shellSegments('git push origin > /tmp/log 2>&1; ls')).toEqual([['git', 'push', 'origin'], ['ls']])
+    expect(shellSegments('git restore f 2>/dev/null >>log')).toEqual([['git', 'restore', 'f']])
+    expect(shellSegments('git restore f >> log 2> err')).toEqual([['git', 'restore', 'f']])
+    expect(shellSegments('make &> out.txt && ls')).toEqual([['make'], ['ls']])
+    expect(shellSegments('echo x >| forced')).toEqual([['echo', 'x']])
+    expect(shellSegments('cat <<< word')).toEqual([['cat']])
+    expect(shellSegments(String.raw`echo ">" '2>&1' \>`)).toEqual([['echo', '>', '2>&1', '>']])
+    expect(shellSegments('sleep 1 & ls')).toEqual([['sleep', '1'], ['ls']])
+    expect(shellSegments('git &>/dev/null restore f')).toEqual([['git', 'restore', 'f']])
+    expect(shellSegments('git &>> log restore f')).toEqual([['git', 'restore', 'f']])
+    expect(shellSegments('echo x >& both.log; ls')).toEqual([['echo', 'x'], ['ls']])
+    expect(shellSegments('a > ; b')).toEqual([['a'], ['b']]) // a dangling redirect eats nothing past its segment
   })
 
   it('annotates each segment with its subshell depth', () => {
@@ -108,6 +126,47 @@ describe('stashInvocations', () => {
 
   it('recognizes cd behind a reserved-word prefix', () => {
     expect(stashInvocations('{ cd /wt && git stash pop stash@{0}; }')[0].cdPath).toBe('/wt')
+  })
+
+  it('accumulates consecutive relative cds, and an absolute one resets', () => {
+    expect(stashInvocations('cd packages && cd app && git stash pop')[0].cdPath).toBe('packages/app')
+    expect(stashInvocations('cd /a && cd b && git stash pop')[0].cdPath).toBe('/a/b')
+    expect(stashInvocations('cd a && cd /b && git stash pop')[0].cdPath).toBe('/b')
+    expect(stashInvocations('cd a && cd ~/b && git stash pop')[0].cdPath).toBe(join(homedir(), 'b'))
+    expect(stashInvocations('cd ~ && cd b && git stash pop')[0].cdPath).toBe(join(homedir(), 'b'))
+    expect(stashInvocations('cd a && (cd b && true); git stash pop')[0].cdPath).toBe('a')
+    expect(stashInvocations('cd "$S" && cd .. && git stash pop')[0].cdPath).toBe('$S/..')
+  })
+
+  it('expands a leading tilde in -C, --git-dir and --work-tree values', () => {
+    expect(stashInvocations('git -C ~/repo stash list')[0].cArgs).toEqual(['-C', join(homedir(), 'repo')])
+    expect(stashInvocations('git --work-tree ~ stash list')[0].cArgs).toEqual(['--work-tree', homedir()])
+  })
+
+  it('follows only named directories; other cd, pushd and popd forms stay unknown', () => {
+    const cdPath = (cmd: string) => stashInvocations(`${cmd} && git stash list`)[0].cdPath
+    expect(cdPath('cd')).toBe(homedir())
+    expect(cdPath('cd -P /wt')).toBe('/wt')
+    expect(cdPath('cd -')).toBe('$OLDPWD')
+    expect(cdPath('cd - && cd sub')).toBe('$OLDPWD/sub')
+    expect(cdPath('pushd /wt')).toBe('/wt')
+    expect(cdPath('pushd')).toBe('$DIRSTACK')
+    expect(cdPath('pushd +1')).toBe('$DIRSTACK')
+    expect(cdPath('pushd /wt && popd')).toBe('$DIRSTACK')
+  })
+
+  it('keeps the starting directory when a cd target does not exist', () => {
+    const start = realpathSync(tmpdir())
+    expect(effectiveCwd(start, '/no/such/dir/anywhere')).toEqual({ cwd: start, exact: true })
+    expect(effectiveCwd('/', start)).toEqual({ cwd: start, exact: true })
+  })
+
+  it('names the cd or -C target a static reading cannot resolve', () => {
+    const target = (cmd: string) => unresolvedTarget(stashInvocations(cmd)[0])
+    expect(target('cd "$WT" && git stash list')).toBe('$WT')
+    expect(target('git -C "$WT" stash list')).toBe('$WT')
+    expect(target('git --git-dir=$G stash list')).toBe('--git-dir=$G')
+    expect(target('cd /wt && git -C sub stash list')).toBeNull()
   })
 
   it('scopes a subshell cd to its subshell', () => {
