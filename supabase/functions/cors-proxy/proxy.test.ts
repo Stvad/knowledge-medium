@@ -107,6 +107,21 @@ describe('authentication', () => {
     expect(targetRequests()).toEqual([])
   })
 
+  it('stops checking the session when the caller goes away', async () => {
+    let authAborted = false
+    const {call} = setup({
+      [AUTH_URL]: req => new Promise((_, reject) => req.signal.addEventListener('abort', () => {
+        authAborted = true
+        reject(req.signal.reason)
+      })),
+    }, PUBLIC_DNS)
+    const caller = new AbortController()
+    const pending = call('https://example.com/', {signal: caller.signal})
+    caller.abort()
+    await vi.waitFor(() => expect(authAborted).toBe(true))
+    expect(errorOf(await pending).code).toBe('auth-unavailable')
+  })
+
   it('authenticates before validating the request', async () => {
     const {call} = setup({}, PUBLIC_DNS)
     expect(errorOf(await call('file:///etc/passwd', {token: null}))).toEqual({status: 401, code: 'unauthenticated'})
@@ -206,6 +221,7 @@ describe('request', () => {
     const response = await call('https://example.com/')
     expect(response.headers.get('x-proxy-status')).toBe('304')
     expect(response.headers.get('x-proxy-header-content-length')).toBe('1000')
+    expect(response.headers.get('content-length')).toBeNull()
     expect(response.body).toBeNull()
   })
 })
@@ -270,6 +286,27 @@ describe('addresses', () => {
     await call('https://example.com/page')
     const [target] = targetRequests()
     expect([target.url, target.headers.get('host')]).toEqual(['https://example.com/page', null])
+  })
+
+  it('tries each checked address of an http target in turn', async () => {
+    const down = '93.184.215.1'
+    const network = fakeNetwork({'http://example.com/': () => new Response('ok')}, {'example.com': ['2606:4700::1111', down, PUBLIC_IP]})
+    const connected: string[] = []
+    const handler = createProxyHandler({
+      supabaseUrl: SUPABASE_URL,
+      resolveDns: network.resolveDns,
+      fetch: async (input, init) => {
+        const address = new URL(String(input)).hostname
+        if (address !== new URL(AUTH_URL).hostname) connected.push(address)
+        if (address === down) throw new TypeError('connection refused')
+        return network.fetch(input, init)
+      },
+    })
+    const response = await handler(new Request(PROXY_ENDPOINT, {headers: {
+      authorization: 'Bearer user-token', apikey: 'publishable-key', 'x-proxy-url': 'http://example.com/',
+    }}))
+    expect(await response.text()).toBe('ok')
+    expect(connected).toEqual([down, PUBLIC_IP])
   })
 
   it('reports a name that does not resolve', async () => {
@@ -380,10 +417,10 @@ describe('redirects', () => {
 })
 
 describe('response', () => {
-  it('relays no cookies and no framing that no longer matches the body', async () => {
+  it('relays no cookies and no hop-by-hop headers', async () => {
     const {call} = setup({
       'https://example.com/': () => {
-        const headers = new Headers({'content-encoding': 'identity', 'content-length': '3', 'content-type': 'text/plain', connection: 'keep-alive'})
+        const headers = new Headers({'content-type': 'text/plain', connection: 'keep-alive', 'keep-alive': 'timeout=5'})
         headers.append('set-cookie', 'session=secret')
         return new Response('abc', {headers})
       },
@@ -391,6 +428,21 @@ describe('response', () => {
     const response = await call('https://example.com/')
     const relayed = [...response.headers.keys()].filter(name => name.startsWith('x-proxy-header-'))
     expect(relayed).toEqual(['x-proxy-header-content-type'])
+  })
+
+  it('declares the target\'s length on the wire, when it declared one', async () => {
+    const {call} = setup({
+      'https://example.com/declared': () => new Response('hello', {headers: {'content-length': '5'}}),
+      'https://example.com/doubled': () => new Response('hello', {headers: {'content-length': '5, 5'}}),
+      'https://example.com/streamed': () => new Response(new ReadableStream({start: controller => {
+        controller.enqueue(new TextEncoder().encode('hello'))
+        controller.close()
+      }})),
+    }, PUBLIC_DNS)
+    const declared = await call('https://example.com/declared')
+    expect([declared.headers.get('content-length'), declared.headers.get('x-proxy-header-content-length')]).toEqual(['5', '5'])
+    expect((await call('https://example.com/streamed')).headers.get('content-length')).toBeNull()
+    expect((await call('https://example.com/doubled')).headers.get('content-length')).toBeNull()
   })
 
   it('namespaces target headers so they cannot pose as the proxy\'s own', async () => {
@@ -441,19 +493,21 @@ describe('response', () => {
     expect([pulled, cancelled]).toEqual([false, true])
   })
 
-  it('refuses a body that grows past the size cap', async () => {
+  it('cuts off a body that grows past the size cap', async () => {
     const limits = {...DEFAULT_LIMITS, maxBodyBytes: 4}
     const {call} = setup({'https://example.com/': () => new Response('too long')}, PUBLIC_DNS, limits)
-    expect(errorOf(await call('https://example.com/'))).toEqual({status: 502, code: 'response-too-large'})
+    const response = await call('https://example.com/')
+    expect(response.headers.get('x-proxy-status')).toBe('200')
+    await expect(response.text()).rejects.toThrow('over 4 bytes')
   })
 
-  it('refuses a body that fails mid-read', async () => {
+  it('ends the relayed body early when the target\'s fails', async () => {
     const body = new ReadableStream({start: controller => {
       controller.enqueue(new TextEncoder().encode('partial'))
       controller.error(new TypeError('connection reset'))
     }})
     const {call} = setup({'https://example.com/': () => new Response(body)}, PUBLIC_DNS)
-    expect(errorOf(await call('https://example.com/'))).toEqual({status: 502, code: 'upstream-failed'})
+    await expect((await call('https://example.com/')).text()).rejects.toThrow('connection reset')
   })
 
   it('times out when the deadline passes before the target is reached', async () => {
@@ -486,7 +540,7 @@ describe('response', () => {
     expect(errorOf(await pending).code).toBe('upstream-failed')
   })
 
-  it('times out a body that stalls', async () => {
+  it('cuts off a body that stalls past the deadline', async () => {
     const limits = {...DEFAULT_LIMITS, timeoutMs: 20}
     const {call} = setup({
       'https://example.com/': req => new Response(new ReadableStream({start: controller => {
@@ -494,7 +548,21 @@ describe('response', () => {
         req.signal.addEventListener('abort', () => controller.error(req.signal.reason))
       }})),
     }, PUBLIC_DNS, limits)
-    expect(errorOf(await call('https://example.com/'))).toEqual({status: 504, code: 'timeout'})
+    await expect((await call('https://example.com/')).text()).rejects.toMatchObject({name: 'TimeoutError'})
+  })
+
+  it('cancels the target\'s body when the caller stops reading', async () => {
+    let cancelled = false
+    const {call} = setup({
+      'https://example.com/': () => new Response(new ReadableStream({
+        start: controller => controller.enqueue(new TextEncoder().encode('first')),
+        cancel: () => {
+          cancelled = true
+        },
+      })),
+    }, PUBLIC_DNS)
+    await (await call('https://example.com/')).body!.cancel()
+    await vi.waitFor(() => expect(cancelled).toBe(true))
   })
 
   it.each([null, 'identity', 'Identity'])('relays a body without a content coding (%j)', async coding => {
@@ -509,34 +577,7 @@ describe('response', () => {
     expect(errorOf(await call('https://example.com/'))).toEqual({status: 502, code: 'upstream-failed'})
   })
 
-  it('refuses a body past the worker\'s budget for bodies in flight, and frees it after', async () => {
-    const limits = {...DEFAULT_LIMITS, maxBodyBytes: 100, maxBufferedBytes: 150}
-    let pulls = 0
-    let finishFirst = () => {}
-    const slow = new ReadableStream<Uint8Array>({pull: controller => {
-      pulls++
-      if (pulls === 1) return controller.enqueue(new Uint8Array(80))
-      // A second read means the proxy has copied the first chunk: its buffer is claimed.
-      return new Promise<void>(resolve => {
-        finishFirst = () => {
-          controller.close()
-          resolve()
-        }
-      })
-    }}, {highWaterMark: 0})
-    const {call} = setup({
-      'https://example.com/slow': () => new Response(slow),
-      'https://example.com/fast': () => new Response(new Uint8Array(80)),
-    }, PUBLIC_DNS, limits)
-    const first = call('https://example.com/slow')
-    await vi.waitFor(() => expect(pulls).toBe(2))
-    expect(errorOf(await call('https://example.com/fast'))).toEqual({status: 503, code: 'busy'})
-    finishFirst()
-    expect((await first).headers.get('x-proxy-status')).toBe('200')
-    expect((await call('https://example.com/fast')).headers.get('x-proxy-status')).toBe('200')
-  })
-
-  it('reassembles a body larger than the first buffer, however it is chunked', async () => {
+  it('relays a body intact, however it is chunked', async () => {
     const chunks = [200_000, 70_000, 1].map((size, index) => new Uint8Array(size).fill(index + 1))
     const body = new ReadableStream<Uint8Array>({start: controller => {
       chunks.forEach(chunk => controller.enqueue(chunk))
@@ -546,20 +587,6 @@ describe('response', () => {
     const relayed = new Uint8Array(await (await call('https://example.com/')).arrayBuffer())
     expect(relayed.length).toBe(270_001)
     expect([relayed[0], relayed[199_999], relayed[200_000], relayed[269_999], relayed[270_000]]).toEqual([1, 1, 2, 2, 3])
-  })
-
-  it('copies each chunk as it arrives rather than keeping the source\'s buffer', async () => {
-    const shared = new Uint8Array(64)
-    const encoder = new TextEncoder()
-    let sent = 0
-    const body = new ReadableStream<Uint8Array>({pull: controller => {
-      if (sent === 2) return controller.close()
-      shared.set(encoder.encode(sent === 0 ? 'ab' : 'cd'))
-      controller.enqueue(shared.subarray(0, 2))
-      sent++
-    }}, {highWaterMark: 0})
-    const {call} = setup({'https://example.com/': () => new Response(body)}, PUBLIC_DNS)
-    expect(await (await call('https://example.com/')).text()).toBe('abcd')
   })
 
   it.each([999, 600, 101])('refuses a target status a Response cannot carry (%i)', async status => {

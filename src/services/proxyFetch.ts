@@ -57,22 +57,25 @@ export class ProxyFetchError extends Error {
   }
 }
 
-/** Resolves like `fetch`: a target's 4xx/5xx is a response. Rejects with
- *  `ProxyFetchError` when the proxy can't serve the request, with the caller's
- *  abort reason when `init.signal` aborts, and with a TypeError for headers
- *  fetch would refuse too. */
+/** Resolves like `fetch`: a target's 4xx/5xx is a response, and reading a body
+ *  the proxy had to cut off (size cap, deadline, a failing target) rejects.
+ *  Rejects with `ProxyFetchError` when the proxy can't serve the request, with
+ *  the caller's abort reason when `init.signal` aborts, and with a TypeError
+ *  for headers fetch would refuse too. */
 export const proxyFetch = async (url: string | URL, init: ProxyFetchInit = {}): Promise<ProxyFetchResult> => {
   const target = fetchableUrl(String(url))
   // Not echoed: the URL may carry credentials.
   if (!target) throw new ProxyFetchError('invalid-url', 'Not an http(s) URL without credentials, which the proxy needs.')
+  init.signal?.throwIfAborted()
   // `supabase` being non-null only means auth is CONFIGURED; a local-only session sends nothing.
   if (!isRemoteSyncActive()) throw new ProxyFetchError('local-only', 'Fetching other sites needs sync, and this session is local-only.')
   const endpoint = edgeFunctionEndpoint(CORS_PROXY_FUNCTION)
   if (!supabase || !endpoint) throw new ProxyFetchError('signed-out', 'Fetching other sites needs a signed-in account.')
   // A session near expiry is refreshed here, which needs the network. A refresh
   // Auth rejects outright has signed the user out.
+  const {auth} = supabase
   const {data: {session}, error} = await unlessAborted(
-    supabase.auth.getSession().catch((reason: unknown) => {
+    () => auth.getSession().catch((reason: unknown) => {
       throw new ProxyFetchError('unreachable', `Couldn't load the session: ${reason}`)
     }),
     init.signal,
@@ -104,10 +107,13 @@ export const proxyFetch = async (url: string | URL, init: ProxyFetchInit = {}): 
   return readProxyResponse(wire, init.signal)
 }
 
-/** `promise`, or the abort reason as soon as `signal` aborts. */
-const unlessAborted = <T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> => {
-  if (!signal) return promise
+/** `start()`'s result, or the abort reason as soon as `signal` aborts. Nothing
+ *  starts on a signal that has already aborted, whose abort event won't fire
+ *  again; defence in depth here, since proxyFetch checks first. */
+const unlessAborted = <T>(start: () => Promise<T>, signal: AbortSignal | undefined): Promise<T> => {
+  if (!signal) return start()
   signal.throwIfAborted()
+  const promise = start()
   return new Promise<T>((resolve, reject) => {
     const abort = () => reject(signal.reason)
     signal.addEventListener('abort', abort, {once: true})

@@ -10,9 +10,10 @@
  *   response  200 with `X-Proxy-Status` (the target's status),
  *             `X-Proxy-Final-Url`, one `X-Proxy-Redirect-<n>: <status> <url>` per
  *             redirect followed, the target's headers as `X-Proxy-Header-<name>`
- *             (without cookies, hop-by-hop headers, and, when a body is
- *             relayed, Content-Length and Content-Encoding), and the target's
- *             body, decoded.
+ *             (without cookies and hop-by-hop headers), and the target's
+ *             unencoded body, streamed. A body cut off after the headers (the
+ *             size cap, the deadline, a failing target) ends the response
+ *             early, so reading it fails.
  *   failure   non-200 with `X-Proxy-Error: <code>`, the redirects followed so
  *             far, and a JSON `{error, message}`. A response without
  *             `X-Proxy-Status` never came from a target.
@@ -46,7 +47,6 @@ export const ERROR_STATUS = {
   'response-too-large': 502,
   'timeout': 504,
   'upstream-failed': 502,
-  'busy': 503,
 } as const
 
 export type ProxyErrorCode = keyof typeof ERROR_STATUS

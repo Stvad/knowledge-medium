@@ -23,15 +23,13 @@ import {
 export interface ProxyLimits {
   maxRedirects: number
   maxBodyBytes: number
-  /** Body bytes all requests on one worker may hold at once while reading. */
-  maxBufferedBytes: number
+  /** Bounds the whole exchange, the relayed body included. */
   timeoutMs: number
 }
 
 export const DEFAULT_LIMITS: ProxyLimits = {
   maxRedirects: 10,
   maxBodyBytes: 10 * 1024 * 1024,
-  maxBufferedBytes: 32 * 1024 * 1024,
   timeoutMs: 30_000,
 }
 
@@ -65,7 +63,7 @@ const OWN_REQUEST_HEADERS = new Set(['authorization', 'apikey', PROXY_URL_HEADER
 
 /** Never sent to a target, even when asked for explicitly: connection framing,
  *  virtual-host override, cookies (the proxy keeps no jar in either direction),
- *  and content negotiation (see `targetBody`). */
+ *  and content negotiation (see `checkRelayable`). */
 const FORBIDDEN_TARGET_HEADERS = new Set([
   'host', 'cookie', 'cookie2', 'connection', 'keep-alive', 'te', 'trailer',
   'transfer-encoding', 'upgrade', 'content-length', 'expect', 'accept-encoding',
@@ -77,11 +75,6 @@ const UNRELAYED_RESPONSE_HEADERS = new Set([
   'set-cookie', 'set-cookie2',
   'transfer-encoding', 'connection', 'keep-alive', 'trailer', 'upgrade', 'proxy-connection',
 ])
-
-/** Describe the target's bytes on the wire rather than the relayed body, which
- *  carries its own length; relayed only when there is no body, where they
- *  describe the target's resource. */
-const ENCODED_BODY_HEADERS = new Set(['content-encoding', 'content-length'])
 
 const DEPLOYED_APP_ORIGIN = 'https://stvad.github.io'
 const LOCAL_DEV_ORIGIN = /^http:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?$/
@@ -197,9 +190,9 @@ export const isPublicAddress = (text: string): boolean => {
 const isLocalName = (host: string): boolean =>
   !host.includes('.') || /(?:^|\.)(?:localhost|local|internal|home\.arpa)$/.test(host)
 
-/** Refuses `url`'s host unless it is public, and returns the checked address to
- *  connect to (null when the URL already names an address). */
-const vetHost = async (url: URL, resolveDns: ProxyDeps['resolveDns'], signal: AbortSignal): Promise<string | null> => {
+/** Refuses `url`'s host unless it is public, and returns the checked addresses
+ *  to connect to, IPv4 first (null when the URL already names an address). */
+const vetHost = async (url: URL, resolveDns: ProxyDeps['resolveDns'], signal: AbortSignal): Promise<string[] | null> => {
   const refuse = (code: ProxyErrorCode) => new Refusal(code, url.hostname)
   const host = url.hostname.replace(/\.+$/, '')
   // The URL parser normalizes every IPv4 spelling (hex, octal, a bare integer) to dotted decimal.
@@ -213,7 +206,8 @@ const vetHost = async (url: URL, resolveDns: ProxyDeps['resolveDns'], signal: Ab
   if (addresses.length === 0) throw refuse('unresolvable')
   // Every record, not just the one connected to: an https fetch resolves the name itself.
   if (!addresses.every(isPublicAddress)) throw refuse('blocked-address')
-  return addresses.find(address => parseIPv4(address)) ?? addresses[0]
+  const isV4 = (address: string) => parseIPv4(address) !== null
+  return [...addresses.filter(isV4), ...addresses.filter(address => !isV4(address))]
 }
 
 /** Where a hop connects. An http hop goes to the address `vetHost` checked,
@@ -224,7 +218,7 @@ const vetHost = async (url: URL, resolveDns: ProxyDeps['resolveDns'], signal: Ab
  *  connection to the internal address before TLS fails, so its timing can tell
  *  an open internal port from a closed one. */
 const connection = (url: URL, address: string | null, headers: Headers): {target: URL, headers: Headers} => {
-  if (address === null || url.protocol !== 'http:') return {target: url, headers}
+  if (address === null) return {target: url, headers}
   const target = new URL(url)
   target.hostname = address.includes(':') ? `[${address}]` : address
   const pinned = new Headers(headers)
@@ -256,7 +250,7 @@ const AUTH_TIMEOUT_MS = 10_000
  *  project's Auth. The platform's `verify_jwt` gate can't do this: it also
  *  admits the publishable key, which ships in the app bundle, and anonymous
  *  sign-in mints a session for anyone. */
-const authenticate = async (req: Request, deps: ProxyDeps): Promise<void> => {
+const authenticate = async (req: Request, deps: ProxyDeps, signal: AbortSignal): Promise<void> => {
   const authorization = req.headers.get('authorization')
   const apikey = req.headers.get('apikey')
   if (!authorization?.startsWith('Bearer ') || !apikey) throw new Refusal('unauthenticated')
@@ -267,7 +261,7 @@ const authenticate = async (req: Request, deps: ProxyDeps): Promise<void> => {
     headers: {authorization, apikey},
     // Auth answers itself; a redirect would carry the caller's token elsewhere.
     redirect: 'error',
-    signal: AbortSignal.timeout(AUTH_TIMEOUT_MS),
+    signal: AbortSignal.any([signal, AbortSignal.timeout(AUTH_TIMEOUT_MS)]),
   }).catch(unavailable)
   if (!response.ok) {
     await response.body?.cancel()
@@ -279,6 +273,25 @@ const authenticate = async (req: Request, deps: ProxyDeps): Promise<void> => {
 }
 
 // --- fetching ---------------------------------------------------------------
+
+/** Fetches one hop. An http hop is tried at each checked address in turn, as a
+ *  connection to the name would be; an https hop connects by name. */
+const fetchHop = async (
+  deps: ProxyDeps,
+  url: URL,
+  addresses: string[] | null,
+  init: {method: string, headers: Headers, signal: AbortSignal},
+): Promise<Response> => {
+  for (const address of url.protocol === 'http:' && addresses ? addresses : [null]) {
+    const hop = connection(url, address, init.headers)
+    try {
+      return await deps.fetch(hop.target, {...init, headers: hop.headers, redirect: 'manual'})
+    } catch {
+      // The next address, if any.
+    }
+  }
+  throw new Refusal('upstream-failed', url.hostname)
+}
 
 /** Follows redirects one hop at a time so every hop's host passes `vetHost`
  *  before anything connects to it. Records each hop in `hops`. */
@@ -293,11 +306,8 @@ const follow = async (
 ): Promise<{response: Response, url: URL}> => {
   let url = start
   for (;;) {
-    const hop = connection(url, await vetHost(url, deps.resolveDns, signal), headers)
-    const response = await deps.fetch(hop.target, {method, headers: hop.headers, redirect: 'manual', signal})
-      .catch(() => {
-        throw new Refusal('upstream-failed', url.hostname)
-      })
+    const addresses = await vetHost(url, deps.resolveDns, signal)
+    const response = await fetchHop(deps, url, addresses, {method, headers, signal})
     const location = REDIRECT_STATUSES.has(response.status) ? response.headers.get('location') : null
     if (location === null) return {response, url}
     await response.body?.cancel()
@@ -311,81 +321,41 @@ const follow = async (
   }
 }
 
-/** Body bytes held by in-flight reads on this worker. */
-interface BodyBudget {
-  held: number
-}
-
-/** The body to relay, or null when there is none: fetch gives a HEAD response
- *  and a null-body status a null body. The proxy asks for an unencoded body, so
- *  one still labelled with a content coding was decoded neither by the target
- *  nor on the way (runtimes differ in which codings their fetch decodes and
- *  whether it keeps the label). Relayed, it would reach the client encoded but
- *  labelled as decoded, so it is refused. */
-const targetBody = async (
-  response: Response,
-  limits: ProxyLimits,
-  budget: BodyBudget,
-): Promise<Uint8Array<ArrayBuffer> | null> => {
+/** Refuses, before anything is sent, a response that can't be relayed. The
+ *  proxy asks for an unencoded body, so one still labelled with a content
+ *  coding was decoded neither by the target nor on the way (runtimes differ in
+ *  which codings their fetch decodes and whether it keeps the label); relayed,
+ *  it would reach the client encoded but labelled as decoded. */
+const checkRelayable = async (response: Response, maxBodyBytes: number): Promise<void> => {
+  const refuse = async (code: ProxyErrorCode, detail: string) => {
+    await response.body?.cancel()
+    throw new Refusal(code, detail)
+  }
   // Every Response constructor, the client's included, throws outside 200–599.
   if (response.status < 200 || response.status > 599) {
-    await response.body?.cancel()
-    throw new Refusal('upstream-failed', `the target answered with status ${response.status}`)
+    await refuse('upstream-failed', `the target answered with status ${response.status}`)
   }
-  if (!response.body) return null
+  // fetch gives a HEAD response and a null-body status (204, 205, 304) a null body.
+  if (!response.body) return
   const coding = response.headers.get('content-encoding')
   if (coding && coding.toLowerCase() !== 'identity') {
-    await response.body.cancel()
-    throw new Refusal('upstream-failed', `the body is ${coding}-encoded, which the proxy doesn't decode`)
+    await refuse('upstream-failed', `the body is ${coding}-encoded, which the proxy doesn't decode`)
   }
-  return readBody(response, limits, budget)
+  if (Number(response.headers.get('content-length') ?? 0) > maxBodyBytes) {
+    await refuse('response-too-large', `over ${maxBodyBytes} bytes`)
+  }
 }
 
-/** The whole body, refused past `maxBodyBytes`. Read in full before anything
- *  is sent: a body that fails or overflows mid-stream would otherwise reach the
- *  client as a 200 cut short, which a gateway may pass on as complete.
- *
- *  Each chunk is copied out as it arrives, since fetch's chunks can be views of
- *  larger buffers that keeping them would hold. The buffer counts against the
- *  worker's `maxBufferedBytes` while it is read; past that the request is
- *  refused, rather than risk the worker's memory limit, which would fail every
- *  request on it. */
-const readBody = async (
-  response: Response,
-  {maxBodyBytes, maxBufferedBytes}: ProxyLimits,
-  budget: BodyBudget,
-): Promise<Uint8Array<ArrayBuffer>> => {
-  const tooLarge = () => new Refusal('response-too-large', `over ${maxBodyBytes} bytes`)
-  const reader = response.body!.getReader()
-  let body = new Uint8Array(0)
-  let size = 0
-  let claimed = 0
-  try {
-    // Refused up front when declared, so an oversized body isn't downloaded first.
-    if (Number(response.headers.get('content-length') ?? 0) > maxBodyBytes) throw tooLarge()
-    for (let read = await reader.read(); !read.done; read = await reader.read()) {
-      const end = size + read.value.byteLength
-      if (end > maxBodyBytes) throw tooLarge()
-      if (end > body.length) {
-        const capacity = Math.min(maxBodyBytes, Math.max(end, body.length * 2, 64 * 1024))
-        const more = capacity - body.length
-        if (budget.held + more > maxBufferedBytes) throw new Refusal('busy', 'too many bodies in flight on this worker')
-        budget.held += more
-        claimed += more
-        const grown = new Uint8Array(capacity)
-        grown.set(body.subarray(0, size))
-        body = grown
-      }
-      body.set(read.value, size)
-      size = end
-    }
-    return body.subarray(0, size)
-  } catch (error) {
-    await reader.cancel().catch(() => {})
-    throw error instanceof Refusal ? error : new Refusal('upstream-failed', 'the body failed mid-read')
-  } finally {
-    budget.held -= claimed
-  }
+/** `body`, ended with an error once more than `maxBytes` have passed. */
+const capped = (body: ReadableStream<Uint8Array>, maxBytes: number): ReadableStream<Uint8Array> => {
+  let seen = 0
+  return body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      seen += chunk.byteLength
+      if (seen > maxBytes) controller.error(new Refusal('response-too-large', `over ${maxBytes} bytes`))
+      else controller.enqueue(chunk)
+    },
+  }))
 }
 
 // --- responses --------------------------------------------------------------
@@ -422,20 +392,20 @@ const failure = (cors: Headers, refusal: Refusal, hops: ProxyRedirect[]): Respon
   )
 }
 
-const relay = (
-  cors: Headers,
-  response: Response,
-  url: URL,
-  hops: ProxyRedirect[],
-  body: Uint8Array<ArrayBuffer> | null,
-): Response => {
+/** The target's response, its body streamed through. A body cut off after the
+ *  headers (the size cap, the deadline, a failing target) ends the response
+ *  early. The body is unencoded, so a declared length is exact; on the wire it
+ *  makes a body cut short detectably short. */
+const relay = (cors: Headers, response: Response, url: URL, hops: ProxyRedirect[], maxBodyBytes: number): Response => {
   const headers = baseHeaders(cors, hops)
   headers.set(PROXY_STATUS_HEADER, String(response.status))
   headers.set(PROXY_FINAL_URL_HEADER, url.href)
   for (const [name, value] of response.headers) {
-    if (UNRELAYED_RESPONSE_HEADERS.has(name) || (body && ENCODED_BODY_HEADERS.has(name))) continue
-    headers.append(`${PROXY_HEADER_PREFIX}${name}`, value)
+    if (!UNRELAYED_RESPONSE_HEADERS.has(name)) headers.append(`${PROXY_HEADER_PREFIX}${name}`, value)
   }
+  const length = response.headers.get('content-length')
+  if (response.body && length !== null && /^\d+$/.test(length)) headers.set('content-length', length)
+  const body = response.body && capped(response.body, maxBodyBytes)
   return new Response(body, {status: 200, headers: exposeProxyHeaders(headers)})
 }
 
@@ -454,42 +424,37 @@ const preflight = (req: Request, cors: Headers): Response => {
 const isTimeout = (signal: AbortSignal): boolean =>
   signal.aborted && (signal.reason as {name?: string} | undefined)?.name === 'TimeoutError'
 
-/** State a handler shares across the requests a worker serves. */
-interface Worker {
-  allowedOrigins: Set<string>
-  budget: BodyBudget
-}
-
 export const createProxyHandler = (deps: ProxyDeps) => {
-  const worker: Worker = {allowedOrigins: appOrigins(deps.allowedOrigins), budget: {held: 0}}
-  if (deps.allowedOrigins?.trim() && worker.allowedOrigins.size === 0) {
+  const limits = deps.limits ?? DEFAULT_LIMITS
+  const allowedOrigins = appOrigins(deps.allowedOrigins)
+  if (deps.allowedOrigins?.trim() && allowedOrigins.size === 0) {
     console.warn('cors-proxy: CORS_PROXY_ALLOWED_ORIGINS names no origin; only local dev servers can read responses')
   }
-  return (req: Request): Promise<Response> => handle(req, deps, worker)
-}
 
-const handle = async (req: Request, deps: ProxyDeps, worker: Worker): Promise<Response> => {
-  const limits = deps.limits ?? DEFAULT_LIMITS
-  const cors = corsHeaders(req.headers.get('origin'), worker.allowedOrigins)
-  if (req.method === 'OPTIONS') return preflight(req, cors)
+  return async (req: Request): Promise<Response> => {
+    const cors = corsHeaders(req.headers.get('origin'), allowedOrigins)
+    if (req.method === 'OPTIONS') return preflight(req, cors)
 
-  const hops: ProxyRedirect[] = []
-  // Ends the upstream work when the caller goes away, too. All of it is done
-  // before a response is returned, so Deno.serve aborting `req.signal` once a
-  // response completes cuts nothing short.
-  const signal = AbortSignal.any([req.signal, AbortSignal.timeout(limits.timeoutMs)])
-  try {
-    if (!ALLOWED_METHODS.has(req.method)) throw new Refusal('method-not-allowed', 'GET or HEAD')
-    // Before reading the target or its headers, so a stranger learns nothing about what the proxy would fetch.
-    await authenticate(req, deps)
-    const target = fetchableUrl(req.headers.get(PROXY_URL_HEADER) ?? '')
-    if (!target) throw new Refusal('invalid-url', `${PROXY_URL_HEADER} must be an absolute http(s) URL`)
-    const headers = targetRequestHeaders(req.headers)
-    const {response, url} = await follow(target, req.method, headers, hops, deps, limits, signal)
-    return relay(cors, response, url, hops, await targetBody(response, limits, worker.budget))
-  } catch (error) {
-    if (isTimeout(signal)) return failure(cors, new Refusal('timeout'), hops)
-    if (error instanceof Refusal) return failure(cors, error, hops)
-    throw error
+    const hops: ProxyRedirect[] = []
+    // `req.signal` ends the work sooner where the runtime reports a caller that
+    // went away; Deno.serve also aborts it once a response completes, which cuts
+    // nothing short. A caller gone during the body cancels the relayed stream,
+    // and with it the target's.
+    const signal = AbortSignal.any([req.signal, AbortSignal.timeout(limits.timeoutMs)])
+    try {
+      if (!ALLOWED_METHODS.has(req.method)) throw new Refusal('method-not-allowed', 'GET or HEAD')
+      // Before reading the target or its headers, so a stranger learns nothing about what the proxy would fetch.
+      await authenticate(req, deps, signal)
+      const target = fetchableUrl(req.headers.get(PROXY_URL_HEADER) ?? '')
+      if (!target) throw new Refusal('invalid-url', `${PROXY_URL_HEADER} must be an absolute http(s) URL`)
+      const headers = targetRequestHeaders(req.headers)
+      const {response, url} = await follow(target, req.method, headers, hops, deps, limits, signal)
+      await checkRelayable(response, limits.maxBodyBytes)
+      return relay(cors, response, url, hops, limits.maxBodyBytes)
+    } catch (error) {
+      if (isTimeout(signal)) return failure(cors, new Refusal('timeout'), hops)
+      if (error instanceof Refusal) return failure(cors, error, hops)
+      throw error
+    }
   }
 }

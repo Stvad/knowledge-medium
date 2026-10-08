@@ -10,11 +10,13 @@ const state = vi.hoisted(() => ({
   sessionError: null as unknown,
   sessionThrows: null as unknown,
   sessionPending: false,
+  sessionLoads: 0,
 }))
 
 vi.mock('@/data/repoProvider', () => ({isRemoteSyncActive: () => state.remoteSync}))
 vi.mock('@/services/supabase', () => ({
   supabase: {auth: {getSession: async () => {
+    state.sessionLoads++
     if (state.sessionPending) return new Promise(() => {})
     if (state.sessionThrows) throw state.sessionThrows
     return {data: {session: state.session}, error: state.sessionError}
@@ -43,6 +45,7 @@ beforeEach(() => {
   state.sessionError = null
   state.sessionThrows = null
   state.sessionPending = false
+  state.sessionLoads = 0
 })
 
 afterEach(() => {
@@ -156,18 +159,28 @@ describe('proxyFetch', () => {
     await expect(pending).rejects.toMatchObject({name: 'AbortError'})
   })
 
-  it('keeps a URL\'s credentials out of the refusal', async () => {
-    await expect(proxyFetch('https://user:secret@example.com/')).rejects.toEqual(expect.objectContaining({
-      code: 'invalid-url',
-      message: expect.not.stringContaining('secret'),
-    }))
+  it.each([
+    ['local-only', () => {
+      state.remoteSync = false
+    }],
+    ['a session that would fail to load', () => {
+      state.sessionThrows = new TypeError('Failed to fetch')
+    }],
+  ])('rejects with an abort that came first, over %s, starting nothing', async (_, arrange) => {
+    const {wire} = proxyOver({'https://example.com/': () => new Response('ok')})
+    arrange()
+    const controller = new AbortController()
+    controller.abort()
+    await expect(proxyFetch('https://example.com/', {signal: controller.signal})).rejects.toMatchObject({name: 'AbortError'})
+    expect(state.sessionLoads).toBe(0)
+    expect(wire).not.toHaveBeenCalled()
   })
 
   describe('sends nothing', () => {
     it.each([
       ['for a URL that isn\'t absolute', '/relative', () => {}, 'invalid-url'],
       ['for a URL that isn\'t http(s)', 'ftp://example.com/file', () => {}, 'invalid-url'],
-      ['for a URL carrying credentials', 'https://user:secret@example.com/', () => {}, 'invalid-url'],
+      ['for a URL carrying credentials, without echoing them', 'https://user:secret@example.com/', () => {}, 'invalid-url'],
       ['from a local-only session', 'https://example.com/', () => {
         state.remoteSync = false
       }, 'local-only'],
@@ -191,7 +204,9 @@ describe('proxyFetch', () => {
     ])('%s', async (_, url, arrange, code) => {
       const {wire} = proxyOver({'https://example.com/': () => new Response('ok')})
       arrange()
-      await expect(proxyFetch(url)).rejects.toEqual(refusedWith(code))
+      const error = await proxyFetch(url).catch((reason: unknown) => reason)
+      expect(error).toEqual(refusedWith(code))
+      expect((error as Error).message).not.toContain('secret')
       expect(wire).not.toHaveBeenCalled()
     })
   })
