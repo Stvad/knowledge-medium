@@ -1,1 +1,1 @@
-import{JL as e,qL as t}from"../../chunks/app-CxluMmUX.js";export{t as liveEditorFor,e as liveEditorRegistration};
+import{JL as e,qL as t}from"../../chunks/app-BzvoLS7B.js";export{t as liveEditorFor,e as liveEditorRegistration};

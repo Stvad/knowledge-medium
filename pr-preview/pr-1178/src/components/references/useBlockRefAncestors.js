@@ -1,1 +1,1 @@
-import{mC as e}from"../../../chunks/app-CxluMmUX.js";export{e as useBlockRefAncestors};
+import{mC as e}from"../../../chunks/app-BzvoLS7B.js";export{e as useBlockRefAncestors};
