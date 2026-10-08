@@ -44,12 +44,19 @@ const cidOf = (googleMapsUrl: string | undefined): string | null => {
 }
 
 /** Search only CONFIRMS which place the link means — the result with the
- *  link's CID, else one on the link's own coordinates — and never picks a
- *  best guess: a neighbour or a top-ranked result is a different place. */
+ *  link's CID, else the one nearest the link's own coordinates — and never
+ *  picks a best guess: a neighbour or a top-ranked result is a different place. */
 const pickMatch = (results: readonly PlaceDetails[], link: FullLink): PlaceDetails | null => {
   if (link.cid) return results.find(r => cidOf(r.googleMapsUrl) === link.cid) ?? null
   const at = link.coords
-  return at ? results.find(r => haversineMeters(at, r) <= MATCH_RADIUS_M) ?? null : null
+  if (!at) return null
+  let nearest: PlaceDetails | null = null
+  let nearestM = MATCH_RADIUS_M
+  for (const r of results) {
+    const m = haversineMeters(at, r)
+    if (m <= nearestM) [nearest, nearestM] = [r, m]
+  }
+  return nearest
 }
 
 const findOnGoogle = async (

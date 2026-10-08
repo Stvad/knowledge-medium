@@ -41,7 +41,7 @@ import {
 import type { PlaceCandidate } from './createOrFindPlace'
 import { createOrFindPlaceInteractive } from './placeNameCollision'
 import { CurrentLocationError, getCurrentPosition } from './currentLocation'
-import { locateText, replaceInStoredContent } from './blockTextReplace'
+import { locateText, replaceBlockText } from './blockTextReplace'
 
 const GOOGLE_MIN_QUERY_LEN = 2
 const LOCAL_RESULT_CAP = 8
@@ -317,14 +317,19 @@ const buildPlaceCompletionSource = ({repo, block}: CodeMirrorExtensionContext): 
     return null
   }
 
-  // The collision toast (and any slow resolution) outlives the pick:
-  // clicking it blurs the block, the per-block editor unmounts, and the
-  // captured view can't take the insert anymore.
-  const persistInsert = async ({triggerText, insert}: {triggerText: string, insert: string}) => {
-    await replaceInStoredContent(repo, block.id, doc => locateText(doc, triggerText), insert, 'insert place link')
+  const deliverInsert = async (
+    {span, triggerText, insert}: {span: {from: number, to: number}, triggerText: string, insert: string},
+  ) => {
+    await replaceBlockText({
+      repo,
+      blockId: block.id,
+      locate: doc => locateText(doc, triggerText, span),
+      replacement: insert,
+      description: 'insert place link',
+    })
   }
 
-  return placeCompletionSource({getCandidates, resolvePlace, consumePendingCandidates, persistInsert})
+  return placeCompletionSource({getCandidates, resolvePlace, consumePendingCandidates, deliverInsert})
 }
 
 export const geoCodeMirrorExtensions: CodeMirrorExtensionContribution = (ctx) => {

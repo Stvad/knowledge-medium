@@ -3,7 +3,6 @@
  *  and link the `@` autocomplete would produce, so the block lands on
  *  maps through its body reference. */
 
-import type { EditorView } from '@codemirror/view'
 import type { Repo } from '@/data/repo'
 import { readBlockText, replaceBlockText, type Locate, type TextSpan } from './blockTextReplace'
 import type { PlaceCandidate } from './createOrFindPlace'
@@ -36,15 +35,15 @@ const failureMessage = (url: string, err: unknown): string => {
   return `Couldn't convert ${url}`
 }
 
-/** `view`, when the block is being edited: the text is read from and
- *  written to the live editor, which leads the stored row. */
+/** Reads and writes the block's text wherever it lives at that moment —
+ *  its live editor while one is mounted (see `blockTextReplace.ts`). */
 export const convertMapsLinksInBlock = async (
-  {repo, blockId, view}: {repo: Repo; blockId: string; view?: EditorView},
+  {repo, blockId}: {repo: Repo; blockId: string},
   resolveLink: (url: string) => Promise<PlaceCandidate>,
 ): Promise<MapsLinkConversion> => {
   const result: MapsLinkConversion = {converted: 0, failures: []}
   const data = await repo.load(blockId)
-  const text = await readBlockText(repo, blockId, view)
+  const text = await readBlockText(repo, blockId)
   if (!data || text === null) return result
 
   // One at a time: a name collision opens a toast that waits on the user.
@@ -56,14 +55,13 @@ export const convertMapsLinksInBlock = async (
       // has since removed. A removal after this check (before the create
       // commits, or during a collision prompt) is accepted, not coupled into
       // the minting tx: the stray Place is reused by the next pick of the POI.
-      const current = await readBlockText(repo, blockId, view)
+      const current = await readBlockText(repo, blockId)
       if (current === null || locate(current) === null) continue
       const place = await createOrFindPlaceInteractive(repo, data.workspaceId, candidate)
       if (!place) continue
       const replaced = await replaceBlockText({
         repo,
         blockId,
-        view,
         locate,
         replacement: `[[${place.linkName}]]`,
         description: 'convert maps link to place',

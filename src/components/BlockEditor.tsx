@@ -21,6 +21,7 @@ import { useBlockContext } from '@/context/block.js'
 import { resolveEditModeKeepalive } from '@/components/editModeKeepalive.js'
 import { notifyBlockEditResumed, notifyBlockEditSettled } from '@/editor/editSettleSignal.js'
 import { editorContentFlushFacet } from '@/editor/contentFlush.js'
+import { liveEditorRegistration } from '@/editor/liveEditors.js'
 
 interface BlockEditorProps extends Omit<ReactCodeMirrorProps, 'value' | 'onChange' | 'onUpdate' | 'onBlur' | 'ref'> {
   block: Block
@@ -258,9 +259,11 @@ export const BlockEditor = ({
       // is a stable ref-backed callback (same identity across renders).
       // eslint-disable-next-line react-hooks/refs -- facet stores, never calls during render
       editorContentFlushFacet.of(flushDebouncers),
+      // Lets async work that settles later find THIS editor (liveEditors.ts).
+      liveEditorRegistration(block.id),
       ...(providedExtensions ?? []),
     ],
-    [providedExtensions, flushDebouncers],
+    [providedExtensions, flushDebouncers, block.id],
   )
 
   if (!blockEditData) return null

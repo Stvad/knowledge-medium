@@ -62,10 +62,12 @@ describe('resolveMapsLink', () => {
     })
   })
 
-  it('without a CID, takes the first search result near the linked coordinates', async () => {
+  it('without a CID, takes the search result nearest the linked coordinates', async () => {
     const url = 'https://www.google.com/maps/place/Blue+Bottle/data=!3d37.7765!4d-122.4233'
     const searchText = vi.fn(async () => [
       details({placeId: 'ChIJfar', name: 'Blue Bottle', lat: 37.8, lng: -122.3}),
+      // Both within the match radius; the ranking puts the farther first.
+      details({placeId: 'ChIJclose', name: 'Blue Bottle', lat: 37.7775, lng: -122.4222}),
       details({placeId: 'ChIJnear', name: 'Blue Bottle', lat: 37.7766, lng: -122.4232}),
     ])
 

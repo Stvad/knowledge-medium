@@ -30,9 +30,7 @@
 
 import type { EditorView } from '@codemirror/view'
 import { isInsideLiteralMarkdown } from '@/editor/syntaxContext'
-import { flushEditorContent } from '@/editor/contentFlush'
 import { matchCharTrigger, type TriggerMatch } from '@/editor/triggerMatch'
-import { locateText, replaceInView } from './blockTextReplace'
 import type {
   Completion,
   CompletionContext,
@@ -104,14 +102,12 @@ export interface PlaceAutocompleteOptions {
     span: {from: number, to: number}
     candidates: PlaceAutocompleteCandidate[]
   } | null
-  /** Persistence fallback for the resolved wikilink. `resolvePlace` can
-   *  settle long after the pick (details fetch, collision toast) — by
-   *  then the interaction may have moved focus out of the editor, and
-   *  the per-block CodeMirror view unmounts with it, so dispatching the
-   *  insert into the captured view goes nowhere. Once the view has
-   *  unmounted, this is called to apply the same trigger-text → wikilink
-   *  replacement to the underlying block. */
-  persistInsert?: (args: {triggerText: string; insert: string}) => Promise<void>
+  /** Replaces the trigger text — at `span` unless edits moved it — with
+   *  the resolved wikilink. Resolution can settle long after the pick
+   *  (details fetch, collision toast), by when the editor the pick came
+   *  from may have unmounted, or another mounted; the implementation
+   *  decides where the block's text lives at that moment. */
+  deliverInsert: (args: {span: {from: number; to: number}; triggerText: string; insert: string}) => Promise<void>
 }
 
 /** `@` trigger detection — the shared matcher (see
@@ -139,17 +135,7 @@ const candidateToOption = (
       if (!resolved) return
       if (resolved.kind === 'handled') return
       const insert = `[[${resolved.name}]]`
-      const outcome = replaceInView(
-        view, doc => locateText(doc, triggerText, {from: applyFrom, to: applyTo}), insert,
-      )
-      if (outcome === 'replaced') {
-        // Persist the wikilink insert now so it's durable for the
-        // reference-resolution processors instead of waiting on the
-        // 300ms debounce. The unmounted-view path persists directly.
-        flushEditorContent(view)
-      } else if (outcome === 'unmounted') {
-        await options.persistInsert?.({triggerText, insert})
-      }
+      await options.deliverInsert({span: {from: applyFrom, to: applyTo}, triggerText, insert})
     })()
   },
 })

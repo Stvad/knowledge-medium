@@ -39,6 +39,7 @@ describe('placeCompletionSource', () => {
     const source = placeCompletionSource({
       getCandidates: async () => [],
       resolvePlace: async () => null,
+      deliverInsert: async () => {},
       consumePendingCandidates: () => {
         if (consumed) return null
         consumed = true
@@ -67,6 +68,7 @@ describe('placeCompletionSource', () => {
     const source = placeCompletionSource({
       getCandidates: async () => trigger,
       resolvePlace: async () => null,
+      deliverInsert: async () => {},
       consumePendingCandidates: () => {
         if (consumed) return null
         consumed = true
@@ -87,6 +89,7 @@ describe('placeCompletionSource', () => {
         {id: 't', source: 'local', label: 'Local', insertText: 'Local'},
       ],
       resolvePlace: async () => null,
+      deliverInsert: async () => {},
     })
     const result = await source(docContext('@', 1))
     expect(result!.options.map(o => o.label)).toEqual(['Local'])
@@ -98,6 +101,7 @@ describe('placeCompletionSource', () => {
         {id: 't', source: 'local', label: 'Local', insertText: 'Local'},
       ],
       resolvePlace: async () => null,
+      deliverInsert: async () => {},
     })
     const markdownContext = (doc: string, pos: number): CompletionContext =>
       new CompletionContext(
@@ -116,82 +120,25 @@ describe('placeCompletionSource', () => {
 })
 
 describe('placeCompletionSource — resolved insert delivery', () => {
-  const buildOption = async (opts: {
-    resolveName: string
-    persistInsert?: (args: {triggerText: string; insert: string}) => Promise<void>
-    onResolved?: () => void
-  }) => {
+  it('hands the wikilink, the trigger text and its span to deliverInsert', async () => {
+    const delivered: Array<{span: {from: number; to: number}; triggerText: string; insert: string}> = []
     const source = placeCompletionSource({
       getCandidates: async () => [
         {id: 'g', source: 'google', label: 'Blue Bottle', insertText: 'Blue Bottle'},
       ],
-      // Simulate a slow resolution (details fetch / collision toast).
-      resolvePlace: async () => {
-        await new Promise(r => setTimeout(r, 0))
-        opts.onResolved?.()
-        return {kind: 'insert', name: opts.resolveName}
-      },
-      persistInsert: opts.persistInsert,
+      resolvePlace: async () => ({kind: 'insert', name: 'Blue Bottle'}),
+      deliverInsert: async args => { delivered.push(args) },
     })
     const state = EditorState.create({doc: 'met at @blue'})
     const result = await source(new CompletionContext(state, 12, true))
     const option = result!.options[0]
-    const apply = option.apply
-    if (typeof apply !== 'function') throw new Error('expected a function apply')
-    return {option, apply, state}
-  }
-
-  it('dispatches into a live (attached) view', async () => {
-    const {option, apply, state} = await buildOption({resolveName: 'Blue Bottle'})
+    if (typeof option.apply !== 'function') throw new Error('expected a function apply')
     const view = new EditorView({state, parent: document.body})
     try {
-      apply(view, option, 7, 12)
+      option.apply(view, option, 7, 12)
       await vi.waitFor(() => {
-        expect(view.state.doc.toString()).toBe('met at [[Blue Bottle]]')
+        expect(delivered).toEqual([{span: {from: 7, to: 12}, triggerText: '@blue', insert: '[[Blue Bottle]]'}])
       })
-    } finally {
-      view.destroy()
-    }
-  })
-
-  it('falls back to persistInsert when the view is gone before resolution settles', async () => {
-    const persisted: Array<{triggerText: string; insert: string}> = []
-    const {option, apply, state} = await buildOption({
-      resolveName: 'Blue Bottle',
-      persistInsert: async args => { persisted.push(args) },
-    })
-    const view = new EditorView({state, parent: document.body})
-    try {
-      apply(view, option, 7, 12)
-    } finally {
-      // The collision toast steals focus; the per-block editor unmounts
-      // and destroys the view before resolvePlace settles.
-      view.destroy()
-    }
-    await vi.waitFor(() => {
-      expect(persisted).toEqual([{triggerText: '@blue', insert: '[[Blue Bottle]]'}])
-    })
-  })
-
-  it('persists nothing when the still-mounted editor dropped the trigger text', async () => {
-    const persisted: Array<{triggerText: string; insert: string}> = []
-    let resolved = false
-    const {option, apply, state} = await buildOption({
-      resolveName: 'Blue Bottle',
-      persistInsert: async args => { persisted.push(args) },
-      onResolved: () => { resolved = true },
-    })
-    const view = new EditorView({state, parent: document.body})
-    try {
-      apply(view, option, 7, 12)
-      // The user deletes `@blue` while the place resolves.
-      view.dispatch({changes: {from: 6, to: 12, insert: ''}})
-      await vi.waitFor(() => expect(resolved).toBe(true))
-      // Delivery runs in the microtasks after resolution; a macrotask
-      // fence lets it finish before asserting it wrote nothing.
-      await new Promise(r => setTimeout(r, 0))
-      expect(persisted).toEqual([])
-      expect(view.state.doc.toString()).toBe('met at')
     } finally {
       view.destroy()
     }

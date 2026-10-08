@@ -3,6 +3,7 @@ import { EditorState } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import { describe, expect, it, vi } from 'vitest'
 import type { Repo } from '@/data/repo'
+import { liveEditorRegistration } from '@/editor/liveEditors'
 import { locateText, replaceBlockText } from '../blockTextReplace'
 
 describe('locateText', () => {
@@ -28,24 +29,26 @@ describe('locateText', () => {
 })
 
 describe('replaceBlockText', () => {
-  const run = (view: EditorView) => {
+  const run = () => {
     const repo = {tx: vi.fn(async () => {})} as unknown as Repo
     const replaced = replaceBlockText({
       repo,
       blockId: 'b',
-      view,
       locate: doc => locateText(doc, 'LINK'),
       replacement: '[[P]]',
       description: 'test',
     })
     return {repo, replaced}
   }
-  const mounted = (doc: string) => new EditorView({state: EditorState.create({doc}), parent: document.body})
+  const mountEditor = (doc: string) => new EditorView({
+    state: EditorState.create({doc, extensions: liveEditorRegistration('b')}),
+    parent: document.body,
+  })
 
-  it('replaces in the mounted editor, not the stored row', async () => {
-    const view = mounted('see LINK')
+  it("replaces in the block's live editor, looked up at write time", async () => {
+    const view = mountEditor('see LINK')
     try {
-      const {repo, replaced} = run(view)
+      const {repo, replaced} = run()
       expect(await replaced).toBe(true)
       expect(view.state.doc.toString()).toBe('see [[P]]')
       expect(repo.tx).not.toHaveBeenCalled()
@@ -54,12 +57,12 @@ describe('replaceBlockText', () => {
     }
   })
 
-  it('writes nothing when the mounted editor no longer holds the target', async () => {
+  it('writes nothing when the live editor no longer holds the target', async () => {
     // The stored row trails the editor by its debounce and may still hold
     // the target; the editor is the authority while it's mounted.
-    const view = mounted('see nothing')
+    const view = mountEditor('see nothing')
     try {
-      const {repo, replaced} = run(view)
+      const {repo, replaced} = run()
       expect(await replaced).toBe(false)
       expect(repo.tx).not.toHaveBeenCalled()
     } finally {
@@ -67,11 +70,9 @@ describe('replaceBlockText', () => {
     }
   })
 
-  it('falls back to the stored row once the editor has unmounted', async () => {
-    const view = mounted('see LINK')
-    view.destroy()
-    view.dom.remove()
-    const {repo, replaced} = run(view)
+  it('writes the stored row when no editor is mounted', async () => {
+    mountEditor('see LINK').destroy()
+    const {repo, replaced} = run()
     await replaced
     expect(repo.tx).toHaveBeenCalledTimes(1)
   })
