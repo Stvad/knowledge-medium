@@ -426,7 +426,9 @@ export const createProxyHandler = (deps: ProxyDeps) => async (req: Request): Pro
   if (req.method === 'OPTIONS') return preflight(req, cors)
 
   const hops: Hop[] = []
-  const signal = AbortSignal.any([req.signal, AbortSignal.timeout(limits.timeoutMs)])
+  // Not tied to `req.signal`: a client that disconnects cancels the relayed
+  // body, which cancels the upstream one, and the timeout bounds the rest.
+  const signal = AbortSignal.timeout(limits.timeoutMs)
   try {
     if (!ALLOWED_METHODS.has(req.method)) throw new Refusal('method-not-allowed', 'GET or HEAD')
     // Before anything else, so a stranger learns nothing about what the proxy would fetch.
