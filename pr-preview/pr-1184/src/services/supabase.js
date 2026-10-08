@@ -1,1 +1,1 @@
-import{_1 as e,g1 as t,h1 as n,m1 as r,v1 as i,y1 as a}from"../../chunks/app-Cu8FFXHu.js";export{r as edgeFunctionEndpoint,n as hasSupabaseAuthConfig,t as isAuthCallbackUrl,e as readPersistedSession,i as sessionUserToAppUser,a as supabase};
+import{_1 as e,g1 as t,h1 as n,m1 as r,v1 as i,y1 as a}from"../../chunks/app-CWkg3DVK.js";export{r as edgeFunctionEndpoint,n as hasSupabaseAuthConfig,t as isAuthCallbackUrl,e as readPersistedSession,i as sessionUserToAppUser,a as supabase};
