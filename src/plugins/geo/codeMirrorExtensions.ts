@@ -41,7 +41,7 @@ import {
 import type { PlaceCandidate } from './createOrFindPlace'
 import { createOrFindPlaceInteractive } from './placeNameCollision'
 import { CurrentLocationError, getCurrentPosition } from './currentLocation'
-import { replaceInStoredContent } from './blockTextReplace'
+import { locateText, replaceInStoredContent } from './blockTextReplace'
 
 const GOOGLE_MIN_QUERY_LEN = 2
 const LOCAL_RESULT_CAP = 8
@@ -321,7 +321,7 @@ const buildPlaceCompletionSource = ({repo, block}: CodeMirrorExtensionContext): 
   // clicking it blurs the block, the per-block editor unmounts, and the
   // captured view can't take the insert anymore.
   const persistInsert = async ({triggerText, insert}: {triggerText: string, insert: string}) => {
-    await replaceInStoredContent(repo, block.id, triggerText, insert, 'insert place link')
+    await replaceInStoredContent(repo, block.id, doc => locateText(doc, triggerText), insert, 'insert place link')
   }
 
   return placeCompletionSource({getCandidates, resolvePlace, consumePendingCandidates, persistInsert})

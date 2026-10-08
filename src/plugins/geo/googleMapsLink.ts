@@ -30,7 +30,8 @@ export type ParsedMapsLink =
       cid?: string
       /** The place's own position. */
       coords?: LatLng
-      /** The map centre at share time. */
+      /** The map centre at share time — a search bias only, never a
+       *  place's position. */
       viewport?: LatLng
     }
 

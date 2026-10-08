@@ -1,7 +1,8 @@
 /** Replacing a piece of a block's text once async work settles (a place
  *  resolution, a collision toast). By then the text may have moved or be
  *  gone, and the block's editor may have unmounted — so the replacement
- *  re-locates the text, and lands in the live editor when there is one
+ *  re-locates its target with the caller's `Locate` (which knows what the
+ *  target IS, not just its text), and lands in the live editor when there is one
  *  (its pending debounced write would otherwise clobber a stored-content
  *  edit) or in the stored content when there isn't. */
 
@@ -16,11 +17,15 @@ export interface TextSpan {
   to: number
 }
 
-/** Where `text` is now: the recorded span if it still holds it, else its
- *  first occurrence (other edits moved it); `null` when it's gone. */
-export const locateText = (doc: string, span: TextSpan, text: string): TextSpan | null => {
+/** Finds the replacement's target in the current text; `null` when it's
+ *  gone. */
+export type Locate = (doc: string) => TextSpan | null
+
+/** Where `text` is now: `near` if it still holds it, else its first
+ *  occurrence (other edits moved it); `null` when it's gone. */
+export const locateText = (doc: string, text: string, near?: TextSpan): TextSpan | null => {
   if (text.length === 0) return null
-  if (doc.slice(span.from, span.to) === text) return span
+  if (near && doc.slice(near.from, near.to) === text) return near
   const idx = doc.indexOf(text)
   if (idx === -1) return null
   return {from: idx, to: idx + text.length}
@@ -43,16 +48,11 @@ export const readBlockText = async (
   return data && !data.deleted ? data.content : null
 }
 
-/** False when the view is unmounted or no longer holds `text` — the
+/** False when the view is unmounted or no longer holds the target — the
  *  caller falls back to `replaceInStoredContent`. */
-export const replaceInView = (
-  view: EditorView,
-  span: TextSpan,
-  text: string,
-  replacement: string,
-): boolean => {
+export const replaceInView = (view: EditorView, locate: Locate, replacement: string): boolean => {
   if (!isMounted(view)) return false
-  const at = locateText(view.state.doc.toString(), span, text)
+  const at = locate(view.state.doc.toString())
   if (at === null) return false
   try {
     view.dispatch({
@@ -66,11 +66,11 @@ export const replaceInView = (
 }
 
 /** Read-modify-write inside a tx, so a concurrent editor flush can't be
- *  clobbered. False when the block or the text is gone. */
+ *  clobbered. False when the block or the target is gone. */
 export const replaceInStoredContent = async (
   repo: Repo,
   blockId: string,
-  text: string,
+  locate: Locate,
   replacement: string,
   description: string,
 ): Promise<boolean> => {
@@ -78,7 +78,7 @@ export const replaceInStoredContent = async (
   await repo.tx(async tx => {
     const data = await tx.get(blockId)
     if (!data || data.deleted) return
-    const at = locateText(data.content, {from: 0, to: 0}, text)
+    const at = locate(data.content)
     if (at === null) return
     await tx.update(blockId, {
       content: data.content.slice(0, at.from) + replacement + data.content.slice(at.to),
@@ -88,23 +88,22 @@ export const replaceInStoredContent = async (
   return replaced
 }
 
-/** The live editor when `view` is given and still holds the text, else
+/** The live editor when `view` is given and still holds the target, else
  *  the stored content. */
 export const replaceBlockText = async (args: {
   repo: Repo
   blockId: string
   view?: EditorView
-  span: TextSpan
-  text: string
+  locate: Locate
   replacement: string
   description: string
 }): Promise<boolean> => {
-  const {view, span, text, replacement} = args
-  if (view && replaceInView(view, span, text, replacement)) {
+  const {view, locate, replacement} = args
+  if (view && replaceInView(view, locate, replacement)) {
     // Commit the edit now rather than on the editor's debounce, so
     // follow-up work reads it from the stored row.
     flushEditorContent(view)
     return true
   }
-  return replaceInStoredContent(args.repo, args.blockId, text, replacement, args.description)
+  return replaceInStoredContent(args.repo, args.blockId, locate, replacement, args.description)
 }

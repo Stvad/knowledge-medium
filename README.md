@@ -64,12 +64,18 @@ npx supabase projects create knowledge-medium --org-id <org-id> --region us-west
 npx supabase link --project-ref <project-ref> --password <db-password>
 ```
 
-4. Push the committed schema and auth config:
+4. Push the committed schema, auth config, and edge functions:
 
 ```bash
 npx supabase db push
 npx supabase config push
+npx supabase functions deploy
 ```
+
+   Re-run `functions deploy` whenever `supabase/functions/` changes; the Pages
+   deploy doesn't publish them. Without `resolve-maps-link`, converting a
+   `maps.app.goo.gl` short link to a Place fails (full Google Maps URLs still
+   convert).
 
 5. Fill client env vars:
    - `VITE_SUPABASE_URL`: Supabase project URL

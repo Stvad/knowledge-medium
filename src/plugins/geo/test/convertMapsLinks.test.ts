@@ -8,6 +8,7 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import { geoDataExtension } from '../dataExtension'
 import { convertMapsLinksInBlock } from '../convertMapsLinks'
 import { createOrFindPlace, placeMachineAlias, type PlaceCandidate } from '../createOrFindPlace'
+import { GooglePlacesError } from '../googlePlacesClient'
 import { MapsLinkError } from '../resolveMapsLink'
 import { placeGooglePlaceIdProp } from '../properties'
 
@@ -42,6 +43,18 @@ const blockWith = async (content: string): Promise<string> => {
 const contentOf = async (id: string): Promise<string | undefined> => (await repo.load(id))?.content
 
 describe('convertMapsLinksInBlock', () => {
+  it('asks for a retry when Google Places is unreachable, keeping the link', async () => {
+    const id = await blockWith(SHORT)
+    const resolveLink = async (): Promise<PlaceCandidate> => {
+      throw new GooglePlacesError('network', null, 'offline')
+    }
+
+    const result = await convertMapsLinksInBlock({repo, blockId: id}, resolveLink)
+
+    expect(result.failures).toEqual([expect.stringMatching(/Google Places.*try again/)])
+    expect(await contentOf(id)).toBe(SHORT)
+  })
+
   it('replaces the link with a wikilink to a new Place', async () => {
     const id = await blockWith(`coffee at ${SHORT}.`)
 
@@ -76,6 +89,21 @@ describe('convertMapsLinksInBlock', () => {
     expect(result).toEqual({converted: 0, failures: []})
     expect(await contentOf(id)).toBe('coffee at home')
     expect(await repo.query.aliasLookup({workspaceId: WS, alias: placeMachineAlias(craftsman)}).load()).toBeNull()
+  })
+
+  it('re-finds the link, not a copy of it in code, after the text moved', async () => {
+    const id = await blockWith(`\`${SHORT}\` is where we had ${SHORT}`)
+    const resolveLink = async () => {
+      // Typing ahead of the link shifts it off its recorded span.
+      await repo.tx(async tx => {
+        await tx.update(id, {content: `note: \`${SHORT}\` is where we had ${SHORT}`})
+      }, {scope: ChangeScope.BlockDefault, description: 'user edit'})
+      return craftsman
+    }
+
+    await convertMapsLinksInBlock({repo, blockId: id}, resolveLink)
+
+    expect(await contentOf(id)).toBe(`note: \`${SHORT}\` is where we had [[Craftsman and Wolves Valencia]]`)
   })
 
   it('leaves a link it cannot resolve in place and reports why', async () => {

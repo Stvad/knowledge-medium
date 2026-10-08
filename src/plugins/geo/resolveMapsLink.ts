@@ -9,7 +9,7 @@ import {
   type GooglePlacesClient,
   type PlaceDetails,
 } from './googlePlacesClient'
-import { parseGoogleMapsUrl, type LatLng, type ParsedMapsLink } from './googleMapsLink'
+import { parseGoogleMapsUrl, type ParsedMapsLink } from './googleMapsLink'
 
 /** A link this module can't turn into a place; `message` is user-facing. */
 export class MapsLinkError extends Error {
@@ -43,14 +43,13 @@ const cidOf = (googleMapsUrl: string | undefined): string | null => {
   }
 }
 
+/** Search only CONFIRMS which place the link means — the result with the
+ *  link's CID, else one on the link's own coordinates — and never picks a
+ *  best guess: a neighbour or a top-ranked result is a different place. */
 const pickMatch = (results: readonly PlaceDetails[], link: FullLink): PlaceDetails | null => {
-  if (link.cid) {
-    const byCid = results.find(r => cidOf(r.googleMapsUrl) === link.cid)
-    if (byCid) return byCid
-  }
+  if (link.cid) return results.find(r => cidOf(r.googleMapsUrl) === link.cid) ?? null
   const at = link.coords
-  if (at) return results.find(r => haversineMeters(at, r) <= MATCH_RADIUS_M) ?? null
-  return results[0] ?? null
+  return at ? results.find(r => haversineMeters(at, r) <= MATCH_RADIUS_M) ?? null : null
 }
 
 const findOnGoogle = async (
@@ -61,6 +60,8 @@ const findOnGoogle = async (
   // A CID-only link (`?cid=…`) ends here and is refused by `fromLink`: the
   // Places API has no CID lookup, and the cid page doesn't redirect to one.
   if (!link.query) return null
+  // Nothing could confirm a result, so don't pay for the search.
+  if (!link.cid && !link.coords) return null
   const center = link.coords ?? link.viewport
   const results = await client.searchText(link.query, {
     bias: center && {...center, radiusM: BIAS_RADIUS_M},
@@ -85,11 +86,9 @@ const nameFromQuery = (query: string | undefined): string =>
   query?.split(',')[0]?.trim() ?? ''
 
 const fromLink = (link: FullLink, url: string): PlaceCandidate => {
-  // The map centre stands in for the position only on a link that names
-  // a place — on its own it is just a map view, not a place.
-  const position: LatLng | undefined = link.coords ?? (link.query ? link.viewport : undefined)
+  const position = link.coords
   if (!position) {
-    throw new MapsLinkError("The link doesn't say where the place is — open it and copy the place's full URL.")
+    throw new MapsLinkError("The link doesn't identify one place — open it and copy the place's full URL.")
   }
   return {
     name: nameFromQuery(link.query),

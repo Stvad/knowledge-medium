@@ -32,7 +32,7 @@ import type { EditorView } from '@codemirror/view'
 import { isInsideLiteralMarkdown } from '@/editor/syntaxContext'
 import { flushEditorContent } from '@/editor/contentFlush'
 import { matchCharTrigger, type TriggerMatch } from '@/editor/triggerMatch'
-import { replaceInView } from './blockTextReplace'
+import { locateText, replaceInView } from './blockTextReplace'
 import type {
   Completion,
   CompletionContext,
@@ -140,7 +140,7 @@ const candidateToOption = (
       if (resolved.kind === 'handled') return
       const insert = `[[${resolved.name}]]`
       const delivered = replaceInView(
-        view, {from: applyFrom, to: applyTo}, triggerText, insert,
+        view, doc => locateText(doc, triggerText, {from: applyFrom, to: applyTo}), insert,
       )
       if (delivered) {
         // Persist the wikilink insert now so it's durable for the

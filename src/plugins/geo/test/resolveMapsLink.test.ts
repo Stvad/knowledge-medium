@@ -96,7 +96,10 @@ describe('resolveMapsLink', () => {
 
   it('falls back to what the link itself says when Google has no match', async () => {
     const searchText = vi.fn(async () => [
-      details({placeId: 'ChIJfar', name: 'Monterey Bay Aquarium', lat: 40, lng: -100}),
+      // Right on the linked coordinates, but its CID says it's another
+      // place — the link's CID outranks proximity.
+      details({placeId: 'ChIJneighbour', name: 'Monterey Bay Aquarium Store', lat: 36.6183, lng: -121.902,
+        googleMapsUrl: 'https://maps.google.com/?cid=1'}),
     ])
 
     const candidate = await resolveMapsLink(MONTEREY_URL, deps({searchText}))
@@ -119,13 +122,19 @@ describe('resolveMapsLink', () => {
     expect(candidate.googlePlaceId).toBeUndefined()
   })
 
-  it('refuses a link that names no findable place and carries no position', async () => {
+  it('refuses a link that does not identify one place', async () => {
     await expect(resolveMapsLink('https://www.google.com/maps/@37.7,-122.4,15z', deps()))
       .rejects.toBeInstanceOf(MapsLinkError)
     const cidOnly = deps()
     await expect(resolveMapsLink(`https://maps.google.com/?cid=${AQUARIUM_CID}`, cidOnly))
       .rejects.toBeInstanceOf(MapsLinkError)
     expect(cidOnly.client?.searchText).not.toHaveBeenCalled()
+    // A search, not a place: nothing pins down WHICH result is meant, and
+    // the map centre is no place's position.
+    const search = deps({searchText: vi.fn(async () => [aquarium])})
+    await expect(resolveMapsLink('https://www.google.com/maps/search/restaurants/@36.6,-121.9,15z', search))
+      .rejects.toBeInstanceOf(MapsLinkError)
+    expect(search.client?.searchText).not.toHaveBeenCalled()
     await expect(resolveMapsLink('https://example.com/place', deps()))
       .rejects.toBeInstanceOf(MapsLinkError)
   })
