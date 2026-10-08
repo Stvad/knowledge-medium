@@ -49,14 +49,21 @@ export const convertMapsLinksInBlock = async (
   // One at a time: a name collision opens a toast that waits on the user.
   for (const link of findGoogleMapsLinks(text)) {
     const locate = locateLink(text.slice(link.from, link.to), link)
-    try {
-      const candidate = await resolveLink(link.url)
-      // The lookup takes seconds; don't mint a Place for a link the user
-      // has since removed. A removal after this check (before the create
-      // commits, or during a collision prompt) is accepted, not coupled into
-      // the minting tx: the stray Place is reused by the next pick of the POI.
+    // Each lookup takes seconds, so this link may have been removed (or the
+    // workspace turned read-only) by the time its own lookup starts or its
+    // Place would be minted; checked before both. A removal after the
+    // second check (before the create commits, or during a collision
+    // prompt) is accepted, not coupled into the minting tx: the stray Place
+    // is reused by the next pick of the POI.
+    const stillEligible = async (): Promise<boolean> => {
+      if (repo.isReadOnly) return false
       const current = await readBlockText(repo, blockId)
-      if (current === null || locate(current) === null) continue
+      return current !== null && locate(current) !== null
+    }
+    try {
+      if (!(await stillEligible())) continue
+      const candidate = await resolveLink(link.url)
+      if (!(await stillEligible())) continue
       const place = await createOrFindPlaceInteractive(repo, data.workspaceId, candidate)
       if (!place) continue
       const replaced = await replaceBlockText({

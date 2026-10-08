@@ -91,6 +91,35 @@ describe('convertMapsLinksInBlock', () => {
     expect(await repo.query.aliasLookup({workspaceId: WS, alias: placeMachineAlias(craftsman)}).load()).toBeNull()
   })
 
+  it('does not look up a later link the user removed while an earlier one resolved', async () => {
+    const second = 'https://maps.app.goo.gl/second'
+    const id = await blockWith(`${SHORT} and ${second}`)
+    const resolveLink = vi.fn(async () => {
+      await repo.tx(async tx => { await tx.update(id, {content: `${SHORT} and nothing`}) },
+        {scope: ChangeScope.BlockDefault, description: 'user edit'})
+      return craftsman
+    })
+
+    await convertMapsLinksInBlock({repo, blockId: id}, resolveLink)
+
+    expect(resolveLink.mock.calls).toEqual([[SHORT]])
+    expect(await contentOf(id)).toBe('[[Craftsman and Wolves Valencia]] and nothing')
+  })
+
+  it('stops, before the next lookup or any Place, once the workspace turned read-only', async () => {
+    const id = await blockWith(`${SHORT} and https://maps.app.goo.gl/second`)
+    const resolveLink = vi.fn(async () => {
+      repo.setReadOnly(true)
+      return craftsman
+    })
+
+    const result = await convertMapsLinksInBlock({repo, blockId: id}, resolveLink)
+
+    expect(resolveLink).toHaveBeenCalledTimes(1)
+    expect(result).toEqual({converted: 0, failures: []})
+    expect(await repo.query.aliasLookup({workspaceId: WS, alias: placeMachineAlias(craftsman)}).load()).toBeNull()
+  })
+
   it('re-finds the link, not a copy of it in code, after the text moved', async () => {
     const id = await blockWith(`\`${SHORT}\` is where we had ${SHORT}`)
     const resolveLink = async () => {
