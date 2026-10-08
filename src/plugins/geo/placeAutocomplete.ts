@@ -108,9 +108,9 @@ export interface PlaceAutocompleteOptions {
    *  settle long after the pick (details fetch, collision toast) — by
    *  then the interaction may have moved focus out of the editor, and
    *  the per-block CodeMirror view unmounts with it, so dispatching the
-   *  insert into the captured view goes nowhere. When the view can no
-   *  longer take the change, this is called to apply the same
-   *  trigger-text → wikilink replacement to the underlying block. */
+   *  insert into the captured view goes nowhere. Once the view has
+   *  unmounted, this is called to apply the same trigger-text → wikilink
+   *  replacement to the underlying block. */
   persistInsert?: (args: {triggerText: string; insert: string}) => Promise<void>
 }
 
@@ -139,15 +139,15 @@ const candidateToOption = (
       if (!resolved) return
       if (resolved.kind === 'handled') return
       const insert = `[[${resolved.name}]]`
-      const delivered = replaceInView(
+      const outcome = replaceInView(
         view, doc => locateText(doc, triggerText, {from: applyFrom, to: applyTo}), insert,
       )
-      if (delivered) {
+      if (outcome === 'replaced') {
         // Persist the wikilink insert now so it's durable for the
         // reference-resolution processors instead of waiting on the
         // 300ms debounce. The unmounted-view path persists directly.
         flushEditorContent(view)
-      } else {
+      } else if (outcome === 'unmounted') {
         await options.persistInsert?.({triggerText, insert})
       }
     })()

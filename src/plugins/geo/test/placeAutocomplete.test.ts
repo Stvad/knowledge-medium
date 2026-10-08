@@ -119,6 +119,7 @@ describe('placeCompletionSource — resolved insert delivery', () => {
   const buildOption = async (opts: {
     resolveName: string
     persistInsert?: (args: {triggerText: string; insert: string}) => Promise<void>
+    onResolved?: () => void
   }) => {
     const source = placeCompletionSource({
       getCandidates: async () => [
@@ -127,6 +128,7 @@ describe('placeCompletionSource — resolved insert delivery', () => {
       // Simulate a slow resolution (details fetch / collision toast).
       resolvePlace: async () => {
         await new Promise(r => setTimeout(r, 0))
+        opts.onResolved?.()
         return {kind: 'insert', name: opts.resolveName}
       },
       persistInsert: opts.persistInsert,
@@ -169,5 +171,29 @@ describe('placeCompletionSource — resolved insert delivery', () => {
     await vi.waitFor(() => {
       expect(persisted).toEqual([{triggerText: '@blue', insert: '[[Blue Bottle]]'}])
     })
+  })
+
+  it('persists nothing when the still-mounted editor dropped the trigger text', async () => {
+    const persisted: Array<{triggerText: string; insert: string}> = []
+    let resolved = false
+    const {option, apply, state} = await buildOption({
+      resolveName: 'Blue Bottle',
+      persistInsert: async args => { persisted.push(args) },
+      onResolved: () => { resolved = true },
+    })
+    const view = new EditorView({state, parent: document.body})
+    try {
+      apply(view, option, 7, 12)
+      // The user deletes `@blue` while the place resolves.
+      view.dispatch({changes: {from: 6, to: 12, insert: ''}})
+      await vi.waitFor(() => expect(resolved).toBe(true))
+      // Delivery runs in the microtasks after resolution; a macrotask
+      // fence lets it finish before asserting it wrote nothing.
+      await new Promise(r => setTimeout(r, 0))
+      expect(persisted).toEqual([])
+      expect(view.state.doc.toString()).toBe('met at')
+    } finally {
+      view.destroy()
+    }
   })
 })

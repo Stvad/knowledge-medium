@@ -48,20 +48,24 @@ export const readBlockText = async (
   return data && !data.deleted ? data.content : null
 }
 
-/** False when the view is unmounted or no longer holds the target — the
- *  caller falls back to `replaceInStoredContent`. */
-export const replaceInView = (view: EditorView, locate: Locate, replacement: string): boolean => {
-  if (!isMounted(view)) return false
+/** While the editor is mounted it is the authority: `absent` means the
+ *  target is gone, full stop — the stored row trails the editor and may
+ *  still hold it. Only `unmounted` sends the caller to the stored row. */
+export type ViewReplacement = 'replaced' | 'absent' | 'unmounted'
+
+export const replaceInView = (view: EditorView, locate: Locate, replacement: string): ViewReplacement => {
+  if (!isMounted(view)) return 'unmounted'
   const at = locate(view.state.doc.toString())
-  if (at === null) return false
+  if (at === null) return 'absent'
   try {
     view.dispatch({
       changes: {from: at.from, to: at.to, insert: replacement},
       selection: EditorSelection.cursor(at.from + replacement.length),
     })
-    return true
+    return 'replaced'
   } catch {
-    return false
+    // Torn down between the mount check and the dispatch.
+    return 'unmounted'
   }
 }
 
@@ -88,8 +92,7 @@ export const replaceInStoredContent = async (
   return replaced
 }
 
-/** The live editor when `view` is given and still holds the target, else
- *  the stored content. */
+/** The live editor while `view` is mounted, else the stored content. */
 export const replaceBlockText = async (args: {
   repo: Repo
   blockId: string
@@ -99,11 +102,12 @@ export const replaceBlockText = async (args: {
   description: string
 }): Promise<boolean> => {
   const {view, locate, replacement} = args
-  if (view && replaceInView(view, locate, replacement)) {
-    // Commit the edit now rather than on the editor's debounce, so
-    // follow-up work reads it from the stored row.
-    flushEditorContent(view)
-    return true
+  const outcome = view ? replaceInView(view, locate, replacement) : 'unmounted'
+  if (outcome === 'unmounted') {
+    return replaceInStoredContent(args.repo, args.blockId, locate, replacement, args.description)
   }
-  return replaceInStoredContent(args.repo, args.blockId, locate, replacement, args.description)
+  // Commit the edit now rather than on the editor's debounce, so
+  // follow-up work reads it from the stored row.
+  if (outcome === 'replaced' && view) flushEditorContent(view)
+  return outcome === 'replaced'
 }
