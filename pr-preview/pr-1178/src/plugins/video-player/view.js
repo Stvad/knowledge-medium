@@ -1,1 +1,1 @@
-import{Xm as e,Ym as t,Zm as n}from"../../../chunks/app-DY3Tm0zF.js";export{t as DEFAULT_VIDEO_NOTES_PANE_RATIO,e as VIDEO_NOTES_VIEW_MODE,n as videoNotesPaneRatioProp};
+import{Qm as e,Xm as t,Zm as n}from"../../../chunks/app-D7VJNcCJ.js";export{t as DEFAULT_VIDEO_NOTES_PANE_RATIO,n as VIDEO_NOTES_VIEW_MODE,e as videoNotesPaneRatioProp};

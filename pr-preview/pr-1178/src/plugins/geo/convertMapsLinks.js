@@ -1,1 +1,1 @@
-import{Nd as e}from"../../../chunks/app-DY3Tm0zF.js";export{e as convertMapsLinksInBlock};
+import{Nd as e,Pd as t}from"../../../chunks/app-D7VJNcCJ.js";export{e as convertMapsLinksInBlock,t as convertibleMapsLinks};
