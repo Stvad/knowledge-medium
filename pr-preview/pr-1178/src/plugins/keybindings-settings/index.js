@@ -1,1 +1,1 @@
-import{Gx as e,Wx as t,ct as n}from"../../../chunks/app-BZOxzxC8.js";export{t as keybindingOverridesProp,e as keybindingsPrefsType,n as keybindingsSettingsPlugin};
+import{Gx as e,Wx as t,ct as n}from"../../../chunks/app-Di5A6og2.js";export{t as keybindingOverridesProp,e as keybindingsPrefsType,n as keybindingsSettingsPlugin};
