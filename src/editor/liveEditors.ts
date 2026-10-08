@@ -24,6 +24,9 @@ export const liveEditorRegistration = (blockId: string) =>
     }
   })
 
-/** The block's most recently mounted editor, if any. */
-export const liveEditorFor = (blockId: string): EditorView | undefined =>
-  liveEditors.get(blockId)?.at(-1)
+/** The block's editor the user is in, else its most recently mounted one
+ *  (a block can be open for editing in two panels at once). */
+export const liveEditorFor = (blockId: string): EditorView | undefined => {
+  const views = liveEditors.get(blockId)
+  return views?.find(view => view.hasFocus) ?? views?.at(-1)
+}

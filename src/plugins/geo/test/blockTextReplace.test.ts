@@ -29,8 +29,8 @@ describe('locateText', () => {
 })
 
 describe('replaceBlockText', () => {
-  const run = () => {
-    const repo = {tx: vi.fn(async () => {})} as unknown as Repo
+  const run = ({isReadOnly = false} = {}) => {
+    const repo = {tx: vi.fn(async () => {}), isReadOnly} as unknown as Repo
     const replaced = replaceBlockText({
       repo,
       blockId: 'b',
@@ -40,8 +40,8 @@ describe('replaceBlockText', () => {
     })
     return {repo, replaced}
   }
-  const mountEditor = (doc: string) => new EditorView({
-    state: EditorState.create({doc, extensions: liveEditorRegistration('b')}),
+  const mountEditor = (doc: string, caret = 0) => new EditorView({
+    state: EditorState.create({doc, selection: {anchor: caret}, extensions: liveEditorRegistration('b')}),
     parent: document.body,
   })
 
@@ -75,5 +75,37 @@ describe('replaceBlockText', () => {
     const {repo, replaced} = run()
     await replaced
     expect(repo.tx).toHaveBeenCalledTimes(1)
+  })
+
+  it('leaves the caret where the user is, mapped through the replacement', async () => {
+    // A caret right after the link (an accepted completion) ends up right
+    // after the replacement…
+    const afterLink = mountEditor('see LINK', 8)
+    try {
+      expect(await run().replaced).toBe(true)
+      expect(afterLink.state.selection.main.head).toBe('see [[P]]'.length)
+    } finally {
+      afterLink.destroy()
+    }
+    // …and one the user moved elsewhere while it resolved stays put.
+    const elsewhere = mountEditor('see LINK', 0)
+    try {
+      expect(await run().replaced).toBe(true)
+      expect(elsewhere.state.selection.main.head).toBe(0)
+    } finally {
+      elsewhere.destroy()
+    }
+  })
+
+  it('writes nothing once the workspace turned read-only', async () => {
+    const view = mountEditor('see LINK')
+    try {
+      const {repo, replaced} = run({isReadOnly: true})
+      expect(await replaced).toBe(false)
+      expect(view.state.doc.toString()).toBe('see LINK')
+      expect(repo.tx).not.toHaveBeenCalled()
+    } finally {
+      view.destroy()
+    }
   })
 })

@@ -31,4 +31,16 @@ describe('liveEditorFor', () => {
       second.destroy()
     }
   })
+
+  it('prefers the editor the user is in over a more recently mounted one', () => {
+    const focused = mount('block-a')
+    const other = mount('block-a')
+    try {
+      focused.focus()
+      expect(liveEditorFor('block-a')).toBe(focused)
+    } finally {
+      focused.destroy()
+      other.destroy()
+    }
+  })
 })

@@ -5,7 +5,6 @@
  *  not just its text), in the block's text wherever it lives at THAT
  *  moment: its live editor if one is mounted, else the stored content. */
 
-import { EditorSelection } from '@codemirror/state'
 import type { EditorView } from '@codemirror/view'
 import { ChangeScope } from '@/data/api'
 import type { Repo } from '@/data/repo'
@@ -42,10 +41,10 @@ export const readBlockText = async (repo: Repo, blockId: string): Promise<string
 const replaceInEditor = (view: EditorView, locate: Locate, replacement: string): boolean => {
   const at = locate(view.state.doc.toString())
   if (at === null) return false
-  view.dispatch({
-    changes: {from: at.from, to: at.to, insert: replacement},
-    selection: EditorSelection.cursor(at.from + replacement.length),
-  })
+  // No explicit selection: the caret maps through the change, so it stays
+  // where the user is — or lands after the replacement if it sat right
+  // after the target, as on an accepted completion.
+  view.dispatch({changes: {from: at.from, to: at.to, insert: replacement}})
   // Commit now rather than on the editor's debounce, so follow-up work
   // reads it from the stored row.
   flushEditorContent(view)
@@ -75,8 +74,9 @@ const replaceInStoredContent = async (
   return replaced
 }
 
-/** False when the target is gone. While an editor is mounted only ITS
- *  text counts — the stored row trails it and may still hold the target. */
+/** False when the target is gone, or the workspace has turned read-only
+ *  while the async work ran. While an editor is mounted only ITS text
+ *  counts — the stored row trails it and may still hold the target. */
 export const replaceBlockText = async (args: {
   repo: Repo
   blockId: string
@@ -84,6 +84,9 @@ export const replaceBlockText = async (args: {
   replacement: string
   description: string
 }): Promise<boolean> => {
+  // Checked here, at write time: the editor path writes no tx until its
+  // flush, which a read-only repo would then reject.
+  if (args.repo.isReadOnly) return false
   const editor = liveEditorFor(args.blockId)
   return editor
     ? replaceInEditor(editor, args.locate, args.replacement)
