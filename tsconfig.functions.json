@@ -23,8 +23,8 @@
     "noUncheckedSideEffectImports": true
   },
   // Edge-function modules and their tests. Each function's entry uses Deno
-  // globals, so it's checked with `deno check supabase/functions/<name>/index.ts`
-  // instead; keep the logic in plain modules beside it.
+  // globals and is outside the gate: run `deno check supabase/functions/<name>/index.ts`
+  // after editing one, and keep the logic in plain modules beside it.
   "include": ["supabase/functions"],
   "exclude": ["supabase/functions/*/index.ts"]
 }

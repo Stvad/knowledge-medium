@@ -1,61 +1,44 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createProxyHandler } from '../../supabase/functions/cors-proxy/proxy.ts'
-import { ProxyFetchError, proxyFetch } from './proxyFetch'
+import { fakeNetwork, PUBLIC_IP, type Route, SUPABASE_URL } from '../../supabase/functions/cors-proxy/testNetwork.ts'
+import { proxyFetch } from './proxyFetch'
 
 const state = vi.hoisted(() => ({
   remoteSync: true,
   session: null as null | {access_token: string, user: {is_anonymous?: boolean}},
+  sessionError: null as unknown,
+  sessionThrows: null as unknown,
 }))
 
 vi.mock('@/data/repoProvider', () => ({isRemoteSyncActive: () => state.remoteSync}))
 vi.mock('@/services/supabase', () => ({
-  supabase: {auth: {getSession: async () => ({data: {session: state.session}})}},
-  edgeFunctionEndpoint: (name: string) => ({url: `https://project.test/functions/v1/${name}`, apiKey: 'publishable-key'}),
+  supabase: {auth: {getSession: async () => {
+    if (state.sessionThrows) throw state.sessionThrows
+    return {data: {session: state.session}, error: state.sessionError}
+  }}},
+  edgeFunctionEndpoint: (name: string) => ({url: `${SUPABASE_URL}/functions/v1/${name}`, apiKey: 'publishable-key'}),
 }))
 
-const PUBLIC_IP = '93.184.215.14'
-
 /** The real proxy handler over a fake internet, standing in for the network. */
-const proxyOver = (routes: Record<string, (req: Request) => Response>) => {
-  const targetRequests: Request[] = []
-  const handler = createProxyHandler({
-    supabaseUrl: 'https://project.test',
-    fetch: async (input, init) => {
-      const req = new Request(input, init)
-      if (req.url === 'https://project.test/auth/v1/user') {
-        return req.headers.get('authorization') === 'Bearer user-token'
-          ? Response.json({id: 'user-1', is_anonymous: false})
-          : Response.json({msg: 'invalid JWT'}, {status: 401})
-      }
-      targetRequests.push(req)
-      const route = routes[req.url]
-      if (!route) throw new TypeError(`connection refused: ${req.url}`)
-      return route(req)
-    },
-    resolveDns: async () => [PUBLIC_IP],
-  })
+const proxyOver = (routes: Record<string, Route>) => {
+  const network = fakeNetwork(routes, {'example.com': [PUBLIC_IP], 'ja.wikipedia.org': [PUBLIC_IP]})
+  const handler = createProxyHandler({supabaseUrl: SUPABASE_URL, fetch: network.fetch, resolveDns: network.resolveDns})
   const wire = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const response = await handler(new Request(input, init))
     // A network response body is a stream even when empty, which `new Response(null)` isn't.
     return new Response(response.body ?? '', {status: response.status, headers: response.headers})
   })
   vi.stubGlobal('fetch', wire)
-  return {wire, targetRequests}
+  return {wire, targetRequests: network.targetRequests}
 }
 
-const refusal = (promise: Promise<unknown>) => promise.then(
-  () => {
-    throw new Error('expected a ProxyFetchError')
-  },
-  (error: unknown) => {
-    expect(error).toBeInstanceOf(ProxyFetchError)
-    return (error as ProxyFetchError).code
-  },
-)
+const refusedWith = (code: string) => expect.objectContaining({name: 'ProxyFetchError', code})
 
 beforeEach(() => {
   state.remoteSync = true
   state.session = {access_token: 'user-token', user: {is_anonymous: false}}
+  state.sessionError = null
+  state.sessionThrows = null
 })
 
 afterEach(() => {
@@ -79,7 +62,7 @@ describe('proxyFetch', () => {
   it('sends the target the caller\'s headers and not the session', async () => {
     const {targetRequests} = proxyOver({'https://example.com/': () => new Response('ok')})
     await proxyFetch(new URL('https://example.com/'), {headers: {accept: 'application/json'}})
-    expect([...targetRequests[0].headers]).toEqual([['accept', 'application/json']])
+    expect([...targetRequests()[0].headers]).toEqual([['accept', 'application/json']])
   })
 
   it('authenticates the proxy request with the session, not the publishable key', async () => {
@@ -90,10 +73,17 @@ describe('proxyFetch', () => {
     expect(sent.get('apikey')).toBe('publishable-key')
   })
 
+  it('sends a URL with characters a header can\'t carry, encoded', async () => {
+    const {targetRequests} = proxyOver({'https://ja.wikipedia.org/wiki/%E6%9D%B1%E4%BA%AC': () => new Response('ok')})
+    const {response} = await proxyFetch('https://ja.wikipedia.org/wiki/東京')
+    expect(await response.text()).toBe('ok')
+    expect(targetRequests()).toHaveLength(1)
+  })
+
   it('makes HEAD requests', async () => {
     const {targetRequests} = proxyOver({'https://example.com/': () => new Response('body', {headers: {etag: '"v1"'}})})
     const {response} = await proxyFetch('https://example.com/', {method: 'HEAD'})
-    expect(targetRequests[0].method).toBe('HEAD')
+    expect(targetRequests()[0].method).toBe('HEAD')
     expect(response.headers.get('etag')).toBe('"v1"')
   })
 
@@ -104,21 +94,29 @@ describe('proxyFetch', () => {
     expect(response.body).toBeNull()
   })
 
-  it('rejects with the proxy\'s refusal', async () => {
-    proxyOver({})
-    expect(await refusal(proxyFetch('http://127.0.0.1/'))).toBe('blocked-address')
+  it('rejects with the proxy\'s refusal, and the redirects followed before it', async () => {
+    proxyOver({'https://example.com/': () => new Response(null, {status: 302, headers: {location: 'http://127.0.0.1/'}})})
+    await expect(proxyFetch('https://example.com/')).rejects.toEqual(expect.objectContaining({
+      code: 'blocked-address',
+      redirects: [{status: 302, location: 'http://127.0.0.1/'}],
+    }))
   })
 
   it('rejects when the answer is not the proxy\'s', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('Function not found', {status: 404})))
-    expect(await refusal(proxyFetch('https://example.com/'))).toBe('unreachable')
+    await expect(proxyFetch('https://example.com/')).rejects.toEqual(refusedWith('unreachable'))
+  })
+
+  it('reports a refusal code this client doesn\'t know as unreachable', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', {status: 502, headers: {'x-proxy-error': 'from-a-newer-proxy'}})))
+    await expect(proxyFetch('https://example.com/')).rejects.toEqual(refusedWith('unreachable'))
   })
 
   it('rejects when the proxy cannot be reached', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => {
       throw new TypeError('Failed to fetch')
     }))
-    expect(await refusal(proxyFetch('https://example.com/'))).toBe('unreachable')
+    await expect(proxyFetch('https://example.com/')).rejects.toEqual(refusedWith('unreachable'))
   })
 
   it('rejects with the caller\'s abort, as fetch does', async () => {
@@ -131,24 +129,28 @@ describe('proxyFetch', () => {
   })
 
   describe('sends nothing', () => {
-    it('from a local-only session', async () => {
+    it.each([
+      ['for a URL that isn\'t absolute', '/relative', () => {}, 'invalid-url'],
+      ['from a local-only session', 'https://example.com/', () => {
+        state.remoteSync = false
+      }, 'local-only'],
+      ['without a session', 'https://example.com/', () => {
+        state.session = null
+      }, 'signed-out'],
+      ['when the session can\'t be refreshed', 'https://example.com/', () => {
+        state.session = null
+        state.sessionError = new Error('Failed to fetch')
+      }, 'unreachable'],
+      ['when refreshing the session throws', 'https://example.com/', () => {
+        state.sessionThrows = new TypeError('Failed to fetch')
+      }, 'unreachable'],
+      ['from an anonymous session', 'https://example.com/', () => {
+        state.session = {access_token: 'anonymous-token', user: {is_anonymous: true}}
+      }, 'anonymous-session'],
+    ])('%s', async (_, url, arrange, code) => {
       const {wire} = proxyOver({'https://example.com/': () => new Response('ok')})
-      state.remoteSync = false
-      expect(await refusal(proxyFetch('https://example.com/'))).toBe('local-only')
-      expect(wire).not.toHaveBeenCalled()
-    })
-
-    it('without a session', async () => {
-      const {wire} = proxyOver({'https://example.com/': () => new Response('ok')})
-      state.session = null
-      expect(await refusal(proxyFetch('https://example.com/'))).toBe('signed-out')
-      expect(wire).not.toHaveBeenCalled()
-    })
-
-    it('from an anonymous session', async () => {
-      const {wire} = proxyOver({'https://example.com/': () => new Response('ok')})
-      state.session = {access_token: 'anonymous-token', user: {is_anonymous: true}}
-      expect(await refusal(proxyFetch('https://example.com/'))).toBe('anonymous-session')
+      arrange()
+      await expect(proxyFetch(url)).rejects.toEqual(refusedWith(code))
       expect(wire).not.toHaveBeenCalled()
     })
   })

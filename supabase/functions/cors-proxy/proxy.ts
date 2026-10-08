@@ -1,50 +1,23 @@
 /**
  * An authenticated CORS proxy: fetches an http(s) URL on behalf of a signed-in
- * user and relays the response to the browser, which can't read it cross-origin.
- *
- * Wire protocol (the client half is `src/services/proxyFetch.ts`):
- *   request   GET|HEAD with `X-Proxy-Url: <target>`; each `X-Proxy-Header-<name>`
- *             is sent to the target as `<name>`. Nothing else the caller sends
- *             reaches the target.
- *   response  200 with `X-Proxy-Status` (the target's status),
- *             `X-Proxy-Final-Url`, one `X-Proxy-Redirect-<n>: <status> <url>` per
- *             redirect followed, each target header as `X-Proxy-Header-<name>`,
- *             and the target's body.
- *   failure   non-200 with `X-Proxy-Error: <code>` and a JSON body. A response
- *             without `X-Proxy-Status` never came from a target.
- *
- * Target headers travel under a prefix in both directions so the browser applies
- * none of them to the proxy's origin (cookies, auth prompts, HSTS, reporting
- * endpoints) and a target can't forge the proxy's own `X-Proxy-*` headers.
+ * user and relays the response to the browser, which can't read it
+ * cross-origin. The wire protocol is in `./protocol.ts`.
  *
  * Pure module: no Deno globals, so vitest can run it. `index.ts` supplies the
  * platform (fetch, DNS, env).
  */
 
-export const PROXY_URL_HEADER = 'x-proxy-url'
-export const PROXY_HEADER_PREFIX = 'x-proxy-header-'
-export const PROXY_STATUS_HEADER = 'x-proxy-status'
-export const PROXY_FINAL_URL_HEADER = 'x-proxy-final-url'
-export const PROXY_REDIRECT_HEADER_PREFIX = 'x-proxy-redirect-'
-export const PROXY_ERROR_HEADER = 'x-proxy-error'
-
-const ERROR_STATUS = {
-  'method-not-allowed': 405,
-  'unauthenticated': 401,
-  'anonymous-session': 403,
-  'auth-unavailable': 503,
-  'invalid-url': 400,
-  'forbidden-header': 400,
-  'blocked-address': 403,
-  'unresolvable': 502,
-  'bad-redirect': 502,
-  'too-many-redirects': 502,
-  'response-too-large': 502,
-  'timeout': 504,
-  'upstream-failed': 502,
-} as const
-
-export type ProxyErrorCode = keyof typeof ERROR_STATUS
+import {
+  ERROR_STATUS,
+  PROXY_ERROR_HEADER,
+  PROXY_FINAL_URL_HEADER,
+  PROXY_HEADER_PREFIX,
+  PROXY_STATUS_HEADER,
+  PROXY_URL_HEADER,
+  type ProxyErrorCode,
+  type ProxyRedirect,
+  writeRedirects,
+} from './protocol.ts'
 
 export interface ProxyLimits {
   maxRedirects: number
@@ -66,11 +39,6 @@ export interface ProxyDeps {
   /** Every A and AAAA record for `hostname`; empty when it doesn't resolve. */
   resolveDns: (hostname: string, signal: AbortSignal) => Promise<string[]>
   limits?: ProxyLimits
-}
-
-export interface Hop {
-  status: number
-  location: string
 }
 
 class Refusal extends Error {
@@ -95,12 +63,16 @@ const FORBIDDEN_TARGET_HEADERS = new Set([
   'transfer-encoding', 'upgrade', 'content-length', 'expect',
 ])
 
-/** Target response headers not relayed: framing that no longer describes the
- *  relayed body (fetch has already decoded it), and cookies. */
+/** Target response headers never relayed: cookies, and hop-by-hop headers of
+ *  the proxy's own connection to the target. */
 const UNRELAYED_RESPONSE_HEADERS = new Set([
-  'set-cookie', 'set-cookie2', 'content-encoding', 'content-length',
+  'set-cookie', 'set-cookie2',
   'transfer-encoding', 'connection', 'keep-alive', 'trailer', 'upgrade', 'proxy-connection',
 ])
+
+/** Describe the bytes fetch received, which it has already decoded; relayed
+ *  only when no body is (HEAD, 304), where they still describe the target's resource. */
+const ENCODED_BODY_HEADERS = new Set(['content-encoding', 'content-length'])
 
 const ALLOWED_ORIGIN = /^(?:https:\/\/stvad\.github\.io|http:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?)$/
 
@@ -194,40 +166,39 @@ export const isPublicAddress = (text: string): boolean => {
   return inCidr(address, GLOBAL_UNICAST_V6) && !NON_PUBLIC_V6.some(range => inCidr(address, range))
 }
 
-// Names that resolve to a local network by convention. A dotless name resolves
-// through the host's search domains. Checked before DNS because the resolver
-// `fetch` uses may answer differently from `resolveDns` for exactly these
-// (hosts file, search domains, mDNS).
-const LOCAL_NAME = /(?:^|\.)(?:localhost|local|internal|home\.arpa)$/
+/** A name that resolves to a local network by convention, or (dotless) through
+ *  the host's search domains. Refused before DNS because the resolver `fetch`
+ *  uses (getaddrinfo: hosts file, search domains, mDNS) may answer differently
+ *  from `resolveDns` for exactly these. */
+const isLocalName = (host: string): boolean =>
+  !host.includes('.') || /(?:^|\.)(?:localhost|local|internal|home\.arpa)$/.test(host)
 
-/** Refused, or allowed with the checked address to connect to (null when the
- *  URL already names an address). */
-type HostVerdict = {refused: ProxyErrorCode} | {address: string | null}
-
-const vetHost = async (
-  url: URL,
-  resolveDns: ProxyDeps['resolveDns'],
-  signal: AbortSignal,
-): Promise<HostVerdict> => {
-  const host = url.hostname.replace(/\.$/, '')
-  const literal = (address: string): HostVerdict =>
-    isPublicAddress(address) ? {address: null} : {refused: 'blocked-address'}
+/** Refuses `url`'s host unless it is public, and returns the checked address to
+ *  connect to (null when the URL already names an address). */
+const vetHost = async (url: URL, resolveDns: ProxyDeps['resolveDns'], signal: AbortSignal): Promise<string | null> => {
+  const refuse = (code: ProxyErrorCode) => new Refusal(code, url.hostname)
+  const host = url.hostname.replace(/\.+$/, '')
   // The URL parser normalizes every IPv4 spelling (hex, octal, a bare integer) to dotted decimal.
-  if (host.startsWith('[')) return literal(host.slice(1, -1))
-  if (parseIPv4(host)) return literal(host)
-  if (!host.includes('.') || LOCAL_NAME.test(host)) return {refused: 'blocked-address'}
+  const literal = host.startsWith('[') ? host.slice(1, -1) : parseIPv4(host) ? host : null
+  if (literal !== null) {
+    if (!isPublicAddress(literal)) throw refuse('blocked-address')
+    return null
+  }
+  if (isLocalName(host)) throw refuse('blocked-address')
   const addresses = await resolveDns(host, signal)
-  if (addresses.length === 0) return {refused: 'unresolvable'}
+  if (addresses.length === 0) throw refuse('unresolvable')
   // Every record, not just the one connected to: an https fetch resolves the name itself.
-  if (!addresses.every(isPublicAddress)) return {refused: 'blocked-address'}
-  return {address: addresses.find(address => parseIPv4(address)) ?? addresses[0]}
+  if (!addresses.every(isPublicAddress)) throw refuse('blocked-address')
+  return addresses.find(address => parseIPv4(address)) ?? addresses[0]
 }
 
 /** Where a hop connects. An http hop goes to the address `vetHost` checked,
  *  with the name in `Host`, so nothing resolves the name a second time — the
  *  window a DNS-rebinding attack needs. An https hop keeps its name: TLS binds
  *  the connection to it, and an internal host can't present a certificate for
- *  an attacker's domain. */
+ *  an attacker's domain. Accepted: a rebound https hop still opens a TCP
+ *  connection to the internal address before TLS fails, so its timing can tell
+ *  an open internal port from a closed one. */
 const connection = (url: URL, address: string | null, headers: Headers): {target: URL, headers: Headers} => {
   if (address === null || url.protocol !== 'http:') return {target: url, headers}
   const target = new URL(url)
@@ -266,33 +237,32 @@ const targetRequestHeaders = (incoming: Headers): Headers => {
   return outgoing
 }
 
-type Caller = 'user' | 'unauthenticated' | 'anonymous-session' | 'auth-unavailable'
-
 const AUTH_TIMEOUT_MS = 10_000
 
-/** Checks the caller's session against the project's Auth. The platform's
- *  `verify_jwt` gate can't do this: it also admits the publishable key, which
- *  ships in the app bundle, and anonymous sign-in mints a session for anyone. */
-const authenticate = async (req: Request, deps: ProxyDeps): Promise<Caller> => {
+/** Refuses the caller unless its session belongs to a non-anonymous user of the
+ *  project's Auth. The platform's `verify_jwt` gate can't do this: it also
+ *  admits the publishable key, which ships in the app bundle, and anonymous
+ *  sign-in mints a session for anyone. */
+const authenticate = async (req: Request, deps: ProxyDeps): Promise<void> => {
   const authorization = req.headers.get('authorization')
   const apikey = req.headers.get('apikey')
-  if (!authorization?.startsWith('Bearer ') || !apikey) return 'unauthenticated'
-  let response: Response
+  if (!authorization?.startsWith('Bearer ') || !apikey) throw new Refusal('unauthenticated')
+  let user: {id?: unknown, is_anonymous?: unknown} | null
   try {
-    response = await deps.fetch(new URL('auth/v1/user', `${deps.supabaseUrl.replace(/\/+$/, '')}/`), {
+    const response = await deps.fetch(new URL('auth/v1/user', `${deps.supabaseUrl.replace(/\/+$/, '')}/`), {
       headers: {authorization, apikey},
       signal: AbortSignal.timeout(AUTH_TIMEOUT_MS),
     })
-  } catch {
-    return 'auth-unavailable'
+    if (!response.ok) {
+      await response.body?.cancel()
+      throw new Refusal(response.status >= 500 ? 'auth-unavailable' : 'unauthenticated')
+    }
+    user = await response.json()
+  } catch (error) {
+    throw error instanceof Refusal ? error : new Refusal('auth-unavailable')
   }
-  if (!response.ok) {
-    await response.body?.cancel()
-    return response.status >= 500 ? 'auth-unavailable' : 'unauthenticated'
-  }
-  const user = await response.json().catch(() => null)
-  if (typeof user?.id !== 'string') return 'unauthenticated'
-  return user.is_anonymous === false ? 'user' : 'anonymous-session'
+  if (typeof user?.id !== 'string') throw new Refusal('unauthenticated')
+  if (user.is_anonymous !== false) throw new Refusal('anonymous-session')
 }
 
 // --- fetching ---------------------------------------------------------------
@@ -303,16 +273,14 @@ const follow = async (
   start: URL,
   method: string,
   headers: Headers,
-  hops: Hop[],
+  hops: ProxyRedirect[],
   deps: ProxyDeps,
   limits: ProxyLimits,
   signal: AbortSignal,
 ): Promise<{response: Response, url: URL}> => {
   let url = start
   for (;;) {
-    const verdict = await vetHost(url, deps.resolveDns, signal)
-    if ('refused' in verdict) throw new Refusal(verdict.refused, url.hostname)
-    const hop = connection(url, verdict.address, headers)
+    const hop = connection(url, await vetHost(url, deps.resolveDns, signal), headers)
     let response: Response
     try {
       response = await deps.fetch(hop.target, {method, headers: hop.headers, redirect: 'manual', signal})
@@ -332,17 +300,38 @@ const follow = async (
   }
 }
 
-/** `body`, erroring once more than `maxBytes` have passed. The status is already
- *  sent by then, so the client sees a failed body read. */
-const capped = (body: ReadableStream<Uint8Array>, maxBytes: number): ReadableStream<Uint8Array> => {
-  let seen = 0
-  return body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
-    transform(chunk, controller) {
-      seen += chunk.byteLength
-      if (seen > maxBytes) controller.error(new Error('response-too-large'))
-      else controller.enqueue(chunk)
-    },
-  }))
+/** The whole target body, refused past `maxBytes`. Read in full before anything
+ *  is sent: a body that fails or overflows mid-stream would otherwise reach the
+ *  client as a 200 cut short, which a gateway may pass on as complete. */
+const readBody = async (response: Response, maxBytes: number): Promise<Uint8Array<ArrayBuffer>> => {
+  const tooLarge = () => new Refusal('response-too-large', `over ${maxBytes} bytes`)
+  const reader = response.body!.getReader()
+  // Refused up front when declared, so an oversized body isn't downloaded first.
+  if (Number(response.headers.get('content-length') ?? 0) > maxBytes) {
+    await reader.cancel()
+    throw tooLarge()
+  }
+  const chunks: Uint8Array[] = []
+  let size = 0
+  try {
+    for (let read = await reader.read(); !read.done; read = await reader.read()) {
+      size += read.value.byteLength
+      if (size > maxBytes) {
+        await reader.cancel()
+        throw tooLarge()
+      }
+      chunks.push(read.value)
+    }
+  } catch (error) {
+    throw error instanceof Refusal ? error : new Refusal('upstream-failed', 'the body failed mid-read')
+  }
+  const body = new Uint8Array(size)
+  let offset = 0
+  for (const chunk of chunks) {
+    body.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  return body
 }
 
 // --- responses --------------------------------------------------------------
@@ -356,12 +345,10 @@ const corsHeaders = (origin: string | null): Headers => {
 /** Headers every proxy response carries: CORS, no caching (every target shares
  *  the proxy's URL, so a cached response could answer for another target), and
  *  the redirect hops. */
-const baseHeaders = (cors: Headers, hops: Hop[]): Headers => {
+const baseHeaders = (cors: Headers, hops: ProxyRedirect[]): Headers => {
   const headers = new Headers(cors)
   headers.set('cache-control', 'no-store')
-  hops.forEach(({status, location}, index) => {
-    headers.set(`${PROXY_REDIRECT_HEADER_PREFIX}${index + 1}`, `${status} ${location}`)
-  })
+  writeRedirects(headers, hops)
   return headers
 }
 
@@ -371,7 +358,7 @@ const exposeProxyHeaders = (headers: Headers): Headers => {
   return headers
 }
 
-const failure = (cors: Headers, refusal: Refusal, hops: Hop[]): Response => {
+const failure = (cors: Headers, refusal: Refusal, hops: ProxyRedirect[]): Response => {
   const headers = baseHeaders(cors, hops)
   headers.set('content-type', 'application/json')
   headers.set(PROXY_ERROR_HEADER, refusal.code)
@@ -385,23 +372,24 @@ const relay = async (
   cors: Headers,
   method: string,
   {response, url}: {response: Response, url: URL},
-  hops: Hop[],
+  hops: ProxyRedirect[],
   maxBodyBytes: number,
 ): Promise<Response> => {
-  if (Number(response.headers.get('content-length') ?? 0) > maxBodyBytes) {
+  // Every Response constructor, the client's included, throws outside 200–599.
+  if (response.status < 200 || response.status > 599) {
     await response.body?.cancel()
-    throw new Refusal('response-too-large', `over ${maxBodyBytes} bytes`)
+    throw new Refusal('upstream-failed', `the target answered with status ${response.status}`)
   }
+  // fetch already gives a null-body status (204, 304) a null body.
+  const body = method === 'HEAD' || !response.body ? null : await readBody(response, maxBodyBytes)
+  if (body === null) await response.body?.cancel()
   const headers = baseHeaders(cors, hops)
   headers.set(PROXY_STATUS_HEADER, String(response.status))
   headers.set(PROXY_FINAL_URL_HEADER, url.href)
   for (const [name, value] of response.headers) {
-    if (!UNRELAYED_RESPONSE_HEADERS.has(name)) headers.append(`${PROXY_HEADER_PREFIX}${name}`, value)
+    if (UNRELAYED_RESPONSE_HEADERS.has(name) || (body && ENCODED_BODY_HEADERS.has(name))) continue
+    headers.append(`${PROXY_HEADER_PREFIX}${name}`, value)
   }
-  // fetch already gives a null-body status (204, 304) a null body.
-  const bodiless = method === 'HEAD' || !response.body
-  if (bodiless) await response.body?.cancel()
-  const body = bodiless ? null : capped(response.body!, maxBodyBytes)
   return new Response(body, {status: 200, headers: exposeProxyHeaders(headers)})
 }
 
@@ -425,15 +413,14 @@ export const createProxyHandler = (deps: ProxyDeps) => async (req: Request): Pro
   const cors = corsHeaders(req.headers.get('origin'))
   if (req.method === 'OPTIONS') return preflight(req, cors)
 
-  const hops: Hop[] = []
-  // Not tied to `req.signal`: a client that disconnects cancels the relayed
-  // body, which cancels the upstream one, and the timeout bounds the rest.
+  const hops: ProxyRedirect[] = []
+  // Not tied to `req.signal`, which Deno.serve aborts on every successful
+  // response; the timeout bounds the work instead.
   const signal = AbortSignal.timeout(limits.timeoutMs)
   try {
     if (!ALLOWED_METHODS.has(req.method)) throw new Refusal('method-not-allowed', 'GET or HEAD')
-    // Before anything else, so a stranger learns nothing about what the proxy would fetch.
-    const caller = await authenticate(req, deps)
-    if (caller !== 'user') throw new Refusal(caller)
+    // Before reading the target or its headers, so a stranger learns nothing about what the proxy would fetch.
+    await authenticate(req, deps)
     const target = fetchableUrl(req.headers.get(PROXY_URL_HEADER) ?? '')
     if (!target) throw new Refusal('invalid-url', `${PROXY_URL_HEADER} must be an absolute http(s) URL`)
     const headers = targetRequestHeaders(req.headers)

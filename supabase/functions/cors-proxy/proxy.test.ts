@@ -1,54 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import { createProxyHandler, DEFAULT_LIMITS, isPublicAddress, type ProxyLimits } from './proxy.ts'
+import { AUTH_URL, fakeNetwork, PUBLIC_IP, type Route, SUPABASE_URL } from './testNetwork.ts'
 
-const SUPABASE_URL = 'https://project.test'
-const AUTH_URL = `${SUPABASE_URL}/auth/v1/user`
 const PROXY_ENDPOINT = `${SUPABASE_URL}/functions/v1/cors-proxy`
 
-type Route = (req: Request) => Response | Promise<Response>
-
-const authRoute: Route = req => {
-  switch (req.headers.get('authorization')) {
-    case 'Bearer user-token': return Response.json({id: 'user-1', is_anonymous: false})
-    case 'Bearer anonymous-token': return Response.json({id: 'user-2', is_anonymous: true})
-    default: return Response.json({msg: 'invalid JWT'}, {status: 401})
-  }
-}
-
-/** A fake internet: exact-URL routes, plus the project's Auth. Records every request. */
 const setup = (
   routes: Record<string, Route>,
   dns: Record<string, string[]> = {},
   limits: ProxyLimits = DEFAULT_LIMITS,
 ) => {
-  const requests: Request[] = []
-  const lookups: string[] = []
-  const fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-    const req = new Request(input, init)
-    requests.push(req)
-    // Routed like a server with virtual hosts: by the Host header when one is sent.
-    const addressed = new URL(req.url)
-    const host = req.headers.get('host')
-    if (host) addressed.host = host
-    const route = addressed.href === AUTH_URL ? (routes[AUTH_URL] ?? authRoute) : routes[addressed.href]
-    if (!route) throw new TypeError(`connection refused: ${addressed.href}`)
-    const response = await route(req)
-    // Like real fetch: follows a redirect itself unless told not to.
-    const location = response.headers.get('location')
-    if (req.redirect !== 'manual' && location && response.status >= 300 && response.status < 400) {
-      return fetch(new URL(location, req.url), init)
-    }
-    return response
-  }
-  const handler = createProxyHandler({
-    supabaseUrl: SUPABASE_URL,
-    fetch,
-    resolveDns: async hostname => {
-      lookups.push(hostname)
-      return dns[hostname] ?? []
-    },
-    limits,
-  })
+  const network = fakeNetwork(routes, dns)
+  const handler = createProxyHandler({supabaseUrl: SUPABASE_URL, fetch: network.fetch, resolveDns: network.resolveDns, limits})
   const call = (target: string | null, options: {
     method?: string
     token?: string | null
@@ -62,11 +24,9 @@ const setup = (
     if (options.origin) headers.set('origin', options.origin)
     return handler(new Request(PROXY_ENDPOINT, {method: options.method ?? 'GET', headers}))
   }
-  const targetRequests = () => requests.filter(req => req.url !== AUTH_URL)
-  return {call, handler, requests, targetRequests, lookups}
+  return {call, handler, ...network}
 }
 
-const PUBLIC_IP = '93.184.215.14'
 const PUBLIC_DNS = {'example.com': [PUBLIC_IP], 'other.example': [PUBLIC_IP]}
 
 const errorOf = async (response: Response) => ({
@@ -119,6 +79,21 @@ describe('authentication', () => {
   it('refuses when Auth answers without a user', async () => {
     const {call, targetRequests} = setup({...routes, [AUTH_URL]: () => Response.json({})}, PUBLIC_DNS)
     expect(await errorOf(await call('https://example.com/'))).toEqual({status: 401, code: 'unauthenticated'})
+    expect(targetRequests()).toEqual([])
+  })
+
+  it.each([
+    ['a 5xx with an error body', 503, 'auth-unavailable'],
+    ['a 4xx, even one shaped like a user', 403, 'unauthenticated'],
+  ])('reads %s from Auth as a refusal', async (_, status, code) => {
+    const {call, targetRequests} = setup({...routes, [AUTH_URL]: () => Response.json({id: 'user-1', is_anonymous: false}, {status})}, PUBLIC_DNS)
+    expect((await errorOf(await call('https://example.com/'))).code).toBe(code)
+    expect(targetRequests()).toEqual([])
+  })
+
+  it('fails closed when Auth answers 200 with something unreadable', async () => {
+    const {call, targetRequests} = setup({...routes, [AUTH_URL]: () => new Response('<html>maintenance</html>')}, PUBLIC_DNS)
+    expect(await errorOf(await call('https://example.com/'))).toEqual({status: 503, code: 'auth-unavailable'})
     expect(targetRequests()).toEqual([])
   })
 
@@ -201,11 +176,18 @@ describe('request', () => {
     expect(requests).toEqual([])
   })
 
-  it('sends HEAD as HEAD and relays no body', async () => {
-    const {call, targetRequests} = setup({'https://example.com/': () => new Response('body', {headers: {'content-type': 'text/html'}})}, PUBLIC_DNS)
+  it('sends HEAD as HEAD and relays no body, whatever size the resource declares', async () => {
+    const limits = {...DEFAULT_LIMITS, maxBodyBytes: 4}
+    const {call, targetRequests} = setup({
+      'https://example.com/': () => new Response('body', {headers: {
+        'content-type': 'video/mp4', 'content-length': '50000000', 'content-encoding': 'identity',
+      }}),
+    }, PUBLIC_DNS, limits)
     const response = await call('https://example.com/', {method: 'HEAD'})
     expect(targetRequests()[0].method).toBe('HEAD')
-    expect(response.headers.get('x-proxy-header-content-type')).toBe('text/html')
+    expect(response.headers.get('x-proxy-status')).toBe('200')
+    expect(response.headers.get('x-proxy-header-content-length')).toBe('50000000')
+    expect(response.headers.get('x-proxy-header-content-encoding')).toBe('identity')
     expect(response.body).toBeNull()
   })
 })
@@ -240,10 +222,13 @@ describe('addresses', () => {
 
   // DNS says public here; these are refused by name alone, because the resolver
   // fetch uses can answer differently for them.
-  it.each(['http://localhost/', 'http://localhost./', 'http://app.localhost/', 'http://metadata/', 'http://printer.local/', 'http://metadata.google.internal/', 'http://nas.home.arpa/'])(
+  it.each([
+    'http://localhost/', 'http://localhost./', 'http://localhost../', 'http://app.localhost/', 'http://metadata/',
+    'http://intranet../', 'http://printer.local/', 'http://metadata.google.internal/', 'http://nas.home.arpa/',
+  ])(
     'refuses the local name %s',
     async target => {
-      const host = new URL(target).hostname.replace(/\.$/, '')
+      const host = new URL(target).hostname.replace(/\.+$/, '')
       const {call, targetRequests} = setup({[target]: () => new Response('ok')}, {[host]: [PUBLIC_IP]})
       expect(await errorOf(await call(target))).toEqual({status: 403, code: 'blocked-address'})
       expect(targetRequests()).toEqual([])
@@ -364,9 +349,11 @@ describe('redirects', () => {
   })
 
   it('relays a 3xx with no Location as the final response', async () => {
-    const {call} = setup({'https://example.com/': () => new Response(null, {status: 304})}, PUBLIC_DNS)
+    const limits = {...DEFAULT_LIMITS, maxBodyBytes: 4}
+    const {call} = setup({'https://example.com/': () => new Response(null, {status: 304, headers: {'content-length': '1000'}})}, PUBLIC_DNS, limits)
     const response = await call('https://example.com/')
     expect(response.headers.get('x-proxy-status')).toBe('304')
+    expect(response.headers.get('x-proxy-header-content-length')).toBe('1000')
     expect(response.body).toBeNull()
   })
 })
@@ -375,7 +362,7 @@ describe('response', () => {
   it('relays no cookies and no framing that no longer matches the body', async () => {
     const {call} = setup({
       'https://example.com/': () => {
-        const headers = new Headers({'content-encoding': 'gzip', 'content-length': '3', 'content-type': 'text/plain'})
+        const headers = new Headers({'content-encoding': 'gzip', 'content-length': '3', 'content-type': 'text/plain', connection: 'keep-alive'})
         headers.append('set-cookie', 'session=secret')
         return new Response('abc', {headers})
       },
@@ -416,17 +403,48 @@ describe('response', () => {
     expect((await call('http://127.0.0.1/')).headers.get('cache-control')).toBe('no-store')
   })
 
-  it('refuses a body declared over the size cap', async () => {
+  it('refuses a body declared over the size cap without reading it', async () => {
     const limits = {...DEFAULT_LIMITS, maxBodyBytes: 4}
-    const {call} = setup({'https://example.com/': () => new Response('too long', {headers: {'content-length': '8'}})}, PUBLIC_DNS, limits)
+    let pulled = false
+    const body = new ReadableStream({pull: () => {
+      pulled = true
+    }}, {highWaterMark: 0})
+    const {call} = setup({'https://example.com/': () => new Response(body, {headers: {'content-length': '1000000'}})}, PUBLIC_DNS, limits)
+    expect(await errorOf(await call('https://example.com/'))).toEqual({status: 502, code: 'response-too-large'})
+    expect(pulled).toBe(false)
+  })
+
+  it('refuses a body that grows past the size cap', async () => {
+    const limits = {...DEFAULT_LIMITS, maxBodyBytes: 4}
+    const {call} = setup({'https://example.com/': () => new Response('too long')}, PUBLIC_DNS, limits)
     expect(await errorOf(await call('https://example.com/'))).toEqual({status: 502, code: 'response-too-large'})
   })
 
-  it('cuts off a body that grows past the size cap', async () => {
-    const limits = {...DEFAULT_LIMITS, maxBodyBytes: 4}
-    const {call} = setup({'https://example.com/': () => new Response('too long')}, PUBLIC_DNS, limits)
-    const response = await call('https://example.com/')
-    await expect(response.text()).rejects.toThrow('response-too-large')
+  it('refuses a body that fails mid-read', async () => {
+    const body = new ReadableStream({start: controller => {
+      controller.enqueue(new TextEncoder().encode('partial'))
+      controller.error(new TypeError('connection reset'))
+    }})
+    const {call} = setup({'https://example.com/': () => new Response(body)}, PUBLIC_DNS)
+    expect(await errorOf(await call('https://example.com/'))).toEqual({status: 502, code: 'upstream-failed'})
+  })
+
+  it('times out a body that stalls', async () => {
+    const limits = {...DEFAULT_LIMITS, timeoutMs: 20}
+    const {call} = setup({
+      'https://example.com/': req => new Response(new ReadableStream({start: controller => {
+        controller.enqueue(new TextEncoder().encode('partial'))
+        req.signal.addEventListener('abort', () => controller.error(req.signal.reason))
+      }})),
+    }, PUBLIC_DNS, limits)
+    expect(await errorOf(await call('https://example.com/'))).toEqual({status: 504, code: 'timeout'})
+  })
+
+  it.each([999, 600, 101])('refuses a target status a Response cannot carry (%i)', async status => {
+    const odd = new Response('odd')
+    Object.defineProperty(odd, 'status', {value: status})
+    const {call} = setup({'https://example.com/': () => odd}, PUBLIC_DNS)
+    expect(await errorOf(await call('https://example.com/'))).toEqual({status: 502, code: 'upstream-failed'})
   })
 
   it('reports a target that cannot be reached', async () => {
