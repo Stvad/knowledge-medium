@@ -4,7 +4,7 @@ import { EditorView } from '@codemirror/view'
 import { describe, expect, it, vi } from 'vitest'
 import type { Repo } from '@/data/repo'
 import { liveEditorRegistration } from '@/editor/liveEditors'
-import { locateText, replaceBlockText } from '../blockTextReplace'
+import { locateText, readBlockText, replaceBlockText } from '../blockTextReplace'
 
 describe('locateText', () => {
   it('uses the recorded span when the trigger text is still there', () => {
@@ -106,6 +106,49 @@ describe('replaceBlockText', () => {
       expect(repo.tx).not.toHaveBeenCalled()
     } finally {
       view.destroy()
+    }
+  })
+
+  it('writes into an editor that mounted while the write waited for its tx', async () => {
+    let view: EditorView | undefined
+    const update = vi.fn()
+    const repo = {
+      isReadOnly: false,
+      tx: vi.fn(async (fn: (tx: unknown) => Promise<void>) => {
+        // The user opens the block while the tx is queued for the lock.
+        view = mountEditor('see LINK')
+        await fn({get: async () => ({content: 'see LINK', deleted: false}), update})
+      }),
+    } as unknown as Repo
+    try {
+      const replaced = await replaceBlockText({
+        repo, blockId: 'b', locate: doc => locateText(doc, 'LINK'), replacement: '[[P]]', description: 'test',
+      })
+      expect(replaced).toBe(true)
+      expect(update).not.toHaveBeenCalled()
+      expect(view?.state.doc.toString()).toBe('see [[P]]')
+    } finally {
+      view?.destroy()
+    }
+  })
+})
+
+describe('readBlockText', () => {
+  it("reads an editor that mounted while the stored row loaded, not the row", async () => {
+    let view: EditorView | undefined
+    const repo = {
+      load: async () => {
+        view = new EditorView({
+          state: EditorState.create({doc: 'fresh', extensions: liveEditorRegistration('b')}),
+          parent: document.body,
+        })
+        return {content: 'stale', deleted: false}
+      },
+    } as unknown as Repo
+    try {
+      expect(await readBlockText(repo, 'b')).toBe('fresh')
+    } finally {
+      view?.destroy()
     }
   })
 })
