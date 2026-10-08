@@ -1,0 +1,1 @@
+import{Lg as e}from"../../../chunks/app-MXJowIYd.js";export{e as MobileBottomNavButton};
