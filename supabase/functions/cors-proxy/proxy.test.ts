@@ -23,12 +23,18 @@ const setup = (
 ) => {
   const requests: Request[] = []
   const lookups: string[] = []
-  const fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+  const fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const req = new Request(input, init)
     requests.push(req)
     const route = req.url === AUTH_URL ? (routes[AUTH_URL] ?? authRoute) : routes[req.url]
     if (!route) throw new TypeError(`connection refused: ${req.url}`)
-    return route(req)
+    const response = await route(req)
+    // Like real fetch: follows a redirect itself unless told not to.
+    const location = response.headers.get('location')
+    if (req.redirect !== 'manual' && location && response.status >= 300 && response.status < 400) {
+      return fetch(new URL(location, req.url), init)
+    }
+    return response
   }
   const handler = createProxyHandler({
     supabaseUrl: SUPABASE_URL,
@@ -72,7 +78,7 @@ describe('isPublicAddress', () => {
     '::', '::1', 'fc00::1', 'fd00:ec2::254', 'fe80::1', 'fec0::1', 'ff02::1', '100::1',
     '::ffff:127.0.0.1', '::ffff:7f00:1', '::ffff:a9fe:a9fe', '64:ff9b::a9fe:a9fe', '2002:7f00:1::',
     '::127.0.0.1', '2001:db8::1', '2001::1', '3fff::1',
-    'not-an-ip', '1.2.3', '1.2.3.256', '1::2::3', '12345::',
+    'not-an-ip', '1.2.3', '1.2.3.256', '1::2::3', '12345::', '2606:4700:1', '2606::1:2:3:4:5:6:7',
   ])('refuses %s', address => {
     expect(isPublicAddress(address)).toBe(false)
   })
@@ -110,6 +116,17 @@ describe('authentication', () => {
     const {call, targetRequests} = setup({...routes, [AUTH_URL]: () => Response.json({})}, PUBLIC_DNS)
     expect(await errorOf(await call('https://example.com/'))).toEqual({status: 401, code: 'unauthenticated'})
     expect(targetRequests()).toEqual([])
+  })
+
+  it('fails closed when Auth is unreachable', async () => {
+    const {call, targetRequests} = setup({...routes, [AUTH_URL]: () => { throw new TypeError('connection reset') }}, PUBLIC_DNS)
+    expect(await errorOf(await call('https://example.com/'))).toEqual({status: 503, code: 'auth-unavailable'})
+    expect(targetRequests()).toEqual([])
+  })
+
+  it('authenticates before validating the request', async () => {
+    const {call} = setup({}, PUBLIC_DNS)
+    expect(await errorOf(await call('file:///etc/passwd', {token: null}))).toEqual({status: 401, code: 'unauthenticated'})
   })
 
   it('fails closed when Auth is down', async () => {
@@ -200,9 +217,9 @@ describe('addresses', () => {
     expect(lookups).toEqual([])
   })
 
-  it('accepts a public literal address', async () => {
-    const {call} = setup({'http://8.8.8.8/': () => new Response('ok')})
-    expect((await call('http://8.8.8.8/')).headers.get('x-proxy-status')).toBe('200')
+  it.each(['http://8.8.8.8/', 'http://[2606:4700::1111]/'])('accepts the public literal address %s', async target => {
+    const {call} = setup({[target]: () => new Response('ok')})
+    expect((await call(target)).headers.get('x-proxy-status')).toBe('200')
   })
 
   it('refuses a name that resolves to a private address', async () => {

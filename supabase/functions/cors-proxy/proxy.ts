@@ -83,7 +83,6 @@ class Refusal extends Error {
 const ALLOWED_METHODS = new Set(['GET', 'HEAD'])
 
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308])
-const NULL_BODY_STATUSES = new Set([101, 103, 204, 205, 304])
 
 /** Request headers the proxy itself reads; the only unprefixed ones a preflight allows. */
 const OWN_REQUEST_HEADERS = new Set(['authorization', 'apikey', 'x-client-info', PROXY_URL_HEADER])
@@ -377,7 +376,8 @@ const relay = async (
   for (const [name, value] of response.headers) {
     if (!UNRELAYED_RESPONSE_HEADERS.has(name)) headers.append(`${PROXY_HEADER_PREFIX}${name}`, value)
   }
-  const bodiless = method === 'HEAD' || NULL_BODY_STATUSES.has(response.status) || !response.body
+  // fetch already gives a null-body status (204, 304) a null body.
+  const bodiless = method === 'HEAD' || !response.body
   if (bodiless) await response.body?.cancel()
   const body = bodiless ? null : capped(response.body!, maxBodyBytes)
   return new Response(body, {status: 200, headers: exposeProxyHeaders(headers)})
