@@ -66,7 +66,7 @@ describe('proxyFetch', () => {
   it('sends the target the caller\'s headers and not the session', async () => {
     const {targetRequests} = proxyOver({'https://example.com/': () => new Response('ok')})
     await proxyFetch(new URL('https://example.com/'), {headers: {accept: 'application/json'}})
-    expect([...targetRequests()[0].headers]).toEqual([['accept', 'application/json']])
+    expect([...targetRequests()[0].headers]).toEqual([['accept', 'application/json'], ['accept-encoding', 'identity']])
   })
 
   it('authenticates the proxy request with the session, not the publishable key', async () => {
@@ -154,6 +154,13 @@ describe('proxyFetch', () => {
     await vi.waitFor(() => expect(fetch).toHaveBeenCalled())
     controller.abort()
     await expect(pending).rejects.toMatchObject({name: 'AbortError'})
+  })
+
+  it('keeps a URL\'s credentials out of the refusal', async () => {
+    await expect(proxyFetch('https://user:secret@example.com/')).rejects.toEqual(expect.objectContaining({
+      code: 'invalid-url',
+      message: expect.not.stringContaining('secret'),
+    }))
   })
 
   describe('sends nothing', () => {

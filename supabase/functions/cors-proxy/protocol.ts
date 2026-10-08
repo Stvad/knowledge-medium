@@ -4,9 +4,9 @@
  *
  *   request   GET|HEAD with `X-Proxy-Url: <target>` (see `fetchableUrl`); each
  *             `X-Proxy-Header-<name>` is sent to the target as `<name>`, except
- *             ones the proxy owns (Host, Cookie, Accept-Encoding, connection
- *             framing), which are refused. Nothing else the caller sends
- *             reaches the target.
+ *             ones the proxy owns (Host, Cookie, Accept-Encoding, Proxy-*,
+ *             connection framing), which are refused. Nothing else the caller
+ *             sends reaches the target; the proxy asks it for an unencoded body.
  *   response  200 with `X-Proxy-Status` (the target's status),
  *             `X-Proxy-Final-Url`, one `X-Proxy-Redirect-<n>: <status> <url>` per
  *             redirect followed, the target's headers as `X-Proxy-Header-<name>`
@@ -46,6 +46,7 @@ export const ERROR_STATUS = {
   'response-too-large': 502,
   'timeout': 504,
   'upstream-failed': 502,
+  'busy': 503,
 } as const
 
 export type ProxyErrorCode = keyof typeof ERROR_STATUS

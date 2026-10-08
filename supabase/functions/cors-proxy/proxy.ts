@@ -23,12 +23,15 @@ import {
 export interface ProxyLimits {
   maxRedirects: number
   maxBodyBytes: number
+  /** Body bytes all requests on one worker may hold at once while reading. */
+  maxBufferedBytes: number
   timeoutMs: number
 }
 
 export const DEFAULT_LIMITS: ProxyLimits = {
   maxRedirects: 10,
   maxBodyBytes: 10 * 1024 * 1024,
+  maxBufferedBytes: 32 * 1024 * 1024,
   timeoutMs: 30_000,
 }
 
@@ -62,7 +65,7 @@ const OWN_REQUEST_HEADERS = new Set(['authorization', 'apikey', PROXY_URL_HEADER
 
 /** Never sent to a target, even when asked for explicitly: connection framing,
  *  virtual-host override, cookies (the proxy keeps no jar in either direction),
- *  and content negotiation (fetch asks only for the codings it decodes). */
+ *  and content negotiation (see `targetBody`). */
 const FORBIDDEN_TARGET_HEADERS = new Set([
   'host', 'cookie', 'cookie2', 'connection', 'keep-alive', 'te', 'trailer',
   'transfer-encoding', 'upgrade', 'content-length', 'expect', 'accept-encoding',
@@ -75,20 +78,10 @@ const UNRELAYED_RESPONSE_HEADERS = new Set([
   'transfer-encoding', 'connection', 'keep-alive', 'trailer', 'upgrade', 'proxy-connection',
 ])
 
-/** Describe the bytes fetch received, which it has already decoded; relayed
- *  only when no body is (HEAD, 204, 304), where they still describe the target's resource. */
+/** Describe the target's bytes on the wire rather than the relayed body, which
+ *  carries its own length; relayed only when there is no body, where they
+ *  describe the target's resource. */
 const ENCODED_BODY_HEADERS = new Set(['content-encoding', 'content-length'])
-
-/** The content codings fetch asks for and decodes. It asks for identity alone
- *  when the request carries Range. */
-const FETCH_DECODED_CODINGS = new Set(['gzip', 'br'])
-
-/** Whether fetch decoded a body sent with `coding`. One it didn't would reach
- *  the client still encoded, but labelled as decoded. */
-const decodedByFetch = (coding: string | null, ranged: boolean): boolean => {
-  const token = coding?.trim().toLowerCase() || 'identity'
-  return token === 'identity' || (!ranged && FETCH_DECODED_CODINGS.has(token))
-}
 
 const DEPLOYED_APP_ORIGIN = 'https://stvad.github.io'
 const LOCAL_DEV_ORIGIN = /^http:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?$/
@@ -241,7 +234,8 @@ const connection = (url: URL, address: string | null, headers: Headers): {target
 
 // --- request ----------------------------------------------------------------
 
-/** The headers the caller addressed to the target, unprefixed. */
+/** The headers sent to the target: the ones the caller addressed to it,
+ *  unprefixed, and a request for an unencoded body (see `targetBody`). */
 const targetRequestHeaders = (incoming: Headers): Headers => {
   const outgoing = new Headers()
   for (const [name, value] of incoming) {
@@ -252,6 +246,7 @@ const targetRequestHeaders = (incoming: Headers): Headers => {
     }
     outgoing.append(targetName, value)
   }
+  outgoing.set('accept-encoding', 'identity')
   return outgoing
 }
 
@@ -265,7 +260,7 @@ const authenticate = async (req: Request, deps: ProxyDeps): Promise<void> => {
   const authorization = req.headers.get('authorization')
   const apikey = req.headers.get('apikey')
   if (!authorization?.startsWith('Bearer ') || !apikey) throw new Refusal('unauthenticated')
-  const unavailable = (): never => {
+  const unavailable = () => {
     throw new Refusal('auth-unavailable')
   }
   const response = await deps.fetch(new URL('auth/v1/user', `${deps.supabaseUrl.replace(/\/+$/, '')}/`), {
@@ -300,7 +295,7 @@ const follow = async (
   for (;;) {
     const hop = connection(url, await vetHost(url, deps.resolveDns, signal), headers)
     const response = await deps.fetch(hop.target, {method, headers: hop.headers, redirect: 'manual', signal})
-      .catch((): never => {
+      .catch(() => {
         throw new Refusal('upstream-failed', url.hostname)
       })
     const location = REDIRECT_STATUSES.has(response.status) ? response.headers.get('location') : null
@@ -316,41 +311,81 @@ const follow = async (
   }
 }
 
-/** The whole target body, refused past `maxBytes`. Read in full before anything
- *  is sent: a body that fails or overflows mid-stream would otherwise reach the
- *  client as a 200 cut short, which a gateway may pass on as complete. Each
- *  chunk is copied out as it arrives: fetch's chunks are views of 64 KiB
- *  buffers, so keeping them would hold 64 KiB per chunk however few bytes
- *  arrived, and a slow drip would multiply the memory a body costs. */
-const readBody = async (response: Response, maxBytes: number): Promise<Uint8Array<ArrayBuffer>> => {
-  const tooLarge = () => new Refusal('response-too-large', `over ${maxBytes} bytes`)
-  const reader = response.body!.getReader()
-  // Refused up front when declared, so an oversized body isn't downloaded first.
-  if (Number(response.headers.get('content-length') ?? 0) > maxBytes) {
-    await reader.cancel()
-    throw tooLarge()
+/** Body bytes held by in-flight reads on this worker. */
+interface BodyBudget {
+  held: number
+}
+
+/** The body to relay, or null when there is none: fetch gives a HEAD response
+ *  and a null-body status a null body. The proxy asks for an unencoded body, so
+ *  one still labelled with a content coding was decoded neither by the target
+ *  nor on the way (runtimes differ in which codings their fetch decodes and
+ *  whether it keeps the label). Relayed, it would reach the client encoded but
+ *  labelled as decoded, so it is refused. */
+const targetBody = async (
+  response: Response,
+  limits: ProxyLimits,
+  budget: BodyBudget,
+): Promise<Uint8Array<ArrayBuffer> | null> => {
+  // Every Response constructor, the client's included, throws outside 200–599.
+  if (response.status < 200 || response.status > 599) {
+    await response.body?.cancel()
+    throw new Refusal('upstream-failed', `the target answered with status ${response.status}`)
   }
-  let body = new Uint8Array(Math.min(maxBytes, 64 * 1024))
+  if (!response.body) return null
+  const coding = response.headers.get('content-encoding')
+  if (coding && coding.toLowerCase() !== 'identity') {
+    await response.body.cancel()
+    throw new Refusal('upstream-failed', `the body is ${coding}-encoded, which the proxy doesn't decode`)
+  }
+  return readBody(response, limits, budget)
+}
+
+/** The whole body, refused past `maxBodyBytes`. Read in full before anything
+ *  is sent: a body that fails or overflows mid-stream would otherwise reach the
+ *  client as a 200 cut short, which a gateway may pass on as complete.
+ *
+ *  Each chunk is copied out as it arrives, since fetch's chunks can be views of
+ *  larger buffers that keeping them would hold. The buffer counts against the
+ *  worker's `maxBufferedBytes` while it is read; past that the request is
+ *  refused, rather than risk the worker's memory limit, which would fail every
+ *  request on it. */
+const readBody = async (
+  response: Response,
+  {maxBodyBytes, maxBufferedBytes}: ProxyLimits,
+  budget: BodyBudget,
+): Promise<Uint8Array<ArrayBuffer>> => {
+  const tooLarge = () => new Refusal('response-too-large', `over ${maxBodyBytes} bytes`)
+  const reader = response.body!.getReader()
+  let body = new Uint8Array(0)
   let size = 0
+  let claimed = 0
   try {
+    // Refused up front when declared, so an oversized body isn't downloaded first.
+    if (Number(response.headers.get('content-length') ?? 0) > maxBodyBytes) throw tooLarge()
     for (let read = await reader.read(); !read.done; read = await reader.read()) {
       const end = size + read.value.byteLength
-      if (end > maxBytes) {
-        await reader.cancel()
-        throw tooLarge()
-      }
+      if (end > maxBodyBytes) throw tooLarge()
       if (end > body.length) {
-        const grown = new Uint8Array(Math.min(maxBytes, Math.max(end, body.length * 2)))
+        const capacity = Math.min(maxBodyBytes, Math.max(end, body.length * 2, 64 * 1024))
+        const more = capacity - body.length
+        if (budget.held + more > maxBufferedBytes) throw new Refusal('busy', 'too many bodies in flight on this worker')
+        budget.held += more
+        claimed += more
+        const grown = new Uint8Array(capacity)
         grown.set(body.subarray(0, size))
         body = grown
       }
       body.set(read.value, size)
       size = end
     }
+    return body.subarray(0, size)
   } catch (error) {
+    await reader.cancel().catch(() => {})
     throw error instanceof Refusal ? error : new Refusal('upstream-failed', 'the body failed mid-read')
+  } finally {
+    budget.held -= claimed
   }
-  return body.subarray(0, size)
 }
 
 // --- responses --------------------------------------------------------------
@@ -387,28 +422,13 @@ const failure = (cors: Headers, refusal: Refusal, hops: ProxyRedirect[]): Respon
   )
 }
 
-const relay = async (
+const relay = (
   cors: Headers,
-  {response, url}: {response: Response, url: URL},
+  response: Response,
+  url: URL,
   hops: ProxyRedirect[],
-  maxBodyBytes: number,
-  ranged: boolean,
-): Promise<Response> => {
-  // Every Response constructor, the client's included, throws outside 200–599.
-  if (response.status < 200 || response.status > 599) {
-    await response.body?.cancel()
-    throw new Refusal('upstream-failed', `the target answered with status ${response.status}`)
-  }
-  // fetch gives a HEAD response, and a null-body status (204, 205, 304), a null body.
-  let body: Uint8Array<ArrayBuffer> | null = null
-  if (response.body) {
-    const coding = response.headers.get('content-encoding')
-    if (!decodedByFetch(coding, ranged)) {
-      await response.body.cancel()
-      throw new Refusal('upstream-failed', `the body is ${coding}-encoded, which the proxy doesn't decode`)
-    }
-    body = await readBody(response, maxBodyBytes)
-  }
+  body: Uint8Array<ArrayBuffer> | null,
+): Response => {
   const headers = baseHeaders(cors, hops)
   headers.set(PROXY_STATUS_HEADER, String(response.status))
   headers.set(PROXY_FINAL_URL_HEADER, url.href)
@@ -434,14 +454,23 @@ const preflight = (req: Request, cors: Headers): Response => {
 const isTimeout = (signal: AbortSignal): boolean =>
   signal.aborted && (signal.reason as {name?: string} | undefined)?.name === 'TimeoutError'
 
-export const createProxyHandler = (deps: ProxyDeps) => {
-  const allowedOrigins = appOrigins(deps.allowedOrigins)
-  return (req: Request): Promise<Response> => handle(req, deps, allowedOrigins)
+/** State a handler shares across the requests a worker serves. */
+interface Worker {
+  allowedOrigins: Set<string>
+  budget: BodyBudget
 }
 
-const handle = async (req: Request, deps: ProxyDeps, allowedOrigins: Set<string>): Promise<Response> => {
+export const createProxyHandler = (deps: ProxyDeps) => {
+  const worker: Worker = {allowedOrigins: appOrigins(deps.allowedOrigins), budget: {held: 0}}
+  if (deps.allowedOrigins?.trim() && worker.allowedOrigins.size === 0) {
+    console.warn('cors-proxy: CORS_PROXY_ALLOWED_ORIGINS names no origin; only local dev servers can read responses')
+  }
+  return (req: Request): Promise<Response> => handle(req, deps, worker)
+}
+
+const handle = async (req: Request, deps: ProxyDeps, worker: Worker): Promise<Response> => {
   const limits = deps.limits ?? DEFAULT_LIMITS
-  const cors = corsHeaders(req.headers.get('origin'), allowedOrigins)
+  const cors = corsHeaders(req.headers.get('origin'), worker.allowedOrigins)
   if (req.method === 'OPTIONS') return preflight(req, cors)
 
   const hops: ProxyRedirect[] = []
@@ -456,9 +485,8 @@ const handle = async (req: Request, deps: ProxyDeps, allowedOrigins: Set<string>
     const target = fetchableUrl(req.headers.get(PROXY_URL_HEADER) ?? '')
     if (!target) throw new Refusal('invalid-url', `${PROXY_URL_HEADER} must be an absolute http(s) URL`)
     const headers = targetRequestHeaders(req.headers)
-    const ranged = headers.has('range')
-    const outcome = await follow(target, req.method, headers, hops, deps, limits, signal)
-    return await relay(cors, outcome, hops, limits.maxBodyBytes, ranged)
+    const {response, url} = await follow(target, req.method, headers, hops, deps, limits, signal)
+    return relay(cors, response, url, hops, await targetBody(response, limits, worker.budget))
   } catch (error) {
     if (isTimeout(signal)) return failure(cors, new Refusal('timeout'), hops)
     if (error instanceof Refusal) return failure(cors, error, hops)

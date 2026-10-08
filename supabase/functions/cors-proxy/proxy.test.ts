@@ -8,21 +8,25 @@ const setup = (
   routes: Record<string, Route>,
   dns: Record<string, string[]> = {},
   limits: ProxyLimits = DEFAULT_LIMITS,
+  allowedOrigins?: string,
 ) => {
   const network = fakeNetwork(routes, dns)
-  const handler = createProxyHandler({supabaseUrl: SUPABASE_URL, fetch: network.fetch, resolveDns: network.resolveDns, limits})
+  const handler = createProxyHandler({
+    supabaseUrl: SUPABASE_URL, fetch: network.fetch, resolveDns: network.resolveDns, limits, allowedOrigins,
+  })
   const call = (target: string | null, options: {
     method?: string
     token?: string | null
     headers?: Record<string, string>
     origin?: string
+    signal?: AbortSignal
   } = {}) => {
     const headers = new Headers({apikey: 'publishable-key', ...options.headers})
     const token = options.token === undefined ? 'user-token' : options.token
     if (token) headers.set('authorization', `Bearer ${token}`)
     if (target !== null) headers.set('x-proxy-url', target)
     if (options.origin) headers.set('origin', options.origin)
-    return handler(new Request(PROXY_ENDPOINT, {method: options.method ?? 'GET', headers}))
+    return handler(new Request(PROXY_ENDPOINT, {method: options.method ?? 'GET', headers, signal: options.signal}))
   }
   return {call, handler, ...network}
 }
@@ -142,7 +146,7 @@ describe('request', () => {
     expect(await response.text()).toBe('nope')
   })
 
-  it('sends the target only the headers addressed to it', async () => {
+  it('sends the target only the headers addressed to it, and a request for an unencoded body', async () => {
     const {call, targetRequests} = setup({'https://example.com/': () => new Response('ok')}, PUBLIC_DNS)
     await call('https://example.com/', {headers: {
       'x-client-info': 'supabase-js',
@@ -152,6 +156,7 @@ describe('request', () => {
     const [target] = targetRequests()
     expect([...target.headers]).toEqual([
       ['accept', 'application/json'],
+      ['accept-encoding', 'identity'],
       ['authorization', 'Bearer third-party-key'],
     ])
   })
@@ -192,6 +197,15 @@ describe('request', () => {
     expect(response.headers.get('x-proxy-status')).toBe('200')
     expect(response.headers.get('x-proxy-header-content-length')).toBe('50000000')
     expect(response.headers.get('x-proxy-header-content-encoding')).toBe('identity')
+    expect(response.body).toBeNull()
+  })
+
+  it('relays a 304\'s declared Content-Length, uncapped', async () => {
+    const limits = {...DEFAULT_LIMITS, maxBodyBytes: 4}
+    const {call} = setup({'https://example.com/': () => new Response(null, {status: 304, headers: {'content-length': '1000'}})}, PUBLIC_DNS, limits)
+    const response = await call('https://example.com/')
+    expect(response.headers.get('x-proxy-status')).toBe('304')
+    expect(response.headers.get('x-proxy-header-content-length')).toBe('1000')
     expect(response.body).toBeNull()
   })
 })
@@ -363,21 +377,13 @@ describe('redirects', () => {
     expect(targetRequests()).toHaveLength(1)
   })
 
-  it('relays a 304\'s declared Content-Length, uncapped', async () => {
-    const limits = {...DEFAULT_LIMITS, maxBodyBytes: 4}
-    const {call} = setup({'https://example.com/': () => new Response(null, {status: 304, headers: {'content-length': '1000'}})}, PUBLIC_DNS, limits)
-    const response = await call('https://example.com/')
-    expect(response.headers.get('x-proxy-status')).toBe('304')
-    expect(response.headers.get('x-proxy-header-content-length')).toBe('1000')
-    expect(response.body).toBeNull()
-  })
 })
 
 describe('response', () => {
   it('relays no cookies and no framing that no longer matches the body', async () => {
     const {call} = setup({
       'https://example.com/': () => {
-        const headers = new Headers({'content-encoding': 'gzip', 'content-length': '3', 'content-type': 'text/plain', connection: 'keep-alive'})
+        const headers = new Headers({'content-encoding': 'identity', 'content-length': '3', 'content-type': 'text/plain', connection: 'keep-alive'})
         headers.append('set-cookie', 'session=secret')
         return new Response('abc', {headers})
       },
@@ -418,15 +424,21 @@ describe('response', () => {
     expect((await call('http://127.0.0.1/')).headers.get('cache-control')).toBe('no-store')
   })
 
-  it('refuses a body declared over the size cap without reading it', async () => {
+  it('refuses a body declared over the size cap without reading it, and lets the target go', async () => {
     const limits = {...DEFAULT_LIMITS, maxBodyBytes: 4}
     let pulled = false
-    const body = new ReadableStream({pull: () => {
-      pulled = true
-    }}, {highWaterMark: 0})
+    let cancelled = false
+    const body = new ReadableStream({
+      pull: () => {
+        pulled = true
+      },
+      cancel: () => {
+        cancelled = true
+      },
+    }, {highWaterMark: 0})
     const {call} = setup({'https://example.com/': () => new Response(body, {headers: {'content-length': '1000000'}})}, PUBLIC_DNS, limits)
     expect(errorOf(await call('https://example.com/'))).toEqual({status: 502, code: 'response-too-large'})
-    expect(pulled).toBe(false)
+    expect([pulled, cancelled]).toEqual([false, true])
   })
 
   it('refuses a body that grows past the size cap', async () => {
@@ -460,17 +472,14 @@ describe('response', () => {
 
   it('stops the upstream work when the caller goes away', async () => {
     let upstreamAborted = false
-    const {handler, targetRequests} = setup({
+    const {call, targetRequests} = setup({
       'https://example.com/': req => new Promise((_, reject) => req.signal.addEventListener('abort', () => {
         upstreamAborted = true
         reject(req.signal.reason)
       })),
     }, PUBLIC_DNS)
     const caller = new AbortController()
-    const pending = handler(new Request(PROXY_ENDPOINT, {
-      headers: {authorization: 'Bearer user-token', apikey: 'publishable-key', 'x-proxy-url': 'https://example.com/'},
-      signal: caller.signal,
-    }))
+    const pending = call('https://example.com/', {signal: caller.signal})
     await vi.waitFor(() => expect(targetRequests()).toHaveLength(1))
     caller.abort()
     await vi.waitFor(() => expect(upstreamAborted).toBe(true))
@@ -488,25 +497,43 @@ describe('response', () => {
     expect(errorOf(await call('https://example.com/'))).toEqual({status: 504, code: 'timeout'})
   })
 
-  it.each([
-    ['gzip', {}],
-    [' BR ', {}],
-    ['identity', {'x-proxy-header-range': 'bytes=0-9'}],
-  ])('relays a body fetch decoded (content-encoding %j)', async (coding, headers) => {
-    const {call} = setup({'https://example.com/': () => new Response('decoded', {headers: {'content-encoding': coding}})}, PUBLIC_DNS)
-    const response = await call('https://example.com/', {headers})
+  it.each([null, 'identity', 'Identity'])('relays a body without a content coding (%j)', async coding => {
+    const {call} = setup({'https://example.com/': () => new Response('plain', {headers: coding ? {'content-encoding': coding} : {}})}, PUBLIC_DNS)
+    const response = await call('https://example.com/')
     expect(response.headers.get('x-proxy-status')).toBe('200')
-    expect(await response.text()).toBe('decoded')
+    expect(await response.text()).toBe('plain')
   })
 
-  it.each([
-    ['deflate', {}],
-    ['x-gzip', {}],
-    ['gzip, gzip', {}],
-    ['gzip', {'x-proxy-header-range': 'bytes=0-9'}],
-  ])('refuses a body fetch left encoded (content-encoding %j)', async (coding, headers) => {
+  it.each(['gzip', 'GZIP', 'br', 'deflate', 'gzip, gzip'])('refuses a body still labelled with a content coding (%j)', async coding => {
     const {call} = setup({'https://example.com/': () => new Response('\x78\x9c', {headers: {'content-encoding': coding}})}, PUBLIC_DNS)
-    expect(errorOf(await call('https://example.com/', {headers}))).toEqual({status: 502, code: 'upstream-failed'})
+    expect(errorOf(await call('https://example.com/'))).toEqual({status: 502, code: 'upstream-failed'})
+  })
+
+  it('refuses a body past the worker\'s budget for bodies in flight, and frees it after', async () => {
+    const limits = {...DEFAULT_LIMITS, maxBodyBytes: 100, maxBufferedBytes: 150}
+    let pulls = 0
+    let finishFirst = () => {}
+    const slow = new ReadableStream<Uint8Array>({pull: controller => {
+      pulls++
+      if (pulls === 1) return controller.enqueue(new Uint8Array(80))
+      // A second read means the proxy has copied the first chunk: its buffer is claimed.
+      return new Promise<void>(resolve => {
+        finishFirst = () => {
+          controller.close()
+          resolve()
+        }
+      })
+    }}, {highWaterMark: 0})
+    const {call} = setup({
+      'https://example.com/slow': () => new Response(slow),
+      'https://example.com/fast': () => new Response(new Uint8Array(80)),
+    }, PUBLIC_DNS, limits)
+    const first = call('https://example.com/slow')
+    await vi.waitFor(() => expect(pulls).toBe(2))
+    expect(errorOf(await call('https://example.com/fast'))).toEqual({status: 503, code: 'busy'})
+    finishFirst()
+    expect((await first).headers.get('x-proxy-status')).toBe('200')
+    expect((await call('https://example.com/fast')).headers.get('x-proxy-status')).toBe('200')
   })
 
   it('reassembles a body larger than the first buffer, however it is chunked', async () => {
@@ -577,30 +604,23 @@ describe('CORS', () => {
     expect(response.headers.get('access-control-allow-headers')).toBe('authorization, apikey, x-proxy-url, x-proxy-header-accept')
   })
 
-  it('allows the configured origins instead of the app\'s own, and still local dev servers', async () => {
-    const network = fakeNetwork({})
-    const handler = createProxyHandler({
-      supabaseUrl: SUPABASE_URL,
-      fetch: network.fetch,
-      resolveDns: network.resolveDns,
-      allowedOrigins: 'https://alice.github.io/, not a url, https://Notes.Example.com',
-    })
-    const allowed = async (origin: string) => (await handler(new Request(PROXY_ENDPOINT, {method: 'OPTIONS', headers: {origin}})))
-      .headers.get('access-control-allow-origin') === origin
-    expect(await allowed('https://alice.github.io')).toBe(true)
-    expect(await allowed('https://notes.example.com')).toBe(true)
-    expect(await allowed('http://localhost:5173')).toBe(true)
-    expect(await allowed('https://stvad.github.io')).toBe(false)
-  })
+  const allowedOrigin = async (origin: string, configured: string) => {
+    const {handler} = setup({}, {}, DEFAULT_LIMITS, configured)
+    return (await handler(new Request(PROXY_ENDPOINT, {method: 'OPTIONS', headers: {origin}}))).headers.get('access-control-allow-origin')
+  }
 
   it.each([
-    ['an opaque origin', 'file:///home/app.html', 'null', false],
-    ['an empty setting, which means the app\'s own', ' ', 'https://stvad.github.io', true],
-  ])('reads %s in the allowed origins', async (_, allowedOrigins, origin, allowed) => {
-    const network = fakeNetwork({})
-    const handler = createProxyHandler({supabaseUrl: SUPABASE_URL, fetch: network.fetch, resolveDns: network.resolveDns, allowedOrigins})
-    const response = await handler(new Request(PROXY_ENDPOINT, {method: 'OPTIONS', headers: {origin}}))
-    expect(response.headers.get('access-control-allow-origin') === origin).toBe(allowed)
+    ['https://alice.github.io', 'https://alice.github.io'],
+    ['https://notes.example.com', 'https://notes.example.com'],
+    ['http://localhost:5173', 'http://localhost:5173'],
+    ['https://stvad.github.io', null],
+    ['null', null],
+  ])('reads the configured origins instead of the app\'s own: %s', async (origin, allowed) => {
+    expect(await allowedOrigin(origin, 'https://alice.github.io/, not a url, file:///home/app.html, https://Notes.Example.com')).toBe(allowed)
+  })
+
+  it('reads an empty setting as the app\'s own origin', async () => {
+    expect(await allowedOrigin('https://stvad.github.io', ' ')).toBe('https://stvad.github.io')
   })
 
   it('answers a preflight without authentication or fetching', async () => {

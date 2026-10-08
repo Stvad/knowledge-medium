@@ -34,9 +34,9 @@ export const fakeNetwork = (routes: Record<string, Route>, dns: Record<string, s
     if (!route) throw new TypeError(`connection refused: ${addressed.href}`)
     const response = await route(req)
     const location = response.headers.get('location')
-    if (location && response.status >= 300 && response.status < 400) {
+    if ([301, 302, 303, 307, 308].includes(response.status)) {
       if (req.redirect === 'error') throw new TypeError(`redirected: ${req.url}`)
-      if (req.redirect === 'follow') return fetch(new URL(location, req.url), init)
+      if (req.redirect === 'follow' && location) return fetch(new URL(location, req.url), init)
     }
     return req.method === 'HEAD' ? new Response(null, {status: response.status, headers: response.headers}) : response
   }

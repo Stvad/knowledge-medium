@@ -33,9 +33,8 @@ export interface ProxyFetchResult {
 
 export interface ProxyFetchInit {
   method?: 'GET' | 'HEAD'
-  /** Sent to the target, and nothing else is. The proxy refuses Cookie, Host,
-   *  Accept-Encoding and connection headers, and drops Authorization on a
-   *  cross-origin redirect. */
+  /** Sent to the target, and nothing else is. The headers the proxy refuses are
+   *  listed in its protocol; it drops Authorization on a cross-origin redirect. */
   headers?: HeadersInit
   signal?: AbortSignal
 }
@@ -59,11 +58,13 @@ export class ProxyFetchError extends Error {
 }
 
 /** Resolves like `fetch`: a target's 4xx/5xx is a response. Rejects with
- *  `ProxyFetchError` when the proxy can't serve the request, and with the
- *  caller's abort reason when `init.signal` aborts. */
+ *  `ProxyFetchError` when the proxy can't serve the request, with the caller's
+ *  abort reason when `init.signal` aborts, and with a TypeError for headers
+ *  fetch would refuse too. */
 export const proxyFetch = async (url: string | URL, init: ProxyFetchInit = {}): Promise<ProxyFetchResult> => {
   const target = fetchableUrl(String(url))
-  if (!target) throw new ProxyFetchError('invalid-url', `Not an http(s) URL the proxy will fetch: ${url}`)
+  // Not echoed: the URL may carry credentials.
+  if (!target) throw new ProxyFetchError('invalid-url', 'Not an http(s) URL without credentials, which the proxy needs.')
   // `supabase` being non-null only means auth is CONFIGURED; a local-only session sends nothing.
   if (!isRemoteSyncActive()) throw new ProxyFetchError('local-only', 'Fetching other sites needs sync, and this session is local-only.')
   const endpoint = edgeFunctionEndpoint(CORS_PROXY_FUNCTION)
@@ -71,7 +72,7 @@ export const proxyFetch = async (url: string | URL, init: ProxyFetchInit = {}): 
   // A session near expiry is refreshed here, which needs the network. A refresh
   // Auth rejects outright has signed the user out.
   const {data: {session}, error} = await unlessAborted(
-    supabase.auth.getSession().catch((reason: unknown): never => {
+    supabase.auth.getSession().catch((reason: unknown) => {
       throw new ProxyFetchError('unreachable', `Couldn't load the session: ${reason}`)
     }),
     init.signal,
