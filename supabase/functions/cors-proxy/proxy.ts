@@ -38,6 +38,9 @@ export interface ProxyDeps {
   fetch: typeof fetch
   /** Every A and AAAA record for `hostname`; empty when it doesn't resolve. */
   resolveDns: (hostname: string, signal: AbortSignal) => Promise<string[]>
+  /** Comma-separated origins whose pages may read responses, besides local dev
+   *  servers (`CORS_PROXY_ALLOWED_ORIGINS`). Unset means the app's own deployment. */
+  allowedOrigins?: string
   limits?: ProxyLimits
 }
 
@@ -74,7 +77,20 @@ const UNRELAYED_RESPONSE_HEADERS = new Set([
  *  only when no body is (HEAD, 304), where they still describe the target's resource. */
 const ENCODED_BODY_HEADERS = new Set(['content-encoding', 'content-length'])
 
-const ALLOWED_ORIGIN = /^(?:https:\/\/stvad\.github\.io|http:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?)$/
+const DEPLOYED_APP_ORIGIN = 'https://stvad.github.io'
+const LOCAL_DEV_ORIGIN = /^http:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?$/
+
+const appOrigins = (configured: string | undefined): Set<string> => {
+  const origins = new Set<string>()
+  for (const entry of (configured ?? DEPLOYED_APP_ORIGIN).split(',')) {
+    try {
+      origins.add(new URL(entry.trim()).origin)
+    } catch {
+      // Not a URL; it names no origin.
+    }
+  }
+  return origins
+}
 
 // --- addresses --------------------------------------------------------------
 
@@ -336,9 +352,9 @@ const readBody = async (response: Response, maxBytes: number): Promise<Uint8Arra
 
 // --- responses --------------------------------------------------------------
 
-const corsHeaders = (origin: string | null): Headers => {
+const corsHeaders = (origin: string | null, allowed: Set<string>): Headers => {
   const headers = new Headers({vary: 'Origin'})
-  if (origin && ALLOWED_ORIGIN.test(origin)) headers.set('access-control-allow-origin', origin)
+  if (origin && (allowed.has(origin) || LOCAL_DEV_ORIGIN.test(origin))) headers.set('access-control-allow-origin', origin)
   return headers
 }
 
@@ -408,9 +424,14 @@ const preflight = (req: Request, cors: Headers): Response => {
 const isTimeout = (signal: AbortSignal): boolean =>
   signal.aborted && (signal.reason as {name?: string} | undefined)?.name === 'TimeoutError'
 
-export const createProxyHandler = (deps: ProxyDeps) => async (req: Request): Promise<Response> => {
+export const createProxyHandler = (deps: ProxyDeps) => {
+  const allowedOrigins = appOrigins(deps.allowedOrigins)
+  return (req: Request): Promise<Response> => handle(req, deps, allowedOrigins)
+}
+
+const handle = async (req: Request, deps: ProxyDeps, allowedOrigins: Set<string>): Promise<Response> => {
   const limits = deps.limits ?? DEFAULT_LIMITS
-  const cors = corsHeaders(req.headers.get('origin'))
+  const cors = corsHeaders(req.headers.get('origin'), allowedOrigins)
   if (req.method === 'OPTIONS') return preflight(req, cors)
 
   const hops: ProxyRedirect[] = []

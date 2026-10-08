@@ -21,4 +21,5 @@ Deno.serve(createProxyHandler({
   supabaseUrl,
   fetch: (input, init) => fetch(input, {...init, client}),
   resolveDns,
+  allowedOrigins: Deno.env.get('CORS_PROXY_ALLOWED_ORIGINS'),
 }))

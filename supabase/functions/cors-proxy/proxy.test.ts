@@ -429,6 +429,20 @@ describe('response', () => {
     expect(await errorOf(await call('https://example.com/'))).toEqual({status: 502, code: 'upstream-failed'})
   })
 
+  it('times out when the deadline passes before the target is reached', async () => {
+    const limits = {...DEFAULT_LIMITS, timeoutMs: 20}
+    const slowAuth: Route = async () => {
+      await new Promise(resolve => setTimeout(resolve, 60))
+      return Response.json({id: 'user-1', is_anonymous: false})
+    }
+    const {call, targetRequests} = setup({
+      [AUTH_URL]: slowAuth,
+      'https://example.com/': req => new Promise((_, reject) => req.signal.addEventListener('abort', () => reject(req.signal.reason))),
+    }, PUBLIC_DNS, limits)
+    expect(await errorOf(await call('https://example.com/'))).toEqual({status: 504, code: 'timeout'})
+    expect(targetRequests()).toHaveLength(1)
+  })
+
   it('times out a body that stalls', async () => {
     const limits = {...DEFAULT_LIMITS, timeoutMs: 20}
     const {call} = setup({
@@ -480,6 +494,22 @@ describe('CORS', () => {
   it('allows only the proxy\'s own request headers and target-addressed ones', async () => {
     const response = await preflight('https://stvad.github.io', 'Authorization, apikey, X-Proxy-Url, x-proxy-header-accept, x-other')
     expect(response.headers.get('access-control-allow-headers')).toBe('authorization, apikey, x-proxy-url, x-proxy-header-accept')
+  })
+
+  it('allows the configured origins instead of the app\'s own, and still local dev servers', async () => {
+    const network = fakeNetwork({})
+    const handler = createProxyHandler({
+      supabaseUrl: SUPABASE_URL,
+      fetch: network.fetch,
+      resolveDns: network.resolveDns,
+      allowedOrigins: 'https://alice.github.io/, not a url, https://Notes.Example.com',
+    })
+    const allowed = async (origin: string) => (await handler(new Request(PROXY_ENDPOINT, {method: 'OPTIONS', headers: {origin}})))
+      .headers.get('access-control-allow-origin') === origin
+    expect(await allowed('https://alice.github.io')).toBe(true)
+    expect(await allowed('https://notes.example.com')).toBe(true)
+    expect(await allowed('http://localhost:5173')).toBe(true)
+    expect(await allowed('https://stvad.github.io')).toBe(false)
   })
 
   it('answers a preflight without authentication or fetching', async () => {

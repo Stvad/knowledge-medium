@@ -1,7 +1,8 @@
 /** A fake internet for the proxy's tests: exact-URL routes, the project's Auth,
- *  and a DNS table. Behaves like the real network where the proxy depends on
- *  it: routes by the Host header when one is sent (virtual hosts), and follows
- *  redirects itself unless told `manual`. */
+ *  and a DNS table. Behaves like real fetch where the proxy depends on it:
+ *  routes by the Host header when one is sent (virtual hosts), follows
+ *  redirects itself unless told `manual`, and rejects at once on a signal that
+ *  has already aborted (a route listening for `abort` would never hear it). */
 
 export const SUPABASE_URL = 'https://project.test'
 export const AUTH_URL = `${SUPABASE_URL}/auth/v1/user`
@@ -24,6 +25,7 @@ export const fakeNetwork = (routes: Record<string, Route>, dns: Record<string, s
   const fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const req = new Request(input, init)
     requests.push(req)
+    if (req.signal.aborted) throw req.signal.reason
     const addressed = new URL(req.url)
     const host = req.headers.get('host')
     if (host) addressed.host = host
