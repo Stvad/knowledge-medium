@@ -52,9 +52,10 @@ export const convertMapsLinksInBlock = async (
     const locate = locateLink(text.slice(link.from, link.to), link)
     try {
       const candidate = await resolveLink(link.url)
-      // The lookup takes a while; don't mint a Place for a link the user
-      // has since removed. (A removal during a collision prompt is
-      // accepted: the prompt's choice is itself a deliberate action.)
+      // The lookup takes seconds; don't mint a Place for a link the user
+      // has since removed. A removal after this check (before the create
+      // commits, or during a collision prompt) is accepted, not coupled into
+      // the minting tx: the stray Place is reused by the next pick of the POI.
       const current = await readBlockText(repo, blockId, view)
       if (current === null || locate(current) === null) continue
       const place = await createOrFindPlaceInteractive(repo, data.workspaceId, candidate)

@@ -54,13 +54,13 @@ const isFullMapsUrl = (u: URL): boolean =>
 
 const COORD_PAIR = /^(-?\d{1,3}(?:\.\d+)?),\s*(-?\d{1,3}(?:\.\d+)?)$/
 
+/** The one range check, whichever syntax the pair came in. */
+const toLatLng = (lat: number, lng: number): LatLng | undefined =>
+  Math.abs(lat) <= 90 && Math.abs(lng) <= 180 ? {lat, lng} : undefined
+
 const parseCoordPair = (text: string): LatLng | undefined => {
   const m = COORD_PAIR.exec(text.trim())
-  if (!m) return undefined
-  const lat = Number(m[1])
-  const lng = Number(m[2])
-  if (Math.abs(lat) > 90 || Math.abs(lng) > 180) return undefined
-  return {lat, lng}
+  return m ? toLatLng(Number(m[1]), Number(m[2])) : undefined
 }
 
 const PLACE_COORDS = /!3d(-?\d+(?:\.\d+)?)!4d(-?\d+(?:\.\d+)?)/
@@ -119,7 +119,8 @@ export const parseGoogleMapsUrl = (url: string): ParsedMapsLink | null => {
   }
 
   const dataCoords = PLACE_COORDS.exec(u.pathname)
-  if (dataCoords) out.coords ??= {lat: Number(dataCoords[1]), lng: Number(dataCoords[2])}
+  const placeCoords = dataCoords ? toLatLng(Number(dataCoords[1]), Number(dataCoords[2])) : undefined
+  if (placeCoords) out.coords ??= placeCoords
 
   const viewportSegment = segments.find(s => s.startsWith('@'))
   if (viewportSegment) {
@@ -148,6 +149,12 @@ const LINK_WRAPPERS: ReadonlySet<string> = new Set(['Link', 'Autolink'])
  *  definition), so it isn't converted. */
 const NOT_A_LINK: ReadonlySet<string> = new Set(['Image', 'LinkReference'])
 
+/** A `[label](…)` destination's value — the node text keeps the `<…>`
+ *  wrapper and backslash escapes markdown allows there. */
+const destinationValue = (raw: string): string =>
+  (raw.startsWith('<') && raw.endsWith('>') ? raw.slice(1, -1) : raw)
+    .replace(/\\([!-/:-@[-`{-~])/g, '$1')
+
 /** Found by the editor's markdown parser rather than a regex, so links
  *  in code stay literal and URL boundaries follow GFM (trailing
  *  punctuation dropped, balanced parentheses kept). */
@@ -158,7 +165,8 @@ export const findGoogleMapsLinks = (text: string): MapsLinkMatch[] => {
       if (node.name !== 'URL') return
       const parent = node.node.parent
       if (parent && NOT_A_LINK.has(parent.name)) return
-      const url = text.slice(node.from, node.to)
+      const raw = text.slice(node.from, node.to)
+      const url = parent?.name === 'Link' ? destinationValue(raw) : raw
       if (parseGoogleMapsUrl(url) === null) return
       const span = parent && LINK_WRAPPERS.has(parent.name) ? parent : node
       out.push({from: span.from, to: span.to, url})

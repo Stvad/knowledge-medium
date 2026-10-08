@@ -16,7 +16,7 @@ const MAX_HOPS = 3
 // Deno function can't import.
 
 const isShortLink = (u: URL): boolean =>
-  u.protocol === 'https:'
+  (u.protocol === 'https:' || u.protocol === 'http:')
   && (u.hostname === 'maps.app.goo.gl' || (u.hostname === 'goo.gl' && u.pathname.startsWith('/maps/')))
 
 const GOOGLE_HOST = /^(?:www\.|maps\.)?google\.[a-z]{2,3}(?:\.[a-z]{2})?$/
@@ -49,6 +49,7 @@ Deno.serve(async req => {
   if (!current || !isShortLink(current)) return json({error: 'not a Google Maps short link'}, 400)
 
   for (let hop = 0; hop < MAX_HOPS; hop++) {
+    current.protocol = 'https:'
     const response = await fetch(current, {redirect: 'manual'})
     await response.body?.cancel()
     const next = parseUrl(response.headers.get('location'))

@@ -63,6 +63,13 @@ describe('parseGoogleMapsUrl', () => {
     })
   })
 
+  it('drops out-of-range coordinates wherever they come from', () => {
+    expect(parseGoogleMapsUrl('https://www.google.com/maps/place/X/data=!3d999!4d999')).toEqual({
+      kind: 'full',
+      query: 'X',
+    })
+  })
+
   it('rejects URLs that are not Google Maps', () => {
     expect(parseGoogleMapsUrl('https://www.google.com/search?q=maps')).toBeNull()
     expect(parseGoogleMapsUrl('https://goo.gl/abc')).toBeNull()
@@ -96,6 +103,15 @@ describe('findGoogleMapsLinks', () => {
     expect(findGoogleMapsLinks(text).map(l => [l.url, text.slice(l.from, l.to)])).toEqual([
       [url, url],
       [url, `[Target](${url})`],
+    ])
+  })
+
+  it('reads a markdown destination as its value: no angle brackets, no escapes', () => {
+    const bracketed = '[map](<https://maps.app.goo.gl/abc>)'
+    const escaped = '[map](https://www.google.com/maps/place/A\\(B\\)/@1,2,3z)'
+    expect(findGoogleMapsLinks(bracketed)).toEqual([{from: 0, to: bracketed.length, url: 'https://maps.app.goo.gl/abc'}])
+    expect(findGoogleMapsLinks(escaped)).toEqual([
+      {from: 0, to: escaped.length, url: 'https://www.google.com/maps/place/A(B)/@1,2,3z'},
     ])
   })
 
