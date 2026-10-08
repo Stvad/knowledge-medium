@@ -21,7 +21,6 @@ import type {
   CodeMirrorExtensionContext,
   CodeMirrorExtensionContribution,
 } from '@/editor/codeMirrorExtensions.js'
-import { ChangeScope } from '@/data/api'
 import { aliasesProp, typesProp } from '@/data/properties'
 import { PLACE_TYPE } from './blockTypes'
 import {
@@ -42,6 +41,7 @@ import {
 import type { PlaceCandidate } from './createOrFindPlace'
 import { createOrFindPlaceInteractive } from './placeNameCollision'
 import { CurrentLocationError, getCurrentPosition } from './currentLocation'
+import { locateText, replaceBlockText } from './blockTextReplace'
 
 const GOOGLE_MIN_QUERY_LEN = 2
 const LOCAL_RESULT_CAP = 8
@@ -317,24 +317,19 @@ const buildPlaceCompletionSource = ({repo, block}: CodeMirrorExtensionContext): 
     return null
   }
 
-  // The collision toast (and any slow resolution) outlives the pick:
-  // clicking it blurs the block, the per-block editor unmounts, and the
-  // captured view can't take the insert anymore. Apply the same
-  // replacement to the block's content instead — read-modify-write
-  // inside a tx so a pending editor flush can't be clobbered.
-  const persistInsert = async ({triggerText, insert}: {triggerText: string, insert: string}) => {
-    await repo.tx(async tx => {
-      const data = await tx.get(block.id)
-      if (!data || data.deleted) return
-      const idx = data.content.indexOf(triggerText)
-      if (idx === -1) return
-      const next = data.content.slice(0, idx) + insert
-        + data.content.slice(idx + triggerText.length)
-      await tx.update(block.id, {content: next})
-    }, {scope: ChangeScope.BlockDefault, description: 'insert place link'})
+  const deliverInsert = async (
+    {span, triggerText, insert}: {span: {from: number, to: number}, triggerText: string, insert: string},
+  ) => {
+    await replaceBlockText({
+      repo,
+      blockId: block.id,
+      locate: doc => locateText(doc, triggerText, span),
+      replacement: insert,
+      description: 'insert place link',
+    })
   }
 
-  return placeCompletionSource({getCandidates, resolvePlace, consumePendingCandidates, persistInsert})
+  return placeCompletionSource({getCandidates, resolvePlace, consumePendingCandidates, deliverInsert})
 }
 
 export const geoCodeMirrorExtensions: CodeMirrorExtensionContribution = (ctx) => {
