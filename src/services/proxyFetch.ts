@@ -70,9 +70,12 @@ export const proxyFetch = async (url: string | URL, init: ProxyFetchInit = {}): 
   if (!supabase || !endpoint) throw new ProxyFetchError('signed-out', 'Fetching other sites needs a signed-in account.')
   // A session near expiry is refreshed here, which needs the network. A refresh
   // Auth rejects outright has signed the user out.
-  const {data: {session}, error} = await supabase.auth.getSession().catch((reason: unknown): never => {
-    throw new ProxyFetchError('unreachable', `Couldn't load the session: ${reason}`)
-  })
+  const {data: {session}, error} = await unlessAborted(
+    supabase.auth.getSession().catch((reason: unknown): never => {
+      throw new ProxyFetchError('unreachable', `Couldn't load the session: ${reason}`)
+    }),
+    init.signal,
+  )
   if (error) {
     throw isAuthRetryableFetchError(error)
       ? new ProxyFetchError('unreachable', `Couldn't refresh the session: ${error.message}`)
@@ -97,16 +100,29 @@ export const proxyFetch = async (url: string | URL, init: ProxyFetchInit = {}): 
     if (init.signal?.aborted) throw error
     throw new ProxyFetchError('unreachable', `The proxy didn't answer: ${error}`)
   }
-  return readProxyResponse(wire)
+  return readProxyResponse(wire, init.signal)
 }
 
-const readProxyResponse = async (wire: Response): Promise<ProxyFetchResult> => {
+/** `promise`, or the abort reason as soon as `signal` aborts. */
+const unlessAborted = <T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> => {
+  if (!signal) return promise
+  signal.throwIfAborted()
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(signal.reason)
+    signal.addEventListener('abort', abort, {once: true})
+    promise.then(resolve, reject).finally(() => signal.removeEventListener('abort', abort))
+  })
+}
+
+const readProxyResponse = async (wire: Response, signal: AbortSignal | undefined): Promise<ProxyFetchResult> => {
   const redirects = readRedirects(wire.headers)
   const status = wire.headers.get(PROXY_STATUS_HEADER)
   if (status === null) {
     // Without X-Proxy-Status the answer isn't a target's: a refusal, or not the proxy at all.
     const code = wire.headers.get(PROXY_ERROR_HEADER)
     const body = await wire.json().catch(() => null) as {message?: unknown} | null
+    // An unreadable body is only a missing message, unless the caller aborted reading it.
+    signal?.throwIfAborted()
     throw code !== null && isProxyErrorCode(code)
       ? new ProxyFetchError(code, `The proxy refused: ${typeof body?.message === 'string' ? body.message : code}`, redirects)
       : new ProxyFetchError('unreachable', `The proxy is unavailable (HTTP ${wire.status}).`)

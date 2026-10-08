@@ -9,11 +9,13 @@ const state = vi.hoisted(() => ({
   session: null as null | {access_token: string, user: {is_anonymous?: boolean}},
   sessionError: null as unknown,
   sessionThrows: null as unknown,
+  sessionPending: false,
 }))
 
 vi.mock('@/data/repoProvider', () => ({isRemoteSyncActive: () => state.remoteSync}))
 vi.mock('@/services/supabase', () => ({
   supabase: {auth: {getSession: async () => {
+    if (state.sessionPending) return new Promise(() => {})
     if (state.sessionThrows) throw state.sessionThrows
     return {data: {session: state.session}, error: state.sessionError}
   }}},
@@ -40,6 +42,7 @@ beforeEach(() => {
   state.session = {access_token: 'user-token', user: {is_anonymous: false}}
   state.sessionError = null
   state.sessionThrows = null
+  state.sessionPending = false
 })
 
 afterEach(() => {
@@ -127,6 +130,30 @@ describe('proxyFetch', () => {
       throw init!.signal!.reason
     }))
     await expect(proxyFetch('https://example.com/', {signal: controller.signal})).rejects.toMatchObject({name: 'AbortError'})
+  })
+
+  it('rejects with the caller\'s abort while the session is still refreshing, sending nothing', async () => {
+    const {wire} = proxyOver({'https://example.com/': () => new Response('ok')})
+    state.sessionPending = true
+    const controller = new AbortController()
+    const pending = proxyFetch('https://example.com/', {signal: controller.signal})
+    controller.abort()
+    await expect(pending).rejects.toMatchObject({name: 'AbortError'})
+    expect(wire).not.toHaveBeenCalled()
+  })
+
+  it('rejects with the caller\'s abort while a refusal is still arriving', async () => {
+    const controller = new AbortController()
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(
+      new ReadableStream({start: stream => {
+        controller.signal.addEventListener('abort', () => stream.error(controller.signal.reason))
+      }}),
+      {status: 403, headers: {'x-proxy-error': 'blocked-address'}},
+    )))
+    const pending = proxyFetch('https://example.com/', {signal: controller.signal})
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalled())
+    controller.abort()
+    await expect(pending).rejects.toMatchObject({name: 'AbortError'})
   })
 
   describe('sends nothing', () => {

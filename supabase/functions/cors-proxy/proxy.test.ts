@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { createProxyHandler, DEFAULT_LIMITS, isPublicAddress, type ProxyLimits } from './proxy.ts'
 import { AUTH_URL, fakeNetwork, PUBLIC_IP, type Route, SUPABASE_URL } from './testNetwork.ts'
 
@@ -456,6 +456,25 @@ describe('response', () => {
     }, PUBLIC_DNS, limits)
     expect(errorOf(await call('https://example.com/'))).toEqual({status: 504, code: 'timeout'})
     expect(targetRequests()).toHaveLength(1)
+  })
+
+  it('stops the upstream work when the caller goes away', async () => {
+    let upstreamAborted = false
+    const {handler, targetRequests} = setup({
+      'https://example.com/': req => new Promise((_, reject) => req.signal.addEventListener('abort', () => {
+        upstreamAborted = true
+        reject(req.signal.reason)
+      })),
+    }, PUBLIC_DNS)
+    const caller = new AbortController()
+    const pending = handler(new Request(PROXY_ENDPOINT, {
+      headers: {authorization: 'Bearer user-token', apikey: 'publishable-key', 'x-proxy-url': 'https://example.com/'},
+      signal: caller.signal,
+    }))
+    await vi.waitFor(() => expect(targetRequests()).toHaveLength(1))
+    caller.abort()
+    await vi.waitFor(() => expect(upstreamAborted).toBe(true))
+    expect(errorOf(await pending).code).toBe('upstream-failed')
   })
 
   it('times out a body that stalls', async () => {

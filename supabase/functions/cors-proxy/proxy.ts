@@ -445,9 +445,10 @@ const handle = async (req: Request, deps: ProxyDeps, allowedOrigins: Set<string>
   if (req.method === 'OPTIONS') return preflight(req, cors)
 
   const hops: ProxyRedirect[] = []
-  // Not tied to `req.signal`, which Deno.serve aborts on every successful
-  // response; the timeout bounds the work instead.
-  const signal = AbortSignal.timeout(limits.timeoutMs)
+  // Ends the upstream work when the caller goes away, too. All of it is done
+  // before a response is returned, so Deno.serve aborting `req.signal` once a
+  // response completes cuts nothing short.
+  const signal = AbortSignal.any([req.signal, AbortSignal.timeout(limits.timeoutMs)])
   try {
     if (!ALLOWED_METHODS.has(req.method)) throw new Refusal('method-not-allowed', 'GET or HEAD')
     // Before reading the target or its headers, so a stranger learns nothing about what the proxy would fetch.
