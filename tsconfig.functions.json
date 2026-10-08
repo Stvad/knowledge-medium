@@ -1,0 +1,30 @@
+{
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.functions.tsbuildinfo",
+    "target": "ES2022",
+    // Web-standard globals only (fetch, Request, streams), which Deno shares.
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": [],
+    "module": "ESNext",
+    "skipLibCheck": true,
+
+    /* Bundler mode — matches the app/scripts configs. */
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+
+    /* Linting */
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedSideEffectImports": true
+  },
+  // Edge-function modules and their tests. Each function's entry uses Deno
+  // globals and is outside the gate: run `deno check supabase/functions/<name>/index.ts`
+  // after editing one, and keep the logic in plain modules beside it.
+  "include": ["supabase/functions"],
+  "exclude": ["supabase/functions/*/index.ts"]
+}
