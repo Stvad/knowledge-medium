@@ -34,6 +34,7 @@ import {
   todayIso,
 } from '@/plugins/daily-notes'
 import { todayDailyNoteLanding } from '@/plugins/daily-notes/landing.js'
+import { aliasDataExtension } from '@/plugins/alias/dataExtension.js'
 
 const WS = 'ws-1'
 
@@ -50,7 +51,10 @@ const setup = async (): Promise<Harness> => {
   const { repo, cache } = createTestRepo({
     db: h.db,
     user: {id: 'user-1'},
-    extensions: [dailyNotesDataExtension],
+    // `aliasDataExtension` is required, not optional: without it the processor
+    // that reconciles content against aliases does not run, and a repro of any
+    // bug involving it passes for that reason.
+    extensions: [dailyNotesDataExtension, aliasDataExtension],
   })
   return {h, cache, repo}
 }

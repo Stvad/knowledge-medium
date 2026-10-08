@@ -7,7 +7,7 @@ import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo, isBlockDeleted } from '@/data/test/createTestRepo'
 import { resolveFacetRuntimeSync } from '@/facets/facet.js'
-import { typesProp } from '@/data/properties.js'
+import { aliasesProp, getAliases, typesProp } from '@/data/properties.js'
 import {
   blockDateAdapterFacet,
   dailyNoteBlockId,
@@ -83,6 +83,34 @@ describe('srsBlockDateAdapter', () => {
 
   it('getCurrentIso resolves through the daily-note row', async () => {
     const target = await getOrCreateDailyNote(repo, WS, '2026-07-04')
+    await repo.tx(tx => tx.create({id: 'srs', workspaceId: WS, parentId: null, orderKey: 'a',
+      content: '',
+      properties: {
+        [typesProp.name]: typesProp.codec.encode([SRS_SM25_TYPE]),
+        [srsNextReviewDateProp.name]: srsNextReviewDateProp.codec.encode(target.id),
+      },
+    }), {scope: ChangeScope.BlockDefault})
+
+    const block = repo.block('srs')
+    await block.load()
+    expect(await srsBlockDateAdapter.getCurrentIso(block)).toBe('2026-07-04')
+  })
+
+  it('still resolves a day whose ISO name another page owns', async () => {
+    // The day yields a contested ISO alias rather than fighting for it, and
+    // its title is the long-form label — so scanning aliases finds nothing and
+    // the content fallback finds nothing either. A card scheduled for that day
+    // then reads as unscheduled: the reschedule sheet opens on today, and the
+    // scrub gesture commits nothing at all.
+    await repo.tx(async tx => {
+      await tx.create({id: 'rival', workspaceId: WS, parentId: null, orderKey: 'z',
+        content: 'Mine'})
+      await tx.setProperty('rival', aliasesProp, ['2026-07-04'])
+    }, {scope: ChangeScope.BlockDefault})
+    const target = await getOrCreateDailyNote(repo, WS, '2026-07-04')
+    // The precondition the test is about — without it nothing is contested.
+    expect(getAliases((await repo.load(target.id))!)).not.toContain('2026-07-04')
+
     await repo.tx(tx => tx.create({id: 'srs', workspaceId: WS, parentId: null, orderKey: 'a',
       content: '',
       properties: {
