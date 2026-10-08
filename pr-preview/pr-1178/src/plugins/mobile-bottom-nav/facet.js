@@ -1,1 +1,1 @@
-import{Kg as e}from"../../../chunks/app-BzvoLS7B.js";export{e as mobileBottomNavItemsFacet};
+import{Kg as e}from"../../../chunks/app-NmtH0K7U.js";export{e as mobileBottomNavItemsFacet};
