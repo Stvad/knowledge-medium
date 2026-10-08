@@ -14,8 +14,11 @@ const resolveDns = async (hostname: string, signal: AbortSignal): Promise<string
   return lookups.flatMap(lookup => (lookup.status === 'fulfilled' ? lookup.value : []))
 }
 
+// `allowHost`: the proxy names the host itself when it connects to a checked address.
+const client = Deno.createHttpClient({allowHost: true})
+
 Deno.serve(createProxyHandler({
   supabaseUrl,
-  fetch: (input, init) => fetch(input, init),
+  fetch: (input, init) => fetch(input, {...init, client}),
   resolveDns,
 }))

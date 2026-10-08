@@ -26,8 +26,12 @@ const setup = (
   const fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const req = new Request(input, init)
     requests.push(req)
-    const route = req.url === AUTH_URL ? (routes[AUTH_URL] ?? authRoute) : routes[req.url]
-    if (!route) throw new TypeError(`connection refused: ${req.url}`)
+    // Routed like a server with virtual hosts: by the Host header when one is sent.
+    const addressed = new URL(req.url)
+    const host = req.headers.get('host')
+    if (host) addressed.host = host
+    const route = addressed.href === AUTH_URL ? (routes[AUTH_URL] ?? authRoute) : routes[addressed.href]
+    if (!route) throw new TypeError(`connection refused: ${addressed.href}`)
     const response = await route(req)
     // Like real fetch: follows a redirect itself unless told not to.
     const location = response.headers.get('location')
@@ -246,6 +250,25 @@ describe('addresses', () => {
     },
   )
 
+  it('connects an http target to the address it checked, so the name is not resolved again', async () => {
+    const {call, targetRequests} = setup(
+      {'http://example.com:8080/page?q=1': () => new Response('ok')},
+      {'example.com': ['2606:4700::1111', PUBLIC_IP]},
+    )
+    const response = await call('http://example.com:8080/page?q=1')
+    expect(await response.text()).toBe('ok')
+    expect(response.headers.get('x-proxy-final-url')).toBe('http://example.com:8080/page?q=1')
+    const [target] = targetRequests()
+    expect([target.url, target.headers.get('host')]).toEqual([`http://${PUBLIC_IP}:8080/page?q=1`, 'example.com:8080'])
+  })
+
+  it('connects an https target by name, for its certificate check', async () => {
+    const {call, targetRequests} = setup({'https://example.com/page': () => new Response('ok')}, PUBLIC_DNS)
+    await call('https://example.com/page')
+    const [target] = targetRequests()
+    expect([target.url, target.headers.get('host')]).toEqual(['https://example.com/page', null])
+  })
+
   it('reports a name that does not resolve', async () => {
     const {call, targetRequests} = setup({})
     expect(await errorOf(await call('https://nowhere.example/'))).toEqual({status: 502, code: 'unresolvable'})
@@ -268,6 +291,15 @@ describe('redirects', () => {
     expect(response.headers.get('x-proxy-redirect-3')).toBeNull()
     expect(response.headers.get('x-proxy-final-url')).toBe('https://other.example/final')
     expect(await response.text()).toBe('done')
+  })
+
+  it('names the host only on the http hop it connects', async () => {
+    const {call, targetRequests} = setup({
+      'http://example.com/a': redirect('https://other.example/b'),
+      'https://other.example/b': () => new Response('ok'),
+    }, PUBLIC_DNS)
+    expect(await (await call('http://example.com/a')).text()).toBe('ok')
+    expect(targetRequests().map(req => req.headers.get('host'))).toEqual(['example.com', null])
   })
 
   it('refuses a redirect to an internal address without connecting to it', async () => {

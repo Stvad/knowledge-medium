@@ -61,6 +61,7 @@ export const DEFAULT_LIMITS: ProxyLimits = {
 export interface ProxyDeps {
   /** The project's own API URL; the caller's session is checked against its Auth. */
   supabaseUrl: string
+  /** Must send a `Host` header it's given (Deno: a client created with `allowHost`). */
   fetch: typeof fetch
   /** Every A and AAAA record for `hostname`; empty when it doesn't resolve. */
   resolveDns: (hostname: string, signal: AbortSignal) => Promise<string[]>
@@ -199,21 +200,41 @@ export const isPublicAddress = (text: string): boolean => {
 // (hosts file, search domains, mDNS).
 const LOCAL_NAME = /(?:^|\.)(?:localhost|local|internal|home\.arpa)$/
 
-/** The reason `url`'s host may not be fetched, or null when it's a public address. */
-const refuseHost = async (
+/** Refused, or allowed with the checked address to connect to (null when the
+ *  URL already names an address). */
+type HostVerdict = {refused: ProxyErrorCode} | {address: string | null}
+
+const vetHost = async (
   url: URL,
   resolveDns: ProxyDeps['resolveDns'],
   signal: AbortSignal,
-): Promise<ProxyErrorCode | null> => {
+): Promise<HostVerdict> => {
   const host = url.hostname.replace(/\.$/, '')
+  const literal = (address: string): HostVerdict =>
+    isPublicAddress(address) ? {address: null} : {refused: 'blocked-address'}
   // The URL parser normalizes every IPv4 spelling (hex, octal, a bare integer) to dotted decimal.
-  if (host.startsWith('[')) return isPublicAddress(host.slice(1, -1)) ? null : 'blocked-address'
-  if (parseIPv4(host)) return isPublicAddress(host) ? null : 'blocked-address'
-  if (!host.includes('.') || LOCAL_NAME.test(host)) return 'blocked-address'
+  if (host.startsWith('[')) return literal(host.slice(1, -1))
+  if (parseIPv4(host)) return literal(host)
+  if (!host.includes('.') || LOCAL_NAME.test(host)) return {refused: 'blocked-address'}
   const addresses = await resolveDns(host, signal)
-  if (addresses.length === 0) return 'unresolvable'
-  // Every record, not just one: `fetch` may connect to any of them.
-  return addresses.every(isPublicAddress) ? null : 'blocked-address'
+  if (addresses.length === 0) return {refused: 'unresolvable'}
+  // Every record, not just the one connected to: an https fetch resolves the name itself.
+  if (!addresses.every(isPublicAddress)) return {refused: 'blocked-address'}
+  return {address: addresses.find(address => parseIPv4(address)) ?? addresses[0]}
+}
+
+/** Where a hop connects. An http hop goes to the address `vetHost` checked,
+ *  with the name in `Host`, so nothing resolves the name a second time — the
+ *  window a DNS-rebinding attack needs. An https hop keeps its name: TLS binds
+ *  the connection to it, and an internal host can't present a certificate for
+ *  an attacker's domain. */
+const connection = (url: URL, address: string | null, headers: Headers): {target: URL, headers: Headers} => {
+  if (address === null || url.protocol !== 'http:') return {target: url, headers}
+  const target = new URL(url)
+  target.hostname = address.includes(':') ? `[${address}]` : address
+  const pinned = new Headers(headers)
+  pinned.set('host', url.host)
+  return {target, headers: pinned}
 }
 
 // --- request ----------------------------------------------------------------
@@ -276,7 +297,7 @@ const authenticate = async (req: Request, deps: ProxyDeps): Promise<Caller> => {
 
 // --- fetching ---------------------------------------------------------------
 
-/** Follows redirects one hop at a time so every hop's host passes `refuseHost`
+/** Follows redirects one hop at a time so every hop's host passes `vetHost`
  *  before anything connects to it. Records each hop in `hops`. */
 const follow = async (
   start: URL,
@@ -289,11 +310,12 @@ const follow = async (
 ): Promise<{response: Response, url: URL}> => {
   let url = start
   for (;;) {
-    const refusal = await refuseHost(url, deps.resolveDns, signal)
-    if (refusal) throw new Refusal(refusal, url.hostname)
+    const verdict = await vetHost(url, deps.resolveDns, signal)
+    if ('refused' in verdict) throw new Refusal(verdict.refused, url.hostname)
+    const hop = connection(url, verdict.address, headers)
     let response: Response
     try {
-      response = await deps.fetch(url, {method, headers, redirect: 'manual', signal})
+      response = await deps.fetch(hop.target, {method, headers: hop.headers, redirect: 'manual', signal})
     } catch {
       throw new Refusal('upstream-failed', url.hostname)
     }
