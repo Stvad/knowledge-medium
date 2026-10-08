@@ -1,1 +1,1 @@
-import{sA as e}from"../../chunks/app-MXJowIYd.js";export{e as BlockProperties};
+import{sA as e}from"../../chunks/app-DuBeWxvV.js";export{e as BlockProperties};

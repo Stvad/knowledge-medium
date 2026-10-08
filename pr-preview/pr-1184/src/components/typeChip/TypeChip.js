@@ -1,1 +1,1 @@
-import{mC as e}from"../../../chunks/app-MXJowIYd.js";export{e as TypeChip};
+import{mC as e}from"../../../chunks/app-DuBeWxvV.js";export{e as TypeChip};
