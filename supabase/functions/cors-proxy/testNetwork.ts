@@ -1,8 +1,9 @@
 /** A fake internet for the proxy's tests: exact-URL routes, the project's Auth,
  *  and a DNS table. Behaves like real fetch where the proxy depends on it:
- *  routes by the Host header when one is sent (virtual hosts), follows
- *  redirects itself unless told `manual`, and rejects at once on a signal that
- *  has already aborted (a route listening for `abort` would never hear it). */
+ *  routes by the Host header when one is sent (virtual hosts), handles a
+ *  redirect per the request's `redirect` mode, gives a HEAD response a null
+ *  body, and rejects at once on a signal that has already aborted (a route
+ *  listening for `abort` would never hear it). */
 
 export const SUPABASE_URL = 'https://project.test'
 export const AUTH_URL = `${SUPABASE_URL}/auth/v1/user`
@@ -33,10 +34,11 @@ export const fakeNetwork = (routes: Record<string, Route>, dns: Record<string, s
     if (!route) throw new TypeError(`connection refused: ${addressed.href}`)
     const response = await route(req)
     const location = response.headers.get('location')
-    if (req.redirect !== 'manual' && location && response.status >= 300 && response.status < 400) {
-      return fetch(new URL(location, req.url), init)
+    if (location && response.status >= 300 && response.status < 400) {
+      if (req.redirect === 'error') throw new TypeError(`redirected: ${req.url}`)
+      if (req.redirect === 'follow') return fetch(new URL(location, req.url), init)
     }
-    return response
+    return req.method === 'HEAD' ? new Response(null, {status: response.status, headers: response.headers}) : response
   }
   const resolveDns = async (hostname: string) => {
     lookups.push(hostname)

@@ -2,13 +2,17 @@
  * The cors-proxy wire protocol, shared by the edge function (`proxy.ts`) and
  * the browser client (`src/services/proxyFetch.ts`).
  *
- *   request   GET|HEAD with `X-Proxy-Url: <target>`; each `X-Proxy-Header-<name>`
- *             is sent to the target as `<name>`. Nothing else the caller sends
+ *   request   GET|HEAD with `X-Proxy-Url: <target>` (see `fetchableUrl`); each
+ *             `X-Proxy-Header-<name>` is sent to the target as `<name>`, except
+ *             ones the proxy owns (Host, Cookie, Accept-Encoding, connection
+ *             framing), which are refused. Nothing else the caller sends
  *             reaches the target.
  *   response  200 with `X-Proxy-Status` (the target's status),
  *             `X-Proxy-Final-Url`, one `X-Proxy-Redirect-<n>: <status> <url>` per
- *             redirect followed, each target header as `X-Proxy-Header-<name>`,
- *             and the target's body.
+ *             redirect followed, the target's headers as `X-Proxy-Header-<name>`
+ *             (without cookies, hop-by-hop headers, and, when a body is
+ *             relayed, Content-Length and Content-Encoding), and the target's
+ *             body, decoded.
  *   failure   non-200 with `X-Proxy-Error: <code>`, the redirects followed so
  *             far, and a JSON `{error, message}`. A response without
  *             `X-Proxy-Status` never came from a target.
@@ -68,4 +72,17 @@ export const readRedirects = (headers: Headers): ProxyRedirect[] => {
     const space = value.indexOf(' ')
     redirects.push({status: Number(value.slice(0, space)), location: value.slice(space + 1)})
   }
+}
+
+/** A URL the proxy will fetch: absolute http(s), no embedded credentials (fetch refuses them too). */
+export const fetchableUrl = (text: string, base?: URL): URL | null => {
+  let url: URL
+  try {
+    url = new URL(text, base)
+  } catch {
+    return null
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return null
+  if (url.username || url.password) return null
+  return url
 }

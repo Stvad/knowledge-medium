@@ -1,9 +1,11 @@
 /** `fetch` for URLs a browser can't read cross-origin, through the `cors-proxy`
  *  edge function. The wire protocol is in `supabase/functions/cors-proxy/protocol.ts`. */
 
+import { isAuthRetryableFetchError } from '@supabase/supabase-js'
 import { isRemoteSyncActive } from '@/data/repoProvider'
 import { edgeFunctionEndpoint, supabase } from '@/services/supabase'
 import {
+  fetchableUrl,
   isProxyErrorCode,
   PROXY_ERROR_HEADER,
   PROXY_FINAL_URL_HEADER,
@@ -31,15 +33,17 @@ export interface ProxyFetchResult {
 
 export interface ProxyFetchInit {
   method?: 'GET' | 'HEAD'
-  /** Sent to the target, and nothing else is. The proxy refuses Cookie, Host
-   *  and connection headers, and drops Authorization on a cross-origin redirect. */
+  /** Sent to the target, and nothing else is. The proxy refuses Cookie, Host,
+   *  Accept-Encoding and connection headers, and drops Authorization on a
+   *  cross-origin redirect. */
   headers?: HeadersInit
   signal?: AbortSignal
 }
 
 /** Refused here before anything is sent (`local-only`, `signed-out`,
- *  `anonymous-session`, `invalid-url`); no answer from the proxy (`unreachable`:
- *  network, session refresh, not deployed); or the proxy's own refusal. */
+ *  `anonymous-session`, `invalid-url`); no answer this client can read
+ *  (`unreachable`: network, session refresh, not deployed, or a refusal code it
+ *  doesn't know); or the proxy's own refusal. */
 export type ProxyFetchErrorCode = ProxyErrorCode | 'local-only' | 'signed-out' | 'unreachable'
 
 export class ProxyFetchError extends Error {
@@ -58,21 +62,22 @@ export class ProxyFetchError extends Error {
  *  `ProxyFetchError` when the proxy can't serve the request, and with the
  *  caller's abort reason when `init.signal` aborts. */
 export const proxyFetch = async (url: string | URL, init: ProxyFetchInit = {}): Promise<ProxyFetchResult> => {
-  let target: string
-  try {
-    // Serialized: a header value must be ASCII, and `href` percent-encodes the rest.
-    target = new URL(url).href
-  } catch {
-    throw new ProxyFetchError('invalid-url', `Not an absolute URL: ${url}`)
-  }
+  const target = fetchableUrl(String(url))
+  if (!target) throw new ProxyFetchError('invalid-url', `Not an http(s) URL the proxy will fetch: ${url}`)
   // `supabase` being non-null only means auth is CONFIGURED; a local-only session sends nothing.
   if (!isRemoteSyncActive()) throw new ProxyFetchError('local-only', 'Fetching other sites needs sync, and this session is local-only.')
   const endpoint = edgeFunctionEndpoint(CORS_PROXY_FUNCTION)
   if (!supabase || !endpoint) throw new ProxyFetchError('signed-out', 'Fetching other sites needs a signed-in account.')
-  // A session near expiry is refreshed here, which needs the network.
-  const {data: {session}, error} = await supabase.auth.getSession()
-    .catch((reason: unknown) => ({data: {session: null}, error: reason}))
-  if (error) throw new ProxyFetchError('unreachable', `Couldn't refresh the session: ${error}`)
+  // A session near expiry is refreshed here, which needs the network. A refresh
+  // Auth rejects outright has signed the user out.
+  const {data: {session}, error} = await supabase.auth.getSession().catch((reason: unknown): never => {
+    throw new ProxyFetchError('unreachable', `Couldn't load the session: ${reason}`)
+  })
+  if (error) {
+    throw isAuthRetryableFetchError(error)
+      ? new ProxyFetchError('unreachable', `Couldn't refresh the session: ${error.message}`)
+      : new ProxyFetchError('signed-out', `The session ended: ${error.message}`)
+  }
   if (!session) throw new ProxyFetchError('signed-out', 'Fetching other sites needs a signed-in account.')
   // The proxy refuses these too; checking here saves the round trip.
   if (session.user.is_anonymous) throw new ProxyFetchError('anonymous-session', 'Fetching other sites needs an account signed in with email.')
@@ -80,7 +85,8 @@ export const proxyFetch = async (url: string | URL, init: ProxyFetchInit = {}): 
   const headers = new Headers({
     authorization: `Bearer ${session.access_token}`,
     apikey: endpoint.apiKey,
-    [PROXY_URL_HEADER]: target,
+    // `href` is ASCII, as a header value must be: it percent-encodes the rest.
+    [PROXY_URL_HEADER]: target.href,
   })
   new Headers(init.headers).forEach((value, name) => headers.append(`${PROXY_HEADER_PREFIX}${name}`, value))
 

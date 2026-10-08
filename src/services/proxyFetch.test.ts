@@ -1,3 +1,4 @@
+import { AuthError, AuthRetryableFetchError } from '@supabase/supabase-js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createProxyHandler } from '../../supabase/functions/cors-proxy/proxy.ts'
 import { fakeNetwork, PUBLIC_IP, type Route, SUPABASE_URL } from '../../supabase/functions/cors-proxy/testNetwork.ts'
@@ -131,16 +132,22 @@ describe('proxyFetch', () => {
   describe('sends nothing', () => {
     it.each([
       ['for a URL that isn\'t absolute', '/relative', () => {}, 'invalid-url'],
+      ['for a URL that isn\'t http(s)', 'ftp://example.com/file', () => {}, 'invalid-url'],
+      ['for a URL carrying credentials', 'https://user:secret@example.com/', () => {}, 'invalid-url'],
       ['from a local-only session', 'https://example.com/', () => {
         state.remoteSync = false
       }, 'local-only'],
       ['without a session', 'https://example.com/', () => {
         state.session = null
       }, 'signed-out'],
-      ['when the session can\'t be refreshed', 'https://example.com/', () => {
+      ['when the session can\'t be refreshed for now', 'https://example.com/', () => {
         state.session = null
-        state.sessionError = new Error('Failed to fetch')
+        state.sessionError = new AuthRetryableFetchError('Failed to fetch', 0)
       }, 'unreachable'],
+      ['when Auth rejects the refresh, which signs the user out', 'https://example.com/', () => {
+        state.session = null
+        state.sessionError = new AuthError('Invalid Refresh Token: Refresh Token Not Found', 400)
+      }, 'signed-out'],
       ['when refreshing the session throws', 'https://example.com/', () => {
         state.sessionThrows = new TypeError('Failed to fetch')
       }, 'unreachable'],

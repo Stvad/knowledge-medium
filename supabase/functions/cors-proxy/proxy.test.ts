@@ -29,7 +29,7 @@ const setup = (
 
 const PUBLIC_DNS = {'example.com': [PUBLIC_IP], 'other.example': [PUBLIC_IP]}
 
-const errorOf = async (response: Response) => ({
+const errorOf = (response: Response) => ({
   status: response.status,
   code: response.headers.get('x-proxy-error'),
 })
@@ -60,58 +60,62 @@ describe('authentication', () => {
 
   it('refuses a caller with no session, before fetching anything', async () => {
     const {call, requests} = setup(routes, PUBLIC_DNS)
-    expect(await errorOf(await call('https://example.com/', {token: null}))).toEqual({status: 401, code: 'unauthenticated'})
+    expect(errorOf(await call('https://example.com/', {token: null}))).toEqual({status: 401, code: 'unauthenticated'})
     expect(requests).toEqual([])
   })
 
   it('refuses a token Auth rejects, such as the publishable key', async () => {
     const {call, targetRequests} = setup(routes, PUBLIC_DNS)
-    expect(await errorOf(await call('https://example.com/', {token: 'publishable-key'}))).toEqual({status: 401, code: 'unauthenticated'})
+    expect(errorOf(await call('https://example.com/', {token: 'publishable-key'}))).toEqual({status: 401, code: 'unauthenticated'})
     expect(targetRequests()).toEqual([])
   })
 
   it('refuses an anonymous session', async () => {
     const {call, targetRequests} = setup(routes, PUBLIC_DNS)
-    expect(await errorOf(await call('https://example.com/', {token: 'anonymous-token'}))).toEqual({status: 403, code: 'anonymous-session'})
+    expect(errorOf(await call('https://example.com/', {token: 'anonymous-token'}))).toEqual({status: 403, code: 'anonymous-session'})
     expect(targetRequests()).toEqual([])
   })
 
   it('refuses when Auth answers without a user', async () => {
     const {call, targetRequests} = setup({...routes, [AUTH_URL]: () => Response.json({})}, PUBLIC_DNS)
-    expect(await errorOf(await call('https://example.com/'))).toEqual({status: 401, code: 'unauthenticated'})
+    expect(errorOf(await call('https://example.com/'))).toEqual({status: 401, code: 'unauthenticated'})
     expect(targetRequests()).toEqual([])
   })
 
   it.each([
-    ['a 5xx with an error body', 503, 'auth-unavailable'],
+    ['a 5xx, even one shaped like a user', 503, 'auth-unavailable'],
     ['a 4xx, even one shaped like a user', 403, 'unauthenticated'],
   ])('reads %s from Auth as a refusal', async (_, status, code) => {
     const {call, targetRequests} = setup({...routes, [AUTH_URL]: () => Response.json({id: 'user-1', is_anonymous: false}, {status})}, PUBLIC_DNS)
-    expect((await errorOf(await call('https://example.com/'))).code).toBe(code)
+    expect((errorOf(await call('https://example.com/'))).code).toBe(code)
     expect(targetRequests()).toEqual([])
   })
 
   it('fails closed when Auth answers 200 with something unreadable', async () => {
     const {call, targetRequests} = setup({...routes, [AUTH_URL]: () => new Response('<html>maintenance</html>')}, PUBLIC_DNS)
-    expect(await errorOf(await call('https://example.com/'))).toEqual({status: 503, code: 'auth-unavailable'})
+    expect(errorOf(await call('https://example.com/'))).toEqual({status: 503, code: 'auth-unavailable'})
     expect(targetRequests()).toEqual([])
   })
 
   it('fails closed when Auth is unreachable', async () => {
     const {call, targetRequests} = setup({...routes, [AUTH_URL]: () => { throw new TypeError('connection reset') }}, PUBLIC_DNS)
-    expect(await errorOf(await call('https://example.com/'))).toEqual({status: 503, code: 'auth-unavailable'})
+    expect(errorOf(await call('https://example.com/'))).toEqual({status: 503, code: 'auth-unavailable'})
     expect(targetRequests()).toEqual([])
   })
 
   it('authenticates before validating the request', async () => {
     const {call} = setup({}, PUBLIC_DNS)
-    expect(await errorOf(await call('file:///etc/passwd', {token: null}))).toEqual({status: 401, code: 'unauthenticated'})
+    expect(errorOf(await call('file:///etc/passwd', {token: null}))).toEqual({status: 401, code: 'unauthenticated'})
   })
 
-  it('fails closed when Auth is down', async () => {
-    const {call, targetRequests} = setup({...routes, [AUTH_URL]: () => new Response('', {status: 502})}, PUBLIC_DNS)
-    expect(await errorOf(await call('https://example.com/'))).toEqual({status: 503, code: 'auth-unavailable'})
-    expect(targetRequests()).toEqual([])
+  it('does not follow a redirect from Auth', async () => {
+    const {call, targetRequests} = setup({
+      ...routes,
+      [AUTH_URL]: () => new Response(null, {status: 302, headers: {location: 'https://elsewhere.example/user'}}),
+      'https://elsewhere.example/user': () => Response.json({id: 'user-1', is_anonymous: false}),
+    }, PUBLIC_DNS)
+    expect(errorOf(await call('https://example.com/'))).toEqual({status: 503, code: 'auth-unavailable'})
+    expect(targetRequests().map(req => req.url)).toEqual([])
   })
 
   it('checks the session with the caller\'s own credentials', async () => {
@@ -152,9 +156,9 @@ describe('request', () => {
     ])
   })
 
-  it.each(['cookie', 'host', 'proxy-authorization', 'transfer-encoding'])('refuses to send %s to a target', async name => {
+  it.each(['cookie', 'host', 'proxy-authorization', 'transfer-encoding', 'accept-encoding'])('refuses to send %s to a target', async name => {
     const {call, targetRequests} = setup({'https://example.com/': () => new Response('ok')}, PUBLIC_DNS)
-    expect(await errorOf(await call('https://example.com/', {headers: {[`x-proxy-header-${name}`]: 'x'}})))
+    expect(errorOf(await call('https://example.com/', {headers: {[`x-proxy-header-${name}`]: 'x'}})))
       .toEqual({status: 400, code: 'forbidden-header'})
     expect(targetRequests()).toEqual([])
   })
@@ -166,13 +170,13 @@ describe('request', () => {
     ['carrying credentials', 'https://user:pass@example.com/'],
   ])('refuses a target URL that is %s', async (_, target) => {
     const {call, targetRequests} = setup({}, PUBLIC_DNS)
-    expect(await errorOf(await call(target))).toEqual({status: 400, code: 'invalid-url'})
+    expect(errorOf(await call(target))).toEqual({status: 400, code: 'invalid-url'})
     expect(targetRequests()).toEqual([])
   })
 
   it.each(['POST', 'PUT', 'DELETE'])('refuses %s', async method => {
     const {call, requests} = setup({'https://example.com/': () => new Response('ok')}, PUBLIC_DNS)
-    expect(await errorOf(await call('https://example.com/', {method}))).toEqual({status: 405, code: 'method-not-allowed'})
+    expect(errorOf(await call('https://example.com/', {method}))).toEqual({status: 405, code: 'method-not-allowed'})
     expect(requests).toEqual([])
   })
 
@@ -198,7 +202,7 @@ describe('addresses', () => {
     'http://[::1]/', 'http://[::ffff:127.0.0.1]/', 'http://10.0.0.1:8080/',
   ])('refuses the literal address %s without resolving anything', async target => {
     const {call, targetRequests, lookups} = setup({}, PUBLIC_DNS)
-    expect(await errorOf(await call(target))).toEqual({status: 403, code: 'blocked-address'})
+    expect(errorOf(await call(target))).toEqual({status: 403, code: 'blocked-address'})
     expect(targetRequests()).toEqual([])
     expect(lookups).toEqual([])
   })
@@ -210,13 +214,13 @@ describe('addresses', () => {
 
   it('refuses a name that resolves to a private address', async () => {
     const {call, targetRequests} = setup({}, {'internal.example.com': ['10.0.0.5']})
-    expect(await errorOf(await call('https://internal.example.com/'))).toEqual({status: 403, code: 'blocked-address'})
+    expect(errorOf(await call('https://internal.example.com/'))).toEqual({status: 403, code: 'blocked-address'})
     expect(targetRequests()).toEqual([])
   })
 
   it('refuses a name when any of its records is private', async () => {
     const {call, targetRequests} = setup({}, {'mixed.example.com': [PUBLIC_IP, '::1']})
-    expect(await errorOf(await call('https://mixed.example.com/'))).toEqual({status: 403, code: 'blocked-address'})
+    expect(errorOf(await call('https://mixed.example.com/'))).toEqual({status: 403, code: 'blocked-address'})
     expect(targetRequests()).toEqual([])
   })
 
@@ -230,7 +234,7 @@ describe('addresses', () => {
     async target => {
       const host = new URL(target).hostname.replace(/\.+$/, '')
       const {call, targetRequests} = setup({[target]: () => new Response('ok')}, {[host]: [PUBLIC_IP]})
-      expect(await errorOf(await call(target))).toEqual({status: 403, code: 'blocked-address'})
+      expect(errorOf(await call(target))).toEqual({status: 403, code: 'blocked-address'})
       expect(targetRequests()).toEqual([])
     },
   )
@@ -256,7 +260,7 @@ describe('addresses', () => {
 
   it('reports a name that does not resolve', async () => {
     const {call, targetRequests} = setup({})
-    expect(await errorOf(await call('https://nowhere.example/'))).toEqual({status: 502, code: 'unresolvable'})
+    expect(errorOf(await call('https://nowhere.example/'))).toEqual({status: 502, code: 'unresolvable'})
     expect(targetRequests()).toEqual([])
   })
 })
@@ -293,7 +297,7 @@ describe('redirects', () => {
       'http://169.254.169.254/latest/meta-data/': () => new Response('secrets'),
     }, PUBLIC_DNS)
     const response = await call('https://example.com/')
-    expect(await errorOf(response)).toEqual({status: 403, code: 'blocked-address'})
+    expect(errorOf(response)).toEqual({status: 403, code: 'blocked-address'})
     expect(response.headers.get('x-proxy-redirect-1')).toBe('302 http://169.254.169.254/latest/meta-data/')
     expect(targetRequests().map(req => req.url)).toEqual(['https://example.com/'])
   })
@@ -303,13 +307,13 @@ describe('redirects', () => {
       'https://example.com/': redirect('https://rebind.example.net/'),
       'https://rebind.example.net/': () => new Response('internal'),
     }, {...PUBLIC_DNS, 'rebind.example.net': ['127.0.0.1']})
-    expect(await errorOf(await call('https://example.com/'))).toEqual({status: 403, code: 'blocked-address'})
+    expect(errorOf(await call('https://example.com/'))).toEqual({status: 403, code: 'blocked-address'})
     expect(targetRequests().map(req => req.url)).toEqual(['https://example.com/'])
   })
 
   it('refuses a redirect out of http(s)', async () => {
     const {call} = setup({'https://example.com/': redirect('file:///etc/passwd')}, PUBLIC_DNS)
-    expect(await errorOf(await call('https://example.com/'))).toEqual({status: 502, code: 'bad-redirect'})
+    expect(errorOf(await call('https://example.com/'))).toEqual({status: 502, code: 'bad-redirect'})
   })
 
   it('gives up past the hop cap', async () => {
@@ -320,7 +324,7 @@ describe('redirects', () => {
       'https://example.com/3': redirect('/4'),
       'https://example.com/4': () => new Response('too far'),
     }, PUBLIC_DNS, limits)
-    expect(await errorOf(await call('https://example.com/1'))).toEqual({status: 502, code: 'too-many-redirects'})
+    expect(errorOf(await call('https://example.com/1'))).toEqual({status: 502, code: 'too-many-redirects'})
     expect(targetRequests()).toHaveLength(3)
   })
 
@@ -348,7 +352,18 @@ describe('redirects', () => {
     ])
   })
 
-  it('relays a 3xx with no Location as the final response', async () => {
+  it('relays a Location on a status that isn\'t a redirect, without following it', async () => {
+    const {call, targetRequests} = setup({
+      'https://example.com/items': () => new Response('created', {status: 201, headers: {location: '/items/1'}}),
+      'https://example.com/items/1': () => new Response('the item'),
+    }, PUBLIC_DNS)
+    const response = await call('https://example.com/items')
+    expect(response.headers.get('x-proxy-status')).toBe('201')
+    expect(response.headers.get('x-proxy-header-location')).toBe('/items/1')
+    expect(targetRequests()).toHaveLength(1)
+  })
+
+  it('relays a 304\'s declared Content-Length, uncapped', async () => {
     const limits = {...DEFAULT_LIMITS, maxBodyBytes: 4}
     const {call} = setup({'https://example.com/': () => new Response(null, {status: 304, headers: {'content-length': '1000'}})}, PUBLIC_DNS, limits)
     const response = await call('https://example.com/')
@@ -410,14 +425,14 @@ describe('response', () => {
       pulled = true
     }}, {highWaterMark: 0})
     const {call} = setup({'https://example.com/': () => new Response(body, {headers: {'content-length': '1000000'}})}, PUBLIC_DNS, limits)
-    expect(await errorOf(await call('https://example.com/'))).toEqual({status: 502, code: 'response-too-large'})
+    expect(errorOf(await call('https://example.com/'))).toEqual({status: 502, code: 'response-too-large'})
     expect(pulled).toBe(false)
   })
 
   it('refuses a body that grows past the size cap', async () => {
     const limits = {...DEFAULT_LIMITS, maxBodyBytes: 4}
     const {call} = setup({'https://example.com/': () => new Response('too long')}, PUBLIC_DNS, limits)
-    expect(await errorOf(await call('https://example.com/'))).toEqual({status: 502, code: 'response-too-large'})
+    expect(errorOf(await call('https://example.com/'))).toEqual({status: 502, code: 'response-too-large'})
   })
 
   it('refuses a body that fails mid-read', async () => {
@@ -426,7 +441,7 @@ describe('response', () => {
       controller.error(new TypeError('connection reset'))
     }})
     const {call} = setup({'https://example.com/': () => new Response(body)}, PUBLIC_DNS)
-    expect(await errorOf(await call('https://example.com/'))).toEqual({status: 502, code: 'upstream-failed'})
+    expect(errorOf(await call('https://example.com/'))).toEqual({status: 502, code: 'upstream-failed'})
   })
 
   it('times out when the deadline passes before the target is reached', async () => {
@@ -439,7 +454,7 @@ describe('response', () => {
       [AUTH_URL]: slowAuth,
       'https://example.com/': req => new Promise((_, reject) => req.signal.addEventListener('abort', () => reject(req.signal.reason))),
     }, PUBLIC_DNS, limits)
-    expect(await errorOf(await call('https://example.com/'))).toEqual({status: 504, code: 'timeout'})
+    expect(errorOf(await call('https://example.com/'))).toEqual({status: 504, code: 'timeout'})
     expect(targetRequests()).toHaveLength(1)
   })
 
@@ -451,19 +466,66 @@ describe('response', () => {
         req.signal.addEventListener('abort', () => controller.error(req.signal.reason))
       }})),
     }, PUBLIC_DNS, limits)
-    expect(await errorOf(await call('https://example.com/'))).toEqual({status: 504, code: 'timeout'})
+    expect(errorOf(await call('https://example.com/'))).toEqual({status: 504, code: 'timeout'})
+  })
+
+  it.each([
+    ['gzip', {}],
+    [' BR ', {}],
+    ['identity', {'x-proxy-header-range': 'bytes=0-9'}],
+  ])('relays a body fetch decoded (content-encoding %j)', async (coding, headers) => {
+    const {call} = setup({'https://example.com/': () => new Response('decoded', {headers: {'content-encoding': coding}})}, PUBLIC_DNS)
+    const response = await call('https://example.com/', {headers})
+    expect(response.headers.get('x-proxy-status')).toBe('200')
+    expect(await response.text()).toBe('decoded')
+  })
+
+  it.each([
+    ['deflate', {}],
+    ['x-gzip', {}],
+    ['gzip, gzip', {}],
+    ['gzip', {'x-proxy-header-range': 'bytes=0-9'}],
+  ])('refuses a body fetch left encoded (content-encoding %j)', async (coding, headers) => {
+    const {call} = setup({'https://example.com/': () => new Response('\x78\x9c', {headers: {'content-encoding': coding}})}, PUBLIC_DNS)
+    expect(errorOf(await call('https://example.com/', {headers}))).toEqual({status: 502, code: 'upstream-failed'})
+  })
+
+  it('reassembles a body larger than the first buffer, however it is chunked', async () => {
+    const chunks = [200_000, 70_000, 1].map((size, index) => new Uint8Array(size).fill(index + 1))
+    const body = new ReadableStream<Uint8Array>({start: controller => {
+      chunks.forEach(chunk => controller.enqueue(chunk))
+      controller.close()
+    }})
+    const {call} = setup({'https://example.com/': () => new Response(body)}, PUBLIC_DNS)
+    const relayed = new Uint8Array(await (await call('https://example.com/')).arrayBuffer())
+    expect(relayed.length).toBe(270_001)
+    expect([relayed[0], relayed[199_999], relayed[200_000], relayed[269_999], relayed[270_000]]).toEqual([1, 1, 2, 2, 3])
+  })
+
+  it('copies each chunk as it arrives rather than keeping the source\'s buffer', async () => {
+    const shared = new Uint8Array(64)
+    const encoder = new TextEncoder()
+    let sent = 0
+    const body = new ReadableStream<Uint8Array>({pull: controller => {
+      if (sent === 2) return controller.close()
+      shared.set(encoder.encode(sent === 0 ? 'ab' : 'cd'))
+      controller.enqueue(shared.subarray(0, 2))
+      sent++
+    }}, {highWaterMark: 0})
+    const {call} = setup({'https://example.com/': () => new Response(body)}, PUBLIC_DNS)
+    expect(await (await call('https://example.com/')).text()).toBe('abcd')
   })
 
   it.each([999, 600, 101])('refuses a target status a Response cannot carry (%i)', async status => {
     const odd = new Response('odd')
     Object.defineProperty(odd, 'status', {value: status})
     const {call} = setup({'https://example.com/': () => odd}, PUBLIC_DNS)
-    expect(await errorOf(await call('https://example.com/'))).toEqual({status: 502, code: 'upstream-failed'})
+    expect(errorOf(await call('https://example.com/'))).toEqual({status: 502, code: 'upstream-failed'})
   })
 
   it('reports a target that cannot be reached', async () => {
     const {call} = setup({}, PUBLIC_DNS)
-    expect(await errorOf(await call('https://example.com/'))).toEqual({status: 502, code: 'upstream-failed'})
+    expect(errorOf(await call('https://example.com/'))).toEqual({status: 502, code: 'upstream-failed'})
   })
 
   it('times out a target that does not answer', async () => {
@@ -471,7 +533,7 @@ describe('response', () => {
     const {call} = setup({
       'https://example.com/': req => new Promise((_, reject) => req.signal.addEventListener('abort', () => reject(req.signal.reason))),
     }, PUBLIC_DNS, limits)
-    expect(await errorOf(await call('https://example.com/'))).toEqual({status: 504, code: 'timeout'})
+    expect(errorOf(await call('https://example.com/'))).toEqual({status: 504, code: 'timeout'})
   })
 })
 
@@ -510,6 +572,16 @@ describe('CORS', () => {
     expect(await allowed('https://notes.example.com')).toBe(true)
     expect(await allowed('http://localhost:5173')).toBe(true)
     expect(await allowed('https://stvad.github.io')).toBe(false)
+  })
+
+  it.each([
+    ['an opaque origin', 'file:///home/app.html', 'null', false],
+    ['an empty setting, which means the app\'s own', ' ', 'https://stvad.github.io', true],
+  ])('reads %s in the allowed origins', async (_, allowedOrigins, origin, allowed) => {
+    const network = fakeNetwork({})
+    const handler = createProxyHandler({supabaseUrl: SUPABASE_URL, fetch: network.fetch, resolveDns: network.resolveDns, allowedOrigins})
+    const response = await handler(new Request(PROXY_ENDPOINT, {method: 'OPTIONS', headers: {origin}}))
+    expect(response.headers.get('access-control-allow-origin') === origin).toBe(allowed)
   })
 
   it('answers a preflight without authentication or fetching', async () => {
