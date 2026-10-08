@@ -115,6 +115,12 @@ describe('findGoogleMapsLinks', () => {
     ])
   })
 
+  it("reads a markdown link's destination, never a URL in its label", () => {
+    expect(findGoogleMapsLinks('[https://maps.app.goo.gl/label](https://example.com)')).toEqual([])
+    const both = '[https://maps.app.goo.gl/label](https://maps.app.goo.gl/target)'
+    expect(findGoogleMapsLinks(both)).toEqual([{from: 0, to: both.length, url: 'https://maps.app.goo.gl/target'}])
+  })
+
   it('leaves links in code and images alone', () => {
     const text = [
       'inline `https://maps.app.goo.gl/inline` code',

@@ -3,9 +3,12 @@
  *  gone, and an editor may have unmounted or mounted — so the target is
  *  re-located with the caller's `Locate` (which knows what the target IS,
  *  not just its text), in the block's text wherever it lives at THAT
- *  moment: its live editor if one is mounted, else the stored content. */
+ *  moment: its live editor if one is mounted, else the stored content.
+ *
+ *  Every write runs its guards (editor ownership, read-only) synchronously
+ *  right before writing — never across an await, where an editor can open
+ *  or the workspace's role can change. */
 
-import type { EditorView } from '@codemirror/view'
 import { ChangeScope } from '@/data/api'
 import type { Repo } from '@/data/repo'
 import { flushEditorContent } from '@/editor/contentFlush'
@@ -33,13 +36,22 @@ export const locateText = (doc: string, text: string, near?: TextSpan): TextSpan
 /** The text a replacement would act on now; `null` when the block is gone. */
 export const readBlockText = async (repo: Repo, blockId: string): Promise<string | null> => {
   const data = await repo.load(blockId)
+  if (!data || data.deleted) return null
   // After the load, not before: an editor that mounted during it leads the row.
-  const editor = liveEditorFor(blockId)
-  if (editor) return editor.state.doc.toString()
-  return data && !data.deleted ? data.content : null
+  return liveEditorFor(blockId)?.state.doc.toString() ?? data.content
 }
 
-const replaceInEditor = (view: EditorView, locate: Locate, replacement: string): boolean => {
+/** `null` when no editor owns the block's text right now. */
+const replaceInLiveEditor = (
+  repo: Repo,
+  blockId: string,
+  locate: Locate,
+  replacement: string,
+): boolean | null => {
+  const view = liveEditorFor(blockId)
+  if (!view) return null
+  // The editor writes no tx until its flush, which a read-only repo rejects.
+  if (repo.isReadOnly) return false
   const at = locate(view.state.doc.toString())
   if (at === null) return false
   // No explicit selection: the caret maps through the change, so it stays
@@ -53,8 +65,8 @@ const replaceInEditor = (view: EditorView, locate: Locate, replacement: string):
 }
 
 /** Read-modify-write inside a tx, so a concurrent editor flush can't be
- *  clobbered. `editor-mounted`: an editor opened while the tx waited for
- *  its lock, and now owns the text — nothing was written. */
+ *  clobbered. `editor-mounted`: an editor opened before the write and now
+ *  owns the text — nothing was written. */
 const replaceInStoredContent = async (
   repo: Repo,
   blockId: string,
@@ -64,12 +76,12 @@ const replaceInStoredContent = async (
 ): Promise<'replaced' | 'absent' | 'editor-mounted'> => {
   let outcome: 'replaced' | 'absent' | 'editor-mounted' = 'absent'
   await repo.tx(async tx => {
+    const data = await tx.get(blockId)
     if (liveEditorFor(blockId)) {
       outcome = 'editor-mounted'
       return
     }
-    const data = await tx.get(blockId)
-    if (!data || data.deleted) return
+    if (repo.isReadOnly || !data || data.deleted) return
     const at = locate(data.content)
     if (at === null) return
     await tx.update(blockId, {
@@ -80,9 +92,9 @@ const replaceInStoredContent = async (
   return outcome
 }
 
-/** False when the target is gone, or the workspace has turned read-only
- *  while the async work ran. While an editor is mounted only ITS text
- *  counts — the stored row trails it and may still hold the target. */
+/** False when the target is gone or the workspace is read-only. While an
+ *  editor is mounted only ITS text counts — the stored row trails it and
+ *  may still hold the target. */
 export const replaceBlockText = async (args: {
   repo: Repo
   blockId: string
@@ -90,15 +102,10 @@ export const replaceBlockText = async (args: {
   replacement: string
   description: string
 }): Promise<boolean> => {
-  // Checked here, at write time: the editor path writes no tx until its
-  // flush, which a read-only repo would then reject.
-  if (args.repo.isReadOnly) return false
-  const viaEditor = (): boolean | null => {
-    const editor = liveEditorFor(args.blockId)
-    return editor ? replaceInEditor(editor, args.locate, args.replacement) : null
-  }
-  const before = viaEditor()
-  if (before !== null) return before
-  const stored = await replaceInStoredContent(args.repo, args.blockId, args.locate, args.replacement, args.description)
-  return stored === 'editor-mounted' ? viaEditor() ?? false : stored === 'replaced'
+  const {repo, blockId, locate, replacement} = args
+  const direct = replaceInLiveEditor(repo, blockId, locate, replacement)
+  if (direct !== null) return direct
+  const stored = await replaceInStoredContent(repo, blockId, locate, replacement, args.description)
+  if (stored !== 'editor-mounted') return stored === 'replaced'
+  return replaceInLiveEditor(repo, blockId, locate, replacement) ?? false
 }

@@ -131,9 +131,87 @@ describe('replaceBlockText', () => {
       view?.destroy()
     }
   })
+
+  // The user opens the block, and the repo's role may flip, while the tx
+  // is mid-read — after any check placed before that read.
+  const txMountingAnEditorDuringItsRead = (onMount: (view: EditorView) => void, isReadOnly = () => false) => {
+    const update = vi.fn()
+    const repo = {
+      get isReadOnly() { return isReadOnly() },
+      tx: vi.fn(async (fn: (tx: unknown) => Promise<void>) => {
+        await fn({
+          get: async () => {
+            onMount(mountEditor('see LINK'))
+            return {content: 'see LINK', deleted: false}
+          },
+          update,
+        })
+      }),
+    } as unknown as Repo
+    return {repo, update}
+  }
+
+  it('writes nothing to the stored row once the workspace is read-only', async () => {
+    const update = vi.fn()
+    const repo = {
+      isReadOnly: true,
+      tx: vi.fn(async (fn: (tx: unknown) => Promise<void>) => {
+        await fn({get: async () => ({content: 'see LINK', deleted: false}), update})
+      }),
+    } as unknown as Repo
+    const replaced = await replaceBlockText({
+      repo, blockId: 'b', locate: doc => locateText(doc, 'LINK'), replacement: '[[P]]', description: 'test',
+    })
+    expect(replaced).toBe(false)
+    expect(update).not.toHaveBeenCalled()
+  })
+
+  it('hands the write to an editor that opened while the tx read the row', async () => {
+    let view: EditorView | undefined
+    const {repo, update} = txMountingAnEditorDuringItsRead(v => { view = v })
+    try {
+      const replaced = await replaceBlockText({
+        repo, blockId: 'b', locate: doc => locateText(doc, 'LINK'), replacement: '[[P]]', description: 'test',
+      })
+      expect(replaced).toBe(true)
+      expect(update).not.toHaveBeenCalled()
+      expect(view?.state.doc.toString()).toBe('see [[P]]')
+    } finally {
+      view?.destroy()
+    }
+  })
+
+  it('writes into that editor only if the workspace is still writable', async () => {
+    let view: EditorView | undefined
+    let readOnly = false
+    const {repo, update} = txMountingAnEditorDuringItsRead(v => { view = v; readOnly = true }, () => readOnly)
+    try {
+      const replaced = await replaceBlockText({
+        repo, blockId: 'b', locate: doc => locateText(doc, 'LINK'), replacement: '[[P]]', description: 'test',
+      })
+      expect(replaced).toBe(false)
+      expect(update).not.toHaveBeenCalled()
+      expect(view?.state.doc.toString()).toBe('see LINK')
+    } finally {
+      view?.destroy()
+    }
+  })
 })
 
 describe('readBlockText', () => {
+  it('reports a deleted block as gone even while its editor is still open', async () => {
+    const view = new EditorView({
+      state: EditorState.create({doc: 'see LINK', extensions: liveEditorRegistration('b')}),
+      parent: document.body,
+    })
+    try {
+      const repo = {load: async () => ({content: 'see LINK', deleted: true})} as unknown as Repo
+      expect(await readBlockText(repo, 'b')).toBeNull()
+    } finally {
+      view.destroy()
+    }
+  })
+
   it("reads an editor that mounted while the stored row loaded, not the row", async () => {
     let view: EditorView | undefined
     const repo = {

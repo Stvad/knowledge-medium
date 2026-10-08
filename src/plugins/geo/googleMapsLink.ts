@@ -12,6 +12,7 @@
  *  a browser cannot do (the redirect has no CORS headers). */
 
 import { markdownLanguage } from '@codemirror/lang-markdown'
+import type { SyntaxNode } from '@lezer/common'
 
 export interface LatLng {
   lat: number
@@ -149,6 +150,13 @@ const LINK_WRAPPERS: ReadonlySet<string> = new Set(['Link', 'Autolink'])
  *  definition), so it isn't converted. */
 const NOT_A_LINK: ReadonlySet<string> = new Set(['Image', 'LinkReference'])
 
+/** A bare URL in a link's LABEL is a URL node too; the destination is the
+ *  one right after the `(` mark. */
+const isLinkDestination = (text: string, url: SyntaxNode): boolean => {
+  const mark = url.prevSibling
+  return mark?.name === 'LinkMark' && text.slice(mark.from, mark.to) === '('
+}
+
 /** A `[label](…)` destination's value — the node text keeps the `<…>`
  *  wrapper and backslash escapes markdown allows there. */
 const destinationValue = (raw: string): string =>
@@ -165,6 +173,7 @@ export const findGoogleMapsLinks = (text: string): MapsLinkMatch[] => {
       if (node.name !== 'URL') return
       const parent = node.node.parent
       if (parent && NOT_A_LINK.has(parent.name)) return
+      if (parent?.name === 'Link' && !isLinkDestination(text, node.node)) return
       const raw = text.slice(node.from, node.to)
       const url = parent?.name === 'Link' ? destinationValue(raw) : raw
       if (parseGoogleMapsUrl(url) === null) return
