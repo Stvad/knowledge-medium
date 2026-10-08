@@ -1,1 +1,1 @@
-import{VC as e}from"../../chunks/app-D7VJNcCJ.js";export{e as ensureMetricsConsoleHook};
+import{VC as e}from"../../chunks/app-Cwpk03jk.js";export{e as ensureMetricsConsoleHook};

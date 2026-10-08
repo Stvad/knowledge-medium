@@ -1,1 +1,1 @@
-import{JR as e}from"../../../chunks/app-D7VJNcCJ.js";export{e as dailyNotesDataExtension};
+import{JR as e}from"../../../chunks/app-Cwpk03jk.js";export{e as dailyNotesDataExtension};

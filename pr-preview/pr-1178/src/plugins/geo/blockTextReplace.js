@@ -1,1 +1,1 @@
-import{GL as e,KL as t,qL as n}from"../../../chunks/app-D7VJNcCJ.js";export{e as locateText,t as readBlockText,n as replaceBlockText};
+import{GL as e,KL as t,qL as n}from"../../../chunks/app-Cwpk03jk.js";export{e as locateText,t as readBlock,n as replaceBlockText};
