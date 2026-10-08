@@ -1,1 +1,1 @@
-import{u as e}from"../../../chunks/app-CxRfAWcK.js";export{e as resolveWorkspaceEntry};
+import{u as e}from"../../../chunks/app-BZOxzxC8.js";export{e as resolveWorkspaceEntry};

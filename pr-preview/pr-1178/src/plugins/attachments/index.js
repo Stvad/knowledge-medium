@@ -1,1 +1,1 @@
-import{Mf as e}from"../../../chunks/app-CxRfAWcK.js";export{e as attachmentsPlugin};
+import{Mf as e}from"../../../chunks/app-BZOxzxC8.js";export{e as attachmentsPlugin};
