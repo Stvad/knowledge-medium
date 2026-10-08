@@ -150,6 +150,8 @@ const LINK_WRAPPERS: ReadonlySet<string> = new Set(['Link', 'Autolink'])
  *  definition), so it isn't converted. */
 const NOT_A_LINK: ReadonlySet<string> = new Set(['Image', 'LinkReference'])
 
+const BARE_URL_TRAILING_QUOTES = /["'”’]+$/
+
 /** A bare URL in a link's LABEL is a URL node too; the destination is the
  *  one right after the `(` mark. */
 const isLinkDestination = (text: string, url: SyntaxNode): boolean => {
@@ -175,10 +177,13 @@ export const findGoogleMapsLinks = (text: string): MapsLinkMatch[] => {
       if (parent && NOT_A_LINK.has(parent.name)) return
       if (parent?.name === 'Link' && !isLinkDestination(text, node.node)) return
       const raw = text.slice(node.from, node.to)
-      const url = parent?.name === 'Link' ? destinationValue(raw) : raw
+      const wrapped = parent !== null && LINK_WRAPPERS.has(parent.name)
+      const url = parent?.name === 'Link' ? destinationValue(raw)
+        : wrapped ? raw
+        // GFM keeps quotes in a bare autolink; a raw `"` can't be in a URL.
+        : raw.replace(BARE_URL_TRAILING_QUOTES, '')
       if (parseGoogleMapsUrl(url) === null) return
-      const span = parent && LINK_WRAPPERS.has(parent.name) ? parent : node
-      out.push({from: span.from, to: span.to, url})
+      out.push(wrapped ? {from: parent.from, to: parent.to, url} : {from: node.from, to: node.from + url.length, url})
     },
   })
   return out

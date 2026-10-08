@@ -6,7 +6,9 @@
 import type { Repo } from '@/data/repo'
 import { readBlockText, replaceBlockText, type Locate, type TextSpan } from './blockTextReplace'
 import type { PlaceCandidate } from './createOrFindPlace'
-import { findGoogleMapsLinks } from './googleMapsLink'
+import type { BlockData } from '@/data/api'
+import { isExtensionSource } from '@/plugins/references/referencesProcessor'
+import { findGoogleMapsLinks, type MapsLinkMatch } from './googleMapsLink'
 import { GooglePlacesError } from './googlePlacesClient'
 import { createOrFindPlaceInteractive } from './placeNameCollision'
 import { MapsLinkError } from './resolveMapsLink'
@@ -16,6 +18,11 @@ export interface MapsLinkConversion {
   /** User-facing reasons, one per link left unconverted. */
   failures: string[]
 }
+
+/** The maps links a block offers for conversion: none in an extension
+ *  block, whose content is source code, not markdown. */
+export const convertibleMapsLinks = (block: Pick<BlockData, 'properties'>, text: string): MapsLinkMatch[] =>
+  isExtensionSource(block) ? [] : findGoogleMapsLinks(text)
 
 /** The occurrence of `linkText` the parser still reads as a link — the
  *  recorded one if it's there, else the first — never a copy in code. */
@@ -47,7 +54,7 @@ export const convertMapsLinksInBlock = async (
   if (!data || text === null) return result
 
   // One at a time: a name collision opens a toast that waits on the user.
-  for (const link of findGoogleMapsLinks(text)) {
+  for (const link of convertibleMapsLinks(data, text)) {
     const locate = locateLink(text.slice(link.from, link.to), link)
     // Each lookup takes seconds, so this link may have been removed (or the
     // workspace turned read-only) by the time its own lookup starts or its

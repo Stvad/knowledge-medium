@@ -66,7 +66,10 @@ const replaceInLiveEditor = (
 
 /** Read-modify-write inside a tx, so a concurrent editor flush can't be
  *  clobbered. `editor-mounted`: an editor opened before the write and now
- *  owns the text — nothing was written. */
+ *  owns the text — nothing was written. An editor opening DURING the write
+ *  itself is accepted, not chased further: it is the kernel's case for
+ *  every outside writer (BlockEditor adopts the change unless the user
+ *  already typed past it). */
 const replaceInStoredContent = async (
   repo: Repo,
   blockId: string,
@@ -74,6 +77,9 @@ const replaceInStoredContent = async (
   replacement: string,
   description: string,
 ): Promise<'replaced' | 'absent' | 'editor-mounted'> => {
+  // Repo.tx refuses a read-only repo before running the callback; the
+  // check inside covers a role change while the row is read.
+  if (repo.isReadOnly) return 'absent'
   let outcome: 'replaced' | 'absent' | 'editor-mounted' = 'absent'
   await repo.tx(async tx => {
     const data = await tx.get(blockId)

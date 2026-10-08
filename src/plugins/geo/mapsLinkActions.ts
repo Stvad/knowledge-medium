@@ -5,10 +5,9 @@ import { MapPin } from 'lucide-react'
 import type { Block } from '@/data/block'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.js'
 import { showError, showInfo } from '@/utils/toast'
-import { convertMapsLinksInBlock } from './convertMapsLinks'
+import { convertMapsLinksInBlock, convertibleMapsLinks } from './convertMapsLinks'
 import { expandShortMapsLink } from './expandShortMapsLink'
 import { createGooglePlacesClient, resolveApiKey } from './googlePlacesClient'
-import { findGoogleMapsLinks } from './googleMapsLink'
 import { resolveMapsLink } from './resolveMapsLink'
 
 const resolveLink = (url: string) => {
@@ -19,8 +18,11 @@ const resolveLink = (url: string) => {
   })
 }
 
-const hasMapsLink = (text: string | undefined): boolean =>
-  text !== undefined && findGoogleMapsLinks(text).length > 0
+/** `liveText`: the editor's text, which leads the stored row while editing. */
+const hasMapsLink = (block: Block, liveText?: string): boolean => {
+  const data = block.peek()
+  return !!data && convertibleMapsLinks(data, liveText ?? data.content).length > 0
+}
 
 const convert = async (block: Block): Promise<void> => {
   // Defence in depth — the tx refuses the write anyway; this skips the
@@ -41,7 +43,7 @@ export const convertMapsLinkAction: ActionConfig<typeof ActionContextTypes.NORMA
   description: DESCRIPTION,
   context: ActionContextTypes.NORMAL_MODE,
   icon: MapPin,
-  isVisible: ({block}) => hasMapsLink(block.peek()?.content),
+  isVisible: ({block}) => hasMapsLink(block),
   handler: ({block}) => convert(block),
 }
 
@@ -50,6 +52,6 @@ export const editModeConvertMapsLinkAction: ActionConfig<typeof ActionContextTyp
   description: DESCRIPTION,
   context: ActionContextTypes.EDIT_MODE_CM,
   icon: MapPin,
-  isVisible: ({editorView}) => hasMapsLink(editorView.state.doc.toString()),
+  isVisible: ({block, editorView}) => hasMapsLink(block, editorView.state.doc.toString()),
   handler: ({block}) => convert(block),
 }

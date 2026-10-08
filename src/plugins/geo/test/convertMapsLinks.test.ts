@@ -2,6 +2,7 @@
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
+import { EXTENSION_TYPE } from '@/data/blockTypes'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
@@ -133,6 +134,20 @@ describe('convertMapsLinksInBlock', () => {
     await convertMapsLinksInBlock({repo, blockId: id}, resolveLink)
 
     expect(await contentOf(id)).toBe(`note: \`${SHORT}\` is where we had [[Craftsman and Wolves Valencia]]`)
+  })
+
+  it("leaves an extension block's source alone, without looking anything up", async () => {
+    const source = `const url = "${SHORT}"`
+    const id = await blockWith(source)
+    await repo.tx(async tx => { await repo.addTypeInTx(tx, id, EXTENSION_TYPE, {}, repo.snapshotTypeRegistries()) },
+      {scope: ChangeScope.BlockDefault, description: 'make it an extension'})
+    const resolveLink = vi.fn(async () => craftsman)
+
+    const result = await convertMapsLinksInBlock({repo, blockId: id}, resolveLink)
+
+    expect(result).toEqual({converted: 0, failures: []})
+    expect(resolveLink).not.toHaveBeenCalled()
+    expect(await contentOf(id)).toBe(source)
   })
 
   it('leaves a link it cannot resolve in place and reports why', async () => {

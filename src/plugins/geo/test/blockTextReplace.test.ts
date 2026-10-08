@@ -151,18 +151,33 @@ describe('replaceBlockText', () => {
     return {repo, update}
   }
 
-  it('writes nothing to the stored row once the workspace is read-only', async () => {
+  // Like Repo.tx: a read-only repo refuses the tx before running it.
+  const storedOnlyRepo = (readOnly: {now: boolean}, onRead = () => {}) => {
     const update = vi.fn()
     const repo = {
-      isReadOnly: true,
+      get isReadOnly() { return readOnly.now },
       tx: vi.fn(async (fn: (tx: unknown) => Promise<void>) => {
-        await fn({get: async () => ({content: 'see LINK', deleted: false}), update})
+        if (readOnly.now) throw new Error('read-only workspace')
+        await fn({get: async () => { onRead(); return {content: 'see LINK', deleted: false} }, update})
       }),
     } as unknown as Repo
-    const replaced = await replaceBlockText({
-      repo, blockId: 'b', locate: doc => locateText(doc, 'LINK'), replacement: '[[P]]', description: 'test',
-    })
-    expect(replaced).toBe(false)
+    return {repo, update}
+  }
+  const replaceLink = (repo: Repo) => replaceBlockText({
+    repo, blockId: 'b', locate: doc => locateText(doc, 'LINK'), replacement: '[[P]]', description: 'test',
+  })
+
+  it('declines, without opening a tx, once the workspace is read-only', async () => {
+    const {repo, update} = storedOnlyRepo({now: true})
+    expect(await replaceLink(repo)).toBe(false)
+    expect(repo.tx).not.toHaveBeenCalled()
+    expect(update).not.toHaveBeenCalled()
+  })
+
+  it('writes nothing when the workspace turns read-only while the tx reads the row', async () => {
+    const readOnly = {now: false}
+    const {repo, update} = storedOnlyRepo(readOnly, () => { readOnly.now = true })
+    expect(await replaceLink(repo)).toBe(false)
     expect(update).not.toHaveBeenCalled()
   })
 

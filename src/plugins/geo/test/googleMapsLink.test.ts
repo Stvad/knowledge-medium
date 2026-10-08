@@ -132,6 +132,12 @@ describe('findGoogleMapsLinks', () => {
     expect(findGoogleMapsLinks(text)).toEqual([])
   })
 
+  it('leaves a closing quote out of a bare URL', () => {
+    const url = 'https://www.google.com/maps/place/X/data=!3d1!4d2'
+    const text = `Visit "${url}" today`
+    expect(findGoogleMapsLinks(text).map(l => [l.url, text.slice(l.from, l.to)])).toEqual([[url, url]])
+  })
+
   it('skips links to anything other than Google Maps', () => {
     expect(findGoogleMapsLinks('https://example.com and https://www.google.com/search?q=x')).toEqual([])
   })
