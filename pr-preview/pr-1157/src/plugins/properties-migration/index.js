@@ -1,1 +1,0 @@
-import{Dr as e,jr as t}from"../../../chunks/app-OJ4hpBMw.js";export{t as migratePropertiesToBlocksAction,e as propertiesMigrationPlugin};

@@ -1,1 +1,0 @@
-import{_w as e,gw as t}from"../../../chunks/app-OJ4hpBMw.js";export{t as ExtensionPromptSurface,e as extensionPromptsExtension};
