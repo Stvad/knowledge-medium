@@ -5,7 +5,7 @@
 
 import type { EditorView } from '@codemirror/view'
 import type { Repo } from '@/data/repo'
-import { replaceBlockText } from './blockTextReplace'
+import { readBlockText, replaceBlockText } from './blockTextReplace'
 import type { PlaceCandidate } from './createOrFindPlace'
 import { findGoogleMapsLinks } from './googleMapsLink'
 import { createOrFindPlaceInteractive } from './placeNameCollision'
@@ -29,22 +29,28 @@ export const convertMapsLinksInBlock = async (
   {repo, blockId, view}: {repo: Repo; blockId: string; view?: EditorView},
   resolveLink: (url: string) => Promise<PlaceCandidate>,
 ): Promise<MapsLinkConversion> => {
-  const data = await repo.load(blockId)
-  if (!data) return {converted: 0, failures: []}
-  const text = view ? view.state.doc.toString() : data.content
-
   const result: MapsLinkConversion = {converted: 0, failures: []}
+  const data = await repo.load(blockId)
+  const text = await readBlockText(repo, blockId, view)
+  if (!data || text === null) return result
+
   // One at a time: a name collision opens a toast that waits on the user.
   for (const link of findGoogleMapsLinks(text)) {
+    const linkText = text.slice(link.from, link.to)
     try {
-      const place = await createOrFindPlaceInteractive(repo, data.workspaceId, await resolveLink(link.url))
+      const candidate = await resolveLink(link.url)
+      // The lookup takes a while; don't mint a Place for a link the user
+      // has since removed. (A removal during a collision prompt is
+      // accepted: the prompt's choice is itself a deliberate action.)
+      if (!(await readBlockText(repo, blockId, view))?.includes(linkText)) continue
+      const place = await createOrFindPlaceInteractive(repo, data.workspaceId, candidate)
       if (!place) continue
       const replaced = await replaceBlockText({
         repo,
         blockId,
         view,
         span: link,
-        text: text.slice(link.from, link.to),
+        text: linkText,
         replacement: `[[${place.linkName}]]`,
         description: 'convert maps link to place',
       })

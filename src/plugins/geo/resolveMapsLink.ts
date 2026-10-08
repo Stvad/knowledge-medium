@@ -58,6 +58,8 @@ const findOnGoogle = async (
   link: FullLink,
 ): Promise<PlaceDetails | null> => {
   if (link.placeId) return client.getDetails(link.placeId, {})
+  // A CID-only link (`?cid=…`) ends here and is refused by `fromLink`: the
+  // Places API has no CID lookup, and the cid page doesn't redirect to one.
   if (!link.query) return null
   const center = link.coords ?? link.viewport
   const results = await client.searchText(link.query, {

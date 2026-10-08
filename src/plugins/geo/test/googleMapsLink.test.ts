@@ -90,6 +90,26 @@ describe('findGoogleMapsLinks', () => {
     ])
   })
 
+  it('keeps parentheses that are part of the URL, bare or in a markdown link', () => {
+    const url = 'https://www.google.com/maps/place/Target+(CVS)/@37.7,-122.4,15z'
+    const text = `(near ${url}) or [Target](${url})`
+    expect(findGoogleMapsLinks(text).map(l => [l.url, text.slice(l.from, l.to)])).toEqual([
+      [url, url],
+      [url, `[Target](${url})`],
+    ])
+  })
+
+  it('leaves links in code and images alone', () => {
+    const text = [
+      'inline `https://maps.app.goo.gl/inline` code',
+      '```',
+      'https://maps.app.goo.gl/fenced',
+      '```',
+      '![map](https://maps.app.goo.gl/image)',
+    ].join('\n')
+    expect(findGoogleMapsLinks(text)).toEqual([])
+  })
+
   it('skips links to anything other than Google Maps', () => {
     expect(findGoogleMapsLinks('https://example.com and https://www.google.com/search?q=x')).toEqual([])
   })

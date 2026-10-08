@@ -11,6 +11,8 @@
  *  Short links (`maps.app.goo.gl/…`) carry nothing until expanded, which
  *  a browser cannot do (the redirect has no CORS headers). */
 
+import { markdownLanguage } from '@codemirror/lang-markdown'
+
 export interface LatLng {
   lat: number
   lng: number
@@ -138,18 +140,28 @@ export const parseGoogleMapsUrl = (url: string): ParsedMapsLink | null => {
   return out
 }
 
-const LINK_CANDIDATE =
-  /\[[^\]\n]*\]\((https?:\/\/[^\s)]+)\)|<(https?:\/\/[^\s>]+)>|(https?:\/\/[^\s<>()[\]]+)/g
-const TRAILING_PUNCTUATION = /[.,;:!?'"]+$/
+/** Parent nodes whose span IS the link — replacing the URL means
+ *  replacing the whole `[label](url)` / `<url>`. */
+const LINK_WRAPPERS: ReadonlySet<string> = new Set(['Link', 'Autolink'])
+/** A URL here isn't a link to the place (an image source, a reference
+ *  definition), so it isn't converted. */
+const NOT_A_LINK: ReadonlySet<string> = new Set(['Image', 'LinkReference'])
 
+/** Found by the editor's markdown parser rather than a regex, so links
+ *  in code stay literal and URL boundaries follow GFM (trailing
+ *  punctuation dropped, balanced parentheses kept). */
 export const findGoogleMapsLinks = (text: string): MapsLinkMatch[] => {
   const out: MapsLinkMatch[] = []
-  for (const m of text.matchAll(LINK_CANDIDATE)) {
-    const from = m.index
-    const wrapped = m[1] ?? m[2]
-    const url = wrapped ?? m[3].replace(TRAILING_PUNCTUATION, '')
-    const to = wrapped !== undefined ? from + m[0].length : from + url.length
-    if (parseGoogleMapsUrl(url) !== null) out.push({from, to, url})
-  }
+  markdownLanguage.parser.parse(text).iterate({
+    enter: node => {
+      if (node.name !== 'URL') return
+      const parent = node.node.parent
+      if (parent && NOT_A_LINK.has(parent.name)) return
+      const url = text.slice(node.from, node.to)
+      if (parseGoogleMapsUrl(url) === null) return
+      const span = parent && LINK_WRAPPERS.has(parent.name) ? parent : node
+      out.push({from: span.from, to: span.to, url})
+    },
+  })
   return out
 }

@@ -122,6 +122,10 @@ describe('resolveMapsLink', () => {
   it('refuses a link that names no findable place and carries no position', async () => {
     await expect(resolveMapsLink('https://www.google.com/maps/@37.7,-122.4,15z', deps()))
       .rejects.toBeInstanceOf(MapsLinkError)
+    const cidOnly = deps()
+    await expect(resolveMapsLink(`https://maps.google.com/?cid=${AQUARIUM_CID}`, cidOnly))
+      .rejects.toBeInstanceOf(MapsLinkError)
+    expect(cidOnly.client?.searchText).not.toHaveBeenCalled()
     await expect(resolveMapsLink('https://example.com/place', deps()))
       .rejects.toBeInstanceOf(MapsLinkError)
   })

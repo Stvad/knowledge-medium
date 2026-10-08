@@ -63,6 +63,21 @@ describe('convertMapsLinksInBlock', () => {
     expect(await contentOf(id)).toBe('[[Craftsman & Wolves]]')
   })
 
+  it('creates no Place when the link was removed while it was being looked up', async () => {
+    const id = await blockWith(`coffee at ${SHORT}`)
+    const resolveLink = async () => {
+      await repo.tx(async tx => { await tx.update(id, {content: 'coffee at home'}) },
+        {scope: ChangeScope.BlockDefault, description: 'user edit'})
+      return craftsman
+    }
+
+    const result = await convertMapsLinksInBlock({repo, blockId: id}, resolveLink)
+
+    expect(result).toEqual({converted: 0, failures: []})
+    expect(await contentOf(id)).toBe('coffee at home')
+    expect(await repo.query.aliasLookup({workspaceId: WS, alias: placeMachineAlias(craftsman)}).load()).toBeNull()
+  })
+
   it('leaves a link it cannot resolve in place and reports why', async () => {
     const id = await blockWith(`a ${SHORT} and b https://www.google.com/maps/@37.7,-122.4,15z`)
     const resolveLink = vi.fn(async (url: string) => {

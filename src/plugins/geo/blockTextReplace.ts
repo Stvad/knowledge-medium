@@ -26,6 +26,23 @@ export const locateText = (doc: string, span: TextSpan, text: string): TextSpan 
   return {from: idx, to: idx + text.length}
 }
 
+const isMounted = (view: EditorView | undefined): view is EditorView =>
+  // `EditorView.destroyed` is private API; a detached root is the
+  // observable signature of an unmounted per-block editor.
+  view !== undefined && view.dom.isConnected
+
+/** The text the replacement would act on: the live editor's while it's
+ *  mounted, else the stored content; `null` when the block is gone. */
+export const readBlockText = async (
+  repo: Repo,
+  blockId: string,
+  view?: EditorView,
+): Promise<string | null> => {
+  if (isMounted(view)) return view.state.doc.toString()
+  const data = await repo.load(blockId)
+  return data && !data.deleted ? data.content : null
+}
+
 /** False when the view is unmounted or no longer holds `text` — the
  *  caller falls back to `replaceInStoredContent`. */
 export const replaceInView = (
@@ -34,9 +51,7 @@ export const replaceInView = (
   text: string,
   replacement: string,
 ): boolean => {
-  // `EditorView.destroyed` is private API; a detached root is the
-  // observable signature of an unmounted per-block editor.
-  if (!view.dom.isConnected) return false
+  if (!isMounted(view)) return false
   const at = locateText(view.state.doc.toString(), span, text)
   if (at === null) return false
   try {
