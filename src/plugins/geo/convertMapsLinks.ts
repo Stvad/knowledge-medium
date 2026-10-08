@@ -4,7 +4,7 @@
  *  maps through its body reference. */
 
 import type { Repo } from '@/data/repo'
-import { readBlockText, replaceBlockText, type Locate, type TextSpan } from './blockTextReplace'
+import { readBlock, replaceBlockText, type Locate, type TextSpan } from './blockTextReplace'
 import type { PlaceCandidate } from './createOrFindPlace'
 import type { BlockData } from '@/data/api'
 import { isExtensionSource } from '@/plugins/references/referencesProcessor'
@@ -49,23 +49,24 @@ export const convertMapsLinksInBlock = async (
   resolveLink: (url: string) => Promise<PlaceCandidate>,
 ): Promise<MapsLinkConversion> => {
   const result: MapsLinkConversion = {converted: 0, failures: []}
-  const data = await repo.load(blockId)
-  const text = await readBlockText(repo, blockId)
-  if (!data || text === null) return result
+  const initial = await readBlock(repo, blockId)
+  if (!initial) return result
+  const {data, text} = initial
 
   // One at a time: a name collision opens a toast that waits on the user.
   for (const link of convertibleMapsLinks(data, text)) {
     const locate = locateLink(text.slice(link.from, link.to), link)
-    // Each lookup takes seconds, so this link may have been removed (or the
-    // workspace turned read-only) by the time its own lookup starts or its
-    // Place would be minted; checked before both. A removal after the
-    // second check (before the create commits, or during a collision
-    // prompt) is accepted, not coupled into the minting tx: the stray Place
-    // is reused by the next pick of the POI.
+    // Each lookup takes seconds, so by the time this link's own lookup
+    // starts, or its Place would be minted, the link may be gone, the block
+    // retyped as an extension, or the workspace read-only: checked before
+    // both, on a fresh read, with no await between check and step. A change
+    // after the second check (before the create commits, or during a
+    // collision prompt) is accepted, not coupled into the minting tx: the
+    // stray Place is reused by the next pick of the POI.
     const stillEligible = async (): Promise<boolean> => {
-      if (repo.isReadOnly) return false
-      const current = await readBlockText(repo, blockId)
-      return current !== null && locate(current) !== null
+      const current = await readBlock(repo, blockId)
+      if (!current || repo.isReadOnly || isExtensionSource(current.data)) return false
+      return locate(current.text) !== null
     }
     try {
       if (!(await stillEligible())) continue

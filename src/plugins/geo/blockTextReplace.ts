@@ -9,7 +9,7 @@
  *  right before writing — never across an await, where an editor can open
  *  or the workspace's role can change. */
 
-import { ChangeScope } from '@/data/api'
+import { ChangeScope, type BlockData } from '@/data/api'
 import type { Repo } from '@/data/repo'
 import { flushEditorContent } from '@/editor/contentFlush'
 import { liveEditorFor } from '@/editor/liveEditors'
@@ -33,12 +33,16 @@ export const locateText = (doc: string, text: string, near?: TextSpan): TextSpan
   return {from: idx, to: idx + text.length}
 }
 
-/** The text a replacement would act on now; `null` when the block is gone. */
-export const readBlockText = async (repo: Repo, blockId: string): Promise<string | null> => {
+/** The block now, with the text a replacement would act on; `null` when
+ *  the block is gone. */
+export const readBlock = async (
+  repo: Repo,
+  blockId: string,
+): Promise<{data: BlockData; text: string} | null> => {
   const data = await repo.load(blockId)
   if (!data || data.deleted) return null
   // After the load, not before: an editor that mounted during it leads the row.
-  return liveEditorFor(blockId)?.state.doc.toString() ?? data.content
+  return {data, text: liveEditorFor(blockId)?.state.doc.toString() ?? data.content}
 }
 
 /** `null` when no editor owns the block's text right now. */

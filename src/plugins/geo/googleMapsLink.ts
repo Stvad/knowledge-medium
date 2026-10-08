@@ -43,6 +43,9 @@ export interface MapsLinkMatch {
   url: string
 }
 
+/** Host SHAPE, not ownership: nothing is fetched from a full URL, so a
+ *  lookalike host only yields a Place built from its own link text — not
+ *  worth carrying Google's ~190-entry domain list. */
 const GOOGLE_HOST = /^(?:www\.|maps\.)?google\.[a-z]{2,3}(?:\.[a-z]{2})?$/
 
 const isShortLinkUrl = (u: URL): boolean =>

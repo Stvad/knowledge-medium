@@ -25,7 +25,10 @@ export const liveEditorRegistration = (blockId: string) =>
   })
 
 /** The block's editor the user is in, else its most recently mounted one
- *  (a block can be open for editing in two panels at once). */
+ *  (a block can be open for editing in two panels at once). Not pinned to
+ *  the editor an action started in: both are views of the same block's
+ *  text, and two editors typing over each other is the kernel's
+ *  last-write-wins case either way. */
 export const liveEditorFor = (blockId: string): EditorView | undefined => {
   const views = liveEditors.get(blockId)
   return views?.find(view => view.hasFocus) ?? views?.at(-1)

@@ -4,7 +4,7 @@ import { EditorView } from '@codemirror/view'
 import { describe, expect, it, vi } from 'vitest'
 import type { Repo } from '@/data/repo'
 import { liveEditorRegistration } from '@/editor/liveEditors'
-import { locateText, readBlockText, replaceBlockText } from '../blockTextReplace'
+import { locateText, readBlock, replaceBlockText } from '../blockTextReplace'
 
 describe('locateText', () => {
   it('uses the recorded span when the trigger text is still there', () => {
@@ -213,7 +213,7 @@ describe('replaceBlockText', () => {
   })
 })
 
-describe('readBlockText', () => {
+describe('readBlock', () => {
   it('reports a deleted block as gone even while its editor is still open', async () => {
     const view = new EditorView({
       state: EditorState.create({doc: 'see LINK', extensions: liveEditorRegistration('b')}),
@@ -221,7 +221,7 @@ describe('readBlockText', () => {
     })
     try {
       const repo = {load: async () => ({content: 'see LINK', deleted: true})} as unknown as Repo
-      expect(await readBlockText(repo, 'b')).toBeNull()
+      expect(await readBlock(repo, 'b')).toBeNull()
     } finally {
       view.destroy()
     }
@@ -239,7 +239,7 @@ describe('readBlockText', () => {
       },
     } as unknown as Repo
     try {
-      expect(await readBlockText(repo, 'b')).toBe('fresh')
+      expect((await readBlock(repo, 'b'))?.text).toBe('fresh')
     } finally {
       view?.destroy()
     }

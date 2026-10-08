@@ -121,6 +121,39 @@ describe('convertMapsLinksInBlock', () => {
     expect(await repo.query.aliasLookup({workspaceId: WS, alias: placeMachineAlias(craftsman)}).load()).toBeNull()
   })
 
+  it('checks read-only after reading the block, right before the lookup', async () => {
+    const id = await blockWith(SHORT)
+    const load = repo.load.bind(repo)
+    let loads = 0
+    // The role changes while the eligibility check reads the block.
+    vi.spyOn(repo, 'load').mockImplementation(async (...args) => {
+      const row = await load(...args)
+      if (++loads === 2) repo.setReadOnly(true)
+      return row
+    })
+    const resolveLink = vi.fn(async () => craftsman)
+
+    await convertMapsLinksInBlock({repo, blockId: id}, resolveLink)
+
+    expect(loads).toBeGreaterThanOrEqual(2)
+    expect(resolveLink).not.toHaveBeenCalled()
+  })
+
+  it('mints no Place once the block was retyped as an extension during the lookup', async () => {
+    const id = await blockWith(`coffee at ${SHORT}`)
+    const resolveLink = async () => {
+      await repo.tx(async tx => { await repo.addTypeInTx(tx, id, EXTENSION_TYPE, {}, repo.snapshotTypeRegistries()) },
+        {scope: ChangeScope.BlockDefault, description: 'retype as extension'})
+      return craftsman
+    }
+
+    const result = await convertMapsLinksInBlock({repo, blockId: id}, resolveLink)
+
+    expect(result).toEqual({converted: 0, failures: []})
+    expect(await contentOf(id)).toBe(`coffee at ${SHORT}`)
+    expect(await repo.query.aliasLookup({workspaceId: WS, alias: placeMachineAlias(craftsman)}).load()).toBeNull()
+  })
+
   it('re-finds the link, not a copy of it in code, after the text moved', async () => {
     const id = await blockWith(`\`${SHORT}\` is where we had ${SHORT}`)
     const resolveLink = async () => {
