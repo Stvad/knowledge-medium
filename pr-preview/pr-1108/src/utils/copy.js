@@ -1,1 +1,1 @@
-import{BC as e,IC as t,LC as n,RC as r,zC as i}from"../../chunks/app-DmRo6tib.js";export{t as copyBlockIdsToClipboard,n as copyBlockToClipboard,r as copySelectedBlocksToClipboard,i as serializeBlock,e as serializeSelectedBlocks};
+import{GC as e,HC as t,UC as n,VC as r,WC as i}from"../../chunks/app-B9-cTzvE.js";export{r as copyBlockIdsToClipboard,t as copyBlockToClipboard,n as copySelectedBlocksToClipboard,i as serializeBlock,e as serializeSelectedBlocks};
