@@ -1720,6 +1720,7 @@ describe('agent runtime commands', () => {
       [WS, 'flipped', 'user-1'])
 
     const populateLastRun = () => propertyCellBackfill.run({
+      syncWaitCount: 0,
       workspaceId: WS,
       getAll: (sql, params) => env.repo.db.getAll(sql, params as unknown[] | undefined),
       tx: (fn, opts) => env.repo.tx(fn, {scope: ChangeScope.BlockDefault, skipUndo: true, ...opts}),

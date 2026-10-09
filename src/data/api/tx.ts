@@ -1,6 +1,7 @@
 import type {
   BlockData,
   BlockDataPatch,
+  BlockReference,
   NewBlockData,
 } from './blockData'
 import type { ChangeScope, TxSource } from './changeScope'
@@ -98,6 +99,33 @@ export interface Tx {
    *  raw `tx.create` — see §4.7 Layer 1 (v4.30). */
   create(data: NewBlockData, opts?: TxInsertOpts): Promise<string>
 
+  /** `create` for a caller that already knows its whole write set: one
+   *  batched parent check and one multi-row INSERT per chunk in place of a
+   *  SELECT and an INSERT per row. Same refusals, same id policy, same
+   *  `record` per row, so the same-tx processors see exactly what they would
+   *  see one at a time.
+   *
+   *  A row may name a parent created earlier in the SAME call, so rows are
+   *  inserted in the order given and a forward reference is a
+   *  `ParentNotFoundError`. Returns the ids in that order. */
+  createMany(rows: readonly NewBlockData[], opts?: TxInsertOpts): Promise<string[]>
+
+  /** Live rows for ids already known to the caller, batched through the shared
+   *  `IN (…)` cap rather than a number stated here — see `sqlBinds`.
+   *  Missing and soft-deleted ids are simply absent from the result — the
+   *  caller is a pass that expects some of its candidates to have moved on. */
+  liveRowsForIds(workspaceId: string, ids: readonly string[]): Promise<BlockData[]>
+
+  /** Every property FIELD ROW under any of `parentIds`, live and tombstoned
+   *  alike, batched through the same shared cap. The union is deliberate: "this owner
+   *  already has a field row for this fieldId" and "this owner had one that was
+   *  reaped" are the two reasons a pass must leave a cell key alone, and asking
+   *  for them separately is two queries per owner to answer one question. */
+  propertyFieldRowsForParents(
+    workspaceId: string,
+    parentIds: readonly string[],
+  ): Promise<BlockData[]>
+
   /** Insert OR fetch the live row at a deterministic id. **No tombstone
    *  resurrection in the primitive** — see §10.4. Throws
    *  `DeterministicIdCrossWorkspaceError` if the existing row is in a
@@ -138,6 +166,19 @@ export interface Tx {
    *  when both already match. NOT for content-bundled retargets — those
    *  change a synced column and go through `update`. */
   stampReferenceTarget(id: string, targetId: string | null, isFieldForm: boolean): Promise<void>
+
+  /** The `references` this content already implies, for a row core is about to
+   *  mint with content it wrote itself — a field row addressing its definition,
+   *  a ref value child addressing its target.
+   *
+   *  Answered by whoever parses content into references in this configuration
+   *  (`contentReferencePrefillsFacet`, snapshotted at tx start like every other
+   *  registry the tx reads), so that the row can be BORN correct and the parse
+   *  never has to write it a second time. `undefined` — including whenever
+   *  nothing contributes, which is what References being off looks like — means
+   *  create the row without references and leave the content to whatever reads
+   *  it afterwards. */
+  derivedReferencesFor(content: string): BlockReference[] | undefined
 
   // ──── Tree moves (structural) ────
 

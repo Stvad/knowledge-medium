@@ -10,7 +10,7 @@
  * same wiring as `concurrentEditConvergence.test.ts`: the real upload loop →
  * a fake server → `deliverTo` → `drainStagingWindowOnce`.
  */
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { createFakeSyncServer, type FakeSyncServer } from '@/data/test/fakeSyncServer'
@@ -20,9 +20,10 @@ import {
 } from '@/services/powersync'
 import { applySyncInvalidation } from '@/data/internals/syncObserver/invalidate.js'
 import { constMat, drainStagingWindowOnce, noKey } from '@/data/internals/syncObserver/test/harness.js'
-import { createGraphBackfillClaim } from '@/data/internals/graphBackfillClaim'
+import { createGraphBackfillClaim, graphBackfillClaimBlockId } from '@/data/internals/graphBackfillClaim'
 import { getOrCreateMigrationsPage } from '@/data/migrationsPage'
 import type { Repo } from '@/data/repo'
+import { ChangeScope } from '@/data/api'
 import type { BlockCache } from '@/data/blockCache'
 
 const WS = 'ws-claim-race'
@@ -104,6 +105,47 @@ describe('the completion record across two databases', () => {
       for (const d of devices) await deliverAndDrain(d, server)
     }
   }
+
+  it.each([
+    ['own live', true],
+    ['peer live', false],
+    ['completed', false],
+    ['deleted', false],
+    ['absent', false],
+    ['foreign', false],
+  ] as const)('checks %s ownership without reclaiming or writing', async (state, owned) => {
+    const {a} = await setup()
+    const backfillId = 'ownership-v1'
+    const seededClaim = claimFor(a, state === 'peer live' ? 'device-b' : 'device-a')
+    if (state !== 'absent') {
+      expect(await seededClaim.tryClaim(WS, backfillId)).toBe('minted')
+      if (state === 'completed') await seededClaim.markComplete(WS, backfillId)
+      if (state === 'deleted') {
+        await seededClaim.releaseClaim(WS, backfillId)
+        expect(await a.db.getOptional<{deleted: number}>(
+          'SELECT deleted FROM blocks WHERE id = ?',
+          [graphBackfillClaimBlockId(WS, backfillId)],
+        )).toEqual({deleted: 1})
+      }
+    }
+    const tx = vi.fn(async () => { throw new Error('ownership check opened a write transaction') })
+    const ensureHome = vi.fn(async () => { throw new Error('ownership check ensured its parent') })
+    const outsideRead = vi.fn(async () => { throw new Error('ownership read escaped the transaction') })
+    const observer = createGraphBackfillClaim({
+      db: {getOptional: outsideRead}, claimantId: 'device-a', tx, ensureHome,
+    })
+
+    if (state === 'foreign') {
+      await a.db.execute('UPDATE blocks SET workspace_id = ? WHERE id = ?',
+        ['other-workspace', graphBackfillClaimBlockId(WS, backfillId)])
+    }
+    expect(await a.repo.tx(t => observer.stillOwned(t, WS, backfillId), {
+      scope: ChangeScope.BlockDefault, description: 'Check ownership under the write lock',
+    })).toBe(owned)
+    expect(outsideRead).not.toHaveBeenCalled()
+    expect(tx).not.toHaveBeenCalled()
+    expect(ensureHome).not.toHaveBeenCalled()
+  })
 
   it('tells a second device the pass is already done', async () => {
     const {a, b, server} = await setup()

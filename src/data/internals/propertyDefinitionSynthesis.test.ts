@@ -448,7 +448,7 @@ describe('planPropertyDefinitionSynthesis', () => {
 
     const plan = await planFor()
 
-    expect(plan.scanSyncGap).toMatch(/have not reached/)
+    expect(plan.scanSyncGap).toMatch(/have not been verified locally/)
     expect(flipBlockedBySynthesis(plan)).toMatch(/still catching up/)
   })
 
@@ -476,7 +476,7 @@ describe('planPropertyDefinitionSynthesis', () => {
     })
 
     await expect(applyPropertyDefinitionSynthesis(repo, plan))
-      .rejects.toThrow(/have not reached/)
+      .rejects.toThrow(/have not been verified locally/)
     expect(repo.block(await definitionIdFor('demo:orphan')).peek()).toBeUndefined()
   })
 
@@ -580,7 +580,7 @@ describe('planPropertyDefinitionSynthesis', () => {
     expect(await repo.syncViewGap()).toBeNull()
 
     await expect(applyPropertyDefinitionSynthesis(repo, plan))
-      .rejects.toThrow(/have not reached/)
+      .rejects.toThrow(/have not been verified locally/)
     expect(repo.block(await definitionIdFor('demo:orphan')).peek()).toBeUndefined()
   })
 
@@ -650,7 +650,7 @@ describe('applyPropertyDefinitionSynthesis', () => {
     try {
       const reachedMintPath = vi.spyOn(repo, 'propertySchemaResolverFor')
       await expect(applyPropertyDefinitionSynthesis(repo, plan))
-        .rejects.toThrow(/have not reached/)
+        .rejects.toThrow(/have not been verified locally/)
       expect(probes).toBe(2)
       // On the CAUSE, not on the absence of a block: `repo.tx` rolls back, so
       // "no definition exists" holds wherever in the transaction the guard
@@ -1374,6 +1374,29 @@ describe('flipBlockedBySynthesis', () => {
     expect(flipBlockedBySynthesis(await planFor())).toMatch(/have no definition/)
   })
 
+  it('names the keys a refused workspace is leaving behind', async () => {
+    // The one branch that reported a bare count. On an already-flipped
+    // workspace this text is an advisory rather than a refusal, so it is the
+    // only place the operator is told which keys stay cell-only — and a count
+    // sends them to the CLI audit to find out.
+    await seedWorkspaceRow('e2ee')
+    await rawCell('b1', {'demo:orphan': 'x'})
+    expect(flipBlockedBySynthesis(await planFor())).toMatch(/"demo:orphan"/)
+  })
+
+  it('names a few of the hopeless keys and counts the rest, rather than all of them', async () => {
+    // This text is a toast. Naming every key in a pathological graph produces
+    // one nobody reads at all, so the count carries the scale and the names
+    // are a sample — but the remainder has to be stated, or the sample reads
+    // as the whole list.
+    await rawCell('b1', {'[[a]]': 'x', '[[b]]': 'x', '[[c]]': 'x', '[[d]]': 'x'})
+
+    const message = flipBlockedBySynthesis(await planFor())
+
+    expect(message).toMatch(/4 property key\(s\) cannot be given a definition/)
+    expect(message).toMatch(/and 1 more/)
+  })
+
   it('blocks a refused workspace even with nothing to mint', async () => {
     // An earlier revision let this through, reasoning that the refusal is about
     // minting a dictionary-testable id and there is nothing to mint. That
@@ -1397,6 +1420,27 @@ describe('flipBlockedBySynthesis', () => {
     const plan = await planFor()
     expect(plan.unreadableBlocks).toBe(1)
     expect(flipBlockedBySynthesis(plan)).toMatch(/cannot read/)
+  })
+
+  it('does not block on a definition that is merely BROKEN', async () => {
+    // The one unresolved-key category that is advisory rather than a blocker,
+    // and the reason prose about this function must not say it refuses over
+    // every hazard the scan finds. A broken definition is usually a preset
+    // from an extension that is not enabled here, so refusing would withhold
+    // the flip from every other key over one that enabling the provider
+    // repairs; the consent screen carries the warning instead.
+    await rawCell('defn', {
+      types: ['property-schema'],
+      'property-schema:name': 'demo:broken',
+      'property-schema:change-scope': 'not-a-real-scope',
+    })
+    await rawCell('b1', {'demo:broken': 'x'})
+
+    const plan = await planFor()
+    // Asserted, not assumed: with the key bucketed anywhere else this would
+    // pass over a scenario that never reached the decision under test.
+    expect(plan.brokenDefinitions.map(b => b.key)).toEqual(['demo:broken'])
+    expect(flipBlockedBySynthesis(plan)).toBeNull()
   })
 
   it('lets a clean workspace through', async () => {

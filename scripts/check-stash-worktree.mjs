@@ -37,7 +37,7 @@ import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { isMainModule } from './is-main-module.mjs'
 import { shellSegmentsWithDepth } from './shell-segments.mjs'
 
 const WRAPPERS = new Set(['sudo', 'command', 'time', 'env', 'nice', 'nohup', 'xargs'])
@@ -520,7 +520,4 @@ const main = () => {
   allow()
 }
 
-// Exact-path comparison: a suffix match could run the hook at import time from
-// a future sibling whose name this file's happens to end with.
-const isMain = process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])
-if (isMain) main()
+if (isMainModule(import.meta.url)) main()

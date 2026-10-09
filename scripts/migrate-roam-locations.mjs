@@ -25,7 +25,7 @@
  *  Options:
  *    --dry-run    Resolve + report; no mutations.
  *    --limit N    Process only the first N pages (testing).
- *    --profile P  kmagent profile (default: AGENT_RUNTIME_PROFILE or ff-vlad-dev).
+ *    --profile P  kmagent profile (required unless AGENT_RUNTIME_PROFILE is set).
  *    --workspace W  Workspace id (default: runtime-summary's active workspace).
  */
 
@@ -46,7 +46,11 @@ const opt = (name) => {
 
 const DRY = flag('--dry-run')
 const LIMIT = opt('--limit') ? Number(opt('--limit')) : null
-const PROFILE = opt('--profile') ?? process.env.AGENT_RUNTIME_PROFILE ?? 'ff-vlad-dev'
+const PROFILE = opt('--profile') ?? process.env.AGENT_RUNTIME_PROFILE
+if (!PROFILE) {
+  console.error('pass --profile P (or set AGENT_RUNTIME_PROFILE): this script writes to that client')
+  process.exit(1)
+}
 const KEY = process.env.LEGACY_PLACES_KEY
 // Drift reporting only — CID resolution is by-design unique
 // (same CID = same place forever), so we trust the API result and

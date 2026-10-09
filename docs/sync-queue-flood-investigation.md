@@ -10,8 +10,7 @@
 > **statement timeout** and retries forever (Issue C).
 
 **Found:** 2026-06-08, while manually testing the merged e2ee groundwork (PR #105)
-on live profile `ff-vlad-dev` (user `vlad@sitalo.org`, workspaces: `stvad`
-plaintext + `e2eet1` e2ee).
+on a live client with one plaintext and one e2ee workspace.
 
 **Symptom that kicked this off:** after a reload (pulling e2ee workspace
 changes), the sync widget showed **~16,280 blocks "queued for upload"** and the
@@ -45,9 +44,9 @@ involved a reload, which is when it was noticed.
 All evidence below came from the live client via the agent CLI:
 
 ```
-pnpm agent --profile ff-vlad-dev ping                 # confirm connected
-pnpm agent --profile ff-vlad-dev sql all "<SQL>"      # run SQL in the tab
-pnpm agent --profile ff-vlad-dev eval "return <js>"   # run JS (repo/db in scope)
+pnpm agent --profile <profile> ping                 # confirm connected
+pnpm agent --profile <profile> sql all "<SQL>"      # run SQL in the tab
+pnpm agent --profile <profile> eval "return <js>"   # run JS (repo/db in scope)
 ```
 
 (SQLite JSON paths use `'$.x'`; in zsh escape the `$` as `\$` inside double
@@ -91,7 +90,7 @@ So the flood is **`references_json`-only PATCHes**. Workspace split:
 SELECT b.workspace_id, w.name, w.encryption_mode, COUNT(DISTINCT b.id) queued
 FROM blocks b JOIN ps_crud c ON b.id = json_extract(c.data,'$.id')
 LEFT JOIN workspaces w ON w.id = b.workspace_id GROUP BY b.workspace_id;
--- stvad (none): 16265   |   e2eet1 (e2ee): 8
+-- plaintext workspace (none): 16265   |   e2ee workspace (e2ee): 8
 ```
 
 The rewritten references are projected from imported Roam ref-typed properties
@@ -147,7 +146,7 @@ dynamic-extension property schemas are still loading.
    # markers present:
    SELECT key FROM client_schema_state WHERE key LIKE 'reproject_ref:%' ORDER BY key;
    # then compare to the ref-typed names the runtime reports:
-   pnpm agent --profile ff-vlad-dev eval \
+   pnpm agent --profile <profile> eval \
      "return [...repo.propertySchemas?.entries?.() ?? []].filter(([,s]) => /* ref-typed */ true).map(([n]) => n)"
    ```
    (Use `describe-runtime` / the real `refCodecKind` to classify — see
@@ -188,8 +187,8 @@ Rejected row (`ps_crud_rejected`):
 SELECT data, error_code, error_message FROM ps_crud_rejected;
 ```
 ```json
-{"op":"PATCH","type":"blocks","id":"469ecc66-34de-5a0e-a85a-a69c69477fb2",
- "data":{"properties_json":"{\"activePanelId\":\"e18a1e8e-982f-426f-be7c-9219cfb5a4eb\"}",
+{"op":"PATCH","type":"blocks","id":"<block-id>",
+ "data":{"properties_json":"{\"activePanelId\":\"<panel-id>\"}",
          "updated_at":1780927417279}}
 ```
 - `error_code` 23514, message: *"blocks in an e2ee workspace must carry a
@@ -197,8 +196,7 @@ SELECT data, error_code, error_message FROM ps_crud_rejected;
 - The PATCH carries **plaintext `properties_json`** (panel/layout UI-state:
   `activePanelId`) and **no `workspace_id`**.
 
-This block is a **layout/UI-state block in the e2ee workspace** (`e2eet1`,
-`2de56b00-…`). The 8 queued e2ee-workspace PATCHes alternate between
+This block is a **layout/UI-state block in the e2ee workspace**. The 8 queued e2ee-workspace PATCHes alternate between
 `references_json:"[]"` and non-references PATCHes — the rejected one is the
 `properties_json` UI-state write.
 
@@ -231,13 +229,13 @@ keep tripping the ciphertext trigger unless they're sealed like any other block.
 
 1. **Identify the block + its write path:**
    ```
-   pnpm agent --profile ff-vlad-dev sql all \
-     "SELECT id, workspace_id, substr(content,1,60) content, substr(properties_json,1,120) props FROM blocks WHERE id='469ecc66-34de-5a0e-a85a-a69c69477fb2'"
+   pnpm agent --profile <profile> sql all \
+     "SELECT id, workspace_id, substr(content,1,60) content, substr(properties_json,1,120) props FROM blocks WHERE id='<block-id>'"
    ```
    Confirm it's the layout-session/panel-state block (`getLayoutSessionBlock` /
    `stateBlocks.ts`) and how it's created in the e2ee workspace.
 2. **Check whether the queued PATCH actually has `workspace_id`** for a *fresh*
-   e2ee edit (write a block in `e2eet1`, then look at its new `ps_crud` row): if
+   e2ee edit (write a block in the e2ee workspace, then look at its new `ps_crud` row): if
    a fresh PATCH includes `workspace_id`, the rejected one is stale; if not, the
    trigger/`workspace_id` emission has a gap for this path.
 3. **Check the connector seal path** in `src/services/powersync.ts`
@@ -278,14 +276,14 @@ keep tripping the ciphertext trigger unless they're sealed like any other block.
 ## Quick command appendix
 
 ```
-pnpm agent --profile ff-vlad-dev eval "return repo.metrics().reprojection"
-pnpm agent --profile ff-vlad-dev sql all "SELECT COUNT(*) rows, COUNT(DISTINCT json_extract(data,'\$.id')) blocks FROM ps_crud"
-pnpm agent --profile ff-vlad-dev sql all "SELECT je.key col, COUNT(*) n FROM ps_crud, json_each(json_extract(ps_crud.data,'\$.data')) je GROUP BY je.key ORDER BY n DESC"
-pnpm agent --profile ff-vlad-dev sql all "SELECT data, error_code FROM ps_crud_rejected"
-pnpm agent --profile ff-vlad-dev sql all "SELECT COUNT(*) FROM client_schema_state WHERE key LIKE 'reproject_ref:%'"
+pnpm agent --profile <profile> eval "return repo.metrics().reprojection"
+pnpm agent --profile <profile> sql all "SELECT COUNT(*) rows, COUNT(DISTINCT json_extract(data,'\$.id')) blocks FROM ps_crud"
+pnpm agent --profile <profile> sql all "SELECT je.key col, COUNT(*) n FROM ps_crud, json_each(json_extract(ps_crud.data,'\$.data')) je GROUP BY je.key ORDER BY n DESC"
+pnpm agent --profile <profile> sql all "SELECT data, error_code FROM ps_crud_rejected"
+pnpm agent --profile <profile> sql all "SELECT COUNT(*) FROM client_schema_state WHERE key LIKE 'reproject_ref:%'"
 # session-2 additions:
-pnpm agent --profile ff-vlad-dev eval "const s=(repo.db||db).currentStatus; return {uploading:s.dataFlowStatus.uploading, uploadError:String(s.dataFlowStatus.uploadError?.message), downloadError:String(s.dataFlowStatus.downloadError?.message)}"
-pnpm agent --profile ff-vlad-dev sql all "SELECT MIN(id) lo, MAX(id) hi, COUNT(*) n FROM ps_crud"   # lo pinned at oldest ⇒ not draining
+pnpm agent --profile <profile> eval "const s=(repo.db||db).currentStatus; return {uploading:s.dataFlowStatus.uploading, uploadError:String(s.dataFlowStatus.uploadError?.message), downloadError:String(s.dataFlowStatus.downloadError?.message)}"
+pnpm agent --profile <profile> sql all "SELECT MIN(id) lo, MAX(id) hi, COUNT(*) n FROM ps_crud"   # lo pinned at oldest ⇒ not draining
 ```
 
 ---

@@ -19,15 +19,13 @@ import {configFromPlan, type PlanNode} from '../program/planParser'
 import {readAltChoices} from './store'
 import {
   cadenceDaysProp,
-  planRootProp,
+  planProp,
   rolloverHourProp,
   roundToProp,
 } from './schema'
 
-/** The Strength Plan v2 outline root from the handoff. A default only —
- *  overridable via the settings block's `plan-root`, and resolvable by the
- *  "Strength Plan v2" alias when neither points anywhere live. */
-export const DEFAULT_PLAN_ROOT_ID = 'ed2e8053-ea55-4130-9207-01409192a4aa'
+/** Resolves the plan outline when the settings block's `plan` points
+ *  nowhere live. */
 export const PLAN_ALIAS = 'Strength Plan v2'
 
 const read = <T>(block: BlockData | null, schema: PropertySchema<T>): T => {
@@ -52,16 +50,13 @@ const resolvePlanRoot = async (
   workspaceId: string,
   settings: BlockData | null,
 ): Promise<string | null> => {
-  const configured = read(settings, planRootProp)
-  const candidates = [configured, DEFAULT_PLAN_ROOT_ID].filter(id => id.length > 0)
-  for (const id of candidates) {
-    const block = await repo.block(id).load()
-    if (block && !block.deleted) return id
+  const configured = read(settings, planProp)
+  if (configured !== undefined) {
+    const block = await repo.block(configured).load()
+    if (block && !block.deleted) return configured
   }
-  const aliased = await repo.runQuery<{id: string} | null>('core.aliasLookup', {
-    alias: PLAN_ALIAS,
-    workspaceId,
-  }).catch(() => null)
+  const aliased = await repo.query.aliasLookup({alias: PLAN_ALIAS, workspaceId}).load()
+    .catch(() => null)
   return aliased?.id ?? null
 }
 
@@ -131,7 +126,7 @@ export const configFor = (
   if (!source.planRootId) {
     return {
       config: base,
-      warnings: ['Strength Plan v2 outline not found — using the built-in program. Set the plan-root in strength settings to read from your notes.'],
+      warnings: ['Strength Plan v2 outline not found — using the built-in program. Set the plan in strength settings to read from your notes.'],
       planRootId: null,
     }
   }

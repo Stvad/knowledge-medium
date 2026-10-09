@@ -6,7 +6,8 @@ import { useActionRefItems } from '@/shortcuts/actionRefItems.js'
 import { ActionContextTypes } from '@/shortcuts/types.js'
 import { withEditModeKeepalive } from '@/components/editModeKeepalive.js'
 import {
-  getLayoutViewportKeyboardOverlap,
+  getKeyboardTop,
+  keyboardBottomStyle,
   setEditingToolbarHeight,
   subscribeKeyboardViewport,
 } from '@/utils/keyboardViewport.js'
@@ -19,7 +20,7 @@ import { EXIT_EDIT_ACTION_ID, mobileKeyboardToolbarItemsFacet } from './facet.ts
  *  `active`, so an app with no active editor carries no listeners.
  *
  *  Accepted transient: during a rapid keyboard open/close iOS emits a burst of
- *  events while clientHeight / vv.height / offsetTop settle independently, so a
+ *  events while vv.height / offsetTop settle independently, so a
  *  derived value can be briefly off for a frame; the next event recomputes it.
  *  Not rAF-coalesced — that would add a frame of latency to the common
  *  smooth-scroll case for a rare, self-correcting blip. */
@@ -40,12 +41,6 @@ const useKeyboardViewportValue = <T,>(active: boolean, read: () => T, initial: T
   return value
 }
 
-/** The toolbar's `bottom` inset — the live layout-viewport keyboard overlap
- *  that lifts the `position: fixed` toolbar just above the on-screen keyboard
- *  (see `getLayoutViewportKeyboardOverlap` for the iOS clientHeight/pan
- *  rationale). ~0 on Chromium/Firefox, nonzero on iOS Safari. */
-const useKeyboardInset = (active: boolean): number =>
-  useKeyboardViewportValue(active, getLayoutViewportKeyboardOverlap, 0)
 
 /** Mobile-only toolbar that sits above the on-screen keyboard while a
  *  block is being edited. Its buttons are facet contributions
@@ -84,9 +79,11 @@ export function MobileKeyboardToolbar() {
   const pointerCoarse = usePointerCoarse()
   const showToolbar = isEditing && pointerCoarse
   // Hooks above the early-return must run on every render. Pass the
-  // activation flag in so the sentinel only mounts/listens while the
-  // toolbar is on screen.
-  const keyboardInset = useKeyboardInset(showToolbar)
+  // activation flag in so the subscription only exists while the toolbar is
+  // on screen.
+  const keyboardBottom = keyboardBottomStyle(
+    useKeyboardViewportValue<number | undefined>(showToolbar, getKeyboardTop, undefined),
+  )
 
   // Publish the toolbar's rendered height so keyboardAwareScroll can keep
   // the caret above the toolbar, not just above the keyboard. Measured
@@ -171,14 +168,12 @@ export function MobileKeyboardToolbar() {
   return (
     <div
       ref={toolbarRef}
-      // `keyboardInset` lifts the fixed toolbar above the on-screen
-      // keyboard by the keyboard's intrusion into the layout viewport:
-      // nonzero on iOS Safari (layout viewport stays full-height while the
-      // keyboard overlays + pans it), ~0 on Chromium/Firefox (where
-      // interactive-widget=resizes-content shrinks the layout viewport, so
-      // bottom:0 already clears the keyboard). See useKeyboardInset.
+      // Must stay a direct child of the app root: the `100%` in `bottom` is the
+      // viewport only while no ancestor carries a transform, filter, contain
+      // or backdrop-filter, any of which would make itself the containing
+      // block and resolve the bar to an arbitrary y.
       className="mobile-keyboard-toolbar fixed left-0 right-0 z-50 flex items-center justify-around gap-1 border-t border-border bg-background/95 px-1 py-1 backdrop-blur supports-[backdrop-filter]:bg-background/80"
-      style={{bottom: keyboardInset}}
+      style={{bottom: keyboardBottom}}
       data-block-interaction="ignore"
     >
       {resolved.map(({item, action}) => {

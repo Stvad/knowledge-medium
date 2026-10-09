@@ -1,12 +1,19 @@
-/** The "look back" surface: milestones, per-lift trend sparklines,
- *  left/right asymmetry, and the recent-session log. Most useful on a wider
- *  screen, but degrades fine on mobile.
+/** The "look back" surface: stalled lifts, milestones and lift ratios,
+ *  per-lift trend sparklines, left/right asymmetry, and the recent-session
+ *  log. Most useful on a wider screen, but degrades fine on mobile.
  */
 
 import {useMemo} from 'react'
 
-import {asymmetries, exerciseSeries, milestoneProgress, type SeriesPoint} from '../engine/trends'
-import type {ProgramConfig, WorkoutRecord} from '../engine/types'
+import {
+  asymmetries,
+  exerciseSeries,
+  liftBalance,
+  milestoneProgress,
+  stalledLifts,
+  type SeriesPoint,
+} from '../engine/trends'
+import {programOccurrences, type ProgramConfig, type WorkoutRecord} from '../engine/types'
 import {dateToDay} from '../km/day'
 
 interface Props {
@@ -17,35 +24,25 @@ interface Props {
 export function HistoryView({config, history}: Props) {
   const milestones = useMemo(() => milestoneProgress(history, config), [history, config])
   const asym = useMemo(() => asymmetries(history, config), [history, config])
-  // The load-progressed main lifts, in program order, that have any history.
+  const stalls = useMemo(() => stalledLifts(history, config), [history, config])
+  const balance = useMemo(() => liftBalance(history, config), [history, config])
+  // The load-progressed lifts, in program order, that have any history. A
+  // plan that prescribes one lift twice draws two DIFFERENT lines.
   const trendLifts = useMemo(
-    () => {
-      // Occurrence counted the way `planFromPrescription` counts it — by plan
-      // block where there is one, else by name — so a plan that prescribes one
-      // lift twice draws two DIFFERENT lines instead of the same one twice
-      // (with the second row's history nowhere on screen, under a duplicate
-      // React key).
-      const seen = new Map<string, number>()
-      return config.exercises
-        .filter(e => !e.freeform)
-        .map(e => {
-          const identityKey = e.defId ?? e.name
-          const occurrence = seen.get(identityKey) ?? 0
-          seen.set(identityKey, occurrence + 1)
-          return {
-            name: e.name,
-            key: `${identityKey}#${occurrence}`,
-            label: occurrence === 0 ? e.name : `${e.name} (${occurrence + 1})`,
-            unit: config.unit,
-            series: exerciseSeries(
-              history,
-              {exercise: e.name, ...(e.defId !== undefined ? {defId: e.defId} : {}), occurrence},
-              config.dayRolloverHour,
-            ),
-          }
-        })
-        .filter(t => t.series.length > 0)
-    },
+    () => programOccurrences(config.exercises)
+      .filter(({item}) => !item.freeform)
+      .map(({item: e, occurrence, key}) => ({
+        name: e.name,
+        key,
+        label: rowLabel(e.name, occurrence),
+        unit: config.unit,
+        series: exerciseSeries(
+          history,
+          {exercise: e.name, ...(e.defId !== undefined ? {defId: e.defId} : {}), occurrence},
+          config.dayRolloverHour,
+        ),
+      }))
+      .filter(t => t.series.length > 0),
     [history, config],
   )
 
@@ -59,6 +56,31 @@ export function HistoryView({config, history}: Props) {
 
   return (
     <div className="flex flex-col gap-6">
+      {stalls.length > 0 && (
+        <Section title="Stalled">
+          <ul className="flex flex-col gap-1.5">
+            {stalls.map(stall => (
+              <li key={stall.key} className="flex flex-col text-sm">
+                <span>
+                  {rowLabel(stall.exercise, stall.occurrence)}{' '}
+                  <span className="tabular-nums text-muted-foreground">
+                    {stall.weight}{config.unit} for {stall.sessions} sessions
+                  </span>
+                </span>
+                {/* The reps are what separate a lift that is stuck from one
+                    that is tired: a set-to-set fade points at rest or order,
+                    not at the load. A carry logs no reps, so it has none. */}
+                {stall.recent.some(reps => reps.some(r => r > 0)) ? (
+                  <span className="text-xs tabular-nums text-muted-foreground">
+                    last: {stall.recent.map(reps => reps.join('·')).join(' / ')}
+                  </span>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </Section>
+      )}
+
       <Section title="Milestones">
         <ul className="flex flex-col gap-2">
           {milestones.map(m => (
@@ -81,6 +103,25 @@ export function HistoryView({config, history}: Props) {
             </li>
           ))}
         </ul>
+        {balance.heaviest || balance.ratios.some(r => r.value !== undefined) ? (
+          <ul className="mt-3 flex flex-col gap-1 text-sm">
+            {balance.heaviest ? (
+              <li className="flex justify-between gap-2">
+                <span>{balance.heaviest.lift} is the heaviest lift</span>
+                <span className={'shrink-0 tabular-nums ' + (balance.heaviest.holds ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400')}>
+                  {balance.heaviest.holds ? '✓' : '✗'} {balance.heaviest.weight}
+                  {` vs ${balance.heaviest.runnerUp.lift.toLowerCase()} ${balance.heaviest.runnerUp.weight}`}
+                </span>
+              </li>
+            ) : null}
+            {balance.ratios.map(({ratio, value}) => value === undefined ? null : (
+              <li key={ratio.id} className="flex justify-between gap-2">
+                <span>{ratio.label}</span>
+                <span className="shrink-0 tabular-nums text-muted-foreground">{value.toFixed(2)}</span>
+              </li>
+            ))}
+          </ul>
+        ) : null}
       </Section>
 
       {trendLifts.length > 0 && (
@@ -109,8 +150,8 @@ export function HistoryView({config, history}: Props) {
         <Section title="Left / right">
           <ul className="flex flex-col gap-1.5">
             {asym.map(a => (
-              <li key={`${a.defId ?? a.exercise}#${a.occurrence}`} className="flex items-center justify-between gap-2 text-sm">
-                <span>{a.occurrence === 0 ? a.exercise : `${a.exercise} (${a.occurrence + 1})`}</span>
+              <li key={a.key} className="flex items-center justify-between gap-2 text-sm">
+                <span>{rowLabel(a.exercise, a.occurrence)}</span>
                 <span className="flex items-center gap-2 tabular-nums">
                   {/* Reps beside the load: at equal weight the flag turns on
                       REPS, and showing weight alone would put "right ahead"
@@ -165,6 +206,11 @@ export function HistoryView({config, history}: Props) {
   )
 }
 HistoryView.displayName = 'HistoryView'
+
+/** A lift the plan prescribes twice in a session is numbered from its second
+ *  row on. */
+const rowLabel = (name: string, occurrence: number): string =>
+  occurrence === 0 ? name : `${name} (${occurrence + 1})`
 
 const topWeight = (sets: readonly {weight: number}[]): number =>
   sets.reduce((max, s) => Math.max(max, s.weight), 0)

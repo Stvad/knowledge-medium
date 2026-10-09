@@ -15,6 +15,7 @@ import type {
   AnyValuePresetCore,
   AnyValuePresetPresentation,
   BlockData,
+  BlockReference,
   Tx,
 } from '@/data/api'
 import type {ProjectedPropertyDefinition} from '@/data/propertyDefinitionRegistry'
@@ -152,6 +153,10 @@ export interface BackfillCompletionClaim {
     backfillId: string,
     opts?: {reclaimCompleted?: boolean},
   ): Promise<ClaimAttempt>
+  /** Read the live claim through the writing transaction so a sync drain
+   *  cannot replace it between this check and the guarded batch. Never creates,
+   *  restores, or reclaims a missing or completed claim. */
+  stillOwned(tx: Pick<Tx, 'get'>, workspaceId: string, backfillId: string): Promise<boolean>
   /** The claimed run finished. Record completion where every device sees it. */
   markComplete(workspaceId: string, backfillId: string): Promise<void>
   /** The claimed run aborted without finishing (a transient precondition, a
@@ -201,6 +206,9 @@ export interface WorkspaceBackfill {
 }
 
 export interface WorkspaceBackfillContext {
+  /** Successful sync waits during this run. A scan spanning a change in this
+   *  count must revisit its candidates before declaring convergence. */
+  readonly syncWaitCount: number
   /** The single workspace this run is scoped to. Every read and write MUST be
    *  filtered to it — a backfill never touches another workspace (that was the
    *  cross-workspace cold-start hazard the original raw backfill had). */
@@ -343,6 +351,51 @@ export const workspaceBackfillsFacet = defineFacet<WorkspaceBackfill, readonly W
   id: 'data.workspaceBackfills',
   validate: isWorkspaceBackfill,
 })
+
+/**
+ * What a block's WHOLE content already says about its `references`, for rows
+ * core mints with content it authored itself.
+ *
+ * Core owns the column — `core.normalizeReferences` canonicalizes every write
+ * of it — but not the reading of content that fills it: that is the References
+ * plugin's parser, and the parser is behind a `systemToggle`. So a contributor
+ * here is answering one question only, "what would YOUR parse of this content
+ * produce", and the contract is agreement with that parse: a prefill the parser
+ * would not reproduce is a reference it retracts on the next write, which costs
+ * the write, the upload and the retraction this exists to avoid. `undefined` —
+ * the safe answer, and the right one for anything needing an alias lookup or a
+ * seat probe — leaves the content to the parser.
+ *
+ * Declared in core so core can fill the column at `tx.create` instead of paying
+ * a second write per row, and contributed from the plugin so it lives beside
+ * the parse it predicts and leaves with it when References is off.
+ */
+export interface ContentReferencePrefill {
+  id: string
+  derive: (content: string) => BlockReference[] | undefined
+}
+
+const isContentReferencePrefill = (value: unknown): value is ContentReferencePrefill =>
+  isRecord(value) && typeof value.id === 'string' && typeof value.derive === 'function'
+
+export const contentReferencePrefillsFacet = defineFacet<
+  ContentReferencePrefill, readonly ContentReferencePrefill[]
+>({
+  id: 'data.contentReferencePrefills',
+  validate: isContentReferencePrefill,
+})
+
+/** First contributor with an answer wins; no contributor means no prefill, and
+ *  every row is left to whatever parses content in that configuration. */
+export const contentReferencePrefillFor = (
+  prefills: readonly ContentReferencePrefill[],
+) => (content: string): BlockReference[] | undefined => {
+  for (const prefill of prefills) {
+    const derived = prefill.derive(content)
+    if (derived !== undefined) return derived
+  }
+  return undefined
+}
 
 /**
  * A per-workspace singleton page that must exist EARLY — before the workspace's

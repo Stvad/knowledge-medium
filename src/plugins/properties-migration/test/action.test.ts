@@ -54,6 +54,19 @@ vi.mock('@/data/internals/propertyDefinitionSynthesis', () => ({
   flipBlockedBySynthesis: () => flipBlocked(),
 }))
 
+/** The pre-dialog survey of stored cell values, faked for the same reason the
+ *  plan above is: this file is about the gesture's ORDER — when the scan runs,
+ *  and what the gesture does with its verdict. What the verdict MEANS is
+ *  `propertyCellBackfill.test.ts`. Partial, so `pendingValueCount` and the
+ *  pass id stay real. */
+const surveyCells = vi.fn<() => Promise<PropertyCellRejectionSurvey>>()
+const cellValuesBlocked = vi.fn<() => string | null>()
+vi.mock('@/data/internals/propertyCellBackfill', async importOriginal => ({
+  ...(await importOriginal<typeof import('@/data/internals/propertyCellBackfill')>()),
+  surveyPropertyCellRejections: () => surveyCells(),
+  flipBlockedByCellValues: () => cellValuesBlocked(),
+}))
+
 /** A plan with `n` keys to mint and nothing wrong. */
 const plan = (candidates = 0) => ({
   workspaceId: 'ws-1', refusal: null, unreadableBlocks: 0,
@@ -63,12 +76,13 @@ const plan = (candidates = 0) => ({
   blockers: [], brokenDefinitions: [],
 })
 
-import type { OperatorBackfillResult, Repo, ViewGap } from '@/data/repo'
+import type { OperatorBackfillResult, Repo, ViewGap, WorkspaceRematerialization } from '@/data/repo'
 import type { SynthesisResult } from '@/data/internals/propertyDefinitionSynthesis'
+import type { PropertyCellRejectionSurvey } from '@/data/internals/propertyCellBackfill'
 import type { HistoryDrop } from '@/data/internals/undoManager'
 import { getClientId } from '@/utils/clientId'
 import { claimStub, type ClaimStubLog } from './claimStub.ts'
-import { describeOutcome, migratePropertiesToBlocksAction } from '../action.ts'
+import { type RunCounts, describeOutcome, migratePropertiesToBlocksAction } from '../action.ts'
 
 const clearUndo = vi.fn()
 const finishUndoDrop = vi.fn()
@@ -102,11 +116,14 @@ const makeRepo = (
   } = {},
 ) => {
   const runPass = vi.fn(async () => result)
-  const getAll = vi.fn(async () => [{n: 7}])
+  const getAll = vi.fn(async () => [])
   const workspaceViewGap = vi.fn(async (): Promise<ViewGap | null> => null)
-  // Two readers of the `workspaces` row now — the flip state and the owner.
+  const rematerializeWorkspace = vi.fn(async (): Promise<WorkspaceRematerialization> => ({
+    workspaceId: 'ws-1', scope: 'unapplied', unappliedBefore: 3, unappliedAfter: 3,
+    scanned: 3, applied: 0, deferred: 2, quarantined: 1, skippedStale: 0,
+    resolved: 0, reflagged: 0, remainingGap: STRANDED,
+  }))
   const getOptional = vi.fn(async (sql: string) => {
-    if (sql.includes('owner_user_id')) return {owner_user_id: owner}
     if (sql.includes('properties_json')) {
       return claimedBy === undefined ? null : {
         properties_json: JSON.stringify({
@@ -114,7 +131,7 @@ const makeRepo = (
         }),
       }
     }
-    return {properties_migration: flipped ? 'children' : 'cell'}
+    return {properties_migration: flipped ? 'children' : 'cell', owner_user_id: owner}
   })
   const repo = {
     activeWorkspaceId: 'ws-1',
@@ -122,6 +139,7 @@ const makeRepo = (
     db: {getAll, getOptional},
     isReadOnly: false,
     workspaceViewGap,
+    rematerializeWorkspace,
     undoManagerFor: () => ({clear: clearUndo, beginHistoryDrop}),
     // The gesture reaches the pass THROUGH the claim, so the stub is the only
     // route to `runPass`. `repo.runPass` is deliberately
@@ -130,7 +148,7 @@ const makeRepo = (
     // (#710) this file exists to pin. Missing, it is a TypeError instead.
     withOperatorBackfillClaim: claimStub(runPass, {log, refuse: refuseClaim}),
   } as unknown as Repo
-  return {repo, runPass, getAll, workspaceViewGap, getOptional}
+  return {repo, runPass, getAll, workspaceViewGap, getOptional, rematerializeWorkspace}
 }
 
 /** The dialog is a user-length pause; this is the seam for what happens during
@@ -142,8 +160,10 @@ const dialogThatSwitchesWorkspace = (repo: Repo) => async () => {
 
 /** The counts `describeOutcome` reports on, for a run that migrated `blocks`
  *  blocks cleanly. Shared by every describe that renders an outcome. */
-const counts = (blocks: number) =>
-  ({blocksMaterialized: blocks, valuesMaterializedTotal: blocks, unmigrated: 0})
+const counts = (blocks: number, over: Partial<RunCounts> = {}): RunCounts => ({
+  blocksMaterializedTotal: blocks, valuesMaterializedTotal: blocks, unmigrated: 0,
+  unresolved: 0, unresolvedNames: [], ...over,
+})
 
 describe('a workspace another client is already migrating', () => {
   it('refuses before the consent screen, rather than after it', async () => {
@@ -159,6 +179,19 @@ describe('a workspace another client is already migrating', () => {
     expect(runPass).not.toHaveBeenCalled()
     expect(showInfo).toHaveBeenCalledWith(
       expect.stringContaining('Another client is already migrating'))
+  })
+
+  it('lets a completed peer claim through because it no longer holds the workspace', async () => {
+    const {repo, getOptional, runPass} = makeRepo()
+    const read = getOptional.getMockImplementation()!
+    getOptional.mockImplementation(async sql => sql.includes('properties_json')
+      ? {properties_json: JSON.stringify({
+        'migration:claimant': 'peer', 'migration:claimed-at': 1, 'migration:completed-at': 2,
+      })} as never
+      : read(sql))
+    await invoke(repo)
+    expect(openDialog).toHaveBeenCalledOnce()
+    expect(runPass).toHaveBeenCalledOnce()
   })
 
   it('lets OUR OWN claimant through, because that is what a resume is', async () => {
@@ -193,6 +226,8 @@ afterEach(() => {
   planSynthesis.mockResolvedValue(plan())
   applySynthesis.mockReset()
   flipBlocked.mockReset()
+  surveyCells.mockReset()
+  cellValuesBlocked.mockReset()
 })
 
 // Every default lives HERE, not split with `afterEach`: arming in `afterEach`
@@ -208,6 +243,8 @@ beforeEach(() => {
   planSynthesis.mockResolvedValue(plan())
   applySynthesis.mockResolvedValue(synthesized())
   flipBlocked.mockReturnValue(null)
+  surveyCells.mockResolvedValue({keys: [], cells: 0, blocksScanned: 7})
+  cellValuesBlocked.mockReturnValue(null)
 })
 
 describe('migrate_properties_to_blocks action', () => {
@@ -276,15 +313,15 @@ describe('migrate_properties_to_blocks action', () => {
   })
 
   it('refuses an already-flipped workspace before the workspace-wide scan', async () => {
-    // No flip on this path, so nothing irreversible — but the candidate count is
-    // an unbounded json_each walk on the UI thread and the dialog would ask for
-    // consent to a run the runner is about to refuse.
-    const {repo, runPass, getAll, workspaceViewGap} = makeRepo(RAN, {flipped: true})
+    // No flip on this path, so nothing irreversible — but the cell survey is an
+    // unbounded walk of every property bag on the UI thread, and the dialog
+    // would ask for consent to a run the runner is about to refuse.
+    const {repo, runPass, workspaceViewGap} = makeRepo(RAN, {flipped: true})
     workspaceViewGap.mockResolvedValue(DRAINING)
 
     await invoke(repo)
 
-    expect(getAll).not.toHaveBeenCalled()
+    expect(surveyCells).not.toHaveBeenCalled()
     expect(openDialog).not.toHaveBeenCalled()
     expect(runPass).not.toHaveBeenCalled()
   })
@@ -658,7 +695,7 @@ describe('the graph-wide claim', () => {
 
     expect(applySynthesis).not.toHaveBeenCalled()
     expect(progressHandle.fail).toHaveBeenCalledWith(
-      expect.stringMatching(/not caught up with the server.*Nothing was changed/is))
+      expect.stringMatching(/not caught up with the server.*No properties were migrated/is))
   })
 
   it('keeps the flip inside the claimed region, so a failed flip still releases', async () => {
@@ -680,19 +717,193 @@ describe('the graph-wide claim', () => {
   })
 })
 
+describe('the stored-cell-value gate', () => {
+  it('refuses the flip when a stored value no codec will carry exists', async () => {
+    // The cell-level twin of the orphan-key refusal, and the reason it has to
+    // be one: the key IS registered, so `audit-properties` reports the
+    // workspace clean while these cells can never become child-backed — and
+    // the flip they would be stranded by is one-way.
+    cellValuesBlocked.mockReturnValue('2 property value(s) cannot be stored as property blocks')
+    const {repo, runPass} = makeRepo()
+
+    await invoke(repo)
+
+    expect(showInfo).toHaveBeenCalledWith(
+      expect.stringMatching(/cannot be stored as property blocks/), expect.anything())
+    expect(openDialog).not.toHaveBeenCalled()
+    expect(flipWorkspace).not.toHaveBeenCalled()
+    expect(runPass).not.toHaveBeenCalled()
+  })
+
+  it('lets an already-flipped workspace run anyway, as an advisory', async () => {
+    // Same bargain as the orphan-key gate: past the flip nothing irreversible
+    // is left, and refusing would withhold the backfill from every other key
+    // over a handful that can never migrate.
+    cellValuesBlocked.mockReturnValue('2 property value(s) cannot be stored as property blocks')
+    const {repo, runPass} = makeRepo(RAN, {flipped: true})
+
+    await invoke(repo)
+
+    expect(showInfo).toHaveBeenCalledWith(
+      expect.stringMatching(/cannot be stored as property blocks/), expect.anything())
+    expect(runPass).toHaveBeenCalled()
+  })
+
+  it('refuses the flip when a bad cell arrives while the dialog is open', async () => {
+    // The pre-dialog survey is taken across a user-length pause. A sync
+    // arrival or a raw write landing in it would otherwise be carried straight
+    // into the one-way flip, after which that cell is stranded for good —
+    // exactly the hazard the gate exists for, through the one window the
+    // pre-dialog answer cannot see.
+    cellValuesBlocked.mockReturnValueOnce(null)
+      .mockReturnValue('1 property value(s) cannot be stored as property blocks')
+    const {repo, runPass} = makeRepo()
+
+    await invoke(repo)
+
+    expect(openDialog).toHaveBeenCalled()
+    expect(flipWorkspace).not.toHaveBeenCalled()
+    expect(runPass).not.toHaveBeenCalled()
+    expect(progressHandle.fail).toHaveBeenCalledWith(
+      expect.stringMatching(/stopped before switching this workspace over/i))
+    // And it refuses ABOVE the history drop, which is a POSITION this pins
+    // rather than a second effect: a drop begun and then returned past is
+    // never ended, and an unended one refuses every replay in the workspace
+    // until the page reloads.
+    expect(beginHistoryDrop).not.toHaveBeenCalled()
+  })
+
+  it('still catches a workspace switched DURING the pre-flip re-survey', async () => {
+    // The re-survey is a paginated walk of every property bag, so it is a
+    // multi-second suspension point — and dropped BELOW the active-workspace
+    // check it would reopen the exact window that check exists to close, with
+    // the flip the next thing to run. It sits above it instead, which costs a
+    // wasted scan on this path and keeps the check the LAST thing before the
+    // flip. A third check is what that check's own comment refuses.
+    const {repo, runPass} = makeRepo()
+    surveyCells.mockResolvedValueOnce({keys: [], cells: 0, blocksScanned: 7})
+      .mockImplementation(async () => {
+        ;(repo as unknown as {activeWorkspaceId: string}).activeWorkspaceId = 'ws-2'
+        return {keys: [], cells: 0, blocksScanned: 7}
+      })
+
+    await invoke(repo)
+
+    expect(flipWorkspace).not.toHaveBeenCalled()
+    expect(runPass).not.toHaveBeenCalled()
+    expect(progressHandle.fail).toHaveBeenCalledWith(
+      expect.stringMatching(/different workspace is open now/i))
+  })
+
+  it('re-surveys under the claim, not against the pre-dialog snapshot', async () => {
+    // Two calls, the second of them the one that guards the flip. One call
+    // means the gate is a snapshot taken before the user had answered.
+    const {repo} = makeRepo()
+
+    await invoke(repo)
+
+    expect(surveyCells).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not make an already-flipped workspace pay for the re-survey', async () => {
+    // There is no irreversible step left on that path, so the second scan
+    // would be a full walk of every property bag bought for nothing.
+    const {repo, runPass} = makeRepo(RAN, {flipped: true})
+
+    await invoke(repo)
+
+    expect(surveyCells).toHaveBeenCalledTimes(1)
+    expect(runPass).toHaveBeenCalled()
+  })
+
+  it('fails closed when the pre-flip re-survey THROWS', async () => {
+    // A read that threw says nothing about whether the precondition holds, and
+    // this is the last thing between here and a one-way step.
+    surveyCells.mockResolvedValueOnce({keys: [], cells: 0, blocksScanned: 7})
+      .mockRejectedValue(new Error('the read failed'))
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const {repo, runPass} = makeRepo()
+
+    await invoke(repo)
+
+    expect(flipWorkspace).not.toHaveBeenCalled()
+    expect(runPass).not.toHaveBeenCalled()
+    expect(progressHandle.fail).toHaveBeenCalledWith(
+      expect.stringMatching(/could not re-check/i))
+  })
+
+  it('does not survey the cells of a workspace the key gate already refused', async () => {
+    // Ordering, and it is the expensive half: the survey decodes every stored
+    // property value in the workspace, on the UI thread, before a dialog the
+    // gesture is about to decline to show.
+    flipBlocked.mockReturnValue('2 property key(s) cannot be given a definition')
+    const {repo} = makeRepo()
+
+    await invoke(repo)
+
+    expect(surveyCells).not.toHaveBeenCalled()
+  })
+
+  it('takes the cell-value advisory down once a re-run comes back clean', async () => {
+    // Sticky and stable-id like the synthesis one, and for the same reason: a
+    // repaired workspace must not keep a "cannot migrate" banner through a
+    // migration that then succeeds.
+    const {repo} = makeRepo(RAN, {flipped: true})
+    cellValuesBlocked.mockReturnValue('2 property value(s) cannot be stored as property blocks')
+    await invoke(repo)
+    const advisory = (showInfo.mock.calls[0]![1] as {id: string}).id
+
+    showInfo.mockReset()
+    dismissToast.mockReset()
+    cellValuesBlocked.mockReturnValue(null)
+    await invoke(repo)
+
+    expect(dismissToast).toHaveBeenCalledWith(advisory)
+  })
+
+  it('reports a survey that THREW without changing anything', async () => {
+    // Database reads, and nothing else is watching this await. Left to throw it
+    // would end the gesture with no outcome reported, over a flip that had not
+    // happened.
+    surveyCells.mockRejectedValue(new Error('the read failed'))
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const {repo, runPass} = makeRepo()
+
+    await invoke(repo)
+
+    expect(showInfo).toHaveBeenCalledWith(expect.stringMatching(/no properties were migrated/i))
+    expect(openDialog).not.toHaveBeenCalled()
+    expect(flipWorkspace).not.toHaveBeenCalled()
+    expect(runPass).not.toHaveBeenCalled()
+  })
+
+  it('shows the dialog the blocks the survey actually read', async () => {
+    // The survey replaced a separate candidate COUNT that ran here, so its scan
+    // is now the only thing that can answer "how many blocks". Reading it from
+    // anywhere else would be a second full walk of every property bag.
+    surveyCells.mockResolvedValue({keys: [], cells: 0, blocksScanned: 41})
+    const {repo} = makeRepo()
+
+    await invoke(repo)
+
+    expect(openDialog).toHaveBeenCalledWith(
+      expect.anything(), expect.objectContaining({blockCount: 41}))
+  })
+})
+
 describe('the orphan-definition step', () => {
   it('refuses the flip when a key can never have a definition, before anything is scanned', async () => {
     // The hard case: such a key makes "every cell key resolves a definition"
     // unsatisfiable forever, and the flip is one-way. Refusing after the flip
     // would be refusing after the damage.
     flipBlocked.mockReturnValue('2 property key(s) cannot be given a definition')
-    const {repo, runPass, getAll} = makeRepo()
+    const {repo, runPass} = makeRepo()
 
     await invoke(repo)
 
     expect(showInfo).toHaveBeenCalledWith(
       expect.stringMatching(/cannot be given a definition/), expect.anything())
-    expect(getAll).not.toHaveBeenCalled()
+    expect(surveyCells).not.toHaveBeenCalled()
     expect(openDialog).not.toHaveBeenCalled()
     expect(flipWorkspace).not.toHaveBeenCalled()
     expect(runPass).not.toHaveBeenCalled()
@@ -797,29 +1008,27 @@ describe('the orphan-definition step', () => {
     // editor runs the whole gesture, mints definitions that claim shared
     // property names, clears the workspace's undo history — and only then finds
     // out the flip was never available to them.
-    const {repo, runPass, getAll} = makeRepo(
+    const {repo, runPass} = makeRepo(
       RAN, {owner: 'someone-else'})
 
     await invoke(repo)
 
     expect(showInfo).toHaveBeenCalledWith(expect.stringMatching(/only the workspace owner/i))
     expect(planSynthesis).not.toHaveBeenCalled()
-    expect(getAll).not.toHaveBeenCalled()
+    expect(surveyCells).not.toHaveBeenCalled()
     expect(openDialog).not.toHaveBeenCalled()
     expect(flipWorkspace).not.toHaveBeenCalled()
     expect(runPass).not.toHaveBeenCalled()
   })
 
   it('re-checks ownership after the confirmation, which is a user-length pause', async () => {
-    // Ownership can change out of band, or the change can simply reach this
-    // replica during the dialog. It is re-taken because it lives in
-    // `passIsUnfit`, which is re-taken — the whole point of putting it there.
     planSynthesis.mockResolvedValue(plan(2))
     const {repo, runPass, getOptional} = makeRepo()
+    const read = getOptional.getMockImplementation()!
     let reads = 0
     getOptional.mockImplementation(async (sql: string) => sql.includes('owner_user_id')
-      ? {owner_user_id: ++reads === 1 ? USER : 'someone-else'}
-      : {properties_migration: 'cell'})
+      ? {properties_migration: 'cell', owner_user_id: ++reads === 1 ? USER : 'someone-else'}
+      : read(sql))
 
     await invoke(repo)
 
@@ -921,7 +1130,66 @@ describe('the orphan-definition step', () => {
     expect(applySynthesis).not.toHaveBeenCalled()
     // And the dialog does not promise the minting it is about to skip.
     expect(openDialog).toHaveBeenCalledWith(expect.anything(),
-      expect.objectContaining({synthesizedKeys: 0, unfixableKeys: 2}))
+      expect.objectContaining({synthesizedKeys: {count: 0, names: []}}))
+  })
+
+  it('files keys a REFUSED device skips as stranded, not as impossible', async () => {
+    // These are keys a definition could back — what the refusal says is that
+    // this DEVICE will not mint one, which the operator can fix. Reported as
+    // "cannot be given a definition at all" they read as permanent, which is
+    // the `repairableKeys` mistake with a different cause.
+    planSynthesis.mockResolvedValue(
+      {...plan(2), refusal: 'this device holds no content key for the encrypted workspace'})
+    const {repo} = makeRepo(RAN, {flipped: true})
+
+    await invoke(repo)
+
+    expect(openDialog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      unfixableKeys: {count: 0, names: []},
+      stranded: {
+        count: 2,
+        names: ['demo:orphan0', 'demo:orphan1'],
+        reason: 'this device holds no content key for the encrypted workspace',
+      },
+    }))
+  })
+
+  it('raises no stranded category when the refusal strands nothing', async () => {
+    // A refused device whose keys all already have definitions. The refusal is
+    // real — the flip still cannot happen here — but there is no key to name,
+    // and a paragraph about "0 properties" is noise on a consent screen.
+    planSynthesis.mockResolvedValue({...plan(0), refusal: 'this device has no local row'})
+    const {repo} = makeRepo(RAN, {flipped: true})
+
+    await invoke(repo)
+
+    expect(openDialog).toHaveBeenCalledWith(
+      expect.anything(), expect.objectContaining({stranded: null}))
+  })
+
+  it('names the keys behind every count it shows, and caps what it hands over', async () => {
+    // The whole point of the screen: it asks consent for a one-way, fleet-wide
+    // change, and a bare count sends the operator to the CLI audit to find out
+    // which keys — at the one moment they have no reason to go looking. Capped
+    // at the construction site so a workspace with thousands of orphan keys
+    // hands a React prop a handful of strings rather than a copy of the plan.
+    planSynthesis.mockResolvedValue({
+      ...plan(5),
+      blockers: [{key: 'demo:hopeless', cells: 2, reason: 'reads as a block reference'}],
+      brokenDefinitions: [{key: 'demo:broken', cells: 3}],
+    })
+    const {repo} = makeRepo(RAN, {flipped: true})
+
+    await invoke(repo)
+
+    expect(openDialog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      // Count exact, names a sample — so the copy can say how many it left out.
+      synthesizedKeys: {
+        count: 5, names: ['demo:orphan0', 'demo:orphan1', 'demo:orphan2'],
+      },
+      unfixableKeys: {count: 1, names: ['demo:hopeless']},
+      repairableKeys: {count: 1, names: ['demo:broken']},
+    }))
   })
 
   it('does not mint into a workspace the operator navigated away from', async () => {
@@ -946,8 +1214,10 @@ describe('the orphan-definition step', () => {
 
     await invoke(repo)
 
-    expect(openDialog).toHaveBeenCalledWith(expect.anything(),
-      expect.objectContaining({repairableKeys: 1, unfixableKeys: 0}))
+    expect(openDialog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      repairableKeys: {count: 1, names: ['demo:b']},
+      unfixableKeys: {count: 0, names: []},
+    }))
   })
 
   it('does not flip when a key came back with no definition, even though minting succeeded', async () => {
@@ -983,7 +1253,7 @@ describe('the orphan-definition step', () => {
       expect.stringMatching(/still have no definition/), expect.anything())
   })
 
-  it('takes the fitness check BEFORE minting, so "nothing was changed" stays true', async () => {
+  it('takes the fitness check before minting any definitions', async () => {
     // Below the synthesis block this message is false the moment a definition
     // commits — the same lie the flip-failure branch goes out of its way to
     // avoid one step later.
@@ -999,7 +1269,7 @@ describe('the orphan-definition step', () => {
 
     expect(applySynthesis).not.toHaveBeenCalled()
     expect(progressHandle.fail).toHaveBeenCalledWith(
-      expect.stringMatching(/Nothing was changed/))
+      expect.stringMatching(/No properties were migrated/))
   })
 
   it('stops without writing when the plan itself cannot be built', async () => {
@@ -1017,22 +1287,100 @@ describe('the orphan-definition step', () => {
 
 describe('what a completed run tells the operator', () => {
   it('calls a run that migrated nothing a failure, not a green "0 blocks"', async () => {
-    // Failures are per-value by design, so a systematic problem — a codec
-    // rejecting everything, storage refusing writes — otherwise came back as
-    // a success banner reading "Migrated properties on 0 blocks."
+    // Failures are per-value by design, so a run where every value was refused
+    // otherwise came back as a success banner reading "Migrated properties on
+    // 0 blocks."
     const {message, failed} = describeOutcome(
-      RAN, {blocksMaterialized: 0, valuesMaterializedTotal: 0, unmigrated: 12})
+      RAN, counts(0, {unmigrated: 12}))
 
     expect(failed).toBe(true)
-    expect(message).toMatch(/systematic/i)
+    expect(message).toMatch(/Nothing was migrated/i)
+    expect(message).toMatch(/12/)
+  })
+
+  it('does not tell the operator WHY nothing migrated, having no way to know', async () => {
+    // It used to call this "a systematic problem, not a handful of bad
+    // values". Nothing available here separates a broken first run from a
+    // converged graph whose only remaining cells are permanently undecodable:
+    // both write nothing and refuse the same count. On a real migrated graph
+    // the second is the steady state, so the diagnosis was wrong on every
+    // re-run, forever.
+    const {message} = describeOutcome(
+      RAN, counts(0, {unmigrated: 65}))
+
+    expect(message).not.toMatch(/systematic/i)
+  })
+
+  it('does not report the stop condition over cells it never attempted', async () => {
+    // The runbook is "re-run until it reports nothing left". An unregistered
+    // key is skipped without raising a failure, so a run whose only remaining
+    // cells are those wrote nothing and refused nothing — indistinguishable,
+    // here, from a finished one. It reported the stop condition, and the
+    // operator stops on that sentence with the values still unmigrated.
+    const {message, failed} = describeOutcome(
+      RAN, counts(0, {unresolved: 12, unresolvedNames: ['a-key']}))
+
+    expect(failed).toBe(true)
+    expect(message).not.toMatch(/nothing left to migrate/i)
+    expect(message).toMatch(/no registered schema/i)
+    expect(message).toMatch(/12/)
+  })
+
+  it('names the skipped keys after a run that DID migrate values', async () => {
+    // Not only on the ending that moved nothing: a run can migrate a thousand
+    // values and still skip a key whose plugin is disabled, and that key is
+    // then the only thing left to act on. Both repairs land in ONE worklist —
+    // they share a toast id, so a second note would replace the first.
+    const {followUp} = describeOutcome(
+      RAN, counts(5, {unmigrated: 2, unresolved: 3, unresolvedNames: ['a-key', 'b-key']}))
+
+    expect(followUp).toMatch(/could not be migrated/i)
+    expect(followUp).toMatch(/no registered schema/i)
+    expect(followUp).toMatch(/a-key/)
+    expect(followUp).toMatch(/b-key/)
+  })
+
+  it('reports a run that found nothing left as such, not as work it did', async () => {
+    // The runbook's stop condition is "re-run until it reports nothing left",
+    // and a block count cannot carry it — a finished workspace once rendered
+    // as "Migrated properties on 249 blocks", live numbers from the report.
+    //
+    // The input pairs a nonzero block count with zero values ON PURPOSE. The
+    // run-wide counters cannot now produce it (the owner set only grows when
+    // a value moves), so this is defence in depth: it fails if either the
+    // branch or the message is ever re-pointed at the block count.
+    const {message, failed} = describeOutcome(
+      RAN, counts(249, {valuesMaterializedTotal: 0}))
+
+    expect(failed).toBe(false)
+    expect(message).toMatch(/nothing left to migrate/i)
+    // The count is the whole defect: reporting it here is what made a finished
+    // migration read exactly like one starting over.
+    expect(message).not.toMatch(/249/)
+  })
+
+  it('does not claim the undo history for a re-run that wrote nothing', async () => {
+    // The runner only drops the stack for a batch that WROTE, so a no-op
+    // re-run comes back with `undoHistoryCleared: false` — and the banner must
+    // not charge the operator for a cost that was not taken.
+    const {repo} = makeRepo({outcome: 'ran', undoHistoryCleared: false}, {flipped: true})
+
+    await invoke(repo)
+
+    expect(progressHandle.fail).not.toHaveBeenCalled()
+    expect(progressHandle.done).toHaveBeenCalledWith(
+      expect.stringMatching(/nothing left to migrate/i))
+    expect(progressHandle.done).toHaveBeenCalledWith(
+      expect.not.stringMatching(/undo history/i))
   })
 
   it('is not "systematic" when one bad key per block hid a mostly-good run', async () => {
-    // `blocksMaterialized` counts blocks accepted in FULL, so it reads zero for
-    // a run that wrote every other key on every block. Branching on it told the
-    // operator nothing was migrated while tens of thousands of rows were.
+    // A run that moved 40 values off 20 owners and refused 20 more is a
+    // mostly-good run, not a failure. Branching on a per-block "accepted in
+    // full" count called it one, because one bad key per block reads as zero
+    // accepted while tens of thousands of rows moved.
     const {failed} = describeOutcome(
-      RAN, {blocksMaterialized: 0, valuesMaterializedTotal: 40, unmigrated: 20},
+      RAN, counts(20, {valuesMaterializedTotal: 40, unmigrated: 20}),
     )
 
     expect(failed).toBe(false)
@@ -1124,9 +1472,9 @@ describe('every outcome says whether the history is gone', () => {
   it('covers the all-values-failed branch, which returns before the common tail', () => {
     const {message} = describeOutcome(
       RAN,
-      {blocksMaterialized: 0, valuesMaterializedTotal: 0, unmigrated: 5},
+      counts(0, {unmigrated: 5}),
       {flipped: false, undoCleared: true})
-    expect(message).toMatch(/all 5 property value\(s\) failed/)
+    expect(message).toMatch(/all 5 property value\(s\) the pass tried/)
     expect(message).toMatch(/Undo history for this workspace was cleared/)
   })
 })
@@ -1151,5 +1499,199 @@ describe('what an aborted run tells the operator', () => {
     )
 
     expect(message).toMatch(/undo history/i)
+  })
+})
+
+
+describe('pre-dialog recovery of a durable workspace gap', () => {
+  it('recovers once before the survey and ordinary confirmation, then honors cancellation', async () => {
+    const {repo, workspaceViewGap, rematerializeWorkspace, runPass} = makeRepo()
+    workspaceViewGap.mockResolvedValueOnce(STRANDED).mockResolvedValue(null)
+    openDialog.mockResolvedValue(null)
+    await invoke(repo)
+    expect(rematerializeWorkspace).toHaveBeenCalledExactlyOnceWith('ws-1', {scope: 'unapplied'})
+    expect(rematerializeWorkspace.mock.invocationCallOrder[0]).toBeLessThan(
+      surveyCells.mock.invocationCallOrder[0]!)
+    expect(openDialog).toHaveBeenCalledOnce()
+    expect(flipWorkspace).not.toHaveBeenCalled()
+    expect(runPass).not.toHaveBeenCalled()
+    expect(beginHistoryDrop).not.toHaveBeenCalled()
+  })
+
+  it('rechecks eligibility rather than trusting a successful recovery report', async () => {
+    const {repo, workspaceViewGap, rematerializeWorkspace} = makeRepo()
+    workspaceViewGap.mockResolvedValue(STRANDED)
+    rematerializeWorkspace.mockResolvedValue({
+      workspaceId: 'ws-1', scope: 'unapplied', unappliedBefore: 3, unappliedAfter: 0,
+      scanned: 3, applied: 3, deferred: 0, quarantined: 0, skippedStale: 0,
+      resolved: 3, reflagged: 0, remainingGap: null,
+    })
+    await invoke(repo)
+    expect(rematerializeWorkspace).toHaveBeenCalledTimes(1)
+    expect(workspaceViewGap).toHaveBeenCalledTimes(2)
+    expect(planSynthesis).not.toHaveBeenCalled()
+    expect(openDialog).not.toHaveBeenCalled()
+  })
+
+  it.each(['transient', 'read-only', 'non-owner', 'local-only', 'peer claim'])(
+    'does not recover an unrelated refusal: %s', async cause => {
+      const {repo, workspaceViewGap, rematerializeWorkspace} = makeRepo(RAN, {
+        owner: cause === 'non-owner' ? 'another-user' : USER,
+        claimedBy: cause === 'peer claim' ? 'another-client' : undefined,
+      })
+      workspaceViewGap.mockResolvedValue(cause === 'transient' ? DRAINING : cause === 'peer claim' ? null : STRANDED)
+      if (cause === 'read-only') Object.defineProperty(repo, 'isReadOnly', {value: true})
+      if (cause === 'local-only') remoteSyncActive.mockReturnValue(false)
+      await invoke(repo)
+      expect(rematerializeWorkspace).not.toHaveBeenCalled()
+      expect(openDialog).not.toHaveBeenCalled()
+    })
+
+  it.each(['read-only', 'non-owner', 'local-only'])(
+    'rechecks %s after awaited recovery before surveying', async cause => {
+      const {repo, workspaceViewGap, rematerializeWorkspace, getOptional} = makeRepo()
+      workspaceViewGap.mockResolvedValueOnce(STRANDED).mockResolvedValue(null)
+      const recover = rematerializeWorkspace.getMockImplementation()!
+      rematerializeWorkspace.mockImplementation(async () => {
+        if (cause === 'read-only') Object.defineProperty(repo, 'isReadOnly', {value: true})
+        if (cause === 'non-owner') getOptional.mockImplementation(async () => ({owner_user_id: 'other'}) as never)
+        if (cause === 'local-only') remoteSyncActive.mockReturnValue(false)
+        return recover()
+      })
+      await invoke(repo)
+      expect(rematerializeWorkspace).toHaveBeenCalledOnce()
+      expect(planSynthesis).not.toHaveBeenCalled()
+      expect(openDialog).not.toHaveBeenCalled()
+    })
+
+  it('does not start recovery after a workspace switch during eligibility', async () => {
+    const {repo, workspaceViewGap, rematerializeWorkspace} = makeRepo()
+    workspaceViewGap.mockImplementation(async () => {
+      Object.defineProperty(repo, 'activeWorkspaceId', {value: 'ws-2'})
+      return STRANDED
+    })
+    await invoke(repo)
+    expect(rematerializeWorkspace).not.toHaveBeenCalled()
+    expect(planSynthesis).not.toHaveBeenCalled()
+  })
+
+  it('does not survey or confirm after a workspace switch during recovery', async () => {
+    const {repo, workspaceViewGap, rematerializeWorkspace} = makeRepo()
+    workspaceViewGap.mockResolvedValueOnce(STRANDED).mockResolvedValue(null)
+    const recover = rematerializeWorkspace.getMockImplementation()!
+    rematerializeWorkspace.mockImplementation(async () => {
+      Object.defineProperty(repo, 'activeWorkspaceId', {value: 'ws-2'})
+      return recover()
+    })
+    await invoke(repo)
+    expect(rematerializeWorkspace).toHaveBeenCalledOnce()
+    expect(planSynthesis).not.toHaveBeenCalled()
+    expect(openDialog).not.toHaveBeenCalled()
+  })
+
+  it('does not survey after a workspace switch during the post-recovery eligibility read', async () => {
+    const {repo, workspaceViewGap} = makeRepo()
+    workspaceViewGap.mockResolvedValueOnce(STRANDED).mockImplementationOnce(async () => {
+      Object.defineProperty(repo, 'activeWorkspaceId', {value: 'ws-2'})
+      return null
+    })
+    await invoke(repo)
+    expect(planSynthesis).not.toHaveBeenCalled()
+    expect(openDialog).not.toHaveBeenCalled()
+  })
+
+  it.each(['owner', 'non-owner', 'local-only'])(
+    'uses the mode received during recovery for a %s client', async client => {
+      const {repo, getOptional, workspaceViewGap, rematerializeWorkspace, runPass} = makeRepo()
+      workspaceViewGap.mockResolvedValueOnce(STRANDED).mockResolvedValue(null)
+      const read = getOptional.getMockImplementation()!
+      const recover = rematerializeWorkspace.getMockImplementation()!
+      rematerializeWorkspace.mockImplementation(async () => {
+        getOptional.mockImplementation(async sql => {
+          if (sql.includes('workspaces')) return {
+            properties_migration: 'children', owner_user_id: client === 'non-owner' ? 'other' : USER,
+          } as never
+          return read(sql)
+        })
+        if (client === 'local-only') remoteSyncActive.mockReturnValue(false)
+        return recover()
+      })
+      await invoke(repo)
+      expect(rematerializeWorkspace).toHaveBeenCalledOnce()
+      expect(openDialog).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({childBacked: true}))
+      expect(runPass).toHaveBeenCalledOnce()
+      expect(flipWorkspace).not.toHaveBeenCalled()
+      expect(beginHistoryDrop).not.toHaveBeenCalled()
+    })
+
+  it('uses the mode received during consent for the remaining migration path', async () => {
+    const {repo, getOptional, runPass} = makeRepo()
+    const read = getOptional.getMockImplementation()!
+    openDialog.mockImplementation(async () => {
+      getOptional.mockImplementation(async sql => sql.includes('properties_migration')
+        ? {properties_migration: 'children', owner_user_id: USER} as never : read(sql))
+      return true
+    })
+    await invoke(repo)
+    expect(runPass).toHaveBeenCalledOnce()
+    expect(flipWorkspace).not.toHaveBeenCalled()
+    expect(beginHistoryDrop).not.toHaveBeenCalled()
+  })
+
+  it('refuses a peer claim recovered into the local view before planning', async () => {
+    const {repo, workspaceViewGap, rematerializeWorkspace, getOptional} = makeRepo()
+    workspaceViewGap.mockResolvedValueOnce(STRANDED).mockResolvedValue(null)
+    const recover = rematerializeWorkspace.getMockImplementation()!
+    const read = getOptional.getMockImplementation()!
+    rematerializeWorkspace.mockImplementation(async () => {
+      getOptional.mockImplementation(async sql => sql.includes('properties_json')
+        ? {properties_json: JSON.stringify({'migration:claimant': 'peer', 'migration:claimed-at': 1})} as never
+        : read(sql))
+      return recover()
+    })
+    await invoke(repo)
+    expect(rematerializeWorkspace).toHaveBeenCalledOnce()
+    expect(planSynthesis).not.toHaveBeenCalled()
+    expect(surveyCells).not.toHaveBeenCalled()
+    expect(openDialog).not.toHaveBeenCalled()
+    expect(showInfo).toHaveBeenCalledWith(expect.stringContaining('Another client is already migrating'))
+  })
+
+  it('rechecks peer claims after consent before any migration write', async () => {
+    const {repo, getOptional, runPass} = makeRepo()
+    const read = getOptional.getMockImplementation()!
+    openDialog.mockImplementation(async () => {
+      getOptional.mockImplementation(async sql => sql.includes('properties_json')
+        ? {properties_json: JSON.stringify({'migration:claimant': 'peer', 'migration:claimed-at': 1})} as never
+        : read(sql))
+      return true
+    })
+    await invoke(repo)
+    expect(applySynthesis).not.toHaveBeenCalled()
+    expect(runPass).not.toHaveBeenCalled()
+    expect(flipWorkspace).not.toHaveBeenCalled()
+    expect(progressHandle.fail).toHaveBeenCalledWith(expect.stringContaining('Another client is already migrating'))
+  })
+
+  it('does not recover a gap that appears after the confirmation', async () => {
+    const {repo, workspaceViewGap, rematerializeWorkspace} = makeRepo()
+    workspaceViewGap.mockResolvedValueOnce(null).mockResolvedValue(STRANDED)
+    await invoke(repo)
+    expect(openDialog).toHaveBeenCalledOnce()
+    expect(rematerializeWorkspace).not.toHaveBeenCalled()
+    expect(flipWorkspace).not.toHaveBeenCalled()
+  })
+
+  it('stops before surveying if recovery throws after partial work', async () => {
+    const {repo, workspaceViewGap, rematerializeWorkspace} = makeRepo()
+    workspaceViewGap.mockResolvedValue(STRANDED)
+    rematerializeWorkspace.mockRejectedValue(new Error('disk unavailable'))
+    await invoke(repo)
+    expect(rematerializeWorkspace).toHaveBeenCalledOnce()
+    expect(planSynthesis).not.toHaveBeenCalled()
+    expect(openDialog).not.toHaveBeenCalled()
+    expect(workspaceViewGap).toHaveBeenCalledTimes(1)
+    expect(showInfo.mock.calls.flat().join(' ')).toMatch(/may have partially completed/)
+    expect(showInfo.mock.calls.flat().join(' ')).not.toMatch(/No properties were migrated/)
   })
 })

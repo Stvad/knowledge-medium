@@ -245,7 +245,7 @@ describe('prescribe — the RPE ceiling', () => {
   })
 
   it('withholds a ceiling that has no catch-up increment behind it', () => {
-    // `incrementFor` reads the two together, so a ceiling on its own changes
+    // `toppedStep` reads the two together, so a ceiling on its own changes
     // no prescription. Carrying it anyway would put an RPE control on the
     // row and collect a number nothing ever reads back.
     const config = {
@@ -290,5 +290,31 @@ describe('a repeat session on the same training day', () => {
     const row = out.exercises.find(e => e.exercise === bench.name)!
     // Off this morning's 185, not yesterday's 135.
     expect(row.weight).toBeGreaterThanOrEqual(185)
+  })
+})
+
+describe('prescribe — stalled lifts', () => {
+  const sessionB = (day: string, exercise: string, sets: SetRecord[]): WorkoutRecord => ({
+    id: day, date: `${day}T23:20:00`, session: 'B', exercises: [{exercise, prescribedSets: 3, sets}],
+  })
+  const weeks = ['2026-06-28', '2026-07-05', '2026-07-12', '2026-07-19']
+
+  it('says how long a held lift has sat at its weight', () => {
+    const history = weeks.map(day => sessionB(day, 'Overhead press', at(85, 8, 8, 7)))
+    const row = forExercise(run({history, now: '2026-07-26T23:00:00'}), 'Overhead press')
+    expect(row.weight).toBe(85)
+    expect(row.rationale).toContain('4 sessions at 85')
+  })
+
+  it('stays quiet below the threshold', () => {
+    const history = weeks.slice(1).map(day => sessionB(day, 'Overhead press', at(85, 8, 8, 7)))
+    const row = forExercise(run({history, now: '2026-07-26T23:00:00'}), 'Overhead press')
+    expect(row.rationale).not.toContain('sessions at')
+  })
+
+  it('never calls unloaded work stalled', () => {
+    const history = weeks.map(day => sessionB(day, 'Waiter carry', at(0, 2, 2)))
+    const row = forExercise(run({history, now: '2026-07-26T23:00:00'}), 'Waiter carry')
+    expect(row.rationale).not.toContain('sessions')
   })
 })

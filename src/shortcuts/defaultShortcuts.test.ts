@@ -31,6 +31,8 @@ import {
   insertPanelRow,
   panelBlockId,
   allPanelRowsInLayoutOrder,
+  layoutSlotsFromRows,
+  insertSidebarStackedPanel,
 } from '@/utils/panelLayoutProjection'
 import { panelRenderScopeId } from '@/utils/renderScope'
 import {
@@ -389,6 +391,68 @@ describe('default CodeMirror shortcuts', () => {
     } satisfies BlockShortcutDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
 
     expect(await isBlockDeleted(env.repo, 'panel')).toBe(true)
+  })
+
+  it.each([
+    {context: 'normal mode', actionId: 'open_focused_in_panel'},
+    {context: 'CodeMirror edit mode', actionId: 'edit.cm.open_focused_in_panel'},
+  ])('opens the focused block in the existing sidebar stack from $context', async ({actionId, context}) => {
+    await env.repo.tx(async tx => {
+      for (const [id, orderKey] of [
+        ['source', 'a0'],
+        ['focused', 'b0'],
+        ['right', 'c0'],
+        ['last', 'd0'],
+      ] as const) {
+        await tx.create({id, workspaceId: WS, parentId: null, orderKey, content: id})
+      }
+    }, {scope: ChangeScope.BlockDefault})
+
+    const uiState = await getUIStateBlock(env.repo, WS, USER, {})
+    const layoutSession = await getLayoutSessionBlock(uiState, env.repo.activeLayoutSessionId)
+    const sourcePanelId = await insertPanelRow(env.repo, layoutSession, 'source')
+    const rightPanelId = await insertSidebarStackedPanel(env.repo, layoutSession, 'right', {sourcePanelId})
+    await insertPanelRow(env.repo, layoutSession, 'last')
+    const rightPanel = await env.repo.block(rightPanelId).load()
+    const existingStackId = rightPanel?.parentId
+    if (!existingStackId) throw new Error('Expected the right panel to belong to a sidebar stack')
+    const topLevelRowIds = await childIds(layoutSession.id)
+    expect(topLevelRowIds).toHaveLength(3)
+    const action = context === 'normal mode'
+      ? findNormalModeAction(env.repo, actionId)
+      : findEditModeAction(env.repo, actionId)
+    const dependencies = context === 'normal mode'
+      ? {block: env.repo.block('focused'), uiStateBlock: env.repo.block(sourcePanelId)}
+      : {
+          block: env.repo.block('focused'),
+          editorView: emptyEditorView(),
+          uiStateBlock: env.repo.block(sourcePanelId),
+        }
+
+    await action.handler(
+      dependencies as BlockShortcutDependencies & CodeMirrorEditModeDependencies,
+      {preventDefault: vi.fn()} as unknown as ActionTrigger,
+    )
+
+    await waitFor(async () => {
+      const rows = await env.repo.query.subtree({id: layoutSession.id}).load()
+      expect(await childIds(layoutSession.id)).toEqual(topLevelRowIds)
+      expect((await env.repo.block(existingStackId).load())?.parentId).toBe(layoutSession.id)
+      expect(layoutSlotsFromRows(layoutSession.id, rows)).toEqual([
+        {kind: 'leaf', blockId: 'source'},
+        {
+          kind: 'stack',
+          children: [
+            {kind: 'leaf', blockId: 'focused', active: true},
+            {kind: 'leaf', blockId: 'right'},
+          ],
+        },
+        {kind: 'leaf', blockId: 'last'},
+      ])
+      const panelRows = allPanelRowsInLayoutOrder(layoutSession.id, rows)
+      expect(panelRows.map(panelBlockId)).toEqual(['source', 'focused', 'right', 'last'])
+      expect((await env.repo.block(rightPanelId).load())?.parentId).toBe(existingStackId)
+    })
   })
 
   it('closes the current panel from CodeMirror edit mode', async () => {

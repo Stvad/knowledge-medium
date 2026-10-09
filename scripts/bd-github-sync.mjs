@@ -9,45 +9,38 @@
  *    a failure to read or adopt ABORTS the run: proceeding with a partial
  *    view is exactly the clobber this step exists to prevent.
  * 2. A pull flattens bead priority to P2 when the issue lacks a priority::*
- *    machine label. Flattening is detected by comparing each bead's priority
- *    BEFORE and AFTER the sync (≠2 → 2 means this run's pull did it) and
- *    restoring the pre-sync value — never by guessing from labels, which
- *    would fight a deliberate P2. Only beads NEW this run (no pre-sync row)
- *    fall back to label derivation, since for them the label is the only
- *    signal.
+ *    machine label. A linked bead is never flattened — the pull is not handed
+ *    one whose priority it would default (guard 5) — so this only concerns a
+ *    bead the pull CREATES from a GitHub-filed issue: it takes the value its
+ *    hand-applied labels spell (planPriorityFixes), and is pushed back.
  * 3. A bead closed BEFORE its first sync stays closed locally but its issue is
- *    minted OPEN. So after syncing, closed beads whose issue is open get the
- *    issue closed via gh — NOT via a selective bd push: bd PATCHes a linked
- *    bead only when the local row is strictly newer than the issue's
- *    updated_at, so anything that touched the issue after the close (a
- *    comment, a label, a cross-reference) makes bd skip it for good
- *    (observed live: a day-old close never pushed). gh-closing is safe in
- *    exactly this direction because the bead is already closed: the states
- *    agree afterwards, so the next sync has nothing to revert.
+ *    minted OPEN — and bd records the bead's closed content as already
+ *    pushed, so its push skips that bead until its pushed content changes.
+ *    So after syncing, closed beads whose issue is open get the issue
+ *    closed via gh. gh-closing is safe in exactly this direction because the
+ *    bead is already closed: the states agree afterwards, so the next sync
+ *    has nothing to revert.
  *    Note the deliberate asymmetry with (1): GitHub-side CLOSES are adopted
  *    (they come from PR merges), GitHub-side REOPENS do not stick (beads is
  *    the source of truth; reopen the bead instead).
  * 4. The pull applies a strictly OLDER GitHub copy over newer local rows —
  *    text edits, claims and closes alike — despite the documented
- *    prefer-newer default (#647; measured live). Guarded twice: local state
- *    is pushed out BEFORE the pull (after close-adoption, so an un-adopted
- *    open bead cannot re-open its issue), and beads whose local row is still
- *    newer than their GitHub copy — a failed push or a mid-run touch of the
- *    issue can leave such a row unpushed — are snapshotted before the pull
- *    and restored + re-pushed if it reverted them. That push is SELECTIVE and the pull runs alone (see step 1.5):
- *    bd 1.2.2 GETs every linked bead it is handed and PATCHes only the
- *    local-newer ones, so the listing already names the beads it could
- *    touch, and a converged run costs seconds rather than one GET per bead
- *    per leg (measured: 387 beads, 90s per leg, two legs).
+ *    prefer-newer default (#647). So a bead whose local row is newer than its
+ *    issue is never handed to the pull (planPullSet): the push carries that
+ *    direction, run BEFORE the pull (after close-adoption, so an un-adopted
+ *    open bead cannot re-open its issue) over the beads planPrePullPush
+ *    selects; a push that did not land holds back that bead's comment
+ *    mirror (mirrorComments).
  *
  * 5. The pull re-applies a GitHub copy onto a bead and drops what GitHub does
  *    not carry back: the assignee (bd's push never sets one), the close date
  *    (the status write restamps it, and no bd verb can put it back), and a
  *    type the labels do not spell uniquely (#955). So the pull is never given
- *    such a bead. It runs BY IDENTIFIER (planPullSet + pullIssues) over the
+ *    such a bead. It runs BY IDENTIFIER (planPullSet + syncIssues) over the
  *    issues with no bead and the beads it would carry faithfully, which takes
- *    doPull's other branch: it fetches each issue by number, ignores
- *    `last_sync`, and never hydrates. Both of a bulk pull's routes to a bead —
+ *    doPull's other branch: it fetches each issue by number, with no
+ *    `last_sync` window, and never hydrates (bd's skip-locally-modified guard
+ *    still applies). Both of a bulk pull's routes to a bead —
  *    the incremental window, and fetchPrelinkedIssues bypassing the
  *    skip-locally-modified guard for a row edited since the stamp — are
  *    therefore out of reach, and a withheld bead simply cannot be written.
@@ -60,12 +53,33 @@
  *    an edit are the same window, and only a pull by identifier has neither.
  *
  *    A withheld bead is REPORTED, with the fields that also differ on GitHub:
- *    the next push sends the local value over them, and nothing here can say
- *    which side was edited last.
- * Accepted race: an issue closed on GitHub DURING the sync window can be
- * re-opened by the in-flight push, and because the reopen is then the state
- * every later fetch sees, no later run re-adopts the close. Inherent to a
- * push-based mirror; close the bead instead if it happens.
+ *    the bead's next push sends the local value over them, and nothing here
+ *    can say which side was edited last.
+ * Accepted:
+ *  - An issue closed or edited on GitHub DURING the sync window can be
+ *    re-opened or overwritten by the in-flight push, which compares content
+ *    against the issue, not timestamps, and was selected from a listing taken
+ *    at the start of the run. A reopen is then the state every later fetch
+ *    sees, so no later run re-adopts the close. Inherent to a push-based
+ *    mirror; close the bead instead if it happens. The pull is planned on a
+ *    read taken just before it, so of the local edits made during a run only
+ *    one landing while bd's pull itself runs can be taken by it.
+ *  - bd's push skips a bead whose content equals what it last pushed, without
+ *    fetching the issue — a clone-local cache the pull never refreshes and no
+ *    bd verb clears in embedded mode. So a GitHub edit that was imported and
+ *    later undone locally is not pushed back, and one followed by a local
+ *    touch that changes no pushed field is neither imported nor overwritten:
+ *    GitHub keeps its copy, reported each run as a push that did not land,
+ *    until the bead's next pushed change overwrites it or a GitHub-side touch
+ *    makes the pull take it; the bead's comments, and comments naming it,
+ *    wait with it. Forcing the write through gh instead would make
+ *    the wrapper a second implementation of bd's push mapping.
+ *  - A local edit that was never pushed can lose to a later GitHub-side touch
+ *    (a comment, a label, a cross-reference): once GitHub is the newer side
+ *    the bead goes to the pull, and bd's guard stops covering the edit as
+ *    soon as any sync — this wrapper's pre-pull push included — stamps
+ *    `last_sync` past it. Direction is decided by timestamps, not by content
+ *    against a last-synced base.
  *
  * Beyond the guards, the wrapper carries what bd's sync does not: bead
  * COMMENTS are mirrored onto their issues, one way and append-only
@@ -79,9 +93,10 @@
  *   node scripts/bd-github-sync.mjs --hook-pre-pr # Claude Code PreToolUse(Bash) hook:
  *       fast-exits unless the command PUBLISHES text on GitHub (gh pr
  *       create/edit/comment/review/merge, gh issue create/edit/comment/close,
- *       gh release create/edit, gh api graphql mutations — matched only where
- *       gh is in command position, so a commit message MENTIONING these does
- *       not trip it). Published text is read back after publication by
+ *       gh release create/edit, gh api mutations, and `pnpm pr:reply`, this
+ *       repo's review-reply command — matched only outside quoted text, so a
+ *       commit message MENTIONING these does not trip it). A graphql call with
+ *       no `mutation` in it publishes nothing (graphqlShape). Published text is read back after publication by
  *       bd-publish-verify.mjs (PostToolUse), which echoes the real title of
  *       every #N it published — so this gate scans the raw command string
  *       and deliberately does NOT chase stdin/expansion/--recover bodies;
@@ -106,17 +121,21 @@
  *       (commit text never becomes a GitHub object; the commit leg runs
  *       INDEPENDENTLY of the publish legs), and the merge COMMIT of a
  *       merged PR, read back post-merge by bd-publish-verify.
- *       Escape hatches: KM_ALLOW_BEAD_IDS=1 / KM_ISSUE_REFS_OK=1 prefixes.
+ *       Escape hatches: KM_ALLOW_BEAD_IDS=1 / KM_ISSUE_REFS_OK=1 prefixes. A
+ *       number KM_ISSUE_REFS_OK=1 attested once passes later commands of the
+ *       same session with its title as context (attestationMemo); a bead id
+ *       is never attested.
  *       The FULL sync does not run here: even converged it costs several
- *       seconds (an issue listing, bead listings, a pull) plus the lock,
+ *       seconds (an issue listing and one tracker read) plus the lock,
  *       which is too slow to sit in front of every PR. SessionEnd and manual
  *       runs carry it. This mode writes NOTHING, so
  *       it needs no dry-run valve: it reads, and it blocks or allows.
  *
- * Every path no-ops silently when bd, the beads DB, or a gh token is missing
- * (cloud sessions) — and no bd command runs before the DB's existence is
+ * Every path no-ops silently when the beads DB is missing (a fresh clone, a
+ * cloud session) — and no bd command runs before the DB's existence is
  * confirmed, because the FIRST bd command in a fresh clone creates an empty
- * DB that then refuses to pull. The hook's bead-id block still fires without
+ * DB that then refuses to pull. A checkout that HAS a DB but no runnable bd
+ * or no gh token skips the sync too, and its run log records a failed run. The hook's bead-id block still fires without
  * a DB: an unmappable reference is worth blocking even where the sync can't
  * run.
  *
@@ -124,11 +143,11 @@
  * from both streams, never from the exit code alone.
  */
 
-import { spawnSync } from 'node:child_process'
-import { accessSync, constants, existsSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { spawn, spawnSync } from 'node:child_process'
+import { accessSync, appendFileSync, constants, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { isMainModule } from './is-main-module.mjs'
 import { shellSegmentsWithDepth } from './shell-segments.mjs'
 
 export const REPO = 'Stvad/knowledge-medium'
@@ -137,10 +156,26 @@ export const REPO = 'Stvad/knowledge-medium'
 // Pure logic (unit-tested in bd-github-sync.test.ts)
 // ---------------------------------------------------------------------------
 
-export const BEAD_ID = /(?<![\w-])km-[a-z0-9]+(?:-[a-z0-9]+)*(?![\w-])/g
+// A DETECTOR shared by the gate, the verifier and the comment mirror, so a
+// shape it misses is published unchecked by all three: it over-matches. It
+// takes the shapes bd mints — the long form a GitHub import creates, and a
+// hash sized to the tracker (4 up to 8 characters, growing with it) with an
+// optional wisp/mol/proto kind — and stops at the hash, so an id with a
+// hyphenated suffix still yields the id. Only a branch under an agent prefix
+// (`claude/km-…`, `codex/km-…`) is excluded: it names the branch, not a bead.
+export const BEAD_ID = /(?<![\w-])(?<!\b(?:claude|codex)\/)km-(?:\d{13}-\d+-[0-9a-f]{8}|(?:(?:wisp|mol|proto)-)?[a-z0-9]{4,8})(?!\w)/g
 
 /** Unique bead ids referenced in a blob of text, in first-seen order. */
 export const extractBeadIds = text => [...new Set(text.match(BEAD_ID) ?? [])]
+
+// A PR's head and base branches are its address, not text it publishes, so
+// their values leave the command text the gate scans — only for a flag that
+// starts its own word. Quoted spans match first and come back whole, so a
+// flag spelled inside a body is still body text, and one glued into a value
+// (`--body=--head=…`, `body=--head=…`) is not a flag at all. Removing text from
+// the scan is an allow: it under-matches.
+const BRANCH_FLAG_VALUE = /'[^']*'|"(?:\\.|[^"\\])*"|((?<=^|\s)(?:--head|--base)(?:=|\s+)|(?<=^|\s)-[HB](?:=|\s+)?)(?:'[^']*'|"(?:\\.|[^"\\])*"|[^\s'";&|<>()]+)/g
+const withoutBranchValues = cmd => cmd.replace(BRANCH_FLAG_VALUE, (m, flag) => flag ?? m)
 
 // gh must sit in COMMAND position — matching it anywhere in the text lets a
 // commit message that merely mentions "gh pr comment" trip the gate and mint
@@ -158,7 +193,16 @@ export const extractBeadIds = text => [...new Set(text.match(BEAD_ID) ?? [])]
 // position and blocks, and the escape hatch covers it; parsing heredocs is
 // more surface than this guard warrants. (Commands arrive from the Bash
 // tool, so quotes are balanced; this is a guard, not a shell parser.)
-const commandSkeleton = cmd => {
+// The predicates below each re-derive the same whole-command views, several
+// times per hook call; remembering the last input keeps that linear.
+const lastCall = fn => {
+  let last
+  return cmd => {
+    if (last?.cmd !== cmd) last = { cmd, value: fn(cmd) }
+    return last.value
+  }
+}
+const commandSkeleton = lastCall(cmd => {
   const lifted = []
   const liftSubstitutions = span => {
     for (const m of span.matchAll(/\$\(([^)]*)\)/g)) lifted.push(m[1])
@@ -192,7 +236,7 @@ const commandSkeleton = cmd => {
     return "''"
   })
   return [skeleton, ...lifted].join('\n')
-}
+})
 
 // The DETECTORS below scan the skeleton for their verb wherever it occurs.
 // They deliberately do NOT require it to sit at a recognized command
@@ -223,6 +267,35 @@ const GH_PUBLISH = new RegExp(
 
 /** Does this shell command publish PR/issue/release text on GitHub? */
 export const matchesPrCommand = cmd => GH_PUBLISH.test(commandSkeleton(cmd))
+
+// The repo's own review-reply publisher, scripts/pr-reply.mjs: one command
+// that posts a body file and prints the reply's URL, so the read-back covers
+// it like a single gh publish. Its gh call runs in a child process no hook
+// sees, so this detector is the only way either hook learns of the publish.
+// It reads real command segments, where quotes are already removed, so every
+// spelling of the invocation counts: the script name after any package
+// manager (`pnpm "pr:reply"`, `npm run pr:reply`), the file after any
+// runner, or the file as the command itself. Naming the file to a reader
+// (`sed`, `cat`, `git log`) is not an invocation. What it still misses is
+// caught by the script, which refuses bead ids itself.
+const PACKAGE_MANAGER = /(?:^|\/)(?:pnpm|npm|yarn|bun|npx)$/
+// Interpreters that execute the file; a tool that merely takes it as an
+// argument (a linter, a test runner, launched through npx or pnpm) does not.
+const SCRIPT_RUNNER = /(?:^|\/)(?:node|bun|deno|tsx)$/
+const REPLY_FILE = /(?:^|\/)pr-reply\.mjs$/
+const invokesReply = tokens => {
+  let afterManager = false
+  let afterRunner = false
+  return tokens.some((t, i) => {
+    if ((t === 'pr:reply' && afterManager) || (REPLY_FILE.test(t) && (i === 0 || afterRunner))) return true
+    afterManager ||= PACKAGE_MANAGER.test(t)
+    afterRunner ||= SCRIPT_RUNNER.test(t)
+    return false
+  })
+}
+const matchesReplyCommand = cmd => shellSegmentsWithDepth(cmd).some(s => !s.heredoc && invokesReply(s.tokens))
+// Publishers other than `gh api`, whose output names the object they made.
+export const matchesCliPublish = cmd => matchesPrCommand(cmd) || matchesReplyCommand(cmd)
 
 // `gh api` mutations (explicit -X/--method POST|PATCH|PUT, or field/input
 // flags, which make gh default to POST) — the channel review replies actually
@@ -258,7 +331,7 @@ const isSoleExplicitRead = (cmd, sk) =>
 export const matchesApiPublish = cmd => {
   if (!isGhApiCall(cmd)) return false
   const sk = commandSkeleton(cmd)
-  if (isSoleExplicitRead(cmd, sk)) return false
+  if (isSoleExplicitRead(cmd, sk) || isGraphqlRead(cmd)) return false
   return (
     /(?<![\w-])(?:-X|--method)(?:=|\s+)?(?:POST|PATCH|PUT)\b/i.test(sk) ||
     /(?<![\w-])(?:--raw-field|--field|--input)(?:=|\s)/.test(sk) ||
@@ -284,6 +357,7 @@ export const publishableKinds = cmd => {
   if (/\b(?:pr|issue)\s+comment\b/.test(sk)) kinds.add('comment')
   if (/\bpr\s+review\b/.test(sk)) kinds.add('review').add('review-comment')
   if (/\brelease\s+(?:create|new|edit)\b/.test(sk)) kinds.add('release')
+  if (matchesReplyCommand(cmd)) kinds.add('review-comment')
   return kinds
 }
 
@@ -406,6 +480,118 @@ const OPAQUE_OUTPUT = /(?<![\w-])(?:--(?:silent|jq|template)\b|-t)/
 // The api's graphql endpoint answers with no object URL to read back.
 const GRAPHQL = /\bgraphql\b/
 
+// The coarse rule's signals of text living outside the command, besides
+// expansion: any *file long flag (body-file, file, notes-file, …),
+// --template, --input, -F/-T (matched bare — the CLI accepts ATTACHED values
+// like -Fmsgfile) and an @-reference. Tested command-wide, never by command
+// kind: splitting them by kind is what let a compound mixing api with CLI
+// read the wrong signal. Owned here for the coarse rule and the graphql
+// recognizer below. Tilde, glob and brace expansion are not counted: markdown
+// in a heredoc beside a publish reads as globs, and #672 declines expansion
+// coverage.
+const OUTSIDE_TEXT = /(?<![\w-])--(?:[a-z-]*file|input|template)\b|@|(?<![\w-])-[FT]/
+
+// A graphql call keeps its document, and so everything it can publish, in the
+// command. graphqlShape recognizes a WHOLE invocation whose graphql calls are
+// its only gh commands and in which nothing else carries text from outside
+// the command, so a document the gate can read speaks for all of it. It is an
+// ALLOW: it recognizes a shape positively and anything else falls back to the
+// coarse rule.
+//
+// Every `gh` word in the raw text must open a recognized graphql call. Counted
+// broadly — quoted, continued or unusually spaced spellings the publish
+// detectors miss all count — so the recognizer cannot vouch for a command
+// holding a gh call it did not examine.
+const GH_WORD = /(?<![\w.-])gh(?![\w.-])/g
+const GH_GRAPHQL_CALL = new RegExp(GH + String.raw`api\s+graphql(?![\w-])`, 'gm')
+// The pieces of a graphql invocation that carry nothing from outside the
+// command, removed from the RAW text before the leftover is checked, so a
+// flag or file marker inside quotes still reaches OUTSIDE_TEXT the way it
+// reaches gh:
+//  - a field whose whole value is inline: a literal, quoted or bare, or a
+//    typed `-F name=value`. A value starting with `@` stays in place, in any
+//    quoting: on -F it is a file or stdin (`@path`, `@-`); on -f it is a
+//    literal, over-blocked by the same rule rather than split by flag.
+//  - a --jq filter in quotes, whose `@sh` or `@csv` is a jq format, not a
+//    file. A bare one (`--jq @sh`) is not recognized and over-blocks.
+const FIELD_FLAG = String.raw`(?<![\w-])(?:-[fF]|--(?:raw-)?field)(?:=|\s+)?`
+const FIELD_NAME = String.raw`[A-Za-z_][\w.[\]-]*`
+const SINGLE_QUOTED_LITERAL = String.raw`'(?!@)[^']*'`
+const DOUBLE_QUOTED_LITERAL = String.raw`"(?!@)[^"$\`\\]*"`
+const INLINE_FIELD = new RegExp(
+  FIELD_FLAG +
+    String.raw`(?:${FIELD_NAME}=(?:${SINGLE_QUOTED_LITERAL}|${DOUBLE_QUOTED_LITERAL}|(?![@'"\\])[^\s'"$\`;&|<>()]*)|'${FIELD_NAME}=(?!@)[^']*'|"${FIELD_NAME}=(?!@)[^"$\`\\]*")(?=[\s;&|)]|$)`,
+  'g',
+)
+const JQ_FILTER = /(?<![\w-])(?:--jq|-q)(?:=|\s+)(?:'[^']*'|"[^"$`\\]*")/g
+// GraphQL's own scalars that cannot hold prose: an ID is a node id GitHub
+// validates, the rest are numbers and flags. String, custom scalars (URI,
+// HTML, …) and input objects can all carry text.
+const NON_TEXT_SCALARS = new Set(['ID', 'Int', 'Float', 'Boolean'])
+// Only a bare scalar type is read. A list (`[ID!]`) stays unrecognized, which
+// keeps the allow narrow at the cost of a list-typed variable's expansion.
+const VARIABLE_DECLARATION = /\$(\w+)\s*:\s*(\w+)/g
+// Declarations are read from the documents as GraphQL reads them — the argv
+// words the shell builds, with GraphQL's ignored tokens (comments, commas)
+// turned into whitespace — so no real declaration hides from the scan. Text
+// that only looks like one (in a comment, in a string) can only ADD a
+// declaration, and a name is non-text only when every declaration of it is.
+// A `#` inside a string literal ends that line early too; that can only hide
+// a declaration, which leaves its variable unrecognized.
+const nonTextVariables = words => {
+  const graphqlView = words.replace(/#[^\n]*/g, ' ').replace(/,/g, ' ')
+  const types = new Map()
+  for (const [, name, type] of graphqlView.matchAll(VARIABLE_DECLARATION)) types.set(name, [...(types.get(name) ?? []), type])
+  return new Set([...types].filter(([, ts]) => ts.every(t => NON_TEXT_SCALARS.has(t))).map(([name]) => name))
+}
+// The two places an expansion can sit and publish nothing, both matched on
+// the raw command (a match inside single quotes removes only literal text):
+//  - a whole double-quoted field value (`-f t="$t"`), one argv word that
+//    becomes one variable — harmless when the variable is a non-text scalar,
+//    or when nothing in the invocation is a mutation. Never the `query` field,
+//    which is the document itself.
+//  - inside a double-quoted document, a whole string literal given to an id
+//    argument (`threadId:\"$t\"`). GitHub names node references `id` or
+//    `…Id`; the few `…Id` arguments that take a free string
+//    (clientMutationId, a check run's externalId) are identifiers nobody
+//    reads as prose either.
+// Accepted, not overlooked: a value that closes its own string literal could
+// still rewrite the document around it, and a GraphQL string escape
+// (`#`) decodes to a `#` after the gate has read the text, as it already
+// did under the coarse rule. This guard defends against accidents; an agent
+// does not smuggle GraphQL through a thread id or encode a reference.
+const WHOLE_EXPANSION = String.raw`\$(?:\w+|\{\w+\})`
+const VARIABLE_FIELD = new RegExp(FIELD_FLAG + String.raw`(\w+)="${WHOLE_EXPANSION}"`, 'g')
+const DOUBLE_QUOTED_DOCUMENT = new RegExp(FIELD_FLAG + String.raw`query="(?:\\.|[^"\\])*"`, 'g')
+const ID_ARGUMENT_EXPANSION = new RegExp(String.raw`\b(?:id|[a-z]\w*Id)\s*:\s*\\"${WHOLE_EXPANSION}\\"`, 'g')
+// The operation keyword is looked for in the argv words the shell builds —
+// quotes removed, escapes and line continuations applied, heredoc data
+// included — so no shell spelling that splits it (`'mut''ation'`,
+// `mu\tation`, a backslash-newline) reads as a read.
+// Any occurrence counts, a `$mutation` variable or a search string included:
+// misreading a read as a write costs one attested re-run, and telling the
+// keyword's position apart after shell unquoting is parsing this avoids.
+const MUTATION = /\bmutation\b/
+// A pr:reply beside the graphql calls publishes a file this recognizer never
+// sees, so it is refused here too. Defence in depth: the coarse rule checks
+// for a reply first, so no caller reaches this clause today.
+const graphqlShape = lastCall(cmd => {
+  const calls = commandSkeleton(cmd).match(GH_GRAPHQL_CALL)?.length ?? 0
+  if (!calls || calls !== (cmd.match(GH_WORD)?.length ?? 0) || matchesReplyCommand(cmd)) return null
+  const words = shellSegmentsWithDepth(cmd).flatMap(s => s.tokens).join(' ')
+  const mutates = MUTATION.test(words)
+  const nonText = nonTextVariables(words)
+  const residue = cmd
+    .replace(DOUBLE_QUOTED_DOCUMENT, doc => doc.replace(ID_ARGUMENT_EXPANSION, ''))
+    .replace(VARIABLE_FIELD, (m, name) => (name !== 'query' && (!mutates || nonText.has(name)) ? '' : m))
+    .replace(INLINE_FIELD, '')
+    .replace(JQ_FILTER, '')
+  return hasExpansion(residue) || OUTSIDE_TEXT.test(residue) ? null : { mutates }
+})
+// No `mutation` operation anywhere means nothing is written: the keyword is
+// the only way to open one.
+const isGraphqlRead = cmd => graphqlShape(cmd)?.mutates === false
+
 /**
  * Any command that may publish text on GitHub — including one whose mutation
  * flags arrive by expansion, where no literal flag is left to match and a
@@ -424,7 +610,7 @@ const GRAPHQL = /\bgraphql\b/
 const NON_PUBLISHING_MODE = /(?<![\w-])--(?:dry-run|web)\b/
 
 export const matchesAnyPublish = cmd =>
-  matchesPrCommand(cmd) || matchesApiPublish(cmd) || (isGhApiCall(cmd) && hasExpansion(cmd))
+  matchesCliPublish(cmd) || matchesApiPublish(cmd) || (isGhApiCall(cmd) && hasExpansion(cmd) && !isGraphqlRead(cmd))
 
 // Text-bearing flags and api fields. A publish with none of them — a label
 // change, a reaction, a comment DELETION, a merge-method call — has no
@@ -449,7 +635,7 @@ const GH_CREATE = new RegExp(GH + String.raw`(?:pr|issue|release)\s+(?:create|ne
 // then read as "carries no text" — which would suppress the warning rather
 // than add one, the direction that actually hurts. What the field CARRIES is
 // decided by its name.
-const FIELD_ANY = /(?<![\w-])(?:-[fF]|--(?:raw-)?field)(?:=|\s+)?['"]?([A-Za-z_][\w.[\]-]*)=/g
+const FIELD_ANY = new RegExp(FIELD_FLAG + String.raw`['"]?([A-Za-z_][\w.[\]-]*)=`, 'g')
 // Matched as a SUBSTRING, not an exact name: the api's compound fields
 // (commit_title, commit_message on the merge endpoint) carry text every bit
 // as much as `body` does, and an exact list would have to grow once per
@@ -463,6 +649,7 @@ const TEXT_FIELD_NAME = /body|title|message|name|description|text|note|comment|c
 
 /** Whether this command publishes text that could contain a reference at all. */
 export const carriesPublishableText = cmd => {
+  if (matchesReplyCommand(cmd)) return true
   const sk = commandSkeleton(cmd)
   if (isExplicitRead(sk)) return false
   if (GH_CREATE.test(sk) || TEXT_FLAG.test(sk)) return true
@@ -514,19 +701,22 @@ export const isPostVerifiable = cmd => {
 }
 
 
-// The escape hatch must also be in command-prefix position of the SKELETON —
-// honored from quoted prose, a PR body QUOTING it would both bypass the gate
-// and publish the marker.
-// Anchored at the invocation start or after an explicit separator — never
-// after a bare NEWLINE, which is exactly what separates heredoc DATA lines.
-// Heredoc bodies survive into the skeleton (see commandSkeleton), so a line
-// of data would otherwise sit at a command position and attest for a real
-// publish later in the same invocation. No `m` flag, so `^` is the string
-// start rather than every line start. Over-matching a detector is cheap;
-// over-matching a bypass is not.
-const ESCAPE_START = String.raw`(?:^|[;&|]\s*)(?:[A-Za-z_]\w*=\S*\s+)*`
-const ALLOW_MARKER = new RegExp(ESCAPE_START + String.raw`KM_ALLOW_BEAD_IDS=1\s`)
-export const allowsBeadIds = cmd => ALLOW_MARKER.test(commandSkeleton(cmd))
+// An escape is honored only as a prefix assignment of a real command: one of
+// the leading NAME=value words of a command segment. Quoted prose stays
+// inside its token, so a body QUOTING the marker neither bypasses the gate
+// nor attests; heredoc bodies come back as data segments and never count, so
+// neither does a line of data (a markdown table's `| KM_… |` cell included).
+// A newline-separated command line is a real command and counts. Over-matching
+// a detector is cheap; over-matching a bypass is not.
+// The NAME=value words before a segment's command; none when nothing follows
+// them, since a bare assignment prefixes no command.
+const leadingAssignments = tokens => {
+  const command = tokens.findIndex(t => !/^[A-Za-z_]\w*=/.test(t))
+  return command === -1 ? [] : tokens.slice(0, command)
+}
+const escapeAssigned = (cmd, assignment) =>
+  shellSegmentsWithDepth(cmd).some(s => !s.heredoc && leadingAssignments(s.tokens).includes(assignment))
+export const allowsBeadIds = cmd => escapeAssigned(cmd, 'KM_ALLOW_BEAD_IDS=1')
 
 // GitHub-style issue references in publishable text. Guessed numbers are the
 // top hallucination since the #N-not-bead-id policy: a wrong number usually
@@ -558,8 +748,7 @@ const CLOSE_KEYWORD = /\b(?:fix(?:es|ed)?|close[sd]?|resolve[sd]?):?\s+#(\d{1,5}
 export const closeKeywordRefs = text =>
   [...new Set([...normalizeQualifiedRefs(text).matchAll(CLOSE_KEYWORD)].map(m => Number(m[1])))]
 
-const ISSUE_REFS_OK = new RegExp(ESCAPE_START + String.raw`KM_ISSUE_REFS_OK=1\s`)
-export const allowsIssueRefs = cmd => ISSUE_REFS_OK.test(commandSkeleton(cmd))
+export const allowsIssueRefs = cmd => escapeAssigned(cmd, 'KM_ISSUE_REFS_OK=1')
 
 /**
  * The echo table: one line of ground truth per referenced number, warnings
@@ -567,21 +756,33 @@ export const allowsIssueRefs = cmd => ISSUE_REFS_OK.test(commandSkeleton(cmd))
  * [{number, info}] where info is {title, state, isPr} | 'not-found' | null
  * (null = the lookup itself failed).
  */
+// A reference whose lookup gave a real title, rather than a 404 or a failure.
+const isResolved = ({ info }) => info !== null && info !== 'not-found'
+// The shapes wrong regardless of intent, for a resolved reference.
+const referenceWarnings = ({ number, info }, closeNums) => [
+  ...(closeNums.has(number) && info.isPr ? ['⚠ close keyword targets a PR'] : []),
+  ...(closeNums.has(number) && !info.isPr && info.state !== 'open' ? ['⚠ close keyword on an already-closed issue'] : []),
+]
+
 export const buildIssueRefsMessage = (refs, closeNums, mode = 'pre') => {
-  const lines = refs.map(({ number, info }) => {
+  const lines = refs.map(ref => {
+    const { number, info } = ref
     if (info === 'not-found') return `  #${number} → NO SUCH ISSUE OR PR — a guessed number?`
     if (!info) return `  #${number} → COULD NOT VERIFY (gh lookup failed)`
     const kind = info.isPr ? 'PULL REQUEST' : 'issue'
-    const warns = [
-      ...(closeNums.has(number) && info.isPr ? ['⚠ close keyword targets a PR'] : []),
-      ...(closeNums.has(number) && !info.isPr && info.state !== 'open' ? ['⚠ close keyword on an already-closed issue'] : []),
-    ]
+    const warns = referenceWarnings(ref, closeNums)
     return `  #${number} → "${info.title}" (${kind}, ${info.state})${warns.length ? ` ${warns.join(' ')}` : ''}`
   })
   // The bypass footer appears only when every reference resolved to a real
   // title: advertising it over a failed lookup or a nonexistent number would
   // invite bypassing a reference no one has read.
-  const anyUnresolved = refs.some(({ info }) => info === null || info === 'not-found')
+  const anyUnresolved = !refs.every(isResolved)
+  if (mode === 'attested')
+    return [
+      'Issue references this session already attested with KM_ISSUE_REFS_OK=1, so this command was not blocked. Their titles now:',
+      ...lines,
+      'If a title above is not the issue you meant, fix the text after this command runs.',
+    ].join('\n')
   const footer =
     mode === 'post'
       ? anyUnresolved
@@ -639,8 +840,8 @@ export const bodyFilePaths = cmd => messageFileValues(cmd).filter(p => !STDIN_PA
 export const hasStdinBody = cmd => messageFileValues(cmd).some(p => STDIN_PATH.test(p))
 
 /** Resolve a body-file path the way the shell would have: ~, then cwd. */
-export const resolveBodyPath = (p, cwd, home) =>
-  p === '~' || p.startsWith('~/') ? join(home, p.slice(1)) : isAbsolute(p) ? p : resolve(cwd, p)
+const isHomePath = p => p === '~' || p.startsWith('~/')
+export const resolveBodyPath = (p, cwd, home) => (isHomePath(p) ? join(home, p.slice(1)) : isAbsolute(p) ? p : resolve(cwd, p))
 
 /**
  * Priority 0–4 from GitHub label names. The machine label (`priority::high`,
@@ -698,18 +899,12 @@ export const planClosePushes = (beads, issueByNumber, maxKnownIssueNumber) =>
       return known ? known.state === 'OPEN' : number > maxKnownIssueNumber
     })
 
-/**
- * Beads to un-flatten after a sync. A bead that WAS ≠2 before this run and is
- * 2 after was flattened by this run's pull → restore its pre-sync value. A
- * bead new this run at 2 takes the label-derived value if one exists. A bead
- * already at 2 before the run is untouched — 2 may be deliberate.
- */
 // Beads whose FIRST issue this run minted: external_ref appearing between two
 // listings. A row ABSENT from the pre listing counts too: no pull runs
 // between the two listings at either call site, so a fresh-only row is a
 // concurrent local creation (worktrees share the DB) whose issue this push
 // may still have minted — excluding it loses the mapping forever, while
-// including it costs at most a redundant line or snapshot suspect.
+// including it costs at most a redundant line.
 export const planMintedRefs = (preBeads, postBeads) => {
   const preRefs = new Map(preBeads.map(b => [b.id, b.external_ref ?? null]))
   return postBeads.flatMap(b => {
@@ -718,48 +913,28 @@ export const planMintedRefs = (preBeads, postBeads) => {
   })
 }
 
-// Beads in any non-open status whose FIRST issue the pre-pull push just
-// minted: the mint creates the issue OPEN with a fresh timestamp, so the
-// timestamp-based suspect test above can never flag them, yet the pull can
-// apply that OPEN copy over the local lifecycle state — closes (trap 3's
-// population, re-exposed by pushing before the pull), claims, blocks and
-// deferrals alike.
-export const planMintedNonOpen = (preBeads, freshBeads) => {
-  const nonOpen = new Set(freshBeads.filter(b => b.status !== 'open').map(b => b.id))
-  return planMintedRefs(preBeads, freshBeads).filter(m => nonOpen.has(m.id))
-}
-
-// Closed beads whose linked issue is OPEN after close-adoption ran: that is a
-// GitHub-side REOPEN, which per the documented asymmetry must not stick —
-// beads is the source of truth; reopen the bead instead. The reopen bumps the
-// issue timestamp, so the newer-local test below structurally cannot flag
-// these; snapshotting them lets the restore + push-back undo the reopen on
-// both sides.
-export const planReopenedClosed = (beads, issueByNumber) =>
+// Linked beads whose issue, re-read after the push, still differs in a pushed
+// field — the push did not land.
+export const planUnlandedPushes = (beads, issueByNumber) =>
   beads.flatMap(b => {
     const number = issueNumberFromRef(b.external_ref)
     const issue = number === null ? undefined : issueByNumber.get(number)
-    return b.status === 'closed' && issue?.state === 'OPEN' ? [{ id: b.id, number }] : []
+    return issue && pushWouldChange(b, issue) ? [{ id: b.id, number }] : []
   })
 
-// Beads whose local row is strictly newer than their GitHub copy. bd's pull
-// applies GitHub state over these despite the documented prefer-newer default
-// (#647), so they are exactly the rows a pull can revert. Missing timestamps
-// on either side mean "cannot claim local is newer" — not a suspect.
-export const planLocalWins = (beads, issueByNumber) =>
-  beads.flatMap(b => {
-    const number = issueNumberFromRef(b.external_ref)
-    const issue = number === null ? undefined : issueByNumber.get(number)
-    if (!issue?.updatedAt || !b.updated_at) return []
-    return Date.parse(b.updated_at) > Date.parse(issue.updatedAt) ? [{ id: b.id, number }] : []
-  })
+// Which side of a linked bead changed last: true when the local row is
+// strictly newer than its GitHub copy, false when GitHub is same-or-newer,
+// null when a timestamp is missing and neither side can be claimed.
+const localNewer = (bead, issue) =>
+  issue?.updatedAt && bead.updated_at ? Date.parse(bead.updated_at) > Date.parse(issue.updatedAt) : null
 
 // ---- what bd's pull would write ----
 // The pull overwrites a bead from its GitHub copy, and the decision to let it
-// happen has to be made BEFORE it runs — so these replicate bd 1.2.2's
-// GitHub→beads mapping (internal/github/mapping.go, unchanged in 1.3.0-rc.2).
+// happen has to be made BEFORE it runs — so these replicate bd's
+// GitHub→beads mapping (internal/github/mapping.go).
 // Both ways of being wrong are bounded: reading a divergence bd would not see
-// costs one needless touch and push, and missing one leaves today's behaviour.
+// costs a no-op pull of that issue or a spurious withheld report, and missing
+// one leaves today's behaviour.
 // bd splits a label on the FIRST `::`, compares the prefix case-sensitively
 // and the value case-insensitively.
 // A Map for the same reason as PRIORITY_WORDS above.
@@ -843,11 +1018,9 @@ const labelFieldsWhere = (bead, issue, keep) =>
   LABEL_FIELDS.filter(([, read]) => keep(labelVerdict(bead, issue, read))).map(([field]) => field)
 
 /**
- * Whether a push would CHANGE the issue — bd 1.2.2 does not ask (it PATCHes on
- * the timestamp alone), so the wrapper asks on its behalf and spares the
- * tracker a PATCH that ships nothing. Only ever a THRIFT: a push that ships
- * nothing still moves the issue, which planPrePullPush needs whenever the pull
- * would write the bead, so this never decides that case on its own.
+ * Whether a push would CHANGE the issue — the question bd's push asks itself
+ * (PushFieldsEqual) after fetching the issue, asked here from the listing so a
+ * bead bd would skip is never handed over.
  * Mirrors bd's BeadsIssueToGitHubFields — title, body, open/closed, and the
  * whole label set, scoped labels derived from the bead plus its own.
  */
@@ -906,83 +1079,36 @@ export const planLossyReapplies = (beads, issueByNumber) =>
     return losses.length ? [{ id: b.id, number, losses, overwrites }] : []
   })
 
-// Beads to hand the pre-pull push, skipping the two kinds bd would waste a
-// GET on. bd 1.2.2 wires no content hook — its GitHub command sets PullHooks
-// and never PushHooks, so doPush's ContentEqual is nil and it falls back to
-// the timestamp rule: it GETs every linked bead and PATCHes whenever the local
-// row is STRICTLY newer, content identical or not.
-//   - GitHub is same-or-newer: bd would skip it anyway.
-//   - the push would change nothing AND the pull would write nothing
-//     (pullIssueEqual): bd would PATCH for no reason, re-stamping the issue.
-// A content-identical push is NOT skippable when the pull would write, even
-// though it ships no content — because of HYDRATION. bd's pull explicitly
-// fetches every bead modified since last_sync whose issue the incremental
-// query did not already return, and those bypass the "skip locally modified"
-// guard (fetchPrelinkedIssues + prelinkedHydrateIDs; the ref-changed test
-// falls back to `UpdatedAt.After(lastSync)` because the embedded Dolt store
-// exposes no pooled *sql.DB). So the pull writes a bead exactly when ONE of
-// the two sides moved since last_sync, and the push is what moves the issue
-// so that BOTH did. That is #647's mechanism, and why this push cannot be
-// optimized away on content alone.
-// Everything the listing cannot prove bd would skip (no ref, a foreign ref, an
-// issue missing from the listing, a missing timestamp) still goes to bd, which
-// decides with a fresh GET as the full push did.
+// Beads to hand the pre-pull push. bd's push PATCHes a handed bead whenever
+// its pushed fields differ, whichever side changed last — so this filter is
+// what keeps the push from overwriting a newer GitHub-side edit:
+//   - GitHub is same-or-newer: left for the pull.
+//   - the push would change nothing: bd would at most spend a GET to skip it.
+// A bead with no ref, a foreign ref or an issue missing from the listing goes
+// to bd unjudged (the first mints its issue); a missing timestamp is judged on
+// content alone.
 export const planPrePullPush = (beads, issueByNumber) =>
   beads
     .filter(b => {
       const issue = issueByNumber.get(issueNumberFromRef(b.external_ref))
       if (!issue) return true
-      if (issue.updatedAt && b.updated_at && Date.parse(issue.updatedAt) >= Date.parse(b.updated_at)) return false
-      return pushWouldChange(b, issue) || pullWouldWrite(b, issue)
+      if (localNewer(b, issue) === false) return false
+      return pushWouldChange(b, issue)
     })
     .map(b => b.id)
 
-// Both sides of the comparison are `bd show` rows (list rows lack assignee),
-// so assignment-only reverts are visible too; the restore replays the full
-// snapshot, close reason included. Together with the set-compared labels,
-// this covers every field the pull writes (the issue-backed set) — fields
-// GitHub issues don't carry (notes, design, estimates, deps) cannot be
-// pull-reverted and are deliberately absent.
-const REVERT_FIELDS = ['title', 'description', 'status', 'priority', 'issue_type', 'assignee']
-const labelKey = row => [...(row.labels ?? [])].sort().join('\n')
-export const detectReverts = (snapshotRows, postById) =>
-  snapshotRows.filter(s => {
-    const post = postById.get(s.id)
-    return post && (REVERT_FIELDS.some(f => (s[f] ?? null) !== (post[f] ?? null)) || labelKey(s) !== labelKey(post))
-  })
-
-// A closed bead cannot be restored by `bd update -s closed` alone: close is
-// its own verb and carries the reason. Everything else is one update.
-// `post` is the row's post-pull state, used only to compute the label delta;
-// without it (the conservative path) every snapshot label is re-added —
-// duplicate adds are idempotent — and none removed.
-export const planRestoreArgs = (row, post) => {
-  const update = ['update', row.id, '--title', row.title ?? '', '-d', row.description ?? '', '-p', String(row.priority)]
-  if (row.issue_type) update.push('-t', row.issue_type)
-  // Always passed: `-a ''` CLEARS the assignee (verified against bd 1.2.2),
-  // so an unassigned snapshot can undo a pulled stale assignment.
-  update.push('-a', row.assignee ?? '')
-  const snapLabels = new Set(row.labels ?? [])
-  const postLabels = new Set(post?.labels ?? [])
-  for (const l of snapLabels) if (!postLabels.has(l)) update.push('--add-label', l)
-  for (const l of postLabels) if (!snapLabels.has(l)) update.push('--remove-label', l)
-  if (row.status === 'closed')
-    return [update, ['close', row.id, '-r', row.close_reason || 'restored by bd-github-sync after a pull revert (#647)']]
-  return [[...update, '-s', row.status]]
-}
-
+/**
+ * Beads this run's pull created from GitHub-filed issues (no pre-sync row) and
+ * left at P2, which bd gives any issue without a `priority::*` machine label:
+ * they take the value their hand-applied labels spell, if any. A linked bead
+ * is never flattened — the pull is not handed one whose priority it would
+ * default (planLossyReapplies).
+ */
 export const planPriorityFixes = (preById, postBeads, issueByNumber) =>
   postBeads
-    .filter(b => b.status !== 'closed' && b.priority === 2)
+    .filter(b => b.status !== 'closed' && b.priority === 2 && !preById.has(b.id))
     .map(b => {
       const issue = issueByNumber.get(issueNumberFromRef(b.external_ref))
-      // A sole `priority::medium` MEANS 2. Restoring over it would revert a
-      // deliberate GitHub-side edit — the mirror image of the flattening this
-      // repairs, and indistinguishable from it by the post-pull value alone.
-      const spelled = issue ? pullPriorities(issue.labels) : null
-      if (spelled?.size === 1 && spelled.has(2)) return { id: b.id, to: null }
-      const pre = preById.get(b.id)
-      if (pre) return { id: b.id, to: pre.priority !== 2 ? pre.priority : null }
       return { id: b.id, to: issue ? deriveLabelPriority(issue.labels) : null }
     })
     .filter(({ to }) => to !== null && to !== 2)
@@ -1002,8 +1128,9 @@ export const mirroredCommentIds = bodies => new Set(bodies.map(b => b.match(MIRR
 // nothing inside code links on GitHub either way, and sparing it needs a
 // Markdown tokenizer whose edge cases (fences, spans, indented blocks, HTML)
 // never end. What cannot be rewritten splits by whether waiting fixes it: an
-// id in `holdIds` (a bead whose issue is still to be minted) resolves by
-// itself, so the comment is held (`unmapped`); one matching no bead at all
+// id in `holdIds` (a bead whose issue is still to be minted, or one held out
+// of this run's mirror) resolves by itself, so the comment is held
+// (`unmapped`); one matching no bead at all
 // (a fixture in a quoted test line, a typo) or whose ref points at no issue
 // never will, and a bead comment cannot be edited — so those go out and are
 // reported (`leftover`), since the GitHub copy is the one a human can fix.
@@ -1038,6 +1165,19 @@ export const mirrorCommentBody = (comment, numberByBeadId, holdIds) => {
 export const planCommentMirror = (comments, mirrored) =>
   comments.filter(c => !mirrored.has(c.id)).sort((a, b) => a.created_at.localeCompare(b.created_at))
 
+// The refusal for bead ids found in text about to be published, with each
+// id's issue number where the tracker has one. Looked up, never MINTED: the
+// gate's detectors deliberately over-match — a verb in ordinary unquoted argv
+// (`printf … gh pr create km-new`) reads as a publish — and while an extra
+// check costs a round, an extra mint creates a public issue for a command
+// that is about to be blocked and never runs. The message tells the agent to
+// sync instead. No bd command runs without a DB (see the header).
+export const beadIdDenial = ids => {
+  const byId = initializedDbRoot() ? beadIssueLookup(ids) : new Map()
+  const mapped = ids.filter(id => byId.get(id)).map(id => ({ id, number: byId.get(id) }))
+  return buildDenyMessage(mapped, ids.filter(id => !byId.get(id)))
+}
+
 export const buildDenyMessage = (mapped, unmapped) => {
   const lines = [
     'BLOCKED: this text references bead ids (km-…), which GitHub readers cannot resolve.',
@@ -1065,13 +1205,96 @@ export const buildDenyMessage = (mapped, unmapped) => {
  *  the shared helper, not on whichever call site crosses first. */
 const MAX_OUTPUT_BYTES = 256 * 1024 * 1024
 
-const run = (file, args, opts = {}) => {
-  const r = spawnSync(file, args, {
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-    maxBuffer: MAX_OUTPUT_BYTES,
-    ...opts,
+// When each verb's spawns ran, for the run log (openRunRecord): nearly all of
+// a sync's cost is subprocesses, so this is where a regression shows. Keyed
+// by the verb, not its operands, so repeated calls aggregate.
+const spawnTimes = new Map()
+const spawnVerb = (file, args) => {
+  const words = args.filter(a => /^[a-z][a-z-]*$/.test(a) && !a.startsWith('km-')).slice(0, 2)
+  const direction = args.find(a => a === '--push-only' || a === '--pull-only')
+  return [file, ...(words.length ? words : args.slice(0, 1)), ...(direction ? [direction] : [])].join(' ')
+}
+// Time spent waiting on purpose — pacing posts, queueing on another run's
+// lock. The run log records it apart, and the budget does not count it.
+let idleMs = 0
+const pause = ms => {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+  idleMs += ms
+}
+
+const noteSpawn = (file, args, started) => {
+  const verb = spawnVerb(file, args)
+  spawnTimes.set(verb, [...(spawnTimes.get(verb) ?? []), [started, performance.now()]])
+}
+// The wall time the intervals cover, not their sum: concurrent spawns of one
+// verb would otherwise report several times the time the run spent on them.
+export const coveredMs = intervals => {
+  let total = 0
+  let end = -Infinity
+  for (const [from, to] of [...intervals].sort((a, b) => a[0] - b[0])) {
+    if (to <= end) continue
+    total += to - Math.max(from, end)
+    end = to
+  }
+  return total
+}
+// spawnSync's result shape, without blocking: for reads that do not depend on
+// each other. `maxBuffer` is spawnSync's too, so the async readers keep the
+// same ceiling (MAX_OUTPUT_BYTES): past it the child is killed and the result
+// carries the error.
+export const spawnAsync = (file, args, { maxBuffer = MAX_OUTPUT_BYTES, ...opts } = {}) =>
+  new Promise(resolve => {
+    const started = performance.now()
+    const out = { stdout: '', stderr: '' }
+    let bytes = 0
+    let overflow
+    const child = spawn(file, args, { stdio: ['ignore', 'pipe', 'pipe'], ...opts })
+    const collect = stream => chunk => {
+      if (overflow) return
+      bytes += Buffer.byteLength(chunk)
+      if (bytes > maxBuffer) {
+        overflow = new Error(`${file} ${args[0]}: output exceeded ${maxBuffer} bytes`)
+        child.kill()
+      } else out[stream] += chunk
+    }
+    child.stdout.setEncoding('utf8').on('data', collect('stdout'))
+    child.stderr.setEncoding('utf8').on('data', collect('stderr'))
+    child.on('error', error => resolve({ ...out, error }))
+    child.on('close', status => {
+      noteSpawn(file, args, started)
+      resolve({ ...out, status, ...(overflow && { error: overflow }) })
+    })
   })
+
+// Concurrent work here is child processes, and a rejection that leaves its
+// siblings running lets them outlive the lock and the run's timing record. So
+// both helpers settle everything they started before failing.
+export const settleAll = async promises => {
+  const results = await Promise.allSettled(promises)
+  const failed = results.find(r => r.status === 'rejected')
+  if (failed) throw failed.reason
+  return results.map(r => r.value)
+}
+
+// At most `width` of `items` in flight at once; after a failure, nothing new
+// starts and the first failure is thrown once the rest have settled.
+export const inPool = async (items, width, fn) => {
+  let next = 0
+  let failure = null
+  const worker = async () => {
+    while (!failure && next < items.length) {
+      try {
+        await fn(items[next++])
+      } catch (error) {
+        failure ??= { error }
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(width, items.length) }, worker))
+  if (failure) throw failure.error
+}
+
+const checkedStdout = (file, args, r) => {
   if (r.error) throw r.error
   const combined = `${r.stdout ?? ''}\n${r.stderr ?? ''}`
   if (r.status !== 0) throw new Error(`${file} ${args[0]} exited ${r.status}: ${combined.trim().slice(0, 500)}`)
@@ -1079,6 +1302,17 @@ const run = (file, args, opts = {}) => {
   if (file === 'bd' && /^Error/m.test(combined)) throw new Error(`bd ${args[0]}: ${combined.trim().slice(0, 500)}`)
   return r.stdout ?? ''
 }
+const run = (file, args, opts = {}) => {
+  const started = performance.now()
+  let r
+  try {
+    r = spawnSync(file, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: MAX_OUTPUT_BYTES, ...opts })
+  } finally {
+    noteSpawn(file, args, started)
+  }
+  return checkedStdout(file, args, r)
+}
+const runAsync = async (file, args, opts) => checkedStdout(file, args, await spawnAsync(file, args, opts))
 
 export const tryRun = (file, args, opts) => {
   try {
@@ -1095,16 +1329,13 @@ export const tryRun = (file, args, opts) => {
  * Returns the rows, or null when stdout is not a JSON array. Callers must
  * hold the DB-exists gate (initializedDbRoot) first — see header.
  */
-export const bdShowRows = (ids, opts = {}) => {
+const bdShowRows = ids => {
   const r = spawnSync('bd', ['show', ...ids, '--json'], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
-    // Scales with the request: `bd show` costs ~0.3s per id, and a failed
-    // pre-pull snapshot ABORTS the whole sync — a fixed ceiling turns a
-    // growing suspect set into a sync that stops working and stays stopped.
+    // Scales with the request.
     timeout: Math.max(15_000, ids.length * 2_000),
     maxBuffer: MAX_OUTPUT_BYTES,
-    ...opts,
   })
   try {
     const rows = JSON.parse(r.stdout ?? '')
@@ -1128,21 +1359,44 @@ const mainRepoRoot = () => {
   return commonDir ? dirname(commonDir.trim()) : null
 }
 
-// The DB's PRIOR existence gates every bd invocation — see header.
-// Exported for bd-prime-hook.mjs, which shares the same fresh-clone invariant.
-export const initializedDbRoot = () => {
+// One spawn per process: the DB gate below and runSync's version gate read the
+// same output.
+let bdVersionOutput = null
+const probeBdVersion = () => (bdVersionOutput ??= tryRun('bd', ['--version'], { timeout: PROBE_TIMEOUT }))
+
+// The DB's PRIOR existence gates every bd invocation — see header. Kept apart
+// from whether bd runs: no DB is a fresh clone or a cloud session, which stays
+// silent, while a DB with no runnable bd is a broken install the run log and
+// its alarm must see.
+export const beadsDbRoot = () => {
   const root = mainRepoRoot()
-  return root && existsSync(join(root, '.beads', 'embeddeddolt')) && tryRun('bd', ['--version'], { timeout: PROBE_TIMEOUT })
-    ? root
-    : null
+  return root && existsSync(join(root, '.beads', 'embeddeddolt')) ? root : null
+}
+export const bdRunnable = () => probeBdVersion() !== null
+
+// Exported for bd-prime-hook.mjs and bd-publish-verify.mjs, which share the
+// same fresh-clone invariant.
+export const initializedDbRoot = () => {
+  const root = beadsDbRoot()
+  return root && bdRunnable() ? root : null
 }
 
-export const preconditions = (root = initializedDbRoot()) => {
-  if (!root) return { ok: false, reason: 'no initialized beads DB (or bd not on PATH)' }
+export const preconditions = () => {
+  const root = beadsDbRoot()
+  if (!root) return { ok: false, reason: 'no initialized beads DB' }
+  if (!bdRunnable()) return { ok: false, root, reason: 'bd is not runnable (not on PATH, or its version probe failed)' }
   const token = tryRun('gh', ['auth', 'token'], { timeout: PROBE_TIMEOUT })?.trim()
-  if (!token) return { ok: false, reason: 'no gh token' }
+  if (!token) return { ok: false, root, reason: 'no gh token' }
   return { ok: true, root, env: { ...process.env, GITHUB_TOKEN: token, BD_NO_REMOTE_ADOPT: '1' } }
 }
+
+// A run holding the lock, or started and never finished, for longer than this
+// is presumed dead whatever its pid says: pids are reused, and an orphan that
+// no init reaps stays a zombie that reads as alive.
+const STALE_RUN_MS = 10 * 60_000
+// How long a run waits on another run's lock. The override is for the process
+// tests.
+const LOCK_WAIT_MS = Number(process.env.KM_BD_SYNC_LOCK_WAIT_MS) || 20_000
 
 const processAlive = pid => {
   try {
@@ -1156,7 +1410,7 @@ const processAlive = pid => {
 /**
  * One sync at a time across sessions/worktrees (they share the one DB). The
  * lock only serializes THIS script; bd itself may still run concurrently
- * elsewhere — which is why listBeads failures abort instead of soft-failing.
+ * elsewhere — which is why exportBeads failures abort instead of soft-failing.
  * The lock file holds the holder's pid, so the common leak — a holder killed
  * before its cleanup ran — self-heals on the next attempt via a dead-pid
  * check instead of waiting out a staleness window. A narrow TOCTOU remains
@@ -1165,26 +1419,31 @@ const processAlive = pid => {
  * concurrent runs of converging operations, and closing it fully needs
  * primitives the filesystem doesn't offer.
  */
-const withLock = (root, fn) => {
+const withLock = async (root, fn) => {
   const lock = join(root, '.beads', 'github-sync.lock')
-  const deadline = Date.now() + 20_000
+  const deadline = Date.now() + LOCK_WAIT_MS
   for (;;) {
     try {
       writeFileSync(lock, String(process.pid), { flag: 'wx' })
       break
     } catch {
-      // The deadline bounds EVERY loop path — an unremovable lock path (e.g.
-      // a stray directory unlink can't clear) must skip, not spin forever.
-      if (Date.now() > deadline) return { skipped: `lock at ${lock} could not be acquired in 20s` }
       const holder = Number(tryRead(lock))
+      // The deadline bounds EVERY loop path. Past it, a live holder is
+      // contention and this run skips; a lock path nothing live holds that
+      // still could not be taken (a stray directory, no permission) is broken,
+      // and fails the run so its record says so.
+      if (Date.now() > deadline) {
+        if (holder && processAlive(holder)) return { skipped: `lock at ${lock} held by pid ${holder} past the wait` }
+        throw new Error(`could not take the sync lock at ${lock}, and nothing live holds it`)
+      }
       const age = Date.now() - (statSync(lock, { throwIfNoEntry: false })?.mtimeMs ?? Date.now())
-      if ((holder && !processAlive(holder)) || age > 10 * 60_000) {
+      if ((holder && !processAlive(holder)) || age > STALE_RUN_MS) {
         try {
           unlinkSync(lock)
         } catch {}
         continue
       }
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500)
+      pause(500)
     }
   }
   const unlock = () => {
@@ -1192,9 +1451,10 @@ const withLock = (root, fn) => {
       unlinkSync(lock)
     } catch {}
   }
-  // Covers a kill landing while this process is between children. While a
-  // spawnSync child runs, the event loop is blocked and no handler fires —
-  // that leak is what the dead-pid steal above then heals.
+  // A kill releases the lock and exits; the run's log record then stays as
+  // one that did not finish. A signal that lands while a spawnSync child runs
+  // is handled once the child returns. A SIGKILL leaks the lock, which the
+  // dead-pid steal above heals.
   const onSignal = sig => {
     unlock()
     process.exit(sig === 'SIGINT' ? 130 : 143)
@@ -1202,7 +1462,7 @@ const withLock = (root, fn) => {
   process.on('SIGTERM', onSignal)
   process.on('SIGINT', onSignal)
   try {
-    return fn()
+    return await fn()
   } finally {
     process.off('SIGTERM', onSignal)
     process.off('SIGINT', onSignal)
@@ -1218,38 +1478,36 @@ const tryRead = p => {
   }
 }
 
-// All five statuses in one call; throws on failure. Callers slice by status —
-// the plan functions own status selection, so nothing here pre-filters.
-// --limit 0 is explicit: the documented default is 50, and a truncated bead
-// list would put every unlisted open bead back on the re-open-the-issue path.
-// One `bd export` carries every bead with its comments (id, text, time) in
-// about a second, where `bd comments` costs a spawn per bead — and it lets
-// the mirrored/pending split be exact, comment id by comment id.
-const exportBeads = env =>
-  run('bd', ['export'], { env: { ...env, BD_IGNORE_SCHEMA_SKEW: '1' } })
+// The ONE read of the tracker; throws on failure. Every stored status, and the
+// only row that carries assignee, labels, closed_at and comments — a check
+// reading a narrower row passes silently on exactly the divergence it exists
+// to see. runSync re-reads only after a step that wrote. Callers slice by
+// status; nothing here pre-filters.
+const exportBeads = async env => {
+  const out = await runAsync('bd', ['export'], { env: { ...env, BD_IGNORE_SCHEMA_SKEW: '1' } })
+  return out
     .split('\n')
     .filter(Boolean)
     .map(l => JSON.parse(l))
     .filter(r => r._type === 'issue')
+}
 
 // Every guard in this file is calibrated to ONE bd version's MEASURED
-// behaviour: what the pull reaches and how, the push's timestamp rule, the
-// close that only gh can carry. An upgrade moves them together and silently,
-// and a wrong guess loses an assignee and a close date without reporting it.
-// So an unverified bd REFUSES to sync rather than syncing on stale reasoning.
-const VERIFIED_BD_VERSIONS = ['1.2.2']
+// behaviour: what the pull reaches and how, what makes the push PATCH, the
+// close that only gh can carry, the close policy. An upgrade moves them
+// together and silently, and a wrong guess loses an assignee and a close date
+// without reporting it. So an unverified bd REFUSES to sync rather than
+// syncing on stale reasoning.
+const VERIFIED_BD_VERSIONS = ['1.3.0']
 // The WHOLE token, prerelease and build metadata included: `1.2.2-rc.1` is a
 // different engine from `1.2.2` (the retracted 1.2.1 was one such), and
 // truncating it would let an unmeasured build through the allowlist.
 export const bdVersion = out => out?.match(/\bversion\s+(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.+-]*)?)/i)?.[1] ?? null
 
-const listAllBeads = () =>
-  JSON.parse(run('bd', ['list', '--status', 'open,in_progress,blocked,deferred,closed', '--limit', '0', '--json']))
-
 const FETCH_LIMIT = 5000
-const fetchIssues = () => {
+const fetchIssues = async () => {
   const rows = JSON.parse(
-    run('gh', [
+    await runAsync('gh', [
       'issue',
       'list',
       '--repo',
@@ -1291,74 +1549,62 @@ const fetchIssues = () => {
   }
 }
 
-// One owner for "push these beads". bd takes the ids as a single --issues
-// argument, which has a per-argument ceiling (128 KiB on Linux), so a large
-// set is split across invocations instead of failing the spawn before bd
-// starts. Returns the concatenated bd output.
-// Issues to hand the pull, BY IDENTIFIER. That takes doPull's other branch:
-// it fetches each issue by number, ignores `last_sync` entirely, and never
-// hydrates — so a bulk pull's two ways of reaching a bead we are protecting
-// (the incremental window, and fetchPrelinkedIssues bypassing the skip for a
-// locally-modified row) are both out of reach, and there is no window to
-// close. That is what lets the mirror stay bidirectional while a lossy
-// re-apply stays impossible (#955).
+// Issues to hand the pull, BY IDENTIFIER (header 5 says why):
 //   - an issue with no bead yet: the GitHub→beads direction, where a
 //     hand-filed issue becomes a bead.
 //   - a bead the pull would carry faithfully: the edit import.
 // A bead the pull would damage is simply never named, so it cannot be written.
-export const planPullSet = (beads, issueByNumber, lossyIds) => {
+// Nor is a bead whose local row is newer: the push carries that direction,
+// and where bd's push skips it (its push cache) a pull would revert the very
+// row the push did not send. `excludedIds` is every bead another step owns
+// (see runSync).
+export const planPullSet = (beads, issueByNumber, excludedIds) => {
   const linked = new Set()
   const faithful = []
   for (const b of beads) {
     const number = issueNumberFromRef(b.external_ref)
     if (number === null || !issueByNumber.has(number)) continue
     linked.add(number)
-    if (!lossyIds.has(b.id) && pullWouldWrite(b, issueByNumber.get(number))) faithful.push(number)
+    const issue = issueByNumber.get(number)
+    if (!excludedIds.has(b.id) && !localNewer(b, issue) && pullWouldWrite(b, issue)) faithful.push(number)
   }
   const unlinked = [...issueByNumber.keys()].filter(n => !linked.has(n))
   return [...new Set([...unlinked, ...faithful])].sort((a, b) => a - b)
 }
 
-const PUSH_CHUNK = 200
-// bd takes the ids as one --issues argument, so a large set is split the same
-// way the push is. An EMPTY set must not fall through to a bulk pull, which is
-// the whole class this avoids — it is simply not run.
-const pullIssues = (numbers, env, dryRun) => {
-  if (!numbers.length) return ''
+// One owner for "push these beads out, or pull them in". bd takes the ids as
+// a single --issues argument, which has a per-argument ceiling (128 KiB on
+// Linux), so a large set is split across invocations instead of failing the
+// spawn before bd starts. Returns the concatenated bd output.
+const ISSUES_PER_CALL = 200
+const syncIssues = (direction, ids, env, extraArgs = []) => {
+  // An empty list must never reach bd as a bare `--pull-only` — that would be a bulk pull.
+  if (!ids.length) return ''
   let out = ''
-  for (let i = 0; i < numbers.length; i += PUSH_CHUNK)
-    out +=
-      run('bd', ['github', 'sync', '--pull-only', '--issues', numbers.slice(i, i + PUSH_CHUNK).join(','), ...(dryRun ? ['--dry-run'] : [])], {
-        env,
-      }) + '\n'
-  return out
-}
-
-const pushBeads = (ids, env) => {
-  let out = ''
-  for (let i = 0; i < ids.length; i += PUSH_CHUNK)
-    out += run('bd', ['github', 'sync', '--push-only', '--issues', ids.slice(i, i + PUSH_CHUNK).join(',')], { env }) + '\n'
+  for (let i = 0; i < ids.length; i += ISSUES_PER_CALL)
+    out += run('bd', ['github', 'sync', direction, '--issues', ids.slice(i, i + ISSUES_PER_CALL).join(','), ...extraArgs], { env }) + '\n'
   return out
 }
 
 // One GraphQL call per chunk reads the comment bodies of every commented
-// bead's issue, so a converged run costs one request rather than one per
-// issue; an issue past the first page costs one more query per page.
+// bead's issue, up to COMMENT_READS_AT_ONCE chunks at a time: GitHub resolves
+// the aliases of one query in turn, so a run costs about one chunk's time, not
+// one request per issue or per chunk. An issue past the first page costs one
+// more query per page.
 // `issue(number)` resolves a PR or a deleted issue to null — with a NOT_FOUND
 // error and a non-zero gh exit that still carries the data, so the parse
 // reads stdout and ignores the status. Returns number → { bodies } | null
 // (not an issue).
 const COMMENT_PAGE = 100
 const GRAPHQL_CHUNK = 50
+const COMMENT_READS_AT_ONCE = 8
 const [OWNER, NAME] = REPO.split('/')
 const commentsField = after => `comments(first: ${COMMENT_PAGE}${after ? `, after: "${after}"` : ''}) { pageInfo { hasNextPage endCursor } nodes { body } }`
-const graphqlRepository = (fields, env) => {
-  const r = spawnSync('gh', ['api', 'graphql', '-f', `query=query { repository(owner: "${OWNER}", name: "${NAME}") { ${fields} } }`], {
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-    maxBuffer: MAX_OUTPUT_BYTES,
-    env,
-  })
+const graphqlRepository = async (fields, env) => {
+  const r = await spawnAsync('gh', ['api', 'graphql', '-f', `query=query { repository(owner: "${OWNER}", name: "${NAME}") { ${fields} } }`], { env })
+  // Names an overflow as one: its truncated stdout would fail the parse below
+  // anyway, but reading as bad JSON.
+  if (r.error) throw r.error
   let repo
   try {
     repo = JSON.parse(r.stdout).data.repository
@@ -1366,11 +1612,13 @@ const graphqlRepository = (fields, env) => {
   if (!repo) throw new Error(`gh api graphql: ${(r.stderr || r.stdout || '').trim().slice(0, 300)}`)
   return repo
 }
-const fetchIssueComments = (numbers, env) => {
+const fetchIssueComments = async (numbers, env) => {
   const byNumber = new Map()
-  for (let i = 0; i < numbers.length; i += GRAPHQL_CHUNK) {
-    const chunk = numbers.slice(i, i + GRAPHQL_CHUNK)
-    const repo = graphqlRepository(chunk.map(n => `i${n}: issue(number: ${n}) { ${commentsField()} }`).join(' '), env)
+  const size = Math.min(GRAPHQL_CHUNK, Math.ceil(numbers.length / COMMENT_READS_AT_ONCE))
+  const chunks = []
+  for (let i = 0; i < numbers.length; i += size) chunks.push(numbers.slice(i, i + size))
+  const readChunk = async chunk => {
+    const repo = await graphqlRepository(chunk.map(n => `i${n}: issue(number: ${n}) { ${commentsField()} }`).join(' '), env)
     for (const n of chunk) {
       const issue = repo[`i${n}`]
       if (!issue) {
@@ -1383,7 +1631,7 @@ const fetchIssueComments = (numbers, env) => {
       const bodies = issue.comments.nodes.map(c => c.body)
       let page = issue.comments.pageInfo
       while (page.hasNextPage) {
-        const more = graphqlRepository(`issue(number: ${n}) { ${commentsField(page.endCursor)} }`, env).issue
+        const more = (await graphqlRepository(`issue(number: ${n}) { ${commentsField(page.endCursor)} }`, env)).issue
         if (!more) throw new Error(`issue #${n} vanished between comment pages`)
         bodies.push(...more.comments.nodes.map(c => c.body))
         page = more.comments.pageInfo
@@ -1391,14 +1639,15 @@ const fetchIssueComments = (numbers, env) => {
       byNumber.set(n, { bodies })
     }
   }
+  await inPool(chunks, COMMENT_READS_AT_ONCE, readChunk)
   return byNumber
 }
 
-// Bead comments → issue comments, one way and append-only: bd 1.2.2's sync
-// carries comments in neither direction (nothing in its GitHub client, mapper
-// or tracker reads or writes them), so a mirrored comment never comes back as
-// a new bead comment. The beads come from one `bd export` (exportBeads), so
-// nothing is read per bead. Posts are paced under GitHub's
+// Bead comments → issue comments, one way and append-only: bd's sync carries
+// comments in neither direction (nothing in its GitHub client, mapper or
+// tracker reads or writes them), so a mirrored comment never comes back as a
+// new bead comment. The beads come from one `bd export`
+// (exportBeads), so nothing is read per bead. Posts are paced under GitHub's
 // content-creation limit (80/min), and a bead stops at its first failed post
 // so the thread keeps bead order; the next run resumes where it stopped.
 // Every failure is a report line, never a throw: a throw here would swallow
@@ -1409,37 +1658,42 @@ const fetchIssueComments = (numbers, env) => {
 // is visible and deletable; a cross-device claim is more machinery than that
 // warrants.
 const POST_PAUSE_MS = 800
-// Bounds one run under the SessionEnd hook's timeout (.claude/settings.json);
-// the rest resumes next run. The env override exists for the process tests.
-const POST_CAP = Number(process.env.KM_MIRROR_POST_CAP) || 60
-const pause = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
-const mirrorComments = ({ beads, issueByNumber, mintedNumbers, skipIds, env, dryRun }) => {
+// Keeps a draining run's pacing to about 25s, well inside the SessionEnd
+// hook's time limit; the rest resumes next run. The env override exists for
+// the process tests.
+const POST_CAP = Number(process.env.KM_MIRROR_POST_CAP) || 30
+const mirrorComments = async ({ beads, reread, issueByNumber, mintedNumbers, skipIds, env, dryRun }) => {
   // A ref is trusted only where the run-start listing shows an issue, or
   // where this run's push minted it: a ref pointed at a PR or a deleted
   // issue would otherwise turn a bead id into a confidently wrong #N,
   // whether as a destination or a reference. PRs share the number sequence,
   // so a number beyond the listing's last proves nothing by itself.
   const isIssue = n => issueByNumber.has(n) || mintedNumbers.has(n)
-  const numberByBeadId = new Map(beads.map(b => [b.id, issueNumberFromRef(b.external_ref)]).filter(([, n]) => n && isIssue(n)))
-  const unmintedIds = new Set(beads.filter(b => !b.external_ref).map(b => b.id))
+  // A skipped bead is also held as a REFERENCE: a cross-reference touches
+  // its issue as a post does.
+  const numberByBeadId = new Map(
+    beads.map(b => [b.id, issueNumberFromRef(b.external_ref)]).filter(([id, n]) => n && isIssue(n) && !skipIds.has(id)),
+  )
+  const holdIds = new Set([...beads.filter(b => !b.external_ref).map(b => b.id), ...skipIds])
   const report = []
   const commented = []
   for (const b of beads) {
     if (!b.comments?.length) continue
-    // skipIds: beads the restore left half-repaired — the touch would push
-    // that row and bury the loss the push-back exclusion protects.
-    if (skipIds.has(b.id)) report.push(`SKIPPED comments of ${b.id}: its restore failed this run — touching it would push the half-restored row`)
+    // skipIds: beads whose push did not land this run. A post makes GitHub the
+    // newer side, and the next pull would take GitHub's copy over that row.
+    if (skipIds.has(b.id)) report.push(`SKIPPED comments of ${b.id}: GitHub does not hold its local row this run — a post would let the next pull overwrite it`)
     else if (numberByBeadId.has(b.id)) commented.push(b)
     else if (b.external_ref) report.push(`SKIPPED comments of ${b.id}: its external_ref does not point at an issue of this repo (a PR, or deleted) — fix the ref`)
   }
   if (!commented.length) return { report }
   let ghComments
   try {
-    ghComments = fetchIssueComments(commented.map(b => numberByBeadId.get(b.id)), env)
+    ghComments = await fetchIssueComments(commented.map(b => numberByBeadId.get(b.id)), env)
   } catch (e) {
     return { report: [...report, `FAILED to read GitHub comments (${e.message}) — comment mirror skipped this run`] }
   }
   let posts = 0
+  let fresh = null
   for (const bead of commented) {
     if (posts >= POST_CAP) {
       report.push(`comment mirror stopped at ${POST_CAP} post(s) this run — the rest resumes next run`)
@@ -1462,9 +1716,9 @@ const mirrorComments = ({ beads, issueByNumber, mintedNumbers, skipIds, env, dry
     // run.
     const publishable = []
     for (const c of pending) {
-      const { body, unmapped, leftover } = mirrorCommentBody(c, numberByBeadId, unmintedIds)
+      const { body, unmapped, leftover } = mirrorCommentBody(c, numberByBeadId, holdIds)
       if (unmapped.length) {
-        report.push(`SKIPPED comment ${c.id} of ${bead.id}: it names bead(s) with no issue yet (${unmapped.join(', ')}) — ${pending.length - publishable.length} left for the next run`)
+        report.push(`SKIPPED comment ${c.id} of ${bead.id}: it names bead(s) not referenceable this run (${unmapped.join(', ')}) — ${pending.length - publishable.length} left for the next run`)
         break
       }
       publishable.push({ id: c.id, body, leftover })
@@ -1472,6 +1726,23 @@ const mirrorComments = ({ beads, issueByNumber, mintedNumbers, skipIds, env, dry
     if (!publishable.length) continue
     if (dryRun) {
       report.push(`[dry-run] would mirror ${publishable.length} comment(s) of ${bead.id} to #${number}`)
+      continue
+    }
+    // Re-read once, right before the first post: a bead another worktree
+    // edited during the run holds a row GitHub does not have yet, and a post
+    // would make GitHub the newer side for the next pull. It waits a run.
+    // Accepted: an edit landing while the loop itself posts — a check before
+    // every post would still leave the gap to that post, at a tracker read
+    // apiece; it is the header's never-pushed-edit trade.
+    if (!fresh)
+      try {
+        fresh = new Map((await reread()).map(r => [r.id, r]))
+      } catch (e) {
+        report.push(`FAILED to re-read the beads before posting (${e.message}) — comment mirror stopped this run`)
+        break
+      }
+    if (fresh.get(bead.id)?.updated_at !== bead.updated_at) {
+      report.push(`SKIPPED comments of ${bead.id}: edited during this run — they go out with the next run, after its push`)
       continue
     }
     let posted = 0
@@ -1501,18 +1772,173 @@ const mirrorComments = ({ beads, issueByNumber, mintedNumbers, skipIds, env, dry
 }
 
 // ---------------------------------------------------------------------------
+// Run log: the slow-sync alarm's input
+// ---------------------------------------------------------------------------
+
+// Each real run appends two lines to the main checkout's .beads/ (per device,
+// gitignored as a *.log): a `start` as it begins, and as it ends either its
+// record — whether it finished, how long it took, the slowest spawns — or a
+// `skipped` when it never took the lock (a wait that was another run's).
+// Appends only: runs in several worktrees start and end outside the sync lock,
+// and appending is what keeps one from writing over another's line. Readers
+// fold the pair by id (foldRunLog). SessionEnd output reaches nobody, so this
+// log is the only place a failing or slowing sync shows; the SessionStart hook
+// reads it (syncAlarm). What it cannot see is a sync that never starts — no
+// hook fires, or the script cannot load — which leaves no line at all.
+export const SYNC_RUN_LOG = join('.beads', 'github-sync-runs.log')
+// About twice a converged run on the live tracker, leaving room for a run that
+// also pushes. The override is for the process tests.
+const SLOW_SYNC_MS = process.env.KM_BD_SYNC_BUDGET_MS ? Number(process.env.KM_BD_SYNC_BUDGET_MS) : 15_000
+const RUN_LOG_KEEP = 200
+const DID_NOT_FINISH = 'did not finish (killed or crashed)'
+const seconds = ms => `${(ms / 1000).toFixed(1)}s`
+// The one definition, for the line a run prints and for the alarm: what the
+// run spent working, against the budget it ran under.
+const activeMs = record => record.ms - record.idleMs
+const overBudget = record => activeMs(record) > record.budgetMs
+const spawnSummary = spawns => spawns.map(s => `${s.cmd}${s.calls > 1 ? ` ×${s.calls}` : ''} ${seconds(s.ms)}`).join(', ')
+
+const appendRunLog = (root, entry) => {
+  try {
+    appendFileSync(join(root, SYNC_RUN_LOG), JSON.stringify(entry) + '\n')
+  } catch {
+    // The log is telemetry: losing a line must never fail the sync it describes.
+  }
+}
+
+// Called under the sync lock, and only once the log is twice the kept length.
+// Accepted: a line another run appends while this rewrite runs is lost.
+const trimRunLog = root => {
+  try {
+    const path = join(root, SYNC_RUN_LOG)
+    const lines = tryRead(path).split('\n').filter(Boolean)
+    if (lines.length > 2 * RUN_LOG_KEEP) writeFileSync(path, lines.slice(-RUN_LOG_KEEP).join('\n') + '\n')
+  } catch {
+    // Telemetry, as above.
+  }
+}
+
+// Logs this run's start, and returns what logs its end: `{}` when the run
+// finished, `{ failure }` when it failed, `{ skipped }` when it never took the
+// lock. Timed from process start: what the user waits on includes node and
+// the probes, not just the steps.
+const openRunRecord = root => {
+  const id = `${process.pid}-${Math.round(performance.timeOrigin)}`
+  const at = new Date().toISOString()
+  appendRunLog(root, { id, event: 'start', pid: process.pid, at, budgetMs: SLOW_SYNC_MS })
+  return ({ failure, skipped }) => {
+    if (skipped) return appendRunLog(root, { id, event: 'skipped' })
+    const record = {
+      id,
+      event: 'end',
+      at,
+      budgetMs: SLOW_SYNC_MS,
+      ms: Math.round(performance.now()),
+      idleMs: Math.round(idleMs),
+      ok: !failure,
+      ...(failure && { failure }),
+      spawns: [...spawnTimes]
+        .map(([cmd, intervals]) => ({ cmd, calls: intervals.length, ms: Math.round(coveredMs(intervals)) }))
+        .sort((a, b) => b.ms - a.ms)
+        .slice(0, 5),
+    }
+    if (!failure && overBudget(record))
+      console.log(
+        `bd-github-sync: slow run — ${seconds(activeMs(record))} against a ${Math.round(SLOW_SYNC_MS / 1000)}s budget; ` +
+          `slowest: ${spawnSummary(record.spawns)}${record.idleMs ? `; plus ${seconds(record.idleMs)} of deliberate waits` : ''}`,
+      )
+    appendRunLog(root, record)
+  }
+}
+
+// Every run the log holds, as its end record, in the order the runs ENDED —
+// runs queued on the lock start in one order and take it in another, and the
+// alarm reads the sequence they actually ran in. A skipped run is dropped; a
+// start with no end is a run still going while its process lives and it is
+// not stale (left out), or one that was killed or crashed, placed where it
+// started. A line with no id — an older build's — stands as a run of its own.
+export const foldRunLog = (logText, isAlive = processAlive, now = Date.now()) => {
+  const slots = new Map()
+  String(logText ?? '')
+    .split('\n')
+    .forEach((line, at) => {
+      let r
+      try {
+        r = JSON.parse(line)
+      } catch {
+        return
+      }
+      if (!r || typeof r !== 'object' || Array.isArray(r)) return
+      const key = typeof r.id === 'string' ? r.id : Symbol('unkeyed')
+      if (!slots.has(key)) slots.set(key, {})
+      const slot = slots.get(key)
+      if (r.event === 'start') Object.assign(slot, { start: r, startAt: at })
+      else Object.assign(slot, { end: r, endAt: at })
+    })
+  return [...slots.values()]
+    .flatMap(({ start, startAt, end, endAt }) => {
+      if (end) return end.event === 'skipped' ? [] : [{ record: end, at: endAt }]
+      if (Number.isInteger(start.pid) && isAlive(start.pid) && now - Date.parse(start.at) < STALE_RUN_MS) return []
+      return [{ record: { ...start, ms: 0, idleMs: 0, ok: false, failure: DID_NOT_FINISH, spawns: [] }, at: startAt }]
+    })
+    .sort((a, b) => a.at - b.at)
+    .map(({ record }) => record)
+}
+
+// A record as the alarm may use it, or null: the log is per-device text that
+// older builds and damaged writes also left behind, and formatting must only
+// ever see the shape openRunRecord writes. `failure` is null for a run that
+// finished.
+const parseRunRecord = r => {
+  if (typeof r?.ms !== 'number' || typeof r.budgetMs !== 'number') return null
+  return {
+    at: typeof r.at === 'string' ? r.at : 'unknown',
+    ms: r.ms,
+    idleMs: typeof r.idleMs === 'number' ? r.idleMs : 0,
+    budgetMs: r.budgetMs,
+    failure: r.ok === false ? (typeof r.failure === 'string' ? r.failure : 'failed') : null,
+    spawns: (Array.isArray(r.spawns) ? r.spawns : []).filter(s => typeof s?.cmd === 'string' && typeof s.ms === 'number'),
+  }
+}
+
+// Two bad runs in a row, not one: a single failure or slow run is as often
+// GitHub having a bad minute as a regression. The latest run decides which of
+// the two it reports. Total over any text — it runs at session start, which
+// must never break.
+export const syncAlarm = (logText, isAlive = processAlive, now = Date.now()) => {
+  const runs = foldRunLog(logText, isAlive, now).map(parseRunRecord).filter(Boolean)
+  const lastTwo = runs.slice(-2)
+  const bad = record => record.failure !== null || overBudget(record)
+  if (lastTwo.length < 2 || !lastTwo.every(bad)) return ''
+  const [previous, latest] = lastTwo
+  if (latest.failure !== null)
+    return (
+      (previous.failure !== null
+        ? `⚠ bd-github-sync has failed its last two runs (latest ${latest.at}): ${latest.failure}.`
+        : `⚠ bd-github-sync's latest run failed (${latest.at}): ${latest.failure}, after one that took ` +
+          `${seconds(activeMs(previous))} against its ${Math.round(previous.budgetMs / 1000)}s budget.`) +
+      ` The beads↔GitHub mirror is not syncing until that is fixed — tell the user.`
+    )
+  return (
+    `⚠ bd-github-sync is over its ${Math.round(latest.budgetMs / 1000)}s budget: ` +
+    (previous.failure === null
+      ? `the last two runs took ${seconds(activeMs(previous))} and ${seconds(activeMs(latest))}`
+      : `the latest run took ${seconds(activeMs(latest))}, after one that failed (${previous.failure})`) +
+    ` (latest ${latest.at}). Slowest spawns in the latest: ${spawnSummary(latest.spawns)}. A converged run is a fixed ` +
+    `handful of reads (pinned by "makes only the fixed reads on a converged run" in scripts/bd-github-sync.test.ts), ` +
+    `so some step has started scaling with the tracker — tell the user, and find it before runs start being cut off ` +
+    `by the SessionEnd hook's time limit.`
+  )
+}
+
+export const readSyncAlarm = root => syncAlarm(tryRead(join(root, SYNC_RUN_LOG)))
+
+// ---------------------------------------------------------------------------
 // The sync sequence
 // ---------------------------------------------------------------------------
 
-const runSync = ({ quiet = false, dryRun = false } = {}) => {
-  const pre = preconditions()
-  if (!pre.ok) {
-    if (!quiet) console.log(`bd-github-sync: skipped (${pre.reason})`)
-    return { skipped: pre.reason }
-  }
-  const { env } = pre
-
-  const version = bdVersion(tryRun('bd', ['--version'], { env, timeout: PROBE_TIMEOUT }))
+const refuseUnverifiedBd = () => {
+  const version = bdVersion(probeBdVersion())
   // Exactly '1', like the two hook escapes, which match a literal `=1`:
   // read for truthiness, `KM_BD_VERSION_OK=0` would turn the refusal OFF.
   if (process.env.KM_BD_VERSION_OK !== '1' && !VERIFIED_BD_VERSIONS.includes(version))
@@ -1521,17 +1947,35 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
         `${version ?? 'a version this could not read'}. Re-verify them against the new engine before syncing (the bd ` +
         `upgrade issue carries the checklist), then add the version here. KM_BD_VERSION_OK=1 proceeds anyway.`,
     )
+}
 
-  const result = withLock(pre.root, () => {
-    const { issueByNumber, maxKnownIssueNumber } = fetchIssues()
-    const preBeads = listAllBeads()
+const runSync = async ({ quiet = false, dryRun = false } = {}) => {
+  const pre = preconditions()
+  // No beads DB here (a fresh clone, a cloud session): nothing to sync, and
+  // nowhere to log it.
+  if (!pre.root) {
+    if (!quiet) console.log(`bd-github-sync: skipped (${pre.reason})`)
+    return { skipped: pre.reason }
+  }
+  const { env } = pre
+
+  const syncSteps = async () => {
+    trimRunLog(pre.root)
+    // Every read of the tracker is one `bd export` — the only row carrying
+    // assignee, labels, closed_at and comments — taken again only after a step
+    // that WROTE: a converged run reads it once. The first runs under the
+    // issue listing, which is paging-bound and the run's longest step.
+    const [{ issueByNumber, maxKnownIssueNumber }, preBeads] = await settleAll([fetchIssues(), exportBeads(env)])
     const report = []
     // The km→#N mapping for every issue this run's push minted. Printed
     // IMMEDIATELY, not via the end-of-run report: any later step failing
     // would swallow the report, and by the next run the bead already carries
-    // its ref, so the mapping would never be printed at all.
+    // its ref, so the mapping would never be printed at all. Returns what it
+    // printed, for the comment mirror.
     const printMinted = post => {
-      for (const { id, number } of planMintedRefs(preBeads, post)) console.log(`bd-github-sync: minted: ${id} → #${number}`)
+      const minted = planMintedRefs(preBeads, post)
+      for (const { id, number } of minted) console.log(`bd-github-sync: minted: ${id} → #${number}`)
+      return minted
     }
 
     // 1. Adopt GitHub-side closes BEFORE pushing (see header). A failed close
@@ -1542,7 +1986,12 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
     for (const { id, number } of closes) {
       if (dryRun) {
         report.push(`[dry-run] would close ${id} (issue #${number} was closed on GitHub)`)
-      } else if (tryRun('bd', ['close', id, '--reason', `Closed on GitHub (issue #${number}); reconciled by bd-github-sync.`], { env }) !== null) {
+      } else if (
+        // --force: bd refuses to close a bead with an open child, an open
+        // blocker or another actor's claim, and a GitHub close is
+        // authoritative here, as it is for bd's own pull.
+        tryRun('bd', ['close', id, '--force', '-r', `Closed on GitHub (issue #${number}); reconciled by bd-github-sync.`], { env }) !== null
+      ) {
         report.push(`closed ${id} (issue #${number} was closed on GitHub)`)
       } else {
         closeFailures.push(id)
@@ -1553,28 +2002,24 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
         `aborting before push: could not adopt GitHub closes for ${closeFailures.join(', ')}` +
           (report.length ? ` (already applied: ${report.join('; ')})` : ''),
       )
+    // Re-read after the closes: a close bumps updated_at, and the pre-adoption
+    // row would look converged to the push plan below. A dry run makes no
+    // closes, so the rows it would have bumped are added to the push by hand.
+    const exported = closes.length && !dryRun ? await exportBeads(env) : preBeads
+    const dryRunBumped = dryRun ? closes.map(c => c.id) : []
 
-    // 1.2 Decide what the pull may touch. A bead whose re-apply would lose
-    // something is simply WITHHELD from the pull's id list (planLossyReapplies
-    // names it and why); everything else — an issue with no bead, and a bead
-    // the pull would carry faithfully — is handed to it by identifier, so the
-    // mirror stays bidirectional. No touching, no forced push, no timestamps:
-    // the pull cannot reach what it is not given.
-    // `bd export` rather than the listing: only it carries assignee, labels
-    // and closed_at, and it is one read for the whole tracker either way. Read
-    // after close-adoption, so it already reflects the closes.
-    const exported = exportBeads(env)
+    // 1.2 A bead whose re-apply would lose something is WITHHELD from the pull
+    // (planLossyReapplies names it and why). Reported, but never counted as
+    // news: withholding changes nothing on either side and recurs for as long
+    // as the divergence does, so letting it answer "did anything change"
+    // would un-quiet every SessionEnd run.
     const withheld = planLossyReapplies(exported, issueByNumber)
-    // Reported, but never counted as news: withholding changes nothing on
-    // either side and recurs for as long as the divergence does, so letting it
-    // answer "did anything change" would un-quiet every SessionEnd run.
     const routine = new Set()
-    const pullSet = planPullSet(exported, issueByNumber, new Set(withheld.map(w => w.id)))
     for (const { id, number, losses, overwrites } of withheld) {
       const line =
         `withheld ${id} (#${number}) from the pull: it would lose ${losses.join(', ')} (#955)` +
         (overwrites.length
-          ? `; its ${overwrites.join(', ')} also differ(s) on GitHub and the next push sends the local value — compare them by hand`
+          ? `; its ${overwrites.join(', ')} also differ(s) on GitHub and the bead's next push sends the local value — compare them by hand`
           : '')
       // Only the content-identical withhold is routine. One that also names a
       // GitHub-side divergence is the warning that makes the trade visible —
@@ -1583,158 +2028,107 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
       report.push(line)
     }
 
-    // 1.5 Push local state out BEFORE anything pulls. bd's pull applies a
-    // strictly OLDER GitHub copy over newer local rows (#647) — closes and
-    // edits included — so the pull must never see a GitHub copy that lags
-    // local. Runs after close-adoption (an un-adopted open bead would
-    // re-open its GitHub-closed issue). Handed only the beads bd could update
-    // (planPrePullPush) — listed AFTER close-adoption, since a close bumps
-    // updated_at and the pre-adoption row would look converged.
-    // EXPORT rows, not a listing: `bd list` carries neither assignee nor
-    // labels. `exported` was read after close-adoption, so the closes are in
-    // it; a dry run makes no closes, so the rows it would have bumped are
-    // added by hand.
-    const dryRunBumped = dryRun ? closes.map(c => c.id) : []
+    // 1.5 Push local-newer and not-yet-linked rows out (planPrePullPush). The
+    // push and the pull get disjoint sets: the pull is never handed a bead the
+    // push was — the local-newer rule in planPullSet covers most of them, and
+    // the push set itself covers the rest (a bead with no timestamp goes to
+    // the push unjudged).
     const pushSet = [...new Set([...planPrePullPush(exported, issueByNumber), ...dryRunBumped])]
+    const pullExcluded = new Set([...withheld.map(w => w.id), ...pushSet])
+    const pushed = pushSet.length > 0 && !dryRun
+    const unlanded = new Set()
+    let pushErr = null
     if (dryRun) {
       report.push(`[dry-run] would push ${pushSet.length} bead(s) out before the pull${pushSet.length ? `: ${pushSet.join(', ')}` : ''}`)
-    } else if (pushSet.length) {
-      let pushOut
+    } else if (pushed) {
       try {
-        pushOut = pushBeads(pushSet, env)
+        // Zero-count lines stay out of the report: they would flip `changed`
+        // below and un-quiet every converged SessionEnd run.
+        const pushOut = syncIssues('--push-only', pushSet, env)
+        report.push(...pushOut.split('\n').filter(l => /Pushed|Created|Updated/.test(l) && /[1-9]/.test(l)).map(l => `pre-pull: ${l.trim()}`))
       } catch (e) {
-        // A failed push may still have minted issues (an earlier chunk, or bd
-        // aborting midway) — print their mapping from a fresh listing before
-        // the failure propagates; the listing's own failure yields to it.
-        try {
-          printMinted(listAllBeads())
-        } catch {
-          // Silence here would be a permanent loss, not a skipped nicety: any
-          // mapping this push minted is unrecoverable once the next run's
-          // listing shows the ref as pre-existing.
-          console.error('bd-github-sync: could not re-list beads — any km→#N mapping this push minted is unprinted')
-        }
-        throw e
+        pushErr = e
       }
-      // Zero-count lines stay out of the report: they would flip `changed`
-      // below and un-quiet every converged SessionEnd run.
-      report.push(...pushOut.split('\n').filter(l => /Pushed|Created|Updated/.test(l) && /[1-9]/.test(l)).map(l => `pre-pull: ${l.trim()}`))
+    }
+    // Re-read after a push: it mints refs — and a failed push may have minted
+    // some too (an earlier chunk, or bd aborting midway). The km→#N mapping is
+    // this run's only record of what it minted: once the next run's read shows
+    // a ref as pre-existing it is unrecoverable, so it prints before anything
+    // else can fail, a read that fails says so, and the push's own failure
+    // outranks the read's.
+    let freshBeads = exported
+    if (pushed)
+      try {
+        freshBeads = await exportBeads(env)
+      } catch (e) {
+        console.error('bd-github-sync: could not re-read beads — any km→#N mapping this push minted is unprinted')
+        throw pushErr ?? e
+      }
+    const minted = printMinted(freshBeads)
+    if (pushErr) throw pushErr
+
+    // 1.55 Which pushes landed, judged by content on a fresh listing: bd only
+    // warns on a failed PATCH, and its push cache skips a bead equal to its
+    // last push. An unlanded row is held out of the comment mirror (skipIds).
+    // A listing that cannot be read leaves every linked handed bead unlanded —
+    // the direction that only delays a post.
+    if (pushed) {
+      const handed = new Set(pushSet)
+      const linkedHanded = exported.filter(b => handed.has(b.id) && issueByNumber.has(issueNumberFromRef(b.external_ref)))
+      let afterPush = null
+      if (linkedHanded.length)
+        try {
+          afterPush = (await fetchIssues()).issueByNumber
+        } catch (e) {
+          report.push(`FAILED to re-read the pushed issues (${e.message}) — treating ${linkedHanded.map(b => b.id).join(', ')} as unlanded this run`)
+        }
+      const notLanded = afterPush
+        ? planUnlandedPushes(linkedHanded, afterPush)
+        : linkedHanded.map(b => ({ id: b.id, number: issueNumberFromRef(b.external_ref) }))
+      for (const { id, number } of notLanded) {
+        unlanded.add(id)
+        if (afterPush) report.push(`push did not land for ${id} (#${number}): GitHub still differs from the local row`)
+      }
     }
 
-    // 1.6 A push can leave a local-newer row unpushed (it failed, or bd's
-    // strictly-newer test against the issue's updated_at, re-read at push
-    // time, said no), so snapshot every bead whose local row is STILL newer
-    // than its GitHub copy — the pull may revert exactly those; step 2.5
-    // restores any it does. Fresh
-    // list: the push just minted refs. Snapshot via a direct spawn, not
-    // run(): `bd show` output is pretty-printed JSON, and a description line
-    // starting with "Error" would trip run()'s bd check.
-    const freshBeads = dryRun ? exported : listAllBeads()
-    printMinted(freshBeads)
-    const suspects = [
-      ...new Map(
-        [
-          ...planLocalWins(freshBeads, issueByNumber),
-          ...planMintedNonOpen(preBeads, freshBeads),
-          ...planReopenedClosed(freshBeads, issueByNumber),
-        ].map(s => [s.id, s]),
-      ).values(),
-    ]
-    // The length check catches bd's partial-output shape (see bdShowRows):
-    // a snapshot missing any suspect is no snapshot at all.
-    const showSuspects = () => {
-      const rows = bdShowRows(suspects.map(s => s.id), { env })
-      return rows && rows.length === suspects.length ? rows : null
-    }
-    let snapshot = []
-    if (suspects.length && !dryRun) {
-      snapshot = showSuspects()
-      // Abort rather than pull unprotected — same reasoning as the
-      // close-adoption abort: proceeding is the exact loss this guard
-      // prevents.
-      if (!snapshot)
-        throw new Error(
-          `aborting before pull: could not snapshot ${suspects.map(s => s.id).join(', ')} — the pull could revert these newer local rows undetected (#647)`,
-        )
+    // Every step below that writes from a bead's state plans on a read taken
+    // right before it, whenever it has anything to do: another worktree can
+    // edit a bead at any point in the run, and a plan from an earlier read
+    // acts on the old row. A step with nothing to do pays no re-read.
+    let latest = freshBeads
+    const planFresh = async plan => {
+      if (dryRun || !plan(latest).length) return plan(latest)
+      latest = await exportBeads(env)
+      return plan(latest)
     }
 
-    // 2. The pull. Pull-only, not bidirectional: the push leg would GET every
-    // linked bead again and could only PATCH rows step 1.5 just pushed (GitHub
-    // is the newer side once it has), and the conflict pass keys off
-    // last_sync, which that push just advanced — a second full-price no-op.
-    const syncOut = pullIssues(pullSet, env, dryRun)
+    // 2. The pull: a bead another worktree edited since the push was planned
+    // is newer locally by now, and planPullSet leaves it out.
+    // Pull-only: a push leg would bypass planPrePullPush's selection.
+    const pullSet = await planFresh(beads => planPullSet(beads, issueByNumber, pullExcluded))
+    const syncOut = syncIssues('--pull-only', pullSet, env, dryRun ? ['--dry-run'] : [])
     const syncSummary = syncOut
       .split('\n')
       .filter(l => /Pulled|Pushed|Created|Updated|dry-run/.test(l))
       .map(l => l.trim())
     report.push(...syncSummary)
+    if (pullSet.length && !dryRun) latest = await exportBeads(env)
+    const postBeads = latest
 
-    // 2.5 Restore local rows the pull reverted anyway (#647 — 1.5's push
-    // left them unpushed). The restore bumps updated_at, so the
-    // push-back below carries them out and the next pull leaves them alone.
-    //
-    // ACCEPTED residuals (reviewed 2026-08-20; each is a failure INSIDE this
-    // fallback, needs a mid-run bd failure or a seconds-wide race, and ends
-    // in a report line naming the bead for hand-recovery — do not add
-    // machinery for them here, it recreates transactions over a store that
-    // has none; the class ends upstream when bd's pull honors prefer-newer):
-    // a close restore whose second step fails leaves the row open with the
-    // reason only in the FAILED line; a concurrent edit from another
-    // worktree during the pull window can be read as a revert and lose the
-    // seconds-wide delta between two local edits (no compare-and-swap verb
-    // exists to close this); the conservative no-post path cannot compute
-    // label REMOVALS, so a pulled-back stale label survives until edited.
-    const postBeads = dryRun ? preBeads : listAllBeads()
-    // Post-pull state for the suspects comes from `bd show`, not the list:
-    // list rows lack assignee, so a list-based comparison would miss
-    // assignment-only reverts (and false-positive every assigned suspect).
-    const postSuspects = snapshot.length ? showSuspects() : []
-    const postById = new Map((postSuspects ?? []).map(b => [b.id, b]))
-    // A failed post-read must not discard the snapshot: the DB may already
-    // hold the reverted row, and the next sync's snapshot would capture THAT
-    // — the newer local edit would be gone for good. Conservatively restore
-    // every snapshotted suspect instead; for an untouched row that rewrites
-    // identical content, which the push-back then skips.
-    const reverted = dryRun ? [] : postSuspects ? detectReverts(snapshot, postById) : snapshot
-    if (!postSuspects)
-      report.push(`FAILED to re-read ${suspects.map(s => s.id).join(', ')} after the pull — conservatively restoring every snapshotted suspect`)
-    const restoredOk = []
-    const restoreFailures = []
-    for (const row of reverted) {
-      const ok = planRestoreArgs(row, postById.get(row.id)).every(args => tryRun('bd', args, { env }) !== null)
-      if (ok) {
-        restoredOk.push(row.id)
-        report.push(`restored ${row.id} — the pull reverted a newer local row (#647)`)
-      } else {
-        restoreFailures.push(row.id)
-      }
-    }
-    // Failed restores stay OUT of the push-back: pushing a half-restored row
-    // would stamp GitHub newer and bury the loss, while leaving GitHub older
-    // keeps the row a suspect so the next sync retries the restore.
-    if (restoreFailures.length)
-      report.push(`FAILED to restore after a pull revert: ${restoreFailures.join(', ')} — left un-pushed so the next sync retries; check them by hand (bd show)`)
-
-    // 3. Un-flatten priorities (pre/post comparison — see header), push back
-    // together with the restored rows.
+    // 3. Priorities for beads this run's pull created (header 2), pushed back.
     const preById = new Map(preBeads.map(b => [b.id, b]))
-    if (dryRun) report.push('[dry-run] priority un-flattening not simulated — it needs the post-sync state')
+    if (dryRun) report.push('[dry-run] priority derivation not simulated — it needs the post-sync state')
     const fixes = planPriorityFixes(preById, postBeads, issueByNumber)
     for (const { id, to } of fixes) {
       if (!dryRun) run('bd', ['update', id, '-p', String(to)], { env })
-      report.push(`priority ${id} → ${to} (re-derived after pull-flattening)`)
+      report.push(`priority ${id} → ${to} (derived from its labels)`)
     }
-    // restoreFailures subtracted from the WHOLE union: a half-restored row
-    // can also enter through the priority-fix leg, and pushing it would
-    // stamp GitHub newer and bury the loss (see the restore loop above).
-    const failedRestoreIds = new Set(restoreFailures)
-    const pushBack = [...new Set([...fixes.map(f => f.id), ...restoredOk])].filter(id => !failedRestoreIds.has(id))
-    if (pushBack.length && !dryRun) pushBeads(pushBack, env)
+    if (fixes.length && !dryRun) syncIssues('--push-only', fixes.map(f => f.id), env)
 
-    // 4. Carry bead closes out to issues still open (see header: via gh, not
-    // a selective bd push, which skips a close once the issue was touched
-    // after it).
-    const closePushes = planClosePushes(postBeads, issueByNumber, maxKnownIssueNumber)
+    // 4. Carry bead closes out to issues still open, via gh (header 3 says
+    // why bd's push skips them).
+    // A bead reopened in another worktree meanwhile is no longer a candidate.
+    const closePushes = await planFresh(beads => planClosePushes(beads, issueByNumber, maxKnownIssueNumber))
     for (const { id, number } of closePushes) {
       if (dryRun) {
         report.push(`[dry-run] would close issue #${number} to match closed bead ${id}`)
@@ -1762,20 +2156,18 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
     }
 
     // 5. Mirror bead comments onto their issues (mirrorComments). It runs
-    // after the push, because a post bumps the issue past the local row and bd
-    // PATCHes only local-newer rows; and after the pull, so a GitHub-side edit
-    // waiting on a bead is imported before the post.
-    // The touch-push-repull dance this used to need is gone with the bulk
-    // pull: a post cannot make the next run re-apply the issue onto its bead,
-    // because the pull is only ever handed ids we chose (see 1.2 and guard 5).
-    // Read fresh here, not from postBeads: this run's push may have minted the
-    // external_refs the mirror resolves bead ids through, and postBeads is a
-    // listing, which carries no comments.
-    const mirror = mirrorComments({
-      beads: exportBeads(env),
+    // after the push, because a post bumps the issue past the local row and
+    // the push is handed only local-newer rows; and after the pull, so a
+    // GitHub-side edit waiting on a bead is imported before the post. A bead
+    // whose local row GitHub does not hold this run is skipped (skipIds).
+    // postBeads already carries this run's minted refs, and no step since it
+    // touches a ref or a comment.
+    const mirror = await mirrorComments({
+      beads: latest,
+      reread: () => exportBeads(env),
       issueByNumber,
-      mintedNumbers: new Set(planMintedRefs(preBeads, freshBeads).map(m => m.number)),
-      skipIds: failedRestoreIds,
+      mintedNumbers: new Set(minted.map(m => m.number)),
+      skipIds: unlanded,
       env,
       dryRun,
     })
@@ -1786,11 +2178,39 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
     const actionReported = report.some(l => !syncSummary.includes(l) && !routine.has(l))
     const changed = actionReported || syncSummary.some(l => /[1-9]/.test(l))
     if (!quiet || changed) console.log(['bd-github-sync:', ...report].join('\n  '))
-    return { closes, fixes, closePushes }
-  })
+    // FAILED is the report's word for a step it could not do (a post, a close,
+    // a read); the run is on record as failed, since the report reaches nobody
+    // and the same failure can recur every run. What the report states as
+    // expected — a withheld bead, a push that did not land — is not a failure.
+    return { failures: report.filter(l => l.startsWith('FAILED')) }
+  }
 
-  if (result?.skipped && !quiet) console.log(`bd-github-sync: skipped (${result.skipped})`)
-  return result
+  // Everything from here is on record, a refusal or a missing token included:
+  // a sync that cannot run is the failure the alarm most needs to see.
+  const closeRecord = dryRun ? () => {} : openRunRecord(pre.root)
+  let outcome = { failure: DID_NOT_FINISH }
+  try {
+    if (!pre.ok) {
+      outcome = { failure: pre.reason }
+      if (!quiet) console.log(`bd-github-sync: skipped (${pre.reason})`)
+      return { skipped: pre.reason }
+    }
+    refuseUnverifiedBd()
+    const result = await withLock(pre.root, syncSteps)
+    const failures = result.failures ?? []
+    outcome = result.skipped
+      ? { skipped: true }
+      : failures.length
+        ? { failure: `${failures[0].slice(0, 300)}${failures.length > 1 ? ` (+${failures.length - 1} more)` : ''}` }
+        : {}
+    if (result?.skipped && !quiet) console.log(`bd-github-sync: skipped (${result.skipped})`)
+    return result
+  } catch (e) {
+    outcome = { failure: String(e.message ?? e).split('\n')[0].slice(0, 300) }
+    throw e
+  } finally {
+    closeRecord(outcome)
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1804,19 +2224,41 @@ const runSync = ({ quiet = false, dryRun = false } = {}) => {
 // sync path, which relays a whole run's mappings, is the one that converted.
 const allow = () => process.exit(0)
 
-// A path whose text this hook can actually read. A directory or an
-// unreadable file must reach the caller's fail-closed branch rather than
-// throwing out of the hook — see the entry point for why a throw here is
-// worse than a block.
-const readableFile = p => {
+// Why this hook cannot read a message path, as the fact it saw — or null when
+// it can. One stat decides it, so the fact and the verdict cannot disagree,
+// and nothing here throws: a throw out of the hook would allow the commit
+// (see the entry point), where this must block.
+const unreadableFact = p => {
+  let stat
   try {
-    if (!statSync(p).isFile()) return false
+    stat = statSync(p)
+  } catch (e) {
+    return e?.code === 'ENOENT' ? 'does not exist at hook time' : `cannot be examined by this hook (${e?.code ?? 'error'})`
+  }
+  if (stat.isDirectory()) return 'is a directory'
+  if (!stat.isFile()) return 'is not a regular file'
+  try {
     accessSync(p, constants.R_OK)
-    return true
+    return null
   } catch {
-    return false
+    return 'is not readable by this hook'
   }
 }
+// The report prints what the hook found at each path and whether the
+// command's own text redirects into it (a file it writes after this hook
+// ran) — never a cause, which is the reader's to draw.
+const escapeRegExp = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+const commandWrites = (cmd, value) =>
+  new RegExp(String.raw`(?:>|\btee(?:\s+-\S+)*\s+)\s*(['"]?)${escapeRegExp(value)}\1(?=[\s;&|)]|$)`).test(cmd)
+const unreadableMessageFilesReport = (files, cmd, cwd) =>
+  [
+    'Commit message file(s) this gate reads before the commit runs, to check close keywords, and could not read:',
+    ...files.map(({ value, path, fact }) => `  ${path}: ${fact}${commandWrites(cmd, value) ? '; this command writes it' : ''}`),
+    ...(files.some(({ value }) => !isAbsolute(value) && !isHomePath(value))
+      ? [`(relative paths resolved against ${cwd})`]
+      : []),
+    'A KM_ISSUE_REFS_OK=1 prefix attests the references and skips this read.',
+  ].join('\n')
 
 /**
  * One issue/PR's ground truth, memoized per process — tolerant, and
@@ -1825,13 +2267,14 @@ const readableFile = p => {
  * mapping validation and again for the echo table, across several targets,
  * inside a killable hook timeout. Only definite answers are cached.
  */
+const ISSUE_LOOKUP_TIMEOUT = 10_000
 const issueInfoCache = new Map()
 export const fetchIssueInfo = number => {
   if (issueInfoCache.has(number)) return issueInfoCache.get(number)
   const r = spawnSync('gh', ['api', `repos/${REPO}/issues/${number}`], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
-    timeout: 10_000,
+    timeout: ISSUE_LOOKUP_TIMEOUT,
   })
   let info = null
   try {
@@ -1852,11 +2295,79 @@ export const fetchIssueInfo = number => {
 // The #N leg of the gate: echo every referenced number's ground truth;
 // KM_ISSUE_REFS_OK=1 on the re-run confirms. Also used by
 // bd-publish-verify.mjs (mode 'post', where the text already published).
-export const issueRefsTable = (text, refs, mode = 'pre') =>
-  buildIssueRefsMessage(refs.map(number => ({ number, info: fetchIssueInfo(number) })), new Set(closeKeywordRefs(text)), mode)
+const lookUpRefs = refs => refs.map(number => ({ number, info: fetchIssueInfo(number) }))
 
-const echoIssueRefs = (text, refs) => {
-  console.error(issueRefsTable(text, refs))
+// How many references an echo after publication may look up before a
+// deadline. The text is already out by then, so an echo that overran would
+// read as a failed publish. Each lookup may take ISSUE_LOOKUP_TIMEOUT, so the
+// cap is what the time left divides into; the references past it are counted
+// by moreRefsNote. REFS_CAP is defence in depth: every shipped budget binds
+// first, and it keeps a larger one from uncapping the echo.
+const REFS_CAP = 15
+export const refsCap = deadline => Math.min(REFS_CAP, Math.max(0, Math.floor((deadline - Date.now()) / ISSUE_LOOKUP_TIMEOUT) - 1))
+export const moreRefsNote = (total, cap) => (total > cap ? `\n  …and ${total - cap} more references not echoed` : '')
+export const issueRefsTable = (text, refs, mode = 'pre') => buildIssueRefsMessage(lookUpRefs(refs), new Set(closeKeywordRefs(text)), mode)
+
+// Numbers an agent attested with KM_ISSUE_REFS_OK=1. Keyed by the host's
+// session id, plus the subagent's id when the call comes from one (subagents
+// share their parent's session id, and an attestation is the word of the
+// agent that read the table). Kept under the OS temp dir rather than the
+// host's own state (whose layout is not ours) or the repo (shared by every
+// session in it). No other session reads it, because session ids are
+// unique; a resumed session keeps its id and so its attestations; the file
+// is left to the OS's temp cleanup. Two hooks racing on it can lose an
+// attestation, which costs one extra block.
+const PLAIN_ID = /^[A-Za-z0-9_-]{1,128}$/
+const isPlainId = id => typeof id === 'string' && PLAIN_ID.test(id)
+const attestationMemo = ({ session_id: sessionId, agent_id: agentId }) => {
+  if (!isPlainId(sessionId) || (agentId !== undefined && !isPlainId(agentId))) return null
+  const path = join(tmpdir(), 'km-publish-gate', `${agentId === undefined ? sessionId : `${sessionId}.${agentId}`}.json`)
+  let attested = new Set()
+  try {
+    const stored = JSON.parse(readFileSync(path, 'utf8'))?.attested
+    if (Array.isArray(stored)) attested = new Set(stored.filter(Number.isInteger))
+  } catch {
+    // no memo yet, or one this hook cannot read: nothing is attested
+  }
+  const covers = numbers => numbers.every(n => attested.has(n))
+  return {
+    covers,
+    add: numbers => {
+      if (covers(numbers)) return
+      for (const n of numbers) attested.add(n)
+      const staged = `${path}.${process.pid}`
+      try {
+        mkdirSync(dirname(path), { recursive: true })
+        writeFileSync(staged, JSON.stringify({ attested: [...attested] }))
+        renameSync(staged, path)
+      } catch {
+        // an unwritable memo only means the next repeat blocks as before
+        try {
+          unlinkSync(staged)
+        } catch {
+          // nothing was staged
+        }
+      }
+    },
+  }
+}
+
+// The echo round, unless the session already attested every number: then the
+// titles go to the agent as context and the host's own permission flow
+// decides. An attestation vouched for a number's identity, not for this use
+// of it, so the pass also needs every number to resolve now and no close
+// keyword here to draw a warning; otherwise the blocking table, from the
+// same lookups.
+const echoIssueRefs = (text, refs, memo) => {
+  const infos = lookUpRefs(refs)
+  const closeNums = new Set(closeKeywordRefs(text))
+  if (memo?.covers(refs) && infos.every(ref => isResolved(ref) && referenceWarnings(ref, closeNums).length === 0)) {
+    const additionalContext = buildIssueRefsMessage(infos, closeNums, 'attested')
+    // writeSync: a pipe write queued behind exit() can be dropped
+    writeSync(1, JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext } }))
+    allow()
+  }
+  console.error(buildIssueRefsMessage(infos, closeNums))
   process.exit(2)
 }
 
@@ -1870,6 +2381,7 @@ const hookPrePr = () => {
   const cmd = payload?.tool_input?.command ?? ''
   if (!cmd) allow()
   const cwd = payload?.cwd ?? process.cwd()
+  const memo = attestationMemo(payload ?? {})
 
   // Message/body files, failing CLOSED on text this gate cannot see: a
   // stdin-fed body would need pipeline simulation (heredoc stdin passes — its
@@ -1883,18 +2395,16 @@ const hookPrePr = () => {
       )
       process.exit(2)
     }
-    const paths = bodyFilePaths(cmd).map(p => resolveBodyPath(p, cwd, homedir()))
-    // Unreadable counts as missing: a directory or a permission error takes
-    // the fail-closed branch below rather than throwing out of the hook.
-    const missing = paths.filter(p => !readableFile(p))
-    if (missing.length) {
-      console.error(
-        `Cannot read message file(s) referenced by this command: ${missing.join(', ')} (resolved from ${cwd}; cd chains inside the command are not followed).\n` +
-          'Run from the directory the paths are relative to, inline the text, or — after verifying the references yourself — re-run with KM_ISSUE_REFS_OK=1 prefixed.',
-      )
+    const files = bodyFilePaths(cmd).map(value => {
+      const path = resolveBodyPath(value, cwd, homedir())
+      return { value, path, fact: unreadableFact(path) }
+    })
+    const unreadable = files.filter(f => f.fact)
+    if (unreadable.length) {
+      console.error(unreadableMessageFilesReport(unreadable, cmd, cwd))
       process.exit(2)
     }
-    return paths.map(p => readFileSync(p, 'utf8'))
+    return files.map(f => readFileSync(f.path, 'utf8'))
   }
 
   // The legs below are INDEPENDENT — one invocation can both commit and
@@ -1920,11 +2430,6 @@ const hookPrePr = () => {
       : ''
   const commitRefs = commitText ? closeKeywordRefs(commitText) : []
 
-  if (!publishes) {
-    if (commitRefs.length === 0) allow()
-    return echoIssueRefs(commitText, commitRefs)
-  }
-
   // A positional target URL (`gh pr comment <url> --body …`) is the command's
   // addressee, not published text — stripped so it does not cost a
   // title-confirmation round. Two guards keep the strip away from published
@@ -1934,29 +2439,35 @@ const hookPrePr = () => {
   // prose spelling out a full `gh … <url>` alongside a real positional
   // target also gets stripped — accepted over parsing argument positions.
   const targetUrl = () => /((?:\S*\/)?gh\s+(?:-\S+\s+(?:[^-\s]\S*\s+)?)*(?:pr|issue)\s+\w+\s+)https?:\/\/\S+/g
-  const text = targetUrl().test(commandSkeleton(cmd)) ? cmd.replace(targetUrl(), '$1') : cmd
+  const text = withoutBranchValues(targetUrl().test(commandSkeleton(cmd)) ? cmd.replace(targetUrl(), '$1') : cmd)
+  // Uncovered publishes keep the pre-publish checks; covered ones are read
+  // back after publication instead (isPostVerifiable, shared with that hook).
+  const blind = publishes && !isPostVerifiable(cmd)
 
-  // Uncovered publishes keep the pre-publish checks: readable text gets the
-  // refs/ids tables below, text living OUTSIDE the command blocks outright
-  // (#683). The merge COMMIT of a merged PR is read back post-merge by
-  // bd-publish-verify regardless. The coverage test itself is shared with
-  // that hook (isPostVerifiable), which reports any claim it cannot honour.
-  const blind = !isPostVerifiable(cmd)
+  // A KM_ISSUE_REFS_OK=1 run attests exactly what the echo it answers would
+  // have shown: a commit's close keywords and every number in a blind
+  // publish's scanned text. A message file goes unread under the escape, so
+  // its keywords are not recorded; a covered publish echoes nothing.
+  if (allowsIssueRefs(cmd))
+    memo?.add([...new Set([...(matchesCommitCommand(cmd) ? closeKeywordRefs(cmd) : []), ...(blind ? extractIssueRefs(text) : [])])])
+
+  if (!publishes) {
+    if (commitRefs.length === 0) allow()
+    return echoIssueRefs(commitText, commitRefs, memo)
+  }
+
+  // Uncovered publishes: readable text gets the refs/ids tables below, text
+  // living OUTSIDE the command blocks outright (#683). The merge COMMIT of a
+  // merged PR is read back post-merge by bd-publish-verify regardless, and
+  // that hook reports any coverage claim it cannot honour.
   if (blind && !(allowsIssueRefs(cmd) && allowsBeadIds(cmd))) {
-    // Any *file long flag (body-file, file, notes-file, …), --template and
-    // --input carry text this gate cannot read, as do -F/-T (matched bare —
-    // the CLI accepts ATTACHED values like -Fmsgfile) and an api @<path>.
-    // All of them tested unconditionally: on `gh api` a -F is an inline
-    // typed field rather than a file, but an inline api publish is COVERED
-    // and never reaches this branch, so telling the two apart would only
-    // matter for commands that are already attesting. Splitting them by
-    // command kind is what let a compound mixing api with CLI read the
-    // wrong signal.
+    // A pr:reply always takes its text from a file. A graphql invocation
+    // graphqlShape recognizes has none outside the command by construction.
     const textOutsideCommand =
-      /(?<![\w-])--(?:[a-z-]*file|input|template)\b|@|(?<![\w-])-[FT]/.test(cmd) || hasExpansion(cmd)
+      matchesReplyCommand(cmd) || (!graphqlShape(cmd) && (OUTSIDE_TEXT.test(cmd) || hasExpansion(cmd)))
     if (textOutsideCommand) {
       console.error(
-        'This publish is not one the post-publication read-back covers (it must be a single gh command, with no shell operator, aimed at this repo, whose verb and flags leave a fetchable URL in the output) — and it carries text this gate cannot read from the command either: a file or payload flag, an @-reference, or shell expansion. Publish literal inline text so this gate can read it (a COVERED publish — a single create/edit/comment command with no shell operator — may use --body-file freely, since the read-back checks what it shipped) — or, after checking every reference and bead id in it yourself, re-run with KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 prefixed.',
+        'This publish is not one the post-publication read-back covers (it must be a single gh command or pnpm pr:reply, with no shell operator, aimed at this repo, whose verb and flags leave a fetchable URL in the output) — and it carries text this gate cannot read from the command either: a file or payload flag, a pr:reply body file, an @-reference, or shell expansion. Publish literal inline text so this gate can read it (a COVERED publish — a single create/edit/comment command or pnpm pr:reply, with no shell operator — may take its body from a file freely, since the read-back checks what it shipped) — or, after checking every reference and bead id in it yourself, re-run with KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 prefixed.',
       )
       process.exit(2)
     }
@@ -1970,43 +2481,18 @@ const hookPrePr = () => {
   const ids = allowsBeadIds(cmd) ? [] : extractBeadIds(text)
   if (ids.length === 0 && refs.length === 0) allow()
   const refsText = [blind ? text : '', commitText].filter(Boolean).join('\n') || text
-  if (ids.length === 0) return echoIssueRefs(refsText, refs)
+  if (ids.length === 0) return echoIssueRefs(refsText, refs, memo)
 
-  // Looked up, never MINTED. The detectors deliberately over-match — a verb
-  // in ordinary unquoted argv (`printf … gh pr create km-new`) reads as a
-  // publish — and while an extra check costs a round, an extra MINT creates a
-  // public issue for a command that is about to be blocked and never runs.
-  // The block below already tells the agent to sync, which is how every bead
-  // in this session got its number anyway.
-  const byId = initializedDbRoot() ? beadIssueLookup(ids) : new Map()
-  const mapped = ids.filter(id => byId.get(id)).map(id => ({ id, number: byId.get(id) }))
-  const unmapped = ids.filter(id => !byId.get(id))
   // The deny message licenses a KM_ISSUE_REFS_OK=1 re-run, so any #N already
   // present in the text must have its ground truth shown in THIS round —
   // otherwise the mixed case would publish unverified numbers under that
   // licence.
   const refsSection = refs.length ? `\n\n${issueRefsTable(refsText, refs)}` : ''
-  console.error(buildDenyMessage(mapped, unmapped) + refsSection)
+  console.error(beadIdDenial(ids) + refsSection)
   process.exit(2)
 }
 
 // ---------------------------------------------------------------------------
-
-/**
- * Exact-path comparison: a suffix match would run a live sync at import time
- * from any future sibling whose name this file's happens to end with. Both
- * sides realpathed: node resolves the ESM entry through symlinks while argv
- * keeps the literal path, and a mismatch silently disables the hook. Shared
- * by every hook script in scripts/.
- */
-export const isMainModule = metaUrl => {
-  if (!process.argv[1]) return false
-  try {
-    return realpathSync(fileURLToPath(metaUrl)) === realpathSync(resolve(process.argv[1]))
-  } catch {
-    return fileURLToPath(metaUrl) === resolve(process.argv[1])
-  }
-}
 
 if (isMainModule(import.meta.url)) {
   const args = new Set(process.argv.slice(2))
@@ -2024,16 +2510,12 @@ if (isMainModule(import.meta.url)) {
       allow()
     }
   } else {
-    try {
-      runSync({ quiet: args.has('--quiet'), dryRun: args.has('--dry-run') })
-    } catch (e) {
+    runSync({ quiet: args.has('--quiet'), dryRun: args.has('--dry-run') }).catch(e => {
       console.error(`bd-github-sync: failed — ${e.message ?? e}`)
       // `exitCode`, never `exit()`: a failed push may still have minted issues,
       // and the km→#N mappings printed above are this run's only record of
       // them, but `exit()` drops whatever is still queued on a piped stdout.
-      // Nothing holds the loop open here (spawnSync adds no handles), so the
-      // process still ends promptly.
       process.exitCode = 1
-    }
+    })
   }
 }

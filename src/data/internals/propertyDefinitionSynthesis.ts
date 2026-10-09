@@ -56,6 +56,7 @@ import { deriveWorkspaceIdNamespace } from '@/sync/crypto/derivedIdNamespace'
 import { getWorkspaceKeyStore } from '@/sync/keys/keyStore'
 import { getModePin, type ModePin } from '@/sync/keys/modePin'
 import { readContentKeyHmac } from '@/sync/keys/resolver'
+import { describeNames, firstFew } from '@/utils/nameList'
 import {
   valueSurvivesChildRoundTrip,
 } from '@/data/propertyChildren'
@@ -562,15 +563,24 @@ export const flipBlockedBySynthesis = (
   plan: PropertyDefinitionSynthesisPlan,
   outcome?: SynthesisResult,
 ): string | null => {
+  /** A few of the keys with their reasons, and the rest counted. This text is
+   *  a toast: naming every key of a pathological graph produces one nobody
+   *  reads, and dropping the remainder silently would make the sample read as
+   *  the whole list. */
+  const named = (entries: readonly {key: string; reason: string}[]): string => {
+    const {shown, more} = firstFew(entries)
+    const list = shown.map(e => `${JSON.stringify(e.key)} (${e.reason})`).join('; ')
+    return more > 0 ? `${list} and ${more} more` : list
+  }
   // Asked AGAIN after the write, with its outcome — `plan` is what we expected
   // to be able to do, `outcome.skipped` is what we could not. A key that came
   // back skipped is one the flip must not step over: the backfill excludes
   // unregistered keys from its work list, so the pass would report `ran` with
   // zero failures over a key it silently could not migrate.
   if (outcome && outcome.skipped.length > 0) {
-    const named = outcome.skipped.map(s => `${JSON.stringify(s.key)} (${s.reason})`).join('; ')
     return `${outcome.skipped.length} property key(s) still have no definition after trying ` +
-      `to add one: ${named}. Nothing was switched over; resolve these and run this again.`
+      `to add one: ${named(outcome.skipped)}. Nothing was switched over; resolve these and ` +
+      'run this again.'
   }
   if (plan.unreadableBlocks > 0) {
     return `${plan.unreadableBlocks} block(s) have a property bag this device cannot read, so ` +
@@ -582,10 +592,9 @@ export const flipBlockedBySynthesis = (
       + 'so keys that arrived during it are missing from it. Run this again once sync is idle.'
   }
   if (plan.blockers.length > 0) {
-    const named = plan.blockers.map(b => `${JSON.stringify(b.key)} (${b.reason})`).join('; ')
     return `${plan.blockers.length} property key(s) cannot be given a definition, so this ` +
-      `workspace can never finish the migration while they exist: ${named}. Delete or ` +
-      'remap them, then run this again.'
+      `workspace can never finish the migration while they exist: ${named(plan.blockers)}. ` +
+      'Delete or remap them, then run this again.'
   }
   // Whether or not there is anything to mint: "is there something to
   // synthesize" and "may this workspace flip at all" are different questions.
@@ -594,7 +603,8 @@ export const flipBlockedBySynthesis = (
   // here is safe.
   if (plan.refusal !== null) {
     return plan.candidates.length > 0
-      ? `${plan.candidates.length} property key(s) have no definition, and ${plan.refusal}.`
+      ? `${plan.candidates.length} property key(s) have no definition `
+        + `(${describeNames(plan.candidates.map(c => c.key))}), and ${plan.refusal}.`
       : `This workspace cannot be switched to property blocks: ${plan.refusal}.`
   }
   return null

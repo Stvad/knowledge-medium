@@ -138,7 +138,7 @@ export const ensureBlockLocalColumns = async (db: {
  * LOCAL-only staging column: has the drain decided that `blocks` correctly
  * reflects this delivery?
  *
- * The durable record of "this device downloaded a row it has not applied",
+ * The durable record of "this downloaded row still needs local verification",
  * written by the materializer in the SAME transaction as the decision itself.
  * Every other way of answering that question is a poll of concurrently-moving
  * state from somewhere the decision is not made, and each one is its own
@@ -148,7 +148,9 @@ export const ensureBlockLocalColumns = async (db: {
  * PowerSync's put is an `INSERT OR REPLACE` over the STORAGE columns only, so
  * every delivery — first or re-delivery — resets this to its default and a
  * newer version is unapplied until the drain says otherwise; a staging delete
- * takes it with the row. No path can leave it stale.
+ * takes it with the row. The upgrade seed can leave already-correct legacy rows
+ * flagged when stored-column comparisons cannot prove equality; only the drain
+ * can verify encrypted stamp-zero rows against local plaintext.
  *
  * `blocks_synced` carries INSERT and DELETE triggers but no UPDATE trigger, so
  * clearing it enqueues nothing and cannot feed the drain its own tail.

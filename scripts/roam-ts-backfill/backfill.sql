@@ -1,5 +1,6 @@
 -- ===========================================================================
--- Roam timestamp backfill — ff-vlad-dev workspace ef43b424-80ba-4967-b587-a4c32efd8071
+-- Roam timestamp backfill — one workspace, passed as a psql variable:
+--   psql <supabase-url> -v ws=<workspace-id> -f backfill.sql
 --
 -- Restores real Roam create-time/edit-time onto the ~312K already-imported
 -- blocks (all currently stamped at 2026-05-13 import time). Run server-side on
@@ -20,6 +21,13 @@
 -- one-time row_events burst (see docs/row-events-retention.md; pruning is the
 -- real fix). Not avoidable by any backfill path.
 -- ===========================================================================
+
+\if :{?ws}
+\else
+  -- psql's \quit always exits 0; a raised error under ON_ERROR_STOP exits 3.
+  \set ON_ERROR_STOP on
+  DO $$ BEGIN RAISE EXCEPTION 'usage: psql <supabase-url> -v ws=<workspace-id> -f backfill.sql'; END $$;
+\endif
 
 -- ---------------------------------------------------------------------------
 -- 0. Load the two CSVs into staging tables (run from psql, paths relative to
@@ -51,7 +59,7 @@ CREATE TABLE blocks_ts_backup_20260613 AS
 SELECT b.id, b.created_at, b.updated_at, b.user_updated_at
 FROM public.blocks b
 JOIN roam_ts_map m ON m.id = b.id
-WHERE b.workspace_id = 'ef43b424-80ba-4967-b587-a4c32efd8071'
+WHERE b.workspace_id = :'ws'
   AND b.deleted = false;
 ALTER TABLE blocks_ts_backup_20260613 ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON blocks_ts_backup_20260613 FROM anon, authenticated;
@@ -76,7 +84,7 @@ UPDATE public.blocks b SET
 FROM roam_ts_map m
 LEFT JOIN roam_ts_preserve p ON p.id = m.id
 WHERE b.id = m.id
-  AND b.workspace_id = 'ef43b424-80ba-4967-b587-a4c32efd8071'
+  AND b.workspace_id = :'ws'
   AND b.deleted = false;
 
 ALTER TABLE public.blocks ENABLE TRIGGER blocks_record_history_trg;
@@ -96,7 +104,7 @@ FROM public.blocks b
 JOIN roam_ts_map m ON m.id = b.id
 JOIN blocks_ts_backup_20260613 bk ON bk.id = b.id
 LEFT JOIN roam_ts_preserve p ON p.id = b.id
-WHERE b.workspace_id = 'ef43b424-80ba-4967-b587-a4c32efd8071' AND b.deleted = false;
+WHERE b.workspace_id = :'ws' AND b.deleted = false;
 
 -- COMMIT;    -- <- uncomment to apply once the verify row looks right
 -- ROLLBACK;  -- <- otherwise
@@ -110,7 +118,7 @@ WHERE b.workspace_id = 'ef43b424-80ba-4967-b587-a4c32efd8071' AND b.deleted = fa
 --   created_at = bk.created_at, updated_at = (extract(epoch from now())*1000)::bigint,
 --   user_updated_at = bk.user_updated_at
 -- FROM blocks_ts_backup_20260613 bk
--- WHERE b.id = bk.id AND b.workspace_id = 'ef43b424-80ba-4967-b587-a4c32efd8071';
+-- WHERE b.id = bk.id AND b.workspace_id = :'ws';
 -- ALTER TABLE public.blocks ENABLE TRIGGER blocks_record_history_trg;
 
 -- Cleanup after a few days of confidence:

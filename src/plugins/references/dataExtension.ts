@@ -1,4 +1,5 @@
 import {
+  contentReferencePrefillsFacet,
   invalidationRulesFacet,
   localSchemaFacet,
   postCommitProcessorsFacet,
@@ -6,6 +7,7 @@ import {
 } from '@/data/facets.js'
 import type { AppExtension } from '@/facets/facet.js'
 import { referencesPostCommitProcessors } from './referencesProcessor.ts'
+import { exactBlockRefPrefill } from './contentPrefill.ts'
 import {
   RENAME_BACKLINKS_PRECEDENCE,
   renameSameTxProcessors,
@@ -16,6 +18,10 @@ import { referencesInvalidationRule } from './invalidation.ts'
 
 export const referencesDataExtension: AppExtension = [
   localSchemaFacet.of(referencesLocalSchema, {source: 'references'}),
+  // Rides the same toggle as the parse it predicts, which is the point of
+  // contributing it rather than letting core derive it: with References off
+  // nothing extracts references, and there is also nothing to prefill FOR.
+  contentReferencePrefillsFacet.of(exactBlockRefPrefill, {source: 'references'}),
   invalidationRulesFacet.of(referencesInvalidationRule, {source: 'references'}),
   referencesSameTxProcessors.map(processor =>
     sameTxProcessorsFacet.of(processor, {source: 'references'}),

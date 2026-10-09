@@ -96,6 +96,7 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   backfillSyncSettledNow: 'read — samples the injected gate; assigns no Repo fields',
   syncViewGap: 'read — one query, an observer sample and a gate sample; assigns no Repo fields',
   workspaceViewGap: 'read — syncViewGap plus one query; assigns no Repo fields',
+  backfillViewGap: 'read — polls workspaceViewGap with call-local timers; assigns no Repo fields',
   lastSyncedAt: 'getter read (delegates to the PowerSync status)',
 
   // ── writes into a caller-provided tx (grouping follows the caller) ──

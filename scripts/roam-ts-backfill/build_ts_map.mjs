@@ -7,14 +7,19 @@
 //
 // Out: tmp/roam_ts_map.csv  (id,create_time,edit_time)  + .json
 //
-// Workspace-specific: set WS to the target workspace id and pass the Roam
-// export path as argv[2]. The namespace constants are the app's public
-// id-derivation namespaces (ids.ts / dailyNotes.ts) and do not change.
+// Usage: node build_ts_map.mjs <workspace-id> [export.json]
+// The namespace constants are the app's public id-derivation namespaces
+// (ids.ts / dailyNotes.ts) and do not change.
 import { v5 as uuidv5 } from 'uuid'
 import fs from 'fs'
 
-const EXPORT = process.argv[2] || 'tmp/roam-export.json'
-const WS = 'ef43b424-80ba-4967-b587-a4c32efd8071' // workspace-specific (ff-vlad-dev)
+const [wsArg = '', EXPORT = 'tmp/roam-export.json'] = process.argv.slice(2)
+if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(wsArg)) {
+  console.error('usage: node build_ts_map.mjs <workspace-id> [export.json]')
+  process.exit(1)
+}
+// v5 names are case-sensitive and the importer derived ids from the lowercase id.
+const WS = wsArg.toLowerCase()
 const ROAM_IMPORT_NS = 'b8d6f1c2-7e9a-4f4d-a4f1-2c0a3a6e7f01'   // ids.ts
 const DAILY_NOTE_NS = '53421e08-2f31-42f8-b73a-43830bb718f1'    // dailyNotes.ts
 

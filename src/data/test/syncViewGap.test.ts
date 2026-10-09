@@ -230,7 +230,7 @@ describe('Repo.workspaceViewGap', () => {
     // `transient: false` says, and what a self-re-arming caller reads.
     expect(await repo.syncViewGap()).toBeNull()
     expect(await repo.workspaceViewGap(WS)).toEqual({
-      reason: expect.stringMatching(/have not reached/), transient: false,
+      reason: expect.stringMatching(/have not been verified locally/), transient: false,
     })
   })
 

@@ -2,9 +2,12 @@ import {describe, expect, it} from 'vitest'
 
 import {
   lastEntryFor,
+  nextRung,
   nextWeight,
   progressionSets,
   roundLoad,
+  rungAtOrBelow,
+  stallOf,
   toppedOut,
   workingWeight,
 } from '../src/engine/progression'
@@ -193,7 +196,7 @@ describe('toppedOut', () => {
 
 describe('nextWeight', () => {
   it('adds the increment once the range is cleared', () => {
-    expect(nextWeight(bench(at(135, 10, 10, 10)), CONFIG)).toEqual({weight: 140, progressed: true})
+    expect(nextWeight(bench(at(135, 10, 10, 10)), CONFIG)).toEqual({weight: 140, progressed: true, rule: 'increment'})
   })
 
   it('repeats the weight otherwise', () => {
@@ -205,20 +208,122 @@ describe('nextWeight', () => {
   const rep = (weight: number, reps: number, rpe: number): SetRecord => ({weight, reps, rpe})
 
   it('takes the bigger catch-up jump when topped and every set is RPE ≤ threshold', () => {
-    expect(nextWeight(dl([rep(225, 8, 7), rep(225, 8, 6)]), CATCHUP)).toEqual({weight: 245, progressed: true})
+    expect(nextWeight(dl([rep(225, 8, 7), rep(225, 8, 6)]), CATCHUP)).toEqual({weight: 245, progressed: true, rule: 'catch-up'})
   })
 
   it('takes only the normal jump when a set is above the RPE threshold', () => {
-    expect(nextWeight(dl([rep(225, 8, 7), rep(225, 8, 8)]), CATCHUP)).toEqual({weight: 235, progressed: true})
+    expect(nextWeight(dl([rep(225, 8, 7), rep(225, 8, 8)]), CATCHUP)).toEqual({weight: 235, progressed: true, rule: 'increment'})
+  })
+
+  it('reads the RPE of the working sets only, so an unrated warm-up does not withhold the jump', () => {
+    expect(nextWeight(dl([{weight: 135, reps: 5}, rep(225, 8, 6), rep(225, 8, 7)]), CATCHUP))
+      .toEqual({weight: 245, progressed: true, rule: 'catch-up'})
   })
 
   it('takes only the normal jump when RPE is not logged (no evidence it was easy)', () => {
-    expect(nextWeight(dl(at(225, 8, 8)), CATCHUP)).toEqual({weight: 235, progressed: true})
+    expect(nextWeight(dl(at(225, 8, 8)), CATCHUP)).toEqual({weight: 235, progressed: true, rule: 'increment'})
+  })
+
+  it('judges a hand-edited target of 0 as one set, never as an empty list', () => {
+    // An empty list passes every rule: 3×8 on a 3×10 lift would earn the jump.
+    expect(nextWeight(bench(at(135, 8, 8, 8), 0), CONFIG)).toEqual({weight: 135, progressed: false})
   })
 
   it('holds when the caller says to', () => {
     expect(nextWeight(bench(at(135, 10, 10, 10)), CONFIG, {hold: true}))
       .toEqual({weight: 135, progressed: false})
+  })
+
+  describe('total-reps micro step', () => {
+    const OHP = {...CONFIG, totalRepsThreshold: 26, microIncrement: 2}
+    const ohp = (sets: SetRecord[]): ExerciseRecord => ({exercise: 'Overhead press', sets})
+
+    it('adds the micro increment once the prescribed sets total the threshold', () => {
+      expect(nextWeight(ohp(at(85, 10, 8, 8)), OHP)).toEqual({weight: 87, progressed: true, rule: 'total-reps'})
+    })
+
+    it('holds below the threshold', () => {
+      expect(nextWeight(ohp(at(85, 10, 7, 6)), OHP)).toEqual({weight: 85, progressed: false})
+    })
+
+    it('lets the full increment win when every set topped out', () => {
+      expect(nextWeight(ohp(at(85, 10, 10, 10)), OHP)).toEqual({weight: 90, progressed: true, rule: 'increment'})
+    })
+
+    it('judges a top-out by the prescribed sets, so an extra fading set cannot demote it to the micro step', () => {
+      expect(nextWeight(ohp(at(85, 10, 10, 10, 7)), OHP)).toEqual({weight: 90, progressed: true, rule: 'increment'})
+    })
+
+    it('counts only the prescribed sets, so an extra set cannot buy the step', () => {
+      expect(nextWeight(ohp(at(85, 9, 8, 7, 6)), OHP)).toEqual({weight: 85, progressed: false})
+    })
+
+    it('needs every prescribed set done at the weight', () => {
+      expect(nextWeight(ohp(at(85, 14, 13)), OHP)).toEqual({weight: 85, progressed: false})
+    })
+
+    it('never fires for freeform work', () => {
+      expect(nextWeight(ohp(at(85, 10, 8, 8)), {...OHP, freeform: true})).toEqual({weight: 85, progressed: false})
+    })
+
+    it('does not step between rungs of a ladder', () => {
+      // A ladder says which loads exist; 87 is not one of them.
+      expect(nextWeight(ohp(at(85, 10, 8, 8)), {...OHP, ladder: [85, 95]})).toEqual({weight: 85, progressed: false})
+    })
+  })
+
+  describe('ladder', () => {
+    const CARRY = {sets: 2, repMax: 4, freeform: false, increment: 5, ladder: [20, 25, 35, 53]}
+    const carry = (sets: SetRecord[]): ExerciseRecord => ({exercise: 'Waiter carry', sets})
+
+    it('steps to the next rung rather than adding the increment', () => {
+      expect(nextWeight(carry(at(35, 4, 4)), CARRY)).toEqual({weight: 53, progressed: true, rule: 'ladder'})
+    })
+
+    it('steps onto the ladder from a load that is not on it', () => {
+      expect(nextWeight(carry(at(30, 4, 4)), CARRY)).toEqual({weight: 35, progressed: true, rule: 'ladder'})
+    })
+
+    it('adds the increment past the top rung — there is nothing listed to step to', () => {
+      expect(nextWeight(carry(at(53, 4, 4)), CARRY)).toEqual({weight: 58, progressed: true, rule: 'increment'})
+    })
+  })
+})
+
+describe('nextRung', () => {
+  it('is the lightest rung above the weight', () => {
+    expect(nextRung([20, 25, 35, 53], 25)).toBe(35)
+    expect(nextRung([20, 25, 35, 53], 30)).toBe(35)
+    expect(nextRung([20, 25, 35, 53], 53)).toBeUndefined()
+  })
+})
+
+describe('stallOf', () => {
+  const workout = (id: string, day: string, sets: SetRecord[]): WorkoutRecord => ({
+    id, date: `${day}T12:00:00`, session: 'B', exercises: [{exercise: 'Waiter carry', sets}],
+  })
+  const days = ['2026-07-25', '2026-08-02', '2026-08-16', '2026-08-23', '2026-09-06']
+
+  it('counts the latest run of sessions at one load', () => {
+    const history = days.map((day, i) => workout(String(i), day, at(i === 0 ? 25 : 30, 0)))
+    expect(stallOf(history, 'Waiter carry')).toEqual({weight: 30, sessions: 4})
+    // Order of arrival is not order of training.
+    expect(stallOf([...history].reverse(), 'Waiter carry')).toEqual({weight: 30, sessions: 4})
+  })
+
+  it('stays quiet below four sessions, and with no history', () => {
+    const history = days.slice(2).map((day, i) => workout(String(i), day, at(30, 0)))
+    expect(stallOf(history, 'Waiter carry')).toBeUndefined()
+    expect(stallOf([], 'Waiter carry')).toBeUndefined()
+  })
+})
+
+describe('rungAtOrBelow', () => {
+  it('puts a cut load onto a rung that exists', () => {
+    expect(rungAtOrBelow([20, 25, 35, 53], 47.7)).toBe(35)
+    expect(rungAtOrBelow([20, 25, 35, 53], 35)).toBe(35)
+    // Nothing lighter exists.
+    expect(rungAtOrBelow([20, 25, 35, 53], 12)).toBe(20)
   })
 })
 

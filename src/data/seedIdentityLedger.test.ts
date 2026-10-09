@@ -633,7 +633,18 @@ describe('what a seed change does to values already stored', () => {
     const block = upgraded.block('retyped-block')
     await block.load()
 
-    expect(() => block.get(afterRetype)).toThrow(/expected finite number/)
+    // Settled, not read once. `release` makes the new codec live through the
+    // seed pass, and until that lands the OLD codec is still in effect —
+    // reading a string through it is correctly not an error, so a single
+    // immediate read asserts the throw before the thing that causes it has
+    // arrived. The sibling above fences on the registry for the same reason;
+    // a retype cannot reuse that fence, because the NAME is unchanged and
+    // present under either revision, which leaves the throw as the only
+    // observable arrival. It keeps its teeth: a codec that never goes live
+    // times out here instead of passing.
+    await settle(() => {
+      expect(() => block.get(afterRetype)).toThrow(/expected finite number/)
+    })
     expect(await cellsOf('retyped-block')).toEqual({'ledgerTest:score': 'seventeen'})
   })
 
@@ -743,6 +754,10 @@ describe('what a seed change does to values already stored', () => {
     const upgraded = await release([reclaimer])
     const block = upgraded.block('reclaimed-block')
     await block.load()
-    expect(block.get(reclaimer)).toBe('vlad')
+    // Fenced like the retype above, and for the same reason: until the
+    // reclaiming seed is live the name resolves to nothing and this reads
+    // ITS-OWN-DEFAULT — the correct answer for that instant, and not the claim
+    // being made here.
+    await settle(() => { expect(block.get(reclaimer)).toBe('vlad') })
   })
 })

@@ -392,7 +392,10 @@ describe('workspace backfill runner — sync gating', () => {
     ))
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
-    const result = await repo.runWorkspaceBackfillNow(WS, 'operator-transient-v1')
+    const running = repo.runWorkspaceBackfillNow(WS, 'operator-transient-v1')
+    await vi.waitFor(() => expect(batches).toEqual([0]))
+    await vi.advanceTimersByTimeAsync(30_000)
+    const result = await running
     warn.mockRestore()
 
     expect(result).toMatchObject({outcome: 'deferred', retryable: true})
@@ -696,6 +699,7 @@ describe('workspace backfill runner — sync gating', () => {
       user: {id: 'user-1'},
       backfillSyncGate: g.gate,
       backfillCompletionClaim: {
+        stillOwned: async () => true,
         tryClaim: async (_ws, id) => { claimAttempts.push(id); return 'minted' as const },
         markComplete: async () => {},
         releaseClaim: async () => {},
@@ -731,6 +735,7 @@ describe('workspace backfill runner — sync gating', () => {
       user: {id: 'user-1'},
       backfillSyncGate: g.gate,
       backfillCompletionClaim: {
+        stillOwned: async () => true,
         tryClaim: async (_ws, id) => {
           if (claimed.has(id)) return 'declined' as const
           claimed.add(id)
@@ -1025,6 +1030,69 @@ describe('workspace backfill runner — undo', () => {
     expect((await repo.load('target'))?.content).toBe('original')
   })
 
+  it('leaves it alone for a pass whose batches COMMIT and write nothing', async () => {
+    // The re-run of a finished migration, which is the shape the drop used to
+    // over-approximate into: the scan still selects every candidate and every
+    // batch still opens a transaction, so clearing per committed batch charged
+    // the operator their whole stack for a pass that changed nothing — and the
+    // banner then announced the cost.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const repo = makeRepo({
+      id: 'operator-undo-probe-v1',
+      trigger: 'operator' as const,
+      // READS, in a real transaction, which is what a re-run's batches do:
+      // every candidate is visited and found to owe nothing.
+      run: async ({tx}) => {
+        await tx(async t => { await t.get('target') }, {description: 'batch one'})
+        await tx(async t => { await t.get('target') }, {description: 'batch two'})
+      },
+    })
+    await seedTarget(repo)
+    await repo.tx(async tx => {
+      await tx.update('target', {content: 'user edit'})
+    }, {scope: ChangeScope.BlockDefault, description: 'user edit'})
+
+    const result = await repo.runWorkspaceBackfillNow(WS, 'operator-undo-probe-v1')
+
+    // Both halves: the history is still there, and the run does not claim to
+    // have taken it. The operator reads the claim, not the stack.
+    expect(result.undoHistoryCleared).toBe(false)
+    expect(repo.undoManager.depths(ChangeScope.BlockDefault).undo).toBeGreaterThan(0)
+    await repo.undo(ChangeScope.BlockDefault)
+    expect((await repo.load('target'))?.content).toBe('original')
+    expect(warn.mock.calls.filter(([msg]) =>
+      typeof msg === 'string' && msg.includes('undo history was cleared'))).toHaveLength(0)
+    warn.mockRestore()
+  })
+
+  it('still clears once a later batch DOES write, after empty ones', async () => {
+    // The emptiness test is per batch, so a pass that reads its way through the
+    // first half of the graph must still pay for the first batch that writes —
+    // the entries at risk are the ones recorded before it.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const repo = makeRepo({
+      id: 'operator-undo-probe-v1',
+      trigger: 'operator' as const,
+      run: async ({tx}) => {
+        await tx(async t => { await t.get('target') }, {description: 'batch one'})
+        await tx(async t => { await t.update('target', {content: 'migrated'}) },
+          {description: 'batch two'})
+      },
+    })
+    await seedTarget(repo)
+    await repo.tx(async tx => {
+      await tx.update('target', {content: 'user edit'})
+    }, {scope: ChangeScope.BlockDefault, description: 'user edit'})
+
+    const result = await repo.runWorkspaceBackfillNow(WS, 'operator-undo-probe-v1')
+
+    expect(result.undoHistoryCleared).toBe(true)
+    expect(repo.undoManager.depths(ChangeScope.BlockDefault).undo).toBe(0)
+    await repo.undo(ChangeScope.BlockDefault)
+    expect((await repo.load('target'))?.content).toBe('migrated')
+    warn.mockRestore()
+  })
+
   it('still uploads — suppressing undo must not make it a local-only write', async () => {
     // The whole point of a WorkspaceBackfill over a raw db.execute is that its
     // writes reach the server (the daily-note:date bug).
@@ -1098,6 +1166,7 @@ describe('workspace backfill runner — operator outcomes', () => {
       user: {id: 'user-1'},
       backfillSyncGate: neverSettles,
       backfillCompletionClaim: {
+        stillOwned: async () => true,
         tryClaim: async (_ws, id) => { claimAttempts.push(id); return 'minted' as const },
         markComplete: async () => {},
         releaseClaim: async () => {},
@@ -1129,6 +1198,7 @@ describe('workspace backfill runner — operator outcomes', () => {
 
   // Records attempts so these can assert the runner never reached the claim.
   const recordingClaim = (attempts: string[]) => ({
+    stillOwned: async () => true,
     tryClaim: async (_ws: string, id: string) => { attempts.push(id); return 'minted' as const },
     markComplete: async () => {},
     releaseClaim: async () => {},
@@ -1218,6 +1288,7 @@ describe('workspace backfill runner — operator outcomes', () => {
       db: sharedDb.db,
       user: {id: 'user-1'},
       backfillCompletionClaim: {
+        stillOwned: async () => true,
         tryClaim: async () => 'minted' as const,
         markComplete: async () => {},
         releaseClaim: async () => {},
@@ -1254,6 +1325,7 @@ describe('workspace backfill runner — concurrent operator invocations', () => 
       db: sharedDb.db,
       user: {id: 'user-1'},
       backfillCompletionClaim: {
+        stillOwned: async () => true,
         tryClaim: async () => 'minted' as const,
         markComplete: async () => {},
         releaseClaim: async () => {},
@@ -1292,6 +1364,7 @@ describe('workspace backfill runner — a claim held across a gesture', () => {
   /** Records the claim seam's calls in order, so a test can assert the claim
    *  came before the body rather than merely that both happened. */
   const spyClaim = (events: string[], {won = true}: {won?: boolean} = {}) => ({
+    stillOwned: async () => true,
     // A win MINTS. `inherited` is a separate axis with its own test below —
     // folding it in here would silence every release assertion at once.
     tryClaim: async () => { events.push('tryClaim'); return won ? 'minted' as const : 'declined' as const },
@@ -1400,6 +1473,7 @@ describe('workspace backfill runner — a claim held across a gesture', () => {
       db: sharedDb.db,
       user: {id: 'user-1'},
       backfillCompletionClaim: {
+        stillOwned: async () => true,
         tryClaim: async () => { events.push('tryClaim'); return 'inherited' as const },
         markComplete: async () => { events.push('markComplete') },
         releaseClaim: async () => { events.push('releaseClaim') },
@@ -1428,6 +1502,7 @@ describe('workspace backfill runner — a claim held across a gesture', () => {
       db: sharedDb.db,
       user: {id: 'user-1'},
       backfillCompletionClaim: {
+        stillOwned: async () => true,
         tryClaim: async () => { events.push('tryClaim'); return 'inherited' as const },
         markComplete: async () => { events.push('markComplete') },
         releaseClaim: async () => { events.push('releaseClaim') },
@@ -1511,6 +1586,7 @@ describe('workspace backfill runner — a claim held across a gesture', () => {
       db: sharedDb.db,
       user: {id: 'user-1'},
       backfillCompletionClaim: {
+        stillOwned: async () => true,
         tryClaim: async () => {
           throw new DeterministicIdCrossWorkspaceError('claim-id', 'ws-other', WS)
         },
@@ -1566,6 +1642,7 @@ describe('workspace backfill runner — a claim held across a gesture', () => {
       db: sharedDb.db,
       user: {id: 'user-1'},
       backfillCompletionClaim: {
+        stillOwned: async () => true,
         tryClaim: async () => { throw new Error('claim write failed') },
         markComplete: async () => {},
         releaseClaim: async () => { events.push('releaseClaim') },

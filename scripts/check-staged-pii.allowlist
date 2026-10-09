@@ -1,0 +1,4 @@
+# uuids that are code constants, not graph data; check-staged-pii.mjs does not
+# report them anywhere. One per line: the uuid, whitespace, then what it is.
+# A line without that description is not an entry.
+45fb169f-ffac-458b-b2a7-6cec87d2d7ee  READWISE_NS: v5 namespace for readwise ids (agent-extensions/readwise.tsx)

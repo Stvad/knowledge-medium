@@ -1447,6 +1447,51 @@ describe('parseReferences — alias claimed between plan build and apply (write-
   })
 })
 
+describe('parseReferences — the machinery prefill', () => {
+  // THE claim the create-time prefill exists for: a machinery row born with
+  // the references its content implies is one the parser finds already
+  // correct, so it never opens its transaction. Asserted on the UPLOAD QUEUE
+  // because that is the only observable — the end STATE is identical either
+  // way (without the prefill the parser simply fills it a moment later), so
+  // no assertion about `references_json` can tell the two apart.
+  const FIELD_TARGET = '55555555-5555-4555-8555-555555555555'
+
+  it('a row created with the prefill uploads once, not twice', async () => {
+    const content = `::((${FIELD_TARGET}))`
+    await env.repo.tx(
+      tx => tx.create({
+        id: 'field-row', workspaceId: WS, parentId: null, orderKey: 'a0',
+        content, references: tx.derivedReferencesFor(content),
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    const ops = (await env.h.db.getAll<{data: string}>('SELECT data FROM ps_crud ORDER BY id'))
+      .map(r => JSON.parse(r.data) as {op: string; id: string})
+      .filter(e => e.id === 'field-row')
+    expect(ops.map(e => e.op)).toEqual(['PUT'])
+  })
+
+  it('the same row WITHOUT the prefill uploads a second time', async () => {
+    // The control. Without it the test above passes for a prefill that
+    // returns nothing at all, which is the mutation that matters.
+    const content = `::((${FIELD_TARGET}))`
+    await env.repo.tx(
+      tx => tx.create({
+        id: 'field-row', workspaceId: WS, parentId: null, orderKey: 'a0', content,
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    const ops = (await env.h.db.getAll<{data: string}>('SELECT data FROM ps_crud ORDER BY id'))
+      .map(r => JSON.parse(r.data) as {op: string; id: string})
+      .filter(e => e.id === 'field-row')
+    expect(ops.map(e => e.op)).toEqual(['PUT', 'PATCH'])
+  })
+})
+
 describe('parseReferences — idempotent comparison', () => {
   it('skips the references write when stored refs canonical-equal the parse output despite differing array order', async () => {
     // Simulate what a sync-applied row looks like locally after the

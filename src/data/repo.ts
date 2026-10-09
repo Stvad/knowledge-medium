@@ -65,6 +65,8 @@ import {
 } from '@/data/blockSchema'
 import { kernelDataExtension } from './kernelDataExtension'
 import {
+  contentReferencePrefillFor,
+  contentReferencePrefillsFacet,
   systemPagesFacet,
   type WorkspaceBackfill,
   type BackfillCompletionClaim,
@@ -452,13 +454,13 @@ interface ReferenceTargetStampContext {
   readonly resolver: PropertySchemaResolver
 }
 
-/** Why this device's view of a workspace is incomplete — see
+/** Why this device cannot verify a complete local workspace view — see
  *  {@link Repo.workspaceViewGap}. */
 export interface ViewGap {
   /** The CAUSE only; callers state their own consequence. */
   readonly reason: string
   /** Will waiting clear it? True for work in flight or a download still
-   *  running. False for rows this device downloaded and never caught up with,
+   *  running. False for downloaded rows still flagged for local verification,
    *  which nothing is going to retry on its own — so a caller that re-arms
    *  itself on a deferral must not re-arm on this one, and a caller with a
    *  human to tell must not tell them to try again. */
@@ -511,6 +513,9 @@ export interface OperatorBackfillResult {
    *  that carry no reason. */
   retryable?: boolean
 }
+
+const OPERATOR_BACKFILL_SYNC_WAIT_MS = 30_000
+const BACKFILL_SYNC_POLL_MS = 100
 
 /** Why a backfill cannot run at all when the composition root wired no claim
  *  seam. */
@@ -2192,6 +2197,9 @@ export class Repo {
         sameTxProcessors: this.sameTxProcessors,
         propertySchemas: this._propertySchemas,
         valuePresets: this._valuePresetCores,
+        contentReferencePrefill: contentReferencePrefillFor(
+          this.facetRuntime?.read(contentReferencePrefillsFacet) ?? [],
+        ),
         // Same tx-start boundary as `propertySchemas`; a merge needs it to ask
         // whether the source/destination actually OWN the tokens they look like
         // they own, which their rows alone cannot answer. Keyed by the TX's
@@ -3313,12 +3321,13 @@ export class Repo {
    * they arrived — workspace not yet unlocked, mode unresolved, a key-store
    * read that failed, ciphertext that would not decode — stay staged while the
    * drain consumes their queue entries, leaving a stable gap that no in-flight
-   * signal reports and no waiting clears.
+   * signal reports and no waiting clears. Conservatively seeded upgrade flags
+   * can also cover already-correct rows; a flag alone does not prove missing data.
    *
    * Supersedes rather than complements `syncViewGap`: it asks that first, so a
    * caller with a workspace in hand needs exactly one of the two. Every arm is
    * cheap — the durable one reads a flag the drain set, off a partial index
-   * holding only unapplied rows — so this is the predicate for BOTH the top of
+   * holding only flagged rows — so this is the predicate for BOTH the top of
    * a one-way pass and its per-transaction re-checks. There is deliberately no
    * cheaper approximation to reach for in the hot path; that split is what let
    * the two answers disagree.
@@ -3359,10 +3368,10 @@ export class Repo {
     // its own, and every caller's answer is the same one, so stating it here
     // beats each of them remembering to.
     return {
-      reason: `${count} synced row(s) of this workspace have not reached \`blocks\` on `
-        + 'this device — never materialized, or still showing an older version — '
-        + 'and nothing is in flight to change that; the `rematerialize-workspace` '
-        + 'agent verb re-runs the drain over exactly these rows',
+      reason: `${count} downloaded row(s) of this workspace have not been verified locally — `
+        + 'they may be missing, outdated, or already correct — '
+        + 'and nothing is in flight to check them; run “Repair downloaded workspace data” '
+        + 'from the command palette to retry these rows',
       transient: false,
     }
   }
@@ -3372,8 +3381,8 @@ export class Repo {
    *
    * The remedy for {@link workspaceViewGap}'s durable arm: rows that reached
    * the drain, were not applied, and had their queue entry consumed, so nothing
-   * re-delivers them and every one-way pass on the workspace refuses for as
-   * long as they sit there.
+   * re-delivers them. It also rechecks conservatively seeded flags on legacy rows.
+   * Every one-way pass refuses until the drain clears those flags.
    *
    * A DERIVATION pass, not a data migration: it rebuilds this device's `blocks`
    * from rows this device already downloaded, writes with `tx_context.source`
@@ -3481,11 +3490,35 @@ export class Repo {
     return null
   }
 
+  /** Wait outside the write lock while an already-claimed operator run catches up.
+   *  Background passes keep their scheduler-driven retry; durable gaps never wait. */
+  private async backfillViewGap(
+    workspaceId: string,
+    generation: number,
+    waitForSync: boolean,
+  ): Promise<{gap: ViewGap | null; waited: boolean}> {
+    let waited = false
+    const deadline = performance.now() + OPERATOR_BACKFILL_SYNC_WAIT_MS
+    let gap = await this.workspaceViewGap(workspaceId)
+    while (waitForSync && gap?.transient
+      && this.workspaceRunStaleReason(workspaceId, generation) === null
+      && !this.isReadOnly) {
+      if (performance.now() >= deadline) {
+        return {gap: {...gap, reason: `sync did not settle within 30 seconds: ${gap.reason}`}, waited}
+      }
+      waited = true
+      await new Promise<void>(resolve => setTimeout(resolve, BACKFILL_SYNC_POLL_MS))
+      gap = await this.workspaceViewGap(workspaceId)
+    }
+    return {gap, waited}
+  }
+
   private async assertBackfillMayWrite(
     workspaceId: string,
-    backfillId: string,
+    backfill: WorkspaceBackfill,
     generation: number,
-  ): Promise<void> {
+    waitForSync = backfill.trigger === 'operator',
+  ): Promise<boolean> {
     // Re-sampled per transaction, and NOT from inside one. That is now a
     // CHOICE rather than a constraint: `workspaceViewGap` takes a
     // `ViewGapReads`, so a caller holding the lock can pass its transaction
@@ -3495,24 +3528,19 @@ export class Repo {
     // rather than an un-undoable write. Callers run it immediately before
     // opening their transaction and re-assert the synchronous half
     // (`assertBackfillSessionUnchanged`) within.
-    const gap = await this.workspaceViewGap(workspaceId)
+    const {gap, waited} = await this.backfillViewGap(workspaceId, generation, waitForSync)
+    // Waiting can outlive the active workspace or its write access.
+    this.assertBackfillSessionUnchanged(workspaceId, backfill.id, generation)
     if (gap !== null) {
       throw Object.assign(new Error(
-        `[workspaceBackfills] "${backfillId}" aborted: ${gap.reason}. This pass would scan ` +
+        `[workspaceBackfills] "${backfill.id}" aborted: ${gap.reason}. This pass would scan ` +
         `an incomplete view of the graph and upload a properties bag built from it.`,
         // A DURABLE gap is rows nothing is draining, so telling the operator to
         // run it again is the forever-retry the flag exists to prevent — the
         // same answer `retryableAfter` gives this refusal on the claim path.
       ), {kind: Repo.TRANSIENT, retryable: gap.transient})
     }
-    // AFTER the probe, not before it: `setActiveWorkspaceId` and a role change
-    // are synchronous field writes that land cleanly in the probe's await
-    // window, so a copy ahead of the probe would be describing a session this
-    // one has since left. Asking after strictly dominates asking before — a
-    // workspace that left and returned across the probe has moved its
-    // generation — so a second copy there would decide nothing and only look
-    // load-bearing.
-    this.assertBackfillSessionUnchanged(workspaceId, backfillId, generation)
+    return waited
   }
 
   /**
@@ -3592,6 +3620,7 @@ export class Repo {
     workspaceId: string,
     backfill: WorkspaceBackfill,
     generation: number,
+    claimHeldByCaller = false,
   ): Promise<BackfillClaimAttempt> {
     const runStale = (): string | null =>
       this.workspaceRunStaleReason(workspaceId, generation)
@@ -3636,7 +3665,13 @@ export class Repo {
     // mid-drain. The SAME predicate `assertBackfillMayWrite` re-asks per
     // transaction — there is deliberately no cheaper approximation for the hot
     // path, because that split is what let the two answers disagree.
-    const gap = await this.workspaceViewGap(workspaceId)
+    const {gap} = await this.backfillViewGap(workspaceId, generation, claimHeldByCaller)
+    // The wait must not authorize a claim for a departed or read-only session.
+    const staleNow = runStale()
+    if (staleNow !== null) {
+      return {status: 'refused', refusal: {kind: 'stale', reason: staleNow}}
+    }
+    if (this.isReadOnly) return {status: 'refused', refusal: {kind: 'read-only'}}
     if (gap !== null) {
       console.warn(
         `[workspaceBackfills] "${backfill.id}" deferred: ${gap.reason}, so claiming ` +
@@ -3646,14 +3681,6 @@ export class Repo {
         status: 'refused',
         refusal: {kind: 'view-gap', reason: gap.reason, transient: gap.transient},
       }
-    }
-    // Re-evaluated: the gap check above AWAITS, and a switch across that await
-    // leaves the earlier evaluation stale — including a switch away and back,
-    // which restores the id and moves only the generation. Last statement
-    // before the claim write, nothing awaited in between.
-    const staleNow = runStale()
-    if (staleNow !== null) {
-      return {status: 'refused', refusal: {kind: 'stale', reason: staleNow}}
     }
     const won = await claim.tryClaim(workspaceId, backfill.id, {
       reclaimCompleted: backfill.trigger === 'operator',
@@ -3930,7 +3957,9 @@ export class Repo {
       return {completed, undoHistoryCleared, deferred, deferredRetryable, failed}
     }
     for (const backfill of backfills) {
-      const attempt = await this.takeBackfillClaim(claim, workspaceId, backfill, generation)
+      const attempt = await this.takeBackfillClaim(
+        claim, workspaceId, backfill, generation, claimHeldByCaller,
+      )
       if (attempt.status === 'not-ours') continue
       if (attempt.status === 'refused') {
         const {refusal} = attempt
@@ -3956,21 +3985,24 @@ export class Repo {
         // so it would spin until the next open on a condition nothing is
         // working on. Either way this reaches `workspace-open` passes only;
         // an `operator` pass defers to a person who can be told to retry.
-        if (refusal.kind === 'view-gap' && refusal.transient) {
+        if (backfill.trigger === 'workspace-open' && refusal.kind === 'view-gap' && refusal.transient) {
           this.scheduleWorkspaceBackfills(workspaceId)
         }
         return {completed, undoHistoryCleared, deferred, deferredRetryable, failed}
       }
-      const resolver = this.propertySchemaResolverFor(workspaceId)
+      let resolver = this.propertySchemaResolverFor(workspaceId)
+      let syncWaitCount = 0
+      const assertMayWrite = async (waitForSync = backfill.trigger === 'operator'): Promise<void> => {
+        if (!await this.assertBackfillMayWrite(workspaceId, backfill, generation, waitForSync)) return
+        syncWaitCount += 1
+      }
       // Announced once, not per batch: the history is gone either way, and
       // saying so repeatedly for a pass that runs for minutes is noise.
       let announcedUndoClear = false
       const ctx: WorkspaceBackfillContext = {
         workspaceId,
-        // One resolver for the whole run, through the canonical factory: the
-        // per-call version built a fresh one for every cell key (a pass over
-        // ~650k rows resolves that many times) and bypassed the
-        // previous-registry fallback every other site gets.
+        get syncWaitCount() { return syncWaitCount },
+        // Reuse one snapshot per batch, captured after acquiring its write lock.
         resolveNameSchema: (name) => {
           const resolution = resolver.resolve(name)
           return resolution.status === 'resolved' ? resolution.schema : undefined
@@ -4008,9 +4040,17 @@ export class Repo {
           // that commits between this probe and the write is seen by the NEXT
           // batch's probe instead of this one. The synchronous half stays
           // inside, at both ends, where it costs no connection.
-          await this.assertBackfillMayWrite(workspaceId, backfill.id, generation)
+          await assertMayWrite()
           const value = await this.tx(async t => {
             this.assertBackfillSessionUnchanged(workspaceId, backfill.id, generation)
+            // The claim can change while waiting for this lock, even without
+            // an observed sync gap. Check every batch on this transaction's view.
+            if (!await claim.stillOwned(t, workspaceId, backfill.id)) {
+              throw Object.assign(new Error(
+                `[workspaceBackfills] "${backfill.id}" aborted: the migration claim is no longer held by this device`,
+              ), {kind: Repo.TRANSIENT, retryable: false})
+            }
+            resolver = this.propertySchemaResolverFor(workspaceId)
             const value = await fn(t)
             // AGAIN, now the body has returned — see the method. `fn` can span a
             // whole insert budget, so the entry check above is as stale by here
@@ -4021,7 +4061,18 @@ export class Repo {
             // database handing the lock to a waiting replay and `this.tx`
             // resolving, which the harness cannot schedule into. Kept because
             // what it loses is a committed batch of a once-per-graph migration.
-            drop = this.undoManagerFor(workspaceId).beginHistoryDropInWriteLock()
+            //
+            // Only for a batch that WROTE. `meta.workspaceId` is pinned by the
+            // first write primitive and stays null otherwise, so this is the
+            // "did anything change" question asked at the one moment it is
+            // answerable — and a batch that wrote nothing leaves nothing an
+            // entry could be replayed over, so no history is owed for it. The
+            // re-run of a completed pass is the case that makes this worth
+            // asking: every batch commits and writes nothing, so clearing per
+            // batch charged the operator their whole stack for a no-op.
+            if (t.meta.workspaceId !== null) {
+              drop = this.undoManagerFor(workspaceId).beginHistoryDropInWriteLock()
+            }
             return value
           }, {
             scope: ChangeScope.BlockDefault,
@@ -4039,8 +4090,6 @@ export class Repo {
           // pre-pass state and reverts it when replayed, permanently once the
           // pass has recorded itself complete.
           //
-          // An over-approximation in one direction: a committed batch that
-          // happened to write nothing clears too, which errs toward clearing.
           // A mid-group `repo.undoGroup` composite is SPLIT rather than dropped
           // whole — its earlier constituents go and the later ones record onto
           // an empty stack — so one cmd-Z reverts only the tail. Accepted: the
@@ -4049,7 +4098,12 @@ export class Repo {
           //
           // This tab's manager only; a cross-tab clear was declined (#1007).
           drop?.finish()
-          if (!announcedUndoClear) {
+          // Under the same condition the drop is, so what the caller reports is
+          // what happened: `undoHistoryCleared` is the operator's only account
+          // of the cost, and a run that announced it over batches that wrote
+          // nothing made a completed migration indistinguishable from one
+          // starting over.
+          if (drop !== undefined && !announcedUndoClear) {
             announcedUndoClear = true
             undoHistoryCleared = true
             console.warn(
@@ -4067,9 +4121,10 @@ export class Repo {
         // no candidates — precisely what a partially materialized graph looks
         // like, since the rows are staged and not yet in `blocks` — would
         // otherwise sail through and record its one-shot marker as done.
-        await this.assertBackfillMayWrite(workspaceId, backfill.id, generation)
+        await assertMayWrite()
         await backfill.run(ctx)
-        await this.assertBackfillMayWrite(workspaceId, backfill.id, generation)
+        // The scan is over: waiting here could admit rows it never examined.
+        await assertMayWrite(false)
         // Only after a clean run — a thrown backfill leaves the claim unset so
         // the next attempt retries (passes are idempotent per row).
         await claim.markComplete(workspaceId, backfill.id)
@@ -4104,7 +4159,7 @@ export class Repo {
           // still means "worth retrying", which is right for the transient DB
           // failures that make up the rest of this path.
           deferredRetryable = (err as {retryable?: boolean} | null)?.retryable ?? true
-          if (deferredRetryable) {
+          if (deferredRetryable && backfill.trigger === 'workspace-open') {
             // These clear on their own — the download finishes, the queue
             // drains. Logging and walking away would leave the pass undone for
             // the whole session even though its blocker is momentary, so re-arm
@@ -4112,10 +4167,7 @@ export class Repo {
             console.warn(`[workspaceBackfills] ${reason} — will retry when it clears`)
             this.scheduleWorkspaceBackfills(workspaceId)
           } else {
-            // A durable gap is rows nothing is draining, and a revoked role
-            // needs the role back — neither is waiting for anything, so a
-            // re-arm buys a run that will refuse again and the message would be
-            // telling the operator to wait for something that is not coming.
+            // Operator runs require a fresh invocation once their bounded wait ends.
             console.warn(`[workspaceBackfills] ${reason} — not retrying on its own`)
           }
           return {completed, undoHistoryCleared, deferred, deferredRetryable, failed}
