@@ -103,6 +103,15 @@ describe('classifyUploadError', () => {
       expect(classifyUploadError(httpError(422))).toBe('ambiguous')
     })
 
+    it('classifies the block RPCs\' anon refusal (PT401, HTTP 401) as transient', () => {
+      // A request whose session refresh failed goes out with the anon key;
+      // `apply_block_patches` / `apply_block_creates` refuse it with PT401
+      // (supabase/migrations/20261013120000_refuse_anon_block_rpcs.sql). The
+      // write is valid and succeeds once the session is back.
+      const anonRefusal = Object.assign(postgrestError('PT401'), {status: 401})
+      expect(classifyUploadError(anonRefusal)).toBe('transient')
+    })
+
     it('classifies the retry-friendly 4xx subset (401/403/408/429) as transient', () => {
       // 408 = request timeout (often a network blip); 429 = rate limited —
       // both server-invited retries. 401/403 = an expired/not-yet-refreshed

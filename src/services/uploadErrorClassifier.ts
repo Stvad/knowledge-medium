@@ -47,8 +47,9 @@ const isObjectWith = <K extends string>(
  *     schema drift).
  *
  *  `P0002` (`no_data_found`) is raised by `apply_block_patches` when a
- *  patch's target row is missing — retrying the same batch cannot make
- *  the missing row reappear, so it belongs in the permanent bucket. */
+ *  patch's target row is missing or hidden by RLS from an authenticated
+ *  non-writer — retrying the same batch cannot make it reappear, so it
+ *  belongs in the permanent bucket. */
 const PERMANENT_PLPGSQL_SQLSTATES = new Set(['P0002'])
 
 const isPermanentSqlState = (code: string): boolean =>
@@ -83,8 +84,9 @@ const PERMANENT_POSTGREST_CODES = new Set([
  *     re-authenticates and the retry succeeds. Dropping a write on an expired
  *     token is exactly the silent data-loss this module exists to avoid; a
  *     genuine authorization revocation (a workspace un-shared out from under a
- *     pending write) surfaces as the Postgres SQLSTATE `42501` instead — told
- *     apart by the precise CODE, not the coarse 401/403.
+ *     pending write) surfaces as a Postgres SQLSTATE instead — `42501` on a
+ *     create, `P0002` on a patch whose target RLS hides — told apart by the
+ *     precise CODE, not the coarse 401/403.
  *   - `PGRST202` ("function not found" — a stale RPC signature after a
  *     migration, surfaced as HTTP 404): self-heals once PostgREST reloads its
  *     schema cache, so it must be retried, not quarantined. */
@@ -95,8 +97,10 @@ const RECOVERABLE_POSTGREST_CODES = new Set(['PGRST301', 'PGRST302', 'PGRST202']
  *    - 408 (timeout) / 429 (rate limit): the server invites a later retry.
  *    - 401 (unauthorized) / 403 (forbidden): an expired / not-yet-refreshed
  *      session or a gateway-auth blip — recoverable once the token refreshes or
- *      the user re-authenticates. (A real authorization revocation carries the
- *      SQLSTATE `42501`, caught as permanent by the code branch.) */
+ *      the user re-authenticates. This includes `PT401`, which the block
+ *      upload RPCs raise when a failed session refresh sent the request with
+ *      the anon key. (A real authorization revocation carries a SQLSTATE —
+ *      `42501` / `P0002` — caught as permanent by the code branch.) */
 const RETRYABLE_HTTP_STATUSES = new Set([401, 403, 408, 429])
 
 const isClientErrorStatus = (status: number): boolean => status >= 400 && status < 500
