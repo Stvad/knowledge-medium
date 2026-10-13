@@ -1,1 +1,1 @@
-import{Nx as e}from"../../../chunks/app-DAou_Ncp.js";export{e as openKeybindingsSettingsAction};
+import{Nx as e}from"../../../chunks/app-BAVLHuKK.js";export{e as openKeybindingsSettingsAction};

@@ -1,1 +1,1 @@
-import{by as e}from"../../chunks/app-DAou_Ncp.js";export{e as useAncestorCrumbs};
+import{by as e}from"../../chunks/app-BAVLHuKK.js";export{e as useAncestorCrumbs};

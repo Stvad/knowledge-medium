@@ -1,1 +1,1 @@
-import{wS as e}from"../../../chunks/app-DAou_Ncp.js";export{e as SwipeActionMenu};
+import{wS as e}from"../../../chunks/app-BAVLHuKK.js";export{e as SwipeActionMenu};

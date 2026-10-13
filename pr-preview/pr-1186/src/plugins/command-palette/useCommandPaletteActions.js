@@ -1,1 +1,1 @@
-import{Kx as e}from"../../../chunks/app-DAou_Ncp.js";export{e as useCommandPaletteActions};
+import{Kx as e}from"../../../chunks/app-BAVLHuKK.js";export{e as useCommandPaletteActions};
