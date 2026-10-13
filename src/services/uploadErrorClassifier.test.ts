@@ -103,15 +103,6 @@ describe('classifyUploadError', () => {
       expect(classifyUploadError(httpError(422))).toBe('ambiguous')
     })
 
-    it('classifies the block RPCs\' anon refusal (PT401, HTTP 401) as transient', () => {
-      // A request whose session refresh failed goes out with the anon key;
-      // `apply_block_patches` / `apply_block_creates` refuse it with PT401
-      // (supabase/migrations/20261013120000_refuse_anon_block_rpcs.sql). The
-      // write is valid and succeeds once the session is back.
-      const anonRefusal = Object.assign(postgrestError('PT401'), {status: 401})
-      expect(classifyUploadError(anonRefusal)).toBe('transient')
-    })
-
     it('classifies the retry-friendly 4xx subset (401/403/408/429) as transient', () => {
       // 408 = request timeout (often a network blip); 429 = rate limited —
       // both server-invited retries. 401/403 = an expired/not-yet-refreshed
@@ -119,7 +110,7 @@ describe('classifyUploadError', () => {
       // or the user re-authenticates, so the queued write must be retried, not
       // dropped — dropping it would lose a valid edit over a credentials
       // problem. Genuine authorization failures (RLS denial) carry a code
-      // (42501 / PGRST301) and are caught by the code branch, not by status.
+      // (42501 / P0002) and are caught by the code branch, not by status.
       expect(classifyUploadError(httpError(401))).toBe('transient')
       expect(classifyUploadError(httpError(403))).toBe('transient')
       expect(classifyUploadError(httpError(408))).toBe('transient')
@@ -153,6 +144,14 @@ describe('classifyUploadError', () => {
       // code branch decides before the status is consulted.
       const fk = Object.assign(new Error('fk'), {code: '23503', status: 401})
       expect(classifyUploadError(fk)).toBe('permanent')
+    })
+
+    it('classifies an unknown code with a retryable status by that status (the anon-key refusal, PT401 + 401)', () => {
+      // PT401 is how the server refuses an anon-key write to `blocks`
+      // (supabase/migrations/20261013120000_refuse_anon_writes_to_blocks.sql).
+      // It is in no code set, so its 401 decides: retried, not quarantined.
+      const anonRefusal = Object.assign(postgrestError('PT401'), {status: 401})
+      expect(classifyUploadError(anonRefusal)).toBe('transient')
     })
 
     it('classifies an UNKNOWN code with a non-retryable 4xx as ambiguous', () => {

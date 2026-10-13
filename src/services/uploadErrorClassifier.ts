@@ -97,10 +97,10 @@ const RECOVERABLE_POSTGREST_CODES = new Set(['PGRST301', 'PGRST302', 'PGRST202']
  *    - 408 (timeout) / 429 (rate limit): the server invites a later retry.
  *    - 401 (unauthorized) / 403 (forbidden): an expired / not-yet-refreshed
  *      session or a gateway-auth blip — recoverable once the token refreshes or
- *      the user re-authenticates. This includes `PT401`, which the block
- *      upload RPCs raise when a failed session refresh sent the request with
- *      the anon key. (A real authorization revocation carries a SQLSTATE —
- *      `42501` / `P0002` — caught as permanent by the code branch.) */
+ *      the user re-authenticates. `PT401`, the server's refusal of an anon-key
+ *      write to `blocks`, is deliberately in no code set, so this status
+ *      decides it. A real authorization revocation carries a SQLSTATE instead
+ *      (see RECOVERABLE_POSTGREST_CODES). */
 const RETRYABLE_HTTP_STATUSES = new Set([401, 403, 408, 429])
 
 const isClientErrorStatus = (status: number): boolean => status >= 400 && status < 500
