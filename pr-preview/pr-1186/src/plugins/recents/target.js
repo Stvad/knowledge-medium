@@ -1,0 +1,1 @@
+import{Jv as e}from"../../../chunks/app-1PbHX893.js";export{e as openRecentsPage};
