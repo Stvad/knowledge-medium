@@ -110,7 +110,7 @@ describe('classifyUploadError', () => {
       // or the user re-authenticates, so the queued write must be retried, not
       // dropped — dropping it would lose a valid edit over a credentials
       // problem. Genuine authorization failures (RLS denial) carry a code
-      // (42501 / PGRST301) and are caught by the code branch, not by status.
+      // (42501 / P0002) and are caught by the code branch, not by status.
       expect(classifyUploadError(httpError(401))).toBe('transient')
       expect(classifyUploadError(httpError(403))).toBe('transient')
       expect(classifyUploadError(httpError(408))).toBe('transient')
@@ -144,6 +144,14 @@ describe('classifyUploadError', () => {
       // code branch decides before the status is consulted.
       const fk = Object.assign(new Error('fk'), {code: '23503', status: 401})
       expect(classifyUploadError(fk)).toBe('permanent')
+    })
+
+    it('classifies an unknown code with a retryable status by that status (the anon-key refusal, PT401 + 401)', () => {
+      // PT401 is how the server refuses an anon-key write to `blocks`
+      // (supabase/migrations/20261013120000_refuse_anon_writes_to_blocks.sql).
+      // It is in no code set, so its 401 decides: retried, not quarantined.
+      const anonRefusal = Object.assign(postgrestError('PT401'), {status: 401})
+      expect(classifyUploadError(anonRefusal)).toBe('transient')
     })
 
     it('classifies an UNKNOWN code with a non-retryable 4xx as ambiguous', () => {
