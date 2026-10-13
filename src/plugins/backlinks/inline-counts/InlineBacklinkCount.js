@@ -1,1 +1,1 @@
-import{Hu as e,Vu as t}from"../../../../chunks/app-BylI5K8t.js";export{t as inlineBacklinkCountDecoratorContribution,e as inlineBacklinkExpansionFooterContribution};
+import{Hu as e,Vu as t}from"../../../../chunks/app-BURH8TZM.js";export{t as inlineBacklinkCountDecoratorContribution,e as inlineBacklinkExpansionFooterContribution};

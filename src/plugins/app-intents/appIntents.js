@@ -1,1 +1,1 @@
-import{Gc as e,Uc as t,Wc as n}from"../../../chunks/app-BylI5K8t.js";export{t as __resetAppIntentForTesting,n as consumeAppIntent,e as formatSharedContent};
+import{Gc as e,Uc as t,Wc as n}from"../../../chunks/app-BURH8TZM.js";export{t as __resetAppIntentForTesting,n as consumeAppIntent,e as formatSharedContent};
