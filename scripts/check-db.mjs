@@ -148,19 +148,11 @@ async function startPostgresContainer(port) {
     'wal_level=logical',
   ]
   const displayArgs = args.map((arg) => (arg === `POSTGRES_PASSWORD=${postgresPassword}` ? 'POSTGRES_PASSWORD=***' : arg))
-  // `docker run` can create the container and then fail to start it, so cleanup is owed from here on.
+  // `docker run` can create the container and then fail to start it, so cleanup is owed from here on;
+  // `docker rm -f` exits 0 when the container was never created.
   containerMayExist = true
   await runCommand('docker', args, { displayArgs })
   await waitForPostgres(port)
-}
-
-async function removePostgresContainer() {
-  const result = await runCommand('docker', ['rm', '-f', containerName], { capture: true, allowFailure: true })
-  if (result.code !== 0 && !/no such container/i.test(result.stderr)) {
-    const error = new Error(`docker rm -f ${containerName} exited with code ${result.code}: ${result.stderr.trim()}`)
-    error.exitCode = result.code
-    throw error
-  }
 }
 
 async function applyMigrations(port) {
@@ -235,7 +227,7 @@ try {
 } finally {
   if (containerMayExist) {
     try {
-      await removePostgresContainer()
+      await runCommand('docker', ['rm', '-f', containerName])
     } catch (error) {
       console.error(`[check:db] cleanup failed: ${error.message}`)
       if (exitCode === 0) {
