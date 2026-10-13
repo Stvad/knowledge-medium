@@ -1,1 +1,0 @@
-import{fP as e,pP as t}from"../../../chunks/app-DvA8Zoji.js";export{e as floatingAnchorFromRect,t as useAnchoredFloating};
