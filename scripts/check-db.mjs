@@ -11,6 +11,7 @@ import { prepareContainerRuntime } from './container-runtime.mjs'
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)))
 const migrationsDir = join(repoRoot, 'supabase', 'migrations')
 const testsDir = join(repoRoot, 'supabase', 'tests')
+// Matches the hosted project's database version (`npx supabase projects list`), not the CLI's default image.
 const postgresImage = process.env.CHECK_DB_POSTGRES_IMAGE ?? 'public.ecr.aws/supabase/postgres:17.6.1.121'
 const postgresPassword = 'postgres'
 const containerName = `knowledge-medium-db-test-${process.pid}`
