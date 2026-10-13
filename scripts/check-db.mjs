@@ -18,8 +18,8 @@ const containerName = `knowledge-medium-db-test-${process.pid}`
 const env = { ...process.env }
 
 function runCommand(command, commandArgs, options = {}) {
+  const displayArgs = options.displayArgs ?? commandArgs
   if (options.log !== false) {
-    const displayArgs = options.displayArgs ?? commandArgs
     console.log(`[check:db] ${command} ${displayArgs.join(' ')}`)
   }
 
@@ -43,7 +43,8 @@ function runCommand(command, commandArgs, options = {}) {
     }
 
     child.on('error', reject)
-    child.on('exit', (code, signal) => {
+    // 'close', not 'exit': captured output is only complete once the stdio streams close.
+    child.on('close', (code, signal) => {
       if (code === 0) {
         resolve({ code: 0, stdout, stderr })
         return
@@ -56,8 +57,8 @@ function runCommand(command, commandArgs, options = {}) {
 
       const error = new Error(
         signal
-          ? `${command} ${commandArgs.join(' ')} exited via ${signal}`
-          : `${command} ${commandArgs.join(' ')} exited with code ${code ?? 1}`,
+          ? `${command} ${displayArgs.join(' ')} exited via ${signal}`
+          : `${command} ${displayArgs.join(' ')} exited with code ${code ?? 1}`,
       )
       error.exitCode = code ?? 1
       reject(error)
@@ -147,9 +148,19 @@ async function startPostgresContainer(port) {
     'wal_level=logical',
   ]
   const displayArgs = args.map((arg) => (arg === `POSTGRES_PASSWORD=${postgresPassword}` ? 'POSTGRES_PASSWORD=***' : arg))
+  // `docker run` can create the container and then fail to start it, so cleanup is owed from here on.
+  containerMayExist = true
   await runCommand('docker', args, { displayArgs })
-  startedContainer = true
   await waitForPostgres(port)
+}
+
+async function removePostgresContainer() {
+  const result = await runCommand('docker', ['rm', '-f', containerName], { capture: true, allowFailure: true })
+  if (result.code !== 0 && !/no such container/i.test(result.stderr)) {
+    const error = new Error(`docker rm -f ${containerName} exited with code ${result.code}: ${result.stderr.trim()}`)
+    error.exitCode = result.code
+    throw error
+  }
 }
 
 async function applyMigrations(port) {
@@ -210,7 +221,7 @@ async function runSqlTests(port) {
 
 let exitCode = 0
 let runtime = null
-let startedContainer = false
+let containerMayExist = false
 
 try {
   runtime = await prepareContainerRuntime({ env })
@@ -222,9 +233,9 @@ try {
   exitCode = error.exitCode ?? 1
   console.error(`[check:db] ${error.message}`)
 } finally {
-  if (startedContainer) {
+  if (containerMayExist) {
     try {
-      await runCommand('docker', ['rm', '-f', containerName])
+      await removePostgresContainer()
     } catch (error) {
       console.error(`[check:db] cleanup failed: ${error.message}`)
       if (exitCode === 0) {

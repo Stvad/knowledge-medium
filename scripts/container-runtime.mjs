@@ -108,7 +108,8 @@ async function startSocktainer({ env, managed, logPath }) {
   mkdirSync(dirname(logPath), { recursive: true })
   const logFd = openSync(logPath, 'a')
   console.log(`[container-runtime] Starting Socktainer; logs: ${logPath}`)
-  const child = spawn('socktainer', ['--no-check-compatibility'], {
+  // Keep socktainer's version check: on a mismatch with Apple Container it logs a warning rather than exiting.
+  const child = spawn('socktainer', [], {
     cwd: repoRoot,
     detached: !managed,
     env,
@@ -120,7 +121,7 @@ async function startSocktainer({ env, managed, logPath }) {
     child.unref()
   }
 
-  await waitFor('Socktainer Docker API socket', () => pingDockerSocket(socktainerSocket))
+  await waitFor(`Socktainer Docker API socket (logs: ${logPath})`, () => pingDockerSocket(socktainerSocket))
   return child
 }
 
