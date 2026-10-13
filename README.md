@@ -124,8 +124,11 @@ one Apple Container version (Socktainer 1.5.x against container 1.5.0), so
 upgrade the two together:
 
 ```bash
-container system stop && brew upgrade container socktainer/tap/socktainer && container system start
+container system stop && brew upgrade container socktainer && container system start
 ```
+
+Socktainer now ships in homebrew-core. If you installed it from the old
+`socktainer/tap`, run `brew untap socktainer/tap` first, as upstream recommends.
 
 The managed Socktainer logs to
 `$TMPDIR/knowledge-medium-socktainer-<pid>.log`, and its startup version check

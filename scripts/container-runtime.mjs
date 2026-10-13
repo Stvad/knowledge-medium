@@ -108,7 +108,8 @@ async function startSocktainer({ env, managed, logPath }) {
   mkdirSync(dirname(logPath), { recursive: true })
   const logFd = openSync(logPath, 'a')
   console.log(`[container-runtime] Starting Socktainer; logs: ${logPath}`)
-  // Keep socktainer's version check: on a mismatch with Apple Container it logs a warning rather than exiting.
+  // Keep socktainer's version check so a mismatch with Apple Container shows up in its log. Since socktainer
+  // 1.3.0 that is a warning; older releases exit, and the socket wait below times out naming the log.
   const child = spawn('socktainer', [], {
     cwd: repoRoot,
     detached: !managed,
