@@ -388,6 +388,11 @@ Root
       expect(outline(parseMarkdownToBlocks(`${table}\na note`))).toEqual([table, 'a note'])
     })
 
+    it('keeps the rows of a table nested four columns deep', () => {
+      const indented = table.split('\n').map(row => `    ${row}`).join('\n')
+      expect(outline(parseMarkdownToBlocks(`- a\n  - b\n${indented}`))).toEqual(['a', '  b', `    ${table}`])
+    })
+
     it('ends the table at a row at another indent', () => {
       const t = '| a | b |\n| - | - |'
       expect(outline(parseMarkdownToBlocks(`- item\n  ${t.replace('\n', '\n  ')}\n| 1 | 2 |`))).toEqual([

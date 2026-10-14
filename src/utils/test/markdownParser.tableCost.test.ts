@@ -34,6 +34,18 @@ describe('parseMarkdownToBlocks: table detection cost', () => {
     expect(Math.max(...parsedLineCounts())).toBe(3)
   })
 
+  it('parses the header once, not with every row', () => {
+    vi.mocked(fromMarkdown).mockClear()
+    const header = `| ${Array.from({length: 300}, (_, i) => `column ${i}`).join(' | ')} |`
+    const delimiter = `|${' - |'.repeat(300)}`
+
+    parseMarkdownToBlocks([header, delimiter, ...Array.from({length: 200}, (_, i) => `| ${i} |`)].join('\n'))
+
+    const [first, ...rows] = vi.mocked(fromMarkdown).mock.calls.map(([value]) => String(value).length)
+    expect(first).toBeGreaterThan(header.length)
+    expect(Math.max(...rows)).toBeLessThan(40)
+  })
+
   it('parses a table row by row', () => {
     vi.mocked(fromMarkdown).mockClear()
     const table = '| a | b |\n| - | - |\n| 1 | 2 |'

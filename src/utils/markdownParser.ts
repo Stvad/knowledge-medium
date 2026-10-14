@@ -164,19 +164,25 @@ const MAYBE_DELIMITER_ROW = /^[\s|:-]*-[\s|:-]*$/
  *  `start`, or undefined when there is none. The GFM parser the app renders
  *  with decides what is a table and which rows belong to it, so escapes and
  *  code spans match what the block will show, and another block (a bullet, a
- *  quote) ends it. Each row is parsed with just the header and delimiter, as
- *  GFM decides a row on its own. Both of those must carry a pipe: GFM's
+ *  quote) ends it. The header and delimiter must both carry a pipe: GFM's
  *  pipeless one-column table (`a` over `:-:`) is, in pasted notes, text. */
 const tableEnd = (lines: readonly string[], start: number): number | undefined => {
   const header = lines[start]
   const delimiter = lines[start + 1] ?? ''
   if (!header.includes('|') || !delimiter.includes('|') || !MAYBE_DELIMITER_ROW.test(delimiter.trim())) return undefined
-  const isTable = (rows: readonly string[]): boolean => {
-    const [first] = fromMarkdown(dedented(rows), GFM_TABLE).children
-    return first?.type === 'table' && first.position?.end.line === rows.length
-  }
   if (!isTable([header, delimiter])) return undefined
-  return runEnd(lines, start, start + 2, row => row.includes('|') && isTable([header, delimiter, row]))
+  // GFM decides a body row on its own (rows may have any number of cells),
+  // so each row is checked under a stand-in head at the header's indent:
+  // parsing the real header with every row would cost its length per row.
+  const indent = /^[ \t]*/.exec(header)![0]
+  const head = [`${indent}| - |`, `${indent}| - |`]
+  return runEnd(lines, start, start + 2, row => row.includes('|') && isTable([...head, row]))
+}
+
+/** Whether `rows`, dedented, parse as one GFM table spanning all of them. */
+const isTable = (rows: readonly string[]): boolean => {
+  const [first] = fromMarkdown(dedented(rows), GFM_TABLE).children
+  return first?.type === 'table' && first.position?.end.line === rows.length
 }
 
 const isQuoteLine = (line: string): boolean => line.trim().startsWith('>')
