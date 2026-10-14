@@ -124,7 +124,7 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
       return
     }
 
-    const plan = planEditModeMultilinePaste(pasteText, editorView.state.doc.toString(), {
+    const plan = planEditModeMultilinePaste(decision.blocks ?? pasteText, editorView.state.doc.toString(), {
       from: insertAt.from,
       to: insertAt.to,
     })

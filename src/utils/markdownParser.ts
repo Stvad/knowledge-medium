@@ -12,6 +12,24 @@ export interface ParsedBlock {
   content: string
 }
 
+/** A block to create, with the blocks nested under it. The tree-shaped form
+ *  of a paste: what {@link outlineFromTokens} builds, and what a paste-decision
+ *  override that has already structured its content hands back directly. */
+export interface OutlineNode {
+  content: string
+  children?: readonly OutlineNode[]
+}
+
+/** One block-to-be as a front end (markdown lines, clipboard HTML) recognized
+ *  it, before nesting. `indent` is only ever compared between tokens, so a
+ *  front end may count it in any unit that grows with depth. */
+export type OutlineToken =
+  | {kind: 'heading'; level: number; indent: number; content: string}
+  | {kind: 'list-item'; indent: number; content: string}
+  | {kind: 'paragraph'; indent: number; content: string}
+  /** Multi-line content kept whole — a fenced code block, a table, a quote. */
+  | {kind: 'atomic'; indent: number; content: string}
+
 /** Wrap `content` verbatim as a single root `ParsedBlock` — no markdown
  *  splitting, newlines preserved inside the one block. Used for "paste as
  *  one block" (the block-shell paste when the decision is `single-block`).
@@ -22,184 +40,158 @@ export const singleParsedBlock = (content: string): ParsedBlock => ({
   content,
 })
 
-export function parseMarkdownToBlocks(text: string): ParsedBlock[] {
-  const lines = text.split('\n');
-  const parsedBlocks: { content: string; level: number; id: string }[] = [];
+/** Whether `token` nests under `parent` when both sit at the same indent
+ *  (a deeper token always nests, a shallower one never does):
+ *   - a heading owns what follows it, up to the next heading of the same or
+ *     a shallower level;
+ *   - a list nests under the paragraph that introduces it;
+ *   - anything else is a sibling. */
+const nestsAtSameIndent = (parent: OutlineToken, token: OutlineToken): boolean => {
+  if (parent.kind === 'heading') return token.kind !== 'heading' || token.level > parent.level
+  return parent.kind === 'paragraph' && token.kind === 'list-item'
+}
 
-  interface ContextNode {
-    level: number;
-    rawIndent: number;
-    id: string;
-    type: string; // e.g., 'root', 'h1', 'h2', 'ul-item', 'ol-item', 'text'
+/** Nest a token stream into an outline. The one place the paste structuring
+ *  rules live, shared by every front end so markdown text and clipboard HTML
+ *  of the same document come out the same shape. */
+export const outlineFromTokens = (tokens: readonly OutlineToken[]): OutlineNode[] => {
+  const roots: OutlineNode[] = []
+  const open: Array<{token: OutlineToken; children: OutlineNode[]}> = []
+  for (const token of tokens) {
+    while (open.length > 0) {
+      const parent = open[open.length - 1].token
+      if (token.indent > parent.indent) break
+      if (token.indent === parent.indent && nestsAtSameIndent(parent, token)) break
+      open.pop()
+    }
+    const children: OutlineNode[] = []
+    ;(open.at(-1)?.children ?? roots).push({content: token.content, children})
+    open.push({token, children})
   }
+  return roots
+}
 
-  const contextStack: ContextNode[] = [{ level: -1, rawIndent: -1, id: 'ROOT', type: 'root' }];
-
-  function determineLineTypeAndContent(trimmedLine: string): { type: string; content: string } {
-    if (trimmedLine.startsWith('#')) {
-      const match = trimmedLine.match(/^(#+)\s*(.*)/);
-      if (match) {
-        const level = match[1].length;
-        return { type: `h${level}`, content: trimmedLine }; // Keep '#'
-      }
-    }
-    const ulMatch = trimmedLine.match(/^([-*+])\s+(.*)/);
-    if (ulMatch) {
-      return { type: 'ul-item', content: ulMatch[2] }; // Strip marker
-    }
-    const olMatch = trimmedLine.match(/^(\d+\.)\s+(.*)/);
-    if (olMatch) {
-      return { type: 'ol-item', content: trimmedLine }; // Keep number e.g. "1. item"
-    }
-    return { type: 'text', content: trimmedLine };
-  }
-
-  // First pass: parse lines into blocks with levels. Index-based (not
-  // for-of) so a fenced code block can consume its inner lines in one step.
-  let idx = 0;
-  while (idx < lines.length) {
-    const originalLineContent = lines[idx];
-    const trimmedLine = originalLineContent.trim();
-
-    if (!trimmedLine) {
-      idx++;
-      continue; // Skip empty lines
-    }
-
-    let currentLineRawIndent: number;
-    let currentLineType: string;
-    let processedContent: string;
-
-    const fenceOpen = /^([`~])\1{2,}/.exec(trimmedLine);
-    if (fenceOpen) {
-      // Fenced code block → ONE block. Handles both ``` and ~~~ fences
-      // (CommonMark). Consume through the closing fence or EOF, keep both
-      // fences, and never interpret the inner lines as list markers /
-      // headers. The closer is a run of the SAME char, AT LEAST as long as
-      // the opener, with nothing else on the line — so a reply can open with
-      // ```` (or ~~~) to wrap content that itself contains ``` without
-      // closing early. The opening fence's leading indentation is stripped
-      // from every line so nested code doesn't carry the fence's indent; it
-      // nests like a plain line at that opening indent.
-      const closesFence = new RegExp('^' + fenceOpen[1] + '{' + fenceOpen[0].length + ',}$');
-      currentLineRawIndent = getIndentationLevel(originalLineContent);
-      currentLineType = 'text';
-      const openingWs = originalLineContent.match(/^[ \t]*/)?.[0].length ?? 0;
-      const stripOpeningIndent = (raw: string): string => {
-        let removed = 0;
-        let cut = 0;
-        while (cut < raw.length && removed < openingWs && (raw[cut] === ' ' || raw[cut] === '\t')) {
-          removed++;
-          cut++;
-        }
-        return raw.slice(cut);
-      };
-      const fenceLines = [stripOpeningIndent(originalLineContent)];
-      idx++;
-      while (idx < lines.length) {
-        const fenceLine = lines[idx];
-        fenceLines.push(stripOpeningIndent(fenceLine));
-        idx++;
-        if (closesFence.test(fenceLine.trim())) break; // include the closing fence, then stop
-      }
-      processedContent = fenceLines.join('\n').replace(/[ \t\r\n]+$/, '');
-    } else {
-      currentLineRawIndent = getIndentationLevel(originalLineContent);
-      const lineParts = determineLineTypeAndContent(trimmedLine);
-      currentLineType = lineParts.type;
-      processedContent = lineParts.content;
-      idx++;
-    }
-
-    // Implement/Refine Nuanced Context Stack Popping Logic
-    while (contextStack.length > 1) { // contextStack[0] is root, never pop it
-        const parentCtx = contextStack[contextStack.length - 1];
-        const currentHeaderNum = currentLineType.startsWith('h') ? parseInt(currentLineType.substring(1)) : 0;
-        const parentHeaderNum = parentCtx.type.startsWith('h') ? parseInt(parentCtx.type.substring(1)) : 0;
-
-        if (currentLineRawIndent > parentCtx.rawIndent) { // Case A: Strictly indented, current line is a child.
-            break; 
-        } else if (currentLineRawIndent === parentCtx.rawIndent) { // Case B: Same indent level.
-            if (parentCtx.type.startsWith('h') && !currentLineType.startsWith('h')) { // B1: Text/list after header at same indent IS CHILD of header.
-                break;
-            } else if (parentCtx.type.startsWith('h') && currentLineType.startsWith('h')) { // B2: Header after header at same indent.
-                if (currentHeaderNum > parentHeaderNum) { // Deeper header (e.g., H2 after H1) IS CHILD.
-                    break;
-                } else { // Same or shallower header (e.g., H1 after H1, H1 after H2) is SIBLING (pops parent).
-                    contextStack.pop();
-                }
-            } else if ((parentCtx.type === 'ul-item' && currentLineType === 'ul-item') ||
-                       (parentCtx.type === 'ol-item' && currentLineType === 'ol-item')) { // B3: List item sibling of same type.
-                 contextStack.pop(); // Pop previous item; current item becomes child of previous item's parent.
-                                     // Loop will re-evaluate against new stack top.
-            } else { // B4: Other same-indent cases (e.g., text after text, header after list/text). Treat as SIBLING (pops parent).
-                contextStack.pop();
-            }
-        } else { // Case C: currentLineRawIndent < parentCtx.rawIndent (outdented). Pop parent.
-            contextStack.pop();
-        }
-    }
-    
-    // Level Calculation
-    const activeParentContext = contextStack[contextStack.length - 1];
-    const calculatedLevel = activeParentContext.level + 1;
-
-    // Content is already processed by determineLineTypeAndContent
-
-    const newBlockId = uuidv4();
-    parsedBlocks.push({ content: processedContent, level: calculatedLevel, id: newBlockId });
-
-    // Context Stack Pushing Logic: Push context for ALL processed lines.
-    contextStack.push({
-        level: calculatedLevel,
-        rawIndent: currentLineRawIndent,
-        id: newBlockId,
-        type: currentLineType
-    });
-  }
-
-  // Second pass: convert to ParsedBlock[] with parentId + orderKey.
-  // The new tree shape stores parent_id+order_key as the source of
-  // truth — no childIds array. Each parent tracks the previously
-  // assigned key so siblings get base62 fractional keys via
-  // keyAtEnd; using `a${childCount}` would break lexicographic sort
-  // at 11+ siblings (a10 < a2).
+/** Flatten an outline into `ParsedBlock`s in document order, minting ids and
+ *  per-parent ascending order keys (base62 fractional keys via `keyAtEnd`;
+ *  `a${index}` would break lexicographic sort at 11+ siblings). Root keys form
+ *  an ordered sequence too — callers overwrite them, but tests and direct
+ *  consumers rely on the sort matching document order. Iterative, so a
+ *  pathologically deep paste can't overflow the stack. */
+export const parsedBlocksFromOutline = (roots: readonly OutlineNode[]): ParsedBlock[] => {
   const blocks: ParsedBlock[] = []
-  const parentStack: Array<{id: string; lastOrderKey: string | null} | undefined> = []
-  // Sentinel for root-level siblings — there's no real parent at
-  // level 0, but we still need a per-position cursor so root keys
-  // form an ordered sequence (the caller overwrites them, but tests
-  // and direct consumers rely on the sort matching markdown order).
-  let rootLastKey: string | null = null
-
-  for (const parsed of parsedBlocks) {
+  const pending: Array<{node: OutlineNode; parentId: string | undefined}> =
+    roots.map(node => ({node, parentId: undefined})).reverse()
+  const lastKeyByParent = new Map<string | undefined, string>()
+  while (pending.length > 0) {
+    const {node, parentId} = pending.pop()!
     const id = uuidv4()
-
-    // Pop stack until we find the parent at the right level.
-    while (parentStack.length > parsed.level) {
-      parentStack.pop()
-    }
-
-    let parentId: string | undefined
-    let orderKey: string
-    if (parsed.level > 0 && parentStack.length === parsed.level && parentStack[parsed.level - 1]) {
-      const parent = parentStack[parsed.level - 1]!
-      parentId = parent.id
-      orderKey = keyAtEnd(parent.lastOrderKey)
-      parent.lastOrderKey = orderKey
-    } else {
-      orderKey = keyAtEnd(rootLastKey)
-      rootLastKey = orderKey
-    }
-
-    while (parentStack.length < parsed.level) {
-      parentStack.push(undefined)
-    }
-    parentStack[parsed.level] = {id, lastOrderKey: null}
-    blocks.push({id, parentId, orderKey, content: parsed.content})
+    const orderKey = keyAtEnd(lastKeyByParent.get(parentId) ?? null)
+    lastKeyByParent.set(parentId, orderKey)
+    blocks.push({id, parentId, orderKey, content: node.content})
+    const children = node.children ?? []
+    for (let i = children.length - 1; i >= 0; i--) pending.push({node: children[i], parentId: id})
   }
+  return blocks
+}
 
-  return blocks;
+export function parseMarkdownToBlocks(text: string): ParsedBlock[] {
+  return parsedBlocksFromOutline(outlineFromTokens(lexMarkdownLines(text)))
+}
+
+/** Split markdown/outline text into tokens, one per non-blank line except
+ *  for fenced code blocks and tables, which are consumed whole. */
+const lexMarkdownLines = (text: string): OutlineToken[] => {
+  const lines = text.split('\n')
+  const tokens: OutlineToken[] = []
+  let idx = 0
+  while (idx < lines.length) {
+    const line = lines[idx]
+    const trimmed = line.trim()
+    if (!trimmed) {
+      idx++
+      continue
+    }
+    const indent = getIndentationLevel(line)
+
+    const token = lineToken(trimmed, indent)
+    const atomicEnd = fencedCodeEnd(lines, idx) ??
+      (token.kind === 'paragraph' ? tableEnd(lines, idx) : undefined)
+    if (atomicEnd !== undefined) {
+      // Strip the opening line's indentation from every line so nested
+      // content doesn't carry it; the block nests like a plain line at that
+      // indent.
+      const openingWs = line.match(/^[ \t]*/)?.[0].length ?? 0
+      const content = lines.slice(idx, atomicEnd)
+        .map(raw => stripLeadingWhitespace(raw, openingWs))
+        .join('\n')
+        .replace(/[ \t\r\n]+$/, '')
+      tokens.push({kind: 'atomic', indent, content})
+      idx = atomicEnd
+      continue
+    }
+    tokens.push(token)
+    idx++
+  }
+  return tokens
+}
+
+const lineToken = (trimmed: string, indent: number): OutlineToken => {
+  // CommonMark's ATX heading: 1-6 '#'s, then a space or the end of the line
+  // (`#tag` and `#######` are text). Keep the '#'s: the level renders from
+  // the content.
+  const heading = /^(#{1,6})(?:[ \t]|$)/.exec(trimmed)
+  if (heading) return {kind: 'heading', level: heading[1].length, indent, content: trimmed}
+  const bullet = /^[-*+]\s+(.*)/.exec(trimmed)
+  if (bullet) return {kind: 'list-item', indent, content: bullet[1]}
+  // Keep the number, e.g. "1. item".
+  if (/^\d+\.\s+/.test(trimmed)) return {kind: 'list-item', indent, content: trimmed}
+  return {kind: 'paragraph', indent, content: trimmed}
+}
+
+/** End (exclusive line index) of the fenced code block opening at `start`,
+ *  or undefined when that line opens none. Handles ``` and ~~~ fences
+ *  (CommonMark): runs through the closing fence or EOF, and never interprets
+ *  inner lines as list markers / headers. The closer is a run of the SAME
+ *  char, AT LEAST as long as the opener, with nothing else on the line — so a
+ *  reply can open with ```` (or ~~~) to wrap content that itself contains
+ *  ``` without closing early. */
+const fencedCodeEnd = (lines: readonly string[], start: number): number | undefined => {
+  const fenceOpen = /^([`~])\1{2,}/.exec(lines[start].trim())
+  if (!fenceOpen) return undefined
+  const closesFence = new RegExp('^' + fenceOpen[1] + '{' + fenceOpen[0].length + ',}$')
+  let end = start + 1
+  while (end < lines.length) {
+    if (closesFence.test(lines[end++].trim())) break
+  }
+  return end
+}
+
+const TABLE_DELIMITER_ROW = /^\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?$/
+
+const tableCellCount = (row: string): number =>
+  row.replace(/^\|/, '').replace(/\|$/, '').split('|').length
+
+/** End (exclusive line index) of the GFM table whose header row is at
+ *  `start`, or undefined when there is none: a header row, a delimiter row
+ *  with the same cell count, then every following row that still has a pipe.
+ *  A mismatched table falls back to one block per line, which is how it would
+ *  render anyway. */
+const tableEnd = (lines: readonly string[], start: number): number | undefined => {
+  const header = lines[start].trim()
+  const delimiter = lines[start + 1]?.trim()
+  if (!header.includes('|') || !delimiter?.includes('|')) return undefined
+  if (!TABLE_DELIMITER_ROW.test(delimiter)) return undefined
+  if (tableCellCount(header) !== tableCellCount(delimiter)) return undefined
+  let end = start + 2
+  while (end < lines.length && lines[end].trim().includes('|')) end++
+  return end
+}
+
+/** Remove up to `count` leading spaces/tabs from `raw`. */
+const stripLeadingWhitespace = (raw: string, count: number): string => {
+  let cut = 0
+  while (cut < raw.length && cut < count && (raw[cut] === ' ' || raw[cut] === '\t')) cut++
+  return raw.slice(cut)
 }
 
 /** Column a tab advances to, per CommonMark's tab-stop rule. Only the
@@ -220,9 +212,3 @@ function getIndentationLevel(line: string): number {
   }
   return Math.floor(column / 2);
 }
-
-// cleanLine is not used in the provided code, can be removed if not needed elsewhere.
-// function cleanLine(line: string): string {
-//   // Only trim the line initially. Specific cleaning will be done in the parsing logic.
-//   return line.trim();
-// }
