@@ -22,12 +22,15 @@
  * compile path starts the load and the runtime apply waits for it.
  *
  * BUILD SHAPE
- * `source(none)` turns off automatic content detection for this entry so it
- * emits ONLY the classes listed below, not a duplicate of what index.css
- * already generates from the app's source. `@reference` makes index.css's
- * theme (tokens, the custom dark variant) resolvable here without re-emitting
- * any of its CSS. Order matters: `@reference` after the utilities import, or
- * the file emits nothing.
+ * This entry keeps automatic content detection, so it re-emits every utility
+ * index.css generates from the app's source alongside the classes listed
+ * below. It loads after index.css into the same `utilities` layer and so wins
+ * every specificity tie; only as a superset does its own ordering decide all
+ * of them. Under `source(none)` an app variant it lacked (`@md:flex-row`) lost
+ * to a safelisted base utility (`flex-col`). `@reference` makes index.css's
+ * theme (tokens, the custom dark variant, plugins) resolvable here without
+ * re-emitting any of its CSS. Order matters: `@reference` after the utilities
+ * import, or the file emits nothing.
  *
  * SCOPE
  * Base utilities are covered broadly (layout, spacing, sizing, typography,
@@ -41,7 +44,7 @@
  * this file. Keep additions grouped and re-measure the output size.
  * ═══════════════════════════════════════════════════════════════════════ */
 
-@import "tailwindcss/utilities" layer(utilities) source(none);
+@import "tailwindcss/utilities" layer(utilities);
 @reference "./index.css";
 
 /* ── Display / box ─────────────────────────────────────────────────────── */
