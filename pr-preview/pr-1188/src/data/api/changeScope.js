@@ -1,0 +1,1 @@
+import{_3 as e,d3 as t,f3 as n,g3 as r,h3 as i,m3 as a,p3 as o,u3 as s,v3 as c}from"../../../chunks/app-WV5-ij87.js";export{s as CHANGE_SCOPE_POLICIES,t as ChangeScope,n as isChangeScope,o as policyForScope,a as scopeAllowedInReadOnly,i as scopeIsUndoable,r as scopePoliciesEquivalent,e as scopeUploadsToServer,c as sourceForScope};

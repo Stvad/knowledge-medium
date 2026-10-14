@@ -1,0 +1,1 @@
+import{AS as e,jS as t,kS as n}from"../../../chunks/app-WV5-ij87.js";export{n as SWIPE_QUICK_ACTIONS_GESTURE_ID,e as SWIPE_TRIGGER_PX,t as swipeRecognizer};

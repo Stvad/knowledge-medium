@@ -1,0 +1,1 @@
+import{$C as e,QC as t}from"../../chunks/app-WV5-ij87.js";export{t as resolveStructuralEditPolicy,e as structuralEditPolicyForBlock};

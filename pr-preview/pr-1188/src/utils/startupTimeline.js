@@ -1,0 +1,1 @@
+import{aF as e,cF as t,iF as n,lF as r,nF as i,oF as a,rF as o,sF as s,uF as c}from"../../chunks/app-WV5-ij87.js";export{i as getLastLongTaskEndMs,o as getStartupTimeline,n as hasStartupMark,e as longTasksSupported,a as markStartup,s as markStartupAt,t as onLongTask,r as resetStartupTimeline,c as startStartupObservers};

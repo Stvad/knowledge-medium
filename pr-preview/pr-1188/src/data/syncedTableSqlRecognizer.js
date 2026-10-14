@@ -1,0 +1,1 @@
+import{JB as e,XB as t,YB as n}from"../../chunks/app-WV5-ij87.js";export{e as SYNCED_TABLES,n as syncedWriteTarget,t as writeTargets};

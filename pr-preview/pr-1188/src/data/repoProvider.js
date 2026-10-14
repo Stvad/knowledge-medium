@@ -1,0 +1,1 @@
+import{SF as e,_F as t,bF as n,gF as r,hF as i,mF as a,pF as o,vF as s,xF as c,yF as l}from"../../chunks/app-WV5-ij87.js";export{o as BATCH_SENTINEL_SQL,a as closePowerSyncDbIfOpen,i as ensurePowerSyncReady,r as getActiveSyncResolver,t as getActiveUserId,s as getPowerSyncDb,l as initializeClientSchema,n as isRemoteSyncActive,c as syncObserverDepsFor,e as syncResolverForUser};

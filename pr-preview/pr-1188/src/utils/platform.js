@@ -1,0 +1,1 @@
+import{cN as e,sN as t}from"../../chunks/app-WV5-ij87.js";export{t as isIOS,e as isMacPlatform};

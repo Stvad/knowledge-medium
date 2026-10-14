@@ -1,0 +1,1 @@
+import{oT as e,sT as t}from"../../chunks/app-WV5-ij87.js";export{e as dispatchPointerAction,t as setPointerActionDispatcher};

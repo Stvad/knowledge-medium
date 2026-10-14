@@ -1,0 +1,1 @@
+import{bw as e,xw as t}from"../../../chunks/app-WV5-ij87.js";export{e as ExtensionPromptSurface,t as extensionPromptsExtension};

@@ -1,0 +1,1 @@
+import{GA as e,KA as t}from"../../../chunks/app-WV5-ij87.js";export{e as METADATA_ROW_GRID_STYLE,t as PROPERTY_ROW_GRID_STYLE};

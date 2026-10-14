@@ -1,0 +1,1 @@
+import{iA as e,rA as t}from"../../chunks/app-WV5-ij87.js";export{t as defineVariant,e as defineVariantFacet};

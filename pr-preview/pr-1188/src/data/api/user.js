@@ -1,0 +1,1 @@
+import{h4 as e,m4 as t,p4 as n}from"../../../chunks/app-WV5-ij87.js";export{n as SYSTEM_AUTHOR_PREFIX,t as isSystemAuthor,e as systemAuthor};

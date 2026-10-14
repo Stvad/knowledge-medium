@@ -1,0 +1,1 @@
+import{_s as e,vs as t}from"../../../chunks/app-WV5-ij87.js";export{e as appendTagToBlocks,t as appendTagToContent};

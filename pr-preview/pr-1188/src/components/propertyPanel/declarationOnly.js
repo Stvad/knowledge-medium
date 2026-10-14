@@ -1,0 +1,1 @@
+import{HA as e,VA as t}from"../../../chunks/app-WV5-ij87.js";export{t as declarationOnlyDefinitionForName,e as declarationOnlyStatusText};

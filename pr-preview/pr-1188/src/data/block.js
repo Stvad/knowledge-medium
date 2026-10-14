@@ -1,0 +1,1 @@
+import{IG as e,LG as t}from"../../chunks/app-WV5-ij87.js";export{e as Block,t as requireLoadedBlock};

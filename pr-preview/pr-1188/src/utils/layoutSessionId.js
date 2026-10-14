@@ -1,0 +1,1 @@
+import{GQ as e,JQ as t,KQ as n,UQ as r,WQ as i,qQ as a}from"../../chunks/app-WV5-ij87.js";export{r as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,i as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,e as __resetLayoutSessionIdForTesting,n as getLayoutSessionId,a as isInstalledAppDisplayMode,t as readOrCreateLayoutSessionId};
