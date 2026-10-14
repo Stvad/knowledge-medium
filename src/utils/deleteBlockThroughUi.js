@@ -1,1 +1,1 @@
-import{$E as e,QE as t,XE as n,ZE as r}from"../../chunks/app-DnZrHdyN.js";export{n as BULK_DELETE_CONFIRM_THRESHOLD,r as deleteBlockThroughUi,t as deleteBlocksThroughUi,e as ensureDeletableThroughUi};
+import{eD as e,nD as t,rD as n,tD as r}from"../../chunks/app-4lopI1W0.js";export{e as BULK_DELETE_CONFIRM_THRESHOLD,r as deleteBlockThroughUi,t as deleteBlocksThroughUi,n as ensureDeletableThroughUi};
