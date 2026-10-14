@@ -1,6 +1,6 @@
 import { fromDom } from 'hast-util-from-dom'
 import { toMdast } from 'hast-util-to-mdast'
-import type { Nodes, Parents, PhrasingContent, Root, RootContent } from 'mdast'
+import type { Nodes, Paragraph, Parents, PhrasingContent, Root, RootContent } from 'mdast'
 import { gfmToMarkdown } from 'mdast-util-gfm'
 import { toMarkdown, type Options as ToMarkdownOptions } from 'mdast-util-to-markdown'
 import { outlineFromTokens, type OutlineNode, type OutlineToken } from '@/utils/markdownParser.js'
@@ -9,8 +9,10 @@ import { normalizeClipboardDom } from './normalizeClipboardDom.js'
 export type ClipboardHtmlConversion =
   /** The HTML carries nothing the plain text lacks — paste the text as usual. */
   | {kind: 'plain'}
-  /** A single line of content, as inline markdown (no heading or list marker),
-   *  for the ordinary single-line paste path. */
+  /** A single line of paragraph text, as inline markdown, for the ordinary
+   *  single-line paste path. A lone heading or list item is an outline: the
+   *  browser only puts the element on the clipboard when the whole block was
+   *  copied (a partial selection arrives as a styled span). */
   | {kind: 'inline'; markdown: string}
   | {kind: 'outline'; blocks: OutlineNode[]}
 
@@ -23,50 +25,43 @@ export const convertClipboardHtml = (html: string): ClipboardHtmlConversion => {
   normalizeClipboardDom(body)
   const mdast = toMdast(fromDom(body)) as Root
   sanitize(mdast)
+  splitAtBlankLines(mdast)
   if (!carriesStructure(mdast)) return {kind: 'plain'}
 
-  const units: Unit[] = []
-  walkFlow(mdast.children, 0, units)
-  if (units.length === 0) return {kind: 'plain'}
-  const [only] = units
-  if (units.length === 1 && only.inline !== undefined && !only.inline.includes('\n')) {
-    return {kind: 'inline', markdown: only.inline}
+  const tokens: OutlineToken[] = []
+  walkFlow(mdast.children, 0, tokens)
+  if (tokens.length === 0) return {kind: 'plain'}
+  const [only] = tokens
+  if (tokens.length === 1 && only.kind === 'paragraph' && !only.content.includes('\n')) {
+    return {kind: 'inline', markdown: only.content}
   }
-  return {kind: 'outline', blocks: outlineFromTokens(units.map(unit => unit.token))}
-}
-
-/** A token plus, for content that can be inlined at a caret, that form. */
-interface Unit {
-  token: OutlineToken
-  inline?: string
+  return {kind: 'outline', blocks: outlineFromTokens(tokens)}
 }
 
 /** Whether the HTML says anything the plain text doesn't. Plain paragraphs
  *  are what the text path already produces; a lone code block is a copy from
  *  a code view (an IDE, a raw file, a terminal), whose plain text is the
- *  better source. Neither is worth taking over the paste for. */
+ *  better source. Neither is worth taking over the paste for. A line break is
+ *  worth it: the plain text can't tell it from a paragraph break. */
 const carriesStructure = (root: Root): boolean => {
   if (root.children.length === 1 && root.children[0].type === 'code') return false
   const hasMarkup = (node: Nodes): boolean =>
-    !['root', 'paragraph', 'text', 'break'].includes(node.type) ||
+    !['root', 'paragraph', 'text'].includes(node.type) ||
     ('children' in node && node.children.some(hasMarkup))
   return hasMarkup(root)
 }
 
-const walkFlow = (nodes: readonly RootContent[], indent: number, units: Unit[]): void => {
+const walkFlow = (nodes: readonly RootContent[], indent: number, tokens: OutlineToken[]): void => {
   for (const node of nodes) {
     switch (node.type) {
       case 'heading': {
         const inline = phrasing(node.children, {singleLine: true})
-        if (inline) {
-          const content = `${'#'.repeat(node.depth)} ${inline}`
-          units.push({token: {kind: 'heading', level: node.depth, indent, content}, inline})
-        }
+        if (inline) tokens.push({kind: 'heading', level: node.depth, indent, content: `${'#'.repeat(node.depth)} ${inline}`})
         break
       }
       case 'paragraph': {
-        const inline = phrasing(node.children)
-        if (inline) units.push({token: {kind: 'paragraph', indent, content: inline}, inline})
+        const content = phrasing(node.children)
+        if (content) tokens.push({kind: 'paragraph', indent, content})
         break
       }
       case 'list':
@@ -76,22 +71,22 @@ const walkFlow = (nodes: readonly RootContent[], indent: number, units: Unit[]):
           if (!inline) {
             // No text of its own (e.g. an item holding only a sub-list):
             // its content nests under whatever precedes it.
-            walkFlow(first?.type === 'paragraph' ? rest : item.children, indent + 1, units)
+            walkFlow(first?.type === 'paragraph' ? rest : item.children, indent + 1, tokens)
             return
           }
           // Ordered items keep their number, matching a markdown-text paste.
           const content = node.ordered ? `${(node.start ?? 1) + index}. ${inline}` : inline
-          units.push({token: {kind: 'list-item', indent, content}, inline})
-          walkFlow(rest, indent + 1, units)
+          tokens.push({kind: 'list-item', indent, content})
+          walkFlow(rest, indent + 1, tokens)
         })
         break
       case 'code':
       case 'blockquote':
-        if (hasContent(node)) units.push({token: {kind: 'atomic', indent, content: markdown(node)}})
+        if (hasContent(node)) tokens.push({kind: 'atomic', indent, content: markdown(node)})
         break
       case 'table':
         // A GFM table row can't contain a line break.
-        if (hasContent(node)) units.push({token: {kind: 'atomic', indent, content: markdown(withoutBreaks(node))}})
+        if (hasContent(node)) tokens.push({kind: 'atomic', indent, content: markdown(withoutBreaks(node))})
         break
       // Thematic breaks, definitions, raw html: no block worth making.
     }
@@ -133,6 +128,45 @@ const withoutBreaks = <T extends Parents>(node: T): T => {
     return {...current, children: current.children.map(replace)} as Nodes
   }
   return replace(node) as T
+}
+
+/** Split paragraphs where two or more line breaks meet: `<br><br>` is how
+ *  plain-text-era pages separate paragraphs, so only a single `<br>` stays a
+ *  line break inside its block. In place. */
+const splitAtBlankLines = (node: Parents): void => {
+  node.children = node.children.flatMap((child): Nodes[] => {
+    if (child.type === 'paragraph') return splitParagraph(child)
+    if ('children' in child) splitAtBlankLines(child)
+    return [child]
+  }) as typeof node.children
+}
+
+const isBlankText = (node: PhrasingContent | undefined): boolean =>
+  node?.type === 'text' && node.value.trim() === ''
+
+const splitParagraph = (paragraph: Paragraph): Paragraph[] => {
+  const pieces: PhrasingContent[][] = [[]]
+  const children = paragraph.children
+  for (let i = 0; i < children.length; i++) {
+    if (children[i].type === 'break') {
+      // The run of breaks (and the whitespace between them) starting here.
+      let end = i + 1
+      let breaks = 1
+      while (end < children.length && (children[end].type === 'break' || isBlankText(children[end]))) {
+        if (children[end].type === 'break') breaks++
+        end++
+      }
+      if (breaks >= 2) {
+        pieces.push([])
+        i = end - 1
+        continue
+      }
+    }
+    pieces[pieces.length - 1].push(children[i])
+  }
+  // A piece left empty (a leading or trailing run) becomes an empty
+  // paragraph, which `walkFlow` skips like any other.
+  return pieces.map(children => ({...paragraph, children}))
 }
 
 /** Drop what can't work once pasted (fragment and relative links, `data:`/
