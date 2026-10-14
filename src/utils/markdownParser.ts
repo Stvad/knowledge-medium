@@ -176,24 +176,26 @@ const MAYBE_DELIMITER_ROW = /^[\s|:-]*-[\s|:-]*$/
 /** End (exclusive line index) of the GFM table whose header row is at
  *  `start`, or undefined when there is none. The GFM parser the app renders
  *  with decides what is a table, so escapes and code spans match what the
- *  block will show, and a blank line or another block (a bullet, a quote)
- *  ends it. Unlike GFM, a row without a pipe ends it too: GFM's lazy row is,
- *  in pasted notes, the next line of the note (quotes follow the same rule). */
+ *  block will show, and another block (a bullet, a quote) ends it. Unlike
+ *  GFM, a row without a pipe ends it too: GFM's lazy row is, in pasted notes,
+ *  the next line of the note (quotes follow the same rule). */
 const tableEnd = (lines: readonly string[], start: number): number | undefined => {
   const delimiter = lines[start + 1]?.trim() ?? ''
   if (!lines[start].includes('|') || !delimiter.includes('|') || !MAYBE_DELIMITER_ROW.test(delimiter)) return undefined
-  let blockEnd = start
-  while (blockEnd < lines.length && lines[blockEnd].trim()) blockEnd++
   const openingWs = lines[start].match(/^[ \t]*/)?.[0].length ?? 0
-  const candidate = lines.slice(start, blockEnd).map(raw => stripLeadingWhitespace(raw, openingWs)).join('\n')
-  const [first] = fromMarkdown(candidate, {
-    extensions: [gfmTable()],
-    mdastExtensions: [gfmTableFromMarkdown()],
-  }).children
-  if (first?.type !== 'table' || !first.position) return undefined
-  let end = start + 2
-  while (end < start + first.position.end.line && lines[end].includes('|')) end++
-  return end
+  const parseTableAt = (end: number) => {
+    const source = lines.slice(start, end).map(raw => stripLeadingWhitespace(raw, openingWs)).join('\n')
+    const [first] = fromMarkdown(source, {extensions: [gfmTable()], mdastExtensions: [gfmTableFromMarkdown()]}).children
+    return first?.type === 'table' ? first : undefined
+  }
+  // The header and delimiter rows alone decide whether a table starts here,
+  // so a rejected candidate costs two lines however long the paste: parsing
+  // its whole run would make a run of malformed pairs quadratic.
+  if (!parseTableAt(start + 2)) return undefined
+  let runEnd = start + 2
+  while (runEnd < lines.length && lines[runEnd].includes('|')) runEnd++
+  const table = parseTableAt(runEnd)
+  return table?.position ? start + table.position.end.line : undefined
 }
 
 /** End (exclusive line index) of the run of `>` quote lines starting at
