@@ -3,6 +3,7 @@ import { toMdast } from 'hast-util-to-mdast'
 import type { Nodes, Paragraph, Parents, PhrasingContent, Root, RootContent } from 'mdast'
 import { gfmToMarkdown } from 'mdast-util-gfm'
 import { toMarkdown, type Options as ToMarkdownOptions } from 'mdast-util-to-markdown'
+import { parseBlockRefs, parseOutermostReferences } from '@/plugins/references/referenceParser.js'
 import { outlineFromTokens, type OutlineNode, type OutlineToken } from '@/utils/markdownParser.js'
 import { normalizeClipboardDom } from './normalizeClipboardDom.js'
 
@@ -37,14 +38,27 @@ export const convertClipboardHtml = (html: string, plainText: string): Clipboard
   if (tokens.length === 0) return {kind: 'plain'}
   const [only] = tokens
   if (tokens.length === 1 && only.kind === 'paragraph' && !only.content.includes('\n')) {
-    return {kind: 'inline', markdown: only.content}
+    // Whitespace minification drops the selection's edge spaces (a
+    // double-clicked word's trailing one); restore them from the plain text
+    // so a caret paste doesn't glue words together.
+    const lead = /^[ \t]*/.exec(plainText)?.[0] ?? ''
+    const trail = /[ \t]*$/.exec(plainText)?.[0] ?? ''
+    return {kind: 'inline', markdown: `${lead}${only.content}${trail}`}
   }
   return {kind: 'outline', blocks: outlineFromTokens(tokens)}
 }
 
-/** A page reference `[[…]]`, or a block reference `((…))` to a Roam-style
- *  9-character uid or a UUID. */
-const OUTLINER_REFERENCE = /\[\[[^[\]\n]+\]\]|\(\((?:[\w-]{9}|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})\)\)/gi
+/** Roam's 9-character block uids, which this app's own grammar (UUIDs) doesn't read. */
+const ROAM_BLOCK_REFERENCE = /\(\([\w-]{9}\)\)/g
+
+/** The reference spans in `text`: this app's grammar — balanced `[[page]]`
+ *  aliases and `((uuid))` refs, as the references plugin parses them — plus
+ *  Roam's uid refs. */
+const outlinerReferences = (text: string): string[] => [
+  ...[...parseOutermostReferences(text), ...parseBlockRefs(text)]
+    .map(reference => text.slice(reference.startIndex, reference.endIndex)),
+  ...(text.match(ROAM_BLOCK_REFERENCE) ?? []),
+]
 
 /** Outliner copies (Roam, Logseq) put their `[[page]]` / `((block))`
  *  references in the plain text; HTML beside it is a rendering that has lost
@@ -55,8 +69,8 @@ const hasOutlinerReferences = (plainText: string, body: HTMLElement): boolean =>
     .filter(element => element.tagName === 'PRE' || !element.closest('pre')) // a <pre>'s <code> once
     .map(element => element.textContent ?? '')
     .join('\n')
-  const references = new Set(plainText.match(OUTLINER_REFERENCE))
-  return [...references].some(reference => occurrences(plainText, reference) > occurrences(code, reference))
+  return [...new Set(outlinerReferences(plainText))]
+    .some(reference => occurrences(plainText, reference) > occurrences(code, reference))
 }
 
 const occurrences = (haystack: string, needle: string): number => haystack.split(needle).length - 1
