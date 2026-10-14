@@ -1,5 +1,8 @@
 import { defineVerbFacet } from '@/facets/verbFacet.ts'
+import type { OutlineNode } from '@/utils/markdownParser.ts'
 import type { PasteChordIntent } from './operations.ts'
+
+export type { OutlineNode }
 
 /**
  * What the editor should do with a paste. The default impl reproduces the
@@ -18,9 +21,11 @@ export type PasteDecision =
    *  kept. For single-line text this is an ordinary caret insert; for
    *  multiline it's Roam's "paste as plain text". */
   | {kind: 'single-block'; text?: string}
-  /** Parse the (optionally rewritten) text as markdown and split it into a
-   *  block tree at the cursor. */
-  | {kind: 'split'; text?: string}
+  /** Split the paste into a block tree at the cursor: `blocks` when the
+   *  override already built the tree (e.g. from clipboard HTML — a block's
+   *  content may then span lines), else the (optionally rewritten) text parsed
+   *  as markdown. With `blocks` present, `text` is not used. */
+  | {kind: 'split'; text?: string; blocks?: readonly OutlineNode[]}
   /** The paste/drop carried file(s) (image, etc.) — capture them as media
    *  attachments (§11) rather than inserting text. The renderer reads the files
    *  off the original event and hands them to the async capture; the decision
@@ -119,11 +124,27 @@ export const defaultPasteDecision = (request: PasteRequest): PasteDecision => {
   return request.surface === 'editor' ? {kind: 'single-block'} : {kind: 'split'}
 }
 
+// `Array.from` so a sparse array's holes are checked rather than skipped.
+const isOutline = (value: unknown): value is readonly OutlineNode[] =>
+  Array.isArray(value) && Array.from(value).every(node =>
+    node != null &&
+    typeof (node as {content?: unknown}).content === 'string' &&
+    ((node as {children?: unknown}).children === undefined ||
+      isOutline((node as {children?: unknown}).children)))
+
+/** `blocks` only on a `split`, and a well-formed tree. */
+const isValidBlocksField = (decision: PasteDecision): boolean => {
+  const {blocks} = decision as {blocks?: unknown}
+  return blocks === undefined || (decision.kind === 'split' && isOutline(blocks))
+}
+
 /**
  * The paste verb — the first home of `defineVerbFacet` outside
  * navigation. Decides, per paste, how clipboard content lands in the
  * outline. Plugins contribute:
- *   - `pasteDecisionVerb.impl(fn)`      — replace the decision wholesale,
+ *   - `pasteDecisionVerb.impl(fn)`      — replace the default decision; the
+ *     decorators still wrap it, and a format-aware one (rich paste) can
+ *     override its answer, so a plugin that must have the final say decorates,
  *   - `pasteDecisionVerb.decorator(fn)` — wrap it (e.g. rewrite CSV →
  *     markdown then defer to `next`),
  *   - `pasteDecisionVerb.before/after`  — observe pastes.
@@ -142,15 +163,16 @@ export const pasteDecisionVerb = defineVerbFacet<PasteRequest, PasteDecision>({
   // not break paste. Safe because `defaultPasteDecision` (and any well-behaved
   // override) is effect-free — the renderers apply the side effect.
   onError: 'fallback',
-  // Guard the renderers (which read `decision.kind`/`.text` right after
-  // `preventDefault`) against an untyped plugin returning `undefined`/`{}`:
-  // an invalid shape falls back to `defaultPasteDecision`. `text` is validated
-  // UNIFORMLY across kinds (string-or-absent) — including `media`, which carries
-  // no text — so a malformed `{kind:'media', text: 123}` is rejected too, rather
-  // than slipping through a kind-specific short-circuit.
+  // Guard the renderers (which read `decision.kind`/`.text`/`.blocks` right
+  // after `preventDefault`) against an untyped plugin returning `undefined`/`{}`
+  // or a malformed tree: an invalid shape falls back to `defaultPasteDecision`.
+  // `text` is validated UNIFORMLY across kinds (string-or-absent) — including
+  // `media`, which carries no text — so a malformed `{kind:'media', text: 123}`
+  // is rejected too, rather than slipping through a kind-specific short-circuit.
   validateResult: decision =>
     decision != null &&
     (decision.kind === 'single-block' || decision.kind === 'split' || decision.kind === 'media') &&
     ((decision as {text?: unknown}).text === undefined ||
-      typeof (decision as {text?: unknown}).text === 'string'),
+      typeof (decision as {text?: unknown}).text === 'string') &&
+    isValidBlocksField(decision),
 })

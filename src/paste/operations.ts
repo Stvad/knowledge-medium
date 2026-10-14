@@ -4,7 +4,12 @@ import type { Repo } from '../data/repo'
 import { isCollapsedProp } from '@/data/properties.js'
 import { revealChildren } from '@/data/mutators'
 import { visibleChildrenOf } from '@/data/visibleChildren'
-import { parseMarkdownToBlocks, singleParsedBlock, type ParsedBlock } from '@/utils/markdownParser.js'
+import {
+  parseMarkdownToBlocks,
+  parsedBlocksFromOutline,
+  type OutlineNode,
+  type ParsedBlock,
+} from '@/utils/markdownParser.js'
 import { keysBetween } from '../data/orderKey.ts'
 import { keysImmediatelyAfter, keysImmediatelyBefore } from '../data/orderKeyPlacement.ts'
 import { FacetRuntime } from '@/facets/facet.js'
@@ -27,10 +32,6 @@ interface PasteOptions {
    *  also selects it internally when the absorbed root's children would
    *  otherwise collide with it. */
   placement?: PastePlacement
-  /** Treat the whole clipboard text as one block's content (newlines
-   *  kept) instead of parsing markdown into a tree. Used by the block-
-   *  shell paste when the paste decision is `single-block`. */
-  asSingleBlock?: boolean
 }
 
 interface ExistingParentInsertion {
@@ -296,12 +297,14 @@ const planPastePlacement = async (
   return {blocksToCreate, finalParentId, orderKeysByParsedId}
 }
 
+/** `pasted` is clipboard text to parse as markdown, or a block tree a paste
+ *  decision already built. */
 export const planEditModeMultilinePaste = (
-  pastedText: string,
+  pasted: string | readonly OutlineNode[],
   currentContent: string,
   selection: EditModePasteSelection,
 ): EditModeMultilinePastePlan | null => {
-  const parsed = parseMarkdownToBlocks(pastedText)
+  const parsed = typeof pasted === 'string' ? parseMarkdownToBlocks(pasted) : parsedBlocksFromOutline(pasted)
   const absorbedRoot = parsed.find(block => !block.parentId)
   if (!absorbedRoot) return null
 
@@ -310,14 +313,14 @@ export const planEditModeMultilinePaste = (
   const prefix = currentContent.slice(0, from)
   const suffix = currentContent.slice(to)
   const createsAdditionalBlocks = parsed.some(block => block.id !== absorbedRoot.id)
-  // A multi-line absorbed root is a fenced code block (the only parse that
-  // yields one block spanning newlines). Its content is atomic — the
-  // "merge only the first source line" rule would drop the code body, so
-  // merge the whole block. Single-line roots keep the first-line merge
-  // (strips the bullet marker, preserves leading whitespace at the cursor).
-  const mergedFirstContent = absorbedRoot.content.includes('\n')
+  // A pre-built tree's root content is already final. A multi-line parsed
+  // root is an atomic token (`OutlineToken`'s `atomic` kind) — the "merge
+  // only the first source line" rule would drop its body, so merge it whole.
+  // Single-line parsed roots keep the first-line merge (strips the bullet
+  // marker, preserves leading whitespace at the cursor).
+  const mergedFirstContent = typeof pasted !== 'string' || absorbedRoot.content.includes('\n')
     ? absorbedRoot.content
-    : editorContentForFirstPastedLine(pastedText, absorbedRoot.content)
+    : editorContentForFirstPastedLine(pasted, absorbedRoot.content)
   const contentBeforeStructuralBreak = `${prefix}${mergedFirstContent}`
 
   return {
@@ -331,7 +334,37 @@ export const planEditModeMultilinePaste = (
   }
 }
 
-/** Paste markdown text into the outline around a target block.
+/** Paste markdown text into the outline around a target block, parsed into
+ *  a block tree and placed per {@link pasteParsedBlocks}. */
+export async function pasteMultilineText(
+  pastedText: string,
+  pasteTarget: Block,
+  repo: Repo,
+  options: PasteOptions = {},
+): Promise<Block[]> {
+  return pasteParsedBlocks(parseMarkdownToBlocks(pastedText), pasteTarget, repo, options)
+}
+
+/** Paste a resolved (non-media) decision around `pasteTarget`, placed per
+ *  {@link pasteParsedBlocks}. */
+export async function pasteResolvedDecision(
+  resolved: ResolvedTextPaste,
+  pasteTarget: Block,
+  repo: Repo,
+  options: PasteOptions = {},
+): Promise<Block[]> {
+  return pasteParsedBlocks(parsedBlocksFor(resolved), pasteTarget, repo, options)
+}
+
+/** The blocks a decision pastes: the tree it built, else its text parsed as
+ *  markdown, or kept whole as one block for `single-block`. Blank text pastes
+ *  nothing either way (a whitespace-only block would clobber a blank target). */
+const parsedBlocksFor = ({decision, text}: ResolvedTextPaste): ParsedBlock[] => {
+  if (decision.kind === 'split') return decision.blocks ? parsedBlocksFromOutline(decision.blocks) : parseMarkdownToBlocks(text)
+  return isBlankContent(text) ? [] : parsedBlocksFromOutline([{content: text}])
+}
+
+/** Paste parsed blocks into the outline around a target block.
  *
  *  Rewrites parsed blocks into one `repo.tx`:
  *   - Empty targets absorb a pasted root — the first, or the LAST when the
@@ -345,29 +378,19 @@ export const planEditModeMultilinePaste = (
  *  Returns the Block facades of the root-level pasted blocks in CLIPBOARD
  *  order (which is also their resulting visible order), the absorbed root
  *  appearing at its own position in that sequence rather than first. */
-export async function pasteMultilineText(
-  pastedText: string,
+async function pasteParsedBlocks(
+  parsed: readonly ParsedBlock[],
   pasteTarget: Block,
   repo: Repo,
   {
     position = 'after',
     scopeRootId,
     placement = 'visible',
-    asSingleBlock = false,
-  }: PasteOptions = {},
+  }: PasteOptions,
 ): Promise<Block[]> {
+  if (parsed.length === 0) return []
   const targetData = pasteTarget.peek() ?? await pasteTarget.load()
   if (!targetData) return []
-
-  // Blank clipboard is a no-op on both paths: `parseMarkdownToBlocks` drops
-  // all-blank input to `[]`, so `asSingleBlock` must too — otherwise it
-  // would create a whitespace-only block (or clobber a blank target).
-  if (asSingleBlock && isBlankContent(pastedText)) return []
-
-  const parsed = asSingleBlock
-    ? [singleParsedBlock(pastedText)]
-    : parseMarkdownToBlocks(pastedText)
-  if (parsed.length === 0) return []
 
   const parsedRoots = parsed.filter(block => !block.parentId)
 
@@ -520,11 +543,14 @@ export async function resolvePasteWithMediaCapture(
 
   // Clipboard text first, then one reference per captured file — each on its own line.
   const text = [request.text, ...references].filter(Boolean).join('\n')
-  if (!text) return null // nothing captured and no text
+  // Once references are spliced in, the html no longer describes the text, and
+  // an html-aware override would rewrite them away. With none, it still does.
+  const html = references.length > 0 ? undefined : request.html
+  if (!text && !html) return null // nothing captured and nothing else to paste
 
   // Re-decide with files stripped + the spliced text, so the file half doesn't
   // re-trigger `media`.
-  const decision = pasteDecisionVerb.runSync(runtime, { ...request, text, files: [] })
+  const decision = pasteDecisionVerb.runSync(runtime, { ...request, text, html, files: [] })
   if (decision.kind === 'media') return null // a plugin returned media without files — nothing to paste
   return { decision, text: decision.text ?? text }
 }
@@ -560,8 +586,5 @@ export async function pasteFromClipboard(
   // This path is text-only (navigator.clipboard.readText carries no files), so a
   // `media` decision can't arise — fall back to the text paste if one does.
   if (decision.kind === 'media') return pasteMultilineText(text, pasteTarget, repo, options)
-  return pasteMultilineText(decision.text ?? text, pasteTarget, repo, {
-    ...options,
-    asSingleBlock: decision.kind === 'single-block',
-  })
+  return pasteResolvedDecision({decision, text: decision.text ?? text}, pasteTarget, repo, options)
 }
