@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render } from '@testing-library/react'
+import { act, cleanup, render } from '@testing-library/react'
 import { ChangeScope, type User } from '@/data/api'
 import type { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -10,8 +10,17 @@ import {
   focusBlock,
   isEditingProp,
   peekFocusedBlockLocation,
+  selectionStateProp,
 } from '@/data/properties'
+import type { Block } from '@/data/block'
+import type { ActionTrigger, BlockPointerDependencies } from '@/shortcuts/types'
+import { extendBlockSelectionAction } from '@/extensions/blockSelectionAction'
+import { resolveFacetRuntimeSync } from '@/facets/facet'
+import { invokeAction } from '@/shortcuts/actionDispatch'
+import { spatialNavigationPlugin } from '@/plugins/spatial-navigation'
+import { cursorFollowsScrollPlugin } from '../index.ts'
 import { PanelCursorFollowsScroll } from '../PanelCursorFollowsScroll.tsx'
+import { forgetFollow, rangeOriginDecorator, rememberFollow } from '../followOrigin.ts'
 
 const WS = 'ws-1'
 const USER: User = {id: 'user-1'}
@@ -566,5 +575,105 @@ describe('PanelCursorFollowsScroll', () => {
     await fence.settled()
     expect(peekFocusedBlockLocation(panel)?.blockId).toBe('a')
     expect(panel.peekProperty(isEditingProp)).toBe(true)
+  })
+})
+
+/** The `rangeOrigin` a shift-click in this panel would extend from, as the
+ *  plugin's decorator hands it to the selection action it wraps. */
+const shiftClickOrigin = async (panel: Block) => {
+  let handed: BlockPointerDependencies | undefined
+  await rangeOriginDecorator.wrap(
+    {block: panel, uiStateBlock: panel, targetElement: document.body} as BlockPointerDependencies,
+    {} as ActionTrigger,
+    async deps => { handed = deps as BlockPointerDependencies },
+  )
+  return handed?.rangeOrigin
+}
+
+describe('range origin after the cursor follows a scroll', () => {
+  afterEach(() => forgetFollow(PANEL_ID))
+
+  /** Scroll `from` out of view with `to` on top, and wait for the follow. */
+  const followScroll = async (panel: Block, dom: PanelDom, from: string, to: string) => {
+    dom.moveRow(from, -400)
+    dom.moveRow(to, 20)
+    dom.scroll()
+    await vi.waitFor(() => {
+      expect(peekFocusedBlockLocation(panel)?.blockId).toBe(to)
+    })
+  }
+
+  it('extends a shift-click from the row the user left, not the row the cursor followed to', async () => {
+    const panel = repo.block(PANEL_ID)
+    const dom = buildPanel(PANEL_ID, [['a', 20], ['b', 200]])
+    await focusBlock(panel, 'a', {renderScopeId: SCOPE})
+    render(<PanelCursorFollowsScroll block={panel}/>)
+    expect(await shiftClickOrigin(panel)).toBeUndefined()
+
+    await followScroll(panel, dom, 'a', 'b')
+
+    expect(await shiftClickOrigin(panel)).toEqual({blockId: 'a', renderScopeId: SCOPE})
+  })
+
+  it('keeps the first origin across consecutive follows', async () => {
+    const panel = repo.block(PANEL_ID)
+    const dom = buildPanel(PANEL_ID, [['a', 20], ['b', 200], ['c', 400]])
+    await focusBlock(panel, 'a', {renderScopeId: SCOPE})
+    render(<PanelCursorFollowsScroll block={panel}/>)
+
+    await followScroll(panel, dom, 'a', 'b')
+    await followScroll(panel, dom, 'b', 'c')
+
+    expect(await shiftClickOrigin(panel)).toEqual({blockId: 'a', renderScopeId: SCOPE})
+  })
+
+  // Away and back is the case a check against the current cursor alone misses:
+  // `b` is where the follow put the cursor, but this time the user put it there.
+  it('drops the origin once the user moves the cursor, even back onto the followed row', async () => {
+    const panel = repo.block(PANEL_ID)
+    const dom = buildPanel(PANEL_ID, [['a', 20], ['b', 200], ['c', 400]])
+    await focusBlock(panel, 'a', {renderScopeId: SCOPE})
+    render(<PanelCursorFollowsScroll block={panel}/>)
+    await followScroll(panel, dom, 'a', 'b')
+
+    await act(async () => { await focusBlock(panel, 'c', {renderScopeId: SCOPE}) })
+    expect(await shiftClickOrigin(panel)).toBeUndefined()
+    await act(async () => { await focusBlock(panel, 'b', {renderScopeId: SCOPE}) })
+
+    expect(await shiftClickOrigin(panel)).toBeUndefined()
+  })
+
+  // The follower forgets a follow when it re-renders for the cursor's move;
+  // a shift-click can land before that render, and must not use it either.
+  it('ignores a follow the cursor has moved off before the follower has seen the move', async () => {
+    const panel = repo.block(PANEL_ID)
+    rememberFollow(PANEL_ID, {blockId: 'a', renderScopeId: SCOPE}, {blockId: 'b', renderScopeId: SCOPE})
+    await focusBlock(panel, 'c', {renderScopeId: SCOPE})
+
+    expect(await shiftClickOrigin(panel)).toBeUndefined()
+  })
+
+  it('reaches the selection through spatial navigation\'s shift-click range', async () => {
+    const panel = repo.block(PANEL_ID)
+    const dom = buildPanel(PANEL_ID, [['a', 20], ['b', 200], ['c', 400]])
+    await focusBlock(panel, 'a', {renderScopeId: SCOPE})
+    render(<PanelCursorFollowsScroll block={panel}/>)
+    await followScroll(panel, dom, 'a', 'b')
+
+    const runtime = resolveFacetRuntimeSync([spatialNavigationPlugin, cursorFollowsScrollPlugin])
+    await invokeAction(runtime, {
+      action: extendBlockSelectionAction,
+      deps: {
+        block: repo.block('c'),
+        uiStateBlock: panel,
+        targetElement: dom.shellOf('c'),
+      } as BlockPointerDependencies,
+      trigger: {} as ActionTrigger,
+    })
+
+    expect(panel.peekProperty(selectionStateProp)).toEqual({
+      selectedBlockIds: ['a', 'b', 'c'],
+      anchorBlockId: 'a',
+    })
   })
 })

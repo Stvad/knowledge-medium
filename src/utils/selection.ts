@@ -414,21 +414,29 @@ export async function getBlocksInRange(
  *  anchor and target block. Reads selection state + focus from the
  *  UI-state block (sync), computes the range against the visible
  *  document order within the surface's scope root, then writes the
- *  new selection state. */
+ *  new selection state. With no active selection the range starts at
+ *  `originBlockId` when given, else at the focused block. */
 export async function extendSelection(
   targetBlockId: string,
   uiStateBlock: Block,
   repo: Repo,
   scopeRootId: string | undefined,
-  scopeRootForcesOpen = true,
-  clearEditing = false,
+  {
+    scopeRootForcesOpen = true,
+    clearEditing = false,
+    originBlockId,
+  }: {
+    scopeRootForcesOpen?: boolean
+    clearEditing?: boolean
+    originBlockId?: string
+  } = {},
 ): Promise<boolean> {
   const currentState = uiStateBlock.peekProperty(selectionStateProp)
   const focusedId = peekFocusedBlockLocation(uiStateBlock)?.blockId
 
   if (!scopeRootId) return false
 
-  const currentAnchor = currentState?.anchorBlockId || focusedId
+  const currentAnchor = currentState?.anchorBlockId || originBlockId || focusedId
   if (!currentAnchor) return false
 
   const rangeIds = await getBlocksInRange(currentAnchor, targetBlockId, scopeRootId, repo, scopeRootForcesOpen)

@@ -64,6 +64,8 @@ const NAV_ITEM_SELECTOR = '[data-block-nav-item="true"]'
 const PANEL_SELECTOR = '[data-panel-id]'
 const COLUMN_SELECTOR = '[data-layout-column-id]'
 const VISIBILITY_TARGET_SELECTOR = '[data-block-visibility-target="true"]'
+/** A deferred row's slot that names the occurrence it holds a place for. */
+const LABELLED_SLOT_SELECTOR = '[data-lazy-block-id][data-lazy-render-scope-id]'
 
 /** Default exclusion set used whenever a caller doesn't thread a resolved
  *  one through (e.g. a direct unit-test call, or the early-boot path with
@@ -203,6 +205,39 @@ export const panelInstances = (
     const ownPanel = el.closest<HTMLElement>(PANEL_SELECTOR)
     return ownPanel === panel
   })
+}
+
+export interface PanelRow {
+  element: HTMLElement
+  location: FocusedBlockLocation
+}
+
+/**
+ * Every row the panel holds a place for, in document order: the mounted rows
+ * `panelInstances` returns, plus the labelled slots of rows still deferred.
+ * What a RANGE between two rows spans — which rows happen to have mounted is
+ * not something the user chose, and a range over mounted rows alone has holes
+ * wherever a scroll jumped past rows without mounting them.
+ *
+ * Rows nested under a still-deferred row have no slot of their own; they are
+ * part of the range through that row, whose selection takes its subtree.
+ */
+export const panelRowsInOrder = (
+  panel: HTMLElement,
+  excludedSurfaces: ReadonlySet<string> = DEFAULT_NON_NAVIGABLE_SURFACES,
+): PanelRow[] => {
+  const mounted = new Set(panelInstances(panel, excludedSurfaces))
+  // The same two filters `panelInstances` applies to mounted rows.
+  const isOwnSlot = (slot: HTMLElement): boolean =>
+    slot.closest<HTMLElement>(PANEL_SELECTOR) === panel && !isInExcludedSurface(slot, excludedSurfaces)
+  const rows: PanelRow[] = []
+  for (const el of panel.querySelectorAll<HTMLElement>(`${NAV_ITEM_SELECTOR}, ${LABELLED_SLOT_SELECTOR}`)) {
+    const location = el.matches(NAV_ITEM_SELECTOR)
+      ? mounted.has(el) ? locationOf(el) : null
+      : isOwnSlot(el) ? slotLocationOf(el) : null
+    if (location) rows.push({element: el, location})
+  }
+  return rows
 }
 
 export const panelOf = (el: HTMLElement): HTMLElement | null =>
@@ -519,9 +554,7 @@ export const reservedRowBetween = (
   const panel = panelOf(from)
   if (!panel) return null
   const fromScope = from.dataset.renderScopeId
-  const slots = Array.from(panel.querySelectorAll<HTMLElement>(
-    '[data-lazy-block-id][data-lazy-render-scope-id]',
-  )).filter(slot =>
+  const slots = Array.from(panel.querySelectorAll<HTMLElement>(LABELLED_SLOT_SELECTOR)).filter(slot =>
     aheadOf(from, slot, direction) &&
     // Past the mounted neighbour it isn't "between" — the neighbour is then the
     // nearer answer and nothing is missing before it.

@@ -43,6 +43,7 @@ import {
   panelById,
   panelOf,
   panelInstances,
+  panelRowsInOrder,
   reservedRowBetween,
   resolveCurrentAnchor,
   rowSlotIn,
@@ -81,16 +82,12 @@ const currentInstance = (
   return resolveCurrentAnchor(uiStateBlock.id, focusedLocation, excludedSurfacesFor(uiStateBlock))
 }
 
-const locationsOf = (instances: readonly HTMLElement[]): FocusedBlockLocation[] | null => {
-  const locations = instances.map(locationOf)
-  return locations.every((location): location is FocusedBlockLocation => Boolean(location))
-    ? locations
-    : null
-}
-
+/** `rangeOrigin` stands in for the focused row as the cursor the range starts
+ *  from — see `BlockPointerDependencies.rangeOrigin`. */
 export const extendSelectionToSpatialTarget = async (
   deps: BaseShortcutDependencies,
   target: HTMLElement,
+  rangeOrigin?: FocusedBlockLocation,
 ): Promise<boolean> => {
   const {uiStateBlock} = deps
   if (!uiStateBlock) return false
@@ -101,19 +98,18 @@ export const extendSelectionToSpatialTarget = async (
   if (!panel || panel.dataset.panelId !== uiStateBlock.id) return true
 
   const currentState = uiStateBlock.peekProperty(selectionStateProp)
-  const currentLocation = peekFocusedBlockLocation(uiStateBlock)
-  const anchorBlockId = currentState?.anchorBlockId ?? currentLocation?.blockId
+  const cursorLocation = rangeOrigin ?? peekFocusedBlockLocation(uiStateBlock)
+  const anchorBlockId = currentState?.anchorBlockId ?? cursorLocation?.blockId
   if (!anchorBlockId) return false
 
-  const instances = panelInstances(panel, excludedSurfacesFor(uiStateBlock))
-  const orderedLocations = locationsOf(instances)
-  if (!orderedLocations) return false
-  const targetIndex = instances.indexOf(target)
+  const rows = panelRowsInOrder(panel, excludedSurfacesFor(uiStateBlock))
+  const orderedLocations = rows.map(row => row.location)
+  const targetIndex = rows.findIndex(row => row.element === target)
   const anchorIndex = findBestSelectionAnchorIndex(orderedLocations, {
     anchorBlockId,
     targetIndex,
     selectedBlockIds: currentState?.selectedBlockIds,
-    currentLocation,
+    currentLocation: cursorLocation,
   })
   if (anchorIndex < 0) return false
 
@@ -600,13 +596,13 @@ export const spatialSelectionClickDecorator: ActionDispatchDecorator = {
   actionId: EXTEND_BLOCK_SELECTION_ACTION_ID,
   context: ActionContextTypes.BLOCK_POINTER,
   wrap: async (deps, trigger, next, dispatch) => {
-    const {uiStateBlock, targetElement} = deps as BlockPointerDependencies
+    const {uiStateBlock, targetElement, rangeOrigin} = deps as BlockPointerDependencies
     // Only the clicked block's own panel can resolve a spatial range; for a
     // mismatched panel defer to the structural base rather than swallow it.
     // `extendSelectionToSpatialTarget` reports a mismatch as "handled" for
     // the keyboard contract, so gate on the panel match here.
     if (panelOf(targetElement)?.dataset.panelId === uiStateBlock.id) {
-      if (await extendSelectionToSpatialTarget({uiStateBlock}, targetElement)) return
+      if (await extendSelectionToSpatialTarget({uiStateBlock}, targetElement, rangeOrigin)) return
     }
     await next(deps, trigger, dispatch)
   },
