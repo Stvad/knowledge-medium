@@ -1,1 +1,1 @@
-import{cR as e,lR as t,sR as n}from"../../../chunks/app-Cp90yLYS.js";export{n as matchAtTrigger,e as placeCompletionSource,t as planResolvedInsert};
+import{cR as e,lR as t,sR as n}from"../../../chunks/app-DnZrHdyN.js";export{n as matchAtTrigger,e as placeCompletionSource,t as planResolvedInsert};

@@ -1,1 +1,1 @@
-import{LC as e}from"../../chunks/app-Cp90yLYS.js";export{e as ensureMetricsConsoleHook};
+import{LC as e}from"../../chunks/app-DnZrHdyN.js";export{e as ensureMetricsConsoleHook};
