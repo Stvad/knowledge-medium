@@ -149,6 +149,20 @@ describe('convertClipboardHtml: content', () => {
     expect(parseMarkdownToBlocks(table).map(block => block.content)).toEqual([table])
   })
 
+  it('drops code-block chrome that sits beside the <code>', () => {
+    expect(outline('<h1>T</h1><pre><span>javascript</span><button>Copy</button><code class="language-js">x = 1</code></pre>'))
+      .toEqual(['# T', '  ```js\nx = 1\n```'])
+  })
+
+  it('keeps every line of a <pre> split across several <code>s', () => {
+    expect(outline('<h1>T</h1><pre><code>a</code>\n<code>b</code></pre>')).toEqual(['# T', '  ```\na\nb\n```'])
+  })
+
+  it('writes a quote that a later text paste reads back as one block', () => {
+    const [, quote] = outline('<h1>T</h1><blockquote><p>q1</p><p>q2</p></blockquote>')
+    expect(parseMarkdownToBlocks(quote.trim()).map(block => block.content)).toEqual([quote.trim()])
+  })
+
   it('normalizes non-breaking and zero-width spaces', () => {
     expect(outline('<h1>T</h1><p>a&nbsp;b\u200bc</p>')).toEqual(['# T', '  a bc'])
   })
