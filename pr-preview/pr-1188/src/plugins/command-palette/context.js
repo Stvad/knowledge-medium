@@ -1,1 +1,1 @@
-import{$x as e,eS as t,nS as n,tS as r}from"../../../chunks/app-C2W-n-hv.js";export{e as COMMAND_PALETTE_ACTION_ID,t as COMMAND_PALETTE_CONTEXT,r as COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,n as commandPaletteActionContext};
+import{$x as e,eS as t,nS as n,tS as r}from"../../../chunks/app-DuJgFISO.js";export{e as COMMAND_PALETTE_ACTION_ID,t as COMMAND_PALETTE_CONTEXT,r as COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,n as commandPaletteActionContext};

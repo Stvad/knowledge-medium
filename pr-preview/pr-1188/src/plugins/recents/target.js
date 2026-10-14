@@ -1,1 +1,1 @@
-import{Qv as e}from"../../../chunks/app-C2W-n-hv.js";export{e as openRecentsPage};
+import{Qv as e}from"../../../chunks/app-DuJgFISO.js";export{e as openRecentsPage};

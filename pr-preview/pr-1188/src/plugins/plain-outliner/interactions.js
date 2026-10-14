@@ -1,1 +1,1 @@
-import{r_ as e}from"../../../chunks/app-C2W-n-hv.js";export{e as blockEditingContentRenderer};
+import{r_ as e}from"../../../chunks/app-DuJgFISO.js";export{e as blockEditingContentRenderer};
