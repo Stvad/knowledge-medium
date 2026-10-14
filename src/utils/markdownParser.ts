@@ -168,8 +168,10 @@ const fencedCodeEnd = (lines: readonly string[], start: number): number | undefi
 
 const TABLE_DELIMITER_ROW = /^\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?$/
 
+/** Cells in a table row: GFM splits at every pipe not escaped as `\|`
+ *  (inside code spans too). */
 const tableCellCount = (row: string): number =>
-  row.replace(/^\|/, '').replace(/\|$/, '').split('|').length
+  row.replace(/^\|/, '').replace(/\|$/, '').split(/(?<!\\)\|/).length
 
 /** End (exclusive line index) of the GFM table whose header row is at
  *  `start`, or undefined when there is none: a header row, a delimiter row

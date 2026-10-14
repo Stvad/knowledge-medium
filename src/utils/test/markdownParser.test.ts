@@ -367,6 +367,11 @@ Root
       expect(outline(parseMarkdownToBlocks('a | b\n--- | ---\n1 | 2'))).toEqual(['a | b\n--- | ---\n1 | 2'])
     })
 
+    it('does not count an escaped pipe as a column', () => {
+      const escaped = '| a \\| b | value |\n| --- | --- |\n| `x\\|y` | 2 |'
+      expect(outline(parseMarkdownToBlocks(escaped))).toEqual([escaped])
+    })
+
     it('falls back to a block per line when the delimiter row does not match the header', () => {
       expect(outline(parseMarkdownToBlocks('| a | b |\n| --- |\n| 1 | 2 |'))).toEqual([
         '| a | b |',

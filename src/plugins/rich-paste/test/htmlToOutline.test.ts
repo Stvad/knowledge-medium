@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { describe, expect, it } from 'vitest'
-import type { OutlineNode } from '@/utils/markdownParser'
+import { parseMarkdownToBlocks, type OutlineNode } from '@/utils/markdownParser'
 import { convertClipboardHtml, type ClipboardHtmlConversion } from '../htmlToOutline'
 import chatgptAnswer from './fixtures/chatgpt-answer.html?raw'
 import chromePartialHeading from './fixtures/chrome-partial-heading.html?raw'
@@ -113,6 +113,22 @@ describe('convertClipboardHtml: content', () => {
     )).toEqual(['## Bold style', '  **emphasis**'])
   })
 
+  it('keeps a lone heading or list item as a block, with its marker', () => {
+    expect(outline('<h2>Title</h2>')).toEqual(['## Title'])
+    expect(outline('<ol start="3"><li>third</li></ol>')).toEqual(['3. third'])
+  })
+
+  it('keeps a line break inside one block even with no other markup', () => {
+    expect(outline('<p>first<br>second</p>')).toEqual(['first\nsecond'])
+  })
+
+  it('splits paragraphs at a double line break', () => {
+    expect(outline('<p>one<br>&nbsp;<br>two<br>three</p>')).toEqual(['one', 'two\nthree'])
+    expect(outline('<ul><li>item<br><br>more</li></ul>')).toEqual(['item', '  more'])
+    // Nothing but paragraph breaks left: the plain text says the same.
+    expect(convertClipboardHtml('<p>one<br><br><br>two</p>')).toEqual(plain)
+  })
+
   it('keeps a formatted paragraph with a line break as a block, not a caret insert', () => {
     expect(outline('<p><a href="https://e.com/">one</a><br>two</p>')).toEqual(['[one](https://e.com/)\ntwo'])
   })
@@ -124,6 +140,13 @@ describe('convertClipboardHtml: content', () => {
   it('drops a table, quote or code block with nothing in it', () => {
     expect(outline('<h1>T</h1><table><thead></thead></table><table><tr><td> </td><td></td></tr><tr><td></td></tr></table>' +
       '<blockquote> </blockquote><pre><code></code></pre><p>end</p>')).toEqual(['# T', '  end'])
+  })
+
+  it('writes a table that a later text paste reads back as one block', () => {
+    // Copying the block and pasting it again goes through the markdown parser.
+    const [table] = outline('<table><tr><th>a|b</th><th>c</th></tr><tr><td>1</td><td>2</td></tr></table>')
+    expect(table).toContain('a\\|b')
+    expect(parseMarkdownToBlocks(table).map(block => block.content)).toEqual([table])
   })
 
   it('normalizes non-breaking and zero-width spaces', () => {
