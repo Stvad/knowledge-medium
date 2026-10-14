@@ -7,7 +7,7 @@ import {
 } from '@/extensions/blockInteraction.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { focusBlock, isFocusedBlock } from '@/data/properties.js'
-import { pasteMultilineText, resolvePasteWithMediaCapture } from '@/paste/operations.js'
+import { pasteResolvedDecision, resolvePasteWithMediaCapture } from '@/paste/operations.js'
 import type { PasteRequest } from '@/paste/decision.js'
 
 /**
@@ -55,10 +55,7 @@ export function BlockPasteShellDecorator({
       const workspaceId = block.peek()?.workspaceId ?? repo.activeWorkspaceId ?? ''
       const resolved = await resolvePasteWithMediaCapture(runtime, request, { repo, workspaceId })
       if (!resolved) return
-      const pasted = await pasteMultilineText(resolved.text, block, repo, {
-        scopeRootId,
-        asSingleBlock: resolved.decision.kind === 'single-block',
-      })
+      const pasted = await pasteResolvedDecision(resolved, block, repo, { scopeRootId })
       if (pasted[0]) {
         void focusBlock(uiStateBlock, pasted[0].id, { renderScopeId })
       }
