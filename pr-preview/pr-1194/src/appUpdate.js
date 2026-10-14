@@ -1,1 +1,0 @@
-import{$w as e,Qw as t}from"../chunks/app-CL4aiuUb.js";export{t as appUpdate,e as useAppUpdateAvailable};

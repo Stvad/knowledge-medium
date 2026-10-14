@@ -1,1 +1,0 @@
-import{aT as e,oT as t}from"../../chunks/app-CL4aiuUb.js";export{e as gestureBindingDescriptor,t as matchesGestureEvent};

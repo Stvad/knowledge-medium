@@ -1,1 +1,0 @@
-import{GQ as e,HQ as t,KQ as n,UQ as r,VQ as i,WQ as a}from"../../chunks/app-CL4aiuUb.js";export{i as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,t as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,r as __resetLayoutSessionIdForTesting,a as getLayoutSessionId,e as isInstalledAppDisplayMode,n as readOrCreateLayoutSessionId};

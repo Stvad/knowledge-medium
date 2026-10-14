@@ -1,1 +1,0 @@
-import{a_ as e,c_ as t,o_ as n,s_ as r}from"../../../chunks/app-CL4aiuUb.js";export{e as WorkspaceSwitcherSidebarSection,n as pendingInvitationsHeaderItem,r as workspaceHeaderPlugin,t as workspaceSwitcherSidebarSection};

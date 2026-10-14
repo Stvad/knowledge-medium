@@ -1,1 +1,0 @@
-import{SP as e,xP as t}from"../../../chunks/app-CL4aiuUb.js";export{t as PropertyShapeButton,e as PropertyShapeGlyph};

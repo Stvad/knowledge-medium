@@ -1,1 +1,0 @@
-import{DT as e,ET as t}from"../../chunks/app-CL4aiuUb.js";export{t as ClientLocalSettings,e as clientLocalSettings};

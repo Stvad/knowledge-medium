@@ -1,1 +1,0 @@
-import{T_ as e,w_ as t}from"../../../chunks/app-CL4aiuUb.js";export{t as isLeftSidebarSectionContribution,e as leftSidebarSectionsFacet};

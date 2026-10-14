@@ -1,1 +1,0 @@
-import{Ow as e,gt as t,kw as n}from"../../../chunks/app-CL4aiuUb.js";export{e as extensionsOverridesProp,n as extensionsPrefsType,t as extensionsSettingsPlugin};

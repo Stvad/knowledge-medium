@@ -1,1 +1,0 @@
-import{cz as e,lz as t,uz as n}from"../../../chunks/app-CL4aiuUb.js";export{e as charLimitProp,t as charProfileProp,n as charScopeProp};
