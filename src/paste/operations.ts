@@ -319,8 +319,8 @@ export const planEditModeMultilinePaste = (
   const suffix = currentContent.slice(to)
   const createsAdditionalBlocks = parsed.some(block => block.id !== absorbedRoot.id)
   // A pre-built tree's root content is already final. A multi-line parsed
-  // root is atomic (a fenced code block or a table) — the "merge only the
-  // first source line" rule would drop its body, so merge the whole block.
+  // root is an atomic token (`OutlineToken`'s `atomic` kind) — the "merge
+  // only the first source line" rule would drop its body, so merge it whole.
   // Single-line parsed roots keep the first-line merge (strips the bullet
   // marker, preserves leading whitespace at the cursor).
   const mergedFirstContent = typeof pasted !== 'string' || absorbedRoot.content.includes('\n')
