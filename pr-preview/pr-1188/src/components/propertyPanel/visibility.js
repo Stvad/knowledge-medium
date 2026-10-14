@@ -1,1 +1,1 @@
-import{TM as e,wM as t}from"../../../chunks/app-BM6YW8t7.js";export{t as isPropertyPanelHiddenProperty,e as isPropertyPanelReadOnlyProperty};
+import{TM as e,wM as t}from"../../../chunks/app-DiY5lSyd.js";export{t as isPropertyPanelHiddenProperty,e as isPropertyPanelReadOnlyProperty};
