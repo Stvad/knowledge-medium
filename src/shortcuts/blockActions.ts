@@ -143,13 +143,13 @@ export const extendSelectionDown = async (
   // meaningless, so leave the keystroke native (matches the old no-op there).
   if (!hasActiveSelection(uiStateBlock)) {
     if (focusedId === scopeRootId) return false
-    return extendSelection(focusedId, uiStateBlock, repo, scopeRootId, scopeRootForcesOpen, clearEditing)
+    return extendSelection(focusedId, uiStateBlock, repo, scopeRootId, {scopeRootForcesOpen, clearEditing})
   }
 
   const nextBlock = await nextVisibleBlock(repo.block(focusedId), scopeRootId, scopeRootForcesOpen)
   if (!nextBlock) return false
 
-  return extendSelection(nextBlock.id, uiStateBlock, repo, scopeRootId, scopeRootForcesOpen, clearEditing)
+  return extendSelection(nextBlock.id, uiStateBlock, repo, scopeRootId, {scopeRootForcesOpen, clearEditing})
 }
 
 /** Mirror of {@link extendSelectionDown} for the previous visible block.
@@ -170,13 +170,13 @@ export const extendSelectionUp = async (
   // Roam-style first press — see extendSelectionDown.
   if (!hasActiveSelection(uiStateBlock)) {
     if (focusedId === scopeRootId) return false
-    return extendSelection(focusedId, uiStateBlock, repo, scopeRootId, scopeRootForcesOpen, clearEditing)
+    return extendSelection(focusedId, uiStateBlock, repo, scopeRootId, {scopeRootForcesOpen, clearEditing})
   }
 
   const prevBlock = await previousVisibleBlock(repo.block(focusedId), scopeRootId)
   if (!prevBlock) return false
 
-  return extendSelection(prevBlock.id, uiStateBlock, repo, scopeRootId, scopeRootForcesOpen, clearEditing)
+  return extendSelection(prevBlock.id, uiStateBlock, repo, scopeRootId, {scopeRootForcesOpen, clearEditing})
 }
 
 export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockActions => {

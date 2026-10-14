@@ -5,9 +5,12 @@ import { ChangeScope, type User } from '@/data/api'
 import { Repo } from '@/data/repo.js'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb.js'
 import { createTestRepo } from '@/data/test/createTestRepo'
-import { selectionStateProp } from '@/data/properties.js'
+import { focusBlock, selectionStateProp } from '@/data/properties.js'
 import type { ActionTrigger, BlockPointerDependencies } from '@/shortcuts/types.js'
-import { toggleBlockSelectionAction } from '@/extensions/blockSelectionAction.js'
+import {
+  extendBlockSelectionAction,
+  toggleBlockSelectionAction,
+} from '@/extensions/blockSelectionAction.js'
 
 const WS = 'ws-1'
 const USER: User = {id: 'user-1'}
@@ -26,7 +29,52 @@ beforeEach(async () => {
     await tx.create({id: 'panel', workspaceId: WS, parentId: null, orderKey: 'a0'})
     await tx.create({id: 'A', workspaceId: WS, parentId: null, orderKey: 'b0', content: 'A'})
     await tx.create({id: 'B', workspaceId: WS, parentId: null, orderKey: 'c0', content: 'B'})
+    await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'd0', content: 'root'})
+    for (const [id, orderKey] of [['r1', 'a0'], ['r2', 'b0'], ['r3', 'c0']]) {
+      await tx.create({id, workspaceId: WS, parentId: 'root', orderKey, content: id})
+    }
   }, {scope: ChangeScope.UiState})
+})
+
+describe('extendBlockSelectionAction', () => {
+  const SCOPE = 'panel:root'
+
+  it('extends from the range origin the gesture carries rather than the focused row', async () => {
+    const panel = repo.block('panel')
+    await focusBlock(panel, 'r2', {renderScopeId: SCOPE})
+
+    await extendBlockSelectionAction.handler({
+      block: repo.block('r3'),
+      uiStateBlock: panel,
+      scopeRootId: 'root',
+      targetElement: document.body,
+      rangeOrigin: {blockId: 'r1', renderScopeId: SCOPE},
+    }, {} as ActionTrigger)
+
+    expect(panel.peekProperty(selectionStateProp)).toEqual({
+      selectedBlockIds: ['r1', 'r2', 'r3'],
+      anchorBlockId: 'r1',
+    })
+  })
+
+  it('lets an active selection anchor win over the range origin', async () => {
+    const panel = repo.block('panel')
+    await focusBlock(panel, 'r3', {renderScopeId: SCOPE})
+    await panel.set(selectionStateProp, {selectedBlockIds: ['r2'], anchorBlockId: 'r2'})
+
+    await extendBlockSelectionAction.handler({
+      block: repo.block('r3'),
+      uiStateBlock: panel,
+      scopeRootId: 'root',
+      targetElement: document.body,
+      rangeOrigin: {blockId: 'r1', renderScopeId: SCOPE},
+    }, {} as ActionTrigger)
+
+    expect(panel.peekProperty(selectionStateProp)).toEqual({
+      selectedBlockIds: ['r2', 'r3'],
+      anchorBlockId: 'r2',
+    })
+  })
 })
 
 describe('toggleBlockSelectionAction', () => {
