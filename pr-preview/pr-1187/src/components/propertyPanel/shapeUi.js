@@ -1,1 +1,0 @@
-import{SP as e,xP as t}from"../../../chunks/app-Bln09WHz.js";export{t as PropertyShapeButton,e as PropertyShapeGlyph};

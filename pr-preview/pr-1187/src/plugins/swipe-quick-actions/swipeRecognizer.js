@@ -1,1 +1,0 @@
-import{AS as e,MS as t,jS as n}from"../../../chunks/app-Bln09WHz.js";export{e as SWIPE_QUICK_ACTIONS_GESTURE_ID,n as SWIPE_TRIGGER_PX,t as swipeRecognizer};
