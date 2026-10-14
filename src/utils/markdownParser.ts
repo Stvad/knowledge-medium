@@ -175,9 +175,10 @@ const MAYBE_DELIMITER_ROW = /^[\s|:-]*-[\s|:-]*$/
 
 /** End (exclusive line index) of the GFM table whose header row is at
  *  `start`, or undefined when there is none. The GFM parser the app renders
- *  with decides, so escapes, code spans and where a table stops match what
- *  the block will show: a blank line or another block (a bullet, a quote)
- *  ends it, while a plain line right after it is one more row. */
+ *  with decides what is a table, so escapes and code spans match what the
+ *  block will show, and a blank line or another block (a bullet, a quote)
+ *  ends it. Unlike GFM, a row without a pipe ends it too: GFM's lazy row is,
+ *  in pasted notes, the next line of the note (quotes follow the same rule). */
 const tableEnd = (lines: readonly string[], start: number): number | undefined => {
   const delimiter = lines[start + 1]?.trim() ?? ''
   if (!lines[start].includes('|') || !delimiter.includes('|') || !MAYBE_DELIMITER_ROW.test(delimiter)) return undefined
@@ -189,11 +190,15 @@ const tableEnd = (lines: readonly string[], start: number): number | undefined =
     extensions: [gfmTable()],
     mdastExtensions: [gfmTableFromMarkdown()],
   }).children
-  return first?.type === 'table' && first.position ? start + first.position.end.line : undefined
+  if (first?.type !== 'table' || !first.position) return undefined
+  let end = start + 2
+  while (end < start + first.position.end.line && lines[end].includes('|')) end++
+  return end
 }
 
 /** End (exclusive line index) of the run of `>` quote lines starting at
- *  `start`, or undefined when that line isn't one. */
+ *  `start`, or undefined when that line isn't one. A lazy continuation line
+ *  (no `>`) is not followed: in pasted notes it is a reply, not the quote. */
 const quoteEnd = (lines: readonly string[], start: number): number | undefined => {
   if (!lines[start].trim().startsWith('>')) return undefined
   let end = start + 1

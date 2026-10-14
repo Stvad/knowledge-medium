@@ -8,7 +8,8 @@ import { normalizeClipboardDom } from './normalizeClipboardDom.js'
 
 export type ClipboardHtmlConversion =
   /** The plain text is the better source (an outliner's own copy), or the
-   *  HTML carries nothing it lacks — paste the text as usual. */
+   *  HTML carries nothing it lacks — paste the text as usual. Never chosen
+   *  when there is no plain text to paste. */
   | {kind: 'plain'}
   /** A single line of paragraph text, as inline markdown, for the ordinary
    *  single-line paste path. A lone heading or list item is an outline: the
@@ -21,14 +22,15 @@ export type ClipboardHtmlConversion =
  *  paragraph, list item, table, code block or quote, nested by the shared
  *  paste structuring rules (`outlineFromTokens`), each block's content written
  *  as markdown. `plainText` is the same clipboard's `text/plain`. */
-export const convertClipboardHtml = (html: string, plainText = ''): ClipboardHtmlConversion => {
+export const convertClipboardHtml = (html: string, plainText: string): ClipboardHtmlConversion => {
   const body = new DOMParser().parseFromString(html, 'text/html').body
   if (hasOutlinerReferences(plainText, body)) return {kind: 'plain'}
   normalizeClipboardDom(body)
   const mdast = toMdast(fromDom(body)) as Root
   sanitize(mdast)
   splitAtBlankLines(mdast)
-  if (!carriesStructure(mdast)) return {kind: 'plain'}
+  // With no plain text (an html-only clipboard) the html is the only source.
+  if (plainText.trim() && !carriesStructure(mdast)) return {kind: 'plain'}
 
   const tokens: OutlineToken[] = []
   walkFlow(mdast.children, 0, tokens)
@@ -42,16 +44,22 @@ export const convertClipboardHtml = (html: string, plainText = ''): ClipboardHtm
 
 /** A page reference `[[…]]`, or a block reference `((…))` to a Roam-style
  *  9-character uid or a UUID. */
-const OUTLINER_REFERENCE = /\[\[[^[\]\n]+\]\]|\(\((?:[\w-]{9}|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})\)\)/g
+const OUTLINER_REFERENCE = /\[\[[^[\]\n]+\]\]|\(\((?:[\w-]{9}|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})\)\)/gi
 
 /** Outliner copies (Roam, Logseq) put their `[[page]]` / `((block))`
  *  references in the plain text; HTML beside it is a rendering that has lost
  *  them, so the text is the better source. The same characters inside code
  *  (`if ((ready))`, `m[[i]]`) are just code. */
 const hasOutlinerReferences = (plainText: string, body: HTMLElement): boolean => {
-  const code = [...body.querySelectorAll('code, pre')].map(element => element.textContent ?? '').join('\n')
-  return [...plainText.matchAll(OUTLINER_REFERENCE)].some(([reference]) => !code.includes(reference))
+  const code = [...body.querySelectorAll('pre, code')]
+    .filter(element => element.tagName === 'PRE' || !element.closest('pre')) // a <pre>'s <code> once
+    .map(element => element.textContent ?? '')
+    .join('\n')
+  const references = new Set(plainText.match(OUTLINER_REFERENCE))
+  return [...references].some(reference => occurrences(plainText, reference) > occurrences(code, reference))
 }
+
+const occurrences = (haystack: string, needle: string): number => haystack.split(needle).length - 1
 
 /** Whether the HTML says anything the plain text doesn't. Plain paragraphs
  *  are what the text path already produces; a lone code block is a copy from
@@ -89,9 +97,12 @@ const walkFlow = (nodes: readonly RootContent[], indent: number, tokens: Outline
             walkFlow(first?.type === 'paragraph' ? rest : item.children, indent + 1, tokens)
             return
           }
-          // Ordered items keep their number, matching a markdown-text paste.
+          // Ordered items keep their number and task items their checkbox,
+          // matching a markdown-text paste of `1. [x] item`.
           // `<ol reversed>` / `<li value>` are not honoured: rare in copied content.
-          const content = node.ordered ? `${(node.start ?? 1) + index}. ${inline}` : inline
+          const number = node.ordered ? `${(node.start ?? 1) + index}. ` : ''
+          const checkbox = item.checked == null ? '' : item.checked ? '[x] ' : '[ ] '
+          const content = `${number}${checkbox}${inline}`
           tokens.push({kind: 'list-item', indent, content})
           walkFlow(rest, indent + 1, tokens)
         })
