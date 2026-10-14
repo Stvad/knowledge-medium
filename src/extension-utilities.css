@@ -26,8 +26,8 @@
  * index.css generates from the app's source alongside the classes listed
  * below. It loads after index.css into the same `utilities` layer and so wins
  * every specificity tie; only as a superset does its own ordering decide all
- * of them. Under `source(none)` an app variant it lacked (`@md:flex-row`) lost
- * to a safelisted base utility (`flex-col`). `@reference` makes index.css's
+ * of them. So no `source(none)` to shrink it: an app variant it would then
+ * lack loses to a safelisted base utility. `@reference` makes index.css's
  * theme (tokens, the custom dark variant, plugins) resolvable here without
  * re-emitting any of its CSS. Order matters: `@reference` after the utilities
  * import, or the file emits nothing.

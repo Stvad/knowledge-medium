@@ -12,29 +12,59 @@ const safelistStylesheet = fileURLToPath(new URL('./extension-utilities.css', im
 const compile = async (file: string): Promise<Root> =>
   (await postcss([tailwindcss()]).process(await readFile(file, 'utf8'), {from: file})).root
 
-/** Selectors Tailwind generated into `@layer utilities`. Rules index.css
- *  authors by hand are left out: `@reference` never re-emits them, so they
- *  must outrank a single class on their own (as `.bullet.page-bullet` does). */
-const generatedUtilitySelectors = (root: Root): Set<string> => {
-  const selectors = new Set<string>()
+interface UtilityRule {
+  selector: string
+  css: string
+}
+
+/** `var(--x, fallback)` → `var(--x)`. Under `@reference` Tailwind writes each
+ *  theme token's value in as a fallback; index.css defines every token its own
+ *  utilities read, so the fallback never applies and the rules match without
+ *  it. */
+const withoutVarFallbacks = (css: string): string => {
+  const fallbackStart = /var\((--[\w-]+),/g
+  let out = ''
+  let copiedUpTo = 0
+  for (let match; (match = fallbackStart.exec(css));) {
+    let end = fallbackStart.lastIndex
+    for (let depth = 1; depth > 0 && end < css.length; end++) {
+      if (css[end] === '(') depth++
+      if (css[end] === ')') depth--
+    }
+    out += `${css.slice(copiedUpTo, match.index)}var(${match[1]})`
+    copiedUpTo = fallbackStart.lastIndex = end
+  }
+  return out + css.slice(copiedUpTo)
+}
+
+/** Rules Tailwind generated into `@layer utilities`, in emitted order. Rules
+ *  index.css authors by hand are left out: `@reference` never re-emits them,
+ *  so they must outrank a single class on their own (as `.bullet.page-bullet`
+ *  does). */
+const generatedUtilityRules = (root: Root): UtilityRule[] => {
+  const rules: UtilityRule[] = []
   root.walkAtRules('layer', layer => {
     if (layer.params !== 'utilities') return
     layer.each(node => {
-      if (node.type === 'rule' && node.source?.input.file !== appStylesheet) selectors.add(node.selector)
+      if (node.type === 'rule' && node.source?.input.file !== appStylesheet) {
+        rules.push({selector: node.selector, css: withoutVarFallbacks(node.toString())})
+      }
     })
   })
-  return selectors
+  return rules
 }
 
 describe('extension-utilities.css', () => {
   // The safelist lands after index.css in the same `utilities` layer, so it
-  // wins every specificity tie. An app utility it does not re-emit loses to a
-  // base utility it does: the video-notes split's `@md:flex-row` lost to
-  // `flex-col` and stacked the notes under the video.
-  it('re-emits every utility index.css generates, so its own ordering decides every tie', async () => {
-    const app = generatedUtilitySelectors(await compile(appStylesheet))
-    const safelist = generatedUtilitySelectors(await compile(safelistStylesheet))
+  // wins every specificity tie. It leaves the app's cascade intact only by
+  // re-emitting the app's utilities with the same bodies in the same relative
+  // order: one it lacks or reorders loses to a safelisted utility it emits
+  // later (an app `@md:flex-row` to a safelisted `flex-col`).
+  it('re-emits every utility index.css generates, with the same bodies, in the same order', async () => {
+    const app = generatedUtilityRules(await compile(appStylesheet))
+    const appSelectors = new Set(app.map(rule => rule.selector))
+    const safelist = generatedUtilityRules(await compile(safelistStylesheet))
 
-    expect([...app].filter(selector => !safelist.has(selector))).toEqual([])
+    expect(safelist.filter(rule => appSelectors.has(rule.selector))).toEqual(app)
   }, 20_000) // ~0.5s alone; two full Tailwind compiles and a content scan.
 })
