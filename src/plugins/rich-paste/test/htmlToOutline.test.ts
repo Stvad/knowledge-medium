@@ -83,6 +83,21 @@ describe('convertClipboardHtml: sources', () => {
   })
 })
 
+describe('convertClipboardHtml: outliner copies', () => {
+  const html = '<h2>Notes</h2><p>See <code>if ((ready))</code></p><pre><code>m[[i]] = ((a1b2c3d4e))</code></pre>'
+
+  it('defers to plain text carrying page or block references', () => {
+    expect(convertClipboardHtml(html, 'Notes\nSee [[Page]]')).toEqual(plain)
+    expect(convertClipboardHtml(html, 'Notes\n((z9y8x7w6v)) and more')).toEqual(plain)
+    expect(convertClipboardHtml(html, 'ref ((123e4567-e89b-12d3-a456-426614174000))')).toEqual(plain)
+  })
+
+  it('ignores reference-like syntax that is code, or not a block id', () => {
+    const plainText = 'Notes\nSee if ((ready))\nm[[i]] = ((a1b2c3d4e))\ncall((x))'
+    expect(convertClipboardHtml(html, plainText).kind).toBe('outline')
+  })
+})
+
 describe('convertClipboardHtml: content', () => {
   it('keeps a <br> as a newline inside the block, but not in a heading', () => {
     expect(outline('<h2>Two<br>lines</h2><p>first<br>second</p>')).toEqual(['## Two lines', '  first\nsecond'])
