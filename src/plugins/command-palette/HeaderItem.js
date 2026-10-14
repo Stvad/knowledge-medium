@@ -1,1 +1,1 @@
-import{mS as e}from"../../../chunks/app-BURH8TZM.js";export{e as CommandPaletteHeaderItem};
+import{mS as e}from"../../../chunks/app-zB9MyDKj.js";export{e as CommandPaletteHeaderItem};

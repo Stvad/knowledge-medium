@@ -1,1 +1,1 @@
-import{ao as e,io as t,oo as n}from"../../../chunks/app-BURH8TZM.js";export{t as dailyNoteHintDecks,e as reviewHintLabel,n as srsDailyNoteReviewHintDecorator};
+import{ao as e,io as t,oo as n}from"../../../chunks/app-zB9MyDKj.js";export{t as dailyNoteHintDecks,e as reviewHintLabel,n as srsDailyNoteReviewHintDecorator};
