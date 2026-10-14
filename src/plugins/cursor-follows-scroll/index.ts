@@ -1,9 +1,9 @@
 import type { AppExtension } from '@/facets/facet.js'
 import { panelMountsFacet, type PanelMountContribution } from '@/extensions/core.js'
 import { systemToggle } from '@/facets/togglable.js'
-import { actionDispatchWrap } from '@/shortcuts/actionDispatch.js'
+import { actionDispatchVerb } from '@/shortcuts/actionDispatch.js'
 import { PanelCursorFollowsScroll } from './PanelCursorFollowsScroll.tsx'
-import { rangeOriginDecorator } from './followOrigin.ts'
+import { consumeFollowOnDispatch } from './followOrigin.ts'
 
 const cursorFollowsScrollMount: PanelMountContribution = {
   id: 'cursor-follows-scroll.panel',
@@ -22,7 +22,7 @@ export const cursorFollowsScrollPlugin: AppExtension = systemToggle({
   panelMountsFacet.of(cursorFollowsScrollMount, {source: 'cursor-follows-scroll'}),
   // Above spatial navigation's shift-click decorator (default precedence),
   // which reads the origin this one supplies.
-  actionDispatchWrap(rangeOriginDecorator, {source: 'cursor-follows-scroll', precedence: 1}),
+  actionDispatchVerb.decorator(consumeFollowOnDispatch, {source: 'cursor-follows-scroll', precedence: 1}),
 ])
 
 export {

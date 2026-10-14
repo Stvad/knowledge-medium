@@ -475,6 +475,26 @@ describe('spatial navigation shift-click selection', () => {
     })
   })
 
+  // A backlink entry reserves its slot without naming the scope it will mint,
+  // which keeps navigation off it; a range needs only the block.
+  it('includes a deferred row whose slot names no scope', async () => {
+    buildPanelDom([
+      {blockId: 'A', renderScopeId: 'panel:outline'},
+      {deferredBlockId: 'X'},
+      {blockId: 'B', renderScopeId: 'panel:backlink:B'},
+    ] as NavInstance[])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'A', {renderScopeId: 'panel:outline'})
+
+    await shiftClick({
+      block: env.repo.block('B'),
+      uiStateBlock: panel,
+      targetElement: blockNavItem('B'),
+    })
+
+    expect(panel.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual(['A', 'X', 'B'])
+  })
+
   it('leaves out deferred rows inside an excluded surface, as it does mounted ones', async () => {
     buildPanelDom([{
       blockId: 'top',

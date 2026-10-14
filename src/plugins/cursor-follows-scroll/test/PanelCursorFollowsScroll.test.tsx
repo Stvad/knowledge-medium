@@ -13,14 +13,19 @@ import {
   selectionStateProp,
 } from '@/data/properties'
 import type { Block } from '@/data/block'
-import type { ActionTrigger, BlockPointerDependencies } from '@/shortcuts/types'
+import {
+  ActionContextTypes,
+  type ActionConfig,
+  type ActionTrigger,
+  type BlockPointerDependencies,
+} from '@/shortcuts/types'
 import { extendBlockSelectionAction } from '@/extensions/blockSelectionAction'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { invokeAction } from '@/shortcuts/actionDispatch'
 import { spatialNavigationPlugin } from '@/plugins/spatial-navigation'
 import { cursorFollowsScrollPlugin } from '../index.ts'
 import { PanelCursorFollowsScroll } from '../PanelCursorFollowsScroll.tsx'
-import { forgetFollow, rangeOriginDecorator, rememberFollow } from '../followOrigin.ts'
+import { forgetFollow, rememberFollow } from '../followOrigin.ts'
 
 const WS = 'ws-1'
 const USER: User = {id: 'user-1'}
@@ -578,15 +583,24 @@ describe('PanelCursorFollowsScroll', () => {
   })
 })
 
-/** The `rangeOrigin` a shift-click in this panel would extend from, as the
- *  plugin's decorator hands it to the selection action it wraps. */
+/** Run `action` in `panel` through the dispatch path, with this plugin's
+ *  contributions live. */
+const dispatchInPanel = async (panel: Block, action: ActionConfig) => {
+  await invokeAction(resolveFacetRuntimeSync([cursorFollowsScrollPlugin]), {
+    action,
+    deps: {block: panel, uiStateBlock: panel, targetElement: document.body} as BlockPointerDependencies,
+    trigger: {} as ActionTrigger,
+  })
+}
+
+/** The `rangeOrigin` a shift-click in this panel extends from, as the plugin
+ *  hands it to the selection action. */
 const shiftClickOrigin = async (panel: Block) => {
   let handed: BlockPointerDependencies | undefined
-  await rangeOriginDecorator.wrap(
-    {block: panel, uiStateBlock: panel, targetElement: document.body} as BlockPointerDependencies,
-    {} as ActionTrigger,
-    async deps => { handed = deps as BlockPointerDependencies },
-  )
+  await dispatchInPanel(panel, {
+    ...extendBlockSelectionAction,
+    handler: async deps => { handed = deps as BlockPointerDependencies },
+  } as ActionConfig)
   return handed?.rangeOrigin
 }
 
@@ -637,8 +651,26 @@ describe('range origin after the cursor follows a scroll', () => {
     await followScroll(panel, dom, 'a', 'b')
 
     await act(async () => { await focusBlock(panel, 'c', {renderScopeId: SCOPE}) })
-    expect(await shiftClickOrigin(panel)).toBeUndefined()
     await act(async () => { await focusBlock(panel, 'b', {renderScopeId: SCOPE}) })
+
+    expect(await shiftClickOrigin(panel)).toBeUndefined()
+  })
+
+  // Clicking the row the follow landed on writes the location already stored,
+  // so nothing watching the cursor can see it — only the gesture can.
+  it('drops the origin when the user acts in the panel, even on the followed row', async () => {
+    const panel = repo.block(PANEL_ID)
+    const dom = buildPanel(PANEL_ID, [['a', 20], ['b', 200]])
+    await focusBlock(panel, 'a', {renderScopeId: SCOPE})
+    render(<PanelCursorFollowsScroll block={panel}/>)
+    await followScroll(panel, dom, 'a', 'b')
+
+    await dispatchInPanel(panel, {
+      id: 'test.plain_click',
+      description: 'Plain click',
+      context: ActionContextTypes.BLOCK_POINTER,
+      handler: async () => { await focusBlock(panel, 'b', {renderScopeId: SCOPE}) },
+    } as ActionConfig)
 
     expect(await shiftClickOrigin(panel)).toBeUndefined()
   })

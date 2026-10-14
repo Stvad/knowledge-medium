@@ -103,9 +103,8 @@ export const extendSelectionToSpatialTarget = async (
   if (!anchorBlockId) return false
 
   const rows = panelRowsInOrder(panel, excludedSurfacesFor(uiStateBlock))
-  const orderedLocations = rows.map(row => row.location)
   const targetIndex = rows.findIndex(row => row.element === target)
-  const anchorIndex = findBestSelectionAnchorIndex(orderedLocations, {
+  const anchorIndex = findBestSelectionAnchorIndex(rows, {
     anchorBlockId,
     targetIndex,
     selectedBlockIds: currentState?.selectedBlockIds,
@@ -117,7 +116,7 @@ export const extendSelectionToSpatialTarget = async (
     uiStateBlock,
     anchorBlockId,
     targetLocation,
-    selectedBlockIds: blockIdsInOrderedSelectionRange(orderedLocations, anchorIndex, targetIndex),
+    selectedBlockIds: blockIdsInOrderedSelectionRange(rows, anchorIndex, targetIndex),
     clearEditing: true,
     description: 'spatial-navigation extend selection',
   })

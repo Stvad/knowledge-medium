@@ -6,7 +6,6 @@ import {
   isEditingProp,
   isCollapsedProp,
   peekFocusedBlockLocation,
-  sameFocusedBlockLocation,
   selectionStateProp,
   uiStateRenderScopeId,
 } from '@/data/properties'
@@ -247,8 +246,17 @@ export async function validateSelectionHierarchy(
 const uniqueBlockIds = (ids: readonly string[]): string[] =>
   Array.from(new Set(ids))
 
+/** One row of a range, in document order. A range is a set of blocks, so a row
+ *  whose scope isn't known (a deferred row whose surface doesn't name it) still
+ *  belongs; only the anchor search reads the scope, to tell copies of one
+ *  block apart. */
+export interface SelectionRangeRow {
+  blockId: string
+  renderScopeId?: string
+}
+
 export const blockIdsInOrderedSelectionRange = (
-  orderedLocations: readonly FocusedBlockLocation[],
+  orderedLocations: readonly SelectionRangeRow[],
   anchorIndex: number,
   targetIndex: number,
 ): string[] => {
@@ -267,7 +275,7 @@ export const blockIdsInOrderedSelectionRange = (
 }
 
 export const findBestSelectionAnchorIndex = (
-  orderedLocations: readonly FocusedBlockLocation[],
+  orderedLocations: readonly SelectionRangeRow[],
   options: {
     anchorBlockId: string
     targetIndex: number
@@ -289,9 +297,9 @@ export const findBestSelectionAnchorIndex = (
   if (candidates.length === 0) return -1
   if (candidates.length === 1) return candidates[0].index
 
-  const focusedCandidate = candidates.find(({location}) =>
-    sameFocusedBlockLocation(location, currentLocation),
-  )
+  const focusedCandidate = currentLocation?.blockId === anchorBlockId
+    ? candidates.find(({location}) => location.renderScopeId === currentLocation.renderScopeId)
+    : undefined
   if (focusedCandidate) return focusedCandidate.index
 
   const selected = new Set(selectedBlockIds)
