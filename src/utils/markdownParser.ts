@@ -99,7 +99,7 @@ export function parseMarkdownToBlocks(text: string): ParsedBlock[] {
 }
 
 /** Split markdown/outline text into tokens, one per non-blank line except
- *  for fenced code blocks and tables, which are consumed whole. */
+ *  for fenced code blocks, tables and quotes, which are consumed whole. */
 const lexMarkdownLines = (text: string): OutlineToken[] => {
   const lines = text.split('\n')
   const tokens: OutlineToken[] = []
@@ -115,7 +115,7 @@ const lexMarkdownLines = (text: string): OutlineToken[] => {
 
     const token = lineToken(trimmed, indent)
     const atomicEnd = fencedCodeEnd(lines, idx) ??
-      (token.kind === 'paragraph' ? tableEnd(lines, idx) : undefined)
+      (token.kind === 'paragraph' ? tableEnd(lines, idx) ?? quoteEnd(lines, idx) : undefined)
     if (atomicEnd !== undefined) {
       // Strip the opening line's indentation from every line so nested
       // content doesn't carry it; the block nests like a plain line at that
@@ -186,6 +186,15 @@ const tableEnd = (lines: readonly string[], start: number): number | undefined =
   if (tableCellCount(header) !== tableCellCount(delimiter)) return undefined
   let end = start + 2
   while (end < lines.length && lines[end].trim().includes('|')) end++
+  return end
+}
+
+/** End (exclusive line index) of the run of `>` quote lines starting at
+ *  `start`, or undefined when that line isn't one. */
+const quoteEnd = (lines: readonly string[], start: number): number | undefined => {
+  if (!lines[start].trim().startsWith('>')) return undefined
+  let end = start + 1
+  while (end < lines.length && lines[end].trim().startsWith('>')) end++
   return end
 }
 

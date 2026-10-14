@@ -13,6 +13,7 @@ import {
   planSingleBlockPaste,
   resolvePasteWithMediaCapture,
 } from '@/paste/operations.js'
+import { readClipboardContent } from '@/paste/clipboard.js'
 import type { PasteRequest } from '@/paste/decision.js'
 import { useRepo } from '@/context/repo.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
@@ -58,13 +59,9 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
     // Read-only editors leave paste to the browser (a no-op on a
     // non-editable surface) — matches the historical single-block guard.
     if (repo.isReadOnly) return
-    // File(s) on the clipboard (a pasted image) carry no text/plain, so read
-    // them BEFORE the no-text early return below — otherwise an image paste
-    // would fall through to the browser.
-    const files = e.clipboardData?.files
-    const fileList = files && files.length > 0 ? Array.from(files) : []
-    const text = e.clipboardData?.getData('text/plain') ?? ''
-    if (!text && fileList.length === 0) return
+    // Nothing to paste → leave it to the browser.
+    const content = readClipboardContent(e.clipboardData)
+    if (!content) return
 
     // Latch + reset the chord intent — the paste event can't see modifiers,
     // so the keydown handler latched it. `preventDefault` MUST run
@@ -72,7 +69,6 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
     // always takes over the paste.
     const intent = pasteIntentRef.current
     pasteIntentRef.current = 'split'
-    const html = e.clipboardData?.getData('text/html') || undefined
     e.preventDefault()
 
     // Read the live editor state once: the decision is SYNCHRONOUS (`runSync`),
@@ -96,7 +92,7 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
     // on the paste-time position (title line 1 vs body line 2+) but must decide
     // synchronously. `decision.text` lets it rewrite the content (e.g. CSV →
     // markdown) before it's applied.
-    const request: PasteRequest = {text, html, files: fileList, intent, surface: 'editor', caret}
+    const request: PasteRequest = {...content, intent, surface: 'editor', caret}
     // Resolve the decision, capturing any pasted media first (async) — its `!((id))`
     // embed text is spliced into the paste below, so the attachment lands at the caret
     // per the text policy (NOT a forced child block). The capture verb is the

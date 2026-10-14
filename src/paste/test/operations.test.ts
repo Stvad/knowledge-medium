@@ -827,6 +827,23 @@ describe('resolvePasteWithMediaCapture', () => {
     expect(r?.text).toBe('note\n((a))')
   })
 
+  it('keeps the html for the re-decision when nothing was captured', async () => {
+    const htmlSeen: (string | undefined)[] = []
+    const runtime = resolveFacetRuntimeSync([
+      mediaWhenFiles,
+      pasteDecisionVerb.before(r => { htmlSeen.push(r.html) }),
+      captureMediaVerb.impl(() => ({ references: [] })),
+    ])
+    const r = await resolvePasteWithMediaCapture(
+      runtime,
+      { ...req({ text: '', files }), html: '<h1>Doc</h1>' },
+      { repo, workspaceId: 'ws' },
+    )
+    // Not null: the html alone is still something to paste.
+    expect(r).not.toBeNull()
+    expect(htmlSeen).toEqual(['<h1>Doc</h1>', '<h1>Doc</h1>'])
+  })
+
   it('returns null when capture yields no references and there is no text', async () => {
     const runtime = resolveFacetRuntimeSync([mediaWhenFiles, captureMediaVerb.impl(() => ({ references: [] }))])
     expect(await resolvePasteWithMediaCapture(runtime, req({ text: '', files }), { repo, workspaceId: 'ws' })).toBeNull()

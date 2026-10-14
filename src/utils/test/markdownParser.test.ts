@@ -351,6 +351,16 @@ Root
     })
   })
 
+  describe('quotes', () => {
+    it('keeps a run of quote lines as ONE block', () => {
+      expect(outline(parseMarkdownToBlocks('Before\n> q1\n>\n> q2\nAfter'))).toEqual(['Before', '> q1\n>\n> q2', 'After'])
+    })
+
+    it('nests an indented quote under its bullet and strips the indent', () => {
+      expect(outline(parseMarkdownToBlocks('- said\n  > a\n  > b'))).toEqual(['said', '  > a\n> b'])
+    })
+  })
+
   describe('GFM tables', () => {
     const table = '| a | b |\n| :- | -: |\n| 1 | 2 |\n| 3 | 4 |'
 

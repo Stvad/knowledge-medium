@@ -30,7 +30,7 @@ import { type FacetRuntime } from '@/facets/facet'
 import { ActiveContextsProvider } from '@/shortcuts/ActiveContexts'
 import type { Block } from '@/data/block'
 import type { BlockRendererProps } from '@/types'
-import { pasteResolvedDecision } from '@/paste/operations'
+import { pasteResolvedDecision, resolvePasteWithMediaCapture } from '@/paste/operations'
 import { DefaultBlockRenderer } from './DefaultBlockRenderer'
 import { MarkdownContentRenderer } from './MarkdownContentRenderer'
 import { BLOCK_TITLE_TEXT_CLASS } from './blockTitleText'
@@ -108,11 +108,11 @@ const TestContentRenderer = ({block}: BlockRendererProps) => (
   <div>{block.id}</div>
 )
 
-const dispatchPaste = (target: Element, text: string): Event => {
+const dispatchPaste = (target: Element, text: string, html = ''): Event => {
   const event = new Event('paste', {bubbles: true, cancelable: true})
   Object.defineProperty(event, 'clipboardData', {
     value: {
-      getData: (type: string) => type === 'text/plain' ? text : '',
+      getData: (type: string) => type === 'text/plain' ? text : type === 'text/html' ? html : '',
     },
   })
   target.dispatchEvent(event)
@@ -254,6 +254,19 @@ describe('DefaultBlockRenderer paste handling', () => {
       repo,
       {scopeRootId: 'root'},
     )
+  })
+
+  it('pastes an html-only clipboard on the focused block shell', async () => {
+    renderBlock()
+
+    const shell = document.querySelector<HTMLElement>('[data-block-id="block-1"][data-editing="false"]')
+    act(() => {
+      dispatchPaste(shell!, '', '<img src="https://e.com/a.png">')
+    })
+
+    await vi.waitFor(() => expect(pasteResolvedDecision).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(resolvePasteWithMediaCapture).mock.lastCall?.[1])
+      .toMatchObject({text: '', html: '<img src="https://e.com/a.png">'})
   })
 
   it('applies the default focused-block shell highlight without visual navigation', () => {

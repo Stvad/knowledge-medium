@@ -560,12 +560,14 @@ export async function resolvePasteWithMediaCapture(
 
   // Clipboard text first, then one reference per captured file — each on its own line.
   const text = [request.text, ...references].filter(Boolean).join('\n')
-  if (!text) return null // nothing captured and no text
+  // Once references are spliced in, the html no longer describes the text, and
+  // an html-aware override would rewrite them away. With none, it still does.
+  const html = references.length > 0 ? undefined : request.html
+  if (!text && !html) return null // nothing captured and nothing else to paste
 
   // Re-decide with files stripped + the spliced text, so the file half doesn't
-  // re-trigger `media`. The html goes too: it describes the clipboard text, not
-  // the spliced references, and an html-aware override would rewrite them away.
-  const decision = pasteDecisionVerb.runSync(runtime, { ...request, text, files: [], html: undefined })
+  // re-trigger `media`.
+  const decision = pasteDecisionVerb.runSync(runtime, { ...request, text, html, files: [] })
   if (decision.kind === 'media') return null // a plugin returned media without files — nothing to paste
   return { decision, text: decision.text ?? text }
 }

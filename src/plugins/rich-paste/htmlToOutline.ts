@@ -75,6 +75,7 @@ const walkFlow = (nodes: readonly RootContent[], indent: number, tokens: Outline
             return
           }
           // Ordered items keep their number, matching a markdown-text paste.
+          // `<ol reversed>` / `<li value>` are not honoured: rare in copied content.
           const content = node.ordered ? `${(node.start ?? 1) + index}. ${inline}` : inline
           tokens.push({kind: 'list-item', indent, content})
           walkFlow(rest, indent + 1, tokens)
