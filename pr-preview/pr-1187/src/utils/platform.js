@@ -1,0 +1,1 @@
+import{aN as e,oN as t}from"../../chunks/app-DIb_02bT.js";export{e as isIOS,t as isMacPlatform};

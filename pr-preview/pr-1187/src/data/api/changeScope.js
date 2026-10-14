@@ -1,0 +1,1 @@
+import{c3 as e,d3 as t,f3 as n,g3 as r,h3 as i,l3 as a,m3 as o,p3 as s,u3 as c}from"../../../chunks/app-DIb_02bT.js";export{e as CHANGE_SCOPE_POLICIES,a as ChangeScope,c as isChangeScope,t as policyForScope,n as scopeAllowedInReadOnly,s as scopeIsUndoable,o as scopePoliciesEquivalent,i as scopeUploadsToServer,r as sourceForScope};

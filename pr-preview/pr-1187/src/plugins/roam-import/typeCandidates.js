@@ -1,0 +1,1 @@
+import{Bs as e,zs as t}from"../../../chunks/app-DIb_02bT.js";export{t as collectTypeCandidates,e as formatTypeCandidateReport};

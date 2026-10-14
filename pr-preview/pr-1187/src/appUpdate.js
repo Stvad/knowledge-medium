@@ -1,0 +1,1 @@
+import{$w as e,Qw as t}from"../chunks/app-DIb_02bT.js";export{t as appUpdate,e as useAppUpdateAvailable};

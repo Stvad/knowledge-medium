@@ -1,0 +1,1 @@
+import{a_ as e,c_ as t,o_ as n,s_ as r}from"../../../chunks/app-DIb_02bT.js";export{e as WorkspaceSwitcherSidebarSection,n as pendingInvitationsHeaderItem,r as workspaceHeaderPlugin,t as workspaceSwitcherSidebarSection};

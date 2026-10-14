@@ -1,0 +1,1 @@
+import{UA as e,WA as t}from"../../../chunks/app-DIb_02bT.js";export{e as METADATA_ROW_GRID_STYLE,t as PROPERTY_ROW_GRID_STYLE};
