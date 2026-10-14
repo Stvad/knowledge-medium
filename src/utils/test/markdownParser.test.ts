@@ -356,6 +356,10 @@ Root
       expect(outline(parseMarkdownToBlocks('Before\n> q1\n>\n> q2\nAfter'))).toEqual(['Before', '> q1\n>\n> q2', 'After'])
     })
 
+    it('ends the quote at a line without `>`, unlike a CommonMark lazy continuation', () => {
+      expect(outline(parseMarkdownToBlocks('> quoted\na reply'))).toEqual(['> quoted', 'a reply'])
+    })
+
     it('nests an indented quote under its bullet and strips the indent', () => {
       expect(outline(parseMarkdownToBlocks('- said\n  > a\n  > b'))).toEqual(['said', '  > a\n> b'])
     })
@@ -368,8 +372,8 @@ Root
       expect(outline(parseMarkdownToBlocks(`Before\n${table}\n\nAfter`))).toEqual(['Before', table, 'After'])
     })
 
-    it('takes a plain line right after the table as a row, as GFM renders it', () => {
-      expect(outline(parseMarkdownToBlocks(`${table}\nlazy row`))).toEqual([`${table}\nlazy row`])
+    it('ends the table at a line without a pipe, unlike a GFM lazy row', () => {
+      expect(outline(parseMarkdownToBlocks(`${table}\na note`))).toEqual([table, 'a note'])
     })
 
     it('nests an indented table under its bullet and strips the indent', () => {

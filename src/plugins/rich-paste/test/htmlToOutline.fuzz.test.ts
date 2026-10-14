@@ -37,8 +37,8 @@ const blankBlocks = (nodes: readonly OutlineNode[]): string[] =>
 describe('convertClipboardHtml: tag soup', () => {
   it('never throws and never yields a blank block', () => {
     fc.assert(
-      fc.property(htmlArb, html => {
-        const result = convertClipboardHtml(html)
+      fc.property(htmlArb, fc.constantFrom('', 'copied text'), (html, plainText) => {
+        const result = convertClipboardHtml(html, plainText)
         if (result.kind === 'outline') expect(blankBlocks(result.blocks)).toEqual([])
         if (result.kind === 'inline') expect(result.markdown.trim()).not.toBe('')
       }),
