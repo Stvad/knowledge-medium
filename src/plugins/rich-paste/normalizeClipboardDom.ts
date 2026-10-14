@@ -83,10 +83,11 @@ const normalizeTables = (body: HTMLElement): void => {
 }
 
 /** Chat UIs (and many docs sites) put a language label and a "Copy" button
- *  inside the `<pre>`, around the `<code>`. Keep just the code. */
+ *  inside the `<pre>`, beside or around the `<code>`. Keep just the code —
+ *  unless there are several, which may each hold part of it. */
 const keepOnlyCodeInPre = (body: HTMLElement): void => {
   for (const pre of body.querySelectorAll('pre')) {
-    const code = pre.querySelector('code')
-    if (code && code.parentElement !== pre) pre.replaceChildren(code)
+    const codes = pre.querySelectorAll('code')
+    if (codes.length === 1) pre.replaceChildren(codes[0])
   }
 }
