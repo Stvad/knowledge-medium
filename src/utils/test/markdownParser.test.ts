@@ -421,6 +421,11 @@ Root
       expect(outline(parseMarkdownToBlocks(`${t}\n> note | status\n- item | x`))).toEqual([t, '> note | status', 'item | x'])
     })
 
+    it('reads a one-column table without a pipe in its header or delimiter row as text', () => {
+      expect(outline(parseMarkdownToBlocks('Status\n|:-:|\n| ok |'))).toEqual(['Status', '|:-:|', '| ok |'])
+      expect(outline(parseMarkdownToBlocks('| Status |\n:-:'))).toEqual(['| Status |', ':-:'])
+    })
+
     it('falls back to a block per line when the delimiter row does not match the header', () => {
       expect(outline(parseMarkdownToBlocks('| a | b |\n| --- |\n| 1 | 2 |'))).toEqual([
         '| a | b |',
