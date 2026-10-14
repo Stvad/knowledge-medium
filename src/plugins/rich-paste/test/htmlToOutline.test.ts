@@ -12,11 +12,16 @@ import jetbrains from './fixtures/jetbrains.html?raw'
 import vscode from './fixtures/vscode.html?raw'
 import wikipediaChrome from './fixtures/wikipedia-chrome.html?raw'
 
+/** What the browser put in `text/plain` beside the html, where a test
+ *  doesn't care: present, and carrying no outliner references. */
+const PLAIN_TEXT = 'copied text'
+const convert = (html: string, plainText = PLAIN_TEXT) => convertClipboardHtml(html, plainText)
+
 /** The converted outline as content lines, each indented two spaces per
  *  level (only a block's FIRST line — a multi-line block's later lines are
  *  its content verbatim). */
 const outline = (html: string): string[] => {
-  const result = convertClipboardHtml(html)
+  const result = convert(html)
   if (result.kind !== 'outline') throw new Error(`expected an outline, got ${JSON.stringify(result)}`)
   const lines = (nodes: readonly OutlineNode[], depth: number): string[] =>
     nodes.flatMap(node => ['  '.repeat(depth) + node.content, ...lines(node.children ?? [], depth + 1)])
@@ -69,7 +74,7 @@ describe('convertClipboardHtml: sources', () => {
   })
 
   it('a single link selection is inline markdown', () => {
-    expect(convertClipboardHtml(chromePartialLink))
+    expect(convert(chromePartialLink))
       .toEqual({kind: 'inline', markdown: '[the article](https://example.com/article)'})
   })
 
@@ -79,7 +84,7 @@ describe('convertClipboardHtml: sources', () => {
     ['VS Code (styled divs, no structure)', vscode],
     ['JetBrains (one <pre>)', jetbrains],
   ])('defers to the plain text for %s', (_, html) => {
-    expect(convertClipboardHtml(html)).toEqual(plain)
+    expect(convert(html)).toEqual(plain)
   })
 })
 
@@ -90,6 +95,14 @@ describe('convertClipboardHtml: outliner copies', () => {
     expect(convertClipboardHtml(html, 'Notes\nSee [[Page]]')).toEqual(plain)
     expect(convertClipboardHtml(html, 'Notes\n((z9y8x7w6v)) and more')).toEqual(plain)
     expect(convertClipboardHtml(html, 'ref ((123e4567-e89b-12d3-a456-426614174000))')).toEqual(plain)
+  })
+
+  it('reads uppercase UUIDs as block references, as the app does', () => {
+    expect(convert(html, 'ref ((123E4567-E89B-12D3-A456-426614174000))')).toEqual(plain)
+  })
+
+  it('counts a reference used both in code and in prose as prose', () => {
+    expect(convert('<p>See Page</p><pre><code>[[Page]]</code></pre>', 'See [[Page]]\nexample: [[Page]]')).toEqual(plain)
   })
 
   it('ignores reference-like syntax that is code, or not a block id', () => {
@@ -128,6 +141,16 @@ describe('convertClipboardHtml: content', () => {
     )).toEqual(['## Bold style', '  **emphasis**'])
   })
 
+  it('converts an html-only clipboard even when it is plain paragraphs', () => {
+    expect(convert('<p>hello</p>', '')).toEqual({kind: 'inline', markdown: 'hello'})
+    expect(convert('<p>a</p><p>b</p>', '')).toMatchObject({kind: 'outline', blocks: [{content: 'a'}, {content: 'b'}]})
+  })
+
+  it('keeps a task item\'s checkbox state, as a markdown-text paste does', () => {
+    expect(outline('<ul><li><input type="checkbox" checked>done</li><li><input type="checkbox">open</li></ul>'))
+      .toEqual(['[x] done', '[ ] open'])
+  })
+
   it('keeps a lone heading or list item as a block, with its marker', () => {
     expect(outline('<h2>Title</h2>')).toEqual(['## Title'])
     expect(outline('<ol start="3"><li>third</li></ol>')).toEqual(['3. third'])
@@ -141,7 +164,7 @@ describe('convertClipboardHtml: content', () => {
     expect(outline('<p>one<br>&nbsp;<br>two<br>three</p>')).toEqual(['one', 'two\nthree'])
     expect(outline('<ul><li>item<br><br>more</li></ul>')).toEqual(['item', '  more'])
     // Nothing but paragraph breaks left: the plain text says the same.
-    expect(convertClipboardHtml('<p>one<br><br><br>two</p>')).toEqual(plain)
+    expect(convert('<p>one<br><br><br>two</p>')).toEqual(plain)
   })
 
   it('keeps a formatted paragraph with a line break as a block, not a caret insert', () => {
