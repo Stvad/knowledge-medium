@@ -120,6 +120,31 @@ describe('pasteDecisionVerb', () => {
     consoleError.mockRestore()
   })
 
+  it('accepts a split carrying a pre-built block tree', () => {
+    const blocks = [{content: 'Heading', children: [{content: 'a\nb'}, {content: 'c', children: []}]}]
+    const runtime = resolveFacetRuntimeSync([pasteDecisionVerb.impl(() => ({kind: 'split', blocks}))])
+    expect(pasteDecisionVerb.runSync(runtime, request({text: 'x'}))).toEqual({kind: 'split', blocks})
+  })
+
+  it('falls back to the default when a block tree is malformed or not on a split', () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const malformed = [
+      {kind: 'split', blocks: 'nope'},
+      {kind: 'split', blocks: [{content: 1}]},
+      {kind: 'split', blocks: [{content: 'ok', children: [{children: []}]}]},
+      {kind: 'single-block', blocks: [{content: 'ok'}]},
+    ]
+    for (const bad of malformed) {
+      const runtime = resolveFacetRuntimeSync([
+        pasteDecisionVerb.impl(() => bad as unknown as PasteDecision),
+      ])
+      expect(pasteDecisionVerb.runSync(runtime, request({text: 'a\nb'})))
+        .toEqual({kind: 'split'})
+    }
+    expect(consoleError).toHaveBeenCalledTimes(malformed.length)
+    consoleError.mockRestore()
+  })
+
   it('falls back to the default decision when a plugin override throws', () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
     const runtime = resolveFacetRuntimeSync([
