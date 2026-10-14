@@ -365,7 +365,11 @@ Root
     const table = '| a | b |\n| :- | -: |\n| 1 | 2 |\n| 3 | 4 |'
 
     it('keeps a table as ONE block', () => {
-      expect(outline(parseMarkdownToBlocks(`Before\n${table}\nAfter`))).toEqual(['Before', table, 'After'])
+      expect(outline(parseMarkdownToBlocks(`Before\n${table}\n\nAfter`))).toEqual(['Before', table, 'After'])
+    })
+
+    it('takes a plain line right after the table as a row, as GFM renders it', () => {
+      expect(outline(parseMarkdownToBlocks(`${table}\nlazy row`))).toEqual([`${table}\nlazy row`])
     })
 
     it('nests an indented table under its bullet and strips the indent', () => {
@@ -380,6 +384,16 @@ Root
     it('does not count an escaped pipe as a column', () => {
       const escaped = '| a \\| b | value |\n| --- | --- |\n| `x\\|y` | 2 |'
       expect(outline(parseMarkdownToBlocks(escaped))).toEqual([escaped])
+    })
+
+    it('counts a pipe after an escaped backslash as a column', () => {
+      const evenBackslashes = '| a \\\\| b | c |\n| - | - | - |\n| 1 | 2 | 3 |'
+      expect(outline(parseMarkdownToBlocks(evenBackslashes))).toEqual([evenBackslashes])
+    })
+
+    it('ends the table where another block starts, even one with a pipe', () => {
+      const t = '| a | b |\n| - | - |\n| 1 | 2 |'
+      expect(outline(parseMarkdownToBlocks(`${t}\n> note | status\n- item | x`))).toEqual([t, '> note | status', 'item | x'])
     })
 
     it('falls back to a block per line when the delimiter row does not match the header', () => {
