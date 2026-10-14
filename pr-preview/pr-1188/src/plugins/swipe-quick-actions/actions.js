@@ -1,1 +1,1 @@
-import{JS as e,XS as t,YS as n,ZS as r}from"../../../chunks/app-DiY5lSyd.js";export{e as DEFAULT_QUICK_ACTION_ITEMS,n as SWIPE_RIGHT_BLOCK_ACTION_ID,t as isQuickActionItem,r as quickActionItemsFacet};
+import{JS as e,XS as t,YS as n,ZS as r}from"../../../chunks/app-C76QzZrS.js";export{e as DEFAULT_QUICK_ACTION_ITEMS,n as SWIPE_RIGHT_BLOCK_ACTION_ID,t as isQuickActionItem,r as quickActionItemsFacet};

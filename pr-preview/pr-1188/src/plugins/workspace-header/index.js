@@ -1,1 +1,1 @@
-import{a_ as e,i_ as t,o_ as n,s_ as r}from"../../../chunks/app-DiY5lSyd.js";export{t as WorkspaceSwitcherSidebarSection,e as pendingInvitationsHeaderItem,n as workspaceHeaderPlugin,r as workspaceSwitcherSidebarSection};
+import{a_ as e,i_ as t,o_ as n,s_ as r}from"../../../chunks/app-C76QzZrS.js";export{t as WorkspaceSwitcherSidebarSection,e as pendingInvitationsHeaderItem,n as workspaceHeaderPlugin,r as workspaceSwitcherSidebarSection};
