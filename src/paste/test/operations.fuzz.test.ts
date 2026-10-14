@@ -42,8 +42,8 @@
  *       `contentBeforeStructuralBreak.length`; derived exactly per branch
  *       below, which also implies the weaker `[0, targetContent.length]`
  *       range the task asked for.
- *     - fenced-code root: a multi-line absorbed root (a fence or a table —
- *       the only parses that yield one block spanning newlines) is kept whole (`mergedFirstContent =
+ *     - fenced-code root: a multi-line absorbed root (an atomic token — the
+ *       only parses that yield one block spanning newlines) is kept whole (`mergedFirstContent =
  *       absorbedRoot.content`), so `targetContent` contains the full fence
  *       body verbatim — checked directly with a fence-only generator.
  *

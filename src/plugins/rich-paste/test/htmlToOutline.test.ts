@@ -83,6 +83,11 @@ describe('convertClipboardHtml: sources', () => {
       .toEqual({kind: 'inline', markdown: '[the article](https://example.com/article)'})
   })
 
+  it('keeps a lone web or chat code block whole, with its language', () => {
+    const code = 'const a = 1\n# not a heading\n- nor a bullet'
+    expect(outline(`<pre><code class="language-js">${code}</code></pre>`)).toEqual([`\`\`\`js\n${code}\n\`\`\``])
+  })
+
   it.each([
     ['Chrome copying words of a heading (computed bold is not emphasis)', chromePartialHeading],
     ['a single spreadsheet cell', googleSheetsCell],

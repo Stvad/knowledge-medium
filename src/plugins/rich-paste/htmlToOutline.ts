@@ -31,7 +31,7 @@ export const convertClipboardHtml = (html: string, plainText: string): Clipboard
   sanitize(mdast)
   splitAtBlankLines(mdast)
   // With no plain text (an html-only clipboard) the html is the only source.
-  if (plainText.trim() && !carriesStructure(mdast)) return {kind: 'plain'}
+  if (plainText.trim() && !carriesStructure(mdast, isCodeView(body))) return {kind: 'plain'}
 
   const tokens: OutlineToken[] = []
   walkFlow(mdast.children, 0, tokens)
@@ -75,13 +75,18 @@ const hasOutlinerReferences = (plainText: string, body: HTMLElement): boolean =>
 
 const occurrences = (haystack: string, needle: string): number => haystack.split(needle).length - 1
 
+/** A copy from a code *view* — an IDE, a raw file, a terminal — rather than
+ *  a code block on a page: a `<pre>` with no `<code>` (web and chat code
+ *  blocks mark theirs). */
+const isCodeView = (body: HTMLElement): boolean => !body.querySelector('code')
+
 /** Whether the HTML says anything the plain text doesn't. Plain paragraphs
- *  are what the text path already produces; a lone code block is a copy from
- *  a code view (an IDE, a raw file, a terminal), whose plain text is the
- *  better source. Neither is worth taking over the paste for. A line break is
- *  worth it: the plain text can't tell it from a paragraph break. */
-const carriesStructure = (root: Root): boolean => {
-  if (root.children.length === 1 && root.children[0].type === 'code') return false
+ *  are what the text path already produces, and a code view's plain text is
+ *  the better source (it may be a markdown file to parse as an outline).
+ *  Neither is worth taking over the paste for. A line break is worth it: the
+ *  plain text can't tell it from a paragraph break. */
+const carriesStructure = (root: Root, codeView: boolean): boolean => {
+  if (codeView && root.children.length === 1 && root.children[0].type === 'code') return false
   const hasMarkup = (node: Nodes): boolean =>
     !['root', 'paragraph', 'text'].includes(node.type) ||
     ('children' in node && node.children.some(hasMarkup))
@@ -173,7 +178,8 @@ const withoutBreaks = <T extends Parents>(node: T): T => {
 
 /** Split paragraphs where two or more line breaks meet: `<br><br>` is how
  *  plain-text-era pages separate paragraphs, so only a single `<br>` stays a
- *  line break inside its block. In place. */
+ *  line break inside its block. In place. A run inside inline markup
+ *  (`<b>a<br><br>b</b>`) is not split: rare, and it would split the markup. */
 const splitAtBlankLines = (node: Parents): void => {
   node.children = node.children.flatMap((child): Nodes[] => {
     if (child.type === 'paragraph') return splitParagraph(child)
