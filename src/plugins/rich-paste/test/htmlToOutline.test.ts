@@ -88,13 +88,23 @@ describe('convertClipboardHtml: sources', () => {
     expect(outline(`<pre><code class="language-js">${code}</code></pre>`)).toEqual([`\`\`\`js\n${code}\n\`\`\``])
   })
 
-  it.each([
+  const deferring = [
     ['Chrome copying words of a heading (computed bold is not emphasis)', chromePartialHeading],
     ['a single spreadsheet cell', googleSheetsCell],
     ['VS Code (styled divs, no structure)', vscode],
     ['JetBrains (one <pre>)', jetbrains],
-  ])('defers to the plain text for %s', (_, html) => {
+  ]
+
+  it.each(deferring)('defers to the plain text for %s', (_, html) => {
     expect(convert(html)).toEqual(plain)
+  })
+
+  // Windows browsers hand over the clipboard's HTML format with its markers.
+  const windowsClipboard = (html: string) =>
+    `<html>\r\n<body>\r\n<!--StartFragment-->${html}<!--EndFragment-->\r\n</body>\r\n</html>`
+
+  it.each(deferring)('defers to the plain text for %s, from a Windows clipboard', (_, html) => {
+    expect(convert(windowsClipboard(html))).toEqual(plain)
   })
 })
 
@@ -231,6 +241,70 @@ describe('convertClipboardHtml: content', () => {
 
   it('keeps the items of a stray sub-list that has no item before it', () => {
     expect(outline('<ul><ul><li>deep</li></ul><li>b</li></ul>')).toEqual(['deep', 'b'])
+  })
+
+  it('keeps whitespace at the edges of inline markup outside it', () => {
+    expect(outline('<h1>T</h1><p><b>Note: </b>text</p><p>a<em> word</em></p><p>Hello<b> </b>world</p>'))
+      .toEqual(['# T', '  **Note:** text', '  a *word*', '  Hello world'])
+  })
+
+  it('unwraps markup and links left with nothing in them', () => {
+    expect(outline('<h1>T</h1><p><i class="icon"></i> Done <b>x</b><s></s></p>')).toEqual(['# T', '  Done **x**'])
+    // A heading's icon-only anchor link, as on GitHub.
+    expect(outline(
+      '<div><h2>Install</h2><a href="https://github.com/o/r#install"><svg><path/></svg></a></div><ul><li>npm i</li></ul>',
+    )).toEqual(['## Install', '  npm i'])
+  })
+
+  it('unwraps markup nested in the same markup', () => {
+    expect(outline('<h1>T</h1><p><del><a href="#x"><del>struck</del></a></del> <b>a <i><b>b</b></i></b></p>'))
+      .toEqual(['# T', '  ~~struck~~ **a *b***'])
+  })
+
+  it('makes no block of block markup nested in inline markup with no text', () => {
+    expect(outline('<h1>T</h1><b><h2></h2></b><i><hr></i><p>end</p>')).toEqual(['# T', '  end'])
+  })
+
+  it('reads non-breaking spaces as spaces before collapsing whitespace', () => {
+    expect(outline('<h1>T</h1><p>One</p><p>&nbsp;</p><p>&nbsp;Two&nbsp;</p><p>three&nbsp;<br>four</p>'))
+      .toEqual(['# T', '  One', '  Two', '  three\nfour'])
+  })
+
+  it('ignores HTML comments', () => {
+    expect(outline('<h1>T</h1><p><b>x</b><!--[if !supportLists]-->y</p>')).toEqual(['# T', '  **x**y'])
+  })
+
+  it('flattens block content in a table cell onto its row, and keeps the caption', () => {
+    expect(outline(
+      '<table><caption>Scores</caption><tr><th><h3>Name</h3></th><th>Notes</th></tr>' +
+      '<tr><td><p>first</p><p>second</p></td><td><ul><li>x</li><li>y</li></ul></td></tr></table>',
+    )).toEqual(['Scores', '| Name         | Notes |\n| ------------ | ----- |\n| first second | x y   |'])
+  })
+
+  it('defers to the plain text rather than drop text the converter cannot read', () => {
+    expect(convert('<h1>T</h1><p>Energy <math><mi>E</mi></math> is <b>famous</b></p>')).toEqual(plain)
+  })
+
+  it('drops embeds, icons and form controls, which the plain text leaves out too', () => {
+    expect(outline(
+      '<h1>T</h1><p>a<svg><text>label</text></svg> <input placeholder="Search"><select><option>A</option></select></p>' +
+      '<iframe src="about:blank" title="Video player"></iframe>',
+    )).toEqual(['# T', '  a'])
+  })
+
+  it('keeps line breaks that the source draws with a white-space style', () => {
+    expect(outline('<h1>T</h1><div style="white-space: pre-wrap;">Line one\nLine two</div>'))
+      .toEqual(['# T', '  Line one\nLine two'])
+  })
+
+  it('defers to a multi-line plain text that the html runs into one line', () => {
+    expect(convert('<span style="display:block">First</span><span style="display:block"><b>Second</b></span>', 'First\nSecond'))
+      .toEqual(plain)
+  })
+
+  it('pastes an emoji image as its character', () => {
+    expect(convert('<p>Nice <img alt="👍" src="https://e.com/emoji/1f44d.svg"> <b>work</b></p>'))
+      .toEqual({kind: 'inline', markdown: 'Nice 👍 **work**'})
   })
 
   it('keeps a blockquote as one block', () => {

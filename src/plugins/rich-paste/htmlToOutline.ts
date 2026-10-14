@@ -1,6 +1,8 @@
 import { fromDom } from 'hast-util-from-dom'
 import { toMdast } from 'hast-util-to-mdast'
-import type { Nodes, Paragraph, Parents, PhrasingContent, Root, RootContent } from 'mdast'
+import type {
+  Delete, Emphasis, Link, Nodes, Paragraph, Parents, PhrasingContent, Root, RootContent, Strong, Text,
+} from 'mdast'
 import { gfmToMarkdown } from 'mdast-util-gfm'
 import { toMarkdown, type Options as ToMarkdownOptions } from 'mdast-util-to-markdown'
 import { parseBlockRefs, parseOutermostReferences } from '@/plugins/references/referenceParser.js'
@@ -31,13 +33,16 @@ export const convertClipboardHtml = (html: string, plainText: string): Clipboard
   sanitize(mdast)
   splitAtBlankLines(mdast)
   // With no plain text (an html-only clipboard) the html is the only source.
-  if (plainText.trim() && !carriesStructure(mdast, isCodeView(body))) return {kind: 'plain'}
+  if (plainText.trim() && !(carriesStructure(mdast, isCodeView(body)) && keepsAllText(body, mdast))) return {kind: 'plain'}
 
   const tokens: OutlineToken[] = []
   walkFlow(mdast.children, 0, tokens)
   if (tokens.length === 0) return {kind: 'plain'}
   const [only] = tokens
   if (tokens.length === 1 && only.kind === 'paragraph' && !only.content.includes('\n')) {
+    // The plain text's lines are ones the html failed to mark (CSS-drawn
+    // breaks); a one-line insert would run them together.
+    if (plainText.trim().includes('\n')) return {kind: 'plain'}
     // Whitespace minification drops the selection's edge spaces (a
     // double-clicked word's trailing one); restore them from the plain text
     // so a caret paste doesn't glue words together.
@@ -69,11 +74,15 @@ const hasOutlinerReferences = (plainText: string, body: HTMLElement): boolean =>
     .filter(element => element.tagName === 'PRE' || !element.closest('pre')) // a <pre>'s <code> once
     .map(element => element.textContent ?? '')
     .join('\n')
-  return [...new Set(outlinerReferences(plainText))]
-    .some(reference => occurrences(plainText, reference) > occurrences(code, reference))
+  const inCode = counts(outlinerReferences(code))
+  return [...counts(outlinerReferences(plainText))].some(([reference, count]) => count > (inCode.get(reference) ?? 0))
 }
 
-const occurrences = (haystack: string, needle: string): number => haystack.split(needle).length - 1
+const counts = (items: readonly string[]): Map<string, number> => {
+  const result = new Map<string, number>()
+  for (const item of items) result.set(item, (result.get(item) ?? 0) + 1)
+  return result
+}
 
 /** A copy from a code *view* — an IDE, a raw file, a terminal — rather than
  *  a code block on a page: a `<pre>` with no `<code>` (web and chat code
@@ -92,6 +101,17 @@ const carriesStructure = (root: Root, codeView: boolean): boolean => {
     ('children' in node && node.children.some(hasMarkup))
   return hasMarkup(root)
 }
+
+/** Whether the conversion kept every letter and digit of the HTML's text,
+ *  in order. The converter ignores some elements outright (`<math>`,
+ *  `<menu>`…); silently losing their text is worse than pasting plain. */
+const keepsAllText = (body: HTMLElement, root: Root): boolean =>
+  alphanumerics(literalText(root)) === alphanumerics(body.textContent ?? '')
+
+const alphanumerics = (text: string): string => text.replace(/[^\p{L}\p{N}]/gu, '')
+
+const literalText = (node: Nodes): string =>
+  'value' in node ? node.value : 'children' in node ? node.children.map(literalText).join('') : ''
 
 const walkFlow = (nodes: readonly RootContent[], indent: number, tokens: OutlineToken[]): void => {
   for (const node of nodes) {
@@ -153,8 +173,11 @@ const markdown = (node: Nodes): string =>
   toMarkdown(node, MARKDOWN_OPTIONS).replace(/\n+$/, '')
 
 /** Inline markdown for phrasing content, escaped so a block that merely
- *  starts with `#`, `-` or `1.` isn't read back as a heading or list. */
+ *  starts with `#`, `-` or `1.` isn't read back as a heading or list; empty
+ *  when there is no text or image (block markup nested in inline markup
+ *  would otherwise serialize as a bare `#` or `***`). */
 const phrasing = (children: PhrasingContent[], {singleLine = false} = {}): string => {
+  if (!children.some(hasContent)) return ''
   const paragraph = {type: 'paragraph' as const, children}
   return markdown(singleLine ? withoutBreaks(paragraph) : paragraph).trim()
 }
@@ -217,13 +240,15 @@ const splitParagraph = (paragraph: Paragraph): Paragraph[] => {
 }
 
 /** Drop what can't work once pasted (fragment and relative links, `data:`/
- *  `blob:` images), link titles and whitespace oddities, in place. */
-const sanitize = (node: Parents): void => {
+ *  `blob:` images) and link titles, and tidy inline markup, in place.
+ *  `markupAround` is the inline markup `node` sits in. */
+const sanitize = (node: Parents, markupAround: ReadonlySet<Nodes['type']> = new Set()): void => {
+  const around = isInlineMarkup(node) ? new Set([...markupAround, node.type]) : markupAround
   node.children = node.children.flatMap((child): Nodes[] => {
     if (child.type === 'link') {
       const href = absoluteHref(child.url)
       if (href === undefined) {
-        sanitize(child)
+        sanitize(child, around)
         return child.children
       }
       child.url = href
@@ -233,12 +258,37 @@ const sanitize = (node: Parents): void => {
       if (absoluteHref(child.url, IMAGE_PROTOCOLS) === undefined) return []
       child.title = null
     }
-    if (child.type === 'text') {
-      child.value = child.value.replace(/\u00a0/g, ' ').replace(/[\u200b\ufeff]/g, '')
-    }
-    if ('children' in child) sanitize(child)
-    return [child]
+    if ('children' in child) sanitize(child, around)
+    if (!isInlineMarkup(child)) return [child]
+    // Markup inside the same markup adds nothing, and nested strikes (`~~~~`)
+    // would open a code fence.
+    return around.has(child.type) ? child.children : withEdgeWhitespaceOutside(child)
   }) as typeof node.children
+}
+
+type InlineMarkup = Delete | Emphasis | Link | Strong
+
+const isInlineMarkup = (node: Nodes): node is InlineMarkup =>
+  node.type === 'delete' || node.type === 'emphasis' || node.type === 'link' || node.type === 'strong'
+
+/** `markup` with the whitespace at its edges moved outside it — markdown
+ *  can't close emphasis after a space, so the serializer would write the
+ *  space as `&#x20;` — or unwrapped when nothing is left inside it (an icon's
+ *  empty `<i>`, an anchor link whose only content was an icon). */
+const withEdgeWhitespaceOutside = (markup: InlineMarkup): PhrasingContent[] => {
+  const lead = takeEdgeWhitespace(markup.children[0], /^\s+/)
+  const trail = takeEdgeWhitespace(markup.children.at(-1), /\s+$/)
+  return [...lead, ...(hasContent(markup) ? [markup] : markup.children), ...trail]
+}
+
+/** Remove the whitespace `edge` matches from `node` if it is text, returning
+ *  it as a text node of its own. */
+const takeEdgeWhitespace = (node: PhrasingContent | undefined, edge: RegExp): Text[] => {
+  if (node?.type !== 'text') return []
+  const whitespace = edge.exec(node.value)?.[0]
+  if (!whitespace) return []
+  node.value = node.value.replace(edge, '')
+  return [{type: 'text', value: whitespace}]
 }
 
 const LINK_PROTOCOLS = ['http:', 'https:', 'mailto:']

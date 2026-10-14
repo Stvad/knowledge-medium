@@ -142,7 +142,9 @@ const isValidBlocksField = (decision: PasteDecision): boolean => {
  * The paste verb — the first home of `defineVerbFacet` outside
  * navigation. Decides, per paste, how clipboard content lands in the
  * outline. Plugins contribute:
- *   - `pasteDecisionVerb.impl(fn)`      — replace the decision wholesale,
+ *   - `pasteDecisionVerb.impl(fn)`      — replace the default decision; the
+ *     decorators still wrap it, and a format-aware one (rich paste) can
+ *     override its answer, so a plugin that must have the final say decorates,
  *   - `pasteDecisionVerb.decorator(fn)` — wrap it (e.g. rewrite CSV →
  *     markdown then defer to `next`),
  *   - `pasteDecisionVerb.before/after`  — observe pastes.
