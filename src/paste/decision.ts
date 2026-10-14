@@ -124,8 +124,9 @@ export const defaultPasteDecision = (request: PasteRequest): PasteDecision => {
   return request.surface === 'editor' ? {kind: 'single-block'} : {kind: 'split'}
 }
 
+// `Array.from` so a sparse array's holes are checked rather than skipped.
 const isOutline = (value: unknown): value is readonly OutlineNode[] =>
-  Array.isArray(value) && value.every(node =>
+  Array.isArray(value) && Array.from(value).every(node =>
     node != null &&
     typeof (node as {content?: unknown}).content === 'string' &&
     ((node as {children?: unknown}).children === undefined ||
