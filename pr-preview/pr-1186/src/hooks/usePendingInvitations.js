@@ -1,1 +1,0 @@
-import{Z_ as e}from"../../chunks/app-BAVLHuKK.js";export{e as usePendingInvitations};
