@@ -33,6 +33,7 @@ import { vimNormalModePlugin } from '@/plugins/vim-normal-mode'
 import { onboardingPlugin } from '@/plugins/onboarding'
 import { videoPlayerPlugin } from '@/plugins/video-player'
 import { attachmentsPlugin } from '@/plugins/attachments'
+import { richPastePlugin } from '@/plugins/rich-paste'
 import { aliasPlugin } from '@/plugins/alias'
 import { mergeBlocksPlugin } from '@/plugins/merge-blocks'
 import { moveBlocksPlugin } from '@/plugins/move-blocks'
@@ -133,6 +134,7 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   vimNormalModePlugin({repo}),
   videoPlayerPlugin,
   attachmentsPlugin,
+  richPastePlugin,
   referencesPlugin,
   geoPlugin,
   characterCounterPlugin,
