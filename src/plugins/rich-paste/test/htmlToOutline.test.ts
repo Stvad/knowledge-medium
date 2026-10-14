@@ -73,6 +73,11 @@ describe('convertClipboardHtml: sources', () => {
     expect(outline(googleSheetsRange)).toEqual(['| Name | Score |\n| ---- | ----- |\n| Ann  | 7     |'])
   })
 
+  it('keeps the selection\'s edge spaces on an inline paste', () => {
+    expect(convert('<strong>bold</strong> ', 'bold ')).toEqual({kind: 'inline', markdown: '**bold** '})
+    expect(convert(' <a href="https://e.com/">x</a>', ' x')).toEqual({kind: 'inline', markdown: ' [x](https://e.com/)'})
+  })
+
   it('a single link selection is inline markdown', () => {
     expect(convert(chromePartialLink))
       .toEqual({kind: 'inline', markdown: '[the article](https://example.com/article)'})
@@ -95,6 +100,10 @@ describe('convertClipboardHtml: outliner copies', () => {
     expect(convertClipboardHtml(html, 'Notes\nSee [[Page]]')).toEqual(plain)
     expect(convertClipboardHtml(html, 'Notes\n((z9y8x7w6v)) and more')).toEqual(plain)
     expect(convertClipboardHtml(html, 'ref ((123e4567-e89b-12d3-a456-426614174000))')).toEqual(plain)
+  })
+
+  it('reads balanced page aliases as the app\'s reference parser does', () => {
+    expect(convert(html, 'See [[Book of [x]]]')).toEqual(plain)
   })
 
   it('reads uppercase UUIDs as block references, as the app does', () => {
