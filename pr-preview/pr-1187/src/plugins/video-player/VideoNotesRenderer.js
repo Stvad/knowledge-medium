@@ -1,1 +1,1 @@
-import{Dm as e,Em as t,Tm as n}from"../../../chunks/app-DIb_02bT.js";export{n as VideoNotesLayout,t as VideoNotesRenderer,e as videoNotesLayoutContribution};
+import{Dm as e,Em as t,Tm as n}from"../../../chunks/app-Bln09WHz.js";export{n as VideoNotesLayout,t as VideoNotesRenderer,e as videoNotesLayoutContribution};

@@ -1,1 +1,1 @@
-import{Jd as e,Kd as t,qd as n}from"../../chunks/app-DIb_02bT.js";export{t as backlinkCompletionSource,n as createBacklinkAutocomplete,e as isInsideBacklinkBrackets};
+import{Jd as e,Kd as t,qd as n}from"../../chunks/app-Bln09WHz.js";export{t as backlinkCompletionSource,n as createBacklinkAutocomplete,e as isInsideBacklinkBrackets};

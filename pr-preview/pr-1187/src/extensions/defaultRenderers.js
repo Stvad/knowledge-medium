@@ -1,1 +1,1 @@
-import{_E as e,gE as t,hE as n}from"../../chunks/app-DIb_02bT.js";export{n as defaultRegistry,t as defaultRendererContributions,e as defaultRenderersExtension};
+import{_E as e,gE as t,hE as n}from"../../chunks/app-Bln09WHz.js";export{n as defaultRegistry,t as defaultRendererContributions,e as defaultRenderersExtension};

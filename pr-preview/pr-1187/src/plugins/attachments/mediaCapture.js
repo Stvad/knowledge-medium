@@ -1,1 +1,1 @@
-import{$f as e,Qf as t,ep as n}from"../../../chunks/app-DIb_02bT.js";export{t as DEFAULT_MAX_CAPTURE_BYTES,e as captureMedia,n as mediaBlockId};
+import{$f as e,Qf as t,ep as n}from"../../../chunks/app-Bln09WHz.js";export{t as DEFAULT_MAX_CAPTURE_BYTES,e as captureMedia,n as mediaBlockId};
