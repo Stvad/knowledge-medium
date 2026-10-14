@@ -1,1 +1,0 @@
-import{lT as e,uT as t}from"../../chunks/app-CzrTimGB.js";export{e as gestureBindingDescriptor,t as matchesGestureEvent};

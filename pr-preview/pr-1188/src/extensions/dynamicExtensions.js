@@ -1,1 +1,0 @@
-import{PT as e}from"../../chunks/app-CzrTimGB.js";export{e as dynamicExtensionsExtension};
