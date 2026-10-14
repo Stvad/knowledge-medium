@@ -1,6 +1,6 @@
 import type { PasteRequest } from './decision.ts'
 
-export type ClipboardContent = Pick<PasteRequest, 'text' | 'html' | 'files'>
+type ClipboardContent = Pick<PasteRequest, 'text' | 'html' | 'files'>
 
 /** What a paste/drop payload carries for the paste decision, or null when it
  *  carries nothing to paste. Neither text nor html alone decides emptiness:

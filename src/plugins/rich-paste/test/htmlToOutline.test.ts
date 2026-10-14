@@ -4,7 +4,6 @@ import { parseMarkdownToBlocks, type OutlineNode } from '@/utils/markdownParser'
 import { convertClipboardHtml, type ClipboardHtmlConversion } from '../htmlToOutline'
 import chatgptAnswer from './fixtures/chatgpt-answer.html?raw'
 import chromePartialHeading from './fixtures/chrome-partial-heading.html?raw'
-import chromePartialLink from './fixtures/chrome-partial-link.html?raw'
 import googleDocs from './fixtures/google-docs.html?raw'
 import googleSheetsCell from './fixtures/google-sheets-cell.html?raw'
 import googleSheetsRange from './fixtures/google-sheets-range.html?raw'
@@ -76,11 +75,6 @@ describe('convertClipboardHtml: sources', () => {
   it('keeps the selection\'s edge spaces on an inline paste', () => {
     expect(convert('<strong>bold</strong> ', 'bold ')).toEqual({kind: 'inline', markdown: '**bold** '})
     expect(convert(' <a href="https://e.com/">x</a>', ' x')).toEqual({kind: 'inline', markdown: ' [x](https://e.com/)'})
-  })
-
-  it('a single link selection is inline markdown', () => {
-    expect(convert(chromePartialLink))
-      .toEqual({kind: 'inline', markdown: '[the article](https://example.com/article)'})
   })
 
   it('keeps a lone web or chat code block whole, with its language', () => {
@@ -220,11 +214,6 @@ describe('convertClipboardHtml: content', () => {
     expect(outline('<h1>T</h1><pre><code>a</code>\n<code>b</code></pre>')).toEqual(['# T', '  ```\na\nb\n```'])
   })
 
-  it('writes a quote that a later text paste reads back as one block', () => {
-    const [, quote] = outline('<h1>T</h1><blockquote><p>q1</p><p>q2</p></blockquote>')
-    expect(parseMarkdownToBlocks(quote.trim()).map(block => block.content)).toEqual([quote.trim()])
-  })
-
   it('normalizes non-breaking and zero-width spaces', () => {
     expect(outline('<h1>T</h1><p>a&nbsp;b\u200bc</p>')).toEqual(['# T', '  a bc'])
   })
@@ -307,7 +296,9 @@ describe('convertClipboardHtml: content', () => {
       .toEqual({kind: 'inline', markdown: 'Nice 👍 **work**'})
   })
 
-  it('keeps a blockquote as one block', () => {
-    expect(outline('<h1>T</h1><blockquote><p>q1</p><p>q2</p></blockquote>')).toEqual(['# T', '  > q1\n>\n> q2'])
+  it('keeps a blockquote as one block, which a later text paste reads back as one', () => {
+    const [, quote] = outline('<h1>T</h1><blockquote><p>q1</p><p>q2</p></blockquote>')
+    expect(quote).toBe('  > q1\n>\n> q2')
+    expect(parseMarkdownToBlocks(quote.trim()).map(block => block.content)).toEqual([quote.trim()])
   })
 })

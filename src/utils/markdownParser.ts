@@ -33,16 +33,6 @@ export type OutlineToken =
   /** Multi-line content kept whole — a fenced code block, a table, a quote. */
   | {kind: 'atomic'; indent: number; content: string}
 
-/** Wrap `content` verbatim as a single root `ParsedBlock` — no markdown
- *  splitting, newlines preserved inside the one block. Used for "paste as
- *  one block" (the block-shell paste when the decision is `single-block`).
- *  The `orderKey` is a placeholder; insertion paths recompute it. */
-export const singleParsedBlock = (content: string): ParsedBlock => ({
-  id: uuidv4(),
-  orderKey: keyAtEnd(),
-  content,
-})
-
 /** Whether `token` nests under `parent` when both sit at the same indent
  *  (a deeper token always nests, a shallower one never does):
  *   - a heading owns what follows it, up to the next heading of the same or

@@ -117,7 +117,7 @@ const walkFlow = (nodes: readonly RootContent[], indent: number, tokens: Outline
   for (const node of nodes) {
     switch (node.type) {
       case 'heading': {
-        const inline = phrasing(node.children, {singleLine: true})
+        const inline = phrasing(withoutBreaks(node).children)
         if (inline) tokens.push({kind: 'heading', level: node.depth, indent, content: `${'#'.repeat(node.depth)} ${inline}`})
         break
       }
@@ -130,20 +130,17 @@ const walkFlow = (nodes: readonly RootContent[], indent: number, tokens: Outline
         node.children.forEach((item, index) => {
           const [first, ...rest] = item.children
           const inline = first?.type === 'paragraph' ? phrasing(first.children) : ''
-          if (!inline) {
-            // No text of its own (e.g. an item holding only a sub-list):
-            // its content nests under whatever precedes it.
-            walkFlow(first?.type === 'paragraph' ? rest : item.children, indent + 1, tokens)
-            return
+          if (inline) {
+            // Ordered items keep their number and task items their checkbox,
+            // matching a markdown-text paste of `1. [x] item`.
+            // `<ol reversed>` / `<li value>` are not honoured: rare in copied content.
+            const number = node.ordered ? `${(node.start ?? 1) + index}. ` : ''
+            const checkbox = item.checked == null ? '' : item.checked ? '[x] ' : '[ ] '
+            tokens.push({kind: 'list-item', indent, content: `${number}${checkbox}${inline}`})
           }
-          // Ordered items keep their number and task items their checkbox,
-          // matching a markdown-text paste of `1. [x] item`.
-          // `<ol reversed>` / `<li value>` are not honoured: rare in copied content.
-          const number = node.ordered ? `${(node.start ?? 1) + index}. ` : ''
-          const checkbox = item.checked == null ? '' : item.checked ? '[x] ' : '[ ] '
-          const content = `${number}${checkbox}${inline}`
-          tokens.push({kind: 'list-item', indent, content})
-          walkFlow(rest, indent + 1, tokens)
+          // An item with no text of its own (e.g. only a sub-list) nests its
+          // content under whatever precedes it.
+          walkFlow(inline ? rest : item.children, indent + 1, tokens)
         })
         break
       case 'code':
@@ -162,7 +159,6 @@ const walkFlow = (nodes: readonly RootContent[], indent: number, tokens: Outline
 const MARKDOWN_OPTIONS: ToMarkdownOptions = {
   extensions: [gfmToMarkdown()],
   bullet: '-',
-  emphasis: '*',
   // Blocks render with `white-space: pre-wrap`, so a plain newline is a line
   // break — the same thing Shift+Enter types — where markdown's `\` hard
   // break would show its backslash in the editor.
@@ -176,11 +172,8 @@ const markdown = (node: Nodes): string =>
  *  starts with `#`, `-` or `1.` isn't read back as a heading or list; empty
  *  when there is no text or image (block markup nested in inline markup
  *  would otherwise serialize as a bare `#` or `***`). */
-const phrasing = (children: PhrasingContent[], {singleLine = false} = {}): string => {
-  if (!children.some(hasContent)) return ''
-  const paragraph = {type: 'paragraph' as const, children}
-  return markdown(singleLine ? withoutBreaks(paragraph) : paragraph).trim()
-}
+const phrasing = (children: PhrasingContent[]): string =>
+  children.some(hasContent) ? markdown({type: 'paragraph', children}).trim() : ''
 
 /** Whether `node` holds any text or image — an empty table or quote would
  *  otherwise paste as a block of bare pipes or `>`. */
@@ -211,8 +204,8 @@ const splitAtBlankLines = (node: Parents): void => {
   }) as typeof node.children
 }
 
-const isBlankText = (node: PhrasingContent | undefined): boolean =>
-  node?.type === 'text' && node.value.trim() === ''
+const isBlankText = (node: PhrasingContent): boolean =>
+  node.type === 'text' && node.value.trim() === ''
 
 const splitParagraph = (paragraph: Paragraph): Paragraph[] => {
   const pieces: PhrasingContent[][] = [[]]

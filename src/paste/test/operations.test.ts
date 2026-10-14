@@ -238,43 +238,6 @@ describe('pasteMultilineText', () => {
     expect(await childContents('parent')).toEqual(['Old child'])
   })
 
-  it('pastes the whole text as one block when asSingleBlock is set', async () => {
-    await createBlock('root', 'Root', null, 'a0')
-    await createBlock('target', 'Target', 'root', 'a0')
-    await createBlock('sibling', 'Sibling', 'root', 'a1')
-
-    const pasted = await pasteMultilineText(
-      '- Alpha\n- Beta',
-      env.repo.block('target'),
-      env.repo,
-      {scopeRootId: 'root', asSingleBlock: true},
-    )
-
-    // No markdown split, no bullet stripping — the whole clipboard becomes
-    // one block (the block-shell "single-block" override path).
-    expect(pasted).toHaveLength(1)
-    expect(pasted[0]?.peek()?.content).toBe('- Alpha\n- Beta')
-    expect(await childContents('root')).toEqual(['Target', '- Alpha\n- Beta', 'Sibling'])
-  })
-
-  it('absorbs an asSingleBlock paste into a blank target, keeping newlines', async () => {
-    await createBlock('root', 'Root', null, 'a0')
-    await createBlock('empty', '', 'root', 'a0')
-    await createBlock('next', 'Next', 'root', 'a1')
-
-    const pasted = await pasteMultilineText(
-      '- Alpha\n- Beta',
-      env.repo.block('empty'),
-      env.repo,
-      {scopeRootId: 'root', asSingleBlock: true},
-    )
-
-    expect(pasted).toHaveLength(1)
-    expect(pasted[0]?.id).toBe('empty')
-    expect(env.repo.block('empty').peek()?.content).toBe('- Alpha\n- Beta')
-    expect(await childContents('root')).toEqual(['- Alpha\n- Beta', 'Next'])
-  })
-
   describe("position: 'before'", () => {
     const abcWithBlankB = async (): Promise<void> => {
       await createBlock('root', 'Root', null, 'a0')
@@ -379,20 +342,6 @@ describe('pasteMultilineText', () => {
     })
   })
 
-  it('no-ops an asSingleBlock paste of blank text (matches the parse path)', async () => {
-    await createBlock('root', 'Root', null, 'a0')
-    await createBlock('target', 'Target', 'root', 'a0')
-
-    const pasted = await pasteMultilineText(
-      '   \n  ',
-      env.repo.block('target'),
-      env.repo,
-      {scopeRootId: 'root', asSingleBlock: true},
-    )
-
-    expect(pasted).toEqual([])
-    expect(await childContents('root')).toEqual(['Target'])
-  })
 })
 
 describe('pasteResolvedDecision', () => {
@@ -420,30 +369,44 @@ describe('pasteResolvedDecision', () => {
     expect(await childContents(pasted[0].id)).toEqual(['line one\nline two', '- not a bullet'])
   })
 
-  it('absorbs the first root into a blank target, its children moving with it', async () => {
+  const singleBlock = (text: string) => ({decision: {kind: 'single-block' as const}, text})
+
+  it('pastes a single-block decision\'s text whole as one block', async () => {
     await createBlock('root', 'Root', null, 'a0')
-    await createBlock('empty', '', 'root', 'a0')
+    await createBlock('target', 'Target', 'root', 'a0')
+    await createBlock('sibling', 'Sibling', 'root', 'a1')
 
-    const pasted = await pasteResolvedDecision(treeDecision, env.repo.block('empty'), env.repo, {scopeRootId: 'root'})
+    const pasted = await pasteResolvedDecision(singleBlock('- Alpha\n- Beta'), env.repo.block('target'), env.repo, {scopeRootId: 'root'})
 
-    expect(pasted[0]?.id).toBe('empty')
-    expect(await childContents('root')).toEqual(['## Heading', 'Second root'])
-    expect(await childContents('empty')).toEqual(['line one\nline two', '- not a bullet'])
+    // No markdown split, no bullet stripping.
+    expect(pasted).toHaveLength(1)
+    expect(pasted[0]?.peek()?.content).toBe('- Alpha\n- Beta')
+    expect(await childContents('root')).toEqual(['Target', '- Alpha\n- Beta', 'Sibling'])
   })
 
-  it('pastes the text when the decision carries no tree', async () => {
+  it('absorbs a single-block paste into a blank target, keeping newlines', async () => {
+    await createBlock('root', 'Root', null, 'a0')
+    await createBlock('empty', '', 'root', 'a0')
+    await createBlock('next', 'Next', 'root', 'a1')
+
+    const pasted = await pasteResolvedDecision(singleBlock('- Alpha\n- Beta'), env.repo.block('empty'), env.repo, {scopeRootId: 'root'})
+
+    expect(pasted).toHaveLength(1)
+    expect(pasted[0]?.id).toBe('empty')
+    expect(env.repo.block('empty').peek()?.content).toBe('- Alpha\n- Beta')
+    expect(await childContents('root')).toEqual(['- Alpha\n- Beta', 'Next'])
+  })
+
+  it('no-ops a single-block paste of blank text, as a parse would', async () => {
     await createBlock('root', 'Root', null, 'a0')
     await createBlock('target', 'Target', 'root', 'a0')
 
-    await pasteResolvedDecision(
-      {decision: {kind: 'single-block'}, text: '- a\n- b'},
-      env.repo.block('target'),
-      env.repo,
-      {scopeRootId: 'root'},
-    )
+    const pasted = await pasteResolvedDecision(singleBlock('   \n  '), env.repo.block('target'), env.repo, {scopeRootId: 'root'})
 
-    expect(await childContents('root')).toEqual(['Target', '- a\n- b'])
+    expect(pasted).toEqual([])
+    expect(await childContents('root')).toEqual(['Target'])
   })
+
 })
 
 describe('pasteEditModeMultilineText', () => {

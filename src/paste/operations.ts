@@ -7,7 +7,6 @@ import { visibleChildrenOf } from '@/data/visibleChildren'
 import {
   parseMarkdownToBlocks,
   parsedBlocksFromOutline,
-  singleParsedBlock,
   type OutlineNode,
   type ParsedBlock,
 } from '@/utils/markdownParser.js'
@@ -33,10 +32,6 @@ interface PasteOptions {
    *  also selects it internally when the absorbed root's children would
    *  otherwise collide with it. */
   placement?: PastePlacement
-  /** Treat the whole clipboard text as one block's content (newlines
-   *  kept) instead of parsing markdown into a tree. Used by the block-
-   *  shell paste when the paste decision is `single-block`. */
-  asSingleBlock?: boolean
 }
 
 interface ExistingParentInsertion {
@@ -339,46 +334,34 @@ export const planEditModeMultilinePaste = (
   }
 }
 
-/** Paste markdown text into the outline around a target block — parsed into
- *  a block tree, or kept whole as one block with `asSingleBlock` — placed per
- *  {@link pasteParsedBlocks}. */
+/** Paste markdown text into the outline around a target block, parsed into
+ *  a block tree and placed per {@link pasteParsedBlocks}. */
 export async function pasteMultilineText(
   pastedText: string,
   pasteTarget: Block,
   repo: Repo,
-  {
-    position = 'after',
-    scopeRootId,
-    placement = 'visible',
-    asSingleBlock = false,
-  }: PasteOptions = {},
+  options: PasteOptions = {},
 ): Promise<Block[]> {
-  // Blank clipboard is a no-op on both paths: `parseMarkdownToBlocks` drops
-  // all-blank input to `[]`, so `asSingleBlock` must too — otherwise it
-  // would create a whitespace-only block (or clobber a blank target).
-  if (asSingleBlock && isBlankContent(pastedText)) return []
-
-  const parsed = asSingleBlock
-    ? [singleParsedBlock(pastedText)]
-    : parseMarkdownToBlocks(pastedText)
-  return pasteParsedBlocks(parsed, pasteTarget, repo, {position, scopeRootId, placement})
+  return pasteParsedBlocks(parseMarkdownToBlocks(pastedText), pasteTarget, repo, options)
 }
 
-/** Paste a resolved (non-media) decision around `pasteTarget`: the block tree
- *  the decision built, when it carries one, else its text. */
+/** Paste a resolved (non-media) decision around `pasteTarget`, placed per
+ *  {@link pasteParsedBlocks}. */
 export async function pasteResolvedDecision(
-  {decision, text}: ResolvedTextPaste,
+  resolved: ResolvedTextPaste,
   pasteTarget: Block,
   repo: Repo,
-  options: Omit<PasteOptions, 'asSingleBlock'> = {},
+  options: PasteOptions = {},
 ): Promise<Block[]> {
-  if (decision.kind === 'split' && decision.blocks) {
-    return pasteParsedBlocks(parsedBlocksFromOutline(decision.blocks), pasteTarget, repo, options)
-  }
-  return pasteMultilineText(text, pasteTarget, repo, {
-    ...options,
-    asSingleBlock: decision.kind === 'single-block',
-  })
+  return pasteParsedBlocks(parsedBlocksFor(resolved), pasteTarget, repo, options)
+}
+
+/** The blocks a decision pastes: the tree it built, else its text parsed as
+ *  markdown, or kept whole as one block for `single-block`. Blank text pastes
+ *  nothing either way (a whitespace-only block would clobber a blank target). */
+const parsedBlocksFor = ({decision, text}: ResolvedTextPaste): ParsedBlock[] => {
+  if (decision.kind === 'split') return decision.blocks ? parsedBlocksFromOutline(decision.blocks) : parseMarkdownToBlocks(text)
+  return isBlankContent(text) ? [] : parsedBlocksFromOutline([{content: text}])
 }
 
 /** Paste parsed blocks into the outline around a target block.
@@ -403,7 +386,7 @@ async function pasteParsedBlocks(
     position = 'after',
     scopeRootId,
     placement = 'visible',
-  }: Omit<PasteOptions, 'asSingleBlock'>,
+  }: PasteOptions,
 ): Promise<Block[]> {
   if (parsed.length === 0) return []
   const targetData = pasteTarget.peek() ?? await pasteTarget.load()

@@ -62,6 +62,12 @@ const GOOGLE_DOCS_WRAPPER = 'b[id^="docs-internal-guid-"]'
  *  content: elsewhere a styled span is usually Chrome recording the COMPUTED
  *  style of a partial selection — copying a few words of a heading yields a
  *  `font-weight:700` span — and bolding those would be wrong. */
+const STYLE_MARKS = [
+  [/font-weight:\s*(bold|[6-9]00)/i, 'strong'],
+  [/font-style:\s*italic/i, 'em'],
+  [/text-decoration[^;]*line-through/i, 'del'],
+] as const
+
 const normalizeGoogleDocs = (body: HTMLElement): void => {
   const wrappers = body.querySelectorAll(GOOGLE_DOCS_WRAPPER)
   if (wrappers.length === 0) return
@@ -71,12 +77,8 @@ const normalizeGoogleDocs = (body: HTMLElement): void => {
     // A heading's own size/weight is its heading-ness, not emphasis.
     if (span.closest('h1, h2, h3, h4, h5, h6')) continue
     const style = span.getAttribute('style') ?? ''
-    const marks = [
-      /font-weight:\s*(bold|[6-9]00)/i.test(style) && 'strong',
-      /font-style:\s*italic/i.test(style) && 'em',
-      /text-decoration[^;]*line-through/i.test(style) && 'del',
-    ].filter((mark): mark is string => typeof mark === 'string')
-    for (const mark of marks) {
+    for (const [pattern, mark] of STYLE_MARKS) {
+      if (!pattern.test(style)) continue
       const element = body.ownerDocument.createElement(mark)
       element.append(...span.childNodes)
       span.append(element)
