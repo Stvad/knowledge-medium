@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { describe, expect, it } from 'vitest'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
-import { pasteDecisionVerb, type PasteRequest } from '@/paste/decision'
+import { pasteDecisionVerb, type PasteDecision, type PasteRequest } from '@/paste/decision'
 import { richPasteDecisionContribution } from '../pasteDecision'
 
 const runtime = resolveFacetRuntimeSync([richPasteDecisionContribution])
@@ -46,10 +46,27 @@ describe('rich paste decision', () => {
     ['no html', {text: 'a\nb'}],
     ['html with nothing the text lacks', {text: 'a\nb', html: '<p>a</p><p>b</p>'}],
     ['the plain-text chord', {text: 'a\nb', html: STRUCTURED, intent: 'single-block' as const}],
-    ['files on the clipboard', {text: 'a\nb', html: STRUCTURED, files: [new File(['x'], 'x.png')]}],
     ['outliner reference syntax in the text', {text: '- [[Page]]\n- b', html: STRUCTURED}],
   ])('leaves the paste to the rest of the chain for %s', (_, over) => {
     const request = editor(over)
     expect(decide(request)).toEqual(pasteDecisionVerb.runSync(resolveFacetRuntimeSync([]), request))
+  })
+
+  describe('with files on the clipboard', () => {
+    const withFiles = editor({text: 'Title\nBody', html: STRUCTURED, files: [new File(['x'], 'x.png')]})
+    const mediaWhenFiles = pasteDecisionVerb.decorator(
+      next => req => (req.files?.length ? {kind: 'media'} : next(req)) as PasteDecision,
+    )
+
+    it('still converts the html when nothing in the chain captures them', () => {
+      expect(decide(withFiles)).toMatchObject({kind: 'split', blocks: [{content: '## Title'}]})
+    })
+
+    it.each([
+      ['inside', [richPasteDecisionContribution, mediaWhenFiles]],
+      ['outside', [mediaWhenFiles, richPasteDecisionContribution]],
+    ])('yields to a media capture registered %s it', (_, contributions) => {
+      expect(pasteDecisionVerb.runSync(resolveFacetRuntimeSync(contributions), withFiles)).toEqual({kind: 'media'})
+    })
   })
 })
