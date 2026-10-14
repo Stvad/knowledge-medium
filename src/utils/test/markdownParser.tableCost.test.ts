@@ -23,7 +23,18 @@ describe('parseMarkdownToBlocks: table detection cost', () => {
     expect(Math.max(...parsedLineCounts())).toBe(2)
   })
 
-  it('parses a real table once more, over its own run of rows only', () => {
+  it('parses each row with only the header and delimiter, however long the pipe run', () => {
+    vi.mocked(fromMarkdown).mockClear()
+    // Tables each ended by a block that also carries a pipe.
+    const tables = Array.from({length: 200}, (_, i) => `| a${i} | b |\n| - | - |\n- c${i} | d`).join('\n')
+
+    const blocks = parseMarkdownToBlocks(tables)
+
+    expect(blocks).toHaveLength(400)
+    expect(Math.max(...parsedLineCounts())).toBe(3)
+  })
+
+  it('parses a table row by row', () => {
     vi.mocked(fromMarkdown).mockClear()
     const table = '| a | b |\n| - | - |\n| 1 | 2 |'
 

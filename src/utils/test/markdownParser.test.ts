@@ -363,6 +363,18 @@ Root
     it('nests an indented quote under its bullet and strips the indent', () => {
       expect(outline(parseMarkdownToBlocks('- said\n  > a\n  > b'))).toEqual(['said', '  > a\n> b'])
     })
+
+    it('ends the quote at a line at another indent', () => {
+      expect(outline(parseMarkdownToBlocks('- item\n  > under item\n> at root'))).toEqual([
+        'item',
+        '  > under item',
+        '> at root',
+      ])
+    })
+
+    it('reads Windows line endings as plain newlines', () => {
+      expect(outline(parseMarkdownToBlocks('> q1\r\n> q2\r\nafter'))).toEqual(['> q1\n> q2', 'after'])
+    })
   })
 
   describe('GFM tables', () => {
@@ -374,6 +386,15 @@ Root
 
     it('ends the table at a line without a pipe, unlike a GFM lazy row', () => {
       expect(outline(parseMarkdownToBlocks(`${table}\na note`))).toEqual([table, 'a note'])
+    })
+
+    it('ends the table at a row at another indent', () => {
+      const t = '| a | b |\n| - | - |'
+      expect(outline(parseMarkdownToBlocks(`- item\n  ${t.replace('\n', '\n  ')}\n| 1 | 2 |`))).toEqual([
+        'item',
+        `  ${t}`,
+        '| 1 | 2 |',
+      ])
     })
 
     it('nests an indented table under its bullet and strips the indent', () => {

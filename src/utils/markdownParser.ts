@@ -104,7 +104,7 @@ export function parseMarkdownToBlocks(text: string): ParsedBlock[] {
 /** Split markdown/outline text into tokens, one per non-blank line except
  *  for fenced code blocks, tables and quotes, which are consumed whole. */
 const lexMarkdownLines = (text: string): OutlineToken[] => {
-  const lines = text.split('\n')
+  const lines = text.replace(/\r\n?/g, '\n').split('\n')
   const tokens: OutlineToken[] = []
   let idx = 0
   while (idx < lines.length) {
@@ -117,18 +117,13 @@ const lexMarkdownLines = (text: string): OutlineToken[] => {
     const indent = getIndentationLevel(line)
 
     const token = lineToken(trimmed, indent)
-    const atomicEnd = fencedCodeEnd(lines, idx) ??
-      (token.kind === 'paragraph' ? tableEnd(lines, idx) ?? quoteEnd(lines, idx) : undefined)
+    const atomicEnd = token.kind === 'paragraph'
+      ? fencedCodeEnd(lines, idx) ?? tableEnd(lines, idx) ?? quoteEnd(lines, idx)
+      : undefined
     if (atomicEnd !== undefined) {
-      // Strip the opening line's indentation from every line so nested
-      // content doesn't carry it; the block nests like a plain line at that
-      // indent.
-      const openingWs = line.match(/^[ \t]*/)?.[0].length ?? 0
-      const content = lines.slice(idx, atomicEnd)
-        .map(raw => stripLeadingWhitespace(raw, openingWs))
-        .join('\n')
-        .replace(/[ \t\r\n]+$/, '')
-      tokens.push({kind: 'atomic', indent, content})
+      // The block nests like a plain line at its opening indent, so its lines
+      // drop that indent.
+      tokens.push({kind: 'atomic', indent, content: dedented(lines.slice(idx, atomicEnd)).trimEnd()})
       idx = atomicEnd
       continue
     }
@@ -169,50 +164,58 @@ const fencedCodeEnd = (lines: readonly string[], start: number): number | undefi
   return end
 }
 
+const GFM_TABLE = {extensions: [gfmTable()], mdastExtensions: [gfmTableFromMarkdown()]}
+
 /** A line that could be a GFM delimiter row — a cheap filter so the parser
  *  only runs on real table candidates, not on every line with a pipe. */
 const MAYBE_DELIMITER_ROW = /^[\s|:-]*-[\s|:-]*$/
 
 /** End (exclusive line index) of the GFM table whose header row is at
  *  `start`, or undefined when there is none. The GFM parser the app renders
- *  with decides what is a table, so escapes and code spans match what the
- *  block will show, and another block (a bullet, a quote) ends it. Unlike
- *  GFM, a row without a pipe ends it too: GFM's lazy row is, in pasted notes,
- *  the next line of the note (quotes follow the same rule). */
+ *  with decides what is a table and which rows belong to it, so escapes and
+ *  code spans match what the block will show, and another block (a bullet, a
+ *  quote) ends it. Each row is parsed with just the header and delimiter, as
+ *  GFM decides a row on its own. Both of those must carry a pipe: GFM's
+ *  pipeless one-column table (`a` over `:-:`) is, in pasted notes, text. */
 const tableEnd = (lines: readonly string[], start: number): number | undefined => {
-  const delimiter = lines[start + 1]?.trim() ?? ''
-  if (!lines[start].includes('|') || !delimiter.includes('|') || !MAYBE_DELIMITER_ROW.test(delimiter)) return undefined
-  const openingWs = lines[start].match(/^[ \t]*/)?.[0].length ?? 0
-  const parseTableAt = (end: number) => {
-    const source = lines.slice(start, end).map(raw => stripLeadingWhitespace(raw, openingWs)).join('\n')
-    const [first] = fromMarkdown(source, {extensions: [gfmTable()], mdastExtensions: [gfmTableFromMarkdown()]}).children
-    return first?.type === 'table' ? first : undefined
+  const header = lines[start]
+  const delimiter = lines[start + 1] ?? ''
+  if (!header.includes('|') || !delimiter.includes('|') || !MAYBE_DELIMITER_ROW.test(delimiter.trim())) return undefined
+  const isTable = (rows: readonly string[]): boolean => {
+    const [first] = fromMarkdown(dedented(rows), GFM_TABLE).children
+    return first?.type === 'table' && first.position?.end.line === rows.length
   }
-  // The header and delimiter rows alone decide whether a table starts here,
-  // so a rejected candidate costs two lines however long the paste: parsing
-  // its whole run would make a run of malformed pairs quadratic.
-  if (!parseTableAt(start + 2)) return undefined
-  let runEnd = start + 2
-  while (runEnd < lines.length && lines[runEnd].includes('|')) runEnd++
-  const table = parseTableAt(runEnd)
-  return table?.position ? start + table.position.end.line : undefined
+  if (!isTable([header, delimiter])) return undefined
+  return runEnd(lines, start, start + 2, row => row.includes('|') && isTable([header, delimiter, row]))
 }
 
+const isQuoteLine = (line: string): boolean => line.trim().startsWith('>')
+
 /** End (exclusive line index) of the run of `>` quote lines starting at
- *  `start`, or undefined when that line isn't one. A lazy continuation line
- *  (no `>`) is not followed: in pasted notes it is a reply, not the quote. */
-const quoteEnd = (lines: readonly string[], start: number): number | undefined => {
-  if (!lines[start].trim().startsWith('>')) return undefined
-  let end = start + 1
-  while (end < lines.length && lines[end].trim().startsWith('>')) end++
+ *  `start`, or undefined when that line isn't one. */
+const quoteEnd = (lines: readonly string[], start: number): number | undefined =>
+  isQuoteLine(lines[start]) ? runEnd(lines, start, start + 1, isQuoteLine) : undefined
+
+/** End (exclusive) of the run of lines from `from` on that continue the
+ *  table or quote opening at `start`: lines at its indent, carrying its
+ *  marker. A lazy continuation (GFM's pipeless row, CommonMark's `>`-less
+ *  quote line) is not followed: in pasted notes it is the next note. */
+const runEnd = (
+  lines: readonly string[],
+  start: number,
+  from: number,
+  continues: (line: string) => boolean,
+): number => {
+  const indent = getIndentationLevel(lines[start])
+  let end = from
+  while (end < lines.length && getIndentationLevel(lines[end]) === indent && continues(lines[end])) end++
   return end
 }
 
-/** Remove up to `count` leading spaces/tabs from `raw`. */
-const stripLeadingWhitespace = (raw: string, count: number): string => {
-  let cut = 0
-  while (cut < raw.length && cut < count && (raw[cut] === ' ' || raw[cut] === '\t')) cut++
-  return raw.slice(cut)
+/** `rows` joined, each without the first row's indentation (as far as it has it). */
+const dedented = (rows: readonly string[]): string => {
+  const width = /^[ \t]*/.exec(rows[0])![0].length
+  return rows.map(row => row.replace(/^[ \t]*/, indent => indent.slice(width))).join('\n')
 }
 
 /** Column a tab advances to, per CommonMark's tab-stop rule. Only the
