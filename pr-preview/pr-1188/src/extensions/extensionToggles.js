@@ -1,1 +1,1 @@
-import{FT as e,IT as t,LT as n,RT as r}from"../../chunks/app-DuJgFISO.js";export{e as extensionDisplayName,t as extensionName,n as userExtensionShellToggle,r as userExtensionToggle};
+import{BT as e,HT as t,UT as n,VT as r}from"../../chunks/app-Bj7cXbNu.js";export{e as extensionDisplayName,r as extensionName,t as userExtensionShellToggle,n as userExtensionToggle};

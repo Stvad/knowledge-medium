@@ -1,1 +1,1 @@
-import{Dy as e,Ey as t,Oy as n,Ty as r}from"../../chunks/app-DuJgFISO.js";export{r as CRUMB_MAX_CHARS,t as CRUMB_MAX_SEGMENTS,e as collapseCrumbs,n as crumbsFromAncestors};
+import{Ay as e,My as t,Ny as n,jy as r}from"../../chunks/app-Bj7cXbNu.js";export{e as CRUMB_MAX_CHARS,r as CRUMB_MAX_SEGMENTS,t as collapseCrumbs,n as crumbsFromAncestors};

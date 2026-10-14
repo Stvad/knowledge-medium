@@ -1,1 +1,1 @@
-import{OI as e}from"../../../chunks/app-DuJgFISO.js";export{e as preferredSpanReplacement};
+import{NI as e}from"../../../chunks/app-Bj7cXbNu.js";export{e as preferredSpanReplacement};

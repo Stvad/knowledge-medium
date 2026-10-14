@@ -1,1 +1,1 @@
-import{O_ as e}from"../../../chunks/app-DuJgFISO.js";export{e as CreateWorkspaceDialog};
+import{N_ as e}from"../../../chunks/app-Bj7cXbNu.js";export{e as CreateWorkspaceDialog};

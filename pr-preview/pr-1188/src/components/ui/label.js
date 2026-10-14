@@ -1,1 +1,1 @@
-import{eb as e}from"../../../chunks/app-DuJgFISO.js";export{e as Label};
+import{ab as e}from"../../../chunks/app-Bj7cXbNu.js";export{e as Label};
