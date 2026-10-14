@@ -1,1 +1,1 @@
-import{Dh as e,Eh as t,Oh as n}from"../../../chunks/app-DoeSRydL.js";export{t as COLEMAK_KEYBINDINGS_PLUGIN_ID,e as colemakKeybindingsPlugin,n as colemakMovementKeybindingOverrides};
+import{Dh as e,Eh as t,Oh as n}from"../../../chunks/app-BM6YW8t7.js";export{t as COLEMAK_KEYBINDINGS_PLUGIN_ID,e as colemakKeybindingsPlugin,n as colemakMovementKeybindingOverrides};
