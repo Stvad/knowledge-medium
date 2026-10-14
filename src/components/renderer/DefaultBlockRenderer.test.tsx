@@ -30,7 +30,7 @@ import { type FacetRuntime } from '@/facets/facet'
 import { ActiveContextsProvider } from '@/shortcuts/ActiveContexts'
 import type { Block } from '@/data/block'
 import type { BlockRendererProps } from '@/types'
-import { pasteMultilineText } from '@/paste/operations'
+import { pasteResolvedDecision } from '@/paste/operations'
 import { DefaultBlockRenderer } from './DefaultBlockRenderer'
 import { MarkdownContentRenderer } from './MarkdownContentRenderer'
 import { BLOCK_TITLE_TEXT_CLASS } from './blockTitleText'
@@ -78,7 +78,7 @@ vi.mock('@/data/globalState.ts', async () => {
 })
 
 vi.mock('@/paste/operations.ts', () => ({
-  pasteMultilineText: vi.fn(async () => []),
+  pasteResolvedDecision: vi.fn(async () => []),
   pasteFromClipboard: vi.fn(async () => []),
   // The renderer resolves the decision (+ any media capture) through this; for a
   // plain text paste it returns the split decision and the text unchanged.
@@ -134,7 +134,7 @@ describe('DefaultBlockRenderer paste handling', () => {
   let runtime: FacetRuntime
 
   beforeEach(async () => {
-    vi.mocked(pasteMultilineText).mockClear()
+    vi.mocked(pasteResolvedDecision).mockClear()
 
     await resetTestDb(sharedDb.db)
     h = sharedDb
@@ -230,7 +230,7 @@ describe('DefaultBlockRenderer paste handling', () => {
     })
 
     expect(event?.defaultPrevented).toBe(false)
-    expect(pasteMultilineText).not.toHaveBeenCalled()
+    expect(pasteResolvedDecision).not.toHaveBeenCalled()
   })
 
   it('still handles paste on the focused block shell', async () => {
@@ -247,12 +247,12 @@ describe('DefaultBlockRenderer paste handling', () => {
     // preventDefault is synchronous; the apply now runs after the async
     // paste-verb decision, so wait for the call.
     expect(event?.defaultPrevented).toBe(true)
-    await vi.waitFor(() => expect(pasteMultilineText).toHaveBeenCalledTimes(1))
-    expect(pasteMultilineText).toHaveBeenCalledWith(
-      'first\nsecond',
+    await vi.waitFor(() => expect(pasteResolvedDecision).toHaveBeenCalledTimes(1))
+    expect(pasteResolvedDecision).toHaveBeenCalledWith(
+      {decision: {kind: 'split'}, text: 'first\nsecond'},
       repo.block('block-1'),
       repo,
-      {scopeRootId: 'root', asSingleBlock: false},
+      {scopeRootId: 'root'},
     )
   })
 
