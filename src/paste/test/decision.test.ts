@@ -133,6 +133,8 @@ describe('pasteDecisionVerb', () => {
       {kind: 'split', blocks: [{content: 1}]},
       {kind: 'split', blocks: [{content: 'ok', children: [{children: []}]}]},
       {kind: 'single-block', blocks: [{content: 'ok'}]},
+      {kind: 'split', blocks: new Array(1)},
+      {kind: 'split', blocks: [{content: 'ok', children: new Array(2)}]},
     ]
     for (const bad of malformed) {
       const runtime = resolveFacetRuntimeSync([

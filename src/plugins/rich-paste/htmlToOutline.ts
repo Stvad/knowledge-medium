@@ -7,7 +7,8 @@ import { outlineFromTokens, type OutlineNode, type OutlineToken } from '@/utils/
 import { normalizeClipboardDom } from './normalizeClipboardDom.js'
 
 export type ClipboardHtmlConversion =
-  /** The HTML carries nothing the plain text lacks — paste the text as usual. */
+  /** The plain text is the better source (an outliner's own copy), or the
+   *  HTML carries nothing it lacks — paste the text as usual. */
   | {kind: 'plain'}
   /** A single line of paragraph text, as inline markdown, for the ordinary
    *  single-line paste path. A lone heading or list item is an outline: the
@@ -19,9 +20,10 @@ export type ClipboardHtmlConversion =
 /** Convert clipboard `text/html` into an outline: one block per heading,
  *  paragraph, list item, table, code block or quote, nested by the shared
  *  paste structuring rules (`outlineFromTokens`), each block's content written
- *  as markdown. */
-export const convertClipboardHtml = (html: string): ClipboardHtmlConversion => {
+ *  as markdown. `plainText` is the same clipboard's `text/plain`. */
+export const convertClipboardHtml = (html: string, plainText = ''): ClipboardHtmlConversion => {
   const body = new DOMParser().parseFromString(html, 'text/html').body
+  if (hasOutlinerReferences(plainText, body)) return {kind: 'plain'}
   normalizeClipboardDom(body)
   const mdast = toMdast(fromDom(body)) as Root
   sanitize(mdast)
@@ -36,6 +38,19 @@ export const convertClipboardHtml = (html: string): ClipboardHtmlConversion => {
     return {kind: 'inline', markdown: only.content}
   }
   return {kind: 'outline', blocks: outlineFromTokens(tokens)}
+}
+
+/** A page reference `[[…]]`, or a block reference `((…))` to a Roam-style
+ *  9-character uid or a UUID. */
+const OUTLINER_REFERENCE = /\[\[[^[\]\n]+\]\]|\(\((?:[\w-]{9}|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})\)\)/g
+
+/** Outliner copies (Roam, Logseq) put their `[[page]]` / `((block))`
+ *  references in the plain text; HTML beside it is a rendering that has lost
+ *  them, so the text is the better source. The same characters inside code
+ *  (`if ((ready))`, `m[[i]]`) are just code. */
+const hasOutlinerReferences = (plainText: string, body: HTMLElement): boolean => {
+  const code = [...body.querySelectorAll('code, pre')].map(element => element.textContent ?? '').join('\n')
+  return [...plainText.matchAll(OUTLINER_REFERENCE)].some(([reference]) => !code.includes(reference))
 }
 
 /** Whether the HTML says anything the plain text doesn't. Plain paragraphs

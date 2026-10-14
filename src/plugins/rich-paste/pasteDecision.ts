@@ -1,11 +1,6 @@
 import { pasteDecisionVerb, type PasteDecision } from '@/paste/decision.js'
 import { convertClipboardHtml } from './htmlToOutline.js'
 
-/** Outliner copies (Roam, Logseq) put their own `[[page]]` / `((block))`
- *  syntax in the plain text; any HTML beside it is a rendering that has lost
- *  those references, so the text is the better source. */
-const hasOutlinerReferenceSyntax = (text: string): boolean => /\[\[|\(\(/.test(text)
-
 /**
  * Paste clipboard HTML (web pages, Google Docs, chat answers) as structured
  * blocks rather than the browser's flattened plain text. Defers to the rest of
@@ -17,11 +12,10 @@ const hasOutlinerReferenceSyntax = (text: string): boolean => /\[\[|\(\(/.test(t
 export const richPasteDecisionContribution = pasteDecisionVerb.decorator(
   next => request => {
     if (request.intent === 'single-block' || !request.html) return next(request)
-    if (hasOutlinerReferenceSyntax(request.text)) return next(request)
     const downstream = next(request) as PasteDecision
     if (downstream.kind === 'media') return downstream
 
-    const converted = convertClipboardHtml(request.html)
+    const converted = convertClipboardHtml(request.html, request.text)
     if (converted.kind === 'plain') return downstream
     if (converted.kind === 'outline') return {kind: 'split', blocks: converted.blocks}
 

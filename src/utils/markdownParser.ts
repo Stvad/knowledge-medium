@@ -1,3 +1,6 @@
+import { fromMarkdown } from 'mdast-util-from-markdown'
+import { gfmTableFromMarkdown } from 'mdast-util-gfm-table'
+import { gfmTable } from 'micromark-extension-gfm-table'
 import { v4 as uuidv4 } from 'uuid'
 import { keyAtEnd } from '../data/orderKey.ts'
 
@@ -166,27 +169,27 @@ const fencedCodeEnd = (lines: readonly string[], start: number): number | undefi
   return end
 }
 
-const TABLE_DELIMITER_ROW = /^\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?$/
-
-/** Cells in a table row: GFM splits at every pipe not escaped as `\|`
- *  (inside code spans too). */
-const tableCellCount = (row: string): number =>
-  row.replace(/^\|/, '').replace(/\|$/, '').split(/(?<!\\)\|/).length
+/** A line that could be a GFM delimiter row — a cheap filter so the parser
+ *  only runs on real table candidates, not on every line with a pipe. */
+const MAYBE_DELIMITER_ROW = /^[\s|:-]*-[\s|:-]*$/
 
 /** End (exclusive line index) of the GFM table whose header row is at
- *  `start`, or undefined when there is none: a header row, a delimiter row
- *  with the same cell count, then every following row that still has a pipe.
- *  A mismatched table falls back to one block per line, which is how it would
- *  render anyway. */
+ *  `start`, or undefined when there is none. The GFM parser the app renders
+ *  with decides, so escapes, code spans and where a table stops match what
+ *  the block will show: a blank line or another block (a bullet, a quote)
+ *  ends it, while a plain line right after it is one more row. */
 const tableEnd = (lines: readonly string[], start: number): number | undefined => {
-  const header = lines[start].trim()
-  const delimiter = lines[start + 1]?.trim()
-  if (!header.includes('|') || !delimiter?.includes('|')) return undefined
-  if (!TABLE_DELIMITER_ROW.test(delimiter)) return undefined
-  if (tableCellCount(header) !== tableCellCount(delimiter)) return undefined
-  let end = start + 2
-  while (end < lines.length && lines[end].trim().includes('|')) end++
-  return end
+  const delimiter = lines[start + 1]?.trim() ?? ''
+  if (!lines[start].includes('|') || !delimiter.includes('|') || !MAYBE_DELIMITER_ROW.test(delimiter)) return undefined
+  let blockEnd = start
+  while (blockEnd < lines.length && lines[blockEnd].trim()) blockEnd++
+  const openingWs = lines[start].match(/^[ \t]*/)?.[0].length ?? 0
+  const candidate = lines.slice(start, blockEnd).map(raw => stripLeadingWhitespace(raw, openingWs)).join('\n')
+  const [first] = fromMarkdown(candidate, {
+    extensions: [gfmTable()],
+    mdastExtensions: [gfmTableFromMarkdown()],
+  }).children
+  return first?.type === 'table' && first.position ? start + first.position.end.line : undefined
 }
 
 /** End (exclusive line index) of the run of `>` quote lines starting at
