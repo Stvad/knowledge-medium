@@ -1,1 +1,1 @@
-import{Jg as e}from"../../../chunks/app-WV5-ij87.js";export{e as PromotableBreadcrumbList};
+import{Jg as e}from"../../../chunks/app-DoeSRydL.js";export{e as PromotableBreadcrumbList};

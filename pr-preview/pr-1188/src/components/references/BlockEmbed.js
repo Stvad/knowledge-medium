@@ -1,1 +1,1 @@
-import{lC as e}from"../../../chunks/app-WV5-ij87.js";export{e as BlockEmbed};
+import{lC as e}from"../../../chunks/app-DoeSRydL.js";export{e as BlockEmbed};

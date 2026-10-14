@@ -1,1 +1,1 @@
-import{Fz as e,Iz as t}from"../../chunks/app-WV5-ij87.js";export{e as pluginPrefsExtension,t as pluginUIStateExtension};
+import{Fz as e,Iz as t}from"../../chunks/app-DoeSRydL.js";export{e as pluginPrefsExtension,t as pluginUIStateExtension};

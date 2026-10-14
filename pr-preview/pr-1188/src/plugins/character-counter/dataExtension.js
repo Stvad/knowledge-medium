@@ -1,1 +1,1 @@
-import{sz as e}from"../../../chunks/app-WV5-ij87.js";export{e as characterCounterDataExtension};
+import{sz as e}from"../../../chunks/app-DoeSRydL.js";export{e as characterCounterDataExtension};

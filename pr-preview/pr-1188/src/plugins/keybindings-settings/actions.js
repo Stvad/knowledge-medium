@@ -1,1 +1,1 @@
-import{Lx as e}from"../../../chunks/app-WV5-ij87.js";export{e as openKeybindingsSettingsAction};
+import{Lx as e}from"../../../chunks/app-DoeSRydL.js";export{e as openKeybindingsSettingsAction};

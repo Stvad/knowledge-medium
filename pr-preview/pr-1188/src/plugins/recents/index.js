@@ -1,1 +1,1 @@
-import{Bv as e,Lv as t,Rv as n,zv as r}from"../../../chunks/app-WV5-ij87.js";export{t as OPEN_RECENTS_ACTION_ID,n as openRecentsAction,r as recentsHeaderItem,e as recentsPlugin};
+import{Bv as e,Lv as t,Rv as n,zv as r}from"../../../chunks/app-DoeSRydL.js";export{t as OPEN_RECENTS_ACTION_ID,n as openRecentsAction,r as recentsHeaderItem,e as recentsPlugin};
