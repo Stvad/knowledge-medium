@@ -1,0 +1,1 @@
+import{cz as e,lz as t,uz as n}from"../../../chunks/app-CfkKk3Tm.js";export{e as charLimitProp,t as charProfileProp,n as charScopeProp};

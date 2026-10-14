@@ -1,0 +1,1 @@
+import{Ow as e,gt as t,kw as n}from"../../../chunks/app-CfkKk3Tm.js";export{e as extensionsOverridesProp,n as extensionsPrefsType,t as extensionsSettingsPlugin};

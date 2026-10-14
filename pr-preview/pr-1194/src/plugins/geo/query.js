@@ -1,0 +1,1 @@
+import{RL as e,zL as t}from"../../../chunks/app-CfkKk3Tm.js";export{e as PLACES_UNDER_BLOCK_QUERY,t as placesUnderBlockQuery};

@@ -1,0 +1,1 @@
+import{$P as e}from"../../../chunks/app-CfkKk3Tm.js";export{e as SuspenseFallback};

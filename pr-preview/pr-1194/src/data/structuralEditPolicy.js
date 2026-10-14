@@ -1,0 +1,1 @@
+import{$C as e,ew as t}from"../../chunks/app-CfkKk3Tm.js";export{e as resolveStructuralEditPolicy,t as structuralEditPolicyForBlock};

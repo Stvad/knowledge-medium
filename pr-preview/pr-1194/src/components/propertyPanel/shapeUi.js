@@ -1,0 +1,1 @@
+import{SP as e,xP as t}from"../../../chunks/app-CfkKk3Tm.js";export{t as PropertyShapeButton,e as PropertyShapeGlyph};
