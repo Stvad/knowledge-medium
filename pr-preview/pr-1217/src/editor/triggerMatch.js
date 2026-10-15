@@ -1,1 +1,0 @@
-import{_R as e}from"../../chunks/app-BwoaUt5B.js";export{e as matchCharTrigger};

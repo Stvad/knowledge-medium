@@ -1,1 +1,0 @@
-import{Mw as e,Nw as t,gt as n}from"../../../chunks/app-BwoaUt5B.js";export{e as extensionsOverridesProp,t as extensionsPrefsType,n as extensionsSettingsPlugin};
