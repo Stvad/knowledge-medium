@@ -57,6 +57,7 @@ import type { Repo } from './repo'
 
 const WS = 'ws-def-change'
 const FIELD_ID = 'field-status-change'
+const FIELD_PEER_ELSEWHERE = 'field-peer-unjudged'
 
 let sharedDb: TestDb
 beforeAll(async () => { sharedDb = await createTestDb() })
@@ -1226,6 +1227,32 @@ describe('a workspace this client cannot judge', () => {
     expect((await cell(FIELD_ID))[propertyNameProp.name]).toBe('status')
     expect(await cell('p')).toEqual({status: 'done'})
     expect(errors.map(e => e.code)).toEqual(['property.definition-change.unjudgeable'])
+  })
+
+  it('refuses a RESTORE there too: whether its name was taken since is unknowable', async () => {
+    // The shape the shared-name refusal exists for — a used `status` that took
+    // the name while the older definition was deleted — but judged with no
+    // registry, so it cannot be seen.
+    await seedWorkspace('children')
+    await seedWorkspace('children', 'ws-elsewhere')
+    const repo = makeRepo()
+    await createDefinition(repo, FIELD_PEER_ELSEWHERE, 'status', 'number')
+    await awaitDefinition(repo, 'status', 'number')
+    await repo.tx(tx => tx.delete(FIELD_PEER_ELSEWHERE), {scope: ChangeScope.BlockDefault})
+    await createDefinition(repo, FIELD_ID, 'status', 'string')
+    await awaitDefinition(repo, 'status', 'string')
+    await seedProperty(repo, 'p', 'status', 'done')
+
+    repo.setActiveWorkspaceId('ws-elsewhere')
+    await vi.waitFor(() => {
+      if (repo.propertyDefinitions?.workspaceId === WS) {
+        throw new Error('[test] the registry has not moved off the definition\'s workspace')
+      }
+    }, {timeout: 3000})
+    await expect(repo.tx(tx => tx.restore(FIELD_PEER_ELSEWHERE), {scope: ChangeScope.BlockDefault}))
+      .rejects.toMatchObject({code: 'property.definition-change.unjudgeable'})
+
+    expect(await isLive(FIELD_PEER_ELSEWHERE)).toBe(false)
   })
 })
 

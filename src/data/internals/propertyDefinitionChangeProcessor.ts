@@ -485,6 +485,13 @@ const collectChanges = (
       if (before !== null && afterMeta.seedKey === undefined) reclaimedNames.add(afterMeta.name)
     }
   }
+  // An arrival is judged against names too, so a revival needs the registry
+  // as much as a change does.
+  for (const name of reclaimedNames) probeName ??= name
+  if (probeName === null) return {changes: [], unfanoutable, sharedNameClaimants: []}
+  if (ctx.propertyDefinitionsClaimingName(workspaceId, probeName) === null) {
+    return 'unjudgeable'
+  }
   const claimOf = (name: string): NameClaim | null => {
     const atTxStart = ctx.propertyDefinitionsClaimingName(workspaceId, name)
     return atTxStart === null
@@ -496,18 +503,13 @@ const collectChanges = (
   }
   const sharedNameClaimants = new Set<string>()
   for (const name of reclaimedNames) {
-    // No registry, nothing to judge: a CHANGE there is refused as unjudgeable
-    // below, and a plain revival commits as it always has.
-    const claim = claimOf(name)
-    if (claim === null) continue
+    // Past the probe: the registry is per workspace, so every name has a claim.
+    const claim = claimOf(name)!
     const claimants = new Set([...claim.holding, ...claim.arriving])
     if (claimants.size > 1) for (const fieldId of claimants) sharedNameClaimants.add(fieldId)
   }
   if (candidates.length === 0 && unfanoutable.length === 0) {
     return {changes: [], unfanoutable, sharedNameClaimants: [...sharedNameClaimants]}
-  }
-  if (ctx.propertyDefinitionsClaimingName(workspaceId, probeName!) === null) {
-    return 'unjudgeable'
   }
   // Pass 2: hold every change whose destination or vacated name another
   // definition also claims — see `contestedChanges` for the two halves.
