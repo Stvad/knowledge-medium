@@ -4283,6 +4283,30 @@ describe('multi-value properties are N sibling value children (km-h1hy)', () => 
       expect((await bagOf(keep!.id))[tagsSchema.name]).toEqual(['x', 'y'])
     })
 
+    it('folding a repeated member keeps marked rows whose definition the same tx deletes', async () => {
+      // The registry is a tx-start snapshot, so it still resolves a definition
+      // this tx deletes — but at commit those rows are ordinary blocks, and
+      // folding one into the other would tombstone it.
+      const repo = await setupWithLists()
+      await seedDefinitionBlock(repo)
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['a', 'a']),
+        {scope: ChangeScope.BlockDefault})
+      const [keep, fold] = await memberRows('p', TAGS_FIELD_ID)
+      await repo.tx(tx => tx.setProperty(keep!.id, statusSchema, 'k'), {scope: ChangeScope.BlockDefault})
+      await repo.tx(tx => tx.setProperty(fold!.id, statusSchema, 'f'), {scope: ChangeScope.BlockDefault})
+      const [foldStatus] = await liveFieldRows(fold!.id)
+
+      await repo.tx(async tx => {
+        await tx.delete(STATUS_FIELD_ID)
+        await tx.setProperty('p', tagsSchema, ['a'])
+      }, {scope: ChangeScope.BlockDefault})
+
+      const moved = await sharedDb.db.get<{parent_id: string; deleted: number}>(
+        'SELECT parent_id, deleted FROM blocks WHERE id = ?', [foldStatus!.id])
+      expect(moved).toEqual({parent_id: keep!.id, deleted: 0})
+    })
+
     it('folding a repeated member keeps the marked rows no definition resolves', async () => {
       // A `::` row whose target resolves to no definition is not a field row
       // (§9 condition 3) — two of them sharing a target are two user blocks,

@@ -1034,15 +1034,18 @@ const appendUnder = async (
  *  if `child` is one — where a fold puts it instead of making the survivor a
  *  second field row for that property. Recognized by the §9 predicate, not
  *  the bit alone: a `::` row whose target resolves to no definition is a user
- *  block, and two of them sharing a target are two blocks, never one to fold. */
-const survivorFieldRowFor = (
+ *  block, and two of them sharing a target are two blocks, never one to fold.
+ *  The registry is a tx-start snapshot, so a definition whose block this tx
+ *  tombstoned still resolves there; its rows are user blocks at commit. */
+const survivorFieldRowFor = async (
   tx: Tx,
   survivorChildren: readonly BlockData[],
   child: BlockData,
-): BlockData | undefined => {
+): Promise<BlockData | undefined> => {
   const isDefinition = (fieldId: string): boolean => tx.isPropertyFieldDefinition(child.workspaceId, fieldId)
   if (!isPropertyFieldInstance(child, isDefinition)) return undefined
-  const fieldId = getPropertyFieldTargetId(child)
+  const fieldId = getPropertyFieldTargetId(child)!
+  if ((await tx.get(fieldId))?.deleted) return undefined
   return survivorChildren.find(c =>
     isPropertyFieldInstance(c, isDefinition) && getPropertyFieldTargetId(c) === fieldId)
 }
@@ -1057,7 +1060,7 @@ const relocateChildren = async (tx: Tx, fromId: string, toId: string): Promise<v
   const keys = keysBetween(survivorChildren.at(-1)?.orderKey ?? null, null, movable.length)
   for (let i = 0; i < movable.length; i++) {
     const child = movable[i]!
-    const survivorOwn = survivorFieldRowFor(tx, survivorChildren, child)
+    const survivorOwn = await survivorFieldRowFor(tx, survivorChildren, child)
     if (survivorOwn) await collapseDuplicateFieldRow(tx, survivorOwn.id, child)
     else await tx.move(child.id, {parentId: toId, orderKey: keys[i]!})
   }
@@ -1133,7 +1136,7 @@ export const collapseDuplicateFieldRow = async (
     // same fieldId when one exists, else move over intact (it stays a
     // recognized field row of the survivor — content-intrinsic, move-proof).
     if (child.isFieldForm === true) {
-      const survivorOwn = survivorFieldRowFor(tx, survivorChildren, child)
+      const survivorOwn = await survivorFieldRowFor(tx, survivorChildren, child)
       if (survivorOwn) {
         await collapseDuplicateFieldRow(tx, survivorOwn.id, child, additive)
       } else {
