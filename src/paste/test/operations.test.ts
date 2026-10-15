@@ -496,6 +496,18 @@ describe('pasteEditModeMultilineText', () => {
       expect(result?.focusOffset).toBe(FENCE.length)
     })
 
+    it('still merges a lone list item into the edited block, text on both sides kept', async () => {
+      await createBlock('root', 'Root', null, 'a0')
+      await createBlock('target', 'Do  now', 'root', 'a0')
+
+      const plan = planEditModeMultilinePaste([{content: '1. step'}], 'Do  now', {from: 'Do '.length})
+      const result = await pasteEditModeMultilineText(plan!, env.repo.block('target'), env.repo, {scopeRootId: 'root'})
+
+      expect(await childContents('root')).toEqual(['Do 1. step now'])
+      expect(result?.focusBlock.id).toBe('target')
+      expect(result?.focusOffset).toBe('Do 1. step'.length)
+    })
+
     it('reads the line the text joins: the first for text before the caret, the last for text after', () => {
       const plan = planEditModeMultilinePaste([{content: 'intro\n> quoted'}], 'See  end', {from: 'See '.length})
 
