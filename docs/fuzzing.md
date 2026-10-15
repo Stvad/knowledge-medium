@@ -19,7 +19,7 @@ The same property code runs at three intensities (mechanics in
 |---|---|---|---|
 | smoke | part of the normal `pnpm test` / `pnpm run check` gate | fixed | small run counts, ~1s/file |
 | local deep | `pnpm fuzz [files…]` | random | `FUZZ_TIME_MS` per property (default 15s) |
-| nightly | `.github/workflows/fuzz-nightly.yml` (06:23 UTC cron + manual dispatch) | random | 15s/property across all suites, then a 20-minute dedicated pass on the stateful data-layer suite |
+| nightly | `.github/workflows/fuzz-nightly.yml` (06:23 UTC cron + manual dispatch) | random | 15s/property across all suites, then a 20-minute dedicated pass on the stateful data-layer suite and a 15-minute one on the props-as-blocks dual-write suite |
 
 The smoke tier is deliberately deterministic: the gate re-explores the
 same cases every run, so a pre-existing bug can only surface in the
@@ -233,6 +233,36 @@ one.
   atomicity under poisoning, bag code-ownership through every tx
   primitive, restore-preserves-bag, and a registry-resolution tie-in
   after each sequence.
+- `src/data/internals/propertyDualWrite.fuzz.test.ts` — stateful, the
+  properties-as-blocks dual representation (cell + field/value child
+  rows, roadmap #430's "eager dual-write oracle"): sequences mixing every
+  writer — eager `setProperty`/`unsetProperty`/`setProperties`, raw
+  `tx.update({properties})`, direct field/value-row edits (content,
+  delete, move, reorder, stray and `::`-marked children), owner
+  delete/restore, undo/redo, and sync-shaped raw `db.writeTransaction`
+  arrivals (a peer's duplicate field row, a value edit without its cell,
+  a live child under a tombstone) — often several per tx. Oracles after
+  every tx: the cell equals what the live children project to; re-running
+  PROJECT, and MATERIALIZE on pairs a cell write just converged, writes
+  nothing; no duplicate field rows or orphans except where a tree edit or
+  an arrival could have minted one and no cell write has collapsed it
+  since; a cell-writes-only pair ends at the LAST write; a rejected tx
+  leaves no trace; each undo and redo lands exactly on the state
+  recorded on that side of its tx (a mirror of the undo stack, which
+  also restores the waivers that state was checked under), and so do
+  undo-all and redo-all. Arrivals deliberately leave the touched pairs
+  incoherent (the arrival path never re-projects), so the suite waives
+  exactly those pairs until a local write re-settles them — read the
+  docblock before tightening it. A case aims most ops at one "hot"
+  (owner, property) pair, and a multi-op tx crowds onto it; blind
+  targets over 3 owners × 5 properties seldom met. The property asserts
+  over its own sample that every writer and oracle was reached: on the
+  fixed smoke sample, or on any random one of 200+ cases (so a short
+  `FUZZ_RUNS` triage run reports only property failures). Three composite
+  shapes are asserted only from 5,000 cases, which the nightly's dedicated
+  pass for this suite reaches: the order-blind carve-out, a field row
+  already live at its owner's revival, and a restore checked against a
+  key that held a value.
 - `src/utils/test/linkTargetAutocomplete.fuzz.test.ts` — the
   `searchSourcesFacet` merge point (`searchBlocksAcrossSources`): model
   differential against an independent group-then-fold reference over
@@ -602,6 +632,55 @@ restore half of the release-reclaim residual (issue #706, seed
   `collectRestorePlans` invalidates those edges at the restore (never
   rewriting content, so the deferred decision stays deferred); the drop
   is itself the write that schedules the referrer's rebind.
+
+The properties-as-blocks dual-write suite (roadmap #430) found one within
+its first deep minutes:
+
+- Restoring an owner revives its tombstoned field row and value row
+  (#787), but under §9 flat recognition a value row can own properties
+  of its own — and it came back with its bag while ITS field rows stayed
+  tombstoned: a cell claiming a property no child backed, the #778 shape
+  one level down. MATERIALIZE performs those restores itself, and the
+  commit pipeline never re-runs a processor over its own writes, so the
+  revival rule never saw the value row. The revival now re-materializes
+  every row it restores with the untouched-names policy.
+- The cell→children half of the same revival had a mirror gap, raised in
+  review and then made reachable by the suite. Sync-apply skips the
+  parent-liveness trigger, so a peer's field row can sit LIVE under a
+  tombstone. The revival policy says the children win, but PROJECT only
+  re-projected owners whose child rows changed in the tx, so the revived
+  owner kept its pre-delete cell. PROJECT now re-projects a revived row's
+  own live field rows.
+- Two more in the same revival, both raised in review and pinned by
+  deterministic tests:
+  - Adding values from the cell for keys the tx never wrote resurrected
+    a peer's delete. A field row already live and empty (or a list
+    missing a member) got the stale cell value back. The revival now
+    takes no value from the cell into an already-live field row; the
+    suite asserts that it mints nothing there.
+  - A value row brought back by its owner's revival treated its whole
+    bag as untouched, so a key the same tx had written on it could be
+    unset. Every revived row now goes through one rule
+    (`materializeRevivedRow`), which splits written keys from untouched
+    ones by the row's tx-start state.
+- Folding a repeated list member into its survivor moved the folded
+  row's own `::` field rows over wholesale. When the member carried
+  properties of its own, the survivor ended up with two field rows for
+  one property. The value-row fold now folds field rows the way the
+  field-row fold already did, through one shared lookup.
+- Still open, each with a `KNOWN ISSUE (fuzz)` carve-out:
+  - #1210: the revival picks field rows by the `is_field_form` bit before
+    DERIVE re-stamps it. So a restore in the same tx as an edit that
+    un-marks a field row under the restored owner leaves a cell key with
+    no field row.
+  - #1211: deleting and restoring a block in ONE tx is no revival to
+    MATERIALIZE (its net change is live → live), while PROJECT sees its
+    field rows die. Every property is silently unset.
+- Also raised in review and filed, though the suite cannot see it (cell
+  and children agree afterwards): #1212. A peer's property delete whose
+  owner-cell update lost last-writer-wins leaves a stale cell. A later
+  local delete and restore then revives the peer's tombstones, or mints
+  from the stale cell.
 
 The visible-children differential found one on its first smoke run
 (#1202, open): the outline SQL counts any `property-schema`-tagged block

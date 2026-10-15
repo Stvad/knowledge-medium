@@ -32,8 +32,10 @@
  * raw bag write that removes the same key nets to "no cell change" for
  * MATERIALIZE (net-diff semantics), so the dual-write's children survive
  * and PROJECT restores the key over the raw writer's final bag — mixed
- * setProperty+raw shapes in one tx are order-blind. Split the writes across
- * txs for last-write-wins semantics.
+ * setProperty+raw shapes in one tx are order-blind. The same net diff makes
+ * a cell write that changes a key beat a LATER same-tx edit of that key's
+ * value child: MATERIALIZE re-reconciles the children from the final cell.
+ * Split the writes across txs for last-write-wins semantics.
  *
  * Also load-bearing (§5): a cell key with NO child rows at all is pending
  * materialization for the projection direction — reprojection only rebuilds
@@ -59,6 +61,7 @@ import {
   getPropertyFieldTargetId,
   fieldValueChildren,
   isFieldValueChild,
+  isPropertyFieldInstance,
   memberKeysFor,
   propertiesEqual,
   propertyCellValueRejection,
@@ -372,18 +375,30 @@ const changedPropertyNames = (
  *  them across two calls — see `materializePropertiesForChangedRow`. */
 export type UndecodableCellPolicy = 'reject' | 'skip'
 
+/** What the revival path knows about the tx it runs in. */
+export interface RevivalContext {
+  /** A row's state at TX START — `null` for a row this tx created,
+   *  `undefined` when this tx changed none of the watched fields, so its
+   *  current bag is its starting one. Every row the
+   *  revival restores is a revived row in its own right, and splitting its
+   *  names by who wrote them needs the bag it started the tx with. */
+  readonly txStartOf: (id: string) => BlockData | null | undefined
+}
+
 export interface MaterializeOptions {
   /** See {@link UndecodableCellPolicy}. Default `'reject'`. */
   undecodable?: UndecodableCellPolicy
   /** Bring a name's TOMBSTONED field row back instead of minting a
-   *  replacement, when the owner has exactly one and no live one (#787).
+   *  replacement, when the owner has exactly one and no live one (#787) — and
+   *  materialize every row that brings back as the revived row it is
+   *  ({@link materializeRevivedRow}).
    *
    *  Opt-in, and only the revival path opts in: it re-materializes the whole
    *  restored bag and would mint a replacement field row anyway, so reviving
    *  changes which row id carries the property, not whether it comes back. The
    *  cell backfill has no such contract and would resurrect what the user
    *  reaped — declined there. */
-  reviveTombstoned?: boolean
+  revive?: RevivalContext
   /** This call did not observe user intent for these names, so it may only ADD
    *  rows: never remove one, never rewrite one's content. The cell→children
    *  twin of the projection's `'additive'` mode, and for the same reason — an
@@ -395,22 +410,32 @@ export interface MaterializeOptions {
    *  parent-liveness trigger and lands an edit under a tombstoned row. Which
    *  side of a divergence is newer is not knowable here, so the tie goes to the
    *  children: post-flip they are the only property truth that crosses sync,
-   *  and PROJECT heals the cell from them in the same tx. */
+   *  and PROJECT heals the cell from them in the same tx.
+   *
+   *  Hence a name whose field row is ALREADY live takes no value from the
+   *  cell — not even one its field row lacks. An empty field row is the
+   *  children saying "unset" (a peer deleted the value), and so is a list
+   *  missing a member: adding from the cell would resurrect that delete. Its
+   *  duplicate field rows still fold, which moves rows and removes none.
+   *  Adding values is for a name with no field row, or one this call just
+   *  revived. */
   additive?: boolean
 }
 
 /** Restore the tombstoned field row backing `fieldId`, together with its value
  *  children — so a revived property keeps its row identity instead of being
- *  replaced by a fresh mint. Returns whether anything came back.
+ *  replaced by a fresh mint. Returns the ids it restored — none when nothing
+ *  came back.
  *
  *  One level down and no further: the field row and its value. Everything
- *  BELOW that stays tombstoned — a comment thread under the value (ordinary
- *  user content, like any other descendant of a restored block) and, under §9
- *  flat recognition, the value's own nested field rows if it carries properties
- *  of its own. What all of it must stop being is STRANDED: minting left it
- *  under a tombstoned value child nothing would ever revive, so no path could
- *  reach it again. Reviving the two rows above it restores the chain, which is
- *  the difference between "still deleted" and "gone".
+ *  BELOW that stays tombstoned — a comment thread under the value is ordinary
+ *  user content, like any other descendant of a restored block. What it must
+ *  stop being is STRANDED: minting left it under a tombstoned value child
+ *  nothing would ever revive, so no path could reach it again. Reviving the
+ *  two rows above it restores the chain, which is the difference between
+ *  "still deleted" and "gone". The rows it restores are returned because each
+ *  came back with its BAG, which makes it a revived row in its own right — see
+ *  {@link materializeRevivedRow}.
  *
  *  A MULTI-VALUED property restores NO member row, by an explicit gate rather
  *  than by the count failing to match — see the gate for the case where it
@@ -434,10 +459,10 @@ const reviveTombstonedFieldRow = async (
   tx: Tx,
   schema: AnyPropertySchema & {readonly fieldId: string},
   tombstones: readonly BlockData[],
-): Promise<boolean> => {
+): Promise<string[]> => {
   const fieldId = schema.fieldId
   const matching = tombstones.filter(t => getPropertyFieldTargetId(t) === fieldId)
-  if (matching.length !== 1) return false
+  if (matching.length !== 1) return []
   const fieldRow = matching[0]!
   // Bit-filtered per §9: a marked child is the field row's OWN machinery, never
   // one of its values.
@@ -450,7 +475,7 @@ const reviveTombstonedFieldRow = async (
   // This is also the ambiguity rule's live half — nothing live may hold the
   // slot — but the POSITION is what makes it a refusal rather than a repair.
   const liveValues = (await tx.childrenOf(fieldRow.id, undefined)).filter(isValue)
-  if (liveValues.length > 0) return false
+  if (liveValues.length > 0) return []
 
   await tx.restore(fieldRow.id)
   // The tombstone half, SINGLE-VALUED ONLY: exactly one offers to fill the
@@ -463,10 +488,47 @@ const reviveTombstonedFieldRow = async (
   // deletion, and `additive` then forbids the reconciler from undoing the
   // resurrection. So the branch is, for a list, only ever a way to bring a
   // reaped member back.
-  if (memberCodecOf(schema.codec) !== undefined) return true
+  if (memberCodecOf(schema.codec) !== undefined) return [fieldRow.id]
   const values = (await tx.deletedChildrenOf(fieldRow.id)).filter(isValue)
-  if (values.length === 1) await tx.restore(values[0]!.id)
-  return true
+  if (values.length !== 1) return [fieldRow.id]
+  await tx.restore(values[0]!.id)
+  return [fieldRow.id, values[0]!.id]
+}
+
+/** Materialize a row coming back from a tombstone. Its whole bag, not the
+ *  diff: a restore usually leaves the bag identical, so a diff-only rule would
+ *  schedule nothing (#778).
+ *
+ *  Split by WHO WROTE THE VALUE. A name this tx wrote is the user's word and
+ *  materializes like any write, its decode rejection included. The rest of the
+ *  bag was not observed — it can be stale against children a peer wrote while
+ *  the row was dead — so it takes the untouched policy: never reject, only add,
+ *  and nothing into a field row that is already live (`additive`). A PARTITION,
+ *  not an overlap — overlapping is harmless only because the first call throws
+ *  first, and that would leave call ORDER load-bearing.
+ *
+ *  ONE rule for every revived row: the one the processor sees restored, and
+ *  each row the revival itself restores under it. Under §9 flat recognition a
+ *  field row or a value row owns properties like any block, and the processor
+ *  never sees those come back — the commit pipeline does not re-run a
+ *  processor over its OWN writes. */
+const materializeRevivedRow = async (
+  tx: Tx,
+  row: BlockData,
+  lookups: MaterializeLookups,
+  revive: RevivalContext,
+): Promise<void> => {
+  const txStart = revive.txStartOf(row.id)
+  // `null`: created in this tx, so its whole bag is this tx's writing.
+  // `undefined`: this tx changed none of its watched fields, so none of it is.
+  const startBag = txStart === undefined ? row.properties : txStart?.properties ?? {}
+  const written = changedPropertyNames(startBag, row.properties)
+  const writtenNames = new Set(written)
+  const untouched = Object.keys(row.properties).filter(name => !writtenNames.has(name))
+  await materializePropertyChildrenForExistingRow(tx, row, lookups, written, {revive})
+  await materializePropertyChildrenForExistingRow(
+    tx, row, lookups, untouched, {undecodable: 'skip', additive: true, revive},
+  )
 }
 
 /** Find-or-create/update/delete the field+value children for `names` on
@@ -537,16 +599,29 @@ export const materializePropertyChildrenForExistingRow = async (
       throw undecodableCellValueError(name, row.id, schema, rejection)
     }
 
+    // See `additive`: a live field row's values are the children's to decide.
+    if (opts.additive && matchingChildren.length > 0) {
+      await upsertFieldRow(tx, row, schema.fieldId, matchingChildren, true)
+      continue
+    }
+
     // Revive AFTER the rejection gate, never before it: a name the gate skipped
     // must be left exactly as the revival found it, and bringing its rows back
     // is not that — it would hand a stale child to a cell the skip declined to
     // touch, and post-flip the child is the side that wins.
     let fieldRows = matchingChildren
-    if (opts.reviveTombstoned && fieldRows.length === 0) {
+    if (opts.revive && fieldRows.length === 0) {
       tombstones ??= await tx.tombstonedPropertyFieldRows(row.workspaceId, row.id)
-      if (await reviveTombstonedFieldRow(tx, schema, tombstones)) {
+      const revived = await reviveTombstonedFieldRow(tx, schema, tombstones)
+      if (revived.length > 0) {
         children = await tx.childrenOf(row.id, undefined)
         fieldRows = fieldRowsForSchema(children, schema.fieldId)
+        for (const id of revived) {
+          const restored = await tx.get(id)
+          if (restored !== null && !restored.deleted) {
+            await materializeRevivedRow(tx, restored, lookups, opts.revive)
+          }
+        }
       }
     }
 
@@ -578,6 +653,7 @@ const materializePropertiesForChangedRow = async (
   tx: Tx,
   row: {before: BlockData | null; after: BlockData | null},
   lookups: PropertyChildrenLookups,
+  revive: RevivalContext,
 ): Promise<void> => {
   if (row.after === null || row.after.deleted) return
   const before = row.before
@@ -590,24 +666,7 @@ const materializePropertiesForChangedRow = async (
     await materializePropertyChildrenForExistingRow(tx, row.after, lookups, changed)
     return
   }
-  // Revival re-materializes the diff PLUS the rest of the restored bag — a
-  // restore usually leaves the bag identical, so a diff-only rule would
-  // schedule nothing.
-  //
-  // Split by WHO WROTE THE VALUE: the decode rejection may only fire on names
-  // this tx wrote, because a per-tx policy would let one untouched legacy
-  // value veto a restore-then-write tx. A PARTITION, not an overlap —
-  // overlapping is harmless only because the first call throws first, and
-  // that would leave call ORDER load-bearing.
-  const written = new Set(changed)
-  const untouched = Object.keys(row.after.properties).filter(name => !written.has(name))
-  await materializePropertyChildrenForExistingRow(
-    tx, row.after, lookups, changed, {reviveTombstoned: true},
-  )
-  await materializePropertyChildrenForExistingRow(
-    tx, row.after, lookups, untouched,
-    {undecodable: 'skip', reviveTombstoned: true, additive: true},
-  )
+  await materializeRevivedRow(tx, row.after, lookups, revive)
 }
 
 /** Why one cell value could not become children, in the one wording both
@@ -971,15 +1030,39 @@ const appendUnder = async (
   await tx.move(child.id, {parentId, orderKey: keysBetween(anchor, null, 1)[0]!})
 }
 
-/** Move every child of `fromId` under `toId`, appended at the end. */
+/** The survivor's own field row for the property `child` is a field row of,
+ *  if `child` is one — where a fold puts it instead of making the survivor a
+ *  second field row for that property. Recognized by the §9 predicate, not
+ *  the bit alone: a `::` row whose target resolves to no definition is a user
+ *  block, and two of them sharing a target are two blocks, never one to fold.
+ *  Recognition is the tx-start registry, as at every tx site: rows of a
+ *  definition this tx deletes or unpublishes still fold. ACCEPTED — staged
+ *  rows cannot say whether it resolves at commit (a seed outlives its block). */
+const survivorFieldRowFor = (
+  tx: Tx,
+  survivorChildren: readonly BlockData[],
+  child: BlockData,
+): BlockData | undefined => {
+  const isDefinition = (fieldId: string): boolean => tx.isPropertyFieldDefinition(child.workspaceId, fieldId)
+  if (!isPropertyFieldInstance(child, isDefinition)) return undefined
+  const fieldId = getPropertyFieldTargetId(child)
+  return survivorChildren.find(c =>
+    isPropertyFieldInstance(c, isDefinition) && getPropertyFieldTargetId(c) === fieldId)
+}
+
+/** Move every child of `fromId` under `toId`, appended at the end — a field
+ *  row the survivor already has one of for its property folding into that
+ *  one instead (§9 flat recognition: a value row owns properties too). */
 const relocateChildren = async (tx: Tx, fromId: string, toId: string): Promise<void> => {
   const movable = await tx.childrenOf(fromId, undefined)
   if (movable.length === 0) return
-  const anchor = (await tx.childrenOf(toId, undefined))
-    .at(-1)?.orderKey ?? null
-  const keys = keysBetween(anchor, null, movable.length)
+  const survivorChildren = await tx.childrenOf(toId, undefined)
+  const keys = keysBetween(survivorChildren.at(-1)?.orderKey ?? null, null, movable.length)
   for (let i = 0; i < movable.length; i++) {
-    await tx.move(movable[i]!.id, {parentId: toId, orderKey: keys[i]!})
+    const child = movable[i]!
+    const survivorOwn = survivorFieldRowFor(tx, survivorChildren, child)
+    if (survivorOwn) await collapseDuplicateFieldRow(tx, survivorOwn.id, child)
+    else await tx.move(child.id, {parentId: toId, orderKey: keys[i]!})
   }
 }
 
@@ -1053,11 +1136,7 @@ export const collapseDuplicateFieldRow = async (
     // same fieldId when one exists, else move over intact (it stays a
     // recognized field row of the survivor — content-intrinsic, move-proof).
     if (child.isFieldForm === true) {
-      const childFieldId = getPropertyFieldTargetId(child)
-      const survivorOwn = survivorChildren.find(c =>
-        c.isFieldForm === true
-        && childFieldId !== undefined
-        && getPropertyFieldTargetId(c) === childFieldId)
+      const survivorOwn = survivorFieldRowFor(tx, survivorChildren, child)
       if (survivorOwn) {
         await collapseDuplicateFieldRow(tx, survivorOwn.id, child, additive)
       } else {
@@ -1101,8 +1180,11 @@ export const MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR = defineSameTxProcessor({
     // single workspace, and un-flipped workspaces are fully dormant.
     if (!(await ctx.tx.isPropertyChildBackedWorkspace(event.workspaceId))) return
     const lookups = lookupsFor(ctx, event.workspaceId)
+    // From the tx's write log, never this event: on the re-run pass the event
+    // holds only rows dirtied since the first, with a merged `before`.
+    const revive: RevivalContext = {txStartOf: id => ctx.txStartOf(id)}
     for (const row of event.changedRows) {
-      await materializePropertiesForChangedRow(ctx.tx, row, lookups)
+      await materializePropertiesForChangedRow(ctx.tx, row, lookups, revive)
     }
   },
 })
@@ -1134,9 +1216,22 @@ export const PROJECT_PROPERTY_CHILDREN_PROCESSOR = defineSameTxProcessor({
     if (!(await ctx.tx.isPropertyChildBackedWorkspace(event.workspaceId))) return
     // Both sides of a move: the old parent loses the key, the new parent
     // gains it (§9 reparent semantics).
+    const rowStates: (ProjectableRow | null)[] =
+      event.changedRows.flatMap(row => [row.before, row.after])
+    for (const row of event.changedRows) {
+      // A row back from a tombstone is an OWNER back too, and the field rows
+      // under it need not have changed in this tx: sync-apply skips the
+      // parent-liveness trigger, so a peer's edit can sit live under the
+      // tombstone. Its cell is the pre-delete one, and post-flip the children
+      // win (§5) — which only happens if those field rows are reprojected.
+      if (row.before?.deleted !== true || row.after === null || row.after.deleted) continue
+      for (const child of await ctx.tx.childrenOf(row.after.id, undefined)) {
+        if (child.isFieldForm === true) rowStates.push(child)
+      }
+    }
     await reprojectOwnersForRowStates(
       ctx.tx,
-      event.changedRows.flatMap(row => [row.before, row.after]),
+      rowStates,
       lookupsFor(ctx, event.workspaceId),
       // Authoritative: this processor's writes ARE settled, which is what
       // makes the lossy unset safe here and nowhere else.

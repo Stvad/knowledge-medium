@@ -3,9 +3,11 @@
 # The *.fuzz.test.ts suites already run in the PR gate as a small
 # fixed-seed smoke tier; this job is the deep tier — fresh random seeds
 # and a real time budget per property, so new input territory gets
-# explored every night. Two passes: a budget across every suite, then a
+# explored every night. Three passes: a budget across every suite, then a
 # long dedicated pass on the stateful data-layer fuzzer (highest
-# bug-yield per minute, so it gets the lion's share).
+# bug-yield per minute, so it gets the lion's share), then one on the
+# props-as-blocks dual-write suite, whose composite coverage shapes are
+# asserted only once a run reaches thousands of cases.
 #
 # On failure: both passes' vitest logs (each of which, if it failed,
 # contains fast-check's failing seed + path + shrunk counterexample) are
@@ -30,6 +32,9 @@ on:
       stateful_time_ms:
         description: 'Time budget in ms for the dedicated stateful pass'
         default: '1200000'
+      dualwrite_time_ms:
+        description: 'Time budget in ms for the dedicated dual-write pass'
+        default: '900000'
 
 permissions:
   contents: read
@@ -84,6 +89,16 @@ jobs:
           set -o pipefail
           pnpm fuzz src/data/test/repoMutators.fuzz.test.ts 2>&1 | tee fuzz-stateful.log
 
+      - name: Deep fuzz — props-as-blocks dual-write suite (long pass)
+        id: dualwrite
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          FUZZ_TIME_MS: ${{ inputs.dualwrite_time_ms || '900000' }}
+        run: |
+          set -o pipefail
+          pnpm fuzz src/data/internals/propertyDualWrite.fuzz.test.ts 2>&1 | tee fuzz-dualwrite.log
+
       - name: Upload fuzz logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -92,6 +107,7 @@ jobs:
           path: |
             fuzz-sweep.log
             fuzz-stateful.log
+            fuzz-dualwrite.log
           if-no-files-found: warn
           retention-days: 30
 
@@ -109,6 +125,7 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           SWEEP_OUTCOME: ${{ steps.sweep.outcome }}
           STATEFUL_OUTCOME: ${{ steps.stateful.outcome }}
+          DUALWRITE_OUTCOME: ${{ steps.dualwrite.outcome }}
         run: |
           # Failing-file extraction, the seed/repro excerpt, and the
           # static triage note are all built by
@@ -120,6 +137,7 @@ jobs:
           failing=()
           [ "$SWEEP_OUTCOME" = "failure" ] && failing+=("Deep fuzz — all suites|fuzz-sweep.log")
           [ "$STATEFUL_OUTCOME" = "failure" ] && failing+=("Deep fuzz — stateful data-layer suite (long pass)|fuzz-stateful.log")
+          [ "$DUALWRITE_OUTCOME" = "failure" ] && failing+=("Deep fuzz — props-as-blocks dual-write suite (long pass)|fuzz-dualwrite.log")
 
           body=$(node scripts/fuzz.mjs --report "${failing[@]}")
 
