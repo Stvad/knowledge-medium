@@ -49,6 +49,7 @@ import {
   memberCodecOf,
   type AnyPropertySchema,
   type BlockData,
+  type ChangedRow,
   type NewBlockData,
   type ResolvedPropertySchema,
   type SameTxCtx,
@@ -372,7 +373,7 @@ const changedPropertyNames = (
  *  left as it was found (cell junk, no children); the next write to it rejects.
  *
  *  The policy is per CALL, so a caller reconciling both kinds of name splits
- *  them across two calls — see `materializePropertiesForChangedRow`. */
+ *  them across two calls — see `materializeRevivedRow`. */
 export type UndecodableCellPolicy = 'reject' | 'skip'
 
 /** What the revival path knows about the tx it runs in. Every row the revival
@@ -656,7 +657,7 @@ export const materializePropertyChildrenForExistingRow = async (
  */
 const materializeChangedRows = async (
   tx: Tx,
-  changedRows: readonly {id: string; before: BlockData | null; after: BlockData | null}[],
+  changedRows: readonly ChangedRow[],
   lookups: PropertyChildrenLookups,
   history: Pick<SameTxCtx, 'txBaselineOf' | 'tombstonedDuringTx'>,
 ): Promise<void> => {
@@ -1171,10 +1172,11 @@ export const collapseDuplicateFieldRow = async (
 export const MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR = defineSameTxProcessor({
   name: MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR_NAME,
   // `deleted` alongside `properties` so a REVIVAL re-materializes even when the
-  // bag did not change (`materializePropertiesForChangedRow`) — the bag is what
+  // bag did not change (`materializeChangedRows`) — the bag is what
   // this direction reads, but liveness is what takes the children away. Same
   // reason `core.aliasClaimRederive` watches it. Rows going the other way match
-  // too and are dropped by the `after.deleted` guard.
+  // too: materializing nothing themselves, they lead to an owner deleted and
+  // restored in the same tx.
   watches: {kind: 'field', table: 'blocks', fields: ['properties', 'deleted']},
   // Issue #402: re-runs over rows dirtied after it ran, so (a) a plugin's
   // raw bag write (merge retarget) grows/updates its backing children in
