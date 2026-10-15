@@ -555,13 +555,16 @@ found one product bug in its first minute (fixed + pinned):
   `property.definition-change.shared-name` while either side has
   consumers; two unused definitions may still share a name.
 
-Its second deep run found one more, filed rather than fixed here since
-it sits in the dual-write path, not the rename (#1209): `setProperty`
-writing the value a deleted definition's stale cell already holds under
-that name is short-circuited as a no-op, so the definition now answering
-to the name never gets a field row and its value does not follow a later
-rename. The value model carries a `KNOWN ISSUE (fuzz)` carve-out for
-exactly that case.
+Its second deep run found one more, in the dual-write path rather than
+the rename (#1209, fixed separately): `setProperty` writing the value a
+deleted definition's stale cell already holds under that name was
+short-circuited as a no-op, so the definition now answering to the name
+never got a field row and its value did not follow a later rename. The
+eager writers now converge the children before their no-op check, which
+only spares the bag write. A RAW bag write that leaves the cell as it was
+still writes nothing — MATERIALIZE sees net diffs — so the value model
+credits no value to one; what the cell keeps there is the departing
+definition's leftover, which is #1031's question.
 
 Its harness carries one lesson for any suite that builds a Repo per
 case: every case runs inside ONE test, so the per-test Repo release

@@ -1638,8 +1638,7 @@ describe('duplicate collapse preservation (§9, slice B3)', () => {
       })
     }, {scope: ChangeScope.BlockDefault})
 
-    // A REAL cell change triggers materialize, which dedups field rows at
-    // 'p' (an equal-value setProperty short-circuits before any write).
+    // The write dedups the field rows at 'p'.
     await repo.tx(tx => tx.setProperty('p', statusSchema, 'gamma'),
       {scope: ChangeScope.BlockDefault})
 

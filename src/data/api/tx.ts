@@ -207,7 +207,10 @@ export interface Tx {
    *  into the row's `properties` map, and writes through immediately.
    *  The updater overload runs inside this serialized tx after identity is
    *  accepted and receives `undefined` (not `defaultValue`) when absent.
-   *  Bypassing codecs (raw `properties` writes) goes through `tx.update`. */
+   *  In a child-backed workspace the field/value children converge to the
+   *  value even when the cell already holds it — that only skips the bag
+   *  write. Bypassing codecs (raw `properties` writes) goes through
+   *  `tx.update`. */
   setProperty<T>(
     id: string,
     schema: PropertySchema<T>,
@@ -248,7 +251,8 @@ export interface Tx {
    *  write on an unresolvable/mis-scoped entry). In a child-backed workspace it
    *  EAGERLY reconciles children in the same tx — creating/updating for sets,
    *  soft-deleting for unsets (unset wins on a key in both) — symmetric with
-   *  `setProperty`/`unsetProperty`. A net no-op (bag unchanged) is skipped.
+   *  `setProperty`/`unsetProperty`. A net no-op (bag unchanged) writes no bag
+   *  and deletes nothing, but its sets' children still converge.
    *  `set` values are literals, not updater functions — read via `getProperty`
    *  first if you need the current value. */
   setProperties(
