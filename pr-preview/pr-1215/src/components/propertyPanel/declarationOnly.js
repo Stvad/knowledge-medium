@@ -1,1 +1,1 @@
-import{KA as e,qA as t}from"../../../chunks/app-D30-Jg3y.js";export{e as declarationOnlyDefinitionForName,t as declarationOnlyStatusText};
+import{KA as e,qA as t}from"../../../chunks/app-NQ6ymJ0z.js";export{e as declarationOnlyDefinitionForName,t as declarationOnlyStatusText};
