@@ -91,6 +91,15 @@ export function parseMarkdownToBlocks(text: string): ParsedBlock[] {
   return parsedBlocksFromOutline(outlineFromTokens(lexMarkdownLines(text)))
 }
 
+/** Whether the first or last line of `content` is a heading or belongs to a
+ *  code block, table or quote: markdown that owns its whole line, so text
+ *  joined onto that line shows the markup or is swallowed by it. */
+export const blockSyntaxOnLine = (content: string, line: 'first' | 'last'): boolean => {
+  const tokens = lexMarkdownLines(content)
+  const kind = (line === 'first' ? tokens[0] : tokens.at(-1))?.kind
+  return kind === 'heading' || kind === 'atomic'
+}
+
 /** Split markdown/outline text into tokens, one per non-blank line except
  *  for fenced code blocks, tables and quotes, which are consumed whole. */
 const lexMarkdownLines = (text: string): OutlineToken[] => {

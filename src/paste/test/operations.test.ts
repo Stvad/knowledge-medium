@@ -434,46 +434,99 @@ describe('pasteEditModeMultilineText', () => {
     expect(result?.focusOffset).toBe('beta'.length)
   })
 
-  it('preserves a pasted fenced code block body instead of merging only its first line', async () => {
-    // A fenced block parses to ONE multi-line root. The first-line merge
-    // would drop the code body, keeping just the ``` opener — regression fix.
+  it('merges a code block whole into a block with nothing before the caret', async () => {
+    // A fenced block parses to ONE multi-line root; merging only its first
+    // line would keep just the ``` opener.
     await createBlock('root', 'Root', null, 'a0')
-    await createBlock('target', 'note: ', 'root', 'a0')
+    await createBlock('target', '', 'root', 'a0')
 
     const fence = '```js\nconst x = 1\n```'
-    const plan = planEditModeMultilinePaste(fence, 'note: ', {
-      from: 'note: '.length,
-      to: 'note: '.length,
-    })
-    expect(plan?.targetContent).toBe(`note: ${fence}`)
-
-    await pasteEditModeMultilineText(
-      plan!,
-      env.repo.block('target'),
-      env.repo,
-      {scopeRootId: 'root'},
-    )
-    expect(env.repo.block('target').peek()?.content).toBe(`note: ${fence}`)
-    // A single-root fence adds no extra blocks.
-    expect(await childContents('root')).toEqual([`note: ${fence}`])
-  })
-
-  it('merges a pre-built tree root whole at the caret — no first-line or bullet rule', async () => {
-    await createBlock('root', 'Root', null, 'a0')
-    await createBlock('target', 'see  now', 'root', 'a0')
-
-    const plan = planEditModeMultilinePaste(
-      [{content: '- kept\nverbatim', children: [{content: 'child'}]}, {content: 'last'}],
-      'see  now',
-      {from: 'see '.length, to: 'see '.length},
-    )
-    expect(plan?.targetContent).toBe('see - kept\nverbatim')
-    expect(plan?.suffix).toBe(' now')
-
+    const plan = planEditModeMultilinePaste(fence, '', {from: 0})
     await pasteEditModeMultilineText(plan!, env.repo.block('target'), env.repo, {scopeRootId: 'root'})
 
-    expect(await childContents('root')).toEqual(['see - kept\nverbatim', 'last now'])
-    expect(await childContents('target')).toEqual(['child'])
+    expect(await childContents('root')).toEqual([fence])
+  })
+
+  describe('a heading, code block, table or quote never shares a line with the text at the caret', () => {
+    const FENCE = '```js\nconst x = 1\n```'
+
+    it.each([
+      ['markdown text', '## Getting started'],
+      ['a pre-built tree', [{content: '## Getting started'}]],
+    ] as const)('starts a block of its own after text before the caret, from %s', async (_source, pasted) => {
+      await createBlock('root', 'Root', null, 'a0')
+      await createBlock('target', 'Read: ', 'root', 'a0')
+      await createBlock('next', 'Next', 'root', 'a1')
+
+      const plan = planEditModeMultilinePaste(pasted, 'Read: ', {from: 'Read: '.length})
+      expect(plan?.targetContent).toBe('Read: ')
+
+      const result = await pasteEditModeMultilineText(plan!, env.repo.block('target'), env.repo, {scopeRootId: 'root'})
+
+      expect(await childContents('root')).toEqual(['Read: ', '## Getting started', 'Next'])
+      expect(result?.focusBlock.peek()?.content).toBe('## Getting started')
+      expect(result?.focusOffset).toBe('## Getting started'.length)
+    })
+
+    it('moves the text after the caret to a block after a pasted code block', async () => {
+      await createBlock('root', 'Root', null, 'a0')
+      await createBlock('target', 'See  for details', 'root', 'a0')
+
+      const plan = planEditModeMultilinePaste(FENCE, 'See  for details', {from: 'See '.length})
+      const result = await pasteEditModeMultilineText(plan!, env.repo.block('target'), env.repo, {scopeRootId: 'root'})
+
+      expect(await childContents('root')).toEqual(['See ', FENCE, ' for details'])
+      // The caret ends where the paste does, as when the text after it is glued on.
+      expect(result?.focusBlock.peek()?.content).toBe(FENCE)
+      expect(result?.focusOffset).toBe(FENCE.length)
+    })
+
+    it('moves the text after the caret off a code block the edited block absorbed', async () => {
+      await createBlock('root', 'Root', null, 'a0')
+      await createBlock('target', 'world', 'root', 'a0')
+
+      const plan = planEditModeMultilinePaste(FENCE, 'world', {from: 0})
+      expect(plan?.targetContent).toBe(FENCE)
+      expect(plan?.focusOffsetInTarget).toBe(FENCE.length)
+
+      const result = await pasteEditModeMultilineText(plan!, env.repo.block('target'), env.repo, {scopeRootId: 'root'})
+
+      expect(await childContents('root')).toEqual([FENCE, 'world'])
+      expect(result?.focusBlock.id).toBe('target')
+      expect(result?.focusOffset).toBe(FENCE.length)
+    })
+
+    it('reads the line the text joins: the first for text before the caret, the last for text after', () => {
+      const plan = planEditModeMultilinePaste([{content: 'intro\n> quoted'}], 'See  end', {from: 'See '.length})
+
+      expect(plan?.targetContent).toBe('See intro\n> quoted')
+      expect(plan?.parsed.map(block => block.content)).toEqual(['intro\n> quoted', ' end'])
+    })
+
+    it('keeps the children of a heading that starts its own block under it', async () => {
+      await createBlock('root', 'Root', null, 'a0')
+      await createBlock('target', 'Read: ', 'root', 'a0')
+
+      const plan = planEditModeMultilinePaste('## Setup\n- install\n- run', 'Read: ', {from: 'Read: '.length})
+      await pasteEditModeMultilineText(plan!, env.repo.block('target'), env.repo, {scopeRootId: 'root'})
+
+      const [, heading] = await env.repo.query.children({id: 'root'}).load()
+      expect(await childContents('root')).toEqual(['Read: ', '## Setup'])
+      expect(await childContents(heading.id)).toEqual(['install', 'run'])
+      expect(await childContents('target')).toEqual([])
+    })
+
+    it('places the text after the caret beside the nested code block that ends the paste', async () => {
+      await createBlock('root', 'Root', null, 'a0')
+      await createBlock('target', 'See world', 'root', 'a0')
+
+      const plan = planEditModeMultilinePaste(`## Example\n${FENCE}`, 'See world', {from: 'See '.length})
+      await pasteEditModeMultilineText(plan!, env.repo.block('target'), env.repo, {scopeRootId: 'root'})
+
+      const [, heading] = await env.repo.query.children({id: 'root'}).load()
+      expect(await childContents('root')).toEqual(['See ', '## Example'])
+      expect(await childContents(heading.id)).toEqual([FENCE, 'world'])
+    })
   })
 
   it('inserts edit-mode paste siblings between tied neighbours without losing content (#198)', async () => {
