@@ -1,1 +1,0 @@
-import{nw as e,tw as t}from"../../chunks/app-BzGNu4Ub.js";export{t as exampleExtensions,e as insertExampleExtensionsUnder};
