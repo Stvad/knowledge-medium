@@ -1,0 +1,1 @@
+import{gE as e}from"../../chunks/app-CQloWP-b.js";export{e as BlockLoadingPlaceholder};

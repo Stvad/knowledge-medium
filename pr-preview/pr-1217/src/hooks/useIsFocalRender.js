@@ -1,0 +1,1 @@
+import{dA as e,uA as t}from"../../chunks/app-CQloWP-b.js";export{t as isFocalRender,e as useIsFocalRender};

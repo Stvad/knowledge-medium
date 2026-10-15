@@ -1,0 +1,1 @@
+import{bK as e,xK as t}from"../../../chunks/app-CQloWP-b.js";export{e as emitKernelInvalidations,t as kernelInvalidationRule};

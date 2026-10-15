@@ -1,0 +1,1 @@
+import{GL as e,KL as t}from"../../../chunks/app-CQloWP-b.js";export{e as PLACES_UNDER_BLOCK_QUERY,t as placesUnderBlockQuery};
