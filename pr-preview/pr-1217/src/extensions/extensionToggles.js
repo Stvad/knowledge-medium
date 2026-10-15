@@ -1,1 +1,1 @@
-import{BT as e,HT as t,UT as n,VT as r}from"../../chunks/app-CQloWP-b.js";export{e as extensionDisplayName,r as extensionName,t as userExtensionShellToggle,n as userExtensionToggle};
+import{BT as e,HT as t,UT as n,VT as r}from"../../chunks/app-BNRNcxjH.js";export{e as extensionDisplayName,r as extensionName,t as userExtensionShellToggle,n as userExtensionToggle};

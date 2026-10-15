@@ -1,1 +1,1 @@
-import{Gu as e}from"../../../../chunks/app-CQloWP-b.js";export{e as useBacklinkCount};
+import{Gu as e}from"../../../../chunks/app-BNRNcxjH.js";export{e as useBacklinkCount};

@@ -1,1 +1,1 @@
-import{Gg as e}from"../../../chunks/app-CQloWP-b.js";export{e as MobileBottomNav};
+import{Gg as e}from"../../../chunks/app-BNRNcxjH.js";export{e as MobileBottomNav};

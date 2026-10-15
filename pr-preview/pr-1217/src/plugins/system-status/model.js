@@ -1,1 +1,1 @@
-import{Da as e}from"../../../chunks/app-CQloWP-b.js";export{e as getSyncIndicatorView};
+import{Da as e}from"../../../chunks/app-BNRNcxjH.js";export{e as getSyncIndicatorView};

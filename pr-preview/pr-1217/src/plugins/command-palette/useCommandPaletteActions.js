@@ -1,1 +1,1 @@
-import{tS as e}from"../../../chunks/app-CQloWP-b.js";export{e as useCommandPaletteActions};
+import{tS as e}from"../../../chunks/app-BNRNcxjH.js";export{e as useCommandPaletteActions};

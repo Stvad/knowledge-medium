@@ -1,1 +1,1 @@
-import{Gw as e}from"../../../chunks/app-CQloWP-b.js";export{e as appUpdatePromptExtension};
+import{Gw as e}from"../../../chunks/app-BNRNcxjH.js";export{e as appUpdatePromptExtension};

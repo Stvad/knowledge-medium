@@ -1,1 +1,1 @@
-import{EP as e}from"../../chunks/app-CQloWP-b.js";export{e as usePropertySchemas};
+import{EP as e}from"../../chunks/app-BNRNcxjH.js";export{e as usePropertySchemas};

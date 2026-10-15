@@ -1,1 +1,1 @@
-import{Fw as e,Iw as t}from"../../../chunks/app-CQloWP-b.js";export{e as extensionPromptStore,t as pendingExtensionPrompts};
+import{Fw as e,Iw as t}from"../../../chunks/app-BNRNcxjH.js";export{e as extensionPromptStore,t as pendingExtensionPrompts};

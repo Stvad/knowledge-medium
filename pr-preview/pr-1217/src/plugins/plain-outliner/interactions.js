@@ -1,1 +1,1 @@
-import{c_ as e}from"../../../chunks/app-CQloWP-b.js";export{e as blockEditingContentRenderer};
+import{c_ as e}from"../../../chunks/app-BNRNcxjH.js";export{e as blockEditingContentRenderer};

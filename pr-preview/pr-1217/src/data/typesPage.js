@@ -1,1 +1,1 @@
-import{M1 as e,N1 as t}from"../../chunks/app-CQloWP-b.js";export{e as getOrCreateTypesPage,t as typesPageBlockId};
+import{N1 as e,P1 as t}from"../../chunks/app-BNRNcxjH.js";export{e as getOrCreateTypesPage,t as typesPageBlockId};

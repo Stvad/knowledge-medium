@@ -1,1 +1,1 @@
-import{Vd as e}from"../../../../../chunks/app-CQloWP-b.js";export{e as blockrefMarkdownExtension};
+import{Vd as e}from"../../../../../chunks/app-BNRNcxjH.js";export{e as blockrefMarkdownExtension};

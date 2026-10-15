@@ -1,1 +1,1 @@
-import{Bz as e,Vz as t}from"../../chunks/app-CQloWP-b.js";export{e as pluginPrefsExtension,t as pluginUIStateExtension};
+import{Bz as e,Vz as t}from"../../chunks/app-BNRNcxjH.js";export{e as pluginPrefsExtension,t as pluginUIStateExtension};

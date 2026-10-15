@@ -1,1 +1,1 @@
-import{Ah as e}from"../../../chunks/app-CQloWP-b.js";export{e as PanelCursorFollowsScroll};
+import{Ah as e}from"../../../chunks/app-BNRNcxjH.js";export{e as PanelCursorFollowsScroll};
