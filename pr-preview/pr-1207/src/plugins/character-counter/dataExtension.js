@@ -1,1 +1,1 @@
-import{fz as e}from"../../../chunks/app-DQsJHQTs.js";export{e as characterCounterDataExtension};
+import{fz as e}from"../../../chunks/app-Cr15GhOk.js";export{e as characterCounterDataExtension};
