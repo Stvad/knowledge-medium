@@ -1,1 +1,1 @@
-import{tS as e}from"../../../chunks/app-BZTDjSwh.js";export{e as useCommandPaletteActions};
+import{tS as e}from"../../../chunks/app-DOL7Apyn.js";export{e as useCommandPaletteActions};

@@ -1,1 +1,1 @@
-import{t_ as e}from"../../../chunks/app-BZTDjSwh.js";export{e as getBreadcrumbContentPreview};
+import{t_ as e}from"../../../chunks/app-DOL7Apyn.js";export{e as getBreadcrumbContentPreview};

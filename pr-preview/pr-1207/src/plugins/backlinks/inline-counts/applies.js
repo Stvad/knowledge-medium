@@ -1,1 +1,1 @@
-import{Ku as e}from"../../../../chunks/app-BZTDjSwh.js";export{e as inlineBacklinksApplies};
+import{Ku as e}from"../../../../chunks/app-DOL7Apyn.js";export{e as inlineBacklinksApplies};
