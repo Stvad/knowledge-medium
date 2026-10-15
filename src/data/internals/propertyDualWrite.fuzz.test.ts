@@ -719,14 +719,15 @@ interface TxLog {
   events: Map<string, Map<string, Ev[]>>
   /** Rows some child edit in this tx reached (the edited rows and their
    *  ancestors, before and after a move) — for what is about the ROW: whether
-   *  it died unsettled, and #1210's revived owners. */
+   *  it died unsettled. */
   childTouched: Set<string>
   /** Pairs whose projection a child edit in this tx changed — the grain the
    *  intent and convergence exemptions apply at. */
   childPairs: Set<string>
   /** Pairs a child edit may have handed a NEW field row. */
   dupRisk: Set<string>
-  /** Top owners this tx subtree-deleted. */
+  /** Top owners this tx subtree-deleted — the ones it also restored came
+   *  back from a tombstone the tx itself made. */
   deletedOwners: Set<string>
 }
 
@@ -1171,6 +1172,8 @@ const stats = {
   projectedPresent: 0,
   restoredKeysChecked: 0,
   liveFieldRowsAtRevival: 0,
+  /** Owners deleted and restored inside one tx that the intent check reached. */
+  sameTxRevivals: 0,
 }
 const bump = (counts: Map<string, number>, key: string): void => {
   counts.set(key, (counts.get(key) ?? 0) + 1)
@@ -1179,7 +1182,7 @@ const resetStats = (): void => {
   for (const counts of [stats.applied, stats.skipped, stats.raw, stats.undoRedo]) counts.clear()
   stats.cases = stats.committed = stats.rejected = stats.intentChecked = stats.orderBlind = 0
   stats.rematerialized = stats.dupObserved = stats.projectedPresent = stats.restoredKeysChecked = 0
-  stats.liveFieldRowsAtRevival = 0
+  stats.liveFieldRowsAtRevival = stats.sameTxRevivals = 0
 }
 
 // ──── oracles ────
@@ -1253,7 +1256,10 @@ const checkIntent = (
 ): void => {
   const startBags = new Map([...start.byId.values()].map(row => [row.id, bagOf(row)]))
   for (const owner of end.byId.values()) {
-    if (owner.deleted !== 0 || start.byId.get(owner.id)?.deleted !== 1) continue
+    if (owner.deleted !== 0) continue
+    const deadAtStart = start.byId.get(owner.id)?.deleted === 1
+    if (!deadAtStart && !log.deletedOwners.has(owner.id)) continue
+    if (!deadAtStart) stats.sameTxRevivals++
     const byName = log.events.get(owner.id)
     // Exempt: a key this tx wrote, or one a child edit in it changed.
     const written = (name: string): boolean =>
@@ -1262,10 +1268,11 @@ const checkIntent = (
     // A field row already live when its owner came back carries the
     // children's word, so the revival takes no value from the cell into it —
     // whatever else is unsettled about the owner. A value moved over from a
-    // folded duplicate existed before; a minted one did not.
+    // folded duplicate existed before; a minted one did not. An owner this tx
+    // deleted came back with no live field row: its delete took them all.
     for (const kind of KINDS) {
       const {schema, fieldId} = SCHEMAS[kind]
-      if (written(schema.name)) continue
+      if (!deadAtStart || written(schema.name)) continue
       for (const fieldRow of liveFieldRows(end, owner.id, fieldId)) {
         if (start.byId.get(fieldRow.id)?.deleted !== 0) continue
         stats.liveFieldRowsAtRevival++
@@ -1288,11 +1295,6 @@ const checkIntent = (
     }
   }
   for (const [ownerId, byName] of log.events) {
-    // KNOWN ISSUE (fuzz): #1211. Deleted and restored in this one tx, the
-    // owner is no revival to MATERIALIZE (live → live net) while PROJECT sees
-    // its field rows die, so every key is unset. Counterexample: set a key,
-    // subtree-delete the owner, restore it — one tx. Remove with the fix.
-    if (log.deletedOwners.has(ownerId)) continue
     const owner = end.byId.get(ownerId)
     if (owner === undefined || owner.deleted !== 0) continue
     const bag = bagOf(owner)
@@ -1315,39 +1317,6 @@ const checkIntent = (
       }
     }
   }
-}
-
-/** KNOWN ISSUE (fuzz): #1210. MATERIALIZE's revival picks an owner's field
- *  rows by a bit DERIVE has not re-stamped yet, so a child edit that marks,
- *  unmarks or moves a row under an owner revived in the SAME tx can leave a
- *  cell key with no field row. Counterexample: restore A, move B's field row
- *  under A, edit it to plain text — all in one tx. The pairs at risk are, for
- *  each row this tx re-placed or re-marked under such an owner, the property
- *  the revival read it as (its pre-tx bit) and the one it is now. Remove with
- *  the fix. */
-const staleBitRevivalPairs = (log: TxLog, start: DbState, end: DbState): string[] => {
-  const revived = new Set([...end.byId.values()]
-    .filter(row => row.deleted === 0 && start.byId.get(row.id)?.deleted === 1 && log.childTouched.has(row.id))
-    .map(row => row.id))
-  if (revived.size === 0) return []
-  const pairs: string[] = []
-  for (const after of end.byId.values()) {
-    const before = start.byId.get(after.id)
-    const owners = [after.parent_id, before?.parent_id]
-      .filter((id): id is string => id !== null && id !== undefined && revived.has(id))
-    if (owners.length === 0) continue
-    if (before !== undefined && before.parent_id === after.parent_id && before.deleted === after.deleted
-      && before.is_field_form === after.is_field_form
-      && before.reference_target_id === after.reference_target_id) continue
-    for (const ownerId of owners) {
-      for (const row of [before, after]) {
-        if (row?.is_field_form === 1 && isRegisteredField(row.reference_target_id)) {
-          pairs.push(pairKey(ownerId, row.reference_target_id))
-        }
-      }
-    }
-  }
-  return pairs
 }
 
 /** Drops waivers the state no longer needs. A duplicate waiver says a pair
@@ -1493,7 +1462,6 @@ const runBatch = async (
     }
   }
   for (const key of reprojectedPairs(start, end)) waivers.proj.delete(key)
-  for (const key of staleBitRevivalPairs(log, start, end)) waivers.proj.add(key)
   pruneWaivers(end, waivers)
   // The undo manager records one entry per tx that wrote; mirror it before
   // the quiescence check, which writes nothing either way.
@@ -1605,6 +1573,7 @@ describe('properties-as-blocks dual representation under mixed writer sequences'
     expect(stats.projectedPresent, 'P compared a present value').toBeGreaterThan(0)
     expect(stats.dupObserved, 'D saw a duplicate field row').toBeGreaterThan(0)
     expect(stats.restoredKeysChecked, 'I checked a restored owner').toBeGreaterThan(0)
+    expect(stats.sameTxRevivals, 'I checked an owner deleted and restored in one tx').toBeGreaterThan(0)
     // Composite shapes several ops have to line up for: neither the ~1s smoke
     // sample nor a short deep slice reaches them reliably; thousands of cases
     // must.
