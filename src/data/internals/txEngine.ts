@@ -986,11 +986,15 @@ export class TxImpl implements Tx {
     //
     // Ahead of the no-op check, not behind it: the cell is derived, so a cell
     // that already equals the value does not mean THIS definition's children
-    // back it (#1209). Equality only spares the bag write.
+    // back it (#1209). Equality only spares the bag write — except on a
+    // deleted owner, whose children its revival rebuilds and under which no
+    // live row may be created.
+    const unchanged = jsonValuesEqual(stored, encoded)
+    if (unchanged && before.deleted) return
     if (isResolvedPropertySchema(resolvedSchema) && await this.isChildBackedRow(before)) {
       await this.writePropertyValueChild(before, resolvedSchema, encoded)
     }
-    if (jsonValuesEqual(stored, encoded)) return
+    if (unchanged) return
     const properties = {...before.properties, [resolvedSchema.name]: encoded}
     await this.writePropertiesBag(id, before, properties, opts)
   }
@@ -1112,9 +1116,11 @@ export class TxImpl implements Tx {
     for (const name of unsetNames) delete properties[name]
     // Eager child dual-write, symmetric with setProperty/unsetProperty. The
     // sets that survive (a key in both lists was removed above) converge even
-    // in a net no-op batch, for the reason setProperty states. Unsets stay
+    // in a net no-op batch, on the terms setProperty states. Unsets stay
     // behind the no-op check: removal is the destructive direction, and a
     // no-op batch removed nothing the cell shows.
+    const unchanged = jsonValuesEqual(before.properties, properties)
+    if (unchanged && before.deleted) return
     const childBacked = await this.isChildBackedRow(before)
     if (childBacked) {
       for (const {schema} of sets) {
@@ -1125,7 +1131,7 @@ export class TxImpl implements Tx {
         }
       }
     }
-    if (jsonValuesEqual(before.properties, properties)) return // net no-op
+    if (unchanged) return
     if (childBacked) {
       for (const schema of unsets) {
         if (isResolvedPropertySchema(schema)) await this.deletePropertyValueChildren(before, schema)

@@ -312,6 +312,20 @@ describe('flipped workspace (properties_migration = children)', () => {
       const values = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
       expect(values.map(v => v.content)).toEqual(['draft'])
     })
+
+    it('is still a no-op on an owner deleted with its children', async () => {
+      await seedWorkspace('children')
+      const repo = setup()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', statusSchema, 'done'),
+        {scope: ChangeScope.BlockDefault})
+      await repo.tx(tx => deleteSubtreeInTx(tx, 'p'), {scope: ChangeScope.BlockDefault})
+
+      // No live row may sit under a tombstone, so converging here would throw.
+      await repo.tx(tx => write(tx, 'done'), {scope: ChangeScope.BlockDefault})
+
+      expect((await childrenRows('p')).filter(r => r.deleted === 0)).toEqual([])
+    })
   })
 
   it('setProperties deletes no field row for an unset that changes nothing the cell shows', async () => {
