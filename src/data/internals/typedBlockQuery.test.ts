@@ -326,8 +326,11 @@ describe('repo.queryBlocks', () => {
         canonical: '2026-01-01T00:00:00.000Z',
         // Date-only and second-precision spellings parse, but are not what
         // the codec writes; a signed six-digit year sorts before every
-        // four-digit one.
-        foreign: ['', '2026-01-01', '2026-01-01T00:00:00Z', '+010000-01-01T00:00:00.000Z', 20260101],
+        // four-digit one; GLOB reads only up to an embedded NUL.
+        foreign: [
+          '', '2026-01-01', '2026-01-01T00:00:00Z', '+010000-01-01T00:00:00.000Z', 20260101,
+          '2026-01-01T00:00:00.000Z\u0000junk',
+        ],
       },
     ])('a $storage comparator admits only a cell of its storage shape', async ({name, values, canonical, foreign}) => {
       await create({id: 'canonical', properties: {[name]: canonical}})

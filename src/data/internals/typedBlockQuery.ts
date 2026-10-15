@@ -146,7 +146,10 @@ const STORAGE_TEST: Readonly<Record<WhereStorage, (cell: string) => string>> = {
   boolean: cell => `json_type(${cell}) IN ('true', 'false')`,
   // No `json_type` needed: anything but a JSON string extracts as a number or
   // as JSON text opening with `[` / `{`, and none of those fit the pattern.
-  'iso-date': cell => `json_extract(${cell}) GLOB ${ISO_DATE_GLOB}`,
+  // The byte length because GLOB stops at an embedded NUL, so
+  // `…000Z\u0000junk` fits on its prefix while `<` / `>` read the bytes past it.
+  'iso-date': cell =>
+    `json_extract(${cell}) GLOB ${ISO_DATE_GLOB} AND length(CAST(json_extract(${cell}) AS BLOB)) = 24`,
 }
 
 interface Comparable {

@@ -192,10 +192,10 @@ const SOURCE_FIELDS = [undefined, '', 'tbq:ref', 'other'] as const
  *  encoding. SQLite orders values across storage classes, so each one is a
  *  cell a bare comparison would order against the operand. `'["b0"]'`,
  *  `['b0']` and `{id: 'b0'}` all spell a real row id, so a fan-out that reads
- *  one as a list is visible; the date-like strings parse as dates but are
- *  not what the date codec writes. */
+ *  one as a list is visible; the date-like strings are not what the date
+ *  codec writes, one of them only past an embedded NUL. */
 const FOREIGN_CELLS: readonly unknown[] = [
-  '', 'x', '10', '2026-01-01', '2026-01-01T00:00:00Z', '["b0"]',
+  '', 'x', '10', '2026-01-01', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00.000Z\u0000x', '["b0"]',
   0, 1, 1767225600000, true, false, [], ['b0'], {}, {id: 'b0'},
 ]
 
