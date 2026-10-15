@@ -1,0 +1,1 @@
+import{C4 as e,S4 as t,x4 as n}from"../../../chunks/app-SKT86WJe.js";export{n as SYSTEM_AUTHOR_PREFIX,t as isSystemAuthor,e as systemAuthor};

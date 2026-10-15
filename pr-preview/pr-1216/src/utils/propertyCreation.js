@@ -1,0 +1,1 @@
+import{DO as e,OO as t}from"../../chunks/app-SKT86WJe.js";export{e as canConvertEmptyChildBlockToProperty,t as convertEmptyChildBlockToProperty};

@@ -1,0 +1,1 @@
+import{$B as e,eV as t,tV as n}from"../../chunks/app-SKT86WJe.js";export{e as SYNCED_TABLES,t as syncedWriteTarget,n as writeTargets};

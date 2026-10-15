@@ -1,0 +1,1 @@
+import{$Q as e,QQ as t,ZQ as n,e$ as r,n$ as i,t$ as a}from"../../chunks/app-SKT86WJe.js";export{n as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,t as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,e as __resetLayoutSessionIdForTesting,r as getLayoutSessionId,a as isInstalledAppDisplayMode,i as readOrCreateLayoutSessionId};

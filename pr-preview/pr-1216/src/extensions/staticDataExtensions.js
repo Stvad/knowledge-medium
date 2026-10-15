@@ -1,0 +1,1 @@
+import{IF as e}from"../../chunks/app-SKT86WJe.js";export{e as staticDataExtensions};

@@ -1,0 +1,1 @@
+import{ou as e,su as t}from"../../../chunks/app-SKT86WJe.js";export{e as createWatchEventsRegistry,t as watchEventsRegistry};

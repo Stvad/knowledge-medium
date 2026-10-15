@@ -1,0 +1,1 @@
+import{F1 as e,I1 as t}from"../../chunks/app-SKT86WJe.js";export{e as getOrCreateTypesPage,t as typesPageBlockId};

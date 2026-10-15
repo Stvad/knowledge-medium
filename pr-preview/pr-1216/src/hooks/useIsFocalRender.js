@@ -1,0 +1,1 @@
+import{dA as e,uA as t}from"../../chunks/app-SKT86WJe.js";export{t as isFocalRender,e as useIsFocalRender};
