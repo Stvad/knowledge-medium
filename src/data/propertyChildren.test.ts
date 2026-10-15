@@ -4272,12 +4272,40 @@ describe('multi-value properties are N sibling value children (km-h1hy)', () => 
       const [keep, fold] = await memberRows('p', TAGS_FIELD_ID)
       await repo.tx(tx => tx.setProperty(keep!.id, tagsSchema, ['x']), {scope: ChangeScope.BlockDefault})
       await repo.tx(tx => tx.setProperty(fold!.id, tagsSchema, ['y']), {scope: ChangeScope.BlockDefault})
+      const [keepField] = await liveFieldRowsFor(TAGS_FIELD_ID)(keep!.id)
 
       await repo.tx(tx => tx.setProperty('p', tagsSchema, ['a']), {scope: ChangeScope.BlockDefault})
 
       expect(await memberContents('p', TAGS_FIELD_ID)).toEqual(['a'])
+      // ONE field row on the survivor — its own — holding both members.
+      expect((await liveFieldRowsFor(TAGS_FIELD_ID)(keep!.id)).map(row => row.id)).toEqual([keepField!.id])
       expect(await memberContents(keep!.id, TAGS_FIELD_ID)).toEqual(['x', 'y'])
       expect((await bagOf(keep!.id))[tagsSchema.name]).toEqual(['x', 'y'])
+    })
+
+    it('folding a repeated member keeps the marked rows no definition resolves', async () => {
+      // A `::` row whose target resolves to no definition is not a field row
+      // (§9 condition 3) — two of them sharing a target are two user blocks,
+      // and folding one into the other would tombstone one of them.
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['a', 'a']),
+        {scope: ChangeScope.BlockDefault})
+      const [keep, fold] = await memberRows('p', TAGS_FIELD_ID)
+      const unresolved = propertyFieldContent('field-nobody-defines')
+      await repo.tx(async tx => {
+        await tx.create({id: 'keep-note', workspaceId: WS, parentId: keep!.id, orderKey: 'a0', content: unresolved})
+        await tx.create({id: 'fold-note', workspaceId: WS, parentId: fold!.id, orderKey: 'a0', content: unresolved})
+      }, {scope: ChangeScope.BlockDefault})
+
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['a']), {scope: ChangeScope.BlockDefault})
+
+      const notes = await sharedDb.db.getAll<{id: string; parent_id: string; deleted: number}>(
+        `SELECT id, parent_id, deleted FROM blocks WHERE id IN ('keep-note', 'fold-note') ORDER BY id`)
+      expect(notes).toEqual([
+        {id: 'fold-note', parent_id: keep!.id, deleted: 0},
+        {id: 'keep-note', parent_id: keep!.id, deleted: 0},
+      ])
     })
 
     it('keeps a twin that arrived under a DUPLICATE field row', async () => {
