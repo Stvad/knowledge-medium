@@ -42,9 +42,11 @@
  *   null); `{exists: true}` means set — so `''`, `[]`, `0` and `false` are
  *   all SET. A comparator (`eq`/bare value/`lt`/`lte`/`gt`/`gte`/`between`,
  *   inclusive) holds only when the stored cell is a value the property's
- *   codec could have written (chosen) AND the comparison holds between the
- *   `where.encode`d forms; an unset cell matches no comparator. Dates
- *   compare chronologically, strings by code point.
+ *   codec could have written (`WhereStorage`) AND the comparison holds
+ *   between the `where.encode`d forms; an unset cell matches no comparator.
+ *   Strings compare by code point, dates chronologically within years
+ *   0000–9999: a date cell outside them matches no comparator, and a query
+ *   with an operand outside them is refused.
  * - `target`: the ref (or any refList member) names a LIVE block in the
  *   same workspace whose properties satisfy the inner where-map; `{}` means
  *   "names a live block". A refList cell that is not an array names nothing,
@@ -69,11 +71,11 @@
  * ──── Generator emphasis: the NULL class ────
  *
  * Every property cell is drawn from absent / JSON null / a canonical value
- * / the type's "empty" value ('' / [] / 0 / false) / (ref, refList and list
- * properties) a malformed value, and every where value
+ * / the type's "empty" value ('' / [] / 0 / false) / a value of another
+ * shape (what a re-type leaves behind), and every where value
  * from null / exists / comparators / between / nested target — so a
- * comparison on an absent value, a negated predicate over it, an exclude
- * of an unset property, and a `target` through a missing / dangling /
+ * comparison on an absent or foreign value, a negated predicate over it, an
+ * exclude of an unset property, and a `target` through a missing / dangling /
  * deleted / cross-workspace ref are all common. Blocks carry 0..n type
  * tags (multi-type blocks exercise the join's DISTINCT), a fraction are
  * soft-deleted, parents form forests with the occasional cycle or dangling
@@ -82,11 +84,9 @@
  *
  * ──── Deliberately NOT covered ────
  *
- * - Malformed cells under SCALAR properties (a string in a number
- *   property, …) — a KNOWN ISSUE, see `FOREIGN_CELLS`. Malformed ref,
- *   refList and list cells ARE generated.
- * - Dates outside years 0000–9999: their ISO text (`+010000-…`) does not
- *   sort chronologically, so the pool stays inside that range (#1204).
+ * - A date cell in the canonical SHAPE with impossible fields
+ *   (`2026-13-45T…`): the compiler tests the shape, not the calendar, so it
+ *   would compare as text where the model calls it foreign. Accepted.
  * - The ancestor walk's depth cap (100): generated chains are short.
  * - Cross-workspace PARENT links (a broken invariant the rest of the data
  *   layer audits); cross-workspace REF targets are generated.
@@ -123,6 +123,7 @@ import { compileTypedBlockQuery, type TypedBlockQueryProjection } from './typedB
 const WS = 'ws-a'
 const OTHER_WS = 'ws-b'
 const GATE_ERROR = /require at least one candidate filter/
+const DATE_RANGE_ERROR = /date in years 0000-9999/
 
 // ──── Property universe ────
 
@@ -168,12 +169,17 @@ const PROP_BY_NAME = new Map(PROPS.map(p => [p.name, p]))
 const STRINGS = ['', 'a', 'A', 'b', 'ab', 'a ', '0', '10', '9', 'é', '\uE000', '\u{1F600}', 'null']
 const NUMBERS = [0, 1, -1, 2, 1.5, -0.5, 10, 1e21, 123456789]
 const ISO_DATES = [
+  '0000-01-01T00:00:00.000Z',
   '1969-12-31T23:59:59.999Z',
   '1970-01-01T00:00:00.000Z',
   '2026-01-01T00:00:00.000Z',
   '2026-05-18T12:00:00.000Z',
   '9999-12-31T23:59:59.999Z',
 ]
+/** What `toISOString()` writes outside years 0000–9999: a signed six-digit
+ *  year, which sorts before every four-digit one as text. Stored, they match
+ *  no comparator; as operands, they refuse the query. */
+const EXTENDED_DATES = ['+010000-01-01T00:00:00.000Z', '-000001-12-31T23:59:59.999Z']
 /** Date-only operand spellings: `where.encode` accepts any parseable string
  *  (JSON-revived predicates) and normalizes it to the canonical ISO form. */
 const DATE_ONLY = ['2026-01-01', '1970-01-01']
@@ -181,19 +187,17 @@ const STORED_TYPES = ['todo', 'task', 'Todo', ' todo']
 const QUERY_TYPES = ['todo', 'task', 'Todo', ' todo ', '', '  ', 'none']
 const SOURCE_FIELDS = [undefined, '', 'tbq:ref', 'other'] as const
 
-/** Cells the property's codec could not have written — what a re-type leaves
- *  behind in the old encoding. `'["b0"]'`, `['b0']` and `{id: 'b0'}` all
- *  spell a real row id, so a fan-out that reads one as a list is visible.
- *
- *  KNOWN ISSUE (fuzz): generated only for kinds no comparator applies to
- *  (`FOREIGN_KINDS`). On a scalar property SQLite orders `json_extract`
- *  results across storage classes, so `{gt: 3}` on a number property matches
- *  a stale `'abc'` and `true` matches a stored `1` — #1204. Counterexample:
- *  a `tbq:num` cell of `'x'` under `where: {'tbq:num': {gt: 0}}`. */
+/** Cells of every JSON shape, most of which the property's codec could not
+ *  have written under any one kind — what a re-type leaves behind in the old
+ *  encoding. SQLite orders values across storage classes, so each one is a
+ *  cell a bare comparison would order against the operand. `'["b0"]'`,
+ *  `['b0']` and `{id: 'b0'}` all spell a real row id, so a fan-out that reads
+ *  one as a list is visible; the date-like strings are not what the date
+ *  codec writes, one of them only past an embedded NUL. */
 const FOREIGN_CELLS: readonly unknown[] = [
-  '', 'x', '2026-01-01', '["b0"]', 0, 1, true, false, [], ['b0'], {}, {id: 'b0'},
+  '', 'x', '10', '2026-01-01', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00.000Z\u0000x', '["b0"]',
+  0, 1, 1767225600000, true, false, [], ['b0'], {}, {id: 'b0'},
 ]
-const FOREIGN_KINDS: ReadonlySet<Kind> = new Set(['ref', 'refList', 'list'])
 
 // ──── Generated world ────
 
@@ -262,7 +266,10 @@ const cellArb = (kind: Kind, name: string): fc.Arbitrary<RawCell> => {
       case 'string': return value(fc.constantFrom(...STRINGS))
       case 'number': return value(fc.constantFrom(...NUMBERS))
       case 'boolean': return value(fc.boolean())
-      case 'date': return value(fc.constantFrom(...ISO_DATES))
+      case 'date': return value(fc.oneof(
+        {arbitrary: fc.constantFrom(...ISO_DATES), weight: 4},
+        {arbitrary: fc.constantFrom(...EXTENDED_DATES), weight: 1},
+      ))
       case 'ref': return idRefArb.map(v => ({t: 'ref', v}))
       case 'refList': return fc.array(idRefArb, {maxLength: 3}).map(v => ({t: 'refs', v}))
       case 'list': return name === typesProp.name
@@ -275,13 +282,13 @@ const cellArb = (kind: Kind, name: string): fc.Arbitrary<RawCell> => {
   const empty = EMPTY_VALUE[kind]
   // `types` stays well-formed: its trigger indexes a bare string as a type,
   // which is the index's reading, not this compiler's.
-  const foreign = FOREIGN_KINDS.has(kind) && name !== typesProp.name
+  const foreign = name !== typesProp.name
   return fc.oneof(
     {arbitrary: absent, weight: 4},
     {arbitrary: nul, weight: 2},
     {arbitrary: canonical, weight: 5},
     ...(empty === undefined ? [] : [{arbitrary: value(fc.constant(empty.v)), weight: 2}]),
-    ...(foreign ? [{arbitrary: value(fc.constantFrom(...FOREIGN_CELLS)), weight: 2}] : []),
+    ...(foreign ? [{arbitrary: value(fc.constantFrom(...FOREIGN_CELLS)), weight: 3}] : []),
   )
 }
 
@@ -367,10 +374,12 @@ const resolveRows = (raw: readonly RawRow[]): Row[] => {
  *  where-queryable — `target` is the only operator on a ref). */
 type WhereMap = Record<string, unknown>
 
+/** Rarely out of range: such an operand refuses the whole query. */
 const dateOperandArb = fc.oneof(
-  fc.constantFrom(...ISO_DATES).map(s => new Date(s)),
-  fc.constantFrom(...ISO_DATES),
-  fc.constantFrom(...DATE_ONLY),
+  {arbitrary: fc.constantFrom(...ISO_DATES).map(s => new Date(s)), weight: 4},
+  {arbitrary: fc.constantFrom(...ISO_DATES), weight: 4},
+  {arbitrary: fc.constantFrom(...DATE_ONLY), weight: 4},
+  {arbitrary: fc.constantFrom(...EXTENDED_DATES).map(s => new Date(s)), weight: 1},
 )
 
 const scalarOperandArb = (kind: Kind): fc.Arbitrary<unknown> => {
@@ -507,7 +516,9 @@ const resolveQuery = (ids: readonly string[], q: RawQuery): ResolvedTypedBlockQu
 
 // ──── The reference interpreter ────
 
-type ModelResult = {readonly kind: 'ok'; readonly ids: readonly string[]} | {readonly kind: 'gate'}
+type ModelResult =
+  | {readonly kind: 'ok'; readonly ids: readonly string[]}
+  | {readonly kind: 'error'; readonly error: RegExp}
 
 const isPlainObject = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v) && !(v instanceof Date)
@@ -522,6 +533,22 @@ const isEmptyValue = (cell: unknown) =>
  *  cannot bound a candidate set. */
 const isSelective = (value: unknown) =>
   !(value === null || (isPlainObject(value) && Object.keys(value).length === 1 && value.exists === false))
+
+/** Years 0000–9999: the range in which date comparators are defined. */
+const inDateRange = (date: Date) => date.getUTCFullYear() >= 0 && date.getUTCFullYear() <= 9999
+
+/** Every comparator operand in a where-map, nested `target` maps included. */
+const comparatorOperands = (where: WhereMap | undefined): {p: PropSpec; operand: unknown}[] =>
+  Object.entries(where ?? {}).flatMap(([name, value]) => {
+    const p = PROP_BY_NAME.get(name)!
+    if (value === null) return []
+    if (!isPlainObject(value)) return [{p, operand: value}]
+    const [op, operand] = Object.entries(value)[0]!
+    if (op === 'exists') return []
+    if (op === 'target') return comparatorOperands(operand as WhereMap)
+    if (op === 'between') return (operand as unknown[]).map(o => ({p, operand: o}))
+    return [{p, operand}]
+  })
 
 const codePointCompare = (a: string, b: string) =>
   Buffer.compare(Buffer.from(a, 'utf8'), Buffer.from(b, 'utf8'))
@@ -538,7 +565,11 @@ const COVERAGE_KEYS = [
   'non-empty result',
   'gate rejection',
   'comparator on an unset cell',
+  'comparator on a foreign cell',
+  'comparator on an out-of-range date cell',
+  'query refused for an out-of-range date operand',
   'exclude kept a row over an unset cell',
+  'exclude kept a row over a foreign cell',
   'exclude removed a row',
   'exists:true on an empty value',
   'match through a proper ancestor',
@@ -555,6 +586,8 @@ class QueryModel {
   private readonly byId: ReadonlyMap<string, Row>
   /** Set when a comparator meets an unset cell during the current predicate. */
   private sawUnknown = false
+  /** Set when a comparator meets a set cell its codec could not have written. */
+  private sawForeign = false
 
   constructor(
     private readonly rows: readonly Row[],
@@ -588,7 +621,12 @@ class QueryModel {
       return undefined
     }
     if (decoded === undefined || !isDeepStrictEqual(p.codec.encode(decoded), cell)) return undefined
-    return p.kind === 'date' ? (decoded as Date).getTime() : p.codec.where!.encode(decoded)
+    if (p.kind !== 'date') return p.codec.where!.encode(decoded)
+    if (!inDateRange(decoded as Date)) {
+      this.hit('comparator on an out-of-range date cell')
+      return undefined
+    }
+    return (decoded as Date).getTime()
   }
 
   private operand(p: PropSpec, value: unknown): number | string {
@@ -612,6 +650,9 @@ class QueryModel {
       if (isUnset(cell)) {
         this.sawUnknown = true
         this.hit('comparator on an unset cell')
+      } else if (v === undefined) {
+        this.sawForeign = true
+        this.hit('comparator on a foreign cell')
       }
       return v
     }
@@ -704,9 +745,13 @@ class QueryModel {
   private excluded(row: Row, exclude: readonly BlockPredicate[]): boolean {
     return exclude.some(p => {
       this.sawUnknown = false
+      this.sawForeign = false
       const holds = this.predicate(row, p)
       if (holds) this.hit('exclude removed a row')
-      else if (this.sawUnknown) this.hit('exclude kept a row over an unset cell')
+      else {
+        if (this.sawUnknown) this.hit('exclude kept a row over an unset cell')
+        if (this.sawForeign) this.hit('exclude kept a row over a foreign cell')
+      }
       return holds
     })
   }
@@ -728,7 +773,14 @@ class QueryModel {
         Object.values(p.where ?? {}).some(isSelective)))
     if (walks && !bounded) {
       this.hit('gate rejection')
-      return {kind: 'gate'}
+      return {kind: 'error', error: GATE_ERROR}
+    }
+    const refused = [query.where, ...match.map(p => p.where), ...exclude.map(p => p.where)]
+      .flatMap(comparatorOperands)
+      .some(({p, operand}) => p.kind === 'date' && !inDateRange(new Date(operand as string | Date)))
+    if (refused) {
+      this.hit('query refused for an out-of-range date operand')
+      return {kind: 'error', error: DATE_RANGE_ERROR}
     }
 
     const hits = this.rows.filter(row => {
@@ -823,8 +875,8 @@ const runAllPaths = async (
 const expectedOutcomes = (model: ModelResult, paths: readonly string[]) =>
   Object.fromEntries(paths.map(path => [
     path,
-    model.kind === 'gate'
-      ? {error: expect.stringMatching(GATE_ERROR)}
+    model.kind === 'error'
+      ? {error: expect.stringMatching(model.error)}
       : {ok: path.endsWith('Count') || path.endsWith('count') ? model.ids.length : model.ids},
   ]))
 
@@ -832,7 +884,7 @@ const expectedOutcomes = (model: ModelResult, paths: readonly string[]) =>
  *  and each extra query over the same rows is nearly free. */
 const worldArb = fc.record({
   rows: fc.array(rawRowArb, {minLength: 2, maxLength: 16}),
-  queries: fc.array(rawQueryArb, {minLength: 8, maxLength: 20}),
+  queries: fc.array(rawQueryArb, {minLength: 12, maxLength: 30}),
 })
 
 describe('compileTypedBlockQuery — differential vs a JS reference interpreter', () => {

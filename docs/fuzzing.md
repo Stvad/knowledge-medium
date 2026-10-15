@@ -19,7 +19,7 @@ The same property code runs at three intensities (mechanics in
 |---|---|---|---|
 | smoke | part of the normal `pnpm test` / `pnpm run check` gate | fixed | small run counts, ~1s/file |
 | local deep | `pnpm fuzz [files…]` | random | `FUZZ_TIME_MS` per property (default 15s) |
-| nightly | `.github/workflows/fuzz-nightly.yml` (06:23 UTC cron + manual dispatch) | random | 15s/property across all suites, then a 20-minute dedicated pass on the stateful data-layer suite |
+| nightly | `.github/workflows/fuzz-nightly.yml` (06:23 UTC cron + manual dispatch) | random | 15s/property across all suites, then a 20-minute dedicated pass on the stateful data-layer suite and a 15-minute one on the props-as-blocks dual-write suite |
 
 The smoke tier is deliberately deterministic: the gate re-explores the
 same cases every run, so a pre-existing bug can only surface in the
@@ -258,9 +258,11 @@ one.
   targets over 3 owners × 5 properties seldom met. The property asserts
   over its own sample that every writer and oracle was reached: on the
   fixed smoke sample, or on any random one of 200+ cases (so a short
-  `FUZZ_RUNS` triage run reports only property failures). Two composite
-  shapes are asserted only from 2,000 cases: the order-blind carve-out,
-  and a field row already live at its owner's revival.
+  `FUZZ_RUNS` triage run reports only property failures). Three composite
+  shapes are asserted only from 5,000 cases, which the nightly's dedicated
+  pass for this suite reaches: the order-blind carve-out, a field row
+  already live at its owner's revival, and a restore checked against a
+  key that held a value.
 - `src/utils/test/linkTargetAutocomplete.fuzz.test.ts` — the
   `searchSourcesFacet` merge point (`searchBlocksAcrossSources`): model
   differential against an independent group-then-fold reference over
@@ -319,8 +321,11 @@ one.
   JSON null vs `''`/`0`/`false`/`[]`, comparators and excludes over unset
   properties, `target` through dangling / deleted / cross-workspace refs,
   multi-type blocks, deleted parents, `created_at` ties, the ancestor-walk
-  gate. A model-only canary pins each of those as reached. Malformed cells
-  under scalar properties are a KNOWN ISSUE carve-out (#1204).
+  gate. Every property kind also draws cells of a foreign JSON shape (what
+  a re-type leaves behind), and the date pool runs past years 0000–9999:
+  extended-year cells, and rarely an out-of-range operand whose refusal the
+  model predicts on every path. A model-only canary pins each of those as
+  reached.
 
 ## Found so far
 
@@ -755,9 +760,21 @@ deep runs (each fixed with pinned tests in the same PR):
   way. Both now go through one helper that reads only array cells.
 
 Its probe of the rest of that malformed-cell class filed #1204:
-comparators match cells of the wrong JSON type, because SQLite orders
-`json_extract` results across storage classes (`{gt: 3}` matches a stale
-`'abc'`). And one finding about the suite itself: its first coverage
+comparators matched cells of the wrong JSON type, because SQLite orders
+`json_extract` results across storage classes (`{gt: 3}` matched a stale
+`'abc'`, `true` a stored `1`, a date `{lt}` the empty string, and a
+`+010000-…` date sorted before every four-digit year). Fixed in a
+follow-up: each where-capable codec declares a `WhereStorage`, and the
+compiler ANDs that shape's test onto every comparator. Dates compare only
+in canonical `toISOString()` form with a four-digit year; outside years
+0000–9999 a cell matches nothing and an operand is refused. The generator
+then lost its carve-out, so the model's existing "a cell the codec could
+not have written matches no comparator" is the regression test. Its fixed
+smoke sample catches deleting any one storage test; deleting the guard on
+the `between` branch alone surfaces only in deep runs (within seconds),
+and the example tests pin it.
+
+And one finding about the suite itself: its first coverage
 canary showed that across 300 sampled worlds no ancestor-scoped predicate
 ever matched through a PROPER ancestor, and only 24 of ~750 queries
 returned anything at all — stacked single-row filters, and parents picked

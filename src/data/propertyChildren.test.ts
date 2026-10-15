@@ -4545,6 +4545,30 @@ describe('multi-value properties are N sibling value children (km-h1hy)', () => 
       expect([...await memberContents(keep!.id, TAGS_FIELD_ID)].sort()).toEqual(['y', 'z'])
     })
 
+    it('folding a repeated member folds field rows of a seed whose block the same tx deletes', async () => {
+      // A seed's declaration resolves its fieldId with or without the block,
+      // so these are still field rows at commit — declining the fold would
+      // leave the survivor two of them for one property.
+      const repo = await setupWithLists()
+      const aliasFieldId = propertyDefinitionBlockId(WS, aliasesProp.seedKey)
+      await repo.tx(tx => tx.create({
+        id: aliasFieldId, workspaceId: WS, parentId: null, orderKey: 'zz', content: 'alias',
+      }), {scope: ChangeScope.BlockDefault})
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['a', 'a']),
+        {scope: ChangeScope.BlockDefault})
+      const [keep, fold] = await memberRows('p', TAGS_FIELD_ID)
+      await repo.tx(tx => tx.setProperty(keep!.id, aliasesProp, ['k']), {scope: ChangeScope.BlockDefault})
+      await repo.tx(tx => tx.setProperty(fold!.id, aliasesProp, ['f']), {scope: ChangeScope.BlockDefault})
+
+      await repo.tx(async tx => {
+        await tx.delete(aliasFieldId)
+        await tx.setProperty('p', tagsSchema, ['a'])
+      }, {scope: ChangeScope.BlockDefault})
+
+      expect(await liveFieldRowsFor(aliasFieldId)(keep!.id)).toHaveLength(1)
+    })
+
     it('folding a repeated member keeps the marked rows no definition resolves', async () => {
       // A `::` row whose target resolves to no definition is not a field row
       // (§9 condition 3) — two of them sharing a target are two user blocks,

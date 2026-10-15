@@ -1079,7 +1079,10 @@ const appendUnder = async (
  *  if `child` is one — where a fold puts it instead of making the survivor a
  *  second field row for that property. Recognized by the §9 predicate, not
  *  the bit alone: a `::` row whose target resolves to no definition is a user
- *  block, and two of them sharing a target are two blocks, never one to fold. */
+ *  block, and two of them sharing a target are two blocks, never one to fold.
+ *  Recognition is the tx-start registry, as at every tx site: rows of a
+ *  definition this tx deletes or unpublishes still fold. ACCEPTED — staged
+ *  rows cannot say whether it resolves at commit (a seed outlives its block). */
 const survivorFieldRowFor = (
   tx: Tx,
   survivorChildren: readonly BlockData[],
