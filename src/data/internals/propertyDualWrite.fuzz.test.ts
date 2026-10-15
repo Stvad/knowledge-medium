@@ -602,11 +602,14 @@ const keyAt = async (tx: Tx, parentId: string, pos: 'first' | 'last', excludeId?
     : keysBetween(siblings.at(-1)!.orderKey, null, 1)[0]!
 }
 
-/** `id` and every ancestor above it. */
+/** `id` and every ancestor above it, up to the root. */
 const lineage = async (tx: Tx, id: string): Promise<string[]> => {
   const out: string[] = []
+  const seen = new Set<string>()
   let cursor: string | null = id
-  while (cursor !== null && out.length < 32) {
+  while (cursor !== null) {
+    if (seen.has(cursor)) throw new Error(`cycle through ${cursor} in the lineage of ${id}`)
+    seen.add(cursor)
     out.push(cursor)
     cursor = (await tx.get(cursor))?.parentId ?? null
   }
@@ -679,7 +682,9 @@ const pairsReading = (
 // ──── one local transaction ────
 
 const ABSENT = undefined
-type Ev = {cls: 'E' | 'R'; value: unknown}
+/** One cell write. An EAGER one records whether it wrote — one that matched
+ *  the cell is a no-op and reconciled no children. */
+type Ev = {cls: 'E'; value: unknown; wrote: boolean} | {cls: 'R'; value: unknown}
 
 interface TxLog {
   /** owner → cell key → cell writes, in order. */
@@ -689,18 +694,27 @@ interface TxLog {
   childTouched: Set<string>
   /** Pairs a child edit may have handed a NEW field row. */
   dupRisk: Set<string>
-  /** owner → keys an eager write reconciled children for. */
-  eagerConverged: Map<string, Set<string>>
   /** Top owners this tx subtree-deleted. */
   deletedOwners: Set<string>
 }
 
-/** An eager write followed by a raw bag write to the same key: from then on
- *  only MATERIALIZE's NET diff reaches the children, so the key's outcome is
- *  order-blind (the accepted wrinkle in propertyChildrenProcessor.ts's
- *  docblock) and the eager write's reconcile proves nothing about the end. */
-const rawAfterEager = (evs: readonly Ev[]): boolean =>
-  evs.some((ev, i) => ev.cls === 'E' && evs.slice(i + 1).some(later => later.cls === 'R'))
+/** The last eager write that reconciled children, or -1. */
+const lastEagerWrite = (evs: readonly Ev[]): number => {
+  for (let i = evs.length - 1; i >= 0; i--) {
+    const ev = evs[i]!
+    if (ev.cls === 'E' && ev.wrote) return i
+  }
+  return -1
+}
+
+/** A raw bag write after the last eager write that reconciled children: from
+ *  then on only MATERIALIZE's NET diff reaches the children, so the key's
+ *  outcome is order-blind (the accepted wrinkle in propertyChildrenProcessor.ts's
+ *  docblock). A later eager write that writes settles the key again. */
+const orderBlind = (evs: readonly Ev[]): boolean => {
+  const last = lastEagerWrite(evs)
+  return last >= 0 && evs.slice(last + 1).some(ev => ev.cls === 'R')
+}
 
 const addEvent = (log: TxLog, ownerId: string, name: string, ev: Ev): void => {
   let byName = log.events.get(ownerId)
@@ -708,11 +722,6 @@ const addEvent = (log: TxLog, ownerId: string, name: string, ev: Ev): void => {
   const evs = byName.get(name)
   if (evs) evs.push(ev)
   else byName.set(name, [ev])
-}
-const addConverged = (log: TxLog, ownerId: string, name: string): void => {
-  let names = log.eagerConverged.get(ownerId)
-  if (!names) log.eagerConverged.set(ownerId, names = new Set())
-  names.add(name)
 }
 const touch = async (log: TxLog, tx: Tx, id: string): Promise<void> => {
   for (const id_ of await lineage(tx, id)) log.childTouched.add(id_)
@@ -729,8 +738,7 @@ const applyLocalOp = async (tx: Tx, op: LocalOp, log: TxLog): Promise<boolean> =
       const stored = (await tx.get(owner))!.properties[schema.name]
       const encoded = encodeFor(op.kind, op.value)
       await tx.setProperty(owner, schema, op.value)
-      addEvent(log, owner, schema.name, {cls: 'E', value: encoded})
-      if (!sameValue(stored, encoded)) addConverged(log, owner, schema.name)
+      addEvent(log, owner, schema.name, {cls: 'E', value: encoded, wrote: !sameValue(stored, encoded)})
       return true
     }
     case 'unset': {
@@ -739,8 +747,7 @@ const applyLocalOp = async (tx: Tx, op: LocalOp, log: TxLog): Promise<boolean> =
       const {schema} = SCHEMAS[op.kind]
       const stored = (await tx.get(owner))!.properties[schema.name]
       await tx.unsetProperty(owner, schema)
-      addEvent(log, owner, schema.name, {cls: 'E', value: ABSENT})
-      if (stored !== undefined) addConverged(log, owner, schema.name)
+      addEvent(log, owner, schema.name, {cls: 'E', value: ABSENT, wrote: stored !== undefined})
       return true
     }
     case 'setMany': {
@@ -756,20 +763,17 @@ const applyLocalOp = async (tx: Tx, op: LocalOp, log: TxLog): Promise<boolean> =
       const after = {...before}
       for (const {kind, value} of op.sets) {
         const name = SCHEMAS[kind].schema.name
-        if (unset.has(name)) continue
-        after[name] = encodeFor(kind, value)
-        addEvent(log, owner, name, {cls: 'E', value: after[name]})
+        if (!unset.has(name)) after[name] = encodeFor(kind, value)
       }
-      for (const name of unset) {
-        delete after[name]
-        addEvent(log, owner, name, {cls: 'E', value: ABSENT})
-      }
+      for (const name of unset) delete after[name]
       // A net no-op batch writes nothing at all; otherwise EVERY listed key
       // has its children reconciled, changed or not.
-      if (!jsonValuesEqual(before, after)) {
-        for (const {kind} of op.sets) addConverged(log, owner, SCHEMAS[kind].schema.name)
-        for (const name of unset) addConverged(log, owner, name)
+      const wrote = !jsonValuesEqual(before, after)
+      for (const {kind} of op.sets) {
+        const name = SCHEMAS[kind].schema.name
+        if (!unset.has(name)) addEvent(log, owner, name, {cls: 'E', value: after[name], wrote})
       }
+      for (const name of unset) addEvent(log, owner, name, {cls: 'E', value: ABSENT, wrote})
       return true
     }
     case 'rawBag': {
@@ -1089,6 +1093,8 @@ const stats = {
   applied: new Map<string, number>(),
   skipped: new Map<string, number>(),
   raw: new Map<string, number>(),
+  /** Mid-sequence undo / redo steps that acted. */
+  undoRedo: new Map<string, number>(),
   committed: 0,
   rejected: 0,
   intentChecked: 0,
@@ -1097,14 +1103,16 @@ const stats = {
   dupObserved: 0,
   projectedPresent: 0,
   restoredKeysChecked: 0,
+  liveFieldRowsAtRevival: 0,
 }
 const bump = (counts: Map<string, number>, key: string): void => {
   counts.set(key, (counts.get(key) ?? 0) + 1)
 }
 const resetStats = (): void => {
-  for (const counts of [stats.applied, stats.skipped, stats.raw]) counts.clear()
+  for (const counts of [stats.applied, stats.skipped, stats.raw, stats.undoRedo]) counts.clear()
   stats.committed = stats.rejected = stats.intentChecked = stats.orderBlind = 0
   stats.rematerialized = stats.dupObserved = stats.projectedPresent = stats.restoredKeysChecked = 0
+  stats.liveFieldRowsAtRevival = 0
 }
 
 // ──── oracles ────
@@ -1179,8 +1187,26 @@ const checkIntent = (
   const startBags = new Map([...start.byId.values()].map(row => [row.id, bagOf(row)]))
   for (const owner of end.byId.values()) {
     if (owner.deleted !== 0 || start.byId.get(owner.id)?.deleted !== 1) continue
-    if (log.childTouched.has(owner.id) || waivers.unsettledDead.has(owner.id)) continue
+    if (log.childTouched.has(owner.id)) continue
     const written = log.events.get(owner.id)
+    // A field row already live when its owner came back carries the
+    // children's word, so the revival takes no value from the cell into it —
+    // whatever else is unsettled about the owner. A value moved over from a
+    // folded duplicate existed before; a minted one did not.
+    for (const kind of KINDS) {
+      const {schema, fieldId} = SCHEMAS[kind]
+      if (written?.has(schema.name)) continue
+      for (const fieldRow of liveFieldRows(end, owner.id, fieldId)) {
+        if (start.byId.get(fieldRow.id)?.deleted !== 0) continue
+        stats.liveFieldRowsAtRevival++
+        for (const value of end.liveChildren.get(fieldRow.id) ?? []) {
+          if (value.is_field_form !== 1 && start.byId.get(value.id) === undefined) {
+            expect.fail(`${label}: I — restoring ${owner.id} minted ${JSON.stringify(value.content)} into the live ${schema.name} field row ${fieldRow.id}`)
+          }
+        }
+      }
+    }
+    if (waivers.unsettledDead.has(owner.id)) continue
     for (const kind of KINDS) {
       const {schema, fieldId} = SCHEMAS[kind]
       if (written?.has(schema.name) || waivers.proj.has(pairKey(owner.id, fieldId))) continue
@@ -1203,9 +1229,9 @@ const checkIntent = (
     const bag = bagOf(owner)
     for (const [name, evs] of byName) {
       const actual = bag[name]
-      const orderBlind = rawAfterEager(evs)
+      const blind = orderBlind(evs)
       stats.intentChecked++
-      if (orderBlind) {
+      if (blind) {
         stats.orderBlind++
         const candidates = [startBags.get(ownerId)?.[name], ...evs.map(ev => ev.value)]
         if (!candidates.some(c => sameValue(c, actual))) {
@@ -1267,11 +1293,38 @@ const staleBitRevivalPairs = (log: TxLog, start: DbState, end: DbState): string[
   return pairs
 }
 
+/** The pairs PROJECT re-projected in 'full' mode at the end of a committed
+ *  local tx, so their cells agree with their children whatever an arrival
+ *  left: every pair that reads a row whose watched columns changed (before
+ *  and after the change — PROJECT's own collection), plus a revived row's own
+ *  field rows. Owners live at the end only. */
+const reprojectedPairs = (start: DbState, end: DbState): string[] => {
+  const pairs = new Set<string>()
+  for (const after of end.byId.values()) {
+    const before = start.byId.get(after.id)
+    if (before !== undefined && before.content === after.content && before.parent_id === after.parent_id
+      && before.order_key === after.order_key && before.deleted === after.deleted
+      && before.is_field_form === after.is_field_form
+      && before.reference_target_id === after.reference_target_id) continue
+    for (const row of [before, after]) {
+      if (row !== undefined) for (const key of pairsReading(end, row)) pairs.add(key)
+    }
+    if (before?.deleted === 1 && after.deleted === 0) {
+      for (const child of end.liveChildren.get(after.id) ?? []) {
+        if (child.is_field_form === 1 && isRegisteredField(child.reference_target_id)) {
+          pairs.add(pairKey(after.id, child.reference_target_id))
+        }
+      }
+    }
+  }
+  return [...pairs].filter(key => end.byId.get(key.split('|')[0]!)?.deleted === 0)
+}
+
 const runBatch = async (repo: Repo, ops: LocalOp[], waivers: Waivers, label: string): Promise<void> => {
   const start = await readState()
   const startSnapshot = await fullSnapshot()
   const startBags = new Map([...start.byId.values()].map(row => [row.id, bagOf(row)]))
-  const log: TxLog = {events: new Map(), childTouched: new Set(), dupRisk: new Set(), eagerConverged: new Map(), deletedOwners: new Set()}
+  const log: TxLog = {events: new Map(), childTouched: new Set(), dupRisk: new Set(), deletedOwners: new Set()}
   try {
     await repo.tx(async tx => {
       for (const op of ops) bump(await applyLocalOp(tx, op, log) ? stats.applied : stats.skipped, op.op)
@@ -1311,7 +1364,7 @@ const runBatch = async (repo: Repo, ops: LocalOp[], waivers: Waivers, label: str
     const owner = end.byId.get(ownerId)
     if (owner === undefined || owner.deleted !== 0) continue
     for (const [name, evs] of byName) {
-      const eager = log.eagerConverged.get(ownerId)?.has(name) === true && !rawAfterEager(evs)
+      const eager = lastEagerWrite(evs) >= 0 && !orderBlind(evs)
       // A raw bag write reaches the children only through MATERIALIZE's net
       // diff, so it converges only when the tx's final cell moved.
       const raw = evs.some(ev => ev.cls === 'R') && !sameValue(startBags.get(ownerId)?.[name], bagOf(owner)[name])
@@ -1324,6 +1377,7 @@ const runBatch = async (repo: Repo, ops: LocalOp[], waivers: Waivers, label: str
       waivers.dup.delete(pairKey(ownerId, fieldId))
     }
   }
+  for (const key of reprojectedPairs(start, end)) waivers.proj.delete(key)
   for (const key of staleBitRevivalPairs(log, start, end)) waivers.proj.add(key)
   await checkState(repo, waivers, converged, label)
 }
@@ -1345,7 +1399,7 @@ const runCase = async ({mode, txs}: {mode: Mode; txs: TxSpec[]}): Promise<void> 
       case 'undo':
       case 'redo':
         ranUndoRedo = true
-        await (spec.t === 'undo' ? repo.undo() : repo.redo())
+        if (await (spec.t === 'undo' ? repo.undo() : repo.redo())) bump(stats.undoRedo, spec.t)
         for (const key of await currentDupPairs()) waivers.dup.add(key)
         await checkState(repo, waivers, new Map(), label)
         break
@@ -1405,11 +1459,15 @@ describe('properties-as-blocks dual representation under mixed writer sequences'
     }
     expect(stats.committed, 'committed txs').toBeGreaterThan(0)
     expect(stats.rejected, 'A — a rejected tx was rolled back and checked').toBeGreaterThan(0)
+    for (const step of ['undo', 'redo']) {
+      expect(stats.undoRedo.get(step) ?? 0, `a mid-sequence ${step} acted — ${summary}`).toBeGreaterThan(0)
+    }
     expect(stats.intentChecked, 'I checks').toBeGreaterThan(0)
     expect(stats.orderBlind, 'I order-blind carve-out reached').toBeGreaterThan(0)
     expect(stats.rematerialized, 'Q MATERIALIZE re-runs').toBeGreaterThan(0)
     expect(stats.projectedPresent, 'P compared a present value').toBeGreaterThan(0)
     expect(stats.dupObserved, 'D saw a duplicate field row').toBeGreaterThan(0)
     expect(stats.restoredKeysChecked, 'I checked a restored owner').toBeGreaterThan(0)
+    expect(stats.liveFieldRowsAtRevival, 'I saw a field row live at its owner\'s revival').toBeGreaterThan(0)
   }, 60_000)
 })
