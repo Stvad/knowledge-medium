@@ -59,10 +59,12 @@
  *  O  no live row under a missing/tombstoned parent, except rows an
  *     arrival placed there (sync-apply skips the parent-liveness trigger).
  *  I  INTENT — for a pair written only by cell writers in a tx, the cell
- *     ends at the LAST write (absent for an unset). A write that left the
- *     cell as it found it claims nothing — no user unsets a key the cell does
- *     not show — and neither do raw writes that land back on the tx-start
- *     value, since only their net diff reaches the children (`claimsIntent`).
+ *     ends at the LAST write (absent for an unset). Every eager set claims it,
+ *     equal to the cell or not, since it reconciles the children either way.
+ *     An unset that removed nothing claims nothing — no user unsets a key the
+ *     cell does not show — and neither do raw writes that land back on the
+ *     tx-start value, since only their net diff reaches the children
+ *     (`claimsIntent`).
  *     Two carve-outs, both the accepted single-pass wrinkle in
  *     propertyChildrenProcessor.ts's docblock (MATERIALIZE diffs the tx's
  *     net bag):
@@ -705,10 +707,11 @@ const pairsReading = (
 // ──── one local transaction ────
 
 const ABSENT = undefined
-/** One cell write, and whether it CHANGED the cell it found. A no-op claims
- *  nothing: an eager one reconciled no children, and either kind leaves the
- *  key exactly as the earlier writes (or the processors) decide — a user can
- *  not unset a key the cell does not show. */
+/** One cell write, and whether it reached the children. Every eager SET does —
+ *  it reconciles them even when the cell already holds its value — so only an
+ *  unset that removed nothing and a raw write that left the cell as it found
+ *  it claim nothing: either leaves the key as the earlier writes (or the
+ *  processors) decide, and a user can not unset a key the cell does not show. */
 type Ev = {cls: 'E' | 'R'; value: unknown; wrote: boolean}
 
 /** Whether a key's cell writes in one tx claim its outcome. An eager write
@@ -795,10 +798,8 @@ const applyLocalOp = async (tx: Tx, op: LocalOp, log: TxLog): Promise<boolean> =
       const owner = await resolveOwner(tx, op.owner)
       if (owner === null) return false
       const {schema} = SCHEMAS[op.kind]
-      const stored = (await tx.get(owner))!.properties[schema.name]
-      const encoded = encodeFor(op.kind, op.value)
       await tx.setProperty(owner, schema, op.value)
-      addEvent(log, owner, schema.name, {cls: 'E', value: encoded, wrote: !sameValue(stored, encoded)})
+      addEvent(log, owner, schema.name, {cls: 'E', value: encodeFor(op.kind, op.value), wrote: true})
       return true
     }
     case 'unset': {
@@ -826,13 +827,13 @@ const applyLocalOp = async (tx: Tx, op: LocalOp, log: TxLog): Promise<boolean> =
         if (!unset.has(name)) after[name] = encodeFor(kind, value)
       }
       for (const name of unset) delete after[name]
-      // A net no-op batch writes nothing at all; otherwise EVERY listed key
-      // has its children reconciled, changed or not.
-      const wrote = !jsonValuesEqual(before, after)
+      // Every surviving set reconciles its children; the unsets act only when
+      // the batch changes the cell.
       for (const {kind} of op.sets) {
         const name = SCHEMAS[kind].schema.name
-        if (!unset.has(name)) addEvent(log, owner, name, {cls: 'E', value: after[name], wrote})
+        if (!unset.has(name)) addEvent(log, owner, name, {cls: 'E', value: after[name], wrote: true})
       }
+      const wrote = !jsonValuesEqual(before, after)
       for (const name of unset) addEvent(log, owner, name, {cls: 'E', value: ABSENT, wrote})
       return true
     }
