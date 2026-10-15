@@ -1,1 +1,1 @@
-import{wC as e}from"../../../chunks/app-D7DhTxm9.js";export{e as chipStyle};
+import{wC as e}from"../../../chunks/app-CGl4lMjb.js";export{e as chipStyle};
