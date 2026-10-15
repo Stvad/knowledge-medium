@@ -580,6 +580,11 @@ its first deep minutes:
     unset. Every revived row now goes through one rule
     (`materializeRevivedRow`), which splits written keys from untouched
     ones by the row's tx-start state.
+- Folding a repeated list member into its survivor moved the folded
+  row's own `::` field rows over wholesale. When the member carried
+  properties of its own, the survivor ended up with two field rows for
+  one property. The value-row fold now folds field rows the way the
+  field-row fold already did, through one shared lookup.
 - Still open, each with a `KNOWN ISSUE (fuzz)` carve-out:
   - #1210: the revival picks field rows by the `is_field_form` bit before
     DERIVE re-stamps it. So a restore in the same tx as an edit that

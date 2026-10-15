@@ -709,9 +709,13 @@ const effective = (evs: readonly Ev[]): boolean => evs.some(ev => ev.wrote)
 interface TxLog {
   /** owner → cell key → cell writes, in order. */
   events: Map<string, Map<string, Ev[]>>
-  /** Owners some child edit in this tx reached (the edited rows, their
-   *  ancestors, before and after a move). */
+  /** Rows some child edit in this tx reached (the edited rows and their
+   *  ancestors, before and after a move) — for what is about the ROW: whether
+   *  it died unsettled, and #1210's revived owners. */
   childTouched: Set<string>
+  /** Pairs whose projection a child edit in this tx changed — the grain the
+   *  intent and convergence exemptions apply at. */
+  childPairs: Set<string>
   /** Pairs a child edit may have handed a NEW field row. */
   dupRisk: Set<string>
   /** Top owners this tx subtree-deleted. */
@@ -745,6 +749,29 @@ const addEvent = (log: TxLog, ownerId: string, name: string, ev: Ev): void => {
 }
 const touch = async (log: TxLog, tx: Tx, id: string): Promise<void> => {
   for (const id_ of await lineage(tx, id)) log.childTouched.add(id_)
+}
+
+/** `pairsReading`'s twin over the open tx, for a row placed under `parentId`
+ *  with `content` — marking read from content, since a bit written earlier in
+ *  this tx is only stamped at its end. */
+const pairsReadingIn = async (tx: Tx, parentId: string | null, content: string): Promise<string[]> => {
+  if (parentId === null) return []
+  const {target, isFieldForm} = await derivedColumns(content)
+  if (isFieldForm === 1) return isRegisteredField(target) ? [pairKey(parentId, target)] : []
+  const parent = await tx.get(parentId)
+  if (parent === null || parent.deleted || parent.parentId === null) return []
+  const parentField = await markedFieldId(parent.content)
+  return parentField === null ? [] : [pairKey(parent.parentId, parentField)]
+}
+
+/** Records the pairs a child edit changes: those reading the row where it was
+ *  and where it ends up. */
+const touchPairs = async (
+  log: TxLog, tx: Tx, placements: readonly {parentId: string | null; content: string}[],
+): Promise<void> => {
+  for (const {parentId, content} of placements) {
+    for (const key of await pairsReadingIn(tx, parentId, content)) log.childPairs.add(key)
+  }
 }
 
 const encodeFor = (kind: Kind, value: unknown): unknown => SCHEMAS[kind].schema.codec.encode(value)
@@ -815,9 +842,11 @@ const applyLocalOp = async (tx: Tx, op: LocalOp, log: TxLog): Promise<boolean> =
       const id = await resolveRow(tx, op.row)
       if (id === null) return false
       await touch(log, tx, id)
+      const row = (await tx.get(id))!
       const content = resolveContent(op.content)
+      await touchPairs(log, tx, [row, {parentId: row.parentId, content}])
       const fieldId = await markedFieldId(content)
-      if (fieldId !== null) log.dupRisk.add(pairKey((await tx.get(id))!.parentId!, fieldId))
+      if (fieldId !== null) log.dupRisk.add(pairKey(row.parentId!, fieldId))
       await tx.update(id, {content})
       return true
     }
@@ -825,6 +854,7 @@ const applyLocalOp = async (tx: Tx, op: LocalOp, log: TxLog): Promise<boolean> =
       const id = await resolveRow(tx, op.row)
       if (id === null) return false
       await touch(log, tx, id)
+      await touchPairs(log, tx, [(await tx.get(id))!])
       await deleteSubtreeInTx(tx, id)
       return true
     }
@@ -836,7 +866,9 @@ const applyLocalOp = async (tx: Tx, op: LocalOp, log: TxLog): Promise<boolean> =
       const destParent = (await fieldRowsIn(tx, destOwner, op.dest.kind))[0]?.id ?? destOwner
       await touch(log, tx, id)
       await touch(log, tx, destParent)
-      const fieldId = await markedFieldId((await tx.get(id))!.content)
+      const moved = (await tx.get(id))!
+      await touchPairs(log, tx, [moved, {parentId: destParent, content: moved.content}])
+      const fieldId = await markedFieldId(moved.content)
       if (fieldId !== null) log.dupRisk.add(pairKey(destParent, fieldId))
       await tx.move(id, {parentId: destParent, orderKey: await keyAt(tx, destParent, op.pos, id)})
       return true
@@ -844,8 +876,10 @@ const applyLocalOp = async (tx: Tx, op: LocalOp, log: TxLog): Promise<boolean> =
     case 'reorderRow': {
       const id = await resolveRow(tx, op.row)
       if (id === null) return false
-      const parentId = (await tx.get(id))!.parentId!
+      const row = (await tx.get(id))!
+      const parentId = row.parentId!
       await touch(log, tx, id)
+      await touchPairs(log, tx, [row])
       await tx.move(id, {parentId, orderKey: await keyAt(tx, parentId, op.pos, id)})
       return true
     }
@@ -856,6 +890,7 @@ const applyLocalOp = async (tx: Tx, op: LocalOp, log: TxLog): Promise<boolean> =
       if (parent === null) return false
       await touch(log, tx, parent)
       const content = resolveContent(op.content)
+      await touchPairs(log, tx, [{parentId: parent, content}])
       const fieldId = await markedFieldId(content)
       if (fieldId !== null) log.dupRisk.add(pairKey(parent, fieldId))
       await tx.create({workspaceId: WS, parentId: parent, orderKey: await keyAt(tx, parent, op.pos), content})
@@ -1211,9 +1246,10 @@ const checkIntent = (
   const startBags = new Map([...start.byId.values()].map(row => [row.id, bagOf(row)]))
   for (const owner of end.byId.values()) {
     if (owner.deleted !== 0 || start.byId.get(owner.id)?.deleted !== 1) continue
-    if (log.childTouched.has(owner.id)) continue
     const byName = log.events.get(owner.id)
+    // Exempt: a key this tx wrote, or one a child edit in it changed.
     const written = (name: string): boolean => effective(byName?.get(name) ?? [])
+      || log.childPairs.has(pairKey(owner.id, lookups.resolveNameSchema(name)!.fieldId))
     // A field row already live when its owner came back carries the
     // children's word, so the revival takes no value from the cell into it —
     // whatever else is unsettled about the owner. A value moved over from a
@@ -1243,7 +1279,6 @@ const checkIntent = (
     }
   }
   for (const [ownerId, byName] of log.events) {
-    if (log.childTouched.has(ownerId)) continue
     // KNOWN ISSUE (fuzz): #1211. Deleted and restored in this one tx, the
     // owner is no revival to MATERIALIZE (live → live net) while PROJECT sees
     // its field rows die, so every key is unset. Counterexample: set a key,
@@ -1255,6 +1290,9 @@ const checkIntent = (
     for (const [name, evs] of byName) {
       const actual = bag[name]
       if (!effective(evs)) continue
+      // A cell write beats a later same-tx child edit of its pair (the
+      // order-blind wrinkle), so "last write" claims nothing there.
+      if (log.childPairs.has(pairKey(ownerId, lookups.resolveNameSchema(name)!.fieldId))) continue
       const blind = orderBlind(evs)
       stats.intentChecked++
       if (blind) {
@@ -1301,6 +1339,16 @@ const staleBitRevivalPairs = (log: TxLog, start: DbState, end: DbState): string[
     }
   }
   return pairs
+}
+
+/** A duplicate waiver only says a pair MAY hold two field rows; once it
+ *  holds at most one, any later duplicate has to come from a write that
+ *  waives it again, so the stale waiver is dropped. */
+const pruneDupWaivers = (state: DbState, waivers: Waivers): void => {
+  for (const key of [...waivers.dup]) {
+    const [ownerId, fieldId] = key.split('|') as [string, string]
+    if (liveFieldRows(state, ownerId, fieldId).length <= 1) waivers.dup.delete(key)
+  }
 }
 
 /** What the suite knows on each side of one undo entry. The undo manager
@@ -1373,7 +1421,7 @@ const runBatch = async (
   const startBags = new Map([...start.byId.values()].map(row => [row.id, bagOf(row)]))
   const waiversBefore = cloneWaivers(waivers)
   const writesBefore = await lastRowEvent()
-  const log: TxLog = {events: new Map(), childTouched: new Set(), dupRisk: new Set(), deletedOwners: new Set()}
+  const log: TxLog = {events: new Map(), childTouched: new Set(), childPairs: new Set(), dupRisk: new Set(), deletedOwners: new Set()}
   // Counted only once the tx commits: a rolled-back op reached no oracle.
   const outcomes: [string, boolean][] = []
   try {
@@ -1408,14 +1456,14 @@ const runBatch = async (
   for (const key of log.dupRisk) waivers.dup.add(key)
   // A cell write that reached the children converges its pair — it folds
   // duplicate field rows and rewrites the children from the cell — unless a
-  // child edit in the same tx could have handed the owner a row the write
+  // child edit in the same tx could have handed the pair a row the write
   // never saw (a marked row's bit is only stamped at the end of the tx).
   const converged = new Map<string, Set<string>>()
   for (const [ownerId, byName] of log.events) {
-    if (log.childTouched.has(ownerId)) continue
     const owner = end.byId.get(ownerId)
     if (owner === undefined || owner.deleted !== 0) continue
     for (const [name, evs] of byName) {
+      if (log.childPairs.has(pairKey(ownerId, lookups.resolveNameSchema(name)!.fieldId))) continue
       const eager = lastEagerWrite(evs) >= 0 && !orderBlind(evs)
       // A raw bag write reaches the children only through MATERIALIZE's net
       // diff, so it converges only when the tx's final cell moved.
@@ -1431,6 +1479,7 @@ const runBatch = async (
   }
   for (const key of reprojectedPairs(start, end)) waivers.proj.delete(key)
   for (const key of staleBitRevivalPairs(log, start, end)) waivers.proj.add(key)
+  pruneDupWaivers(end, waivers)
   // The undo manager records one entry per tx that wrote; mirror it before
   // the quiescence check, which writes nothing either way.
   if (mirror !== null && await lastRowEvent() > writesBefore) {
@@ -1482,6 +1531,7 @@ const runCase = async ({mode, txs}: {mode: Mode; txs: TxSpec[]}): Promise<void> 
       }
       case 'raw':
         if (await applyRawOp(spec.op, waivers)) bump(stats.raw, spec.op.op)
+        pruneDupWaivers(await readState(), waivers)
         await checkState(repo, waivers, new Map(), `${label} ${spec.op.op}`)
         break
     }
@@ -1510,6 +1560,9 @@ describe('properties-as-blocks dual representation under mixed writer sequences'
         guard.run(prngSeed, () => runCase({mode, txs}))),
       fuzzParams(30),
     )
+    // A time budget resolves fc.assert without awaiting the case in flight;
+    // its counters are not final until it settles.
+    await guard.barrier()
     // Non-vacuity (docs/fuzzing.md §8), over the sample the property just
     // ran: every op resolves against whatever rows exist when it runs, so a
     // generator drift that left, say, value-row edits nothing to target would
