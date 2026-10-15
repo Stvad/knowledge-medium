@@ -662,25 +662,39 @@ its first deep minutes:
     bag as untouched, so a key the same tx had written on it could be
     unset. Every revived row now goes through one rule
     (`materializeRevivedRow`), which splits written keys from untouched
-    ones by the row's tx-start state.
+    ones by the row's tx baseline: its tx-start state, with what a
+    settled processor wrote last read as current.
 - Folding a repeated list member into its survivor moved the folded
   row's own `::` field rows over wholesale. When the member carried
   properties of its own, the survivor ended up with two field rows for
   one property. The value-row fold now folds field rows the way the
   field-row fold already did, through one shared lookup.
-- Still open, each with a `KNOWN ISSUE (fuzz)` carve-out:
-  - #1210: the revival picks field rows by the `is_field_form` bit before
-    DERIVE re-stamps it. So a restore in the same tx as an edit that
-    un-marks a field row under the restored owner leaves a cell key with
-    no field row.
-  - #1211: deleting and restoring a block in ONE tx is no revival to
-    MATERIALIZE (its net change is live → live), while PROJECT sees its
-    field rows die. Every property is silently unset.
-- Also raised in review and filed, though the suite cannot see it (cell
-  and children agree afterwards): #1212. A peer's property delete whose
-  owner-cell update lost last-writer-wins leaves a stale cell. A later
-  local delete and restore then revives the peer's tombstones, or mints
-  from the stale cell.
+- Two more the suite found, fixed after it landed, with their carve-outs
+  removed. Both come from MATERIALIZE reading the tx's net change, so the
+  fix reads the tx's write log instead:
+  - #1211: deleting and restoring a block in ONE tx is no revival to a
+    net diff (live → live), while PROJECT saw its field rows die, so
+    every property was silently unset. MATERIALIZE now asks the write
+    log whether a row passed through a tombstone, and finds such an
+    owner through the dying field rows the event does carry.
+  - #1210: the revival picked field rows by the `is_field_form` bit
+    before DERIVE re-stamped it. So a restore in the same tx as an edit
+    that un-marks a row under the restored owner left a cell key with no
+    field row. The re-run pass now re-runs a revived owner's revival when
+    a row under it changed after MATERIALIZE first read it.
+  The suite's revival oracle now covers an owner deleted and restored
+  inside one tx as well.
+- A third, found while fixing those two and pinned by a deterministic
+  test: on the re-run pass, the revival diffed a row's bag against its
+  raw tx-start state, so PROJECT's settled unset of an unparseable key
+  read as the tx removing it, and the field row and value §9 keeps for
+  repair were tombstoned. The baseline now reads settled-last paths as
+  current, the same mask the re-run pass's `before` already applies.
+- Still open, raised in review and filed, though the suite cannot see it
+  (cell and children agree afterwards): #1212. A peer's property delete
+  whose owner-cell update lost last-writer-wins leaves a stale cell. A
+  later local delete and restore then revives the peer's tombstones, or
+  mints from the stale cell.
 
 The visible-children differential found one on its first smoke run
 (#1202, open): the outline SQL counts any `property-schema`-tagged block

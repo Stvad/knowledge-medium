@@ -49,6 +49,7 @@ import {
   memberCodecOf,
   type AnyPropertySchema,
   type BlockData,
+  type ChangedRow,
   type NewBlockData,
   type ResolvedPropertySchema,
   type SameTxCtx,
@@ -372,24 +373,20 @@ const changedPropertyNames = (
  *  left as it was found (cell junk, no children); the next write to it rejects.
  *
  *  The policy is per CALL, so a caller reconciling both kinds of name splits
- *  them across two calls — see `materializePropertiesForChangedRow`. */
+ *  them across two calls — see `materializeRevivedRow`. */
 export type UndecodableCellPolicy = 'reject' | 'skip'
 
-/** What the revival path knows about the tx it runs in. */
-export interface RevivalContext {
-  /** A row's state at TX START — `null` for a row this tx created,
-   *  `undefined` when this tx changed none of the watched fields, so its
-   *  current bag is its starting one. Every row the
-   *  revival restores is a revived row in its own right, and splitting its
-   *  names by who wrote them needs the bag it started the tx with. */
-  readonly txStartOf: (id: string) => BlockData | null | undefined
-}
+/** What the revival path knows about the tx it runs in. Every row the revival
+ *  restores is a revived row in its own right, and splitting its names by who
+ *  wrote them needs the bag this tx found it with. */
+export type RevivalContext = Pick<SameTxCtx, 'txBaselineOf' | 'parentLivenessWhenTombstoned'>
 
 export interface MaterializeOptions {
   /** See {@link UndecodableCellPolicy}. Default `'reject'`. */
   undecodable?: UndecodableCellPolicy
   /** Bring a name's TOMBSTONED field row back instead of minting a
-   *  replacement, when the owner has exactly one and no live one (#787) — and
+   *  replacement, when it is the one candidate and no live one exists (#787,
+   *  {@link revivalCandidates}) — and
    *  materialize every row that brings back as the revived row it is
    *  ({@link materializeRevivedRow}).
    *
@@ -422,7 +419,8 @@ export interface MaterializeOptions {
   additive?: boolean
 }
 
-/** Restore the tombstoned field row backing `fieldId`, together with its value
+/** Restore the one tombstoned field row among `candidates` (see
+ *  {@link revivalCandidates}), together with its value
  *  children — so a revived property keeps its row identity instead of being
  *  replaced by a fresh mint. Returns the ids it restored — none when nothing
  *  came back.
@@ -445,9 +443,9 @@ export interface MaterializeOptions {
  *  which is the stranding this helper exists to prevent.
  *
  *  ONE ambiguity rule, applied at both levels: revive only what is unambiguous.
- *  Several tombstones for one definition (an unset/re-set cycle before the
- *  owner was deleted), or several tombstoned values under one field row (a
- *  divergent conflict peer the user resolved by deleting it), are
+ *  Several tombstones for one definition from before this tx (an unset/re-set
+ *  cycle before the owner was deleted), or several tombstoned values under one
+ *  field row (a divergent conflict peer the user resolved by deleting it), are
  *  indistinguishable at revival time from rows the owner's own delete took
  *  down. Picking among them would need a rule that is deterministic across
  *  replicas AND right about which was live last; ordering gives the first, not
@@ -457,13 +455,11 @@ export interface MaterializeOptions {
  *  tombstones stay reachable under a live parent instead of resurrected. */
 const reviveTombstonedFieldRow = async (
   tx: Tx,
-  schema: AnyPropertySchema & {readonly fieldId: string},
-  tombstones: readonly BlockData[],
+  schema: AnyPropertySchema,
+  candidates: readonly BlockData[],
 ): Promise<string[]> => {
-  const fieldId = schema.fieldId
-  const matching = tombstones.filter(t => getPropertyFieldTargetId(t) === fieldId)
-  if (matching.length !== 1) return []
-  const fieldRow = matching[0]!
+  if (candidates.length !== 1) return []
+  const fieldRow = candidates[0]!
   // Bit-filtered per §9: a marked child is the field row's OWN machinery, never
   // one of its values.
   const isValue = (child: BlockData): boolean => child.isFieldForm !== true
@@ -495,6 +491,32 @@ const reviveTombstonedFieldRow = async (
   return [fieldRow.id, values[0]!.id]
 }
 
+/** Which of `fieldId`'s tombstoned field rows a revival may bring back, by
+ *  each one's provenance in the write log. One this tx took down under a
+ *  tombstoned owner went with the owner, so the property was still set when the
+ *  owner died: those are the candidates, and nothing older competes with them.
+ *  One taken down under a LIVE owner was deleted on its own and is never a
+ *  candidate. When that is the tx's only word on the property, it outranks the
+ *  tombstones from before the tx too, and `deletedOnItsOwn` says so. */
+const revivalCandidates = async (
+  tombstones: readonly BlockData[],
+  fieldId: string,
+  revive: RevivalContext,
+): Promise<{candidates: BlockData[]; deletedOnItsOwn: boolean}> => {
+  const withOwner: BlockData[] = []
+  const beforeTx: BlockData[] = []
+  let deletedOnItsOwn = false
+  for (const tombstone of tombstones) {
+    if (getPropertyFieldTargetId(tombstone) !== fieldId) continue
+    const owner = await revive.parentLivenessWhenTombstoned(tombstone.id)
+    if (owner === 'tombstoned') withOwner.push(tombstone)
+    else if (owner === 'live') deletedOnItsOwn = true
+    else beforeTx.push(tombstone)
+  }
+  if (withOwner.length > 0) return {candidates: withOwner, deletedOnItsOwn: false}
+  return {candidates: deletedOnItsOwn ? [] : beforeTx, deletedOnItsOwn}
+}
+
 /** Materialize a row coming back from a tombstone. Its whole bag, not the
  *  diff: a restore usually leaves the bag identical, so a diff-only rule would
  *  schedule nothing (#778).
@@ -518,10 +540,10 @@ const materializeRevivedRow = async (
   lookups: MaterializeLookups,
   revive: RevivalContext,
 ): Promise<void> => {
-  const txStart = revive.txStartOf(row.id)
+  const baseline = revive.txBaselineOf(row.id)
   // `null`: created in this tx, so its whole bag is this tx's writing.
-  // `undefined`: this tx changed none of its watched fields, so none of it is.
-  const startBag = txStart === undefined ? row.properties : txStart?.properties ?? {}
+  // `undefined`: this tx has not written the row, so none of it is.
+  const startBag = baseline === undefined ? row.properties : baseline?.properties ?? {}
   const written = changedPropertyNames(startBag, row.properties)
   const writtenNames = new Set(written)
   const untouched = Object.keys(row.properties).filter(name => !writtenNames.has(name))
@@ -612,7 +634,13 @@ export const materializePropertyChildrenForExistingRow = async (
     let fieldRows = matchingChildren
     if (opts.revive && fieldRows.length === 0) {
       tombstones ??= await tx.tombstonedPropertyFieldRows(row.workspaceId, row.id)
-      const revived = await reviveTombstonedFieldRow(tx, schema, tombstones)
+      const {candidates, deletedOnItsOwn} =
+        await revivalCandidates(tombstones, schema.fieldId, opts.revive)
+      // A field row the tx deleted under the live owner is the children's word,
+      // as an empty live field row is: an untouched name is left for PROJECT to
+      // unset. A written one has no candidate, so it mints a fresh row.
+      if (deletedOnItsOwn && opts.additive) continue
+      const revived = await reviveTombstonedFieldRow(tx, schema, candidates)
       if (revived.length > 0) {
         children = await tx.childrenOf(row.id, undefined)
         fieldRows = fieldRowsForSchema(children, schema.fieldId)
@@ -633,9 +661,9 @@ export const materializePropertyChildrenForExistingRow = async (
 }
 
 /**
- * Materialize one changed row. Normally that means the bag DIFF — but a row
- * coming back from a tombstone reconciles its WHOLE bag, because the trigger
- * there is LIVENESS, not the bag.
+ * Materialize the rows one pass changed. Normally that means each row's bag
+ * DIFF — but a row coming back from a tombstone reconciles its WHOLE bag,
+ * because the trigger there is LIVENESS, not the bag.
  *
  * A subtree delete tombstones the owner's field and value rows along with it
  * (§9 machinery traversal), and a revival — `tx.restore`, with or without a
@@ -644,29 +672,46 @@ export const materializePropertyChildrenForExistingRow = async (
  * value with no child-backed truth under it: post-flip the children ARE the
  * property, so every reader that has moved to them sees it as missing (#778).
  *
+ * "Coming back" is read off the tx's write log, never the event, and revived
+ * rows are looked for among the event's rows AND their parents. Two shapes
+ * need the parents:
+ *   - a row deleted and restored in this ONE tx is live → live net, so only
+ *     its dying field rows reach the event (#1211);
+ *   - a row this tx re-marked or moved under a revived owner carries the bit
+ *     its old content earned until DERIVE re-stamps it, so the first pass
+ *     reads it as the wrong field row. The re-run pass sees it again with the
+ *     fresh bit, and re-running the owner's revival is what heeds it (#1210).
+ *
  * Undo/redo replay does NOT come through here — `applyRaw` drives each row to
  * its recorded snapshot with the same-tx pass skipped. It needs no revival
  * rule: the children written below land in the reviving tx's own snapshots, so
  * replaying that tx replays them too.
  */
-const materializePropertiesForChangedRow = async (
+const materializeChangedRows = async (
   tx: Tx,
-  row: {before: BlockData | null; after: BlockData | null},
+  changedRows: readonly ChangedRow[],
   lookups: PropertyChildrenLookups,
-  revive: RevivalContext,
+  history: RevivalContext & Pick<SameTxCtx, 'tombstonedDuringTx'>,
 ): Promise<void> => {
-  if (row.after === null || row.after.deleted) return
-  const before = row.before
-  const changed = changedPropertyNames(before?.properties ?? {}, row.after.properties)
-  if (before === null || !before.deleted) {
+  const revived = new Set<string>()
+  for (const row of changedRows) {
+    for (const id of [row.id, row.after?.parentId]) {
+      if (id != null && history.tombstonedDuringTx(id)) revived.add(id)
+    }
+  }
+  for (const row of changedRows) {
+    if (row.after === null || row.after.deleted || revived.has(row.id)) continue
     // Materialize-everything (§9 flat recognition): field rows and value rows
     // grow their own `::` children like every other block — recognition
     // reclaims nested machinery at any depth, so the old interior/prospective
     // carve-outs are deleted.
-    await materializePropertyChildrenForExistingRow(tx, row.after, lookups, changed)
-    return
+    await materializePropertyChildrenForExistingRow(tx, row.after, lookups,
+      changedPropertyNames(row.before?.properties ?? {}, row.after.properties))
   }
-  await materializeRevivedRow(tx, row.after, lookups, revive)
+  for (const id of revived) {
+    const row = await tx.get(id)
+    if (row !== null && !row.deleted) await materializeRevivedRow(tx, row, lookups, history)
+  }
 }
 
 /** Why one cell value could not become children, in the one wording both
@@ -1056,13 +1101,19 @@ const survivorFieldRowFor = (
 const relocateChildren = async (tx: Tx, fromId: string, toId: string): Promise<void> => {
   const movable = await tx.childrenOf(fromId, undefined)
   if (movable.length === 0) return
-  const survivorChildren = await tx.childrenOf(toId, undefined)
+  // Grows with each row moved over, so a second field row for one property
+  // folds into the first instead of landing beside it.
+  const survivorChildren = [...await tx.childrenOf(toId, undefined)]
   const keys = keysBetween(survivorChildren.at(-1)?.orderKey ?? null, null, movable.length)
   for (let i = 0; i < movable.length; i++) {
     const child = movable[i]!
     const survivorOwn = survivorFieldRowFor(tx, survivorChildren, child)
-    if (survivorOwn) await collapseDuplicateFieldRow(tx, survivorOwn.id, child)
-    else await tx.move(child.id, {parentId: toId, orderKey: keys[i]!})
+    if (survivorOwn) {
+      await collapseDuplicateFieldRow(tx, survivorOwn.id, child)
+    } else {
+      await tx.move(child.id, {parentId: toId, orderKey: keys[i]!})
+      survivorChildren.push(child)
+    }
   }
 }
 
@@ -1162,10 +1213,11 @@ export const collapseDuplicateFieldRow = async (
 export const MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR = defineSameTxProcessor({
   name: MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR_NAME,
   // `deleted` alongside `properties` so a REVIVAL re-materializes even when the
-  // bag did not change (`materializePropertiesForChangedRow`) — the bag is what
+  // bag did not change (`materializeChangedRows`) — the bag is what
   // this direction reads, but liveness is what takes the children away. Same
   // reason `core.aliasClaimRederive` watches it. Rows going the other way match
-  // too and are dropped by the `after.deleted` guard.
+  // too: materializing nothing themselves, they lead to an owner deleted and
+  // restored in the same tx.
   watches: {kind: 'field', table: 'blocks', fields: ['properties', 'deleted']},
   // Issue #402: re-runs over rows dirtied after it ran, so (a) a plugin's
   // raw bag write (merge retarget) grows/updates its backing children in
@@ -1179,13 +1231,10 @@ export const MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR = defineSameTxProcessor({
     // Workspace flip gate (§6): one predicate, checked once — a tx pins a
     // single workspace, and un-flipped workspaces are fully dormant.
     if (!(await ctx.tx.isPropertyChildBackedWorkspace(event.workspaceId))) return
-    const lookups = lookupsFor(ctx, event.workspaceId)
-    // From the tx's write log, never this event: on the re-run pass the event
-    // holds only rows dirtied since the first, with a merged `before`.
-    const revive: RevivalContext = {txStartOf: id => ctx.txStartOf(id)}
-    for (const row of event.changedRows) {
-      await materializePropertiesForChangedRow(ctx.tx, row, lookups, revive)
-    }
+    // Revival reads the tx's write log through `ctx`, never this event: on the
+    // re-run pass the event holds only rows dirtied since the first, with a
+    // merged `before`.
+    await materializeChangedRows(ctx.tx, event.changedRows, lookupsFor(ctx, event.workspaceId), ctx)
   },
 })
 
