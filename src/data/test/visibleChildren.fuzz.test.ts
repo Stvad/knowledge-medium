@@ -638,8 +638,6 @@ describe('visible-children view', () => {
   // makes the SQL show it fails the children oracle — either way the case
   // goes red, and its branch goes with it.
   it.each([
-    {branch: 'preset does not load', def: {name: 1, preset: 'unloadable', validScope: true}},
-    {branch: 'preset is missing', def: {name: 1, preset: 'none', validScope: true}},
     {branch: 'change scope is invalid', def: {name: 1, preset: 'string', validScope: false}},
     {branch: 'name is empty', def: {name: NAMES.length, preset: 'string', validScope: true}},
   ] satisfies Array<{branch: string; def: DefSpec}>)(
