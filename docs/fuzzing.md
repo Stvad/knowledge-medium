@@ -250,6 +250,19 @@ one.
   every call site's actual LIKE/ESCAPE fragment, run against a live
   connection, matches a case-folded JS containment check for arbitrary
   needle/haystack pairs biased toward `%`/`_`/`\`/case-invariant unicode.
+- `src/data/test/visibleChildren.fuzz.test.ts` — the outline's
+  visible-children view (the §9 field-row hiding), stateful: random tx,
+  peer-sync (staged into `blocks_synced`, materialized by the observer)
+  and undo/redo ops over trees with field rows at every depth, unknown
+  and foreign field ids, seed ids, unmarked look-alikes and churning
+  definitions. Both views read the same stamped columns and split only
+  on "does the target name a definition", so the oracles are: the stamped
+  `is_field_form`/`reference_target_id` equal a fresh derive (the shared
+  input, which no SQL-vs-JS differential can see), `VISIBLE_CHILDREN_SQL`
+  equals `visibleChildrenOf` for every live block, and
+  `VISIBLE_SUBTREE_SQL` equals a walk over those lists. The one excused
+  divergence is #1202 (below), for bags the generator made unbuildable,
+  with a tripwire per clause that fails once it is fixed.
 - `src/data/propertyDefinitionRename.fuzz.test.ts` — N-way definition
   renames through `core.migratePropertyDefinition`: swaps and longer
   cycles across codecs, renames onto fresh names, a seed's name and a
@@ -575,6 +588,24 @@ restore half of the release-reclaim residual (issue #706, seed
   rewriting content, so the deferred decision stays deferred); the drop
   is itself the write that schedules the referrer's rebind.
 
+The visible-children differential found one on its first smoke run
+(#1202, open): the outline SQL counts any `property-schema`-tagged block
+as a definition, while the tx layer's checker needs the registry to have
+parsed its metadata and, for a name winner, built its schema. So a
+definition whose preset does not load (synced from a peer with the
+plugin, or the plugin uninstalled) or whose change scope is invalid
+hides its field rows on screen while gestures resolve against them.
+Filed rather than fixed: the fix that makes the class impossible binds
+the registry's classified set into the SQL, which is a design call. The
+suite keeps generating those shapes and excuses exactly that divergence.
+A first version stopped generating them instead (review caught it), which
+loses every OTHER check in states holding a broken definition. Which
+definitions are excused is decided by the generator's own model of the
+bags it made unbuildable, read off the row. Asking the parse/build under
+test would excuse a regression that rejects a valid definition, and asking
+the projector's published state would excuse a projector that lags; planted
+versions of both are caught.
+
 The definition-rename fuzzer (roadmap #430's N-way same-tx renames)
 found one product bug in its first minute (fixed + pinned):
 
@@ -602,7 +633,8 @@ Its harness carries one lesson for any suite that builds a Repo per
 case: every case runs inside ONE test, so the per-test Repo release
 never fires between them. The previous case's sync observer drained the
 next case's `blocks_synced` rows into handles nobody read, and the
-registry never saw the delivery — release each case's Repo yourself.
+registry never saw the delivery — release each case's Repo yourself
+(`releaseTestRepos`, rule 11 under "Adding a suite").
 
 ## Adding a suite
 
@@ -664,3 +696,12 @@ registry never saw the delivery — release each case's Repo yourself.
    read `command_events` in rowid order: it is the order the database
    committed in, and a rolled-back transaction leaves no row
    (`undoInterleaving.fuzz.test.ts`).
+10. Before writing a differential, list what the two sides SHARE. Two
+    implementations reading one stamped column agree on every corruption
+    of that column, so the differential is silent about it — give the
+    shared input an oracle of its own (`visibleChildren.fuzz`).
+11. A property that builds a Repo per CASE (one test, many Repos on one
+    db) must release each with `releaseTestRepos` from
+    `@/data/test/testRepoScope`; the automatic release runs only when the
+    test ends, so until then every earlier case's Repo keeps its sync
+    observer and projectors subscribed to the shared db.
