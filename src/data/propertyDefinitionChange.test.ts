@@ -57,6 +57,7 @@ import type { Repo } from './repo'
 
 const WS = 'ws-def-change'
 const FIELD_ID = 'field-status-change'
+const FIELD_OLDER = 'field-older-peer'
 
 let sharedDb: TestDb
 beforeAll(async () => { sharedDb = await createTestDb() })
@@ -1227,6 +1228,32 @@ describe('a workspace this client cannot judge', () => {
     expect(await cell('p')).toEqual({status: 'done'})
     expect(errors.map(e => e.code)).toEqual(['property.definition-change.unjudgeable'])
   })
+
+  it('refuses a RESTORE there too: whether its name was taken since is unknowable', async () => {
+    // The shape the shared-name refusal exists for — a used `status` that took
+    // the name while the older definition was deleted — but judged with no
+    // registry, so it cannot be seen.
+    await seedWorkspace('children')
+    await seedWorkspace('children', 'ws-elsewhere')
+    const repo = makeRepo()
+    await createDefinition(repo, FIELD_OLDER, 'status', 'number')
+    await awaitDefinition(repo, 'status', 'number')
+    await repo.tx(tx => tx.delete(FIELD_OLDER), {scope: ChangeScope.BlockDefault})
+    await createDefinition(repo, FIELD_ID, 'status', 'string')
+    await awaitDefinition(repo, 'status', 'string')
+    await seedProperty(repo, 'p', 'status', 'done')
+
+    repo.setActiveWorkspaceId('ws-elsewhere')
+    await vi.waitFor(() => {
+      if (repo.propertyDefinitions?.workspaceId === WS) {
+        throw new Error('[test] the registry has not moved off the definition\'s workspace')
+      }
+    }, {timeout: 3000})
+    await expect(repo.tx(tx => tx.restore(FIELD_OLDER), {scope: ChangeScope.BlockDefault}))
+      .rejects.toMatchObject({code: 'property.definition-change.unjudgeable'})
+
+    expect(await isLive(FIELD_OLDER)).toBe(false)
+  })
 })
 
 describe('claimants the batch itself adds or removes', () => {
@@ -1422,6 +1449,63 @@ describe('claimants the batch itself adds or removes', () => {
     }, {scope: ChangeScope.BlockDefault})
 
     expect(await cell('p')).toEqual({retired: 'done'})
+  })
+
+  /** An older `count` definition with no consumers, and a newer `status` that
+   *  has one. The registry ranks claimants of one name oldest first, so the
+   *  older definition arriving at `status` would become the one every `status`
+   *  cell is read and written through. */
+  const setupOlderUnusedPeer = async (): Promise<Repo> => {
+    await seedWorkspace('children')
+    const repo = makeRepo()
+    await createDefinition(repo, FIELD_PEER, 'count', 'number')
+    await awaitDefinition(repo, 'count', 'number')
+    await createDefinition(repo, FIELD_ID, 'status', 'string')
+    await awaitDefinition(repo, 'status', 'string')
+    await seedProperty(repo, 'p', 'status', 'done')
+    return repo
+  }
+
+  it('refuses renaming an UNUSED definition onto a name a used one holds', async () => {
+    const repo = await setupOlderUnusedPeer()
+
+    await expect(rename(repo, FIELD_PEER, 'status')).rejects.toMatchObject({
+      code: 'property.definition-change.shared-name',
+    })
+
+    expect((await cell(FIELD_PEER))[propertyNameProp.name]).toBe('count')
+    expect(await cell('p')).toEqual({status: 'done'})
+  })
+
+  it('refuses restoring a definition under a name a used one has taken since', async () => {
+    await seedWorkspace('children')
+    const repo = makeRepo()
+    await createDefinition(repo, FIELD_PEER, 'status', 'number')
+    await awaitDefinition(repo, 'status', 'number')
+    await repo.tx(tx => tx.delete(FIELD_PEER), {scope: ChangeScope.BlockDefault})
+    await createDefinition(repo, FIELD_ID, 'status', 'string')
+    await awaitDefinition(repo, 'status', 'string')
+    await seedProperty(repo, 'p', 'status', 'done')
+
+    await expect(repo.tx(tx => tx.restore(FIELD_PEER), {scope: ChangeScope.BlockDefault}))
+      .rejects.toMatchObject({code: 'property.definition-change.shared-name'})
+
+    expect(await isLive(FIELD_PEER)).toBe(false)
+    expect(await cell('p')).toEqual({status: 'done'})
+  })
+
+  it('still lets an unused definition share a name only unused definitions hold', async () => {
+    // No consumer on either side, so no cell is read through the wrong codec.
+    await seedWorkspace('children')
+    const repo = makeRepo()
+    await createDefinition(repo, FIELD_PEER, 'count', 'number')
+    await createDefinition(repo, FIELD_ID, 'status', 'string')
+    await awaitDefinition(repo, 'count', 'number')
+    await awaitDefinition(repo, 'status', 'string')
+
+    await rename(repo, FIELD_PEER, 'status')
+
+    expect((await cell(FIELD_PEER))[propertyNameProp.name]).toBe('status')
   })
 })
 
@@ -2020,6 +2104,47 @@ describe('while the cell-to-children backfill holds this workspace\'s claim', ()
     // parent, which is why the refusal must not consult it.
     expect(await consumingParentIds(sharedDb.db, WS, [FIELD_ID])).toEqual([])
     expect(await cell('cell-only')).toEqual({status: 'pending'})
+  })
+
+  /** An older `status` deleted, a newer `status` whose only consumer the
+   *  backfill has not reached. */
+  const setupDeletedOlderPeer = async (): Promise<Repo> => {
+    await seedWorkspace('children')
+    const repo = makeRepo()
+    await createDefinition(repo, FIELD_OLDER, 'status', 'number')
+    await awaitDefinition(repo, 'status', 'number')
+    await repo.tx(tx => tx.delete(FIELD_OLDER), {scope: ChangeScope.BlockDefault})
+    await createDefinition(repo, FIELD_ID, 'status', 'string')
+    await awaitDefinition(repo, 'status', 'string')
+    await seedCellOnlyProperty(repo, 'cell-only', 'status', 'pending')
+    await seedBackfillClaim()
+    return repo
+  }
+
+  it('refuses a RESTORE that would share a name with a cell-only definition', async () => {
+    // A plain revival is no rename or re-type, and the incumbent's consumer has
+    // no field row for the shared-name refusal to count — so neither check
+    // would see the older definition about to take that consumer over.
+    const repo = await setupDeletedOlderPeer()
+
+    await expect(repo.tx(tx => tx.restore(FIELD_OLDER), {scope: ChangeScope.BlockDefault}))
+      .rejects.toMatchObject({code: 'property.definition-change.migration-running'})
+
+    expect(await isLive(FIELD_OLDER)).toBe(false)
+  })
+
+  it('still lets a restore through under a name nobody else holds', async () => {
+    const repo = await setupDeletedOlderPeer()
+    await repo.tx(tx => tx.delete(FIELD_ID), {scope: ChangeScope.BlockDefault})
+    await vi.waitFor(() => {
+      if (repo.propertySchemas.get('status') !== undefined) {
+        throw new Error('[test] status is still published')
+      }
+    }, {timeout: 3000})
+
+    await repo.tx(tx => tx.restore(FIELD_OLDER), {scope: ChangeScope.BlockDefault})
+
+    expect(await isLive(FIELD_OLDER)).toBe(true)
   })
 
   it('names the MIGRATION, not the broken type, when the re-type is also unbuildable', async () => {

@@ -272,8 +272,9 @@ const REFUSALS: Record<RefusalReason, {code: string; message: string}> = {
   },
 }
 
-/** Refusing every definition rename and re-type for as long as the
- *  cell-to-children backfill holds this workspace's claim (#1029).
+/** Refusing every definition rename and re-type, and every rename or revival
+ *  that leaves a name shared, for as long as the cell-to-children backfill
+ *  holds this workspace's claim (#1029).
  *
  *  The recovery half is {@link STRANDED_CLAIM_RECOVERY}, shared with the pass's
  *  own report of a claim held elsewhere, so an operator who meets both does not
@@ -294,9 +295,24 @@ const MIGRATION_RUNNING_REFUSAL = {
   code: 'property.definition-change.migration-running',
   message:
     'The properties migration is running on this workspace, so a property '
-    + 'definition cannot be renamed or given a different type yet: blocks it has '
-    + 'not reached still hold this property under its current name, and it would '
-    + `never convert them. Wait for it to finish — ${STRANDED_CLAIM_RECOVERY}.`,
+    + 'definition cannot be renamed, given a different type, or restored under a '
+    + 'name another definition holds yet: blocks it has not reached still hold '
+    + 'this property under its current name, and it would never convert them. '
+    + `Wait for it to finish — ${STRANDED_CLAIM_RECOVERY}.`,
+} as const
+
+/** Refusing to let a renamed or revived definition answer to a name another
+ *  definition holds while either of them has consumers. Two claimants are a
+ *  state the registry models — it publishes the OLDER one — but entering it
+ *  here would hand the newer definition's consumers to the older: their cells
+ *  read through its codec, and the next write by name grows a field row for
+ *  it beside theirs. Two unused definitions may still share a name. */
+const SHARED_NAME_REFUSAL = {
+  code: 'property.definition-change.shared-name',
+  message:
+    'cannot give a property definition a name another definition already '
+    + 'answers to while blocks use either of them: the blocks would be read '
+    + 'through whichever definition is older. Rename or delete one of them first.',
 } as const
 
 type CollectedChanges =
@@ -309,6 +325,13 @@ type CollectedChanges =
        *  not be reading them with, so the caller refuses the transaction once
        *  any of them has a consumer. */
       readonly unfanoutable: ReadonlyArray<{fieldId: string; reason: RefusalReason}>
+      /** Every claimant of a name that an EXISTING definition arrives at — by
+       *  rename or revival — and that more than one definition will hold once
+       *  the tx commits. The registry ranks claimants oldest first, so the
+       *  arrival can become the definition the incumbent's consumers are read
+       *  and written through; the caller refuses once any of them has a
+       *  consumer. */
+      readonly sharedNameClaimants: readonly string[]
     }
 
 interface DefinitionChange {
@@ -427,9 +450,6 @@ const collectChanges = (
       encodingChanged,
     })
   }
-  if (candidates.length === 0 && unfanoutable.length === 0) {
-    return {changes: [], unfanoutable}
-  }
   // ONE derivation of what this tx does to names, read off the ROWS: every
   // definition it touches either keeps the name the tx-start registry files it
   // under, or LEAVES it — by being deleted, renamed, or stripped of the
@@ -441,6 +461,13 @@ const collectChanges = (
   // which is the state the refusal has to be judged against.
   const released = new Set<string>()
   const arrivingByName = new Map<string, string[]>()
+  /** Names an EXISTING user definition arrives at. A CREATED row is its
+   *  writer's to police: `addSchema` refuses a claimed name, and seed
+   *  materialization arrives where its own seed already claims. A seed row is
+   *  skipped for that reason too — its declaration claims the name while the
+   *  row is down, so a revival joins nobody. Defence in depth: no local edit
+   *  puts a user definition on a seed's name. */
+  const reclaimedNames = new Set<string>()
   for (const {before, after} of changedRows) {
     const beforeMeta = before !== null && !before.deleted
       ? parsePropertyDefinitionMetadata(before)
@@ -457,14 +484,17 @@ const collectChanges = (
       const arriving = arrivingByName.get(afterMeta.name) ?? []
       arriving.push(after!.id)
       arrivingByName.set(afterMeta.name, arriving)
+      if (before !== null && afterMeta.seedKey === undefined) reclaimedNames.add(afterMeta.name)
     }
   }
-  if (ctx.propertyDefinitionsClaimingName(workspaceId, probeName!) === null) {
+  // An arrival is judged against names too, so a revival needs the registry
+  // as much as a change does.
+  for (const name of reclaimedNames) probeName ??= name
+  if (probeName === null) return {changes: [], unfanoutable, sharedNameClaimants: []}
+  if (ctx.propertyDefinitionsClaimingName(workspaceId, probeName) === null) {
     return 'unjudgeable'
   }
-  // Pass 2: hold every change whose destination or vacated name another
-  // definition also claims — see `contestedChanges` for the two halves.
-  const contested = contestedChanges(candidates, (name) => {
+  const claimOf = (name: string): NameClaim | null => {
     const atTxStart = ctx.propertyDefinitionsClaimingName(workspaceId, name)
     return atTxStart === null
       ? null
@@ -472,7 +502,20 @@ const collectChanges = (
         holding: atTxStart.filter(fieldId => !released.has(fieldId)),
         arriving: arrivingByName.get(name) ?? [],
       }
-  })
+  }
+  const sharedNameClaimants = new Set<string>()
+  for (const name of reclaimedNames) {
+    // Past the probe: the registry is per workspace, so every name has a claim.
+    const claim = claimOf(name)!
+    const claimants = new Set([...claim.holding, ...claim.arriving])
+    if (claimants.size > 1) for (const fieldId of claimants) sharedNameClaimants.add(fieldId)
+  }
+  if (candidates.length === 0 && unfanoutable.length === 0) {
+    return {changes: [], unfanoutable, sharedNameClaimants: [...sharedNameClaimants]}
+  }
+  // Pass 2: hold every change whose destination or vacated name another
+  // definition also claims — see `contestedChanges` for the two halves.
+  const contested = contestedChanges(candidates, claimOf)
   for (const candidate of contested) {
     unfanoutable.push({fieldId: candidate.fieldId, reason: 'contested'})
   }
@@ -485,6 +528,7 @@ const collectChanges = (
   return {
     changes: candidates.filter(candidate => !refused.has(candidate.fieldId)),
     unfanoutable,
+    sharedNameClaimants: [...sharedNameClaimants],
   }
 }
 
@@ -795,7 +839,7 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
         {workspaceId: event.workspaceId},
       )
     }
-    const {changes, unfanoutable} = collected
+    const {changes, unfanoutable, sharedNameClaimants} = collected
     // ABOVE the refusal below and above the two dormancy returns under it: every
     // one of those consults `consumingParentIds`, which sees FIELD ROWS, and the
     // hazard here is a consumer that has none. The runbook flips before
@@ -813,20 +857,28 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
     // `json_each` scan over the workspace's bags inside the user's own editing
     // transaction (#1029).
     //
-    // These two lists PARTITION the renames and re-types this tx makes — every
-    // candidate ends in exactly one of them — so together they answer "does
-    // this transaction change a definition at all", which is the question here.
-    // Reading them is sound only while that holds: a change dropped into
-    // NEITHER would commit its new name with its consumers unreached and this
-    // gate would not even look. #1028 made the contested ones held rather than
-    // dropped, which closed the last such path.
+    // The first two lists PARTITION the renames and re-types this tx makes —
+    // every candidate ends in exactly one of them — and the third is non-empty
+    // exactly when an arrival leaves a name with a second claimant, which is
+    // the shared-name refusal's question and needs field rows as much. So
+    // together they answer "does this transaction change what a name resolves
+    // to", which is the question here. Reading them is sound only while that
+    // holds: a change dropped into NONE would commit with its consumers
+    // unreached and this gate would not even look. #1028 made the contested
+    // ones held rather than dropped, which closed the last such path.
     //
-    // What the gate keeps out is the writes that are not a rename or a re-type
-    // at all — a CREATE has no before row, and neither an unrelated bag edit
-    // nor the materializer's own field-row bookkeeping survives
-    // `collectChanges`. That is what lets the migration gesture mint its orphan
-    // definitions while holding its own claim.
-    if (changes.length > 0 || unfanoutable.length > 0) {
+    // What the gate keeps out is the writes that change no name's meaning — a
+    // CREATE has no before row, a revival onto a free name hands its consumers
+    // to nobody else, and neither an unrelated bag edit nor the materializer's
+    // own field-row bookkeeping survives `collectChanges`. That is what lets
+    // the migration gesture mint its orphan definitions while holding its own
+    // claim.
+    const touched = [
+      ...changes.map(change => change.fieldId),
+      ...unfanoutable.map(held => held.fieldId),
+      ...sharedNameClaimants,
+    ]
+    if (touched.length > 0) {
       // The TRANSACTION's own view, like every other read here. The claim is
       // synced data, so a peer device holding the row refuses too.
       if (await isGraphBackfillClaimActive(
@@ -834,18 +886,15 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
       )) {
         throw new ProcessorRejection(
           MIGRATION_RUNNING_REFUSAL.message, MIGRATION_RUNNING_REFUSAL.code,
-          {
-            workspaceId: event.workspaceId,
-            fieldIds: [...changes.map(change => change.fieldId),
-                       ...unfanoutable.map(held => held.fieldId)],
-          },
+          {workspaceId: event.workspaceId, fieldIds: touched},
         )
       }
     }
     if (unfanoutable.length > 0) {
-      // Only a change with CONSUMERS strands anything; one on an unused
-      // definition is the user's to make, and telling them to fix something
-      // first would be friction for nothing.
+      // Only a change with CONSUMERS strands anything of its own; one on an
+      // unused definition is the user's to make, and telling them to fix
+      // something first would be friction for nothing. The consumers of a
+      // definition it would SHARE a name with are the next check's.
       const stranded = await consumingParentIds(
         ctx.db, event.workspaceId, unfanoutable.map(held => held.fieldId),
       )
@@ -856,6 +905,14 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
           message, code, {fieldIds: unfanoutable.map(held => held.fieldId)},
         )
       }
+    }
+    if (sharedNameClaimants.length > 0 && (await consumingParentIds(
+      ctx.db, event.workspaceId, sharedNameClaimants,
+    )).length > 0) {
+      throw new ProcessorRejection(
+        SHARED_NAME_REFUSAL.message, SHARED_NAME_REFUSAL.code,
+        {fieldIds: sharedNameClaimants},
+      )
     }
     if (changes.length === 0) return
     const parentIds = await consumingParentIds(

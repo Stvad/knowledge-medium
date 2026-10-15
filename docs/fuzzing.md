@@ -250,6 +250,24 @@ one.
   `VISIBLE_SUBTREE_SQL` equals a walk over those lists. The one excused
   divergence is #1202 (below), for bags the generator made unbuildable,
   with a tripwire per clause that fails once it is fixed.
+- `src/data/propertyDefinitionRename.fuzz.test.ts` — N-way definition
+  renames through `core.migratePropertyDefinition`: swaps and longer
+  cycles across codecs, renames onto fresh names, a seed's name and a
+  tombstoned definition's old name, mixed with deletes and revivals in
+  the same batch; delivered as one tx, split across consecutive txs, or
+  as the initiator's rows arriving through `blocks_synced`. Consumers
+  come from every write route (`setProperty`, a raw cell write, hand-built
+  field rows) on plain, nested and definition-block hosts, beside
+  cell-only keys, sync-shaped duplicate field rows and a tombstoned
+  consumer. Oracles = an independent refusal model; conservation (only
+  the edited definition rows and consumers' cells change — old keys
+  dropped, each new key the projection of its field rows, every other
+  key untouched); a value model across steps; sole name ownership in the
+  rebuilt registry; exact undo/redo; a reference route moving one
+  definition per tx through temporary names; re-running the processor
+  writes nothing; and sync convergence. Two fixed canaries (a 3-cycle, a
+  sync-delivered swap) run in every tier, because a planted
+  non-swap-safe re-key slipped past the first smoke sample.
 
 ## Found so far
 
@@ -552,6 +570,35 @@ bags it made unbuildable, read off the row. Asking the parse/build under
 test would excuse a regression that rejects a valid definition, and asking
 the projector's published state would excuse a projector that lags; planted
 versions of both are caught.
+
+The definition-rename fuzzer (roadmap #430's N-way same-tx renames)
+found one product bug in its first minute (fixed + pinned):
+
+- Renaming an UNUSED definition onto a name a used one holds committed:
+  the contested refusal fired only when the renamed definition had
+  consumers of its own. The registry ranks one name's claimants oldest
+  first, so an older definition arriving that way took over every
+  consumer of the incumbent — their cells read through its codec (a
+  string value under a number codec throws), and the next write by name
+  grew a field row for the newcomer beside the incumbent's. Restoring a
+  definition under a name a used one had taken since did the same with
+  no rename at all. Both now refuse as
+  `property.definition-change.shared-name` while either side has
+  consumers; two unused definitions may still share a name.
+
+Its second deep run found one more, filed rather than fixed here since
+it sits in the dual-write path, not the rename (#1209): `setProperty`
+writing the value a deleted definition's stale cell already holds under
+that name is short-circuited as a no-op, so the definition now answering
+to the name never gets a field row and its value does not follow a later
+rename. The value model carries a `KNOWN ISSUE (fuzz)` carve-out for
+exactly that case.
+
+Its harness carries one lesson for any suite that builds a Repo per
+case: every case runs inside ONE test, so the per-test Repo release
+never fires between them. The previous case's sync observer drained the
+next case's `blocks_synced` rows into handles nobody read, and the
+registry never saw the delivery — release each case's Repo yourself.
 
 ## Adding a suite
 
