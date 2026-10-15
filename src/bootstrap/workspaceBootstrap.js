@@ -1,1 +1,1 @@
-import{c as e}from"../../chunks/app-DTeTdHBC.js";export{e as bootstrapWorkspace};
+import{c as e}from"../../chunks/app-cZMr1QxY.js";export{e as bootstrapWorkspace};
