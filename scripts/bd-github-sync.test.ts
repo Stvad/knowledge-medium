@@ -1389,10 +1389,12 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     failCloseId?: string
     /** Beads bd's close policy refuses to close without --force (an open child or blocker). */
     blockedCloseIds?: string[]
-    /** What `gh issue list` serves from its second call on — the state after the pre-pull push. */
+    /** What the issue listing serves once a push has run — the state after the pre-pull push. */
     issuesAfterPush?: object[]
-    /** Fail `gh issue list` from its second call on. */
+    /** Fail every issue-listing read once a push has run. */
     failListAfterPush?: boolean
+    /** A GraphQL error every issue-listing chunk carries, nulling its first alias. */
+    listingError?: object
     failFullSync?: boolean
     failPushCall?: number
     failReadCall?: number
@@ -1403,7 +1405,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     failPostCall?: number
     /** Seconds each `gh api graphql` call takes, so overlapping calls show in `graphqlPeak`. */
     graphqlDelay?: number
-    /** Seconds the issue listing takes. */
+    /** Seconds each issue-listing read takes, so overlapping reads show in `listingPeak`. */
     issueListDelay?: number
     /** `gh auth token` prints nothing, as on a machine that is logged out. */
     noGhToken?: boolean
@@ -1423,6 +1425,41 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     writeFileSync(shimLog, '')
     writeFileSync(join(repo, 'gh-issues.json'), JSON.stringify(opts.issues))
     if (opts.issuesAfterPush) writeFileSync(join(repo, 'gh-issues-after.json'), JSON.stringify(opts.issuesAfterPush))
+    // Answers the listing's GraphQL reads from the issue fixtures, as GitHub
+    // does: the newest number, or each aliased number as an issue or as null
+    // with a NOT_FOUND error (and gh's exit 1).
+    writeFileSync(
+      join(repo, 'gh-listing.mjs'),
+      [
+        "import { existsSync, readFileSync } from 'node:fs'",
+        `const repo = ${JSON.stringify(repo)}`,
+        "const query = process.argv.slice(2).find(a => a.startsWith('query=')).slice('query='.length)",
+        "const pushed = existsSync(repo + '/push-count')",
+        ...(opts.failListAfterPush ? ["if (pushed) { console.error('HTTP 502: Bad Gateway'); process.exit(1) }"] : []),
+        "const after = pushed && existsSync(repo + '/gh-issues-after.json')",
+        "const issues = JSON.parse(readFileSync(repo + (after ? '/gh-issues-after.json' : '/gh-issues.json'), 'utf8'))",
+        'const byNumber = new Map(issues.map(i => [i.number, i]))',
+        'let response',
+        "if (query.includes('orderBy:')) {",
+        '  const newest = Math.max(0, ...issues.map(i => i.number))',
+        '  response = { data: { repository: { issues: { nodes: newest ? [{ number: newest }] : [] } } } }',
+        '} else {',
+        '  const repository = {}',
+        '  const errors = []',
+        '  for (const [, n] of query.matchAll(/i(\\d+): issue\\(number:/g)) {',
+        '    const i = byNumber.get(Number(n))',
+        '    repository[`i${n}`] = i ? { ...i, labels: { nodes: i.labels ?? [] }, assignees: { nodes: i.assignees ?? [] } } : null',
+        "    if (!i) errors.push({ type: 'NOT_FOUND', path: ['repository', `i${n}`] })",
+        '  }',
+        ...(opts.listingError
+          ? [`  const first = Object.keys(repository)[0]; repository[first] = null; errors.push(${JSON.stringify(opts.listingError)})`]
+          : []),
+        '  response = { data: { repository }, ...(errors.length && { errors }) }',
+        '}',
+        'console.log(JSON.stringify(response))',
+        "process.exit(response.errors ? 1 : 0)",
+      ].join('\n') + '\n',
+    )
     const serialize = (rows: object[]) =>
       rows.map(r => JSON.stringify({ _type: 'issue', ...r, comments: opts.comments?.[(r as { id: string }).id] ?? [] })).join('\n') + '\n'
     opts.reads.forEach((rows, i) => writeFileSync(join(repo, `export-${i + 1}.jsonl`), serialize(rows)))
@@ -1465,18 +1502,26 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
       join(shimDir, 'gh'),
       [
         '#!/bin/sh',
-        `echo "gh $@" >> "${shimLog}"`,
+        // A listing read is logged by its kind: a chunk's query runs to ~14KB,
+        // and concurrent appends that long interleave in the log.
+        'case "$*" in',
+        `  *"number state updatedAt"*) echo "gh api graphql listing" >> "${shimLog}";;`,
+        `  *"orderBy:"*) echo "gh api graphql newest" >> "${shimLog}";;`,
+        `  *) echo "gh $@" >> "${shimLog}";;`,
+        'esac',
         'case "$1 $2" in',
         `  "auth token") ${opts.noGhToken ? 'true' : 'echo shim-token'};;`,
-        '  "issue list")',
-        `    n=$(cat "${repo}/gh-list-count" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "${repo}/gh-list-count"`,
-        ...(opts.issueListDelay ? [`    sleep ${opts.issueListDelay}`] : []),
-        ...(opts.failListAfterPush ? ['    if [ "$n" -gt 1 ]; then echo "HTTP 502: Bad Gateway" >&2; exit 1; fi'] : []),
-        `    if [ "$n" -gt 1 ] && [ -f "${repo}/gh-issues-after.json" ]; then cat "${repo}/gh-issues-after.json"; else cat "${repo}/gh-issues.json"; fi;;`,
         // The real gh exits 1 when any alias is NOT_FOUND but still prints
         // the data — the shim mirrors that exit so the parser is pinned to
         // stdout, not the status.
         '  "api graphql")',
+        '    case "$*" in *"number state updatedAt"*|*"orderBy:"*)',
+        ...(opts.issueListDelay
+          ? [`      echo + >> "${repo}/listing-flight.log"; sleep ${opts.issueListDelay}; echo - >> "${repo}/listing-flight.log"`]
+          : []),
+        `      exec node "${repo}/gh-listing.mjs" "$@";;`,
+        '    esac',
+        `    echo read >> "${repo}/comment-reads.log"`,
         ...(opts.graphqlDelay
           ? [`    echo + >> "${repo}/graphql-flight.log"; sleep ${opts.graphqlDelay}; echo - >> "${repo}/graphql-flight.log"`]
           : []),
@@ -1506,18 +1551,32 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
       const log = join(repo, SYNC_RUN_LOG)
       return existsSync(log) ? (foldRunLog(readFileSync(log, 'utf8')) as ReturnType<typeof JSON.parse>[]) : []
     }
-    // Most GraphQL calls ever in flight at once, from the delay log.
-    const graphqlPeak = () => {
+    // Most calls ever in flight at once, from a delay log.
+    const peakOf = (log: string) => () => {
       let inFlight = 0
       let peak = 0
-      for (const mark of readFileSync(join(repo, 'graphql-flight.log'), 'utf8').split('\n'))
+      for (const mark of readFileSync(join(repo, log), 'utf8').split('\n'))
         if (mark === '+') peak = Math.max(peak, ++inFlight)
         else if (mark === '-') inFlight--
       return peak
     }
+    const shimCalls = () => readFileSync(shimLog, 'utf8')
+    // GraphQL reads of issue comments — the listing's reads are GraphQL too.
+    const commentReads = () => (existsSync(join(repo, 'comment-reads.log')) ? readFileSync(join(repo, 'comment-reads.log'), 'utf8').split('\n').filter(Boolean).length : 0)
     // Each bd command's verb with the BD_DOLT_AUTO_PUSH it ran under.
     const bdAutoPush = () => readFileSync(join(repo, 'bd-env.log'), 'utf8').trim().split('\n')
-    return { repo, run, runInBackground, runLog, graphqlPeak, bdAutoPush, shimCalls: () => readFileSync(shimLog, 'utf8'), posted: () => readFileSync(postedLog, 'utf8') }
+    return {
+      repo,
+      run,
+      runInBackground,
+      runLog,
+      graphqlPeak: peakOf('graphql-flight.log'),
+      listingPeak: peakOf('listing-flight.log'),
+      commentReads,
+      bdAutoPush,
+      shimCalls,
+      posted: () => readFileSync(postedLog, 'utf8'),
+    }
   }
 
   // Paired with syncRow to be CONVERGED: same title, body, priority and type,
@@ -1700,7 +1759,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(r.stdout).toMatch(/^bd-github-sync: slow run — [\d.]+s against a 0s budget; slowest: /m)
     const [entry] = runLog()
     expect(entry).toMatchObject({ ok: true, budgetMs: 1 })
-    expect(entry.spawns.map((s: { cmd: string }) => s.cmd)).toEqual(expect.arrayContaining(['gh issue list', 'bd export']))
+    expect(entry.spawns.map((s: { cmd: string }) => s.cmd)).toEqual(expect.arrayContaining(['gh api graphql (listing)', 'bd export']))
   })
 
   // The listing and the first read run at once; when one fails, the run still
@@ -1966,12 +2025,13 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(shimCalls()).not.toContain('gh issue close')
   })
 
-  // A converged run's whole cost: the probes, one issue listing, one read of the
-  // tracker — nothing per bead, however many carry a local timestamp past their
-  // issue's (bd stamps a freshly minted bead a second after its issue, so that
-  // set only grows). Each spawn costs the live tracker 0.5–5s.
+  // A converged run's whole cost: the probes, the issue listing, one read of
+  // the tracker — nothing per bead, however many carry a local timestamp past
+  // their issue's (bd stamps a freshly minted bead a second after its issue, so
+  // that set only grows). The listing is the newest-number read and one read
+  // per 100 numbers, which run concurrently (next test).
   it('makes only the fixed reads on a converged run, however many beads are locally newer', () => {
-    const rows = Array.from({ length: 30 }, (_, i) =>
+    const rows = Array.from({ length: 250 }, (_, i) =>
       syncRow({ id: `km-s${i}`, external_ref: ref(i + 1), updated_at: '2026-08-20T00:00:01Z' }),
     )
     const { run, shimCalls } = makeSyncRepo({
@@ -1983,7 +2043,46 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(r.stdout).toBe('')
     // Sorted: the listing and the first read run concurrently.
     const spawned = shimCalls().trim().split('\n').map(l => l.split(' ').slice(0, 3).join(' '))
-    expect(spawned.sort()).toEqual(['bd --version', 'bd export', 'gh auth token', 'gh issue list'])
+    expect(spawned.sort()).toEqual(['bd --version', 'bd export', ...Array(4).fill('gh api graphql'), 'gh auth token'])
+  })
+
+  // `gh issue list` paged through the tracker one request after another, a
+  // second per 100 issues on the live one.
+  it('reads the listing in concurrent chunks, at most eight in flight', () => {
+    const { run, listingPeak, shimCalls } = makeSyncRepo({
+      issues: Array.from({ length: 1000 }, (_, i) => ghIssue(i + 1, '2026-08-20T00:00:00Z')),
+      reads: [[]],
+      issueListDelay: 0.3,
+    })
+    expect(run().status).toBe(0)
+    expect(shimCalls().match(/^gh api graphql listing$/gm)).toHaveLength(10)
+    expect(listingPeak()).toBe(8)
+  })
+
+  it('fails the run on an empty listing, before acting on anything', () => {
+    const row = syncRow({ id: 'km-e', external_ref: ref(1), status: 'closed', updated_at: '2026-08-19T00:00:00Z' })
+    const { run, shimCalls } = makeSyncRepo({ issues: [], reads: [[row]] })
+    const r = run()
+    expect(r.status).toBe(1)
+    expect(r.stderr).toContain('issue listing came back empty')
+    expect(shimCalls()).not.toContain('bd github sync')
+    expect(shimCalls()).not.toContain('gh api repos/')
+  })
+
+  // Close-adoption, the pull set and the close pushes all act on an issue's
+  // ABSENCE, so a number may read as absent only on GitHub saying so.
+  it('fails the run on a listing error other than NOT_FOUND, before acting on anything', () => {
+    const row = syncRow({ id: 'km-e', external_ref: ref(1), updated_at: '2026-08-19T00:00:00Z' })
+    const { run, shimCalls } = makeSyncRepo({
+      issues: [ghIssue(1, '2026-08-20T00:00:00Z', 'CLOSED'), ghIssue(2, '2026-08-20T00:00:00Z')],
+      reads: [[row]],
+      listingError: { type: 'SERVICE_UNAVAILABLE', message: 'Something went wrong while executing your query.' },
+    })
+    const r = run()
+    expect(r.status).toBe(1)
+    expect(r.stderr).toContain('Something went wrong while executing your query.')
+    expect(shimCalls()).not.toContain('bd close')
+    expect(shimCalls()).not.toContain('bd github sync')
   })
 
   // A closed, assigned bead: bd's pull would clear the assignee and restamp the
@@ -2191,7 +2290,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   // backfill costs one pause on top of the spawns — recorded as idle time, so
   // a backlog drain does not read as the sync slowing down.
   it('mirrors unmirrored bead comments onto the issue oldest-first, marker-tagged, with bead ids rewritten', () => {
-    const { run, shimCalls, posted, runLog } = makeSyncRepo({
+    const { run, shimCalls, commentReads, posted, runLog } = makeSyncRepo({
       issues: twoIssues(),
       reads: [commentedRows()],
       comments: { 'km-mmmm': twoComments },
@@ -2218,7 +2317,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     // Nothing was posted for the uncommented bead, and the mirror never
     // reads GitHub comments outside the one GraphQL call.
     expect(log).not.toContain('issues/8/comments')
-    expect(shimCalls().match(/gh api graphql/g)).toHaveLength(1)
+    expect(commentReads()).toBe(1)
     // The pacing pause between the two posts is recorded as idle, not active, time.
     const [entry] = runLog()
     expect(entry.idleMs).toBeGreaterThanOrEqual(800)
@@ -2275,7 +2374,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   // the newer side for the next pull.
   it('holds back the comments of a bead whose push did not land, and says so', () => {
     const newer = pushable({ id: 'km-mmmm', external_ref: ref(7), updated_at: '2026-08-21T00:00:00Z', comment_count: 2 })
-    const { run, posted, runLog } = makeSyncRepo({
+    const { run, posted, runLog, shimCalls } = makeSyncRepo({
       issues: twoIssues(),
       issuesAfterPush: twoIssues(),
       reads: [[newer]],
@@ -2284,6 +2383,9 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     })
     const r = run()
     expect(r.status).toBe(0)
+    // The re-read asks for the handed issue, not for the whole listing again.
+    expect(shimCalls().match(/^gh api graphql newest$/gm)).toHaveLength(1)
+    expect(shimCalls().match(/^gh api graphql listing$/gm)).toHaveLength(2)
     expect(r.stdout).toContain('push did not land for km-mmmm (#7)')
     expect(r.stdout).toContain('SKIPPED comments of km-mmmm: GitHub does not hold its local row this run')
     expect(posted()).toBe('')
@@ -2490,7 +2592,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   })
 
   it('reads every comment page, so a marker beyond the first still counts', () => {
-    const { run, shimCalls, posted } = makeSyncRepo({
+    const { run, shimCalls, commentReads, posted } = makeSyncRepo({
       issues: twoIssues(),
       reads: [commentedRows()],
       comments: { 'km-mmmm': twoComments },
@@ -2502,7 +2604,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const r = run()
     expect(r.status).toBe(0)
     const calls = shimCalls()
-    expect(calls.match(/gh api graphql/g)).toHaveLength(2)
+    expect(commentReads()).toBe(2)
     expect(calls).toContain('after: "cursor-1"')
     expect(posted()).toBe('')
   })
@@ -2551,11 +2653,11 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
 
   it('skips a commented bead whose own ref points at no issue of this repo, before any GitHub read', () => {
     const rows = [syncRow({ id: 'km-mmmm', external_ref: ref(5), updated_at: '2026-08-19T00:00:00Z', comment_count: 2 })]
-    const { run, shimCalls, posted } = makeSyncRepo({ issues: twoIssues(), reads: [rows], comments: { 'km-mmmm': twoComments } })
+    const { run, commentReads, posted } = makeSyncRepo({ issues: twoIssues(), reads: [rows], comments: { 'km-mmmm': twoComments } })
     const r = run()
     expect(r.status).toBe(0)
     expect(r.stdout).toContain('SKIPPED comments of km-mmmm: its external_ref does not point at an issue of this repo')
-    expect(shimCalls()).not.toContain('gh api graphql')
+    expect(commentReads()).toBe(0)
     expect(posted()).toBe('')
   })
 
@@ -2567,7 +2669,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const rows = numbers.map(n => syncRow({ id: `km-c${n}`, external_ref: ref(n), updated_at: '2026-08-19T00:00:00Z' }))
     const comments = Object.fromEntries(numbers.map(n => [`km-c${n}`, [beadComment(commentId(n), `on #${n}`, '2026-09-03T20:16:36Z')]]))
     const onGitHub = Object.fromEntries(numbers.map(n => [`i${n}`, issueComments(n === 15 ? [] : [`<!-- bd-comment ${commentId(n)} -->\nmirrored`])]))
-    const { run, shimCalls, posted } = makeSyncRepo({
+    const { run, commentReads, posted } = makeSyncRepo({
       issues: numbers.map(n => ghIssue(n, '2026-08-20T00:00:00Z')),
       reads: [rows],
       comments,
@@ -2575,7 +2677,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     })
     const r = run()
     expect(r.status).toBe(0)
-    expect(shimCalls().match(/gh api graphql/g)).toHaveLength(5)
+    expect(commentReads()).toBe(5)
     const posts = postsOf(posted())
     expect(posts).toHaveLength(1)
     expect(posts[0]).toContain(`repos/${REPO}/issues/15/comments`)
@@ -2589,7 +2691,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const rows = numbers.map(n => syncRow({ id: `km-c${n}`, external_ref: ref(n), updated_at: '2026-08-19T00:00:00Z' }))
     const comments = Object.fromEntries(numbers.map(n => [`km-c${n}`, [beadComment(commentId(n), 'c', '2026-09-03T20:16:36Z')]]))
     const onGitHub = Object.fromEntries(numbers.map(n => [`i${n}`, issueComments([`<!-- bd-comment ${commentId(n)} -->\nmirrored`])]))
-    const { run, shimCalls, graphqlPeak } = makeSyncRepo({
+    const { run, commentReads, graphqlPeak } = makeSyncRepo({
       issues: numbers.map(n => ghIssue(n, '2026-08-20T00:00:00Z')),
       reads: [rows],
       comments,
@@ -2598,7 +2700,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     })
     const r = run()
     expect(r.status).toBe(0)
-    expect(shimCalls().match(/gh api graphql/g)).toHaveLength(9)
+    expect(commentReads()).toBe(9)
     expect(graphqlPeak()).toBe(8)
   })
 
