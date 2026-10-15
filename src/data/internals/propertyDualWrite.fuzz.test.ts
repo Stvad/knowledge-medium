@@ -618,10 +618,12 @@ interface Waivers {
   dup: Set<string>
   /** Row ids an arrival left live under a tombstone. */
   orphans: Set<string>
-  /** Rows that died in a tx which also wrote them through a deferred path —
-   *  a raw bag write or a child edit — so their tombstoned cell and children
-   *  were never reconciled. Eager writes keep the two in step and do not
-   *  count. Cleared when the row comes back. */
+  /** Tombstoned rows whose cell and children were never reconciled: they died
+   *  in a tx that also wrote them through a deferred path (a raw bag write or
+   *  a child edit — eager writes keep the two in step), or an arrival put a
+   *  child under them while they were dead. A revival settles them toward the
+   *  children, so their untouched keys may move. Cleared when the row comes
+   *  back. */
   unsettledDead: Set<string>
 }
 const pairKey = (ownerId: string, fieldId: string): string => `${ownerId}|${fieldId}`
@@ -856,16 +858,20 @@ const assertLegalRejection = (e: unknown, desc: string): void => {
 type Lock = Parameters<Parameters<TestDb['db']['writeTransaction']>[0]>[0]
 let rawSeq = 0
 
-/** Inserts one peer row, waiving the pairs it lands in: the arrival wrote no
- *  cell for them, and a field row may duplicate one already there. */
+/** Inserts one peer row. A field row may duplicate one already there. Under
+ *  a LIVE parent the arrival wrote no cell for the pairs it lands in, so they
+ *  are waived; under a tombstoned one nothing checks them until a revival,
+ *  which must reconcile them (or, for a raw restore, waives the owner). */
 const rawInsert = async (
   lock: Lock, state: DbState, waivers: Waivers, parentId: string, orderKey: string, content: string,
 ): Promise<string> => {
   const id = `peer-${++rawSeq}`
   const {target, isFieldForm} = await derivedColumns(content)
   const pairs = pairsReading(state, {parent_id: parentId, is_field_form: isFieldForm, reference_target_id: target})
+  const parentLive = state.byId.get(parentId)?.deleted === 0
+  if (!parentLive) waivers.unsettledDead.add(parentId)
   for (const key of pairs) {
-    waivers.proj.add(key)
+    if (parentLive) waivers.proj.add(key)
     if (isFieldForm === 1) waivers.dup.add(key)
   }
   await lock.execute(
@@ -887,23 +893,31 @@ const rawSetCell = async (lock: Lock, ownerId: string, name: string, value: unkn
 }
 
 /** A peer's PROJECT for the pairs its write touched: rewrite those cell keys
- *  from the children. */
-const rawReproject = async (lock: Lock, pairs: readonly string[]): Promise<void> => {
+ *  from the children. Returns the pairs it rewrote — a tombstoned owner's
+ *  are left for its revival. */
+const rawReproject = async (lock: Lock, pairs: readonly string[]): Promise<string[]> => {
   const state = await readStateIn(lock)
+  const rewritten: string[] = []
   for (const key of pairs) {
     const [ownerId, fieldId] = key.split('|') as [string, string]
     const owner = state.byId.get(ownerId)
     if (owner === undefined || owner.deleted) continue
     const kind = KIND_BY_FIELD.get(fieldId)!
     await rawSetCell(lock, ownerId, SCHEMAS[kind].schema.name, projectFromChildren(state, ownerId, kind))
+    rewritten.push(key)
   }
+  return rewritten
 }
 
 /** Where a raw write that moved `pairs` leaves their cells: rewritten by the
- *  peer's own PROJECT, or waived as out of step. */
+ *  peer's own PROJECT — back in step, whatever an earlier arrival left — or
+ *  waived as out of step. */
 const settleRawPairs = async (lock: Lock, waivers: Waivers, pairs: readonly string[], withCell: boolean): Promise<void> => {
-  if (withCell) await rawReproject(lock, pairs)
-  else for (const key of pairs) waivers.proj.add(key)
+  if (!withCell) {
+    for (const key of pairs) waivers.proj.add(key)
+    return
+  }
+  for (const key of await rawReproject(lock, pairs)) waivers.proj.delete(key)
 }
 
 const readStateIn = async (lock: Lock): Promise<DbState> => {
