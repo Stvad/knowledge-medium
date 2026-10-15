@@ -237,6 +237,24 @@ one.
   every call site's actual LIKE/ESCAPE fragment, run against a live
   connection, matches a case-folded JS containment check for arbitrary
   needle/haystack pairs biased toward `%`/`_`/`\`/case-invariant unicode.
+- `src/data/propertyDefinitionRename.fuzz.test.ts` — N-way definition
+  renames through `core.migratePropertyDefinition`: swaps and longer
+  cycles across codecs, renames onto fresh names, a seed's name and a
+  tombstoned definition's old name, mixed with deletes and revivals in
+  the same batch; delivered as one tx, split across consecutive txs, or
+  as the initiator's rows arriving through `blocks_synced`. Consumers
+  come from every write route (`setProperty`, a raw cell write, hand-built
+  field rows) on plain, nested and definition-block hosts, beside
+  cell-only keys, sync-shaped duplicate field rows and a tombstoned
+  consumer. Oracles = an independent refusal model; conservation (only
+  the edited definition rows and consumers' cells change — old keys
+  dropped, each new key the projection of its field rows, every other
+  key untouched); a value model across steps; sole name ownership in the
+  rebuilt registry; exact undo/redo; a reference route moving one
+  definition per tx through temporary names; re-running the processor
+  writes nothing; and sync convergence. Two fixed canaries (a 3-cycle, a
+  sync-delivered swap) run in every tier, because a planted
+  non-swap-safe re-key slipped past the first smoke sample.
 
 ## Found so far
 
@@ -521,6 +539,27 @@ restore half of the release-reclaim residual (issue #706, seed
   `collectRestorePlans` invalidates those edges at the restore (never
   rewriting content, so the deferred decision stays deferred); the drop
   is itself the write that schedules the referrer's rebind.
+
+The definition-rename fuzzer (roadmap #430's N-way same-tx renames)
+found one product bug in its first minute (fixed + pinned):
+
+- Renaming an UNUSED definition onto a name a used one holds committed:
+  the contested refusal fired only when the renamed definition had
+  consumers of its own. The registry ranks one name's claimants oldest
+  first, so an older definition arriving that way took over every
+  consumer of the incumbent — their cells read through its codec (a
+  string value under a number codec throws), and the next write by name
+  grew a field row for the newcomer beside the incumbent's. Restoring a
+  definition under a name a used one had taken since did the same with
+  no rename at all. Both now refuse as
+  `property.definition-change.shared-name` while either side has
+  consumers; two unused definitions may still share a name.
+
+Its harness carries one lesson for any suite that builds a Repo per
+case: every case runs inside ONE test, so the per-test Repo release
+never fires between them. The previous case's sync observer drained the
+next case's `blocks_synced` rows into handles nobody read, and the
+registry never saw the delivery — release each case's Repo yourself.
 
 ## Adding a suite
 
