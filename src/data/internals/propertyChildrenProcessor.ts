@@ -374,18 +374,29 @@ const changedPropertyNames = (
  *  them across two calls — see `materializePropertiesForChangedRow`. */
 export type UndecodableCellPolicy = 'reject' | 'skip'
 
+/** What the revival path knows about the tx it runs in. */
+export interface RevivalContext {
+  /** A row's state at TX START — `undefined` when this tx changed none of the
+   *  watched fields, so its current bag is its starting one. Every row the
+   *  revival restores is a revived row in its own right, and splitting its
+   *  names by who wrote them needs the bag it started the tx with. */
+  readonly txStartOf: (id: string) => BlockData | null | undefined
+}
+
 export interface MaterializeOptions {
   /** See {@link UndecodableCellPolicy}. Default `'reject'`. */
   undecodable?: UndecodableCellPolicy
   /** Bring a name's TOMBSTONED field row back instead of minting a
-   *  replacement, when the owner has exactly one and no live one (#787).
+   *  replacement, when the owner has exactly one and no live one (#787) — and
+   *  materialize every row that brings back as the revived row it is
+   *  ({@link materializeRevivedRow}).
    *
    *  Opt-in, and only the revival path opts in: it re-materializes the whole
    *  restored bag and would mint a replacement field row anyway, so reviving
    *  changes which row id carries the property, not whether it comes back. The
    *  cell backfill has no such contract and would resurrect what the user
    *  reaped — declined there. */
-  reviveTombstoned?: boolean
+  revive?: RevivalContext
   /** This call did not observe user intent for these names, so it may only ADD
    *  rows: never remove one, never rewrite one's content. The cell→children
    *  twin of the projection's `'additive'` mode, and for the same reason — an
@@ -422,7 +433,7 @@ export interface MaterializeOptions {
  *  two rows above it restores the chain, which is the difference between
  *  "still deleted" and "gone". The rows it restores are returned because each
  *  came back with its BAG, which makes it a revived row in its own right — see
- *  {@link rematerializeRevivedRow}.
+ *  {@link materializeRevivedRow}.
  *
  *  A MULTI-VALUED property restores NO member row, by an explicit gate rather
  *  than by the count failing to match — see the gate for the case where it
@@ -482,26 +493,36 @@ const reviveTombstonedFieldRow = async (
   return [fieldRow.id, values[0]!.id]
 }
 
-/** Revival's policy for a name THIS TX DID NOT WRITE: it may only add rows,
- *  a value it cannot carry is left as found, and a tombstoned field row comes
- *  back rather than being replaced. See the three options' own docs. */
-const REVIVE_UNTOUCHED: MaterializeOptions = {undecodable: 'skip', reviveTombstoned: true, additive: true}
-
-/** Re-materialize the whole bag of a row {@link reviveTombstonedFieldRow}
- *  restored. Under §9 flat recognition a field row or a value row owns
- *  properties like any block, and it came back with its bag — so it is a
- *  revived row (#778) whose own field rows must come back too, or its cell
- *  claims properties no child backs. The processor's revival branch never sees
- *  it: the commit pipeline does not re-run a processor over its OWN writes. */
-const rematerializeRevivedRow = async (
+/** Materialize a row coming back from a tombstone. Its whole bag, not the
+ *  diff: a restore usually leaves the bag identical, so a diff-only rule would
+ *  schedule nothing (#778).
+ *
+ *  Split by WHO WROTE THE VALUE. A name this tx wrote is the user's word and
+ *  materializes like any write, its decode rejection included. The rest of the
+ *  bag was not observed — it can be stale against children a peer wrote while
+ *  the row was dead — so it takes the untouched policy: never reject, only add,
+ *  and nothing into a field row that is already live (`additive`). A PARTITION,
+ *  not an overlap — overlapping is harmless only because the first call throws
+ *  first, and that would leave call ORDER load-bearing.
+ *
+ *  ONE rule for every revived row: the one the processor sees restored, and
+ *  each row the revival itself restores under it. Under §9 flat recognition a
+ *  field row or a value row owns properties like any block, and the processor
+ *  never sees those come back — the commit pipeline does not re-run a
+ *  processor over its OWN writes. */
+const materializeRevivedRow = async (
   tx: Tx,
-  id: string,
+  row: BlockData,
   lookups: MaterializeLookups,
+  revive: RevivalContext,
 ): Promise<void> => {
-  const row = await tx.get(id)
-  if (row === null || row.deleted) return
+  const txStart = revive.txStartOf(row.id)
+  const written = changedPropertyNames((txStart ?? row).properties, row.properties)
+  const writtenNames = new Set(written)
+  const untouched = Object.keys(row.properties).filter(name => !writtenNames.has(name))
+  await materializePropertyChildrenForExistingRow(tx, row, lookups, written, {revive})
   await materializePropertyChildrenForExistingRow(
-    tx, row, lookups, Object.keys(row.properties), REVIVE_UNTOUCHED,
+    tx, row, lookups, untouched, {undecodable: 'skip', additive: true, revive},
   )
 }
 
@@ -584,13 +605,18 @@ export const materializePropertyChildrenForExistingRow = async (
     // is not that — it would hand a stale child to a cell the skip declined to
     // touch, and post-flip the child is the side that wins.
     let fieldRows = matchingChildren
-    if (opts.reviveTombstoned && fieldRows.length === 0) {
+    if (opts.revive && fieldRows.length === 0) {
       tombstones ??= await tx.tombstonedPropertyFieldRows(row.workspaceId, row.id)
       const revived = await reviveTombstonedFieldRow(tx, schema, tombstones)
       if (revived.length > 0) {
         children = await tx.childrenOf(row.id, undefined)
         fieldRows = fieldRowsForSchema(children, schema.fieldId)
-        for (const id of revived) await rematerializeRevivedRow(tx, id, lookups)
+        for (const id of revived) {
+          const restored = await tx.get(id)
+          if (restored !== null && !restored.deleted) {
+            await materializeRevivedRow(tx, restored, lookups, opts.revive)
+          }
+        }
       }
     }
 
@@ -622,6 +648,7 @@ const materializePropertiesForChangedRow = async (
   tx: Tx,
   row: {before: BlockData | null; after: BlockData | null},
   lookups: PropertyChildrenLookups,
+  revive: RevivalContext,
 ): Promise<void> => {
   if (row.after === null || row.after.deleted) return
   const before = row.before
@@ -634,21 +661,7 @@ const materializePropertiesForChangedRow = async (
     await materializePropertyChildrenForExistingRow(tx, row.after, lookups, changed)
     return
   }
-  // Revival re-materializes the diff PLUS the rest of the restored bag — a
-  // restore usually leaves the bag identical, so a diff-only rule would
-  // schedule nothing.
-  //
-  // Split by WHO WROTE THE VALUE: the decode rejection may only fire on names
-  // this tx wrote, because a per-tx policy would let one untouched legacy
-  // value veto a restore-then-write tx. A PARTITION, not an overlap —
-  // overlapping is harmless only because the first call throws first, and
-  // that would leave call ORDER load-bearing.
-  const written = new Set(changed)
-  const untouched = Object.keys(row.after.properties).filter(name => !written.has(name))
-  await materializePropertyChildrenForExistingRow(
-    tx, row.after, lookups, changed, {reviveTombstoned: true},
-  )
-  await materializePropertyChildrenForExistingRow(tx, row.after, lookups, untouched, REVIVE_UNTOUCHED)
+  await materializeRevivedRow(tx, row.after, lookups, revive)
 }
 
 /** Why one cell value could not become children, in the one wording both
@@ -1142,8 +1155,10 @@ export const MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR = defineSameTxProcessor({
     // single workspace, and un-flipped workspaces are fully dormant.
     if (!(await ctx.tx.isPropertyChildBackedWorkspace(event.workspaceId))) return
     const lookups = lookupsFor(ctx, event.workspaceId)
+    const txStart = new Map(event.changedRows.map(row => [row.id, row.before]))
+    const revive: RevivalContext = {txStartOf: id => txStart.get(id)}
     for (const row of event.changedRows) {
-      await materializePropertiesForChangedRow(ctx.tx, row, lookups)
+      await materializePropertiesForChangedRow(ctx.tx, row, lookups, revive)
     }
   },
 })

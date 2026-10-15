@@ -2046,6 +2046,29 @@ describe('revival re-materializes property children (#778)', () => {
     expect(await cellValue(value!.id)).toBeUndefined()
   })
 
+  it('keeps a key the SAME tx wrote on a value row that the revival brings back', async () => {
+    // The value row comes back through its owner's revival, not its own — but
+    // a name this tx wrote is the user's word, not an untouched one, so the
+    // children may not override it the way they override a stale cell.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    const [field] = await liveFieldRows('p')
+    const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+    await repo.tx(tx => tx.setProperty(value!.id, statusSchema, 'nested'),
+      {scope: ChangeScope.BlockDefault})
+    const [nestedField] = await liveFieldRows(value!.id)
+    await repo.mutate.delete({id: 'p'})
+    await sharedDb.db.execute('UPDATE blocks SET deleted = 0 WHERE id = ?', [nestedField!.id])
+
+    await repo.tx(async tx => {
+      await tx.update(value!.id, {properties: {[statusSchema.name]: 'local-new'}})
+      await tx.restore('p')
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(await cellValue(value!.id)).toBe('local-new')
+    expect(await liveValueContents(value!.id)).toEqual(['local-new'])
+  })
+
   it('drops a cell that moved while the row was dead, and re-projects from the child', async () => {
     // The mirror image of the test above, and the reason it is settled the same
     // way: an unobserved cell write and an unobserved child arrival reach the
