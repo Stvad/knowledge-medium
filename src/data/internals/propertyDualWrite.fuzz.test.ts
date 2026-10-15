@@ -61,7 +61,9 @@
  *  I  INTENT — for a pair written only by cell writers in a tx, the cell
  *     ends at the LAST write (absent for an unset). A write that left the
  *     cell as it found it claims nothing — no user unsets a key the cell does
- *     not show. Two carve-outs, both the accepted single-pass wrinkle in
+ *     not show — and neither do raw writes that land back on the tx-start
+ *     value, since only their net diff reaches the children (`claimsIntent`).
+ *     Two carve-outs, both the accepted single-pass wrinkle in
  *     propertyChildrenProcessor.ts's docblock (MATERIALIZE diffs the tx's
  *     net bag):
  *       - a raw bag write after the last eager write that reconciled
@@ -704,7 +706,13 @@ const ABSENT = undefined
  *  not unset a key the cell does not show. */
 type Ev = {cls: 'E' | 'R'; value: unknown; wrote: boolean}
 
-const effective = (evs: readonly Ev[]): boolean => evs.some(ev => ev.wrote)
+/** Whether a key's cell writes in one tx claim its outcome. An eager write
+ *  that wrote reconciled the children itself. Raw writes reach the children
+ *  only through MATERIALIZE's NET diff, so raw writes that land back on the
+ *  tx-start value claim nothing — the key is then the children's. */
+const claimsIntent = (evs: readonly Ev[], startValue: unknown): boolean =>
+  evs.some(ev => ev.cls === 'E' && ev.wrote)
+  || (evs.some(ev => ev.cls === 'R' && ev.wrote) && !sameValue(evs.at(-1)!.value, startValue))
 
 interface TxLog {
   /** owner → cell key → cell writes, in order. */
@@ -1248,7 +1256,8 @@ const checkIntent = (
     if (owner.deleted !== 0 || start.byId.get(owner.id)?.deleted !== 1) continue
     const byName = log.events.get(owner.id)
     // Exempt: a key this tx wrote, or one a child edit in it changed.
-    const written = (name: string): boolean => effective(byName?.get(name) ?? [])
+    const written = (name: string): boolean =>
+      claimsIntent(byName?.get(name) ?? [], startBags.get(owner.id)?.[name])
       || log.childPairs.has(pairKey(owner.id, lookups.resolveNameSchema(name)!.fieldId))
     // A field row already live when its owner came back carries the
     // children's word, so the revival takes no value from the cell into it —
@@ -1289,7 +1298,7 @@ const checkIntent = (
     const bag = bagOf(owner)
     for (const [name, evs] of byName) {
       const actual = bag[name]
-      if (!effective(evs)) continue
+      if (!claimsIntent(evs, startBags.get(ownerId)?.[name])) continue
       // A cell write beats a later same-tx child edit of its pair (the
       // order-blind wrinkle), so "last write" claims nothing there.
       if (log.childPairs.has(pairKey(ownerId, lookups.resolveNameSchema(name)!.fieldId))) continue
@@ -1341,13 +1350,19 @@ const staleBitRevivalPairs = (log: TxLog, start: DbState, end: DbState): string[
   return pairs
 }
 
-/** A duplicate waiver only says a pair MAY hold two field rows; once it
- *  holds at most one, any later duplicate has to come from a write that
- *  waives it again, so the stale waiver is dropped. */
-const pruneDupWaivers = (state: DbState, waivers: Waivers): void => {
+/** Drops waivers the state no longer needs. A duplicate waiver says a pair
+ *  MAY hold two field rows, and an orphan waiver that a row MAY sit live under
+ *  a tombstone; once neither is so, any later duplicate or orphan has to come
+ *  from a write that waives it again. */
+const pruneWaivers = (state: DbState, waivers: Waivers): void => {
   for (const key of [...waivers.dup]) {
     const [ownerId, fieldId] = key.split('|') as [string, string]
     if (liveFieldRows(state, ownerId, fieldId).length <= 1) waivers.dup.delete(key)
+  }
+  for (const id of [...waivers.orphans]) {
+    const row = state.byId.get(id)
+    const parent = row?.parent_id == null ? undefined : state.byId.get(row.parent_id)
+    if (row === undefined || row.deleted !== 0 || parent?.deleted === 0) waivers.orphans.delete(id)
   }
 }
 
@@ -1479,7 +1494,7 @@ const runBatch = async (
   }
   for (const key of reprojectedPairs(start, end)) waivers.proj.delete(key)
   for (const key of staleBitRevivalPairs(log, start, end)) waivers.proj.add(key)
-  pruneDupWaivers(end, waivers)
+  pruneWaivers(end, waivers)
   // The undo manager records one entry per tx that wrote; mirror it before
   // the quiescence check, which writes nothing either way.
   if (mirror !== null && await lastRowEvent() > writesBefore) {
@@ -1531,7 +1546,7 @@ const runCase = async ({mode, txs}: {mode: Mode; txs: TxSpec[]}): Promise<void> 
       }
       case 'raw':
         if (await applyRawOp(spec.op, waivers)) bump(stats.raw, spec.op.op)
-        pruneDupWaivers(await readState(), waivers)
+        pruneWaivers(await readState(), waivers)
         await checkState(repo, waivers, new Map(), `${label} ${spec.op.op}`)
         break
     }
