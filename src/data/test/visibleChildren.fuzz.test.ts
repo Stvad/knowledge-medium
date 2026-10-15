@@ -539,35 +539,38 @@ describe('visible-children view', () => {
   it('SQL and JS agree, and the stamped columns match content, after every op', async () => {
     await fc.assert(
       fc.asyncProperty(caseArb, ({ops, prngSeed}) => guard.run(prngSeed, () => runCase(ops))),
-      fuzzParams(8),
+      fuzzParams(20),
     )
   }, fuzzTestTimeout())
 
   // Non-vacuity canary: the differential only bites when the generated states
-  // actually reach every leg — a hidden field row, a visible unknown-field
-  // row, a pruned nested subtree, a definition that arrived from a peer.
+  // reach every leg — a hidden field row, a visible unknown-field row, an
+  // unmarked look-alike (the NULL bit under `NOT (...)` that COALESCE
+  // exists for), a pruned nested subtree, a definition from a peer.
   it('the op vocabulary reaches every recognition leg', async () => {
     await guard.barrier()
     const u = await openUniverse()
     try {
-      const field = {kind: 'node', idx: 0} as const
+      const root = {kind: 'node', idx: 0} as const
       for (const op of [
-        {op: 'create', parent: field, orderKey: 0, content: {kind: 'field', target: {to: 'def', slot: 0}, labelled: false}, via: 'tx'},
+        {op: 'create', parent: root, orderKey: 0, content: {kind: 'field', target: {to: 'def', slot: 0}, labelled: false}, via: 'tx'},
         {op: 'create', parent: {kind: 'node', idx: 2}, orderKey: 0, content: {kind: 'text', word: 0}, via: 'tx'},
-        {op: 'create', parent: field, orderKey: 1, content: {kind: 'field', target: {to: 'unknown'}, labelled: false}, via: 'tx'},
-        {op: 'create', parent: field, orderKey: 2, content: {kind: 'field', target: {to: 'seed'}, labelled: true}, via: 'sync'},
-        {op: 'create', parent: field, orderKey: 2, content: {kind: 'field', target: {to: 'def', slot: 1}, labelled: false}, via: 'tx'},
+        {op: 'create', parent: root, orderKey: 1, content: {kind: 'field', target: {to: 'unknown'}, labelled: false}, via: 'tx'},
+        {op: 'create', parent: root, orderKey: 2, content: {kind: 'field', target: {to: 'seed'}, labelled: true}, via: 'sync'},
+        {op: 'create', parent: root, orderKey: 2, content: {kind: 'field', target: {to: 'def', slot: 1}, labelled: false}, via: 'tx'},
         {op: 'putDef', slot: 1, def: {name: 1, preset: 'number', validScope: true}, via: 'sync'},
+        {op: 'create', parent: root, orderKey: 0, content: {kind: 'ref', target: {to: 'def', slot: 0}}, via: 'tx'},
       ] satisfies Op[]) {
         await applyOp(u, op)
         await sweep(u)
       }
-      const [defRow, valueRow, unknownRow] = u.nodes.slice(2)
+      const [fieldRow, valueRow, unknownRow] = u.nodes.slice(2)
+      const lookAlike = u.nodes.at(-1)
       const visible = (await u.db.getAll<{id: string}>(VISIBLE_CHILDREN_SQL, [ROOT, ...registrySeedParams(u.repo)]))
         .map(r => r.id)
-      expect(visible, 'only the unknown-field row stays visible').toEqual([unknownRow])
-      const fromField = await u.db.getAll<{id: string}>(VISIBLE_SUBTREE_SQL, [defRow!, ...registrySeedParams(u.repo)])
-      expect(fromField.map(r => r.id), 'a field row opened directly shows its value child').toEqual([defRow, valueRow])
+      expect(visible, 'the unmarked look-alike and the unknown-field row stay visible').toEqual([lookAlike, unknownRow])
+      const fromField = await u.db.getAll<{id: string}>(VISIBLE_SUBTREE_SQL, [fieldRow!, ...registrySeedParams(u.repo)])
+      expect(fromField.map(r => r.id), 'a field row opened directly shows its value child').toEqual([fieldRow, valueRow])
     } finally {
       await releaseTestRepos([u.repo])
     }
