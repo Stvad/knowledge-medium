@@ -199,6 +199,9 @@ type LocalOp =
    *  properties or owners — or, when `row` is the same field row's value, a
    *  reorder), or straight under the owner when it has none. */
   | {op: 'moveRow'; row: RowSel; dest: {owner: OwnerSel; kind: Kind}; pos: 'first' | 'last'}
+  /** To the first or last slot among its own siblings — for a list's value
+   *  row, a reorder of the list. */
+  | {op: 'reorderRow'; row: RowSel; pos: 'first' | 'last'}
   | {op: 'addChild'; parent: RowSel | {owner: OwnerSel}; content: ContentSpec; pos: 'first' | 'last'}
   /** The `pick`-th LIVE top owner. */
   | {op: 'deleteOwner'; pick: number}
@@ -215,7 +218,8 @@ type RawOp =
   | {op: 'rawRestoreOwner'; pick: number}
 
 const LOCAL_OPS = [
-  'set', 'unset', 'setMany', 'rawBag', 'editContent', 'deleteRow', 'moveRow', 'addChild', 'deleteOwner', 'restoreOwner',
+  'set', 'unset', 'setMany', 'rawBag', 'editContent', 'deleteRow', 'moveRow', 'reorderRow', 'addChild',
+  'deleteOwner', 'restoreOwner',
 ] as const satisfies readonly LocalOp['op'][]
 const RAW_OPS = [
   'rawDupField', 'rawContent', 'rawDelete', 'rawCell', 'rawOrphan', 'rawDeleteOwner', 'rawRestoreOwner',
@@ -307,6 +311,7 @@ const opArbs = ({top, kind}: Focus) => {
     {weight: 3, arbitrary: fc.record({
       op: fc.constant('moveRow' as const), row, dest: fc.record({owner, kind: hotKind}), pos,
     })},
+    {weight: 2, arbitrary: fc.record({op: fc.constant('reorderRow' as const), row, pos})},
     {weight: 2, arbitrary: fc.record({
       op: fc.constant('addChild' as const),
       parent: fc.oneof(row, fc.record({owner})),
@@ -336,12 +341,12 @@ const opArbs = ({top, kind}: Focus) => {
       op: fc.constant('rawCell' as const), top: fc.constant(t), kind: fc.constant(k),
       value: valueArb(k), remove: fc.boolean(),
     }))},
-    {weight: 1, arbitrary: fc.record({top: hotTop, kind: hotKind}).chain(({top: t, kind: k}) => fc.record({
+    {weight: 2, arbitrary: fc.record({top: hotTop, kind: hotKind}).chain(({top: t, kind: k}) => fc.record({
       op: fc.constant('rawOrphan' as const), top: fc.constant(t), kind: fc.constant(k),
       content: valueContent(k),
     }))},
-    {weight: 1, arbitrary: fc.record({op: fc.constant('rawDeleteOwner' as const), pick: ownerPick})},
-    {weight: 1, arbitrary: fc.record({op: fc.constant('rawRestoreOwner' as const), pick: ownerPick})},
+    {weight: 2, arbitrary: fc.record({op: fc.constant('rawDeleteOwner' as const), pick: ownerPick})},
+    {weight: 2, arbitrary: fc.record({op: fc.constant('rawRestoreOwner' as const), pick: ownerPick})},
   )
   return {local, raw}
 }
@@ -486,6 +491,9 @@ const fullSnapshot = async (): Promise<SnapRow[]> =>
        FROM blocks ORDER BY id`,
   )
 type SnapRow = Record<string, unknown> & {id: string; deleted: number}
+
+const lastRowEvent = async (): Promise<number> =>
+  (await sharedDb.db.get<{n: number}>('SELECT COALESCE(MAX(id), 0) AS n FROM row_events')).n
 
 // ──── content + selection helpers ────
 
@@ -736,6 +744,14 @@ const applyLocalOp = async (tx: Tx, op: LocalOp, log: TxLog): Promise<boolean> =
       await touch(log, tx, destParent)
       log.dupRisk.add(destParent)
       await tx.move(id, {parentId: destParent, orderKey: await keyAt(tx, destParent, op.pos, id)})
+      return true
+    }
+    case 'reorderRow': {
+      const id = await resolveRow(tx, op.row)
+      if (id === null) return false
+      const parentId = (await tx.get(id))!.parentId!
+      await touch(log, tx, id)
+      await tx.move(id, {parentId, orderKey: await keyAt(tx, parentId, op.pos, id)})
       return true
     }
     case 'addChild': {
@@ -1055,7 +1071,7 @@ const checkState = async (
     }
   }
 
-  const before = await fullSnapshot()
+  const writesBefore = await lastRowEvent()
   await repo.tx(async tx => {
     for (const [ownerId, names] of rematerialize) {
       const owner = await tx.get(ownerId)
@@ -1065,7 +1081,9 @@ const checkState = async (
     }
     await reprojectOwnersForRowStates(tx, projectRows, lookups, 'full')
   }, {scope: ChangeScope.BlockDefault})
-  expect(await fullSnapshot(), `${label}: Q — re-running MATERIALIZE/PROJECT must write nothing`).toEqual(before)
+  // Every write to `blocks` logs a row event, so "writes nothing" is literal:
+  // an identical rewrite fails it as surely as a changed one.
+  expect(await lastRowEvent(), `${label}: Q — re-running MATERIALIZE/PROJECT must write nothing`).toBe(writesBefore)
 }
 
 /** I — the cell ends where the tx's cell writes put it. */
@@ -1230,7 +1248,7 @@ describe('properties-as-blocks dual representation under mixed writer sequences'
     await fc.assert(
       fc.asyncProperty(caseArb, ({mode, txs, prngSeed}) =>
         guard.run(prngSeed, () => runCase({mode, txs}))),
-      fuzzParams(12),
+      fuzzParams(20),
     )
   }, fuzzTestTimeout())
 
@@ -1244,7 +1262,7 @@ describe('properties-as-blocks dual representation under mixed writer sequences'
     await fc.assert(
       fc.asyncProperty(caseArb, ({mode, txs, prngSeed}) =>
         guard.run(prngSeed, () => runCase({mode, txs}))),
-      {numRuns: 40, seed: 430},
+      {numRuns: 60, seed: 430},
     )
     const summary = JSON.stringify(stats, (_, v: unknown) => v instanceof Map ? Object.fromEntries(v) : v)
     for (const op of LOCAL_OPS) {
