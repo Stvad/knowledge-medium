@@ -89,7 +89,7 @@ const main = argv => {
   const published = typeof reply?.body === 'string' ? reply.body : signedBody(body.text)
   const refs = extractIssueRefs(published)
   if (!refs.length) return null
-  const cap = refsCap(Date.now() + ECHO_BUDGET_MS)
+  const cap = refsCap(ECHO_BUDGET_MS)
   console.log(
     cap > 0
       ? `\n${issueRefsTable(published, refs.slice(0, cap), 'post')}${moreRefsNote(refs.length, cap)}`
