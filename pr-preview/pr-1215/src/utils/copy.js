@@ -1,0 +1,1 @@
+import{$C as e,QC as t,XC as n,ZC as r,ew as i}from"../../chunks/app-D30-Jg3y.js";export{n as copyBlockIdsToClipboard,r as copyBlockToClipboard,t as copySelectedBlocksToClipboard,e as serializeBlock,i as serializeSelectedBlocks};

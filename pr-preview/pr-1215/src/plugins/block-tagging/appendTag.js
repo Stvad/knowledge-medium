@@ -1,0 +1,1 @@
+import{_s as e,vs as t}from"../../../chunks/app-D30-Jg3y.js";export{e as appendTagToBlocks,t as appendTagToContent};

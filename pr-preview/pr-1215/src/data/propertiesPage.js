@@ -1,0 +1,1 @@
+import{F1 as e,I1 as t}from"../../chunks/app-D30-Jg3y.js";export{e as getOrCreatePropertiesPage,t as propertiesPageBlockId};

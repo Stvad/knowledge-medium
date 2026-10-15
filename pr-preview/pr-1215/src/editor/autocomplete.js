@@ -1,0 +1,1 @@
+import{Sw as e}from"../../chunks/app-D30-Jg3y.js";export{e as editorAutocompleteExtension};

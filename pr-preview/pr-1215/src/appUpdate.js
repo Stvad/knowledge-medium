@@ -1,0 +1,1 @@
+import{nT as e,rT as t}from"../chunks/app-D30-Jg3y.js";export{e as appUpdate,t as useAppUpdateAvailable};
