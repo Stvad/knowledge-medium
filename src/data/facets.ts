@@ -19,7 +19,7 @@ import type {
   Tx,
 } from '@/data/api'
 import {
-  projectedPropertyDefinitionFieldId,
+  combineProjectedPropertyDefinitions,
   type ProjectedPropertyDefinition,
 } from '@/data/propertyDefinitionRegistry'
 import type {ProjectedTypeDefinition} from '@/data/typeDefinitionRegistry'
@@ -293,10 +293,14 @@ export const definitionSeedsFacet = defineFacet<
 /** Block-built property definitions keyed by durable field id: parsed
  * metadata with optional locally-buildable behavior, or the marker for a
  * `property-schema` block whose metadata does not parse. */
-export const projectedPropertyDefinitionsFacet = keyedMapFacet<ProjectedPropertyDefinition>(
-  'data.projected-property-definitions',
-  projectedPropertyDefinitionFieldId,
-)
+export const projectedPropertyDefinitionsFacet = defineFacet<
+  ProjectedPropertyDefinition,
+  ReadonlyMap<string, ProjectedPropertyDefinition>
+>({
+  id: 'data.projected-property-definitions',
+  combine: combineProjectedPropertyDefinitions,
+  empty: () => new Map(),
+})
 
 /** Block-built type definitions keyed by durable block id — the type-side
  * twin of `projectedPropertyDefinitionsFacet`. The `userTypesProjector`

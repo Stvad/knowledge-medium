@@ -38,6 +38,34 @@ export const projectedPropertyDefinitionFieldId = (
   ? projected.metadata.fieldId
   : projected.unparseable.fieldId
 
+/** Fold every source's projected definitions into one entry per field id.
+ *  Last-wins, as for every keyed registry facet, except that a parsed
+ *  definition outranks an unparseable marker for the same id in either order:
+ *  a source that CAN define the id answers for it over one that could not read
+ *  the block. That keeps `definitionsByFieldId` and `unparseableDefinitionIds`
+ *  disjoint whatever the contribution order. */
+export const combineProjectedPropertyDefinitions = (
+  values: readonly ProjectedPropertyDefinition[],
+): ReadonlyMap<string, ProjectedPropertyDefinition> => {
+  const out = new Map<string, ProjectedPropertyDefinition>()
+  for (const value of values) {
+    const key = projectedPropertyDefinitionFieldId(value)
+    const existing = out.get(key)
+    if (existing !== undefined) {
+      const parsedNow = isParsedPropertyDefinition(value)
+      if (isParsedPropertyDefinition(existing) && !parsedNow) continue
+      if (isParsedPropertyDefinition(existing) === parsedNow) {
+        console.warn(
+          `[data.projected-property-definitions] duplicate registration for "${key}"; ` +
+          'last-wins per facet convention',
+        )
+      }
+    }
+    out.set(key, value)
+  }
+  return out
+}
+
 export interface PropertyDefinitionRegistrySnapshot {
   readonly workspaceId: string
   readonly schemas: ReadonlyMap<string, AnyPropertySchema>

@@ -4,6 +4,7 @@ import {propertyDefinitionBlockId} from '@/data/definitionSeeds'
 import type {PropertyDefinitionMetadata} from '@/data/propertyDefinitionMetadata'
 import {
   buildPropertyDefinitionRegistry,
+  combineProjectedPropertyDefinitions,
   resolveEditorOverride,
 } from '@/data/propertyDefinitionRegistry'
 import {createPropertySchemaResolver} from '@/data/internals/propertySchemaResolution'
@@ -220,6 +221,16 @@ describe('property definition registry snapshot', () => {
       status: 'identity-unavailable',
       reason: 'definition-unavailable',
     })
+  })
+
+  it('lets a parsed definition outrank an unparseable marker for its id, in either order', () => {
+    const parsed = {metadata: metadata('dual', 'dual', 1)}
+    const marker = {unparseable: {fieldId: 'dual', workspaceId: WS}}
+    for (const values of [[parsed, marker], [marker, parsed]]) {
+      const snapshot = build({projectedDefinitions: combineProjectedPropertyDefinitions(values)})
+      expect(snapshot.definitionsByFieldId.get('dual')).toBe(parsed.metadata)
+      expect(snapshot.unparseableDefinitionIds.has('dual')).toBe(false)
+    }
   })
 
   it('rejects a structural handle that borrows another declaration seed key', () => {
