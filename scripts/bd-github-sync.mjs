@@ -2297,14 +2297,17 @@ export const fetchIssueInfo = number => {
 // bd-publish-verify.mjs (mode 'post', where the text already published).
 const lookUpRefs = refs => refs.map(number => ({ number, info: fetchIssueInfo(number) }))
 
-// How many references an echo after publication may look up before a
-// deadline. The text is already out by then, so an echo that overran would
+// How many references an echo after publication may look up in the time it
+// has left. The text is already out by then, so an echo that overran would
 // read as a failed publish. Each lookup may take ISSUE_LOOKUP_TIMEOUT, so the
 // cap is what the time left divides into; the references past it are counted
-// by moreRefsNote. REFS_CAP is defence in depth: every shipped budget binds
-// first, and it keeps a larger one from uncapping the echo.
+// by moreRefsNote. It takes a duration, not a deadline: a caller holding a
+// budget passes it whole, where a deadline built from one clock read and
+// measured against another loses a lookup to any millisecond between them.
+// REFS_CAP is defence in depth: every shipped budget binds first, and it
+// keeps a larger one from uncapping the echo.
 const REFS_CAP = 15
-export const refsCap = deadline => Math.min(REFS_CAP, Math.max(0, Math.floor((deadline - Date.now()) / ISSUE_LOOKUP_TIMEOUT) - 1))
+export const refsCap = msLeft => Math.min(REFS_CAP, Math.max(0, Math.floor(msLeft / ISSUE_LOOKUP_TIMEOUT) - 1))
 export const moreRefsNote = (total, cap) => (total > cap ? `\n  …and ${total - cap} more references not echoed` : '')
 export const issueRefsTable = (text, refs, mode = 'pre') => buildIssueRefsMessage(lookUpRefs(refs), new Set(closeKeywordRefs(text)), mode)
 
