@@ -272,8 +272,9 @@ const REFUSALS: Record<RefusalReason, {code: string; message: string}> = {
   },
 }
 
-/** Refusing every definition rename and re-type for as long as the
- *  cell-to-children backfill holds this workspace's claim (#1029).
+/** Refusing every definition rename and re-type, and every rename or revival
+ *  that leaves a name shared, for as long as the cell-to-children backfill
+ *  holds this workspace's claim (#1029).
  *
  *  The recovery half is {@link STRANDED_CLAIM_RECOVERY}, shared with the pass's
  *  own report of a claim held elsewhere, so an operator who meets both does not
@@ -294,9 +295,10 @@ const MIGRATION_RUNNING_REFUSAL = {
   code: 'property.definition-change.migration-running',
   message:
     'The properties migration is running on this workspace, so a property '
-    + 'definition cannot be renamed or given a different type yet: blocks it has '
-    + 'not reached still hold this property under its current name, and it would '
-    + `never convert them. Wait for it to finish — ${STRANDED_CLAIM_RECOVERY}.`,
+    + 'definition cannot be renamed, given a different type, or restored under a '
+    + 'name another definition holds yet: blocks it has not reached still hold '
+    + 'this property under its current name, and it would never convert them. '
+    + `Wait for it to finish — ${STRANDED_CLAIM_RECOVERY}.`,
 } as const
 
 /** Refusing to let a renamed or revived definition answer to a name another
@@ -855,20 +857,28 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
     // `json_each` scan over the workspace's bags inside the user's own editing
     // transaction (#1029).
     //
-    // These two lists PARTITION the renames and re-types this tx makes — every
-    // candidate ends in exactly one of them — so together they answer "does
-    // this transaction change a definition at all", which is the question here.
-    // Reading them is sound only while that holds: a change dropped into
-    // NEITHER would commit its new name with its consumers unreached and this
-    // gate would not even look. #1028 made the contested ones held rather than
-    // dropped, which closed the last such path.
+    // The first two lists PARTITION the renames and re-types this tx makes —
+    // every candidate ends in exactly one of them — and the third is non-empty
+    // exactly when an arrival leaves a name with a second claimant, which is
+    // the shared-name refusal's question and needs field rows as much. So
+    // together they answer "does this transaction change what a name resolves
+    // to", which is the question here. Reading them is sound only while that
+    // holds: a change dropped into NONE would commit with its consumers
+    // unreached and this gate would not even look. #1028 made the contested
+    // ones held rather than dropped, which closed the last such path.
     //
-    // What the gate keeps out is the writes that are not a rename or a re-type
-    // at all — a CREATE has no before row, and neither an unrelated bag edit
-    // nor the materializer's own field-row bookkeeping survives
-    // `collectChanges`. That is what lets the migration gesture mint its orphan
-    // definitions while holding its own claim.
-    if (changes.length > 0 || unfanoutable.length > 0) {
+    // What the gate keeps out is the writes that change no name's meaning — a
+    // CREATE has no before row, a revival onto a free name hands its consumers
+    // to nobody else, and neither an unrelated bag edit nor the materializer's
+    // own field-row bookkeeping survives `collectChanges`. That is what lets
+    // the migration gesture mint its orphan definitions while holding its own
+    // claim.
+    const touched = [
+      ...changes.map(change => change.fieldId),
+      ...unfanoutable.map(held => held.fieldId),
+      ...sharedNameClaimants,
+    ]
+    if (touched.length > 0) {
       // The TRANSACTION's own view, like every other read here. The claim is
       // synced data, so a peer device holding the row refuses too.
       if (await isGraphBackfillClaimActive(
@@ -876,11 +886,7 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
       )) {
         throw new ProcessorRejection(
           MIGRATION_RUNNING_REFUSAL.message, MIGRATION_RUNNING_REFUSAL.code,
-          {
-            workspaceId: event.workspaceId,
-            fieldIds: [...changes.map(change => change.fieldId),
-                       ...unfanoutable.map(held => held.fieldId)],
-          },
+          {workspaceId: event.workspaceId, fieldIds: touched},
         )
       }
     }
