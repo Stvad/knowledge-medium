@@ -72,7 +72,10 @@
  *     An owner restored from a tombstone keeps every key the tx did not
  *     write (MATERIALIZE's revival re-materializes the bag rather than
  *     letting PROJECT read the tombstoned children as "unset"), unless an
- *     arrival had already waived the pair.
+ *     arrival had already waived the pair, or the tx that deleted it had
+ *     also raw-written its bag or edited its children: the processors skip
+ *     a tombstoned row, so that divergence was never reconciled, and the
+ *     revival settles it toward the children (§5).
  *  A  a rejected transaction (a legal kernel rejection, or MATERIALIZE
  *     refusing a cell value no value child can carry) leaves the db
  *     byte-identical.
@@ -184,8 +187,9 @@ type ContentSpec =
  *  the `nested`-th value row under it, acting as an owner in its own right. */
 type OwnerSel = {top: number; nested?: number}
 /** The `pick`-th live field row (any marked row) or value row (an unmarked
- *  child of a marked row) under owner `within`, or anywhere when null —
- *  chosen among rows that EXIST, so tree edits rarely resolve to nothing. */
+ *  child of a marked row) under owner `within` — anywhere when null, or when
+ *  that owner has none — chosen among rows that EXIST, so tree edits rarely
+ *  resolve to nothing. */
 type RowSel = {within: number | null; level: 'field' | 'value'; pick: number}
 
 type LocalOp =
@@ -213,7 +217,9 @@ type RawOp =
   | {op: 'rawContent'; row: RowSel; content: ContentSpec; withCell: boolean}
   | {op: 'rawDelete'; row: RowSel; subtree: boolean; withCell: boolean}
   | {op: 'rawCell'; top: number; kind: Kind; value: unknown; remove: boolean}
-  | {op: 'rawOrphan'; top: number; kind: Kind; content: ContentSpec}
+  /** A live child arriving under the `pick`-th row tombstoned here — a value
+   *  under a reaped field row, or a field row under a deleted owner. */
+  | {op: 'rawOrphan'; pick: number; content: ContentSpec}
   | {op: 'rawDeleteOwner'; pick: number}
   | {op: 'rawRestoreOwner'; pick: number}
 
@@ -319,7 +325,8 @@ const opArbs = ({top, kind}: Focus) => {
       pos,
     })},
     {weight: 1, arbitrary: fc.record({op: fc.constant('deleteOwner' as const), pick: ownerPick})},
-    {weight: 1, arbitrary: fc.record({op: fc.constant('restoreOwner' as const), pick: ownerPick})},
+    // Heavier than delete: a restore only lands once an owner is dead.
+    {weight: 2, arbitrary: fc.record({op: fc.constant('restoreOwner' as const), pick: ownerPick})},
   )
 
   const raw: fc.Arbitrary<RawOp> = fc.oneof(
@@ -341,12 +348,9 @@ const opArbs = ({top, kind}: Focus) => {
       op: fc.constant('rawCell' as const), top: fc.constant(t), kind: fc.constant(k),
       value: valueArb(k), remove: fc.boolean(),
     }))},
-    {weight: 2, arbitrary: fc.record({top: hotTop, kind: hotKind}).chain(({top: t, kind: k}) => fc.record({
-      op: fc.constant('rawOrphan' as const), top: fc.constant(t), kind: fc.constant(k),
-      content: valueContent(k),
-    }))},
+    {weight: 2, arbitrary: fc.record({op: fc.constant('rawOrphan' as const), pick: fc.nat(5), content})},
     {weight: 2, arbitrary: fc.record({op: fc.constant('rawDeleteOwner' as const), pick: ownerPick})},
-    {weight: 2, arbitrary: fc.record({op: fc.constant('rawRestoreOwner' as const), pick: ownerPick})},
+    {weight: 3, arbitrary: fc.record({op: fc.constant('rawRestoreOwner' as const), pick: ownerPick})},
   )
   return {local, raw}
 }
@@ -376,7 +380,9 @@ const caseArb = fc.record({
   focus: fc.record({top: TOP_ARB, kind: KIND_ARB}),
 }).chain(({mode, focus}) => fc.record({
   mode: fc.constant(mode),
-  txs: fc.array(txArb(mode, focus), {minLength: 1, maxLength: 14}),
+  // Long enough to accumulate state worth editing: an op aimed at rows
+  // that do not exist yet resolves to nothing.
+  txs: fc.array(txArb(mode, focus), {minLength: 4, maxLength: 16}),
   prngSeed: fc.integer({min: 1, max: 2 ** 31 - 2}),
 }))
 
@@ -516,7 +522,6 @@ const resolveContent = (spec: ContentSpec): string => {
     case 'markedUnknown': return propertyFieldContent(UNKNOWN_FIELD_ID)
   }
 }
-const isMarkedSpec = (spec: ContentSpec): boolean => spec.c === 'marked' || spec.c === 'markedUnknown'
 
 const isLive = async (tx: Tx, id: string): Promise<boolean> => {
   const row = await tx.get(id)
@@ -568,9 +573,9 @@ const resolveOwner = async (tx: Tx, sel: OwnerSel): Promise<string | null> => {
 }
 
 const resolveRow = async (tx: Tx, sel: RowSel): Promise<string | null> => {
-  const root = sel.within === null ? ROOT : OWNERS[sel.within]!
-  if (!(await isLive(tx, root))) return null
-  return pickFrom(await levelRowsIn(tx, root, sel.level), sel.pick)
+  const scoped = sel.within === null ? [] : await levelRowsIn(tx, OWNERS[sel.within]!, sel.level)
+  const rows = scoped.length > 0 ? scoped : await levelRowsIn(tx, ROOT, sel.level)
+  return pickFrom(rows, sel.pick)
 }
 
 /** The `pick`-th top owner whose liveness is `live`. */
@@ -613,10 +618,55 @@ interface Waivers {
   dup: Set<string>
   /** Row ids an arrival left live under a tombstone. */
   orphans: Set<string>
+  /** Rows that died in a tx which also wrote them through a deferred path —
+   *  a raw bag write or a child edit — so their tombstoned cell and children
+   *  were never reconciled. Eager writes keep the two in step and do not
+   *  count. Cleared when the row comes back. */
+  unsettledDead: Set<string>
 }
 const pairKey = (ownerId: string, fieldId: string): string => `${ownerId}|${fieldId}`
+/** Every pair of `ownerId` — only for an arrival that genuinely affects them
+ *  all, like an owner restored ahead of its field rows. */
 const waiveOwner = (set: Set<string>, ownerId: string): void => {
   for (const kind of KINDS) set.add(pairKey(ownerId, SCHEMAS[kind].fieldId))
+}
+
+const isRegisteredField = (fieldId: string | null | undefined): fieldId is string =>
+  fieldId !== null && fieldId !== undefined && KIND_BY_FIELD.has(fieldId)
+
+/** The derived columns `content` gets, exactly as DERIVE (and the arrival
+ *  processor) computes them. */
+const derivedColumns = async (content: string): Promise<{target: string | null; isFieldForm: number | null}> => {
+  const derived = await deriveReferenceColumns(content, WS, {aliasTargetId: async () => null})
+  return {target: derived.targetId ?? null, isFieldForm: derived.isFieldForm ? 1 : null}
+}
+
+/** The registered property `content` marks a row as a field row of — null for
+ *  an unmarked row, and for a marked one whose target resolves to no
+ *  definition (§9 condition 3: not a field row at all). Read from the CONTENT,
+ *  not the bit, which is only stamped at the end of the tx. */
+const markedFieldId = async (content: string): Promise<string | null> => {
+  const {target, isFieldForm} = await derivedColumns(content)
+  return isFieldForm === 1 && isRegisteredField(target) ? target : null
+}
+
+/** The pairs whose projection reads `row`: as a field row of its parent, or as
+ *  a value of its parent field row. */
+const pairsReading = (
+  state: DbState,
+  row: Pick<Row, 'parent_id' | 'is_field_form' | 'reference_target_id'>,
+): string[] => {
+  if (row.parent_id === null) return []
+  // A field row needs only its parent's id — which may be a row the same
+  // arrival is still inserting, absent from `state`.
+  if (row.is_field_form === 1) {
+    return isRegisteredField(row.reference_target_id) ? [pairKey(row.parent_id, row.reference_target_id)] : []
+  }
+  const parent = state.byId.get(row.parent_id)
+  return parent !== undefined && parent.deleted === 0 && parent.is_field_form === 1 && parent.parent_id !== null
+    && isRegisteredField(parent.reference_target_id)
+    ? [pairKey(parent.parent_id, parent.reference_target_id)]
+    : []
 }
 
 // ──── one local transaction ────
@@ -630,11 +680,18 @@ interface TxLog {
   /** Owners some child edit in this tx reached (the edited rows, their
    *  ancestors, before and after a move). */
   childTouched: Set<string>
-  /** Owners a child edit may have handed a NEW marked row. */
+  /** Pairs a child edit may have handed a NEW field row. */
   dupRisk: Set<string>
   /** owner → keys an eager write reconciled children for. */
   eagerConverged: Map<string, Set<string>>
 }
+
+/** An eager write followed by a raw bag write to the same key: from then on
+ *  only MATERIALIZE's NET diff reaches the children, so the key's outcome is
+ *  order-blind (the accepted wrinkle in propertyChildrenProcessor.ts's
+ *  docblock) and the eager write's reconcile proves nothing about the end. */
+const rawAfterEager = (evs: readonly Ev[]): boolean =>
+  evs.some((ev, i) => ev.cls === 'E' && evs.slice(i + 1).some(later => later.cls === 'R'))
 
 const addEvent = (log: TxLog, ownerId: string, name: string, ev: Ev): void => {
   let byName = log.events.get(ownerId)
@@ -723,8 +780,10 @@ const applyLocalOp = async (tx: Tx, op: LocalOp, log: TxLog): Promise<boolean> =
       const id = await resolveRow(tx, op.row)
       if (id === null) return false
       await touch(log, tx, id)
-      if (isMarkedSpec(op.content)) log.dupRisk.add((await tx.get(id))!.parentId!)
-      await tx.update(id, {content: resolveContent(op.content)})
+      const content = resolveContent(op.content)
+      const fieldId = await markedFieldId(content)
+      if (fieldId !== null) log.dupRisk.add(pairKey((await tx.get(id))!.parentId!, fieldId))
+      await tx.update(id, {content})
       return true
     }
     case 'deleteRow': {
@@ -742,7 +801,8 @@ const applyLocalOp = async (tx: Tx, op: LocalOp, log: TxLog): Promise<boolean> =
       const destParent = (await fieldRowsIn(tx, destOwner, op.dest.kind))[0]?.id ?? destOwner
       await touch(log, tx, id)
       await touch(log, tx, destParent)
-      log.dupRisk.add(destParent)
+      const fieldId = await markedFieldId((await tx.get(id))!.content)
+      if (fieldId !== null) log.dupRisk.add(pairKey(destParent, fieldId))
       await tx.move(id, {parentId: destParent, orderKey: await keyAt(tx, destParent, op.pos, id)})
       return true
     }
@@ -760,12 +820,10 @@ const applyLocalOp = async (tx: Tx, op: LocalOp, log: TxLog): Promise<boolean> =
         : await resolveRow(tx, op.parent)
       if (parent === null) return false
       await touch(log, tx, parent)
-      if (isMarkedSpec(op.content)) log.dupRisk.add(parent)
-      await tx.create({
-        workspaceId: WS, parentId: parent,
-        orderKey: await keyAt(tx, parent, op.pos),
-        content: resolveContent(op.content),
-      })
+      const content = resolveContent(op.content)
+      const fieldId = await markedFieldId(content)
+      if (fieldId !== null) log.dupRisk.add(pairKey(parent, fieldId))
+      await tx.create({workspaceId: WS, parentId: parent, orderKey: await keyAt(tx, parent, op.pos), content})
       return true
     }
     case 'deleteOwner': {
@@ -798,21 +856,17 @@ const assertLegalRejection = (e: unknown, desc: string): void => {
 type Lock = Parameters<Parameters<TestDb['db']['writeTransaction']>[0]>[0]
 let rawSeq = 0
 
-const derivedColumns = async (content: string): Promise<{target: string | null; isFieldForm: number | null}> => {
-  const derived = await deriveReferenceColumns(content, WS, {aliasTargetId: async () => null})
-  return {target: derived.targetId ?? null, isFieldForm: derived.isFieldForm ? 1 : null}
-}
-
-/** Inserts one peer row. A MARKED row makes its parent an owner whose cell
- *  the arrival never wrote, so that parent's pairs are waived. */
+/** Inserts one peer row, waiving the pairs it lands in: the arrival wrote no
+ *  cell for them, and a field row may duplicate one already there. */
 const rawInsert = async (
-  lock: Lock, waivers: Waivers, parentId: string, orderKey: string, content: string,
+  lock: Lock, state: DbState, waivers: Waivers, parentId: string, orderKey: string, content: string,
 ): Promise<string> => {
   const id = `peer-${++rawSeq}`
   const {target, isFieldForm} = await derivedColumns(content)
-  if (isFieldForm === 1) {
-    waiveOwner(waivers.proj, parentId)
-    waiveOwner(waivers.dup, parentId)
+  const pairs = pairsReading(state, {parent_id: parentId, is_field_form: isFieldForm, reference_target_id: target})
+  for (const key of pairs) {
+    waivers.proj.add(key)
+    if (isFieldForm === 1) waivers.dup.add(key)
   }
   await lock.execute(
     `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json, references_json,
@@ -832,14 +886,24 @@ const rawSetCell = async (lock: Lock, ownerId: string, name: string, value: unkn
     [JSON.stringify(bag), ownerId])
 }
 
-/** A peer's PROJECT for one owner: rewrite its cell from its children. */
-const rawReproject = async (lock: Lock, ownerId: string): Promise<void> => {
+/** A peer's PROJECT for the pairs its write touched: rewrite those cell keys
+ *  from the children. */
+const rawReproject = async (lock: Lock, pairs: readonly string[]): Promise<void> => {
   const state = await readStateIn(lock)
-  const owner = state.byId.get(ownerId)
-  if (owner === undefined || owner.deleted) return
-  for (const kind of KINDS) {
+  for (const key of pairs) {
+    const [ownerId, fieldId] = key.split('|') as [string, string]
+    const owner = state.byId.get(ownerId)
+    if (owner === undefined || owner.deleted) continue
+    const kind = KIND_BY_FIELD.get(fieldId)!
     await rawSetCell(lock, ownerId, SCHEMAS[kind].schema.name, projectFromChildren(state, ownerId, kind))
   }
+}
+
+/** Where a raw write that moved `pairs` leaves their cells: rewritten by the
+ *  peer's own PROJECT, or waived as out of step. */
+const settleRawPairs = async (lock: Lock, waivers: Waivers, pairs: readonly string[], withCell: boolean): Promise<void> => {
+  if (withCell) await rawReproject(lock, pairs)
+  else for (const key of pairs) waivers.proj.add(key)
 }
 
 const readStateIn = async (lock: Lock): Promise<DbState> => {
@@ -860,19 +924,20 @@ const readStateIn = async (lock: Lock): Promise<DbState> => {
   return {byId, liveChildren}
 }
 
+/** `resolveRow`'s twin over a raw read: the same subtree walk and fallback. */
 const rawRowOf = (state: DbState, sel: RowSel): Row | null => {
-  const root = state.byId.get(sel.within === null ? ROOT : OWNERS[sel.within]!)
-  if (root === undefined || root.deleted !== 0) return null
-  const rows: Row[] = []
-  const stack = [root.id]
-  while (stack.length > 0) {
-    const children = state.liveChildren.get(stack.pop()!) ?? []
-    rows.push(...children)
-    for (const child of [...children].reverse()) stack.push(child.id)
+  const levelRows = (rootId: string): Row[] => {
+    const rows: Row[] = []
+    const stack = state.byId.get(rootId)?.deleted === 0 ? [rootId] : []
+    while (stack.length > 0) {
+      const children = state.liveChildren.get(stack.pop()!) ?? []
+      rows.push(...children)
+      for (const child of [...children].reverse()) stack.push(child.id)
+    }
+    return rowsAtLevel(rows.map(r => ({...r, parentId: r.parent_id, marked: r.is_field_form === 1})), sel.level)
   }
-  const picked = pickFrom(rowsAtLevel(
-    rows.map(r => ({id: r.id, parentId: r.parent_id, marked: r.is_field_form === 1})), sel.level), sel.pick)
-  return picked === null ? null : state.byId.get(picked.id)!
+  const scoped = sel.within === null ? [] : levelRows(OWNERS[sel.within]!)
+  return pickFrom(scoped.length > 0 ? scoped : levelRows(ROOT), sel.pick)
 }
 
 const rawPickTop = (state: DbState, pick: number, live: boolean): string | null =>
@@ -889,116 +954,103 @@ const subtreeIds = (state: DbState, rootId: string): string[] => {
   return out
 }
 
-const applyRawOp = async (op: RawOp, waivers: Waivers): Promise<void> => {
+/** Applies one arrival; false when it found nothing to write. */
+const applyRawOp = async (op: RawOp, waivers: Waivers): Promise<boolean> => {
+  let wrote = false
   await sharedDb.db.writeTransaction(async lock => {
     const state = await readStateIn(lock)
-    switch (op.op) {
-      case 'rawDupField': {
-        // A peer that minted its own field row for the same property.
-        const ownerId = OWNERS[op.top]!
-        const owner = state.byId.get(ownerId)!
-        if (owner.deleted) return
-        const {fieldId, schema} = SCHEMAS[op.kind]
-        const siblings = state.liveChildren.get(ownerId) ?? []
-        const existing = liveFieldRows(state, ownerId, fieldId)
-        const orderKey = op.key === 'tie' && existing.length > 0
-          ? existing[0]!.order_key
-          : op.key === 'first' && siblings.length > 0
-            ? keysBetween(null, siblings[0]!.order_key, 1)[0]!
-            : keysBetween(siblings.at(-1)?.order_key ?? null, null, 1)[0]!
-        const fieldRowId = await rawInsert(lock, waivers, ownerId, orderKey, propertyFieldContent(fieldId))
-        const contents = op.values.map(resolveContent)
-        const keys = keysBetween(null, null, Math.max(contents.length, 1))
-        for (const [i, content] of contents.entries()) await rawInsert(lock, waivers, fieldRowId, keys[i]!, content)
-        if (op.peerCell) {
-          // The peer's own cell: what ITS children project to, alone.
-          await rawSetCell(lock, ownerId, schema.name, childContentsToEncodedPropertyValue(schema, contents))
-        }
-        waivers.proj.add(pairKey(ownerId, fieldId))
-        waivers.dup.add(pairKey(ownerId, fieldId))
-        return
-      }
-      case 'rawContent': {
-        const row = rawRowOf(state, op.row)
-        if (row === null) return
-        const content = resolveContent(op.content)
-        const {target, isFieldForm} = await derivedColumns(content)
-        await lock.execute(
-          `UPDATE blocks SET content = ?, reference_target_id = ?, is_field_form = ?, updated_at = updated_at + 1
-            WHERE id = ?`,
-          [content, target, isFieldForm, row.id],
-        )
-        const affected = [row.parent_id!, state.byId.get(row.parent_id!)?.parent_id ?? null]
-          .filter((id): id is string => id !== null)
-        if (isFieldForm === 1) waiveOwner(waivers.dup, row.parent_id!)
-        for (const ownerId of affected) {
-          if (op.withCell) await rawReproject(lock, ownerId)
-          else waiveOwner(waivers.proj, ownerId)
-        }
-        return
-      }
-      case 'rawDelete': {
-        const row = rawRowOf(state, op.row)
-        if (row === null) return
-        const ids = op.subtree ? subtreeIds(state, row.id) : [row.id]
-        for (const id of ids) await lock.execute('UPDATE blocks SET deleted = 1, updated_at = updated_at + 1 WHERE id = ?', [id])
-        if (!op.subtree) {
-          for (const child of state.liveChildren.get(row.id) ?? []) waivers.orphans.add(child.id)
-        }
-        const affected = [row.parent_id!, state.byId.get(row.parent_id!)?.parent_id ?? null]
-          .filter((id): id is string => id !== null)
-        for (const ownerId of affected) {
-          if (op.withCell) await rawReproject(lock, ownerId)
-          else waiveOwner(waivers.proj, ownerId)
-        }
-        return
-      }
-      case 'rawCell': {
-        const ownerId = OWNERS[op.top]!
-        const {schema, fieldId} = SCHEMAS[op.kind]
-        await rawSetCell(lock, ownerId, schema.name, op.remove ? undefined : encodeFor(op.kind, op.value))
-        waivers.proj.add(pairKey(ownerId, fieldId))
-        return
-      }
-      case 'rawOrphan': {
-        // A peer's value written under a field row that is tombstoned here,
-        // or a field row under an owner that is tombstoned here.
-        const ownerId = OWNERS[op.top]!
-        const {fieldId} = SCHEMAS[op.kind]
-        const owner = state.byId.get(ownerId)!
-        const deadFieldRow = [...state.byId.values()].find(r =>
-          r.parent_id === ownerId && r.deleted === 1 && r.is_field_form === 1 && r.reference_target_id === fieldId)
-        if (owner.deleted) {
-          const fieldRowId = await rawInsert(lock, waivers, ownerId, keysBetween(null, null, 1)[0]!, propertyFieldContent(fieldId))
-          waivers.orphans.add(fieldRowId)
-          waivers.orphans.add(await rawInsert(lock, waivers, fieldRowId, keysBetween(null, null, 1)[0]!, resolveContent(op.content)))
-          waiveOwner(waivers.proj, ownerId)
-          waiveOwner(waivers.dup, ownerId)
-        } else if (deadFieldRow) {
-          waivers.orphans.add(await rawInsert(lock, waivers, deadFieldRow.id, keysBetween(null, null, 1)[0]!, resolveContent(op.content)))
-        }
-        return
-      }
-      case 'rawDeleteOwner': {
-        // A peer's subtree delete, arriving whole.
-        const ownerId = rawPickTop(state, op.pick, true)
-        if (ownerId === null) return
-        for (const id of subtreeIds(state, ownerId)) {
-          await lock.execute('UPDATE blocks SET deleted = 1, updated_at = updated_at + 1 WHERE id = ? AND deleted = 0', [id])
-        }
-        return
-      }
-      case 'rawRestoreOwner': {
-        // A peer's restore of the owner, arriving ahead of the field rows its
-        // revival wrote.
-        const ownerId = rawPickTop(state, op.pick, false)
-        if (ownerId === null) return
-        await lock.execute('UPDATE blocks SET deleted = 0, updated_at = updated_at + 1 WHERE id = ?', [ownerId])
-        waiveOwner(waivers.proj, ownerId)
-        return
-      }
-    }
+    wrote = await applyRawOpIn(lock, state, op, waivers)
   })
+  return wrote
+}
+
+const applyRawOpIn = async (lock: Lock, state: DbState, op: RawOp, waivers: Waivers): Promise<boolean> => {
+  switch (op.op) {
+    case 'rawDupField': {
+      // A peer that minted its own field row for the same property.
+      const ownerId = OWNERS[op.top]!
+      const owner = state.byId.get(ownerId)!
+      if (owner.deleted) return false
+      const {fieldId, schema} = SCHEMAS[op.kind]
+      const siblings = state.liveChildren.get(ownerId) ?? []
+      const existing = liveFieldRows(state, ownerId, fieldId)
+      const orderKey = op.key === 'tie' && existing.length > 0
+        ? existing[0]!.order_key
+        : op.key === 'first' && siblings.length > 0
+          ? keysBetween(null, siblings[0]!.order_key, 1)[0]!
+          : keysBetween(siblings.at(-1)?.order_key ?? null, null, 1)[0]!
+      const fieldRowId = await rawInsert(lock, state, waivers, ownerId, orderKey, propertyFieldContent(fieldId))
+      const contents = op.values.map(resolveContent)
+      const keys = keysBetween(null, null, Math.max(contents.length, 1))
+      for (const [i, content] of contents.entries()) await rawInsert(lock, state, waivers, fieldRowId, keys[i]!, content)
+      if (op.peerCell) {
+        // The peer's own cell: what ITS children project to, alone.
+        await rawSetCell(lock, ownerId, schema.name, childContentsToEncodedPropertyValue(schema, contents))
+      }
+      // `rawInsert` already waived the pair; the peer's cell, when it
+      // arrives too, says what only ITS field row projects to.
+      return true
+    }
+    case 'rawContent': {
+      const row = rawRowOf(state, op.row)
+      if (row === null) return false
+      const content = resolveContent(op.content)
+      const {target, isFieldForm} = await derivedColumns(content)
+      await lock.execute(
+        `UPDATE blocks SET content = ?, reference_target_id = ?, is_field_form = ?, updated_at = updated_at + 1
+          WHERE id = ?`,
+        [content, target, isFieldForm, row.id],
+      )
+      // The pairs that read the row before the edit, and the ones that read
+      // it after — a value can turn into a field row and back.
+      const after = pairsReading(state, {parent_id: row.parent_id, is_field_form: isFieldForm, reference_target_id: target})
+      if (isFieldForm === 1) for (const key of after) waivers.dup.add(key)
+      await settleRawPairs(lock, waivers, [...new Set([...pairsReading(state, row), ...after])], op.withCell)
+      return true
+    }
+    case 'rawDelete': {
+      const row = rawRowOf(state, op.row)
+      if (row === null) return false
+      const ids = op.subtree ? subtreeIds(state, row.id) : [row.id]
+      for (const id of ids) await lock.execute('UPDATE blocks SET deleted = 1, updated_at = updated_at + 1 WHERE id = ?', [id])
+      if (!op.subtree) {
+        for (const child of state.liveChildren.get(row.id) ?? []) waivers.orphans.add(child.id)
+      }
+      await settleRawPairs(lock, waivers, pairsReading(state, row), op.withCell)
+      return true
+    }
+    case 'rawCell': {
+      const ownerId = OWNERS[op.top]!
+      const {schema, fieldId} = SCHEMAS[op.kind]
+      await rawSetCell(lock, ownerId, schema.name, op.remove ? undefined : encodeFor(op.kind, op.value))
+      waivers.proj.add(pairKey(ownerId, fieldId))
+      return true
+    }
+    case 'rawOrphan': {
+      const parent = pickFrom([...state.byId.values()].filter(r => r.deleted !== 0), op.pick)
+      if (parent === null) return false
+      waivers.orphans.add(await rawInsert(lock, state, waivers, parent.id, keysBetween(null, null, 1)[0]!, resolveContent(op.content)))
+      return true
+    }
+    case 'rawDeleteOwner': {
+      // A peer's subtree delete, arriving whole.
+      const ownerId = rawPickTop(state, op.pick, true)
+      if (ownerId === null) return false
+      for (const id of subtreeIds(state, ownerId)) {
+        await lock.execute('UPDATE blocks SET deleted = 1, updated_at = updated_at + 1 WHERE id = ? AND deleted = 0', [id])
+      }
+      return true
+    }
+    case 'rawRestoreOwner': {
+      // A peer's restore of the owner, arriving ahead of the field rows its
+      // revival wrote.
+      const ownerId = rawPickTop(state, op.pick, false)
+      if (ownerId === null) return false
+      await lock.execute('UPDATE blocks SET deleted = 0, updated_at = updated_at + 1 WHERE id = ?', [ownerId])
+      waiveOwner(waivers.proj, ownerId)
+      return true
+    }
+  }
 }
 
 // ──── non-vacuity bookkeeping (read by the canary at the bottom) ────
@@ -1097,7 +1149,7 @@ const checkIntent = (
   const startBags = new Map([...start.byId.values()].map(row => [row.id, bagOf(row)]))
   for (const owner of end.byId.values()) {
     if (owner.deleted !== 0 || start.byId.get(owner.id)?.deleted !== 1) continue
-    if (log.childTouched.has(owner.id)) continue
+    if (log.childTouched.has(owner.id) || waivers.unsettledDead.has(owner.id)) continue
     const written = log.events.get(owner.id)
     for (const kind of KINDS) {
       const {schema, fieldId} = SCHEMAS[kind]
@@ -1116,7 +1168,7 @@ const checkIntent = (
     const bag = bagOf(owner)
     for (const [name, evs] of byName) {
       const actual = bag[name]
-      const orderBlind = evs.some((ev, i) => ev.cls === 'E' && evs.slice(i + 1).some(later => later.cls === 'R'))
+      const orderBlind = rawAfterEager(evs)
       stats.intentChecked++
       if (orderBlind) {
         stats.orderBlind++
@@ -1167,8 +1219,20 @@ const runBatch = async (repo: Repo, ops: LocalOp[], waivers: Waivers, label: str
 
   const end = await readState()
   checkIntent(log, start, end, waivers, label)
+  for (const row of end.byId.values()) {
+    if (row.deleted === 0) {
+      waivers.unsettledDead.delete(row.id)
+      continue
+    }
+    if (start.byId.get(row.id)?.deleted === 1) continue
+    // Died in this tx: settled unless a deferred writer reached it first.
+    const deferredWrite = log.childTouched.has(row.id)
+      || [...log.events.get(row.id)?.values() ?? []].some(evs => evs.some(ev => ev.cls === 'R'))
+    if (deferredWrite) waivers.unsettledDead.add(row.id)
+    else waivers.unsettledDead.delete(row.id)
+  }
 
-  for (const ownerId of log.dupRisk) waiveOwner(waivers.dup, ownerId)
+  for (const key of log.dupRisk) waivers.dup.add(key)
   // A cell write that reached the children converges its pair — it folds
   // duplicate field rows and rewrites the children from the cell — unless a
   // child edit in the same tx could have handed the owner a row the write
@@ -1179,7 +1243,7 @@ const runBatch = async (repo: Repo, ops: LocalOp[], waivers: Waivers, label: str
     const owner = end.byId.get(ownerId)
     if (owner === undefined || owner.deleted !== 0) continue
     for (const [name, evs] of byName) {
-      const eager = log.eagerConverged.get(ownerId)?.has(name) === true
+      const eager = log.eagerConverged.get(ownerId)?.has(name) === true && !rawAfterEager(evs)
       // A raw bag write reaches the children only through MATERIALIZE's net
       // diff, so it converges only when the tx's final cell moved.
       const raw = evs.some(ev => ev.cls === 'R') && !sameValue(startBags.get(ownerId)?.[name], bagOf(owner)[name])
@@ -1200,7 +1264,7 @@ const runCase = async ({mode, txs}: {mode: Mode; txs: TxSpec[]}): Promise<void> 
   rawSeq = 0
   const repo = await seedWorkspace()
   const seedRows = await fullSnapshot()
-  const waivers: Waivers = {proj: new Set(), dup: new Set(), orphans: new Set()}
+  const waivers: Waivers = {proj: new Set(), dup: new Set(), orphans: new Set(), unsettledDead: new Set()}
   let ranUndoRedo = false
 
   for (const [i, spec] of txs.entries()) {
@@ -1217,8 +1281,7 @@ const runCase = async ({mode, txs}: {mode: Mode; txs: TxSpec[]}): Promise<void> 
         await checkState(repo, waivers, new Map(), label)
         break
       case 'raw':
-        bump(stats.raw, spec.op.op)
-        await applyRawOp(spec.op, waivers)
+        if (await applyRawOp(spec.op, waivers)) bump(stats.raw, spec.op.op)
         await checkState(repo, waivers, new Map(), `${label} ${spec.op.op}`)
         break
     }
@@ -1240,7 +1303,7 @@ const runCase = async ({mode, txs}: {mode: Mode; txs: TxSpec[]}): Promise<void> 
   if (!ranUndoRedo) {
     expect(await fullSnapshot(), 'U — redo-all returns to the final state').toEqual(finalSnapshot)
   }
-  await checkState(repo, {proj: new Set(), dup: new Set(await currentDupPairs()), orphans: new Set()}, new Map(), 'after redo-all')
+  await checkState(repo, {proj: new Set(), dup: new Set(await currentDupPairs()), orphans: new Set(), unsettledDead: new Set()}, new Map(), 'after redo-all')
 }
 
 describe('properties-as-blocks dual representation under mixed writer sequences', () => {
@@ -1269,7 +1332,7 @@ describe('properties-as-blocks dual representation under mixed writer sequences'
       expect(stats.applied.get(op) ?? 0, `local op "${op}" applied — ${summary}`).toBeGreaterThan(0)
     }
     for (const op of RAW_OPS) {
-      expect(stats.raw.get(op) ?? 0, `raw op "${op}" ran — ${summary}`).toBeGreaterThan(0)
+      expect(stats.raw.get(op) ?? 0, `raw op "${op}" wrote — ${summary}`).toBeGreaterThan(0)
     }
     expect(stats.committed, 'committed txs').toBeGreaterThan(0)
     expect(stats.intentChecked, 'I checks').toBeGreaterThan(0)
