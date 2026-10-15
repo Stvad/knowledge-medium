@@ -1387,7 +1387,11 @@ export const preconditions = () => {
   if (!bdRunnable()) return { ok: false, root, reason: 'bd is not runnable (not on PATH, or its version probe failed)' }
   const token = tryRun('gh', ['auth', 'token'], { timeout: PROBE_TIMEOUT })?.trim()
   if (!token) return { ok: false, root, reason: 'no gh token' }
-  return { ok: true, root, env: { ...process.env, GITHUB_TOKEN: token, BD_NO_REMOTE_ADOPT: '1' } }
+  // BD_DOLT_AUTO_PUSH: bd pushes its Dolt remote from inside whichever command
+  // is running when its push throttle lapses — a git+ssh push that measured
+  // 15–20s, landing on a random step of this run. The sync opts out, and the
+  // push waits for bd's next auto-push outside it.
+  return { ok: true, root, env: { ...process.env, GITHUB_TOKEN: token, BD_NO_REMOTE_ADOPT: '1', BD_DOLT_AUTO_PUSH: 'false' } }
 }
 
 // A run holding the lock, or started and never finished, for longer than this

@@ -1412,6 +1412,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
       [
         '#!/bin/sh',
         `echo "bd $@" >> "${shimLog}"`,
+        `echo "$1 \${BD_DOLT_AUTO_PUSH-unset}" >> "${repo}/bd-env.log"`,
         'case "$1" in',
         `  --version) ${opts.bdBroken ? 'exit 127' : `echo "${opts.bdVersionOutput ?? 'bd version 1.3.0 (shim)'}"`};;`,
         '  github)',
@@ -1489,7 +1490,9 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
         else if (mark === '-') inFlight--
       return peak
     }
-    return { repo, run, runInBackground, runLog, graphqlPeak, shimCalls: () => readFileSync(shimLog, 'utf8'), posted: () => readFileSync(postedLog, 'utf8') }
+    // Each bd command's verb with the BD_DOLT_AUTO_PUSH it ran under.
+    const bdAutoPush = () => readFileSync(join(repo, 'bd-env.log'), 'utf8').trim().split('\n')
+    return { repo, run, runInBackground, runLog, graphqlPeak, bdAutoPush, shimCalls: () => readFileSync(shimLog, 'utf8'), posted: () => readFileSync(postedLog, 'utf8') }
   }
 
   // Paired with syncRow to be CONVERGED: same title, body, priority and type,
@@ -1611,6 +1614,21 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(close).toBeGreaterThan(-1)
     expect(pushOnly).toBeGreaterThan(-1)
     expect(close).toBeLessThan(pushOnly)
+  })
+
+  // bd pushes its Dolt remote from inside whichever command is running when
+  // the push throttle lapses, so a run that writes at all would carry a
+  // git+ssh push on one of its steps.
+  it('runs every bd command of the sync with Dolt auto-push off', () => {
+    const row = pushable({ id: 'km-t3', external_ref: ref(3), updated_at: '2026-08-19T00:00:00Z' })
+    const { run, bdAutoPush } = makeSyncRepo({
+      issues: [ghIssue(3, '2026-08-20T00:00:00Z', 'CLOSED'), unlinkedIssue()],
+      reads: [[row], [{ ...row, status: 'closed', updated_at: '2026-08-21T00:00:00Z' }]],
+    })
+    expect(run().status).toBe(0)
+    const commands = bdAutoPush().filter(l => !l.startsWith('--version'))
+    expect(new Set(commands.map(l => l.split(' ')[0]))).toEqual(new Set(['export', 'close', 'github']))
+    expect(commands.filter(l => !l.endsWith(' false'))).toEqual([])
   })
 
   it('prints the km→#N mapping for an issue this run minted', () => {
