@@ -267,12 +267,14 @@ describe('flipped workspace (properties_migration = children)', () => {
     expect(await cellValue('p')).toBe('done')
   })
 
-  // The cell is derived, so a write equal to it can still owe the children.
-  describe.each([
+  const eagerSets = [
     ['setProperty', (tx: Tx, value: string) => tx.setProperty('p', statusSchema, value)],
     ['setProperties', (tx: Tx, value: string) =>
       tx.setProperties('p', {set: [propertyValue(statusSchema, value)]})],
-  ])('%s of the value the cell already holds', (_, write) => {
+  ] as const
+
+  // The cell is derived, so a write equal to it can still owe the children.
+  describe.each(eagerSets)('%s of the value the cell already holds', (_, write) => {
     it('materializes it when no field row backs the cell (#1209)', async () => {
       await seedWorkspace('children')
       const repo = setup()
@@ -326,6 +328,19 @@ describe('flipped workspace (properties_migration = children)', () => {
 
       expect((await childrenRows('p')).filter(r => r.deleted === 0)).toEqual([])
     })
+  })
+
+  it.each(eagerSets)('%s of a NEW value still writes a deleted owner', async (_, write) => {
+    await seedWorkspace('children')
+    const repo = setup()
+    await createBlock(repo, 'p')
+    await repo.tx(tx => tx.setProperty('p', statusSchema, 'done'),
+      {scope: ChangeScope.BlockDefault})
+    await repo.tx(tx => tx.delete('p'), {scope: ChangeScope.BlockDefault})
+
+    await repo.tx(tx => write(tx, 'shipped'), {scope: ChangeScope.BlockDefault})
+
+    expect(await cellValue('p')).toBe('shipped')
   })
 
   it('setProperties deletes no field row for an unset that changes nothing the cell shows', async () => {
