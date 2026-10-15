@@ -830,6 +830,25 @@ describe('undo/redo against a transaction committing mid-gesture (#227)', () => 
     expect(depths(repo).undo).toBe(0)
   })
 
+  it('undoes an edit that committed but has not yet resumed its caller', async () => {
+    // The lock is released at COMMIT and the edit's caller resumes some time
+    // after; a gesture can take the lock in between. Its entry must already be
+    // on the stack by then, or the undo reverts the entry UNDER it and writes
+    // that one's stale `before` over the edit.
+    const {repo} = env
+    await edit(repo, 'a', 'v1')
+    await repo.awaitProcessors()
+
+    let undone: boolean | null = null
+    const hook = onNextWriteSettled(async () => { undone = await repo.undo() })
+    await edit(repo, 'a', 'v2')
+    expect(hook.fired()).toBe(true)
+
+    expect(undone).toBe(true)
+    expect(await readContent(repo, 'a')).toBe('v1')
+    expect(depths(repo)).toEqual({undo: 1, redo: 1})
+  })
+
   it('undoes the commit that was queued ahead of the undo, not the entry under it', async () => {
     const {repo} = env
     await edit(repo, 'a', 'v1')

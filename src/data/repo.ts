@@ -254,9 +254,9 @@ const TX_LOG_CAPACITY = 64
 const NO_ACTIVE_WORKSPACE = '__no_active_workspace__'
 
 /** The entry an undo/redo gesture saw at press time was gone once its replay
- *  held the write lock — another gesture or a history drop took it. The gesture
- *  answers false; the replay transaction rolls back rather than committing an
- *  audit row for a replay that never ran. */
+ *  held the write lock: another gesture took it, or the history was cleared.
+ *  The gesture answers false; the replay transaction rolls back rather than
+ *  committing an audit row for a replay that never ran. */
 class NothingToReplay extends Error {}
 
 /** What `repo.tx` and `_replay` pass `runTx` beyond the public tx options. */
@@ -2318,9 +2318,9 @@ export class Repo {
       // still hold entries from before them, so replaying one restores rows
       // the pass is in the middle of replacing. The epoch cannot say this —
       // it marks an instant, and a replay that starts mid-drop samples the
-      // already-moved value. Refused rather than queued: answering "nothing
-      // happened" now beats a cmd-Z that applies a minute later against rows
-      // it no longer describes.
+      // already-moved value. Refused rather than deferred until the drop
+      // ends: answering "nothing happened" beats a cmd-Z that applies a
+      // minute later against rows it no longer describes.
       //
       // A drop that already ENDED emptied the stacks, so the pop below finds
       // nothing it predates.
