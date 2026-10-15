@@ -1,0 +1,1 @@
+import{iw as e,rw as t}from"../../chunks/app-BvpmS0gl.js";export{t as resolveStructuralEditPolicy,e as structuralEditPolicyForBlock};

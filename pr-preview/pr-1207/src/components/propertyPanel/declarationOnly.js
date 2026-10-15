@@ -1,0 +1,1 @@
+import{KA as e,qA as t}from"../../../chunks/app-BvpmS0gl.js";export{e as declarationOnlyDefinitionForName,t as declarationOnlyStatusText};

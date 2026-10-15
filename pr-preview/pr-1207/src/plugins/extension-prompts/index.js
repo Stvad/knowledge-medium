@@ -1,0 +1,1 @@
+import{Ew as e,Tw as t}from"../../../chunks/app-BvpmS0gl.js";export{t as ExtensionPromptSurface,e as extensionPromptsExtension};

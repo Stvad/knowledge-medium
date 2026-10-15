@@ -1,0 +1,1 @@
+import{l as e}from"../../chunks/app-BvpmS0gl.js";export{e as resolveWorkspace};

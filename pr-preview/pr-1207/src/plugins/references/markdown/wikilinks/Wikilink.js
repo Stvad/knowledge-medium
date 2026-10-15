@@ -1,0 +1,1 @@
+import{zd as e}from"../../../../../chunks/app-BvpmS0gl.js";export{e as Wikilink};
