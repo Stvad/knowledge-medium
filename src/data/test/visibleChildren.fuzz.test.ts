@@ -238,13 +238,17 @@ const readRow = async (db: TestDb['db'], id: string): Promise<BlockData | null> 
 const tx = (u: Universe, fn: Parameters<Repo['tx']>[0]): Promise<unknown> =>
   u.repo.tx(fn, {scope: ChangeScope.BlockDefault})
 
-/** A peer's write: staged into `blocks_synced` and materialized by the
- *  observer, which runs the arrival processors. `ps_crud` is cleared first —
- *  our own uploads have drained — so the reconcile gate applies it rather
- *  than holding it behind a pending local write. */
+/** A peer's write that WINS: staged into `blocks_synced` and materialized by
+ *  the observer, which runs the arrival processors. A losing arrival
+ *  exercises the reconcile gate rather than those processors, and is the
+ *  reconcile suite's. So `ps_crud` is cleared first (our own uploads have
+ *  drained), and the stamp outranks the row it overwrites — a local write
+ *  stamps `max(now, before.updatedAt + 1)` (invariant I3), so after one peer
+ *  write a local edit already sits past any fixed peer clock. */
 const applyFromPeer = async (u: Universe, next: BlockData): Promise<void> => {
   await u.db.execute('DELETE FROM ps_crud')
-  u.syncClock += 1
+  const current = await readRow(u.db, next.id)
+  u.syncClock = Math.max(u.syncClock, current?.updatedAt ?? 0) + 1
   await u.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToSyncedRowParams({
     ...next, updatedAt: u.syncClock, userUpdatedAt: u.syncClock, updatedBy: 'peer',
   }))
