@@ -598,7 +598,8 @@ Its harness carries one lesson for any suite that builds a Repo per
 case: every case runs inside ONE test, so the per-test Repo release
 never fires between them. The previous case's sync observer drained the
 next case's `blocks_synced` rows into handles nobody read, and the
-registry never saw the delivery — release each case's Repo yourself.
+registry never saw the delivery — release each case's Repo yourself
+(`releaseTestRepos`, rule 10 under "Adding a suite").
 
 ## Adding a suite
 
