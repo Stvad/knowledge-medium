@@ -1971,6 +1971,47 @@ describe('revival re-materializes property children (#778)', () => {
     expect(await liveValueContents(value!.id)).toEqual(['nested'])
   })
 
+  it('re-projects the cell from a field row sync left LIVE under the tombstoned owner', async () => {
+    // A peer that never saw the delete re-delivers the field and value rows
+    // live. The restore writes nothing under them, so nothing marked them
+    // changed — but the revived owner's cell is still the pre-delete one, and
+    // the children win (the test above, for the tombstoned-value shape).
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    const [field] = await liveFieldRows('p')
+    const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+    await repo.mutate.delete({id: 'p'})
+    await sharedDb.db.execute('UPDATE blocks SET deleted = 0 WHERE id = ?', [field!.id])
+    await sharedDb.db.execute(
+      'UPDATE blocks SET deleted = 0, content = ? WHERE id = ?', ['arrived', value!.id])
+
+    await repo.mutate.restore({id: 'p'})
+
+    expect((await liveFieldRows('p')).map(row => row.id)).toEqual([field!.id])
+    expect(await cellValue('p')).toBe('arrived')
+  })
+
+  it('re-projects a revived value row from its own field row sync left live', async () => {
+    // The same shape one level down: the value row comes back through the
+    // owner's revival, and its OWN property was edited by a peer meanwhile.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    const [field] = await liveFieldRows('p')
+    const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+    await repo.tx(tx => tx.setProperty(value!.id, statusSchema, 'nested'),
+      {scope: ChangeScope.BlockDefault})
+    const [nestedField] = await liveFieldRows(value!.id)
+    const [nestedValue] = (await childrenRows(nestedField!.id)).filter(v => v.deleted === 0)
+    await repo.mutate.delete({id: 'p'})
+    await sharedDb.db.execute('UPDATE blocks SET deleted = 0 WHERE id = ?', [nestedField!.id])
+    await sharedDb.db.execute(
+      'UPDATE blocks SET deleted = 0, content = ? WHERE id = ?', ['arrived', nestedValue!.id])
+
+    await repo.mutate.restore({id: 'p'})
+
+    expect(await cellValue(value!.id)).toBe('arrived')
+  })
+
   it('drops a cell that moved while the row was dead, and re-projects from the child', async () => {
     // The mirror image of the test above, and the reason it is settled the same
     // way: an unobserved cell write and an unobserved child arrival reach the

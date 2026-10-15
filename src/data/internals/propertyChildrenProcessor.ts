@@ -1161,9 +1161,22 @@ export const PROJECT_PROPERTY_CHILDREN_PROCESSOR = defineSameTxProcessor({
     if (!(await ctx.tx.isPropertyChildBackedWorkspace(event.workspaceId))) return
     // Both sides of a move: the old parent loses the key, the new parent
     // gains it (§9 reparent semantics).
+    const rowStates: (ProjectableRow | null)[] =
+      event.changedRows.flatMap(row => [row.before, row.after])
+    for (const row of event.changedRows) {
+      // A row back from a tombstone is an OWNER back too, and the field rows
+      // under it need not have changed in this tx: sync-apply skips the
+      // parent-liveness trigger, so a peer's edit can sit live under the
+      // tombstone. Its cell is the pre-delete one, and post-flip the children
+      // win (§5) — which only happens if those field rows are reprojected.
+      if (row.before?.deleted !== true || row.after === null || row.after.deleted) continue
+      for (const child of await ctx.tx.childrenOf(row.after.id, undefined)) {
+        if (child.isFieldForm === true) rowStates.push(child)
+      }
+    }
     await reprojectOwnersForRowStates(
       ctx.tx,
-      event.changedRows.flatMap(row => [row.before, row.after]),
+      rowStates,
       lookupsFor(ctx, event.workspaceId),
       // Authoritative: this processor's writes ARE settled, which is what
       // makes the lossy unset safe here and nowhere else.
