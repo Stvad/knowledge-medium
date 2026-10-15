@@ -397,7 +397,15 @@ export interface MaterializeOptions {
    *  parent-liveness trigger and lands an edit under a tombstoned row. Which
    *  side of a divergence is newer is not knowable here, so the tie goes to the
    *  children: post-flip they are the only property truth that crosses sync,
-   *  and PROJECT heals the cell from them in the same tx. */
+   *  and PROJECT heals the cell from them in the same tx.
+   *
+   *  Hence a name whose field row is ALREADY live takes no value from the
+   *  cell — not even one its field row lacks. An empty field row is the
+   *  children saying "unset" (a peer deleted the value), and so is a list
+   *  missing a member: adding from the cell would resurrect that delete. Its
+   *  duplicate field rows still fold, which moves rows and removes none.
+   *  Adding values is for a name with no field row, or one this call just
+   *  revived. */
   additive?: boolean
 }
 
@@ -563,6 +571,12 @@ export const materializePropertyChildrenForExistingRow = async (
       // block, not let one bad value throw the whole pass.
       if (undecodable === 'skip') continue
       throw undecodableCellValueError(name, row.id, schema, rejection)
+    }
+
+    // See `additive`: a live field row's values are the children's to decide.
+    if (opts.additive && matchingChildren.length > 0) {
+      await upsertFieldRow(tx, row, schema.fieldId, matchingChildren, true)
+      continue
     }
 
     // Revive AFTER the rejection gate, never before it: a name the gate skipped

@@ -2012,6 +2012,40 @@ describe('revival re-materializes property children (#778)', () => {
     expect(await cellValue(value!.id)).toBe('arrived')
   })
 
+  it('does not mint into a field row sync left live and EMPTY under the tombstoned owner', async () => {
+    // The peer deleted the value; its field row arrived live, its value as a
+    // tombstone. The children say "unset", and the children win — minting the
+    // stale cell back into that field row would resurrect the peer's delete.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    const [field] = await liveFieldRows('p')
+    await repo.mutate.delete({id: 'p'})
+    await sharedDb.db.execute('UPDATE blocks SET deleted = 0 WHERE id = ?', [field!.id])
+
+    await repo.mutate.restore({id: 'p'})
+
+    expect((await liveFieldRows('p')).map(row => row.id)).toEqual([field!.id])
+    expect(await liveValueContents('p')).toEqual([])
+    expect(await cellValue('p')).toBeUndefined()
+  })
+
+  it('does not mint into an empty live field row of a revived value row either', async () => {
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    const [field] = await liveFieldRows('p')
+    const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+    await repo.tx(tx => tx.setProperty(value!.id, statusSchema, 'nested'),
+      {scope: ChangeScope.BlockDefault})
+    const [nestedField] = await liveFieldRows(value!.id)
+    await repo.mutate.delete({id: 'p'})
+    await sharedDb.db.execute('UPDATE blocks SET deleted = 0 WHERE id = ?', [nestedField!.id])
+
+    await repo.mutate.restore({id: 'p'})
+
+    expect(await liveValueContents(value!.id)).toEqual([])
+    expect(await cellValue(value!.id)).toBeUndefined()
+  })
+
   it('drops a cell that moved while the row was dead, and re-projects from the child', async () => {
     // The mirror image of the test above, and the reason it is settled the same
     // way: an unobserved cell write and an unobserved child arrival reach the
