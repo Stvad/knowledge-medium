@@ -72,6 +72,7 @@ import { jsonValuesEqual } from '@/data/internals/jsonCanonical'
 import { presetIdProp, propertyChangeScopeProp, propertyNameProp } from '@/data/properties'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
+import { releaseTestRepos } from '@/data/test/testRepoScope'
 import { MIGRATE_PROPERTY_DEFINITION_PROCESSOR } from '@/data/internals/propertyDefinitionChangeProcessor'
 import type { Repo } from '@/data/repo'
 
@@ -455,16 +456,6 @@ const openRepo = async (spec: CaseSpec): Promise<Repo> => {
   })
   repo.setActiveWorkspaceId(WS)
   return repo
-}
-
-/** Every case shares one test, so the per-test release never runs between
- *  them: a case's Repo is released here, or its observer would drain the next
- *  case's `blocks_synced` rows into handles nobody reads. */
-const releaseRepo = async (repo: Repo): Promise<void> => {
-  await repo.flushSyncObserver().catch(() => {})
-  repo.stopSyncObserver()
-  repo.setActiveWorkspaceId(null)
-  await repo.awaitDeferredWork()
 }
 
 const build = async (spec: CaseSpec, repo: Repo): Promise<Built> => {
@@ -879,7 +870,10 @@ const runCase = async (spec: CaseSpec): Promise<number> => {
   try {
     return await checkCase(spec, await build(spec, repo))
   } finally {
-    await releaseRepo(repo)
+    // Every case shares one test, so the per-test release never runs between
+    // them; without this the observer drains the next case's `blocks_synced`
+    // rows into handles nobody reads.
+    await releaseTestRepos([repo])
   }
 }
 

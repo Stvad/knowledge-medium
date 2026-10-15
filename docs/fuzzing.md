@@ -162,6 +162,19 @@ one.
   conservation: split-then-merge identity, whole-tree pre-order text
   conservation, sibling placement + child adoption, exact-snapshot
   undo/redo round-trips.
+- `src/data/test/undoInterleaving.fuzz.test.ts` — undo/redo under
+  interleaving (#227): random plans of edits (some sharing an undo
+  group), undo/redo gestures (double-pressed, or with a replay that
+  fails), with ordinary edits committing AHEAD of a replay (queued on
+  the write lock), the moment a replay's transaction settles, or
+  behind it — and gestures run in the window between an edit's commit
+  and its caller resuming. Oracle = a sequential model driven by the
+  database's OWN commit order (`command_events` rowid order; a replay's
+  row names its entry): every replay must name the entry on top of its
+  stack at that point and find each row at the entry's far side; DB
+  content, depths and stack tops must match the model after every step;
+  redo-all / undo-all / redo-all must reach the newest state, the seed,
+  and the newest state again.
 - `src/sync/crypto/aead.fuzz.test.ts` — AEAD seal/open (text + bytes):
   round-trips, single-byte ciphertext‖tag tamper rejection, one-field
   AAD-mismatch rejection, wrong-key rejection, `validateCanary`
@@ -237,6 +250,19 @@ one.
   every call site's actual LIKE/ESCAPE fragment, run against a live
   connection, matches a case-folded JS containment check for arbitrary
   needle/haystack pairs biased toward `%`/`_`/`\`/case-invariant unicode.
+- `src/data/test/visibleChildren.fuzz.test.ts` — the outline's
+  visible-children view (the §9 field-row hiding), stateful: random tx,
+  peer-sync (staged into `blocks_synced`, materialized by the observer)
+  and undo/redo ops over trees with field rows at every depth, unknown
+  and foreign field ids, seed ids, unmarked look-alikes and churning
+  definitions. Both views read the same stamped columns and split only
+  on "does the target name a definition", so the oracles are: the stamped
+  `is_field_form`/`reference_target_id` equal a fresh derive (the shared
+  input, which no SQL-vs-JS differential can see), `VISIBLE_CHILDREN_SQL`
+  equals `visibleChildrenOf` for every live block, and
+  `VISIBLE_SUBTREE_SQL` equals a walk over those lists. The one excused
+  divergence is #1202 (below), for bags the generator made unbuildable,
+  with a tripwire per clause that fails once it is fixed.
 - `src/data/propertyDefinitionRename.fuzz.test.ts` — N-way definition
   renames through `core.migratePropertyDefinition`: swaps and longer
   cycles across codecs, renames onto fresh names, a seed's name and a
@@ -511,6 +537,28 @@ for likely-fragile functions. Product bugs it found:
   patch now strips the aliases key and the caller re-claims the set it
   means.
 
+The undo interleaving suite (#227) was written against a race already on
+file, and went red on the unfixed code in every interleaving it models:
+
+- The gesture popped its entry at press time, awaited the replay, and
+  moved it to the other stack in a continuation after the lock's
+  release; `repo.tx` recorded in a continuation too. So a commit queued
+  ahead of the replay was written over with the popped entry's stale
+  snapshot, a commit landing after the replay let the push resurrect a
+  redo branch it had ended (or put a redone entry ABOVE it on undo),
+  and a failed replay's pushback landed above a commit made while it
+  unwound. Every stack motion now runs inside the write lock — the pop
+  in the replay's transaction, the record and the opposite-stack push
+  in `runTx`'s `beforeCommit` hook, the failure pushback in `aborted` —
+  so the stacks change in commit order by construction.
+- Moving `repo.tx`'s OWN record into the lock failed nothing at first:
+  the next lock holder needs a database round trip before it touches a
+  stack, which the old continuation always beat. Comments had called
+  that window unschedulable. It is not — interposing on the raw
+  database's `writeTransaction` holds a caller between its commit and
+  its resume for as long as the test likes, and running a whole gesture
+  there pins the clause (item 9 below).
+
 Two more findings were about the SUITES, and both are the same defect:
 a test that could not fail.
 
@@ -555,6 +603,24 @@ restore half of the release-reclaim residual (issue #706, seed
   rewriting content, so the deferred decision stays deferred); the drop
   is itself the write that schedules the referrer's rebind.
 
+The visible-children differential found one on its first smoke run
+(#1202, open): the outline SQL counts any `property-schema`-tagged block
+as a definition, while the tx layer's checker needs the registry to have
+parsed its metadata and, for a name winner, built its schema. So a
+definition whose preset does not load (synced from a peer with the
+plugin, or the plugin uninstalled) or whose change scope is invalid
+hides its field rows on screen while gestures resolve against them.
+Filed rather than fixed: the fix that makes the class impossible binds
+the registry's classified set into the SQL, which is a design call. The
+suite keeps generating those shapes and excuses exactly that divergence.
+A first version stopped generating them instead (review caught it), which
+loses every OTHER check in states holding a broken definition. Which
+definitions are excused is decided by the generator's own model of the
+bags it made unbuildable, read off the row. Asking the parse/build under
+test would excuse a regression that rejects a valid definition, and asking
+the projector's published state would excuse a projector that lags; planted
+versions of both are caught.
+
 The definition-rename fuzzer (roadmap #430's N-way same-tx renames)
 found one product bug in its first minute (fixed + pinned):
 
@@ -582,7 +648,8 @@ Its harness carries one lesson for any suite that builds a Repo per
 case: every case runs inside ONE test, so the per-test Repo release
 never fires between them. The previous case's sync observer drained the
 next case's `blocks_synced` rows into handles nobody read, and the
-registry never saw the delivery — release each case's Repo yourself.
+registry never saw the delivery — release each case's Repo yourself
+(`releaseTestRepos`, rule 11 under "Adding a suite").
 
 The typed-block query differential found two compiler bugs on its first
 deep runs (each fixed with pinned tests in the same PR):
@@ -672,3 +739,21 @@ stays.
    — measured here as nested 1 effect run vs root 2. Wrap the element
    you hand to `render`/`rerender`, not the tree inside your harness
    component, and pin it (`activeContextsOwnership.fuzz.test.tsx`).
+9. To land work inside a transaction's ordering windows — while it waits
+   for the write lock, or between its commit and its caller resuming —
+   don't sleep: hold one transaction on the lock to queue the others
+   behind it, and wrap the raw db's `writeTransaction` (which the Repo's
+   metrics proxy calls through) to run an arbitrary action once a
+   transaction settles and before its caller resumes. For an oracle,
+   read `command_events` in rowid order: it is the order the database
+   committed in, and a rolled-back transaction leaves no row
+   (`undoInterleaving.fuzz.test.ts`).
+10. Before writing a differential, list what the two sides SHARE. Two
+    implementations reading one stamped column agree on every corruption
+    of that column, so the differential is silent about it — give the
+    shared input an oracle of its own (`visibleChildren.fuzz`).
+11. A property that builds a Repo per CASE (one test, many Repos on one
+    db) must release each with `releaseTestRepos` from
+    `@/data/test/testRepoScope`; the automatic release runs only when the
+    test ends, so until then every earlier case's Repo keeps its sync
+    observer and projectors subscribed to the shared db.
