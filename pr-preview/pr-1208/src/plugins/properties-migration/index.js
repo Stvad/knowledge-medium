@@ -1,1 +1,0 @@
-import{Dr as e,jr as t}from"../../../chunks/app-Chv_Qobd.js";export{t as migratePropertiesToBlocksAction,e as propertiesMigrationPlugin};

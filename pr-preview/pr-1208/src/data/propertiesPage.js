@@ -1,1 +1,0 @@
-import{F1 as e,P1 as t}from"../../chunks/app-Chv_Qobd.js";export{t as getOrCreatePropertiesPage,e as propertiesPageBlockId};
