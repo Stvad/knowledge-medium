@@ -63,7 +63,8 @@ import { BLOCKS_SYNCED_RAW_TABLE, blockToSyncedRowParams, parseBlockRow, type Bl
 import { registrySeedParams } from '@/data/internals/kernelQueries'
 import { deriveReferenceColumns } from '@/data/internals/referenceTargetProcessor'
 import { VISIBLE_CHILDREN_SQL, VISIBLE_SUBTREE_SQL } from '@/data/internals/treeQueries'
-import { USER_SCHEMAS_PROJECTOR_ID } from '@/data/userSchemasService'
+import { tryBuildSchema, USER_SCHEMAS_PROJECTOR_ID } from '@/data/userSchemasService'
+import { parsePropertyDefinitionMetadata } from '@/data/propertyDefinitionMetadata'
 import { visibleChildrenOf } from '@/data/visibleChildren'
 import type { Repo } from '@/data/repo'
 
@@ -138,26 +139,11 @@ const contentArb: fc.Arbitrary<ContentSpec> = fc.oneof(
   {weight: 1, arbitrary: fc.record({kind: fc.constant('ref' as const), target: targetArb})},
   {weight: 1, arbitrary: fc.record({kind: fc.constant('nearMiss' as const), target: targetArb, shape: fc.nat({max: 4})})},
 )
-/** KNOWN ISSUE (fuzz): #1202 — the views disagree on a block tagged
- *  'property-schema' that the registry cannot build a definition from: SQL
- *  recognizes the tag, the JS checker needs parsed metadata AND a buildable
- *  schema. Counterexamples: an invalid change scope (`putDef` with
- *  `validScope: false`, then a field row targeting it — SQL hides the row,
- *  JS shows it) and an unloadable or missing preset (same shape). Only
- *  buildable definitions are generated until that lands; flip this then. */
-const GENERATE_UNBUILDABLE_DEFINITIONS = false
-
-const defArb: fc.Arbitrary<DefSpec> = GENERATE_UNBUILDABLE_DEFINITIONS
-  ? fc.record({
-    name: fc.nat({max: NAMES.length}),
-    preset: fc.constantFrom('string', 'number', 'unloadable', 'none'),
-    validScope: fc.boolean(),
-  })
-  : fc.record({
-    name: fc.nat({max: NAMES.length - 1}),
-    preset: fc.constantFrom('string', 'number'),
-    validScope: fc.constant(true),
-  })
+const defArb: fc.Arbitrary<DefSpec> = fc.record({
+  name: fc.nat({max: NAMES.length}),
+  preset: fc.constantFrom('string', 'number', 'unloadable', 'none'),
+  validScope: fc.boolean(),
+})
 const parentArb: fc.Arbitrary<ParentSpec> = fc.oneof(
   {weight: 9, arbitrary: fc.record({kind: fc.constant('node' as const), idx})},
   {weight: 1, arbitrary: fc.constant({kind: 'workspace-root' as const})},
@@ -430,15 +416,44 @@ const explainRows = async (u: Universe, ids: readonly string[]): Promise<string>
 const symmetricDiff = (a: readonly string[], b: readonly string[]): string[] =>
   [...a.filter(x => !b.includes(x)), ...b.filter(x => !a.includes(x))]
 
+/** KNOWN ISSUE (fuzz): #1202 — the outline SQL hides a marked row whose
+ *  target is a block tagged 'property-schema' that the registry cannot build a
+ *  definition from, while the tx layer shows it. Counterexample: `putDef` with
+ *  `validScope: false` or preset 'unloadable', then a field row targeting it.
+ *  The one divergence the oracles excuse, and only for a target that provably
+ *  cannot build, judged from the ROW with the projector's own parse and build:
+ *  its metadata does not parse, or its schema does not build. Never from the
+ *  projector's published state, which would excuse a projector that lags or
+ *  drops a buildable definition. Delete this, its call site and the #1202
+ *  tripwire test when the issue lands. */
+const unbuildableDefinitionIds = async (u: Universe): Promise<ReadonlySet<string>> => {
+  const tagged = await u.db.getAll<{block_id: string}>(
+    `SELECT block_id FROM block_types WHERE type = 'property-schema' AND workspace_id = ?`, [WS],
+  )
+  const out = new Set<string>()
+  for (const {block_id: id} of tagged) {
+    const row = await readRow(u.db, id)
+    if (row === null) continue
+    const metadata = parsePropertyDefinitionMetadata(row)
+    if (metadata === null || tryBuildSchema(row, u.repo.valuePresetCores, metadata) === null) out.add(id)
+  }
+  return out
+}
+
 const compareViews = async (u: Universe): Promise<void> => {
   const live = (await u.db.getAll<{id: string}>(
     'SELECT id FROM blocks WHERE workspace_id = ? AND deleted = 0 ORDER BY id', [WS],
   )).map(r => r.id)
   const seedParams = registrySeedParams(u.repo)
+  const unbuildable = await unbuildableDefinitionIds(u)
 
   const jsChildren = new Map<string, string[]>()
   await tx(u, async t => {
-    for (const id of live) jsChildren.set(id, (await visibleChildrenOf(t, id)).map(c => c.id))
+    for (const id of live) {
+      jsChildren.set(id, (await visibleChildrenOf(t, id))
+        .filter(c => !(c.isFieldForm === true && unbuildable.has(c.referenceTargetId ?? '')))
+        .map(c => c.id))
+    }
   })
 
   for (const id of live) {
@@ -580,6 +595,29 @@ describe('visible-children view', () => {
       expect(visible, 'the unmarked look-alike and the unknown-field row stay visible').toEqual([lookAlike, unknownRow])
       const fromField = await u.db.getAll<{id: string}>(VISIBLE_SUBTREE_SQL, [fieldRow!, ...registrySeedParams(u.repo)])
       expect(fromField.map(r => r.id), 'a field row opened directly shows its value child').toEqual([fieldRow, valueRow])
+    } finally {
+      await releaseTestRepos([u.repo])
+    }
+  })
+  // Tripwire for the #1202 excuse: it is only sound while the bug exists. A
+  // fix that makes the tx layer hide this row would leave the excuse dead,
+  // and one that makes the SQL show it fails the children oracle — either
+  // way this goes red, and the excuse goes with it.
+  it('KNOWN ISSUE #1202: an unbuildable definition still splits the views', async () => {
+    await guard.barrier()
+    const u = await openUniverse()
+    try {
+      for (const op of [
+        {op: 'putDef', slot: 1, def: {name: 1, preset: 'unloadable', validScope: true}, via: 'sync'},
+        {op: 'create', parent: {kind: 'node', idx: 0}, orderKey: 0, content: {kind: 'field', target: {to: 'def', slot: 1}, labelled: false}, via: 'tx'},
+      ] satisfies Op[]) await applyOp(u, op)
+      const fieldRow = u.nodes.at(-1)
+      await vi.waitFor(async () => {
+        const sql = (await u.db.getAll<{id: string}>(VISIBLE_CHILDREN_SQL, [ROOT, ...registrySeedParams(u.repo)]))
+          .map(r => r.id)
+        const js = (await u.repo.tx(t => visibleChildrenOf(t, ROOT), {scope: ChangeScope.BlockDefault})).map(c => c.id)
+        expect({sql, js}).toEqual({sql: [], js: [fieldRow]})
+      })
     } finally {
       await releaseTestRepos([u.repo])
     }

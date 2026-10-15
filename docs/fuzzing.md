@@ -247,8 +247,9 @@ one.
   `is_field_form`/`reference_target_id` equal a fresh derive (the shared
   input, which no SQL-vs-JS differential can see), `VISIBLE_CHILDREN_SQL`
   equals `visibleChildrenOf` for every live block, and
-  `VISIBLE_SUBTREE_SQL` equals a walk over those lists. Unbuildable
-  definitions are gated off (#1202, below).
+  `VISIBLE_SUBTREE_SQL` equals a walk over those lists. The one excused
+  divergence is #1202 (below), judged from the definition row itself, with
+  a tripwire test that fails once it is fixed.
 
 ## Found so far
 
@@ -543,8 +544,13 @@ plugin, or the plugin uninstalled) or whose change scope is invalid
 hides its field rows on screen while gestures resolve against them.
 Filed rather than fixed: the fix that makes the class impossible binds
 the registry's classified set into the SQL, which is a design call. The
-suite generates those shapes only once it lands
-(`GENERATE_UNBUILDABLE_DEFINITIONS`).
+suite keeps generating those shapes and excuses exactly that divergence.
+A first version stopped generating them instead (review caught it), which
+loses every OTHER check in states holding a broken definition. The excuse
+is decided from the definition row with the projector's own parse and
+build, never from the projector's published state; deciding it from that
+state would also excuse a projector that drops a buildable schema (a
+planted one is caught).
 
 ## Adding a suite
 
