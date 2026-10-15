@@ -1,0 +1,1 @@
+import{l as e}from"../../chunks/app-CbgZ6mhY.js";export{e as resolveWorkspace};
