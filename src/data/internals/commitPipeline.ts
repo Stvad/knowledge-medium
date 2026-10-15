@@ -389,6 +389,9 @@ export interface TxResult<R> {
   workspaceId: string | null
   /** Tx id (for processor CommittedEvent.txId). */
   txId: string
+  /** What the `command_events` row recorded — `meta.description` as of commit,
+   *  which a replay sets only once it holds the lock. */
+  description: string | undefined
   /** User who ran the tx (for processor CommittedEvent.user). */
   user: User
   /** Processor registry snapshot taken at tx start. The runner walks
@@ -819,6 +822,7 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
     snapshots,
     workspaceId: meta.workspaceId,
     txId,
+    description: meta.description,
     user,
     processors,
     propertySchemas,

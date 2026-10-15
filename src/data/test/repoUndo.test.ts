@@ -100,6 +100,12 @@ describe('repo.undo / redo on tx.update (setContent)', () => {
 
     expect(await env.repo.undo()).toBe(true)
     expect(await readContent(env.repo, 'a')).toBe('original')
+    // Named after the entry it replayed, which it takes only under the lock —
+    // in the audit row and in the tx metrics alike.
+    const undoRow = await env.repo.db.get<{description: string}>(
+      'SELECT description FROM command_events ORDER BY rowid DESC LIMIT 1')
+    expect(undoRow.description).toBe('undo: edit a')
+    expect(env.repo.metrics().txLog.at(-1)?.description).toBe('undo: edit a')
 
     expect(await env.repo.redo()).toBe(true)
     expect(await readContent(env.repo, 'a')).toBe('edited')

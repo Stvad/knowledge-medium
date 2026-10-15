@@ -2215,7 +2215,7 @@ export class Repo {
     // 'reproject ref-typed properties after schema swap', mutator names).
     // Cheaper than recording every tx; only the high-water mark wins.
     const txMs = performance.now() - txT0
-    const description = opts.description ?? null
+    const description = result.description ?? null
     if (txMs > this.slowestTx.ms) {
       this.slowestTx = {description, ms: txMs}
     }
