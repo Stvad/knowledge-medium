@@ -1,0 +1,1 @@
+import{cA as e,lA as t}from"../../chunks/app-Df08UdHC.js";export{e as defineVariant,t as defineVariantFacet};

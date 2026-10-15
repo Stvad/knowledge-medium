@@ -1,0 +1,1 @@
+import{EP as e}from"../../chunks/app-Df08UdHC.js";export{e as usePropertySchemas};

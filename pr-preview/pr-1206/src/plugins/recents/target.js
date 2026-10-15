@@ -1,0 +1,1 @@
+import{ry as e}from"../../../chunks/app-Df08UdHC.js";export{e as openRecentsPage};
