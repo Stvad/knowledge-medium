@@ -281,6 +281,18 @@ one.
   writes nothing; and sync convergence. Two fixed canaries (a 3-cycle, a
   sync-delivered swap) run in every tier, because a planted
   non-swap-safe re-key slipped past the first smoke sample.
+- `src/data/internals/typedBlockQuery.fuzz.test.ts` — the typed-block
+  query compiler, #430's flagship: random block forests written raw (the
+  sync-applied shape) and random `TypedBlockQuery` specs; every SQL path
+  (the compiler's rows / ids / count projections and the Repo resolvers,
+  incl. the single-type fast path and the ancestor-dep walk) diffed in
+  order against a JS interpreter written from the documented semantics,
+  never from the SQL builder. Generators lean on NULL ≠ FALSE: absent vs
+  JSON null vs `''`/`0`/`false`/`[]`, comparators and excludes over unset
+  properties, `target` through dangling / deleted / cross-workspace refs,
+  multi-type blocks, deleted parents, `created_at` ties, the ancestor-walk
+  gate. A model-only canary pins each of those as reached. Malformed cells
+  under scalar properties are a KNOWN ISSUE carve-out (#1204).
 
 ## Found so far
 
@@ -635,6 +647,31 @@ never fires between them. The previous case's sync observer drained the
 next case's `blocks_synced` rows into handles nobody read, and the
 registry never saw the delivery — release each case's Repo yourself
 (`releaseTestRepos`, rule 11 under "Adding a suite").
+
+The typed-block query differential found two compiler bugs on its first
+deep runs (each fixed with pinned tests in the same PR):
+
+- `target` joined the referenced row on id and liveness only, so a ref
+  naming a live block in ANOTHER workspace satisfied `target: {}` and had
+  its inner where-map read against that workspace's properties — while
+  the deps that wake the handle are keyed by the query's workspace, so the
+  match could never be invalidated. The traversal now requires the source
+  row's workspace.
+- A refList cell that is not a JSON array — what a `ref` → `refList`
+  re-type leaves behind in a workspace with no field rows — made
+  `json_each` throw `malformed JSON`, failing every `target` query on the
+  property; the ancestor-dep walk's hand-copied fan-out failed the same
+  way. Both now go through one helper that reads only array cells.
+
+Its probe of the rest of that malformed-cell class filed #1204:
+comparators match cells of the wrong JSON type, because SQLite orders
+`json_extract` results across storage classes (`{gt: 3}` matches a stale
+`'abc'`). And one finding about the suite itself: its first coverage
+canary showed that across 300 sampled worlds no ancestor-scoped predicate
+ever matched through a PROPER ancestor, and only 24 of ~750 queries
+returned anything at all — stacked single-row filters, and parents picked
+without regard to workspace. The property was green over that. The canary
+stays.
 
 ## Adding a suite
 
