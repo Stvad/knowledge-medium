@@ -1,1 +1,0 @@
-import{mw as e,pw as t}from"../../chunks/app-CbgZ6mhY.js";export{t as BlockPasteShellDecorator,e as blockPasteShellDecorator};
