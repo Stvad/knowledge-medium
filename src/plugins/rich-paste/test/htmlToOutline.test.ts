@@ -174,6 +174,10 @@ describe('convertClipboardHtml: content', () => {
     expect(outline('<ol start="3"><li>third</li></ol>')).toEqual(['3. third'])
   })
 
+  it('keeps a list item that is outside a list', () => {
+    expect(outline('<h1>T</h1><li>x</li><b><li>y</li></b>')).toEqual(['# T', '  x', '  y'])
+  })
+
   it('keeps a line break inside one block even with no other markup', () => {
     expect(outline('<p>first<br>second</p>')).toEqual(['first\nsecond'])
   })
@@ -250,8 +254,30 @@ describe('convertClipboardHtml: content', () => {
       .toEqual(['# T', '  ~~struck~~ **a *b***'])
   })
 
-  it('makes no block of block markup nested in inline markup with no text', () => {
-    expect(outline('<h1>T</h1><b><h2></h2></b><i><hr></i><p>end</p>')).toEqual(['# T', '  end'])
+  it('drops empty code spans and joins touching ones, which markdown cannot spell', () => {
+    expect(outline(
+      '<h1>T</h1><p><code></code>x</p><p><code></code><code></code><img src="https://e.com/i.png" alt="i"></p>',
+    )).toEqual(['# T', '  x', '  ![i](https://e.com/i.png)'])
+    expect(outline('<h1>T</h1><p><code>a</code><code></code><code>b</code> c</p>')).toEqual(['# T', '  `ab` c'])
+  })
+
+  it('lifts blocks out of the paragraph or inline markup that holds them', () => {
+    // The converter reads a <summary> as a paragraph; READMEs put a heading in one.
+    expect(outline('<details><summary><h2>Setup</h2></summary><p>Install it.</p></details>'))
+      .toEqual(['## Setup', '  Install it.'])
+    expect(outline('<h1>T</h1><b>Steps<ol><li>one</li><li>two</li></ol></b><b><p>x</p><p>y</p></b>'))
+      .toEqual(['# T', '  **Steps**', '    1. one', '    2. two', '  x', '  y'])
+    expect(outline('<h3>Setup<ul><li>npm i</li></ul></h3>')).toEqual(['### Setup', '  npm i'])
+    // Splitting a link around a list, the converter puts the link inside it.
+    expect(outline('<h1>T</h1><a href="https://e.com/">See<ul><li>x</li></ul></a>'))
+      .toEqual(['# T', '  [See](https://e.com/)', '    x'])
+    // An empty block left inside would take the escape off the text before it.
+    expect(convert('<summary>-<ul></ul></summary>')).toEqual({kind: 'inline', markdown: '\\-'})
+  })
+
+  it('makes no block of markup with no text in it', () => {
+    expect(outline('<h1>T</h1><b><h2></h2></b><i><hr></i><h2><del><br></del></h2><p>end</p>'))
+      .toEqual(['# T', '  end'])
   })
 
   it('reads non-breaking spaces as spaces before collapsing whitespace', () => {
