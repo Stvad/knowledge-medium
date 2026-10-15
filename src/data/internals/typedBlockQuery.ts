@@ -152,7 +152,7 @@ const compileTargetTraversal = (
   name: string,
   inner: Readonly<Record<string, unknown>>,
   schema: AnyPropertySchema,
-  jsonExpr: string,
+  rowAlias: string,
   propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
   aliasCounter: AliasCounter,
 ): CompiledClause => {
@@ -165,19 +165,23 @@ const compileTargetTraversal = (
     )
   }
   const alias = `d${aliasCounter.n++}`
-  const refExtract = `json_extract(${jsonExpr}, ${inlineJsonPath(name)})`
+  const refExtract = `json_extract(${rowAlias}.properties_json, ${inlineJsonPath(name)})`
   const innerEntries = Object.entries(inner).sort(([a], [b]) => a.localeCompare(b))
   const innerClauses: string[] = []
   const innerParams: unknown[] = []
   for (const [innerName, innerValue] of innerEntries) {
     const compiled = compileWhereClause(
       innerName, innerValue, propertySchemas.get(innerName),
-      `${alias}.properties_json`, propertySchemas, aliasCounter,
+      alias, propertySchemas, aliasCounter,
     )
     innerClauses.push(compiled.sql)
     innerParams.push(...compiled.params)
   }
   const inWhere = innerClauses.length === 0 ? '' : ` AND ${innerClauses.join(' AND ')}`
+  // A target outside the source row's workspace is not a live target here:
+  // reference resolution is workspace-scoped, and so are the deps that wake a
+  // handle when a target is created or deleted (`typedBlocksStructureKey`).
+  const visible = `${alias}.deleted = 0 AND ${alias}.workspace_id = ${rowAlias}.workspace_id`
   if (isRef) {
     // The source row's `properties_json[name]` holds the target id
     // (string, stored as JSON). `json_extract` unwraps the JSON
@@ -186,7 +190,7 @@ const compileTargetTraversal = (
       sql:
         `EXISTS (SELECT 1 FROM blocks ${alias} ` +
         `WHERE ${alias}.id = ${refExtract} ` +
-        `AND ${alias}.deleted = 0${inWhere})`,
+        `AND ${visible}${inWhere})`,
       params: innerParams,
     }
   }
@@ -195,7 +199,7 @@ const compileTargetTraversal = (
     sql:
       `EXISTS (SELECT 1 FROM json_each(${refExtract}) AS je ` +
       `JOIN blocks ${alias} ON ${alias}.id = je.value ` +
-      `WHERE ${alias}.deleted = 0${inWhere})`,
+      `WHERE ${visible}${inWhere})`,
     params: innerParams,
   }
 }
@@ -204,7 +208,7 @@ const compileWhereClause = (
   name: string,
   value: unknown,
   schema: AnyPropertySchema | undefined,
-  jsonExpr: string,
+  rowAlias: string,
   propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
   aliasCounter: AliasCounter = {n: 0},
 ): CompiledClause => {
@@ -214,7 +218,7 @@ const compileWhereClause = (
   if (schema === undefined) {
     throw new Error(`[queryBlocks] where.${name} has no registered PropertySchema`)
   }
-  const extract = `json_extract(${jsonExpr}, ${inlineJsonPath(name)})`
+  const extract = `json_extract(${rowAlias}.properties_json, ${inlineJsonPath(name)})`
   const parsed = parseWhereValue(name, value)
 
   // `IS NULL` / `IS NOT NULL` skip `codec.where.encode` entirely —
@@ -227,7 +231,7 @@ const compileWhereClause = (
     return {sql: `${extract} IS NOT NULL`, params: []}
   }
   if (parsed.kind === 'target') {
-    return compileTargetTraversal(name, parsed.inner, schema, jsonExpr, propertySchemas, aliasCounter)
+    return compileTargetTraversal(name, parsed.inner, schema, rowAlias, propertySchemas, aliasCounter)
   }
   if (parsed.kind === 'between') {
     const lo = encodeForWhere(name, schema, parsed.lo)
@@ -270,7 +274,6 @@ const compilePredicateAgainstRow = (
 ): CompiledClause => {
   const clauses: string[] = []
   const params: unknown[] = []
-  const propsExpr = `${rowAlias}.properties_json`
 
   if (predicate.id !== undefined) {
     clauses.push(`${rowAlias}.id = ?`)
@@ -279,7 +282,7 @@ const compilePredicateAgainstRow = (
 
   if (predicate.where !== undefined) {
     for (const [name, value] of Object.entries(predicate.where).sort(([a], [b]) => a.localeCompare(b))) {
-      const compiled = compileWhereClause(name, value, propertySchemas.get(name), propsExpr, propertySchemas)
+      const compiled = compileWhereClause(name, value, propertySchemas.get(name), rowAlias, propertySchemas)
       clauses.push(compiled.sql)
       params.push(...compiled.params)
     }
@@ -327,7 +330,7 @@ const compileScopedPredicate = (
 
   if (predicate.where !== undefined) {
     for (const [name, value] of Object.entries(predicate.where).sort(([a], [b]) => a.localeCompare(b))) {
-      const compiled = compileWhereClause(name, value, propertySchemas.get(name), 'anc.properties_json', propertySchemas)
+      const compiled = compileWhereClause(name, value, propertySchemas.get(name), 'anc', propertySchemas)
       clauses.push(compiled.sql)
       params.push(...compiled.params)
     }
@@ -508,7 +511,7 @@ export const buildCandidatesCte = (
 
   if (normalized.where !== undefined) {
     for (const [name, value] of Object.entries(normalized.where).sort(([a], [b]) => a.localeCompare(b))) {
-      const compiled = compileWhereClause(name, value, propertySchemas.get(name), 'b.properties_json', propertySchemas)
+      const compiled = compileWhereClause(name, value, propertySchemas.get(name), 'b', propertySchemas)
       clauses.push(compiled.sql)
       params.push(...compiled.params)
     }
