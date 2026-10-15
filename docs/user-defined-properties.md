@@ -254,7 +254,14 @@ export interface Codec<T> {
   readonly where?: WhereCapability<T>
 }
 
+/** The cell shape a where-capable codec writes — the only shape its
+ *  comparators admit, since SQLite orders values across storage classes
+ *  (a stale `'abc'` is `> 3`). `iso-date` is `toISOString()` text with a
+ *  four-digit year; dates outside 0000–9999 never compare (#1204). */
+export type WhereStorage = 'text' | 'number' | 'boolean' | 'iso-date'
+
 export interface WhereCapability<T> {
+  readonly storage: WhereStorage
   /** Encode a decoded value to its scalar SQLite-comparable form.
    *
    *  **Validation boundary.** Typed-query callers can pass any
@@ -292,15 +299,15 @@ export interface RefListCodec extends Codec<readonly string[]> {
 // Kernel codecs — `where.encode` validates input first, then encodes.
 const stringCodec:  Codec<string>  = {
   type: 'string', encode, decode,
-  where: { encode: v => { if (typeof v !== 'string')  throw new CodecError('string',  v); return v } },
+  where: { storage: 'text', encode: v => { if (typeof v !== 'string')  throw new CodecError('string',  v); return v } },
 }
 const numberCodec:  Codec<number>  = {
   type: 'number', encode, decode,
-  where: { encode: v => { if (typeof v !== 'number' || !Number.isFinite(v)) throw new CodecError('finite number', v); return v } },
+  where: { storage: 'number', encode: v => { if (typeof v !== 'number' || !Number.isFinite(v)) throw new CodecError('finite number', v); return v } },
 }
 const booleanCodec: Codec<boolean> = {
   type: 'boolean', encode, decode,
-  where: { encode: v => { if (typeof v !== 'boolean') throw new CodecError('boolean', v); return v ? 1 : 0 } },
+  where: { storage: 'boolean', encode: v => { if (typeof v !== 'boolean') throw new CodecError('boolean', v); return v ? 1 : 0 } },
 }
 // Date is natively absence-aware: value type is `Date | undefined`,
 // no codecs.optional wrapper. Date has no inert "no value" sentinel
@@ -318,6 +325,7 @@ const dateCodec: Codec<Date | undefined> = {
     return d
   },
   where: {
+    storage: 'iso-date',
     encode: v => {
       // null is short-circuited to IS NULL by the compiler before
       // reaching where.encode (per the compileWhereFilter sketch).
@@ -331,7 +339,7 @@ const dateCodec: Codec<Date | undefined> = {
 }
 const url: Codec<string> = {
   type: 'url', encode: validateUrl, decode: validateUrl,
-  where: { encode: v => { if (typeof v !== 'string') throw new CodecError('string', v); return validateUrl(v) } },
+  where: { storage: 'text', encode: v => { if (typeof v !== 'string') throw new CodecError('string', v); return validateUrl(v) } },
 }
 const listCodec    = <T>(inner: Codec<T>): Codec<T[]> => ({ type: 'list', encode, decode })       // no where
 const objectCodec  = <T>(): Codec<T> => ({ type: 'object', encode, decode })                      // no where
@@ -402,11 +410,13 @@ const compileWhereFilter = (
 
 `SCALAR_WHERE_SHAPES`, `normalizeSqlValue`, the `isRefCodec || isRefListCodec` special-case, and the kernel-curated `WHERE_ALLOWED_TYPES` set all go away. Each codec answers for itself.
 
+(Since shipped: the compiler also takes `<` / `<=` / `>` / `>=` / `between`, and ANDs the declared `storage` shape's test onto every comparator, so a cell the codec could not have written matches none — #1204.)
+
 Three properties this gives:
 
 - **One vocabulary, two uses.** Preset id and codec type are the same string. A `'ref'` preset's `build()` returns a codec with `type: 'ref'`; the panel looks up the preset by `codec.type` and uses its `Editor`. No predicate matching, no translation layer.
 - **`where` is a codec capability, not a label.** Queryability is "this codec can produce a SQL-comparable value," which is authorship knowledge — the codec author writes the encoder once, and presence of `where` is the authoritative signal. No parallel registry to drift from the codec; no plugin advertising queryability without delivering it. Booleans correctly bind `0`/`1`, dates correctly bind ISO strings, URLs correctly bind the normalized form — all from the codec's own `where.encode`.
-- **Plugin-defined codecs participate without core changes.** A plugin shipping an `email` preset picks `type: 'email'`, registers a codec with `where: { encode: v => normalizeEmail(v) }` (or omits `where` if email shouldn't be SQL-queryable), and the preset contribution covers `(codec factory, Editor, defaultValue, glyph?, configEditor?)`. No new ad-hoc fields per codec subtype, no parallel facet registration, no allowlist contribution.
+- **Plugin-defined codecs participate without core changes.** A plugin shipping an `email` preset picks `type: 'email'`, registers a codec with `where: { storage: 'text', encode: v => normalizeEmail(v) }` (or omits `where` if email shouldn't be SQL-queryable), and the preset contribution covers `(codec factory, Editor, defaultValue, glyph?, configEditor?)`. No new ad-hoc fields per codec subtype, no parallel facet registration, no allowlist contribution.
 
 The `where` namespace is intentionally a sub-object rather than a flat `whereEncode` field: future operators (`<` / `>` / range queries) extend the namespace (`where.compare`, `where.between`) without breaking codec authors.
 

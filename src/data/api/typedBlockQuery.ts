@@ -23,6 +23,11 @@ export interface TypedBlockQueryReferenceFilter {
  *  "property is set" (`IS NOT NULL`), `false` for "unset" (`IS NULL`,
  *  same as the `null` shorthand).
  *
+ *  A comparator (equality included) matches only a cell in its codec's
+ *  `WhereStorage` shape. Any other cell, such as a re-type's leftover,
+ *  matches none, so no `exclude` removes it either. Dates compare within
+ *  years 0000–9999; an operand outside them is refused.
+ *
  *  `target` is the ref-traversal operator. Valid only on `ref`-typed
  *  (and `refList`-typed) properties; the operand is an inner where-map
  *  compiled against the referenced block's `properties_json`. Lets

@@ -244,6 +244,13 @@ export interface SameTxCtx {
     workspaceId: string,
     name: string,
   ): readonly string[] | null
+  /** A row's state at TX START, from this tx's own write log — `null` for a
+   *  row the tx created, `undefined` for one it has not written. Unlike an
+   *  event's `before`, which on the `rerunOnDirtyRows` pass is a merged
+   *  baseline over just the rows dirtied since the processor's first run,
+   *  this answers for ANY row, which a processor that reaches rows outside
+   *  its event needs. */
+  txStartOf(id: string): BlockData | null | undefined
 }
 
 /** Thrown by a same-tx processor to reject the user's tx. The
