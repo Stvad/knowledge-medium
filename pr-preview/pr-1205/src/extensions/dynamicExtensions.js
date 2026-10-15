@@ -1,0 +1,1 @@
+import{PT as e}from"../../chunks/app-BmQMlR1c.js";export{e as dynamicExtensionsExtension};

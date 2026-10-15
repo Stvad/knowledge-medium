@@ -1,0 +1,1 @@
+import{Mw as e,Nw as t,gt as n}from"../../../chunks/app-BmQMlR1c.js";export{e as extensionsOverridesProp,t as extensionsPrefsType,n as extensionsSettingsPlugin};
