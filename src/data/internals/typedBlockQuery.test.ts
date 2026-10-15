@@ -502,6 +502,30 @@ describe('repo.queryBlocks', () => {
       }
     })
 
+    it('a refList cell that is not an array names no targets instead of failing the query', async () => {
+      // A ref → refList re-type leaves the old plain-string cells behind (an
+      // accepted residual of the definition-change processor). A bare
+      // `json_each` over one throws `malformed JSON`, failing every target
+      // query on the property — both the predicate and the ancestor-dep walk.
+      await create({id: 'live-target'})
+      await create({id: 'stale', properties: {[reviewersProp.name]: 'live-target'}})
+      await create({id: 'object-cell', properties: {[reviewersProp.name]: {a: 'live-target'}}})
+      await create({
+        id: 'current',
+        properties: {[reviewersProp.name]: reviewersProp.codec.encode(['live-target'])},
+      })
+      await create({id: 'entry-stale', parentId: 'stale', types: ['entry']})
+      await create({id: 'entry-current', parentId: 'current', types: ['entry']})
+
+      expect(ids(await env.repo.queryBlocks({workspaceId: WS,
+        where: {[reviewersProp.name]: {target: {}}},
+      }))).toEqual(['current'])
+      expect(ids(await env.repo.queryBlocks({workspaceId: WS,
+        types: ['entry'],
+        match: [{scope: 'ancestor', where: {[reviewersProp.name]: {target: {}}}}],
+      }))).toEqual(['entry-current'])
+    })
+
     it('rejects the target operator on non-ref properties', async () => {
       await expect(env.repo.queryBlocks({workspaceId: WS, 
         where: {status: {target: {priority: {gt: 0}}}},

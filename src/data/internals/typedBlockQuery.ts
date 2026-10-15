@@ -51,6 +51,16 @@ export const inlineJsonPath = (name: string): string => {
   return `'${path.replaceAll("'", "''")}'`
 }
 
+/** `json_each` over the refList cell `name` of `rowAlias`, one row per member
+ *  in `value`. A cell that is not a JSON array names no targets, as in
+ *  `decodeRefListIds` — a `ref` → `refList` re-type leaves plain strings behind
+ *  (an accepted residual of `propertyDefinitionChangeProcessor`), and a bare
+ *  `json_each` over one throws `malformed JSON` for the whole query. */
+export const refListMembersSql = (rowAlias: string, name: string): string => {
+  const cell = `${rowAlias}.properties_json, ${inlineJsonPath(name)}`
+  return `json_each(CASE WHEN json_type(${cell}) = 'array' THEN json_extract(${cell}) END)`
+}
+
 interface CompiledClause {
   readonly sql: string
   readonly params: readonly unknown[]
@@ -165,7 +175,6 @@ const compileTargetTraversal = (
     )
   }
   const alias = `d${aliasCounter.n++}`
-  const refExtract = `json_extract(${rowAlias}.properties_json, ${inlineJsonPath(name)})`
   const innerEntries = Object.entries(inner).sort(([a], [b]) => a.localeCompare(b))
   const innerClauses: string[] = []
   const innerParams: unknown[] = []
@@ -189,15 +198,14 @@ const compileTargetTraversal = (
     return {
       sql:
         `EXISTS (SELECT 1 FROM blocks ${alias} ` +
-        `WHERE ${alias}.id = ${refExtract} ` +
+        `WHERE ${alias}.id = json_extract(${rowAlias}.properties_json, ${inlineJsonPath(name)}) ` +
         `AND ${visible}${inWhere})`,
       params: innerParams,
     }
   }
-  // refList: target value is an array of ids — fan out via json_each.
   return {
     sql:
-      `EXISTS (SELECT 1 FROM json_each(${refExtract}) AS je ` +
+      `EXISTS (SELECT 1 FROM ${refListMembersSql(rowAlias, name)} AS je ` +
       `JOIN blocks ${alias} ON ${alias}.id = je.value ` +
       `WHERE ${visible}${inWhere})`,
     params: innerParams,
