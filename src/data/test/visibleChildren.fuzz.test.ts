@@ -599,16 +599,21 @@ describe('visible-children view', () => {
       await releaseTestRepos([u.repo])
     }
   })
-  // Tripwire for the #1202 excuse: it is only sound while the bug exists. A
-  // fix that makes the tx layer hide this row would leave the excuse dead,
-  // and one that makes the SQL show it fails the children oracle — either
-  // way this goes red, and the excuse goes with it.
-  it('KNOWN ISSUE #1202: an unbuildable definition still splits the views', async () => {
+  // Tripwires for the #1202 excuse, one per branch of
+  // `unbuildableDefinitionIds`: it is only sound while the bug exists. A fix
+  // that makes the tx layer hide the row leaves that branch dead, and one that
+  // makes the SQL show it fails the children oracle — either way the case
+  // goes red, and its branch goes with it.
+  it.each([
+    {branch: 'schema does not build', def: {name: 1, preset: 'unloadable', validScope: true}},
+    {branch: 'metadata does not parse', def: {name: 1, preset: 'string', validScope: false}},
+  ] satisfies Array<{branch: string; def: DefSpec}>)(
+    'KNOWN ISSUE #1202: a definition whose $branch still splits the views', async ({def}) => {
     await guard.barrier()
     const u = await openUniverse()
     try {
       for (const op of [
-        {op: 'putDef', slot: 1, def: {name: 1, preset: 'unloadable', validScope: true}, via: 'sync'},
+        {op: 'putDef', slot: 1, def, via: 'sync'},
         {op: 'create', parent: {kind: 'node', idx: 0}, orderKey: 0, content: {kind: 'field', target: {to: 'def', slot: 1}, labelled: false}, via: 'tx'},
       ] satisfies Op[]) await applyOp(u, op)
       const fieldRow = u.nodes.at(-1)
