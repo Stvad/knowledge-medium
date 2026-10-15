@@ -1,1 +1,0 @@
-import{FS as e,IS as t,PS as n}from"../../../chunks/app-DOnL9xpI.js";export{n as SWIPE_QUICK_ACTIONS_GESTURE_ID,e as SWIPE_TRIGGER_PX,t as swipeRecognizer};
