@@ -4283,28 +4283,28 @@ describe('multi-value properties are N sibling value children (km-h1hy)', () => 
       expect((await bagOf(keep!.id))[tagsSchema.name]).toEqual(['x', 'y'])
     })
 
-    it('folding a repeated member keeps marked rows whose definition the same tx deletes', async () => {
-      // The registry is a tx-start snapshot, so it still resolves a definition
-      // this tx deletes — but at commit those rows are ordinary blocks, and
-      // folding one into the other would tombstone it.
+    it('folding a repeated member folds field rows of a seed whose block the same tx deletes', async () => {
+      // A seed's declaration resolves its fieldId with or without the block,
+      // so these are still field rows at commit — declining the fold would
+      // leave the survivor two of them for one property.
       const repo = await setupWithLists()
-      await seedDefinitionBlock(repo)
+      const aliasFieldId = propertyDefinitionBlockId(WS, aliasesProp.seedKey)
+      await repo.tx(tx => tx.create({
+        id: aliasFieldId, workspaceId: WS, parentId: null, orderKey: 'zz', content: 'alias',
+      }), {scope: ChangeScope.BlockDefault})
       await createBlock(repo, 'p')
       await repo.tx(tx => tx.setProperty('p', tagsSchema, ['a', 'a']),
         {scope: ChangeScope.BlockDefault})
       const [keep, fold] = await memberRows('p', TAGS_FIELD_ID)
-      await repo.tx(tx => tx.setProperty(keep!.id, statusSchema, 'k'), {scope: ChangeScope.BlockDefault})
-      await repo.tx(tx => tx.setProperty(fold!.id, statusSchema, 'f'), {scope: ChangeScope.BlockDefault})
-      const [foldStatus] = await liveFieldRows(fold!.id)
+      await repo.tx(tx => tx.setProperty(keep!.id, aliasesProp, ['k']), {scope: ChangeScope.BlockDefault})
+      await repo.tx(tx => tx.setProperty(fold!.id, aliasesProp, ['f']), {scope: ChangeScope.BlockDefault})
 
       await repo.tx(async tx => {
-        await tx.delete(STATUS_FIELD_ID)
+        await tx.delete(aliasFieldId)
         await tx.setProperty('p', tagsSchema, ['a'])
       }, {scope: ChangeScope.BlockDefault})
 
-      const moved = await sharedDb.db.get<{parent_id: string; deleted: number}>(
-        'SELECT parent_id, deleted FROM blocks WHERE id = ?', [foldStatus!.id])
-      expect(moved).toEqual({parent_id: keep!.id, deleted: 0})
+      expect(await liveFieldRowsFor(aliasFieldId)(keep!.id)).toHaveLength(1)
     })
 
     it('folding a repeated member keeps the marked rows no definition resolves', async () => {

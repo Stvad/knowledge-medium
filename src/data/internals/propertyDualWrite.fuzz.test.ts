@@ -107,6 +107,7 @@ import {
 import { kernelValuePresetCoresById } from '@/data/kernelValuePresetCores'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
+import { releaseTestRepos } from '@/data/test/testRepoScope'
 import { assertLegalKernelRejection, drain } from '@/data/test/fuzzKernelHarness'
 import { projectedPropertyDefinitionsFacet } from '@/data/facets'
 import { keysBetween } from '@/data/orderKey'
@@ -1525,6 +1526,16 @@ const runCase = async ({mode, txs}: {mode: Mode; txs: TxSpec[]}): Promise<void> 
   await resetTestDb(sharedDb.db)
   rawSeq = 0
   const repo = await seedWorkspace()
+  // The test scope releases Repos only after the whole property, so each
+  // case releases its own before the next one resets the shared db.
+  try {
+    await runSequence(repo, mode, txs)
+  } finally {
+    await releaseTestRepos([repo])
+  }
+}
+
+const runSequence = async (repo: Repo, mode: Mode, txs: TxSpec[]): Promise<void> => {
   const seedRows = await fullSnapshot()
   const waivers: Waivers = {proj: new Set(), dup: new Set(), orphans: new Set(), unsettled: new Set()}
   const mirror: UndoMirror | null = mode === 'local' ? {done: [], undone: []} : null
