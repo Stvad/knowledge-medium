@@ -1234,6 +1234,39 @@ const currentDupPairs = async (): Promise<string[]> => {
   return out
 }
 
+/** KNOWN ISSUE (fuzz): #1210. MATERIALIZE's revival picks an owner's field
+ *  rows by a bit DERIVE has not re-stamped yet, so a child edit that marks,
+ *  unmarks or moves a row under an owner revived in the SAME tx can leave a
+ *  cell key with no field row. Counterexample: restore A, move B's field row
+ *  under A, edit it to plain text — all in one tx. The pairs at risk are, for
+ *  each row this tx re-placed or re-marked under such an owner, the property
+ *  the revival read it as (its pre-tx bit) and the one it is now. Remove with
+ *  the fix. */
+const staleBitRevivalPairs = (log: TxLog, start: DbState, end: DbState): string[] => {
+  const revived = new Set([...end.byId.values()]
+    .filter(row => row.deleted === 0 && start.byId.get(row.id)?.deleted === 1 && log.childTouched.has(row.id))
+    .map(row => row.id))
+  if (revived.size === 0) return []
+  const pairs: string[] = []
+  for (const after of end.byId.values()) {
+    const before = start.byId.get(after.id)
+    const owners = [after.parent_id, before?.parent_id]
+      .filter((id): id is string => id !== null && id !== undefined && revived.has(id))
+    if (owners.length === 0) continue
+    if (before !== undefined && before.parent_id === after.parent_id && before.deleted === after.deleted
+      && before.is_field_form === after.is_field_form
+      && before.reference_target_id === after.reference_target_id) continue
+    for (const ownerId of owners) {
+      for (const row of [before, after]) {
+        if (row?.is_field_form === 1 && isRegisteredField(row.reference_target_id)) {
+          pairs.push(pairKey(ownerId, row.reference_target_id))
+        }
+      }
+    }
+  }
+  return pairs
+}
+
 const runBatch = async (repo: Repo, ops: LocalOp[], waivers: Waivers, label: string): Promise<void> => {
   const start = await readState()
   const startSnapshot = await fullSnapshot()
@@ -1291,16 +1324,7 @@ const runBatch = async (repo: Repo, ops: LocalOp[], waivers: Waivers, label: str
       waivers.dup.delete(pairKey(ownerId, fieldId))
     }
   }
-  // KNOWN ISSUE (fuzz): #1210. MATERIALIZE's revival picks field rows by a bit
-  // DERIVE has not re-stamped yet, so a child edit that marks or unmarks a row
-  // under an owner revived in the SAME tx can leave a cell key with no field
-  // row. Counterexample: restore A, move B's field row under A, edit it to
-  // plain text — all in one tx. Remove with the fix.
-  for (const row of end.byId.values()) {
-    if (row.deleted === 0 && start.byId.get(row.id)?.deleted === 1 && log.childTouched.has(row.id)) {
-      waiveOwner(waivers.proj, row.id)
-    }
-  }
+  for (const key of staleBitRevivalPairs(log, start, end)) waivers.proj.add(key)
   await checkState(repo, waivers, converged, label)
 }
 
@@ -1380,6 +1404,7 @@ describe('properties-as-blocks dual representation under mixed writer sequences'
       expect(stats.raw.get(op) ?? 0, `raw op "${op}" wrote — ${summary}`).toBeGreaterThan(0)
     }
     expect(stats.committed, 'committed txs').toBeGreaterThan(0)
+    expect(stats.rejected, 'A — a rejected tx was rolled back and checked').toBeGreaterThan(0)
     expect(stats.intentChecked, 'I checks').toBeGreaterThan(0)
     expect(stats.orderBlind, 'I order-blind carve-out reached').toBeGreaterThan(0)
     expect(stats.rematerialized, 'Q MATERIALIZE re-runs').toBeGreaterThan(0)
