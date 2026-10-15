@@ -1,1 +1,0 @@
-import{Hq as e,Uq as t,Vq as n}from"../../chunks/app-id8XRlxf.js";export{n as NAMES_IN_A_SENTENCE,e as describeNames,t as firstFew};

@@ -1,1 +1,0 @@
-import{C_ as e,S_ as t,w_ as n}from"../../../chunks/app-id8XRlxf.js";export{t as LeftSidebar,e as LeftSidebarCoreSection,n as LeftSidebarShortcutsSection};
