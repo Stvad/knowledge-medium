@@ -1,2 +1,2 @@
-import{z4 as e}from"../../../chunks/app-B7wGJX4d.js";var t=e.optionalRef;export{t as optionalRefCodec};
+import{z4 as e}from"../../../chunks/app-BwoaUt5B.js";var t=e.optionalRef;export{t as optionalRefCodec};
 //# sourceMappingURL=codecs.js.map
