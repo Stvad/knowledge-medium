@@ -346,6 +346,7 @@ const DEFINITION_CHANGE_REFUSALS = new Set([
   'property.definition-change.unbuildable',
   'property.definition-change.contested',
   'property.definition-change.unconvertible',
+  'property.definition-change.shared-name',
 ])
 
 /** Rejections the tx surface owes an incoherent op, keyed by the op that may
@@ -366,7 +367,9 @@ const LEGAL_REJECTIONS: {readonly [K in Op['op']]: (e: unknown) => boolean} = {
   // The definition-change processor (`propertyDefinitionChangeProcessor.ts`):
   // a re-type it cannot fan out because the old or new value type does not
   // build, a change to a definition whose name is contested (both in
-  // `REFUSALS`), or a re-type that would lose a field row's stored value.
+  // `REFUSALS`), a re-type that would lose a field row's stored value, or a
+  // rename or revival onto a name another definition answers to while either
+  // has consumers (`SHARED_NAME_REFUSAL`).
   // Re-defining a tombstoned slot restores it, so restore's tombstoned-parent
   // refusal applies too.
   putDef: e => (e instanceof ProcessorRejection && DEFINITION_CHANGE_REFUSALS.has(e.code))
