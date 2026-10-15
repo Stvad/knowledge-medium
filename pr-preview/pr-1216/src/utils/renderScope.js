@@ -1,1 +1,1 @@
-import{_2 as e,g2 as t,h2 as n,m2 as r,v2 as i}from"../../chunks/app-SKT86WJe.js";export{r as backlinkRenderScopeId,n as breadcrumbRenderScopeId,t as embedRenderScopeId,e as outlineRenderScopeId,i as panelRenderScopeId};
+import{_2 as e,g2 as t,h2 as n,v2 as r,y2 as i}from"../../chunks/app-BO9eUdxJ.js";export{n as backlinkRenderScopeId,t as breadcrumbRenderScopeId,e as embedRenderScopeId,r as outlineRenderScopeId,i as panelRenderScopeId};
