@@ -1,1 +1,1 @@
-import{XK as e,ZK as t}from"../../chunks/app-8Qrycrpu.js";export{e as assertAliasClaimable,t as claimedAliases};
+import{XK as e,ZK as t}from"../../chunks/app-id8XRlxf.js";export{e as assertAliasClaimable,t as claimedAliases};

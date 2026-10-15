@@ -1,1 +1,1 @@
-import{Sp as e,bp as t,xp as n}from"../../../chunks/app-8Qrycrpu.js";export{t as MEDIA_VIEWERS_FACET_ID,n as isMediaViewerContribution,e as mediaViewersFacet};
+import{Sp as e,bp as t,xp as n}from"../../../chunks/app-id8XRlxf.js";export{t as MEDIA_VIEWERS_FACET_ID,n as isMediaViewerContribution,e as mediaViewersFacet};

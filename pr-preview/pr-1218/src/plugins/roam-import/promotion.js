@@ -1,1 +1,1 @@
-import{Qs as e,Zs as t}from"../../../chunks/app-8Qrycrpu.js";export{t as computePromotedFromChildren,e as detectInlineAttribute};
+import{Qs as e,Zs as t}from"../../../chunks/app-id8XRlxf.js";export{t as computePromotedFromChildren,e as detectInlineAttribute};

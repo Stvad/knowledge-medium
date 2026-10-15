@@ -1,1 +1,1 @@
-import{NI as e,PI as t}from"../../../chunks/app-8Qrycrpu.js";export{e as mergeReferrers,t as wikilinkSourcesByContent};
+import{NI as e,PI as t}from"../../../chunks/app-id8XRlxf.js";export{e as mergeReferrers,t as wikilinkSourcesByContent};
