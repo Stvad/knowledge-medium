@@ -291,8 +291,11 @@ one.
   JSON null vs `''`/`0`/`false`/`[]`, comparators and excludes over unset
   properties, `target` through dangling / deleted / cross-workspace refs,
   multi-type blocks, deleted parents, `created_at` ties, the ancestor-walk
-  gate. A model-only canary pins each of those as reached. Malformed cells
-  under scalar properties are a KNOWN ISSUE carve-out (#1204).
+  gate. Every property kind also draws cells of a foreign JSON shape (what
+  a re-type leaves behind), and the date pool runs past years 0000–9999:
+  extended-year cells, and rarely an out-of-range operand whose refusal the
+  model predicts on every path. A model-only canary pins each of those as
+  reached.
 
 ## Found so far
 
@@ -664,9 +667,21 @@ deep runs (each fixed with pinned tests in the same PR):
   way. Both now go through one helper that reads only array cells.
 
 Its probe of the rest of that malformed-cell class filed #1204:
-comparators match cells of the wrong JSON type, because SQLite orders
-`json_extract` results across storage classes (`{gt: 3}` matches a stale
-`'abc'`). And one finding about the suite itself: its first coverage
+comparators matched cells of the wrong JSON type, because SQLite orders
+`json_extract` results across storage classes (`{gt: 3}` matched a stale
+`'abc'`, `true` a stored `1`, a date `{lt}` the empty string, and a
+`+010000-…` date sorted before every four-digit year). Fixed in a
+follow-up: each where-capable codec declares a `WhereStorage`, and the
+compiler ANDs that shape's test onto every comparator. Dates compare only
+in canonical `toISOString()` form with a four-digit year; outside years
+0000–9999 a cell matches nothing and an operand is refused. The generator
+then lost its carve-out, so the model's existing "a cell the codec could
+not have written matches no comparator" is the regression test. Its fixed
+smoke sample catches deleting any one storage test; deleting the guard on
+the `between` branch alone surfaces only in deep runs (within seconds),
+and the example tests pin it.
+
+And one finding about the suite itself: its first coverage
 canary showed that across 300 sampled worlds no ancestor-scoped predicate
 ever matched through a PROPER ancestor, and only 24 of ~750 queries
 returned anything at all — stacked single-row filters, and parents picked
