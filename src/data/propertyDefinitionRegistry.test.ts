@@ -172,7 +172,7 @@ describe('property definition registry snapshot', () => {
     expect(snapshot.schemas.has('status')).toBe(false)
     expect(createPropertySchemaResolver(snapshot).resolve('status')).toEqual({
       status: 'identity-unavailable',
-      reason: 'definition-unavailable',
+      reason: 'behavior-unavailable',
     })
   })
 
@@ -192,7 +192,7 @@ describe('property definition registry snapshot', () => {
     expect(snapshot.definitionsByFieldId.get('plugin-field')).toBe(definition)
     expect(createPropertySchemaResolver(snapshot).resolve('plugin:config')).toEqual({
       status: 'identity-unavailable',
-      reason: 'definition-unavailable',
+      reason: 'behavior-unavailable',
     })
   })
 
@@ -205,6 +205,21 @@ describe('property definition registry snapshot', () => {
     expect(snapshot.definitionsByFieldId.has('foreign')).toBe(false)
     expect(snapshot.schemasByFieldId.has('foreign')).toBe(false)
     expect(snapshot.schemas.has('foreign')).toBe(false)
+  })
+
+  it('reports this workspace\'s unparseable definition blocks, apart from its definitions', () => {
+    const snapshot = build({
+      projectedDefinitions: new Map([
+        ['broken', {unparseable: {fieldId: 'broken', workspaceId: WS}}],
+        ['broken-elsewhere', {unparseable: {fieldId: 'broken-elsewhere', workspaceId: 'ws-other'}}],
+      ]),
+    })
+    expect([...snapshot.unparseableDefinitionIds]).toEqual(['broken'])
+    expect(snapshot.definitionsByFieldId.has('broken')).toBe(false)
+    expect(createPropertySchemaResolver(snapshot).resolveField('broken')).toEqual({
+      status: 'identity-unavailable',
+      reason: 'definition-unavailable',
+    })
   })
 
   it('rejects a structural handle that borrows another declaration seed key', () => {

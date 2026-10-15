@@ -18,7 +18,10 @@ import type {
   BlockReference,
   Tx,
 } from '@/data/api'
-import type {ProjectedPropertyDefinition} from '@/data/propertyDefinitionRegistry'
+import {
+  projectedPropertyDefinitionFieldId,
+  type ProjectedPropertyDefinition,
+} from '@/data/propertyDefinitionRegistry'
 import type {ProjectedTypeDefinition} from '@/data/typeDefinitionRegistry'
 import type { AnyDefinitionBlockProjector } from './projectorRuntime.ts'
 import type { InvalidationRule } from './invalidation.ts'
@@ -287,11 +290,12 @@ export const definitionSeedsFacet = defineFacet<
   validate: isPropertySeedDeclaration,
 })
 
-/** Block-built property definitions keyed by durable field id. Metadata is
- * always present; locally-buildable behavior is optional. */
+/** Block-built property definitions keyed by durable field id: parsed
+ * metadata with optional locally-buildable behavior, or the marker for a
+ * `property-schema` block whose metadata does not parse. */
 export const projectedPropertyDefinitionsFacet = keyedMapFacet<ProjectedPropertyDefinition>(
   'data.projected-property-definitions',
-  definition => definition.metadata.fieldId,
+  projectedPropertyDefinitionFieldId,
 )
 
 /** Block-built type definitions keyed by durable block id — the type-side

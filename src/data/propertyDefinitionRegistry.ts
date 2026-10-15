@@ -9,15 +9,42 @@ import {isPropertySeedDeclaration, type AnyPropertySeedDeclaration} from '@/data
 /** A block-built behavioral entry kept beside its durable field identity.
  * The public ambient registry is name-keyed; this internal form prevents that
  * lossy projection from becoming the resolver's source of identity. */
-export interface ProjectedPropertyDefinition {
+export interface ParsedPropertyDefinition {
   readonly metadata: PropertyDefinitionMetadata
   readonly schema?: AnyPropertySchema
 }
+
+/** A live `property-schema` block whose metadata does not parse (an empty
+ * name, a change scope that is not one, a flag that does not decode). It is
+ * no definition to the registry, so a field row targeting it is an honest
+ * unknown-field row (§9) — and the outline SQL, which recognizes definitions
+ * from `block_types` tags, has to be told so. */
+export interface UnparseablePropertyDefinition {
+  readonly unparseable: {readonly fieldId: string; readonly workspaceId: string}
+}
+
+/** What the user-schemas projector publishes per `property-schema` block. */
+export type ProjectedPropertyDefinition =
+  | ParsedPropertyDefinition
+  | UnparseablePropertyDefinition
+
+export const isParsedPropertyDefinition = (
+  projected: ProjectedPropertyDefinition,
+): projected is ParsedPropertyDefinition => 'metadata' in projected
+
+export const projectedPropertyDefinitionFieldId = (
+  projected: ProjectedPropertyDefinition,
+): string => isParsedPropertyDefinition(projected)
+  ? projected.metadata.fieldId
+  : projected.unparseable.fieldId
 
 export interface PropertyDefinitionRegistrySnapshot {
   readonly workspaceId: string
   readonly schemas: ReadonlyMap<string, AnyPropertySchema>
   readonly definitionsByFieldId: ReadonlyMap<string, PropertyDefinitionMetadata>
+  /** Blocks tagged `property-schema` here that are NOT in
+   *  `definitionsByFieldId` — see {@link UnparseablePropertyDefinition}. */
+  readonly unparseableDefinitionIds: ReadonlySet<string>
   readonly definitionsByName: ReadonlyMap<string, readonly PropertyDefinitionMetadata[]>
   readonly schemasByFieldId: ReadonlyMap<string, AnyPropertySchema>
   readonly seedsByKey: ReadonlyMap<string, AnyPropertySeedDeclaration>
@@ -155,9 +182,16 @@ export const buildPropertyDefinitionRegistry = (
 ): PropertyDefinitionRegistrySnapshot => {
   const {byKey: seedsByKey, byName: seedsByDeclarationName} = indexSeeds(args.seeds)
   const definitionsByFieldId = new Map<string, PropertyDefinitionMetadata>()
+  const unparseableDefinitionIds = new Set<string>()
   const definitionsByNameMutable = new Map<string, PropertyDefinitionMetadata[]>()
   const schemasByFieldId = new Map<string, AnyPropertySchema>()
   for (const projected of args.projectedDefinitions.values()) {
+    if (!isParsedPropertyDefinition(projected)) {
+      if (projected.unparseable.workspaceId === args.workspaceId) {
+        unparseableDefinitionIds.add(projected.unparseable.fieldId)
+      }
+      continue
+    }
     const raw = projected.metadata
     if (raw.workspaceId !== args.workspaceId) continue
     // Seeds are code-owned and non-renamable (user renames are deferred to
@@ -237,6 +271,7 @@ export const buildPropertyDefinitionRegistry = (
     workspaceId: args.workspaceId,
     schemas,
     definitionsByFieldId,
+    unparseableDefinitionIds,
     definitionsByName: definitionsByNameMutable,
     schemasByFieldId,
     seedsByKey,

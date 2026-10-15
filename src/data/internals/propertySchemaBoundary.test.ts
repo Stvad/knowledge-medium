@@ -489,7 +489,7 @@ describe('typed property identity boundary', () => {
 
   it('orders the plain-schema refusal: owner, then buildability, then the object', async () => {
     // One fact per refusal, and the first two come from the snapshot alone.
-    // A metadata-only winner is `definition-unavailable` only while nothing
+    // A metadata-only winner is `behavior-unavailable` only while nothing
     // rivals it — once a second definition claims the name, the duplicate is
     // the fact to report, exactly as it would be for a buildable winner.
     const name = 'ordered'
@@ -524,7 +524,7 @@ describe('typed property identity boundary', () => {
     )
     expect(repo.propertySchemaResolverFor(WS).resolveBoundary(held)).toEqual({
       status: 'identity-unavailable',
-      reason: 'definition-unavailable',
+      reason: 'behavior-unavailable',
     })
 
     // A rival claims the same name. The winner is still unbuildable, but the

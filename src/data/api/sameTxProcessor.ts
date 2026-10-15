@@ -217,9 +217,10 @@ export interface SameTxCtx {
   /** Resolve a durable fieldId (definition block id) against the same
    *  snapshot — the recognition primitive for field rows
    *  (`reference_target_id` → schema). Shadowed definitions resolve as
-   *  `identity-unavailable` with reason 'shadowed' (their field rows keep
-   *  classifying at read sites, but they are excluded from the name map
-   *  and cell projection — unification §7). */
+   *  `identity-unavailable` with reason 'shadowed', and a winner this device
+   *  cannot build a codec for with 'behavior-unavailable' (both keep their
+   *  field rows classifying at read sites, but never project into a cell —
+   *  unification §7). */
   resolvePropertySchemaField(
     workspaceId: string,
     fieldId: string,

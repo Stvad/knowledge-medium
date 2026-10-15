@@ -267,9 +267,10 @@ export interface Tx {
   /** Resolve a durable fieldId (definition block id) to its WINNING schema
    *  against `workspaceId`'s registry snapshot — the §9 recognition/
    *  projection primitive at tx level. Returns null for shadowed losers,
-   *  orphans, and foreign workspaces (their field rows keep classifying at
-   *  read sites but never project, so machinery that folds values into
-   *  cells treats null as "this value exists only in the tree"). */
+   *  winners whose codec this device cannot build, orphans, and foreign
+   *  workspaces (the first two keep their field rows classifying at read
+   *  sites but never project, so machinery that folds values into cells
+   *  treats null as "this value exists only in the tree"). */
   resolvePropertyFieldSchema(
     workspaceId: string,
     fieldId: string,
@@ -278,7 +279,8 @@ export interface Tx {
   /** §9 recognition, condition-3 checker: does `fieldId` name a definition
    *  this workspace's registry can resolve — shadow-tolerant (a shadowed
    *  loser COUNTS: its field rows keep classifying; only the name map and
-   *  projection exclude it, §6). This is the classification predicate's
+   *  projection exclude it, §6), and so does a winner whose codec this
+   *  device cannot build (`isResolvableFieldDefinition`). This is the classification predicate's
    *  fieldId half, exposed so `isPropertyFieldRow` reads the ONE checker
    *  instead of restating the disjunction. (The rename processor and the
    *  deferred migration batch answer the same question from their own

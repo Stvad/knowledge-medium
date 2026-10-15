@@ -24,7 +24,11 @@ import {
   parsePropertyDefinitionMetadata,
   type PropertyDefinitionMetadata,
 } from '@/data/propertyDefinitionMetadata'
-import type {ProjectedPropertyDefinition} from '@/data/propertyDefinitionRegistry'
+import {
+  isParsedPropertyDefinition,
+  projectedPropertyDefinitionFieldId,
+  type ProjectedPropertyDefinition,
+} from '@/data/propertyDefinitionRegistry'
 import {resolveSelectedPropertyDefinition} from '@/data/internals/propertySchemaResolution'
 import {peekRowProperty} from '@/data/rowProperty'
 import {
@@ -189,10 +193,12 @@ export const userSchemasProjector: DefinitionBlockProjector<
   metaType: PROPERTY_SCHEMA_TYPE,
   targetFacet: projectedPropertyDefinitionsFacet,
   sourceId: USER_DATA_SOURCE_ID,
-  keyOf: definition => definition.metadata.fieldId,
+  keyOf: projectedPropertyDefinitionFieldId,
   project: (row, ctx) => {
     const metadata = parsePropertyDefinitionMetadata(row)
-    if (!metadata) return null
+    if (!metadata) {
+      return {unparseable: {fieldId: row.id, workspaceId: row.workspaceId}}
+    }
     let schema: AnyPropertySchema | null = null
     try {
       schema = tryBuildSchema(row, ctx.repo.valuePresetCores, metadata)
@@ -243,7 +249,7 @@ export class UserSchemasService {
    * invalid, and shadowed rows return undefined. */
   getSchemaForBlockId(blockId: string): AnyPropertySchema | undefined {
     const definition = this.handle?.contributionForBlockId(blockId)
-    if (!definition) return undefined
+    if (!definition || !isParsedPropertyDefinition(definition)) return undefined
     return resolveSelectedPropertyDefinition(
       definition.metadata,
       this.repo.propertySchemaResolverFor(definition.metadata.workspaceId),
