@@ -2668,6 +2668,29 @@ describe('revival re-materializes property children (#778)', () => {
     expect(await liveFieldRows('p')).toEqual([])
   })
 
+  it('mints a fresh field row for a key the tx writes after deleting its old one', async () => {
+    // The write is the user's word for the key, so it materializes — but into a
+    // new row, not the one this same tx deleted.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    const [field] = await liveFieldRows('p')
+    const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+    await repo.mutate.delete({id: 'p'})
+    await sharedDb.db.execute('UPDATE blocks SET deleted = 0 WHERE id IN (?, ?)', [field!.id, value!.id])
+
+    await repo.tx(async tx => {
+      await tx.restore('p')
+      await deleteSubtreeInTx(tx, field!.id)
+      await tx.update('p', {properties: {[statusSchema.name]: 'new'}})
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(await cellValue('p')).toBe('new')
+    const fields = await liveFieldRows('p')
+    expect(fields).toHaveLength(1)
+    expect(fields[0]!.id).not.toBe(field!.id)
+    expect(await liveValueContents('p')).toEqual(['new'])
+  })
+
   it('does not bring back a field row deleted before the owner, in one delete + restore tx', async () => {
     // Only the owner's subtree delete takes its field rows down AFTER the owner:
     // the cascade tombstones the root first. A field row that died while the
