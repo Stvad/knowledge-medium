@@ -4215,6 +4215,26 @@ describe('multi-value properties are N sibling value children (km-h1hy)', () => 
       expect(await memberContents('p', TAGS_FIELD_ID)).toEqual(['alpha', 'alpha'])
     })
 
+    it('folding a repeated member folds its own properties into the survivor', async () => {
+      // §9 flat recognition: a member row owns properties like any block. When
+      // a shortened list folds an equal member into its survivor, the folded
+      // member's field rows join the survivor's — a second field row for one
+      // property on the survivor would be a duplicate the fold itself made.
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['a', 'a']),
+        {scope: ChangeScope.BlockDefault})
+      const [keep, fold] = await memberRows('p', TAGS_FIELD_ID)
+      await repo.tx(tx => tx.setProperty(keep!.id, tagsSchema, ['x']), {scope: ChangeScope.BlockDefault})
+      await repo.tx(tx => tx.setProperty(fold!.id, tagsSchema, ['y']), {scope: ChangeScope.BlockDefault})
+
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['a']), {scope: ChangeScope.BlockDefault})
+
+      expect(await memberContents('p', TAGS_FIELD_ID)).toEqual(['a'])
+      expect(await memberContents(keep!.id, TAGS_FIELD_ID)).toEqual(['x', 'y'])
+      expect((await bagOf(keep!.id))[tagsSchema.name]).toEqual(['x', 'y'])
+    })
+
     it('keeps a twin that arrived under a DUPLICATE field row', async () => {
       // The collapse of duplicate field rows runs before the reconciler is
       // handed the policy, so it has to carry it too: folding a member on the
