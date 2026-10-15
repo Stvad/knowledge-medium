@@ -311,6 +311,21 @@ describe('flipped workspace (properties_migration = children)', () => {
     })
   })
 
+  it('setProperties deletes no field row for an unset that changes nothing the cell shows', async () => {
+    await seedWorkspace('children')
+    const repo = setup()
+    await createBlock(repo, 'p')
+    await repo.tx(tx => tx.setProperty('p', statusSchema, 'done'),
+      {scope: ChangeScope.BlockDefault})
+    // Sync-shaped: the cell lost the key with no processor to reconcile it.
+    await sharedDb.db.execute('UPDATE blocks SET properties_json = ? WHERE id = ?', ['{}', 'p'])
+
+    await repo.tx(tx => tx.setProperties('p', {unset: [statusSchema]}),
+      {scope: ChangeScope.BlockDefault})
+
+    expect(await liveFieldRows('p')).toHaveLength(1)
+  })
+
   it('the same-tx projection is idempotent — the cell is written once per tx', async () => {
     await seedWorkspace('children')
     const repo = setup()
