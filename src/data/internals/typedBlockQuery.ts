@@ -5,6 +5,8 @@ import {
   type BlockPredicate,
   type ResolvedTypedBlockQuery,
   type TypedBlockQueryReferenceFilter,
+  type WhereStorage,
+  type WhereValue,
 } from '@/data/api'
 import { buildQualifiedBlockColumnsSql } from '@/data/blockSchema'
 
@@ -131,25 +133,56 @@ const parseWhereValue = (name: string, value: unknown): ParsedWhere => {
   return {kind: 'comparator', op: op as 'eq' | 'lt' | 'lte' | 'gt' | 'gte', operand}
 }
 
-const encodeForWhere = (
-  name: string,
-  schema: AnyPropertySchema,
-  value: unknown,
-): string | number => {
-  if (!schema.codec.where) {
+const ISO_DATE_GLOB =
+  "'[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9]Z'"
+
+/** SQL that holds only for a cell of `storage`'s shape, given the cell's
+ *  `properties_json, path` argument pair. A comparator ANDs it onto the
+ *  comparison, which on its own orders a cell of any shape against the
+ *  operand — see `WhereStorage`. */
+const STORAGE_TEST: Readonly<Record<WhereStorage, (cell: string) => string>> = {
+  text: cell => `json_type(${cell}) = 'text'`,
+  number: cell => `json_type(${cell}) IN ('integer', 'real')`,
+  boolean: cell => `json_type(${cell}) IN ('true', 'false')`,
+  // No `json_type` needed: anything but a JSON string extracts as a number or
+  // as JSON text opening with `[` / `{`, and none of those fit the pattern.
+  'iso-date': cell => `json_extract(${cell}) GLOB ${ISO_DATE_GLOB}`,
+}
+
+interface Comparable {
+  /** {@link STORAGE_TEST} for this cell. */
+  readonly test: string
+  readonly encode: (value: unknown) => WhereValue
+}
+
+const comparableCell = (name: string, schema: AnyPropertySchema, cell: string): Comparable => {
+  const where = schema.codec.where
+  if (!where) {
     throw new Error(
       `[queryBlocks] where.${name} is not where-queryable; ` +
       `codec type ${JSON.stringify(schema.codec.type)} doesn't support comparison predicates ` +
       '(use referencedBy for refs, or add a dedicated query for collection/object filters)',
     )
   }
-  try {
-    return schema.codec.where.encode(value)
-  } catch (err) {
+  // A codec from a DB-stored extension is never type-checked against `WhereStorage`.
+  if (!Object.hasOwn(STORAGE_TEST, where.storage)) {
     throw new Error(
-      `[queryBlocks] where.${name} value is not a valid ${schema.codec.type}: ${(err as Error).message}`,
-      {cause: err},
+      `[queryBlocks] where.${name}: codec type ${JSON.stringify(schema.codec.type)} declares ` +
+      `where.storage ${JSON.stringify(where.storage)}; expected one of ${Object.keys(STORAGE_TEST).join(', ')}`,
     )
+  }
+  return {
+    test: STORAGE_TEST[where.storage](cell),
+    encode: value => {
+      try {
+        return where.encode(value)
+      } catch (err) {
+        throw new Error(
+          `[queryBlocks] where.${name} value is not a valid ${schema.codec.type}: ${(err as Error).message}`,
+          {cause: err},
+        )
+      }
+    },
   }
 }
 
@@ -226,7 +259,8 @@ const compileWhereClause = (
   if (schema === undefined) {
     throw new Error(`[queryBlocks] where.${name} has no registered PropertySchema`)
   }
-  const extract = `json_extract(${rowAlias}.properties_json, ${inlineJsonPath(name)})`
+  const cell = `${rowAlias}.properties_json, ${inlineJsonPath(name)}`
+  const extract = `json_extract(${cell})`
   const parsed = parseWhereValue(name, value)
 
   // `IS NULL` / `IS NOT NULL` skip `codec.where.encode` entirely —
@@ -241,18 +275,18 @@ const compileWhereClause = (
   if (parsed.kind === 'target') {
     return compileTargetTraversal(name, parsed.inner, schema, rowAlias, propertySchemas, aliasCounter)
   }
+  // The comparison stays its own AND term, in the indexed `json_extract`
+  // spelling, so an expression index on the property still serves it.
+  const comparable = comparableCell(name, schema, cell)
   if (parsed.kind === 'between') {
-    const lo = encodeForWhere(name, schema, parsed.lo)
-    const hi = encodeForWhere(name, schema, parsed.hi)
     return {
-      sql: `${extract} BETWEEN ? AND ?`,
-      params: [lo, hi],
+      sql: `(${comparable.test} AND ${extract} BETWEEN ? AND ?)`,
+      params: [comparable.encode(parsed.lo), comparable.encode(parsed.hi)],
     }
   }
-  const operand = encodeForWhere(name, schema, parsed.operand)
   return {
-    sql: `${extract} ${COMPARATOR_SQL[parsed.op]} ?`,
-    params: [operand],
+    sql: `(${comparable.test} AND ${extract} ${COMPARATOR_SQL[parsed.op]} ?)`,
+    params: [comparable.encode(parsed.operand)],
   }
 }
 
@@ -536,8 +570,8 @@ export const buildCandidatesCte = (
     const compiled = compilePredicateAgainstRow(predicate, 'b', propertySchemas)
     // `IS NOT TRUE` (not bare `NOT`): exclude a row only when the
     // predicate is *definitely* true. A scalar `where` over an unset
-    // property compiles to `json_extract(...) = ?`, which is NULL when
-    // the property is missing; `NOT (NULL)` is NULL — not TRUE — so a
+    // property is NULL, since `json_extract` / `json_type` of a missing
+    // path are; `NOT (NULL)` is NULL — not TRUE — so a
     // bare `NOT` would drop every row that never set the property. The
     // documented contract is NOR ("exclude iff a predicate matches"),
     // and an unknown does not match, so unset rows must survive.
