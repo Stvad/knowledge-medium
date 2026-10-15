@@ -115,8 +115,8 @@ const runCase = async (
     // FIELD_ID must be a REGISTERED property-schema definition: the
     // VISIBLE-children predicate only excludes a field row when its
     // `reference_target_id` resolves to a live `block_types`
-    // 'property-schema' entry (`recognizedFieldRowSql`,
-    // treeQueries.ts:285-299). An unregistered FIELD_ID leaves `hand-field`
+    // 'property-schema' entry (`recognizedFieldRowSql` in
+    // treeQueries.ts). An unregistered FIELD_ID leaves `hand-field`
     // visible like any ordinary content child, degenerating this axis into
     // the `contentChild` case and leaving the b0392a7c9 regression (hidden
     // rows, empty cell) untested — the pre-fix guard would pass this case
@@ -137,14 +137,12 @@ const runCase = async (
     }, {scope: ChangeScope.BlockDefault})
   }
 
-  // Non-vacuity check for the `handAuthoredFieldRow` axis: in a flipped
-  // workspace, the row registered above must actually be hidden from the
-  // VISIBLE facade before conversion runs — otherwise the case below isn't
-  // exercising the diverged state (structural rows live, visible list AND
-  // cell both empty) at all. `flip === 'cell'` workspaces recognize no
-  // field rows by design (VISIBLE_CHILD_PREDICATE_SQL short-circuits on the
-  // un-flipped probe), so this only applies once flipped.
-  if (structState === 'handAuthoredFieldRow' && flip === 'children') {
+  // Non-vacuity check for the `handAuthoredFieldRow` axis: the row registered
+  // above must actually be hidden from the VISIBLE facade before conversion
+  // runs — otherwise the case below isn't exercising the diverged state
+  // (structural rows live, visible list AND cell both empty) at all.
+  // Recognition is not flip-gated, so this holds in both flip states.
+  if (structState === 'handAuthoredFieldRow') {
     const visibleIds = await repo.query.childIds({id: 'child', hidePropertyChildren: true}).load()
     expect(visibleIds, 'hand-authored field row must be hidden from the visible facade').toEqual([])
   }

@@ -278,6 +278,30 @@ export interface TxTimingDiagnostics {
   sameTxProcessorRuns: SameTxProcessorTiming[]
 }
 
+/** Callbacks run INSIDE the write lock, so across transactions they run in the
+ *  order those transactions commit. Nothing after the lock's release can recover
+ *  that order — continuations of two transactions resolve in whatever order the
+ *  scheduler picks — which is why the undo stacks are moved here and not after
+ *  `runTx` returns (#227). Both are synchronous: awaiting would hand the
+ *  ordering back to the scheduler. */
+export interface TxLockHooks {
+  /** The last step before COMMIT: every write and the audit row are in.
+   *  Throwing rolls the transaction back.
+   *
+   *  ACCEPTED RESIDUAL: a COMMIT that fails after this ran is not reported, so
+   *  whatever this did stands for a transaction that did not land. That is
+   *  storage failing at the commit statement itself; reporting it needs the
+   *  commit inside this callback, which the `TxDb` contract does not offer. */
+  beforeCommit?(committing: {
+    txId: string
+    workspaceId: string | null
+    snapshots: SnapshotsMap
+  }): void
+  /** The transaction failed — in its body, in the pipeline, or in
+   *  `beforeCommit` — and is about to roll back. */
+  aborted?(): void
+}
+
 export interface RunTxParams<R> {
   db: PowerSyncDb
   cache: BlockCache
@@ -323,6 +347,7 @@ export interface RunTxParams<R> {
    *  state being restored to. Post-commit processors are unaffected;
    *  they dispatch from `_runAndDispatch` regardless. Default false. */
   isReplay?: boolean
+  lockHooks?: TxLockHooks
   /** Merged property-schema registry snapshot, captured at the same
    *  boundary as `processors` so processor code sees a consistent
    *  runtime bundle. */
@@ -364,6 +389,9 @@ export interface TxResult<R> {
   workspaceId: string | null
   /** Tx id (for processor CommittedEvent.txId). */
   txId: string
+  /** What the `command_events` row recorded — `meta.description` as of commit,
+   *  which a replay sets only once it holds the lock. */
+  description: string | undefined
   /** User who ran the tx (for processor CommittedEvent.user). */
   user: User
   /** Processor registry snapshot taken at tx start. The runner walks
@@ -391,6 +419,7 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
     propertySchemaWorkspaceId,
     propertySeedNameCounts,
     isReplay = false,
+    lockHooks,
   } = params
   const {scope, description} = opts
 
@@ -491,7 +520,7 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
   }
 
   // Run inside writeTransaction. Steps 1-5 commit or roll back atomically.
-  const value = await db.writeTransaction(async (txDb): Promise<R> => {
+  const runSteps = async (txDb: TxDb): Promise<R> => {
     // Step 1: set tx_context — triggers read this for source-tagging
     // row_events + gating upload routing + gating workspace-invariant
     // checks (§4.1.1, §4.3, §4.5). tx_seq is the integer key the
@@ -727,13 +756,15 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
     // (per §4.4). workspace_id is the pinned value (or NULL on
     // zero-write txs). source is uniformly 'user' for every repo.tx
     // invocation; sync-applied writes don't go through repo.tx.
+    // The description is read from `meta`, not `opts`: an undo/redo replay
+    // learns which entry it is replaying only once it holds the lock.
     await txDb.execute(
       `INSERT INTO command_events
         (tx_id, description, scope, user_id, workspace_id, mutator_calls, source, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         txId,
-        description ?? null,
+        meta.description ?? null,
         scope,
         user.id,
         meta.workspaceId,
@@ -758,6 +789,16 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
     )
 
     return result
+  }
+  const value = await db.writeTransaction(async (txDb): Promise<R> => {
+    try {
+      const result = await runSteps(txDb)
+      lockHooks?.beforeCommit?.({txId, workspaceId: meta.workspaceId, snapshots})
+      return result
+    } catch (err) {
+      lockHooks?.aborted?.()
+      throw err
+    }
   })
 
   // Step 6: post-COMMIT cache walk. Update cache to `after` per id
@@ -782,6 +823,7 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
     snapshots,
     workspaceId: meta.workspaceId,
     txId,
+    description: meta.description,
     user,
     processors,
     propertySchemas,
