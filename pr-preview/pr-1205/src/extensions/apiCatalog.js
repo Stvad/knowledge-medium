@@ -1,1 +1,1 @@
-import{Fl as e,Pl as t}from"../../chunks/app-BmQMlR1c.js";export{t as extensionApiCatalog,e as extensionApiRuntimeExports};
+import{Fl as e,Pl as t}from"../../chunks/app-BzGNu4Ub.js";export{t as extensionApiCatalog,e as extensionApiRuntimeExports};
