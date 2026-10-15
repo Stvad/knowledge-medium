@@ -1,1 +1,1 @@
-import{Cu as e}from"../../../chunks/app-2WUbCjas.js";export{e as blockInfoPlugin};
+import{Cu as e}from"../../../chunks/app-BwOsPbCa.js";export{e as blockInfoPlugin};
