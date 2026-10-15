@@ -375,15 +375,10 @@ const changedPropertyNames = (
  *  them across two calls — see `materializePropertiesForChangedRow`. */
 export type UndecodableCellPolicy = 'reject' | 'skip'
 
-/** What the revival path knows about the tx it runs in. */
-export interface RevivalContext {
-  /** A row's state at TX START — `null` for a row this tx created,
-   *  `undefined` when this tx changed none of the watched fields, so its
-   *  current bag is its starting one. Every row the
-   *  revival restores is a revived row in its own right, and splitting its
-   *  names by who wrote them needs the bag it started the tx with. */
-  readonly txStartOf: (id: string) => BlockData | null | undefined
-}
+/** What the revival path knows about the tx it runs in. Every row the revival
+ *  restores is a revived row in its own right, and splitting its names by who
+ *  wrote them needs the bag this tx found it with. */
+export type RevivalContext = Pick<SameTxCtx, 'txBaselineOf'>
 
 export interface MaterializeOptions {
   /** See {@link UndecodableCellPolicy}. Default `'reject'`. */
@@ -518,10 +513,10 @@ const materializeRevivedRow = async (
   lookups: MaterializeLookups,
   revive: RevivalContext,
 ): Promise<void> => {
-  const txStart = revive.txStartOf(row.id)
+  const baseline = revive.txBaselineOf(row.id)
   // `null`: created in this tx, so its whole bag is this tx's writing.
-  // `undefined`: this tx changed none of its watched fields, so none of it is.
-  const startBag = txStart === undefined ? row.properties : txStart?.properties ?? {}
+  // `undefined`: this tx has not written the row, so none of it is.
+  const startBag = baseline === undefined ? row.properties : baseline?.properties ?? {}
   const written = changedPropertyNames(startBag, row.properties)
   const writtenNames = new Set(written)
   const untouched = Object.keys(row.properties).filter(name => !writtenNames.has(name))
@@ -633,9 +628,9 @@ export const materializePropertyChildrenForExistingRow = async (
 }
 
 /**
- * Materialize one changed row. Normally that means the bag DIFF — but a row
- * coming back from a tombstone reconciles its WHOLE bag, because the trigger
- * there is LIVENESS, not the bag.
+ * Materialize the rows one pass changed. Normally that means each row's bag
+ * DIFF — but a row coming back from a tombstone reconciles its WHOLE bag,
+ * because the trigger there is LIVENESS, not the bag.
  *
  * A subtree delete tombstones the owner's field and value rows along with it
  * (§9 machinery traversal), and a revival — `tx.restore`, with or without a
@@ -644,29 +639,46 @@ export const materializePropertyChildrenForExistingRow = async (
  * value with no child-backed truth under it: post-flip the children ARE the
  * property, so every reader that has moved to them sees it as missing (#778).
  *
+ * "Coming back" is read off the tx's write log, never the event, and revived
+ * rows are looked for among the event's rows AND their parents. Two shapes
+ * need the parents:
+ *   - a row deleted and restored in this ONE tx is live → live net, so only
+ *     its dying field rows reach the event (#1211);
+ *   - a row this tx re-marked or moved under a revived owner carries the bit
+ *     its old content earned until DERIVE re-stamps it, so the first pass
+ *     reads it as the wrong field row. The re-run pass sees it again with the
+ *     fresh bit, and re-running the owner's revival is what heeds it (#1210).
+ *
  * Undo/redo replay does NOT come through here — `applyRaw` drives each row to
  * its recorded snapshot with the same-tx pass skipped. It needs no revival
  * rule: the children written below land in the reviving tx's own snapshots, so
  * replaying that tx replays them too.
  */
-const materializePropertiesForChangedRow = async (
+const materializeChangedRows = async (
   tx: Tx,
-  row: {before: BlockData | null; after: BlockData | null},
+  changedRows: readonly {id: string; before: BlockData | null; after: BlockData | null}[],
   lookups: PropertyChildrenLookups,
-  revive: RevivalContext,
+  history: Pick<SameTxCtx, 'txBaselineOf' | 'tombstonedDuringTx'>,
 ): Promise<void> => {
-  if (row.after === null || row.after.deleted) return
-  const before = row.before
-  const changed = changedPropertyNames(before?.properties ?? {}, row.after.properties)
-  if (before === null || !before.deleted) {
+  const revived = new Set<string>()
+  for (const row of changedRows) {
+    for (const id of [row.id, row.after?.parentId]) {
+      if (id != null && history.tombstonedDuringTx(id)) revived.add(id)
+    }
+  }
+  for (const row of changedRows) {
+    if (row.after === null || row.after.deleted || revived.has(row.id)) continue
     // Materialize-everything (§9 flat recognition): field rows and value rows
     // grow their own `::` children like every other block — recognition
     // reclaims nested machinery at any depth, so the old interior/prospective
     // carve-outs are deleted.
-    await materializePropertyChildrenForExistingRow(tx, row.after, lookups, changed)
-    return
+    await materializePropertyChildrenForExistingRow(tx, row.after, lookups,
+      changedPropertyNames(row.before?.properties ?? {}, row.after.properties))
   }
-  await materializeRevivedRow(tx, row.after, lookups, revive)
+  for (const id of revived) {
+    const row = await tx.get(id)
+    if (row !== null && !row.deleted) await materializeRevivedRow(tx, row, lookups, history)
+  }
 }
 
 /** Why one cell value could not become children, in the one wording both
@@ -1176,13 +1188,10 @@ export const MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR = defineSameTxProcessor({
     // Workspace flip gate (§6): one predicate, checked once — a tx pins a
     // single workspace, and un-flipped workspaces are fully dormant.
     if (!(await ctx.tx.isPropertyChildBackedWorkspace(event.workspaceId))) return
-    const lookups = lookupsFor(ctx, event.workspaceId)
-    // From the tx's write log, never this event: on the re-run pass the event
-    // holds only rows dirtied since the first, with a merged `before`.
-    const revive: RevivalContext = {txStartOf: id => ctx.txStartOf(id)}
-    for (const row of event.changedRows) {
-      await materializePropertiesForChangedRow(ctx.tx, row, lookups, revive)
-    }
+    // Revival reads the tx's write log through `ctx`, never this event: on the
+    // re-run pass the event holds only rows dirtied since the first, with a
+    // merged `before`.
+    await materializeChangedRows(ctx.tx, event.changedRows, lookupsFor(ctx, event.workspaceId), ctx)
   },
 })
 

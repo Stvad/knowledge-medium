@@ -55,7 +55,7 @@ import {
   type MutatorCallRecord,
   type TxDb,
 } from './txEngine'
-import { newSnapshotsMap, peekTxStart, type SnapshotsMap } from './txSnapshots'
+import { newSnapshotsMap, type SnapshotsMap } from './txSnapshots'
 import { propertySchemaResolverForWorkspace } from './propertySchemaResolution'
 import type { BlockCache } from '@/data/blockCache'
 import type { BlockIdPolicy } from '@/data/blockId'
@@ -606,7 +606,16 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
               typeDefinitions: typeDefinitionsForWorkspace(meta.workspaceId),
               resolvePropertySchemaName, resolvePropertySchemaField,
               propertyDefinitionsClaimingName,
-              txStartOf: id => peekTxStart(snapshots, id),
+              txBaselineOf: id => {
+                const entry = snapshots.get(id)
+                // `rerunBefore` with the watermark AT tx start: the tx-start
+                // row with only the settled-last paths overlaid.
+                return entry === undefined
+                  ? undefined
+                  : rerunBefore(entry.before, entry.before, entry.after, settledFieldPaths.get(id))
+              },
+              tombstonedDuringTx: id => snapshots.get(id)?.before?.deleted === true
+                || (rowWriteLog.get(id)?.some(record => record.after?.deleted === true) ?? false),
             },
           )
         } finally {
