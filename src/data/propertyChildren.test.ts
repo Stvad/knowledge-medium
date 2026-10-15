@@ -30,6 +30,7 @@ import {
   type ProjectableRow,
 } from './internals/propertyChildrenProcessor'
 import { propertyDefinitionBlockId } from './definitionSeeds'
+import { deleteSubtreeInTx } from './subtreeDelete'
 import { addBlockTypeToProperties, aliasesProp, blockTypeLabelProp, typesProp } from './properties'
 import { BLOCK_TYPE_TYPE } from './blockTypes'
 import { kernelValuePresetCoresById } from './kernelValuePresetCores'
@@ -2067,6 +2068,26 @@ describe('revival re-materializes property children (#778)', () => {
 
     expect(await cellValue(value!.id)).toBe('local-new')
     expect(await liveValueContents(value!.id)).toEqual(['local-new'])
+  })
+
+  it('treats every key of a revived row CREATED in this tx as written by it', async () => {
+    // A row created and tombstoned earlier in the same tx has no tx-start
+    // state: all of its bag is this tx's own writing, so a value it cannot
+    // carry is rejected rather than skipped as untouched legacy data.
+    await seedWorkspace('children')
+    const repo = setup()
+    await createBlock(repo, 'p')
+    await repo.mutate.delete({id: 'p'})
+
+    await expect(repo.tx(async tx => {
+      await tx.restore('p')
+      await tx.setProperty('p', statusSchema, 'fresh')
+      const [field] = (await tx.childrenOf('p', undefined)).filter(c => c.isFieldForm === true)
+      const [value] = await tx.childrenOf(field!.id, undefined)
+      await tx.update(value!.id, {properties: {[statusSchema.name]: 123}})
+      await deleteSubtreeInTx(tx, 'p')
+      await tx.restore('p')
+    }, {scope: ChangeScope.BlockDefault})).rejects.toThrow(/Cannot materialize property/)
   })
 
   it('drops a cell that moved while the row was dead, and re-projects from the child', async () => {

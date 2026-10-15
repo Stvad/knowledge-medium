@@ -376,8 +376,9 @@ export type UndecodableCellPolicy = 'reject' | 'skip'
 
 /** What the revival path knows about the tx it runs in. */
 export interface RevivalContext {
-  /** A row's state at TX START — `undefined` when this tx changed none of the
-   *  watched fields, so its current bag is its starting one. Every row the
+  /** A row's state at TX START — `null` for a row this tx created,
+   *  `undefined` when this tx changed none of the watched fields, so its
+   *  current bag is its starting one. Every row the
    *  revival restores is a revived row in its own right, and splitting its
    *  names by who wrote them needs the bag it started the tx with. */
   readonly txStartOf: (id: string) => BlockData | null | undefined
@@ -517,7 +518,10 @@ const materializeRevivedRow = async (
   revive: RevivalContext,
 ): Promise<void> => {
   const txStart = revive.txStartOf(row.id)
-  const written = changedPropertyNames((txStart ?? row).properties, row.properties)
+  // `null`: created in this tx, so its whole bag is this tx's writing.
+  // `undefined`: this tx changed none of its watched fields, so none of it is.
+  const startBag = txStart === undefined ? row.properties : txStart?.properties ?? {}
+  const written = changedPropertyNames(startBag, row.properties)
   const writtenNames = new Set(written)
   const untouched = Object.keys(row.properties).filter(name => !writtenNames.has(name))
   await materializePropertyChildrenForExistingRow(tx, row, lookups, written, {revive})
