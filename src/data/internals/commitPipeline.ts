@@ -473,8 +473,10 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
   // the dirty row but computed no changed names, leaving value children
   // synced to the intermediate bag). Entries hold
   // references to the same `after` objects the primitives built — no
-  // copying.
-  const rowWriteLog = new Map<string, Array<{gen: number, after: BlockData | null}>>()
+  // copying. `seq` is the write's place in the tx, which `gen` is not:
+  // settled writes share the generation they were made under.
+  const rowWriteLog = new Map<string, Array<{gen: number, seq: number, after: BlockData | null}>>()
+  let writeSeq = 0
   const afterCommitJobs: AfterCommitJob[] = []
   const sameTxEvents: SameTxEmittedEvent[] = []
   // `tx.run` pushes onto this list each time a mutator runs (including
@@ -571,7 +573,7 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
         // grounds would break this pairing.
         let log = rowWriteLog.get(id)
         if (log === undefined) rowWriteLog.set(id, log = [])
-        log.push({gen: writeGen, after})
+        log.push({gen: writeGen, seq: ++writeSeq, after})
       },
     })
     // Important: any tx.run calls in the user fn push onto
@@ -645,25 +647,26 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
               },
               tombstonedDuringTx: id => snapshots.get(id)?.before?.deleted === true
                 || (rowWriteLog.get(id)?.some(record => record.after?.deleted === true) ?? false),
-              tombstonedUnderLiveParent: async id => {
+              parentLivenessWhenTombstoned: async id => {
                 let previous = snapshots.get(id)?.before ?? null
-                let death: {gen: number; parentId: string | null} | undefined
+                let death: {seq: number; parentId: string | null} | undefined
                 for (const record of rowWriteLog.get(id) ?? []) {
                   if (record.after?.deleted === true && previous?.deleted === false) {
-                    death = {gen: record.gen, parentId: record.after.parentId}
+                    death = {seq: record.seq, parentId: record.after.parentId}
                   }
                   previous = record.after
                 }
-                if (death === undefined || death.parentId === null) return false
+                if (death === undefined || death.parentId === null) return undefined
                 const parentEntry = snapshots.get(death.parentId)
                 // A parent this tx never wrote was as it is now throughout.
-                if (parentEntry === undefined) return (await tx.get(death.parentId))?.deleted === false
-                let parent = parentEntry.before
+                let parent = parentEntry === undefined
+                  ? await tx.get(death.parentId)
+                  : parentEntry.before
                 for (const record of rowWriteLog.get(death.parentId) ?? []) {
-                  if (record.gen > death.gen) break
+                  if (record.seq > death.seq) break
                   parent = record.after
                 }
-                return parent !== null && !parent.deleted
+                return parent !== null && !parent.deleted ? 'live' : 'tombstoned'
               },
             },
           )

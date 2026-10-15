@@ -2691,6 +2691,76 @@ describe('revival re-materializes property children (#778)', () => {
     expect(await liveValueContents('p')).toEqual(['new'])
   })
 
+  it('revives the duplicate field row the owner\'s delete took, past one the tx deleted on its own', async () => {
+    // Provenance is per tombstone, not per property: the one the cascade took
+    // was live when the owner died, so the property was still set then.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    const [field] = await liveFieldRows('p')
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'twin-field', workspaceId: WS, parentId: 'p', orderKey: 'zz',
+        content: propertyFieldContent(STATUS_FIELD_ID),
+      })
+      await tx.create({
+        id: 'twin-value', workspaceId: WS, parentId: 'twin-field', orderKey: keyAtStart(), content: 'other',
+      })
+    }, {scope: ChangeScope.BlockDefault})
+
+    await repo.tx(async tx => {
+      await deleteSubtreeInTx(tx, field!.id)
+      await deleteSubtreeInTx(tx, 'p')
+      await tx.restore('p')
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect((await liveFieldRows('p')).map(row => row.id)).toEqual(['twin-field'])
+    expect(await cellValue('p')).toBe('other')
+  })
+
+  it('revives the field row the owner\'s delete took over an older tombstone for the property', async () => {
+    // An unset/re-set cycle leaves an older tombstone; with only the before-tx
+    // view that pair is ambiguous and mints. The write log says which one died
+    // with the owner.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    await repo.tx(tx => tx.unsetProperty('p', statusSchema), {scope: ChangeScope.BlockDefault})
+    await repo.tx(tx => tx.setProperty('p', statusSchema, 'done'), {scope: ChangeScope.BlockDefault})
+    const [current] = await liveFieldRows('p')
+
+    await repo.tx(async tx => {
+      await deleteSubtreeInTx(tx, 'p')
+      await tx.restore('p')
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect((await liveFieldRows('p')).map(row => row.id)).toEqual([current!.id])
+    expect(await liveValueContents('p')).toEqual(['done'])
+  })
+
+  it('a key written after the tx deleted its live field row does not revive an older one', async () => {
+    // The tx's own delete of the row that was live outranks a tombstone from
+    // before it, which was deleted before that row was ever made.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    const [older] = await liveFieldRows('p')
+    await repo.tx(tx => tx.unsetProperty('p', statusSchema), {scope: ChangeScope.BlockDefault})
+    await repo.tx(tx => tx.setProperty('p', statusSchema, 'done'), {scope: ChangeScope.BlockDefault})
+    const [current] = await liveFieldRows('p')
+    const [currentValue] = (await childrenRows(current!.id)).filter(v => v.deleted === 0)
+    await repo.mutate.delete({id: 'p'})
+    await sharedDb.db.execute('UPDATE blocks SET deleted = 0 WHERE id IN (?, ?)', [current!.id, currentValue!.id])
+
+    await repo.tx(async tx => {
+      await tx.restore('p')
+      await deleteSubtreeInTx(tx, current!.id)
+      await tx.update('p', {properties: {[statusSchema.name]: 'new'}})
+    }, {scope: ChangeScope.BlockDefault})
+
+    const fields = await liveFieldRows('p')
+    expect(fields).toHaveLength(1)
+    expect([older!.id, current!.id]).not.toContain(fields[0]!.id)
+    expect(await liveValueContents('p')).toEqual(['new'])
+  })
+
   it('does not bring back a field row deleted before the owner, in one delete + restore tx', async () => {
     // Only the owner's subtree delete takes its field rows down AFTER the owner:
     // the cascade tombstones the root first. A field row that died while the
@@ -4446,6 +4516,33 @@ describe('multi-value properties are N sibling value children (km-h1hy)', () => 
       expect((await liveFieldRowsFor(TAGS_FIELD_ID)(keep!.id)).map(row => row.id)).toEqual([keepField!.id])
       expect(await memberContents(keep!.id, TAGS_FIELD_ID)).toEqual(['x', 'y'])
       expect((await bagOf(keep!.id))[tagsSchema.name]).toEqual(['x', 'y'])
+    })
+
+    it('folding a member that owns two field rows for one property leaves the survivor one', async () => {
+      // The survivor gains each row the fold moves over, so the folded member's
+      // second field row for a property folds into the first rather than
+      // landing beside it as a duplicate the fold made.
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['a', 'a']),
+        {scope: ChangeScope.BlockDefault})
+      const [keep, fold] = await memberRows('p', TAGS_FIELD_ID)
+      await repo.tx(tx => tx.setProperty(fold!.id, tagsSchema, ['y']), {scope: ChangeScope.BlockDefault})
+      const twinKey = await appendKey(fold!.id)
+      await repo.tx(async tx => {
+        await tx.create({
+          id: 'twin-field', workspaceId: WS, parentId: fold!.id, orderKey: twinKey,
+          content: propertyFieldContent(TAGS_FIELD_ID),
+        })
+        await tx.create({
+          id: 'twin-value', workspaceId: WS, parentId: 'twin-field', orderKey: keyAtStart(), content: 'z',
+        })
+      }, {scope: ChangeScope.BlockDefault})
+      expect(await liveFieldRowsFor(TAGS_FIELD_ID)(fold!.id)).toHaveLength(2)
+
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['a']), {scope: ChangeScope.BlockDefault})
+
+      expect([...await memberContents(keep!.id, TAGS_FIELD_ID)].sort()).toEqual(['y', 'z'])
     })
 
     it('folding a repeated member keeps the marked rows no definition resolves', async () => {

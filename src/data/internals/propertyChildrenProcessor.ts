@@ -379,14 +379,14 @@ export type UndecodableCellPolicy = 'reject' | 'skip'
 /** What the revival path knows about the tx it runs in. Every row the revival
  *  restores is a revived row in its own right, and splitting its names by who
  *  wrote them needs the bag this tx found it with. */
-export type RevivalContext = Pick<SameTxCtx, 'txBaselineOf' | 'tombstonedUnderLiveParent'>
+export type RevivalContext = Pick<SameTxCtx, 'txBaselineOf' | 'parentLivenessWhenTombstoned'>
 
 export interface MaterializeOptions {
   /** See {@link UndecodableCellPolicy}. Default `'reject'`. */
   undecodable?: UndecodableCellPolicy
   /** Bring a name's TOMBSTONED field row back instead of minting a
-   *  replacement, when the owner has exactly one and no live one (#787), and
-   *  this tx did not delete it under the live owner — and
+   *  replacement, when it is the one candidate and no live one exists (#787,
+   *  {@link revivalCandidates}) — and
    *  materialize every row that brings back as the revived row it is
    *  ({@link materializeRevivedRow}).
    *
@@ -419,7 +419,8 @@ export interface MaterializeOptions {
   additive?: boolean
 }
 
-/** Restore the tombstoned field row backing `fieldId`, together with its value
+/** Restore the one tombstoned field row among `candidates` (see
+ *  {@link revivalCandidates}), together with its value
  *  children — so a revived property keeps its row identity instead of being
  *  replaced by a fresh mint. Returns the ids it restored — none when nothing
  *  came back.
@@ -442,9 +443,9 @@ export interface MaterializeOptions {
  *  which is the stranding this helper exists to prevent.
  *
  *  ONE ambiguity rule, applied at both levels: revive only what is unambiguous.
- *  Several tombstones for one definition (an unset/re-set cycle before the
- *  owner was deleted), or several tombstoned values under one field row (a
- *  divergent conflict peer the user resolved by deleting it), are
+ *  Several tombstones for one definition from before this tx (an unset/re-set
+ *  cycle before the owner was deleted), or several tombstoned values under one
+ *  field row (a divergent conflict peer the user resolved by deleting it), are
  *  indistinguishable at revival time from rows the owner's own delete took
  *  down. Picking among them would need a rule that is deterministic across
  *  replicas AND right about which was live last; ordering gives the first, not
@@ -454,13 +455,11 @@ export interface MaterializeOptions {
  *  tombstones stay reachable under a live parent instead of resurrected. */
 const reviveTombstonedFieldRow = async (
   tx: Tx,
-  schema: AnyPropertySchema & {readonly fieldId: string},
-  tombstones: readonly BlockData[],
+  schema: AnyPropertySchema,
+  candidates: readonly BlockData[],
 ): Promise<string[]> => {
-  const fieldId = schema.fieldId
-  const matching = tombstones.filter(t => getPropertyFieldTargetId(t) === fieldId)
-  if (matching.length !== 1) return []
-  const fieldRow = matching[0]!
+  if (candidates.length !== 1) return []
+  const fieldRow = candidates[0]!
   // Bit-filtered per §9: a marked child is the field row's OWN machinery, never
   // one of its values.
   const isValue = (child: BlockData): boolean => child.isFieldForm !== true
@@ -492,18 +491,30 @@ const reviveTombstonedFieldRow = async (
   return [fieldRow.id, values[0]!.id]
 }
 
-/** Whether this tx deleted one of `fieldId`'s tombstoned field rows while the
- *  owner was live, rather than through the owner's own subtree delete. */
-const deletedUnderLiveOwner = async (
+/** Which of `fieldId`'s tombstoned field rows a revival may bring back, by
+ *  each one's provenance in the write log. One this tx took down under a
+ *  tombstoned owner went with the owner, so the property was still set when the
+ *  owner died: those are the candidates, and nothing older competes with them.
+ *  One taken down under a LIVE owner was deleted on its own and is never a
+ *  candidate. When that is the tx's only word on the property, it outranks the
+ *  tombstones from before the tx too, and `deletedOnItsOwn` says so. */
+const revivalCandidates = async (
   tombstones: readonly BlockData[],
   fieldId: string,
   revive: RevivalContext,
-): Promise<boolean> => {
+): Promise<{candidates: BlockData[]; deletedOnItsOwn: boolean}> => {
+  const withOwner: BlockData[] = []
+  const beforeTx: BlockData[] = []
+  let deletedOnItsOwn = false
   for (const tombstone of tombstones) {
     if (getPropertyFieldTargetId(tombstone) !== fieldId) continue
-    if (await revive.tombstonedUnderLiveParent(tombstone.id)) return true
+    const owner = await revive.parentLivenessWhenTombstoned(tombstone.id)
+    if (owner === 'tombstoned') withOwner.push(tombstone)
+    else if (owner === 'live') deletedOnItsOwn = true
+    else beforeTx.push(tombstone)
   }
-  return false
+  if (withOwner.length > 0) return {candidates: withOwner, deletedOnItsOwn: false}
+  return {candidates: deletedOnItsOwn ? [] : beforeTx, deletedOnItsOwn}
 }
 
 /** Materialize a row coming back from a tombstone. Its whole bag, not the
@@ -623,21 +634,20 @@ export const materializePropertyChildrenForExistingRow = async (
     let fieldRows = matchingChildren
     if (opts.revive && fieldRows.length === 0) {
       tombstones ??= await tx.tombstonedPropertyFieldRows(row.workspaceId, row.id)
-      if (await deletedUnderLiveOwner(tombstones, schema.fieldId, opts.revive)) {
-        // The owner's death did not take this one: the tx deleted it, which is
-        // the children's word, as an empty live field row is. An untouched name
-        // is left for PROJECT to unset; a written one mints a fresh row.
-        if (opts.additive) continue
-      } else {
-        const revived = await reviveTombstonedFieldRow(tx, schema, tombstones)
-        if (revived.length > 0) {
-          children = await tx.childrenOf(row.id, undefined)
-          fieldRows = fieldRowsForSchema(children, schema.fieldId)
-          for (const id of revived) {
-            const restored = await tx.get(id)
-            if (restored !== null && !restored.deleted) {
-              await materializeRevivedRow(tx, restored, lookups, opts.revive)
-            }
+      const {candidates, deletedOnItsOwn} =
+        await revivalCandidates(tombstones, schema.fieldId, opts.revive)
+      // A field row the tx deleted under the live owner is the children's word,
+      // as an empty live field row is: an untouched name is left for PROJECT to
+      // unset. A written one has no candidate, so it mints a fresh row.
+      if (deletedOnItsOwn && opts.additive) continue
+      const revived = await reviveTombstonedFieldRow(tx, schema, candidates)
+      if (revived.length > 0) {
+        children = await tx.childrenOf(row.id, undefined)
+        fieldRows = fieldRowsForSchema(children, schema.fieldId)
+        for (const id of revived) {
+          const restored = await tx.get(id)
+          if (restored !== null && !restored.deleted) {
+            await materializeRevivedRow(tx, restored, lookups, opts.revive)
           }
         }
       }
@@ -1088,13 +1098,19 @@ const survivorFieldRowFor = (
 const relocateChildren = async (tx: Tx, fromId: string, toId: string): Promise<void> => {
   const movable = await tx.childrenOf(fromId, undefined)
   if (movable.length === 0) return
-  const survivorChildren = await tx.childrenOf(toId, undefined)
+  // Grows with each row moved over, so a second field row for one property
+  // folds into the first instead of landing beside it.
+  const survivorChildren = [...await tx.childrenOf(toId, undefined)]
   const keys = keysBetween(survivorChildren.at(-1)?.orderKey ?? null, null, movable.length)
   for (let i = 0; i < movable.length; i++) {
     const child = movable[i]!
     const survivorOwn = survivorFieldRowFor(tx, survivorChildren, child)
-    if (survivorOwn) await collapseDuplicateFieldRow(tx, survivorOwn.id, child)
-    else await tx.move(child.id, {parentId: toId, orderKey: keys[i]!})
+    if (survivorOwn) {
+      await collapseDuplicateFieldRow(tx, survivorOwn.id, child)
+    } else {
+      await tx.move(child.id, {parentId: toId, orderKey: keys[i]!})
+      survivorChildren.push(child)
+    }
   }
 }
 

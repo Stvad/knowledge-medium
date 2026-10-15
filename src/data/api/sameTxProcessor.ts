@@ -258,11 +258,11 @@ export interface SameTxCtx {
    *  including a row a later write restored, whose net `deleted` is unchanged
    *  and so shows in no field diff. */
   tombstonedDuringTx(id: string): boolean
-  /** Whether the last write of this tx that tombstoned row `id` came while its
-   *  parent was live — a delete of the row itself, as opposed to a subtree
-   *  delete's cascade, which tombstones the parent first. False for a row this
-   *  tx did not tombstone. */
-  tombstonedUnderLiveParent(id: string): Promise<boolean>
+  /** Row `id`'s parent's liveness at the last write of this tx that
+   *  tombstoned `id`: `'live'` for a delete of the row itself, `'tombstoned'`
+   *  for a subtree delete's cascade, which tombstones the parent first.
+   *  `undefined` for a row this tx did not tombstone, or a root. */
+  parentLivenessWhenTombstoned(id: string): Promise<'live' | 'tombstoned' | undefined>
 }
 
 /** Thrown by a same-tx processor to reject the user's tx. The

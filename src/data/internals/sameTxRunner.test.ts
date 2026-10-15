@@ -404,11 +404,12 @@ describe('Same-tx runner — zero-write tx', () => {
 })
 
 describe('Same-tx runner — write-log reads', () => {
-  const probing = (out: Map<string, boolean>): AnySameTxProcessor => ({
+  type ParentLiveness = 'live' | 'tombstoned' | undefined
+  const probing = (out: Map<string, ParentLiveness>): AnySameTxProcessor => ({
     name: 'test.tombstoneProbe',
     watches: {kind: 'field', table: 'blocks', fields: ['deleted']},
     apply: async (event, ctx) => {
-      for (const row of event.changedRows) out.set(row.id, await ctx.tombstonedUnderLiveParent(row.id))
+      for (const row of event.changedRows) out.set(row.id, await ctx.parentLivenessWhenTombstoned(row.id))
     },
   })
 
@@ -419,21 +420,44 @@ describe('Same-tx runner — write-log reads', () => {
 
   it('reads a row deleted under a parent the tx never wrote as deleted under a live parent', async () => {
     await seedParentAndChild()
-    const probed = new Map<string, boolean>()
+    const probed = new Map<string, ParentLiveness>()
     env.repo.__setSameTxProcessorsForTesting([probing(probed)])
 
     await env.repo.tx(tx => tx.delete('c'), {scope: ChangeScope.BlockDefault})
 
-    expect(probed.get('c')).toBe(true)
+    expect(probed.get('c')).toBe('live')
   })
 
   it("reads a subtree delete's cascade as deleted under a tombstoned parent", async () => {
     await seedParentAndChild()
-    const probed = new Map<string, boolean>()
+    const probed = new Map<string, ParentLiveness>()
     env.repo.__setSameTxProcessorsForTesting([probing(probed)])
 
     await env.repo.tx(tx => deleteSubtreeInTx(tx, 'p'), {scope: ChangeScope.BlockDefault})
 
-    expect(Object.fromEntries(probed)).toEqual({p: false, c: false})
+    expect(probed.get('c')).toBe('tombstoned')
+    // A root has no parent to read.
+    expect(probed.get('p')).toBeUndefined()
+  })
+
+  it('orders the writes of a settled processor, which share one dirty-row generation', async () => {
+    // A settled processor's writes do not advance the generation the re-run
+    // pass watermarks by, so ordering cannot be read off it.
+    await seedParentAndChild()
+    let answer: ParentLiveness
+    env.repo.__setSameTxProcessorsForTesting([{
+      name: 'test.settledDeleter',
+      watches: {kind: 'field', table: 'blocks', fields: ['content']},
+      settledWrites: true,
+      apply: async (_event, ctx) => {
+        await ctx.tx.delete('c')
+        await ctx.tx.delete('p')
+        answer = await ctx.parentLivenessWhenTombstoned('c')
+      },
+    }])
+
+    await env.repo.tx(tx => tx.update('p', {content: 'edited'}), {scope: ChangeScope.BlockDefault})
+
+    expect(answer).toBe('live')
   })
 })
