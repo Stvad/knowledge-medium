@@ -1,1 +1,0 @@
-import{AT as e,jT as t}from"../../chunks/app-DDr5ZzV8.js";export{e as ClientLocalSettings,t as clientLocalSettings};
