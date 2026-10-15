@@ -59,12 +59,14 @@
  *  O  no live row under a missing/tombstoned parent, except rows an
  *     arrival placed there (sync-apply skips the parent-liveness trigger).
  *  I  INTENT — for a pair written only by cell writers in a tx, the cell
- *     ends at the LAST write (absent for an unset). Two carve-outs, both the
- *     accepted single-pass wrinkle in propertyChildrenProcessor.ts's
- *     docblock (MATERIALIZE diffs the tx's net bag):
- *       - an eager write followed by a raw bag write to the same key is
- *         order-blind, so the cell may end at any value written in the tx
- *         (or the start value);
+ *     ends at the LAST write (absent for an unset). A write that left the
+ *     cell as it found it claims nothing — no user unsets a key the cell does
+ *     not show. Two carve-outs, both the accepted single-pass wrinkle in
+ *     propertyChildrenProcessor.ts's docblock (MATERIALIZE diffs the tx's
+ *     net bag):
+ *       - a raw bag write after the last eager write that reconciled
+ *         children is order-blind, so the cell may end at any value written
+ *         in the tx (or the start value);
  *       - a pair whose owner ALSO had its children edited in the same tx is
  *         not checked for intent at all — a cell write beats a later
  *         same-tx child edit (MATERIALIZE re-reconciles from the cell), so
@@ -79,8 +81,10 @@
  *  A  a rejected transaction (a legal kernel rejection, or MATERIALIZE
  *     refusing a cell value no value child can carry) leaves the db
  *     byte-identical.
- *  U  (local cases) undo-all restores the seed rows exactly and tombstones
- *     everything created since; redo-all restores the final state.
+ *  U  (local cases) every undo and redo lands exactly on the state recorded
+ *     on that side of its tx — rows it created come back only as
+ *     tombstones, this layer has no hard delete — with the waivers that
+ *     state was checked under; so do undo-all (to the seed) and redo-all.
  *
  * Every op targets rows by (owner, property, index) resolved at run time,
  * so shrinking keeps the remaining ops meaningful. Order-key jitter is the
@@ -267,9 +271,11 @@ const memberArb = (kind: Kind): fc.Arbitrary<unknown> =>
  *  need several writers on ONE pair, often in one tx. */
 interface Focus {top: number; kind: Kind}
 
-const opArbs = ({top, kind}: Focus) => {
-  const hotKind = fc.oneof({weight: 3, arbitrary: fc.constant(kind)}, {weight: 2, arbitrary: KIND_ARB})
-  const hotTop = fc.oneof({weight: 3, arbitrary: fc.constant(top)}, {weight: 1, arbitrary: TOP_ARB})
+/** `tight` aims nearly every op at the hot pair — for the ops of one
+ *  multi-op tx, where several writers on ONE key is the point. */
+const opArbs = ({top, kind}: Focus, tight = false) => {
+  const hotKind = fc.oneof({weight: tight ? 8 : 3, arbitrary: fc.constant(kind)}, {weight: 2, arbitrary: KIND_ARB})
+  const hotTop = fc.oneof({weight: tight ? 8 : 3, arbitrary: fc.constant(top)}, {weight: 1, arbitrary: TOP_ARB})
   const owner: fc.Arbitrary<OwnerSel> = fc.oneof(
     {weight: 8, arbitrary: hotTop.map(t => ({top: t}))},
     {weight: 1, arbitrary: fc.record({top: hotTop, nested: fc.nat(3)})},
@@ -350,8 +356,16 @@ const opArbs = ({top, kind}: Focus) => {
       op: fc.constant('rawCell' as const), top: fc.constant(t), kind: fc.constant(k),
       value: valueArb(k), remove: fc.boolean(),
     }))},
+    // Mostly a peer's whole property (a marked row with its values) arriving
+    // under a deleted owner — the shape a later restore has to reconcile.
     {weight: 2, arbitrary: hotKind.chain(k => fc.record({
-      op: fc.constant('rawOrphan' as const), pick: fc.nat(5), atOwner: fc.boolean(), content,
+      op: fc.constant('rawOrphan' as const),
+      pick: fc.nat(5),
+      atOwner: fc.oneof({weight: 3, arbitrary: fc.constant(true)}, {weight: 1, arbitrary: fc.constant(false)}),
+      content: fc.oneof(
+        {weight: 2, arbitrary: fc.constant<ContentSpec>({c: 'marked', kind: k})},
+        {weight: 1, arbitrary: content},
+      ),
       values: fc.array(valueContent(k), {maxLength: 2}),
     }))},
     {weight: 2, arbitrary: fc.record({op: fc.constant('rawDeleteOwner' as const), pick: ownerPick})},
@@ -362,17 +376,19 @@ const opArbs = ({top, kind}: Focus) => {
 
 const txArb = (mode: Mode, focus: Focus): fc.Arbitrary<TxSpec> => {
   const {local, raw} = opArbs(focus)
+  const {local: tightLocal} = opArbs(focus, true)
   const batch: fc.Arbitrary<TxSpec> = fc.oneof(
-    // Mostly one op per tx; the multi-op txs are where same-tx
-    // interleavings (eager vs deferred, cell vs children) live.
-    {weight: 3, arbitrary: local.map(op => ({t: 'batch' as const, ops: [op]}))},
-    {weight: 2, arbitrary: fc.array(local, {minLength: 2, maxLength: 4}).map(ops => ({t: 'batch' as const, ops}))},
+    {weight: 1, arbitrary: local.map(op => ({t: 'batch' as const, ops: [op]}))},
+    // Multi-op txs are where same-tx interleavings (eager vs deferred, cell vs
+    // children) live, so their ops crowd onto the hot pair.
+    {weight: 1, arbitrary: fc.array(tightLocal, {minLength: 2, maxLength: 4}).map(ops => ({t: 'batch' as const, ops}))},
   )
   return mode === 'local'
     ? fc.oneof(
       {weight: 10, arbitrary: batch},
-      {weight: 1, arbitrary: fc.constant({t: 'undo' as const})},
-      {weight: 1, arbitrary: fc.constant({t: 'redo' as const})},
+      // A redo lands only straight after an undo, so the two are heavy.
+      {weight: 2, arbitrary: fc.constant({t: 'undo' as const})},
+      {weight: 2, arbitrary: fc.constant({t: 'redo' as const})},
     )
     : fc.oneof(
       {weight: 7, arbitrary: batch},
@@ -682,9 +698,13 @@ const pairsReading = (
 // ──── one local transaction ────
 
 const ABSENT = undefined
-/** One cell write. An EAGER one records whether it wrote — one that matched
- *  the cell is a no-op and reconciled no children. */
-type Ev = {cls: 'E'; value: unknown; wrote: boolean} | {cls: 'R'; value: unknown}
+/** One cell write, and whether it CHANGED the cell it found. A no-op claims
+ *  nothing: an eager one reconciled no children, and either kind leaves the
+ *  key exactly as the earlier writes (or the processors) decide — a user can
+ *  not unset a key the cell does not show. */
+type Ev = {cls: 'E' | 'R'; value: unknown; wrote: boolean}
+
+const effective = (evs: readonly Ev[]): boolean => evs.some(ev => ev.wrote)
 
 interface TxLog {
   /** owner → cell key → cell writes, in order. */
@@ -713,7 +733,7 @@ const lastEagerWrite = (evs: readonly Ev[]): number => {
  *  docblock). A later eager write that writes settles the key again. */
 const orderBlind = (evs: readonly Ev[]): boolean => {
   const last = lastEagerWrite(evs)
-  return last >= 0 && evs.slice(last + 1).some(ev => ev.cls === 'R')
+  return last >= 0 && evs.slice(last + 1).some(ev => ev.cls === 'R' && ev.wrote)
 }
 
 const addEvent = (log: TxLog, ownerId: string, name: string, ev: Ev): void => {
@@ -782,9 +802,11 @@ const applyLocalOp = async (tx: Tx, op: LocalOp, log: TxLog): Promise<boolean> =
       const bag = {...(await tx.get(owner))!.properties}
       for (const {kind, value, remove} of op.edits) {
         const name = SCHEMAS[kind].schema.name
+        const next = remove ? ABSENT : encodeFor(kind, value)
+        const wrote = !sameValue(bag[name], next)
         if (remove) delete bag[name]
-        else bag[name] = encodeFor(kind, value)
-        addEvent(log, owner, name, {cls: 'R', value: remove ? ABSENT : bag[name]})
+        else bag[name] = next
+        addEvent(log, owner, name, {cls: 'R', value: next, wrote})
       }
       await tx.update(owner, {properties: bag})
       return true
@@ -1188,14 +1210,15 @@ const checkIntent = (
   for (const owner of end.byId.values()) {
     if (owner.deleted !== 0 || start.byId.get(owner.id)?.deleted !== 1) continue
     if (log.childTouched.has(owner.id)) continue
-    const written = log.events.get(owner.id)
+    const byName = log.events.get(owner.id)
+    const written = (name: string): boolean => effective(byName?.get(name) ?? [])
     // A field row already live when its owner came back carries the
     // children's word, so the revival takes no value from the cell into it —
     // whatever else is unsettled about the owner. A value moved over from a
     // folded duplicate existed before; a minted one did not.
     for (const kind of KINDS) {
       const {schema, fieldId} = SCHEMAS[kind]
-      if (written?.has(schema.name)) continue
+      if (written(schema.name)) continue
       for (const fieldRow of liveFieldRows(end, owner.id, fieldId)) {
         if (start.byId.get(fieldRow.id)?.deleted !== 0) continue
         stats.liveFieldRowsAtRevival++
@@ -1209,7 +1232,7 @@ const checkIntent = (
     if (waivers.unsettledDead.has(owner.id)) continue
     for (const kind of KINDS) {
       const {schema, fieldId} = SCHEMAS[kind]
-      if (written?.has(schema.name) || waivers.proj.has(pairKey(owner.id, fieldId))) continue
+      if (written(schema.name) || waivers.proj.has(pairKey(owner.id, fieldId))) continue
       stats.restoredKeysChecked++
       const before = startBags.get(owner.id)?.[schema.name]
       if (!sameValue(bagOf(owner)[schema.name], before)) {
@@ -1229,6 +1252,7 @@ const checkIntent = (
     const bag = bagOf(owner)
     for (const [name, evs] of byName) {
       const actual = bag[name]
+      if (!effective(evs)) continue
       const blind = orderBlind(evs)
       stats.intentChecked++
       if (blind) {
@@ -1242,22 +1266,6 @@ const checkIntent = (
       }
     }
   }
-}
-
-/** Pairs that currently hold duplicate field rows — what undo/redo may
- *  legitimately bring back, since it replays a state that already passed D
- *  under the waivers of its time. */
-const currentDupPairs = async (): Promise<string[]> => {
-  const state = await readState()
-  const out: string[] = []
-  for (const owner of state.byId.values()) {
-    if (owner.deleted !== 0) continue
-    for (const kind of KINDS) {
-      const {fieldId} = SCHEMAS[kind]
-      if (liveFieldRows(state, owner.id, fieldId).length > 1) out.push(pairKey(owner.id, fieldId))
-    }
-  }
-  return out
 }
 
 /** KNOWN ISSUE (fuzz): #1210. MATERIALIZE's revival picks an owner's field
@@ -1293,6 +1301,41 @@ const staleBitRevivalPairs = (log: TxLog, start: DbState, end: DbState): string[
   return pairs
 }
 
+/** What the suite knows on each side of one undo entry. The undo manager
+ *  keeps one entry per tx that wrote (no `groupId` here merges two), so a
+ *  stack of these walks in step with it, and an undo or redo lands on a state
+ *  this suite already checked — with the waivers it was checked under. */
+interface Replayable {
+  before: {waivers: Waivers; snapshot: SnapRow[]}
+  after: {waivers: Waivers; snapshot: SnapRow[]}
+}
+interface UndoMirror {done: Replayable[]; undone: Replayable[]}
+
+const cloneWaivers = (waivers: Waivers): Waivers => ({
+  proj: new Set(waivers.proj),
+  dup: new Set(waivers.dup),
+  orphans: new Set(waivers.orphans),
+  unsettledDead: new Set(waivers.unsettledDead),
+})
+const assignWaivers = (target: Waivers, source: Waivers): void => {
+  for (const key of ['proj', 'dup', 'orphans', 'unsettledDead'] as const) {
+    target[key].clear()
+    for (const item of source[key]) target[key].add(item)
+  }
+}
+
+/** An undo or redo restores every row of the state it returns to
+ *  byte-identical, and can only TOMBSTONE a row created since — this layer has
+ *  no hard delete, so a row a later, undone tx created stays as a tombstone. */
+const expectReplayedTo = async (rows: readonly SnapRow[], label: string): Promise<void> => {
+  const now = new Map((await fullSnapshot()).map(row => [row.id, row]))
+  const ids = new Set(rows.map(row => row.id))
+  for (const row of rows) expect(now.get(row.id), `${label}: restores ${row.id}`).toEqual(row)
+  for (const row of now.values()) {
+    if (!ids.has(row.id)) expect(row.deleted, `${label}: ${row.id}, created since, is tombstoned`).toBe(1)
+  }
+}
+
 /** The pairs PROJECT re-projected in 'full' mode at the end of a committed
  *  local tx, so their cells agree with their children whatever an arrival
  *  left: every pair that reads a row whose watched columns changed (before
@@ -1320,16 +1363,23 @@ const reprojectedPairs = (start: DbState, end: DbState): string[] => {
   return [...pairs].filter(key => end.byId.get(key.split('|')[0]!)?.deleted === 0)
 }
 
-const runBatch = async (repo: Repo, ops: LocalOp[], waivers: Waivers, label: string): Promise<void> => {
+const runBatch = async (
+  repo: Repo, ops: LocalOp[], waivers: Waivers, mirror: UndoMirror | null, label: string,
+): Promise<void> => {
   const start = await readState()
   const startSnapshot = await fullSnapshot()
   const startBags = new Map([...start.byId.values()].map(row => [row.id, bagOf(row)]))
+  const waiversBefore = cloneWaivers(waivers)
+  const writesBefore = await lastRowEvent()
   const log: TxLog = {events: new Map(), childTouched: new Set(), dupRisk: new Set(), deletedOwners: new Set()}
+  // Counted only once the tx commits: a rolled-back op reached no oracle.
+  const outcomes: [string, boolean][] = []
   try {
     await repo.tx(async tx => {
-      for (const op of ops) bump(await applyLocalOp(tx, op, log) ? stats.applied : stats.skipped, op.op)
+      for (const op of ops) outcomes.push([op.op, await applyLocalOp(tx, op, log)])
     }, {scope: ChangeScope.BlockDefault})
     stats.committed++
+    for (const [op, applied] of outcomes) bump(applied ? stats.applied : stats.skipped, op)
   } catch (e) {
     stats.rejected++
     assertLegalRejection(e, `${label} ${JSON.stringify(ops)}`)
@@ -1348,7 +1398,7 @@ const runBatch = async (repo: Repo, ops: LocalOp[], waivers: Waivers, label: str
     if (start.byId.get(row.id)?.deleted === 1) continue
     // Died in this tx: settled unless a deferred writer reached it first.
     const deferredWrite = log.childTouched.has(row.id)
-      || [...log.events.get(row.id)?.values() ?? []].some(evs => evs.some(ev => ev.cls === 'R'))
+      || [...log.events.get(row.id)?.values() ?? []].some(evs => evs.some(ev => ev.cls === 'R' && ev.wrote))
     if (deferredWrite) waivers.unsettledDead.add(row.id)
     else waivers.unsettledDead.delete(row.id)
   }
@@ -1379,6 +1429,15 @@ const runBatch = async (repo: Repo, ops: LocalOp[], waivers: Waivers, label: str
   }
   for (const key of reprojectedPairs(start, end)) waivers.proj.delete(key)
   for (const key of staleBitRevivalPairs(log, start, end)) waivers.proj.add(key)
+  // The undo manager records one entry per tx that wrote; mirror it before
+  // the quiescence check, which writes nothing either way.
+  if (mirror !== null && await lastRowEvent() > writesBefore) {
+    mirror.done.push({
+      before: {waivers: waiversBefore, snapshot: startSnapshot},
+      after: {waivers: cloneWaivers(waivers), snapshot: await fullSnapshot()},
+    })
+    mirror.undone.length = 0
+  }
   await checkState(repo, waivers, converged, label)
 }
 
@@ -1388,21 +1447,36 @@ const runCase = async ({mode, txs}: {mode: Mode; txs: TxSpec[]}): Promise<void> 
   const repo = await seedWorkspace()
   const seedRows = await fullSnapshot()
   const waivers: Waivers = {proj: new Set(), dup: new Set(), orphans: new Set(), unsettledDead: new Set()}
-  let ranUndoRedo = false
+  const mirror: UndoMirror | null = mode === 'local' ? {done: [], undone: []} : null
 
   for (const [i, spec] of txs.entries()) {
     const label = `tx ${i} (${spec.t})`
     switch (spec.t) {
       case 'batch':
-        await runBatch(repo, spec.ops, waivers, label)
+        await runBatch(repo, spec.ops, waivers, mirror, label)
         break
-      case 'undo':
-      case 'redo':
-        ranUndoRedo = true
-        if (await (spec.t === 'undo' ? repo.undo() : repo.redo())) bump(stats.undoRedo, spec.t)
-        for (const key of await currentDupPairs()) waivers.dup.add(key)
+      case 'undo': {
+        const entry = mirror!.done.at(-1)
+        expect(await repo.undo(), `${label}: undo acts iff a tx is left to undo`).toBe(entry !== undefined)
+        if (entry === undefined) break
+        bump(stats.undoRedo, 'undo')
+        mirror!.undone.push(mirror!.done.pop()!)
+        await expectReplayedTo(entry.before.snapshot, `${label}: U`)
+        assignWaivers(waivers, entry.before.waivers)
         await checkState(repo, waivers, new Map(), label)
         break
+      }
+      case 'redo': {
+        const entry = mirror!.undone.at(-1)
+        expect(await repo.redo(), `${label}: redo acts iff a tx is left to redo`).toBe(entry !== undefined)
+        if (entry === undefined) break
+        bump(stats.undoRedo, 'redo')
+        mirror!.done.push(mirror!.undone.pop()!)
+        await expectReplayedTo(entry.after.snapshot, `${label}: U — redo`)
+        assignWaivers(waivers, entry.after.waivers)
+        await checkState(repo, waivers, new Map(), label)
+        break
+      }
       case 'raw':
         if (await applyRawOp(spec.op, waivers)) bump(stats.raw, spec.op.op)
         await checkState(repo, waivers, new Map(), `${label} ${spec.op.op}`)
@@ -1410,64 +1484,55 @@ const runCase = async ({mode, txs}: {mode: Mode; txs: TxSpec[]}): Promise<void> 
     }
   }
 
-  if (mode !== 'local') return
-  // U — the whole sequence unwinds and replays.
+  if (mirror === null) return
+  // U — the whole sequence unwinds and replays. Redo-all re-applies every
+  // entry left on either stack, so it ends where the earliest-undone entry
+  // still waiting for a redo ends — or, with none, where the sequence did.
   const finalSnapshot = await fullSnapshot()
   await drain(() => repo.undo())
-  const undone = new Map((await fullSnapshot()).map(row => [row.id, row]))
-  for (const seed of seedRows) {
-    expect(undone.get(seed.id), `U — undo-all restores seed row ${seed.id}`).toEqual(seed)
-  }
-  for (const row of undone.values()) {
-    if (seedRows.some(seed => seed.id === row.id)) continue
-    expect(row.deleted, `U — ${row.id}, created during the sequence, is tombstoned by undo-all`).toBe(1)
-  }
+  await expectReplayedTo(seedRows, 'U — undo-all')
   await drain(() => repo.redo())
-  if (!ranUndoRedo) {
-    expect(await fullSnapshot(), 'U — redo-all returns to the final state').toEqual(finalSnapshot)
-  }
-  await checkState(repo, {proj: new Set(), dup: new Set(await currentDupPairs()), orphans: new Set(), unsettledDead: new Set()}, new Map(), 'after redo-all')
+  const last = mirror.undone[0] ?? mirror.done.at(-1)
+  await expectReplayedTo(last?.after.snapshot ?? finalSnapshot, 'U — redo-all')
+  if (last !== undefined) assignWaivers(waivers, last.after.waivers)
+  await checkState(repo, waivers, new Map(), 'after redo-all')
 }
 
 describe('properties-as-blocks dual representation under mixed writer sequences', () => {
   it('cell and children agree after every tx; cell writes land; processors stay quiescent', async () => {
-    await fc.assert(
-      fc.asyncProperty(caseArb, ({mode, txs, prngSeed}) =>
-        guard.run(prngSeed, () => runCase({mode, txs}))),
-      fuzzParams(20),
-    )
-  }, fuzzTestTimeout())
-
-  // Non-vacuity canary (docs/fuzzing.md §8): every op is resolved against
-  // whatever rows exist when it runs, so a generator drift that left, say,
-  // value-row edits with nothing to target would keep the property green
-  // while testing nothing. A fixed sample, independent of the deep-tier env.
-  it('reaches every writer and every oracle', async () => {
     await guard.barrier()
     resetStats()
     await fc.assert(
       fc.asyncProperty(caseArb, ({mode, txs, prngSeed}) =>
         guard.run(prngSeed, () => runCase({mode, txs}))),
-      {numRuns: 60, seed: 430},
+      fuzzParams(30),
     )
+    // Non-vacuity (docs/fuzzing.md §8), over the sample the property just
+    // ran: every op resolves against whatever rows exist when it runs, so a
+    // generator drift that left, say, value-row edits nothing to target would
+    // keep the property green while testing nothing. A replay runs one case.
+    if (process.env.FUZZ_SEED || process.env.FUZZ_PATH) return
     const summary = JSON.stringify(stats, (_, v: unknown) => v instanceof Map ? Object.fromEntries(v) : v)
     for (const op of LOCAL_OPS) {
-      expect(stats.applied.get(op) ?? 0, `local op "${op}" applied — ${summary}`).toBeGreaterThan(0)
+      expect(stats.applied.get(op) ?? 0, `local op "${op}" committed — ${summary}`).toBeGreaterThan(0)
     }
     for (const op of RAW_OPS) {
       expect(stats.raw.get(op) ?? 0, `raw op "${op}" wrote — ${summary}`).toBeGreaterThan(0)
     }
-    expect(stats.committed, 'committed txs').toBeGreaterThan(0)
-    expect(stats.rejected, 'A — a rejected tx was rolled back and checked').toBeGreaterThan(0)
     for (const step of ['undo', 'redo']) {
       expect(stats.undoRedo.get(step) ?? 0, `a mid-sequence ${step} acted — ${summary}`).toBeGreaterThan(0)
     }
+    expect(stats.rejected, `A — a rejected tx was rolled back and checked — ${summary}`).toBeGreaterThan(0)
     expect(stats.intentChecked, 'I checks').toBeGreaterThan(0)
-    expect(stats.orderBlind, 'I order-blind carve-out reached').toBeGreaterThan(0)
     expect(stats.rematerialized, 'Q MATERIALIZE re-runs').toBeGreaterThan(0)
     expect(stats.projectedPresent, 'P compared a present value').toBeGreaterThan(0)
     expect(stats.dupObserved, 'D saw a duplicate field row').toBeGreaterThan(0)
     expect(stats.restoredKeysChecked, 'I checked a restored owner').toBeGreaterThan(0)
+    // Composite shapes several ops have to line up for: the smoke sample is
+    // sized for the ~1s gate budget and does not reach them; the deep tier's
+    // thousands of cases must.
+    if (!process.env.FUZZ_TIME_MS && !process.env.FUZZ_RUNS) return
+    expect(stats.orderBlind, 'I order-blind carve-out reached').toBeGreaterThan(0)
     expect(stats.liveFieldRowsAtRevival, 'I saw a field row live at its owner\'s revival').toBeGreaterThan(0)
-  }, 60_000)
+  }, fuzzTestTimeout())
 })

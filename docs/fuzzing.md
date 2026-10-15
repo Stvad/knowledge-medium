@@ -234,12 +234,19 @@ one.
   nothing; no duplicate field rows or orphans except where a tree edit or
   an arrival could have minted one and no cell write has collapsed it
   since; a cell-writes-only pair ends at the LAST write; a rejected tx
-  leaves no trace; undo-all/redo-all round-trip. Arrivals deliberately
-  leave the touched pairs incoherent (the arrival path never
-  re-projects), so the suite waives exactly those pairs until a local
-  cell write converges them — read the docblock before tightening it.
-  A case aims most ops at one "hot" (owner, property) pair; blind targets
-  over 3 owners × 5 properties seldom met, which a canary test pins.
+  leaves no trace; each undo and redo lands exactly on the state
+  recorded on that side of its tx (a mirror of the undo stack, which
+  also restores the waivers that state was checked under), and so do
+  undo-all and redo-all. Arrivals deliberately leave the touched pairs
+  incoherent (the arrival path never re-projects), so the suite waives
+  exactly those pairs until a local write re-settles them — read the
+  docblock before tightening it. A case aims most ops at one "hot"
+  (owner, property) pair, and a multi-op tx crowds onto it; blind
+  targets over 3 owners × 5 properties seldom met. The property asserts
+  over its own sample that every writer and oracle was reached. Two
+  composite shapes are asserted only in the deep tier, which the ~1s
+  smoke sample cannot reach: the order-blind carve-out, and a field row
+  already live at its owner's revival.
 - `src/utils/test/linkTargetAutocomplete.fuzz.test.ts` — the
   `searchSourcesFacet` merge point (`searchBlocksAcrossSources`): model
   differential against an independent group-then-fold reference over
@@ -560,6 +567,18 @@ its first deep minutes:
   re-projected owners whose child rows changed in the tx, so the revived
   owner kept its pre-delete cell. PROJECT now re-projects a revived row's
   own live field rows.
+- Two more in the same revival, both raised in review and pinned by
+  deterministic tests:
+  - Adding values from the cell for keys the tx never wrote resurrected
+    a peer's delete. A field row already live and empty (or a list
+    missing a member) got the stale cell value back. The revival now
+    takes no value from the cell into an already-live field row; the
+    suite asserts that it mints nothing there.
+  - A value row brought back by its owner's revival treated its whole
+    bag as untouched, so a key the same tx had written on it could be
+    unset. Every revived row now goes through one rule
+    (`materializeRevivedRow`), which splits written keys from untouched
+    ones by the row's tx-start state.
 - Still open, each with a `KNOWN ISSUE (fuzz)` carve-out:
   - #1210: the revival picks field rows by the `is_field_form` bit before
     DERIVE re-stamps it. So a restore in the same tx as an edit that
