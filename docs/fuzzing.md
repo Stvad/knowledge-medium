@@ -698,10 +698,10 @@ registry never saw the delivery — release each case's Repo yourself
    (`undoInterleaving.fuzz.test.ts`).
 10. Before writing a differential, list what the two sides SHARE. Two
     implementations reading one stamped column agree on every corruption
-   of that column, so the differential is silent about it — give the
-   shared input an oracle of its own (`visibleChildren.fuzz`).
+    of that column, so the differential is silent about it — give the
+    shared input an oracle of its own (`visibleChildren.fuzz`).
 11. A property that builds a Repo per CASE (one test, many Repos on one
-   db) must release each with `releaseTestRepos` from
-   `@/data/test/testRepoScope`; the automatic release runs only when the
-   test ends, so until then every earlier case's Repo keeps its sync
-   observer and projectors subscribed to the shared db.
+    db) must release each with `releaseTestRepos` from
+    `@/data/test/testRepoScope`; the automatic release runs only when the
+    test ends, so until then every earlier case's Repo keeps its sync
+    observer and projectors subscribed to the shared db.
