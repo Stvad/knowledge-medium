@@ -553,6 +553,21 @@ its first deep minutes:
   commit pipeline never re-runs a processor over its own writes, so the
   revival rule never saw the value row. The revival now re-materializes
   every row it restores with the untouched-names policy.
+- The cell→children half of the same revival had a mirror gap, raised in
+  review and then made reachable by the suite. Sync-apply skips the
+  parent-liveness trigger, so a peer's field row can sit LIVE under a
+  tombstone. The revival policy says the children win, but PROJECT only
+  re-projected owners whose child rows changed in the tx, so the revived
+  owner kept its pre-delete cell. PROJECT now re-projects a revived row's
+  own live field rows.
+- Still open, each with a `KNOWN ISSUE (fuzz)` carve-out:
+  - #1210: the revival picks field rows by the `is_field_form` bit before
+    DERIVE re-stamps it. So a restore in the same tx as an edit that
+    un-marks a field row under the restored owner leaves a cell key with
+    no field row.
+  - #1211: deleting and restoring a block in ONE tx is no revival to
+    MATERIALIZE (its net change is live → live), while PROJECT sees its
+    field rows die. Every property is silently unset.
 
 ## Adding a suite
 
