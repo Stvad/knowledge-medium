@@ -555,6 +555,14 @@ found one product bug in its first minute (fixed + pinned):
   `property.definition-change.shared-name` while either side has
   consumers; two unused definitions may still share a name.
 
+Its second deep run found one more, filed rather than fixed here since
+it sits in the dual-write path, not the rename (#1209): `setProperty`
+writing the value a deleted definition's stale cell already holds under
+that name is short-circuited as a no-op, so the definition now answering
+to the name never gets a field row and its value does not follow a later
+rename. The value model carries a `KNOWN ISSUE (fuzz)` carve-out for
+exactly that case.
+
 Its harness carries one lesson for any suite that builds a Repo per
 case: every case runs inside ONE test, so the per-test Repo release
 never fires between them. The previous case's sync observer drained the
