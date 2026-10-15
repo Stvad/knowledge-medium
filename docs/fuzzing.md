@@ -19,7 +19,7 @@ The same property code runs at three intensities (mechanics in
 |---|---|---|---|
 | smoke | part of the normal `pnpm test` / `pnpm run check` gate | fixed | small run counts, ~1s/file |
 | local deep | `pnpm fuzz [files…]` | random | `FUZZ_TIME_MS` per property (default 15s) |
-| nightly | `.github/workflows/fuzz-nightly.yml` (06:23 UTC cron + manual dispatch) | random | 15s/property across all suites, then a 20-minute dedicated pass on the stateful data-layer suite |
+| nightly | `.github/workflows/fuzz-nightly.yml` (06:23 UTC cron + manual dispatch) | random | 15s/property across all suites, then a 20-minute dedicated pass on the stateful data-layer suite and a 15-minute one on the props-as-blocks dual-write suite |
 
 The smoke tier is deliberately deterministic: the gate re-explores the
 same cases every run, so a pre-existing bug can only surface in the
@@ -258,9 +258,11 @@ one.
   targets over 3 owners × 5 properties seldom met. The property asserts
   over its own sample that every writer and oracle was reached: on the
   fixed smoke sample, or on any random one of 200+ cases (so a short
-  `FUZZ_RUNS` triage run reports only property failures). Two composite
-  shapes are asserted only from 2,000 cases: the order-blind carve-out,
-  and a field row already live at its owner's revival.
+  `FUZZ_RUNS` triage run reports only property failures). Three composite
+  shapes are asserted only from 5,000 cases, which the nightly's dedicated
+  pass for this suite reaches: the order-blind carve-out, a field row
+  already live at its owner's revival, and a restore checked against a
+  key that held a value.
 - `src/utils/test/linkTargetAutocomplete.fuzz.test.ts` — the
   `searchSourcesFacet` merge point (`searchBlocksAcrossSources`): model
   differential against an independent group-then-fold reference over

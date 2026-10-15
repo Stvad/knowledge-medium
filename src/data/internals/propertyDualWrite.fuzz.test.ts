@@ -644,13 +644,13 @@ interface Waivers {
   dup: Set<string>
   /** Row ids an arrival left live under a tombstone. */
   orphans: Set<string>
-  /** Tombstoned rows whose cell and children were never reconciled: they died
-   *  in a tx that also wrote them through a deferred path (a raw bag write or
-   *  a child edit — eager writes keep the two in step), or an arrival put a
-   *  child under them while they were dead. A revival settles them toward the
-   *  children, so their untouched keys may move. Cleared when the row comes
-   *  back. */
-  unsettledDead: Set<string>
+  /** `${owner}|${fieldId}` of a tombstoned owner whose cell and children for
+   *  that property were never reconciled: the owner died in a tx that also
+   *  wrote the pair through a deferred path (a raw bag write or a child edit —
+   *  eager writes keep the two in step), or an arrival landed in it while the
+   *  owner was dead. A revival settles such a pair toward the children, so
+   *  its key may move. Cleared when the owner comes back. */
+  unsettled: Set<string>
 }
 const pairKey = (ownerId: string, fieldId: string): string => `${ownerId}|${fieldId}`
 /** Every pair of `ownerId` — only for a write that genuinely affects them
@@ -683,6 +683,9 @@ const markedFieldId = async (content: string): Promise<string | null> => {
 const pairsReading = (
   state: DbState,
   row: Pick<Row, 'parent_id' | 'is_field_form' | 'reference_target_id'>,
+  /** Count a value under a TOMBSTONED field row too — the pairs it will feed
+   *  if a revival brings that row back. */
+  throughDeadParent = false,
 ): string[] => {
   if (row.parent_id === null) return []
   // A field row needs only its parent's id — which may be a row the same
@@ -691,7 +694,8 @@ const pairsReading = (
     return isRegisteredField(row.reference_target_id) ? [pairKey(row.parent_id, row.reference_target_id)] : []
   }
   const parent = state.byId.get(row.parent_id)
-  return parent !== undefined && parent.deleted === 0 && parent.is_field_form === 1 && parent.parent_id !== null
+  return parent !== undefined && (throughDeadParent || parent.deleted === 0)
+    && parent.is_field_form === 1 && parent.parent_id !== null
     && isRegisteredField(parent.reference_target_id)
     ? [pairKey(parent.parent_id, parent.reference_target_id)]
     : []
@@ -947,7 +951,10 @@ const rawInsert = async (
   const pairs = pairsReading(state, {parent_id: parentId, is_field_form: isFieldForm, reference_target_id: target})
   // A parent missing from `state` is one this same arrival just inserted.
   const parentLive = state.byId.get(parentId)?.deleted !== 1
-  if (!parentLive) waivers.unsettledDead.add(parentId)
+  if (!parentLive) {
+    const row = {parent_id: parentId, is_field_form: isFieldForm, reference_target_id: target}
+    for (const key of pairsReading(state, row, true)) waivers.unsettled.add(key)
+  }
   for (const key of pairs) {
     if (parentLive) waivers.proj.add(key)
     if (isFieldForm === 1) waivers.dup.add(key)
@@ -1170,6 +1177,8 @@ const stats = {
   dupObserved: 0,
   projectedPresent: 0,
   restoredKeysChecked: 0,
+  /** …of which the key held a value before the restore. */
+  restoredValuesChecked: 0,
   liveFieldRowsAtRevival: 0,
 }
 const bump = (counts: Map<string, number>, key: string): void => {
@@ -1179,7 +1188,7 @@ const resetStats = (): void => {
   for (const counts of [stats.applied, stats.skipped, stats.raw, stats.undoRedo]) counts.clear()
   stats.cases = stats.committed = stats.rejected = stats.intentChecked = stats.orderBlind = 0
   stats.rematerialized = stats.dupObserved = stats.projectedPresent = stats.restoredKeysChecked = 0
-  stats.liveFieldRowsAtRevival = 0
+  stats.liveFieldRowsAtRevival = stats.restoredValuesChecked = 0
 }
 
 // ──── oracles ────
@@ -1276,12 +1285,13 @@ const checkIntent = (
         }
       }
     }
-    if (waivers.unsettledDead.has(owner.id)) continue
     for (const kind of KINDS) {
       const {schema, fieldId} = SCHEMAS[kind]
-      if (written(schema.name) || waivers.proj.has(pairKey(owner.id, fieldId))) continue
+      const key = pairKey(owner.id, fieldId)
+      if (written(schema.name) || waivers.proj.has(key) || waivers.unsettled.has(key)) continue
       stats.restoredKeysChecked++
       const before = startBags.get(owner.id)?.[schema.name]
+      if (before !== undefined) stats.restoredValuesChecked++
       if (!sameValue(bagOf(owner)[schema.name], before)) {
         expect.fail(`${label}: I — restoring ${owner.id} changed untouched ${schema.name}: ${JSON.stringify(before)} → ${JSON.stringify(bagOf(owner)[schema.name])}`)
       }
@@ -1380,10 +1390,10 @@ const cloneWaivers = (waivers: Waivers): Waivers => ({
   proj: new Set(waivers.proj),
   dup: new Set(waivers.dup),
   orphans: new Set(waivers.orphans),
-  unsettledDead: new Set(waivers.unsettledDead),
+  unsettled: new Set(waivers.unsettled),
 })
 const assignWaivers = (target: Waivers, source: Waivers): void => {
-  for (const key of ['proj', 'dup', 'orphans', 'unsettledDead'] as const) {
+  for (const key of ['proj', 'dup', 'orphans', 'unsettled'] as const) {
     target[key].clear()
     for (const item of source[key]) target[key].add(item)
   }
@@ -1456,16 +1466,19 @@ const runBatch = async (
   const end = await readState()
   checkIntent(log, start, end, waivers, label)
   for (const row of end.byId.values()) {
-    if (row.deleted === 0) {
-      waivers.unsettledDead.delete(row.id)
-      continue
+    if (row.deleted !== 0 && start.byId.get(row.id)?.deleted === 1) continue
+    // Back, or just died: either way its pairs are decided afresh. A death
+    // leaves unsettled exactly the pairs a deferred writer reached first.
+    for (const kind of KINDS) waivers.unsettled.delete(pairKey(row.id, SCHEMAS[kind].fieldId))
+    if (row.deleted === 0) continue
+    for (const [name, evs] of log.events.get(row.id) ?? []) {
+      if (evs.some(ev => ev.cls === 'R' && ev.wrote)) {
+        waivers.unsettled.add(pairKey(row.id, lookups.resolveNameSchema(name)!.fieldId))
+      }
     }
-    if (start.byId.get(row.id)?.deleted === 1) continue
-    // Died in this tx: settled unless a deferred writer reached it first.
-    const deferredWrite = log.childTouched.has(row.id)
-      || [...log.events.get(row.id)?.values() ?? []].some(evs => evs.some(ev => ev.cls === 'R' && ev.wrote))
-    if (deferredWrite) waivers.unsettledDead.add(row.id)
-    else waivers.unsettledDead.delete(row.id)
+    for (const key of log.childPairs) {
+      if (key.startsWith(`${row.id}|`)) waivers.unsettled.add(key)
+    }
   }
 
   for (const key of log.dupRisk) waivers.dup.add(key)
@@ -1513,7 +1526,7 @@ const runCase = async ({mode, txs}: {mode: Mode; txs: TxSpec[]}): Promise<void> 
   rawSeq = 0
   const repo = await seedWorkspace()
   const seedRows = await fullSnapshot()
-  const waivers: Waivers = {proj: new Set(), dup: new Set(), orphans: new Set(), unsettledDead: new Set()}
+  const waivers: Waivers = {proj: new Set(), dup: new Set(), orphans: new Set(), unsettled: new Set()}
   const mirror: UndoMirror | null = mode === 'local' ? {done: [], undone: []} : null
 
   for (const [i, spec] of txs.entries()) {
@@ -1606,10 +1619,12 @@ describe('properties-as-blocks dual representation under mixed writer sequences'
     expect(stats.dupObserved, 'D saw a duplicate field row').toBeGreaterThan(0)
     expect(stats.restoredKeysChecked, 'I checked a restored owner').toBeGreaterThan(0)
     // Composite shapes several ops have to line up for: neither the ~1s smoke
-    // sample nor a short deep slice reaches them reliably; thousands of cases
-    // must.
-    if (stats.cases < 2000) return
+    // sample nor a short deep slice reaches them reliably, so they are asserted
+    // once a run reaches thousands of cases — the nightly's dedicated pass for
+    // this suite does.
+    if (stats.cases < 5000) return
     expect(stats.orderBlind, 'I order-blind carve-out reached').toBeGreaterThan(0)
     expect(stats.liveFieldRowsAtRevival, 'I saw a field row live at its owner\'s revival').toBeGreaterThan(0)
+    expect(stats.restoredValuesChecked, `I checked a restored owner's present value — ${summary}`).toBeGreaterThan(0)
   }, fuzzTestTimeout())
 })
