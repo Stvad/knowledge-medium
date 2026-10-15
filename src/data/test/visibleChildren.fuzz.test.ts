@@ -63,8 +63,7 @@ import { BLOCKS_SYNCED_RAW_TABLE, blockToSyncedRowParams, parseBlockRow, type Bl
 import { registrySeedParams } from '@/data/internals/kernelQueries'
 import { deriveReferenceColumns } from '@/data/internals/referenceTargetProcessor'
 import { VISIBLE_CHILDREN_SQL, VISIBLE_SUBTREE_SQL } from '@/data/internals/treeQueries'
-import { tryBuildSchema, USER_SCHEMAS_PROJECTOR_ID } from '@/data/userSchemasService'
-import { parsePropertyDefinitionMetadata } from '@/data/propertyDefinitionMetadata'
+import { USER_SCHEMAS_PROJECTOR_ID } from '@/data/userSchemasService'
 import { visibleChildrenOf } from '@/data/visibleChildren'
 import type { Repo } from '@/data/repo'
 
@@ -207,13 +206,17 @@ const renderContent = (u: Universe, c: ContentSpec): string => {
   }
 }
 
+const BUILDABLE_PRESETS = ['string', 'number'] as const
+const UNLOADABLE_PRESET = 'preset-whose-plugin-is-not-loaded'
+const INVALID_CHANGE_SCOPE = 'not-a-change-scope'
+
 const definitionBag = (def: DefSpec): Record<string, unknown> => ({
   types: ['property-schema'],
   'property-schema:name': NAMES[def.name] ?? '',
   ...(def.preset === 'none' ? {} : {
-    'property-schema:preset': def.preset === 'unloadable' ? 'preset-whose-plugin-is-not-loaded' : def.preset,
+    'property-schema:preset': def.preset === 'unloadable' ? UNLOADABLE_PRESET : def.preset,
   }),
-  ...(def.validScope ? {} : {'property-schema:change-scope': 'not-a-change-scope'}),
+  ...(def.validScope ? {} : {'property-schema:change-scope': INVALID_CHANGE_SCOPE}),
 })
 
 const readRow = async (db: TestDb['db'], id: string): Promise<BlockData | null> => {
@@ -339,26 +342,44 @@ const applyOp = async (u: Universe, op: Op): Promise<void> => {
   }
 }
 
-/** Rejections the tx surface owes an incoherent op — legal outcomes:
- *  - `CycleError`: a move under its own descendant (`tx.move`'s cycle check);
- *  - `ParentDeletedError`: a create/move under a tombstone;
- *  - `NotDeletedError`: restoring a live row;
- *  - the definition-change processor's refusals
- *    (`propertyDefinitionChangeProcessor.ts`): a re-type it cannot fan out
- *    because the old or new value type does not build, a change to a
- *    definition whose name is contested (both in `REFUSALS`), and a re-type
- *    that would lose a stored value — a field row's value child that the new
- *    type cannot hold.
- *  Anything else is a bug. A peer write is never rejected — sync applies it. */
-const LEGAL_DEFINITION_CHANGE_REFUSALS = new Set([
+const DEFINITION_CHANGE_REFUSALS = new Set([
   'property.definition-change.unbuildable',
   'property.definition-change.contested',
   'property.definition-change.unconvertible',
 ])
 
+/** Rejections the tx surface owes an incoherent op, keyed by the op that may
+ *  raise each — a listed error from any other op is a bug like any unlisted
+ *  one, since a swallowed rejection skips the op and every later sweep still
+ *  passes. A peer write is never rejected: sync applies it. */
+const LEGAL_REJECTIONS: {readonly [K in Op['op']]: (e: unknown) => boolean} = {
+  // A create under a tombstone.
+  create: e => e instanceof ParentDeletedError,
+  setContent: () => false,
+  // `tx.move`'s cycle check (under its own descendant), or under a tombstone.
+  move: e => e instanceof CycleError || e instanceof ParentDeletedError,
+  delete: () => false,
+  // Restoring a live row, or a row whose parent is a tombstone (the
+  // `blocks_parent_not_deleted_check_update` trigger refuses a live row under
+  // one).
+  restore: e => e instanceof NotDeletedError || e instanceof ParentDeletedError,
+  // The definition-change processor (`propertyDefinitionChangeProcessor.ts`):
+  // a re-type it cannot fan out because the old or new value type does not
+  // build, a change to a definition whose name is contested (both in
+  // `REFUSALS`), or a re-type that would lose a field row's stored value.
+  // Re-defining a tombstoned slot restores it, so restore's tombstoned-parent
+  // refusal applies too.
+  putDef: e => (e instanceof ProcessorRejection && DEFINITION_CHANGE_REFUSALS.has(e.code))
+    || e instanceof ParentDeletedError,
+  untypeDef: () => false,
+  // Replay of a recorded move back under a parent a peer has since deleted.
+  undo: e => e instanceof ParentDeletedError,
+  redo: e => e instanceof ParentDeletedError,
+}
+
 const assertLegalRejection = (e: unknown, op: Op): void => {
-  if (e instanceof CycleError || e instanceof ParentDeletedError || e instanceof NotDeletedError) return
-  if (e instanceof ProcessorRejection && LEGAL_DEFINITION_CHANGE_REFUSALS.has(e.code)) return
+  const fromPeer = 'via' in op && op.via === 'sync'
+  if (!fromPeer && LEGAL_REJECTIONS[op.op](e)) return
   throw new Error(`illegal error from ${JSON.stringify(op)}: ${String(e)}`, {cause: e})
 }
 
@@ -420,12 +441,17 @@ const symmetricDiff = (a: readonly string[], b: readonly string[]): string[] =>
  *  target is a block tagged 'property-schema' that the registry cannot build a
  *  definition from, while the tx layer shows it. Counterexample: `putDef` with
  *  `validScope: false` or preset 'unloadable', then a field row targeting it.
- *  The one divergence the oracles excuse, and only for a target that provably
- *  cannot build, judged from the ROW with the projector's own parse and build:
- *  its metadata does not parse, or its schema does not build. Never from the
- *  projector's published state, which would excuse a projector that lags or
- *  drops a buildable definition. Delete this, its call site and the #1202
- *  tripwire test when the issue lands. */
+ *  The one divergence the oracles excuse, and only for a bag the GENERATOR made
+ *  unbuildable, read off the row's current bag (which undo and refusals move).
+ *  Never from the parse/build under test, which would excuse a regression that
+ *  rejects a valid definition, nor from the projector's published state, which
+ *  would excuse one that lags. Delete this, its call site and the #1202
+ *  tripwire tests when the issue lands. */
+const isUnbuildableByConstruction = (bag: Record<string, unknown>): boolean =>
+  !(NAMES as readonly unknown[]).includes(bag['property-schema:name'])
+  || bag['property-schema:change-scope'] === INVALID_CHANGE_SCOPE
+  || !(BUILDABLE_PRESETS as readonly unknown[]).includes(bag['property-schema:preset'])
+
 const unbuildableDefinitionIds = async (u: Universe): Promise<ReadonlySet<string>> => {
   const tagged = await u.db.getAll<{block_id: string}>(
     `SELECT block_id FROM block_types WHERE type = 'property-schema' AND workspace_id = ?`, [WS],
@@ -433,9 +459,7 @@ const unbuildableDefinitionIds = async (u: Universe): Promise<ReadonlySet<string
   const out = new Set<string>()
   for (const {block_id: id} of tagged) {
     const row = await readRow(u.db, id)
-    if (row === null) continue
-    const metadata = parsePropertyDefinitionMetadata(row)
-    if (metadata === null || tryBuildSchema(row, u.repo.valuePresetCores, metadata) === null) out.add(id)
+    if (row !== null && isUnbuildableByConstruction(row.properties)) out.add(id)
   }
   return out
 }
@@ -502,29 +526,36 @@ const guard = statefulFuzzGuard()
 const openUniverse = async (): Promise<Universe> => {
   await resetTestDb(sharedDb.db)
   const {repo} = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}, startSyncObserver: true})
-  repo.setActiveWorkspaceId(WS)
-  await repo.projectors.handle(USER_SCHEMAS_PROJECTOR_ID)!.whenPrimed(WS)
-  const seedIds = JSON.parse(registrySeedParams(repo)[0]) as string[]
-  expect(seedIds.length, 'kernel seeds give the SQL seed leg something to bind').toBeGreaterThan(0)
+  // The Repo is live from here, so a failed setup must release it too — or
+  // its observer and projectors stay subscribed to the next case's db.
+  try {
+    repo.setActiveWorkspaceId(WS)
+    await repo.projectors.handle(USER_SCHEMAS_PROJECTOR_ID)!.whenPrimed(WS)
+    const seedIds = JSON.parse(registrySeedParams(repo)[0]) as string[]
+    expect(seedIds.length, 'kernel seeds give the SQL seed leg something to bind').toBeGreaterThan(0)
 
-  const u: Universe = {repo, db: sharedDb.db, seedId: seedIds[0]!, nodes: [ROOT], nextBlock: 0, syncClock: 9_000_000_000_000}
-  // A definition in ANOTHER workspace: a field row here targeting it must
-  // stay visible (§9 — both legs are workspace-guarded).
-  await repo.tx(t => t.create({
-    id: FOREIGN_DEF, workspaceId: WS2, parentId: null, orderKey: 'a0', content: '',
-    properties: definitionBag({name: 0, preset: 'string', validScope: true}),
-  }), {scope: ChangeScope.BlockDefault})
-  await tx(u, async t => {
-    await t.create({id: ROOT, workspaceId: WS, parentId: null, orderKey: 'a0', content: 'root'})
-    await t.create({
-      id: DEF_SLOTS[0]!, workspaceId: WS, parentId: null, orderKey: 'a1', content: '',
+    const u: Universe = {repo, db: sharedDb.db, seedId: seedIds[0]!, nodes: [ROOT], nextBlock: 0, syncClock: 9_000_000_000_000}
+    // A definition in ANOTHER workspace: a field row here targeting it must
+    // stay visible (§9 — both legs are workspace-guarded).
+    await repo.tx(t => t.create({
+      id: FOREIGN_DEF, workspaceId: WS2, parentId: null, orderKey: 'a0', content: '',
       properties: definitionBag({name: 0, preset: 'string', validScope: true}),
+    }), {scope: ChangeScope.BlockDefault})
+    await tx(u, async t => {
+      await t.create({id: ROOT, workspaceId: WS, parentId: null, orderKey: 'a0', content: 'root'})
+      await t.create({
+        id: DEF_SLOTS[0]!, workspaceId: WS, parentId: null, orderKey: 'a1', content: '',
+        properties: definitionBag({name: 0, preset: 'string', validScope: true}),
+      })
     })
-  })
-  u.nodes.push(DEF_SLOTS[0]!)
-  repo.undoManagerFor(WS).clear()
-  repo.undoManagerFor(WS2).clear()
-  return u
+    u.nodes.push(DEF_SLOTS[0]!)
+    repo.undoManagerFor(WS).clear()
+    repo.undoManagerFor(WS2).clear()
+    return u
+  } catch (e) {
+    await releaseTestRepos([repo])
+    throw e
+  }
 }
 
 /** Undo everything still undoable. Replay can be refused legally — a peer
@@ -547,7 +578,6 @@ const runCase = async (ops: readonly Op[]): Promise<void> => {
       try {
         await applyOp(u, op)
       } catch (e) {
-        if ('via' in op && op.via === 'sync') throw e
         assertLegalRejection(e, op)
       }
       await sweep(u)
@@ -599,14 +629,16 @@ describe('visible-children view', () => {
       await releaseTestRepos([u.repo])
     }
   })
-  // Tripwires for the #1202 excuse, one per branch of
-  // `unbuildableDefinitionIds`: it is only sound while the bug exists. A fix
+  // Tripwires for the #1202 excuse, one per clause of
+  // `isUnbuildableByConstruction`: it is only sound while the bug exists. A fix
   // that makes the tx layer hide the row leaves that branch dead, and one that
   // makes the SQL show it fails the children oracle — either way the case
   // goes red, and its branch goes with it.
   it.each([
-    {branch: 'schema does not build', def: {name: 1, preset: 'unloadable', validScope: true}},
-    {branch: 'metadata does not parse', def: {name: 1, preset: 'string', validScope: false}},
+    {branch: 'preset does not load', def: {name: 1, preset: 'unloadable', validScope: true}},
+    {branch: 'preset is missing', def: {name: 1, preset: 'none', validScope: true}},
+    {branch: 'change scope is invalid', def: {name: 1, preset: 'string', validScope: false}},
+    {branch: 'name is empty', def: {name: NAMES.length, preset: 'string', validScope: true}},
   ] satisfies Array<{branch: string; def: DefSpec}>)(
     'KNOWN ISSUE #1202: a definition whose $branch still splits the views', async ({def}) => {
     await guard.barrier()

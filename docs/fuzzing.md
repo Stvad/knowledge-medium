@@ -248,8 +248,8 @@ one.
   input, which no SQL-vs-JS differential can see), `VISIBLE_CHILDREN_SQL`
   equals `visibleChildrenOf` for every live block, and
   `VISIBLE_SUBTREE_SQL` equals a walk over those lists. The one excused
-  divergence is #1202 (below), judged from the definition row itself, with
-  a tripwire test that fails once it is fixed.
+  divergence is #1202 (below), for bags the generator made unbuildable,
+  with a tripwire per clause that fails once it is fixed.
 
 ## Found so far
 
@@ -546,11 +546,12 @@ Filed rather than fixed: the fix that makes the class impossible binds
 the registry's classified set into the SQL, which is a design call. The
 suite keeps generating those shapes and excuses exactly that divergence.
 A first version stopped generating them instead (review caught it), which
-loses every OTHER check in states holding a broken definition. The excuse
-is decided from the definition row with the projector's own parse and
-build, never from the projector's published state; deciding it from that
-state would also excuse a projector that drops a buildable schema (a
-planted one is caught).
+loses every OTHER check in states holding a broken definition. Which
+definitions are excused is decided by the generator's own model of the
+bags it made unbuildable, read off the row. Asking the parse/build under
+test would excuse a regression that rejects a valid definition, and asking
+the projector's published state would excuse a projector that lags; planted
+versions of both are caught.
 
 ## Adding a suite
 
