@@ -645,6 +645,26 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
               },
               tombstonedDuringTx: id => snapshots.get(id)?.before?.deleted === true
                 || (rowWriteLog.get(id)?.some(record => record.after?.deleted === true) ?? false),
+              tombstonedUnderLiveParent: async id => {
+                let previous = snapshots.get(id)?.before ?? null
+                let death: {gen: number; parentId: string | null} | undefined
+                for (const record of rowWriteLog.get(id) ?? []) {
+                  if (record.after?.deleted === true && previous?.deleted === false) {
+                    death = {gen: record.gen, parentId: record.after.parentId}
+                  }
+                  previous = record.after
+                }
+                if (death === undefined || death.parentId === null) return false
+                const parentEntry = snapshots.get(death.parentId)
+                // A parent this tx never wrote was as it is now throughout.
+                if (parentEntry === undefined) return (await tx.get(death.parentId))?.deleted === false
+                let parent = parentEntry.before
+                for (const record of rowWriteLog.get(death.parentId) ?? []) {
+                  if (record.gen > death.gen) break
+                  parent = record.after
+                }
+                return parent !== null && !parent.deleted
+              },
             },
           )
         } finally {

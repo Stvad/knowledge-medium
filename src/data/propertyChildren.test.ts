@@ -2645,6 +2645,46 @@ describe('revival re-materializes property children (#778)', () => {
     expect((await childrenRows(field!.id)).filter(v => v.deleted === 0).map(v => v.content))
       .toEqual(['not a number'])
   })
+
+  it('does not bring back a field row the restoring tx itself deleted under the live owner', async () => {
+    // The revival brings back what the owner's death took down. A field row this
+    // tx deleted AFTER restoring the owner is the user unsetting the property
+    // through the tree, and neither reviving it nor minting from the cell may
+    // undo that.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    const [field] = await liveFieldRows('p')
+    const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+    await repo.mutate.delete({id: 'p'})
+    // The sync-shaped state: the field row and its value live under the tombstone.
+    await sharedDb.db.execute('UPDATE blocks SET deleted = 0 WHERE id IN (?, ?)', [field!.id, value!.id])
+
+    await repo.tx(async tx => {
+      await tx.restore('p')
+      await deleteSubtreeInTx(tx, field!.id)
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(await cellValue('p')).toBeUndefined()
+    expect(await liveFieldRows('p')).toEqual([])
+  })
+
+  it('does not bring back a field row deleted before the owner, in one delete + restore tx', async () => {
+    // Only the owner's subtree delete takes its field rows down AFTER the owner:
+    // the cascade tombstones the root first. A field row that died while the
+    // owner was still live was deleted on its own.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    const [field] = await liveFieldRows('p')
+
+    await repo.tx(async tx => {
+      await deleteSubtreeInTx(tx, field!.id)
+      await deleteSubtreeInTx(tx, 'p')
+      await tx.restore('p')
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(await cellValue('p')).toBeUndefined()
+    expect(await liveFieldRows('p')).toEqual([])
+  })
 })
 
 describe('§9 recognition on the WRITE side (round-2 review fixes)', () => {

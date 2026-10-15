@@ -33,6 +33,7 @@ import {
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '../repo'
+import { deleteSubtreeInTx } from '../subtreeDelete'
 
 const WS = 'ws-1'
 
@@ -399,5 +400,40 @@ describe('Same-tx runner — zero-write tx', () => {
     }, {scope: ChangeScope.BlockDefault})
 
     expect(log.events).toHaveLength(0)
+  })
+})
+
+describe('Same-tx runner — write-log reads', () => {
+  const probing = (out: Map<string, boolean>): AnySameTxProcessor => ({
+    name: 'test.tombstoneProbe',
+    watches: {kind: 'field', table: 'blocks', fields: ['deleted']},
+    apply: async (event, ctx) => {
+      for (const row of event.changedRows) out.set(row.id, await ctx.tombstonedUnderLiveParent(row.id))
+    },
+  })
+
+  const seedParentAndChild = (): Promise<void> => env.repo.tx(async tx => {
+    await tx.create({id: 'p', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'parent'})
+    await tx.create({id: 'c', workspaceId: WS, parentId: 'p', orderKey: 'a0', content: 'child'})
+  }, {scope: ChangeScope.BlockDefault})
+
+  it('reads a row deleted under a parent the tx never wrote as deleted under a live parent', async () => {
+    await seedParentAndChild()
+    const probed = new Map<string, boolean>()
+    env.repo.__setSameTxProcessorsForTesting([probing(probed)])
+
+    await env.repo.tx(tx => tx.delete('c'), {scope: ChangeScope.BlockDefault})
+
+    expect(probed.get('c')).toBe(true)
+  })
+
+  it("reads a subtree delete's cascade as deleted under a tombstoned parent", async () => {
+    await seedParentAndChild()
+    const probed = new Map<string, boolean>()
+    env.repo.__setSameTxProcessorsForTesting([probing(probed)])
+
+    await env.repo.tx(tx => deleteSubtreeInTx(tx, 'p'), {scope: ChangeScope.BlockDefault})
+
+    expect(Object.fromEntries(probed)).toEqual({p: false, c: false})
   })
 })

@@ -379,13 +379,14 @@ export type UndecodableCellPolicy = 'reject' | 'skip'
 /** What the revival path knows about the tx it runs in. Every row the revival
  *  restores is a revived row in its own right, and splitting its names by who
  *  wrote them needs the bag this tx found it with. */
-export type RevivalContext = Pick<SameTxCtx, 'txBaselineOf'>
+export type RevivalContext = Pick<SameTxCtx, 'txBaselineOf' | 'tombstonedUnderLiveParent'>
 
 export interface MaterializeOptions {
   /** See {@link UndecodableCellPolicy}. Default `'reject'`. */
   undecodable?: UndecodableCellPolicy
   /** Bring a name's TOMBSTONED field row back instead of minting a
-   *  replacement, when the owner has exactly one and no live one (#787) — and
+   *  replacement, when the owner has exactly one and no live one (#787), and
+   *  this tx did not delete it under the live owner — and
    *  materialize every row that brings back as the revived row it is
    *  ({@link materializeRevivedRow}).
    *
@@ -489,6 +490,20 @@ const reviveTombstonedFieldRow = async (
   if (values.length !== 1) return [fieldRow.id]
   await tx.restore(values[0]!.id)
   return [fieldRow.id, values[0]!.id]
+}
+
+/** Whether this tx deleted one of `fieldId`'s tombstoned field rows while the
+ *  owner was live, rather than through the owner's own subtree delete. */
+const deletedUnderLiveOwner = async (
+  tombstones: readonly BlockData[],
+  fieldId: string,
+  revive: RevivalContext,
+): Promise<boolean> => {
+  for (const tombstone of tombstones) {
+    if (getPropertyFieldTargetId(tombstone) !== fieldId) continue
+    if (await revive.tombstonedUnderLiveParent(tombstone.id)) return true
+  }
+  return false
 }
 
 /** Materialize a row coming back from a tombstone. Its whole bag, not the
@@ -608,14 +623,21 @@ export const materializePropertyChildrenForExistingRow = async (
     let fieldRows = matchingChildren
     if (opts.revive && fieldRows.length === 0) {
       tombstones ??= await tx.tombstonedPropertyFieldRows(row.workspaceId, row.id)
-      const revived = await reviveTombstonedFieldRow(tx, schema, tombstones)
-      if (revived.length > 0) {
-        children = await tx.childrenOf(row.id, undefined)
-        fieldRows = fieldRowsForSchema(children, schema.fieldId)
-        for (const id of revived) {
-          const restored = await tx.get(id)
-          if (restored !== null && !restored.deleted) {
-            await materializeRevivedRow(tx, restored, lookups, opts.revive)
+      if (await deletedUnderLiveOwner(tombstones, schema.fieldId, opts.revive)) {
+        // The owner's death did not take this one: the tx deleted it, which is
+        // the children's word, as an empty live field row is. An untouched name
+        // is left for PROJECT to unset; a written one mints a fresh row.
+        if (opts.additive) continue
+      } else {
+        const revived = await reviveTombstonedFieldRow(tx, schema, tombstones)
+        if (revived.length > 0) {
+          children = await tx.childrenOf(row.id, undefined)
+          fieldRows = fieldRowsForSchema(children, schema.fieldId)
+          for (const id of revived) {
+            const restored = await tx.get(id)
+            if (restored !== null && !restored.deleted) {
+              await materializeRevivedRow(tx, restored, lookups, opts.revive)
+            }
           }
         }
       }
@@ -659,7 +681,7 @@ const materializeChangedRows = async (
   tx: Tx,
   changedRows: readonly ChangedRow[],
   lookups: PropertyChildrenLookups,
-  history: Pick<SameTxCtx, 'txBaselineOf' | 'tombstonedDuringTx'>,
+  history: RevivalContext & Pick<SameTxCtx, 'tombstonedDuringTx'>,
 ): Promise<void> => {
   const revived = new Set<string>()
   for (const row of changedRows) {
