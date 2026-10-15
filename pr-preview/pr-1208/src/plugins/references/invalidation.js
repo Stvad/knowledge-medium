@@ -1,0 +1,1 @@
+import{$F as e,eI as t}from"../../../chunks/app-DdOfo0fs.js";export{e as REFERENCES_TARGET_INVALIDATION_CHANNEL,t as referencesInvalidationRule};

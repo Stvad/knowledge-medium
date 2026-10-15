@@ -1,0 +1,1 @@
+import{lT as e,uT as t}from"../../chunks/app-DdOfo0fs.js";export{e as gestureBindingDescriptor,t as matchesGestureEvent};

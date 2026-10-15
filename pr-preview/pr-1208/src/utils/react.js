@@ -1,0 +1,1 @@
+import{BD as e,zD as t}from"../../chunks/app-DdOfo0fs.js";export{t as useIsMobile,e as usePointerCoarse};
