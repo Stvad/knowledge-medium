@@ -7,7 +7,11 @@ import type { Repo } from '@/data/repo'
 import { aliasesProp, hasBlockType } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
 import { keyAtEnd } from '@/data/orderKey'
-import { createOrRestoreTargetBlock, restorePropertiesStrippingAliases } from '@/data/targets'
+import {
+  createOrRestoreTargetBlock,
+  partitionClaimableAliases,
+  restorePropertiesStrippingAliases,
+} from '@/data/targets'
 import { parseAliasCollisionError } from '@/data/internals/raiseProtocol.js'
 import { dailyPageAliases, formatIsoDate } from '@/utils/dailyPage'
 import { DAILY_NOTE_TYPE, dailyNoteDateProp } from './schema.ts'
@@ -185,6 +189,26 @@ export const getOrCreateDailyNote = async (
   }
 
   const live = await repo.load(id)
+
+  // Read-only: GET an EXISTING day, never create or repair. A day that yielded
+  // one of its canonical aliases leaves `needsRepair` true on every later call,
+  // so without this a viewer opening such a day gets `ReadOnlyError` out of the
+  // repair tx instead of the page.
+  //
+  // Only when the row is actually there. Handing back a deterministic id for a
+  // row that does not exist is worse than the error: `todayDailyNoteLanding`
+  // answers with it and workspace bootstrap opens a panel on a missing block,
+  // which `WorkspaceLandingResolver` calls out by name as a bug. A viewer with
+  // no such day gets the write refusal, as before.
+  //
+  // Placed after the occupant read and behind `refuseForeign`: being unable to
+  // write is not entitlement to read another workspace's block under this
+  // workspace's identity.
+  if (repo.isReadOnly && live) {
+    refuseForeign(live)
+    return repo.block(id)
+  }
+
   if (live) {
     refuseForeign(live)
     const aliases = stringListProperty(live.properties[aliasesProp.name])
@@ -204,10 +228,29 @@ export const getOrCreateDailyNote = async (
       if (!current || current.deleted) return
       refuseForeign(current)
       const currentAliases = stringListProperty(current.properties[aliasesProp.name])
-      if (!includesAll(currentAliases, dailyAliases)) {
-        await tx.setProperty(id, aliasesProp, mergeStrings([...dailyAliases, ...currentAliases]))
+      // A name this row already co-claims with another live block wedges EVERY
+      // properties write on it, this repair included: the alias trigger deletes
+      // and re-inserts the row's whole bag, so the duplicate collides and
+      // aborts the caller's transaction — which here is the navigation that
+      // opened the day. Skip the repair rather than take the day down with it.
+      // The row is live and reachable; it just stays unrepaired until the
+      // duplicate is resolved. Latent cross-client duplicates are accepted by
+      // design (the uniqueness trigger skips sync-apply) and the general wedge
+      // they cause is its own issue.
+      for (const alias of currentAliases) {
+        const claimants = await tx.aliasClaimants(alias, workspaceId)
+        if (claimants.some(claimant => claimant.id !== id)) return
       }
-      await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: dailyAliases}, typeSnapshot)
+      const claimable = await partitionClaimableAliases(tx, id, dailyAliases, workspaceId)
+      const merged = mergeStrings([...claimable, ...currentAliases])
+      // Compare against the MERGED set, not the canonical one: while an alias
+      // stays contested `needsRepair` is true on every call, so comparing
+      // against `dailyAliases` would rewrite the same value on every
+      // navigation to the day.
+      if (!includesAll(currentAliases, merged)) {
+        await tx.setProperty(id, aliasesProp, merged)
+      }
+      await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: claimable}, typeSnapshot)
       await repo.addTypeInTx(
         tx, id, DAILY_NOTE_TYPE,
         {[dailyNoteDateProp.name]: dateValue},
@@ -231,12 +274,31 @@ export const getOrCreateDailyNote = async (
       // The tombstone's stored alias bag can hold an entry a different
       // live block claimed while the daily note was dead (issue #378) —
       // restoring it as-is would re-insert that stale claim and abort
-      // the whole tx. Strip it here; the setProperty below re-claims
-      // exactly the canonical long-form + ISO aliases.
+      // the whole tx. Strip it here; the setProperty below re-claims what is
+      // free, out of the canonical names AND the row's own.
       const restoredProperties = await restorePropertiesStrippingAliases(tx, id)
-      await tx.restore(id, {content: longLabel, properties: restoredProperties})
-      await tx.setProperty(id, aliasesProp, dailyAliases)
-      await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: dailyAliases}, typeSnapshot)
+      // Restore writes NO content, not even into an empty title: every content
+      // write here reaches `alias.sync` as a rename (rule 1) or a drift-heal
+      // (rule 2), and either one claims a name around the partition below. The
+      // live-repair branch above never touches content either.
+      await tx.restore(id, {properties: restoredProperties})
+      // MERGE the row's own names with the canonical ones rather than
+      // replacing: replacing makes the diff a 1-for-1 swap whenever the row
+      // had a single custom name, which rule 3 reads as a rename and follows
+      // by rewriting content and re-keying that name's backlinks.
+      //
+      // ACCEPTED, not missed: when the row's ONLY name is the contested one and
+      // matches its title, the yield is itself a 1-for-1 swap and rule 3 does
+      // retitle it to the ISO. That is the honest end state — the page no
+      // longer owns the long name — and backlinks are left alone, because the
+      // released name still has a live claimant and the rename processor takes
+      // its handoff path.
+      const claimable = await partitionClaimableAliases(
+        tx, id, mergeStrings([...dailyAliases, ...stringListProperty(existing.properties[aliasesProp.name])]),
+        workspaceId,
+      )
+      await tx.setProperty(id, aliasesProp, claimable)
+      await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: claimable}, typeSnapshot)
       await repo.addTypeInTx(
         tx, id, DAILY_NOTE_TYPE,
         {[dailyNoteDateProp.name]: dateValue},
@@ -255,7 +317,8 @@ export const getOrCreateDailyNote = async (
       orderKey,
       content: longLabel,
     }, {systemMint: true})
-    await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: dailyAliases}, typeSnapshot)
+    const claimable = await partitionClaimableAliases(tx, id, dailyAliases, workspaceId)
+    await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: claimable}, typeSnapshot)
     await repo.addTypeInTx(
       tx, id, DAILY_NOTE_TYPE,
       {[dailyNoteDateProp.name]: dateValue},
@@ -296,27 +359,67 @@ export const isValidDateAlias = (alias: string): boolean => {
   return new Date(ms).toISOString().slice(0, 10) === alias
 }
 
-/** "Which daily note is this?" from a block's alias list — the ISO alias
- *  `getOrCreateDailyNote` writes via `dailyPageAliases`, or `null` for a block
- *  that isn't a daily note. The one definition of that read, shared by the
- *  prev/next keyboard actions (which peek it off a Block) and the title
- *  date-nav arrows (which get it from a reactive `aliases` hook).
+/** "Which daily note is this?", or `null` for a block that isn't one. The one
+ *  definition of that read — the prev/next actions peek the values off a Block,
+ *  the date-nav arrows take them from reactive hooks, and `srsBlockDateAdapter`
+ *  loads them off a row.
  *
- *  `isValidDateAlias`, NOT `isDateAlias`: a date-SHAPED alias that isn't a
- *  calendar day (`2026-02-30`) belongs to an ordinary alias-target page — the
- *  references processor routes it to `ensureAliasTarget` precisely because
- *  `parseLiteralDailyPageTitle` rejects it. Treating such an alias as the
- *  block's date hands a normal page the daily-note affordances, and
- *  `addDaysIso` then reads it as March 2nd — so "previous day" lands on
- *  2026-03-01, forward by a month. Callers fall back to today instead, the
- *  same as on any other non-daily page.
+ *  The typed `daily-note:date` property first, the ISO alias as the fallback
+ *  for rows older than it. An alias is withholdable: a day whose ISO name
+ *  another live page claims yields it rather than fighting for it, and an
+ *  alias-only read then reports that page as not a daily note at all.
  *
- *  Deliberately NOT a `DAILY_NOTE_TYPE` check: the ISO alias is the marker
- *  every daily-note writer sets, and gating on the type instead would couple
- *  these read paths to type-tagging having reached every historical row. */
-export const dailyNoteIsoFromAliases = (
-  aliases: readonly string[],
-): string | null => aliases.find(isValidDateAlias) ?? null
+ *  `isValidDateAlias`, NOT `isDateAlias`, on both: a date-SHAPED value that
+ *  isn't a calendar day (`2026-02-30`) belongs to an ordinary alias-target page,
+ *  and `addDaysIso` reads it as March 2nd — so "previous day" lands a month
+ *  forward instead of failing. Callers fall back to today, as on any non-daily
+ *  page.
+ *
+ *  Deliberately NOT a `DAILY_NOTE_TYPE` check: that would couple these read
+ *  paths to type-tagging having reached every historical row. */
+export const dailyNoteIso = (
+  {id, workspaceId, date, aliases}: {
+    /** With `workspaceId`, lets a candidate be CONFIRMED against the derived
+     *  id. Omit both only where the block's identity isn't to hand. */
+    id?: string
+    workspaceId?: string
+    date?: Date | undefined
+    aliases?: readonly string[]
+  },
+): string | null => {
+  const fromDate = dailyNoteIsoFromDate(date)
+  const fromAlias = aliases?.find(isValidDateAlias) ?? null
+  // The id is a hash of (workspace, day) and nothing can edit it, so a
+  // candidate that reproduces it IS the day, whatever the other says. Needed
+  // because `daily-note:date` is an ordinary editable cell — the properties
+  // panel offers it — and nothing repairs it: `addTypeInTx` writes initial
+  // values only-if-empty and `needsRepair` never looks at the date. Without
+  // this, one wrong keystroke in that cell redirects the day's navigation
+  // permanently, while the id and both aliases still say otherwise.
+  if (id !== undefined && workspaceId) {
+    for (const candidate of [fromDate, fromAlias]) {
+      if (candidate !== null && dailyNoteBlockId(workspaceId, candidate) === id) return candidate
+    }
+    // Identity was checkable and neither candidate passed, so the date cell is
+    // not this block's identity — it is an ordinary field value. Any block can
+    // adopt `daily-note:date` through the "+ Field" picker, and trusting it
+    // here hands a normal page the date arrows and makes global prev/next step
+    // relative to whatever it holds. The alias still stands on its own: it is
+    // what identified daily notes before the property existed, and rows that
+    // old predate the derived id too.
+    return fromAlias
+  }
+  return fromDate ?? fromAlias
+}
+
+/** Inverse of `dailyNoteDateValue`. UTC, because that is what it wrote —
+ *  reading it in local time shifts the day by one west of Greenwich. Tolerant:
+ *  the cell is user-editable, so an invalid instant is "no date", not a throw. */
+const dailyNoteIsoFromDate = (date: Date | undefined): string | null => {
+  if (date === undefined || Number.isNaN(date.getTime())) return null
+  const iso = date.toISOString().slice(0, 10)
+  return isValidDateAlias(iso) ? iso : null
+}
 
 /** Ensure a daily-note **target seat** block exists for ISO date `date`
  *  in `workspaceId`. The seat is a reference target materialised at
@@ -335,8 +438,12 @@ export const dailyNoteIsoFromAliases = (
  *  is the lighter-weight materialiser invoked from `parseReferences`
  *  during reference resolution; it leaves the row at workspace-root
  *  with the iso date as content (matches the alias — mirrors
- *  `ensureAliasTarget`'s creation-time-default rule) until
- *  `getOrCreateDailyNote` later promotes it with the long-form label. */
+ *  `ensureAliasTarget`'s creation-time-default rule).
+ *
+ *  Nothing promotes that title to the long-form label afterwards: a day first
+ *  reached through `[[2026-04-28]]` stays titled `2026-04-28`. Restoring one
+ *  used to rewrite it, which is precisely the rename that made the day
+ *  unopenable — see `getOrCreateDailyNote`'s restore branch. */
 export const ensureDailyNoteTarget = async (
   tx: Tx,
   repo: Repo,
