@@ -132,3 +132,11 @@ export const peekSnapshot = (
   const entry = snapshots.get(id)
   return entry === undefined ? undefined : entry.after
 }
+
+/** A row's state at TX START — the `before` of its first write in this tx:
+ *  `null` for a row the tx created, `undefined` for one it has not written.
+ *  The sibling of {@link peekSnapshot}, which answers with the latest. */
+export const peekTxStart = (
+  snapshots: SnapshotsMap,
+  id: string,
+): BlockData | null | undefined => snapshots.get(id)?.before

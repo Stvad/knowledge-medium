@@ -55,7 +55,7 @@ import {
   type MutatorCallRecord,
   type TxDb,
 } from './txEngine'
-import { newSnapshotsMap, type SnapshotsMap } from './txSnapshots'
+import { newSnapshotsMap, peekTxStart, type SnapshotsMap } from './txSnapshots'
 import { propertySchemaResolverForWorkspace } from './propertySchemaResolution'
 import type { BlockCache } from '@/data/blockCache'
 import type { BlockIdPolicy } from '@/data/blockId'
@@ -606,6 +606,7 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
               typeDefinitions: typeDefinitionsForWorkspace(meta.workspaceId),
               resolvePropertySchemaName, resolvePropertySchemaField,
               propertyDefinitionsClaimingName,
+              txStartOf: id => peekTxStart(snapshots, id),
             },
           )
         } finally {

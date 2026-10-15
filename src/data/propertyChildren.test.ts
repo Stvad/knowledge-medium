@@ -7,12 +7,14 @@
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { ChangeScope, CodecError, codecs, defineProperty, propertyValue, type AnyPropertySchema, type BlockData, type PropertySchema } from '@/data/api'
+import { ChangeScope, CodecError, codecs, defineProperty, defineSameTxProcessor, propertyValue, type AnyPropertySchema, type BlockData, type PropertySchema } from '@/data/api'
 import { keyAtStart, keysBetween } from './orderKey'
 import { propertyFieldContent } from './propertyChildren'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
-import { contentReferencePrefillsFacet, projectedPropertyDefinitionsFacet } from '@/data/facets'
+import { contentReferencePrefillsFacet, projectedPropertyDefinitionsFacet, sameTxProcessorsFacet } from '@/data/facets'
+import { kernelDataExtension } from '@/data/kernelDataExtension.js'
+import { resolveFacetRuntimeSync } from '@/facets/facet.js'
 import { exactBlockRefPrefill } from '@/plugins/references/contentPrefill'
 import { foldBlocksInTx, mergeBlocksInTx } from './blockMerge'
 import type { Repo } from './repo'
@@ -2064,6 +2066,49 @@ describe('revival re-materializes property children (#778)', () => {
     await repo.tx(async tx => {
       await tx.update(value!.id, {properties: {[statusSchema.name]: 'local-new'}})
       await tx.restore('p')
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(await cellValue(value!.id)).toBe('local-new')
+    expect(await liveValueContents(value!.id)).toEqual(['local-new'])
+  })
+
+  it('keeps a key the tx wrote when a LATER processor triggers the revival (pass two)', async () => {
+    // MATERIALIZE's re-run pass sees only rows dirtied after its first pass,
+    // with a merged baseline — so which keys a recursively revived row had
+    // written must come from the tx's own write log, not from that event.
+    const restorer = defineSameTxProcessor({
+      name: 'test.restoreOnRequest',
+      watches: {kind: 'field', table: 'blocks', fields: ['properties']},
+      apply: async (event, ctx) => {
+        for (const row of event.changedRows) {
+          const target = row.after?.properties['restore']
+          if (typeof target !== 'string') continue
+          if ((await ctx.tx.get(target))?.deleted) await ctx.tx.restore(target)
+        }
+      },
+    })
+    await seedWorkspace('children')
+    const {repo} = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}})
+    repo.setFacetRuntime(resolveFacetRuntimeSync([
+      kernelDataExtension,
+      sameTxProcessorsFacet.of(restorer, {source: 'test'}),
+    ]))
+    repo.setActiveWorkspaceId(WS)
+    registerDefinition(repo, 'test-status-definition', STATUS_FIELD_ID, statusSchema)
+    await createBlock(repo, 'p')
+    await createBlock(repo, 'trigger')
+    await repo.tx(tx => tx.setProperty('p', statusSchema, 'done'), {scope: ChangeScope.BlockDefault})
+    const [field] = await liveFieldRows('p')
+    const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+    await repo.tx(tx => tx.setProperty(value!.id, statusSchema, 'nested'),
+      {scope: ChangeScope.BlockDefault})
+    const [nestedField] = await liveFieldRows(value!.id)
+    await repo.mutate.delete({id: 'p'})
+    await sharedDb.db.execute('UPDATE blocks SET deleted = 0 WHERE id = ?', [nestedField!.id])
+
+    await repo.tx(async tx => {
+      await tx.update(value!.id, {properties: {[statusSchema.name]: 'local-new'}})
+      await tx.update('trigger', {properties: {restore: 'p'}})
     }, {scope: ChangeScope.BlockDefault})
 
     expect(await cellValue(value!.id)).toBe('local-new')

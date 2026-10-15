@@ -1172,8 +1172,9 @@ export const MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR = defineSameTxProcessor({
     // single workspace, and un-flipped workspaces are fully dormant.
     if (!(await ctx.tx.isPropertyChildBackedWorkspace(event.workspaceId))) return
     const lookups = lookupsFor(ctx, event.workspaceId)
-    const txStart = new Map(event.changedRows.map(row => [row.id, row.before]))
-    const revive: RevivalContext = {txStartOf: id => txStart.get(id)}
+    // From the tx's write log, never this event: on the re-run pass the event
+    // holds only rows dirtied since the first, with a merged `before`.
+    const revive: RevivalContext = {txStartOf: id => ctx.txStartOf(id)}
     for (const row of event.changedRows) {
       await materializePropertiesForChangedRow(ctx.tx, row, lookups, revive)
     }
