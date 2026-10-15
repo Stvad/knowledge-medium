@@ -1,1 +1,1 @@
-import{_z as e,gz as t,hz as n}from"../../../chunks/app-zyvKrl38.js";export{n as charLimitProp,t as charProfileProp,e as charScopeProp};
+import{_z as e,gz as t,hz as n}from"../../../chunks/app-UQ-Gi3zL.js";export{n as charLimitProp,t as charProfileProp,e as charScopeProp};
