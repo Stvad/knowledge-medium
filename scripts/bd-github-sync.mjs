@@ -1018,6 +1018,17 @@ const labelFieldsWhere = (bead, issue, keep) =>
   LABEL_FIELDS.filter(([, read]) => keep(labelVerdict(bead, issue, read))).map(([field]) => field)
 
 /**
+ * Whether a bead's text is what the listing shows for it. gh rewrites C0/C1
+ * control characters in every API response to caret notation (ESC → `^[`, its
+ * terminal-injection sanitizer), while bd reads the API raw — so the bead side
+ * is put through the same rewrite. \b and \f are left alone because GitHub
+ * writes them as short escapes, which the sanitizer does not match.
+ */
+const GH_SANITIZED = /[\x00-\x07\x0e-\x1f\x80-\x9f]/g
+const asGhPrints = text => text.replace(GH_SANITIZED, c => `^${String.fromCharCode((c.charCodeAt(0) & 0x1f) + 0x40)}`)
+const sameText = (local, listed) => asGhPrints(local ?? '') === (listed ?? '')
+
+/**
  * Whether a push would CHANGE the issue — the question bd's push asks itself
  * (PushFieldsEqual) after fetching the issue, asked here from the listing so a
  * bead bd would skip is never handed over.
@@ -1031,15 +1042,15 @@ const pushedLabels = bead => [
   ...(bead.labels ?? []),
 ]
 const pushWouldChange = (bead, issue) =>
-  bead.title !== issue.title ||
-  (bead.description ?? '') !== (issue.body ?? '') ||
+  !sameText(bead.title, issue.title) ||
+  !sameText(bead.description, issue.body) ||
   (bead.status === 'closed') !== (issue.state === 'CLOSED') ||
   normalizedLabels(pushedLabels(bead)) !== normalizedLabels(issue.labels)
 
 /** Whether bd's pull would write this bead at all (its pullIssueEqual, negated). */
 export const pullWouldWrite = (bead, issue) =>
-  bead.title !== issue.title ||
-  (bead.description ?? '') !== (issue.body ?? '') ||
+  !sameText(bead.title, issue.title) ||
+  !sameText(bead.description, issue.body) ||
   (bead.assignee ?? '').trim() !== (issue.assignee ?? '').trim() ||
   normalizedLabels(bead.labels) !== normalizedLabels(pullLabels(issue.labels)) ||
   labelFieldsWhere(bead, issue, verdict => verdict !== 'agrees').length > 0
@@ -1071,8 +1082,8 @@ export const planLossyReapplies = (beads, issueByNumber) =>
       ...labelFieldsWhere(b, issue, verdict => LOSING_VERDICTS.includes(verdict)),
     ]
     const overwrites = [
-      ...(b.title !== issue.title ? ['title'] : []),
-      ...((b.description ?? '') !== (issue.body ?? '') ? ['description'] : []),
+      ...(!sameText(b.title, issue.title) ? ['title'] : []),
+      ...(!sameText(b.description, issue.body) ? ['description'] : []),
       ...(normalizedLabels(b.labels) !== normalizedLabels(pullLabels(issue.labels)) ? ['labels'] : []),
       ...labelFieldsWhere(b, issue, verdict => verdict === 'imports'),
     ]

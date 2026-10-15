@@ -852,6 +852,20 @@ describe('pullWouldWrite', () => {
     }
   })
 
+  // gh rewrites control characters in every API response to caret notation,
+  // while bd reads the API raw: a bead holding CI output with ANSI colours
+  // never matched its own listing, and was handed to the pull every run.
+  it('compares text as gh prints it, so a control character is no divergence', () => {
+    const ansi = '\x1b[41m FAIL \x1b[49m'
+    expect(pullWouldWrite({ ...local, description: ansi }, { ...remote, body: '^[[41m FAIL ^[[49m' })).toBe(false)
+    expect(pullWouldWrite({ ...local, title: 'bell\x07 csi\x9b fs\x1c' }, { ...remote, title: 'bell^G csi^[ fs^\\' })).toBe(false)
+    // GitHub writes \b and \f as short escapes, which the sanitizer does not
+    // match; tab, newline, \v, \r and DEL it leaves alone.
+    const kept = 'a\bb\fc\td\ne\vf\rg\x7fh'
+    expect(pullWouldWrite({ ...local, description: kept }, { ...remote, body: kept })).toBe(false)
+    expect(pullWouldWrite({ ...local, description: ansi }, { ...remote, body: '^[[41m FAIL ^[[49m, edited' })).toBe(true)
+  })
+
   it('compares labels as bd does: scoped ones dropped, trimmed, deduplicated, order-free', () => {
     expect(pullWouldWrite({ ...local, labels: [' ui ', 'ui', ''] }, remote)).toBe(false)
     expect(pullWouldWrite({ ...local, labels: ['b', 'a'] }, { ...remote, labels: ['type::task', 'priority::high', 'a', 'b'] })).toBe(false)
@@ -1145,6 +1159,15 @@ describe('planLossyReapplies', () => {
     expect(planLossyReapplies(closed, issues([[1, at('2026-09-11T01:00:00Z', { state: 'CLOSED' })]]))).toEqual([])
   })
 
+  // A withheld bead's report tells a human to compare the named fields by
+  // hand; text that differs only in gh's caret notation is not one of them.
+  it('names no overwrite for text that differs only as gh prints it', () => {
+    const assigned = [row({ id: 'km-a', assignee: 'Someone', title: 'T\x1b[0m', description: '\x1b[41m FAIL' })]
+    expect(planLossyReapplies(assigned, issues([[1, at('2026-09-11T01:00:00Z', { title: 'T^[[0m', body: '^[[41m FAIL' })]]))).toEqual([
+      { id: 'km-a', number: 1, losses: ['assignee'], overwrites: [] },
+    ])
+  })
+
   it('treats a GitHub-side assignment onto an unassigned bead as an import, not a loss', () => {
     const beads = [row({ id: 'km-a' })]
     expect(planLossyReapplies(beads, issues([[1, at('2026-09-11T01:00:00Z', { assignee: 'octocat' })]]))).toEqual([])
@@ -1213,6 +1236,8 @@ describe('planPrePullPush', () => {
     expect(planPrePullPush([{ ...row, title: 'edited locally' }], issues([[1, converged]]))).toEqual(['km-q'])
     expect(planPrePullPush([{ ...row, labels: ['ui'] }], issues([[1, converged]]))).toEqual(['km-q'])
     expect(planPrePullPush([{ ...row, status: 'closed' }], issues([[1, converged]]))).toEqual(['km-q'])
+    expect(planPrePullPush([{ ...row, description: 'D\x1b[0m' }], issues([[1, { ...converged, body: 'D^[[0m' }]]))).toEqual([])
+    expect(planPrePullPush([{ ...row, title: 'T\x1b[0m' }], issues([[1, { ...converged, title: 'T^[[0m' }]]))).toEqual([])
   })
 
 })
