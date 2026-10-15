@@ -50,7 +50,7 @@ import {
   ReadOnlyError,
   UndoHistoryDroppedError,
 } from './api/errors'
-import { runTx, type PowerSyncDb } from './internals/commitPipeline'
+import { runTx, type PowerSyncDb, type TxLockHooks } from './internals/commitPipeline'
 import { STRANDED_CLAIM_RECOVERY } from './internals/graphBackfillClaim'
 import { onSyncSettled } from './internals/firstSync'
 import { devAssertionsEnabled } from './internals/devAssertions'
@@ -252,6 +252,19 @@ const TX_LOG_CAPACITY = 64
  *  in practice — `repo.tx` only records under a pinned (non-null)
  *  workspace and `undo()`/`redo()` no-op when there's no active workspace. */
 const NO_ACTIVE_WORKSPACE = '__no_active_workspace__'
+
+/** The entry an undo/redo gesture saw at press time was gone once its replay
+ *  held the write lock: another gesture took it, or the history was cleared.
+ *  The gesture answers false; the replay transaction rolls back rather than
+ *  committing an audit row for a replay that never ran. */
+class NothingToReplay extends Error {}
+
+/** What `repo.tx` and `_replay` pass `runTx` beyond the public tx options. */
+interface RunAndDispatchInternals {
+  /** An undo/redo replay — see `RunTxParams.isReplay`. */
+  isReplay?: boolean
+  lockHooks?: TxLockHooks
+}
 
 /** Max `ctx.run` composition depth before we assume a cycle (a query
  *  composing itself, directly or transitively). Composition chains are
@@ -1784,22 +1797,20 @@ export class Repo {
     opts: RepoTxOptions,
   ): Promise<R> {
     // Sampled once this transaction HOLDS the write lock — not when it was
-    // called — and compared at record time below.
+    // called — and compared when the entry is recorded, still under that lock.
     //
-    // What it protects against: a transaction can commit and release the lock
-    // ahead of a one-way pass's chunk and only reach its recording
-    // continuation after that chunk has written and cleared. The clear cannot
-    // reach an entry that does not exist yet, and neither can the epoch move
-    // that opened the drop, so the entry would land on the stack holding the
-    // whole PRE-pass row.
+    // What it protects against: a LOCKLESS history drop (the props-as-blocks
+    // flip is a server round trip) beginning or finishing while this
+    // transaction holds the lock. Its `before` rows were read before the pass's
+    // writes land, and the drop's end may already have emptied the stacks this
+    // entry is about to join. A pass that drops under the write lock cannot
+    // land in this window at all: recording happens before this transaction
+    // releases the lock.
     //
-    // Why inside the lock: the same two can be ordered the other way, with the
-    // edit merely INVOKED while a chunk holds the lock and executing after it
-    // commits. Sampled at call time, that edit reads the pre-clear epoch and is
-    // discarded although its `before` rows are the rewritten ones and it is
-    // perfectly safe to undo. Inside the lock, the sample is taken at the same
-    // moment as the rows the entry describes, which is what makes the two
-    // comparable at all.
+    // Why inside the lock: an edit merely INVOKED while a pass's chunk holds
+    // the lock executes after that chunk commits, so its `before` rows are the
+    // rewritten ones and it is perfectly safe to undo. Sampled at call time, it
+    // would read the pre-drop epoch and be discarded.
     /** Epoch per manager, EARLIEST sample kept — see the two calls below. */
     const epochAtLock = new Map<UndoManager, number>()
     const sampleEpoch = (manager: UndoManager): void => {
@@ -1834,41 +1845,46 @@ export class Repo {
           sampleEpoch(this.undoManagerFor(tx.meta.workspaceId))
         }
         return value
-      }, opts)
-    // Step 7 of the §10 pipeline — record undo entry into the tx's pinned
-    // workspace's manager, so a later cmd-Z only ever acts on entries from
-    // the workspace the user is looking at (issue #186). Non-undoable
-    // scopes are filtered inside `record`; zero-write txs have no pinned
-    // workspace (null) and nothing to undo, so skip them here. Replays go
-    // through `_replay`, not here, so they don't add new history.
-    if (result.workspaceId !== null && !opts.skipUndo) {
-      const manager = this.undoManagerFor(result.workspaceId)
-      // Dropped rather than recorded: a pass cleared this workspace's history
-      // while this transaction was in flight, so its `before` rows are the ones
-      // that pass has since rewritten. Replaying them would revert its writes
-      // with its completion already recorded, which is the same loss the clear
-      // itself exists to prevent.
-      //
-      // A missing sample reads as a mismatch and drops the entry: defence in
-      // depth, since a tx that pinned a workspace was always sampled for it.
-      if (epochAtLock.get(manager) === manager.clearEpoch) manager.record({
-        scope: opts.scope,
-        txId: result.txId,
-        snapshots: result.snapshots,
-        description: opts.description,
-        // Group token (issue #306): entries sharing it merge at record
-        // time while the previous one is still top-of-stack, so a
-        // multi-tx composite reverts with one cmd-Z.
-        groupId: opts.groupId,
-      })
-    }
+      }, opts, {lockHooks: {
+        // Step 7 of the §10 pipeline — record the undo entry into the tx's
+        // pinned workspace's manager, so a later cmd-Z only ever acts on
+        // entries from the workspace the user is looking at (issue #186).
+        // Under the write lock, so entries land in commit order — see
+        // `TxLockHooks`. Non-undoable scopes are filtered inside `record`;
+        // zero-write txs have no pinned workspace (null) and nothing to undo.
+        // Replays go through `_replay`, not here, so they add no history.
+        beforeCommit: ({txId, workspaceId, snapshots}) => {
+          if (workspaceId === null || opts.skipUndo) return
+          const manager = this.undoManagerFor(workspaceId)
+          // Dropped rather than recorded: a pass dropped this workspace's
+          // history while this transaction held the lock, so its `before` rows
+          // predate that pass's writes. Replaying them would revert the pass
+          // with its completion already recorded, which is the same loss the
+          // drop itself exists to prevent.
+          //
+          // A missing sample reads as a mismatch and drops the entry: defence in
+          // depth, since a tx that pinned a workspace was always sampled for it.
+          if (epochAtLock.get(manager) !== manager.clearEpoch) return
+          manager.record({
+            scope: opts.scope,
+            txId,
+            snapshots,
+            description: opts.description,
+            // Group token (issue #306): entries sharing it merge at record
+            // time while the previous one is still top-of-stack, so a
+            // multi-tx composite reverts with one cmd-Z.
+            groupId: opts.groupId,
+          })
+        },
+      }})
     return result.value
   }
 
   /** Undo the most recent committed `repo.tx` for `scope` *in the active
    *  workspace*. Default scope is `BlockDefault` (the cmd-Z target).
    *  Resolves to true if an entry was popped + replayed, false if there
-   *  is no active workspace or its manager has no entry for `scope`.
+   *  is no active workspace or its manager has no entry for `scope` once
+   *  the replay holds the write lock.
    *
    *  Undo is per-workspace (issue #186): each workspace has its own
    *  `UndoManager`, and we operate on the active one — so a workspace
@@ -1891,7 +1907,7 @@ export class Repo {
    *  (Known pre-existing limitation: `isReadOnly` is updated by an async
    *  App effect, so it can briefly lag a just-switched-to workspace; a
    *  cmd-Z in that window may transiently `ReadOnlyError`, but the entry
-   *  is pushed back so a retry once the flag settles succeeds — see
+   *  never left its stack, so a retry once the flag settles succeeds — see
    *  issue #226.) */
   async undo(scope: ChangeScope = ChangeScope.BlockDefault): Promise<boolean> {
     return this.replayGesture('undo', scope)
@@ -1904,77 +1920,29 @@ export class Repo {
     return this.replayGesture('redo', scope)
   }
 
-  /** The body of {@link undo} and {@link redo}, which are mirror images: pop
-   *  from one stack, replay it, push it onto the other — and on failure put it
-   *  back where it came from.
-   *
-   *  One owner because every rule here is symmetric, and the asymmetry that
-   *  used to exist between the two copies was an omission rather than a
-   *  decision: only `undo` documented why it pushes a failed entry back. */
+  /** The body of {@link undo} and {@link redo}, which are mirror images: take
+   *  the top entry, replay it, move it onto the other stack — and on failure put
+   *  it back where it came from. The stack motion lives in {@link _replay},
+   *  under the write lock; this only answers the user. */
   private async replayGesture(
     action: 'undo' | 'redo',
     scope: ChangeScope,
   ): Promise<boolean> {
     if (this.client.activeWorkspaceId === null) return false
+    // Captured now so a workspace switch mid-replay cannot redirect the stack
+    // motion to another workspace's manager (#186).
     const manager = this.undoManager
-    // Sampled before the entry leaves the stack, so the whole gesture — pop,
-    // replay and push alike — sits inside the window this validates. A bare
-    // `clear()` moves it, and so does BEGINNING a `HistoryDrop`, which is how a
-    // replay queued behind a pass is refused before its stack is ever dropped.
-    // None of them can happen across the pop itself, so this is the same value
-    // either side.
-    // A drop is UNDER WAY: its pass's writes are landing right now and the
-    // stacks still hold entries from before them, so replaying one restores
-    // rows the pass is in the middle of replacing. The epoch cannot express
-    // this — it marks an instant, so a gesture STARTING mid-drop samples the
-    // already-moved value and passes every check. For the lockless flip that
-    // window is a server round trip wide.
-    //
-    // Refused rather than queued: the gesture is the user's, and answering
-    // "nothing happened" immediately is better than a cmd-Z that silently
-    // applies a minute later against rows it no longer describes.
-    if (manager.historyDropInProgress) return false
-    const clearEpoch = manager.clearEpoch
-    const opposite = action === 'undo' ? 'redo' : 'undo'
-    const entry = action === 'undo' ? manager.popUndo(scope) : manager.popRedo(scope)
-    if (entry === null) return false
-    /** Put `entry` on a stack — unless the history was DROPPED while this
-     *  gesture was in flight.
-     *
-     *  Both pushes go through here, the success one onto the opposite stack and
-     *  the failure one back onto the stack it came from, because the hazard is
-     *  the same for either: the database can hand the write lock to a pass's
-     *  chunk while `_replay` is still resolving, so a clear can land between the
-     *  replay and this line. Pushing then REPOPULATES history the clear had just
-     *  emptied, with an entry describing a pre-pass row — and the next gesture
-     *  samples the new epoch, passes, and replays it over the pass's committed
-     *  writes. Dropping that entry is the whole point of the clear. */
-    const push = (onto: 'undo' | 'redo'): void => {
-      if (manager.clearEpoch !== clearEpoch) return
-      if (onto === 'undo') manager.pushUndo(scope, entry)
-      else manager.pushRedo(scope, entry)
-    }
+    // Empty at press time: answered without queuing for the write lock. Not
+    // the decision itself — the stack can still change before the lock is
+    // held, and `_replay` asks again there.
+    const top = action === 'undo' ? manager.peekUndo(scope) : manager.peekRedo(scope)
+    if (top === null) return false
     try {
-      await this._replay(entry, action, {manager, clearEpoch})
+      await this._replay(manager, action, scope)
     } catch (err) {
-      if (err instanceof UndoHistoryDroppedError) return false
-      // Replay failed — push the entry back so the user can retry
-      // (e.g. after toggling read-only off, fixing a missing parent).
-      // Known narrow hazard (pre-existing, issue #226 window): if a new
-      // tx recorded during the failed replay's await, this pushback
-      // lands the entry ABOVE it — chronologically inverted. With
-      // grouping the inversion additionally makes a same-group tx merge
-      // into the pushed-back entry rather than the newer one. We keep
-      // the groupId on pushback anyway: stripping it would break the
-      // legitimate retry path (RescheduleToast re-matches the restored
-      // entry by groupId once read-only clears), which is a far more
-      // common sequence than a mid-replay same-group commit.
-      push(action)
+      if (err instanceof UndoHistoryDroppedError || err instanceof NothingToReplay) return false
       throw err
     }
-    // True even when the push above was refused: the replay COMMITTED, so the
-    // gesture did what the user asked. All that is withheld is the inverse.
-    push(opposite)
     return true
   }
 
@@ -2121,11 +2089,11 @@ export class Repo {
   private async _runAndDispatch<R>(
     fn: (tx: Tx) => Promise<R>,
     opts: RepoTxOptions,
-    isReplay = false,
+    internal: RunAndDispatchInternals = {},
   ) {
     this.requestedWrites++
     try {
-      return await this._runAndDispatchInner(fn, opts, isReplay)
+      return await this._runAndDispatchInner(fn, opts, internal)
     } finally {
       this.requestedWrites--
     }
@@ -2134,7 +2102,7 @@ export class Repo {
   private async _runAndDispatchInner<R>(
     fn: (tx: Tx) => Promise<R>,
     opts: RepoTxOptions,
-    isReplay = false,
+    {isReplay = false, lockHooks}: RunAndDispatchInternals,
   ) {
     const txT0 = performance.now()
     let result
@@ -2226,6 +2194,7 @@ export class Repo {
         // value-deriving processor can't override `applyRaw`'s exact
         // restore (#187). Post-commit processors still dispatch below.
         isReplay,
+        lockHooks,
       })
     } catch (err) {
       const collision = parseAliasCollisionError(err)
@@ -2246,7 +2215,7 @@ export class Repo {
     // 'reproject ref-typed properties after schema swap', mutator names).
     // Cheaper than recording every tx; only the high-water mark wins.
     const txMs = performance.now() - txT0
-    const description = opts.description ?? null
+    const description = result.description ?? null
     if (txMs > this.slowestTx.ms) {
       this.slowestTx = {description, ms: txMs}
     }
@@ -2313,37 +2282,57 @@ export class Repo {
     return result
   }
 
-  /** Replay an undo / redo entry. Opens a tx in the entry's scope and
-   *  raw-applies each (id → snap.before) (undo) or (id → snap.after)
-   *  (redo) via the engine-internal `applyRaw` primitive. Replays do
-   *  NOT push themselves onto the undo stack — the caller manages
-   *  stack motion (manager.pushRedo / manager.pushUndo) so the same
-   *  entry shuttles symmetrically between stacks. */
+  /** Take the top entry of `action`'s stack, replay it, and move it onto the
+   *  other stack — every step of it inside one transaction, under the write
+   *  lock. Replays raw-apply each (id → snap.before) (undo) or (id →
+   *  snap.after) (redo) via the engine-internal `applyRaw` primitive and do
+   *  NOT record themselves: the same entry shuttles between the stacks.
+   *
+   *  Under the lock because `repo.tx` records there too, so the stacks change
+   *  in exactly the order the database commits (#227). Taken any earlier, the
+   *  entry can be one a transaction queued ahead of this replay has already
+   *  committed over, and the replay writes its stale snapshot across that
+   *  commit. Moved any later, a transaction committing in between records
+   *  first and the stacks invert: an entry lands on redo after a newer action,
+   *  or on undo above one. A failed replay puts its entry back from inside the
+   *  lock for the same reason, so a retry finds it exactly where it was —
+   *  which is what lets `RescheduleToast` re-match it by `groupId`.
+   *
+   *  Throws {@link NothingToReplay} when the stack is empty by the time the
+   *  lock is held, and `UndoHistoryDroppedError` when the workspace's history
+   *  is being or was dropped (see the checks below). */
   private async _replay(
-    entry: UndoEntry,
+    manager: UndoManager,
     action: 'undo' | 'redo',
-    /** Checked INSIDE the replay transaction, once the write lock is held.
-     *
-     *  `undo`/`redo` take the entry OFF its stack and then await this, so a
-     *  pass that drops the workspace's history in that window cannot reach the
-     *  entry any more — `clear()` only empties the manager. Left unchecked, the
-     *  replay lands after the pass's commit and restores the pre-pass state of
-     *  a row the pass has already recorded as done.
-     *
-     *  Inside the transaction rather than before it: `repo.tx` serialises on
-     *  the write lock, so a check taken before acquiring it is exactly the one
-     *  the pass's chunk can commit behind. */
-    invalidation: {manager: UndoManager; clearEpoch: number},
+    scope: ChangeScope,
   ): Promise<void> {
     const direction = action === 'undo' ? 'before' : 'after'
-    const description = entry.description
-      ? `${action}: ${entry.description}`
-      : action
+    const put = (onto: 'undo' | 'redo', entry: UndoEntry): void => {
+      if (onto === 'undo') manager.pushUndo(scope, entry)
+      else manager.pushRedo(scope, entry)
+    }
+    let entry: UndoEntry | null = null
+    let clearEpoch = 0
     await this._runAndDispatch(async (tx) => {
-      if (invalidation.manager.clearEpoch !== invalidation.clearEpoch) {
-        throw new UndoHistoryDroppedError(action)
-      }
+      // A drop is UNDER WAY: its pass's writes are landing and the stacks
+      // still hold entries from before them, so replaying one restores rows
+      // the pass is in the middle of replacing. The epoch cannot say this —
+      // it marks an instant, and a replay that starts mid-drop samples the
+      // already-moved value. Refused rather than deferred until the drop
+      // ends: answering "nothing happened" beats a cmd-Z that applies a
+      // minute later against rows it no longer describes.
+      //
+      // A drop that already ENDED emptied the stacks, so the pop below finds
+      // nothing it predates.
+      if (manager.historyDropInProgress) throw new UndoHistoryDroppedError(action)
+      clearEpoch = manager.clearEpoch
+      entry = action === 'undo' ? manager.popUndo(scope) : manager.popRedo(scope)
+      if (entry === null) throw new NothingToReplay()
+      const replaying = entry
       const txImpl = tx as TxImpl
+      if (replaying.description) {
+        txImpl.meta.description = `${action}: ${replaying.description}`
+      }
       // Start from replayApplicationOrder's topological order (see its
       // docblock in txSnapshots.ts for the parent-before-child
       // rationale), then worklist-retry rows a row-level trigger
@@ -2357,7 +2346,7 @@ export class Repo {
       // every constraint-blocked row eventually unblocks — a full pass
       // with zero progress means the entry itself is inconsistent, and
       // we rethrow.
-      let pending = replayApplicationOrder(entry.snapshots, direction)
+      let pending = replayApplicationOrder(replaying.snapshots, direction)
       while (pending.length > 0) {
         const deferred: typeof pending = []
         let lastError: unknown = null
@@ -2376,30 +2365,29 @@ export class Repo {
         if (deferred.length === pending.length) throw lastError
         pending = deferred
       }
-      // AGAIN, before this transaction commits. The check on entry cannot cover
-      // the loop above, which awaits once per row: a pass that begins its drop
-      // WITHOUT holding the write lock — the props-as-blocks flip is a server
-      // round trip — moves the epoch while this replay is mid-flight, and the
-      // entry check has already passed. Its `finish` can then only suppress the
-      // push; it cannot take back rows this transaction has written. Throwing
-      // here rolls them back instead, which is the only thing that actually
-      // abandons the replay.
-      //
-      // An IN-LOCK pass cannot move the epoch inside this window — it would
-      // need the lock this replay is holding — so this arm is reachable only
-      // from a lockless drop or a bare `clear()`, and abandoning is right for
-      // both.
-      //
-      // ACCEPTED RESIDUAL, same one the backfill's exit check records: this is
-      // the end of the replay's callback, not the commit boundary, and `runTx`
-      // awaits two more statements after it. A lockless drop landing in THOSE
-      // still commits the replay. Closing it needs a pre-commit hook in the
-      // pipeline rather than another check here — each one only moves the gap a
-      // few awaits along.
-      if (invalidation.manager.clearEpoch !== invalidation.clearEpoch) {
-        throw new UndoHistoryDroppedError(action)
-      }
-    }, {scope: entry.scope, description}, true)
+    }, {scope, description: action}, {isReplay: true, lockHooks: {
+      beforeCommit: () => {
+        // The history was dropped while this replay held the lock — only a
+        // LOCKLESS pass or a bare `clear()` can do that, since an in-lock pass
+        // needs the lock this replay is holding. The pop above was valid when
+        // it ran, but the rows it restores predate that pass's writes, so the
+        // replay is rolled back rather than committed over them.
+        //
+        // As late as the pipeline allows: the apply loop awaits once per row,
+        // and so do the audit and context writes after it. What is left is the
+        // COMMIT statement itself — see `TxLockHooks.beforeCommit`.
+        if (manager.clearEpoch !== clearEpoch) throw new UndoHistoryDroppedError(action)
+        put(action === 'undo' ? 'redo' : 'undo', entry!)
+      },
+      aborted: () => {
+        // Back where it came from, so a retry (read-only cleared, a missing
+        // parent restored) finds it. Unless the history was dropped meanwhile:
+        // pushing then REPOPULATES a history the drop just emptied with an
+        // entry describing a pre-pass row, and the next gesture replays it over
+        // the pass's writes.
+        if (entry !== null && manager.clearEpoch === clearEpoch) put(action, entry)
+      },
+    }})
   }
 
   /** Dynamic dispatch — used by runtime-loaded plugins where the
