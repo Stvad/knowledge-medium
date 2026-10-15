@@ -207,10 +207,10 @@ export interface Tx {
    *  into the row's `properties` map, and writes through immediately.
    *  The updater overload runs inside this serialized tx after identity is
    *  accepted and receives `undefined` (not `defaultValue`) when absent.
-   *  In a child-backed workspace the field/value children converge to the
-   *  value even when the cell already holds it — that only skips the bag
-   *  write. Bypassing codecs (raw `properties` writes) goes through
-   *  `tx.update`. */
+   *  In a child-backed workspace a live owner's field/value children
+   *  converge to the value even when the cell already holds it — that only
+   *  skips the bag write. Bypassing codecs (raw `properties` writes) goes
+   *  through `tx.update`. */
   setProperty<T>(
     id: string,
     schema: PropertySchema<T>,
