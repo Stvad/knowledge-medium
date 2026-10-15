@@ -1951,6 +1951,26 @@ describe('revival re-materializes property children (#778)', () => {
     expect(ancestors.map(a => a.deleted)).toEqual([0, 0, 0])
   })
 
+  it('brings back the properties of a value row it revives, not just the value row', async () => {
+    // §9 flat recognition: a value row can own properties of its own. The
+    // revival restores the value row WITH its bag, so the value row is a
+    // revived row too — and its own field rows must come back, or its cell
+    // claims a property no child backs (the #778 shape, one level down).
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    const [field] = await liveFieldRows('p')
+    const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+    await repo.tx(tx => tx.setProperty(value!.id, statusSchema, 'nested'),
+      {scope: ChangeScope.BlockDefault})
+    const [nestedField] = await liveFieldRows(value!.id)
+
+    await deleteAndRestore(repo)
+
+    expect(await cellValue(value!.id)).toBe('nested')
+    expect((await liveFieldRows(value!.id)).map(row => row.id)).toEqual([nestedField!.id])
+    expect(await liveValueContents(value!.id)).toEqual(['nested'])
+  })
+
   it('drops a cell that moved while the row was dead, and re-projects from the child', async () => {
     // The mirror image of the test above, and the reason it is settled the same
     // way: an unobserved cell write and an unobserved child arrival reach the

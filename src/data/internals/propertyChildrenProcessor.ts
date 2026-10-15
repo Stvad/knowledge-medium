@@ -32,8 +32,10 @@
  * raw bag write that removes the same key nets to "no cell change" for
  * MATERIALIZE (net-diff semantics), so the dual-write's children survive
  * and PROJECT restores the key over the raw writer's final bag — mixed
- * setProperty+raw shapes in one tx are order-blind. Split the writes across
- * txs for last-write-wins semantics.
+ * setProperty+raw shapes in one tx are order-blind. The same net diff makes
+ * a cell write that changes a key beat a LATER same-tx edit of that key's
+ * value child: MATERIALIZE re-reconciles the children from the final cell.
+ * Split the writes across txs for last-write-wins semantics.
  *
  * Also load-bearing (§5): a cell key with NO child rows at all is pending
  * materialization for the projection direction — reprojection only rebuilds
@@ -401,16 +403,18 @@ export interface MaterializeOptions {
 
 /** Restore the tombstoned field row backing `fieldId`, together with its value
  *  children — so a revived property keeps its row identity instead of being
- *  replaced by a fresh mint. Returns whether anything came back.
+ *  replaced by a fresh mint. Returns the ids it restored — none when nothing
+ *  came back.
  *
  *  One level down and no further: the field row and its value. Everything
- *  BELOW that stays tombstoned — a comment thread under the value (ordinary
- *  user content, like any other descendant of a restored block) and, under §9
- *  flat recognition, the value's own nested field rows if it carries properties
- *  of its own. What all of it must stop being is STRANDED: minting left it
- *  under a tombstoned value child nothing would ever revive, so no path could
- *  reach it again. Reviving the two rows above it restores the chain, which is
- *  the difference between "still deleted" and "gone".
+ *  BELOW that stays tombstoned — a comment thread under the value is ordinary
+ *  user content, like any other descendant of a restored block. What it must
+ *  stop being is STRANDED: minting left it under a tombstoned value child
+ *  nothing would ever revive, so no path could reach it again. Reviving the
+ *  two rows above it restores the chain, which is the difference between
+ *  "still deleted" and "gone". The rows it restores are returned because each
+ *  came back with its BAG, which makes it a revived row in its own right — see
+ *  {@link rematerializeRevivedRow}.
  *
  *  A MULTI-VALUED property restores NO member row, by an explicit gate rather
  *  than by the count failing to match — see the gate for the case where it
@@ -434,10 +438,10 @@ const reviveTombstonedFieldRow = async (
   tx: Tx,
   schema: AnyPropertySchema & {readonly fieldId: string},
   tombstones: readonly BlockData[],
-): Promise<boolean> => {
+): Promise<string[]> => {
   const fieldId = schema.fieldId
   const matching = tombstones.filter(t => getPropertyFieldTargetId(t) === fieldId)
-  if (matching.length !== 1) return false
+  if (matching.length !== 1) return []
   const fieldRow = matching[0]!
   // Bit-filtered per §9: a marked child is the field row's OWN machinery, never
   // one of its values.
@@ -450,7 +454,7 @@ const reviveTombstonedFieldRow = async (
   // This is also the ambiguity rule's live half — nothing live may hold the
   // slot — but the POSITION is what makes it a refusal rather than a repair.
   const liveValues = (await tx.childrenOf(fieldRow.id, undefined)).filter(isValue)
-  if (liveValues.length > 0) return false
+  if (liveValues.length > 0) return []
 
   await tx.restore(fieldRow.id)
   // The tombstone half, SINGLE-VALUED ONLY: exactly one offers to fill the
@@ -463,10 +467,34 @@ const reviveTombstonedFieldRow = async (
   // deletion, and `additive` then forbids the reconciler from undoing the
   // resurrection. So the branch is, for a list, only ever a way to bring a
   // reaped member back.
-  if (memberCodecOf(schema.codec) !== undefined) return true
+  if (memberCodecOf(schema.codec) !== undefined) return [fieldRow.id]
   const values = (await tx.deletedChildrenOf(fieldRow.id)).filter(isValue)
-  if (values.length === 1) await tx.restore(values[0]!.id)
-  return true
+  if (values.length !== 1) return [fieldRow.id]
+  await tx.restore(values[0]!.id)
+  return [fieldRow.id, values[0]!.id]
+}
+
+/** Revival's policy for a name THIS TX DID NOT WRITE: it may only add rows,
+ *  a value it cannot carry is left as found, and a tombstoned field row comes
+ *  back rather than being replaced. See the three options' own docs. */
+const REVIVE_UNTOUCHED: MaterializeOptions = {undecodable: 'skip', reviveTombstoned: true, additive: true}
+
+/** Re-materialize the whole bag of a row {@link reviveTombstonedFieldRow}
+ *  restored. Under §9 flat recognition a field row or a value row owns
+ *  properties like any block, and it came back with its bag — so it is a
+ *  revived row (#778) whose own field rows must come back too, or its cell
+ *  claims properties no child backs. The processor's revival branch never sees
+ *  it: the commit pipeline does not re-run a processor over its OWN writes. */
+const rematerializeRevivedRow = async (
+  tx: Tx,
+  id: string,
+  lookups: MaterializeLookups,
+): Promise<void> => {
+  const row = await tx.get(id)
+  if (row === null || row.deleted) return
+  await materializePropertyChildrenForExistingRow(
+    tx, row, lookups, Object.keys(row.properties), REVIVE_UNTOUCHED,
+  )
 }
 
 /** Find-or-create/update/delete the field+value children for `names` on
@@ -544,9 +572,11 @@ export const materializePropertyChildrenForExistingRow = async (
     let fieldRows = matchingChildren
     if (opts.reviveTombstoned && fieldRows.length === 0) {
       tombstones ??= await tx.tombstonedPropertyFieldRows(row.workspaceId, row.id)
-      if (await reviveTombstonedFieldRow(tx, schema, tombstones)) {
+      const revived = await reviveTombstonedFieldRow(tx, schema, tombstones)
+      if (revived.length > 0) {
         children = await tx.childrenOf(row.id, undefined)
         fieldRows = fieldRowsForSchema(children, schema.fieldId)
+        for (const id of revived) await rematerializeRevivedRow(tx, id, lookups)
       }
     }
 
@@ -604,10 +634,7 @@ const materializePropertiesForChangedRow = async (
   await materializePropertyChildrenForExistingRow(
     tx, row.after, lookups, changed, {reviveTombstoned: true},
   )
-  await materializePropertyChildrenForExistingRow(
-    tx, row.after, lookups, untouched,
-    {undecodable: 'skip', reviveTombstoned: true, additive: true},
-  )
+  await materializePropertyChildrenForExistingRow(tx, row.after, lookups, untouched, REVIVE_UNTOUCHED)
 }
 
 /** Why one cell value could not become children, in the one wording both
