@@ -357,17 +357,22 @@ const applyOp = async (u: Universe, op: Op): Promise<void> => {
  *  - `CycleError`: a move under its own descendant (`tx.move`'s cycle check);
  *  - `ParentDeletedError`: a create/move under a tombstone;
  *  - `NotDeletedError`: restoring a live row;
- *  - the definition-change processor's two refusals: a preset change it cannot
- *    fan out because the old or new value type does not build, and a change
- *    to a definition whose name is contested
- *    (`propertyDefinitionChangeProcessor.ts`, `REFUSALS`).
+ *  - the definition-change processor's refusals
+ *    (`propertyDefinitionChangeProcessor.ts`): a re-type it cannot fan out
+ *    because the old or new value type does not build, a change to a
+ *    definition whose name is contested (both in `REFUSALS`), and a re-type
+ *    that would lose a stored value — a field row's value child that the new
+ *    type cannot hold.
  *  Anything else is a bug. A peer write is never rejected — sync applies it. */
+const LEGAL_DEFINITION_CHANGE_REFUSALS = new Set([
+  'property.definition-change.unbuildable',
+  'property.definition-change.contested',
+  'property.definition-change.unconvertible',
+])
+
 const assertLegalRejection = (e: unknown, op: Op): void => {
   if (e instanceof CycleError || e instanceof ParentDeletedError || e instanceof NotDeletedError) return
-  if (e instanceof ProcessorRejection && (
-    e.code === 'property.definition-change.unbuildable'
-    || e.code === 'property.definition-change.contested'
-  )) return
+  if (e instanceof ProcessorRejection && LEGAL_DEFINITION_CHANGE_REFUSALS.has(e.code)) return
   throw new Error(`illegal error from ${JSON.stringify(op)}: ${String(e)}`, {cause: e})
 }
 
