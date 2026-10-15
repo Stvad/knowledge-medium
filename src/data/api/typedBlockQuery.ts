@@ -98,7 +98,8 @@ export interface TypedBlockQuery {
    *  ancestor filters. */
   readonly match?: readonly BlockPredicate[]
   /** NORed predicates: a block matches iff none of these match. Same
-   *  predicate shape as `match`. */
+   *  predicate shape as `match`. A predicate with no `id`, `referencedBy` or
+   *  `where` entry is dropped here as in `match`, so it excludes nothing. */
   readonly exclude?: readonly BlockPredicate[]
   /** Result ordering. Default `created-asc`. Backlinks panels use
    *  `created-desc` to put newest sources first. */

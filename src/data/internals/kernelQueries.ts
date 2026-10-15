@@ -51,6 +51,7 @@ import {
   isSelectiveWhereValue,
   normalizeTypedBlockQuery,
   inlineJsonPath,
+  refListMembersSql,
 } from './typedBlockQuery'
 import {
   KERNEL_ALIASES_CHANNEL,
@@ -1145,11 +1146,9 @@ const targetLivenessArms = (
         `  WHERE ${extract} IS NOT NULL`,
       )
     } else if (kind === 'refList') {
-      // Same fan-out the predicate uses; `json_each` over a NULL/absent value
-      // yields no rows, which is why it needs no null guard there or here.
       arms.push(
         `SELECT DISTINCT '${TARGET_DEP_KIND}', je.value\n` +
-        `  FROM walk JOIN blocks b ON b.id = walk.anc_id, json_each(${extract}) je`,
+        `  FROM walk JOIN blocks b ON b.id = walk.anc_id, ${refListMembersSql('b', name)} je`,
       )
     }
   }

@@ -65,7 +65,12 @@ const reviewerProp = seedProperty({
   preset: 'ref', defaultValue: '', changeScope: ChangeScope.BlockDefault,
 })
 
-const queryProps = [statusProp, doneProp, priorityProp, dueProp, weirdNameProp, labelsProp, reviewerProp]
+const reviewersProp = seedProperty({
+  seedKey: 'test/property/reviewers', revision: 1, name: 'reviewers',
+  preset: 'refList', defaultValue: [], changeScope: ChangeScope.BlockDefault,
+})
+
+const queryProps = [statusProp, doneProp, priorityProp, dueProp, weirdNameProp, labelsProp, reviewerProp, reviewersProp]
 
 interface Harness {
   h: TestDb
@@ -466,6 +471,59 @@ describe('repo.queryBlocks', () => {
         channel: TYPED_BLOCKS_STRUCTURE_CHANNEL,
         key: typedBlocksStructureKey(WS, 'live-target'),
       })
+    })
+
+    it('target does not resolve to a live block in another workspace', async () => {
+      // Reference resolution and the target deps that wake a handle are both
+      // workspace-scoped, so a ref naming another workspace's block is
+      // dangling here — on the ref and the refList branch alike.
+      await create({id: 'foreign-target', workspaceId: OTHER_WS, properties: {status: 'done'}})
+      await create({id: 'local-target', properties: {status: 'done'}})
+      await create({
+        id: 'via-ref',
+        properties: {[reviewerProp.name]: reviewerProp.codec.encode('foreign-target')},
+      })
+      await create({
+        id: 'via-ref-list',
+        properties: {[reviewersProp.name]: reviewersProp.codec.encode(['foreign-target'])},
+      })
+      await create({
+        id: 'via-ref-list-mixed',
+        properties: {[reviewersProp.name]: reviewersProp.codec.encode(['foreign-target', 'local-target'])},
+      })
+
+      for (const inner of [{}, {status: 'done'}]) {
+        expect(ids(await env.repo.queryBlocks({workspaceId: WS,
+          where: {[reviewerProp.name]: {target: inner}},
+        }))).toEqual([])
+        expect(ids(await env.repo.queryBlocks({workspaceId: WS,
+          where: {[reviewersProp.name]: {target: inner}},
+        }))).toEqual(['via-ref-list-mixed'])
+      }
+    })
+
+    it('a refList cell that is not an array names no targets instead of failing the query', async () => {
+      // A ref → refList re-type leaves the old plain-string cells behind (an
+      // accepted residual of the definition-change processor). A bare
+      // `json_each` over one throws `malformed JSON`, failing every target
+      // query on the property — both the predicate and the ancestor-dep walk.
+      await create({id: 'live-target'})
+      await create({id: 'stale', properties: {[reviewersProp.name]: 'live-target'}})
+      await create({id: 'object-cell', properties: {[reviewersProp.name]: {a: 'live-target'}}})
+      await create({
+        id: 'current',
+        properties: {[reviewersProp.name]: reviewersProp.codec.encode(['live-target'])},
+      })
+      await create({id: 'entry-stale', parentId: 'stale', types: ['entry']})
+      await create({id: 'entry-current', parentId: 'current', types: ['entry']})
+
+      expect(ids(await env.repo.queryBlocks({workspaceId: WS,
+        where: {[reviewersProp.name]: {target: {}}},
+      }))).toEqual(['current'])
+      expect(ids(await env.repo.queryBlocks({workspaceId: WS,
+        types: ['entry'],
+        match: [{scope: 'ancestor', where: {[reviewersProp.name]: {target: {}}}}],
+      }))).toEqual(['entry-current'])
     })
 
     it('rejects the target operator on non-ref properties', async () => {
