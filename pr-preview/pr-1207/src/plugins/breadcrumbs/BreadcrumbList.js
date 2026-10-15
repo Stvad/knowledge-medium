@@ -1,1 +1,1 @@
-import{r_ as e}from"../../../chunks/app-CG37U0i0.js";export{e as BreadcrumbList};
+import{r_ as e}from"../../../chunks/app-BZTDjSwh.js";export{e as BreadcrumbList};
