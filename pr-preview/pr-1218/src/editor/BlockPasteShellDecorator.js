@@ -1,0 +1,1 @@
+import{mw as e,pw as t}from"../../chunks/app-8Qrycrpu.js";export{t as BlockPasteShellDecorator,e as blockPasteShellDecorator};

@@ -1,0 +1,1 @@
+import{BD as e,zD as t}from"../../chunks/app-8Qrycrpu.js";export{t as useIsMobile,e as usePointerCoarse};
