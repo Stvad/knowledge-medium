@@ -1423,6 +1423,63 @@ describe('claimants the batch itself adds or removes', () => {
 
     expect(await cell('p')).toEqual({retired: 'done'})
   })
+
+  /** An older `count` definition with no consumers, and a newer `status` that
+   *  has one. The registry ranks claimants of one name oldest first, so the
+   *  older definition arriving at `status` would become the one every `status`
+   *  cell is read and written through. */
+  const setupOlderUnusedPeer = async (): Promise<Repo> => {
+    await seedWorkspace('children')
+    const repo = makeRepo()
+    await createDefinition(repo, FIELD_PEER, 'count', 'number')
+    await awaitDefinition(repo, 'count', 'number')
+    await createDefinition(repo, FIELD_ID, 'status', 'string')
+    await awaitDefinition(repo, 'status', 'string')
+    await seedProperty(repo, 'p', 'status', 'done')
+    return repo
+  }
+
+  it('refuses renaming an UNUSED definition onto a name a used one holds', async () => {
+    const repo = await setupOlderUnusedPeer()
+
+    await expect(rename(repo, FIELD_PEER, 'status')).rejects.toMatchObject({
+      code: 'property.definition-change.shared-name',
+    })
+
+    expect((await cell(FIELD_PEER))[propertyNameProp.name]).toBe('count')
+    expect(await cell('p')).toEqual({status: 'done'})
+  })
+
+  it('refuses restoring a definition under a name a used one has taken since', async () => {
+    await seedWorkspace('children')
+    const repo = makeRepo()
+    await createDefinition(repo, FIELD_PEER, 'status', 'number')
+    await awaitDefinition(repo, 'status', 'number')
+    await repo.tx(tx => tx.delete(FIELD_PEER), {scope: ChangeScope.BlockDefault})
+    await createDefinition(repo, FIELD_ID, 'status', 'string')
+    await awaitDefinition(repo, 'status', 'string')
+    await seedProperty(repo, 'p', 'status', 'done')
+
+    await expect(repo.tx(tx => tx.restore(FIELD_PEER), {scope: ChangeScope.BlockDefault}))
+      .rejects.toMatchObject({code: 'property.definition-change.shared-name'})
+
+    expect(await isLive(FIELD_PEER)).toBe(false)
+    expect(await cell('p')).toEqual({status: 'done'})
+  })
+
+  it('still lets an unused definition share a name only unused definitions hold', async () => {
+    // No consumer on either side, so no cell is read through the wrong codec.
+    await seedWorkspace('children')
+    const repo = makeRepo()
+    await createDefinition(repo, FIELD_PEER, 'count', 'number')
+    await createDefinition(repo, FIELD_ID, 'status', 'string')
+    await awaitDefinition(repo, 'count', 'number')
+    await awaitDefinition(repo, 'status', 'string')
+
+    await rename(repo, FIELD_PEER, 'status')
+
+    expect((await cell(FIELD_PEER))[propertyNameProp.name]).toBe('status')
+  })
 })
 
 describe('names a SEED claims', () => {
