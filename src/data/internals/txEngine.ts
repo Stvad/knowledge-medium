@@ -978,15 +978,19 @@ export class TxImpl implements Tx {
       )
       : valueOrUpdater
     const encoded = resolvedSchema.codec.encode(value)
-    if (jsonValuesEqual(stored, encoded)) return
     // Dual-write (docs/properties-as-blocks-migration.html §5): in a flipped workspace every property write is
     // child-backed — the field/value children land in the SAME tx as the cell
     // so readers stay synchronous against the cell while the children are the
     // truth that crosses sync. Requires resolved identity (the fieldId names
     // the field row); a boot-window plain schema stays cell-only.
+    //
+    // Ahead of the no-op check, not behind it: the cell is derived, so a cell
+    // that already equals the value does not mean THIS definition's children
+    // back it (#1209). Equality only spares the bag write.
     if (isResolvedPropertySchema(resolvedSchema) && await this.isChildBackedRow(before)) {
       await this.writePropertyValueChild(before, resolvedSchema, encoded)
     }
+    if (jsonValuesEqual(stored, encoded)) return
     const properties = {...before.properties, [resolvedSchema.name]: encoded}
     await this.writePropertiesBag(id, before, properties, opts)
   }
@@ -1106,20 +1110,25 @@ export class TxImpl implements Tx {
       if (!unsetNames.has(schema.name)) properties[schema.name] = schema.codec.encode(value)
     }
     for (const name of unsetNames) delete properties[name]
-    if (jsonValuesEqual(before.properties, properties)) return // net no-op
-    // Eager child dual-write, symmetric with setProperty/unsetProperty: delete
-    // the field rows for unset keys first, then create/update for the sets that
-    // survive (a key in both lists was removed above, so skip its child write).
-    if (await this.isChildBackedRow(before)) {
-      for (const schema of unsets) {
-        if (isResolvedPropertySchema(schema)) await this.deletePropertyValueChildren(before, schema)
-      }
+    // Eager child dual-write, symmetric with setProperty/unsetProperty. The
+    // sets that survive (a key in both lists was removed above) converge even
+    // in a net no-op batch, for the reason setProperty states. Unsets stay
+    // behind the no-op check: removal is the destructive direction, and a
+    // no-op batch removed nothing the cell shows.
+    const childBacked = await this.isChildBackedRow(before)
+    if (childBacked) {
       for (const {schema} of sets) {
         if (!unsetNames.has(schema.name) && isResolvedPropertySchema(schema)) {
           // The bag above already holds this key's ENCODED value — encoding it
           // a second time here is both waste and a chance to disagree.
           await this.writePropertyValueChild(before, schema, properties[schema.name])
         }
+      }
+    }
+    if (jsonValuesEqual(before.properties, properties)) return // net no-op
+    if (childBacked) {
+      for (const schema of unsets) {
+        if (isResolvedPropertySchema(schema)) await this.deletePropertyValueChildren(before, schema)
       }
     }
     await this.writePropertiesBag(id, before, properties, opts)
