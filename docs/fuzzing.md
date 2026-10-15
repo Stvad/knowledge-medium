@@ -243,10 +243,11 @@ one.
   docblock before tightening it. A case aims most ops at one "hot"
   (owner, property) pair, and a multi-op tx crowds onto it; blind
   targets over 3 owners × 5 properties seldom met. The property asserts
-  over its own sample that every writer and oracle was reached. Two
-  composite shapes are asserted only in the deep tier, which the ~1s
-  smoke sample cannot reach: the order-blind carve-out, and a field row
-  already live at its owner's revival.
+  over its own sample that every writer and oracle was reached: on the
+  fixed smoke sample, or on any random one of 200+ cases (so a short
+  `FUZZ_RUNS` triage run reports only property failures). Two composite
+  shapes are asserted only from 2,000 cases: the order-blind carve-out,
+  and a field row already live at its owner's revival.
 - `src/utils/test/linkTargetAutocomplete.fuzz.test.ts` — the
   `searchSourcesFacet` merge point (`searchBlocksAcrossSources`): model
   differential against an independent group-then-fold reference over
@@ -587,6 +588,11 @@ its first deep minutes:
   - #1211: deleting and restoring a block in ONE tx is no revival to
     MATERIALIZE (its net change is live → live), while PROJECT sees its
     field rows die. Every property is silently unset.
+- Also raised in review and filed, though the suite cannot see it (cell
+  and children agree afterwards): #1212. A peer's property delete whose
+  owner-cell update lost last-writer-wins leaves a stale cell. A later
+  local delete and restore then revives the peer's tombstones, or mints
+  from the stale cell.
 
 ## Adding a suite
 

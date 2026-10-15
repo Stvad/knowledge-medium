@@ -1117,6 +1117,8 @@ const stats = {
   raw: new Map<string, number>(),
   /** Mid-sequence undo / redo steps that acted. */
   undoRedo: new Map<string, number>(),
+  /** Cases run — what the coverage assertions are sized by. */
+  cases: 0,
   committed: 0,
   rejected: 0,
   intentChecked: 0,
@@ -1132,7 +1134,7 @@ const bump = (counts: Map<string, number>, key: string): void => {
 }
 const resetStats = (): void => {
   for (const counts of [stats.applied, stats.skipped, stats.raw, stats.undoRedo]) counts.clear()
-  stats.committed = stats.rejected = stats.intentChecked = stats.orderBlind = 0
+  stats.cases = stats.committed = stats.rejected = stats.intentChecked = stats.orderBlind = 0
   stats.rematerialized = stats.dupObserved = stats.projectedPresent = stats.restoredKeysChecked = 0
   stats.liveFieldRowsAtRevival = 0
 }
@@ -1442,6 +1444,7 @@ const runBatch = async (
 }
 
 const runCase = async ({mode, txs}: {mode: Mode; txs: TxSpec[]}): Promise<void> => {
+  stats.cases++
   await resetTestDb(sharedDb.db)
   rawSeq = 0
   const repo = await seedWorkspace()
@@ -1510,8 +1513,14 @@ describe('properties-as-blocks dual representation under mixed writer sequences'
     // Non-vacuity (docs/fuzzing.md §8), over the sample the property just
     // ran: every op resolves against whatever rows exist when it runs, so a
     // generator drift that left, say, value-row edits nothing to target would
-    // keep the property green while testing nothing. A replay runs one case.
-    if (process.env.FUZZ_SEED || process.env.FUZZ_PATH) return
+    // keep the property green while testing nothing. Sized by the cases that
+    // actually ran: the fixed smoke sample reaches every common shape, and a
+    // random one has to be large enough that a writer it never reached is
+    // drift rather than chance — so a short replay or `FUZZ_RUNS` triage run
+    // reports only property failures.
+    const env = process.env
+    const smokeSample = !env.FUZZ_TIME_MS && !env.FUZZ_RUNS && !env.FUZZ_SEED && !env.FUZZ_PATH
+    if (!smokeSample && stats.cases < 200) return
     const summary = JSON.stringify(stats, (_, v: unknown) => v instanceof Map ? Object.fromEntries(v) : v)
     for (const op of LOCAL_OPS) {
       expect(stats.applied.get(op) ?? 0, `local op "${op}" committed — ${summary}`).toBeGreaterThan(0)
@@ -1528,10 +1537,10 @@ describe('properties-as-blocks dual representation under mixed writer sequences'
     expect(stats.projectedPresent, 'P compared a present value').toBeGreaterThan(0)
     expect(stats.dupObserved, 'D saw a duplicate field row').toBeGreaterThan(0)
     expect(stats.restoredKeysChecked, 'I checked a restored owner').toBeGreaterThan(0)
-    // Composite shapes several ops have to line up for: the smoke sample is
-    // sized for the ~1s gate budget and does not reach them; the deep tier's
-    // thousands of cases must.
-    if (!process.env.FUZZ_TIME_MS && !process.env.FUZZ_RUNS) return
+    // Composite shapes several ops have to line up for: neither the ~1s smoke
+    // sample nor a short deep slice reaches them reliably; thousands of cases
+    // must.
+    if (stats.cases < 2000) return
     expect(stats.orderBlind, 'I order-blind carve-out reached').toBeGreaterThan(0)
     expect(stats.liveFieldRowsAtRevival, 'I saw a field row live at its owner\'s revival').toBeGreaterThan(0)
   }, fuzzTestTimeout())
