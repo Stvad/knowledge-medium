@@ -34,8 +34,9 @@ export const clip = (text: string, max: number): Clipped => {
 
 /** {@link oneLine} then {@link clip}: the form every list row uses. Only a
  *  head of twice the budget is neutralized, so a multi-megabyte block costs
- *  what its line costs; the cut it reports counts the original characters
- *  left out (neutralizing can shift that by a few). */
+ *  what its line costs — a cost bound: the result is the same without it.
+ *  The cut it reports counts the original characters left out (neutralizing
+ *  can shift that by a few). */
 export const clipLine = (text: string, max: number): Clipped => {
   const head = text.length > max * 2 ? text.slice(0, charBoundary(text, max * 2)) : text
   const line = oneLine(head)

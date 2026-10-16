@@ -80,6 +80,8 @@ const formatValue = (value: unknown, budget: number): string => {
     if (!value.every(item => isScalar(item) || item instanceof Date)) return `[${value.length} items]`
     let joined = ''
     for (const [index, item] of value.entries()) {
+      // A cost bound (the line's own clip gives the same text): a huge first
+      // item is cut here rather than joined whole.
       const text = formatValue(item, budget)
       const part = `${index > 0 ? ', ' : ''}${text.length > budget ? `${text.slice(0, charBoundary(text, budget))}…` : text}`
       const marker = `, …+${value.length - index} more`
