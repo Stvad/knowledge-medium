@@ -1,0 +1,1 @@
+import{Sm as e,xm as t}from"../../../chunks/app-wP8IQr_K.js";export{t as attachmentObjectPath,e as authenticatedObjectUrl};
