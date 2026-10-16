@@ -1,1 +1,1 @@
-import{nT as e,rT as t}from"../../../chunks/app-Cm-mZejA.js";export{e as ExtensionPromptSurface,t as extensionPromptsExtension};
+import{nT as e,rT as t}from"../../../chunks/app-Bm_eG-DI.js";export{e as ExtensionPromptSurface,t as extensionPromptsExtension};

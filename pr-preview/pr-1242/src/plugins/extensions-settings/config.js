@@ -1,1 +1,1 @@
-import{cT as e,dT as t,lT as n,uT as r}from"../../../chunks/app-Cm-mZejA.js";export{e as extensionsOverridesPresetCore,n as extensionsOverridesProp,r as extensionsPrefsType,t as overridesCodec};
+import{cT as e,dT as t,lT as n,uT as r}from"../../../chunks/app-Bm_eG-DI.js";export{e as extensionsOverridesPresetCore,n as extensionsOverridesProp,r as extensionsPrefsType,t as overridesCodec};

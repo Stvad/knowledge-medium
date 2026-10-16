@@ -1,1 +1,1 @@
-import{AD as e,OD as t,kD as n}from"../../../chunks/app-Cm-mZejA.js";export{t as BlockTypeBlockRenderer,n as BlockTypeContentRenderer,e as writeBlockTypeLabel};
+import{AD as e,OD as t,kD as n}from"../../../chunks/app-Bm_eG-DI.js";export{t as BlockTypeBlockRenderer,n as BlockTypeContentRenderer,e as writeBlockTypeLabel};

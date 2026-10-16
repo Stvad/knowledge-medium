@@ -1,1 +1,1 @@
-import{vd as e,yd as t}from"../../../../chunks/app-Cm-mZejA.js";export{e as inlineBacklinkCountDecoratorContribution,t as inlineBacklinkExpansionFooterContribution};
+import{vd as e,yd as t}from"../../../../chunks/app-Bm_eG-DI.js";export{e as inlineBacklinkCountDecoratorContribution,t as inlineBacklinkExpansionFooterContribution};
