@@ -1,1 +1,0 @@
-import{VA as e}from"../../chunks/app-Eie5lU2N.js";export{e as buildPropertyPanelSections};

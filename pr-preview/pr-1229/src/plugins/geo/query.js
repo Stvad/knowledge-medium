@@ -1,1 +1,0 @@
-import{GL as e,KL as t}from"../../../chunks/app-Eie5lU2N.js";export{e as PLACES_UNDER_BLOCK_QUERY,t as placesUnderBlockQuery};
