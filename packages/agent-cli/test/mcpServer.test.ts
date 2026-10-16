@@ -75,6 +75,15 @@ describe('createGraphMcpServer', () => {
           return {id: command.id, deleted: true}
         case 'restore-block':
           return {id: command.id, content: 'restored'}
+        case 'append-markdown':
+          return {
+            target: {id: 'p', shortId: 'p', kind: 'block', created: false, content: 'Parent'},
+            blocks: [{id: 'n', shortId: 'n', parentId: 'p', depth: 0, content: 'note'}],
+          }
+        case 'edit-block':
+          return {id: command.id, content: 'edited'}
+        case 'create-page':
+          return {id: 'page', kind: 'page', created: true}
         default:
           throw new Error(`Unexpected command: ${command.type}`)
       }
@@ -95,13 +104,19 @@ describe('createGraphMcpServer', () => {
     await tools.move_block.handler({id: 'b', parentId: null, position: {kind: 'last'}}, {})
     await tools.delete_block.handler({id: 'b'}, {})
     await tools.restore_block.handler({id: 'b'}, {})
+    await tools.append_markdown.handler({target: 'today', markdown: '- note'}, {})
+    await tools.edit_block.handler({id: 'b', old: 'a', new: 'b'}, {})
+    await tools.create_page.handler({name: 'Inbox'}, {})
 
     expect(operations).toEqual([
       {type: 'create_block', parentId: 'p', content: 'hi', properties: {x: 1}},
-      {type: 'update_block', id: 'b', content: 'edited', properties: undefined},
+      {type: 'update_block', id: 'b', content: 'edited', properties: undefined, expectedContent: undefined},
       {type: 'move_block', id: 'b', parentId: null, position: {kind: 'last'}},
       {type: 'delete_block', id: 'b'},
       {type: 'restore_block', id: 'b'},
+      {type: 'append_markdown', target: 'today', markdown: '- note', position: undefined, shape: undefined},
+      {type: 'edit_block', id: 'b', old: 'a', new: 'b'},
+      {type: 'create_page', name: 'Inbox', date: undefined},
     ])
     expect(commands.map(command => command.type)).toEqual([
       'create-block',
@@ -109,6 +124,9 @@ describe('createGraphMcpServer', () => {
       'move-block',
       'delete-block',
       'restore-block',
+      'append-markdown',
+      'edit-block',
+      'create-page',
     ])
   })
 
@@ -129,5 +147,28 @@ describe('createGraphMcpServer', () => {
     await expect(tools.update_block.handler({id: 'b', content: 'edited'}, {}))
       .rejects.toThrow('blocked by caller policy')
     expect(runCommand).not.toHaveBeenCalled()
+  })
+})
+
+describe('recent_changes', () => {
+  it('defaults to what changed since this MCP session started', async () => {
+    const commands: KnownCommand[] = []
+    const before = Date.now()
+    const server = createGraphMcpServer({
+      client: clientFrom(async command => {
+        commands.push(command)
+        return {txs: []}
+      }),
+      serverOptions: {capabilities: {tools: {}}},
+    })
+    const tools = (server as unknown as RegisteredToolHarness)._registeredTools
+
+    await tools.recent_changes.handler({}, {})
+    await tools.recent_changes.handler({since: 0}, {})
+
+    const [sessionDefault, explicit] = commands as Array<{since?: number}>
+    expect(sessionDefault.since).toBeGreaterThanOrEqual(before)
+    expect(sessionDefault.since).toBeLessThanOrEqual(Date.now())
+    expect(explicit.since).toBe(0)
   })
 })

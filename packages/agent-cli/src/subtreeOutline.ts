@@ -85,7 +85,7 @@ const CONTROL_CHAR_RUN_REGEX = /[\u0000-\u0008\u000a-\u001f\u007f-\u009f\u2028\u
  *  single marker is an acceptable way to guarantee one block renders as
  *  exactly one line with no reordering. `id` must round-trip instead and
  *  does NOT go through this — see `encodeOutlineId`. */
-const neutralizeOutlineField = (text: string): string =>
+export const neutralizeOutlineField = (text: string): string =>
   text.replace(CONTROL_CHAR_RUN_REGEX, ' ⏎ ')
 
 /**

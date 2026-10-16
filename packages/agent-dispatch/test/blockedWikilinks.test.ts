@@ -355,3 +355,34 @@ describe('createBlockedWikilinkWriteGuard', () => {
     })).rejects.toThrow('references a blocked page')
   })
 })
+
+describe('createBlockedWikilinkWriteGuard — markdown and edit writes', () => {
+  it('blocks append_markdown when the markdown references a blocked target', async () => {
+    const guard = createBlockedWikilinkWriteGuard(graphFrom(), ['claude'])
+    await expect(guard.beforeWrite({
+      type: 'append_markdown', target: 'today', markdown: '- ask [[claude]] about it',
+    })).rejects.toThrow('references a blocked page')
+  })
+
+  it('blocks edit_block when the replacement text references a blocked target', async () => {
+    const guard = createBlockedWikilinkWriteGuard(graphFrom(), ['claude'])
+    await expect(guard.beforeWrite({
+      type: 'edit_block', id: 'b', old: 'x', new: 'see [[claude]]',
+    })).rejects.toThrow('references a blocked page')
+  })
+
+  it('blocks edit_block when the edit completes a blocked ref out of the stored content', async () => {
+    const sqlAll = vi.fn<GuardGraph['sqlAll']>(async () => [{content: 'ping [[cla-ude]] later'}])
+    const guard = createBlockedWikilinkWriteGuard(graphFrom({sqlAll}), ['claude'])
+    for (const id of ['^3f2a9c1b', '((3f2a9c1b))']) {
+      await expect(guard.beforeWrite({type: 'edit_block', id, old: '-', new: ''}))
+        .rejects.toThrow('references a blocked page')
+      expect(sqlAll.mock.calls.at(-1)?.[1]).toEqual(['3f2a9c1b', '3f2a9c1b'])
+    }
+  })
+
+  it('lets create_page through — get-or-create references nothing', async () => {
+    const guard = createBlockedWikilinkWriteGuard(graphFrom(), ['claude'])
+    await expect(guard.beforeWrite({type: 'create_page', name: 'claude'})).resolves.toBeUndefined()
+  })
+})

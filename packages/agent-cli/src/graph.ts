@@ -53,6 +53,21 @@ export interface MoveBlockInput {
   position: MoveBlockPosition
 }
 
+export interface AppendedBlock {
+  id: string
+  shortId: string
+  parentId: string
+  /** 0 for a direct child of the target. */
+  depth: number
+  content: string
+}
+
+export interface AppendMarkdownResult {
+  target: {id: string, shortId: string, kind: 'block' | 'page' | 'daily', created: boolean, content: string}
+  /** Created blocks in pre-order. */
+  blocks: AppendedBlock[]
+}
+
 export interface DeleteBlockResult {
   id: string
   deleted: true
@@ -153,12 +168,42 @@ export const createBridgeGraph = (client: BridgeClient) => {
     return asRecord(result, 'create-block') as unknown as BlockData
   }
 
+  /** `expectedContent` makes it a compare-and-set: the app refuses the whole
+   *  update unless the block still has exactly that content. */
   const updateBlock = async (
     id: string,
-    patch: {content?: string, properties?: Record<string, unknown>},
+    patch: {content?: string, properties?: Record<string, unknown>, expectedContent?: string},
   ): Promise<unknown> => {
     return client.runCommand({type: 'update-block', id, ...patch})
   }
+
+  const appendMarkdown = async (input: {
+    target: string
+    markdown: string
+    position?: MoveBlockPosition
+    shape?: 'outline' | 'block'
+  }): Promise<AppendMarkdownResult> => {
+    const result = await client.runCommand({type: 'append-markdown', ...input})
+    return asRecord(result, 'append-markdown') as unknown as AppendMarkdownResult
+  }
+
+  const editBlock = async (input: {id: string, old: string, new: string}): Promise<BlockData | null> => {
+    const result = await client.runCommand({type: 'edit-block', ...input})
+    if (result === null || result === undefined) return null
+    return asRecord(result, 'edit-block') as unknown as BlockData
+  }
+
+  const createPage = async (input: {name?: string, date?: string}): Promise<unknown> =>
+    client.runCommand({type: 'create-page', ...input})
+
+  const recentChanges = async (input: {
+    since?: number | string
+    limit?: number
+    includeUser?: boolean
+  }): Promise<unknown> => client.runCommand({type: 'recent-changes', ...input})
+
+  const blockHistory = async (input: {id: string, limit?: number}): Promise<unknown> =>
+    client.runCommand({type: 'block-history', ...input})
 
   const moveBlock = async (input: MoveBlockInput): Promise<BlockData | null> => {
     const result = await client.runCommand({type: 'move-block', ...input})
@@ -242,6 +287,11 @@ export const createBridgeGraph = (client: BridgeClient) => {
     getSubtree,
     createBlock,
     updateBlock,
+    appendMarkdown,
+    editBlock,
+    createPage,
+    recentChanges,
+    blockHistory,
     moveBlock,
     deleteBlock,
     restoreBlock,

@@ -177,6 +177,35 @@ The convenience commands above wrap the starred ones (★) and add hydration.
 
 (Daily-note ids are derived, not queried: \`daily-note <date>\` resolves them.)
 
+## Writing
+
+Write the way you would edit files, and let the app do the outline:
+
+- \`append-markdown <target> <markdown>\` (MCP \`append_markdown\`) — markdown is
+  split into blocks exactly as the app's "paste as markdown" splits it (bullets
+  and headings nest; a fenced code block, table or quote stays one block) and
+  inserted in ONE transaction. Default position: after the target's last child.
+- A **target** is a block id or unique id prefix (\`^3f2a9c1b\`), a
+  \`[[Page name]]\` (created when missing, exactly as typing the wikilink
+  would — a date-literal name is that daily note), or a date expression
+  (\`today\`, \`2026-10-15\`, \`next monday\` → that day's daily note, created
+  when missing). A bare name only finds an EXISTING page; creating one takes
+  the explicit \`[[…]]\`. \`create-page <name> | --date <expr>\` creates without
+  writing content.
+- \`edit-block <id> <old> <new>\` — replace the one occurrence of \`old\`,
+  applied against the content current at write time; refused when \`old\` is
+  missing or ambiguous. Prefer it to rewriting a whole block.
+- \`update-block\` replaces the whole content (properties merge). Pass
+  \`expectedContent\` — what you read — and it is refused if the user changed
+  the block since.
+- **Todos** compose the built-in \`todo\` type: create a block with properties
+  \`{"types": ["todo"], "status": "open"}\`; complete it with
+  \`update-block {id, properties: {"status": "done"}}\`.
+- \`recent-changes\` lists what agent writes changed (\`--all\` adds the user's
+  own edits); \`block-history <id>\` shows one block's changes with full prior
+  content, to review or restore. Every bridge write is recorded as a
+  transaction described \`agent runtime <verb>\`.
+
 ## Lower-level access
 
 - \`pnpm agent get-block <id>\` — fetch one block.
@@ -188,12 +217,12 @@ The convenience commands above wrap the starred ones (★) and add hydration.
   order — already sorted; read it top-to-bottom, don't re-sort (see "Sibling
   order").
 - \`pnpm agent sql <all|get|optional|execute> <sql> [paramsJson]\` — raw SQL.
-- \`pnpm agent move-block <json>\` — structural move via \`repo.mutate.move\`;
+- \`pnpm agent move-block <json>\` — structural move via the \`core.move\` mutator;
   body is \`{id, parentId:string|null, position:{kind:"first"|"last"|"before"|"after", siblingId?}}\`.
 - \`pnpm agent delete-block <id>\` — soft-delete a block and its descendants
-  via \`repo.mutate.delete\`.
-- \`pnpm agent restore-block <id>\` — restore one tombstoned block via
-  \`repo.mutate.restore\`; descendants stay deleted unless restored separately.
+  via the \`core.delete\` mutator.
+- \`pnpm agent restore-block <id>\` — restore one tombstoned block via the
+  \`core.restore\` mutator; descendants stay deleted unless restored separately.
 - \`pnpm agent eval <code>\` — run JS in the app; the named queries above are
   callable directly. The dedicated commands wrap them with config
   resolution + hydration, so prefer them unless you need something custom.

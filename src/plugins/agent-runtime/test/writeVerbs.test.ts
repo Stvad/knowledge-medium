@@ -385,7 +385,7 @@ describe('recent-changes', () => {
       'agent runtime append-markdown',
     ])
     expect(out.txs[0].changes).toEqual([{
-      blockId: NOTE, kind: 'update', changed: ['content'],
+      blockId: NOTE, shortId: '3f2a9c1b', kind: 'update', changed: ['content'],
       content: {before: 'draft by user', after: 'draft by agent'},
     }])
     expect(out.txs[1].changes.map(change => [change.blockId, change.kind])).toContainEqual(
@@ -452,5 +452,27 @@ describe('block-history', () => {
 
   it('refuses a block with no recorded changes', async () => {
     await expect(run({type: 'block-history', id: LONE})).rejects.toThrow(/no recorded changes/)
+  })
+})
+
+// The route the km MCP tool descriptions document for todos.
+describe('todo writes through the raw property bag', () => {
+  it('create-block with types:[todo] + status makes a todo; update-block marks it done', async () => {
+    await seed([{id: NOTE}])
+    const created = await run({
+      type: 'create-block', parentId: NOTE, content: 'buy milk',
+      properties: {types: ['todo'], status: 'open'},
+    }) as {id: string}
+
+    expect(getBlockTypes((await repo.load(created.id))!)).toContain('todo')
+    const typed = await sharedDb.db.getAll<{block_id: string}>(
+      "SELECT block_id FROM block_types WHERE type = 'todo'",
+    )
+    expect(typed.map(row => row.block_id)).toEqual([created.id])
+
+    await run({type: 'update-block', id: created.id, properties: {status: 'done'}})
+    const done = (await repo.load(created.id))!
+    expect(done.properties.status).toBe('done')
+    expect(getBlockTypes(done)).toContain('todo')
   })
 })

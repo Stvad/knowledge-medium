@@ -13,6 +13,7 @@
 import { ChangeScope } from '@/data/api'
 import type { Repo } from '@/data/repo'
 import { AGENT_TX_DESCRIPTION_PREFIX } from './agentWrites.ts'
+import { shortIds } from './agentViews/resolveRef.ts'
 
 interface RowEventRow {
   tx_id: string | null
@@ -51,6 +52,8 @@ export type ChangedField = 'content' | 'parent' | 'order' | 'properties' | 'refe
 
 export interface BlockChange {
   blockId: string
+  /** Unique id prefix, as the read views print it (`^short`). */
+  shortId: string
   kind: ChangeKind
   /** What this write changed, compared field by field. */
   changed: ChangedField[]
@@ -70,7 +73,7 @@ const changedPropertyNames = (before: Snapshot, after: Snapshot): string[] =>
 const clip = (content: string, limit: number | undefined): string =>
   limit !== undefined && content.length > limit ? `${content.slice(0, limit)}…` : content
 
-const describeRowEvent = (row: RowEventRow, contentLimit?: number): BlockChange => {
+const describeRowEvent = (row: RowEventRow, contentLimit?: number): Omit<BlockChange, 'shortId'> => {
   const before = snapshotOf(row.before_json)
   const after = snapshotOf(row.after_json)
   if (!before || !after) {
@@ -179,10 +182,11 @@ export const recentChanges = async (repo: Repo, input: RecentChangesInput): Prom
       ORDER BY id`,
     [JSON.stringify(page.map(tx => tx.tx_id))],
   )
+  const short = await shortIds(repo, rows.map(row => row.block_id))
   const changesByTx = new Map<string, BlockChange[]>()
   for (const row of rows) {
     const list = changesByTx.get(row.tx_id!) ?? []
-    list.push(describeRowEvent(row, RECENT_CONTENT_LIMIT))
+    list.push({...describeRowEvent(row, RECENT_CONTENT_LIMIT), shortId: short.get(row.block_id)!})
     changesByTx.set(row.tx_id!, list)
   }
   return {
@@ -214,6 +218,7 @@ export interface BlockHistoryEvent extends BlockChange {
 
 export interface BlockHistoryResult {
   blockId: string
+  shortId: string
   /** Newest first, full content. */
   events: BlockHistoryEvent[]
   truncated: boolean
@@ -231,8 +236,10 @@ export const blockHistory = async (repo: Repo, input: BlockHistoryInput): Promis
     [input.id, limit + 1],
   )
   if (rows.length === 0) throw new Error(`block-history: no recorded changes for block ${input.id}.`)
+  const shortId = (await shortIds(repo, [input.id])).get(input.id)!
   return {
     blockId: input.id,
+    shortId,
     truncated: rows.length > limit,
     events: rows.slice(0, limit).map(row => ({
       at: isoAt(row.created_at),
@@ -240,6 +247,7 @@ export const blockHistory = async (repo: Repo, input: BlockHistoryInput): Promis
       txId: row.tx_id,
       description: row.description,
       ...describeRowEvent(row),
+      shortId,
     })),
   }
 }

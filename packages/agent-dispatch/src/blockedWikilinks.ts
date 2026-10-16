@@ -266,6 +266,25 @@ export const createBlockedWikilinkWriteGuard = (
       }
     }
 
+    /** The content an `edit_block` will produce, when its id (full, or a
+     *  `^`/`((…))` prefix as the read tools print it) names exactly one live
+     *  row whose content contains `old`. Otherwise the app refuses the edit
+     *  itself, so only `new` needs checking. */
+    const editResult = async (op: {id: string, old: string, new: string}): Promise<string | null> => {
+      const ref = op.id.trim().replace(/^\(\((.*)\)\)$/s, '$1').replace(/^\^/, '').trim()
+      const rows = await graph.sqlAll(
+        `SELECT content FROM blocks
+          WHERE deleted = 0 AND id >= ? AND id < ? || char(1114111)
+          LIMIT 2`,
+        [ref, ref],
+      )
+      const content = rows.length === 1 ? refsFromSqlRow(rows[0]).content : undefined
+      const at = content?.indexOf(op.old) ?? -1
+      return content !== undefined && op.old !== '' && at >= 0
+        ? content.slice(0, at) + op.new + content.slice(at + op.old.length)
+        : null
+    }
+
     const assertNoBlockedRefsInStoredRow = async (id: string): Promise<void> => {
       const {content, properties} = await storedRefsForGuard(id)
       await assertNoBlockedRefs(content, properties)
@@ -306,7 +325,7 @@ export const createBlockedWikilinkWriteGuard = (
       }
     }
 
-    return {assertNoBlockedRefs, assertNoBlockedRefsInStoredRow, assertNoBlockedRefsInLiveDescendants}
+    return {assertNoBlockedRefs, assertNoBlockedRefsInStoredRow, assertNoBlockedRefsInLiveDescendants, editResult}
   }
 
   return {
@@ -315,6 +334,7 @@ export const createBlockedWikilinkWriteGuard = (
         assertNoBlockedRefs,
         assertNoBlockedRefsInStoredRow,
         assertNoBlockedRefsInLiveDescendants,
+        editResult,
       } = createWriteAssertions()
       switch (operation.type) {
         case 'create_block':
@@ -338,6 +358,21 @@ export const createBlockedWikilinkWriteGuard = (
           await assertNoBlockedRefsInStoredRow(operation.id)
           await assertNoBlockedRefsInLiveDescendants(operation.id)
           return
+        case 'append_markdown':
+          await assertNoBlockedRefs(operation.markdown)
+          return
+        case 'edit_block':
+          await assertNoBlockedRefs(operation.new)
+          await assertNoBlockedRefs((await editResult(operation)) ?? undefined)
+          return
+        case 'create_page':
+          // Get-or-create by name writes no reference to anything.
+          return
+        default: {
+          // A new write tool must say here what it can make reference.
+          const unhandled: never = operation
+          throw new Error(`No blocked-wikilink policy for write ${(unhandled as {type: string}).type}`)
+        }
       }
     },
   }

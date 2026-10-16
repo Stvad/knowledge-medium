@@ -45,6 +45,8 @@ import {
 } from './kernelDts.js'
 import {renderSubtreeOutline} from './subtreeOutline.js'
 import {limitOption, scopeAssertion, workspaceAssertion} from './cliOptions.js'
+import type {AppendMarkdownResult} from './graph.js'
+import {renderAppendResult} from './writeTools.js'
 import {extensionScaffold, slugify, titleize} from './scaffold.js'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -860,6 +862,89 @@ cli
   .command('restore-block <id>', wireDescription('restore-block'))
   .action(async (id: string) => {
     await runAndPrint({type: 'restore-block', id})
+  })
+
+const readStdin = async (): Promise<string> => {
+  const chunks: Buffer[] = []
+  for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk as Uint8Array))
+  return Buffer.concat(chunks).toString('utf8')
+}
+
+const appendPosition = (options: {first?: boolean, after?: unknown, before?: unknown}) => {
+  const given = [options.first === true, options.after !== undefined, options.before !== undefined]
+  if (given.filter(Boolean).length > 1) {
+    throw new Error('append-markdown takes at most one of --first, --after <id>, --before <id>')
+  }
+  if (options.first) return {position: {kind: 'first' as const}}
+  if (options.after !== undefined) return {position: {kind: 'after' as const, siblingId: String(options.after)}}
+  if (options.before !== undefined) return {position: {kind: 'before' as const, siblingId: String(options.before)}}
+  return {}
+}
+
+cli
+  .command('append-markdown <target> <markdown>', wireDescription('append-markdown'))
+  .option('--first', "Insert before the target's existing children (default: after them)")
+  .option('--after <id>', 'Insert right after this child of the target')
+  .option('--before <id>', 'Insert right before this child of the target')
+  .option('--one-block', 'Keep the whole markdown as ONE block instead of splitting it')
+  .option('--json', 'Print the raw result instead of the outline')
+  .action(async (
+    target: unknown,
+    markdown: unknown,
+    options: {first?: boolean, after?: unknown, before?: unknown, oneBlock?: boolean, json?: boolean},
+  ) => {
+    const command: KnownCommand = {
+      type: 'append-markdown',
+      target: String(target),
+      markdown: String(markdown) === '-' ? await readStdin() : String(markdown),
+      ...appendPosition(options),
+      ...(options.oneBlock ? {shape: 'block' as const} : {}),
+    }
+    if (options.json) {
+      await runAndPrint(command)
+      return
+    }
+    await ensureBridgeRunning()
+    process.stdout.write(`${renderAppendResult(await runCommand(command) as AppendMarkdownResult)}\n`)
+  })
+
+cli
+  .command('edit-block <id> <old> <new>', wireDescription('edit-block'))
+  .action(async (id: unknown, old: unknown, replacement: unknown) => {
+    await runAndPrint({type: 'edit-block', id: String(id), old: String(old), new: String(replacement)})
+  })
+
+cli
+  .command('create-page [...name]', wireDescription('create-page'))
+  .option('--date <expr>', "A daily note's date instead of a page name (today, 2026-10-15, next monday)")
+  .action(async (name: unknown, options: {date?: unknown}) => {
+    const text = toStringArray(name).join(' ').trim()
+    await runAndPrint({
+      type: 'create-page',
+      ...(text ? {name: text} : {}),
+      ...(options.date !== undefined ? {date: String(options.date)} : {}),
+    })
+  })
+
+cli
+  .command('recent-changes', wireDescription('recent-changes'))
+  .option('--since <when>', 'Epoch ms or ISO timestamp (default: all history)')
+  .option('--limit <n>', 'Max transactions (default 20)')
+  .option('--all', "Include the user's own edits, not only agent writes")
+  .action(async (options: {since?: unknown, limit?: unknown, all?: boolean}) => {
+    await runAndPrint({
+      type: 'recent-changes',
+      ...(options.since !== undefined ? {since: String(options.since)} : {}),
+      ...limitOption(options.limit),
+      ...(options.all ? {includeUser: true} : {}),
+    })
+  })
+
+cli
+  .command('block-history <id>', wireDescription('block-history'))
+  .option('--limit <n>', 'Max events (default 20)')
+  .action(async (id: unknown, options: {limit?: unknown}) => {
+    await runAndPrint({type: 'block-history', id: String(id), ...limitOption(options.limit)})
   })
 
 cli
