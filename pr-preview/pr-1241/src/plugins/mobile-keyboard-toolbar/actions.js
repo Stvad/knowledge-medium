@@ -1,1 +1,1 @@
-import{D_ as e,O_ as t,k_ as n}from"../../../chunks/app-DbXBhdVL.js";export{e as INSERT_BLOCK_REF_TRIGGER_ACTION_ID,t as INSERT_PAGE_REF_TRIGGER_ACTION_ID,n as mobileKeyboardToolbarActions};
+import{D_ as e,O_ as t,k_ as n}from"../../../chunks/app-Cx1aa6rm.js";export{e as INSERT_BLOCK_REF_TRIGGER_ACTION_ID,t as INSERT_PAGE_REF_TRIGGER_ACTION_ID,n as mobileKeyboardToolbarActions};

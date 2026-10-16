@@ -1,1 +1,1 @@
-import{Lf as e,Rf as t}from"../../../chunks/app-DbXBhdVL.js";export{e as aliasCompletions,t as referencesCodeMirrorExtensions};
+import{Lf as e,Rf as t}from"../../../chunks/app-Cx1aa6rm.js";export{e as aliasCompletions,t as referencesCodeMirrorExtensions};

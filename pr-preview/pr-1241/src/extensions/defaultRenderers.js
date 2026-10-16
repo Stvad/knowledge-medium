@@ -1,1 +1,1 @@
-import{hD as e,mD as t,pD as n}from"../../chunks/app-DbXBhdVL.js";export{n as defaultRegistry,t as defaultRendererContributions,e as defaultRenderersExtension};
+import{hD as e,mD as t,pD as n}from"../../chunks/app-Cx1aa6rm.js";export{n as defaultRegistry,t as defaultRendererContributions,e as defaultRenderersExtension};

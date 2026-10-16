@@ -1,1 +1,1 @@
-import{dB as e,lB as t,uB as n}from"../../../chunks/app-DbXBhdVL.js";export{t as charLimitProp,n as charProfileProp,e as charScopeProp};
+import{dB as e,lB as t,uB as n}from"../../../chunks/app-Cx1aa6rm.js";export{t as charLimitProp,n as charProfileProp,e as charScopeProp};
