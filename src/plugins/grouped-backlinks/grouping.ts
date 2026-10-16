@@ -31,12 +31,16 @@ export interface GroupedBacklinkGroup {
 const isBlockKind = (kind: GroupedBacklinkCandidate['kind']): boolean =>
   kind === 'ref' || kind === 'root' || kind === 'attribute'
 
-/** Candidates merge into one group by this key: a block reached several ways
- *  is one group, but a field or type group never merges with a block, since
- *  sync can deliver a block whose id spells `field:…` or `type:…`. Two such
- *  groups then share a `groupId` downstream (accepted). */
-const groupKey = (candidate: GroupedBacklinkCandidate): string =>
-  `${isBlockKind(candidate.kind) ? 'block' : candidate.kind}\u0000${candidate.groupId}`
+/** Group ids this result gives a synthetic group: every field and type
+ *  group's, and the fallback's. A block whose id equals one (sync can deliver
+ *  any id, `field:reviewer` included) is not offered as a group, so a
+ *  `groupId` names one group and a synthetic group never takes a block's
+ *  members or header. */
+const reservedGroupIds = (candidates: readonly GroupedBacklinkCandidate[]): Set<string> => {
+  const reserved = new Set([FALLBACK_GROUP_ID])
+  for (const candidate of candidates) if (!isBlockKind(candidate.kind)) reserved.add(candidate.groupId)
+  return reserved
+}
 
 interface CandidateGroup {
   groupId: string
@@ -144,17 +148,18 @@ export const buildGroupedBacklinks = ({
   const sourceSet = new Set(sourceOrder)
   const matcher = buildMatcher(normalizeGroupedBacklinksConfig(groupingConfig))
   const groups = new Map<string, CandidateGroup>()
+  const reserved = reservedGroupIds(candidates)
   for (const candidate of candidates) {
     if (
       candidate.groupId === targetId ||
       !sourceSet.has(candidate.sourceId) ||
+      (isBlockKind(candidate.kind) && reserved.has(candidate.groupId)) ||
       labelExcluded(candidate.groupLabel, matcher)
     ) {
       continue
     }
     const priority = classify(candidate, matcher)
-    const key = groupKey(candidate)
-    const existing = groups.get(key)
+    const existing = groups.get(candidate.groupId)
     if (existing) {
       existing.sourceIds.add(candidate.sourceId)
       if (priorityRank(priority) > priorityRank(existing.priority)) {
@@ -162,7 +167,7 @@ export const buildGroupedBacklinks = ({
       }
       continue
     }
-    groups.set(key, {
+    groups.set(candidate.groupId, {
       groupId: candidate.groupId,
       label: candidate.groupLabel,
       sourceIds: new Set([candidate.sourceId]),

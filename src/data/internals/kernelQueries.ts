@@ -549,6 +549,11 @@ export const buildFuzzyAliasMatchesSql = (tokenCount: number): string => {
   `
 }
 
+/** How much of a candidate's content an alias match returns: a preview. A
+ *  page whose content is a whole document would otherwise be read in full
+ *  for every candidate. A cost bound. */
+export const ALIAS_MATCH_CONTENT_CHARS = 500
+
 /** Alias substring match used by alias-search surfaces; one row per
  *  (alias, block) pair. Same index plan as the distinct-aliases query
  *  above: filter on alias_lower, JOIN blocks for content + ordering. */
@@ -556,7 +561,7 @@ export const SELECT_ALIAS_MATCHES_IN_WORKSPACE_SQL = `
   SELECT
     ba.alias AS alias,
     b.id AS blockId,
-    b.content AS content
+    substr(b.content, 1, ${ALIAS_MATCH_CONTENT_CHARS}) AS content
   FROM block_aliases ba
   JOIN blocks b ON b.id = ba.block_id
   WHERE ba.workspace_id = ?

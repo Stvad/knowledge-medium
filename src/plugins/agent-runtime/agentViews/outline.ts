@@ -81,7 +81,7 @@ const selectNodes = async (
   // a collapsed block zoomed into; collapsed summarizes a block below the root.
   let frontier = [root.id]
   for (let level = 1; level <= depth && budget > 0 && frontier.length > 0; level++) {
-    const rows = await visibleChildrenLevel(repo, frontier, {limit: budget, offset: level === 1 ? offset : 0})
+    const rows = await visibleChildrenLevel(repo, frontier, {workspaceId: root.workspaceId, limit: budget, offset: level === 1 ? offset : 0})
     budget -= rows.length
     const next: string[] = []
     for (const {block, childCount} of rows) {
@@ -119,7 +119,7 @@ export const buildOutlineView = async (
   ])
   // Counted after the page, so a child sync adds while it is read leaves a
   // continuation; a count taken first could end a full page with none.
-  const rootChildCount = (await visibleChildCounts(repo, [root.id])).get(root.id) ?? 0
+  const rootChildCount = (await visibleChildCounts(repo, [root.id], workspaceId)).get(root.id) ?? 0
 
   const blocks = [root, ...[...nodes.values()].map(node => node.block)]
   const [renderer, shortIds] = await Promise.all([

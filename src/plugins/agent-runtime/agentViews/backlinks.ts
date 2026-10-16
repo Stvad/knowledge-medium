@@ -12,16 +12,23 @@ import {
   type GroupedBacklinksGroupingSpec,
 } from '@/plugins/grouped-backlinks/resolveConfig.js'
 import { labelForBlockData } from '@/utils/linkTargetAutocomplete.js'
-import { firstVisibleChildren, loadBlocks, loadCrumbs, visibleChildCounts } from './context.ts'
+import { firstVisibleChildren, loadBlocks, loadContentHeads, loadCrumbs, visibleChildCounts } from './context.ts'
 import { createPropertyRenderer, NAME_CHARS } from './properties.ts'
 import { displayIds } from './displayIds.ts'
 import { clampInt, CUT_LEGEND, crumbLine, joinDisplayLines, loadRoot, metaSuffix, plural, toViewRow, type ViewRow } from './shared.ts'
-import { boundLabels, clipLine, formatCount, isReferenceOnly } from './text.ts'
+import { boundLabels, clipLine, ellipsize, formatCount, isReferenceOnly, oneLine } from './text.ts'
 
 const MAX_BACKLINKS = 500
 const MAX_GROUPS = 200
 const ROW_CHARS = 240
 const CONTEXT_CHARS = 160
+/** How much of a neighbour's content a context line reads (a cost bound);
+ *  roomy, so collapsing its whitespace rarely leaves less than a line. */
+const CONTEXT_HEAD_CHARS = CONTEXT_CHARS * 4
+
+/** A neighbour's text as context: one line, ellipsized. It says it is cut,
+ *  not by how much, since only a head was read. */
+const contextPreview = (head: string): string => ellipsize(oneLine(head), CONTEXT_CHARS)
 const TITLE_CHARS = 120
 const MAX_VIA = 5
 
@@ -118,12 +125,11 @@ const backlinkRows = async (
     createPropertyRenderer(repo, sources, 'brief'),
     displayIds(repo, ids),
     loadCrumbs(repo, ids, workspaceId),
-    visibleChildCounts(repo, ids),
+    visibleChildCounts(repo, ids, workspaceId),
     viaPropertiesBySource(repo, workspaceId, targetId, ids),
-    loadBlocks(repo, parentIds),
-    firstVisibleChildren(repo, linkOnly.map(source => source.id)),
+    loadContentHeads(repo, parentIds, CONTEXT_HEAD_CHARS),
+    firstVisibleChildren(repo, linkOnly.map(source => source.id), workspaceId, CONTEXT_HEAD_CHARS),
   ])
-  const parentById = new Map(parents.map(parent => [parent.id, parent]))
   return sources.map(source => {
     const row: BacklinkRow = {
       ...toViewRow(source, {shortIds, renderer, maxChars: ROW_CHARS}),
@@ -134,13 +140,13 @@ const backlinkRows = async (
       viaProperties: via.get(source.id) ?? [],
     }
     if (isReferenceOnly(source.content)) {
-      const parent = source.parentId ? parentById.get(source.parentId) : undefined
+      const parent = source.parentId ? parents.get(source.parentId) : undefined
       // A sync-applied parent edge can cross workspaces; that parent is not this block's context.
       if (parent && parent.workspaceId === source.workspaceId && parent.content.trim()) {
-        row.parentContent = clipLine(parent.content, CONTEXT_CHARS).text
+        row.parentContent = contextPreview(parent.content)
       }
       const child = firstChildren.get(source.id)
-      if (child && child.content.trim()) row.firstChildContent = clipLine(child.content, CONTEXT_CHARS).text
+      if (child?.trim()) row.firstChildContent = contextPreview(child)
     }
     return row
   })

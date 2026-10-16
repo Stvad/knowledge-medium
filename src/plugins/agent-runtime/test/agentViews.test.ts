@@ -300,6 +300,19 @@ describe('view-outline', () => {
     expect(out.nextOffset).toBe(3)
   })
 
+  it('lists children of the viewed workspace even if sync moves the root mid-view', async () => {
+    await create({id: ROOT, content: 'Root'})
+    const child = uuid('0000e100', 1)
+    await create({id: child, parentId: ROOT, content: 'moved with its parent'})
+    const out = await duringReads({
+      before: async sql => {
+        if (!sql.includes('AS child_count')) return
+        await sharedDb.db.execute('UPDATE blocks SET workspace_id = ? WHERE id IN (?, ?)', ['ws-2', ROOT, child])
+      },
+    }, () => view<OutlineView>({type: 'view-outline', ref: ROOT, format: 'json'}))
+    expect(out.rows).toEqual([])
+  })
+
   it('fills shallower levels first and pages the root children by offset', async () => {
     await create({id: ROOT, content: 'Root'})
     const children: string[] = []
@@ -746,6 +759,12 @@ describe('structural edge cases', () => {
     expect(out.candidates).toHaveLength(100)
   })
 
+  it('page previews a candidate by a head of its content, never the whole of it', async () => {
+    await create({id: uuid('7d1d1d1d', 1), content: 'y'.repeat(5000), properties: {alias: ['Long document']}})
+    const out = await executeCommand({commandId: 'p', type: 'page', name: 'Long doc'}, context) as {candidates: Array<{content: string}>}
+    expect(out.candidates[0].content).toBe('y'.repeat(500))
+  })
+
   it('empty values never spend a slot under the property cap', async () => {
     const id = uuid('8a8a8a8a', 1)
     const properties: Record<string, unknown> = {}
@@ -997,6 +1016,25 @@ describe('structural edge cases', () => {
 
 describe('view-backlinks', () => {
   const TARGET = uuid('7a7a7a7a', 1)
+
+  it('quotes a link-only source\'s neighbours from a bounded head, never their whole rows', async () => {
+    await create({id: TARGET, content: 'Target', properties: {alias: ['Target']}})
+    const parent = uuid('9b9b9b9b', 1)
+    await create({id: parent, content: `Big parent ${'p'.repeat(100_000)}`})
+    const source = uuid('9b9b9b9c', 2)
+    await create({id: source, parentId: parent, content: '[[Target]]', references: [{id: TARGET, alias: 'Target'}]})
+    await create({id: uuid('9b9b9b9d', 3), parentId: source, content: `Big child ${'c'.repeat(100_000)}`})
+    const wholeRowReads: string[] = []
+    const out = await duringReads({
+      before: async (sql, params) => {
+        if (/\b(b|child)\.\*/.test(sql) && JSON.stringify(params).includes(parent)) wholeRowReads.push(sql)
+      },
+    }, () => view<BacklinksView>({type: 'view-backlinks', ref: TARGET, format: 'json'}))
+    expect(out.rows[0].parentContent).toMatch(/^Big parent p+…$/)
+    expect(out.rows[0].firstChildContent).toMatch(/^Big child c+…$/)
+    expect(out.rows[0].parentContent!.length).toBeLessThanOrEqual(160)
+    expect(wholeRowReads).toEqual([])
+  })
 
   it('drops a source that leaves the workspace between being listed and being read', async () => {
     await create({id: TARGET, content: 'Target', properties: {alias: ['Target']}})

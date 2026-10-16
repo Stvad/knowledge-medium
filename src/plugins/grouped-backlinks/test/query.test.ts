@@ -301,7 +301,7 @@ describe('groupedBacklinksDataExtension query', () => {
     expect(out.groups.find(group => group.label === 'Project')?.blockId).toBe('project')
   })
 
-  it('keeps a field group apart from a block whose id spells the field group id', async () => {
+  it('does not offer a block whose id spells a synthetic group id as a group', async () => {
     await create({id: 'target', content: 'Target'})
     // Sync can deliver a block with any id.
     await create({id: 'field:reviewer', content: 'Planted'})
@@ -316,8 +316,9 @@ describe('groupedBacklinksDataExtension query', () => {
     }).load()
 
     expect(out.groups.find(group => group.label === 'reviewer')).toMatchObject({blockId: null, sourceIds: ['src-field']})
-    expect(sorted(out.groups.find(group => group.blockId === 'field:reviewer')!.sourceIds))
-      .toEqual(['src-ref-1', 'src-ref-2'])
+    expect(out.groups.some(group => group.blockId === 'field:reviewer')).toBe(false)
+    const groupIds = out.groups.map(group => group.groupId)
+    expect(new Set(groupIds).size).toBe(groupIds.length)
   })
 
   it('keeps two source fields from the same source to the same target distinct', async () => {

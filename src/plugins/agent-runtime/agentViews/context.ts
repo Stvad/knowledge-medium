@@ -117,18 +117,23 @@ export const loadCrumbs = async (
 }
 
 /** `childRef` is a child an outline shows of the block whose id is
- *  `parentIdSql`: live, not a property field row, in the parent's workspace,
+ *  `parentIdSql`: live, not a property field row, in the viewed workspace,
  *  and not the parent itself — sync applies parent ids verbatim, so a block
- *  can be its own parent or have one in another workspace. The one
- *  definition every child listing and count here uses. Binds
- *  `[...RecognitionParams]`. */
+ *  can be its own parent or have one in another workspace, and rewrites
+ *  `workspace_id` in place, so the view's workspace is bound rather than read
+ *  off the parent mid-view. The one definition every child listing and count
+ *  here uses. Binds {@link visibleChildParams}. */
 const visibleChildOfSql = (childRef: string, parentIdSql: string): string => `
   ${childRef}.parent_id = ${parentIdSql} AND ${childRef}.id != ${parentIdSql} AND ${childRef}.deleted = 0
-  AND ${childRef}.workspace_id = (SELECT workspace_id FROM blocks WHERE id = ${parentIdSql})
+  AND ${childRef}.workspace_id = ?
   AND NOT (${recognizedFieldRowSql(childRef)})
 `
 
-/** Count of the children an outline shows, bound as `[...RecognitionParams]`. */
+/** What one {@link visibleChildOfSql} binds, in order. */
+const visibleChildParams = (repo: Repo, workspaceId: string): unknown[] =>
+  [workspaceId, ...registryRecognitionParams(repo)]
+
+/** Count of the children an outline shows; binds {@link visibleChildParams}. */
 const visibleChildCountSql = (rowRef: string): string => `
   (SELECT count(*) FROM blocks vc WHERE ${visibleChildOfSql('vc', `${rowRef}.id`)})
 `
@@ -136,12 +141,13 @@ const visibleChildCountSql = (rowRef: string): string => `
 export const visibleChildCounts = async (
   repo: Repo,
   ids: readonly string[],
+  workspaceId: string,
 ): Promise<Map<string, number>> => {
   if (ids.length === 0) return new Map()
   const rows = await repo.db.getAll<{id: string, n: number}>(
     `SELECT b.id AS id, ${visibleChildCountSql('b')} AS n
        FROM json_each(?) j JOIN blocks b ON b.id = j.value`,
-    [...registryRecognitionParams(repo), JSON.stringify(ids)],
+    [...visibleChildParams(repo, workspaceId), JSON.stringify(ids)],
   )
   return new Map(rows.map(row => [row.id, row.n]))
 }
@@ -152,10 +158,10 @@ export const visibleChildCounts = async (
 export const visibleChildrenLevel = async (
   repo: Repo,
   parentIds: readonly string[],
-  {limit, offset = 0}: {limit: number, offset?: number},
+  {workspaceId, limit, offset = 0}: {workspaceId: string, limit: number, offset?: number},
 ): Promise<Array<{block: BlockData, childCount: number}>> => {
   if (parentIds.length === 0 || limit <= 0) return []
-  const recognition = registryRecognitionParams(repo)
+  const child = visibleChildParams(repo, workspaceId)
   const rows = await repo.db.getAll<BlockRow & {child_count: number}>(
     `SELECT child.*, ${visibleChildCountSql('child')} AS child_count
        FROM json_each(?) j
@@ -163,7 +169,7 @@ export const visibleChildrenLevel = async (
       WHERE ${visibleChildOfSql('child', 'j.value')}
       ORDER BY j.key, child.order_key, child.id
       LIMIT ? OFFSET ?`,
-    [...recognition, JSON.stringify(parentIds), ...recognition, limit, offset],
+    [...child, JSON.stringify(parentIds), ...child, limit, offset],
   )
   return rows.map(row => ({block: parseBlockRow(row), childCount: row.child_count}))
 }
@@ -173,20 +179,34 @@ export const visibleChildrenLevel = async (
 export const firstVisibleChildren = async (
   repo: Repo,
   ids: readonly string[],
-): Promise<Map<string, BlockData>> => {
+  workspaceId: string,
+  chars: number,
+): Promise<Map<string, string>> => {
   if (ids.length === 0) return new Map()
-  const recognition = registryRecognitionParams(repo)
-  const rows = await repo.db.getAll<BlockRow>(
-    `SELECT child.* FROM json_each(?) j
+  const rows = await repo.db.getAll<{parent_id: string, content: string | null}>(
+    `SELECT j.value AS parent_id, ${textHeadSql('child.content', chars)} AS content FROM json_each(?) j
        JOIN blocks child ON child.id = (
          SELECT c.id FROM blocks c
           WHERE ${visibleChildOfSql('c', 'j.value')}
           ORDER BY c.order_key, c.id LIMIT 1
        )`,
-    [JSON.stringify(ids), ...recognition],
+    [JSON.stringify(ids), ...visibleChildParams(repo, workspaceId)],
   )
-  return new Map(rows.map(row => {
-    const block = parseBlockRow(row)
-    return [block.parentId ?? '', block]
-  }))
+  return new Map(rows.map(row => [row.parent_id, row.content ?? '']))
+}
+
+/** A bounded head of each block's content, with its workspace: for context
+ *  lines that quote a neighbour, which never need the whole row. */
+export const loadContentHeads = async (
+  repo: Repo,
+  ids: readonly string[],
+  chars: number,
+): Promise<Map<string, {workspaceId: string, content: string}>> => {
+  if (ids.length === 0) return new Map()
+  const rows = await repo.db.getAll<{id: string, workspace_id: string, content: string | null}>(
+    `SELECT b.id AS id, b.workspace_id AS workspace_id, ${textHeadSql('b.content', chars)} AS content
+       FROM json_each(?) j JOIN blocks b ON b.id = j.value WHERE b.deleted = 0`,
+    [JSON.stringify(ids)],
+  )
+  return new Map(rows.map(row => [row.id, {workspaceId: row.workspace_id, content: row.content ?? ''}]))
 }

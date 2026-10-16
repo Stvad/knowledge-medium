@@ -62,7 +62,7 @@ export const buildBlockView = async (
     createPropertyRenderer(repo, [block], 'full'),
     displayIds(repo, [block.id]),
     loadCrumbs(repo, [block.id], block.workspaceId),
-    visibleChildCounts(repo, [block.id]),
+    visibleChildCounts(repo, [block.id], workspaceId),
     // The backlinks view's own set, so the two counts cannot disagree.
     repo.query[BACKLINKS_FOR_BLOCK_QUERY]({workspaceId: block.workspaceId, id: block.id}).load(),
   ])
