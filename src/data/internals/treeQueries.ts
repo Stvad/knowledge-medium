@@ -215,6 +215,19 @@ export const CHILDREN_IDS_SQL = `
    ORDER BY order_key, id
 `
 
+/** The registry's half of {@link recognizedFieldRowSql}, bound in this order
+ *  after the statement's own parameters: the JSON id list of `property-schema`
+ *  blocks the registry cannot parse, the JSON id list of its seed definitions,
+ *  and the workspace that registry belongs to. */
+export type RecognitionParams = readonly [
+  unparseableDefinitionIdsJson: string,
+  seedDefinitionIdsJson: string,
+  registryWorkspaceId: string,
+]
+
+/** Recognition with no registry: `block_types` alone decides. */
+export const NO_REGISTRY_RECOGNITION_PARAMS: RecognitionParams = ['[]', '[]', '']
+
 /**
  * VISIBLE-children predicate: excludes a recognized field row
  * (`is_field_form = 1`) from ordinary child listings at any depth — the
@@ -222,12 +235,14 @@ export const CHILDREN_IDS_SQL = `
  * recognized field row, rather than only hidden-tier ones, is an ACCEPTED
  * interim.
  *
- * DIVERGENCE from the tx-layer registry checker (issue #389 item 7): that
- * checker asks the REGISTRY, this SQL sees only what has been materialized
- * and indexed, so a zero-row code-declared seed is hidden in-tx and shown
- * reactively (the bound seed-id list narrows the gap). NOT gated on
- * `properties_migration` — the cell→children backfill mints field rows in
- * un-flipped workspaces too.
+ * Condition 3 (the target names a definition) is the REGISTRY's decision —
+ * `isResolvableFieldDefinition` on the tx side. This SQL reads it from the
+ * `block_types` index, corrected by the bound {@link RecognitionParams}
+ * where the index disagrees with the registry: a tagged block the registry
+ * cannot parse is no definition, and a code seed the registry knows is one
+ * before its row materializes (issue #389 item 7). The two agree once the
+ * registry has caught up with the rows. NOT gated on `properties_migration` —
+ * the cell→children backfill mints field rows in un-flipped workspaces too.
  *
  * Both legs are workspace-guarded because a foreign workspace's definition
  * id must degrade to a VISIBLE "unknown field" row per §9.
@@ -247,6 +262,7 @@ export const recognizedFieldRowSql = (rowRef: string): string => `
           WHERE bt.block_id = ${rowRef}.reference_target_id
             AND bt.type = 'property-schema'
             AND bt.workspace_id = ${rowRef}.workspace_id
+            AND bt.block_id NOT IN (SELECT value FROM json_each(?))
        )
        OR EXISTS (
          SELECT 1 FROM json_each(?) seed
@@ -263,11 +279,9 @@ ${recognizedFieldRowSql('blocks')}
 `
 
 /** Outline form of {@link CHILDREN_SQL}: excludes recognized field rows.
- *  Bind `[parentId, seedDefinitionIdsJson, seedWorkspaceId]`
- *  — the registry's set and the workspace it belongs to; pass `'[]', ''` for
- *  none. Omitting them binds NULL, which `json_each` reads as zero rows, so a
- *  caller that forgets silently gets the pre-#389 answer rather than an
- *  error. */
+ *  Bind `[parentId, ...RecognitionParams]`. Omitting them binds NULL, which
+ *  `json_each` reads as zero rows, so a caller that forgets silently gets the
+ *  `block_types`-only answer rather than an error. */
 export const VISIBLE_CHILDREN_SQL = `
   SELECT * FROM blocks
    WHERE parent_id = ? AND deleted = 0
@@ -276,8 +290,7 @@ ${VISIBLE_CHILD_PREDICATE_SQL}
 `
 
 /** Outline form of {@link CHILDREN_IDS_SQL}. Bind
- *  `[parentId, seedDefinitionIdsJson, seedWorkspaceId]` — see
- *  {@link VISIBLE_CHILDREN_SQL}. */
+ *  `[parentId, ...RecognitionParams]` — see {@link VISIBLE_CHILDREN_SQL}. */
 export const VISIBLE_CHILDREN_IDS_SQL = `
   SELECT id FROM blocks
    WHERE parent_id = ? AND deleted = 0
@@ -296,9 +309,9 @@ ${VISIBLE_CHILD_PREDICATE_SQL}
  * one step. The ROOT itself is never pruned: it is the seed the caller
  * explicitly asked for, so opening a field row shows its subtree.
  *
- * Bind `[rootId, seedDefinitionIdsJson, seedWorkspaceId]` (see
- * {@link VISIBLE_CHILDREN_SQL}); the trailing two sit inside the recursive
- * term and are bound once for the statement. Same selected columns + depth
+ * Bind `[rootId, ...RecognitionParams]` (see {@link VISIBLE_CHILDREN_SQL});
+ * the trailing three sit inside the recursive term and are bound once for the
+ * statement. Same selected columns + depth
  * semantics as SUBTREE_SQL; the `INDEXED BY` planner-pin note there
  * applies here too.
  */

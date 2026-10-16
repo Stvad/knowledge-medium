@@ -39,10 +39,12 @@ import { ancestorWalk, type AncestorWalk } from './ancestorBatch'
 import {
   CHILDREN_IDS_SQL,
   CHILDREN_SQL,
+  NO_REGISTRY_RECOGNITION_PARAMS,
   SUBTREE_SQL,
   VISIBLE_CHILDREN_IDS_SQL,
   VISIBLE_CHILDREN_SQL,
   VISIBLE_SUBTREE_SQL,
+  type RecognitionParams,
 } from './treeQueries'
 import {
   assertAncestorWalkBounded,
@@ -641,7 +643,7 @@ export const subtreeQuery = defineQuery<
     ctx.depend({kind: 'row', id})
     ctx.depend({kind: 'parent-edge', parentId: id})
     const rows = hidePropertyChildren
-      ? await ctx.db.getAll<BlockRow & {depth: number}>(VISIBLE_SUBTREE_SQL, [id, ...registrySeedParams(ctx.repo)])
+      ? await ctx.db.getAll<BlockRow & {depth: number}>(VISIBLE_SUBTREE_SQL, [id, ...registryRecognitionParams(ctx.repo)])
       : await ctx.db.getAll<BlockRow & {depth: number}>(SUBTREE_SQL, [id])
     const out = ctx.hydrateBlocks(asBlockRows(rows))
     // SUBTREE_SQL already computes depth (0 at the root, +1 per level) and
@@ -764,34 +766,37 @@ export const manyAncestorsQuery = defineQuery<
   },
 })
 
-/** The registry half of the visible-children predicate (#389 item 7): the
- *  seed-definition ids the REGISTRY knows, which `block_types` may not carry
- *  yet, plus the workspace they belong to.
+/** The registry half of the visible-children predicate
+ *  ({@link RecognitionParams}): the `property-schema` blocks the REGISTRY
+ *  cannot parse, which `block_types` still tags, and the seed-definition ids it
+ *  knows, which `block_types` may not carry yet (#389 item 7), plus the
+ *  workspace they belong to.
  *
  *  Pure — seed definition ids are uuidv5 over `workspaceId:seedKey`, so this
- *  is a computation over the loaded declarations with no DB read. It closes
- *  the window where a field row arrives over sync ahead of its definition
- *  block on a warm device, and the SQL view showed a row the tx-layer
- *  recognizer hid.
+ *  is a computation over the snapshot with no DB read.
  *
  *  MEMOIZED on snapshot identity, not as a micro-optimisation: these
  *  constants back `core.children` / `childIds` / `subtree`, which the
  *  outline resolves once per rendered block, and the value only
  *  changes when the registry is REPLACED — which is exactly what a
  *  WeakMap key expresses. */
-const seedParamsBySnapshot = new WeakMap<object, readonly [string, string]>()
+const recognitionParamsBySnapshot = new WeakMap<object, RecognitionParams>()
 
-export const registrySeedParams = (repo: Repo): readonly [string, string] => {
+export const registryRecognitionParams = (repo: Repo): RecognitionParams => {
   const registry = repo.propertyDefinitions
-  if (!registry) return ['[]', '']
-  const cached = seedParamsBySnapshot.get(registry)
+  if (!registry) return NO_REGISTRY_RECOGNITION_PARAMS
+  const cached = recognitionParamsBySnapshot.get(registry)
   if (cached) return cached
-  const ids: string[] = []
+  const seedIds: string[] = []
   for (const seedKey of registry.seedsByKey.keys()) {
-    ids.push(propertyDefinitionBlockId(registry.workspaceId, seedKey))
+    seedIds.push(propertyDefinitionBlockId(registry.workspaceId, seedKey))
   }
-  const params = [JSON.stringify(ids), registry.workspaceId] as const
-  seedParamsBySnapshot.set(registry, params)
+  const params: RecognitionParams = [
+    JSON.stringify([...registry.unparseableDefinitionIds]),
+    JSON.stringify(seedIds),
+    registry.workspaceId,
+  ]
+  recognitionParamsBySnapshot.set(registry, params)
   return params
 }
 
@@ -811,7 +816,7 @@ export const childrenQuery = defineQuery<
   resolve: async ({id, hidePropertyChildren = false}, ctx) => {
     ctx.depend({kind: 'parent-edge', parentId: id})
     const rows = hidePropertyChildren
-      ? await ctx.db.getAll<BlockRow>(VISIBLE_CHILDREN_SQL, [id, ...registrySeedParams(ctx.repo)])
+      ? await ctx.db.getAll<BlockRow>(VISIBLE_CHILDREN_SQL, [id, ...registryRecognitionParams(ctx.repo)])
       : await ctx.db.getAll<BlockRow>(CHILDREN_SQL, [id])
     return ctx.hydrateBlocks(asBlockRows(rows))
   },
@@ -837,12 +842,12 @@ export const childIdsQuery = defineQuery<
     ctx.depend({kind: 'parent-edge', parentId: id})
     if (!hydrate) {
       const rows = hidePropertyChildren
-        ? await ctx.db.getAll<{id: string}>(VISIBLE_CHILDREN_IDS_SQL, [id, ...registrySeedParams(ctx.repo)])
+        ? await ctx.db.getAll<{id: string}>(VISIBLE_CHILDREN_IDS_SQL, [id, ...registryRecognitionParams(ctx.repo)])
         : await ctx.db.getAll<{id: string}>(CHILDREN_IDS_SQL, [id])
       return rows.map(r => r.id)
     }
     const rows = hidePropertyChildren
-      ? await ctx.db.getAll<BlockRow>(VISIBLE_CHILDREN_SQL, [id, ...registrySeedParams(ctx.repo)])
+      ? await ctx.db.getAll<BlockRow>(VISIBLE_CHILDREN_SQL, [id, ...registryRecognitionParams(ctx.repo)])
       : await ctx.db.getAll<BlockRow>(CHILDREN_SQL, [id])
     // declareRowDeps:false — result is the id list; per-row deps would
     // wake the handle on content/property edits that can't change the

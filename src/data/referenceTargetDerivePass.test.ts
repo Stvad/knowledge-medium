@@ -20,7 +20,7 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import { projectedPropertyDefinitionsFacet } from '@/data/facets'
 import { aliasesProp, typesProp } from '@/data/properties'
 import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
-import { registrySeedParams } from '@/data/internals/kernelQueries'
+import { registryRecognitionParams } from '@/data/internals/kernelQueries'
 import { propertyMachinerySourceIds } from '@/plugins/backlinks/query'
 import type { Repo } from './repo'
 
@@ -658,7 +658,7 @@ describe('late-binding stamp → owner-cell re-projection (§9 recognition, issu
     // machinery and both edges display. Asserting this half is what makes
     // the post-stamp assertion evidence rather than a tautology.
     expect(await propertyMachinerySourceIds(
-      sharedDb.db, ['row', 'value'], registrySeedParams(repo),
+      sharedDb.db, ['row', 'value'], registryRecognitionParams(repo),
     )).toEqual(new Set())
 
     await runPass(repo)
@@ -668,7 +668,7 @@ describe('late-binding stamp → owner-cell re-projection (§9 recognition, issu
     // suppressed from the backlink panel and the field row itself is not
     // (its edge to its own definition IS the "used by" backlink).
     expect(await propertyMachinerySourceIds(
-      sharedDb.db, ['row', 'value'], registrySeedParams(repo),
+      sharedDb.db, ['row', 'value'], registryRecognitionParams(repo),
     )).toEqual(new Set(['value']))
 
     // And the edges themselves are untouched — deliberately. Parse writes

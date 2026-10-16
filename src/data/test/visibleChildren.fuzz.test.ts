@@ -13,7 +13,8 @@
  *    (`isResolvableFieldDefinition(resolver.resolveField(id))`), fed by the
  *    user-schemas projector's parse of definition rows plus the code seeds.
  *  - SQL: `recognizedFieldRowSql` — a `block_types` 'property-schema' tag in
- *    the row's workspace, or membership in the bound registry seed-id list.
+ *    the row's workspace that the bound registry list of unparseable blocks
+ *    does not veto, or membership in the bound registry seed-id list.
  * A SQL-vs-JS differential therefore tests that one leg and is blind to the
  * shared input, so the input gets an oracle of its own. After every op:
  *
@@ -27,7 +28,7 @@
  *     repairs), and undo/redo replay. It checks the pipeline, not the
  *     grammar: `referenceParser.fuzz` owns the parse.
  *  2. CHILDREN — for every live block in the active workspace,
- *     `VISIBLE_CHILDREN_SQL` bound with the live `registrySeedParams` (what
+ *     `VISIBLE_CHILDREN_SQL` bound with the live `registryRecognitionParams` (what
  *     `core.children` runs) returns exactly `visibleChildrenOf`'s ids, in order.
  *  3. SUBTREE — for every live block, `VISIBLE_SUBTREE_SQL`'s (id, depth) rows
  *     equal a pre-order walk from it over oracle 2's JS lists: the recursive
@@ -60,7 +61,7 @@ import {
 } from '@/data/api'
 import { ProcessorRejection } from '@/data/api/sameTxProcessor'
 import { BLOCKS_SYNCED_RAW_TABLE, blockToSyncedRowParams, parseBlockRow, type BlockRow } from '@/data/blockSchema'
-import { registrySeedParams } from '@/data/internals/kernelQueries'
+import { registryRecognitionParams } from '@/data/internals/kernelQueries'
 import { deriveReferenceColumns } from '@/data/internals/referenceTargetProcessor'
 import { VISIBLE_CHILDREN_SQL, VISIBLE_SUBTREE_SQL } from '@/data/internals/treeQueries'
 import { USER_SCHEMAS_PROJECTOR_ID } from '@/data/userSchemasService'
@@ -206,7 +207,6 @@ const renderContent = (u: Universe, c: ContentSpec): string => {
   }
 }
 
-const BUILDABLE_PRESETS = ['string', 'number'] as const
 const UNLOADABLE_PRESET = 'preset-whose-plugin-is-not-loaded'
 const INVALID_CHANGE_SCOPE = 'not-a-change-scope'
 
@@ -440,51 +440,21 @@ const explainRows = async (u: Universe, ids: readonly string[]): Promise<string>
 const symmetricDiff = (a: readonly string[], b: readonly string[]): string[] =>
   [...a.filter(x => !b.includes(x)), ...b.filter(x => !a.includes(x))]
 
-/** KNOWN ISSUE (fuzz): #1202 — the outline SQL hides a marked row whose
- *  target is a block tagged 'property-schema' that the registry cannot build a
- *  definition from, while the tx layer shows it. Counterexample: `putDef` with
- *  `validScope: false` or preset 'unloadable', then a field row targeting it.
- *  The one divergence the oracles excuse, and only for a bag the GENERATOR made
- *  unbuildable, read off the row's current bag (which undo and refusals move).
- *  Never from the parse/build under test, which would excuse a regression that
- *  rejects a valid definition, nor from the projector's published state, which
- *  would excuse one that lags. Delete this, its call site and the #1202
- *  tripwire tests when the issue lands. */
-const isUnbuildableByConstruction = (bag: Record<string, unknown>): boolean =>
-  !(NAMES as readonly unknown[]).includes(bag['property-schema:name'])
-  || bag['property-schema:change-scope'] === INVALID_CHANGE_SCOPE
-  || !(BUILDABLE_PRESETS as readonly unknown[]).includes(bag['property-schema:preset'])
-
-const unbuildableDefinitionIds = async (u: Universe): Promise<ReadonlySet<string>> => {
-  const tagged = await u.db.getAll<{block_id: string}>(
-    `SELECT block_id FROM block_types WHERE type = 'property-schema' AND workspace_id = ?`, [WS],
-  )
-  const out = new Set<string>()
-  for (const {block_id: id} of tagged) {
-    const row = await readRow(u.db, id)
-    if (row !== null && isUnbuildableByConstruction(row.properties)) out.add(id)
-  }
-  return out
-}
-
 const compareViews = async (u: Universe): Promise<void> => {
   const live = (await u.db.getAll<{id: string}>(
     'SELECT id FROM blocks WHERE workspace_id = ? AND deleted = 0 ORDER BY id', [WS],
   )).map(r => r.id)
-  const seedParams = registrySeedParams(u.repo)
-  const unbuildable = await unbuildableDefinitionIds(u)
+  const recognitionParams = registryRecognitionParams(u.repo)
 
   const jsChildren = new Map<string, string[]>()
   await tx(u, async t => {
     for (const id of live) {
-      jsChildren.set(id, (await visibleChildrenOf(t, id))
-        .filter(c => !(c.isFieldForm === true && unbuildable.has(c.referenceTargetId ?? '')))
-        .map(c => c.id))
+      jsChildren.set(id, (await visibleChildrenOf(t, id)).map(c => c.id))
     }
   })
 
   for (const id of live) {
-    const sql = (await u.db.getAll<{id: string}>(VISIBLE_CHILDREN_SQL, [id, ...seedParams])).map(r => r.id)
+    const sql = (await u.db.getAll<{id: string}>(VISIBLE_CHILDREN_SQL, [id, ...recognitionParams])).map(r => r.id)
     const js = jsChildren.get(id)!
     if (JSON.stringify(sql) !== JSON.stringify(js)) {
       throw new Error(
@@ -501,7 +471,7 @@ const compareViews = async (u: Universe): Promise<void> => {
       for (const child of jsChildren.get(node) ?? []) walk(child, depth + 1)
     }
     walk(id, 0)
-    const sql = (await u.db.getAll<{id: string; depth: number}>(VISIBLE_SUBTREE_SQL, [id, ...seedParams]))
+    const sql = (await u.db.getAll<{id: string; depth: number}>(VISIBLE_SUBTREE_SQL, [id, ...recognitionParams]))
       .map(r => ({id: r.id, depth: r.depth}))
     expect(sql, `visible subtree of ${id} (SQL vs JS walk)`).toEqual(expected)
   }
@@ -534,7 +504,7 @@ const openUniverse = async (): Promise<Universe> => {
   try {
     repo.setActiveWorkspaceId(WS)
     await repo.projectors.handle(USER_SCHEMAS_PROJECTOR_ID)!.whenPrimed(WS)
-    const seedIds = JSON.parse(registrySeedParams(repo)[0]) as string[]
+    const seedIds = JSON.parse(registryRecognitionParams(repo)[1]) as string[]
     expect(seedIds.length, 'kernel seeds give the SQL seed leg something to bind').toBeGreaterThan(0)
 
     const u: Universe = {repo, db: sharedDb.db, seedId: seedIds[0]!, nodes: [ROOT], nextBlock: 0, syncClock: 9_000_000_000_000}
@@ -603,7 +573,8 @@ describe('visible-children view', () => {
   // Non-vacuity canary: the differential only bites when the generated states
   // reach every leg — a hidden field row, a visible unknown-field row, an
   // unmarked look-alike (the NULL bit under `NOT (...)` that COALESCE
-  // exists for), a pruned nested subtree, a definition from a peer.
+  // exists for), a pruned nested subtree, a definition from a peer, and a
+  // tagged definition the registry cannot parse (the veto).
   it('the op vocabulary reaches every recognition leg', async () => {
     await guard.barrier()
     const u = await openUniverse()
@@ -616,46 +587,21 @@ describe('visible-children view', () => {
         {op: 'create', parent: root, orderKey: 2, content: {kind: 'field', target: {to: 'seed'}, labelled: true}, via: 'sync'},
         {op: 'create', parent: root, orderKey: 2, content: {kind: 'field', target: {to: 'def', slot: 1}, labelled: false}, via: 'tx'},
         {op: 'putDef', slot: 1, def: {name: 1, preset: 'number', validScope: true}, via: 'sync'},
+        {op: 'putDef', slot: 2, def: {name: NAMES.length, preset: 'string', validScope: true}, via: 'tx'},
+        {op: 'create', parent: root, orderKey: 2, content: {kind: 'field', target: {to: 'def', slot: 2}, labelled: false}, via: 'tx'},
         {op: 'create', parent: root, orderKey: 0, content: {kind: 'ref', target: {to: 'def', slot: 0}}, via: 'tx'},
       ] satisfies Op[]) {
         await applyOp(u, op)
         await sweep(u)
       }
       const [fieldRow, valueRow, unknownRow] = u.nodes.slice(2)
-      const lookAlike = u.nodes.at(-1)
-      const visible = (await u.db.getAll<{id: string}>(VISIBLE_CHILDREN_SQL, [ROOT, ...registrySeedParams(u.repo)]))
+      const [unparseableRow, lookAlike] = u.nodes.slice(-2)
+      const visible = (await u.db.getAll<{id: string}>(VISIBLE_CHILDREN_SQL, [ROOT, ...registryRecognitionParams(u.repo)]))
         .map(r => r.id)
-      expect(visible, 'the unmarked look-alike and the unknown-field row stay visible').toEqual([lookAlike, unknownRow])
-      const fromField = await u.db.getAll<{id: string}>(VISIBLE_SUBTREE_SQL, [fieldRow!, ...registrySeedParams(u.repo)])
+      expect(visible, 'the look-alike and the unknown-field rows stay visible')
+        .toEqual([lookAlike, unknownRow, unparseableRow])
+      const fromField = await u.db.getAll<{id: string}>(VISIBLE_SUBTREE_SQL, [fieldRow!, ...registryRecognitionParams(u.repo)])
       expect(fromField.map(r => r.id), 'a field row opened directly shows its value child').toEqual([fieldRow, valueRow])
-    } finally {
-      await releaseTestRepos([u.repo])
-    }
-  })
-  // Tripwires for the #1202 excuse, one per clause of
-  // `isUnbuildableByConstruction`: it is only sound while the bug exists. A fix
-  // that makes the tx layer hide the row leaves that branch dead, and one that
-  // makes the SQL show it fails the children oracle — either way the case
-  // goes red, and its branch goes with it.
-  it.each([
-    {branch: 'change scope is invalid', def: {name: 1, preset: 'string', validScope: false}},
-    {branch: 'name is empty', def: {name: NAMES.length, preset: 'string', validScope: true}},
-  ] satisfies Array<{branch: string; def: DefSpec}>)(
-    'KNOWN ISSUE #1202: a definition whose $branch still splits the views', async ({def}) => {
-    await guard.barrier()
-    const u = await openUniverse()
-    try {
-      for (const op of [
-        {op: 'putDef', slot: 1, def, via: 'sync'},
-        {op: 'create', parent: {kind: 'node', idx: 0}, orderKey: 0, content: {kind: 'field', target: {to: 'def', slot: 1}, labelled: false}, via: 'tx'},
-      ] satisfies Op[]) await applyOp(u, op)
-      const fieldRow = u.nodes.at(-1)
-      await vi.waitFor(async () => {
-        const sql = (await u.db.getAll<{id: string}>(VISIBLE_CHILDREN_SQL, [ROOT, ...registrySeedParams(u.repo)]))
-          .map(r => r.id)
-        const js = (await u.repo.tx(t => visibleChildrenOf(t, ROOT), {scope: ChangeScope.BlockDefault})).map(c => c.id)
-        expect({sql, js}).toEqual({sql: [], js: [fieldRow]})
-      })
     } finally {
       await releaseTestRepos([u.repo])
     }

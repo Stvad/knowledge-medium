@@ -11,8 +11,8 @@ import {
   TYPED_BLOCKS_STRUCTURE_CHANNEL,
   typedBlocksStructureKey,
 } from '@/data/invalidation'
-import { recognizedFieldRowSql } from '@/data/internals/treeQueries'
-import { registrySeedParams } from '@/data/internals/kernelQueries'
+import { recognizedFieldRowSql, type RecognitionParams } from '@/data/internals/treeQueries'
+import { registryRecognitionParams } from '@/data/internals/kernelQueries'
 
 export const BACKLINKS_FOR_BLOCK_QUERY = 'backlinks.forBlock'
 
@@ -80,8 +80,8 @@ export const workspaceHasPropertyMachinery = async (
  *  copy here — the two predicates disagreeing is silent in both directions,
  *  dropping real backlinks or leaking duplicate ones.
  *
- *  Bind `[...sourceIdChunk, seedDefinitionIdsJson, seedWorkspaceId]`: the
- *  fragment's two parameters sit textually after the chunk placeholders.
+ *  Bind `[...sourceIdChunk, ...RecognitionParams]`: the fragment's
+ *  parameters sit textually after the chunk placeholders.
  *
  *  STRICTLY INTERIOR (`depth > 0`): the field row ITSELF is deliberately NOT
  *  matched. The de-dup this filter exists for only applies to interiors — a
@@ -108,7 +108,7 @@ export const workspaceHasPropertyMachinery = async (
 export const propertyMachinerySourceIds = async (
   db: { getAll<T>(sql: string, params?: unknown[]): Promise<T[]> },
   sourceIds: readonly string[],
-  seedParams: readonly [string, string],
+  recognitionParams: RecognitionParams,
   chunkSize: number = MACHINERY_SOURCE_CHUNK,
 ): Promise<Set<string>> => {
   const machinery = new Set<string>()
@@ -133,7 +133,7 @@ export const propertyMachinerySourceIds = async (
          FROM up
         WHERE up.depth > 0
           AND (${recognizedFieldRowSql('up')})`,
-      [...chunk, ...seedParams],
+      [...chunk, ...recognitionParams],
     )
     for (const r of rows) machinery.add(r.id)
   }
@@ -272,7 +272,7 @@ export const backlinksForBlockQuery: Query<
     // visible block. km-nc46.
     if (rawSources || ids.length === 0) return ids
     if (!(await workspaceHasPropertyMachinery(ctx.db, workspaceId))) return ids
-    const machinery = await propertyMachinerySourceIds(ctx.db, ids, registrySeedParams(ctx.repo))
+    const machinery = await propertyMachinerySourceIds(ctx.db, ids, registryRecognitionParams(ctx.repo))
     return machinery.size === 0 ? ids : ids.filter(sourceId => !machinery.has(sourceId))
   },
 })
