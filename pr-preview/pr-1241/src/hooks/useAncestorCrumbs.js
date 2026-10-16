@@ -1,1 +1,1 @@
-import{Tb as e}from"../../chunks/app-Bve32w9Y.js";export{e as useAncestorCrumbs};
+import{Eb as e}from"../../chunks/app-KOQT7xlF.js";export{e as useAncestorCrumbs};

@@ -1,1 +1,1 @@
-import{Bf as e,zf as t}from"../../../chunks/app-Bve32w9Y.js";export{t as aliasCompletions,e as referencesCodeMirrorExtensions};
+import{Bf as e,Vf as t}from"../../../chunks/app-KOQT7xlF.js";export{e as aliasCompletions,t as referencesCodeMirrorExtensions};

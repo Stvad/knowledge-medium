@@ -1,1 +1,1 @@
-import{Aq as e,jq as t}from"../../../chunks/app-Bve32w9Y.js";export{e as ALIAS_CLAIM_REDERIVE_PROCESSOR,t as ALIAS_CLAIM_REDERIVE_PROCESSOR_NAME};
+import{Mq as e,jq as t}from"../../../chunks/app-KOQT7xlF.js";export{t as ALIAS_CLAIM_REDERIVE_PROCESSOR,e as ALIAS_CLAIM_REDERIVE_PROCESSOR_NAME};

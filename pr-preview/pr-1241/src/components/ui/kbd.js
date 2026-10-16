@@ -1,1 +1,1 @@
-import{SC as e}from"../../../chunks/app-Bve32w9Y.js";export{e as Kbd};
+import{CC as e}from"../../../chunks/app-KOQT7xlF.js";export{e as Kbd};

@@ -1,1 +1,1 @@
-import{cP as e,lP as t}from"../../chunks/app-Bve32w9Y.js";export{e as isIOS,t as isMacPlatform};
+import{lP as e,uP as t}from"../../chunks/app-KOQT7xlF.js";export{e as isIOS,t as isMacPlatform};
