@@ -437,6 +437,10 @@ describe('structural edge cases', () => {
     expect(out.root.childCount).toBe(1)
     expect(out.rows.map(row => row.content)).toEqual(['Kid'])
     expect(out.nextOffset).toBeNull()
+    // A one-block page must not be spent on the root itself.
+    const paged = await view<OutlineView>({type: 'view-outline', ref: root, limit: 1, format: 'json'})
+    expect(paged.rows.map(row => row.content)).toEqual(['Kid'])
+    expect(paged.nextOffset).toBeNull()
   })
 
   it('a search stopped by the window cap says so, even when folding left the page empty', async () => {
@@ -489,6 +493,16 @@ describe('structural edge cases', () => {
     }])
     await view({type: 'view-search', query: 'slack'})
     expect(Math.max(...limits)).toBeLessThanOrEqual(2000)
+  })
+
+  it('titles at most 20 refs of a refList, counting the rest', async () => {
+    const targets = Array.from({length: 25}, (_, i) => uuid(`7e7e7e${String(i).padStart(2, '0')}`, i))
+    for (const [i, target] of targets.entries()) await create({id: target, content: `r${i}`})
+    const holder = uuid('7f7f7f7f', 1)
+    await create({id: holder, content: 'holder', properties: {groupWith: targets}})
+    const out = await view<BlockView>({type: 'view-block', ref: holder, format: 'json'})
+    const value = out.properties.find(property => property.name === 'groupWith')!.value
+    expect(value).toMatch(/^\[\[r0\]\], .*\[\[r19\]\], …\+5 more$/)
   })
 
   it('formats a huge list value only as far as its line, counting the rest', async () => {
