@@ -859,6 +859,9 @@ describe('view-backlinks', () => {
 
     const text = await view<string>({type: 'view-backlinks', ref: TARGET, limit: 2})
     expect(text.split('\n')[0]).toBe('Backlinks of "Target" ^7a7a7a7a — 1–2 of 4 (next: offset=2)')
+    expect(text).toMatch(/^2\. \^/m)
+    const second = await view<string>({type: 'view-backlinks', ref: TARGET, limit: 2, offset: 2})
+    expect(second).toMatch(/^3\. \^/m)
   })
 
   it('grouped: groups a page at a time with their sizes and first members', async () => {
