@@ -39,6 +39,13 @@ export interface BlockView {
 
 const MAX_CHARS = 100_000
 
+/** Sync admits out-of-range timestamps, and one must not take the view down. */
+const validIso = (ms: unknown): string | null => {
+  if (typeof ms !== 'number') return null
+  const date = new Date(ms)
+  return Number.isNaN(date.getTime()) ? null : date.toISOString()
+}
+
 export const buildBlockView = async (
   repo: Repo,
   workspaceId: string,
@@ -78,7 +85,7 @@ export const buildBlockView = async (
     hiddenProperties: properties.hidden,
     childCount: childCounts.get(block.id) ?? 0,
     backlinkCount: backlinks.length,
-    editedAt: typeof editedAt === 'number' ? new Date(editedAt).toISOString() : null,
+    editedAt: validIso(editedAt),
   }
 }
 

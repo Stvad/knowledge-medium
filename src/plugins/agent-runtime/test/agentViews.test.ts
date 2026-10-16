@@ -617,6 +617,30 @@ describe('structural edge cases', () => {
     expect(out.omittedProperties).toBe(0)
   })
 
+  it('reads a long list only as far as its line: refs, scalars, and a list of records', async () => {
+    const targets = Array.from({length: 3}, (_, i) => uuid(`8b8b8b8${i}`, i))
+    for (const [i, target] of targets.entries()) await create({id: target, content: `t${i}`})
+    const id = uuid('8c8c8c8c', 1)
+    await create({id, content: 'lists', properties: {
+      groupWith: [...targets, ...Array.from({length: 200_000}, (_, i) => uuid('8d8d8d8d', i))],
+      numbers: Array.from({length: 200_000}, (_, i) => i),
+      history: [{at: 1}, ...Array.from({length: 200_000}, (_, i) => i)],
+    }})
+    const out = await view<BlockView>({type: 'view-block', ref: id, format: 'json'})
+    const value = (name: string) => out.properties.find(property => property.name === name)!.value
+    expect(value('groupWith')).toMatch(/^\[\[t0\]\], \[\[t1\]\], \[\[t2\]\], .*, …\+\d+ more$/)
+    expect(value('numbers')).toMatch(/…\+\d+ more$/)
+    expect(value('history')).toBe('[200001 items]')
+  })
+
+  it('omits an out-of-range edit time instead of failing the view', async () => {
+    const id = uuid('8e8e8e8e', 1)
+    await create({id, content: 'odd clock'})
+    await sharedDb.db.execute('UPDATE blocks SET user_updated_at = ? WHERE id = ?', [9e18, id])
+    const out = await view<BlockView>({type: 'view-block', ref: id, format: 'json'})
+    expect(out.editedAt).toBeNull()
+  })
+
   it('sql summarizes a binary cell by its size', async () => {
     const out = await executeCommand({
       commandId: 's', type: 'sql', mode: 'all', maxRows: 1, sql: 'SELECT randomblob(10) AS b',
@@ -766,7 +790,10 @@ describe('view-search', () => {
 
     const out = await view<SearchView>({type: 'view-search', query: 'banana', format: 'json'})
     expect(out.hits.map(hit => hit.snippet)).toEqual(['banana split', 'we also like banana'])
-    expect(out.hits[0].duplicateIds).toHaveLength(109)
+    expect(out.hits[0].duplicateCount).toBe(109)
+    expect(out.hits[0].duplicateIds).toHaveLength(5)
+    const text = await view<string>({type: 'view-search', query: 'banana'})
+    expect(text).toMatch(/\(\+109 identical: (\^[^,]+, ){5}…\+104 more\)/)
     expect(out.nextOffset).toBeNull()
   })
 

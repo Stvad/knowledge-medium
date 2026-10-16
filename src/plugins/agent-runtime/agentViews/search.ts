@@ -27,9 +27,11 @@ export interface SearchHit {
   types: string[]
   properties: PropertyLine[]
   omittedProperties: number
-  /** Other blocks with the same text, folded into this hit. */
+  /** The first few other blocks with the same text, folded into this hit;
+   *  `duplicateCount` is all of them. */
   duplicateIds: string[]
   duplicateShortIds: string[]
+  duplicateCount: number
 }
 
 export interface SearchView {
@@ -49,6 +51,7 @@ const MAX_RESULTS = 200
  *  ranking: a window that grew per page could reorder its top and repeat or
  *  skip a hit across pages. */
 const SEARCH_WINDOW = 100
+const MAX_DUPLICATES_SHOWN = 5
 const MAX_WINDOW = 2000
 
 /** A filter type is a type id or a type's label (`todo`, a user type's
@@ -122,7 +125,7 @@ export const buildSearchView = async (
 
   const page = groups.slice(offset, offset + limit)
   const shown = page.map(group => group[0])
-  const duplicateIds = page.flatMap(group => group.slice(1).map(block => block.id))
+  const duplicateIds = page.flatMap(group => group.slice(1, 1 + MAX_DUPLICATES_SHOWN).map(block => block.id))
   const [renderer, shortIds, crumbs] = await Promise.all([
     createPropertyRenderer(repo, shown),
     loadShortIds(repo, [...shown.map(block => block.id), ...duplicateIds]),
@@ -139,7 +142,8 @@ export const buildSearchView = async (
     filter: {types: params.types ?? [], under: underId ?? null, includeExtensions},
     offset,
     hits: page.map(group => {
-      const [block, ...duplicates] = group
+      const [block] = group
+      const duplicates = group.slice(1, 1 + MAX_DUPLICATES_SHOWN)
       const properties = renderer.view(block, 'brief')
       return {
         id: block.id,
@@ -151,6 +155,7 @@ export const buildSearchView = async (
         omittedProperties: properties.omitted,
         duplicateIds: duplicates.map(duplicate => duplicate.id),
         duplicateShortIds: duplicates.map(duplicate => shortIds.get(duplicate.id) ?? duplicate.id),
+        duplicateCount: group.length - 1,
       }
     }),
     nextOffset: more ? end : null,
@@ -184,8 +189,9 @@ export const renderSearchView = (view: SearchView): string => {
         ? formatPropertyPairs(hit.properties, 'brief', hit.omittedProperties)
         : null,
     ].filter(Boolean).join('  ')
-    const duplicates = hit.duplicateShortIds.length > 0
-      ? `  (+${hit.duplicateShortIds.length} identical: ${hit.duplicateShortIds.map(id => `^${id}`).join(', ')})`
+    const unlisted = hit.duplicateCount - hit.duplicateShortIds.length
+    const duplicates = hit.duplicateCount > 0
+      ? `  (+${formatCount(hit.duplicateCount)} identical: ${hit.duplicateShortIds.map(id => `^${id}`).join(', ')}${unlisted > 0 ? `, …+${formatCount(unlisted)} more` : ''})`
       : ''
     lines.push(`${view.offset + index + 1}. ^${hit.shortId}  ${crumbLine(hit.breadcrumb)}${duplicates}`)
     lines.push(`   ${hit.snippet}${meta ? `  ${meta}` : ''}`)

@@ -40,22 +40,28 @@ const MAX_TYPES = 10
 const MAX_REFS = 20
 const SUMMARY_KEYS = 3
 
+/** A list value is decoded from a head this long — more than any line can
+ *  show — with its real length kept for the "+N more" count. */
+const MAX_DECODED_ITEMS = 100
+
 type Decoded =
-  | {kind: 'refs', ids: string[]}
-  | {kind: 'value', value: unknown}
+  | {kind: 'refs', ids: string[], total: number}
+  | {kind: 'value', value: unknown, total?: number}
 
 const decodeProperty = (schema: AnyPropertySchema | undefined, raw: unknown): Decoded => {
-  if (!schema) return {kind: 'value', value: raw}
+  const total = Array.isArray(raw) ? raw.length : undefined
+  const head = Array.isArray(raw) && raw.length > MAX_DECODED_ITEMS ? raw.slice(0, MAX_DECODED_ITEMS) : raw
+  if (!schema) return {kind: 'value', value: head, total}
   const codec = schema.codec
   if (isRefCodec(codec)) {
     const id = decodeRefId(codec, raw)
-    return id ? {kind: 'refs', ids: [id]} : {kind: 'value', value: raw}
+    return id ? {kind: 'refs', ids: [id], total: 1} : {kind: 'value', value: raw}
   }
-  if (isRefListCodec(codec)) return {kind: 'refs', ids: decodeRefListIds(codec, raw)}
+  if (isRefListCodec(codec)) return {kind: 'refs', ids: decodeRefListIds(codec, head), total: total ?? 0}
   try {
-    return {kind: 'value', value: codec.decode(raw)}
+    return {kind: 'value', value: codec.decode(head), total}
   } catch {
-    return {kind: 'value', value: raw}
+    return {kind: 'value', value: head, total}
   }
 }
 
@@ -72,31 +78,36 @@ const formatDate = (date: Date): string => {
   return iso.endsWith('T00:00:00.000Z') ? iso.slice(0, 10) : iso.replace(/\.\d{3}Z$/, 'Z')
 }
 
+const isListItem = (value: unknown): boolean => isScalar(value) || value instanceof Date
+
 /** Structured values (an SRS snapshot history, an importer's payload) are
  *  summarized, never dumped — they are what made raw outlines unreadable. A
- *  list is joined only until it passes `budget`, so a huge one costs no more
- *  than the line it ends up on. */
-const formatValue = (value: unknown, budget: number, from = 0): string => {
+ *  list is read only until its line is full: a list of records is told by
+ *  its first item, a list of scalars is joined until it passes `budget`, and
+ *  `total` (the undecoded list's length) counts what was never read. */
+const formatValue = (value: unknown, budget: number, from = 0, total?: number): string => {
   if (value === null || value === undefined) return ''
   if (value instanceof Date) return formatDate(value)
   if (isScalar(value)) return String(value)
   if (Array.isArray(value)) {
-    if (!value.every(item => isScalar(item) || item instanceof Date)) return `[${value.length} items]`
+    const count = total ?? value.length
+    if (value.length > from && !isListItem(value[from])) return `[${count} items]`
     let joined = ''
     for (let index = from; index < value.length; index++) {
       const item: unknown = value[index]
-      const left = value.length - index - 1
+      if (!isListItem(item)) return `${joined}, …+${count - index} more`
+      const left = count - index - 1
       const separator = index > from ? ', ' : ''
       // Room for the count of what follows, so the line's own clip never cuts it off.
       const space = budget - joined.length - separator.length - (left > 0 ? `, …+${left} more`.length : 0)
       const text = formatValue(item, budget)
       if (text.length > space && left > 0) {
-        if (index > from) return `${joined}, …+${value.length - index} more`
+        if (index > from) return `${joined}, …+${count - index} more`
         return `${text.slice(0, charBoundary(text, Math.max(1, space - 1)))}…, …+${left} more`
       }
       joined += `${separator}${text}`
     }
-    return joined
+    return count > value.length ? `${joined}, …+${count - value.length} more` : joined
   }
   if (typeof value === 'object') {
     // Enumerate only what is shown (plus one, to know there is more): an
@@ -203,15 +214,15 @@ export const createPropertyRenderer = async (
         const title = titleIn(id, block.workspaceId)
         return title !== undefined ? `[[${title}]]` : `((${id}))`
       })
-      const rest = decoded.ids.length - shown.length
-      return rest > 0 ? `${shown.join(', ')}, …+${rest} more` : shown.join(', ')
+      // Joined like any list, so the count of the rest stays on the line.
+      return formatValue(shown, budget, 0, decoded.total)
     }
     // A page's first alias is its title, already on the line; skipped in
     // place, since an alias list can be huge.
     if (name === aliasesProp.name && Array.isArray(decoded.value)) {
-      return formatValue(decoded.value, budget, decoded.value[0] === block.content.trim() ? 1 : 0)
+      return formatValue(decoded.value, budget, decoded.value[0] === block.content.trim() ? 1 : 0, decoded.total)
     }
-    return formatValue(decoded.value, budget)
+    return formatValue(decoded.value, budget, 0, decoded.total)
   }
 
   return {
