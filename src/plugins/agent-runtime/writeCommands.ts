@@ -49,19 +49,6 @@ export interface AppendMarkdownResult {
   blocks: AppendedBlock[]
 }
 
-const liveTargetInTx = async (
-  tx: Parameters<Parameters<Repo['tx']>[0]>[0],
-  repo: Repo,
-  verb: string,
-  id: string,
-): Promise<BlockData> => {
-  const row = await tx.get(id)
-  if (!row) throw new Error(`${verb}: block ${id} not found.`)
-  if (row.deleted) throw new Error(`${verb}: block ${id} is deleted — restore it first, or pick another target.`)
-  assertActiveWorkspace(repo, verb, row.workspaceId)
-  return row
-}
-
 const siblingPosition = async (
   repo: Repo,
   verb: string,
@@ -89,7 +76,10 @@ export const appendMarkdown = async (
     let targetContent = ''
 
     await repo.tx(async tx => {
-      targetContent = (await liveTargetInTx(tx, repo, verb, target.id)).content
+      // A missing or deleted target is refused by `createChild` itself.
+      const row = await tx.get(target.id)
+      if (row) assertActiveWorkspace(repo, verb, row.workspaceId)
+      targetContent = row?.content ?? ''
       const created = new Map<string, {id: string; depth: number}>()
       let previousRootId: string | null = null
       for (const node of parsed) {
@@ -118,9 +108,11 @@ export interface EditBlockInput {
   new: string
 }
 
+/** Overlapping occurrences — `aa` occurs twice in `aaa`, which is ambiguous to
+ *  replace. Bounded by the text length, so an empty needle cannot spin. */
 const occurrences = (text: string, needle: string): number => {
   let count = 0
-  for (let at = text.indexOf(needle); at >= 0; at = text.indexOf(needle, at + 1)) count += 1
+  for (let at = text.indexOf(needle); at >= 0 && at < text.length; at = text.indexOf(needle, at + 1)) count += 1
   return count
 }
 

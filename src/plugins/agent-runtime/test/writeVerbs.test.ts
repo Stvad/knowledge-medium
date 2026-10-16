@@ -5,7 +5,7 @@
 // grammar they share, end-to-end against a real Repo with every static data
 // extension — so a page or daily note is created by the same kernel paths the
 // app uses.
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import { PAGE_TYPE } from '@/data/blockTypes'
 import { aliasesProp, getBlockTypes } from '@/data/properties'
@@ -124,6 +124,22 @@ describe('target resolution', () => {
     expect(page.parentId).toBeNull()
     expect(getBlockTypes(page)).toContain(PAGE_TYPE)
     expect(page.properties[aliasesProp.name]).toEqual(['Project X'])
+  })
+
+  // The page is pinned to the workspace active when the call started; its
+  // seat must not be minted after the user switched away (the type registry
+  // the mint reads is the ACTIVE workspace's).
+  it('refuses to mint a page when the active workspace moved since it was pinned', async () => {
+    let reads = 0
+    const spy = vi.spyOn(repo, 'activeWorkspaceId', 'get')
+      .mockImplementation(() => (reads++ === 0 ? WS : 'ws-elsewhere'))
+    try {
+      await expect(resolveAgentTarget(repo, '[[Drifted]]', {verb: 'test', create: true}))
+        .rejects.toThrow(/not the active one/)
+    } finally {
+      spy.mockRestore()
+    }
+    expect(await sharedDb.db.getAll('SELECT block_id FROM block_aliases WHERE alias = ?', ['Drifted'])).toEqual([])
   })
 
   it('refuses a missing page without create', async () => {
@@ -409,18 +425,20 @@ describe('block-history', () => {
       await db.execute('UPDATE blocks SET content = ? WHERE id = ?', ['v3 from another device', NOTE])
     })
     await run({type: 'delete-block', id: NOTE})
+    await run({type: 'restore-block', id: NOTE})
 
     const out = await run({type: 'block-history', id: '3f2a9c1b'}) as {
       events: Array<{kind: string, source: string, description: string | null, content?: {before?: string, after?: string}}>
     }
     expect(out.events.map(event => [event.kind, event.source, event.description])).toEqual([
+      ['restore', 'local', 'agent runtime restore-block'],
       ['soft-delete', 'local', 'agent runtime delete-block'],
       ['update', 'sync', null],
       ['move', 'local', 'agent runtime move-block'],
       ['update', 'local', 'agent runtime update-block'],
       ['create', 'local', 'seed'],
     ])
-    expect(out.events[1].content).toEqual({before: 'v2', after: 'v3 from another device'})
+    expect(out.events[2].content).toEqual({before: 'v2', after: 'v3 from another device'})
   })
 
   it('refuses a block with no recorded changes', async () => {
