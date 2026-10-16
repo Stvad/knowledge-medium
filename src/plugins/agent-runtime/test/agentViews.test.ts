@@ -600,6 +600,25 @@ describe('structural edge cases', () => {
     expect(out.windowCap).toBe(2000)
   })
 
+  it('calls a duplicate count a lower bound while matches continue past the window', async () => {
+    const row = (i: number, content: string) => ({
+      id: `row-${i}`, workspaceId: WS, parentId: null, orderKey: `r${i}`, content,
+      properties: {}, references: [], createdAt: 1, updatedAt: 1, userUpdatedAt: 1,
+      createdBy: USER.id, updatedBy: USER.id, deleted: false,
+    })
+    // Always a full window: two identical rows, then distinct ones.
+    repo.setRuntimeContributions(searchSourcesFacet, 'test:endless', [{
+      id: 'test.endless',
+      search: async (_repo, args) => Array.from({length: args.limit}, (_, i) =>
+        ({block: row(i, i < 2 ? 'twin text' : `other text ${i}`) as never, score: 1000})),
+    }])
+    const out = await view<SearchView>({type: 'view-search', query: 'text', format: 'json'})
+    expect(out.duplicateCountsComplete).toBe(false)
+    expect(out.hits[0].duplicateCount).toBe(1)
+    const text = await view<string>({type: 'view-search', query: 'text'})
+    expect(text).toContain('(+1 or more identical: ^row-1)')
+  })
+
   it('search refuses an `under` block from another workspace', async () => {
     const foreign = uuid('5e5e5e5f', 1)
     await repo.tx(async tx => {

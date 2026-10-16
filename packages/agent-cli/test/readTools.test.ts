@@ -68,10 +68,10 @@ describe('cliInputFrom', () => {
       .toThrow(/--types got the number 123/)
   })
 
-  it('accepts a single or repeated string-array flag, splitting commas', () => {
-    expect(cliInputFrom(tool('search'), ['x'], {types: 'todo,page'}).types).toEqual(['todo', 'page'])
-    expect(cliInputFrom(tool('search'), ['x'], {types: ['todo', 'page,note']}).types)
-      .toEqual(['todo', 'page', 'note'])
+  it('takes each string-array flag occurrence as one value, commas included', () => {
+    expect(cliInputFrom(tool('search'), ['x'], {types: 'todo'}).types).toEqual(['todo'])
+    expect(cliInputFrom(tool('search'), ['x'], {types: ['todo', 'Research, Development']}).types)
+      .toEqual(['todo', 'Research, Development'])
   })
 
   it('passes filter keywords through and parses anything else as JSON', () => {

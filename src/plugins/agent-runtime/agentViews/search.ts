@@ -28,7 +28,8 @@ export interface SearchHit {
   properties: PropertyLine[]
   omittedProperties: number
   /** The first few other blocks with the same text, folded into this hit;
-   *  `duplicateCount` is all of them. */
+   *  `duplicateCount` is all of them within the fetched window (complete only
+   *  when the view's `duplicateCountsComplete` is set). */
   duplicateIds: string[]
   duplicateShortIds: string[]
   duplicateCount: number
@@ -44,6 +45,10 @@ export interface SearchView {
   /** Set when matches may continue past the deepest window a search fetches,
    *  so an offset cannot reach them: narrow the query instead. */
   windowCap: number | null
+  /** Whether each hit's `duplicateCount` counts every identical block: only
+   *  once the sources ran dry, since identical blocks ranked past the
+   *  fetched window are not seen. Otherwise a count is a lower bound. */
+  duplicateCountsComplete: boolean
 }
 
 const MAX_RESULTS = 200
@@ -162,6 +167,7 @@ export const buildSearchView = async (
     }),
     nextOffset: more ? end : null,
     windowCap: !exhausted && window === MAX_WINDOW ? MAX_WINDOW : null,
+    duplicateCountsComplete: exhausted,
   }
 }
 
@@ -193,7 +199,7 @@ export const renderSearchView = (view: SearchView): string => {
     ].filter(Boolean).join('  ')
     const unlisted = hit.duplicateCount - hit.duplicateShortIds.length
     const duplicates = hit.duplicateCount > 0
-      ? `  (+${formatCount(hit.duplicateCount)} identical: ${hit.duplicateShortIds.map(id => `^${id}`).join(', ')}${unlisted > 0 ? `, …+${formatCount(unlisted)} more` : ''})`
+      ? `  (+${formatCount(hit.duplicateCount)}${view.duplicateCountsComplete ? '' : ' or more'} identical: ${hit.duplicateShortIds.map(id => `^${id}`).join(', ')}${unlisted > 0 ? `, …+${formatCount(unlisted)} more` : ''})`
       : ''
     lines.push(`${view.offset + index + 1}. ^${hit.shortId}  ${crumbLine(hit.breadcrumb)}${duplicates}`)
     lines.push(`   ${hit.snippet}${meta ? `  ${meta}` : ''}`)

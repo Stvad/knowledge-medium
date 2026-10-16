@@ -264,12 +264,11 @@ const coerceOption = (spec: CliOptionSpec, value: unknown): unknown => {
       return String(value)
     }
     case 'string-array': {
+      // Each occurrence is one value, verbatim (repeat the flag for more): a
+      // type label can contain a comma.
       const items = Array.isArray(value) ? value : [value]
       for (const item of items) refuseNumberified(flag, item)
-      return items
-        .flatMap(item => String(item).split(','))
-        .map(item => item.trim())
-        .filter(item => item !== '')
+      return items.map(item => String(item).trim()).filter(item => item !== '')
     }
     case 'spec': {
       if (Array.isArray(value)) {
