@@ -60,17 +60,25 @@ Agent memory proposals                                ← system page, agent-wri
   | seed                         | preset         | on                            |
   | ---------------------------- | -------------- | ----------------------------- |
   | type `agent-memory`          |                | memories and proposals        |
-  | `agent-memory:applies-to`    | `refList`      | memories; empty means whole workspace |
+  | `agent-memory:applies-to`    | `refList` (`targetTypes: ['page']`) | memories; empty means whole workspace |
   | `agent-memory:pinned`        | `boolean`      | memories; inject the body, not just the line |
-  | `agent-memory:supersedes`    | `optional-ref` (`targetTypes: ['agent-memory']`) | proposals |
-  | `agent-memory:reported-source` | `optional-ref` | proposals; agent-reported, not provenance |
+  | `agent-memory:supersedes`    | `optional-ref` (`targetTypes: ['agent-memory']`) | proposals; a placement and display hint only |
+  | `agent-memory:reported-source` | `optional-ref` (untyped) | proposals; agent-reported, not provenance |
+
+  `reported-source` is deliberately untyped. What an agent works on can be any block, `targetTypes` is optional in `RefCodecOptions`, and core's `groupWith` is an untyped `refList` too.
 
   The `agent-memory` namespace doesn't collide with dispatch's `agent:status` / `agent:reply`.
-- **Accept treats the proposal as untrusted input.** The agent wrote everything on a proposal: its text, its `supersedes` target and its reported source. Accept is a button on proposals and runs as one undoable user transaction with four steps:
-  1. **Confirm it's what the user saw.** The renderer records the ids and `user_updated_at` of the proposal's rows. If any of them differ inside the transaction, Accept refuses: *"This proposal changed after it was shown. Review it again."*
-  2. **Check `supersedes`.** It must name a live top-level child of the memory page. Anything else is ignored, and Accept says so; that includes another proposal, a deleted block and a block elsewhere in the graph.
-  3. **Publish a copy under new ids.** The copy carries the proposal's text, body, `applies-to` and `pinned`. It goes where the superseded memory was, or at the end of the page.
-  4. **Clean up.** Delete the superseded memory, if any, and then the proposal.
+- **Accept treats the proposal as untrusted input.** The agent wrote everything on a proposal: its text, its `supersedes` target and its reported source. Accept is a button on proposals. It never deletes or edits an existing memory. It runs in these steps:
+  1. **Refuse mid-edit.** If any row of the proposal is open in the editor, Accept refuses before anything is dispatched: *"Finish editing the proposal first."* An edit that hasn't been written yet isn't in the database, so the step 2 check can't see it.
+  2. **Confirm it's what the user saw.** The renderer records the ids and `user_updated_at` of the proposal's rows. If any of them differ inside the transaction, Accept refuses: *"This proposal changed after it was shown. Review it again."*
+  3. **Publish a copy under new ids.** The memory page is get-or-created in the same transaction, because the workspace-open ensure may have been skipped. The copy carries each row's text, the tree shape, and the root's `applies-to` and `pinned`; other properties on body rows are not copied. It goes right after the memory `supersedes` names, when that is a live top-level child of the memory page. Otherwise it goes at the end of the page. A wrong `supersedes` can only misplace the copy.
+  4. **Delete the proposal.**
+
+  Steps 2 to 4 run as one undoable user transaction.
+
+  **Replacing a memory takes two gestures.** When a proposal names a live memory in `supersedes`, the renderer shows the two side by side. After accepting, the user deletes the old memory themselves, like any block they can see. Accept never discards text the user hasn't looked at.
+
+  **Accepted case: a block ref in the proposal's text that points at one of the proposal's own rows dangles after the copy.** `remember` creates those rows, so only a later edit could add such a ref, and injected renderings show refs as ids anyway.
 
   The copy closes a stale-write gap. The gate judges each agent write on the device that runs it, against that device's view, and rows that arrive by sync are not checked again. An agent on a device that hasn't yet seen the acceptance can still edit the proposal, and that edit syncs later. If Accept had moved the proposal, the edit would land in active memory. With a copy, the edit lands on the deleted proposal. The new memory's ids didn't exist until Accept ran, so no agent edit can already be in flight against them.
 
@@ -119,7 +127,7 @@ To propose a memory from this task, call remember with source: <mention block id
 
 ## Q1. What is a "project"?
 
-**Recommendation.** The workspace is the unit of memory: one memory page per workspace, the same unit an agent token is bound to. A memory narrows itself with `agent-memory:applies-to` refs to pages or blocks. A memory **applies at block B** when it has no `applies-to`, or when one of its targets is B or an ancestor of B.
+**Recommendation.** The workspace is the unit of memory: one memory page per workspace, the same unit an agent token is bound to. A memory narrows itself with `agent-memory:applies-to` refs to pages. A memory **applies at block B** when it has no `applies-to`, or when one of its target pages is B or an ancestor of B. Pages are where projects live, and limiting the targets to pages gives the property a page picker.
 
 **How an agent learns its location.** An agent doesn't declare a project when it connects; location comes with each request:
 
@@ -207,7 +215,7 @@ This repo's beads memory works: a SessionStart hook injects a clipped one-line i
 - **Index at start, full text on demand.** `memory {id}` plays the role of `bd recall`. Previews are clipped evenly to fit the budget, as `scripts/bd-prime-hook.mjs` does for the 10K hook limit.
 - **The first line is the index entry, so lead with the subject.** In an outliner this comes naturally: the block's content is the line and its children are the body.
 - **Memory versus issue.** Memories hold what stays true. Anything with state goes into a todo block. The update guidance says so.
-- **Replace instead of piling up.** `supersedes` does the job of `bd remember --key`.
+- **Replace instead of piling up.** `supersedes` does the job of `bd remember --key`, except that the user deletes the old memory.
 
 **Better here.**
 - **Timestamps.** bd memories have none, which is the staleness problem AGENTS.md describes. Blocks carry edit times, so the index shows each memory's age, taken from the newest edit anywhere in its subtree.
@@ -223,6 +231,7 @@ This repo's beads memory works: a SessionStart hook injects a clipped one-line i
 
 - **Bridge verb `agent-memory`** (`readOnly: true`), executed in the app by agent-runtime.
   - Arguments: `{at?, ids?, budget?}`. It returns `{text, counts, truncated}`.
+  - It reads the memory of the workspace the calling token is bound to, and refuses if the tab can't serve that workspace. It never falls back to whichever workspace is active. Injection is automatic, so a fallback would quietly hand one workspace's standing instructions to an agent working in another.
   - Rendering sits next to #1236's `agentViews/`, so knowledge of the type and its properties stays in the plugin.
   - It reads by derived id and **never creates** a page; a missing page means no memories. `remember` also get-or-creates the proposals page at the point of use, as the `systemPagesFacet` guidance recommends, in case the ensure at workspace open was skipped.
 - **Budget rendering.**
@@ -230,7 +239,7 @@ This repo's beads memory works: a SessionStart hook injects a clipped one-line i
   - Then index lines, clipped evenly and in page order.
   - Then a "+N more: memory {}" line.
   - Every cut is stated in the text.
-- **At connect.** Both MCP entrypoints await the verb before `connect`, with a short timeout of about 2s. They compose the result through a shared `composeInstructions(sections)` helper that applies each section's budget. If the bridge doesn't answer, the memory section is one line: *"Graph memory was not loaded at connect (the app's bridge did not answer). Call memory to read it."* With no memories at all, it is one line naming `remember`.
+- **At connect.** Both MCP entrypoints await the verb before `connect`, with a short timeout of about 2s. They compose the result through a shared `composeInstructions(sections)` helper that applies each section's budget. If the verb doesn't answer or refuses, the memory section is one line stating which, for example *"Graph memory was not loaded at connect (the app's bridge did not answer). Call memory to read it."* A refusal quotes the verb's own reason instead. With no memories at all, it is one line naming `remember`.
   - Today `createGraphMcpServer` takes `instructions` only through `serverOptions`, so it needs an async loader, or the entrypoints fetch first and pass the composed string. Either way the change touches the same function #1236 is editing, so the two need to coordinate.
 - **Tools, mirrored as CLI verbs.**
   - `memory`, which reads: with no arguments it returns the full index, bounded like #1236's views; `{id}` returns the full subtree; `{at}` returns the memories that apply there.
@@ -239,15 +248,17 @@ This repo's beads memory works: a SessionStart hook injects a clipped one-line i
 - **Staleness within a session.** Instructions are fixed at connect. A memory accepted mid-session shows up through `memory` but isn't injected again. Beads behaves the same way.
 - **Failure paths.**
   - Bridge down: the one-line notice above.
-  - Tab on another workspace (#1234): the memory loaded is the active workspace's, as with every other read.
+  - The tab shows a different workspace from the token's: the verb refuses, and the connect section says graph memory was not loaded. Today the tab registers only the active workspace's tokens, so this already fails at registration. #1234 may change that, and the verb must keep following the token's workspace when it does.
   - `applies-to` pointing at a deleted block: the memory applies nowhere, and `memory` lists it as such.
-  - Accept when the superseded memory is already gone, or `supersedes` names something else: it ignores `supersedes`, says so, and puts the copy at the end of the page.
+  - Accept when `supersedes` names nothing live on the memory page: the copy goes at the end of the page.
   - Accept on a proposal that changed after it was shown: refused, and the user reviews it again.
+  - Accept while a proposal row is open in the editor: refused before anything is written.
+  - Accept when the memory page is missing: get-or-created in the same transaction.
   - Gate rejection: the agent's transaction rolls back atomically and the agent gets the message above.
 
 ## Implementation slices (for when this is accepted)
 
-1. **Seeds, pages and the proposal UI.** In agent-runtime: the type and property seeds, the two system pages, the tag-on-entry processor, and the proposal renderer with Accept (check, then copy). Each Accept check needs a test that fails when the check is removed: a proposal that changed after it was shown, and a `supersedes` that names another proposal.
+1. **Seeds, pages and the proposal UI.** In agent-runtime: the type and property seeds, the two system pages, the tag-on-entry processor, and the proposal renderer with Accept (check, then copy). Each Accept check needs a test that fails when the check is removed: Accept clicked mid-edit, a proposal edited after it was shown, and a missing memory page.
 2. **Actor stamp and gate.** `actor` on transaction options, the executor's facade, and the same-tx gate. Verify the guard per verb and per clause, including the rename-cascade case and a body block moved between memories: delete the clause and confirm a named test fails.
 3. **Verb, renderer and tools.** The `agent-memory` verb and its renderer with budgets, plus the `memory` / `remember` tools and CLI verbs.
 4. **Connect-time injection.** `composeInstructions` in both MCP entrypoints. This lands after #1236's static `instructions`.
