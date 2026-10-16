@@ -481,9 +481,10 @@ export interface WorkspaceSyncDivergence {
    *  sealed columns are ciphertext, so only the clear ones were compared and a
    *  row differing ONLY in sealed columns is not reported. */
   readonly materializability: Materializability
-  /** A rescan of the workspace is still in flight as the read finishes — it
-   *  rewrites `blocks` without the queue, so these rows may be mid-repair.
-   *  Re-read once it finishes before acting on them. */
+  /** A rescan of the workspace was in flight when the read started or as it
+   *  finished — it rewrites `blocks` without the queue, so these rows may be
+   *  mid-repair. Re-read once it finishes before acting on them. Accepted: a
+   *  rescan that starts and ends wholly inside the read goes unseen. */
   readonly rematerializing: boolean
   /** Rows still flagged for the drain — the durable gap
    *  {@link WORKSPACE_UNAPPLIED_SQL} counts, which `workspaceViewGap` refuses
@@ -563,8 +564,10 @@ export const readSyncDivergence = async (
   const staged = await reader.getAll<{workspaceId: string}>(
     'SELECT DISTINCT workspace_id AS workspaceId FROM blocks_synced')
   const materializability = new Map<string, Materializability>()
+  const rematerializingAtStart = new Set<string>()
   for (const {workspaceId} of staged) {
     materializability.set(workspaceId, await drain.materializabilityOf(workspaceId))
+    if (drain.isRematerializing(workspaceId)) rematerializingAtStart.add(workspaceId)
   }
   const plaintext = [...materializability].filter(([, m]) => m === 'copy').map(([id]) => id)
 
@@ -593,7 +596,8 @@ export const readSyncDivergence = async (
       // now, so its sealed columns went uncompared on this one read.
       materializability: materializability.get(workspaceId)
         ?? await drain.materializabilityOf(workspaceId),
-      rematerializing: drain.isRematerializing(workspaceId),
+      rematerializing: rematerializingAtStart.has(workspaceId)
+        || drain.isRematerializing(workspaceId),
       ...byWorkspace.get(workspaceId)!,
     })
   }

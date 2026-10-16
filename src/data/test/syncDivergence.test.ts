@@ -24,6 +24,7 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import type { Repo } from '@/data/repo'
 import type { BlockData } from '@/data/api'
 import type { GetMaterializability, Materializability } from '@/sync/transform'
+import { readSyncDivergence } from '@/data/internals/syncObserver/reconcile'
 
 const WS = 'ws1'
 
@@ -212,6 +213,35 @@ describe('Repo.syncDivergence — whether a rescan can act on what it reports', 
     release()
     await pass
     expect(await repo.syncDivergence()).toEqual([])
+  })
+})
+
+describe('readSyncDivergence — when it asks whether a rescan is running', () => {
+  // A rescan rewrites rows WHILE the scan reads them, so one sample cannot say
+  // whether the counts caught it mid-repair. Scripted, because a real rescan
+  // cannot be made to start or finish at a chosen point inside the read.
+  it.each([
+    {name: 'running when the read starts, finished by its end', before: true, after: false},
+    {name: 'started during the read, running at its end', before: false, after: true},
+  ])('marks the workspace when a rescan was $name', async ({before, after}) => {
+    await strand(base, {...base, updatedAt: 901})
+    // The scan is the one statement that joins `blocks`; the answer flips
+    // once it has run, whichever samples are taken.
+    let scanned = false
+    const reader = {
+      getAll: async <T,>(sql: string, params?: unknown[]): Promise<T[]> => {
+        const rows = await sharedDb.db.getAll<T>(sql, params)
+        if (sql.includes('JOIN blocks ')) scanned = true
+        return rows
+      },
+    }
+
+    const [entry] = await readSyncDivergence(reader, {
+      materializabilityOf: () => 'copy',
+      isRematerializing: () => (scanned ? after : before),
+    })
+    expect(scanned).toBe(true)
+    expect(entry?.rematerializing).toBe(true)
   })
 })
 
