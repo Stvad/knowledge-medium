@@ -7,6 +7,7 @@
  * A task's wording is part of the measurement: changing it invalidates
  * comparisons with earlier reports, so add a task rather than rewording one.
  */
+import { createHash } from 'node:crypto'
 import { roamBlockId } from '@/plugins/roam-import/blockIds'
 import {
   DESIGN_PAGE,
@@ -24,6 +25,7 @@ import {
   getBlock,
   type GraphProbe,
   pageIdByTitle,
+  purgeBlocks,
   sqlAll,
 } from './graphQueries'
 
@@ -52,15 +54,35 @@ export interface EvalTask {
   /** The everyday job this task stands for. */
   covers: string
   prompt: (env: TaskEnv) => string
-  /** Roam uids of the fixture blocks this task is asked to change. Changing
-   *  any other existing block fails the task (the runner undoes it either way). */
+  /** Roam uids of the fixture blocks this task is asked to change. */
   edits?: readonly string[]
+  /** Blocks under (or equal to) which this task is asked to create, resolved
+   *  after it ran. Any other change fails the task; the runner undoes all of
+   *  them either way. */
+  createsUnder?: (env: TaskEnv) => Promise<string[]>
   /** Clears what an interrupted earlier run of this task may have left and
    *  sets up its preconditions; the runner calls it before snapshotting.
    *  Must be idempotent. */
   reset?: (env: TaskEnv) => Promise<void>
   check: (input: CheckInput) => Promise<CheckOutcome>
 }
+
+/** Bump when a helper the checks share changes (normalizeText, compareSets,
+ *  …): a task's hash covers only its own definition. */
+const SHARED_SCORING_VERSION = 1
+
+/** Identifies what a task measures, so a report only compares a task with an
+ *  earlier run of the same definition. */
+export const taskDefinitionHash = (task: EvalTask, truth: FixtureTruth): string =>
+  createHash('sha256').update(JSON.stringify({
+    shared: SHARED_SCORING_VERSION,
+    kind: task.kind,
+    prompt: task.prompt({probe: {workspaceId: '', command: async () => null}, truth, runTag: '<tag>'}),
+    check: task.check.toString(),
+    reset: task.reset?.toString() ?? null,
+    edits: task.edits ?? [],
+    createsUnder: task.createsUnder?.toString() ?? null,
+  })).digest('hex').slice(0, 12)
 
 const PREAMBLE =
   'You have access to a Knowledge Medium notes graph (an outliner of pages and nested blocks, '
@@ -126,14 +148,13 @@ const requireTarget = async (probe: GraphProbe, uid: string) => {
 const VENDOR_REVIEW_PREFIX = 'Vendor Review: Kestrel'
 const vendorReviewTitle = (runTag: string) => `${VENDOR_REVIEW_PREFIX} ${runTag}`
 
-const deleteAll = async (probe: GraphProbe, rows: ReadonlyArray<{id: string}>) => {
-  for (const row of rows) await probe.command({type: 'delete-block', id: row.id})
+/** Purges blocks anywhere in the workspace whose content matches a LIKE
+ *  pattern, deleted ones included. */
+const purgeLike = async (probe: GraphProbe, pattern: string) => {
+  const rows = await sqlAll<{id: string}>(probe,
+    'SELECT id FROM blocks WHERE workspace_id = ? AND content LIKE ?', [probe.workspaceId, pattern])
+  await purgeBlocks(probe, rows.map(row => row.id))
 }
-
-/** Live blocks anywhere in the workspace whose content matches a LIKE pattern. */
-const blocksLike = (probe: GraphProbe, pattern: string) => sqlAll<{id: string}>(probe,
-  'SELECT id FROM blocks WHERE workspace_id = ? AND deleted = 0 AND content LIKE ?',
-  [probe.workspaceId, pattern])
 
 export const TASKS: readonly EvalTask[] = [
   {
@@ -172,15 +193,14 @@ export const TASKS: readonly EvalTask[] = [
     ),
     check: async ({answer, truth}) => {
       if (!isRecord(answer)) return noAnswer
-      // Hyphens folded so "last writer wins" and "last-writer-wins" agree.
-      const field = (value: unknown) => (typeof value === 'string' ? normalizeText(value).replace(/-/g, ' ') : '')
+      const field = (value: unknown) => (typeof value === 'string' ? value : '')
       const {author, adopted, rejected} = truth.design
       const results = {
-        author: field(answer.author).includes(normalizeText(author)),
+        author: normalizeText(field(answer.author)).includes(normalizeText(author)),
         // Both directions are required: a reversed answer names the right
         // words in the wrong fields.
-        adopted: field(answer.adopted).includes(field(adopted)),
-        rejected: field(answer.rejected).includes(field(rejected)),
+        adopted: adopted.test(field(answer.adopted)),
+        rejected: rejected.test(field(answer.rejected)),
         openQuestions: answer.openQuestions === truth.design.openQuestions,
       }
       const failed = Object.entries(results).filter(([, ok]) => !ok).map(([name]) => name)
@@ -291,8 +311,9 @@ export const TASKS: readonly EvalTask[] = [
       + '"Eval check-in", with exactly three child blocks in this order: '
       + '"Done: drafted the sync rollout plan", "Next: review the Kestrel renewal", "Blockers: none".',
     ),
+    createsUnder: async ({probe}) => [await dailyNoteId(probe, 'today')],
     reset: async ({probe}) => {
-      await deleteAll(probe, await blocksLike(probe, 'Eval check-in%'))
+      await purgeLike(probe, 'Eval check-in%')
       // `daily-note` resolves the id without creating the note, and without
       // the note the task cannot be done at all (`create_block` refuses a
       // missing parent) — a failure of the setup, not of the agent.
@@ -345,9 +366,13 @@ export const TASKS: readonly EvalTask[] = [
       + `Then link to it from the "${PROJECT_PAGE}" page: under that page's "Vendors" section block, `
       + `add a child block containing [[${vendorReviewTitle(runTag)}]].`,
     ),
+    createsUnder: async ({probe, runTag}) => {
+      const page = await pageIdByTitle(probe, vendorReviewTitle(runTag))
+      return [targetId(probe.workspaceId, TARGET_UIDS.vendorsSection), ...(page ? [page] : [])]
+    },
     reset: async ({probe}) => {
-      await deleteAll(probe, await blocksLike(probe, `%[[${VENDOR_REVIEW_PREFIX}%`))
-      await deleteAll(probe, await blocksLike(probe, `${VENDOR_REVIEW_PREFIX}%`))
+      await purgeLike(probe, `%[[${VENDOR_REVIEW_PREFIX}%`)
+      await purgeLike(probe, `${VENDOR_REVIEW_PREFIX}%`)
     },
     check: async ({probe, runTag, startedAt}) => {
       const title = vendorReviewTitle(runTag)

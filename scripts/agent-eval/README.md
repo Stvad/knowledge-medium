@@ -32,17 +32,32 @@ daily note, edit one phrase in a block, create a page and link it, and complete 
 They are scored on graph state read back through raw wire commands and SQL, never
 through the MCP tools under test. A run passes only if the task's check passes, `claude`
 exits cleanly, and the agent changed nothing it wasn't asked to. Each write task
-declares the fixture blocks it may edit, and a read task may edit none.
+declares the fixture blocks it may edit and where it may create blocks; a read task may
+change nothing.
 
-Every task starts from the same graph. The runner snapshots the workspace once, after
-each task's `reset` has cleared anything an interrupted earlier run left behind. After
-each task it undoes every change against that snapshot, whether expected or stray:
-content, properties, deletions, moves and created blocks. It then re-reads the graph to
-prove the undo worked, and aborts rather than measure the next task on a different graph.
+Every task starts from the same graph. The runner snapshots every block row once,
+after each task's `reset` has cleared anything an interrupted earlier run left behind.
+The snapshot leaves out the app's own per-user state, which changes by itself. After
+each task, the runner:
 
-A task's wording is part of the measurement. **Add a task rather than rewording one**:
-a reworded task is no longer comparable with earlier reports. A new task needs a
-reference solution and a wrong one in `fixtureGraph.test.ts`.
+1. waits until the graph is quiet, so late processor writes land first;
+2. diffs the whole table against the snapshot by id, deleted rows included, and never
+   by timestamp, because some rows are minted at `updated_at = 0`;
+3. undoes every difference: content, properties, deletions and moves, and purges the
+   rows the task created, so the agent's raw SQL finds no leftovers;
+4. puts the restored rows' timestamps back, so recency ordering is unchanged;
+5. diffs again to prove the result, and aborts rather than score the next task on a
+   different graph.
+
+The run's snapshot is also journaled to `tmp/agent-eval/journal/`, so a run killed
+mid-task is undone by the next run.
+
+A task's definition is part of the measurement. A report stores a hash of each task's
+prompt, check, reset and allowed changes, and `--compare` shows deltas only for tasks
+whose hash matches; aggregates cover those tasks only. When you change a helper the
+checks share (`normalizeText`, `compareSets`), bump `SHARED_SCORING_VERSION` in
+`tasks.ts`. Prefer adding a task to rewording one. A new task needs a reference solution
+and wrong ones in `fixtureGraph.test.ts`.
 
 ## One-time setup
 
@@ -80,7 +95,9 @@ pnpm agent-eval run --repeat 3 --compare scripts/agent-eval/results/baseline-202
 measured on a different fixture hash.
 
 Options: `--model` (default `sonnet`), `--effort`, `--repeat`, `--tasks id,id`,
-`--label`, `--timeout-min`, `--profile` (default `km-eval`).
+`--label`, `--timeout-min`, `--profile` (default `km-eval`), and `--mcp-output-tokens`
+(default 25000). The last one is passed to every run as `MAX_MCP_OUTPUT_TOKENS` and
+recorded in the report, because it decides which tool results Claude Code caps.
 `pnpm agent-eval report <report.json> --compare <other.json>` re-renders a saved
 report. `pnpm agent-eval sizes` prints the deterministic output sizes only.
 
@@ -93,7 +110,9 @@ login. Credential env vars are scrubbed the way agent-dispatch does it
 outside the env and can't be scrubbed, so check your login if unsure.
 
 Reports go to `results/<label>.{json,md}`. Transcripts go to
-`tmp/agent-eval/runs/<label>/` (gitignored; they hold the full tool outputs).
+`tmp/agent-eval/runs/<label>/` (gitignored). A result over the MCP output cap appears there only as
+Claude Code's notice, never as the full output; the report counts such calls as "capped" and records
+the size the tool returned.
 Per-task figures are medians across repetitions. "Context tokens" is input plus
 cache-creation plus cache-read tokens, summed over the run's API calls. "Peak context"
 is the largest single call. Model runs are noisy, so compare medians of `--repeat 3`

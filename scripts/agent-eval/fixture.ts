@@ -63,16 +63,17 @@ export const TARGET_UIDS = {
   vendorsSection: 'eval-vendors-section',
 } as const
 
-/** What a Kestrel mention can be about, as word-start patterns. Every mention
- *  in the fixture matches one, so an answer can be checked for having read
- *  the mention rather than only having found its date. */
+/** What a Kestrel mention can be about, each with the words a faithful
+ *  paraphrase would use. Every mention in the fixture matches one, so an
+ *  answer can be checked for having read the mention rather than only having
+ *  found its date. */
 export const KESTREL_SIGNALS: Readonly<Record<string, RegExp>> = {
-  renewal: /\brenew/i,
-  pricing: /\bpric/i,
-  sla: /\bsla\b/i,
-  webhook: /\bwebhook/i,
+  renewal: /\brenew|\bcontract/i,
+  pricing: /\bpric|\btiers?\b/i,
+  sla: /\bsla\b|service[\s-]level|\bcredits?\b/i,
+  webhook: /\bwebhooks?\b|\bretr(y|ies|ied)\b/i,
   dashboard: /\bdashboard/i,
-  invoice: /\binvoic/i,
+  invoice: /\binvoic|\breconcil|\bbilling|\bcents?\b/i,
 }
 
 export interface FixtureTruth {
@@ -91,8 +92,9 @@ export interface FixtureTruth {
   julyMeetingsWithInes: string[]
   /** Reading-log titles rated 5/5 and recommended by Tomas Reyes. */
   tomasFiveStarBooks: string[]
-  /** `adopted` / `rejected`: the approach the design chose and the one it turned down. */
-  design: {author: string, openQuestions: number, adopted: string, rejected: string}
+  /** `adopted` / `rejected`: the approach the design chose and the one it
+   *  turned down, as the spellings an answer may use. */
+  design: {author: string, openQuestions: number, adopted: RegExp, rejected: RegExp}
 }
 
 export interface Fixture {
@@ -612,7 +614,12 @@ export const buildFixture = (): Fixture => {
       needleBook: NEEDLE_BOOK,
       julyMeetingsWithInes,
       tomasFiveStarBooks,
-      design: {author: 'Priya Nand', openQuestions: DESIGN_OPEN_QUESTIONS.length, adopted: 'last-writer-wins', rejected: 'crdt'},
+      design: {
+        author: 'Priya Nand',
+        openQuestions: DESIGN_OPEN_QUESTIONS.length,
+        adopted: /\blww\b|last[\s-]+write(r|s)?[\s-]+wins/i,
+        rejected: /\bcrdts?\b/i,
+      },
     },
   }
 }

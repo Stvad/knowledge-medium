@@ -5,15 +5,28 @@
  *
  * Usage arrives once per API call but the stream repeats an assistant
  * message's line for each of its content blocks, so per-call usage is keyed
- * by message id. The `result` line's totals win when present.
+ * by message id. The `result` line's totals win when present; without one
+ * (a timed-out run) output tokens come out low, because the per-message
+ * `output_tokens` the stream carries are partial.
+ *
+ * A tool result over Claude Code's MCP output cap never reaches the model:
+ * it is replaced by a short notice naming the size. Such a call is recorded
+ * as `capped`, with the bytes the model saw and the size the server returned
+ * kept apart — otherwise a tool that shrinks its output below the cap would
+ * read as a regression.
  */
 
 export interface ToolCallRecord {
   id: string
   name: string
   inputBytes: number
-  /** null when the transcript ended before the tool returned. */
+  /** Bytes the model saw; null when the transcript ended before the tool returned. */
   outputBytes: number | null
+  /** Replaced by Claude Code's over-the-cap notice. */
+  capped: boolean
+  /** Size the server returned: the notice's character count when capped,
+   *  else `outputBytes`. */
+  returnedBytes: number | null
   isError: boolean
 }
 
@@ -57,6 +70,8 @@ const byteLength = (text: string) => Buffer.byteLength(text, 'utf8')
 const num = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) ? value : 0)
 const contextOf = (usage: MessageUsage) =>
   num(usage.input_tokens) + num(usage.cache_creation_input_tokens) + num(usage.cache_read_input_tokens)
+
+const CAP_NOTICE = /^Error: result \(([\d,]+) characters across [\d,]+ lines\) exceeds maximum allowed tokens/
 
 const toolResultText = (content: unknown): string => {
   if (typeof content === 'string') return content
@@ -108,6 +123,8 @@ export const parseTranscript = (raw: string): TranscriptMetrics => {
           name: typeof block.name === 'string' ? block.name : '?',
           inputBytes: byteLength(JSON.stringify(block.input ?? {})),
           outputBytes: null,
+          capped: false,
+          returnedBytes: null,
           isError: false,
         }
         callsById.set(call.id, call)
@@ -119,7 +136,11 @@ export const parseTranscript = (raw: string): TranscriptMetrics => {
         if (block?.type !== 'tool_result' || typeof block.tool_use_id !== 'string') continue
         const call = callsById.get(block.tool_use_id)
         if (!call) continue
-        call.outputBytes = byteLength(toolResultText(block.content))
+        const text = toolResultText(block.content)
+        const cap = CAP_NOTICE.exec(text)
+        call.outputBytes = byteLength(text)
+        call.capped = cap !== null
+        call.returnedBytes = cap ? Number(cap[1].replace(/,/g, '')) : call.outputBytes
         call.isError = block.is_error === true
       }
     } else if (event.type === 'result') {
@@ -152,18 +173,37 @@ export const parseTranscript = (raw: string): TranscriptMetrics => {
   return metrics
 }
 
-/** The JSON on the reply's last `ANSWER:` line, or undefined when there is
- *  none or it does not parse. Tolerates a fenced or backticked line. */
-export const extractAnswer = (resultText: string): unknown => {
-  const lines = resultText.split('\n').map(line => line.trim().replace(/^`+|`+$/g, '').trim())
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const match = /^\**ANSWER:\**\s*(.+)$/.exec(lines[i])
-    if (!match) continue
-    try {
-      return JSON.parse(match[1].replace(/`+$/, '').trim()) as unknown
-    } catch {
-      return undefined
-    }
+/** The first balanced `{…}` in `text`, honoring JSON strings. */
+const firstJsonObject = (text: string): string | null => {
+  const start = text.indexOf('{')
+  if (start < 0) return null
+  let depth = 0
+  let inString = false
+  for (let i = start; i < text.length; i++) {
+    const char = text[i]
+    if (inString) {
+      if (char === '\\') i++
+      else if (char === '"') inString = false
+    } else if (char === '"') inString = true
+    else if (char === '{') depth++
+    else if (char === '}' && --depth === 0) return text.slice(start, i + 1)
   }
-  return undefined
+  return null
+}
+
+/** The JSON after the reply's last `ANSWER:` marker, or undefined when there
+ *  is none or it does not parse. Tolerates the decoration models add: bold or
+ *  code around the marker or the JSON, a list or quote prefix, a trailing
+ *  period, JSON spread over several lines. */
+export const extractAnswer = (resultText: string): unknown => {
+  const markers = [...resultText.matchAll(/\bANSWER\b[*_`]*\s*:/g)]
+  const last = markers.at(-1)
+  if (!last) return undefined
+  const json = firstJsonObject(resultText.slice(last.index + last[0].length))
+  if (json === null) return undefined
+  try {
+    return JSON.parse(json) as unknown
+  } catch {
+    return undefined
+  }
 }

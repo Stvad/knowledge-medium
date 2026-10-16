@@ -15,23 +15,27 @@
  *
  * Every case starts from the imported fixture (see the afterEach below).
  */
-import { writeFileSync } from 'node:fs'
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { existsSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { buildFixture, DESIGN_PAGE, PRICING_FAQ_TODO, PROJECT_PAGE, READING_LOG_PAGE, ROLLOUT_BLOCK_TEXT, TARGET_UIDS } from './fixture'
-import { childrenOf, dailyNoteId, descendantsOf, type GraphProbe, pageIdByTitle, requirePageId, sqlAll } from './graphQueries'
-import { changesSince, restoreSnapshot, snapshotWorkspace, strayChanges, type WorkspaceSnapshot } from './isolation'
+import { childrenOf, dailyNoteId, descendantsOf, getBlock, type GraphProbe, pageIdByTitle, requirePageId, sqlAll } from './graphQueries'
+import { diffAgainst, restoreSnapshot, snapshotWorkspace, strayChanges, type WorkspaceSnapshot } from './isolation'
 import { OUTPUT_PROBES, type ProbeContext } from './outputBudgets'
+import { createRunJournal } from './runJournal'
 import { type CheckInput, type CheckOutcome, targetId, TASKS, type TaskEnv } from './tasks'
 import { seedFixtureTestGraph, TEST_WORKSPACE_ID, type FixtureTestGraph } from './testGraph'
 
 let db: TestDb
 let graph: FixtureTestGraph
 let probe: GraphProbe
-const {truth} = buildFixture()
+const {truth, hash: fixtureHash} = buildFixture()
 
 let fixtureSnapshot: WorkspaceSnapshot
-let caseStartedAt = 0
+// In-process writes settle in milliseconds; the live runner waits longer.
+const QUIET = {quietMs: 50, maxMs: 2_000}
 
 // Seeding imports ~5.8k blocks: ~5s alone, budgeted for 6x under the gate.
 beforeAll(async () => {
@@ -44,8 +48,7 @@ beforeAll(async () => {
 // One import is shared by every case, so each case's writes are undone
 // against the post-import snapshot — the runner's own restore — and no case
 // depends on another's leftovers or on declaration order.
-beforeEach(() => { caseStartedAt = Date.now() })
-afterEach(async () => { await restoreSnapshot(probe, fixtureSnapshot, caseStartedAt) })
+afterEach(async () => { await restoreSnapshot(probe, fixtureSnapshot, QUIET) })
 
 afterAll(async () => {
   await graph?.close()
@@ -159,8 +162,8 @@ const deriveReadAnswers = async (): Promise<Record<string, unknown>> => {
 
 const designAnswer = {
   author: truth.design.author,
-  adopted: truth.design.adopted,
-  rejected: truth.design.rejected,
+  adopted: 'per-field LWW with hybrid logical clocks',
+  rejected: 'a CRDT for content',
   openQuestions: truth.design.openQuestions,
 }
 
@@ -293,6 +296,12 @@ describe('task checks', () => {
     const startedAt = Date.now()
     await solveWithMcp[task.id](env)
     expectOutcome(await task.check({...env, answer: undefined, startedAt}), true)
+    // The solution stays inside what the task declares it may change.
+    const allowed = {
+      editIds: new Set((task.edits ?? []).map(uid => targetId(TEST_WORKSPACE_ID, uid))),
+      createRoots: new Set(await task.createsUnder?.(env) ?? []),
+    }
+    expect(strayChanges(await diffAgainst(probe, fixtureSnapshot), allowed)).toBe(0)
   }, 20_000)
 })
 
@@ -305,31 +314,108 @@ describe('isolation', () => {
     const tagged = byText('Support sees roughly')
     const removed = byText('The current protocol ships')
     const moved = byText('Migration runs per workspace')
+    const movedToo = byText('Success metric')
     const rollout = targetId(TEST_WORKSPACE_ID, TARGET_UIDS.rollout)
-    const startedAt = Date.now()
 
     await graph.callTool('update_block', {id: edited.id, content: 'rewritten'})
     await graph.callTool('update_block', {id: tagged.id, properties: {'eval:tag': 'x'}})
     await graph.callTool('delete_block', {id: removed.id})
+    // Two adjacent siblings: undoing the first must not anchor on the second
+    // while it is still elsewhere.
     await graph.callTool('move_block', {id: moved.id, parentId: edited.parent_id, position: {kind: 'first'}})
+    await graph.callTool('move_block', {id: movedToo.id, parentId: edited.parent_id, position: {kind: 'first'}})
     await graph.callTool('update_block', {id: rollout, content: 'Target: Q4 2026.'})
     await graph.callTool('create_block', {parentId: edited.id, content: 'a new child'})
 
-    const changes = await restoreSnapshot(probe, snapshot, startedAt)
+    const changes = await restoreSnapshot(probe, snapshot, QUIET)
     expect(changes.created).toHaveLength(1)
     expect(changes.modified.map(change => change.id).sort())
-      .toEqual([edited.id, tagged.id, removed.id, moved.id, rollout].sort())
+      .toEqual([edited.id, tagged.id, removed.id, moved.id, movedToo.id, rollout].sort())
     // The rollout edit is what edit-rollout-phrase is asked to make; the rest are stray.
-    expect(strayChanges(changes, new Set([rollout]), 'write')).toBe(4)
-    expect(strayChanges(changes, new Set(), 'read')).toBe(6)
+    expect(strayChanges(changes, {editIds: new Set([rollout]), createRoots: new Set()})).toBe(6)
+    expect(strayChanges(changes, {editIds: new Set([rollout]), createRoots: new Set([edited.id])})).toBe(5)
+    expect(strayChanges(changes, {editIds: new Set(), createRoots: new Set()})).toBe(7)
 
-    const after = await changesSince(probe, snapshot, startedAt)
-    expect(after.created).toEqual([])
-    expect(after.modified.filter(change => change.before.order_key === change.after.order_key)).toEqual([])
+    expect(await diffAgainst(probe, snapshot)).toEqual({created: [], modified: []})
     const restored = new Map((await descendantsOf(probe, await requirePageId(probe, DESIGN_PAGE))).map(row => [row.id, row]))
-    for (const block of [edited, tagged, removed, moved]) {
+    for (const block of [edited, tagged, removed, moved, movedToo]) {
       expect({content: restored.get(block.id)?.content, properties: JSON.parse(restored.get(block.id)?.properties_json ?? 'null'), parent: restored.get(block.id)?.parent_id})
         .toEqual({content: block.content, properties: JSON.parse(block.properties_json), parent: block.parent_id})
     }
+    expect((await childrenOf(probe, moved.parent_id!)).map(row => row.id))
+      .toEqual(design.filter(row => row.parent_id === moved.parent_id)
+        .sort((a, b) => a.order_key.localeCompare(b.order_key)).map(row => row.id))
+    // Restored rows keep their recency, which search and recents order by.
+    const timestamps = await sqlAll<{id: string, updated_at: number, user_updated_at: number | null}>(probe,
+      `SELECT id, updated_at, user_updated_at FROM blocks WHERE id IN (${changes.modified.map(() => '?').join(', ')})`,
+      changes.modified.map(change => change.id))
+    for (const row of timestamps) {
+      const before = snapshot.get(row.id)!
+      expect([row.updated_at, row.user_updated_at]).toEqual([before.updated_at, before.user_updated_at])
+    }
   }, 30_000)
+})
+
+describe('isolation edge cases', () => {
+  it('purges a page a link minted, which is born with updated_at = 0', async () => {
+    const snapshot = await snapshotWorkspace(probe)
+    const host = targetId(TEST_WORKSPACE_ID, TARGET_UIDS.vendorsSection)
+    await graph.callTool('create_block', {parentId: host, content: '[[Minted Seat Probe]]'})
+    await vi.waitFor(async () => { expect(await pageIdByTitle(probe, 'Minted Seat Probe')).not.toBeNull() }, {timeout: 5_000})
+
+    await restoreSnapshot(probe, snapshot, QUIET)
+    expect(await pageIdByTitle(probe, 'Minted Seat Probe')).toBeNull()
+    // Purged, not soft-deleted: raw SQL must not find a leftover either.
+    expect(await sqlAll(probe, "SELECT id FROM blocks WHERE content LIKE '%Minted Seat Probe%'")).toEqual([])
+  }, 20_000)
+
+  it('re-deletes a tombstone an agent revived and edited', async () => {
+    const tombstone = (await descendantsOf(probe, await requirePageId(probe, DESIGN_PAGE)))
+      .find(row => row.content.startsWith('Older clients will keep'))!
+    await graph.callTool('delete_block', {id: tombstone.id})
+    const snapshot = await snapshotWorkspace(probe)
+    await graph.callTool('restore_block', {id: tombstone.id})
+    await graph.callTool('update_block', {id: tombstone.id, content: 'revived and edited'})
+
+    await restoreSnapshot(probe, snapshot, QUIET)
+    expect(await diffAgainst(probe, snapshot)).toEqual({created: [], modified: []})
+    await graph.callTool('restore_block', {id: tombstone.id})
+    expect((await getBlock(probe, tombstone.id))?.content).toBe(tombstone.content)
+  }, 20_000)
+
+  it('brings back a fixture block an agent moved under a block it created', async () => {
+    const snapshot = await snapshotWorkspace(probe)
+    const rollout = targetId(TEST_WORKSPACE_ID, TARGET_UIDS.rollout)
+    const before = snapshot.get(rollout)!
+    const parentId = resultIdOf(await graph.callTool('create_block', {parentId: before.parent_id, content: 'new container'}))
+    await graph.callTool('move_block', {id: rollout, parentId, position: {kind: 'first'}})
+
+    await restoreSnapshot(probe, snapshot, QUIET)
+    expect(await diffAgainst(probe, snapshot)).toEqual({created: [], modified: []})
+    expect((await getBlock(probe, rollout))?.content).toBe(before.content)
+  }, 20_000)
+})
+
+describe('run journal', () => {
+  it('undoes what a task left when its run was interrupted, on the next run', async () => {
+    const dir = path.join(mkdtempSync(path.join(tmpdir(), 'agent-eval-journal-')), 'journal')
+    const interrupted = createRunJournal(dir)
+    interrupted.begin(await snapshotWorkspace(probe), fixtureHash)
+    interrupted.taskStarted()
+    const rollout = targetId(TEST_WORKSPACE_ID, TARGET_UIDS.rollout)
+    await graph.callTool('update_block', {id: rollout, content: 'left behind'})
+
+    expect(await createRunJournal(dir).recover(probe, fixtureHash, QUIET)).toBe(1)
+    expect((await getBlock(probe, rollout))?.content).toBe(ROLLOUT_BLOCK_TEXT)
+    expect(existsSync(dir)).toBe(false)
+  }, 20_000)
+
+  it('recovers nothing after a task whose undo finished', async () => {
+    const dir = path.join(mkdtempSync(path.join(tmpdir(), 'agent-eval-journal-')), 'journal')
+    const clean = createRunJournal(dir)
+    clean.begin(await snapshotWorkspace(probe), fixtureHash)
+    clean.taskStarted()
+    clean.taskRestored()
+    expect(await createRunJournal(dir).recover(probe, fixtureHash, QUIET)).toBe(0)
+  }, 20_000)
 })

@@ -26,8 +26,9 @@ import { BILLING_ENV_DENYLIST, envForBilling } from '../../packages/agent-dispat
 import { buildFixture, FIXTURE_HASH_PREFIX, FIXTURE_MARKER_PAGE } from './fixture'
 import { childrenOf, type GraphProbe, pageIdByTitle } from './graphQueries'
 import { restoreSnapshot, snapshotWorkspace, strayChanges } from './isolation'
+import { createRunJournal } from './runJournal'
 import { type EvalReport, renderMarkdown, type TaskRunRecord } from './report'
-import { type EvalTask, targetId, TASKS } from './tasks'
+import { type EvalTask, targetId, taskDefinitionHash, TASKS } from './tasks'
 import { extractAnswer, parseTranscript } from './transcript'
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
@@ -56,17 +57,18 @@ const connect = async (profile: string): Promise<{probe: GraphProbe, client: Ret
 }
 
 /** Seeding and runs write thousands of blocks, so the tab must be one that
- *  has never synced: a local-only session never connects PowerSync and never
- *  downloads a row. A signed-in tab — even offline, even on a dev origin —
- *  shows at least one of these, and is refused. */
+ *  has never synced: a local-only session holds no Supabase session, never
+ *  connects PowerSync and never downloads a row. A signed-in tab — even
+ *  offline, even before its first connect — shows at least one of these and
+ *  is refused. Checked again before every task: a run can last hours. */
 const requireNeverSynced = async (client: ReturnType<typeof createBridgeClient>, profile: string) => {
   const status = await client.runCommand({
     type: 'eval',
     code: `const status = db.currentStatus
 const {count} = await sql('SELECT count(*) AS count FROM blocks_synced', [], 'get')
-return {connected: Boolean(status?.connected), connecting: Boolean(status?.connecting), hasSynced: Boolean(status?.hasSynced), lastSyncedAt: status?.lastSyncedAt ? String(status.lastSyncedAt) : null, syncedRows: count}`,
-  }) as {connected: boolean, connecting: boolean, hasSynced: boolean, lastSyncedAt: string | null, syncedRows: number}
-  if (status.connected || status.connecting || status.hasSynced || status.lastSyncedAt || status.syncedRows > 0) {
+return {signedIn: Object.keys(localStorage).some(key => /^sb-.+-auth-token$/.test(key)), connected: Boolean(status?.connected), connecting: Boolean(status?.connecting), hasSynced: Boolean(status?.hasSynced), lastSyncedAt: status?.lastSyncedAt ? String(status.lastSyncedAt) : null, syncedRows: count}`,
+  }) as {signedIn: boolean, connected: boolean, connecting: boolean, hasSynced: boolean, lastSyncedAt: string | null, syncedRows: number}
+  if (status.signedIn || status.connected || status.connecting || status.hasSynced || status.lastSyncedAt || status.syncedRows > 0) {
     fail(`profile "${profile}" is paired to a tab that syncs (${JSON.stringify(status)}). The eval writes to its graph, `
       + 'so it only runs against a local-only dev tab (README: "One-time setup").')
   }
@@ -153,11 +155,12 @@ interface RunOptions {
   label: string
   compare: string | null
   timeoutMs: number
+  mcpOutputTokens: number
 }
 
 const run = async (options: RunOptions) => {
   buildPackages()
-  const {probe} = await connect(options.profile)
+  const {probe, client} = await connect(options.profile)
   const fixture = buildFixture()
   const seeded = await seededHash(probe)
   if (seeded !== fixture.hash) {
@@ -183,15 +186,22 @@ const run = async (options: RunOptions) => {
     effort: options.effort,
     claudeCodeVersion: null,
     kmTools: [...KM_MCP_ALLOWED_TOOLS].map(tool => tool.replace(`mcp__${MCP_SERVER_NAME}__`, '')),
+    mcpOutputTokens: options.mcpOutputTokens,
     fixtureHash: fixture.hash,
+    taskHashes: Object.fromEntries(options.tasks.map(task => [task.id, taskDefinitionHash(task, fixture.truth)])),
     outputSizes: null,
     runs: [],
   }
 
   // Clear what an interrupted earlier run left, then freeze the starting
   // state every task gets: each task's changes are undone against it.
+  const journal = createRunJournal(path.join(REPO_ROOT, 'tmp/agent-eval/journal', probe.workspaceId))
+  const recovered = await journal.recover(probe, fixture.hash)
+    .catch((error: unknown) => fail(`could not undo an interrupted run: ${error instanceof Error ? error.message : String(error)}`))
+  if (recovered > 0) process.stdout.write(`undid ${recovered} change(s) an interrupted run left\n`)
   for (const task of TASKS) await task.reset?.({probe, truth: fixture.truth, runTag: ''})
   const snapshot = await snapshotWorkspace(probe)
+  journal.begin(snapshot, fixture.hash)
 
   for (let rep = 1; rep <= options.repeat; rep++) {
     for (const task of options.tasks) {
@@ -201,13 +211,15 @@ const run = async (options: RunOptions) => {
       let stdout = ''
       process.stdout.write(`[${rep}/${options.repeat}] ${task.id} … `)
 
+      await requireNeverSynced(client, options.profile)
       const startedAt = Date.now()
+      journal.taskStarted()
       const proc = await runJsonlProcess({
         bin: 'claude',
         args: claudeArgs({model: options.model, effort: options.effort, mcpConfig}),
         prompt: task.prompt(env),
         cwd,
-        env: envForBilling(process.env, 'subscription'),
+        env: {...envForBilling(process.env, 'subscription'), MAX_MCP_OUTPUT_TOKENS: String(options.mcpOutputTokens)},
         timeoutMs: options.timeoutMs,
         onStdoutText: text => { stdout += text },
       })
@@ -219,9 +231,15 @@ const run = async (options: RunOptions) => {
       report.claudeCodeVersion ??= metrics.claudeCodeVersion
       const outcome = await task.check({...env, answer: extractAnswer(metrics.resultText), startedAt})
         .catch((error: unknown) => ({pass: false, detail: `check threw: ${error instanceof Error ? error.message : String(error)}`}))
-      const changes = await restoreSnapshot(probe, snapshot, startedAt)
+      // Resolved before the undo, which removes what the task created.
+      const allowed = {
+        editIds: new Set((task.edits ?? []).map(uid => targetId(probe.workspaceId, uid))),
+        createRoots: new Set(await task.createsUnder?.(env) ?? []),
+      }
+      const changes = await restoreSnapshot(probe, snapshot)
         .catch((error: unknown) => fail(`aborting the run: ${error instanceof Error ? error.message : String(error)}`))
-      const strayEdits = strayChanges(changes, new Set((task.edits ?? []).map(uid => targetId(probe.workspaceId, uid))), task.kind)
+      journal.taskRestored()
+      const strayEdits = strayChanges(changes, allowed)
       const failures = [
         proc.timedOut ? 'timed out' : null,
         !proc.timedOut && (proc.exitCode !== 0 || metrics.isError) ? `claude exited ${proc.exitCode}${metrics.isError ? ' with an error result' : ''}` : null,
@@ -241,6 +259,8 @@ const run = async (options: RunOptions) => {
         toolErrors: metrics.toolCalls.filter(call => call.isError).length,
         toolResultBytes: outputs.reduce((total, bytes) => total + bytes, 0),
         maxToolResultBytes: Math.max(0, ...outputs),
+        cappedCalls: metrics.toolCalls.filter(call => call.capped).length,
+        returnedBytes: metrics.toolCalls.reduce((total, call) => total + (call.returnedBytes ?? 0), 0),
         apiCalls: metrics.apiCalls,
         tokens: metrics.tokens,
         durationMs: metrics.durationMs,
@@ -259,6 +279,7 @@ const run = async (options: RunOptions) => {
   }
 
   report.outputSizes = measureOutputSizes()
+  journal.end()
   report.finishedAt = new Date().toISOString()
   writeReport(report, options.compare)
 }
@@ -295,6 +316,9 @@ const main = async () => {
       label: {type: 'string'},
       compare: {type: 'string'},
       'timeout-min': {type: 'string', default: '10'},
+      // Pinned rather than inherited: it decides which results Claude Code
+      // caps, so it is part of what a report measured.
+      'mcp-output-tokens': {type: 'string', default: '25000'},
     },
   })
   const [command, ...rest] = positionals
@@ -312,6 +336,8 @@ const main = async () => {
       const timeoutMin = Number(values['timeout-min'])
       if (!Number.isInteger(repeat) || repeat < 1 || repeat > 50) fail(`--repeat must be an integer from 1 to 50, got ${values.repeat}`)
       if (!Number.isFinite(timeoutMin) || timeoutMin <= 0) fail(`--timeout-min must be a positive number, got ${values['timeout-min']}`)
+      const mcpOutputTokens = Number(values['mcp-output-tokens'])
+      if (!Number.isInteger(mcpOutputTokens) || mcpOutputTokens < 1) fail(`--mcp-output-tokens must be a positive integer, got ${values['mcp-output-tokens']}`)
       if (values.label) requireSafeLabel(values.label)
       const date = new Date().toISOString().slice(0, 10)
       return run({
@@ -323,6 +349,7 @@ const main = async () => {
         label: values.label ?? `${date}-${gitInfo().sha.slice(0, 7)}-${values.model}`,
         compare: values.compare ?? null,
         timeoutMs: timeoutMin * 60_000,
+        mcpOutputTokens,
       })
     }
     case 'report': {

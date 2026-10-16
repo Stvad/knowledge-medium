@@ -14,9 +14,13 @@ export interface TaskRunRecord {
   toolCalls: number
   toolCallsByName: Record<string, number>
   toolErrors: number
-  /** UTF-8 bytes of every tool result the agent read. */
+  /** UTF-8 bytes of every tool result the agent saw. */
   toolResultBytes: number
   maxToolResultBytes: number
+  /** Results over Claude Code's MCP output cap, which the agent never saw. */
+  cappedCalls: number
+  /** What the tools returned, capped results at their real size. */
+  returnedBytes: number
   apiCalls: number
   tokens: TokenUsage
   durationMs: number | null
@@ -40,7 +44,12 @@ export interface EvalReport {
   effort: string | null
   claudeCodeVersion: string | null
   kmTools: string[]
+  /** MAX_MCP_OUTPUT_TOKENS the runs were given: it decides which results are capped. */
+  mcpOutputTokens: number
   fixtureHash: string
+  /** Per task, a hash of its definition (prompt, check, reset, allowed
+   *  changes). Deltas are shown only for tasks whose hash matches. */
+  taskHashes: Record<string, string>
   /** Deterministic output sizes (bytes) per probe, from the fixture-graph test. */
   outputSizes: Record<string, number> | null
   runs: TaskRunRecord[]
@@ -54,6 +63,8 @@ export interface TaskSummary {
   toolCalls: number
   toolResultBytes: number
   maxToolResultBytes: number
+  cappedCalls: number
+  returnedBytes: number
   contextTokens: number
   peakContext: number
   outputTokens: number
@@ -80,6 +91,8 @@ export const summarize = (report: EvalReport): TaskSummary[] => {
     toolCalls: median(runs.map(run => run.toolCalls)),
     toolResultBytes: median(runs.map(run => run.toolResultBytes)),
     maxToolResultBytes: median(runs.map(run => run.maxToolResultBytes)),
+    cappedCalls: median(runs.map(run => run.cappedCalls)),
+    returnedBytes: median(runs.map(run => run.returnedBytes)),
     contextTokens: median(runs.map(run => run.tokens.contextTotal)),
     peakContext: median(runs.map(run => run.tokens.peakContext)),
     outputTokens: median(runs.map(run => run.tokens.output)),
@@ -102,45 +115,72 @@ const delta = (current: number, base: number | undefined): string => {
 
 const sum = (values: readonly number[]) => values.reduce((total, value) => total + value, 0)
 
+/** A figure with its delta against the baseline figure, when there is one. */
+const cell = (format: (n: number) => string, current: number, base?: number) => `${format(current)}${delta(current, base)}`
+
+const totalsRow = (label: string, rows: readonly TaskSummary[], baseRows?: readonly TaskSummary[]) => {
+  const total = (from: readonly TaskSummary[], pick: (row: TaskSummary) => number) => sum(from.map(pick))
+  const pair = (pick: (row: TaskSummary) => number) =>
+    [total(rows, pick), baseRows ? total(baseRows, pick) : undefined] as const
+  return `| ${label} | | ${total(rows, row => row.passes)}/${total(rows, row => row.reps)} `
+    + `| ${cell(String, ...pair(row => row.toolCalls))} `
+    + `| ${cell(String, ...pair(row => row.cappedCalls))} `
+    + `| ${cell(kb, ...pair(row => row.toolResultBytes))} `
+    + `| ${cell(kb, ...pair(row => row.returnedBytes))} `
+    + `| ${cell(thousands, ...pair(row => row.contextTokens))} | `
+    + `| ${cell(thousands, ...pair(row => row.outputTokens))} `
+    + `| ${cell(dollars, ...pair(row => row.costUsd))} `
+    + `| ${seconds(total(rows, row => row.durationMs))} |`
+}
+
 export const renderMarkdown = (report: EvalReport, baseline?: EvalReport): string => {
   const rows = summarize(report)
-  const base = new Map((baseline ? summarize(baseline) : []).map(row => [row.task, row]))
+  const baselineRows = new Map((baseline ? summarize(baseline) : []).map(row => [row.task, row]))
+  // Only a task measured on the same definition is comparable; a reworded
+  // prompt or changed check is a different workload.
+  const comparable = (task: string) => baselineRows.has(task)
+    && baseline?.taskHashes?.[task] !== undefined && baseline.taskHashes[task] === report.taskHashes?.[task]
   const lines: string[] = []
   const reps = Math.max(...rows.map(row => row.reps))
 
   lines.push(`# Agent ergonomics eval — ${report.label}`, '')
   lines.push(`- commit \`${report.git.sha.slice(0, 10)}\` on \`${report.git.branch}\`${report.git.dirty ? ' (dirty tree)' : ''}`)
   lines.push(`- model \`${report.resolvedModel ?? report.model}\`${report.effort ? `, effort ${report.effort}` : ''}, Claude Code ${report.claudeCodeVersion ?? '?'}`)
-  lines.push(`- km tools: ${report.kmTools.map(tool => `\`${tool}\``).join(', ')}`)
+  lines.push(`- km tools: ${report.kmTools.map(tool => `\`${tool}\``).join(', ')}; MCP output cap ${report.mcpOutputTokens} tokens`)
+  lines.push('- "capped": results over that cap, which Claude Code replaced with a short notice; "seen" is what reached the model, "returned" what the tools produced')
   lines.push(`- fixture \`${report.fixtureHash}\`, ${reps} repetition(s) per task; per-task figures are medians; lower is better except pass`)
   lines.push('- list $ is the API list-price equivalent the CLI reports (a subscription run is not charged it); it weights input, cache and output tokens in one number')
-  if (baseline) lines.push(`- compared with **${baseline.label}** (commit \`${baseline.git.sha.slice(0, 10)}\`); deltas in parentheses`)
+  if (baseline) {
+    lines.push(`- compared with **${baseline.label}** (commit \`${baseline.git.sha.slice(0, 10)}\`); deltas in parentheses, `
+      + `for the ${rows.filter(row => comparable(row.task)).length} of ${rows.length} tasks whose definition is unchanged`)
+  }
   lines.push('')
 
-  lines.push('| task | kind | pass | tool calls | result bytes (total / max) | context tokens | peak context | output tokens | list $ | time |')
-  lines.push('|---|---|---|---|---|---|---|---|---|---|')
+  lines.push('| task | kind | pass | tool calls | capped | bytes seen (total / max) | bytes returned | context tokens | peak context | output tokens | list $ | time |')
+  lines.push('|---|---|---|---|---|---|---|---|---|---|---|---|')
   for (const row of rows) {
-    const was = base.get(row.task)
-    lines.push(`| ${row.task} | ${row.kind} | ${row.passes}/${row.reps}${was ? ` (was ${was.passes}/${was.reps})` : ''} `
-      + `| ${row.toolCalls}${delta(row.toolCalls, was?.toolCalls)} `
-      + `| ${kb(row.toolResultBytes)}${delta(row.toolResultBytes, was?.toolResultBytes)} / ${kb(row.maxToolResultBytes)} `
-      + `| ${thousands(row.contextTokens)}${delta(row.contextTokens, was?.contextTokens)} `
-      + `| ${thousands(row.peakContext)}${delta(row.peakContext, was?.peakContext)} `
-      + `| ${thousands(row.outputTokens)}${delta(row.outputTokens, was?.outputTokens)} `
-      + `| ${dollars(row.costUsd)}${delta(row.costUsd, was?.costUsd)} `
+    const was = comparable(row.task) ? baselineRows.get(row.task) : undefined
+    const note = was ? ` (was ${was.passes}/${was.reps})` : baselineRows.has(row.task) ? ' (task changed since baseline)' : ''
+    lines.push(`| ${row.task} | ${row.kind} | ${row.passes}/${row.reps}${note} `
+      + `| ${cell(String, row.toolCalls, was?.toolCalls)} `
+      + `| ${cell(String, row.cappedCalls, was?.cappedCalls)} `
+      + `| ${cell(kb, row.toolResultBytes, was?.toolResultBytes)} / ${kb(row.maxToolResultBytes)} `
+      + `| ${cell(kb, row.returnedBytes, was?.returnedBytes)} `
+      + `| ${cell(thousands, row.contextTokens, was?.contextTokens)} `
+      + `| ${cell(thousands, row.peakContext, was?.peakContext)} `
+      + `| ${cell(thousands, row.outputTokens, was?.outputTokens)} `
+      + `| ${cell(dollars, row.costUsd, was?.costUsd)} `
       + `| ${seconds(row.durationMs)} |`)
   }
-  const total = (pick: (row: TaskSummary) => number) => sum(rows.map(pick))
-  // A --tasks subset compares against the same subset of the baseline.
-  const baseRows = rows.flatMap(row => base.get(row.task) ?? [])
-  const baseTotal = (pick: (row: TaskSummary) => number) => (baseRows.length ? sum(baseRows.map(pick)) : undefined)
-  lines.push(`| **all** | | ${total(row => row.passes)}/${total(row => row.reps)} `
-    + `| ${total(row => row.toolCalls)}${delta(total(row => row.toolCalls), baseTotal(row => row.toolCalls))} `
-    + `| ${kb(total(row => row.toolResultBytes))}${delta(total(row => row.toolResultBytes), baseTotal(row => row.toolResultBytes))} | `
-    + `${thousands(total(row => row.contextTokens))}${delta(total(row => row.contextTokens), baseTotal(row => row.contextTokens))} | `
-    + `| ${thousands(total(row => row.outputTokens))}${delta(total(row => row.outputTokens), baseTotal(row => row.outputTokens))} `
-    + `| ${dollars(total(row => row.costUsd))}${delta(total(row => row.costUsd), baseTotal(row => row.costUsd))} `
-    + `| ${seconds(total(row => row.durationMs))} |`)
+  // Aggregates compare like with like: when some tasks are new or changed,
+  // the all-tasks total carries no delta and a comparable-subset row does.
+  const comparableRows = rows.filter(row => comparable(row.task))
+  const baseFor = (from: readonly TaskSummary[]) => from.map(row => baselineRows.get(row.task)!)
+  const allComparable = baseline !== undefined && comparableRows.length === rows.length
+  lines.push(totalsRow('**all**', rows, allComparable ? baseFor(rows) : undefined))
+  if (baseline && !allComparable && comparableRows.length > 0) {
+    lines.push(totalsRow(`**comparable (${comparableRows.length})**`, comparableRows, baseFor(comparableRows)))
+  }
   lines.push('')
 
   const failures = report.runs.filter(run => !run.pass)
