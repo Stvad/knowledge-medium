@@ -1,1 +1,1 @@
-import{Mk as e,Nk as t}from"../../chunks/app-XptEjlZN.js";export{e as defaultPasteDecision,t as pasteDecisionVerb};
+import{Mk as e,Nk as t}from"../../chunks/app-C_pYS5dK.js";export{e as defaultPasteDecision,t as pasteDecisionVerb};

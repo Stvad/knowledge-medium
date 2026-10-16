@@ -1,1 +1,1 @@
-import{JD as e,XD as t,YD as n,ZD as r}from"../../chunks/app-XptEjlZN.js";export{e as BULK_DELETE_CONFIRM_THRESHOLD,n as deleteBlockThroughUi,t as deleteBlocksThroughUi,r as ensureDeletableThroughUi};
+import{JD as e,XD as t,YD as n,ZD as r}from"../../chunks/app-C_pYS5dK.js";export{e as BULK_DELETE_CONFIRM_THRESHOLD,n as deleteBlockThroughUi,t as deleteBlocksThroughUi,r as ensureDeletableThroughUi};
