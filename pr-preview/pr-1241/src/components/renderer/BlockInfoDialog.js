@@ -1,1 +1,1 @@
-import{UO as e}from"../../../chunks/app-B9-xxJAz.js";export{e as BlockInfoDialog};
+import{GO as e}from"../../../chunks/app-D-tdqB40.js";export{e as BlockInfoDialog};
