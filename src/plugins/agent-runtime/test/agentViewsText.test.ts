@@ -4,13 +4,12 @@ import { snippet } from '../agentViews/text'
 
 describe('snippet', () => {
   it('never cuts an astral character in half, whichever side of a pair its boundaries land on', () => {
-    for (const lead of ['', 'x']) {
-      for (const tail of ['', 'y']) {
-        const content = `${lead}${'\u{1F600}'.repeat(100)} needle ${'\u{1F600}'.repeat(100)}${tail}`
-        const out = snippet(content, 'needle')
-        expect(out).toContain('needle')
-        expect(hasLoneSurrogate(out)).toBe(false)
-      }
+    const content = `${'\u{1F600}'.repeat(100)} needle ${'\u{1F600}'.repeat(100)}`
+    // Odd and even widths put each boundary on both halves of a pair.
+    for (const width of [139, 140, 141, 142]) {
+      const out = snippet(content, 'needle', width)
+      expect(out).toContain('needle')
+      expect(hasLoneSurrogate(out)).toBe(false)
     }
   })
 })

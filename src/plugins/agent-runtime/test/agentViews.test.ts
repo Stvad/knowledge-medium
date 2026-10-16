@@ -305,10 +305,10 @@ describe('display safety', () => {
 describe('view-block bounds', () => {
   it('caps the property lists and names, counting what it left out', async () => {
     const id = uuid('0000b10f', 1)
-    const properties: Record<string, unknown> = {}
+    // The long name goes first, so it is inside the capped list.
+    const properties: Record<string, unknown> = {[`long-${'n'.repeat(200)}`]: 'x'}
     for (let i = 0; i < 60; i++) properties[`imported-${String(i).padStart(2, '0')}`] = `v${i}`
     for (let i = 0; i < 25; i++) properties[`system:internal-${i}`] = i
-    properties[`long-${'n'.repeat(200)}`] = 'x'
     await create({id, content: 'bag', properties})
 
     const out = await view<BlockView>({type: 'view-block', ref: id, format: 'json'})
