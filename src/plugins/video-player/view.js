@@ -1,1 +1,1 @@
-import{Gm as e,Km as t,qm as n}from"../../../chunks/app-d3Hcg1OX.js";export{e as DEFAULT_VIDEO_NOTES_PANE_RATIO,t as VIDEO_NOTES_VIEW_MODE,n as videoNotesPaneRatioProp};
+import{Jm as e,Km as t,qm as n}from"../../../chunks/app-DRyRcK_b.js";export{t as DEFAULT_VIDEO_NOTES_PANE_RATIO,n as VIDEO_NOTES_VIEW_MODE,e as videoNotesPaneRatioProp};
