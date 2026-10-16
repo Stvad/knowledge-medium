@@ -1,1 +1,1 @@
-import{Gw as e,Hw as t,Uw as n,Ww as r}from"../../chunks/app-BakXaPzX.js";export{t as ExtensionApprovalStatusProvider,n as ExtensionApprovalStatusStore,r as useExtensionApprovalStatus,e as useExtensionApprovalStatuses};
+import{Gw as e,Hw as t,Uw as n,Ww as r}from"../../chunks/app-Bs6l2Er4.js";export{t as ExtensionApprovalStatusProvider,n as ExtensionApprovalStatusStore,r as useExtensionApprovalStatus,e as useExtensionApprovalStatuses};
