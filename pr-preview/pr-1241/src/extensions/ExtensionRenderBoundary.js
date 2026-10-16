@@ -1,1 +1,1 @@
-import{zO as e}from"../../chunks/app-DDkLdC5s.js";export{e as ExtensionRenderBoundary};
+import{RO as e}from"../../chunks/app-BLSVP7Bu.js";export{e as ExtensionRenderBoundary};

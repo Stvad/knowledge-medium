@@ -1,1 +1,1 @@
-import{Nf as e}from"../../../../../chunks/app-DDkLdC5s.js";export{e as blockrefMarkdownExtension};
+import{Mf as e}from"../../../../../chunks/app-BLSVP7Bu.js";export{e as blockrefMarkdownExtension};

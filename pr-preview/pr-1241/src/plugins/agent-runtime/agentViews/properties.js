@@ -1,1 +1,1 @@
-import{Fu as e,Iu as t,Lu as n,Ru as r}from"../../../../chunks/app-DDkLdC5s.js";export{e as BRIEF_PROPERTY_COUNT,t as briefProperties,n as createPropertyRenderer,r as formatPropertyPairs};
+import{Fu as e,Iu as t,Lu as n,Ru as r}from"../../../../chunks/app-BLSVP7Bu.js";export{e as BRIEF_PROPERTY_COUNT,t as briefProperties,n as createPropertyRenderer,r as formatPropertyPairs};

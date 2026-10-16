@@ -1,1 +1,1 @@
-import{LD as e}from"../../../chunks/app-DDkLdC5s.js";export{e as CodeMirrorExtensionBlockRenderer};
+import{ID as e}from"../../../chunks/app-BLSVP7Bu.js";export{e as CodeMirrorExtensionBlockRenderer};

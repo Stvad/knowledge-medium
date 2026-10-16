@@ -1,1 +1,1 @@
-import{Mu as e,Nu as t,Pu as n,ju as r}from"../../../../chunks/app-DDkLdC5s.js";export{r as BlockRefError,e as MIN_ID_PREFIX,t as resolveBlockRef,n as shortIds};
+import{Mu as e,Nu as t,Pu as n,ju as r}from"../../../../chunks/app-BLSVP7Bu.js";export{r as BlockRefError,e as MIN_ID_PREFIX,t as resolveBlockRef,n as shortIds};

@@ -1,1 +1,1 @@
-import{K_ as e}from"../../../chunks/app-DDkLdC5s.js";export{e as BreadcrumbRenderer};
+import{G_ as e}from"../../../chunks/app-BLSVP7Bu.js";export{e as BreadcrumbRenderer};
