@@ -1,1 +1,1 @@
-import{QO as e}from"../../chunks/app-DkWskxfL.js";export{e as useShortcutSurfaceActivations};
+import{QO as e}from"../../chunks/app-Dvv5NalY.js";export{e as useShortcutSurfaceActivations};
