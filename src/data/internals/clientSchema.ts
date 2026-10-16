@@ -316,6 +316,35 @@ export const CREATE_PS_CRUD_REJECTED_TX_ID_INDEX_SQL = `
   ON ps_crud_rejected (tx_id)
 `
 
+/** Hold downloads until the server's checkpoint includes every queued upload.
+ *
+ *  The core publishes a checkpoint only when `ps_crud` is empty AND the
+ *  `$local` bucket's `target_op` does not exceed its `last_op`. Raising
+ *  `target_op` to the max op id keeps that shut after the upload empties
+ *  `ps_crud`, until the SDK swaps in the upload's write checkpoint and a
+ *  checkpoint carrying it arrives. Without it, a checkpoint cut before the
+ *  upload landed is published, and the drain applies that older version over
+ *  the newer local row (#1226). Same effect as PowerSync's own crud path,
+ *  which our writers bypass by inserting into `ps_crud` directly. */
+const HOLD_DOWNLOADS_SQL =
+  "INSERT OR REPLACE INTO ps_buckets(name, last_op, target_op) SELECT '$local', 0, 9223372036854775807"
+
+/** On the queue rather than on its writers, so every enqueue holds: the block
+ *  upload triggers and a direct insert (the rejected-upload retry) alike. */
+export const CREATE_PS_CRUD_HOLD_DOWNLOADS_TRIGGER_SQL = `
+  CREATE TRIGGER IF NOT EXISTS ps_crud_hold_downloads
+  AFTER INSERT ON ps_crud
+  BEGIN
+    ${HOLD_DOWNLOADS_SQL};
+  END
+`
+
+/** Uploads queued before the trigger existed hold too. Runs every boot; with
+ *  nothing queued it writes nothing, and with something queued the hold is
+ *  already the state PowerSync keeps. */
+export const HOLD_DOWNLOADS_FOR_QUEUED_UPLOADS_SQL =
+  `${HOLD_DOWNLOADS_SQL} WHERE EXISTS (SELECT 1 FROM ps_crud)`
+
 // ============================================================================
 // blocks_synced change-capture queue (Layout B, design doc §9.2) — the
 // observer's O(delta) detection signal, replacing an O(N) re-scan of the whole
@@ -528,21 +557,9 @@ export const CREATE_BLOCKS_DELETE_ROW_EVENT_TRIGGER_SQL = `
 //   ps_crud (tx_id INTEGER, data TEXT)
 // where data is a JSON envelope { op, type, id, data }. PowerSync picks
 // rows out of ps_crud and uploads them via the configured connector.
-// Writing it directly bypasses PowerSync's own crud path, so the triggers
-// also do the one other thing that path does: {@link HOLD_DOWNLOADS_SQL}.
+// Writing it directly bypasses PowerSync's own crud path; the one other thing
+// that path does is the queue's own trigger, {@link CREATE_PS_CRUD_HOLD_DOWNLOADS_TRIGGER_SQL}.
 // ============================================================================
-
-/** Hold downloads until the server's checkpoint includes this write.
- *
- *  The core publishes a checkpoint only when `ps_crud` is empty AND the
- *  `$local` bucket's `target_op` does not exceed its `last_op`. Raising
- *  `target_op` to the max op id keeps that shut after the upload empties
- *  `ps_crud`, until the SDK swaps in the upload's write checkpoint and a
- *  checkpoint carrying it arrives. Without it, a checkpoint cut before the
- *  upload landed is published, and the drain applies that older version over
- *  the newer local row (#1226). The statement is PowerSync's own. */
-const HOLD_DOWNLOADS_SQL =
-  "INSERT OR REPLACE INTO ps_buckets(name, last_op, target_op) VALUES('$local', 0, 9223372036854775807)"
 
 interface UploadColumnSpec {
   readonly name: string
@@ -643,7 +660,6 @@ export const CREATE_BLOCKS_UPLOAD_INSERT_TRIGGER_SQL = `
         'data', ${blockUploadJsonSql('NEW')}
       )
     );
-    ${HOLD_DOWNLOADS_SQL};
   END
 `
 
@@ -664,7 +680,6 @@ export const CREATE_BLOCKS_UPLOAD_UPDATE_TRIGGER_SQL = `
         'data', ${blockUploadPatchJsonSql()}
       )
     );
-    ${HOLD_DOWNLOADS_SQL};
   END
 `
 
@@ -1327,6 +1342,7 @@ const CLIENT_SCHEMA_BASE_STATEMENTS: readonly string[] = [
   CREATE_PS_CRUD_REJECTED_TABLE_SQL,
   CREATE_PS_CRUD_REJECTED_REJECTED_AT_INDEX_SQL,
   CREATE_PS_CRUD_REJECTED_TX_ID_INDEX_SQL,
+  HOLD_DOWNLOADS_FOR_QUEUED_UPLOADS_SQL,
   CREATE_BLOCKS_SYNCED_CHANGES_TABLE_SQL,
   CREATE_BLOCKS_SYNCED_CHANGES_ID_OP_INDEX_SQL,
   DROP_BLOCKS_WORKSPACE_TYPE_INDEX_SQL,
@@ -1336,9 +1352,10 @@ const CLIENT_SCHEMA_BASE_STATEMENTS: readonly string[] = [
   CREATE_BLOCKS_INSERT_ROW_EVENT_TRIGGER_SQL,
   CREATE_BLOCKS_UPDATE_ROW_EVENT_TRIGGER_SQL,
   CREATE_BLOCKS_DELETE_ROW_EVENT_TRIGGER_SQL,
-  // 2 upload-routing triggers
+  // 2 upload-routing triggers, and the upload queue's download hold
   CREATE_BLOCKS_UPLOAD_INSERT_TRIGGER_SQL,
   CREATE_BLOCKS_UPLOAD_UPDATE_TRIGGER_SQL,
+  CREATE_PS_CRUD_HOLD_DOWNLOADS_TRIGGER_SQL,
   // 2 workspace-invariant triggers
   CREATE_BLOCKS_WORKSPACE_INVARIANT_INSERT_TRIGGER_SQL,
   CREATE_BLOCKS_WORKSPACE_INVARIANT_UPDATE_TRIGGER_SQL,

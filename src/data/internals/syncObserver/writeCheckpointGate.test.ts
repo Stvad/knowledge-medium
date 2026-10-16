@@ -7,15 +7,16 @@
  * it publishes a checkpoint only when `ps_crud` is empty AND the `$local`
  * bucket's `target_op` does not exceed its `last_op`. The second half is what
  * holds a download back between "upload acknowledged" and "the server's
- * checkpoint includes it", and it only engages if every local write raises
- * `$local.target_op` — PowerSync's own crud path does, and so must our upload
- * triggers, which write `ps_crud` directly.
+ * checkpoint includes it", and it only engages if every enqueue raises
+ * `$local.target_op` — PowerSync's own crud path does, and so must every
+ * writer of ours that inserts into `ps_crud` directly.
  *
  * Without it the drain receives the older version as a fresh delivery and,
  * with nothing pending, applies it over the newer local row (#1226).
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { BLOCK_STORAGE_COLUMNS, blockToSyncedRowParams } from '@/data/blockSchema'
+import { CLIENT_SCHEMA_NON_TRIGGER_STATEMENTS } from '@/data/internals/clientSchema'
 import type { BlockData } from '@/data/api'
 import { constMat, drainStagingWindowOnce, noKey, setupObserverTestDb } from './test/harness.js'
 
@@ -138,15 +139,19 @@ describe('download gating on this device\'s own uploads', () => {
     expect(await stagedContent()).toBe(edited.content)
   })
 
-  it('holds a foreign edit cut before this device\'s edit of a downloaded block landed', async () => {
+  it('holds a re-queued upload, which enqueues without the block triggers', async () => {
     const serverCheckpoint = serverBucket()
     await serverCheckpoint([putOp(1, created)], null)
     await drain()
-    // The device's first local write is this edit, so nothing earlier has
-    // raised the hold.
-    await writeLocally(
+    // An edit whose upload was rejected: the local row holds it, the queue
+    // does not, until a retry puts the envelope back.
+    await env.db.execute(
       'UPDATE blocks SET content = ?, updated_at = ?, user_updated_at = ? WHERE id = ?',
       [edited.content, edited.updatedAt, edited.userUpdatedAt, edited.id],
+    )
+    await env.db.execute(
+      "INSERT INTO ps_crud (tx_id, data) VALUES (1, json_object('op', 'PATCH', 'type', 'blocks', 'id', ?, 'data', json_object('content', ?)))",
+      [edited.id, edited.content],
     )
     await acknowledgeUploads('3')
 
@@ -157,15 +162,20 @@ describe('download gating on this device\'s own uploads', () => {
     expect(await localContent()).toBe(edited.content)
   })
 
-  it('holds a checkpoint carrying an older server copy of a block this device just created', async () => {
+  it('holds an upload a previous build queued, once this build boots', async () => {
     const serverCheckpoint = serverBucket()
-    const serverCopy: BlockData = {...created, content: 'older copy', updatedAt: created.updatedAt - 1000}
-    await writeLocally(INSERT_SQL, blockToSyncedRowParams(edited))
+    await writeLocally(INSERT_SQL, blockToSyncedRowParams(created))
+    await acknowledgeUploads('1')
+    await writeLocally(
+      'UPDATE blocks SET content = ?, updated_at = ?, user_updated_at = ? WHERE id = ?',
+      [edited.content, edited.updatedAt, edited.userUpdatedAt, edited.id],
+    )
+    // What a build without the hold left behind: the edit queued, no `$local`.
+    await env.db.execute("DELETE FROM ps_buckets WHERE name = '$local'")
+    for (const stmt of CLIENT_SCHEMA_NON_TRIGGER_STATEMENTS) await env.db.execute(stmt)
     await acknowledgeUploads('2')
 
-    await serverCheckpoint([putOp(1, serverCopy)], null)
+    await serverCheckpoint([putOp(1, created)], '1')
     expect(await stagedContent()).toBeUndefined()
-    await drain()
-    expect(await localContent()).toBe(edited.content)
   })
 })
