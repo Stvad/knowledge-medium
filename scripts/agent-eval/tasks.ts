@@ -218,6 +218,40 @@ export const TASKS: readonly EvalTask[] = [
     },
   },
   {
+    id: 'meetings-with-person',
+    kind: 'read',
+    covers: 'count references to a person in a date window, when each reference is a bare child line',
+    prompt: () => readPrompt(
+      'Meetings are recorded as [[Meeting]] blocks on the daily notes, each with a "with [[Person]]" child. '
+      + 'How many meetings did I have with Ines Varga in July 2026, and on which dates?',
+      '{"count": <number>, "dates": ["YYYY-MM-DD", ...]}',
+    ),
+    check: async ({answer, truth}) => {
+      if (!isRecord(answer)) return noAnswer
+      const dates = isoDates(answer.dates)
+      if (!dates) return noAnswer
+      const datesOutcome = compareSets(dates, [...new Set(truth.julyMeetingsWithInes)])
+      const countOk = answer.count === truth.julyMeetingsWithInes.length
+      return {
+        pass: countOk && datesOutcome.pass,
+        detail: `count ${countOk ? 'right' : `${JSON.stringify(answer.count)} (want ${truth.julyMeetingsWithInes.length})`}; dates: ${datesOutcome.detail}`,
+      }
+    },
+  },
+  {
+    id: 'reading-log-filter',
+    kind: 'read',
+    covers: 'filter the entries of a page with thousands of children',
+    prompt: () => readPrompt(
+      `On the page "${READING_LOG_PAGE}", which books were rated 5/5 and recommended by Tomas Reyes?`,
+      '{"titles": ["<book title>", ...]}',
+    ),
+    check: async ({answer, truth}) => {
+      const titles = answerField(answer, 'titles', stringList)
+      return titles ? compareSets(titles, truth.tomasFiveStarBooks) : noAnswer
+    },
+  },
+  {
     id: 'daily-checkin',
     kind: 'write',
     covers: "append a structured note to today's daily note",

@@ -103,6 +103,17 @@ const deriveReadAnswers = async (): Promise<Record<string, unknown>> => {
       AND EXISTS (SELECT 1 FROM json_each(properties_json, '$."roam:isa"') WHERE value = ?)`,
   [TEST_WORKSPACE_ID, vendorPageId])
 
+  const julyMeetingsWithInes: string[] = []
+  for (const iso of fixtureDays('2026-07-01', '2026-07-31')) {
+    for (const meeting of (await childrenOf(probe, await dailyNoteId(probe, iso))).filter(row => row.content === '[[Meeting]]')) {
+      if ((await childrenOf(probe, meeting.id)).some(row => row.content === 'with [[Ines Varga]]')) julyMeetingsWithInes.push(iso)
+    }
+  }
+
+  const tomasFiveStar = (await childrenOf(probe, await requirePageId(probe, READING_LOG_PAGE)))
+    .map(row => /^(.*) — rating 5\/5 — recommended by \[\[Tomas Reyes\]\]$/.exec(row.content)?.[1])
+    .filter((title): title is string => title !== undefined)
+
   const design = await descendantsOf(probe, await requirePageId(probe, DESIGN_PAGE))
   const heading = (text: string) => design.find(row => row.content === `## ${text}`)!
   const childrenOfRow = (id: string) => design
@@ -115,6 +126,8 @@ const deriveReadAnswers = async (): Promise<Record<string, unknown>> => {
     'orchard-open-todos': {todos: openTodos},
     'reading-log-needle': {rating: Number(needleMatch?.[1]), recommendedBy: needleMatch?.[2]},
     'renewal-vendors': {vendors: renewalVendors.map(row => row.content)},
+    'meetings-with-person': {count: julyMeetingsWithInes.length, dates: [...new Set(julyMeetingsWithInes)]},
+    'reading-log-filter': {titles: tomasFiveStar},
     'summarize-design': {
       author: /\[\[([^\]]+)\]\]/.exec(design.find(row => row.content.startsWith('Author::'))!.content)?.[1],
       decision: childrenOfRow(heading('Decision').id)[0].content,
@@ -130,6 +143,9 @@ const wrongAnswers: Record<string, unknown> = {
   'orchard-open-todos': {todos: [...truth.openOrchardTodos, 'Book launch venue']},
   'reading-log-needle': {rating: 5, recommendedBy: truth.needleBook.recommendedBy},
   'renewal-vendors': {vendors: [...truth.renewalDueVendors, 'Office Lease']},
+  // Distinct dates, but counting days instead of meetings.
+  'meetings-with-person': {count: new Set(truth.julyMeetingsWithInes).size, dates: [...new Set(truth.julyMeetingsWithInes)]},
+  'reading-log-filter': {titles: truth.tomasFiveStarBooks.slice(1)},
   'summarize-design': {author: PEOPLE[0], decision: 'Adopt a CRDT', openQuestions: truth.design.openQuestions},
 }
 

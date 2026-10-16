@@ -9,7 +9,7 @@ It has two halves:
 | half | what | where it runs |
 |---|---|---|
 | **deterministic** | byte size of representative tool outputs on the fixture, with a budget each; every task's checker proven against the graph | `pnpm run check` (node, no browser, ~8s) — `fixtureGraph.test.ts` |
-| **model** | `claude -p` does ~10 tasks with only the km tools; per task: pass/fail, tool calls, bytes returned, tokens, time | on demand, `pnpm agent-eval run` — costs subscription usage |
+| **model** | `claude -p` does 12 tasks with only the km tools; per task: pass/fail, tool calls, bytes returned, tokens, time | on demand, `pnpm agent-eval run` — costs subscription usage |
 
 ## The fixture
 
@@ -23,9 +23,10 @@ tasks are checked against. All names and content are invented.
 
 ## Tasks
 
-`tasks.ts`. There are six read tasks: a topic in a date window, summarize a page,
+`tasks.ts`. There are eight read tasks: a topic in a date window, summarize a page,
 references with context through bare backlinks, open todos under a page, a needle on a
-2,000-child page, and a property query. They are scored on the reply's final
+2,000-child page, a property query, counting meetings with a person (each a bare
+`with [[Person]]` line), and filtering the 2,000-child page. They are scored on the reply's final
 `ANSWER: {json}` line. There are four write tasks: append a structured note to today's
 daily note, edit one phrase in a block, create a page and link it, and complete a todo.
 They are scored on graph state read back through raw wire commands and SQL, never

@@ -73,6 +73,10 @@ export interface FixtureTruth {
   /** Vendor pages whose Status attribute is "renewal due". */
   renewalDueVendors: string[]
   needleBook: typeof NEEDLE_BOOK
+  /** One date per meeting with Ines Varga in July 2026 (a date repeats for a second meeting that day). */
+  julyMeetingsWithInes: string[]
+  /** Reading-log titles rated 5/5 and recommended by Tomas Reyes. */
+  tomasFiveStarBooks: string[]
   design: {author: string, openQuestions: number, decisionKeyword: string}
 }
 
@@ -551,6 +555,17 @@ export const buildFixture = (): Fixture => {
   const kestrelJuneDates = days.filter((iso, index) =>
     iso.startsWith('2026-06-') && mentionsKestrel(dailyPages[index].children))
 
+  const julyMeetingsWithInes = days.flatMap((iso, index) => iso.startsWith('2026-07-')
+    ? (dailyPages[index].children ?? [])
+      .filter(child => child.string === '[[Meeting]]'
+        && (child.children ?? []).some(note => note.string === 'with [[Ines Varga]]'))
+      .map(() => iso)
+    : [])
+  const readingLog = staticPages.find(p => p.title === READING_LOG_PAGE)!
+  const tomasFiveStarBooks = (readingLog.children ?? [])
+    .map(entry => /^(.*) — rating 5\/5 — recommended by \[\[Tomas Reyes\]\]$/.exec(entry.string ?? '')?.[1])
+    .filter((title): title is string => title !== undefined)
+
   const pages = [...staticPages, ...dailyPages]
   const hash = createHash('sha256').update(JSON.stringify(pages)).digest('hex').slice(0, 12)
   const marker = page(FIXTURE_MARKER_PAGE, 'agent-eval-fixture', [
@@ -567,6 +582,8 @@ export const buildFixture = (): Fixture => {
       openOrchardTodos,
       renewalDueVendors: VENDORS.filter(vendor => vendor.status === 'renewal due').map(vendor => vendor.name),
       needleBook: NEEDLE_BOOK,
+      julyMeetingsWithInes,
+      tomasFiveStarBooks,
       design: {author: 'Priya Nand', openQuestions: DESIGN_OPEN_QUESTIONS.length, decisionKeyword: 'last-writer-wins'},
     },
   }
