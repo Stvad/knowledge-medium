@@ -497,7 +497,7 @@ export const viewOutlineCommandSchema = z.looseObject({
     'Properties per line: brief (default; the first few, compactly), none, or full',
   ),
   expandCollapsed: z.boolean().optional().describe(
-    'Expand blocks the user collapsed (default: summarized as +N children)',
+    'Expand blocks below the root that the user collapsed (default: summarized as +N children)',
   ),
   ...viewFields,
   ...commandIdField,

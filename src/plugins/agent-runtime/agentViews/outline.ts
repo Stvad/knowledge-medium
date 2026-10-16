@@ -3,11 +3,11 @@ import type { BlockData } from '@/data/api'
 import { isCollapsedProp } from '@/data/properties.js'
 import { AGENT_VIEW_DEFAULTS } from '@knowledge-medium/agent-cli/protocol'
 import { loadBlocks, loadCrumbs, visibleChildCounts, visibleChildrenLevel } from './context.ts'
+import { displayIds } from './displayIds.ts'
 import { createPropertyRenderer, type PropertyDetail } from './properties.ts'
 import {
   clampInt,
   CUT_LEGEND,
-  displayIds,
   crumbLine,
   joinDisplayLines,
   loadRoot,
@@ -77,6 +77,8 @@ const selectNodes = async (
 ): Promise<Map<string, Node>> => {
   const nodes = new Map<string, Node>()
   let budget = limit
+  // The root shows its children even when collapsed, as the app shows those of
+  // a collapsed block zoomed into; collapsed summarizes a block below the root.
   let frontier = [root.id]
   for (let level = 1; level <= depth && budget > 0 && frontier.length > 0; level++) {
     const rows = await visibleChildrenLevel(repo, frontier, {limit: budget, offset: level === 1 ? offset : 0})

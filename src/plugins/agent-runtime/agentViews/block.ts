@@ -3,7 +3,8 @@ import { AGENT_VIEW_DEFAULTS } from '@knowledge-medium/agent-cli/protocol'
 import { BACKLINKS_FOR_BLOCK_QUERY } from '@/plugins/backlinks/query.js'
 import { loadCrumbs, visibleChildCounts } from './context.ts'
 import { createPropertyRenderer, type PropertyLine } from './properties.ts'
-import { boundDisplayId, crumbLine, displayIds, joinDisplayLines, loadRoot, plural } from './shared.ts'
+import { boundDisplayId, displayIds } from './displayIds.ts'
+import { crumbLine, joinDisplayLines, loadRoot, plural } from './shared.ts'
 import { charBoundary, formatCount } from './text.ts'
 
 export interface BlockViewParams {

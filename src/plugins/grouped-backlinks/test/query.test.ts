@@ -265,6 +265,7 @@ describe('groupedBacklinksDataExtension query', () => {
       label: 'reviewer',
       sourceIds: ['src'],
       fallback: false,
+      blockId: null,
     }])
   })
 
@@ -295,7 +296,9 @@ describe('groupedBacklinksDataExtension query', () => {
       label: 'reviewer',
       sourceIds: ['src-field'],
       fallback: false,
+      blockId: null,
     })
+    expect(out.groups.find(group => group.label === 'Project')?.blockId).toBe('project')
   })
 
   it('keeps two source fields from the same source to the same target distinct', async () => {
@@ -343,12 +346,14 @@ describe('groupedBacklinksDataExtension query', () => {
         label: 'reviewer',
         sourceIds: ['parent'],
         fallback: false,
+        blockId: null,
       },
       {
         groupId: '__grouped_backlinks_other__',
         label: 'Other',
         sourceIds: ['child'],
         fallback: true,
+        blockId: null,
       },
     ])
   })
@@ -798,6 +803,7 @@ describe('groupedBacklinksDataExtension query', () => {
 
       const financeGroup = out.groups.find(group => group.label === 'Finance')
       expect(financeGroup).toBeDefined()
+      expect(financeGroup!.blockId).toBe('finance')
       expect(sorted(financeGroup!.sourceIds))
         .toEqual(['src-banking', 'src-investments', 'src-taxes'])
     })
@@ -946,6 +952,7 @@ describe('groupedBacklinksDataExtension query', () => {
       const projectGroup = out.groups.find(group => group.label === 'project')
       expect(projectGroup).toBeDefined()
       expect(projectGroup!.groupId).toBe('type:project')
+      expect(projectGroup!.blockId).toBeNull()
       expect(sorted(projectGroup!.sourceIds)).toEqual(['src-1', 'src-2'])
     })
 

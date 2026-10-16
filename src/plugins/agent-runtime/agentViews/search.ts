@@ -6,7 +6,8 @@ import { AGENT_VIEW_DEFAULTS } from '@knowledge-medium/agent-cli/protocol'
 import { searchBlocksAcrossSources } from '@/utils/linkTargetAutocomplete.js'
 import { loadBlocks, loadCrumbs } from './context.ts'
 import { createPropertyRenderer, formatPropertyPairs, type PropertyLine } from './properties.ts'
-import { clampInt, crumbLine, displayIds, joinDisplayLines, loadRoot } from './shared.ts'
+import { displayIds } from './displayIds.ts'
+import { clampInt, crumbLine, joinDisplayLines, loadRoot } from './shared.ts'
 import { formatCount, snippet } from './text.ts'
 
 export interface SearchParams {

@@ -25,6 +25,11 @@ const isHighSurrogate = (code: number): boolean => code >= 0xd800 && code <= 0xd
 export const charBoundary = (text: string, at: number): number =>
   at > 0 && at < text.length && isHighSurrogate(text.charCodeAt(at - 1)) ? at - 1 : at
 
+/** Cut to at most `max` characters, ending in `…` when cut: for a label or an
+ *  id inside a line, where a char-count marker would crowd out the rest. */
+export const ellipsize = (text: string, max: number): string =>
+  text.length > max ? `${text.slice(0, charBoundary(text, max - 1))}…` : text
+
 /** Cut to at most `max` characters of the ORIGINAL text, marked. */
 export const clip = (text: string, max: number): Clipped => {
   if (text.length <= max) return {text, cut: 0}

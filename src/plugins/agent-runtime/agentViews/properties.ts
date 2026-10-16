@@ -3,7 +3,8 @@ import type { AnyPropertySchema, BlockData } from '@/data/api'
 import { decodeRefId, decodeRefListIds, isRefCodec, isRefListCodec, memberCodecOf } from '@/data/api/codecs.js'
 import { aliasesProp, typesProp } from '@/data/properties.js'
 import { isPropertyPanelHiddenProperty } from '@/components/propertyPanel/visibility.js'
-import { boundLabels, charBoundary, clipLine, oneLine } from './text.ts'
+import { boundDisplayId, displayIds } from './displayIds.ts'
+import { boundLabels, charBoundary, clipLine, ellipsize, oneLine } from './text.ts'
 
 export interface PropertyLine {
   name: string
@@ -35,6 +36,8 @@ const MAX_HIDDEN_NAMES = 20
 const MAX_TYPES = 10
 /** Refs titled and shown per property; a refList can hold thousands. */
 const MAX_REFS = 20
+/** A block ref's quoted label keeps at least this much beside its id. */
+const MIN_REF_LABEL = 12
 const SUMMARY_KEYS = 3
 
 /** A list value is decoded from a head this long — more than any line can
@@ -90,6 +93,9 @@ const formatDate = (date: Date): string => {
 
 const isListItem = (value: unknown): boolean => isScalar(value) || value instanceof Date
 
+/** What a cut-off list ends with: the count of the items not shown. */
+const moreSuffix = (left: number): string => `, …+${left} more`
+
 /** Structured values (an SRS snapshot history, an importer's payload) are
  *  summarized, never dumped — they are what made raw outlines unreadable. A
  *  list is read only until its line is full: a list of records is told by
@@ -105,19 +111,22 @@ const formatValue = (value: unknown, budget: number, from = 0, total?: number): 
     let joined = ''
     for (let index = from; index < value.length; index++) {
       const item: unknown = value[index]
-      if (!isListItem(item)) return `${joined}, …+${count - index} more`
+      if (!isListItem(item)) return `${joined}${moreSuffix(count - index)}`
       const left = count - index - 1
       const separator = index > from ? ', ' : ''
       // Room for the count of what follows, so the line's own clip never cuts it off.
-      const space = budget - joined.length - separator.length - (left > 0 ? `, …+${left} more`.length : 0)
+      const space = budget - joined.length - separator.length - (left > 0 ? moreSuffix(left).length : 0)
       const text = formatValue(item, budget)
-      if (text.length > space && left > 0) {
-        if (index > from) return `${joined}, …+${count - index} more`
-        return `${text.slice(0, charBoundary(text, Math.max(1, space - 1)))}…, …+${left} more`
+      // An item that does not fit is counted, never cut — the last one too, so
+      // the line's clip cannot take the end of a ref's id. Only a first item
+      // is cut, to show something.
+      if (text.length > space && (index > from || left > 0)) {
+        if (index > from) return `${joined}${moreSuffix(count - index)}`
+        return `${text.slice(0, charBoundary(text, Math.max(1, space - 1)))}…${moreSuffix(left)}`
       }
       joined += `${separator}${text}`
     }
-    return count > value.length ? `${joined}, …+${count - value.length} more` : joined
+    return count > value.length ? `${joined}${moreSuffix(count - value.length)}` : joined
   }
   if (typeof value === 'object') {
     // Enumerate only what is shown (plus one, to know there is more): an
@@ -165,7 +174,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  *  it can show — visible ones, plain names first, at most
  *  {@link MAX_PROPERTIES} — and decodes only those through the registry, then
  *  loads the titles of their referenced blocks in one query, so a ref renders
- *  as `[[Title]]`. A huge bag costs its names, not its decoding (a cost
+ *  as `[[Title]]` (or quoted content and `^shortid`). A huge bag costs its names, not its decoding (a cost
  *  bound: decoding everything would render the same). Visibility
  *  is the property panel's rule (`isPropertyPanelHiddenProperty`), so an
  *  agent sees what the user sees. */
@@ -224,31 +233,46 @@ export const createPropertyRenderer = async (
     preparedByBlock.set(block.id, {shown, omitted: visible.length - shown.length - blank, hidden})
   }
 
-  const titles = new Map<string, {title: string, workspaceId: string}>()
+  interface Title {
+    workspaceId: string
+    /** The page's first alias, or null for a block that has none. */
+    alias: string | null
+    content: string
+  }
+  const titles = new Map<string, Title>()
   if (refIds.size > 0) {
     const rows = await repo.db.getAll<{id: string, workspace_id: string, alias: unknown, content: string | null}>(
       TITLE_ROWS_SQL,
       [JSON.stringify([...refIds])],
     )
     for (const row of rows) {
-      const alias = typeof row.alias === 'string' ? row.alias.trim() : ''
-      const title = alias || row.content?.trim() || row.id
-      titles.set(row.id, {title: oneLine(title), workspaceId: row.workspace_id})
+      const alias = typeof row.alias === 'string' ? oneLine(row.alias) : ''
+      titles.set(row.id, {workspaceId: row.workspace_id, alias: alias || null, content: oneLine(row.content ?? '')})
     }
   }
-  // References resolve within a workspace, so another workspace's block
-  // stays a dangling ((id)) here, as it is everywhere else.
-  const titleIn = (id: string, workspaceId: string): string | undefined => {
-    const found = titles.get(id)
-    return found?.workspaceId === workspaceId ? found.title : undefined
+  const unaliased = [...titles].filter(([, title]) => title.alias === null).map(([id]) => id)
+  const refShortIds = unaliased.length > 0 ? await displayIds(repo, unaliased) : new Map<string, string>()
+
+  // A page reads as its [[alias]], which resolves by name. Any other block
+  // reads as its quoted content and ^shortid: its content names nothing, so
+  // the id must survive the line's cut. References resolve within a
+  // workspace, so another workspace's block stays a dangling ((id)) here, as
+  // it is everywhere else.
+  const refText = (id: string, workspaceId: string, budget: number): string => {
+    const title = titles.get(id)
+    if (title?.workspaceId !== workspaceId) return `((${boundDisplayId(id)}))`
+    if (title.alias !== null) return `[[${title.alias}]]`
+    const shortId = refShortIds.get(id) ?? boundDisplayId(id)
+    if (!title.content) return `^${shortId}`
+    return `"${ellipsize(title.content, Math.max(MIN_REF_LABEL, budget - shortId.length - 4))}" ^${shortId}`
   }
 
   const display = (decoded: Decoded, block: BlockData, name: string, budget: number): string => {
     if (decoded.kind === 'refs') {
-      const shown = decoded.ids.slice(0, MAX_REFS).map(id => {
-        const title = titleIn(id, block.workspaceId)
-        return title !== undefined ? `[[${title}]]` : `((${id}))`
-      })
+      // Each ref fits the space the list leaves its first item, beside the
+      // count of the rest, so no cut can drop a ref's id.
+      const space = budget - (decoded.total > 1 ? moreSuffix(decoded.total - 1).length : 0)
+      const shown = decoded.ids.slice(0, MAX_REFS).map(id => refText(id, block.workspaceId, space))
       // Joined like any list, so the count of the rest stays on the line.
       return formatValue(shown, budget, 0, decoded.total)
     }

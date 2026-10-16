@@ -14,7 +14,8 @@ import {
 import { labelForBlockData } from '@/utils/linkTargetAutocomplete.js'
 import { firstVisibleChildren, loadBlocks, loadCrumbs, visibleChildCounts } from './context.ts'
 import { createPropertyRenderer, NAME_CHARS } from './properties.ts'
-import { clampInt, CUT_LEGEND, crumbLine, displayIds, joinDisplayLines, loadRoot, metaSuffix, plural, toViewRow, type ViewRow } from './shared.ts'
+import { displayIds } from './displayIds.ts'
+import { clampInt, CUT_LEGEND, crumbLine, joinDisplayLines, loadRoot, metaSuffix, plural, toViewRow, type ViewRow } from './shared.ts'
 import { boundLabels, clipLine, formatCount, isReferenceOnly } from './text.ts'
 
 const MAX_BACKLINKS = 500
@@ -282,14 +283,8 @@ export const buildGroupedBacklinksView = async (
   // cannot multiply past what a single backlinks page may hydrate.
   const membersPerGroup = Math.max(1, Math.min(requestedPerGroup, Math.floor(MAX_BACKLINKS / Math.max(1, page.length))))
   const memberIds = [...new Set(page.flatMap(group => membersOf(group.sourceIds)))]
-  // A group is a block when that block exists — not when its id looks like
-  // one: sync admits non-canonical ids, and the fallback group is no block.
-  const [members, groupBlocks] = await Promise.all([
-    loadBlocks(repo, memberIds),
-    loadBlocks(repo, page.filter(group => !group.fallback).map(group => group.groupId)),
-  ])
-  const groupIds = groupBlocks.map(groupBlock => groupBlock.id)
-  const blockGroupIds = new Set(groupIds)
+  const groupIds = page.flatMap(group => group.blockId === null ? [] : [group.blockId])
+  const members = await loadBlocks(repo, memberIds)
   const [renderer, shortIds] = await Promise.all([
     createPropertyRenderer(repo, members, 'brief'),
     displayIds(repo, [...memberIds, ...groupIds]),
@@ -305,13 +300,12 @@ export const buildGroupedBacklinksView = async (
     nextOffset: end < result.groups.length ? end : null,
     memberOffset,
     groups: page.map(group => {
-      const isBlock = blockGroupIds.has(group.groupId)
       const consumed = membersOf(group.sourceIds)
       const nextMemberOffset = memberOffset + consumed.length
       return {
         label: clipLine(group.label, TITLE_CHARS).text,
-        groupId: isBlock ? group.groupId : null,
-        shortId: isBlock ? shortIds.get(group.groupId) ?? group.groupId : null,
+        groupId: group.blockId,
+        shortId: group.blockId === null ? null : shortIds.get(group.blockId) ?? group.blockId,
         fallback: group.fallback,
         memberCount: group.sourceIds.length,
         nextMemberOffset: nextMemberOffset < group.sourceIds.length ? nextMemberOffset : null,

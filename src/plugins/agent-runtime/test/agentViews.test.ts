@@ -251,6 +251,10 @@ describe('view-outline', () => {
 
     const expanded = await view<string>({type: 'view-outline', ref: ROOT, depth: 2, expandCollapsed: true})
     expect(expanded).toContain('  - Hidden under fold  ^000000c1')
+
+    // A collapsed root still shows its children, as the app does when zoomed into it.
+    const asRoot = await view<string>({type: 'view-outline', ref: collapsed})
+    expect(asRoot).toContain('- Hidden under fold  ^000000c1')
   })
 
   it('fills shallower levels first and pages the root children by offset', async () => {
@@ -500,12 +504,32 @@ describe('structural edge cases', () => {
 
   it('titles at most 20 refs of a refList, counting the rest', async () => {
     const targets = Array.from({length: 25}, (_, i) => uuid(`7e7e7e${String(i).padStart(2, '0')}`, i))
-    for (const [i, target] of targets.entries()) await create({id: target, content: `r${i}`})
+    for (const [i, target] of targets.entries()) await create({id: target, content: `r${i}`, properties: {alias: [`r${i}`]}})
     const holder = uuid('7f7f7f7f', 1)
     await create({id: holder, content: 'holder', properties: {groupWith: targets}})
     const out = await view<BlockView>({type: 'view-block', ref: holder, format: 'json'})
     const value = out.properties.find(property => property.name === 'groupWith')!.value
     expect(value).toMatch(/^\[\[r0\]\], .*\[\[r19\]\], …\+5 more$/)
+  })
+
+  it('names a ref to a block with no alias by its content and a short id that resolves back', async () => {
+    const task = uuid('7a7a7a7a', 1)
+    const content = `Write the quarterly report${' and more'.repeat(20)}`
+    await create({id: task, content})
+    const page = uuid('7b7b7b7b', 1)
+    await create({id: page, content: 'Plans', properties: {alias: ['Plans']}})
+    const root = uuid('7c7c7c7c', 1)
+    await create({id: root, content: 'root'})
+    const holder = uuid('7d7d7d7d', 1)
+    await create({id: holder, parentId: root, content: 'holder', properties: {groupWith: [task, page]}})
+
+    const out = await view<BlockView>({type: 'view-block', ref: holder, format: 'json'})
+    expect(out.properties.find(property => property.name === 'groupWith')!.value)
+      .toBe(`"${content}" ^7a7a7a7a, [[Plans]]`)
+    expect((await resolveBlockRef(repo, '^7a7a7a7a', {workspaceId: WS})).id).toBe(task)
+    // A brief line is 40 characters: the label gives way, never the id.
+    const outline = await view<string>({type: 'view-outline', ref: root})
+    expect(outline).toMatch(/groupWith:: "Write the[^"]*…" \^7a7a7a7a, …\+1 more/)
   })
 
   it('formats a huge list value only as far as its line, counting the rest', async () => {
@@ -642,7 +666,7 @@ describe('structural edge cases', () => {
 
   it('reads a long list only as far as its line: refs, scalars, and a list of records', async () => {
     const targets = Array.from({length: 3}, (_, i) => uuid(`8b8b8b8${i}`, i))
-    for (const [i, target] of targets.entries()) await create({id: target, content: `t${i}`})
+    for (const [i, target] of targets.entries()) await create({id: target, content: `t${i}`, properties: {alias: [`t${i}`]}})
     const id = uuid('8c8c8c8c', 1)
     await create({id, content: 'lists', properties: {
       groupWith: [...targets, ...Array.from({length: 200_000}, (_, i) => uuid('8d8d8d8d', i))],
@@ -705,6 +729,15 @@ describe('structural edge cases', () => {
     }
     const out = await view<GroupedBacklinksView>({type: 'view-grouped-backlinks', ref: target, format: 'json'})
     expect(out.groups.map(group => group.label)).not.toContain('Outer root')
+  })
+
+  it('treats a field or type group as no block, even when a stored id spells its group id', async () => {
+    const target = uuid('a4a4a4a4', 1)
+    await create({id: target, content: 'Target', properties: {alias: ['Target']}})
+    await create({id: 'field:reviewer', content: 'planted'})
+    await create({id: uuid('a5a5a5a5', 1), content: 'src', references: [{id: target, alias: 'Target', sourceField: 'reviewer'}]})
+    const out = await view<GroupedBacklinksView>({type: 'view-grouped-backlinks', ref: target, format: 'json'})
+    expect(out.groups.find(group => group.label === 'reviewer')).toMatchObject({groupId: null, shortId: null})
   })
 
   it('reads only a head of a huge types list, counting the rest', async () => {
