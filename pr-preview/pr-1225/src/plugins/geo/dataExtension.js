@@ -1,1 +1,0 @@
-import{WL as e}from"../../../chunks/app-DOtJgR5I.js";export{e as geoDataExtension};

@@ -1,1 +1,0 @@
-import{Dw as e,Ow as t}from"../../../chunks/app-DOtJgR5I.js";export{e as extensionPromptDiagnosticContribution,t as extensionPromptDiagnosticSource};
