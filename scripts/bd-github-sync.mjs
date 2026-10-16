@@ -1018,6 +1018,18 @@ const labelFieldsWhere = (bead, issue, keep) =>
   LABEL_FIELDS.filter(([, read]) => keep(labelVerdict(bead, issue, read))).map(([field]) => field)
 
 /**
+ * Whether a bead's text is what the listing shows for it. gh rewrites C0/C1
+ * control characters in every API response to caret notation (ESC → `^[`, its
+ * terminal-injection sanitizer), while bd reads the API raw — so the bead side
+ * is put through the same rewrite. \b and \f are left alone because GitHub
+ * writes them as short escapes, which the sanitizer does not match.
+ */
+const GH_SANITIZED = /[\x00-\x07\x0e-\x1f\x80-\x9f]/g
+const asGhPrints = text => text.replace(GH_SANITIZED, c => `^${String.fromCharCode((c.charCodeAt(0) & 0x1f) + 0x40)}`)
+// Accepted: a control character and its literal caret spelling read as equal — gh's transport rewrites every response, so no read through gh tells them apart.
+const sameText = (local, listed) => asGhPrints(local ?? '') === (listed ?? '')
+
+/**
  * Whether a push would CHANGE the issue — the question bd's push asks itself
  * (PushFieldsEqual) after fetching the issue, asked here from the listing so a
  * bead bd would skip is never handed over.
@@ -1031,15 +1043,15 @@ const pushedLabels = bead => [
   ...(bead.labels ?? []),
 ]
 const pushWouldChange = (bead, issue) =>
-  bead.title !== issue.title ||
-  (bead.description ?? '') !== (issue.body ?? '') ||
+  !sameText(bead.title, issue.title) ||
+  !sameText(bead.description, issue.body) ||
   (bead.status === 'closed') !== (issue.state === 'CLOSED') ||
   normalizedLabels(pushedLabels(bead)) !== normalizedLabels(issue.labels)
 
 /** Whether bd's pull would write this bead at all (its pullIssueEqual, negated). */
 export const pullWouldWrite = (bead, issue) =>
-  bead.title !== issue.title ||
-  (bead.description ?? '') !== (issue.body ?? '') ||
+  !sameText(bead.title, issue.title) ||
+  !sameText(bead.description, issue.body) ||
   (bead.assignee ?? '').trim() !== (issue.assignee ?? '').trim() ||
   normalizedLabels(bead.labels) !== normalizedLabels(pullLabels(issue.labels)) ||
   labelFieldsWhere(bead, issue, verdict => verdict !== 'agrees').length > 0
@@ -1071,8 +1083,8 @@ export const planLossyReapplies = (beads, issueByNumber) =>
       ...labelFieldsWhere(b, issue, verdict => LOSING_VERDICTS.includes(verdict)),
     ]
     const overwrites = [
-      ...(b.title !== issue.title ? ['title'] : []),
-      ...((b.description ?? '') !== (issue.body ?? '') ? ['description'] : []),
+      ...(!sameText(b.title, issue.title) ? ['title'] : []),
+      ...(!sameText(b.description, issue.body) ? ['description'] : []),
       ...(normalizedLabels(b.labels) !== normalizedLabels(pullLabels(issue.labels)) ? ['labels'] : []),
       ...labelFieldsWhere(b, issue, verdict => verdict === 'imports'),
     ]
@@ -1222,10 +1234,7 @@ const pause = ms => {
   idleMs += ms
 }
 
-const noteSpawn = (file, args, started) => {
-  const verb = spawnVerb(file, args)
-  spawnTimes.set(verb, [...(spawnTimes.get(verb) ?? []), [started, performance.now()]])
-}
+const noteSpawn = (verb, started) => spawnTimes.set(verb, [...(spawnTimes.get(verb) ?? []), [started, performance.now()]])
 // The wall time the intervals cover, not their sum: concurrent spawns of one
 // verb would otherwise report several times the time the run spent on them.
 export const coveredMs = intervals => {
@@ -1241,8 +1250,9 @@ export const coveredMs = intervals => {
 // spawnSync's result shape, without blocking: for reads that do not depend on
 // each other. `maxBuffer` is spawnSync's too, so the async readers keep the
 // same ceiling (MAX_OUTPUT_BYTES): past it the child is killed and the result
-// carries the error.
-export const spawnAsync = (file, args, { maxBuffer = MAX_OUTPUT_BYTES, ...opts } = {}) =>
+// carries the error. `verb` names the spawn in the run log where its
+// arguments would lump it with another read.
+export const spawnAsync = (file, args, { maxBuffer = MAX_OUTPUT_BYTES, verb = spawnVerb(file, args), ...opts } = {}) =>
   new Promise(resolve => {
     const started = performance.now()
     const out = { stdout: '', stderr: '' }
@@ -1261,7 +1271,7 @@ export const spawnAsync = (file, args, { maxBuffer = MAX_OUTPUT_BYTES, ...opts }
     child.stderr.setEncoding('utf8').on('data', collect('stderr'))
     child.on('error', error => resolve({ ...out, error }))
     child.on('close', status => {
-      noteSpawn(file, args, started)
+      noteSpawn(verb, started)
       resolve({ ...out, status, ...(overflow && { error: overflow }) })
     })
   })
@@ -1308,7 +1318,7 @@ const run = (file, args, opts = {}) => {
   try {
     r = spawnSync(file, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: MAX_OUTPUT_BYTES, ...opts })
   } finally {
-    noteSpawn(file, args, started)
+    noteSpawn(spawnVerb(file, args), started)
   }
   return checkedStdout(file, args, r)
 }
@@ -1387,7 +1397,11 @@ export const preconditions = () => {
   if (!bdRunnable()) return { ok: false, root, reason: 'bd is not runnable (not on PATH, or its version probe failed)' }
   const token = tryRun('gh', ['auth', 'token'], { timeout: PROBE_TIMEOUT })?.trim()
   if (!token) return { ok: false, root, reason: 'no gh token' }
-  return { ok: true, root, env: { ...process.env, GITHUB_TOKEN: token, BD_NO_REMOTE_ADOPT: '1' } }
+  // BD_DOLT_AUTO_PUSH: bd pushes its Dolt remote from inside whichever command
+  // is running when its push throttle lapses — a git+ssh push that measured
+  // 15–20s, landing on a random step of this run. The sync opts out, and the
+  // push waits for bd's next auto-push outside it.
+  return { ok: true, root, env: { ...process.env, GITHUB_TOKEN: token, BD_NO_REMOTE_ADOPT: '1', BD_DOLT_AUTO_PUSH: 'false' } }
 }
 
 // A run holding the lock, or started and never finished, for longer than this
@@ -1504,44 +1518,75 @@ const VERIFIED_BD_VERSIONS = ['1.3.0']
 // truncating it would let an unmeasured build through the allowlist.
 export const bdVersion = out => out?.match(/\bversion\s+(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.+-]*)?)/i)?.[1] ?? null
 
-const FETCH_LIMIT = 5000
-const fetchIssues = async () => {
-  const rows = JSON.parse(
-    await runAsync('gh', [
-      'issue',
-      'list',
-      '--repo',
-      REPO,
-      '--state',
-      'all',
-      // title/body/assignees are read only to say whether bd's pull would
-      // rewrite a bead (planLossyReapplies) — the bodies triple the payload,
-      // and the alternative is one GET per candidate.
-      '--json',
-      'number,state,labels,updatedAt,title,body,assignees',
-      '--limit',
-      String(FETCH_LIMIT),
-    ]),
-  )
-  if (rows.length >= FETCH_LIMIT)
-    throw new Error(`issue list hit the ${FETCH_LIMIT} fetch limit — raise it before trusting absence-based decisions`)
+// One read of the repository over GraphQL. A number GitHub cannot resolve as
+// an issue (a PR, a deleted or transferred issue) comes back as a null alias
+// with a NOT_FOUND error, and a non-zero gh exit that still carries the data,
+// so the parse reads stdout and ignores the status. Any OTHER error fails the
+// read: it nulls its alias too, and every caller would take a real issue for
+// an absent one.
+const [OWNER, NAME] = REPO.split('/')
+const graphqlRepository = async (fields, env, verb) => {
+  const r = await spawnAsync('gh', ['api', 'graphql', '-f', `query=query { repository(owner: "${OWNER}", name: "${NAME}") { ${fields} } }`], { env, verb })
+  // Names an overflow as one: its truncated stdout would fail the parse below
+  // anyway, but reading as bad JSON.
+  if (r.error) throw r.error
+  let response
+  try {
+    response = JSON.parse(r.stdout)
+  } catch {}
+  const repo = response?.data?.repository
+  const failure = response?.errors?.find(e => e.type !== 'NOT_FOUND')
+  if (!repo || failure) throw new Error(`gh api graphql: ${(failure?.message || r.stderr || r.stdout || '').trim().slice(0, 300)}`)
+  return repo
+}
+
+// The listing, read BY NUMBER: `gh issue list` pages 100 issues per request,
+// one request after another, so it grew a second per 100 issues. Here every
+// number is read as `issue(number:)` aliases, in chunks that run
+// LIST_READS_AT_ONCE at a time; PRs share the sequence and read as absent.
+// The range runs one chunk past the newest issue and the newest PR by
+// creation date: a transferred-in issue keeps its creation date but takes the
+// next number, so neither ordering reaches it, and what is numbered past both
+// (transfers, discussions, deleted issues) stays well inside a chunk. An issue
+// filed after that read is absent this run, as it would be from a listing.
+// title/body/assignees are read only to say whether bd's pull would rewrite a
+// bead (planLossyReapplies) — the alternative is one GET per candidate.
+// With `numbers`, reads just those: the re-read of what a push was handed.
+const LIST_CHUNK = 100
+const LIST_READS_AT_ONCE = 8
+const LISTING_VERB = 'gh api graphql (listing)'
+const ISSUE_FIELDS = 'number state updatedAt title body labels(first: 100) { nodes { name } } assignees(first: 1) { nodes { login } }'
+const fetchIssues = async (env, numbers = null) => {
+  if (!numbers) {
+    const newest = connection => `${connection}(first: 1, orderBy: {field: CREATED_AT, direction: DESC}) { nodes { number } }`
+    const repo = await graphqlRepository(`${newest('issues')} ${newest('pullRequests')}`, env, LISTING_VERB)
+    const bound = Math.max(0, ...[repo.issues, repo.pullRequests].map(c => c.nodes[0]?.number ?? 0)) + LIST_CHUNK
+    numbers = Array.from({ length: bound }, (_, i) => i + 1)
+  }
+  const chunks = []
+  for (let i = 0; i < numbers.length; i += LIST_CHUNK) chunks.push(numbers.slice(i, i + LIST_CHUNK))
+  const rows = []
+  await inPool(chunks, LIST_READS_AT_ONCE, async chunk => {
+    const repo = await graphqlRepository(chunk.map(n => `i${n}: issue(number: ${n}) { ${ISSUE_FIELDS} }`).join(' '), env, LISTING_VERB)
+    rows.push(...chunk.map(n => repo[`i${n}`]).filter(Boolean))
+  })
   // This repo can never legitimately have zero issues — an empty 200 is an
   // API blip or token-scope problem, and absence-based decisions downstream
   // (close-adoption finding nothing, close-pushes seeing everything absent)
   // would all be wrong at once.
-  if (rows.length === 0) throw new Error('issue list came back empty — refusing absence-based decisions')
+  if (rows.length === 0) throw new Error('issue listing came back empty — refusing absence-based decisions')
   return {
     issueByNumber: new Map(
       rows.map(i => [
         i.number,
         {
           state: i.state,
-          labels: i.labels.map(l => l.name),
+          labels: i.labels.nodes.map(l => l.name),
           updatedAt: i.updatedAt,
           title: i.title,
           body: i.body,
           // bd reads REST's singular `assignee`, which is the first of these.
-          assignee: i.assignees?.[0]?.login ?? '',
+          assignee: i.assignees.nodes[0]?.login ?? '',
         },
       ]),
     ),
@@ -1590,28 +1635,11 @@ const syncIssues = (direction, ids, env, extraArgs = []) => {
 // bead's issue, up to COMMENT_READS_AT_ONCE chunks at a time: GitHub resolves
 // the aliases of one query in turn, so a run costs about one chunk's time, not
 // one request per issue or per chunk. An issue past the first page costs one
-// more query per page.
-// `issue(number)` resolves a PR or a deleted issue to null — with a NOT_FOUND
-// error and a non-zero gh exit that still carries the data, so the parse
-// reads stdout and ignores the status. Returns number → { bodies } | null
-// (not an issue).
+// more query per page. Returns number → { bodies } | null (not an issue).
 const COMMENT_PAGE = 100
 const GRAPHQL_CHUNK = 50
 const COMMENT_READS_AT_ONCE = 8
-const [OWNER, NAME] = REPO.split('/')
 const commentsField = after => `comments(first: ${COMMENT_PAGE}${after ? `, after: "${after}"` : ''}) { pageInfo { hasNextPage endCursor } nodes { body } }`
-const graphqlRepository = async (fields, env) => {
-  const r = await spawnAsync('gh', ['api', 'graphql', '-f', `query=query { repository(owner: "${OWNER}", name: "${NAME}") { ${fields} } }`], { env })
-  // Names an overflow as one: its truncated stdout would fail the parse below
-  // anyway, but reading as bad JSON.
-  if (r.error) throw r.error
-  let repo
-  try {
-    repo = JSON.parse(r.stdout).data.repository
-  } catch {}
-  if (!repo) throw new Error(`gh api graphql: ${(r.stderr || r.stdout || '').trim().slice(0, 300)}`)
-  return repo
-}
 const fetchIssueComments = async (numbers, env) => {
   const byNumber = new Map()
   const size = Math.min(GRAPHQL_CHUNK, Math.ceil(numbers.length / COMMENT_READS_AT_ONCE))
@@ -1964,8 +1992,8 @@ const runSync = async ({ quiet = false, dryRun = false } = {}) => {
     // Every read of the tracker is one `bd export` — the only row carrying
     // assignee, labels, closed_at and comments — taken again only after a step
     // that WROTE: a converged run reads it once. The first runs under the
-    // issue listing, which is paging-bound and the run's longest step.
-    const [{ issueByNumber, maxKnownIssueNumber }, preBeads] = await settleAll([fetchIssues(), exportBeads(env)])
+    // issue listing, the run's longest read.
+    const [{ issueByNumber, maxKnownIssueNumber }, preBeads] = await settleAll([fetchIssues(env), exportBeads(env)])
     const report = []
     // The km→#N mapping for every issue this run's push minted. Printed
     // IMMEDIATELY, not via the end-of-run report: any later step failing
@@ -2067,7 +2095,7 @@ const runSync = async ({ quiet = false, dryRun = false } = {}) => {
     const minted = printMinted(freshBeads)
     if (pushErr) throw pushErr
 
-    // 1.55 Which pushes landed, judged by content on a fresh listing: bd only
+    // 1.55 Which pushes landed, judged by content on a fresh read: bd only
     // warns on a failed PATCH, and its push cache skips a bead equal to its
     // last push. An unlanded row is held out of the comment mirror (skipIds).
     // A listing that cannot be read leaves every linked handed bead unlanded —
@@ -2078,7 +2106,7 @@ const runSync = async ({ quiet = false, dryRun = false } = {}) => {
       let afterPush = null
       if (linkedHanded.length)
         try {
-          afterPush = (await fetchIssues()).issueByNumber
+          afterPush = (await fetchIssues(env, linkedHanded.map(b => issueNumberFromRef(b.external_ref)))).issueByNumber
         } catch (e) {
           report.push(`FAILED to re-read the pushed issues (${e.message}) — treating ${linkedHanded.map(b => b.id).join(', ')} as unlanded this run`)
         }
