@@ -1,1 +1,0 @@
-import{Aw as e,kw as t}from"../../../chunks/app-K981JdXm.js";export{t as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,e as openExtensionsSettingsAction};

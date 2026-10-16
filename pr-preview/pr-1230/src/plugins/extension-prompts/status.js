@@ -1,1 +1,0 @@
-import{Dw as e,Ow as t}from"../../../chunks/app-K981JdXm.js";export{e as extensionPromptDiagnosticContribution,t as extensionPromptDiagnosticSource};
