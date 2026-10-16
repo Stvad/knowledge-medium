@@ -21,8 +21,11 @@
  *    bead is already closed: the states agree afterwards, so the next sync
  *    has nothing to revert.
  *    Note the deliberate asymmetry with (1): GitHub-side CLOSES are adopted
- *    (they come from PR merges), GitHub-side REOPENS do not stick (beads is
- *    the source of truth; reopen the bead instead).
+ *    (they come from PR merges), and a reopen on one side alone does not
+ *    stick: step 1 re-closes an open bead whose issue is CLOSED, step 3
+ *    re-closes the issue of a closed bead. Reopen BOTH before syncing:
+ *    `bd reopen <id>` (+ `bd comments add` with the reason), then
+ *    `gh issue reopen <N>`, then `pnpm bd:sync`.
  * 4. The pull applies a strictly OLDER GitHub copy over newer local rows —
  *    text edits, claims and closes alike — despite the documented
  *    prefer-newer default (#647). So a bead whose local row is newer than its
