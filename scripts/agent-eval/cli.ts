@@ -23,7 +23,7 @@ import { KM_MCP_ALLOWED_TOOLS, KM_MCP_TOOL_NAMES, MCP_SERVER_NAME } from '../../
 import { runJsonlProcess } from '../../packages/agent-dispatch/src/execProcess'
 import { BILLING_ENV_DENYLIST, envForBilling } from '../../packages/agent-dispatch/src/runner'
 import { buildFixture, type Fixture, FIXTURE_HASH_PREFIX, FIXTURE_MARKER_PAGE } from './fixture'
-import { childrenOf, dailyNoteId, type GraphProbe, pageIdByTitle, purgeBlocks, requirePageId, sqlAll } from './graphQueries'
+import { childrenOf, dailyNoteId, type GraphProbe, pageIdByTitle, requirePageId, sqlAll } from './graphQueries'
 import { restoreSnapshot, snapshotWorkspace, strayChanges } from './isolation'
 import { connectMcpClient } from './mcpClient'
 import { differingUids, fixtureState } from './fixtureState'
@@ -304,14 +304,13 @@ const run = async (options: RunOptions) => {
   const recovered = await journal.recover(probe, fixture.hash)
     .catch((error: unknown) => fail(`could not undo an interrupted run: ${errorText(error)}`))
   if (recovered > 0) process.stdout.write(`undid ${recovered} change(s) an interrupted run left\n`)
-  // What the resets add (today's daily note) is removed after the run, so
-  // runs on later days do not leave the graph a note longer each time.
   const existing = new Set((await sqlAll<{id: string}>(probe, 'SELECT id FROM blocks WHERE workspace_id = ?', [probe.workspaceId])).map(row => row.id))
   for (const task of TASKS) await task.reset?.({probe, truth: fixture.truth, runTag: ''})
   process.stdout.write('checking the tab against this checkout\'s import…\n')
   report.outputSizes = await requireImportedGraph(client, probe, fixture)
   const snapshot = await snapshotWorkspace(probe)
-  journal.begin(snapshot, fixture.hash)
+  const setupCreated = [...snapshot.rows.keys()].filter(id => !existing.has(id))
+  journal.begin(snapshot, fixture.hash, setupCreated)
 
   mkdirSync(path.join(runDir, 'transcripts'), {recursive: true})
   const mcpConfig = writeMcpConfig(runDir, options.profile)
@@ -327,7 +326,6 @@ const run = async (options: RunOptions) => {
       process.stdout.write(`[${rep}/${options.repeat}] ${task.id} … `)
 
       await requireNeverSynced(client, options.profile)
-      if (buildDigest() !== build) fail('packages/agent-cli/dist was rebuilt during the run, so the next task would run other tools; start the run again')
       const startedAt = Date.now()
       journal.taskStarted()
       const proc = await runJsonlProcess({
@@ -340,6 +338,8 @@ const run = async (options: RunOptions) => {
         onStdoutText: text => { stdout += text },
       })
       const elapsedMs = Date.now() - startedAt
+      // After the task, so a rebuild during it — the last task's included — is caught.
+      const rebuilt = buildDigest() !== build
       writeFileSync(transcriptPath, stdout)
       rmSync(cwd, {recursive: true, force: true})
 
@@ -352,6 +352,7 @@ const run = async (options: RunOptions) => {
       const changes = await restoreSnapshot(probe, snapshot)
         .catch((error: unknown) => fail(`aborting the run: ${errorText(error)}`))
       journal.taskRestored()
+      if (rebuilt) fail(`packages/agent-cli/dist changed while ${task.id} ran, so it may have run other tools; start the run again`)
       if (modelResolved) requireComparable(false)
       const allowed = allowedChanges(task, probe.workspaceId, outcome)
       const strayEdits = strayChanges(changes, allowed)
@@ -393,8 +394,7 @@ const run = async (options: RunOptions) => {
     }
   }
 
-  journal.end()
-  await purgeBlocks(probe, [...snapshot.rows.keys()].filter(id => !existing.has(id)))
+  await journal.end(probe, setupCreated)
   release()
   report.finishedAt = new Date().toISOString()
   writeReport(report, options.baseline)

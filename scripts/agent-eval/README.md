@@ -65,8 +65,9 @@ taken, so a fixture block is compared wherever it ends up. After each task, the 
 
 The run's snapshot is also journaled to `tmp/agent-eval/journal/`, so a run killed
 mid-task is undone by the next run. What the resets themselves add (today's daily note,
-when it is missing) is removed when the run ends, so runs on later days don't leave
-the graph a note longer each time. `seed` and `run` hold a lock per workspace there,
+when it is missing) is recorded there too, and removed when the run ends, or by the next
+run when this one stopped early. Runs on later days therefore don't leave the graph a
+note longer each time. `seed` and `run` hold a lock per workspace there,
 so two of them never write one graph at once; a lock left by a process that died is
 taken over.
 
@@ -76,8 +77,8 @@ the export defines is read from the tab and from a fresh in-process import, in a
 that does not depend on the workspace (`fixtureState.ts`), and the two must be equal.
 A tab seeded by older code, or holding a change made by hand, is refused before
 anything is spent, and so is a run whose in-process import fails. The run also aborts if
-`packages/agent-cli/dist` changes under it, since every task launches the server from
-there.
+`packages/agent-cli/dist` changed while a task ran, since every task launches the
+server from there.
 
 A task's definition is part of the measurement. A report stores a hash of each task's
 prompt, check, reset and allowed changes, plus the values the checks close over (the

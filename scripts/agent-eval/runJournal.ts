@@ -1,13 +1,20 @@
 /**
- * Survives an interrupted run. The run's snapshot goes to disk before the
- * first task, and a mark is left while a task is between its start and its
- * restore; a run killed in that window leaves the mark, and the next run
- * restores the stored snapshot before taking its own — otherwise a stray edit
- * left behind would become part of every later run's starting graph.
+ * Everything a run must undo, on disk, so a run that stops any way at all —
+ * finished, refused mid-run, killed — leaves the graph as it found it once
+ * this run or the next one closes the journal:
+ *
+ * - the snapshot, written before the first task, with a mark left while a
+ *   task is between its start and its restore. A run killed in that window
+ *   leaves the mark, and the next run restores the snapshot before taking its
+ *   own; otherwise a stray edit would become part of every later run's
+ *   starting graph.
+ * - the rows the run's own setup added (today's daily note, when it was
+ *   missing), removed when the journal closes, so the graph does not grow by
+ *   a note per run day.
  */
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
-import type { GraphProbe } from './graphQueries'
+import { type GraphProbe, purgeBlocks } from './graphQueries'
 import {
   loadSnapshot,
   type QuietOptions,
@@ -19,6 +26,7 @@ import {
 
 interface JournalSnapshot extends StoredSnapshot {
   fixtureHash: string
+  setupCreated: string[]
 }
 
 export const createRunJournal = (dir: string) => {
@@ -27,28 +35,29 @@ export const createRunJournal = (dir: string) => {
   const clear = () => rmSync(dir, {recursive: true, force: true})
 
   return {
-    /** Undo what an interrupted task of an earlier run left. Returns the
-     *  number of blocks restored (0 when the last run ended cleanly). */
+    /** Undo what an earlier run that did not close its journal left.
+     *  Returns the number of blocks restored or removed (0 when it closed). */
     recover: async (probe: GraphProbe, fixtureHash: string, quiet?: QuietOptions): Promise<number> => {
-      if (!existsSync(inFlightFile) || !existsSync(snapshotFile)) {
+      const journal = existsSync(snapshotFile) ? JSON.parse(readFileSync(snapshotFile, 'utf8')) as JournalSnapshot : null
+      if (!journal || journal.fixtureHash !== fixtureHash) {
         clear()
         return 0
       }
-      const journal = JSON.parse(readFileSync(snapshotFile, 'utf8')) as JournalSnapshot
-      if (journal.fixtureHash !== fixtureHash) {
-        clear()
-        return 0
-      }
-      const changes = await restoreSnapshot(probe, loadSnapshot(journal), quiet)
+      const changes = existsSync(inFlightFile) ? await restoreSnapshot(probe, loadSnapshot(journal), quiet) : null
+      await purgeBlocks(probe, journal.setupCreated)
       clear()
-      return changes.created.length + changes.modified.length
+      return (changes ? changes.created.length + changes.modified.length : 0) + journal.setupCreated.length
     },
-    begin: (snapshot: WorkspaceSnapshot, fixtureHash: string) => {
+    begin: (snapshot: WorkspaceSnapshot, fixtureHash: string, setupCreated: readonly string[]) => {
       mkdirSync(dir, {recursive: true})
-      writeFileSync(snapshotFile, JSON.stringify({fixtureHash, ...storeSnapshot(snapshot)} satisfies JournalSnapshot))
+      writeFileSync(snapshotFile, JSON.stringify({fixtureHash, ...storeSnapshot(snapshot), setupCreated: [...setupCreated]} satisfies JournalSnapshot))
     },
     taskStarted: () => writeFileSync(inFlightFile, '{}'),
     taskRestored: () => rmSync(inFlightFile, {force: true}),
-    end: clear,
+    /** Closes the journal after the run's last restore. */
+    end: async (probe: GraphProbe, setupCreated: readonly string[]) => {
+      await purgeBlocks(probe, setupCreated)
+      clear()
+    },
   }
 }

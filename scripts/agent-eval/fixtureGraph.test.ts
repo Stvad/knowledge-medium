@@ -557,7 +557,7 @@ describe('run journal', () => {
     const userPage = (await probe.command({type: 'create-block', content: 'Eval User', properties: {types: ['user']}}) as {id: string}).id
     const [stateRoot] = userStateRootBlockIds(userPage)
     await probe.command({type: 'create-block', parentId: userPage, content: 'ui-state', data: {id: stateRoot}})
-    interrupted.begin(await snapshotWorkspace(probe, QUIET), fixtureHash)
+    interrupted.begin(await snapshotWorkspace(probe, QUIET), fixtureHash, [])
     interrupted.taskStarted()
     const rollout = fixtureId('rollout')
     await graph.callTool('update_block', {id: rollout, content: 'left behind'})
@@ -574,9 +574,33 @@ describe('run journal', () => {
   it('recovers nothing after a task whose undo finished', async () => {
     const dir = path.join(mkdtempSync(path.join(tmpdir(), 'agent-eval-journal-')), 'journal')
     const clean = createRunJournal(dir)
-    clean.begin(await snapshotWorkspace(probe, QUIET), fixtureHash)
+    clean.begin(await snapshotWorkspace(probe, QUIET), fixtureHash, [])
     clean.taskStarted()
     clean.taskRestored()
     expect(await createRunJournal(dir).recover(probe, fixtureHash, QUIET)).toBe(0)
+  }, 20_000)
+
+  // A block standing in for the daily note a reset creates when it is missing.
+  const setUp = async () => resultIdOf(await graph.callTool('create_block', {parentId: fixtureId('vendorsSection'), content: 'set up by the run'}))
+
+  it('removes what the run\'s setup added when the run ends', async () => {
+    const dir = path.join(mkdtempSync(path.join(tmpdir(), 'agent-eval-journal-')), 'journal')
+    const journal = createRunJournal(dir)
+    const added = await setUp()
+    journal.begin(await snapshotWorkspace(probe, QUIET), fixtureHash, [added])
+    await journal.end(probe, [added])
+    expect(await getBlock(probe, added)).toBeNull()
+  }, 20_000)
+
+  it('removes what setup added on the next run, when a run stopped between tasks', async () => {
+    const dir = path.join(mkdtempSync(path.join(tmpdir(), 'agent-eval-journal-')), 'journal')
+    const stopped = createRunJournal(dir)
+    const added = await setUp()
+    stopped.begin(await snapshotWorkspace(probe, QUIET), fixtureHash, [added])
+    stopped.taskStarted()
+    stopped.taskRestored()
+    expect(await createRunJournal(dir).recover(probe, fixtureHash, QUIET)).toBe(1)
+    expect(await getBlock(probe, added)).toBeNull()
+    expect(existsSync(dir)).toBe(false)
   }, 20_000)
 })
