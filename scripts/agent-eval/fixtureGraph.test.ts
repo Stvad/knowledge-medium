@@ -3,10 +3,11 @@
  * The deterministic half of the agent-ergonomics eval, on the fixture
  * imported into a node test repo (no browser):
  *
- * - output budgets: size in characters of representative km MCP tool outputs, called
- *   through the real MCP server. `AGENT_EVAL_SIZES_OUT=<path>` writes each
- *   output's size and digest as JSON, which the runner checks the live tab
- *   against and reports, and which re-baselining reads.
+ * - imported fixture: its stored state, and the size in characters of
+ *   representative km MCP tool outputs, called through the real MCP server,
+ *   each within a budget. `AGENT_EVAL_SIZES_OUT=<path>` writes both as JSON:
+ *   the runner checks the live tab's state against it, and re-baselining
+ *   reads the sizes.
  * - task checks: each task's ground truth agrees with the imported graph,
  *   a correct solution passes (write tasks solve through the MCP tools, so
  *   the task is doable on the current surface), and a wrong one fails —
@@ -36,7 +37,8 @@ import {
 import { userStateRootBlockIds } from '@/data/derivedIds'
 import { childrenOf, dailyNoteId, descendantsOf, getBlock, type GraphProbe, pageIdByTitle, requirePageId, sqlAll } from './graphQueries'
 import { diffAgainst, restoreSnapshot, snapshotWorkspace, strayChanges, waitForQuiet, type WorkspaceSnapshot } from './isolation'
-import { OUTPUT_PROBES, type ProbeContext, type ProbeOutput, probeOutput } from './outputBudgets'
+import { differingUids, fixtureState } from './fixtureState'
+import { OUTPUT_PROBES, type ProbeContext } from './outputBudgets'
 import { createRunJournal } from './runJournal'
 import {
   allowedChanges,
@@ -77,12 +79,18 @@ afterAll(async () => {
   await db?.cleanup()
 })
 
-describe('output budgets', () => {
-  const measured: Record<string, ProbeOutput> = {}
+describe('imported fixture', () => {
+  const outputs: Record<string, number> = {}
+  let state: string[] = []
   afterAll(() => {
     const out = process.env.AGENT_EVAL_SIZES_OUT
-    if (out) writeFileSync(out, `${JSON.stringify(measured, null, 2)}\n`)
+    if (out) writeFileSync(out, `${JSON.stringify({outputs, state})}\n`)
   })
+
+  it('state', async () => {
+    state = await fixtureState(probe, buildFixture().pages)
+    expect(state.length).toBeGreaterThan(5_000)
+  }, 20_000)
 
   it.each(OUTPUT_PROBES.map(outputProbe => [outputProbe.id, outputProbe] as const))('%s', async (_id, outputProbe) => {
     const context: ProbeContext = {
@@ -90,9 +98,9 @@ describe('output budgets', () => {
       pageId: title => requirePageId(probe, title),
       dailyNoteId: iso => dailyNoteId(probe, iso),
     }
-    const output = probeOutput(await outputProbe.run(context))
-    measured[outputProbe.id] = output
-    expect(output.chars, `${outputProbe.id} (${outputProbe.standsFor}) returned ${output.chars} characters; budget ${outputProbe.maxChars}`)
+    const chars = (await outputProbe.run(context)).length
+    outputs[outputProbe.id] = chars
+    expect(chars, `${outputProbe.id} (${outputProbe.standsFor}) returned ${chars} characters; budget ${outputProbe.maxChars}`)
       .toBeLessThanOrEqual(outputProbe.maxChars)
   }, 20_000)
 })
@@ -246,6 +254,14 @@ const solveWrongly: Record<string, Array<(env: TaskEnv) => Promise<void>>> = {
         content: 'Eval check-in\nDone: drafted the sync rollout plan\nNext: review the Kestrel renewal\nBlockers: none',
       })
     },
+    // The check-in right, but carrying a property nobody asked for.
+    async () => {
+      const today = (JSON.parse(await graph.callTool('daily_note', {date: 'today'})) as {blockId: string}).blockId
+      const parentId = resultIdOf(await graph.callTool('create_block', {parentId: today, content: 'Eval check-in', properties: {'eval:mood': 'good'}}))
+      for (const content of ['Done: drafted the sync rollout plan', 'Next: review the Kestrel renewal', 'Blockers: none']) {
+        await graph.callTool('create_block', {parentId, content})
+      }
+    },
     // The check-in right, plus a block nobody asked for beside it.
     async env => {
       await solveWithMcp['daily-checkin'](env)
@@ -388,9 +404,9 @@ describe('isolation', () => {
       .toEqual([edited.id, tagged.id, removed.id, moved.id, movedToo.id, rollout].sort())
     // The rollout edit is what edit-rollout-phrase is asked to make; the rest are stray.
     const rolloutContent = new Map([[rollout, {content: true} as const]])
-    expect(strayChanges(changes, {edits: rolloutContent, creates: new Set()})).toBe(6)
-    expect(strayChanges(changes, {edits: rolloutContent, creates: new Set([changes.created[0].id])})).toBe(5)
-    expect(strayChanges(changes, {edits: new Map(), creates: new Set()})).toBe(7)
+    expect(strayChanges(changes, {edits: rolloutContent, creates: new Map()})).toBe(6)
+    expect(strayChanges(changes, {edits: rolloutContent, creates: new Map([[changes.created[0].id, []]])})).toBe(5)
+    expect(strayChanges(changes, {edits: new Map(), creates: new Map()})).toBe(7)
 
     expect(await diffAgainst(probe, snapshot, QUIET)).toEqual({created: [], modified: []})
     const restored = new Map((await descendantsOf(probe, await requirePageId(probe, DESIGN_PAGE))).map(row => [row.id, row]))
@@ -435,6 +451,27 @@ describe('isolation', () => {
     await expect(restoreSnapshot(withLateProcessor('UPDATE blocks SET references_json = ? WHERE id = ?', ['[{"stale":true}]', bystander]), snapshot, QUIET))
       .rejects.toThrow(`could not restore 1 block(s) to the fixture state (${bystander})`)
     await probe.command({type: 'sql', mode: 'execute', sql: 'UPDATE blocks SET references_json = ? WHERE id = ?', params: [stored, bystander], allowSyncedWrite: true})
+  }, 20_000)
+})
+
+describe('fixture state', () => {
+  const pages = buildFixture().pages
+
+  it('names every block by uid, so a property change shows up on that block alone', async () => {
+    const before = await fixtureState(probe, pages)
+    const halyard = await requirePageId(probe, 'Halyard Security')
+    await graph.callTool('update_block', {id: halyard, properties: {'roam:Status': 'active'}})
+    expect(differingUids(before, await fixtureState(probe, pages))).toEqual(['vendor-halyard-security'])
+  }, 20_000)
+
+  it('is unchanged by a move the runner undoes, which leaves the block a new order key', async () => {
+    const snapshot = await snapshotWorkspace(probe, QUIET)
+    const before = await fixtureState(probe, pages)
+    const rollout = fixtureId('rollout')
+    await graph.callTool('move_block', {id: rollout, parentId: snapshot.rows.get(rollout)!.parent_id, position: {kind: 'last'}})
+    await restoreSnapshot(probe, snapshot, QUIET)
+    expect(snapshot.rows.get(rollout)!.order_key).not.toBe(fixtureSnapshot.rows.get(rollout)!.order_key)
+    expect(await fixtureState(probe, pages)).toEqual(before)
   }, 20_000)
 })
 

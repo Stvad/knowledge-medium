@@ -3,6 +3,8 @@
  * corrupt each other's measurements: each holds a per-workspace lock file for
  * its whole duration. A lock is stale when the pid it names is no longer alive
  * (killed or crashed holders never release); the next process takes it over.
+ * Two processes taking over the same stale lock at the same instant can both
+ * win: accepted, as that needs two runs started together right after one died.
  */
 import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import path from 'node:path'

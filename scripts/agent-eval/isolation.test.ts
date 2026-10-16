@@ -15,9 +15,9 @@ const row = (id: string, overrides: Partial<SnapshotRow> = {}): SnapshotRow => (
   ...overrides,
 })
 
-const allowing = (edit?: AllowedEdit, creates: string[] = []): AllowedChanges => ({
+const allowing = (edit?: AllowedEdit, creates: Record<string, readonly string[]> = {}): AllowedChanges => ({
   edits: new Map(edit ? [['todo', edit]] : []),
-  creates: new Set(creates),
+  creates: new Map(Object.entries(creates)),
 })
 
 /** Stray count of one change to the `todo` block. */
@@ -55,14 +55,21 @@ describe('strayChanges', () => {
   })
 
   it('allows exactly the blocks a task was asked to create, and ignores what was created and deleted again', () => {
+    const plain = {properties_json: '{}'}
     const created = [
-      row('new', {parent_id: 'section'}),
-      row('child', {parent_id: 'new'}),
-      row('beside', {parent_id: 'section'}),
-      row('gone', {parent_id: 'section', deleted: 1}),
+      row('new', {parent_id: 'section', ...plain}),
+      row('child', {parent_id: 'new', ...plain}),
+      row('beside', {parent_id: 'section', ...plain}),
+      row('gone', {parent_id: 'section', deleted: 1, ...plain}),
     ]
-    expect(strayChanges({created, modified: []}, allowing(undefined, ['new', 'child']))).toBe(1)
-    expect(strayChanges({created, modified: []}, allowing(undefined, []))).toBe(3)
+    expect(strayChanges({created, modified: []}, allowing(undefined, {new: [], child: []}))).toBe(1)
+    expect(strayChanges({created, modified: []}, allowing())).toBe(3)
+  })
+
+  it('counts a requested block that carries a property it was not asked for', () => {
+    const page = row('page', {parent_id: null, properties_json: JSON.stringify({types: ['page'], alias: ['Review']})})
+    expect(strayChanges({created: [page], modified: []}, allowing(undefined, {page: ['types', 'alias']}))).toBe(0)
+    expect(strayChanges({created: [page], modified: []}, allowing(undefined, {page: ['types']}))).toBe(1)
   })
 })
 

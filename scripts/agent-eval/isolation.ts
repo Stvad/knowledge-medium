@@ -267,10 +267,11 @@ export interface AllowedEdit {
 }
 
 /** What a task was asked to change: fields of existing blocks, by block id,
- *  and the blocks it was asked to create. A read task gets neither. */
+ *  and the blocks it was asked to create, each with the property keys it may
+ *  carry. A read task gets neither. */
 export interface AllowedChanges {
   edits: ReadonlyMap<string, AllowedEdit>
-  creates: ReadonlySet<string>
+  creates: ReadonlyMap<string, readonly string[]>
 }
 
 const NO_EDIT: AllowedEdit = {}
@@ -289,8 +290,13 @@ const exceedsEdit = (before: SnapshotRow, after: SnapshotRow, edit: AllowedEdit)
     || before.deleted !== after.deleted
 }
 
+const allowedCreation = (row: SnapshotRow, allowed: AllowedChanges): boolean => {
+  const keys = allowed.creates.get(row.id)
+  return keys !== undefined && Object.keys(JSON.parse(row.properties_json) as object).every(key => keys.includes(key))
+}
+
 /** How many changes fall outside `allowed`. A block the task created and
  *  deleted again is not counted. */
 export const strayChanges = (changes: TaskChanges, allowed: AllowedChanges): number =>
   changes.modified.filter(({id, before, after}) => exceedsEdit(before, after, allowed.edits.get(id) ?? NO_EDIT)).length
-  + changes.created.filter(row => !row.deleted && !allowed.creates.has(row.id)).length
+  + changes.created.filter(row => !row.deleted && !allowedCreation(row, allowed)).length

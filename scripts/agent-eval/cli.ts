@@ -13,7 +13,7 @@
  */
 import { spawnSync } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -22,11 +22,12 @@ import { type BridgeClient, createBridgeClient } from '../../packages/agent-cli/
 import { KM_MCP_ALLOWED_TOOLS, KM_MCP_TOOL_NAMES, MCP_SERVER_NAME } from '../../packages/agent-cli/src/mcpShared'
 import { runJsonlProcess } from '../../packages/agent-dispatch/src/execProcess'
 import { BILLING_ENV_DENYLIST, envForBilling } from '../../packages/agent-dispatch/src/runner'
-import { buildFixture, FIXTURE_HASH_PREFIX, FIXTURE_MARKER_PAGE } from './fixture'
+import { buildFixture, type Fixture, FIXTURE_HASH_PREFIX, FIXTURE_MARKER_PAGE } from './fixture'
 import { childrenOf, dailyNoteId, type GraphProbe, pageIdByTitle, purgeBlocks, requirePageId, sqlAll } from './graphQueries'
 import { restoreSnapshot, snapshotWorkspace, strayChanges } from './isolation'
 import { connectMcpClient } from './mcpClient'
-import { measureProbes, OUTPUT_PROBES, outputProbeHash, type ProbeOutput } from './outputBudgets'
+import { differingUids, fixtureState } from './fixtureState'
+import { measureProbes, OUTPUT_PROBES, outputProbeHash } from './outputBudgets'
 import { createRunJournal } from './runJournal'
 import {
   conditionMismatches,
@@ -162,38 +163,43 @@ const buildDigest = (): string => {
   return hash.digest('hex')
 }
 
-/** The probes' outputs on the fixture as this checkout imports it, from the
- *  fixture-graph test; null unless the test passed and measured every probe. */
-const importedOutputs = (): Record<string, ProbeOutput> | null => {
+interface ImportedFixture {
+  /** Probe output sizes, characters. */
+  outputs: Record<string, number>
+  state: string[]
+}
+
+/** The fixture as this checkout imports it, from the fixture-graph test;
+ *  null unless the test passed and measured every probe. */
+const importedFixture = (): ImportedFixture | null => {
   const out = path.join(mkdtempSync(path.join(tmpdir(), 'agent-eval-sizes-')), 'sizes.json')
-  const test = spawnSync('pnpm', ['vitest', 'run', 'scripts/agent-eval/fixtureGraph.test.ts', '-t', 'output budgets'], {
+  const test = spawnSync('pnpm', ['vitest', 'run', 'scripts/agent-eval/fixtureGraph.test.ts', '-t', 'imported fixture'], {
     cwd: REPO_ROOT,
     env: {...process.env, AGENT_EVAL_SIZES_OUT: out},
     stdio: 'ignore',
   })
   if (test.status !== 0 || !existsSync(out)) return null
-  const outputs = JSON.parse(readFileSync(out, 'utf8')) as Record<string, ProbeOutput>
-  return OUTPUT_PROBES.every(probe => outputs[probe.id] !== undefined) ? outputs : null
+  const imported = JSON.parse(readFileSync(out, 'utf8')) as ImportedFixture
+  return OUTPUT_PROBES.every(probe => imported.outputs[probe.id] !== undefined) && imported.state.length > 0 ? imported : null
 }
 
 /** The agent must query the graph this checkout's code imports, which the
  *  gate's checks are proven on, not one seeded by other code or left dirty.
- *  Returns the tab's probe outputs. */
-const requireImportedGraph = async (client: BridgeClient, probe: GraphProbe): Promise<Record<string, ProbeOutput>> => {
-  const expected = importedOutputs()
-    ?? fail('the in-process import to check the tab against failed; see pnpm vitest run scripts/agent-eval/fixtureGraph.test.ts -t "output budgets"')
+ *  Returns the tab's probe output sizes. */
+const requireImportedGraph = async (client: BridgeClient, probe: GraphProbe, fixture: Fixture): Promise<Record<string, number>> => {
+  const expected = importedFixture()
+    ?? fail('the in-process import to check the tab against failed; see pnpm vitest run scripts/agent-eval/fixtureGraph.test.ts -t "imported fixture"')
+  const differing = differingUids(expected.state, await fixtureState(probe, fixture.pages))
+  if (differing.length > 0) {
+    fail(`the tab's fixture is not the one this checkout imports (${differing.length} block(s) differ, e.g. uid ${differing.slice(0, 5).join(', ')}); `
+      + 'it was seeded by other code, or holds changes an earlier run left. Seed a fresh origin (README: "Resetting the dev origin").')
+  }
   const mcp = await connectMcpClient(client)
-  const live = await measureProbes({
+  return measureProbes({
     callTool: mcp.callTool,
     pageId: title => requirePageId(probe, title),
     dailyNoteId: iso => dailyNoteId(probe, iso),
   }).finally(() => mcp.close())
-  const differing = OUTPUT_PROBES.map(outputProbe => outputProbe.id).filter(id => live[id]?.digest !== expected[id].digest)
-  if (differing.length > 0) {
-    fail(`the tab's graph is not the one this checkout imports (probes that differ: ${differing.join(', ')}); it was seeded by other `
-      + 'code, or holds changes an earlier run left. Seed a fresh origin (README: "Resetting the dev origin").')
-  }
-  return live
 }
 
 const writeMcpConfig = (dir: string, profile: string): string => {
@@ -231,12 +237,26 @@ interface RunOptions {
 }
 
 const run = async (options: RunOptions) => {
+  // Creating the run directory reserves the label; an empty one is given
+  // back if the run stops before writing anything.
   const runDir = path.join(RUNS_DIR, options.label)
-  const taken = [path.join(RESULTS_DIR, `${options.label}.json`), runDir].filter(existsSync)
-  if (taken.length > 0) {
-    fail(`label ${options.label} is already used by ${taken.map(file => path.relative(REPO_ROOT, file)).join(' and ')}; `
-      + 'pass another --label, or delete those to record over it')
+  const used = `label ${options.label} is already used; pass another --label, or delete its report and `
+    + `${path.relative(REPO_ROOT, runDir)} to record over it`
+  if (existsSync(path.join(RESULTS_DIR, `${options.label}.json`))) fail(used)
+  mkdirSync(RUNS_DIR, {recursive: true})
+  try {
+    mkdirSync(runDir)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') fail(used)
+    throw error
   }
+  process.on('exit', () => {
+    try {
+      rmdirSync(runDir)
+    } catch {
+      // Not empty: the run wrote into it.
+    }
+  })
   const build = buildPackages()
   const {probe, client} = await connect(options.profile)
   const release = lockWorkspace(probe)
@@ -289,8 +309,7 @@ const run = async (options: RunOptions) => {
   const existing = new Set((await sqlAll<{id: string}>(probe, 'SELECT id FROM blocks WHERE workspace_id = ?', [probe.workspaceId])).map(row => row.id))
   for (const task of TASKS) await task.reset?.({probe, truth: fixture.truth, runTag: ''})
   process.stdout.write('checking the tab against this checkout\'s import…\n')
-  const outputs = await requireImportedGraph(client, probe)
-  report.outputSizes = Object.fromEntries(Object.entries(outputs).map(([id, output]) => [id, output.chars]))
+  report.outputSizes = await requireImportedGraph(client, probe, fixture)
   const snapshot = await snapshotWorkspace(probe)
   journal.begin(snapshot, fixture.hash)
 
@@ -449,8 +468,8 @@ const main = async () => {
       return writeReport(loadReport(rest[0]), values.compare ? loadReport(values.compare) : undefined)
     }
     case 'sizes': {
-      const outputs = importedOutputs() ?? fail('the fixture-graph test did not run')
-      process.stdout.write(`${JSON.stringify(Object.fromEntries(Object.entries(outputs).map(([id, output]) => [id, output.chars])), null, 2)}\n`)
+      const imported = importedFixture() ?? fail('the fixture-graph test failed; run it to see why')
+      process.stdout.write(`${JSON.stringify(imported.outputs, null, 2)}\n`)
       return
     }
     default:

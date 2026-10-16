@@ -36,9 +36,10 @@ They are scored on graph state read back through raw wire commands and SQL, neve
 through the MCP tools under test. A run passes only if the task's check passes, `claude`
 exits cleanly, and the agent changed nothing it wasn't asked to. Each write task
 declares which fields of which fixture blocks it may edit (the rollout block's content;
-the todo's status), and its check names the blocks it accepted as the ones it asked
-for. Any other change fails the run: another property, a move, a deletion, or one more
-block beside the requested ones. A read task may change nothing.
+the todo's status). Its check names the blocks it accepted as the ones it asked for,
+and the properties each may carry. Any other change fails the run: another property,
+a move, a deletion, or one more block beside the requested ones. A read task may change
+nothing.
 
 Every task starts from the same graph. The runner snapshots every block row once,
 after each task's `reset` has cleared anything an interrupted earlier run left behind.
@@ -69,18 +70,19 @@ the graph a note longer each time. `seed` and `run` hold a lock per workspace th
 so two of them never write one graph at once; a lock left by a process that died is
 taken over.
 
-Before the first task, `run` also checks that the tab holds the graph this checkout's
-code imports. That graph is the one the gate's checks are proven on. The ten output
-probes run against the tab and against a fresh in-process import of the fixture, and
-their outputs must match, with block ids numbered by first appearance. A tab seeded by
-older code, or holding changes made by hand, is refused before anything is spent, and
-so is a run whose in-process import fails or misses a probe. The run also aborts if
+Before the first task, `run` also checks that the tab holds the fixture as this
+checkout's code imports it, which is what the gate's checks are proven on. Every block
+the export defines is read from the tab and from a fresh in-process import, in a form
+that does not depend on the workspace (`fixtureState.ts`), and the two must be equal.
+A tab seeded by older code, or holding a change made by hand, is refused before
+anything is spent, and so is a run whose in-process import fails. The run also aborts if
 `packages/agent-cli/dist` changes under it, since every task launches the server from
 there.
 
 A task's definition is part of the measurement. A report stores a hash of each task's
-prompt, check, reset and allowed changes, and `--compare` shows deltas only for tasks
-whose hash matches; aggregates cover those tasks only. Output-size probes carry a hash
+prompt, check, reset and allowed changes, plus the values the checks close over (the
+truth, its patterns, the target blocks). `--compare` shows deltas only for tasks whose
+hash matches, and aggregates cover those tasks only. Output-size probes carry a hash
 of their call the same way. When you change a helper the checks share
 (`normalizeText`, `compareSets`, `strayChanges`), bump `SHARED_SCORING_VERSION` in
 `tasks.ts`. Prefer adding a task to rewording one. A new task needs a reference solution
@@ -129,7 +131,7 @@ pnpm agent-eval run --repeat 3 --compare scripts/agent-eval/results/baseline-202
 `run` builds `packages/agent-cli` first (incremental), because the runs launch its
 `dist/mcp.js` and a stale build would measure old code. It refuses a `--label` that
 already has a report or transcripts; the default label is the date and time, the commit
-and the model.
+and the model. The run directory is created first, as the label's reservation.
 
 Options: `--model` (default `sonnet`), `--effort`, `--repeat`, `--tasks id,id`,
 `--label`, `--timeout-min`, `--profile` (default `km-eval`), and `--mcp-output-tokens`

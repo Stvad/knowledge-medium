@@ -47,9 +47,11 @@ export interface CheckInput extends TaskEnv {
 export interface CheckOutcome {
   pass: boolean
   detail: string
-  /** The blocks the check accepted as the ones the task was asked to create.
-   *  Any other block the run created is a change it was not asked to make. */
-  created?: readonly string[]
+  /** The blocks the check accepted as the ones the task was asked to create,
+   *  each with the property keys it may carry. Any other block the run
+   *  created, or another property on one of these, is a change it was not
+   *  asked to make. */
+  created?: Readonly<Record<string, readonly string[]>>
 }
 
 export interface EvalTask {
@@ -73,10 +75,18 @@ export interface EvalTask {
  *  …): a task's hash covers only its own definition. */
 const SHARED_SCORING_VERSION = 3
 
+/** The values checks close over, which their source text only names. Shared
+ *  by every task's hash: changing any of them may change any task's verdict. */
+const scoringData = (truth: FixtureTruth) => JSON.parse(JSON.stringify(
+  {truth, KESTREL_SIGNALS, TARGET_UIDS, ROLLOUT_BLOCK_TEXT, PRICING_FAQ_TODO},
+  (_key, value: unknown) => (value instanceof RegExp ? {regex: value.source, flags: value.flags} : value),
+)) as unknown
+
 /** Identifies what a task measures, so a report only compares a task with an
  *  earlier run of the same definition. */
 export const taskDefinitionHash = (task: EvalTask, truth: FixtureTruth): string => definitionHash({
   shared: SHARED_SCORING_VERSION,
+  scoring: scoringData(truth),
   kind: task.kind,
   prompt: task.prompt({probe: {workspaceId: '', command: async () => null}, truth, runTag: '<tag>'}),
   check: task.check.toString(),
@@ -142,7 +152,7 @@ export const targetId = (workspaceId: string, uid: string) => roamBlockId(worksp
 /** What a run of `task` was allowed to change, given its check's outcome. */
 export const allowedChanges = (task: EvalTask, workspaceId: string, outcome: CheckOutcome): AllowedChanges => ({
   edits: new Map(Object.entries(task.edits ?? {}).map(([uid, edit]) => [targetId(workspaceId, uid), edit])),
-  creates: new Set(outcome.created ?? []),
+  creates: new Map(Object.entries(outcome.created ?? {})),
 })
 
 const requireTarget = async (probe: GraphProbe, uid: string) => {
@@ -204,7 +214,9 @@ export const TASKS: readonly EvalTask[] = [
       const results = {
         author: normalizeText(field(answer.author)).includes(normalizeText(author)),
         // Both directions are required: a reversed answer names the right
-        // words in the wrong fields.
+        // words in the wrong fields. A field may also name the other approach
+        // (the page itself says LWW "instead of a CRDT"), so a deliberately
+        // mixed reversal passes: accepted as the limit of keyword scoring.
         adopted: adopted.test(field(answer.adopted)),
         rejected: rejected.test(field(answer.rejected)),
         openQuestions: answer.openQuestions === truth.design.openQuestions,
@@ -338,7 +350,7 @@ export const TASKS: readonly EvalTask[] = [
           'Next: review the Kestrel renewal',
           'Blockers: none',
         ]),
-        created: [added[0].id, ...children.map(row => row.id)],
+        created: Object.fromEntries([added[0], ...children].map(row => [row.id, []])),
       }
     },
   },
@@ -390,7 +402,8 @@ export const TASKS: readonly EvalTask[] = [
       return {
         pass: statusOk && linkOk,
         detail: `first block ${statusOk ? 'ok' : `is ${JSON.stringify(first?.content ?? null)}`}; ${links.length} link(s) under Vendors`,
-        created: [pageId, ...(first ? [first.id] : []), ...links.map(row => row.id)],
+        // A page carries the type and alias the app gives every page.
+        created: Object.fromEntries([[pageId, ['types', 'alias']], ...[...(first ? [first] : []), ...links].map(row => [row.id, []])]),
       }
     },
   },
