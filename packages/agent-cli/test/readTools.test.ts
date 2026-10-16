@@ -60,6 +60,12 @@ describe('cliInputFrom', () => {
       .toThrow(/--workspace/)
   })
 
+  it('refuses a string flag cac already turned into a number, rather than lose its leading zeros', () => {
+    // `--under 00123456` reaches the action as the number 123456.
+    expect(() => cliInputFrom(tool('search'), ['x'], {under: 123456}))
+      .toThrow(/--under got the number 123456.*\^123456/)
+  })
+
   it('accepts a single or repeated string-array flag, splitting commas', () => {
     expect(cliInputFrom(tool('search'), ['x'], {types: 'todo,page'}).types).toEqual(['todo', 'page'])
     expect(cliInputFrom(tool('search'), ['x'], {types: ['todo', 'page,note']}).types)
