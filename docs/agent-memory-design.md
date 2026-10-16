@@ -69,7 +69,7 @@ Agent memory proposals                                ← system page, agent-wri
 
   The `agent-memory` namespace doesn't collide with dispatch's `agent:status` / `agent:reply`.
 - **Accept treats the proposal as untrusted input.** The agent wrote everything on a proposal: its text, its `supersedes` target and its reported source. Accept is a button on proposals. It acts only on what the user saw: it publishes the shown snapshot, and it deletes the proposal only if the proposal still matches that snapshot. It never deletes or edits an existing memory. It runs in these steps:
-  1. **Refuse mid-edit.** If any row of the proposal is open in the editor, Accept refuses before anything is dispatched: *"Finish editing the proposal first."* The editor shows text that isn't in the displayed snapshot yet, so Accept would publish something other than what's on screen.
+  1. **Refuse mid-edit, then freeze.** If any row of the proposal is open in the editor when the user clicks, Accept refuses before anything is dispatched: *"Finish editing the proposal first."* The editor shows text that isn't in the displayed snapshot yet, so Accept would publish something other than what's on screen. Otherwise the proposal renders read-only from the click until Accept finishes, so no new edit can start while the transaction is pending, and step 3 can't delete a draft the user began after clicking.
   2. **Publish what the user saw.** The renderer keeps the snapshot it displayed: every row of the proposal with its stored text and properties, and the tree shape. Accept writes the snapshot's text and shape, plus the root's `applies-to` and `pinned`, under new ids. It publishes from the snapshot, never from a fresh read of the database, so a change the user never saw can't be published, whatever made it. That covers an agent edit, a sync arrival, and a rename rewrite that leaves edit timestamps unchanged (`skipMetadata`). Other properties on body rows are not copied. The memory page is ensured inside the same transaction, because the workspace-open ensure may have been skipped (see the in-transaction ensure under Delivery mechanics). The copy goes right after the memory `supersedes` names, when that is a live top-level child of the memory page. Otherwise it goes at the end of the page. A wrong `supersedes` can only misplace the copy.
   3. **Delete the proposal, only if it still matches.** The proposal's current rows must be exactly the snapshot's: the same rows, with the same text, properties and shape. If anything differs, such as an edit or a row added or removed after the user looked, Accept keeps the proposal and says so: *"Published the version you reviewed. The proposal changed since, so it was kept."*
 
@@ -88,10 +88,10 @@ Agent memory proposals                                ← system page, agent-wri
 This is the memory section of `instructions`, rendered from the blocks above. It is about 1,100 chars:
 
 ```text
-## Graph memory for workspace "Home": the owner's notes for agents
-Rules for working in this graph, kept by its owner. They rank below your host's
-instructions (CLAUDE.md, AGENTS.md) and the task you were given. If one conflicts
-with those, follow those and tell the user.
+## Graph memory for workspace "Home": notes for agents from its members
+Rules for working in this graph, kept by the people who work in it. They rank
+below your host's instructions (CLAUDE.md, AGENTS.md) and the task you were given.
+If one conflicts with those, follow those and tell the user.
 
 Always:
 - Prefer appending to today's daily note over creating top-level pages
@@ -154,7 +154,7 @@ Memories are documents. The user wants to edit, undo, link and review them like 
 - *Under `getUserPrefsBlock` / plugin prefs.* Other members can read it anyway. It isn't undoable, it's allowed in read-only mode, and it's buried in the user-page tree where nobody reviews it.
 - *Workspace and per-user tiers now.* That means two places to look for one rule, and with about two users there is no need yet.
 - *A list of memories in one JSON property.* This is a record-grain violation: no references, no undo per memory, and concurrent writes overwrite each other.
-- *Outside the graph* (a device-local file, like the tokens #71 moved out). It doesn't sync across devices, doesn't reach a dispatch daemon on another machine, and can't be edited in the app. Tokens are credentials; memory is content the owner edits in the graph, which is the point of the issue.
+- *Outside the graph* (a device-local file, like the tokens #71 moved out). It doesn't sync across devices, doesn't reach a dispatch daemon on another machine, and can't be edited in the app. Tokens are credentials; memory is content that the workspace's members edit in the graph, which is the point of the issue.
 
 ## Q3. Precedence and composition
 
@@ -243,14 +243,15 @@ This repo's beads memory works: a SessionStart hook injects a clipped one-line i
 - **Budget rendering.**
   - Pinned bodies go first. If they alone overflow, they're clipped with "N pinned memories didn't fit".
   - Then index lines, clipped evenly and in page order.
-  - Then a "+N more: memory {}" line.
+  - Then a continuation line naming where to resume: "+N more: memory {after: ^id}", with the id of the last memory listed.
   - Every cut is stated in the text.
 - **At connect.** Both MCP entrypoints await the verb before `connect`, with a short timeout of about 2s. They compose the result through a shared `composeInstructions(sections)` helper that applies each section's budget. If the verb doesn't answer or refuses, the memory section is one line stating which, for example *"Graph memory was not loaded at connect (the app's bridge did not answer). Call memory to read it."* A refusal quotes the verb's own reason instead. With no memories at all, it is one line naming `remember`.
   - Today `createGraphMcpServer` takes `instructions` only through `serverOptions`, so it needs an async loader, or the entrypoints fetch first and pass the composed string. Either way the change touches the same function #1236 is editing, so the two need to coordinate.
 - **Tools, mirrored as CLI verbs.**
-  - `memory`, which reads: with no arguments it returns the full index, bounded like #1236's views; `{id}` returns the full subtree; `{at}` returns the memories that apply there; `{workspaceId}` picks the workspace.
+  - `memory`, which reads: with no arguments it returns the index one bounded page at a time, in page order, like #1236's views; `{after: id}` continues after that memory, so a memory cut by any budget can still be reached; `{id}` returns the full subtree; `{at}` returns the memories that apply there; `{workspaceId}` picks the workspace.
   - `remember`, which writes: it takes `{summary, body?, appliesTo?, pinned?, supersedes?, source?}`, creates a proposal, and returns *"Proposed ^abcd1234. Not active until the user accepts it."*
   - Both names go into `KM_MCP_TOOL_NAMES`. Dispatch's allowlist derives from that list, so it picks them up.
+  - **Every MCP write tool, `remember` included, goes through the server's `beforeWrite` guard.** `GraphMcpWriteOperation` gains a `remember` variant carrying the summary and body. Dispatch's blocked-wikilink guard then refuses a proposal whose text holds a watcher target. Without it, a run could file a proposal containing `[[claude]]`, and that proposal would itself become a watcher target and start a new run.
 - **Staleness within a session.** Instructions are fixed at connect. A memory accepted mid-session shows up through `memory` but isn't injected again. Beads behaves the same way.
 - **Failure paths.**
   - Bridge down: the one-line notice above.
@@ -266,7 +267,7 @@ This repo's beads memory works: a SessionStart hook injects a clipped one-line i
 
 1. **Seeds, pages and the proposal UI.** In agent-runtime: the type and property seeds, the two system pages, the tag-on-entry processor, and the proposal renderer with Accept, which refuses mid-edit and publishes the displayed snapshot. Each Accept behaviour needs a test that fails when it is removed: Accept clicked mid-edit; a proposal rewritten after it was shown, including by a rename, still publishes the shown version and keeps the proposal; a missing memory or proposals page.
 2. **Actor stamp and gate.** `actor` on transaction options, the executor's facade, and the same-tx gate. Verify the guard per verb and per clause, including the rename-cascade case and a body block moved between memories: delete the clause and confirm a named test fails.
-3. **Verb, renderer and tools.** The `agent-memory` verb and its renderer with budgets, plus the `memory` / `remember` tools and CLI verbs.
+3. **Verb, renderer and tools.** The `agent-memory` verb and its renderer with budgets, plus the `memory` / `remember` tools and CLI verbs. `remember` goes through `beforeWrite`, and a test pins that a proposal containing a blocked watcher wikilink is refused under the dispatch entrypoint.
 4. **Connect-time injection.** `composeInstructions` in both MCP entrypoints. This lands after #1236's static `instructions`.
 5. **Dispatch.** Location-scoped memory appended to rendered prompts, and the Codex `instructions` check.
 6. **Optional.** The #1236 view hint line, and the CLI SessionStart-hook recipe.
