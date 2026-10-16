@@ -27,21 +27,17 @@ export interface BlockView {
   contentLength: number
   /** Where to continue reading, or null when `content` reaches the end. */
   nextContentOffset: number | null
-  /** The first {@link MAX_PROPERTIES}; `omittedProperties` counts the rest. */
+  /** Bounded by the property renderer; `omittedProperties` counts the rest. */
   properties: PropertyLine[]
   omittedProperties: number
-  /** The first {@link MAX_HIDDEN_NAMES} names; `hiddenPropertyCount` is all. */
+  /** Bounded names, ending in `+N more` when cut. */
   hiddenProperties: string[]
-  hiddenPropertyCount: number
   childCount: number
   backlinkCount: number
   editedAt: string | null
 }
 
 const MAX_CHARS = 100_000
-/** A property bag is bounded like content: an importer can write hundreds. */
-const MAX_PROPERTIES = 50
-const MAX_HIDDEN_NAMES = 20
 
 export const buildBlockView = async (
   repo: Repo,
@@ -77,10 +73,9 @@ export const buildBlockView = async (
     contentOffset,
     contentLength: block.content.length,
     nextContentOffset: end < block.content.length ? end : null,
-    properties: properties.visible.slice(0, MAX_PROPERTIES),
-    omittedProperties: Math.max(0, properties.visible.length - MAX_PROPERTIES),
-    hiddenProperties: properties.hidden.slice(0, MAX_HIDDEN_NAMES),
-    hiddenPropertyCount: properties.hidden.length,
+    properties: properties.visible,
+    omittedProperties: properties.omitted,
+    hiddenProperties: properties.hidden,
     childCount: childCounts.get(block.id) ?? 0,
     backlinkCount: backlinks.length,
     editedAt: typeof editedAt === 'number' ? new Date(editedAt).toISOString() : null,
@@ -116,9 +111,8 @@ export const renderBlockView = (view: BlockView): string => {
       + `json_each(blocks.properties_json) WHERE blocks.id = ? with params ${JSON.stringify([view.id])})`,
     )
   }
-  if (view.hiddenPropertyCount > 0) {
-    const rest = view.hiddenPropertyCount - view.hiddenProperties.length
-    lines.push(`(hidden in the UI: ${view.hiddenProperties.join(', ')}${rest > 0 ? `, +${formatCount(rest)} more` : ''})`)
+  if (view.hiddenProperties.length > 0) {
+    lines.push(`(hidden in the UI: ${view.hiddenProperties.join(', ')})`)
   }
   return joinDisplayLines(lines)
 }

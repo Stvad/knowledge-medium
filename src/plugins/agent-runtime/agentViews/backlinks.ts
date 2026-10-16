@@ -13,16 +13,17 @@ import {
 } from '@/plugins/grouped-backlinks/resolveConfig.js'
 import { labelForBlockData } from '@/utils/linkTargetAutocomplete.js'
 import { firstVisibleChildren, loadBlocks, loadCrumbs, visibleChildCounts } from './context.ts'
-import { createPropertyRenderer } from './properties.ts'
+import { createPropertyRenderer, NAME_CHARS } from './properties.ts'
 import { shortIds as loadShortIds } from './resolveRef.ts'
 import { clampInt, CUT_LEGEND, crumbLine, joinDisplayLines, loadRoot, metaSuffix, plural, toViewRow, type ViewRow } from './shared.ts'
-import { clipLine, formatCount, isReferenceOnly } from './text.ts'
+import { boundLabels, clipLine, formatCount, isReferenceOnly } from './text.ts'
 
 const MAX_BACKLINKS = 500
 const MAX_GROUPS = 200
 const ROW_CHARS = 240
 const CONTEXT_CHARS = 160
 const TITLE_CHARS = 120
+const MAX_VIA = 5
 
 interface Target {
   id: string
@@ -111,7 +112,7 @@ const backlinkRows = async (
       ...toViewRow(source, {shortIds, renderer, maxChars: ROW_CHARS, detail: 'brief'}),
       breadcrumb: crumbs.get(source.id) ?? [],
       childCount: childCounts.get(source.id) ?? 0,
-      viaProperties: via.get(source.id) ?? [],
+      viaProperties: boundLabels(via.get(source.id) ?? [], MAX_VIA, NAME_CHARS),
     }
     if (isReferenceOnly(source.content)) {
       const parent = source.parentId ? parentById.get(source.parentId) : undefined
@@ -221,8 +222,6 @@ export interface GroupedBacklinksView {
   groups: BacklinkGroup[]
 }
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-
 export const buildGroupedBacklinksView = async (
   repo: Repo,
   workspaceId: string,
@@ -243,8 +242,14 @@ export const buildGroupedBacklinksView = async (
 
   const page = result.groups.slice(offset, offset + limit)
   const memberIds = [...new Set(page.flatMap(group => group.sourceIds.slice(0, membersPerGroup)))]
-  const groupIds = page.map(group => group.groupId).filter(id => UUID_RE.test(id))
-  const members = await loadBlocks(repo, memberIds)
+  // A group is a block when that block exists — not when its id looks like
+  // one: sync admits non-canonical ids, and the fallback group is no block.
+  const [members, groupBlocks] = await Promise.all([
+    loadBlocks(repo, memberIds),
+    loadBlocks(repo, page.filter(group => !group.fallback).map(group => group.groupId)),
+  ])
+  const groupIds = groupBlocks.map(groupBlock => groupBlock.id)
+  const blockGroupIds = new Set(groupIds)
   const [renderer, shortIds] = await Promise.all([
     createPropertyRenderer(repo, members),
     loadShortIds(repo, [...memberIds, ...groupIds]),
@@ -259,7 +264,7 @@ export const buildGroupedBacklinksView = async (
     offset,
     nextOffset: end < result.groups.length ? end : null,
     groups: page.map(group => {
-      const isBlock = UUID_RE.test(group.groupId)
+      const isBlock = blockGroupIds.has(group.groupId)
       return {
         label: clipLine(group.label, TITLE_CHARS).text,
         groupId: isBlock ? group.groupId : null,

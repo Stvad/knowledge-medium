@@ -6,7 +6,7 @@ import { isPropertyPanelHiddenProperty } from '@/components/propertyPanel/visibi
 import { labelForBlockData, readTypeIds } from '@/utils/linkTargetAutocomplete.js'
 import { parseBlockRow } from '@/data/blockSchema.js'
 import type { BlockRow } from '@/data/blockSchema.js'
-import { clipLine, oneLine } from './text.ts'
+import { boundLabels, clipLine, oneLine } from './text.ts'
 
 export interface PropertyLine {
   name: string
@@ -16,8 +16,11 @@ export interface PropertyLine {
 }
 
 export interface PropertyView {
+  /** At most {@link MAX_PROPERTIES}; `omitted` counts the rest. */
   visible: PropertyLine[]
-  /** Names the property panel hides (system, UI-state, declared hidden). */
+  omitted: number
+  /** Names the property panel hides (system, UI-state, declared hidden),
+   *  bounded by {@link boundLabels}. */
   hidden: string[]
 }
 
@@ -28,7 +31,11 @@ export const BRIEF_PROPERTY_COUNT = 3
 const BRIEF_VALUE_CHARS = 40
 const FULL_VALUE_CHARS = 300
 /** Names are user data too: an importer can write arbitrarily long ones. */
-const NAME_CHARS = 80
+export const NAME_CHARS = 80
+/** A property bag is bounded like content: an importer can write hundreds. */
+const MAX_PROPERTIES = 50
+const MAX_HIDDEN_NAMES = 20
+const MAX_TYPES = 10
 const SUMMARY_KEYS = 3
 
 type Decoded =
@@ -159,16 +166,19 @@ export const createPropertyRenderer = async (
       const hidden: string[] = []
       const maxChars = detail === 'brief' ? BRIEF_VALUE_CHARS : FULL_VALUE_CHARS
       for (const {name, hidden: isHidden, decoded} of decodedByBlock.get(block.id) ?? []) {
-        const shownName = clipLine(name, NAME_CHARS).text
         if (isHidden) {
-          hidden.push(shownName)
+          hidden.push(name)
           continue
         }
         const value = display(decoded, block, name)
         if (value === '') continue
-        visible.push({name: shownName, value: clipLine(value, maxChars).text})
+        visible.push({name: clipLine(name, NAME_CHARS).text, value: clipLine(value, maxChars).text})
       }
-      return {visible, hidden}
+      return {
+        visible: visible.slice(0, MAX_PROPERTIES),
+        omitted: Math.max(0, visible.length - MAX_PROPERTIES),
+        hidden: boundLabels(hidden, MAX_HIDDEN_NAMES, NAME_CHARS),
+      }
     },
     typeLabels(block) {
       const labels: string[] = []
@@ -177,19 +187,21 @@ export const createPropertyRenderer = async (
         if (label) labels.push(label)
         else if (!UUID_RE.test(typeId)) labels.push(typeId)
       }
-      return [...new Set(labels)]
+      return boundLabels([...new Set(labels)], MAX_TYPES, NAME_CHARS)
     },
   }
 }
 
-/** `key:: value` pairs for one line; the brief form is {@link briefProperties}
- *  with the rest counted. */
+/** `key:: value` pairs for one line; the brief form is {@link briefProperties}.
+ *  Everything not shown — brief's leftovers and the renderer's `omitted` — is
+ *  counted. */
 export const formatPropertyPairs = (
   lines: readonly PropertyLine[],
   detail: PropertyDetail,
+  omitted = 0,
 ): string => {
   const {shown, rest} = detail === 'brief' ? briefProperties(lines) : {shown: lines, rest: 0}
   const pairs = shown.map(line => `${line.name}:: ${line.value}`)
-  if (rest > 0) pairs.push(`+${rest} props`)
+  if (rest + omitted > 0) pairs.push(`+${rest + omitted} props`)
   return pairs.join('  ')
 }

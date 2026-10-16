@@ -35,6 +35,15 @@ export const clip = (text: string, max: number): Clipped => {
  *  reported cut counts characters of the neutralized line. */
 export const clipLine = (text: string, max: number): Clipped => clip(oneLine(text), max)
 
+/** A row's list of user-data names (type labels, property names), bounded
+ *  like the row's content: each one clipped, at most `max` kept, and the rest
+ *  counted in a last `+N more`. Every such list goes through here — one
+ *  unbounded list would make a single block's row arbitrarily large. */
+export const boundLabels = (labels: readonly string[], max: number, chars: number): string[] => {
+  const shown = labels.slice(0, max).map(label => clipLine(label, chars).text)
+  return labels.length > max ? [...shown, `+${formatCount(labels.length - max)} more`] : shown
+}
+
 const SNIPPET_CONTEXT = 70
 
 /** The words a snippet can anchor on: quoted phrases whole, operators and

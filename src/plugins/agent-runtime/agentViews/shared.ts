@@ -14,6 +14,8 @@ export interface ViewRow {
   cut: number
   types: string[]
   properties: PropertyLine[]
+  /** Properties past the renderer's cap, counted into the line's `+N props`. */
+  omittedProperties: number
 }
 
 export const toViewRow = (
@@ -26,13 +28,15 @@ export const toViewRow = (
   },
 ): ViewRow => {
   const clipped = clipLine(block.content, maxChars)
+  const properties = detail === 'none' ? {visible: [], omitted: 0} : renderer.view(block, detail)
   return {
     id: block.id,
     shortId: shortIds.get(block.id) ?? block.id,
     content: clipped.text === '' ? EMPTY_CONTENT : clipped.text,
     cut: clipped.cut,
     types: renderer.typeLabels(block),
-    properties: detail === 'none' ? [] : renderer.view(block, detail).visible,
+    properties: properties.visible,
+    omittedProperties: properties.omitted,
   }
 }
 
@@ -40,7 +44,9 @@ export const toViewRow = (
 export const metaSuffix = (row: ViewRow, detail: PropertyDetail | 'none'): string => {
   const parts: string[] = []
   if (row.types.length > 0) parts.push(`type:: ${row.types.join(', ')}`)
-  if (detail !== 'none' && row.properties.length > 0) parts.push(formatPropertyPairs(row.properties, detail))
+  if (detail !== 'none' && row.properties.length + row.omittedProperties > 0) {
+    parts.push(formatPropertyPairs(row.properties, detail, row.omittedProperties))
+  }
   return parts.length > 0 ? `  ${parts.join('  ')}` : ''
 }
 

@@ -15,6 +15,8 @@ import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { backlinksDataExtension } from '@/plugins/backlinks/dataExtension'
 import { groupedBacklinksDataExtension } from '@/plugins/grouped-backlinks/dataExtension'
 import { dailyNoteBlockId } from '@/plugins/daily-notes/dailyNotes'
+import { searchSourcesFacet } from '@/data/facets'
+import { hasLoneSurrogate } from '@/utils/string'
 import { createAgentRuntimeContext, executeCommand } from '../commands'
 import type { AgentRuntimeContext } from '../protocol'
 import { resolveBlockRef, shortIds } from '../agentViews/resolveRef'
@@ -339,12 +341,89 @@ describe('view-block bounds', () => {
     const out = await view<BlockView>({type: 'view-block', ref: id, format: 'json'})
     expect(out.properties).toHaveLength(50)
     expect(out.omittedProperties).toBe(11)
-    expect(out.hiddenProperties).toHaveLength(20)
-    expect(out.hiddenPropertyCount).toBe(25)
+    expect(out.hiddenProperties).toHaveLength(21)
+    expect(out.hiddenProperties.at(-1)).toBe('+5 more')
     const text = await view<string>({type: 'view-block', ref: id})
     expect(text).toContain(`WHERE blocks.id = ? with params ["${id}"])`)
     expect(text).toMatch(/hidden in the UI: .*, \+5 more\)/)
     expect(text).not.toContain('n'.repeat(100))
+  })
+
+  it('bounds every per-row list of names: an outline root, type labels, a backlink\'s via-properties', async () => {
+    const root = uuid('0000b110', 1)
+    const rootProps: Record<string, unknown> = {types: Array.from({length: 15}, (_, i) => `kind-${i}`)}
+    for (let i = 0; i < 60; i++) rootProps[`field-${i}`] = i
+    await create({id: root, content: 'root', properties: rootProps})
+
+    const outline = await view<OutlineView>({type: 'view-outline', ref: root, properties: 'full', format: 'json'})
+    expect(outline.root.properties).toHaveLength(50)
+    expect(outline.root.omittedProperties).toBe(10)
+    expect(outline.root.types).toHaveLength(11)
+    expect(outline.root.types.at(-1)).toBe('+5 more')
+    // The default brief root shows three plain names and counts the rest.
+    const header = (await view<string>({type: 'view-outline', ref: root})).split('\n')[0]
+    expect(header).toContain('field-2:: 2  +57 props')
+
+    const source = uuid('0000b111', 2)
+    await create({
+      id: source,
+      content: 'linked many ways',
+      references: Array.from({length: 7}, (_, i) => ({id: root, alias: 'root', sourceField: `rel-${i}`})),
+    })
+    const backlinks = await view<BacklinksView>({type: 'view-backlinks', ref: root, format: 'json'})
+    expect(backlinks.rows[0].viaProperties).toEqual(['rel-0', 'rel-1', 'rel-2', 'rel-3', 'rel-4', '+2 more'])
+  })
+})
+
+describe('structural edge cases', () => {
+  it('an outline survives a parent cycle', async () => {
+    const root = uuid('c1c1c1c1', 1)
+    const child = uuid('c2c2c2c2', 2)
+    await create({id: root, content: 'Root'})
+    await create({id: child, parentId: root, content: 'Child'})
+    // Sync applies parent ids verbatim, so a cycle can arrive from outside.
+    await sharedDb.db.execute('UPDATE blocks SET parent_id = ? WHERE id = ?', [child, root])
+
+    const out = await view<OutlineView>({type: 'view-outline', ref: root, depth: 5, format: 'json'})
+    expect(out.rows.map(row => [row.content, row.depth])).toEqual([['Child', 1]])
+    expect(out.nextOffset).toBeNull()
+  })
+
+  it('a grouping block with a non-UUID id is still addressable', async () => {
+    const target = uuid('9e9e9e9e', 1)
+    await create({id: target, content: 'Target'})
+    await create({id: 'topic-page', content: 'Topic B'})
+    // A group needs two members to form.
+    for (let i = 0; i < 2; i++) {
+      await create({id: uuid('9f9f9f9f', i), content: `src ${i}`, references: [{id: target, alias: 'T'}, {id: 'topic-page', alias: 'B'}]})
+    }
+    const out = await view<GroupedBacklinksView>({type: 'view-grouped-backlinks', ref: target, format: 'json'})
+    const group = out.groups.find(candidate => candidate.label === 'Topic B')!
+    expect(group).toMatchObject({groupId: 'topic-page', shortId: 'topic-page'})
+  })
+
+  it('search never fetches past its window cap, whatever the offset', async () => {
+    await create({id: uuid('5e5e5e5e', 1), content: 'capped query'})
+    const limits: number[] = []
+    repo.setRuntimeContributions(searchSourcesFacet, 'test:spy', [{
+      id: 'test.spy',
+      search: async (_repo, args) => {
+        limits.push(args.limit)
+        return []
+      },
+    }])
+    const out = await view<SearchView>({type: 'view-search', query: 'capped', offset: 1_000_000_000, format: 'json'})
+    expect(Math.max(...limits)).toBeLessThanOrEqual(2000)
+    expect(out.hits).toEqual([])
+  })
+
+  it('sql cuts a long cell on a character boundary', async () => {
+    await create({id: uuid('5a5a5a5a', 1), content: `${'y'.repeat(1999)}\u{1F600}${'z'.repeat(10)}`})
+    const out = await executeCommand({
+      commandId: 's', type: 'sql', mode: 'all', maxRows: 5,
+      sql: "SELECT content FROM blocks WHERE content LIKE 'yyy%'",
+    }, context) as {rows: Array<{content: string}>}
+    expect(hasLoneSurrogate(out.rows[0].content)).toBe(false)
   })
 })
 

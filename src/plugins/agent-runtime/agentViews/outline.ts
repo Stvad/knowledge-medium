@@ -77,6 +77,9 @@ const selectNodes = async (
     budget -= rows.length
     const next: string[] = []
     for (const {block, childCount} of rows) {
+      // A parent cycle (sync applies parent ids verbatim) leads back to a
+      // block already placed; placing it again would re-parent it.
+      if (block.id === root.id || nodes.has(block.id)) continue
       nodes.set(block.id, {block, childCount, depth: level, children: []})
       const parent = nodes.get(block.parentId ?? '')
       parent?.children.push(block.id)
@@ -132,7 +135,7 @@ export const buildOutlineView = async (
   const shownEnd = offset + rootChildren.length
   return {
     root: {
-      ...toViewRow(root, {shortIds, renderer, maxChars: ROOT_CHARS, detail: detail === 'none' ? 'none' : 'full'}),
+      ...toViewRow(root, {shortIds, renderer, maxChars: ROOT_CHARS, detail}),
       breadcrumb: crumbs.get(root.id) ?? [],
       childCount: rootChildCount,
     },
@@ -145,8 +148,7 @@ export const buildOutlineView = async (
 export const renderOutlineView = (view: OutlineView, detail: PropertyDetail | 'none' = 'brief'): string => {
   const {root, rows} = view
   const lines: string[] = []
-  const rootDetail = detail === 'none' ? 'none' : 'full'
-  lines.push(`${root.content}  ^${root.shortId}${metaSuffix(root, rootDetail)}  · ${plural(root.childCount, 'child', 'children')}`)
+  lines.push(`${root.content}  ^${root.shortId}${metaSuffix(root, detail)}  · ${plural(root.childCount, 'child', 'children')}`)
   if (root.breadcrumb.length > 0) lines.push(`in: ${crumbLine(root.breadcrumb)}`)
   if (view.offset > 0) lines.push(`(children from #${formatCount(view.offset + 1)})`)
 
