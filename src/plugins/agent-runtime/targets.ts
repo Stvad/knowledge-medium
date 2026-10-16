@@ -81,7 +81,8 @@ export const resolveBlockId = async (repo: Repo, raw: string, verb: string): Pro
     onMissing: 'verbatim',
     accept: 'id',
   })
-  // After the lookup: a stored id may itself look like `[[x]]`.
+  // A `[[x]]` ref is a page, never an id — even beside a synced row whose id is
+  // literally `[[x]]` (that one is reached as `(([[x]]))`).
   if (resolved.via === 'verbatim' && parseAgentTarget(raw).kind === 'page') {
     throw new Error(`${verb}: expected a block id, got the page target ${raw.trim()}.`)
   }
@@ -103,7 +104,7 @@ export const resolveDailyNoteTarget = async (
   assertActiveWorkspace(repo, verb, workspaceId)
   // Even for an existing row: get-or-create also promotes the seat a
   // `[[date]]` wikilink mints at workspace root into the Journal's note.
-  const note = await getOrCreateDailyNote(repo, workspaceId, iso)
+  const note = await getOrCreateDailyNote(repo, workspaceId, iso, agentTxOptions(verb))
   return {id: note.id, kind: 'daily', created: !existed}
 }
 
@@ -157,7 +158,6 @@ export const resolveAgentTarget = async (
       throw new Error(`${verb}: ${error.message}${hint}`, {cause: error})
     }
   }
-  // An id first — a stored id may itself look like `[[x]]`.
   if (found?.via === 'id' || found?.via === 'prefix') return {id: found.id, kind: 'block', created: false}
   if (target.kind === 'page') return resolvePageTarget(repo, target.name, verb, pinned)
   if (found?.via === 'date') {

@@ -88,7 +88,7 @@ const describeCandidates = async (repo: Repo, ids: readonly string[]): Promise<s
   )
   const byId = new Map(rows.map(row => [row.id, row.content ?? '']))
   return ids
-    .map(id => `  ${oneLine(id)}  ${clipLine(byId.get(id) ?? '', 60).text}`)
+    .map(id => `  ${clipLine(id, 64).text}  ${clipLine(byId.get(id) ?? '', 60).text}`)
     .join('\n')
 }
 
@@ -143,7 +143,7 @@ const notFound = async (
     ? await repo.query.aliasMatches({workspaceId, filter: text, limit: 5}).load()
     : []
   const hint = candidates.length > 0
-    ? `\nPages with similar names:\n${candidates.map(row => `  ${oneLine(row.alias)}`).join('\n')}`
+    ? `\nPages with similar names:\n${candidates.map(row => `  ${clipLine(row.alias, 80).text}`).join('\n')}`
     : ''
   return new BlockRefError(
     `No block matches "${oneLine(ref)}" (tried: id, id prefix, page name, date).${hint}`,
@@ -158,10 +158,6 @@ export const resolveBlockRef = async (
   ref: string,
   {workspaceId, onMissing = 'error', accept = 'any'}: ResolveBlockRefOptions,
 ): Promise<BlockRefResolution> => {
-  // A ref that IS a stored id names that block before any reading of it as a
-  // wrapper or prefix: sync and restore admit non-canonical ids, which can
-  // look like `((x))`, `^x` or `[[x]]` and must not resolve to some other block.
-  if (ref !== '' && await repo.db.getOptional(EXISTS_SQL, [ref])) return {id: ref, via: 'id'}
   const {text, forced} = unwrap(ref)
   if (!text) throw new BlockRefError('A block reference is required.')
 

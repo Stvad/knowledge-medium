@@ -6,9 +6,9 @@ import type { Repo } from '@/data/repo'
  *  every tx a bridge verb opens takes its options from {@link agentTxOptions},
  *  and the change-history views filter on this prefix.
  *
- *  Not attributed: `eval`, `sql execute` and `run-action` (arbitrary code), the
- *  daily note `getOrCreateDailyNote` creates (its txs take no description), and
- *  the follow-up txs post-commit processors open for an agent write. */
+ *  Not attributed: `eval`, `sql execute` and `run-action` (arbitrary code), a
+ *  Journal page bootstrapped on the way to a first daily note, and the
+ *  follow-up txs post-commit processors open for an agent write. */
 export const AGENT_TX_DESCRIPTION_PREFIX = 'agent runtime '
 
 export const agentTxOptions = (verb: string) => ({

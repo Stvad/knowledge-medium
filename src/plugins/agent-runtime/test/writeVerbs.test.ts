@@ -625,22 +625,27 @@ describe('review round 3', () => {
 })
 
 describe('review round 4', () => {
-  // Sync and restore admit non-canonical ids; one that looks like reference
-  // syntax must name itself, not the block its inner text would resolve to.
-  it('addresses a stored id that looks like ^prefix, ((id)) or [[name]] as itself', async () => {
-    await seed([{id: NOTE, content: 'victim'}])
-    for (const odd of ['^3f2a9c1b', `((${NOTE}))`, '[[Literal]]']) {
-      await seed([{id: odd, content: 'odd'}])
-      expect(await resolveBlockId(repo, odd, 'test')).toBe(odd)
-      await run({type: 'edit-block', id: odd, old: 'odd', new: 'odd!'})
-      expect(await contentOf(odd)).toBe('odd!')
-      await run({type: 'update-block', id: odd, content: 'odd'})
-    }
-    expect(await contentOf(NOTE)).toBe('victim')
-    const appended = await run({type: 'append-markdown', target: '[[Literal]]', markdown: '- child'}) as {
+  // Sync and restore admit non-canonical ids, including ones shaped like
+  // reference syntax. Such a row must not capture a reference meant for the
+  // real block or page; it stays reachable by wrapping its id in ((…)).
+  it('keeps ^prefix and [[name]] meaning what they say next to a planted id that looks like them', async () => {
+    await seed([{id: NOTE, content: 'real'}, {id: '^3f2a9c1b', content: 'planted'}, {id: '[[Inbox]]', content: 'planted'}])
+    expect(await resolveBlockId(repo, '^3f2a9c1b', 'test')).toBe(NOTE)
+    const appended = await run({type: 'append-markdown', target: '[[Inbox]]', markdown: '- x'}) as {
       target: {id: string, kind: string}
     }
-    expect(appended.target).toMatchObject({id: '[[Literal]]', kind: 'block'})
+    expect(appended.target).toMatchObject({id: computeAliasSeatId('Inbox', WS, 0), kind: 'page'})
+  })
+
+  it('reaches an odd stored id when it is wrapped in ((…))', async () => {
+    await seed([{id: NOTE, content: 'real'}])
+    for (const odd of ['^3f2a9c1b', `((${NOTE}))`, '[[Literal]]']) {
+      await seed([{id: odd, content: 'odd'}])
+      expect(await resolveBlockId(repo, `((${odd}))`, 'test')).toBe(odd)
+      await run({type: 'edit-block', id: `((${odd}))`, old: 'odd', new: 'odd!'})
+      expect(await contentOf(odd)).toBe('odd!')
+    }
+    expect(await contentOf(NOTE)).toBe('real')
   })
 })
 
@@ -664,5 +669,25 @@ describe('review round 5', () => {
 
     const out = await run({type: 'recent-changes'}) as {txs: Array<{changes: Array<{blockId: string}>}>}
     expect(out.txs[0].changes.map(change => change.blockId)).toEqual([NOTE])
+
+    // A storage row changed with NO change to its owner's properties is not
+    // covered by the owner's line, so it is shown rather than hidden.
+    await repo.tx(async tx => {
+      await tx.update('value', {content: 'done'})
+    }, agentTxOptions('edit-block'))
+    const after = await run({type: 'recent-changes'}) as {txs: Array<{changes: Array<{blockId: string}>}>}
+    expect(after.txs[0].changes.map(change => change.blockId)).toEqual(['value'])
+  })
+})
+
+describe('review round 6', () => {
+  it('attributes a daily note it creates, so recent-changes shows it', async () => {
+    const created = await run({type: 'create-page', date: '2026-10-15'}) as {id: string, created: boolean}
+    expect(created.created).toBe(true)
+    const out = await run({type: 'recent-changes'}) as {
+      txs: Array<{description: string, changes: Array<{blockId: string, kind: string}>}>
+    }
+    const changes = out.txs.filter(tx => tx.description === 'agent runtime create-page').flatMap(tx => tx.changes)
+    expect(changes).toContainEqual(expect.objectContaining({blockId: created.id, kind: 'create'}))
   })
 })

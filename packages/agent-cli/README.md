@@ -87,7 +87,7 @@ Writes are markdown-native and conflict-safe, so an agent can treat the graph li
 - **Append.** `append-markdown` parses with the app's paste parser and inserts the whole outline in one transaction, printing the created blocks with their short ids.
 - **Edit.** `edit-block` replaces one exact occurrence inside the writing transaction; `update-block` takes `expectedContent` to refuse a whole-content overwrite when the block changed since it was read.
 - **Todos.** A todo is a block with properties `{"types": ["todo"], "status": "open"}`; set `status` to `"done"` to complete it.
-- **Review.** Every bridge write is a transaction described `agent runtime <verb>`; `recent-changes` and `block-history` read them back from the local change log. Not attributed: `eval`, `sql execute`, `run-action`, and a daily note created on the way to an append.
+- **Review.** Every bridge write is a transaction described `agent runtime <verb>`; `recent-changes` and `block-history` read them back from the local change log. Not attributed: `eval`, `sql execute` and `run-action`.
 
 ## MCP Server
 

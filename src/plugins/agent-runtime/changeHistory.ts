@@ -116,25 +116,47 @@ const describeRowEvent = (row: RowEventRow, contentLimit?: number): Omit<BlockCh
 }
 
 const RECOGNIZED_FIELD_ROWS_SQL = `
-  SELECT b.id FROM blocks b
+  SELECT b.id, b.parent_id AS ownerId FROM blocks b
    WHERE b.id IN (SELECT value FROM json_each(?))
      AND ${recognizedFieldRowSql('b')}`
 
-/** Rows of property storage — recognized field rows (the outline's own
- *  predicate) and the value rows under them — among `rows`. A same-tx
- *  processor writes them for a property the owner's own change already
- *  names, so listing them would present machinery as changed content. */
-const propertyStorageIds = async (repo: Repo, rows: readonly RowEventRow[]): Promise<Set<string>> => {
+/** The owner of each property-storage row among `rows` — recognized field
+ *  rows (the outline's own predicate) and the value rows under them. */
+const propertyStorageOwners = async (repo: Repo, rows: readonly RowEventRow[]): Promise<Map<string, string>> => {
   const parentOf = new Map(rows.map(row =>
     [row.block_id, snapshotOf(row.after_json ?? row.before_json)?.parentId ?? null]))
   const candidates = [...new Set([...parentOf.keys(), ...parentOf.values()])].filter(id => id !== null)
-  const fields = new Set((await repo.db.getAll<{id: string}>(
+  const ownerOfField = new Map((await repo.db.getAll<{id: string, ownerId: string}>(
     RECOGNIZED_FIELD_ROWS_SQL,
     [JSON.stringify(candidates), ...registryRecognitionParams(repo)],
-  )).map(row => row.id))
-  return new Set([...parentOf]
-    .filter(([id, parent]) => fields.has(id) || (parent !== null && fields.has(parent)))
-    .map(([id]) => id))
+  )).map(row => [row.id, row.ownerId]))
+  const owners = new Map<string, string>()
+  for (const [id, parent] of parentOf) {
+    const owner = ownerOfField.get(id) ?? (parent === null ? undefined : ownerOfField.get(parent))
+    if (owner !== undefined) owners.set(id, owner)
+  }
+  return owners
+}
+
+/** Storage rows a same-tx processor wrote for a property change the owner's
+ *  own line already names. One whose owner shows no property change in that
+ *  tx is kept: nothing else would report it. */
+const withoutCoveredPropertyStorage = async <T extends {row: RowEventRow; change: Omit<BlockChange, 'shortId'>}>(
+  repo: Repo,
+  described: readonly T[],
+): Promise<T[]> => {
+  const owners = await propertyStorageOwners(repo, described.map(({row}) => row))
+  const propertyOwnersByTx = new Map<string, Set<string>>()
+  for (const {row, change} of described) {
+    if (!change.changed.includes('properties')) continue
+    const set = propertyOwnersByTx.get(row.tx_id!) ?? new Set<string>()
+    set.add(row.block_id)
+    propertyOwnersByTx.set(row.tx_id!, set)
+  }
+  return described.filter(({row}) => {
+    const owner = owners.get(row.block_id)
+    return owner === undefined || !propertyOwnersByTx.get(row.tx_id!)?.has(owner)
+  })
 }
 
 const parseSince = (value: unknown): number => {
@@ -208,13 +230,15 @@ export const recentChanges = async (repo: Repo, input: RecentChangesInput): Prom
       ORDER BY id`,
     [JSON.stringify(page.map(tx => tx.tx_id))],
   )
-  const storage = await propertyStorageIds(repo, rows)
-  const visible = rows.filter(row => !storage.has(row.block_id))
-  const short = await shortIds(repo, visible.map(row => row.block_id))
+  const visible = await withoutCoveredPropertyStorage(
+    repo,
+    rows.map(row => ({row, change: describeRowEvent(row, RECENT_CONTENT_LIMIT)})),
+  )
+  const short = await shortIds(repo, visible.map(({row}) => row.block_id))
   const changesByTx = new Map<string, BlockChange[]>()
-  for (const row of visible) {
+  for (const {row, change} of visible) {
     const list = changesByTx.get(row.tx_id!) ?? []
-    list.push({...describeRowEvent(row, RECENT_CONTENT_LIMIT), shortId: short.get(row.block_id)!})
+    list.push({...change, shortId: short.get(row.block_id)!})
     changesByTx.set(row.tx_id!, list)
   }
   return {

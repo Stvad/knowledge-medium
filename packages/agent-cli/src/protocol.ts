@@ -797,7 +797,7 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   },
   'recent-changes': {
     usage: 'kmagent recent-changes [--since <ms|iso>] [--limit <n>] [--all]',
-    description: 'Recent local transactions in the active workspace, newest first, each with the blocks it changed (content before/after, parent, deleted, property keys). Defaults to agent-bridge writes only (txs described `agent runtime …`); --all includes the user\'s own edits on this device. Sync-applied changes from other devices are not transactions here — use block-history for one block\'s full record. Not attributed to the agent: eval / sql execute / run-action writes, and a daily note created on the way to an append.',
+    description: 'Recent local transactions in the active workspace, newest first, each with the blocks it changed (content before/after, parent, deleted, property keys). Defaults to agent-bridge writes only (txs described `agent runtime …`); --all includes the user\'s own edits on this device. Sync-applied changes from other devices are not transactions here — use block-history for one block\'s full record. Not attributed to the agent: eval / sql execute / run-action writes.',
     readOnly: true,
   },
   'block-history': {
