@@ -364,7 +364,9 @@ describe('pane resize drag', () => {
 
   it('a resize key pressed mid-drag leaves the drag, and its shield, in charge', async () => {
     await startColumnDrag(500)
+    const writeRatio = vi.spyOn(repo.block(VIDEO), 'set')
     fireEvent.keyDown(columnSeparator(), {key: 'ArrowRight'})
+    expect(writeRatio).not.toHaveBeenCalled() // the release writes the drag's ratio; nothing before it
     expect(screen.getByTestId('video-notes-resize-shield')).toBeTruthy()
     expect(shownRatio()).toBe('50')
 
