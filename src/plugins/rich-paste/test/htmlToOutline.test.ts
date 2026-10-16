@@ -275,6 +275,13 @@ describe('convertClipboardHtml: content', () => {
     expect(convert('<summary>-<ul></ul></summary>')).toEqual({kind: 'inline', markdown: '\\-'})
   })
 
+  it('keeps text a list holds outside its items', () => {
+    // The converter puts it in an item of its own, bare, where no block reads it.
+    expect(outline('<h1>T</h1><ul><li>kept<ul>nested</ul></li></ul>')).toEqual(['# T', '  kept', '    nested'])
+    expect(outline('<h1>T</h1><li>kept<ul>nested</ul></li>')).toEqual(['# T', '  kept', '    nested'])
+    expect(outline('<h1>T</h1><ul><li>a</li><br><li>b</li></ul>')).toEqual(['# T', '  a', '  b'])
+  })
+
   it('makes no block of markup with no text in it', () => {
     expect(outline('<h1>T</h1><b><h2></h2></b><i><hr></i><h2><del><br></del></h2><p>end</p>'))
       .toEqual(['# T', '  end'])

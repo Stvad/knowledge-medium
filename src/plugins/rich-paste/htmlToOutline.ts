@@ -29,8 +29,7 @@ export const convertClipboardHtml = (html: string, plainText: string): Clipboard
   const body = new DOMParser().parseFromString(html, 'text/html').body
   if (hasOutlinerReferences(plainText, body)) return {kind: 'plain'}
   normalizeClipboardDom(body)
-  const mdast = toMdast(fromDom(body)) as Root
-  liftBlocks(mdast)
+  const mdast = separateBlocks(toMdast(fromDom(body)) as Root)
   sanitize(mdast)
   splitAtBlankLines(mdast)
   // With no plain text (an html-only clipboard) the html is the only source.
@@ -201,38 +200,47 @@ const BLOCKS: ReadonlySet<Nodes['type']> = new Set([
   'blockquote', 'code', 'heading', 'list', 'listItem', 'paragraph', 'table', 'thematicBreak',
 ])
 
-/** Phrasing can't hold blocks, but the converter leaves them where the HTML
- *  put them: in a `<summary>` (read as a paragraph), in `<b>` or `<i>`, and,
- *  splitting a link around the blocks in it, in a link inside a list.
- *  Serialized there, a block's text runs into its neighbours or is dropped.
- *  Lift each block out beside the phrasing around it, dropping the inline
- *  markup that wrapped it. In place. */
-const liftBlocks = (root: Root): void => {
-  root.children = root.children.flatMap(lift) as RootContent[]
+/** Markdown keeps phrasing and blocks apart; the converter mixes them where
+ *  the HTML does. It reads a `<summary>` as a paragraph, leaves blocks inside
+ *  `<b>` or `<i>`, and, splitting a link around the blocks in it, puts the
+ *  link inside a list; serialized there, a block's text runs into its
+ *  neighbours or is dropped. And it puts a list's content outside its items
+ *  in an item of its own, bare, where no block reads it. So each block is
+ *  lifted out beside the phrasing around it, dropping the inline markup that
+ *  wrapped it, and bare phrasing in a list item becomes a paragraph. */
+const separateBlocks = (root: Root): Root => separate(root)[0] as Root
+
+/** `node` as a sequence of nodes in which phrasing and blocks don't mix. */
+const separate = (node: Nodes): Nodes[] => {
+  if (!('children' in node)) return [node]
+  const children = (node.children as Nodes[]).flatMap(separate)
+  if (node.type === 'paragraph' || node.type === 'heading' || isInlineMarkup(node)) {
+    return aroundBlocks(children, run => [{...node, children: run} as Nodes])
+  }
+  if (node.type === 'listItem') {
+    // A run with no text (a `<br>` between items) is no paragraph.
+    const paragraph = (run: Nodes[]): Nodes[] =>
+      run.some(hasContent) ? [{type: 'paragraph', children: run as PhrasingContent[]}] : []
+    return [{...node, children: aroundBlocks(children, paragraph)} as Nodes]
+  }
+  return [{...node, children} as Nodes]
 }
 
-/** `node` as a sequence of nodes in which no phrasing holds a block. */
-const lift = (node: Nodes): Nodes[] => {
-  if (!('children' in node)) return [node]
-  const children = (node.children as Nodes[]).flatMap(lift)
-  if (!(node.type === 'paragraph' || node.type === 'heading' || isInlineMarkup(node))) {
-    return [{...node, children} as Nodes]
-  }
-  const pieces: Nodes[] = []
+/** `nodes` with each run of phrasing between their blocks replaced by `wrap(run)`. */
+const aroundBlocks = (nodes: readonly Nodes[], wrap: (run: Nodes[]) => Nodes[]): Nodes[] => {
+  const result: Nodes[] = []
   let run: Nodes[] = []
-  const endRun = () => {
-    if (run.length > 0) pieces.push({...node, children: run} as Nodes)
+  for (const node of nodes) {
+    if (!BLOCKS.has(node.type)) {
+      run.push(node)
+      continue
+    }
+    if (run.length > 0) result.push(...wrap(run))
+    result.push(node)
     run = []
   }
-  for (const child of children) {
-    if (!BLOCKS.has(child.type)) run.push(child)
-    else {
-      endRun()
-      pieces.push(child)
-    }
-  }
-  endRun()
-  return pieces
+  if (run.length > 0) result.push(...wrap(run))
+  return result
 }
 
 /** Split paragraphs where two or more line breaks meet: `<br><br>` is how
