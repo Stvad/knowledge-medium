@@ -1395,6 +1395,8 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     failListAfterPush?: boolean
     /** A GraphQL error every issue-listing chunk carries, nulling its first alias. */
     listingError?: object
+    /** The number of the newest PR by creation date (default: none). */
+    newestPr?: number
     failFullSync?: boolean
     failPushCall?: number
     failReadCall?: number
@@ -1441,8 +1443,11 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
         'const byNumber = new Map(issues.map(i => [i.number, i]))',
         'let response',
         "if (query.includes('orderBy:')) {",
-        '  const newest = Math.max(0, ...issues.map(i => i.number))',
-        '  response = { data: { repository: { issues: { nodes: newest ? [{ number: newest }] : [] } } } }',
+        // Newest by creation date: a fixture's createdAt where every one has
+        // it, its number otherwise.
+        '  const created = issues.every(i => i.createdAt) ? [...issues].sort((a, b) => b.createdAt.localeCompare(a.createdAt)) : [...issues].sort((a, b) => b.number - a.number)',
+        '  const nodes = created.slice(0, 1).map(i => ({ number: i.number }))',
+        `  response = { data: { repository: { issues: { nodes }, pullRequests: { nodes: ${JSON.stringify(opts.newestPr ? [{ number: opts.newestPr }] : [])} } } } }`,
         '} else {',
         '  const repository = {}',
         '  const errors = []',
@@ -2043,7 +2048,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(r.stdout).toBe('')
     // Sorted: the listing and the first read run concurrently.
     const spawned = shimCalls().trim().split('\n').map(l => l.split(' ').slice(0, 3).join(' '))
-    expect(spawned.sort()).toEqual(['bd --version', 'bd export', ...Array(4).fill('gh api graphql'), 'gh auth token'])
+    expect(spawned.sort()).toEqual(['bd --version', 'bd export', ...Array(5).fill('gh api graphql'), 'gh auth token'])
   })
 
   // `gh issue list` paged through the tracker one request after another, a
@@ -2055,8 +2060,18 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
       issueListDelay: 0.3,
     })
     expect(run().status).toBe(0)
-    expect(shimCalls().match(/^gh api graphql listing$/gm)).toHaveLength(10)
+    expect(shimCalls().match(/^gh api graphql listing$/gm)).toHaveLength(11)
     expect(listingPeak()).toBe(8)
+  })
+
+  // A transferred-in issue keeps its creation date but takes the next number,
+  // past every issue and PR that either creation-date ordering returns.
+  it('reads past the newest issue and PR by creation date, so a transferred-in issue is listed', () => {
+    const filed = [1, 2, 3].map(n => ({ ...ghIssue(n, '2026-08-20T00:00:00Z'), createdAt: `2026-08-0${n}T00:00:00Z` }))
+    const transferred = { ...ghIssue(150, '2026-08-20T00:00:00Z'), createdAt: '2020-01-01T00:00:00Z' }
+    const { run, shimCalls } = makeSyncRepo({ issues: [...filed, transferred], newestPr: 149, reads: [[]] })
+    expect(run().status).toBe(0)
+    expect(shimCalls()).toContain('bd github sync --pull-only --issues 1,2,3,150')
   })
 
   it('fails the run on an empty listing, before acting on anything', () => {
@@ -2383,9 +2398,10 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     })
     const r = run()
     expect(r.status).toBe(0)
-    // The re-read asks for the handed issue, not for the whole listing again.
+    // The re-read asks for the handed issue (one chunk), not the whole listing
+    // again (a newest-number read and two chunks).
     expect(shimCalls().match(/^gh api graphql newest$/gm)).toHaveLength(1)
-    expect(shimCalls().match(/^gh api graphql listing$/gm)).toHaveLength(2)
+    expect(shimCalls().match(/^gh api graphql listing$/gm)).toHaveLength(3)
     expect(r.stdout).toContain('push did not land for km-mmmm (#7)')
     expect(r.stdout).toContain('SKIPPED comments of km-mmmm: GitHub does not hold its local row this run')
     expect(posted()).toBe('')

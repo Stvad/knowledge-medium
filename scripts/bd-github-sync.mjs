@@ -1026,6 +1026,7 @@ const labelFieldsWhere = (bead, issue, keep) =>
  */
 const GH_SANITIZED = /[\x00-\x07\x0e-\x1f\x80-\x9f]/g
 const asGhPrints = text => text.replace(GH_SANITIZED, c => `^${String.fromCharCode((c.charCodeAt(0) & 0x1f) + 0x40)}`)
+// Accepted: a control character and its literal caret spelling read as equal — gh's transport rewrites every response, so no read through gh tells them apart.
 const sameText = (local, listed) => asGhPrints(local ?? '') === (listed ?? '')
 
 /**
@@ -1541,11 +1542,13 @@ const graphqlRepository = async (fields, env, verb) => {
 
 // The listing, read BY NUMBER: `gh issue list` pages 100 issues per request,
 // one request after another, so it grew a second per 100 issues. Here every
-// number from 1 to the newest issue's is read as `issue(number:)` aliases, in
-// chunks that run LIST_READS_AT_ONCE at a time; PRs share the sequence and
-// read as absent. The range ends at the newest issue by creation date, so one
-// filed after that read is absent this run, as it would have been from a
-// listing.
+// number is read as `issue(number:)` aliases, in chunks that run
+// LIST_READS_AT_ONCE at a time; PRs share the sequence and read as absent.
+// The range runs one chunk past the newest issue and the newest PR by
+// creation date: a transferred-in issue keeps its creation date but takes the
+// next number, so neither ordering reaches it, and what is numbered past both
+// (transfers, discussions, deleted issues) stays well inside a chunk. An issue
+// filed after that read is absent this run, as it would be from a listing.
 // title/body/assignees are read only to say whether bd's pull would rewrite a
 // bead (planLossyReapplies) — the alternative is one GET per candidate.
 // With `numbers`, reads just those: the re-read of what a push was handed.
@@ -1555,8 +1558,10 @@ const LISTING_VERB = 'gh api graphql (listing)'
 const ISSUE_FIELDS = 'number state updatedAt title body labels(first: 100) { nodes { name } } assignees(first: 1) { nodes { login } }'
 const fetchIssues = async (env, numbers = null) => {
   if (!numbers) {
-    const newest = await graphqlRepository('issues(first: 1, orderBy: {field: CREATED_AT, direction: DESC}) { nodes { number } }', env, LISTING_VERB)
-    numbers = Array.from({ length: newest.issues.nodes[0]?.number ?? 0 }, (_, i) => i + 1)
+    const newest = connection => `${connection}(first: 1, orderBy: {field: CREATED_AT, direction: DESC}) { nodes { number } }`
+    const repo = await graphqlRepository(`${newest('issues')} ${newest('pullRequests')}`, env, LISTING_VERB)
+    const bound = Math.max(0, ...[repo.issues, repo.pullRequests].map(c => c.nodes[0]?.number ?? 0)) + LIST_CHUNK
+    numbers = Array.from({ length: bound }, (_, i) => i + 1)
   }
   const chunks = []
   for (let i = 0; i < numbers.length; i += LIST_CHUNK) chunks.push(numbers.slice(i, i + LIST_CHUNK))
