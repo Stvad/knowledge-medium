@@ -1,1 +1,0 @@
-import{U1 as e,W1 as t}from"../../chunks/app-QUeETBem.js";export{e as getOrCreatePropertiesPage,t as propertiesPageBlockId};

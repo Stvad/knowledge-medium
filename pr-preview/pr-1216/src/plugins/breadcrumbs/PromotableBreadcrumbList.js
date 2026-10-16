@@ -1,1 +1,0 @@
-import{$g as e}from"../../../chunks/app-QUeETBem.js";export{e as PromotableBreadcrumbList};

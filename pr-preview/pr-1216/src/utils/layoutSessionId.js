@@ -1,1 +1,0 @@
-import{a$ as e,c$ as t,i$ as n,o$ as r,r$ as i,s$ as a}from"../../chunks/app-QUeETBem.js";export{i as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,n as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,e as __resetLayoutSessionIdForTesting,r as getLayoutSessionId,a as isInstalledAppDisplayMode,t as readOrCreateLayoutSessionId};
