@@ -1,1 +1,1 @@
-import{ou as e,su as t}from"../../../chunks/app-CV82QQBd.js";export{e as blockHistory,t as recentChanges};
+import{ou as e,su as t}from"../../../chunks/app-BiV8qB4v.js";export{e as blockHistory,t as recentChanges};
