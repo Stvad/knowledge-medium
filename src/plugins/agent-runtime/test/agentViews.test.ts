@@ -128,6 +128,12 @@ describe('resolveBlockRef', () => {
       .rejects.toThrow(/Pages with similar names:\n {2}Project Alpha/)
   })
 
+  it('keeps a non-canonical UUID exactly as given, and never shortens one', async () => {
+    const mixedCase = 'ABCDEF12-0000-4000-8000-000000000001'
+    expect(await resolveBlockRef(repo, mixedCase, {workspaceId: WS})).toEqual({id: mixedCase, via: 'id'})
+    expect((await shortIds(repo, [mixedCase])).get(mixedCase)).toBe(mixedCase)
+  })
+
   it("accept:'id' refuses names, and onMissing:'verbatim' hands the ref back", async () => {
     await expect(resolveBlockRef(repo, 'Project Alpha', {workspaceId: WS, accept: 'id'}))
       .rejects.toThrow(/takes an id/)
@@ -293,6 +299,27 @@ describe('display safety', () => {
     expect(outline).toContain('in: Par ⏎ ent')
     // The block view keeps the content's own line breaks and nothing else.
     expect(block).toContain('one\ntwo ⏎ three')
+  })
+})
+
+describe('view-block bounds', () => {
+  it('caps the property lists and names, counting what it left out', async () => {
+    const id = uuid('0000b10f', 1)
+    const properties: Record<string, unknown> = {}
+    for (let i = 0; i < 60; i++) properties[`imported-${String(i).padStart(2, '0')}`] = `v${i}`
+    for (let i = 0; i < 25; i++) properties[`system:internal-${i}`] = i
+    properties[`long-${'n'.repeat(200)}`] = 'x'
+    await create({id, content: 'bag', properties})
+
+    const out = await view<BlockView>({type: 'view-block', ref: id, format: 'json'})
+    expect(out.properties).toHaveLength(50)
+    expect(out.omittedProperties).toBe(11)
+    expect(out.hiddenProperties).toHaveLength(20)
+    expect(out.hiddenPropertyCount).toBe(25)
+    const text = await view<string>({type: 'view-block', ref: id})
+    expect(text).toContain('(+11 more properties — sql_query:')
+    expect(text).toMatch(/hidden in the UI: .*, \+5 more\)/)
+    expect(text).not.toContain('n'.repeat(100))
   })
 })
 

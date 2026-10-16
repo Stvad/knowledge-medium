@@ -27,6 +27,8 @@ export type PropertyDetail = 'brief' | 'full'
 export const BRIEF_PROPERTY_COUNT = 3
 const BRIEF_VALUE_CHARS = 40
 const FULL_VALUE_CHARS = 300
+/** Names are user data too: an importer can write arbitrarily long ones. */
+const NAME_CHARS = 80
 const SUMMARY_KEYS = 3
 
 type Decoded =
@@ -157,13 +159,14 @@ export const createPropertyRenderer = async (
       const hidden: string[] = []
       const maxChars = detail === 'brief' ? BRIEF_VALUE_CHARS : FULL_VALUE_CHARS
       for (const {name, hidden: isHidden, decoded} of decodedByBlock.get(block.id) ?? []) {
+        const shownName = clipLine(name, NAME_CHARS).text
         if (isHidden) {
-          hidden.push(name)
+          hidden.push(shownName)
           continue
         }
         const value = display(decoded, block, name)
         if (value === '') continue
-        visible.push({name, value: clipLine(value, maxChars).text})
+        visible.push({name: shownName, value: clipLine(value, maxChars).text})
       }
       return {visible, hidden}
     },

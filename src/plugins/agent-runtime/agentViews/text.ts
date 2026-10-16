@@ -68,8 +68,8 @@ export const snippet = (content: string, query: string, width = SNIPPET_CONTEXT 
   }
   if (at < 0) return clip(line, width).text
   const half = Math.max(0, Math.floor((width - termLength) / 2))
-  const start = Math.max(0, Math.min(at - half, line.length - width))
-  const end = Math.min(line.length, start + width)
+  const start = charBoundary(line, Math.max(0, Math.min(at - half, line.length - width)))
+  const end = charBoundary(line, Math.min(line.length, start + width))
   return `${start > 0 ? '…' : ''}${line.slice(start, end)}${end < line.length ? '…' : ''}`
 }
 

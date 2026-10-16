@@ -1,6 +1,7 @@
 import type { Repo } from '@/data/repo'
 import { AGENT_VIEW_DEFAULTS } from '@knowledge-medium/agent-cli/protocol'
-import { backlinkCount, loadCrumbs, visibleChildCounts } from './context.ts'
+import { BACKLINKS_FOR_BLOCK_QUERY } from '@/plugins/backlinks/query.js'
+import { loadCrumbs, visibleChildCounts } from './context.ts'
 import { createPropertyRenderer, type PropertyLine } from './properties.ts'
 import { shortIds as loadShortIds } from './resolveRef.ts'
 import { crumbLine, joinDisplayLines, loadRoot, plural } from './shared.ts'
@@ -26,14 +27,21 @@ export interface BlockView {
   contentLength: number
   /** Where to continue reading, or null when `content` reaches the end. */
   nextContentOffset: number | null
+  /** The first {@link MAX_PROPERTIES}; `omittedProperties` counts the rest. */
   properties: PropertyLine[]
+  omittedProperties: number
+  /** The first {@link MAX_HIDDEN_NAMES} names; `hiddenPropertyCount` is all. */
   hiddenProperties: string[]
+  hiddenPropertyCount: number
   childCount: number
   backlinkCount: number
   editedAt: string | null
 }
 
 const MAX_CHARS = 100_000
+/** A property bag is bounded like content: an importer can write hundreds. */
+const MAX_PROPERTIES = 50
+const MAX_HIDDEN_NAMES = 20
 
 export const buildBlockView = async (
   repo: Repo,
@@ -52,7 +60,8 @@ export const buildBlockView = async (
     loadShortIds(repo, [block.id]),
     loadCrumbs(repo, [block.id], block.workspaceId),
     visibleChildCounts(repo, [block.id]),
-    backlinkCount(repo, block.workspaceId, block.id),
+    // The backlinks view's own set, so the two counts cannot disagree.
+    repo.query[BACKLINKS_FOR_BLOCK_QUERY]({workspaceId: block.workspaceId, id: block.id}).load(),
   ])
   const properties = renderer.view(block, 'full')
   const editedAt = block.userUpdatedAt ?? block.updatedAt
@@ -68,10 +77,12 @@ export const buildBlockView = async (
     contentOffset,
     contentLength: block.content.length,
     nextContentOffset: end < block.content.length ? end : null,
-    properties: properties.visible,
-    hiddenProperties: properties.hidden,
+    properties: properties.visible.slice(0, MAX_PROPERTIES),
+    omittedProperties: Math.max(0, properties.visible.length - MAX_PROPERTIES),
+    hiddenProperties: properties.hidden.slice(0, MAX_HIDDEN_NAMES),
+    hiddenPropertyCount: properties.hidden.length,
     childCount: childCounts.get(block.id) ?? 0,
-    backlinkCount: backlinks,
+    backlinkCount: backlinks.length,
     editedAt: typeof editedAt === 'number' ? new Date(editedAt).toISOString() : null,
   }
 }
@@ -97,8 +108,15 @@ export const renderBlockView = (view: BlockView): string => {
     lines.push('')
     for (const property of view.properties) lines.push(`${property.name}:: ${property.value}`)
   }
-  if (view.hiddenProperties.length > 0) {
-    lines.push(`(hidden in the UI: ${view.hiddenProperties.join(', ')})`)
+  if (view.omittedProperties > 0) {
+    lines.push(
+      `(+${formatCount(view.omittedProperties)} more properties — sql_query: SELECT key, value FROM blocks, `
+      + `json_each(blocks.properties_json) WHERE blocks.id = '${view.id}')`,
+    )
+  }
+  if (view.hiddenPropertyCount > 0) {
+    const rest = view.hiddenPropertyCount - view.hiddenProperties.length
+    lines.push(`(hidden in the UI: ${view.hiddenProperties.join(', ')}${rest > 0 ? `, +${formatCount(rest)} more` : ''})`)
   }
   return joinDisplayLines(lines)
 }

@@ -104,12 +104,3 @@ export const firstVisibleChildren = async (
     return [block.parentId ?? '', block]
   }))
 }
-
-export const backlinkCount = async (repo: Repo, workspaceId: string, id: string): Promise<number> => {
-  const [row] = await repo.db.getAll<{n: number}>(
-    `SELECT count(DISTINCT source_id) AS n FROM block_references
-      WHERE workspace_id = ? AND target_id = ? AND source_id != target_id`,
-    [workspaceId, id],
-  )
-  return row?.n ?? 0
-}

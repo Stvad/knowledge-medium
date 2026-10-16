@@ -96,7 +96,9 @@ const resolveIdLike = async (
   repo: Repo,
   text: string,
 ): Promise<BlockRefResolution | null> => {
-  if (UUID_RE.test(text)) return {id: text.toLowerCase(), via: 'id'}
+  // Verbatim: sync and restore admit non-canonical (mixed-case) ids, and
+  // lowercasing one would read a different row, or none.
+  if (UUID_RE.test(text)) return {id: text, via: 'id'}
   const exists = await repo.db.getOptional(EXISTS_SQL, [text])
   if (exists) return {id: text, via: 'id'}
   if (text.length < MIN_ID_PREFIX || !ID_PREFIX_RE.test(text)) return null
@@ -177,8 +179,12 @@ export const resolveBlockRef = async (
   throw await notFound(repo, ref, text, workspaceId)
 }
 
+/** Prefix lookup is lowercase (canonical ids are), so only an id already in
+ *  that form is shortened; any other prints whole and resolves exactly. */
+const CANONICAL_PREFIXABLE_RE = /^[0-9a-f][0-9a-f-]*$/
+
 const isShortenable = (id: string): boolean =>
-  id.length > SHORT_ID_LENGTHS[0] && ID_PREFIX_RE.test(id)
+  id.length > SHORT_ID_LENGTHS[0] && CANONICAL_PREFIXABLE_RE.test(id)
 
 const SHORT_ID_COUNTS_SQL = `
   SELECT j.value AS id,
