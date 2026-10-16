@@ -58,6 +58,9 @@ numeric coercion (it is not a number). And you rarely need to: \`subtree\`,
 - Pages can have **multiple names**: the \`alias\` property is a string array,
   and any alias resolves to the page. \`[[Some Name]]\` in text links to
   whichever block claims that alias.
+- Every read command takes a **block ref**: a full id, a unique id prefix as
+  printed (\`^3f2a9c1d\`), a page name (or \`[[Page name]]\`), or a date for its
+  daily note — so \`subtree "Project Alpha"\` and \`subtree today\` need no lookup.
 - To find a page by name use \`pnpm agent page <name>\` (exact alias hit +
   substring candidates) — don't scan \`content\`. Pages + aliases are the most
   common things in the graph.
@@ -89,8 +92,11 @@ When block S references block T, you get a \`block_references\` row with
 self-reference). Do **not** approximate backlinks by "blocks on T's page", and
 do **not** filter them by \`created_at\` — that gives the wrong set.
 
-- \`pnpm agent backlinks <blockId>\` → hydrated backlinks (id, content, types,
-  \`sourceFields\`, deep-link).
+- \`pnpm agent backlinks <ref>\` → a page of backlinks (\`--limit\`, \`--offset\`),
+  each with its breadcrumb, the property it links through when not body text,
+  and — for a block that is only a link — its parent's text and first child.
+  \`--raw\` returns every backlink hydrated (id, content, types, \`sourceFields\`,
+  deep-link).
 
 ## Grouped backlinks (the grouped-references view)
 
@@ -99,8 +105,9 @@ backlink by the references of the backlink itself **and every ancestor up its
 chain** — plus the containing root page, \`groupWith\` expansion, and \`types\`
 enrichment. ("What context is each reference in?")
 
-- \`pnpm agent grouped-backlinks <blockId>\` → the same groups the panel shows
-  (label, optional page deep-link, hydrated members) plus an \`Other\` fallback.
+- \`pnpm agent grouped-backlinks <ref>\` → the same groups the panel shows
+  (label, size, first few members; \`--offset\` pages groups) plus an \`Other\`
+  fallback. \`--raw\` returns every group with every member hydrated.
 - "Which of page T's backlinks group under page P?" → run
   \`grouped-backlinks <T>\` and find the group whose label/id is P.
 
@@ -179,12 +186,16 @@ The convenience commands above wrap the starred ones (★) and add hydration.
 
 ## Lower-level access
 
-- \`pnpm agent get-block <id>\` — fetch one block.
-- \`pnpm agent subtree <rootId>\` — fetch a subtree (root included). Prints a
-  depth-indented \`- [id] content\` outline (one line per block, id first);
-  add \`--json\` for the raw flat array (each row also carries its \`depth\`
-  from the root — 0 at the root).
-  Either way it's a **pre-order** traversal with siblings in \`(order_key, id)\`
+- \`pnpm agent get-block <ref>\` — one block: content (cut past \`--max-chars\`,
+  continued with \`--content-offset\`), breadcrumb, types, decoded properties,
+  child and backlink counts. \`--raw\` for the stored row.
+- \`pnpm agent subtree <ref>\` — a bounded markdown outline, one line per block:
+  \`- content  key:: value  ^shortid\`. \`--depth\` / \`--limit\` bound it
+  (shallower levels fill first); \`(+N children)\` marks what was not expanded,
+  \`…[+N chars]\` what was cut, and a long child list ends with the
+  \`--offset\` to continue. \`--json\` for the same view structured; \`--raw\`
+  for the whole stored subtree as a flat array (each row carries its \`depth\`).
+  Every form is a **pre-order** traversal with siblings in \`(order_key, id)\`
   order — already sorted; read it top-to-bottom, don't re-sort (see "Sibling
   order").
 - \`pnpm agent sql <all|get|optional|execute> <sql> [paramsJson]\` — raw SQL.

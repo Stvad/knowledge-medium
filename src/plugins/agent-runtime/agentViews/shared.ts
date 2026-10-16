@@ -2,6 +2,7 @@ import type { BlockData } from '@/data/api'
 import type { Repo } from '@/data/repo'
 import { BlockRefError, resolveBlockRef, type BlockRefResolution } from './resolveRef.ts'
 import { formatPropertyPairs, type PropertyDetail, type PropertyLine, type PropertyRenderer } from './properties.ts'
+import { neutralizeDisplayText } from '@knowledge-medium/agent-cli/protocol'
 import { clipLine, formatCount } from './text.ts'
 
 /** One block as a view row: everything a line needs, already bounded. */
@@ -28,7 +29,7 @@ export const toViewRow = (
   return {
     id: block.id,
     shortId: shortIds.get(block.id) ?? block.id,
-    content: clipped.text,
+    content: clipped.text === '' ? EMPTY_CONTENT : clipped.text,
     cut: clipped.cut,
     types: renderer.typeLabels(block),
     properties: detail === 'none' ? [] : renderer.view(block, detail).visible,
@@ -68,5 +69,16 @@ export const loadRoot = async (
     ? `The daily note for "${ref}" has not been created yet (its id would be ${resolution.id}).`
     : `Block ${resolution.id} does not exist or is deleted.`)
 }
+
+/** Every text view's last step. Each line goes through the shared display
+ *  neutralizer whatever it was built from — content, crumbs, type labels,
+ *  property names and values all come from user data — so no field can
+ *  forge a line or reorder the id printed after it. Multi-line text must be
+ *  split into lines BEFORE this, or its breaks are collapsed too. */
+export const joinDisplayLines = (lines: readonly string[]): string =>
+  lines.map(neutralizeDisplayText).join('\n')
+
+/** An empty block still occupies a line; say so rather than print nothing. */
+export const EMPTY_CONTENT = '(empty)'
 
 export const CUT_LEGEND = '…[+N chars] = cut here; get_block on that id reads the rest.'

@@ -414,7 +414,7 @@ const guides: AuthoringGuide[] = [
       'kmagent data-model',
       'kmagent describe-runtime --guide record-grain',
       'kmagent audit-extension <label>',
-      'kmagent backlinks <blockId>',
+      'kmagent backlinks <ref>',
     ],
     examples: [
       example('A record per block: typed, composed with todo, linked back to its definition', recordGrainSource),

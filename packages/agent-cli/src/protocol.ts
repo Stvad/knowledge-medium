@@ -399,7 +399,7 @@ export const AGENT_VIEW_DEFAULTS = {
   backlinksLimit: 20,
   groupsLimit: 10,
   membersPerGroup: 3,
-  outlineLimit: 150,
+  outlineLimit: 100,
   outlineDepth: 3,
   blockMaxChars: 4000,
   sqlMaxRows: 200,

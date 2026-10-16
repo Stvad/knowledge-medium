@@ -881,6 +881,26 @@ describe('searchBlocksAcrossSources (searchSourcesFacet merge point)', () => {
     expect(results[0].content).toBe('sync notes')
   })
 
+  it('a filtered search runs only the sources that apply the filter, and core applies it before its limit', async () => {
+    await create({id: 'plain', content: 'sync plain'})
+    await create({id: 'tagged', content: 'sync tagged', types: ['todo']})
+    const unfiltering = vi.fn(async () => [{block: blockData('semantic-hit', 'unrelated'), score: 999}])
+    env.repo.setRuntimeContributions(searchSourcesFacet, 'test:toy-source', [{id: 'test.toy', search: unfiltering}])
+
+    const filtered = await searchBlocksAcrossSources(env.repo, {
+      workspaceId: WS,
+      query: 'sync',
+      limit: 1,
+      filter: {types: ['todo']},
+    })
+    expect(filtered.map(block => block.id)).toEqual(['tagged'])
+    expect(unfiltering).not.toHaveBeenCalled()
+
+    // An empty filter is no filter: every source takes part.
+    await searchBlocksAcrossSources(env.repo, {workspaceId: WS, query: 'sync', limit: 10, filter: {}})
+    expect(unfiltering).toHaveBeenCalledTimes(1)
+  })
+
   it('drops a source that throws without failing the others', async () => {
     await create({id: 'core-hit', content: 'sync notes'})
 

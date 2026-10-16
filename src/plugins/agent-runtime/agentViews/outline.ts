@@ -9,6 +9,7 @@ import {
   clampInt,
   CUT_LEGEND,
   crumbLine,
+  joinDisplayLines,
   loadRoot,
   metaSuffix,
   plural,
@@ -166,5 +167,5 @@ export const renderOutlineView = (view: OutlineView, detail: PropertyDetail | 'n
   }
   if (sawHidden) lines.push('(+N children) = not expanded here; raise depth, or read that block by its id.')
   if (sawCut) lines.push(CUT_LEGEND)
-  return lines.join('\n')
+  return joinDisplayLines(lines)
 }

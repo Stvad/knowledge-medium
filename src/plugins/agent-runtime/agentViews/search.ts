@@ -5,9 +5,9 @@ import { isActiveSearchFilter, type BlockSearchFilter } from '@/data/searchFilte
 import { AGENT_VIEW_DEFAULTS } from '@knowledge-medium/agent-cli/protocol'
 import { readTypeIds, searchBlocksAcrossSources } from '@/utils/linkTargetAutocomplete.js'
 import { loadCrumbs } from './context.ts'
-import { createPropertyRenderer, type PropertyLine } from './properties.ts'
+import { createPropertyRenderer, formatPropertyPairs, type PropertyLine } from './properties.ts'
 import { resolveBlockRef, shortIds as loadShortIds } from './resolveRef.ts'
-import { clampInt, crumbLine } from './shared.ts'
+import { clampInt, crumbLine, joinDisplayLines } from './shared.ts'
 import { formatCount, oneLine, snippet } from './text.ts'
 
 export interface SearchParams {
@@ -170,7 +170,7 @@ export const renderSearchView = (view: SearchView): string => {
   view.hits.forEach((hit, index) => {
     const meta = [
       hit.types.length > 0 ? `type:: ${hit.types.join(', ')}` : null,
-      ...hit.properties.slice(0, 2).map(property => `${property.name}:: ${property.value}`),
+      hit.properties.length > 0 ? formatPropertyPairs(hit.properties, 'brief') : null,
     ].filter(Boolean).join('  ')
     const duplicates = hit.duplicateShortIds.length > 0
       ? `  (+${hit.duplicateShortIds.length} identical: ${hit.duplicateShortIds.map(id => `^${id}`).join(', ')})`
@@ -178,5 +178,5 @@ export const renderSearchView = (view: SearchView): string => {
     lines.push(`${view.offset + index + 1}. ^${hit.shortId}  ${crumbLine(hit.breadcrumb)}${duplicates}`)
     lines.push(`   ${hit.snippet}${meta ? `  ${meta}` : ''}`)
   })
-  return lines.join('\n')
+  return joinDisplayLines(lines)
 }

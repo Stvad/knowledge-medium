@@ -250,6 +250,24 @@ describe('view-block', () => {
   })
 })
 
+describe('display safety', () => {
+  it('no field of a text view can carry a line break or a bidi control', async () => {
+    const parent = uuid('5afe0000', 1)
+    const child = uuid('5afe0001', 2)
+    await create({id: parent, content: 'Par\u202Eent', properties: {alias: ['Par\u202Eent']}})
+    await create({id: child, parentId: parent, content: 'one\ntwo\u2028three', properties: {note: 'x\u2066y'}})
+
+    const outline = await view<string>({type: 'view-outline', ref: child})
+    const block = await view<string>({type: 'view-block', ref: child})
+    for (const text of [outline, block]) {
+      expect(text).not.toMatch(/[\u2028\u2029\p{Bidi_Control}]/u)
+    }
+    expect(outline).toContain('in: Par ⏎ ent')
+    // The block view keeps the content's own line breaks and nothing else.
+    expect(block).toContain('one\ntwo ⏎ three')
+  })
+})
+
 describe('view-backlinks', () => {
   const TARGET = uuid('7a7a7a7a', 1)
 

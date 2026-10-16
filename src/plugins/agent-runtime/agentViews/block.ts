@@ -3,7 +3,7 @@ import { AGENT_VIEW_DEFAULTS } from '@knowledge-medium/agent-cli/protocol'
 import { backlinkCount, loadCrumbs, visibleChildCounts } from './context.ts'
 import { createPropertyRenderer, type PropertyLine } from './properties.ts'
 import { shortIds as loadShortIds } from './resolveRef.ts'
-import { crumbLine, loadRoot, plural } from './shared.ts'
+import { crumbLine, joinDisplayLines, loadRoot, plural } from './shared.ts'
 import { formatCount } from './text.ts'
 
 export interface BlockViewParams {
@@ -86,7 +86,7 @@ export const renderBlockView = (view: BlockView): string => {
   lines.push(`in: ${crumbLine(view.breadcrumb)}`)
   lines.push('')
   if (view.contentOffset > 0) lines.push(`…[${formatCount(view.contentOffset)} chars before]`)
-  lines.push(view.content)
+  for (const line of view.content.split(/\r?\n/)) lines.push(line)
   if (view.nextContentOffset !== null) {
     const rest = view.contentLength - view.nextContentOffset
     lines.push(`…[+${formatCount(rest)} chars — continue with contentOffset=${view.nextContentOffset}]`)
@@ -98,5 +98,5 @@ export const renderBlockView = (view: BlockView): string => {
   if (view.hiddenProperties.length > 0) {
     lines.push(`(hidden in the UI: ${view.hiddenProperties.join(', ')})`)
   }
-  return lines.join('\n')
+  return joinDisplayLines(lines)
 }

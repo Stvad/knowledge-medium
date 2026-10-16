@@ -15,7 +15,7 @@ import { labelForBlockData } from '@/utils/linkTargetAutocomplete.js'
 import { firstVisibleChildren, loadBlocks, loadCrumbs, visibleChildCounts } from './context.ts'
 import { createPropertyRenderer } from './properties.ts'
 import { shortIds as loadShortIds } from './resolveRef.ts'
-import { clampInt, CUT_LEGEND, crumbLine, loadRoot, metaSuffix, plural, toViewRow, type ViewRow } from './shared.ts'
+import { clampInt, CUT_LEGEND, crumbLine, joinDisplayLines, loadRoot, metaSuffix, plural, toViewRow, type ViewRow } from './shared.ts'
 import { clipLine, formatCount, isReferenceOnly } from './text.ts'
 
 const MAX_BACKLINKS = 500
@@ -157,15 +157,23 @@ export const buildBacklinksView = async (
   }
 }
 
-const renderBacklinkRow = (row: BacklinkRow, index: number): string[] => {
+/** A row's location, for spotting runs of siblings: many backlinks in one
+ *  place (a page's worth of `[[Topic]]` bullets) share it, and repeating it
+ *  per row is the noise this view exists to remove. */
+const placeOf = (row: BacklinkRow): string =>
+  JSON.stringify([row.breadcrumb, row.parentContent ?? null])
+
+const renderBacklinkRow = (row: BacklinkRow, index: number, samePlace: boolean): string[] => {
   const via = row.viaProperties.length > 0 ? `  [via ${row.viaProperties.join(', ')}]` : ''
   const children = row.childCount > 0 ? `  (${plural(row.childCount, 'child', 'children')})` : ''
-  const lines = [
-    `${index}. ^${row.shortId}  ${crumbLine(row.breadcrumb)}${via}`,
-    `   ${row.content}${metaSuffix(row, 'brief')}${children}`,
-  ]
+  const body = `${row.content}${metaSuffix(row, 'brief')}${children}`
+  const firstChild = row.firstChildContent ? `   ↳ first child: ${row.firstChildContent}` : null
+  if (samePlace) {
+    return [`${index}. ^${row.shortId}  (same place as above)${via}  ${body}`, ...(firstChild ? [firstChild] : [])]
+  }
+  const lines = [`${index}. ^${row.shortId}  ${crumbLine(row.breadcrumb)}${via}`, `   ${body}`]
   if (row.parentContent) lines.push(`   ↳ parent: ${row.parentContent}`)
-  if (row.firstChildContent) lines.push(`   ↳ first child: ${row.firstChildContent}`)
+  if (firstChild) lines.push(firstChild)
   return lines
 }
 
@@ -179,9 +187,12 @@ export const renderBacklinksView = (view: BacklinksView): string => {
   const lines = [
     `Backlinks of "${view.target.title}" ^${view.target.shortId} — ${rangeNote(view.offset, view.rows.length, view.total, view.nextOffset)}`,
   ]
-  view.rows.forEach((row, index) => lines.push(...renderBacklinkRow(row, view.offset + index + 1)))
+  view.rows.forEach((row, index) => {
+    const samePlace = index > 0 && placeOf(row) === placeOf(view.rows[index - 1])
+    lines.push(...renderBacklinkRow(row, view.offset + index + 1, samePlace))
+  })
   if (view.rows.some(row => row.cut > 0)) lines.push(CUT_LEGEND)
-  return lines.join('\n')
+  return joinDisplayLines(lines)
 }
 
 // ----- grouped -----
@@ -276,9 +287,10 @@ export const renderGroupedBacklinksView = (view: GroupedBacklinksView): string =
     for (const member of group.members) lines.push(`- ${member.content}${metaSuffix(member, 'brief')}  ^${member.shortId}`)
     const rest = group.memberCount - group.members.length
     if (rest > 0) {
-      lines.push(`  +${formatCount(rest)} more — membersPerGroup=${group.memberCount} offset=${view.offset + index} limit=1 lists them`)
+      const wanted = Math.min(group.memberCount, MAX_BACKLINKS)
+      lines.push(`  +${formatCount(rest)} more — membersPerGroup=${wanted} offset=${view.offset + index} limit=1 lists ${wanted === group.memberCount ? 'them' : `the first ${formatCount(wanted)}`}`)
     }
   })
   if (view.groups.some(group => group.members.some(member => member.cut > 0))) lines.push(CUT_LEGEND)
-  return lines.join('\n')
+  return joinDisplayLines(lines)
 }

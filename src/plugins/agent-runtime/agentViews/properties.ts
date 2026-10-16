@@ -25,7 +25,7 @@ export type PropertyDetail = 'brief' | 'full'
 
 /** Shown inline on an outline line before the rest collapse to `+N props`. */
 export const BRIEF_PROPERTY_COUNT = 3
-const BRIEF_VALUE_CHARS = 60
+const BRIEF_VALUE_CHARS = 40
 const FULL_VALUE_CHARS = 300
 const SUMMARY_KEYS = 3
 
@@ -77,12 +77,17 @@ const formatValue = (value: unknown): string => {
   return String(value)
 }
 
-/** Order for the brief form: a plain name (`status`, `interval`) is the shared
- *  vocabulary of the graph; a `namespace:`-prefixed one is usually one
- *  plugin's or importer's bookkeeping (`matrix-event:id`, `roam:create/time`),
- *  so it yields the inline slots first. Stable within each group. */
-const briefOrder = (a: PropertyLine, b: PropertyLine): number =>
-  Number(a.name.includes(':')) - Number(b.name.includes(':'))
+/** A plain name (`status`, `interval`, a user's own property) is the graph's
+ *  shared vocabulary; a `namespace:`-prefixed one is a plugin's or importer's
+ *  (extensions are asked to namespace theirs) — `matrix-event:id`,
+ *  `roam:create/time`. The brief form inlines only the first kind and counts
+ *  the second, so per-message importer metadata cannot crowd out the text. */
+const isNamespaced = (name: string): boolean => name.includes(':')
+
+export const briefProperties = (lines: readonly PropertyLine[]): {shown: PropertyLine[], rest: number} => {
+  const shown = lines.filter(line => !isNamespaced(line.name)).slice(0, BRIEF_PROPERTY_COUNT)
+  return {shown, rest: lines.length - shown.length}
+}
 
 export interface PropertyRenderer {
   view(block: BlockData, detail: PropertyDetail): PropertyView
@@ -160,7 +165,6 @@ export const createPropertyRenderer = async (
         if (value === '') continue
         visible.push({name, value: clipLine(value, maxChars).text})
       }
-      if (detail === 'brief') visible.sort(briefOrder)
       return {visible, hidden}
     },
     typeLabels(block) {
@@ -175,15 +179,14 @@ export const createPropertyRenderer = async (
   }
 }
 
-/** `key:: value` pairs for one line; the brief form keeps the first
- *  {@link BRIEF_PROPERTY_COUNT} and counts the rest. */
+/** `key:: value` pairs for one line; the brief form is {@link briefProperties}
+ *  with the rest counted. */
 export const formatPropertyPairs = (
   lines: readonly PropertyLine[],
   detail: PropertyDetail,
 ): string => {
-  const shown = detail === 'brief' ? lines.slice(0, BRIEF_PROPERTY_COUNT) : lines
+  const {shown, rest} = detail === 'brief' ? briefProperties(lines) : {shown: lines, rest: 0}
   const pairs = shown.map(line => `${line.name}:: ${line.value}`)
-  const rest = lines.length - shown.length
   if (rest > 0) pairs.push(`+${rest} props`)
   return pairs.join('  ')
 }
