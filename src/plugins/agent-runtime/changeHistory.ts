@@ -81,10 +81,15 @@ const describeRowEvent = (row: RowEventRow, contentLimit?: number): Omit<BlockCh
   if (!before || !after) {
     const only = (after ?? before)!
     const properties = Object.keys(only.properties).sort()
+    const hasReferences = Array.isArray(only.references) && only.references.length > 0
     return {
       blockId: row.block_id,
       kind: after ? 'create' : 'delete',
-      changed: ['content', 'parent', ...(properties.length > 0 ? ['properties' as const] : [])],
+      changed: [
+        'content', 'parent',
+        ...(properties.length > 0 ? ['properties' as const] : []),
+        ...(hasReferences ? ['references' as const] : []),
+      ],
       content: after ? {after: clip(only.content, contentLimit)} : {before: clip(only.content, contentLimit)},
       parentId: after ? {before: null, after: only.parentId} : {before: only.parentId, after: null},
       ...(properties.length > 0 ? {properties} : {}),
@@ -157,6 +162,24 @@ const withoutCoveredPropertyStorage = async <T extends {row: RowEventRow; change
     const owner = owners.get(row.block_id)
     return owner === undefined || !propertyOwnersByTx.get(row.tx_id!)?.has(owner)
   })
+}
+
+/** One row per block per tx — its net change, from the first write's before
+ *  to the last write's after — in first-write order. A tx can write a block
+ *  several times (a page is minted, then its alias and type are set); only the
+ *  net change is what the tx did. A block created and hard-deleted in one tx
+ *  changed nothing and is dropped. */
+const netRowsPerBlock = (rows: readonly RowEventRow[]): RowEventRow[] => {
+  const byKey = new Map<string, {first: RowEventRow; last: RowEventRow}>()
+  for (const row of rows) {
+    const key = `${row.tx_id}\u0000${row.block_id}`
+    const seen = byKey.get(key)
+    if (seen) seen.last = row
+    else byKey.set(key, {first: row, last: row})
+  }
+  return [...byKey.values()]
+    .map(({first, last}) => ({...last, before_json: first.before_json}))
+    .filter(row => row.before_json !== null || row.after_json !== null)
 }
 
 const parseSince = (value: unknown): number => {
@@ -232,7 +255,7 @@ export const recentChanges = async (repo: Repo, input: RecentChangesInput): Prom
   )
   const visible = await withoutCoveredPropertyStorage(
     repo,
-    rows.map(row => ({row, change: describeRowEvent(row, RECENT_CONTENT_LIMIT)})),
+    netRowsPerBlock(rows).map(row => ({row, change: describeRowEvent(row, RECENT_CONTENT_LIMIT)})),
   )
   const short = await shortIds(repo, visible.map(({row}) => row.block_id))
   const changesByTx = new Map<string, BlockChange[]>()

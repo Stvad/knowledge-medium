@@ -379,9 +379,17 @@ describe('createBlockedWikilinkWriteGuard — markdown and edit writes', () => {
     expect(sqlAll.mock.calls.at(-1)?.[1]).toEqual(['block-1'])
   })
 
-  it('blocks a page title that would carry a blocked wikilink — create_page and [[…]] targets', async () => {
-    const guard = createBlockedWikilinkWriteGuard(graphFrom(), ['claude'])
+  it('blocks a title that would carry a blocked wikilink when the write creates that page', async () => {
+    // Only 'claude' (the blocked page) exists; every other name is missing.
+    const guard = createBlockedWikilinkWriteGuard(graphFrom({
+      resolvePageId: async name => {
+        if (name === 'claude') return 'page-id-123'
+        throw new Error(`Page "${name}" does not exist yet`)
+      },
+    }), ['claude'])
     await expect(guard.beforeWrite({type: 'create_page', name: 'notes [[claude]]'}))
+      .rejects.toThrow('references a blocked page')
+    await expect(guard.beforeWrite({type: 'create_page', name: '[[notes [[claude]]]]'}))
       .rejects.toThrow('references a blocked page')
     await expect(guard.beforeWrite({type: 'append_markdown', target: '[[notes [[claude]]]]', markdown: '- x'}))
       .rejects.toThrow('references a blocked page')
@@ -391,8 +399,15 @@ describe('createBlockedWikilinkWriteGuard — markdown and edit writes', () => {
     // since create-page strips one outer [[…]].
     await expect(guard.beforeWrite({type: 'create_page', name: 'claude'})).resolves.toBeUndefined()
     await expect(guard.beforeWrite({type: 'create_page', name: '[[claude]]'})).resolves.toBeUndefined()
-    await expect(guard.beforeWrite({type: 'create_page', name: '[[notes [[claude]]]]'}))
-      .rejects.toThrow('references a blocked page')
     await expect(guard.beforeWrite({type: 'append_markdown', target: '[[claude]]', markdown: '- x'})).resolves.toBeUndefined()
+  })
+
+  it('lets a write into an EXISTING page through, whatever its title — nothing new is named', async () => {
+    const guard = createBlockedWikilinkWriteGuard(graphFrom({resolvePageId: async () => 'page-id-123'}), ['claude'])
+    await expect(guard.beforeWrite({type: 'create_block', parentId: '[[notes [[claude]]]]', content: 'x'}))
+      .resolves.toBeUndefined()
+    await expect(guard.beforeWrite({type: 'append_markdown', target: '[[notes [[claude]]]]', markdown: '- x'}))
+      .resolves.toBeUndefined()
+    await expect(guard.beforeWrite({type: 'create_page', name: 'notes [[claude]]'})).resolves.toBeUndefined()
   })
 })

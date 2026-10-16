@@ -5,7 +5,7 @@
  * agent read is never clobbered.
  */
 import type { BlockData } from '@/data/api'
-import { createChild, type InsertPosition } from '@/data/mutators.js'
+import { orderKeysForInsert, type InsertPosition } from '@/data/mutators.js'
 import type { Repo } from '@/data/repo'
 import { parseMarkdownToBlocks, type ParsedBlock } from '@/utils/markdownParser.js'
 import { parseRelativeDate } from '@/utils/relativeDate.js'
@@ -82,24 +82,31 @@ export const appendMarkdown = async (
     let targetContent = ''
 
     await repo.tx(async tx => {
-      // A missing or deleted target is refused by `createChild` itself.
       const row = await tx.get(target.id)
-      if (row) assertActiveWorkspace(repo, verb, row.workspaceId)
-      targetContent = row?.content ?? ''
+      if (!row) throw new Error(`${verb}: block ${target.id} not found.`)
+      assertActiveWorkspace(repo, verb, row.workspaceId)
+      targetContent = row.content
+      // The roots' keys in one sibling read (a key per root would rescan the
+      // growing list each time). A parsed child keeps the key the parser gave
+      // it — its parent is new, so it has no siblings to clear. A deleted
+      // target is refused by `tx.create` itself.
+      const rootKeys = await orderKeysForInsert(
+        tx, row.id, row.workspaceId, firstPosition, parsed.filter(node => !node.parentId).length,
+      )
       const created = new Map<string, {id: string; depth: number}>()
-      let previousRootId: string | null = null
       for (const node of parsed) {
         const parent = node.parentId ? created.get(node.parentId)! : null
-        const parentId = parent?.id ?? target.id
-        // Each root lands right after the previous one, so the run stays in
-        // document order wherever the first one went.
-        const position: InsertPosition = parent
-          ? {kind: 'last'}
-          : previousRootId ? {kind: 'after', siblingId: previousRootId} : firstPosition
-        const id: string = await tx.run(createChild, {parentId, content: node.content, position})
+        const parentId = parent?.id ?? row.id
+        const id = crypto.randomUUID()
+        await tx.create({
+          id,
+          workspaceId: row.workspaceId,
+          parentId,
+          orderKey: parent ? node.orderKey : rootKeys.shift()!,
+          content: node.content,
+        })
         const depth = parent ? parent.depth + 1 : 0
         created.set(node.id, {id, depth})
-        if (!parent) previousRootId = id
         blocks.push({id, parentId, depth, content: node.content})
       }
     }, agentTxOptions(verb))

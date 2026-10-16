@@ -133,10 +133,6 @@ const deleteGuardRowFromSqlRow = (row: unknown): DeleteGuardRow | null => {
   return {id, ...refsFromSqlRow(row)}
 }
 
-/** The name a `[[Name]]` target creates a page under when it is missing —
- *  the page's content, so a wikilink nested in it is a reference. */
-const createdPageName = (target: string): string | undefined => pageNameInTarget(target) ?? undefined
-
 export const createBlockedWikilinkWriteGuard = (
   graph: Pick<BridgeGraph, 'resolvePageId' | 'getBlock' | 'sqlAll'>,
   blockedWikilinks: string[],
@@ -244,6 +240,20 @@ export const createBlockedWikilinkWriteGuard = (
     return siblings.slice(anchor + 1, runEnd + 1)
   }
 
+  /** `name` when the write would CREATE that page — only then is the name
+   *  written, as the new page's content, so only then can a wikilink nested
+   *  in it become a reference. A failed lookup counts as missing: scan. */
+  const nameOfPageToCreate = async (name: string | null | undefined): Promise<string | undefined> => {
+    if (!name) return undefined
+    try {
+      await graph.resolvePageId(name)
+      return undefined
+    } catch {
+      return name
+    }
+  }
+  const targetPageToCreate = (target: string) => nameOfPageToCreate(pageNameInTarget(target))
+
   const createWriteAssertions = () => {
     let guardSetForWrite: Promise<RefGuardSet> | null = null
     const guardSet = async () => {
@@ -339,7 +349,7 @@ export const createBlockedWikilinkWriteGuard = (
       } = createWriteAssertions()
       switch (operation.type) {
         case 'create_block':
-          await assertNoBlockedRefs(createdPageName(operation.parentId))
+          await assertNoBlockedRefs(await targetPageToCreate(operation.parentId))
           await assertNoBlockedRefs(operation.content, operation.properties)
           return
         case 'update_block':
@@ -363,7 +373,7 @@ export const createBlockedWikilinkWriteGuard = (
           await assertNoBlockedRefsInLiveDescendants(operation.id)
           return
         case 'append_markdown':
-          await assertNoBlockedRefs(createdPageName(operation.target))
+          await assertNoBlockedRefs(await targetPageToCreate(operation.target))
           await assertNoBlockedRefs(operation.markdown)
           return
         case 'edit_block':
@@ -371,9 +381,10 @@ export const createBlockedWikilinkWriteGuard = (
           await assertNoBlockedRefs((await editResult(operation)) ?? undefined)
           return
         case 'create_page':
-          // A created page's content is its name, so a nested [[…]] in it is a reference.
           // As create-page reads it: one outer [[…]] is the name's wrapper.
-          await assertNoBlockedRefs(operation.name === undefined ? undefined : pageNameInTarget(operation.name) ?? operation.name)
+          await assertNoBlockedRefs(await nameOfPageToCreate(
+            operation.name === undefined ? undefined : pageNameInTarget(operation.name) ?? operation.name,
+          ))
           return
         default: {
           // A new write tool must say here what it can make reference.

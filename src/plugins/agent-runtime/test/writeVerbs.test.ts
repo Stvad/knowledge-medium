@@ -736,3 +736,54 @@ describe('review round 7', () => {
     expect(await contentOf('victim')).toBe('plain')
   })
 })
+
+describe('review round 8', () => {
+  /** Reads of `parentId`'s children inside the txs `run` opens. */
+  const countChildReads = async (parentId: string, action: () => Promise<unknown>): Promise<number> => {
+    const original = repo.tx.bind(repo)
+    let reads = 0
+    const spy = vi.spyOn(repo, 'tx').mockImplementation(((fn, opts) => original(async tx => {
+      const childrenOf = tx.childrenOf.bind(tx)
+      tx.childrenOf = ((id, ...rest) => {
+        if (id === parentId) reads += 1
+        return childrenOf(id, ...rest)
+      }) as typeof tx.childrenOf
+      return fn(tx)
+    }, opts)) as Repo['tx'])
+    try {
+      await action()
+    } finally {
+      spy.mockRestore()
+    }
+    return reads
+  }
+
+  it('reports one net change per block per transaction', async () => {
+    // Page creation mints the seat, then sets its alias and type in the same tx.
+    const created = await run({type: 'create-page', name: 'Net change'}) as {id: string}
+    const out = await run({type: 'recent-changes'}) as {
+      txs: Array<{description: string, changes: Array<{blockId: string, kind: string, changed: string[]}>}>
+    }
+    const pageChanges = out.txs.flatMap(tx => tx.changes).filter(change => change.blockId === created.id)
+    expect(pageChanges).toHaveLength(1)
+    expect(pageChanges[0]).toMatchObject({kind: 'create'})
+    expect(pageChanges[0].changed).toContain('properties')
+  })
+
+  it('names the references a create carried', async () => {
+    await seed([{id: NOTE}, {id: LONE}])
+    await run({type: 'create-block', parentId: NOTE, data: {content: 'see', references: [{id: LONE, alias: LONE}]}})
+    const out = await run({type: 'recent-changes'}) as {txs: Array<{changes: Array<{kind: string, changed: string[]}>}>}
+    const create = out.txs.flatMap(tx => tx.changes).find(change => change.kind === 'create')!
+    expect(create.changed).toContain('references')
+  })
+
+  it('reads the target\'s children a fixed number of times, however many roots it appends', async () => {
+    await seed([{id: NOTE}])
+    const bullets = (n: number) => Array.from({length: n}, (_, i) => `- item ${i}`).join('\n')
+    const few = await countChildReads(NOTE, () => run({type: 'append-markdown', target: NOTE, markdown: bullets(2)}))
+    const many = await countChildReads(NOTE, () => run({type: 'append-markdown', target: NOTE, markdown: bullets(20)}))
+    expect(many).toBe(few)
+    expect((await liveChildren(NOTE))).toHaveLength(22)
+  })
+})

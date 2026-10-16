@@ -19,7 +19,6 @@ import {
 import { BlockNotFoundError } from '@/data/api'
 import {
   keyAtEnd,
-  keyAtStart,
   keyBetween,
   keysBetween,
 } from './orderKey'
@@ -98,15 +97,26 @@ export const orderKeyForInsert = async (
   workspaceId: string,
   position: InsertPosition,
   excludeId?: string,
-): Promise<string> => {
+): Promise<string> => (await orderKeysForInsert(tx, parentId, workspaceId, position, 1, excludeId))[0]
+
+/** {@link orderKeyForInsert} for a contiguous run of `n` new siblings, in
+ *  ascending order — one sibling read for the whole run. */
+export const orderKeysForInsert = async (
+  tx: Tx,
+  parentId: string | null,
+  workspaceId: string,
+  position: InsertPosition,
+  n: number,
+  excludeId?: string,
+): Promise<string[]> => {
   const all = await tx.childrenOf(parentId, workspaceId)
   const siblings = excludeId === undefined ? all : all.filter(s => s.id !== excludeId)
 
   if (position.kind === 'first') {
-    return keyAtStart(siblings[0]?.orderKey ?? null)
+    return keysBetween(null, siblings[0]?.orderKey ?? null, n)
   }
   if (position.kind === 'last') {
-    return keyAtEnd(siblings.at(-1)?.orderKey ?? null)
+    return keysBetween(siblings.at(-1)?.orderKey ?? null, null, n)
   }
   // after / before — locate the anchor sibling and place exactly adjacent.
   const ix = siblings.findIndex(s => s.id === position.siblingId)
@@ -116,8 +126,8 @@ export const orderKeyForInsert = async (
     )
   }
   return position.kind === 'after'
-    ? keyImmediatelyAfter(tx, parentId, siblings, ix)
-    : keyImmediatelyBefore(tx, parentId, siblings, ix)
+    ? keysImmediatelyAfter(tx, parentId, siblings, ix, n)
+    : keysImmediatelyBefore(tx, parentId, siblings, ix, n)
 }
 
 const positionSchema = z.discriminatedUnion('kind', [
