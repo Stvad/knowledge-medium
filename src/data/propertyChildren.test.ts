@@ -7,7 +7,7 @@
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { ChangeScope, CodecError, codecs, defineProperty, defineSameTxProcessor, propertyValue, type AnyPropertySchema, type BlockData, type PropertySchema } from '@/data/api'
+import { ChangeScope, CodecError, codecs, defineProperty, defineSameTxProcessor, propertyValue, type AnyPropertySchema, type BlockData, type PropertySchema, type Tx } from '@/data/api'
 import { keyAtStart, keysBetween } from './orderKey'
 import { propertyFieldContent } from './propertyChildren'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -265,6 +265,97 @@ describe('flipped workspace (properties_migration = children)', () => {
     expect(values).toHaveLength(1)
     expect(values[0]!.content).toBe('done')
     expect(await cellValue('p')).toBe('done')
+  })
+
+  const eagerSets = [
+    ['setProperty', (tx: Tx, value: string) => tx.setProperty('p', statusSchema, value)],
+    ['setProperties', (tx: Tx, value: string) =>
+      tx.setProperties('p', {set: [propertyValue(statusSchema, value)]})],
+  ] as const
+
+  // The cell is derived, so a write equal to it can still owe the children.
+  describe.each(eagerSets)('%s of the value the cell already holds', (_, write) => {
+    it('materializes it when no field row backs the cell (#1209)', async () => {
+      await seedWorkspace('children')
+      const repo = setup()
+      await createBlock(repo, 'p')
+      // Sync-shaped: no processor runs, so nothing materializes the key.
+      await sharedDb.db.execute(
+        'UPDATE blocks SET properties_json = ? WHERE id = ?',
+        [JSON.stringify({[statusSchema.name]: 'done'}), 'p'],
+      )
+      expect(await liveFieldRows('p')).toEqual([])
+
+      await repo.tx(tx => write(tx, 'done'), {scope: ChangeScope.BlockDefault})
+
+      const fields = await liveFieldRows('p')
+      expect(fields).toHaveLength(1)
+      const values = (await childrenRows(fields[0]!.id)).filter(v => v.deleted === 0)
+      expect(values.map(v => v.content)).toEqual(['done'])
+    })
+
+    it('wins over a value-child edit earlier in the same tx', async () => {
+      await seedWorkspace('children')
+      const repo = setup()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', statusSchema, 'draft'),
+        {scope: ChangeScope.BlockDefault})
+      const [field] = await liveFieldRows('p')
+      const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+
+      // The cell still says `draft` when the write runs: PROJECT folds the
+      // child edit back only after the tx body returns.
+      await repo.tx(async tx => {
+        await tx.update(value!.id, {content: 'shipped'})
+        await write(tx, 'draft')
+      }, {scope: ChangeScope.BlockDefault})
+
+      expect(await cellValue('p')).toBe('draft')
+      const values = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+      expect(values.map(v => v.content)).toEqual(['draft'])
+    })
+
+    it('is still a no-op on an owner deleted with its children', async () => {
+      await seedWorkspace('children')
+      const repo = setup()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', statusSchema, 'done'),
+        {scope: ChangeScope.BlockDefault})
+      await repo.tx(tx => deleteSubtreeInTx(tx, 'p'), {scope: ChangeScope.BlockDefault})
+
+      // No live row may sit under a tombstone, so converging here would throw.
+      await repo.tx(tx => write(tx, 'done'), {scope: ChangeScope.BlockDefault})
+
+      expect((await childrenRows('p')).filter(r => r.deleted === 0)).toEqual([])
+    })
+  })
+
+  it.each(eagerSets)('%s of a NEW value still writes a deleted owner', async (_, write) => {
+    await seedWorkspace('children')
+    const repo = setup()
+    await createBlock(repo, 'p')
+    await repo.tx(tx => tx.setProperty('p', statusSchema, 'done'),
+      {scope: ChangeScope.BlockDefault})
+    await repo.tx(tx => tx.delete('p'), {scope: ChangeScope.BlockDefault})
+
+    await repo.tx(tx => write(tx, 'shipped'), {scope: ChangeScope.BlockDefault})
+
+    expect(await cellValue('p')).toBe('shipped')
+  })
+
+  it('setProperties deletes no field row for an unset that changes nothing the cell shows', async () => {
+    await seedWorkspace('children')
+    const repo = setup()
+    await createBlock(repo, 'p')
+    await repo.tx(tx => tx.setProperty('p', statusSchema, 'done'),
+      {scope: ChangeScope.BlockDefault})
+    // Sync-shaped: the cell lost the key with no processor to reconcile it.
+    await sharedDb.db.execute('UPDATE blocks SET properties_json = ? WHERE id = ?', ['{}', 'p'])
+
+    await repo.tx(tx => tx.setProperties('p', {unset: [statusSchema]}),
+      {scope: ChangeScope.BlockDefault})
+
+    expect(await liveFieldRows('p')).toHaveLength(1)
   })
 
   it('the same-tx projection is idempotent — the cell is written once per tx', async () => {
@@ -1579,8 +1670,7 @@ describe('duplicate collapse preservation (§9, slice B3)', () => {
       })
     }, {scope: ChangeScope.BlockDefault})
 
-    // A REAL cell change triggers materialize, which dedups field rows at
-    // 'p' (an equal-value setProperty short-circuits before any write).
+    // The write dedups the field rows at 'p'.
     await repo.tx(tx => tx.setProperty('p', statusSchema, 'gamma'),
       {scope: ChangeScope.BlockDefault})
 

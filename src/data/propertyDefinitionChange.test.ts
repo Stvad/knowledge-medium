@@ -521,6 +521,33 @@ describe('rename', () => {
     expect((await cell(FIELD_ID))[propertyNameProp.name]).toBe('status')
     expect(await cell('p')).toEqual({status: 'done'})
   })
+
+  it('carries a value set over a DELETED predecessor\'s equal cell (#1209)', async () => {
+    const FIELD_SUCCESSOR = 'field-status-successor'
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    await seedProperty(repo, 'p', 'status', 'done')
+    await repo.tx(tx => tx.delete(FIELD_ID), {scope: ChangeScope.BlockDefault})
+    await createDefinition(repo, FIELD_SUCCESSOR, 'status', 'string')
+    await vi.waitFor(() => {
+      const claimants = propertyDefinitionClaimantsForName(repo.propertyDefinitions!, 'status')
+      expect(claimants).toEqual([FIELD_SUCCESSOR])
+    }, {timeout: 3000})
+    await awaitDefinition(repo, 'status', 'string')
+    // The predecessor's value is still in the cell, under the name the
+    // successor now answers to — and the successor has no field row on `p`.
+    expect(await cell('p')).toEqual({status: 'done'})
+    expect(await sharedDb.db.getOptional(
+      'SELECT id FROM blocks WHERE parent_id = ? AND reference_target_id = ?',
+      ['p', FIELD_SUCCESSOR],
+    )).toBeNull()
+
+    await repo.tx(tx => tx.setProperty('p', schemaFor(repo, 'status'), 'done'),
+      {scope: ChangeScope.BlockDefault})
+    await rename(repo, FIELD_SUCCESSOR, 'state')
+
+    expect(await cell('p')).toEqual({state: 'done'})
+  })
 })
 
 describe('codec change', () => {
