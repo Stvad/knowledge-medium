@@ -1,1 +1,1 @@
-import{dK as e}from"../../../../chunks/app-DUyf_Bp1.js";export{e as applySyncInvalidation};
+import{fK as e}from"../../../../chunks/app-Cc5e_Gls.js";export{e as applySyncInvalidation};

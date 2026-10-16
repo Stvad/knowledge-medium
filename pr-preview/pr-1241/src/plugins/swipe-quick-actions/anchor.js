@@ -1,1 +1,1 @@
-import{BC as e,LC as t,RC as n,zC as r}from"../../../chunks/app-DUyf_Bp1.js";export{t as blockSelector,n as findSwipeActionAnchorElement,r as findSwipeActionBlockElement,e as getSwipeActionAnchorRect};
+import{BC as e,RC as t,VC as n,zC as r}from"../../../chunks/app-Cc5e_Gls.js";export{t as blockSelector,r as findSwipeActionAnchorElement,e as findSwipeActionBlockElement,n as getSwipeActionAnchorRect};
