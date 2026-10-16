@@ -293,7 +293,7 @@ const splitParagraph = (paragraph: Paragraph): Paragraph[] => {
  *  `node` sits in. */
 const sanitize = (node: Parents, markupAround: ReadonlySet<Nodes['type']> = new Set()): void => {
   const around = isInlineMarkup(node) ? new Set([...markupAround, node.type]) : markupAround
-  node.children = spellable(node.children.flatMap((child): Nodes[] => {
+  node.children = spellable(around.has('link'), node.children.flatMap((child): Nodes[] => {
     if (child.type === 'link') {
       const href = absoluteHref(child.url)
       if (href === undefined) {
@@ -306,12 +306,6 @@ const sanitize = (node: Parents, markupAround: ReadonlySet<Nodes['type']> = new 
     if (child.type === 'image') {
       if (absoluteHref(child.url, IMAGE_PROTOCOLS) === undefined) return []
       child.title = null
-    }
-    // Read back, a link's text ends at its first `]` when it could be a
-    // definition's label (`` [`a]: b`](…) `` defines `` `a ``), and code
-    // can't escape one.
-    if (child.type === 'inlineCode' && around.has('link') && child.value.includes(']:')) {
-      return [{type: 'text', value: child.value}]
     }
     if ('children' in child) sanitize(child, around)
     if (!isInlineMarkup(child)) return [child]
@@ -326,8 +320,22 @@ const sanitize = (node: Parents, markupAround: ReadonlySet<Nodes['type']> = new 
  *  on its own, so syntax that forms only across two goes unescaped (`1` and
  *  `. Install` read back as a list item); an empty code span writes as two
  *  literal backticks (two in a row open a code fence); and `` `a``b` `` reads
- *  back as one span holding the backticks. */
-const spellable = (nodes: Nodes[]): Nodes[] => {
+ *  back as one span holding the backticks. In a link, code that would end a
+ *  definition's label becomes a text of its own — checked once spans are
+ *  joined, as `]:` can form across two. */
+const spellable = (inLink: boolean, nodes: Nodes[]): Nodes[] => {
+  const joined = joinTouching(nodes)
+  if (!inLink) return joined
+  return joined.map((node): Nodes => endsDefinitionLabel(node) ? {type: 'text', value: node.value} : node)
+}
+
+/** Read back, a link's text ends at its first `]` when it could be a
+ *  definition's label (`` [`a]: b`](…) `` defines `` `a ``), and code can't
+ *  escape one. */
+const endsDefinitionLabel = (node: Nodes): node is InlineCode =>
+  node.type === 'inlineCode' && node.value.includes(']:')
+
+const joinTouching = (nodes: readonly Nodes[]): Nodes[] => {
   const kept: Nodes[] = []
   for (const node of nodes) {
     if (node.type === 'inlineCode' && node.value === '') continue
