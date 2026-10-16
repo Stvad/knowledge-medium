@@ -123,8 +123,9 @@ export const GRAPH_READ_TOOLS: readonly GraphReadTool[] = [
     raw: {type: 'grouped-backlinks', rename: {ref: 'id'}, keep: ['filter', 'grouping']},
   }),
   wireTool('search', 'view-search', viewSearchCommandSchema, {
+    // No --raw: the stored search answer is whole rows, the unbounded shape
+    // this view exists to replace (`kmagent raw` still sends one).
     cli: {verb: 'search', positional: {field: 'query', variadic: true}},
-    raw: {type: 'search', rename: {}, keep: ['query', 'limit']},
   }),
   wireTool('page', 'page', pageCommandSchema, {
     cli: {verb: 'page', positional: {field: 'name', variadic: true}},

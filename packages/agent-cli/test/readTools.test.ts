@@ -105,8 +105,7 @@ describe('cliCommandFrom', () => {
     expect(cliCommandFrom(tool('subtree'), 'b1', {raw: true})).toEqual({type: 'get-subtree', rootId: 'b1'})
     expect(cliCommandFrom(tool('backlinks'), 'b1', {raw: true, filter: 'stored'}))
       .toEqual({type: 'backlinks', id: 'b1', filter: 'stored'})
-    expect(cliCommandFrom(tool('search'), ['q'], {raw: true, limit: 3}))
-      .toEqual({type: 'search', query: 'q', limit: 3})
+    expect(() => cliCommandFrom(tool('search'), ['q'], {raw: true})).toThrow(/no --raw form/)
   })
 
   it('refuses view-only flags under --raw instead of dropping them', () => {

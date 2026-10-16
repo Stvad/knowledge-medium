@@ -143,7 +143,7 @@ const notFound = async (
     ? await repo.query.aliasMatches({workspaceId, filter: text, limit: 5}).load()
     : []
   const hint = candidates.length > 0
-    ? `\nPages with similar names:\n${candidates.map(row => `  ${oneLine(row.alias)}`).join('\n')}`
+    ? `\nPages with similar names:\n${candidates.map(row => `  ${clipLine(row.alias, 80).text}`).join('\n')}`
     : ''
   return new BlockRefError(
     `No block matches "${oneLine(ref)}" (tried: id, id prefix, page name, date).${hint}`,

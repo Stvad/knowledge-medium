@@ -4,10 +4,10 @@ import { EXTENSION_TYPE } from '@/data/blockTypes'
 import { isActiveSearchFilter, type BlockSearchFilter } from '@/data/searchFilter'
 import { AGENT_VIEW_DEFAULTS } from '@knowledge-medium/agent-cli/protocol'
 import { readTypeIds, searchBlocksAcrossSources } from '@/utils/linkTargetAutocomplete.js'
-import { loadCrumbs } from './context.ts'
+import { loadBlocks, loadCrumbs } from './context.ts'
 import { createPropertyRenderer, formatPropertyPairs, type PropertyLine } from './properties.ts'
-import { resolveBlockRef, shortIds as loadShortIds } from './resolveRef.ts'
-import { clampInt, crumbLine, joinDisplayLines } from './shared.ts'
+import { shortIds as loadShortIds } from './resolveRef.ts'
+import { clampInt, crumbLine, joinDisplayLines, loadRoot } from './shared.ts'
 import { formatCount, oneLine, snippet } from './text.ts'
 
 export interface SearchParams {
@@ -106,7 +106,7 @@ export const buildSearchView = async (
   const includeExtensions = params.includeExtensions === true
   const underId = params.under === undefined
     ? undefined
-    : (await resolveBlockRef(repo, params.under, {workspaceId})).id
+    : (await loadRoot(repo, params.under, workspaceId, async id => (await loadBlocks(repo, [id]))[0])).root.id
   const scope: BlockSearchFilter = {
     ...(params.types?.length ? {types: resolveTypeIds(repo, params.types)} : {}),
     ...(underId !== undefined ? {underId} : {}),
@@ -176,7 +176,7 @@ export const buildSearchView = async (
       }
     }),
     nextOffset: more ? end : null,
-    windowCap: !exhausted && window === MAX_WINDOW && wanted > MAX_WINDOW ? MAX_WINDOW : null,
+    windowCap: !exhausted && window === MAX_WINDOW ? MAX_WINDOW : null,
   }
 }
 

@@ -41,7 +41,7 @@ export const loadCrumbs = async (
  *  bound as `[...RecognitionParams]` after the row reference's own params. */
 const visibleChildCountSql = (rowRef: string): string => `
   (SELECT count(*) FROM blocks vc
-    WHERE vc.parent_id = ${rowRef}.id AND vc.deleted = 0
+    WHERE vc.parent_id = ${rowRef}.id AND vc.id != ${rowRef}.id AND vc.deleted = 0
       AND NOT (${recognizedFieldRowSql('vc')}))
 `
 
@@ -60,7 +60,9 @@ export const visibleChildCounts = async (
 
 /** The visible children of `parentIds`, ordered by parent (in input order)
  *  then sibling order, each with its own visible child count — one level of
- *  an outline. `limit`/`offset` page across the whole level. */
+ *  an outline. `limit`/`offset` page across the whole level. A block that is
+ *  its own parent (sync applies parent ids verbatim) is nobody's child here
+ *  or in the counts, so a page never consumes a row it will not show. */
 export const visibleChildrenLevel = async (
   repo: Repo,
   parentIds: readonly string[],
@@ -72,7 +74,7 @@ export const visibleChildrenLevel = async (
     `SELECT child.*, ${visibleChildCountSql('child')} AS child_count
        FROM json_each(?) j
        JOIN blocks child ON child.parent_id = j.value
-      WHERE child.deleted = 0
+      WHERE child.deleted = 0 AND child.id != j.value
         AND NOT (${recognizedFieldRowSql('child')})
       ORDER BY j.key, child.order_key, child.id
       LIMIT ? OFFSET ?`,
