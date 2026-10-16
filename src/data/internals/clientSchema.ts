@@ -524,11 +524,25 @@ export const CREATE_BLOCKS_DELETE_ROW_EVENT_TRIGGER_SQL = `
 // through tx.delete → UPDATE deleted = 1 → fires the UPDATE upload trigger
 // below, which forwards correctly. See §4.5.
 //
-// The upload SQL writes through PowerSync's standard powersync_crud queue:
+// The upload SQL writes PowerSync's upload queue directly:
 //   ps_crud (tx_id INTEGER, data TEXT)
 // where data is a JSON envelope { op, type, id, data }. PowerSync picks
 // rows out of ps_crud and uploads them via the configured connector.
+// Writing it directly bypasses PowerSync's own crud path, so the triggers
+// also do the one other thing that path does: {@link HOLD_DOWNLOADS_SQL}.
 // ============================================================================
+
+/** Hold downloads until the server's checkpoint includes this write.
+ *
+ *  The core publishes a checkpoint only when `ps_crud` is empty AND the
+ *  `$local` bucket's `target_op` does not exceed its `last_op`. Raising
+ *  `target_op` to the max op id keeps that shut after the upload empties
+ *  `ps_crud`, until the SDK swaps in the upload's write checkpoint and a
+ *  checkpoint carrying it arrives. Without it, a checkpoint cut before the
+ *  upload landed is published, and the drain applies that older version over
+ *  the newer local row (#1226). The statement is PowerSync's own. */
+const HOLD_DOWNLOADS_SQL =
+  "INSERT OR REPLACE INTO ps_buckets(name, last_op, target_op) VALUES('$local', 0, 9223372036854775807)"
 
 interface UploadColumnSpec {
   readonly name: string
@@ -629,6 +643,7 @@ export const CREATE_BLOCKS_UPLOAD_INSERT_TRIGGER_SQL = `
         'data', ${blockUploadJsonSql('NEW')}
       )
     );
+    ${HOLD_DOWNLOADS_SQL};
   END
 `
 
@@ -649,6 +664,7 @@ export const CREATE_BLOCKS_UPLOAD_UPDATE_TRIGGER_SQL = `
         'data', ${blockUploadPatchJsonSql()}
       )
     );
+    ${HOLD_DOWNLOADS_SQL};
   END
 `
 

@@ -39,6 +39,7 @@ import {
   CREATE_WORKSPACE_MEMBERS_INDEX_SQL,
   CREATE_WORKSPACE_MEMBERS_TABLE_SQL,
 } from '@/data/workspaceSchema'
+import { POWERSYNC_STUB_TABLES_SQL } from '@/data/test/powerSyncStubTables'
 import {
   CREATE_BLOCK_REFERENCES_TABLE_SQL,
   CREATE_BLOCK_REFERENCES_TARGET_INDEX_SQL,
@@ -144,19 +145,11 @@ const blockValues = (row: BlockInsert): Array<string | number | null> =>
 const setupDb = (): TestDb => {
   const db = new DatabaseSync(':memory:')
 
-  // PowerSync's outgoing queue table. Real schema is
-  // `(id INTEGER PK AUTOINCREMENT, data TEXT, tx_id INTEGER)`; the
-  // upload-routing triggers populate (tx_id, data). PowerSync's
+  // The upload-routing triggers populate ps_crud (tx_id, data). PowerSync's
   // `getNextCrudTransaction()` groups CRUD entries by tx_id, so a
   // multi-row repo.tx must stamp every row with the same non-null
   // tx_id or atomicity intent is lost on the server.
-  db.exec(`
-    CREATE TABLE ps_crud (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      data TEXT NOT NULL,
-      tx_id INTEGER
-    )
-  `)
+  for (const stmt of POWERSYNC_STUB_TABLES_SQL) db.exec(stmt)
 
   // The blocks table (built from the same column list as production).
   db.exec(CREATE_BLOCKS_TABLE_SQL)
@@ -1561,7 +1554,7 @@ describe('ensureUndoGroupIdColumns — local migration (issue #306)', () => {
     // The rest of the schema the statements/triggers need.
     old.exec(CREATE_BLOCKS_TABLE_SQL)
     old.exec(CREATE_BLOCKS_SYNCED_TABLE_SQL)
-    old.exec('CREATE TABLE ps_crud (id INTEGER PRIMARY KEY AUTOINCREMENT, data TEXT NOT NULL, tx_id INTEGER)')
+    for (const stmt of POWERSYNC_STUB_TABLES_SQL) old.exec(stmt)
     old.exec(CREATE_WORKSPACE_MEMBERS_TABLE_SQL)
 
     // App startup on the upgraded build: ensure columns FIRST (the
