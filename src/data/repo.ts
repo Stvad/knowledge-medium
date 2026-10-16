@@ -142,7 +142,11 @@ import {
   SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL,
   SELECT_BLOCK_BY_ID_SQL,
 } from './internals/kernelQueries'
-import type { InvalidationRule } from './invalidation'
+import {
+  KERNEL_FIELD_RECOGNITION_CHANNEL,
+  KERNEL_FIELD_RECOGNITION_KEY,
+  type InvalidationRule,
+} from './invalidation'
 import { KERNEL_PROPERTY_SEEDS } from './properties'
 import { KERNEL_TYPE_CONTRIBUTIONS } from './blockTypes'
 import { propertiesPageBlockId } from './propertiesPage'
@@ -152,7 +156,10 @@ import {USER_SCHEMAS_PROJECTOR_ID, UserSchemasService} from './userSchemasServic
 import { UserTypesService, USER_TYPES_PROJECTOR_ID} from './userTypesService'
 import { TypeTagger } from './typeTagger'
 import { FacetBridge } from './facetBridge'
-import type {PropertyDefinitionRegistrySnapshot} from './propertyDefinitionRegistry'
+import {
+  sameFieldRecognition,
+  type PropertyDefinitionRegistrySnapshot,
+} from './propertyDefinitionRegistry'
 import type {TypeDefinitionRegistrySnapshot} from './typeDefinitionRegistry'
 import {buildUnboundTypes, materializingTypeSeeds} from './typeDefinitionRegistry'
 import {
@@ -1192,9 +1199,17 @@ export class Repo {
           !sameSeedKeySet(this._propertyDefinitionRegistry?.seedsByKey, propertyDefinitions?.seedsByKey) ||
           !sameTypeSeedIdentities(this._typeDefinitionRegistry?.seedsByKey, typeDefinitions?.seedsByKey) ||
           !sameStringSet(this._typeDefinitionRegistry?.contestedSeedKeys, typeDefinitions?.contestedSeedKeys)
+        const recognitionChanged =
+          !sameFieldRecognition(this._propertyDefinitionRegistry, propertyDefinitions)
         this._propertyDefinitionRegistry = propertyDefinitions
         this._typeDefinitionRegistry = typeDefinitions
         this._propertySeedNameCounts = propertySeedNameCounts
+        // After the swap: a handle re-resolving on this reads the new snapshot.
+        if (recognitionChanged) {
+          this.handleStore.invalidate({plugin: new Map([
+            [KERNEL_FIELD_RECOGNITION_CHANNEL, [KERNEL_FIELD_RECOGNITION_KEY]],
+          ])})
+        }
         if (seedsChanged && incomingWorkspaceId !== null && incomingWorkspaceId === this.client.activeWorkspaceId) {
           this.scheduleWorkspaceSeedMaterialization(incomingWorkspaceId, false)
         }

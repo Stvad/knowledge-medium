@@ -26,6 +26,7 @@ import {
   typedBlocksReferenceKey,
   typedBlocksStructureKey,
 } from '@/data/invalidation'
+import { NO_REGISTRY_RECOGNITION_PARAMS } from '@/data/internals/treeQueries'
 import {
   BACKLINKS_FOR_BLOCK_QUERY,
   backlinksForBlockQuery,
@@ -404,7 +405,7 @@ describe('backlinksDataExtension query', () => {
       await createIn({id: 'Q'})
 
       const machinery = await propertyMachinerySourceIds(
-        env.h.db, ['V1', 'Q', 'V2'], ['[]', ''], 1,
+        env.h.db, ['V1', 'Q', 'V2'], NO_REGISTRY_RECOGNITION_PARAMS, 1,
       )
       expect([...machinery].sort()).toEqual(['V1', 'V2'])
     })
@@ -424,9 +425,9 @@ describe('backlinksDataExtension query', () => {
 
       // No `block_types` row exists for SEED, so only the bound seed set can
       // classify it — with an empty set the walk must NOT classify it.
-      expect([...await propertyMachinerySourceIds(env.h.db, ['V'], ['[]', ''])]).toEqual([])
+      expect([...await propertyMachinerySourceIds(env.h.db, ['V'], NO_REGISTRY_RECOGNITION_PARAMS)]).toEqual([])
       expect([...await propertyMachinerySourceIds(
-        env.h.db, ['V'], [JSON.stringify([SEED]), FLIP_WS],
+        env.h.db, ['V'], ['[]', JSON.stringify([SEED]), FLIP_WS],
       )]).toEqual(['V'])
     })
 
@@ -449,7 +450,7 @@ describe('backlinksDataExtension query', () => {
       })
 
       expect([...await propertyMachinerySourceIds(
-        env.h.db, ['under-root', 'under-owner'], ['[]', ''],
+        env.h.db, ['under-root', 'under-owner'], NO_REGISTRY_RECOGNITION_PARAMS,
       )]).toEqual(['under-owner'])
     })
 
@@ -470,7 +471,7 @@ describe('backlinksDataExtension query', () => {
       await sharedDb.db.execute(cyclicPair, ['cy', FLIP_WS, 'cx'])
       await createIn({id: 'under-cycle', parentId: 'cx'})
 
-      const machinery = await propertyMachinerySourceIds(env.h.db, ['under-cycle'], ['[]', ''])
+      const machinery = await propertyMachinerySourceIds(env.h.db, ['under-cycle'], NO_REGISTRY_RECOGNITION_PARAMS)
       expect(machinery.size).toBe(0)
     })
 
