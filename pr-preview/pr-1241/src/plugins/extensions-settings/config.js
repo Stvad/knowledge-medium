@@ -1,1 +1,1 @@
-import{DT as e,ET as t,OT as n,TT as r}from"../../../chunks/app-DeZdlWQh.js";export{r as extensionsOverridesPresetCore,t as extensionsOverridesProp,e as extensionsPrefsType,n as overridesCodec};
+import{DT as e,ET as t,OT as n,TT as r}from"../../../chunks/app-B8ukPBUj.js";export{r as extensionsOverridesPresetCore,t as extensionsOverridesProp,e as extensionsPrefsType,n as overridesCodec};

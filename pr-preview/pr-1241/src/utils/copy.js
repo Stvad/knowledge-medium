@@ -1,1 +1,1 @@
-import{Gw as e,Jw as t,Kw as n,Ww as r,qw as i}from"../../chunks/app-DeZdlWQh.js";export{r as copyBlockIdsToClipboard,e as copyBlockToClipboard,n as copySelectedBlocksToClipboard,i as serializeBlock,t as serializeSelectedBlocks};
+import{Gw as e,Jw as t,Kw as n,Ww as r,qw as i}from"../../chunks/app-B8ukPBUj.js";export{r as copyBlockIdsToClipboard,e as copyBlockToClipboard,n as copySelectedBlocksToClipboard,i as serializeBlock,t as serializeSelectedBlocks};

@@ -1,1 +1,1 @@
-import{XT as e,ZT as t}from"../chunks/app-DeZdlWQh.js";export{e as appUpdate,t as useAppUpdateAvailable};
+import{XT as e,ZT as t}from"../chunks/app-B8ukPBUj.js";export{e as appUpdate,t as useAppUpdateAvailable};
