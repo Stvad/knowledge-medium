@@ -118,7 +118,10 @@ export const buildSearchView = async (
   // folding compares their content. The window, not row size, is the bound.
   const fetchWindow = async (window: number) => {
     const fetched = await searchBlocksAcrossSources(repo, {workspaceId, query: params.query, limit: window, filter})
-    return {groups: groupIdentical(fetched), exhausted: fetched.length < window}
+    // A contributed source can answer with a block that has left the
+    // workspace; its values would decode with this workspace's registries.
+    const inWorkspace = fetched.filter(block => block.workspaceId === workspaceId)
+    return {groups: groupIdentical(inWorkspace), exhausted: fetched.length < window}
   }
 
   // Folding identical blocks shrinks the window, so it grows until it holds

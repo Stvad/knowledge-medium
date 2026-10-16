@@ -943,7 +943,8 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
     readOnly: true,
   },
   // The views read what the raw commands above read (the backlinks views
-  // carry the same one-time prefs-block caveat), so they classify the same.
+  // carry the same one-time prefs-block caveat, an open question in #1037),
+  // so they classify the same.
   'view-block': {
     usage: 'kmagent get-block <ref> [--max-chars <n>] [--content-offset <n>] [--json]',
     description: 'One block, for reading: its content (truncated past maxChars, with how to continue), breadcrumb, types, decoded properties, child and backlink counts.',

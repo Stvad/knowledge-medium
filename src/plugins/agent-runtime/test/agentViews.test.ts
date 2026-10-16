@@ -619,6 +619,20 @@ describe('structural edge cases', () => {
     expect(text).toContain('(+1 or more identical: ^row-1)')
   })
 
+  it('search drops a candidate a source answers with from another workspace', async () => {
+    const row = (id: string, workspaceId: string) => ({
+      id, workspaceId, parentId: null, orderKey: id, content: `papaya ${id}`,
+      properties: {}, references: [], createdAt: 1, updatedAt: 1, userUpdatedAt: 1,
+      createdBy: USER.id, updatedBy: USER.id, deleted: false,
+    })
+    repo.setRuntimeContributions(searchSourcesFacet, 'test:stale', [{
+      id: 'test.stale',
+      search: async () => [row('here', WS), row('moved', 'ws-2')].map(block => ({block: block as never, score: 1000})),
+    }])
+    const out = await view<SearchView>({type: 'view-search', query: 'papaya', format: 'json'})
+    expect(out.hits.map(hit => hit.id)).toEqual(['here'])
+  })
+
   it('search refuses an `under` block from another workspace', async () => {
     const foreign = uuid('5e5e5e5f', 1)
     await repo.tx(async tx => {
