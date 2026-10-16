@@ -134,7 +134,7 @@ export const resolveAgentTarget = async (
   } catch (error) {
     if (!(error instanceof BlockRefError)) throw error
     const hint = target.kind === 'bare' ? ` To create a page by that name, pass [[${target.text}]].` : ''
-    throw new Error(`${verb}: ${error.message}${hint}`)
+    throw new Error(`${verb}: ${error.message}${hint}`, {cause: error})
   }
   switch (found.via) {
     case 'alias':
