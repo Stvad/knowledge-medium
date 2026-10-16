@@ -1,1 +1,1 @@
-import{cf as e}from"../../../../../chunks/app-DjhuyovX.js";export{e as remarkWikilinks};
+import{_f as e}from"../../../../../chunks/app-Cm-mZejA.js";export{e as remarkWikilinks};

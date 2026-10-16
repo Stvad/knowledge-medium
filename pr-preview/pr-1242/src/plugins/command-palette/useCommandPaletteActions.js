@@ -1,1 +1,1 @@
-import{CS as e}from"../../../chunks/app-DjhuyovX.js";export{e as useCommandPaletteActions};
+import{MS as e}from"../../../chunks/app-Cm-mZejA.js";export{e as useCommandPaletteActions};
