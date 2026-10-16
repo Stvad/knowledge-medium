@@ -653,6 +653,16 @@ describe('structural edge cases', () => {
     }
     const out = await view<GroupedBacklinksView>({type: 'view-grouped-backlinks', ref: target, format: 'json'})
     expect(out.groups.map(group => group.label)).not.toContain('Foreign topic')
+
+    // Nor through a context block's groupWith.
+    const context = uuid('9e1e1e1e', 3)
+    await create({id: context, content: 'Context', properties: {groupWith: [foreign]}, references: [{id: foreign, alias: 'F', sourceField: 'groupWith'}]})
+    for (let i = 0; i < 2; i++) {
+      await create({id: uuid('9f1f1f1f', i), content: `ctx src ${i}`, references: [{id: target, alias: 'T'}, {id: context, alias: 'C'}]})
+    }
+    const viaGroupWith = await view<GroupedBacklinksView>({type: 'view-grouped-backlinks', ref: target, limit: 50, format: 'json'})
+    expect(viaGroupWith.groups.map(group => group.label)).toContain('Context')
+    expect(viaGroupWith.groups.map(group => group.label)).not.toContain('Foreign topic')
   })
 
   it('reads only a head of a huge types list, counting the rest', async () => {

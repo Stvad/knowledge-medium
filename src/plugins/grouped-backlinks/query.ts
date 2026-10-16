@@ -294,6 +294,9 @@ export const SELECT_GROUPED_BACKLINK_ATTRIBUTE_CANDIDATES_SQL = `
     AND refs.source_field = ?
     AND refs.target_id != ?
     AND group_block.deleted = 0
+    -- The main statement's workspace rule, here as defence in depth: no
+    -- test reaches a groupWith target that its source's direct context
+    -- does not already outrank.
     AND group_block.workspace_id = refs.workspace_id
   ORDER BY refs.source_id, coalesce(group_block.user_updated_at, group_block.updated_at) DESC, group_block.id
 `
