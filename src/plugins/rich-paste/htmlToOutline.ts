@@ -29,7 +29,7 @@ export const convertClipboardHtml = (html: string, plainText: string): Clipboard
   const body = new DOMParser().parseFromString(html, 'text/html').body
   if (hasOutlinerReferences(plainText, body)) return {kind: 'plain'}
   normalizeClipboardDom(body)
-  const mdast = toMdast(fromDom(body)) as Root
+  const mdast = separateBlocks(toMdast(fromDom(body)) as Root)
   sanitize(mdast)
   splitAtBlankLines(mdast)
   // With no plain text (an html-only clipboard) the html is the only source.
@@ -143,6 +143,9 @@ const walkFlow = (nodes: readonly RootContent[], indent: number, tokens: Outline
           walkFlow(inline ? rest : item.children, indent + 1, tokens)
         })
         break
+      case 'listItem': // an `<li>` outside a list
+        walkFlow([{type: 'list', children: [node]}], indent, tokens)
+        break
       case 'code':
       case 'blockquote':
         if (hasContent(node)) tokens.push({kind: 'atomic', indent, content: markdown(node)})
@@ -170,8 +173,8 @@ const markdown = (node: Nodes): string =>
 
 /** Inline markdown for phrasing content, escaped so a block that merely
  *  starts with `#`, `-` or `1.` isn't read back as a heading or list; empty
- *  when there is no text or image (block markup nested in inline markup
- *  would otherwise serialize as a bare `#` or `***`). */
+ *  when there is no text or image (whitespace alone, such as a heading's
+ *  lone line break, would otherwise serialize as `&#x20;`). */
 const phrasing = (children: PhrasingContent[]): string =>
   children.some(hasContent) ? markdown({type: 'paragraph', children}).trim() : ''
 
@@ -190,6 +193,54 @@ const withoutBreaks = <T extends Parents>(node: T): T => {
     return {...current, children: current.children.map(replace)} as Nodes
   }
   return replace(node) as T
+}
+
+/** The block types the converter emits. */
+const BLOCKS: ReadonlySet<Nodes['type']> = new Set([
+  'blockquote', 'code', 'heading', 'list', 'listItem', 'paragraph', 'table', 'thematicBreak',
+])
+
+/** Markdown keeps phrasing and blocks apart; the converter mixes them where
+ *  the HTML does. It reads a `<summary>` as a paragraph, leaves blocks inside
+ *  `<b>` or `<i>`, and, splitting a link around the blocks in it, puts the
+ *  link inside a list; serialized there, a block's text runs into its
+ *  neighbours or is dropped. And it puts a list's content outside its items
+ *  in an item of its own, bare, where no block reads it. So each block is
+ *  lifted out beside the phrasing around it, dropping the inline markup that
+ *  wrapped it, and bare phrasing in a list item becomes a paragraph. */
+const separateBlocks = (root: Root): Root => separate(root)[0] as Root
+
+/** `node` as a sequence of nodes in which phrasing and blocks don't mix. */
+const separate = (node: Nodes): Nodes[] => {
+  if (!('children' in node)) return [node]
+  const children = (node.children as Nodes[]).flatMap(separate)
+  if (node.type === 'paragraph' || node.type === 'heading' || isInlineMarkup(node)) {
+    return aroundBlocks(children, run => [{...node, children: run} as Nodes])
+  }
+  if (node.type === 'listItem') {
+    // A run with no text (a `<br>` between items) is no paragraph.
+    const paragraph = (run: Nodes[]): Nodes[] =>
+      run.some(hasContent) ? [{type: 'paragraph', children: run as PhrasingContent[]}] : []
+    return [{...node, children: aroundBlocks(children, paragraph)} as Nodes]
+  }
+  return [{...node, children} as Nodes]
+}
+
+/** `nodes` with each run of phrasing between their blocks replaced by `wrap(run)`. */
+const aroundBlocks = (nodes: readonly Nodes[], wrap: (run: Nodes[]) => Nodes[]): Nodes[] => {
+  const result: Nodes[] = []
+  let run: Nodes[] = []
+  for (const node of nodes) {
+    if (!BLOCKS.has(node.type)) {
+      run.push(node)
+      continue
+    }
+    if (run.length > 0) result.push(...wrap(run))
+    result.push(node)
+    run = []
+  }
+  if (run.length > 0) result.push(...wrap(run))
+  return result
 }
 
 /** Split paragraphs where two or more line breaks meet: `<br><br>` is how
@@ -233,11 +284,11 @@ const splitParagraph = (paragraph: Paragraph): Paragraph[] => {
 }
 
 /** Drop what can't work once pasted (fragment and relative links, `data:`/
- *  `blob:` images) and link titles, and tidy inline markup, in place.
- *  `markupAround` is the inline markup `node` sits in. */
+ *  `blob:` images) and link titles, and tidy inline markup and code spans,
+ *  in place. `markupAround` is the inline markup `node` sits in. */
 const sanitize = (node: Parents, markupAround: ReadonlySet<Nodes['type']> = new Set()): void => {
   const around = isInlineMarkup(node) ? new Set([...markupAround, node.type]) : markupAround
-  node.children = node.children.flatMap((child): Nodes[] => {
+  node.children = spellableCodeSpans(node.children.flatMap((child): Nodes[] => {
     if (child.type === 'link') {
       const href = absoluteHref(child.url)
       if (href === undefined) {
@@ -256,7 +307,22 @@ const sanitize = (node: Parents, markupAround: ReadonlySet<Nodes['type']> = new 
     // Markup inside the same markup adds nothing, and nested strikes (`~~~~`)
     // would open a code fence.
     return around.has(child.type) ? child.children : withEdgeWhitespaceOutside(child)
-  }) as typeof node.children
+  })) as typeof node.children
+}
+
+/** `nodes` without empty code spans, and with touching ones joined: markdown
+ *  can spell neither. An empty one writes as two literal backticks (two in a
+ *  row open a code fence), and `` `a``b` `` reads back as one span holding
+ *  the backticks. */
+const spellableCodeSpans = (nodes: Nodes[]): Nodes[] => {
+  const kept: Nodes[] = []
+  for (const node of nodes) {
+    const previous = kept.at(-1)
+    if (node.type !== 'inlineCode') kept.push(node)
+    else if (previous?.type === 'inlineCode') previous.value += node.value
+    else if (node.value !== '') kept.push(node)
+  }
+  return kept
 }
 
 type InlineMarkup = Delete | Emphasis | Link | Strong

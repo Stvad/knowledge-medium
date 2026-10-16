@@ -788,6 +788,22 @@ returned anything at all — stacked single-row filters, and parents picked
 without regard to workspace. The property was green over that. The canary
 stays.
 
+The clipboard-HTML converter's tag-soup suite
+(`src/plugins/rich-paste/test/htmlToOutline.fuzz.test.ts`, oracle: no
+block that renders nothing) found two classes in deep runs, both fixed
+with pinned tests:
+
+- Code spans markdown cannot spell: an empty `<code>` writes as two
+  literal backticks, so two in a row opened a code fence that swallowed
+  the rest of the block. Empty spans are dropped and touching ones joined.
+- Blocks left inside phrasing: the converter reads a `<summary>` as a
+  paragraph and leaves a list inside `<b>`/`<i>`, so an empty one took
+  the escape off a leading `-`, which read back as an empty list item.
+  The same shape glued text (`<b><p>x</p><p>y</p></b>` pasted as
+  `**xy**`) and, through the converter's split of a link around a list,
+  dropped it — losses this oracle cannot see. One pass now lifts every
+  block out of phrasing.
+
 ## Adding a suite
 
 1. Create `<target>.fuzz.test.ts` next to the existing tests, line 1
