@@ -1,1 +1,1 @@
-import{Mb as e,Nb as t,Pb as n,jb as r}from"../../chunks/app-CtFBAnPW.js";export{r as CRUMB_MAX_CHARS,e as CRUMB_MAX_SEGMENTS,t as collapseCrumbs,n as crumbsFromAncestors};
+import{Mb as e,Nb as t,Pb as n,jb as r}from"../../chunks/app-B5aE3UNe.js";export{r as CRUMB_MAX_CHARS,e as CRUMB_MAX_SEGMENTS,t as collapseCrumbs,n as crumbsFromAncestors};
