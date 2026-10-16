@@ -38,12 +38,14 @@ export const loadCrumbs = async (
 }
 
 /** `childRef` is a child an outline shows of the block whose id is
- *  `parentIdSql`: live, not a property field row, and not the parent itself
- *  (sync applies parent ids verbatim, so a block can be its own parent). The
- *  one definition every child listing and count here uses. Binds
+ *  `parentIdSql`: live, not a property field row, in the parent's workspace,
+ *  and not the parent itself — sync applies parent ids verbatim, so a block
+ *  can be its own parent or have one in another workspace. The one
+ *  definition every child listing and count here uses. Binds
  *  `[...RecognitionParams]`. */
 const visibleChildOfSql = (childRef: string, parentIdSql: string): string => `
   ${childRef}.parent_id = ${parentIdSql} AND ${childRef}.id != ${parentIdSql} AND ${childRef}.deleted = 0
+  AND ${childRef}.workspace_id = (SELECT workspace_id FROM blocks WHERE id = ${parentIdSql})
   AND NOT (${recognizedFieldRowSql(childRef)})
 `
 

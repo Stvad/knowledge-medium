@@ -536,6 +536,44 @@ describe('structural edge cases', () => {
     await expect(view({type: 'view-outline', ref: '2026-03-01'})).rejects.toThrow(/is deleted; restore-block/)
   })
 
+  it("a child in another workspace is not shown or counted, and search under a root does not cross into one", async () => {
+    const root = uuid('6a6a6a6a', 1)
+    const foreign = uuid('6b6b6b6b', 2)
+    const beyond = uuid('6c6c6c6c', 3)
+    await create({id: root, content: 'Root here'})
+    await repo.tx(async tx => {
+      await tx.create({id: foreign, workspaceId: 'ws-2', parentId: null, orderKey: 'a0', content: 'crossing', references: []})
+    }, {scope: ChangeScope.BlockDefault})
+    await create({id: beyond, content: 'crossing again'})
+    // Sync applies parent ids verbatim, so these edges can arrive.
+    await sharedDb.db.execute('UPDATE blocks SET parent_id = ? WHERE id = ?', [root, foreign])
+    await sharedDb.db.execute('UPDATE blocks SET parent_id = ? WHERE id = ?', [foreign, beyond])
+
+    const outline = await view<OutlineView>({type: 'view-outline', ref: root, format: 'json'})
+    expect(outline.root.childCount).toBe(0)
+    expect(outline.rows).toEqual([])
+    const out = await view<SearchView>({type: 'view-search', query: 'crossing', under: root, format: 'json'})
+    expect(out.hits).toEqual([])
+  })
+
+  it('summarizes a structured value from its first keys, each clipped', async () => {
+    const id = uuid('6d6d6d6d', 1)
+    await create({id, content: 'holder', properties: {payload: {[`k${'x'.repeat(300)}`]: 1, b: 2, c: 3, d: 4}}})
+    const out = await view<BlockView>({type: 'view-block', ref: id, format: 'json'})
+    const value = out.properties.find(property => property.name === 'payload')!.value
+    expect(value).toMatch(/^\{kx+…, b, c, …\}$/)
+    expect(value.length).toBeLessThanOrEqual(300)
+  })
+
+  it('neutralizes an id it echoes in an error', async () => {
+    const hostile = 'deadbeef-\nforged\u202E'
+    await create({id: hostile, content: 'odd'})
+    await executeCommand({commandId: 'd', type: 'delete-block', id: hostile}, context)
+    const message = await view({type: 'view-outline', ref: hostile}).then(() => '', (error: Error) => error.message)
+    expect(message).toContain('is deleted')
+    expect(message).not.toMatch(/[\n\u202E]/u)
+  })
+
   it('sql summarizes a binary cell by its size', async () => {
     const out = await executeCommand({
       commandId: 's', type: 'sql', mode: 'all', maxRows: 1, sql: 'SELECT randomblob(10) AS b',

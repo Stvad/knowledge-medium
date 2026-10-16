@@ -72,9 +72,10 @@ export const loadRoot = async (
   const root = await load(resolution.id)
   if (!root) {
     const [tombstone] = await repo.db.getAll<{deleted: number}>('SELECT deleted FROM blocks WHERE id = ?', [resolution.id])
-    const what = resolution.via === 'date' ? `The daily note for "${oneLine(ref)}" (${resolution.id})` : `Block ${resolution.id}`
+    const id = oneLine(resolution.id)
+    const what = resolution.via === 'date' ? `The daily note for "${oneLine(ref)}" (${id})` : `Block ${id}`
     throw new BlockRefError(tombstone
-      ? `${what} is deleted; restore-block ${resolution.id} brings it back.`
+      ? `${what} is deleted; restore-block ${id} brings it back.`
       : resolution.via === 'date'
         ? `${what} has not been created yet.`
         : `${what} does not exist.`)
@@ -83,7 +84,7 @@ export const loadRoot = async (
   // workspace's block would render with the wrong codecs and visibility.
   if (root.workspaceId !== workspaceId) {
     throw new BlockRefError(
-      `Block ${root.id} is in workspace ${root.workspaceId}, not the active one (${workspaceId}). `
+      `Block ${oneLine(root.id)} is in workspace ${oneLine(root.workspaceId)}, not the active one (${oneLine(workspaceId)}). `
       + 'Views read the active workspace only: switch the app to that workspace, or use the raw command (--raw).',
     )
   }

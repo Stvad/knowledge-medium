@@ -94,9 +94,16 @@ const formatValue = (value: unknown, budget: number): string => {
     return joined
   }
   if (typeof value === 'object') {
-    const keys = Object.keys(value)
-    const shown = keys.slice(0, SUMMARY_KEYS).join(', ')
-    return `{${shown}${keys.length > SUMMARY_KEYS ? ', …' : ''}}`
+    // Enumerate only what is shown (plus one, to know there is more): an
+    // importer's object can have hundreds of thousands of keys.
+    const keys: string[] = []
+    const keyChars = Math.floor(budget / (SUMMARY_KEYS + 1))
+    for (const key in value) {
+      if (!Object.hasOwn(value, key)) continue
+      keys.push(key.length > keyChars ? `${key.slice(0, charBoundary(key, keyChars))}…` : key)
+      if (keys.length > SUMMARY_KEYS) break
+    }
+    return `{${keys.slice(0, SUMMARY_KEYS).join(', ')}${keys.length > SUMMARY_KEYS ? ', …' : ''}}`
   }
   return String(value)
 }

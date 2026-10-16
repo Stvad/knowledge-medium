@@ -292,18 +292,21 @@ const blockTypeInSql = `
  *  narrowed by a {@link BlockSearchFilter}. Every clause sits in the WHERE,
  *  ahead of the LIMIT. The descendant walk has no depth cap: UNION (not
  *  UNION ALL) drops a row already seen, so a parent cycle ends it, and the
- *  root is excluded at every step, so a cycle through it cannot add it. Binds, in order: `[underId]` when filtering by
- *  ancestry, workspaceId, the MATCH query, `[typesJson]`, `[excludeTypesJson]`,
+ *  root is excluded at every step, so a cycle through it cannot add it, and
+ *  every step stays in the searched workspace (a sync-applied parent edge
+ *  can cross one). Binds, in order: `[underId]` when filtering by
+ *  ancestry, workspaceId (twice when filtering by ancestry), the MATCH query, `[typesJson]`, `[excludeTypesJson]`,
  *  then the two rank parameters and the limit. */
 export const selectBlocksByContentSql = (filter: BlockSearchFilter = {}): string => `
-  ${filter.underId !== undefined ? `WITH RECURSIVE under_root(id) AS (SELECT ?),
+  ${filter.underId !== undefined ? `WITH RECURSIVE under_root(id, workspace_id) AS (SELECT ?, ?),
   under_tree(id) AS (
     SELECT c.id FROM blocks c, under_root
      WHERE c.parent_id = under_root.id AND c.id != under_root.id AND c.deleted = 0
+       AND c.workspace_id = under_root.workspace_id
     UNION
     SELECT c.id FROM blocks c
       JOIN under_tree ON c.parent_id = under_tree.id, under_root
-     WHERE c.deleted = 0 AND c.id != under_root.id
+     WHERE c.deleted = 0 AND c.id != under_root.id AND c.workspace_id = under_root.workspace_id
   )` : ''}
   SELECT ${buildQualifiedBlockColumnsSql('b')}
   FROM blocks_fts
@@ -1423,7 +1426,7 @@ export const searchByContentQuery = defineQuery<
     const rows = await ctx.db.getAll<BlockRow>(
       active ? selectBlocksByContentSql(active) : SELECT_BLOCKS_BY_CONTENT_SQL,
       [
-        ...(active?.underId !== undefined ? [active.underId] : []),
+        ...(active?.underId !== undefined ? [active.underId, workspaceId] : []),
         workspaceId,
         compiledQuery.matchQuery,
         ...(active?.types?.length ? [JSON.stringify(active.types)] : []),
