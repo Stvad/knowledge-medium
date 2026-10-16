@@ -559,6 +559,22 @@ describe('structural edge cases', () => {
     expect(out.windowCap).toBe(2000)
   })
 
+  it('a capped search ends its listing at the window, never offering an unreachable offset', async () => {
+    const hit = (i: number) => ({
+      id: `hit-${i}`, workspaceId: WS, parentId: null, orderKey: `h${i}`, content: `distinct ${i}`,
+      properties: {}, references: [], createdAt: 1, updatedAt: 1, userUpdatedAt: 1,
+      createdBy: USER.id, updatedBy: USER.id, deleted: false,
+    })
+    repo.setRuntimeContributions(searchSourcesFacet, 'test:many', [{
+      id: 'test.many',
+      search: async (_repo, args) => Array.from({length: args.limit}, (_, i) => ({block: hit(i) as never, score: 1000})),
+    }])
+    const out = await view<SearchView>({type: 'view-search', query: 'distinct', offset: 1990, limit: 10, format: 'json'})
+    expect(out.hits).toHaveLength(10)
+    expect(out.nextOffset).toBeNull()
+    expect(out.windowCap).toBe(2000)
+  })
+
   it('search refuses an `under` block from another workspace', async () => {
     const foreign = uuid('5e5e5e5f', 1)
     await repo.tx(async tx => {

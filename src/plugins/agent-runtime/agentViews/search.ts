@@ -109,6 +109,8 @@ export const buildSearchView = async (
     ...(underId !== undefined ? {underId} : {}),
   }
 
+  // Candidates are whole rows: every search source answers with blocks, and
+  // folding compares their content. The window, not row size, is the bound.
   const fetchWindow = async (window: number) => {
     const fetched = await searchBlocksAcrossSources(repo, {workspaceId, query: params.query, limit: window, filter})
     return {groups: groupIdentical(fetched), exhausted: fetched.length < window}
@@ -133,10 +135,9 @@ export const buildSearchView = async (
     loadCrumbs(repo, shown.map(block => block.id), workspaceId),
   ])
   const end = offset + page.length
-  // A window stopped by the cap rather than by the sources may have cut off
-  // matches, so a non-empty page still offers the next offset; an empty one
-  // ends the listing instead of offering the same offset again.
-  const more = end < groups.length || (!exhausted && page.length > 0)
+  // The listing ends where the window does: no offset reaches past a capped
+  // window, which `windowCap` reports instead.
+  const more = end < groups.length
 
   return {
     query: params.query,
