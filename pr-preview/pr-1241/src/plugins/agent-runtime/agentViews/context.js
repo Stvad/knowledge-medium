@@ -1,1 +1,1 @@
-import{Gu as e,Ju as t,Ku as n,Yu as r,qu as i}from"../../../../chunks/app-Cc5e_Gls.js";export{e as firstVisibleChildren,n as loadBlocks,i as loadCrumbs,t as visibleChildCounts,r as visibleChildrenLevel};
+import{Gu as e,Ju as t,Ku as n,Xu as r,Yu as i,qu as a}from"../../../../chunks/app-DG0j12B8.js";export{e as firstVisibleChildren,n as loadBlocks,a as loadContentHeads,t as loadCrumbs,i as visibleChildCounts,r as visibleChildrenLevel};

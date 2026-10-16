@@ -1,1 +1,1 @@
-import{OT as e,kT as t}from"../../../chunks/app-Cc5e_Gls.js";export{e as extensionPromptDiagnosticContribution,t as extensionPromptDiagnosticSource};
+import{AT as e,kT as t}from"../../../chunks/app-DG0j12B8.js";export{t as extensionPromptDiagnosticContribution,e as extensionPromptDiagnosticSource};

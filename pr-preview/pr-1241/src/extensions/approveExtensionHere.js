@@ -1,1 +1,1 @@
-import{VT as e}from"../../chunks/app-Cc5e_Gls.js";export{e as approveExtensionHere};
+import{HT as e}from"../../chunks/app-DG0j12B8.js";export{e as approveExtensionHere};

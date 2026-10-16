@@ -1,1 +1,1 @@
-import{Jf as e,Yf as t,qf as n}from"../../chunks/app-Cc5e_Gls.js";export{n as backlinkCompletionSource,e as createBacklinkAutocomplete,t as isInsideBacklinkBrackets};
+import{Jf as e,Xf as t,Yf as n}from"../../chunks/app-DG0j12B8.js";export{e as backlinkCompletionSource,n as createBacklinkAutocomplete,t as isInsideBacklinkBrackets};

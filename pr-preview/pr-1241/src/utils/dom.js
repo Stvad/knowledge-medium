@@ -1,1 +1,1 @@
-import{dA as e,fA as t,lA as n,pA as r,uA as i}from"../../chunks/app-Cc5e_Gls.js";export{n as getElementScrollportBounds,i as isEditorElement,e as isElementProperlyVisible,t as nearestScrollableAncestor,r as shouldExitEditModeAfterBlur};
+import{dA as e,fA as t,mA as n,pA as r,uA as i}from"../../chunks/app-DG0j12B8.js";export{i as getElementScrollportBounds,e as isEditorElement,t as isElementProperlyVisible,r as nearestScrollableAncestor,n as shouldExitEditModeAfterBlur};

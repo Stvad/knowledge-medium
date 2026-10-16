@@ -1,1 +1,1 @@
-import{Eg as e,Tg as t,wg as n}from"../../../chunks/app-Cc5e_Gls.js";export{n as getVimNormalModeActions,t as jumpVisibleBlocks,e as vimNormalModeActionsExtension};
+import{Dg as e,Eg as t,Tg as n}from"../../../chunks/app-DG0j12B8.js";export{n as getVimNormalModeActions,t as jumpVisibleBlocks,e as vimNormalModeActionsExtension};

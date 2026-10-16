@@ -1,1 +1,1 @@
-import{SD as e,bD as t,xD as n}from"../../chunks/app-Cc5e_Gls.js";export{t as defaultRegistry,n as defaultRendererContributions,e as defaultRenderersExtension};
+import{CD as e,SD as t,xD as n}from"../../chunks/app-DG0j12B8.js";export{n as defaultRegistry,t as defaultRendererContributions,e as defaultRenderersExtension};

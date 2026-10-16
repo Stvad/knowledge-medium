@@ -1,1 +1,1 @@
-import{nE as e,tE as t}from"../chunks/app-Cc5e_Gls.js";export{t as checkForAppUpdate,e as registerServiceWorker};
+import{nE as e,rE as t}from"../chunks/app-DG0j12B8.js";export{e as checkForAppUpdate,t as registerServiceWorker};
