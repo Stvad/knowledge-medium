@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { conditionMismatches, type EvalReport, parseReport, renderMarkdown, summarize, type TaskRunRecord } from './report'
+import {
+  conditionMismatches,
+  type EvalReport,
+  parseReport,
+  renderMarkdown,
+  type RunConditions,
+  summarize,
+  type TaskRunRecord,
+} from './report'
 
 const runRecord = (task: string, rep: number, overrides: Partial<TaskRunRecord> = {}): TaskRunRecord => ({
   task,
@@ -26,19 +34,21 @@ const runRecord = (task: string, rep: number, overrides: Partial<TaskRunRecord> 
   ...overrides,
 })
 
-const reportOf = (label: string, runs: TaskRunRecord[], overrides: Partial<EvalReport> = {}): EvalReport => ({
-  schemaVersion: 2,
+const reportOf = (
+  label: string,
+  runs: TaskRunRecord[],
+  overrides: Partial<EvalReport> = {},
+  conditions: Partial<RunConditions> = {},
+): EvalReport => ({
+  schemaVersion: 3,
   label,
   startedAt: '2026-10-15T00:00:00Z',
   finishedAt: '2026-10-15T00:10:00Z',
   git: {sha: '0123456789abcdef', branch: 'master', dirty: false},
   model: 'sonnet',
-  resolvedModel: 'claude-test',
-  effort: null,
+  conditions: {fixture: 'abc', model: 'claude-test', effort: 'default', mcpOutputTokens: 25_000, timeoutMs: 600_000, ...conditions},
   claudeCodeVersion: '1.0.0',
   kmTools: ['search'],
-  mcpOutputTokens: 25_000,
-  fixtureHash: 'abc',
   taskHashes: Object.fromEntries(runs.map(run => [run.task, `${run.task}-v1`])),
   outputSizes: {'search:x': 1000},
   probeHashes: {'search:x': 'x-v1'},
@@ -106,13 +116,14 @@ describe('renderMarkdown', () => {
   })
 
   it.each([
-    ['model', {resolvedModel: 'claude-other'}, 'model claude-test → claude-other'],
+    ['model', {model: 'claude-other'}, 'model claude-test → claude-other'],
     ['effort', {effort: 'high'}, 'effort default → high'],
-    ['MCP output cap', {mcpOutputTokens: 5_000}, 'MCP output cap 25000 → 5000'],
-    ['fixture', {fixtureHash: 'def'}, 'fixture abc → def'],
-  ] as const)('compares nothing with a baseline run under another %s', (_name, overrides, named) => {
+    ['MCP output cap', {mcpOutputTokens: 5_000}, 'mcpOutputTokens 25000 → 5000'],
+    ['timeout', {timeoutMs: 60_000}, 'timeoutMs 600000 → 60000'],
+    ['fixture', {fixture: 'def'}, 'fixture abc → def'],
+  ] as const)('compares nothing with a baseline run under another %s', (_name, conditions, named) => {
     const baseline = reportOf('before', [runRecord('a', 1, {toolCalls: 8})])
-    const current = reportOf('after', [runRecord('a', 1, {toolCalls: 4})], {...overrides, outputSizes: {'search:x': 250}})
+    const current = reportOf('after', [runRecord('a', 1, {toolCalls: 4})], {outputSizes: {'search:x': 250}}, conditions)
     const markdown = renderMarkdown(current, baseline)
     expect(markdown).toContain(`**not compared** with before: the runs differ in ${named}`)
     expect(markdown).not.toContain('(was ')
@@ -134,15 +145,15 @@ describe('renderMarkdown', () => {
 describe('conditionMismatches', () => {
   it('leaves the model out before the run has resolved it', () => {
     const baseline = reportOf('before', [])
-    expect(conditionMismatches(reportOf('after', [], {resolvedModel: null}), baseline, {planned: true})).toEqual([])
-    expect(conditionMismatches(reportOf('after', [], {resolvedModel: null, mcpOutputTokens: 5}), baseline, {planned: true}))
-      .toEqual(['MCP output cap 25000 → 5'])
+    expect(conditionMismatches(reportOf('after', [], {}, {model: null}), baseline, {planned: true})).toEqual([])
+    expect(conditionMismatches(reportOf('after', [], {}, {model: null, mcpOutputTokens: 5}), baseline, {planned: true}))
+      .toEqual(['mcpOutputTokens 25000 → 5'])
   })
 
   it('compares nothing with a recorded run whose model never resolved', () => {
     const baseline = reportOf('before', [])
-    expect(conditionMismatches(reportOf('after', [], {resolvedModel: null}), baseline)).toEqual(['model claude-test → unknown'])
-    expect(conditionMismatches(reportOf('after', [], {resolvedModel: null}), reportOf('before', [], {resolvedModel: null})))
+    expect(conditionMismatches(reportOf('after', [], {}, {model: null}), baseline)).toEqual(['model claude-test → unknown'])
+    expect(conditionMismatches(reportOf('after', [], {}, {model: null}), reportOf('before', [], {}, {model: null})))
       .toEqual(['model unknown → unknown'])
   })
 })
@@ -150,6 +161,6 @@ describe('conditionMismatches', () => {
 describe('parseReport', () => {
   it('refuses a report written in another format', () => {
     expect(() => parseReport(JSON.stringify({...reportOf('old', []), schemaVersion: 1}), 'old.json'))
-      .toThrow('old.json is report format 1, not 2')
+      .toThrow('old.json is report format 1, not 3')
   })
 })

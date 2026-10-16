@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "label": "baseline-2026-10-16-sonnet",
   "startedAt": "2026-10-16T19:35:01.145Z",
   "finishedAt": "2026-10-16T19:45:18.028Z",
@@ -9,8 +9,13 @@
     "dirty": false
   },
   "model": "sonnet",
-  "resolvedModel": "claude-sonnet-5-5",
-  "effort": null,
+  "conditions": {
+    "fixture": "9d499d1fadc8",
+    "model": "claude-sonnet-5-5",
+    "effort": "default",
+    "mcpOutputTokens": 25000,
+    "timeoutMs": 600000
+  },
   "claudeCodeVersion": "2.1.285",
   "kmTools": [
     "get_block",
@@ -26,8 +31,6 @@
     "delete_block",
     "restore_block"
   ],
-  "mcpOutputTokens": 25000,
-  "fixtureHash": "9d499d1fadc8",
   "taskHashes": {
     "kestrel-june": "0f0fea66e4ab",
     "summarize-design": "1fbe6c3b02c7",

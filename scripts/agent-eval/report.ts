@@ -11,7 +11,7 @@ import { createHash } from 'node:crypto'
 import { MCP_SERVER_NAME } from '../../packages/agent-cli/src/mcpShared'
 import type { TokenUsage } from './transcript'
 
-export const REPORT_SCHEMA_VERSION = 2
+export const REPORT_SCHEMA_VERSION = 3
 
 export interface TaskRunRecord {
   task: string
@@ -43,24 +43,36 @@ export interface TaskRunRecord {
   transcript: string
 }
 
+/** What a run holds fixed besides its tasks, as the runner ran with it. A
+ *  baseline that differs in any of these measures that difference rather
+ *  than the tools, so it gets no deltas. Claude Code's version is recorded
+ *  beside them, not among them, or a baseline would expire with every CLI
+ *  release. */
+export interface RunConditions {
+  fixture: string
+  /** As the first run resolved it; null until then, or when no run got that far. */
+  model: string | null
+  effort: string
+  /** MAX_MCP_OUTPUT_TOKENS: it decides which results are capped. */
+  mcpOutputTokens: number
+  timeoutMs: number
+}
+
 export interface EvalReport {
   schemaVersion: typeof REPORT_SCHEMA_VERSION
   label: string
   startedAt: string
   finishedAt: string
   git: {sha: string, branch: string, dirty: boolean}
+  /** The model as requested; `conditions.model` is what it resolved to. */
   model: string
-  resolvedModel: string | null
-  effort: string | null
+  conditions: RunConditions
   claudeCodeVersion: string | null
   kmTools: string[]
-  /** MAX_MCP_OUTPUT_TOKENS the runs were given: it decides which results are capped. */
-  mcpOutputTokens: number
-  fixtureHash: string
   /** Per task, a hash of its definition (prompt, check, reset, allowed
    *  changes). Deltas are shown only for tasks whose hash matches. */
   taskHashes: Record<string, string>
-  /** Deterministic output sizes per probe, from the fixture-graph test. */
+  /** Deterministic output sizes per probe, measured on the tab the agent queried. */
   outputSizes: Record<string, number> | null
   /** Per probe, a hash of its call; deltas only where it matches. */
   probeHashes: Record<string, string>
@@ -80,23 +92,12 @@ export const parseReport = (json: string, source: string): EvalReport => {
   return report
 }
 
-/** What a run holds fixed besides its tasks: a baseline that differs in any
- *  of these measures that difference, not the tools, so it gets no deltas.
- *  Claude Code's version is shown, not required to match, or a baseline
- *  would expire with every CLI release. */
-const RUN_CONDITIONS: ReadonlyArray<{name: string, read: (report: EvalReport) => string | null, knownBeforeRun: boolean}> = [
-  {name: 'fixture', read: report => report.fixtureHash, knownBeforeRun: true},
-  // Resolved from the first run's transcript; unknown when no run got that far.
-  {name: 'model', read: report => report.resolvedModel, knownBeforeRun: false},
-  {name: 'effort', read: report => report.effort ?? 'default', knownBeforeRun: true},
-  {name: 'MCP output cap', read: report => String(report.mcpOutputTokens), knownBeforeRun: true},
-]
-
 /** The run conditions on which the two reports differ; an unknown value
- *  matches nothing. `planned` compares only what is known before a run. */
+ *  matches nothing. `planned` leaves out what a run has not resolved yet. */
 export const conditionMismatches = (report: EvalReport, baseline: EvalReport, {planned = false} = {}): string[] =>
-  RUN_CONDITIONS.filter(condition => !planned || condition.knownBeforeRun).flatMap(({name, read}) => {
-    const [was, now] = [read(baseline), read(report)]
+  (Object.keys(report.conditions) as Array<keyof RunConditions>).flatMap(name => {
+    const [was, now] = [baseline.conditions[name], report.conditions[name]]
+    if (planned && now === null) return []
     return was !== null && was === now ? [] : [`${name} ${was ?? 'unknown'} → ${now ?? 'unknown'}`]
   })
 
@@ -204,10 +205,11 @@ export const renderMarkdown = (report: EvalReport, compareWith?: EvalReport): st
 
   lines.push(`# Agent ergonomics eval — ${report.label}`, '')
   lines.push(`- commit \`${report.git.sha.slice(0, 10)}\` on \`${report.git.branch}\`${report.git.dirty ? ' (dirty tree)' : ''}`)
-  lines.push(`- model \`${report.resolvedModel ?? report.model}\`${report.effort ? `, effort ${report.effort}` : ''}, Claude Code ${report.claudeCodeVersion ?? '?'}`)
-  lines.push(`- km tools: ${report.kmTools.map(tool => `\`${tool}\``).join(', ')}; MCP output cap ${report.mcpOutputTokens} tokens`)
+  const {conditions} = report
+  lines.push(`- model \`${conditions.model ?? report.model}\`${conditions.effort === 'default' ? '' : `, effort ${conditions.effort}`}, Claude Code ${report.claudeCodeVersion ?? '?'}`)
+  lines.push(`- km tools: ${report.kmTools.map(tool => `\`${tool}\``).join(', ')}; MCP output cap ${conditions.mcpOutputTokens} tokens`)
   lines.push('- sizes are characters; "capped": results over that cap, which Claude Code replaced with a short notice; "seen" is what reached the model, "returned" what the tools produced')
-  lines.push(`- fixture \`${report.fixtureHash}\`, ${reps} repetition(s) per task; per-task figures are medians; lower is better except pass`)
+  lines.push(`- fixture \`${conditions.fixture}\`, ${reps} repetition(s) per task, ${conditions.timeoutMs / 60_000} min timeout each; per-task figures are medians; lower is better except pass`)
   lines.push('- list $ is the API list-price equivalent the CLI reports (a subscription run is not charged it); it weights input, cache and output tokens in one number; n/a where a run ended without reporting it')
   if (compareWith && !baseline) {
     lines.push(`- **not compared** with ${compareWith.label}: the runs differ in ${mismatches.join('; ')}`)

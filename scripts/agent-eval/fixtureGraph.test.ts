@@ -33,6 +33,7 @@ import {
   ROLLOUT_BLOCK_TEXT,
   TARGET_UIDS,
 } from './fixture'
+import { userStateRootBlockIds } from '@/data/derivedIds'
 import { childrenOf, dailyNoteId, descendantsOf, getBlock, type GraphProbe, pageIdByTitle, requirePageId, sqlAll } from './graphQueries'
 import { diffAgainst, restoreSnapshot, snapshotWorkspace, strayChanges, waitForQuiet, type WorkspaceSnapshot } from './isolation'
 import { OUTPUT_PROBES, type ProbeContext, type ProbeOutput, probeOutput } from './outputBudgets'
@@ -478,24 +479,25 @@ describe('isolation edge cases', () => {
 })
 
 describe('app state', () => {
-  it('compares a fixture block wherever it ends up, and leaves the app\'s own state alone', async () => {
-    // A per-user page as the app keeps one, which it writes its own state under.
+  it('leaves the app\'s own state alone, and compares everything else wherever it ends up', async () => {
+    // A user page as the app keeps one, with a state root at the id the app derives.
     const userPage = (await probe.command({type: 'create-block', content: 'Eval User', properties: {types: ['user']}}) as {id: string}).id
+    const [stateRoot] = userStateRootBlockIds(userPage)
+    await probe.command({type: 'create-block', parentId: userPage, content: 'ui-state', data: {id: stateRoot}})
     const snapshot = await snapshotWorkspace(probe, QUIET)
-    expect(snapshot.appState.has(userPage)).toBe(true)
+    expect([snapshot.appState.has(stateRoot), snapshot.rows.has(userPage)]).toEqual([true, true])
     const rollout = fixtureId('rollout')
-    const retyped = fixtureId('vendorsSection')
 
-    await graph.callTool('move_block', {id: rollout, parentId: userPage, position: {kind: 'first'}})
-    await graph.callTool('update_block', {id: retyped, properties: {types: ['user']}})
-    const panelState = resultIdOf(await graph.callTool('create_block', {parentId: userPage, content: 'panel state'}))
+    await graph.callTool('move_block', {id: rollout, parentId: stateRoot, position: {kind: 'first'}})
+    const note = resultIdOf(await graph.callTool('create_block', {parentId: userPage, content: 'a note on my page'}))
+    const panelState = resultIdOf(await graph.callTool('create_block', {parentId: stateRoot, content: 'panel state'}))
 
     const changes = await restoreSnapshot(probe, snapshot, QUIET)
-    expect(changes.modified.map(change => change.id).sort()).toEqual([rollout, retyped].sort())
-    expect(changes.created).toEqual([])
+    expect(changes.modified.map(change => change.id)).toEqual([rollout])
+    expect(changes.created.map(row => row.id)).toEqual([note])
     const [restored] = await sqlAll<{parent_id: string}>(probe, 'SELECT parent_id FROM blocks WHERE id = ?', [rollout])
     expect(restored.parent_id).toBe(snapshot.rows.get(rollout)!.parent_id)
-    expect(await getBlock(probe, panelState)).not.toBeNull()
+    expect([await getBlock(probe, note), await getBlock(probe, panelState)].map(block => block !== null)).toEqual([false, true])
   }, 20_000)
 })
 
@@ -504,15 +506,19 @@ describe('run journal', () => {
     const dir = path.join(mkdtempSync(path.join(tmpdir(), 'agent-eval-journal-')), 'journal')
     const interrupted = createRunJournal(dir)
     const userPage = (await probe.command({type: 'create-block', content: 'Eval User', properties: {types: ['user']}}) as {id: string}).id
+    const [stateRoot] = userStateRootBlockIds(userPage)
+    await probe.command({type: 'create-block', parentId: userPage, content: 'ui-state', data: {id: stateRoot}})
     interrupted.begin(await snapshotWorkspace(probe, QUIET), fixtureHash)
     interrupted.taskStarted()
     const rollout = fixtureId('rollout')
     await graph.callTool('update_block', {id: rollout, content: 'left behind'})
 
+    const panelState = resultIdOf(await graph.callTool('create_block', {parentId: stateRoot, content: 'panel state'}))
+
     expect(await createRunJournal(dir).recover(probe, fixtureHash, QUIET)).toBe(1)
     expect((await getBlock(probe, rollout))?.content).toBe(ROLLOUT_BLOCK_TEXT)
     // The app's own state, as the interrupted run saw it, is left alone.
-    expect(await getBlock(probe, userPage)).not.toBeNull()
+    expect(await getBlock(probe, panelState)).not.toBeNull()
     expect(existsSync(dir)).toBe(false)
   }, 20_000)
 

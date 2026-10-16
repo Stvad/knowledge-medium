@@ -42,9 +42,11 @@ block beside the requested ones. A read task may change nothing.
 
 Every task starts from the same graph. The runner snapshots every block row once,
 after each task's `reset` has cleared anything an interrupted earlier run left behind.
-The snapshot leaves out the app's own per-user state, which changes by itself. Which
-rows those are is fixed when the snapshot is taken, so a fixture block is compared
-wherever it ends up, even under the user page. After each task, the runner:
+The snapshot leaves out the app's own per-user state, which changes by itself: the
+state roots the app derives under each user page (ui-state, preferences) and what is
+under them. The user page itself is an ordinary page, so a note written on it is
+compared like any other block. Which rows are app state is fixed when the snapshot is
+taken, so a fixture block is compared wherever it ends up. After each task, the runner:
 
 1. waits until the graph is quiet, so late processor writes land first, and aborts if
    it is still being written to after 20s;
@@ -71,7 +73,10 @@ Before the first task, `run` also checks that the tab holds the graph this check
 code imports. That graph is the one the gate's checks are proven on. The ten output
 probes run against the tab and against a fresh in-process import of the fixture, and
 their outputs must match, with block ids numbered by first appearance. A tab seeded by
-older code, or holding changes made by hand, is refused before anything is spent.
+older code, or holding changes made by hand, is refused before anything is spent, and
+so is a run whose in-process import fails or misses a probe. The run also aborts if
+`packages/agent-cli/dist` changes under it, since every task launches the server from
+there.
 
 A task's definition is part of the measurement. A report stores a hash of each task's
 prompt, check, reset and allowed changes, and `--compare` shows deltas only for tasks
@@ -81,8 +86,9 @@ of their call the same way. When you change a helper the checks share
 `tasks.ts`. Prefer adding a task to rewording one. A new task needs a reference solution
 and wrong ones in `fixtureGraph.test.ts`.
 
-So is what a run holds fixed: the fixture, the resolved model, the effort and the MCP
-output cap. A baseline that differs in any of them gets no deltas at all, since they
+So is what a run holds fixed, recorded together as the report's `conditions`: the
+fixture, the resolved model, the effort, the MCP output cap and the per-task timeout.
+A baseline that differs in any of them gets no deltas at all, since they
 would measure that difference rather than the tools. That includes a run whose model
 never resolved because no task got far enough. `run` refuses such a `--compare` before
 it starts, and stops after the first task when the resolved model differs, since the

@@ -4,7 +4,7 @@
 - model `claude-sonnet-5-5`, Claude Code 2.1.285
 - km tools: `get_block`, `subtree`, `backlinks`, `page`, `daily_note`, `search`, `sql_query`, `create_block`, `update_block`, `move_block`, `delete_block`, `restore_block`; MCP output cap 25000 tokens
 - sizes are characters; "capped": results over that cap, which Claude Code replaced with a short notice; "seen" is what reached the model, "returned" what the tools produced
-- fixture `9d499d1fadc8`, 3 repetition(s) per task; per-task figures are medians; lower is better except pass
+- fixture `9d499d1fadc8`, 3 repetition(s) per task, 10 min timeout each; per-task figures are medians; lower is better except pass
 - list $ is the API list-price equivalent the CLI reports (a subscription run is not charged it); it weights input, cache and output tokens in one number; n/a where a run ended without reporting it
 
 | task | kind | pass | tool calls | capped | chars seen (total / max) | chars returned | context tokens | peak context | output tokens | list $ | time |

@@ -13,12 +13,14 @@
  * processor started by the agent's writes or by the undo's own — would
  * otherwise land after the read, inside the next task.
  *
- * The app's own per-user state (the `user` page and everything under it:
- * ui-state, prefs, panels) churns by itself and is not part of what a task
- * measures, so it is outside the snapshot. Which rows those are is fixed when
- * the snapshot is taken: a fixture row is compared wherever it ends up, so
- * moving it under the user page or retyping it cannot hide a change.
+ * The app's own per-user state (the state roots under each user page:
+ * ui-state, preferences, panels) churns by itself and is not part of what a
+ * task measures, so it is outside the snapshot. The user page itself is an
+ * ordinary page and is compared, notes written on it included. Which rows
+ * are app state is fixed when the snapshot is taken: a fixture row is
+ * compared wherever it ends up.
  */
+import { userStateRootBlockIds } from '@/data/derivedIds'
 import { type GraphProbe, purgeBlocks, sqlAll } from './graphQueries'
 
 /** A `blocks` row with every column, derived ones such as `references_json`
@@ -79,8 +81,11 @@ const isUserPage = (row: SnapshotRow) => {
   return Array.isArray(types) && types.includes('user')
 }
 
+/** The state roots the app derives from each user page, and what is under them. */
 const snapshotFromRows = (rows: readonly SnapshotRow[]): WorkspaceSnapshot => {
-  const appState = appStateIn({rows: new Map(), appState: new Set(rows.filter(isUserPage).map(row => row.id))}, rows)
+  const ids = new Set(rows.map(row => row.id))
+  const roots = rows.filter(isUserPage).flatMap(page => userStateRootBlockIds(page.id)).filter(id => ids.has(id))
+  const appState = appStateIn({rows: new Map(), appState: new Set(roots)}, rows)
   return {rows: new Map(rows.filter(row => !appState.has(row.id)).map(row => [row.id, row])), appState}
 }
 
@@ -152,6 +157,9 @@ const moved = (before: SnapshotRow, after: SnapshotRow) =>
 
 /** Order keys compare by code unit, as the app and SQLite order them. */
 const byOrderKey = (a: SnapshotRow, b: SnapshotRow) => (a.order_key < b.order_key ? -1 : a.order_key > b.order_key ? 1 : 0)
+
+const stampsMoved = (before: SnapshotRow, after: SnapshotRow) =>
+  before.updated_at !== after.updated_at || before.user_updated_at !== after.user_updated_at
 
 const changesBetween = (snapshot: WorkspaceSnapshot, rows: readonly SnapshotRow[]): TaskChanges => {
   const changes: TaskChanges = {created: [], modified: []}
@@ -238,7 +246,7 @@ export const restoreSnapshot = async (
   // processor that could move them again.
   for (const row of rows) {
     const before = snapshot.rows.get(row.id)
-    if (!before || (row.updated_at === before.updated_at && row.user_updated_at === before.user_updated_at)) continue
+    if (!before || !stampsMoved(before, row)) continue
     await probe.command({
       type: 'sql',
       mode: 'execute',
