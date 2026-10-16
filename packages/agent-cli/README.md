@@ -141,9 +141,18 @@ kmagent eval --data-json '{"x":1}' 'return data.x'
 
 `--data` reads JSON from a file and parses it; `--data-json` parses the inline argument directly. The parsed value is bound as `data` in the eval scope. The two flags are mutually exclusive.
 
+## Workspaces
+
+A token acts as the user who minted it, in any of their workspaces, not only the one open when it was minted. Any open tab of the app signed in as that user registers it, so switching workspace in the tab does not disconnect the agent.
+
+- **Reads take the workspace per call:** `--workspace <id>` on `page`, `search`, `daily-note`, `backlinks` and `grouped-backlinks`, and `workspaceId` on the `km-mcp` `page` / `daily_note` / `search` tools. Without it they use the workspace open in the app tab. `get-block` and `subtree` go by block id, and `sql` sees every workspace in the tab's local database.
+- **A workspace the device cannot read is refused**, not answered with empty results: one this device has no row for, or one that is end-to-end encrypted without its key entered here, or that was never opened here.
+- **Writes go to the workspace open in the app tab only.** They resolve properties and aliases through that workspace's registries, so a write to a block in another workspace is refused; switch the tab to it and re-run. This is a correctness limit, not a permission boundary.
+- **Several tabs of the same user:** a call that names a workspace goes to a tab that has it open; otherwise it goes to the tab focused most recently.
+
 ## Profiles
 
-If you connect to multiple browser profiles or workspaces, name each pairing:
+A token lives in the browser profile (and app origin) that minted it. If you connect to more than one, name each pairing:
 
 ```bash
 kmagent --profile chrome-dev connect

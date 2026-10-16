@@ -62,11 +62,15 @@ afterEach(() => {
 /** Rebuild the repo under test, optionally with a sync gate that says this
  *  device is behind. The gate is the only injectable half of `syncViewGap`,
  *  which the audit reports rather than refuses on. */
-const installRepo = (backfillSyncGate?: (cb: () => void) => () => void) => {
+const installRepo = (
+  backfillSyncGate?: (cb: () => void) => () => void,
+  syncObserverDeps?: Parameters<typeof createTestRepo>[0]['syncObserverDeps'],
+) => {
   repo = createTestRepo({
     db: sharedDb.db,
     user: {id: 'user-1'},
     ...(backfillSyncGate ? {backfillSyncGate} : {}),
+    ...(syncObserverDeps ? {syncObserverDeps} : {}),
   }).repo
   repo.setActiveWorkspaceId(WS)
   const runtime = resolveFacetRuntimeSync([
@@ -507,6 +511,74 @@ describe('shared workspace resolution', () => {
     ) as {workspaceId: string}
 
     expect(result.workspaceId).toBe(WS)
+  })
+})
+
+// A token reaches every workspace of its user, so a read may name one the tab
+// does not have open. Naming one this tab cannot see into is refused rather
+// than answered with "nothing found" (#606).
+describe('reads that name another workspace', () => {
+  const OTHER = 'ws-other'
+  const LOCKED = 'ws-locked'
+
+  const knownWorkspace = (id: string) => repo.db.execute(
+    `INSERT OR REPLACE INTO workspaces
+       (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary,
+        properties_migration)
+     VALUES (?, ?, ?, 1, 1, 'none', NULL, 'cell')`,
+    [id, id, 'user-1'])
+
+  const readVerbs = [
+    ['page', {type: 'page', name: 'x'}],
+    ['search', {type: 'search', query: 'x'}],
+    ['daily-note', {type: 'daily-note', date: '2026-08-18'}],
+    ['backlinks', {type: 'backlinks', blockId: 'b1'}],
+    ['grouped-backlinks', {type: 'grouped-backlinks', blockId: 'b1'}],
+  ] as const
+
+  it.each(readVerbs)('%s refuses a workspace this device does not know', async (_label, base) => {
+    await expect(executeCommand(
+      {commandId: 'r-1', ...base, workspaceId: 'ws-no-such'} as never,
+      context,
+    )).rejects.toThrow(/ws-no-such is not known on this device/)
+  })
+
+  it.each(readVerbs)('%s refuses a workspace whose blocks are not readable here', async (_label, base) => {
+    installRepo(undefined, {
+      getMaterializability: workspaceId => workspaceId === LOCKED ? 'defer' : 'copy',
+      getCek: async () => null,
+    })
+    await knownWorkspace(LOCKED)
+
+    await expect(executeCommand(
+      {commandId: 'r-2', ...base, workspaceId: LOCKED} as never,
+      context,
+    )).rejects.toThrow(/ws-locked is not readable on this device/)
+  })
+
+  it('answers for another workspace that is readable here', async () => {
+    await knownWorkspace(OTHER)
+    await repo.tx(async tx => {
+      await tx.create({id: 'other-page', workspaceId: OTHER, parentId: null, orderKey: 'a0', content: 'Elsewhere'})
+    }, {scope: ChangeScope.BlockDefault, description: 'seed other workspace'})
+
+    const result = await executeCommand(
+      {commandId: 'r-3', type: 'search', query: 'Elsewhere', workspaceId: OTHER},
+      context,
+    ) as {workspaceId: string, results: Array<{id: string}>}
+
+    expect(result.workspaceId).toBe(OTHER)
+    expect(result.results.map(hit => hit.id)).toEqual(['other-page'])
+  })
+
+  it('backlinks refuses a block that is not in the workspace it names', async () => {
+    await knownWorkspace(OTHER)
+    await create({id: 'b1'})
+
+    await expect(executeCommand(
+      {commandId: 'r-4', type: 'backlinks', blockId: 'b1', workspaceId: OTHER},
+      context,
+    )).rejects.toThrow(/b1 is in workspace ws-1, not ws-other/)
   })
 })
 

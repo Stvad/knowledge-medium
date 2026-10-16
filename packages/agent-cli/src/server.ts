@@ -92,12 +92,15 @@ interface ClientRecord {
   metadata: Record<string, unknown>
   audience: Audience | null
   lastSeen: number
-  tokens: Set<Token>
+  /** When the tab last had focus, as it reported; null when it never has. */
+  focusedAt: number | null
+  tokens: Map<Token, TokenGrant>
 }
 
-interface TokenRecord {
-  clientId: ClientId
-  audience: TokenAudience
+/** What a tab's registration says about one of the tokens it lists. */
+interface TokenGrant {
+  userId: string | null
+  label: string | null
   scope: TokenScope
 }
 
@@ -119,7 +122,7 @@ interface CommandRecord {
 // ----- long-poll waiter plumbing ---------------------------------------
 //
 // Shared by the command queue (clientId-keyed) and the events channel
-// (audience-keyed): a parked waiter holds an open response, expires
+// (user-keyed): a parked waiter holds an open response, expires
 // after timeoutMs, and is dropped when the request closes.
 
 interface ParkedWaiter {
@@ -187,8 +190,9 @@ const commands = new Map<CommandId, CommandRecord>()
 const pendingByClient = new Map<ClientId, CommandId[]>()
 // clientId -> Set<ParkedWaiter>
 const waitersByClient = new Map<ClientId, Set<ParkedWaiter>>()
-// token -> token record
-const tokens = new Map<Token, TokenRecord>()
+// token hash -> the user whose tab last listed it, for the unknown-token
+// message. Never pruned: it holds one entry per token any tab ever listed.
+const tokenUsers = new Map<string, string>()
 const responseRequests = new WeakMap<http.ServerResponse, http.IncomingMessage>()
 
 const now = () => Date.now()
@@ -300,11 +304,6 @@ const requireBridgeSecret = (request: http.IncomingMessage, response: http.Serve
 const tokenScope = (value: unknown): TokenScope =>
   value === 'read-only' ? 'read-only' : 'read-write'
 
-const deleteTokenForClient = (token: Token, clientId: ClientId): void => {
-  const entry = tokens.get(token)
-  if (entry?.clientId === clientId) tokens.delete(token)
-}
-
 // Read-only-ness of a SQL string is enforced by the STRICT shared guard
 // (protocol.ts isReadOnlySql) — the previous local `/^(select|explain)/`
 // prefix check let a read-only token run `SELECT powersync_clear(1)`
@@ -330,10 +329,6 @@ const isReadOnlyCommand = (command: CommandPayload): boolean => {
 }
 
 const dropClient = (clientId: ClientId): void => {
-  const client = clients.get(clientId)
-  if (client) {
-    for (const token of client.tokens) deleteTokenForClient(token, clientId)
-  }
   clients.delete(clientId)
 
   // Drop pending queue and fail any waiters; commands targeting this
@@ -414,7 +409,6 @@ const tryDeliverToClient = (clientId: ClientId): void => {
 }
 
 const registerClient = (clientId: ClientId, metadata: RegisterClientMetadata = {}): void => {
-  const existing = clients.get(clientId)
   // The outer metadata shape was validated by handleRequest; per-entry
   // token specs are validated individually so a single malformed entry
   // doesn't reject the whole registration.
@@ -429,27 +423,13 @@ const registerClient = (clientId: ClientId, metadata: RegisterClientMetadata = {
       }
     : null
 
-  // Drop tokens the client no longer authorizes
-  if (existing) {
-    for (const oldToken of existing.tokens) {
-      if (!validatedTokens.some(t => t.token === oldToken)) {
-        deleteTokenForClient(oldToken, clientId)
-      }
-    }
-  }
-
-  const tokenSet = new Set<Token>()
+  // Replaces the client's previous list outright: a token the tab stopped
+  // listing is no longer reachable through it.
+  const grants = new Map<Token, TokenGrant>()
   for (const entry of validatedTokens) {
-    tokenSet.add(entry.token)
-    tokens.set(entry.token, {
-      clientId,
-      audience: {
-        userId: entry.userId ?? audience?.userId ?? null,
-        workspaceId: entry.workspaceId ?? audience?.workspaceId ?? null,
-        label: entry.label ?? null,
-      },
-      scope: tokenScope(entry.scope),
-    })
+    const userId = entry.userId ?? audience?.userId ?? null
+    grants.set(entry.token, {userId, label: entry.label ?? null, scope: tokenScope(entry.scope)})
+    if (userId) tokenUsers.set(hashToken(entry.token), userId)
   }
 
   // Strip token list from stored metadata so /health doesn't echo
@@ -462,9 +442,63 @@ const registerClient = (clientId: ClientId, metadata: RegisterClientMetadata = {
     metadata: publicMetadata,
     audience,
     lastSeen: now(),
-    tokens: tokenSet,
+    focusedAt: typeof metadata.focusedAt === 'number' && Number.isFinite(metadata.focusedAt)
+      ? metadata.focusedAt
+      : null,
+    tokens: grants,
   })
 }
+
+/** The tab a call with `token` goes to, or null when no connected tab lists
+ *  it. Every tab of a user lists every token of that user, so this picks
+ *  among them: a call that names a workspace goes to a tab that has it open;
+ *  otherwise, and when none does, to the most recently focused tab — the
+ *  workspace the user last looked at; ties to the tab seen last, which puts
+ *  a reloaded tab ahead of its predecessor. A tab that closed keeps winning
+ *  until the client TTL drops it, its calls failing `ClientGone` (accepted).
+ *  Which tab serves is routing, not access: any of them reads every
+ *  workspace, and each refuses writes outside the workspace it has open. */
+const routeToken = (
+  token: Token,
+  workspaceId: string | null = null,
+): {client: ClientRecord, grant: TokenGrant} | null => {
+  const rank = (client: ClientRecord) => [
+    workspaceId !== null && client.audience?.workspaceId === workspaceId ? 1 : 0,
+    client.focusedAt ?? 0,
+    client.lastSeen,
+  ]
+  const outranks = (a: ClientRecord, b: ClientRecord) => {
+    const [ra, rb] = [rank(a), rank(b)]
+    const differing = ra.findIndex((value, index) => value !== rb[index])
+    return differing !== -1 && ra[differing]! > rb[differing]!
+  }
+  let best: ClientRecord | null = null
+  for (const client of clients.values()) {
+    if (client.tokens.has(token) && (best === null || outranks(client, best))) best = client
+  }
+  return best ? {client: best, grant: best.tokens.get(token)!} : null
+}
+
+/** The workspace a command names, if any — the routing preference above. */
+const commandWorkspaceId = (payload: CommandPayload): string | null => {
+  const value = (payload as {workspaceId?: unknown}).workspaceId
+  return typeof value === 'string' && value.trim() !== '' ? value.trim() : null
+}
+
+const sendUnknownToken = (response: http.ServerResponse, token: Token): void => {
+  sendJson(response, 401, {
+    error: unknownTokenMessage({
+      tokenUserId: tokenUsers.get(hashToken(token)) ?? null,
+      connectedUserIds: Array.from(clients.values(), client => client.audience?.userId ?? null),
+    }),
+  })
+}
+
+const tokenAudience = ({client, grant}: {client: ClientRecord, grant: TokenGrant}): TokenAudience => ({
+  userId: grant.userId,
+  workspaceId: client.audience?.workspaceId ?? null,
+  label: grant.label,
+})
 
 const enqueueCommand = (
   clientId: ClientId,
@@ -521,18 +555,13 @@ interface EventWaiter extends ParkedWaiter {
   afterSeq: number
 }
 
-// Events are routed by AUDIENCE, not clientId: the consumer's token and
-// the emitting tab share a user+workspace, and that pairing survives tab
-// reloads (a fresh clientId keeps feeding the same stream).
-const audienceKey = (audience: Audience | TokenAudience | null): string | null => {
-  if (!audience) return null
-  if (!audience.userId && !audience.workspaceId) return null
-  return `${audience.userId ?? ''}\u0000${audience.workspaceId ?? ''}`
-}
+// Events are routed by USER, not clientId: a token belongs to its user, so
+// every tab of that user feeds its stream, whichever workspace the tab has
+// open, and a reload (a fresh clientId) keeps feeding the same one.
 
-// audience key -> ring buffer / parked long-polls
+// userId -> ring buffer / parked long-polls
 const eventBuffers = new Map<string, EventBuffer>()
-const eventWaitersByAudience = new Map<string, Set<EventWaiter>>()
+const eventWaitersByUser = new Map<string, Set<EventWaiter>>()
 
 const eventsAfter = (buffer: EventBuffer, afterSeq: number): BridgeEventRecord[] =>
   buffer.events.filter(event => event.seq > afterSeq)
@@ -548,12 +577,12 @@ const appendEvent = (key: string, clientId: ClientId, event: Record<string, unkn
   buffer.events.push(record)
   if (buffer.events.length > eventBufferCap) buffer.events.splice(0, buffer.events.length - eventBufferCap)
 
-  const waiters = eventWaitersByAudience.get(key)
+  const waiters = eventWaitersByUser.get(key)
   if (waiters) {
     for (const waiter of Array.from(waiters)) {
       const pending = eventsAfter(buffer, waiter.afterSeq)
       if (pending.length === 0) continue
-      removeWaiter(eventWaitersByAudience, key, waiter)
+      removeWaiter(eventWaitersByUser, key, waiter)
       clearTimeout(waiter.timeout)
       sendJson(waiter.response, 200, {events: pending, nextSeq: buffer.tail})
     }
@@ -607,7 +636,7 @@ const waitForNextEvents = (
   }
 
   const waiter: EventWaiter = {response, afterSeq}
-  parkWaiter(eventWaitersByAudience, key, request, waiter, timeoutMs, () => {
+  parkWaiter(eventWaitersByUser, key, request, waiter, timeoutMs, () => {
     const current = eventBuffers.get(key)
     sendJson(response, 200, {events: [], nextSeq: current?.tail ?? buffer.tail})
   })
@@ -697,11 +726,11 @@ const getStatus = () => ({
 // an open response, so cancel + close those before dropping the maps.
 const resetState = (): void => {
   drainWaiters(waitersByClient)
-  drainWaiters(eventWaitersByAudience)
+  drainWaiters(eventWaitersByUser)
   clients.clear()
   commands.clear()
   pendingByClient.clear()
-  tokens.clear()
+  tokenUsers.clear()
   eventBuffers.clear()
 }
 
@@ -748,18 +777,17 @@ const handleRequest = async (
         sendJson(response, 401, {error: 'Missing bearer token'})
         return
       }
-      const entry = tokens.get(token)
-      if (!entry) {
-        sendJson(response, 401, {error: unknownTokenMessage})
+      const route = routeToken(token)
+      if (!route) {
+        sendUnknownToken(response, token)
         return
       }
-      const client = clients.get(entry.clientId)
       sendJson(response, 200, {
-        clientId: entry.clientId,
-        audience: entry.audience,
-        scope: entry.scope,
-        connected: Boolean(client),
-        clientLastSeen: client?.lastSeen ?? null,
+        clientId: route.client.id,
+        audience: tokenAudience(route),
+        scope: route.grant.scope,
+        connected: true,
+        clientLastSeen: route.client.lastSeen,
       })
       return
     }
@@ -784,9 +812,9 @@ const handleRequest = async (
         sendJson(response, 409, {error: 'Client is not registered with the bridge — register before posting events'})
         return
       }
-      const key = audienceKey(client.audience)
+      const key = client.audience?.userId
       if (!key) {
-        sendJson(response, 409, {error: 'Client has no audience (userId/workspaceId) — events cannot be routed'})
+        sendJson(response, 409, {error: 'Client has no userId in its audience — events cannot be routed'})
         return
       }
       // Same minimal envelope as commands: a string `type`, everything
@@ -803,21 +831,21 @@ const handleRequest = async (
     }
 
     // Consumer-side long-poll — token-authenticated, scoped to the
-    // token's audience so one user's daemon can't read another's events.
+    // token's user so one user's daemon can't read another's events.
     if (request.method === 'GET' && requestUrl.pathname === '/runtime/events/next') {
       const token = extractBearer(request)
       if (!token) {
         sendJson(response, 401, {error: 'Missing bearer token'})
         return
       }
-      const entry = tokens.get(token)
-      if (!entry) {
-        sendJson(response, 401, {error: unknownTokenMessage})
+      const route = routeToken(token)
+      if (!route) {
+        sendUnknownToken(response, token)
         return
       }
-      const key = audienceKey(entry.audience)
+      const key = route.grant.userId
       if (!key) {
-        sendJson(response, 409, {error: 'Token has no audience (userId/workspaceId) — no event stream to read'})
+        sendJson(response, 409, {error: 'Token has no userId — no event stream to read'})
         return
       }
       waitForNextEvents(request, requestUrl, response, key)
@@ -830,14 +858,8 @@ const handleRequest = async (
         sendJson(response, 401, {error: 'Missing bearer token. Run `kmagent connect <token>` first.'})
         return
       }
-      const entry = tokens.get(token)
-      if (!entry) {
-        sendJson(response, 401, {error: unknownTokenMessage})
-        return
-      }
-      const targetClient = clients.get(entry.clientId)
-      if (!targetClient) {
-        sendJson(response, 503, {error: 'Target client is not currently connected.'})
+      if (!routeToken(token)) {
+        sendUnknownToken(response, token)
         return
       }
 
@@ -850,13 +872,19 @@ const handleRequest = async (
         return
       }
       const payload = parsed.data
-      if (entry.scope === 'read-only' && !isReadOnlyCommand(payload)) {
+      // Re-routed after the body read: the tab set can change while it streams.
+      const route = routeToken(token, commandWorkspaceId(payload))
+      if (!route) {
+        sendUnknownToken(response, token)
+        return
+      }
+      if (route.grant.scope === 'read-only' && !isReadOnlyCommand(payload)) {
         sendJson(response, 403, {error: `Token scope read-only does not allow command type: ${payload.type}`})
         return
       }
 
-      const command = enqueueCommand(entry.clientId, payload, hashToken(token))
-      sendJson(response, 202, {id: command.id, audience: entry.audience})
+      const command = enqueueCommand(route.client.id, payload, hashToken(token))
+      sendJson(response, 202, {id: command.id, audience: tokenAudience(route)})
       return
     }
 

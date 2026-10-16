@@ -29,8 +29,6 @@ export function AgentTokensDialog({
 }: DialogContextProps<void> & AgentTokensDialogProps) {
   const repo = useRepo()
   const userId = repo.user.id
-  const workspaceId = repo.activeWorkspaceId
-  const noWorkspace = !userId || !workspaceId
   const pairing = mode === 'pair-cli'
 
   return (
@@ -40,14 +38,14 @@ export function AgentTokensDialog({
           <DialogTitle>{pairing ? 'Pair agent CLI' : 'Agent runtime tokens'}</DialogTitle>
           <DialogDescription>
             {pairing
-              ? 'Generate a token for this workspace, copy it, then paste it into the waiting terminal prompt.'
-              : 'Tokens authorize a local agent process to drive this workspace as you. Stored on this device only; each token is shown once at mint.'}
+              ? 'Generate a token, copy it, then paste it into the waiting terminal prompt.'
+              : 'Tokens let a local agent process act as you in this app, in any of your workspaces. They work while a tab of the app is open in this browser. Stored on this device only; each token is shown once at mint.'}
           </DialogDescription>
         </DialogHeader>
 
-        {noWorkspace ? (
+        {!userId ? (
           <p className="text-sm text-destructive">
-            Open a workspace before minting agent tokens.
+            Sign in before minting agent tokens.
           </p>
         ) : (
           // Body is a separate component so its useState initializers
@@ -56,7 +54,6 @@ export function AgentTokensDialog({
           // for "reset transient form state when the dialog opens".
           <AgentTokensDialogBody
             userId={userId}
-            workspaceId={workspaceId}
             pairing={pairing}
           />
         )}
@@ -67,25 +64,23 @@ export function AgentTokensDialog({
 
 function AgentTokensDialogBody({
   userId,
-  workspaceId,
   pairing,
 }: {
   userId: string
-  workspaceId: string
   pairing: boolean
 }) {
   const [tokens, setTokens] = useState<AgentToken[]>(
-    () => agentTokenStore.list(userId, workspaceId),
+    () => agentTokenStore.list(userId),
   )
   const [label, setLabel] = useState(pairing ? 'agent-cli' : '')
   const [readOnly, setReadOnly] = useState(false)
   const [justMinted, setJustMinted] = useState<AgentToken | null>(null)
   const [copyState, setCopyState] = useState<'idle' | 'copied'>('idle')
 
-  const refresh = () => setTokens(agentTokenStore.list(userId, workspaceId))
+  const refresh = () => setTokens(agentTokenStore.list(userId))
 
   const mint = () => {
-    const token = agentTokenStore.create(userId, workspaceId, label, readOnly ? 'read-only' : 'read-write')
+    const token = agentTokenStore.create(userId, label, readOnly ? 'read-only' : 'read-write')
     notifyAgentTokensChanged()
     setJustMinted(token)
     setCopyState('idle')
@@ -94,7 +89,7 @@ function AgentTokensDialogBody({
   }
 
   const revoke = (token: string) => {
-    agentTokenStore.revoke(userId, workspaceId, token)
+    agentTokenStore.revoke(userId, token)
     notifyAgentTokensChanged()
     if (justMinted?.token === token) setJustMinted(null)
     refresh()

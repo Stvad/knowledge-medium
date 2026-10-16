@@ -18,6 +18,7 @@ import { knownAgentCommandSchema, type KnownAgentCommand } from '@knowledge-medi
 const defaultBridgeUrl = 'http://127.0.0.1:8787'
 const bridgeUrlStorageKey = 'agent-runtime:bridge-url'
 const bridgeSecretStorageKey = 'agent-runtime:bridge-secret'
+const focusedAtStorageKey = 'agent-runtime:focused-at'
 const longPollMs = 25_000
 const retryBaseMs = 1_000
 const retryMaxMs = 30_000
@@ -181,6 +182,20 @@ const readTrustedStoredBridgeUrl = (): string | null => {
   return null
 }
 
+/** When this tab last had the user's attention. Every tab of the user holds
+ *  every token, and the bridge sends a call that names no workspace to the
+ *  most recently focused one — the workspace the user last looked at. In
+ *  sessionStorage so it is per tab yet survives the reloads `kmagent reload`
+ *  drives; otherwise a reload would demote the tab the agent was using. */
+const readFocusedAt = (): number | null => {
+  const stored = Number(window.sessionStorage.getItem(focusedAtStorageKey))
+  return Number.isFinite(stored) && stored > 0 ? stored : null
+}
+
+const stampFocusedAt = () => {
+  window.sessionStorage.setItem(focusedAtStorageKey, String(Date.now()))
+}
+
 const getStoredBridgeSecret = () =>
   window.localStorage.getItem(bridgeSecretStorageKey)?.trim()
   || import.meta.env.VITE_AGENT_RUNTIME_BRIDGE_SECRET?.trim()
@@ -240,6 +255,7 @@ export const startAgentRuntimeBridge = (
   // Gated by user confirmation + a loopback check; nothing is persisted
   // or used here directly.
   processBridgePairingFromHash()
+  if (document.hasFocus()) stampFocusedAt()
   let retryMs = retryBaseMs
   let attempts = 0
   let wakeResolve: (() => void) | null = null
@@ -275,13 +291,14 @@ export const startAgentRuntimeBridge = (
     const {repo, safeMode} = options
     const userId = repo.user.id
     const workspaceId = repo.activeWorkspaceId
-    const tokens = userId && workspaceId
-      ? agentTokenStore.list(userId, workspaceId).map(t => ({
+    // Every token of the signed-in user, whichever workspace is open: the
+    // workspace a call acts on is the call's parameter, not the token's.
+    const tokens = userId
+      ? agentTokenStore.list(userId).map(t => ({
           token: t.token,
           label: t.label,
           scope: t.scope ?? 'read-write',
           userId,
-          workspaceId,
         }))
       : []
 
@@ -294,6 +311,7 @@ export const startAgentRuntimeBridge = (
       href: window.location.href,
       userAgent: window.navigator.userAgent,
       audience: { userId, workspaceId },
+      focusedAt: readFocusedAt(),
       tokens,
     }, abortController.signal)
   }
@@ -321,8 +339,16 @@ export const startAgentRuntimeBridge = (
     register().catch(() => { /* loop will retry */ })
   }
 
+  // Re-registers at once rather than at the next loop turn, so a call made
+  // right after the user switches tabs already goes to the one in front.
+  const handleFocused = () => {
+    stampFocusedAt()
+    wakeBridgeLoop()
+    register().catch(() => { /* loop will retry */ })
+  }
+
   const handleVisibilityChanged = () => {
-    if (document.visibilityState === 'visible') wakeBridgeLoop()
+    if (document.visibilityState === 'visible') handleFocused()
   }
 
   const handleWakeEvent = () => {
@@ -351,7 +377,7 @@ export const startAgentRuntimeBridge = (
 
   window.addEventListener(agentRuntimeBridgeRestartEvent, handleRestart)
   window.addEventListener(agentTokensChangedEvent, handleTokensChanged)
-  window.addEventListener('focus', handleWakeEvent)
+  window.addEventListener('focus', handleFocused)
   window.addEventListener('hashchange', handleHashChanged)
   window.addEventListener('online', handleWakeEvent)
   document.addEventListener('visibilitychange', handleVisibilityChanged)
@@ -499,7 +525,7 @@ export const startAgentRuntimeBridge = (
     offEditResumed()
     window.removeEventListener(agentRuntimeBridgeRestartEvent, handleRestart)
     window.removeEventListener(agentTokensChangedEvent, handleTokensChanged)
-    window.removeEventListener('focus', handleWakeEvent)
+    window.removeEventListener('focus', handleFocused)
     window.removeEventListener('hashchange', handleHashChanged)
     window.removeEventListener('online', handleWakeEvent)
     document.removeEventListener('visibilitychange', handleVisibilityChanged)

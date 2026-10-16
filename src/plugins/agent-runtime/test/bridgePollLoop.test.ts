@@ -31,6 +31,13 @@ const jsonResponse = (body: unknown) =>
 let commandQueue: Array<Record<string, unknown>>
 let queueWaiters: Array<(command: Record<string, unknown>) => void>
 let resultPosts: Array<{commandId: string, body: {ok: boolean}}>
+let registrations: Array<Registration>
+
+interface Registration {
+  audience: {userId: string | null, workspaceId: string | null}
+  tokens: Array<{token: string, userId?: string, workspaceId?: string}>
+  focusedAt: number | null
+}
 
 const enqueueCommand = (command: Record<string, unknown>) => {
   const waiter = queueWaiters.shift()
@@ -40,7 +47,10 @@ const enqueueCommand = (command: Record<string, unknown>) => {
 
 const fakeBridgeFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
   const url = new URL(String(input instanceof Request ? input.url : input))
-  if (/^\/runtime\/clients\//.test(url.pathname)) return jsonResponse({ok: true})
+  if (/^\/runtime\/clients\//.test(url.pathname)) {
+    registrations.push(JSON.parse(String(init?.body)) as Registration)
+    return jsonResponse({ok: true})
+  }
   const resultMatch = url.pathname.match(/^\/runtime\/commands\/([^/]+)\/result$/)
   if (resultMatch) {
     resultPosts.push({commandId: resultMatch[1]!, body: JSON.parse(String(init?.body)) as {ok: boolean}})
@@ -59,11 +69,13 @@ const fakeBridgeFetch = async (input: RequestInfo | URL, init?: RequestInit): Pr
   throw new Error(`Unexpected bridge fetch: ${url.pathname}`)
 }
 
-const bridgeOptions = {
-  repo: {user: {id: 'user-1'}, activeWorkspaceId: 'workspace-1'},
+const bridgeOptionsIn = (activeWorkspaceId: string) => ({
+  repo: {user: {id: 'user-1'}, activeWorkspaceId},
   runtime: {},
   safeMode: false,
-} as unknown as AgentRuntimeBridgeOptions
+}) as unknown as AgentRuntimeBridgeOptions
+
+const bridgeOptions = bridgeOptionsIn('workspace-1')
 
 let cleanup: (() => void) | null = null
 
@@ -71,6 +83,7 @@ beforeEach(() => {
   commandQueue = []
   queueWaiters = []
   resultPosts = []
+  registrations = []
   mockState.executions.length = 0
   window.localStorage.setItem('agent-runtime:bridge-secret', 'test-secret')
   vi.spyOn(window, 'fetch').mockImplementation(fakeBridgeFetch)
@@ -80,6 +93,7 @@ afterEach(() => {
   cleanup?.()
   cleanup = null
   window.localStorage.clear()
+  window.sessionStorage.clear()
   vi.restoreAllMocks()
 })
 
@@ -141,5 +155,82 @@ describe('bridge poll loop — command concurrency', () => {
     await vi.waitFor(() => expect(mockState.executions).toHaveLength(2))
     mockState.executions[1]!.resolve('fine')
     await vi.waitFor(() => expect(resultFor('after')?.body.ok).toBe(true))
+  })
+})
+
+const storeTokens = (key: string, tokens: string[]) =>
+  window.localStorage.setItem(key, JSON.stringify(
+    tokens.map(token => ({token, label: token, scope: 'read-write', createdAt: 1}))))
+
+const registeredTokens = (registration: Registration) =>
+  registration.tokens.map(t => t.token).sort()
+
+/** One more full poll-loop turn: the loop re-registers after it delivers. */
+const nextLoopTurn = async (commandId: string) => {
+  const registered = registrations.length
+  enqueueCommand({type: 'ping', commandId})
+  await vi.waitFor(() => expect(registrations.length).toBeGreaterThan(registered))
+}
+
+// The bug this pins: registration used to post only the tokens minted in the
+// ACTIVE workspace, so switching workspace in the paired tab un-registered the
+// agent's token and every call failed as if the bridge were down.
+describe('bridge registration — tokens belong to the user', () => {
+  it('registers every token of the signed-in user, whichever workspace is open', async () => {
+    storeTokens('agent-runtime:tokens:user-1', ['T-user'])
+    // Minted while another workspace was active, before tokens were per user.
+    storeTokens('agent-runtime:tokens:user-1:workspace-2', ['T-minted-in-ws-2'])
+    storeTokens('agent-runtime:tokens:someone-else', ['T-other-user'])
+
+    cleanup = startAgentRuntimeBridge(bridgeOptionsIn('workspace-1'))
+
+    await vi.waitFor(() => expect(registrations.length).toBeGreaterThan(0))
+    expect(registeredTokens(registrations[0]!)).toEqual(['T-minted-in-ws-2', 'T-user'])
+    expect(registrations[0]!.audience).toEqual({userId: 'user-1', workspaceId: 'workspace-1'})
+  })
+
+  it('keeps the same tokens registered after the tab switches workspace', async () => {
+    storeTokens('agent-runtime:tokens:user-1', ['T-user'])
+    const options = bridgeOptionsIn('workspace-1')
+    cleanup = startAgentRuntimeBridge(options)
+    await vi.waitFor(() => expect(registrations.length).toBeGreaterThan(0))
+
+    ;(options.repo as {activeWorkspaceId: string}).activeWorkspaceId = 'workspace-2'
+    await nextLoopTurn('after-switch')
+
+    const latest = registrations.at(-1)!
+    expect(registeredTokens(latest)).toEqual(['T-user'])
+    expect(latest.audience.workspaceId).toBe('workspace-2')
+  })
+})
+
+// With every tab of a user holding every token, the bridge picks among them;
+// a call that names no workspace goes to the tab focused most recently.
+describe('bridge registration — focus stamp', () => {
+  // Started unfocused, so the only stamp there can be is the focus event's.
+  beforeEach(() => { vi.spyOn(document, 'hasFocus').mockReturnValue(false) })
+
+  it('re-registers with a focus stamp when the tab gains focus', async () => {
+    cleanup = startAgentRuntimeBridge(bridgeOptions)
+    await vi.waitFor(() => expect(registrations.length).toBeGreaterThan(0))
+    expect(registrations[0]!.focusedAt).toBeNull()
+
+    window.dispatchEvent(new Event('focus'))
+
+    await vi.waitFor(() => expect(registrations.at(-1)!.focusedAt).toBeTypeOf('number'))
+  })
+
+  it('a reloaded tab keeps the focus stamp it had', async () => {
+    cleanup = startAgentRuntimeBridge(bridgeOptions)
+    window.dispatchEvent(new Event('focus'))
+    await vi.waitFor(() => expect(registrations.at(-1)?.focusedAt).toBeTypeOf('number'))
+    const stamp = registrations.at(-1)!.focusedAt
+    cleanup()
+
+    registrations = []
+    cleanup = startAgentRuntimeBridge(bridgeOptions)
+
+    await vi.waitFor(() => expect(registrations.length).toBeGreaterThan(0))
+    expect(registrations[0]!.focusedAt).toBe(stamp)
   })
 })

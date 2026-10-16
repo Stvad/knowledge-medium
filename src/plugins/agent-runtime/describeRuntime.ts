@@ -504,6 +504,10 @@ export const describeRuntimeSummary = async (
     },
     more: [
       {
+        need: 'Read a workspace other than activeWorkspaceId. The token reaches every workspace of its user; writes act on activeWorkspaceId only, because they resolve through the open workspace\'s registries.',
+        command: 'pnpm agent search <query> --workspace <id>  # also page, daily-note, backlinks; sql sees every workspace',
+      },
+      {
         need: "Understand the data model (blocks, references, pages vs daily-notes, backlinks vs grouped-backlinks, source_field, done-status, deep-links) before reading or writing a user's data",
         command: 'pnpm agent data-model',
       },
