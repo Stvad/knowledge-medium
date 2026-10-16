@@ -1,0 +1,1 @@
+import{G$ as e,K$ as t,q$ as n}from"../../chunks/app-DUTnplNZ.js";export{e as MIGRATIONS_PAGE_ALIAS,t as getOrCreateMigrationsPage,n as migrationsPageBlockId};

@@ -1,0 +1,1 @@
+import{CT as e,ST as t}from"../chunks/app-DUTnplNZ.js";export{t as checkForAppUpdate,e as registerServiceWorker};

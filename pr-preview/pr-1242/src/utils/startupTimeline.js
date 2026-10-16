@@ -1,0 +1,1 @@
+import{AF as e,FF as t,IF as n,LF as r,MF as i,NF as a,PF as o,jF as s,kF as c}from"../../chunks/app-DUTnplNZ.js";export{c as getLastLongTaskEndMs,e as getStartupTimeline,s as hasStartupMark,i as longTasksSupported,a as markStartup,o as markStartupAt,t as onLongTask,n as resetStartupTimeline,r as startStartupObservers};

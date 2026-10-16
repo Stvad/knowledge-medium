@@ -1,0 +1,1 @@
+import{cO as e,sO as t}from"../../chunks/app-DUTnplNZ.js";export{t as useIsMobile,e as usePointerCoarse};

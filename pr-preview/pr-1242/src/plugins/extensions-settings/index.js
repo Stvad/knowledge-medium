@@ -1,0 +1,1 @@
+import{eT as e,gt as t,tT as n}from"../../../chunks/app-DUTnplNZ.js";export{e as extensionsOverridesProp,n as extensionsPrefsType,t as extensionsSettingsPlugin};

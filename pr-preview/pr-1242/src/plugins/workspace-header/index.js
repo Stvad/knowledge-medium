@@ -1,0 +1,1 @@
+import{M_ as e,N_ as t,P_ as n,j_ as r}from"../../../chunks/app-DUTnplNZ.js";export{r as WorkspaceSwitcherSidebarSection,e as pendingInvitationsHeaderItem,t as workspaceHeaderPlugin,n as workspaceSwitcherSidebarSection};

@@ -1,0 +1,1 @@
+import{XO as e,YO as t}from"../../chunks/app-DUTnplNZ.js";export{t as canConvertEmptyChildBlockToProperty,e as convertEmptyChildBlockToProperty};

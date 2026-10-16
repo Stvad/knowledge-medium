@@ -1,0 +1,1 @@
+import{$T as e,QT as t}from"../../chunks/app-DUTnplNZ.js";export{t as ClientLocalSettings,e as clientLocalSettings};

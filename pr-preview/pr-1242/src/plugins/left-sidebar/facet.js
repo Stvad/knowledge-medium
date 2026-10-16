@@ -1,0 +1,1 @@
+import{X_ as e,Z_ as t}from"../../../chunks/app-DUTnplNZ.js";export{e as isLeftSidebarSectionContribution,t as leftSidebarSectionsFacet};

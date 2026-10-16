@@ -1,0 +1,1 @@
+import{g0 as e,h0 as t}from"../../chunks/app-DUTnplNZ.js";export{t as getOrCreatePropertiesPage,e as propertiesPageBlockId};

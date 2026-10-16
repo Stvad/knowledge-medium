@@ -1,0 +1,1 @@
+import{bs as e}from"../../../chunks/app-DUTnplNZ.js";export{e as blockTagsConfigUi};

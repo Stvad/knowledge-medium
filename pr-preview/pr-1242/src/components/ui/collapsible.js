@@ -1,0 +1,1 @@
+"use client";import{LA as e,RA as t,zA as n}from"../../../chunks/app-DUTnplNZ.js";export{e as Collapsible,t as CollapsibleContent,n as CollapsibleTrigger};

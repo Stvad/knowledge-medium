@@ -1,0 +1,1 @@
+import{Lz as e,Rz as t,zz as n}from"../../../chunks/app-DUTnplNZ.js";export{e as charLimitProp,t as charProfileProp,n as charScopeProp};

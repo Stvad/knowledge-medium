@@ -1,0 +1,1 @@
+import{XM as e,ZM as t}from"../../../chunks/app-DUTnplNZ.js";export{e as isPropertyPanelHiddenProperty,t as isPropertyPanelReadOnlyProperty};

@@ -1,0 +1,1 @@
+import{vt as e}from"../../../chunks/app-DUTnplNZ.js";export{e as extensionsOverridesUi};

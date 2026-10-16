@@ -1,0 +1,1 @@
+import{iC as e,nC as t,rC as n}from"../../../chunks/app-DUTnplNZ.js";export{t as SWIPE_QUICK_ACTIONS_GESTURE_ID,n as SWIPE_TRIGGER_PX,e as swipeRecognizer};

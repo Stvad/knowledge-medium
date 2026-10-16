@@ -1,0 +1,1 @@
+import{GG as e,WG as t}from"../../chunks/app-DUTnplNZ.js";export{t as Block,e as requireLoadedBlock};

@@ -1,0 +1,1 @@
+import{ok as e,sk as t}from"../../chunks/app-DUTnplNZ.js";export{e as defaultPasteDecision,t as pasteDecisionVerb};

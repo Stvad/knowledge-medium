@@ -1,0 +1,1 @@
+import{KP as e,qP as t}from"../../../chunks/app-DUTnplNZ.js";export{e as floatingAnchorFromRect,t as useAnchoredFloating};

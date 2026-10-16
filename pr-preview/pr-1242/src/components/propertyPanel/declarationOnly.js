@@ -1,0 +1,1 @@
+import{hj as e,mj as t}from"../../../chunks/app-DUTnplNZ.js";export{t as declarationOnlyDefinitionForName,e as declarationOnlyStatusText};

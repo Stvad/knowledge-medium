@@ -1,0 +1,1 @@
+import{fx as e,mx as t,px as n}from"../../../../../chunks/app-DUTnplNZ.js";export{e as isWikilinkDisplayParts,n as resolveWikilinkDisplay,t as wikilinkDisplayDecoratorFacet};
