@@ -411,3 +411,40 @@ describe('createBlockedWikilinkWriteGuard — markdown and edit writes', () => {
     await expect(guard.beforeWrite({type: 'create_page', name: 'notes [[claude]]'})).resolves.toBeUndefined()
   })
 })
+
+describe('createBlockedWikilinkWriteGuard — anchored appends', () => {
+  // An anchored append re-keys siblings tied with the anchor, as a move does,
+  // so those rows are inspected the same way.
+  it('blocks an anchored append that would re-key a tied blocked sibling', async () => {
+    const guard = createBlockedWikilinkWriteGuard(graphFrom({
+      sqlAll: vi.fn(async (sql: string) => {
+        if (sql.includes('SELECT parent_id')) return [{parent_id: 'parent'}]
+        if (sql.includes('SELECT workspace_id')) return [{workspace_id: 'ws-1'}]
+        if (sql.includes('order_key')) {
+          return [
+            {id: 'anchor', content: 'anchor', properties_json: '{}', order_key: 'a0'},
+            {id: 'blocked-sibling', content: 'mentions [[claude]]', properties_json: '{}', order_key: 'a0'},
+            {id: 'later', content: 'later', properties_json: '{}', order_key: 'a1'},
+          ]
+        }
+        return []
+      }),
+    }), ['claude'])
+
+    await expect(guard.beforeWrite({
+      type: 'append_markdown', target: 'parent', markdown: '- safe', position: {kind: 'after', siblingId: 'anchor'},
+    })).rejects.toThrow('references a blocked page')
+  })
+
+  it('lets an unanchored append through without reading siblings', async () => {
+    // Answers the lookups a sibling read would start with, so one would show.
+    const sqlAll = vi.fn<GuardGraph['sqlAll']>(async (sql: string) =>
+      sql.includes('SELECT workspace_id') ? [{workspace_id: 'ws-1'}]
+        : sql.includes('SELECT parent_id') ? [{parent_id: 'parent'}]
+          : [])
+    const guard = createBlockedWikilinkWriteGuard(graphFrom({sqlAll}), ['claude'])
+    await expect(guard.beforeWrite({type: 'append_markdown', target: 'parent', markdown: '- safe'}))
+      .resolves.toBeUndefined()
+    expect(sqlAll.mock.calls.filter(([sql]) => sql.includes('order_key'))).toEqual([])
+  })
+})

@@ -254,6 +254,19 @@ export const createBlockedWikilinkWriteGuard = (
   }
   const targetPageToCreate = (target: string) => nameOfPageToCreate(pageNameInTarget(target))
 
+  /** The tied siblings an append next to `position`'s anchor re-keys — the
+   *  same rows a move to that position rewrites, under the anchor's parent. */
+  const anchoredTiedRewriteRows = async (
+    position: {kind: 'first'} | {kind: 'last'} | {kind: 'before', siblingId: string} | {kind: 'after', siblingId: string} | undefined,
+  ): Promise<MoveSiblingRow[]> => {
+    if (position?.kind !== 'before' && position?.kind !== 'after') return []
+    const rows = await graph.sqlAll('SELECT parent_id FROM blocks WHERE id = ? LIMIT 1', [position.siblingId])
+    const parentId = (rows[0] as {parent_id?: unknown} | undefined)?.parent_id
+    if (typeof parentId !== 'string') return []
+    // No block is being moved: '' excludes nothing.
+    return moveTiedRewriteRowsForGuard({id: '', parentId, position})
+  }
+
   const createWriteAssertions = () => {
     let guardSetForWrite: Promise<RefGuardSet> | null = null
     const guardSet = async () => {
@@ -375,6 +388,10 @@ export const createBlockedWikilinkWriteGuard = (
         case 'append_markdown':
           await assertNoBlockedRefs(await targetPageToCreate(operation.target))
           await assertNoBlockedRefs(operation.markdown)
+          // Anchored, it re-keys siblings tied with the anchor, as a move does.
+          for (const row of await anchoredTiedRewriteRows(operation.position)) {
+            await assertNoBlockedRefs(row.content, row.properties)
+          }
           return
         case 'edit_block':
           await assertNoBlockedRefs(operation.new)
