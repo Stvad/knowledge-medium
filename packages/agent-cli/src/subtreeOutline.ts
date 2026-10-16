@@ -11,6 +11,8 @@
  * re-sorting siblings silently inverts an outline's meaning.
  */
 
+import { neutralizeDisplayText } from './protocol.js'
+
 /** The subset of the flat `get-subtree` row this outline reads (the wire
  *  payload carries the full `SubtreeRow`). `depth` is the authoritative
  *  root-relative depth the runtime computed (0 at the root); `parentId` is
@@ -44,49 +46,11 @@ const isDepth = (value: unknown): value is number =>
  *  `String.prototype.repeat` (OOM, or RangeError past 2**53). */
 const MAX_OUTLINE_DEPTH = 100
 
-/**
- * The characters this module treats as hostile in CONTENT and the rendered
- * PROPERTIES: all of C0 except TAB, DEL, all of C1, U+2028/U+2029, and
- * every codepoint the Unicode `Bidi_Control` property covers. `id` gets a
- * DIFFERENT, categorical treatment — see `ID_ENCODE_REGEX`.
- *
- * INVARIANT: no character that can forge a line break or REORDER displayed
- * text reaches the terminal (or an LLM reading the raw outline text)
- * through content or properties.
- *
- * The bidi class ("Trojan Source": an override or isolate inside content is
- * rendered unchanged by a bidi-aware terminal, which can visually reorder
- * the `[id]` token and its delimiter without a single byte moving) is
- * matched as a Unicode PROPERTY rather than a hand-enumerated transcription
- * of its members, because a transcription can silently omit a member
- * exactly as reordering-capable as the rest. The C0/C1/DEL/line-separator
- * half stays a hand-enumerated range only because no single Unicode
- * property matches this TAB-excluded, Zl/Zp-inclusive boundary.
- *
- * TAB (U+0009) is the one deliberate exclusion: a terminal advances the
- * cursor FORWARD on TAB, so unlike the rest it can never walk back over
- * already-printed text, and no parser here reads it as a line break.
- *
- * ZERO WIDTH JOINER (U+200D) and ZERO WIDTH NON-JOINER (U+200C) are
- * deliberately NOT neutralized, so do not broaden this to `\p{Cf}` or
- * `\p{C}`: neither reorders anything (they shape adjacent characters in
- * place) and both are required in real content — compound emoji are built
- * with ZWJ, and ZWNJ is mandatory orthography in Persian, Hindi and other
- * scripts. Accepted residual: an invisible but NON-reordering character can
- * still reach rendered prose, which is display fidelity rather than the
- * anti-forgery concern defended here.
- */
-// eslint-disable-next-line no-control-regex -- intentional control-char match
-const CONTROL_CHAR_RUN_REGEX = /[\u0000-\u0008\u000a-\u001f\u007f-\u009f\u2028\u2029\p{Bidi_Control}]+/gu
-
-/** The lossy neutralization applied to CONTENT and the rendered
- *  `properties` JSON: both are prose, not identifiers, so collapsing each
- *  run of hostile characters (see {@link CONTROL_CHAR_RUN_REGEX}) to a
- *  single marker is an acceptable way to guarantee one block renders as
- *  exactly one line with no reordering. `id` must round-trip instead and
- *  does NOT go through this — see `encodeOutlineId`. */
-const neutralizeOutlineField = (text: string): string =>
-  text.replace(CONTROL_CHAR_RUN_REGEX, ' ⏎ ')
+/** Content and the rendered properties are prose, so they go through the
+ *  shared lossy {@link neutralizeDisplayText}: one block renders as exactly
+ *  one line with no reordering. `id` must round-trip instead and does NOT go
+ *  through it — see `encodeOutlineId`. */
+const neutralizeOutlineField = neutralizeDisplayText
 
 /**
  * `id`'s hostile-character boundary — a CATEGORY, not an enumerated list,

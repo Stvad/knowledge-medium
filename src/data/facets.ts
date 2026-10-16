@@ -26,6 +26,9 @@ import type {ProjectedTypeDefinition} from '@/data/typeDefinitionRegistry'
 import type { AnyDefinitionBlockProjector } from './projectorRuntime.ts'
 import type { InvalidationRule } from './invalidation.ts'
 import type { Repo } from './repo.ts'
+import type { BlockSearchFilter } from './searchFilter.ts'
+
+export { isActiveSearchFilter, type BlockSearchFilter } from './searchFilter.ts'
 import {isPropertySeedDeclaration} from './propertySeeds.ts'
 import {isTypeSeedDeclaration, type TypeSeedDeclaration} from './typeSeeds.ts'
 
@@ -520,6 +523,8 @@ export interface SearchSourceArgs {
    *  participates in the cross-source sort at the merge point. */
   readonly limit: number
   readonly recentBlockIds?: ReadonlyArray<string>
+  /** Only sources declaring `supportsFilter` receive an active filter. */
+  readonly filter?: BlockSearchFilter
 }
 
 /** A pluggable block-search backend. `search` is called alongside every
@@ -542,6 +547,10 @@ export interface SearchSourceArgs {
  *  rather than resolving to an empty result. */
 export interface SearchSourceContribution {
   readonly id: string
+  /** Applies `SearchSourceArgs.filter` in its own query. A source without it
+   *  sits out every filtered search rather than return blocks the filter
+   *  excludes. */
+  readonly supportsFilter?: boolean
   search: (repo: Repo, args: SearchSourceArgs) => Promise<readonly SearchSourceCandidate[]>
 }
 

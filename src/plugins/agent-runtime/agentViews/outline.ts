@@ -1,0 +1,170 @@
+import type { Repo } from '@/data/repo'
+import type { BlockData } from '@/data/api'
+import { isCollapsedProp } from '@/data/properties.js'
+import { AGENT_VIEW_DEFAULTS } from '@knowledge-medium/agent-cli/protocol'
+import { loadBlocks, loadCrumbs, visibleChildCounts, visibleChildrenLevel } from './context.ts'
+import { createPropertyRenderer, type PropertyDetail } from './properties.ts'
+import { shortIds as loadShortIds } from './resolveRef.ts'
+import {
+  clampInt,
+  CUT_LEGEND,
+  crumbLine,
+  loadRoot,
+  metaSuffix,
+  plural,
+  toViewRow,
+  type ViewRow,
+} from './shared.ts'
+import { formatCount } from './text.ts'
+
+export interface OutlineParams {
+  ref: string
+  depth?: number
+  limit?: number
+  offset?: number
+  properties?: PropertyDetail | 'none'
+  expandCollapsed?: boolean
+}
+
+export interface OutlineRow extends ViewRow {
+  parentId: string
+  /** 1 for the root's children. */
+  depth: number
+  childCount: number
+  /** Children not shown: past `depth`, past the block budget, or collapsed. */
+  hiddenChildren: number
+  collapsed: boolean
+}
+
+export interface OutlineView {
+  root: ViewRow & {breadcrumb: string[], childCount: number}
+  rows: OutlineRow[]
+  offset: number
+  /** The first root-child offset not shown, or null when the listing of the
+   *  root's children is complete. */
+  nextOffset: number | null
+}
+
+const MAX_DEPTH = 20
+const MAX_BLOCKS = 2000
+const LINE_CHARS = 200
+const ROOT_CHARS = 300
+
+interface Node {
+  block: BlockData
+  childCount: number
+  depth: number
+  children: string[]
+}
+
+const isCollapsed = (block: BlockData): boolean => block.properties[isCollapsedProp.name] === true
+
+/** Pick what to show breadth-first, so a budget spent on one deep branch never
+ *  hides the root's other children: level by level, each level ordered by its
+ *  parents' position and then sibling order, until the block budget or the
+ *  depth runs out. */
+const selectNodes = async (
+  repo: Repo,
+  root: BlockData,
+  {depth, limit, offset, expandCollapsed}: {depth: number, limit: number, offset: number, expandCollapsed: boolean},
+): Promise<Map<string, Node>> => {
+  const nodes = new Map<string, Node>()
+  let budget = limit
+  let frontier = [root.id]
+  for (let level = 1; level <= depth && budget > 0 && frontier.length > 0; level++) {
+    const rows = await visibleChildrenLevel(repo, frontier, {limit: budget, offset: level === 1 ? offset : 0})
+    budget -= rows.length
+    const next: string[] = []
+    for (const {block, childCount} of rows) {
+      nodes.set(block.id, {block, childCount, depth: level, children: []})
+      const parent = nodes.get(block.parentId ?? '')
+      parent?.children.push(block.id)
+      if (childCount > 0 && (expandCollapsed || !isCollapsed(block))) next.push(block.id)
+    }
+    frontier = next
+  }
+  return nodes
+}
+
+export const buildOutlineView = async (
+  repo: Repo,
+  workspaceId: string,
+  params: OutlineParams,
+): Promise<OutlineView> => {
+  const depth = clampInt(params.depth, AGENT_VIEW_DEFAULTS.outlineDepth, MAX_DEPTH)
+  const limit = clampInt(params.limit, AGENT_VIEW_DEFAULTS.outlineLimit, MAX_BLOCKS)
+  const offset = params.offset ?? 0
+  const detail = params.properties ?? 'brief'
+
+  const {root} = await loadRoot(repo, params.ref, workspaceId, async id => (await loadBlocks(repo, [id]))[0])
+  const [rootCounts, crumbs] = await Promise.all([
+    visibleChildCounts(repo, [root.id]),
+    loadCrumbs(repo, [root.id], workspaceId),
+  ])
+  const rootChildCount = rootCounts.get(root.id) ?? 0
+  const nodes = await selectNodes(repo, root, {depth, limit, offset, expandCollapsed: params.expandCollapsed === true})
+
+  const blocks = [root, ...[...nodes.values()].map(node => node.block)]
+  const [renderer, shortIds] = await Promise.all([
+    createPropertyRenderer(repo, blocks),
+    loadShortIds(repo, blocks.map(block => block.id)),
+  ])
+
+  const rows: OutlineRow[] = []
+  const visit = (parentId: string, childIds: readonly string[]) => {
+    for (const id of childIds) {
+      const node = nodes.get(id)!
+      rows.push({
+        ...toViewRow(node.block, {shortIds, renderer, maxChars: LINE_CHARS, detail}),
+        parentId,
+        depth: node.depth,
+        childCount: node.childCount,
+        hiddenChildren: node.childCount - node.children.length,
+        collapsed: isCollapsed(node.block),
+      })
+      visit(id, node.children)
+    }
+  }
+  const rootChildren = [...nodes.values()].filter(node => node.depth === 1).map(node => node.block.id)
+  visit(root.id, rootChildren)
+
+  const shownEnd = offset + rootChildren.length
+  return {
+    root: {
+      ...toViewRow(root, {shortIds, renderer, maxChars: ROOT_CHARS, detail: detail === 'none' ? 'none' : 'full'}),
+      breadcrumb: crumbs.get(root.id) ?? [],
+      childCount: rootChildCount,
+    },
+    rows,
+    offset,
+    nextOffset: shownEnd < rootChildCount ? shownEnd : null,
+  }
+}
+
+export const renderOutlineView = (view: OutlineView, detail: PropertyDetail | 'none' = 'brief'): string => {
+  const {root, rows} = view
+  const lines: string[] = []
+  const rootDetail = detail === 'none' ? 'none' : 'full'
+  lines.push(`${root.content}  ^${root.shortId}${metaSuffix(root, rootDetail)}  · ${plural(root.childCount, 'child', 'children')}`)
+  if (root.breadcrumb.length > 0) lines.push(`in: ${crumbLine(root.breadcrumb)}`)
+  if (view.offset > 0) lines.push(`(children from #${formatCount(view.offset + 1)})`)
+
+  let sawHidden = false
+  let sawCut = root.cut > 0
+  for (const row of rows) {
+    const hidden = row.hiddenChildren > 0
+      ? `  (+${plural(row.hiddenChildren, 'child', 'children')}${row.collapsed ? ', collapsed' : ''})`
+      : ''
+    sawHidden ||= hidden !== ''
+    sawCut ||= row.cut > 0
+    lines.push(`${'  '.repeat(row.depth - 1)}- ${row.content}${metaSuffix(row, detail)}  ^${row.shortId}${hidden}`)
+  }
+
+  if (view.nextOffset !== null) {
+    const rest = root.childCount - view.nextOffset
+    lines.push(`… ${plural(rest, 'more child', 'more children')} of the root not shown — continue with offset=${view.nextOffset}`)
+  }
+  if (sawHidden) lines.push('(+N children) = not expanded here; raise depth, or read that block by its id.')
+  if (sawCut) lines.push(CUT_LEGEND)
+  return lines.join('\n')
+}

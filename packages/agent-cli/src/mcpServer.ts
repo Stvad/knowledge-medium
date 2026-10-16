@@ -2,7 +2,8 @@
  * km MCP server — live Knowledge Medium graph tools over the kmagent
  * bridge, for any MCP client.
  *
- * Deliberately narrower than the bridge: read tools + block-level
+ * Deliberately narrower than the bridge: read tools (generated from
+ * `GRAPH_READ_TOOLS`, shared with the CLI) + block-level
  * writes only. No eval, no sql execute, no extension lifecycle — a
  * spawned model gets graph access, not a JS interpreter in the app.
  *
@@ -13,10 +14,10 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { readFileSync } from 'node:fs'
 import { z } from 'zod'
 import { createBridgeClient, type BridgeClient } from './client.js'
-import { renderSubtreeOutline, type SubtreeOutlineRow } from './subtreeOutline.js'
 import { createBridgeGraph, type BridgeGraph } from './graph.js'
-import { isReadOnlySql, type KmMcpToolName, MCP_SERVER_NAME } from './mcpShared.js'
+import { type KmMcpToolName, MCP_SERVER_NAME } from './mcpShared.js'
 import { moveBlockPositionSchema } from './protocol.js'
+import { GRAPH_READ_TOOLS, renderToolResult, toolCommand } from './readTools.js'
 
 interface PackageJson {
   version?: unknown
@@ -30,6 +31,16 @@ const agentCliPackageVersion = (() => {
   }
   return pkg.version
 })()
+
+/** What every km-mcp client is told about the graph; a caller's own
+ *  `serverOptions.instructions` is appended after it. */
+export const KM_MCP_INSTRUCTIONS = `Knowledge Medium is an outliner: everything is a block (markdown content plus typed properties) nested under a parent. A page is a top-level block whose content is its title; [[Page name]] in content links to a page; a block's backlinks are the blocks that reference it. Daily notes are pages, one per date.
+
+Addressing: every tool that takes a block accepts a full id, a unique id prefix as printed (^3f2a9c1d), a page name, or a date (today, yesterday, 2026-06-18) for that day's daily note.
+
+Reads are bounded and say so: an outline line is \`- content  key:: value  ^shortid\`, \`(+N children)\` marks children not expanded, \`…[+N chars]\` marks cut text (get_block reads it in full), and a cut-off list ends with the offset to continue from. Pass format: "json" for structured output.
+
+Start with subtree on a page name or "today" for an overview, search for text (filters: types, under, includeExtensions), backlinks / grouped_backlinks for what references something. guide explains the data model; sql_query is the escape hatch (read-only, rows capped).`
 
 type MoveBlockPositionInput = z.infer<typeof moveBlockPositionSchema>
 
@@ -80,50 +91,20 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
 
   const server = new McpServer(
     {name: MCP_SERVER_NAME, version: agentCliPackageVersion},
-    options.serverOptions,
+    {
+      ...options.serverOptions,
+      instructions: options.serverOptions?.instructions
+        ? `${KM_MCP_INSTRUCTIONS}\n\n${options.serverOptions.instructions}`
+        : KM_MCP_INSTRUCTIONS,
+    },
   )
 
-  server.registerTool('get_block' satisfies KmMcpToolName, {
-    description: 'Fetch a single block (content, properties, parentId) by id. For its children, use the subtree tool.',
-    inputSchema: {id: z.string()},
-  }, async ({id}) => json(await graph.getBlock(id)))
-
-  server.registerTool('subtree' satisfies KmMcpToolName, {
-    description: 'Fetch the subtree under a block as a depth-indented outline (one line per block: `- [<id>] <content> <propsJSON>`). '
-    + "Each block's properties (e.g. status, type) are appended as compact JSON by default; pass includeProperties:false for the lean id+content form.",
-    inputSchema: {rootId: z.string(), includeProperties: z.boolean().optional().default(true)},
-  }, async ({rootId, includeProperties}) =>
-    text(renderSubtreeOutline(await graph.getSubtree(rootId) as SubtreeOutlineRow[], {includeProperties})))
-
-  server.registerTool('backlinks' satisfies KmMcpToolName, {
-    description: 'List blocks that reference the given block/page (hydrated: id, content, deepLink).',
-    inputSchema: {id: z.string()},
-  }, async ({id}) => json(await graph.backlinkSources(id)))
-
-  server.registerTool('page' satisfies KmMcpToolName, {
-    description: 'Resolve a page by alias/title. Returns the exact match (if any) plus substring candidates.',
-    inputSchema: {name: z.string()},
-  }, async ({name}) => json(await client.runCommand({type: 'page', name})))
-
-  server.registerTool('daily_note' satisfies KmMcpToolName, {
-    description: 'Resolve a date expression (today | yesterday | ISO date | natural language) to its daily-note block.',
-    inputSchema: {date: z.string()},
-  }, async ({date}) => json(await client.runCommand({type: 'daily-note', date})))
-
-  server.registerTool('search' satisfies KmMcpToolName, {
-    description: 'Full-text search over block content.',
-    inputSchema: {query: z.string(), limit: z.number().int().positive().optional()},
-  }, async ({query, limit}) => json(await client.runCommand({type: 'search', query, limit})))
-
-  server.registerTool('sql_query' satisfies KmMcpToolName, {
-    description: 'Run a read-only SQL query (single SELECT/WITH statement) against the client database. Key tables: blocks(id, content, properties_json, parent_id, workspace_id).',
-    inputSchema: {sql: z.string(), params: z.array(z.unknown()).optional()},
-  }, async ({sql, params}) => {
-    if (!isReadOnlySql(sql)) {
-      throw new Error('sql_query only accepts a single read-only statement (SELECT, or WITH without mutating keywords). Use create_block / update_block / move_block / delete_block / restore_block for writes.')
-    }
-    return json(await graph.sqlAll(sql, params ?? []))
-  })
+  for (const tool of GRAPH_READ_TOOLS) {
+    server.registerTool(tool.name, {
+      description: tool.description,
+      inputSchema: tool.shape,
+    }, async input => text(renderToolResult(await client.runCommand(toolCommand(tool, input)))))
+  }
 
   server.registerTool('create_block' satisfies KmMcpToolName, {
     description: 'Create a new block under a parent. Content is markdown; [[Page]] wikilinks create references.',

@@ -23,6 +23,8 @@ import { dailyNoteBlockId } from '@/plugins/daily-notes/dailyNotes.js'
 import { assertCanonicalBlockId } from '@/data/blockId.js'
 import { DATA_MODEL_GUIDE } from './dataModelGuide.ts'
 import { runHealthCommand } from './healthCommand.ts'
+import { resolveBlockRef, runViewCommand } from './agentViews/index.ts'
+import { boundSqlRows } from './agentViews/sqlRows.ts'
 import { watchEventsRegistry } from './watchEvents.ts'
 import { keyAtEnd, keyBetween } from '@/data/orderKey.js'
 import { deleteSubtreeInTx } from '@/data/subtreeDelete.js'
@@ -1905,7 +1907,7 @@ const runBacklinksCommand = async (
   repo: Repo,
   command: KnownAgentCommand,
 ): Promise<BacklinksCommandResult> => {
-  const id = requireString(command.blockId ?? command.id, 'blockId')
+  const id = await resolveRawBlockRef(repo, requireString(command.blockId ?? command.id, 'blockId'), command.workspaceId)
   const workspaceId = await resolveBlockWorkspaceId(repo, id, command.workspaceId)
   const filter = await resolveBacklinksFilter(repo, workspaceId, id, parseFilterSpec(command.filter))
 
@@ -1954,7 +1956,7 @@ const runGroupedBacklinksCommand = async (
   repo: Repo,
   command: KnownAgentCommand,
 ): Promise<GroupedBacklinksCommandResult> => {
-  const id = requireString(command.blockId ?? command.id, 'blockId')
+  const id = await resolveRawBlockRef(repo, requireString(command.blockId ?? command.id, 'blockId'), command.workspaceId)
   const workspaceId = await resolveBlockWorkspaceId(repo, id, command.workspaceId)
   const filter = await resolveBacklinksFilter(repo, workspaceId, id, parseFilterSpec(command.filter))
   const grouping = await resolveGroupedBacklinksConfig(
@@ -2032,6 +2034,17 @@ const commandWorkspaceId = (repo: Repo, override: unknown): string => {
   if (asserted) return asserted
   if (repo.activeWorkspaceId) return repo.activeWorkspaceId
   throw new Error('No active workspace; pass workspaceId')
+}
+
+/** A raw command's block id, accepting every form an agent view prints or
+ *  takes (unique id prefix, page name, date). An unmatched ref passes through
+ *  unchanged, so the command's own not-found answer is unchanged too. */
+const resolveRawBlockRef = async (repo: Repo, ref: string, override: unknown): Promise<string> => {
+  const resolution = await resolveBlockRef(repo, ref, {
+    workspaceId: assertedWorkspaceOverride(override) ?? repo.activeWorkspaceId,
+    onMissing: 'verbatim',
+  })
+  return resolution.id
 }
 
 interface PageCommandResult {
@@ -2273,14 +2286,28 @@ export const executeCommand = async (
         throw new Error('mode must be one of: all, get, optional, execute')
       }
 
-      return context.sql(sql, getParams(command.params), mode, command.allowSyncedWrite === true)
+      const result = await context.sql(sql, getParams(command.params), mode, command.allowSyncedWrite === true)
+      return command.maxRows !== undefined && mode === 'all' && Array.isArray(result)
+        ? boundSqlRows(result, command.maxRows)
+        : result
     }
 
     case 'get-block':
-      return context.getBlock(requireString(command.blockId ?? command.id, 'blockId'))
+      return context.getBlock(await resolveRawBlockRef(
+        context.repo,
+        requireString(command.blockId ?? command.id, 'blockId'),
+        undefined,
+      ))
 
     case 'get-subtree':
-      return context.getSubtree(requireString(command.rootId, 'rootId'))
+      return context.getSubtree(await resolveRawBlockRef(context.repo, requireString(command.rootId, 'rootId'), undefined))
+
+    case 'view-block':
+    case 'view-outline':
+    case 'view-backlinks':
+    case 'view-grouped-backlinks':
+    case 'view-search':
+      return runViewCommand(context.repo, command, commandWorkspaceId(context.repo, command.workspaceId))
 
     case 'create-block':
       return context.createBlock({

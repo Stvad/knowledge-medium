@@ -2,6 +2,7 @@ import type { BlockData, TypeContribution } from '@/data/api'
 import type { Repo } from '@/data/repo'
 import { aliasesProp, typesProp } from '@/data/properties.js'
 import {
+  isActiveSearchFilter,
   searchSourceHealthFacet,
   searchSourcesFacet,
   type SearchSourceArgs,
@@ -529,7 +530,8 @@ const blockSearchTextScore = (content: string, query: string): number => {
  *  defaults are wired. */
 export const coreContentSearchSource: SearchSourceContribution = {
   id: 'core.content',
-  search: async (repo, {workspaceId, query, limit, recentBlockIds}) => {
+  supportsFilter: true,
+  search: async (repo, {workspaceId, query, limit, recentBlockIds, filter}) => {
     // Over-fetch so the score below (which promotes exact/prefix/recent
     // hits over the SQL engine's own rank) has room to reorder before the
     // merge point's final slice to `limit`. Same multiplier/ceiling as the
@@ -539,7 +541,12 @@ export const coreContentSearchSource: SearchSourceContribution = {
     // the ceiling (the ceiling is a headroom cap for the common case, not
     // a hard maximum on the result size).
     const fetchLimit = Math.max(limit, Math.min(limit * ALIAS_CANDIDATE_MULTIPLIER, ALIAS_CANDIDATE_CEILING))
-    const rows = await repo.query.searchByContent({workspaceId, query, limit: fetchLimit}).load()
+    const rows = await repo.query.searchByContent({
+      workspaceId,
+      query,
+      limit: fetchLimit,
+      ...(isActiveSearchFilter(filter) ? {filter} : {}),
+    }).load()
     return rows.map((block): SearchSourceCandidate => ({
       block,
       score: blockSearchTextScore(block.content, query) +
@@ -697,9 +704,13 @@ export const searchBlocksAcrossSources = async (
   const generation = ++searchHealthGeneration
 
   const sources = repo.facetRuntime?.read(searchSourcesFacet)
-  const contributions = sources && sources.size > 0
+  const registered = sources && sources.size > 0
     ? [...sources.values()]
     : [coreContentSearchSource]
+  const contributions = isActiveSearchFilter(args.filter)
+    ? registered.filter(source => source.supportsFilter === true)
+    : registered
+  if (contributions.length === 0) return []
 
   const failures: {index: number; error: unknown}[] = []
   // Written by INDEX, not pushed: a push orders outcomes by settle order, so

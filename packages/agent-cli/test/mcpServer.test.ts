@@ -5,7 +5,8 @@ import path from 'node:path'
 import {fileURLToPath} from 'node:url'
 import type {BridgeClient} from '../src/client'
 import type {KnownCommand} from '../src/protocol'
-import {createGraphMcpServer, type GraphMcpWriteOperation} from '../src/mcpServer'
+import {createGraphMcpServer, KM_MCP_INSTRUCTIONS, type GraphMcpWriteOperation} from '../src/mcpServer'
+import {KM_MCP_TOOL_NAMES} from '../src/mcpShared'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const packageJsonPath = path.resolve(here, '../package.json')
@@ -21,6 +22,7 @@ interface RegisteredToolHarness {
 
 interface ServerInfoHarness {
   server: {
+    _instructions?: string
     _serverInfo: {
       version: string
     }
@@ -129,5 +131,62 @@ describe('createGraphMcpServer', () => {
     await expect(tools.update_block.handler({id: 'b', content: 'edited'}, {}))
       .rejects.toThrow('blocked by caller policy')
     expect(runCommand).not.toHaveBeenCalled()
+  })
+
+  it('registers exactly the advertised tool names', () => {
+    const server = createGraphMcpServer({
+      client: clientFrom(vi.fn<BridgeClient['runCommand']>()),
+      serverOptions: {capabilities: {tools: {}}},
+    })
+    const tools = (server as unknown as RegisteredToolHarness)._registeredTools
+    expect(new Set(Object.keys(tools))).toEqual(new Set(KM_MCP_TOOL_NAMES))
+  })
+
+  it('forwards read tools as view commands and returns the app text verbatim', async () => {
+    const runCommand = vi.fn<BridgeClient['runCommand']>(async () => '- hello  ^abc')
+    const server = createGraphMcpServer({
+      client: clientFrom(runCommand),
+      serverOptions: {capabilities: {tools: {}}},
+    })
+    const tools = (server as unknown as RegisteredToolHarness)._registeredTools
+
+    const block = await tools.get_block.handler({ref: 'today'}, {})
+    const outline = await tools.subtree.handler({ref: 'Page', depth: 2}, {})
+
+    expect(runCommand.mock.calls.map(call => call[0])).toEqual([
+      {type: 'view-block', ref: 'today'},
+      {type: 'view-outline', ref: 'Page', depth: 2},
+    ])
+    expect(block.content).toEqual([{type: 'text', text: '- hello  ^abc'}])
+    expect(outline.content).toEqual([{type: 'text', text: '- hello  ^abc'}])
+  })
+
+  it('sql_query sends maxRows and refuses writes without calling the bridge', async () => {
+    const runCommand = vi.fn<BridgeClient['runCommand']>(async () => ({rows: []}))
+    const server = createGraphMcpServer({
+      client: clientFrom(runCommand),
+      serverOptions: {capabilities: {tools: {}}},
+    })
+    const tools = (server as unknown as RegisteredToolHarness)._registeredTools
+
+    await tools.sql_query.handler({sql: 'select 1'}, {})
+    expect(runCommand).toHaveBeenCalledWith(expect.objectContaining({type: 'sql', mode: 'all', maxRows: 200}))
+
+    runCommand.mockClear()
+    await expect(tools.sql_query.handler({sql: 'delete from blocks'}, {})).rejects.toThrow(/read-only/)
+    expect(runCommand).not.toHaveBeenCalled()
+  })
+
+  it('serves the base instructions, with a caller\'s text appended', () => {
+    const client = clientFrom(vi.fn<BridgeClient['runCommand']>())
+    const plain = createGraphMcpServer({client, serverOptions: {capabilities: {tools: {}}}})
+    const extended = createGraphMcpServer({
+      client,
+      serverOptions: {capabilities: {tools: {}}, instructions: 'dispatch rules'},
+    })
+
+    expect((plain as unknown as ServerInfoHarness).server._instructions).toBe(KM_MCP_INSTRUCTIONS)
+    expect((extended as unknown as ServerInfoHarness).server._instructions)
+      .toBe(`${KM_MCP_INSTRUCTIONS}\n\ndispatch rules`)
   })
 })

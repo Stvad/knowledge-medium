@@ -43,8 +43,8 @@ import {
   kernelTypeDeclarationCandidates,
   renderKernelTypesInstallSummary,
 } from './kernelDts.js'
-import {renderSubtreeOutline} from './subtreeOutline.js'
-import {limitOption, scopeAssertion, workspaceAssertion} from './cliOptions.js'
+import {cliCommandFrom, cliOptionsFor, GRAPH_READ_TOOLS, hasJsonFormat, renderToolResult} from './readTools.js'
+import {scopeAssertion, workspaceAssertion} from './cliOptions.js'
 import {extensionScaffold, slugify, titleize} from './scaffold.js'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -104,20 +104,6 @@ const toStringArray = (value: unknown): string[] => {
   if (Array.isArray(value)) return value.map(String)
   if (typeof value === 'string') return [value]
   return []
-}
-
-// `--filter` / `--grouping` accept either a mode keyword (passed through
-// as a string) or inline JSON (an explicit filter / grouping object).
-// The kernel coerces whichever form it receives.
-const parseSpecArg = (
-  value: unknown,
-  modes: readonly string[],
-  label: string,
-): string | unknown | undefined => {
-  if (value === undefined) return undefined
-  const text = String(value)
-  if (modes.includes(text)) return text
-  return parseJson(text, label)
 }
 
 const evalReturnedUndefined = (value: unknown): boolean =>
@@ -717,117 +703,25 @@ cli
     })
   })
 
-cli
-  .command('get-block <id>', wireDescription('get-block'))
-  .action(async (id: string) => {
-    await runAndPrint({type: 'get-block', id})
-  })
-
-cli
-  .command('subtree <rootId>', wireDescription('get-subtree'))
-  .option('--json', 'Print the raw flat array (each row a block + its depth) instead of the indented outline')
-  .option('--props', "Append each block's properties as compact JSON after its content")
-  .action(async (rootId: string, options: {json?: boolean, props?: boolean}) => {
-    if (options.json) {
-      await runAndPrint({type: 'get-subtree', rootId})
-      return
-    }
-    // Default: a depth-indented `- [id] content` outline. The subtree
-    // comes back already in pre-order / (order_key, id) order — we render
-    // it verbatim and never re-sort (see renderSubtreeOutline).
+for (const tool of GRAPH_READ_TOOLS) {
+  if (!tool.cli) continue
+  const {verb, alias, positional} = tool.cli
+  const usage = positional
+    ? `${verb} ${positional.variadic ? `[...${positional.field}]` : `<${positional.field}>`}`
+    : verb
+  const command = cli.command(usage, tool.description)
+  if (alias) command.alias(alias)
+  for (const spec of cliOptionsFor(tool)) command.option(spec.flag, spec.description)
+  if (hasJsonFormat(tool)) command.option('--json', 'Print the bounded view as structured JSON')
+  if (tool.raw) command.option('--raw', 'Send the stored, unbounded command instead of the agent view (pretty JSON)')
+  command.action(async (...args: unknown[]) => {
+    const options = args[args.length - 1] as Record<string, unknown>
+    const wire = cliCommandFrom(tool, positional ? args[0] : undefined, options)
     await ensureBridgeRunning()
-    const value = await runCommand({type: 'get-subtree', rootId})
-    process.stdout.write(`${renderSubtreeOutline(value, {includeProperties: options.props})}\n`)
+    const value = await runCommand(wire)
+    process.stdout.write(`${options.raw ? JSON.stringify(value, null, 2) : renderToolResult(value)}\n`)
   })
-
-cli
-  .command('backlinks <blockId>', wireDescription('backlinks'))
-  .option('--filter <spec>', 'none|stored|effective, or inline JSON BacklinksFilter (default: none)')
-  .option('--workspace <id>', "Workspace id (defaults to the block's workspace, then the active one)")
-  .action(async (blockId: string, options: {filter?: string, workspace?: unknown}) => {
-    const filter = parseSpecArg(options.filter, ['none', 'stored', 'effective'], '--filter')
-    await runAndPrint({
-      type: 'backlinks',
-      id: blockId,
-      ...(filter !== undefined ? {filter} : {}),
-      ...workspaceAssertion(options.workspace),
-    })
-  })
-
-cli
-  .command('grouped-backlinks <blockId>', wireDescription('grouped-backlinks'))
-  .option('--filter <spec>', 'none|stored|effective, or inline JSON BacklinksFilter (default: none)')
-  .option('--grouping <spec>', 'user|none, or inline JSON grouping config (default: user)')
-  .option('--workspace <id>', "Workspace id (defaults to the block's workspace, then the active one)")
-  .action(async (
-    blockId: string,
-    options: {filter?: string, grouping?: string, workspace?: unknown},
-  ) => {
-    const filter = parseSpecArg(options.filter, ['none', 'stored', 'effective'], '--filter')
-    const grouping = parseSpecArg(options.grouping, ['user', 'none'], '--grouping')
-    await runAndPrint({
-      type: 'grouped-backlinks',
-      id: blockId,
-      ...(filter !== undefined ? {filter} : {}),
-      ...(grouping !== undefined ? {grouping} : {}),
-      ...workspaceAssertion(options.workspace),
-    })
-  })
-
-cli
-  .command('data-model', wireDescription('data-model'))
-  .action(async () => {
-    await ensureBridgeRunning()
-    const value = await runCommand({type: 'data-model'})
-    process.stdout.write(
-      typeof value === 'string'
-        ? `${value}\n`
-        : `${JSON.stringify(value, null, 2)}\n`,
-    )
-  })
-
-cli
-  .command('page [...name]', wireDescription('page'))
-  .option('--workspace <id>', 'Workspace id (defaults to the active one)')
-  .option('--limit <n>', 'Max substring candidates (default 20)')
-  .action(async (name: unknown, options: {workspace?: unknown, limit?: unknown}) => {
-    const text = toStringArray(name).join(' ').trim()
-    if (!text) throw new Error('page requires a <name> (e.g. `kmagent page "Project Alpha"`)')
-    await runAndPrint({
-      type: 'page',
-      name: text,
-      ...workspaceAssertion(options.workspace),
-      ...limitOption(options.limit),
-    })
-  })
-
-cli
-  .command('daily-note [...date]', wireDescription('daily-note'))
-  .option('--workspace <id>', 'Workspace id (defaults to the active one)')
-  .action(async (date: unknown, options: {workspace?: unknown}) => {
-    const text = toStringArray(date).join(' ').trim()
-    if (!text) throw new Error('daily-note requires a <date> (e.g. `kmagent daily-note yesterday`)')
-    await runAndPrint({
-      type: 'daily-note',
-      date: text,
-      ...workspaceAssertion(options.workspace),
-    })
-  })
-
-cli
-  .command('search [...query]', wireDescription('search'))
-  .option('--workspace <id>', 'Workspace id (defaults to the active one)')
-  .option('--limit <n>', 'Max results (default 50)')
-  .action(async (query: unknown, options: {workspace?: unknown, limit?: unknown}) => {
-    const text = toStringArray(query).join(' ').trim()
-    if (!text) throw new Error('search requires a <query>')
-    await runAndPrint({
-      type: 'search',
-      query: text,
-      ...workspaceAssertion(options.workspace),
-      ...limitOption(options.limit),
-    })
-  })
+}
 
 cli
   .command('create-block <json>', wireDescription('create-block'))
