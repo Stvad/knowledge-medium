@@ -192,22 +192,37 @@ const sum = (values: readonly number[]) => values.reduce((total, value) => total
 const cell = (format: (n: number) => string, current: number | null, base?: number | null) =>
   (current === null ? 'n/a' : `${format(current)}${delta(current, base)}`)
 
+/** The task table's figures, in column order. Each renders with its delta
+ *  against the baseline, in every task row and in the totals. A peak is not
+ *  totalled: a sum of per-task maxima means nothing. */
+interface Figure {
+  heading: string
+  pick: (row: TaskSummary) => number | null
+  format: (n: number) => string
+  totalled: boolean
+}
+const FIGURES: readonly Figure[] = [
+  {heading: 'tool calls', pick: row => row.toolCalls, format: String, totalled: true},
+  {heading: 'capped', pick: row => row.cappedCalls, format: String, totalled: true},
+  {heading: 'chars seen', pick: row => row.seenChars, format: thousands, totalled: true},
+  {heading: 'max seen', pick: row => row.maxSeenChars, format: thousands, totalled: false},
+  {heading: 'chars returned', pick: row => row.returnedChars, format: thousands, totalled: true},
+  {heading: 'context tokens', pick: row => row.contextTokens, format: thousands, totalled: true},
+  {heading: 'peak context', pick: row => row.peakContext, format: thousands, totalled: false},
+  {heading: 'output tokens', pick: row => row.outputTokens, format: thousands, totalled: true},
+  {heading: 'list $', pick: row => row.costUsd, format: dollars, totalled: true},
+  {heading: 'time', pick: row => row.elapsedMs, format: seconds, totalled: true},
+]
+
 const totalsRow = (label: string, rows: readonly TaskSummary[], baseRows?: readonly TaskSummary[]) => {
-  const total = (from: readonly TaskSummary[], pick: (row: TaskSummary) => number | null) => {
+  const total = (from: readonly TaskSummary[], pick: Figure['pick']) => {
     const all = known(from.map(pick))
     return all && sum(all)
   }
-  const pair = (pick: (row: TaskSummary) => number | null) =>
-    [total(rows, pick), baseRows ? total(baseRows, pick) : undefined] as const
-  return `| ${label} | | ${sum(rows.map(row => row.passes))}/${sum(rows.map(row => row.reps))} `
-    + `| ${cell(String, ...pair(row => row.toolCalls))} `
-    + `| ${cell(String, ...pair(row => row.cappedCalls))} `
-    + `| ${cell(thousands, ...pair(row => row.seenChars))} `
-    + `| ${cell(thousands, ...pair(row => row.returnedChars))} `
-    + `| ${cell(thousands, ...pair(row => row.contextTokens))} | `
-    + `| ${cell(thousands, ...pair(row => row.outputTokens))} `
-    + `| ${cell(dollars, ...pair(row => row.costUsd))} `
-    + `| ${cell(seconds, ...pair(row => row.elapsedMs))} |`
+  const cells = FIGURES.map(figure => (figure.totalled
+    ? cell(figure.format, total(rows, figure.pick), baseRows && total(baseRows, figure.pick))
+    : ''))
+  return `| ${label} | | ${sum(rows.map(row => row.passes))}/${sum(rows.map(row => row.reps))} | ${cells.join(' | ')} |`
 }
 
 export const renderMarkdown = (report: EvalReport, compareWith?: EvalReport): string => {
@@ -241,21 +256,13 @@ export const renderMarkdown = (report: EvalReport, compareWith?: EvalReport): st
   }
   lines.push('')
 
-  lines.push('| task | kind | pass | tool calls | capped | chars seen (total / max) | chars returned | context tokens | peak context | output tokens | list $ | time |')
-  lines.push('|---|---|---|---|---|---|---|---|---|---|---|---|')
+  lines.push(`| task | kind | pass | ${FIGURES.map(figure => figure.heading).join(' | ')} |`)
+  lines.push(`|${'---|'.repeat(3 + FIGURES.length)}`)
   for (const row of rows) {
     const was = comparable(row.task) ? baselineRows.get(row.task) : undefined
     const note = was ? ` (was ${was.passes}/${was.reps})` : baselineRows.has(row.task) ? ' (task changed since baseline)' : ''
-    lines.push(`| ${row.task} | ${row.kind} | ${row.passes}/${row.reps}${note} `
-      + `| ${cell(String, row.toolCalls, was?.toolCalls)} `
-      + `| ${cell(String, row.cappedCalls, was?.cappedCalls)} `
-      + `| ${cell(thousands, row.seenChars, was?.seenChars)} / ${thousands(row.maxSeenChars)} `
-      + `| ${cell(thousands, row.returnedChars, was?.returnedChars)} `
-      + `| ${cell(thousands, row.contextTokens, was?.contextTokens)} `
-      + `| ${cell(thousands, row.peakContext, was?.peakContext)} `
-      + `| ${cell(thousands, row.outputTokens, was?.outputTokens)} `
-      + `| ${cell(dollars, row.costUsd, was?.costUsd)} `
-      + `| ${cell(seconds, row.elapsedMs, was?.elapsedMs)} |`)
+    const cells = FIGURES.map(figure => cell(figure.format, figure.pick(row), was && figure.pick(was)))
+    lines.push(`| ${row.task} | ${row.kind} | ${row.passes}/${row.reps}${note} | ${cells.join(' | ')} |`)
   }
   // Aggregates compare like with like: when some tasks are new or changed,
   // the all-tasks total carries no delta and a comparable-subset row does.

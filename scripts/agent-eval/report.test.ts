@@ -92,6 +92,8 @@ describe('renderMarkdown', () => {
     const markdown = renderMarkdown(current, baseline)
     expect(markdown).toContain('| a | read | 1/1 (was 1/1) | 4 (−50%) |')
     expect(markdown).toMatch(/^\| a \|.*\| 5s \(−50%\) \|$/m)
+    // every figure carries its delta: the max seen too
+    expect(markdown).toMatch(/^\| a \|(?:[^|]*\|){5} 2\.0k \(±0%\) \|/m)
     expect(markdown).toMatch(/^\| \*\*all\*\* \|.*\| 15s \(−25%\) \|$/m)
     expect(markdown).toContain('| search:x | 250 (−75%) |')
     expect(markdown).toContain('- b #1: missing [x]')
@@ -149,9 +151,9 @@ describe('renderMarkdown', () => {
 
   it('renders unknown returned characters as n/a, in the task row and the total', () => {
     const markdown = renderMarkdown(reportOf('r', [runRecord('a', 1, {returnedChars: null}), runRecord('b', 1)]))
-    // label, kind, pass, tool calls, capped, seen, then returned
-    expect(markdown).toMatch(/^\| a \|(?:[^|]*\|){5} n\/a \|/m)
-    expect(markdown).toMatch(/^\| \*\*all\*\* \|(?:[^|]*\|){5} n\/a \|/m)
+    // label, kind, pass, tool calls, capped, seen, max seen, then returned
+    expect(markdown).toMatch(/^\| a \|(?:[^|]*\|){6} n\/a \|/m)
+    expect(markdown).toMatch(/^\| \*\*all\*\* \|(?:[^|]*\|){6} n\/a \|/m)
   })
 
   it('flags writes made during a read task', () => {
