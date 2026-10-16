@@ -1,0 +1,1 @@
+import{c$ as e,d$ as t,f$ as n,l$ as r,s$ as i,u$ as a}from"../../chunks/app-B0pRNyuY.js";export{i as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,e as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,r as __resetLayoutSessionIdForTesting,a as getLayoutSessionId,t as isInstalledAppDisplayMode,n as readOrCreateLayoutSessionId};
