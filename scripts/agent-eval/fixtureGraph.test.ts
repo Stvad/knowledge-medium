@@ -382,30 +382,37 @@ describe('isolation', () => {
     expect(await stampsMovedSince(snapshot)).toEqual([])
   }, 30_000)
 
+  // A post-commit processor the undo's own write starts: it lands a moment
+  // after the undo of the rollout block, on a block the task never touched.
+  const rollout = fixtureId('rollout')
+  const bystander = fixtureId('vendorsSection')
+  const withLateProcessor = (sql: string, params: unknown[]): GraphProbe => ({
+    ...probe,
+    command: async command => {
+      const result = await probe.command(command)
+      if (command.type === 'update-block' && command.id === rollout) {
+        setTimeout(() => { void probe.command({type: 'sql', mode: 'execute', sql, params, allowSyncedWrite: true}) }, 20)
+      }
+      return result
+    },
+  })
+
   it('waits out the writes its own undo starts, and puts back the stamps they move', async () => {
     const snapshot = await snapshotWorkspace(probe, QUIET)
-    const rollout = fixtureId('rollout')
-    const bystander = fixtureId('vendorsSection')
     await graph.callTool('update_block', {id: rollout, content: 'Target: Q4 2026.'})
-    // A post-commit processor the undo's write starts: it lands a moment
-    // later and rewrites a block the task never touched, changing only its
-    // recency stamp — as a re-derive that finds nothing to change does.
-    const lateProcessor: GraphProbe = {
-      ...probe,
-      command: async command => {
-        const result = await probe.command(command)
-        if (command.type === 'update-block' && command.id === rollout) {
-          setTimeout(() => {
-            void probe.command({type: 'sql', mode: 'execute', sql: 'UPDATE blocks SET updated_at = ? WHERE id = ?', params: [Date.now(), bystander], allowSyncedWrite: true})
-          }, 20)
-        }
-        return result
-      },
-    }
-
-    await restoreSnapshot(lateProcessor, snapshot, QUIET)
+    // A re-derive that finds nothing to change still moves the recency stamp.
+    await restoreSnapshot(withLateProcessor('UPDATE blocks SET updated_at = ? WHERE id = ?', [Date.now() + 1, bystander]), snapshot, QUIET)
     await waitForQuiet(probe, QUIET)
     expect(await stampsMovedSince(snapshot)).toEqual([])
+  }, 20_000)
+
+  it('proves derived columns too: one a late processor leaves different fails the restore', async () => {
+    const snapshot = await snapshotWorkspace(probe, QUIET)
+    const stored = snapshot.get(bystander)!.references_json
+    await graph.callTool('update_block', {id: rollout, content: 'Target: Q4 2026.'})
+    await expect(restoreSnapshot(withLateProcessor('UPDATE blocks SET references_json = ? WHERE id = ?', ['[{"stale":true}]', bystander]), snapshot, QUIET))
+      .rejects.toThrow(`could not restore 1 block(s) to the fixture state (${bystander})`)
+    await probe.command({type: 'sql', mode: 'execute', sql: 'UPDATE blocks SET references_json = ? WHERE id = ?', params: [stored, bystander], allowSyncedWrite: true})
   }, 20_000)
 })
 
