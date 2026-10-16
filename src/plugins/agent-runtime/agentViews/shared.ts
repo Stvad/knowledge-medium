@@ -71,9 +71,13 @@ export const loadRoot = async (
   const resolution = await resolveBlockRef(repo, ref, {workspaceId})
   const root = await load(resolution.id)
   if (!root) {
-    throw new BlockRefError(resolution.via === 'date'
-      ? `The daily note for "${oneLine(ref)}" has not been created yet (its id would be ${resolution.id}).`
-      : `Block ${resolution.id} does not exist or is deleted.`)
+    const [tombstone] = await repo.db.getAll<{deleted: number}>('SELECT deleted FROM blocks WHERE id = ?', [resolution.id])
+    const what = resolution.via === 'date' ? `The daily note for "${oneLine(ref)}" (${resolution.id})` : `Block ${resolution.id}`
+    throw new BlockRefError(tombstone
+      ? `${what} is deleted; restore-block ${resolution.id} brings it back.`
+      : resolution.via === 'date'
+        ? `${what} has not been created yet.`
+        : `${what} does not exist.`)
   }
   // A view decodes with the active workspace's registries; another
   // workspace's block would render with the wrong codecs and visibility.

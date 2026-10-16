@@ -494,6 +494,48 @@ describe('structural edge cases', () => {
     expect(value).toMatch(/^0, 1, .*, …\+\d+ more$/)
   })
 
+  it('sql caps maxRows at its ceiling, whatever the caller asks', async () => {
+    const getAll = vi.spyOn(repo.db, 'getAll')
+    await executeCommand({commandId: 's', type: 'sql', mode: 'all', maxRows: 5_000_000, sql: 'SELECT 1 AS one'}, context)
+    const executed = getAll.mock.calls.map(call => call[0]).find(sql => sql.includes('SELECT 1 AS one'))
+    expect(executed).toMatch(/\) LIMIT 1001$/)
+    getAll.mockRestore()
+  })
+
+  it('a line whose text starts with a long blank run still shows its text', async () => {
+    const id = uuid('4a4a4a4a', 1)
+    await create({id, content: `${' '.repeat(600)}${'\u0007'.repeat(10)}the real text`})
+    const line = (await view<string>({type: 'view-outline', ref: id})).split('\n')[0]
+    expect(line).toContain('the real text')
+  })
+
+  it('a list whose first item overflows still shows how many follow', async () => {
+    const id = uuid('4b4b4b4b', 1)
+    await create({id, content: 'holder', properties: {notes: ['w'.repeat(5000), 'second', 'third']}})
+    const out = await view<OutlineView>({type: 'view-outline', ref: id, format: 'json'})
+    const value = out.root.properties.find(property => property.name === 'notes')!.value
+    expect(value).toMatch(/^w+…, …\+2 more$/)
+    expect(value.length).toBeLessThanOrEqual(40)
+  })
+
+  it("titles a ref only inside the referencing block's workspace", async () => {
+    const foreign = uuid('4c4c4c4c', 1)
+    await repo.tx(async tx => {
+      await tx.create({id: foreign, workspaceId: 'ws-2', parentId: null, orderKey: 'a0', content: 'Elsewhere', references: []})
+    }, {scope: ChangeScope.BlockDefault})
+    const holder = uuid('4c4c4c4d', 2)
+    await create({id: holder, content: 'holder', properties: {groupWith: [foreign]}})
+    const out = await view<BlockView>({type: 'view-block', ref: holder, format: 'json'})
+    expect(out.properties.find(property => property.name === 'groupWith')?.value).toBe(`((${foreign}))`)
+  })
+
+  it('a deleted daily note says it is deleted, not that it was never created', async () => {
+    const id = dailyNoteBlockId(WS, '2026-03-01')
+    await create({id, content: 'March 1st, 2026'})
+    await executeCommand({commandId: 'd', type: 'delete-block', id}, context)
+    await expect(view({type: 'view-outline', ref: '2026-03-01'})).rejects.toThrow(/is deleted; restore-block/)
+  })
+
   it('sql summarizes a binary cell by its size', async () => {
     const out = await executeCommand({
       commandId: 's', type: 'sql', mode: 'all', maxRows: 1, sql: 'SELECT randomblob(10) AS b',
@@ -688,7 +730,7 @@ describe('sql maxRows', () => {
       maxRows: 2,
     }, context) as {rows: Array<{content: string}>, truncated: boolean, truncatedCells: number}
     // SQLite stops after maxRows + 1 rows instead of materializing every match.
-    expect(getAll.mock.calls.at(-1)?.[0]).toMatch(/\) LIMIT 3$/)
+    expect(getAll.mock.calls.map(call => call[0]).find(sql => sql.includes('SELECT content FROM blocks'))).toMatch(/\) LIMIT 3$/)
     getAll.mockRestore()
     expect(out.truncated).toBe(true)
     expect(out.rows).toHaveLength(2)

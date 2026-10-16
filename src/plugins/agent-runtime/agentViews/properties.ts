@@ -80,15 +80,16 @@ const formatValue = (value: unknown, budget: number): string => {
     if (!value.every(item => isScalar(item) || item instanceof Date)) return `[${value.length} items]`
     let joined = ''
     for (const [index, item] of value.entries()) {
-      // A cost bound (the line's own clip gives the same text): a huge first
-      // item is cut here rather than joined whole.
+      const left = value.length - index - 1
+      const separator = index > 0 ? ', ' : ''
+      // Room for the count of what follows, so the line's own clip never cuts it off.
+      const space = budget - joined.length - separator.length - (left > 0 ? `, …+${left} more`.length : 0)
       const text = formatValue(item, budget)
-      const part = `${index > 0 ? ', ' : ''}${text.length > budget ? `${text.slice(0, charBoundary(text, budget))}…` : text}`
-      const marker = `, …+${value.length - index} more`
-      // Room is kept for the marker, so the line's own clip never cuts the count off.
-      const room = index < value.length - 1 ? marker.length : 0
-      if (index > 0 && joined.length + part.length + room > budget) return `${joined}${marker}`
-      joined += part
+      if (text.length > space && left > 0) {
+        if (index > 0) return `${joined}, …+${value.length - index} more`
+        return `${text.slice(0, charBoundary(text, Math.max(1, space - 1)))}…, …+${left} more`
+      }
+      joined += `${separator}${text}`
     }
     return joined
   }
@@ -153,18 +154,27 @@ export const createPropertyRenderer = async (
     decodedByBlock.set(block.id, entries)
   }
 
-  const titles = new Map<string, string>()
+  const titles = new Map<string, {title: string, workspaceId: string}>()
   if (refIds.size > 0) {
     const rows = await repo.db.getAll<BlockRow>(TITLE_ROWS_SQL, [JSON.stringify([...refIds])])
     for (const row of rows) {
       const data = parseBlockRow(row)
-      titles.set(data.id, oneLine(labelForBlockData(data, data.id)))
+      titles.set(data.id, {title: oneLine(labelForBlockData(data, data.id)), workspaceId: data.workspaceId})
     }
+  }
+  // References resolve within a workspace, so another workspace's block
+  // stays a dangling ((id)) here, as it is everywhere else.
+  const titleIn = (id: string, workspaceId: string): string | undefined => {
+    const found = titles.get(id)
+    return found?.workspaceId === workspaceId ? found.title : undefined
   }
 
   const display = (decoded: Decoded, block: BlockData, name: string, budget: number): string => {
     if (decoded.kind === 'refs') {
-      const shown = decoded.ids.slice(0, MAX_REFS).map(id => titles.has(id) ? `[[${titles.get(id)}]]` : `((${id}))`)
+      const shown = decoded.ids.slice(0, MAX_REFS).map(id => {
+        const title = titleIn(id, block.workspaceId)
+        return title !== undefined ? `[[${title}]]` : `((${id}))`
+      })
       const rest = decoded.ids.length - shown.length
       return rest > 0 ? `${shown.join(', ')}, …+${rest} more` : shown.join(', ')
     }

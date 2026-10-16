@@ -32,20 +32,11 @@ export const clip = (text: string, max: number): Clipped => {
   return {text: `${text.slice(0, end)}${cutMarker(text.length - end)}`, cut: text.length - end}
 }
 
-/** {@link oneLine} then {@link clip}: the form every list row uses. Only a
- *  head of twice the budget is neutralized, so a multi-megabyte block costs
- *  what its line costs — a cost bound: the result is the same without it.
- *  The cut it reports counts the original characters left out (neutralizing
- *  can shift that by a few). */
-export const clipLine = (text: string, max: number): Clipped => {
-  const head = text.length > max * 2 ? text.slice(0, charBoundary(text, max * 2)) : text
-  const line = oneLine(head)
-  const dropped = text.length - head.length
-  if (line.length <= max && dropped === 0) return {text: line, cut: 0}
-  const end = charBoundary(line, Math.min(max, line.length))
-  const cut = dropped + (line.length - end)
-  return {text: `${line.slice(0, end)}${cutMarker(cut)}`, cut}
-}
+/** {@link oneLine} then {@link clip}: the form every list row uses. The
+ *  whole text is normalized — one linear pass over text already in memory;
+ *  a prefix window was tried and rejected, since a prefix that normalizes
+ *  away (leading whitespace, control runs) left the line empty. */
+export const clipLine = (text: string, max: number): Clipped => clip(oneLine(text), max)
 
 /** A row's list of user-data names (type labels, property names), bounded
  *  like the row's content: each one clipped, at most `max` kept, and the rest

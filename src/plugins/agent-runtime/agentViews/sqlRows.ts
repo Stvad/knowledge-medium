@@ -4,6 +4,9 @@ import { charBoundary, cutMarker } from './text.ts'
  *  long-note cell would otherwise dominate a result. `substr()` in the
  *  query reads a cell piecewise. */
 export const SQL_CELL_CHARS = 2000
+/** The ceiling on `maxRows`, whatever the caller asks: like every other
+ *  bounded view, the caller picks a size inside a bound, not the bound. */
+export const MAX_SQL_ROWS = 1000
 
 export interface BoundedSqlRows {
   rows: unknown[]

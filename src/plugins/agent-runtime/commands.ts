@@ -24,7 +24,7 @@ import { assertCanonicalBlockId } from '@/data/blockId.js'
 import { DATA_MODEL_GUIDE } from './dataModelGuide.ts'
 import { runHealthCommand } from './healthCommand.ts'
 import { resolveBlockRef, runViewCommand } from './agentViews/index.ts'
-import { boundSqlRows, limitedSelectSql } from './agentViews/sqlRows.ts'
+import { boundSqlRows, limitedSelectSql, MAX_SQL_ROWS } from './agentViews/sqlRows.ts'
 import { watchEventsRegistry } from './watchEvents.ts'
 import { keyAtEnd, keyBetween } from '@/data/orderKey.js'
 import { deleteSubtreeInTx } from '@/data/subtreeDelete.js'
@@ -2288,9 +2288,10 @@ export const executeCommand = async (
 
       const allowSyncedWrite = command.allowSyncedWrite === true
       if (command.maxRows !== undefined && mode === 'all') {
-        const limited = limitedSelectSql(sql, command.maxRows) ?? sql
+        const maxRows = Math.min(command.maxRows, MAX_SQL_ROWS)
+        const limited = limitedSelectSql(sql, maxRows) ?? sql
         const rows = await context.sql(limited, getParams(command.params), mode, allowSyncedWrite)
-        return boundSqlRows(Array.isArray(rows) ? rows : [], command.maxRows)
+        return boundSqlRows(Array.isArray(rows) ? rows : [], maxRows)
       }
       return context.sql(sql, getParams(command.params), mode, allowSyncedWrite)
     }
