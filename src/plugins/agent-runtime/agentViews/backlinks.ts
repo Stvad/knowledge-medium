@@ -72,8 +72,11 @@ const viaPropertiesBySource = async (
   const out = new Map<string, string[]>()
   for (const row of rows) {
     if (row.source_field === '') continue
-    out.set(row.source_id, [...(out.get(row.source_id) ?? []), row.source_field].sort())
+    const fields = out.get(row.source_id)
+    if (fields) fields.push(row.source_field)
+    else out.set(row.source_id, [row.source_field])
   }
+  for (const fields of out.values()) fields.sort()
   return out
 }
 
@@ -121,7 +124,10 @@ const backlinkRows = async (
     }
     if (isReferenceOnly(source.content)) {
       const parent = source.parentId ? parentById.get(source.parentId) : undefined
-      if (parent && parent.content.trim()) row.parentContent = clipLine(parent.content, CONTEXT_CHARS).text
+      // A sync-applied parent edge can cross workspaces; that parent is not this block's context.
+      if (parent && parent.workspaceId === source.workspaceId && parent.content.trim()) {
+        row.parentContent = clipLine(parent.content, CONTEXT_CHARS).text
+      }
       const child = firstChildren.get(source.id)
       if (child && child.content.trim()) row.firstChildContent = clipLine(child.content, CONTEXT_CHARS).text
     }

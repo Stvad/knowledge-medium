@@ -2054,13 +2054,17 @@ interface PageCommandResult {
   candidates: Array<{id: string, alias: string, content: string, deepLink: string}>
 }
 
+/** Candidates are a lookup aid, not a listing: a caller picks a count
+ *  inside this bound. */
+const MAX_PAGE_CANDIDATES = 100
+
 const runPageCommand = async (
   repo: Repo,
   command: KnownAgentCommand,
 ): Promise<PageCommandResult> => {
   const name = requireString(command.name, 'name')
   const workspaceId = commandWorkspaceId(repo, command.workspaceId)
-  const limit = typeof command.limit === 'number' ? command.limit : 20
+  const limit = Math.min(typeof command.limit === 'number' ? command.limit : 20, MAX_PAGE_CANDIDATES)
 
   const exact = await repo.query.aliasLookup({workspaceId, alias: name}).load() as BlockData | null
   const candidates = await repo.query.aliasMatches({workspaceId, filter: name, limit}).load()

@@ -133,11 +133,14 @@ const TITLE_ROWS_SQL = `
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
-/** Bind a renderer for a batch of blocks: decodes every property through the
- *  registry once, then loads the titles of all referenced blocks in one
- *  query so a ref renders as `[[Title]]` instead of an id. Visibility is the
- *  property panel's rule (`isPropertyPanelHiddenProperty`), so an agent sees
- *  what the user sees. */
+/** Bind a renderer for a batch of blocks. Per block it picks the properties
+ *  it can show — visible ones, plain names first, at most
+ *  {@link MAX_PROPERTIES} — and decodes only those through the registry, then
+ *  loads the titles of their referenced blocks in one query, so a ref renders
+ *  as `[[Title]]`. A huge bag costs its names, not its decoding (a cost
+ *  bound: decoding everything would render the same). Visibility
+ *  is the property panel's rule (`isPropertyPanelHiddenProperty`), so an
+ *  agent sees what the user sees. */
 export const createPropertyRenderer = async (
   repo: Repo,
   blocks: readonly BlockData[],
@@ -146,19 +149,32 @@ export const createPropertyRenderer = async (
   const overrides = repo.propertyEditorOverrides
   const definitions = repo.propertyDefinitions
 
-  const decodedByBlock = new Map<string, Array<{name: string, hidden: boolean, decoded: Decoded}>>()
+  interface Prepared {
+    shown: Array<{name: string, decoded: Decoded}>
+    omitted: number
+    hidden: string[]
+  }
+  const preparedByBlock = new Map<string, Prepared>()
   const refIds = new Set<string>()
   for (const block of blocks) {
-    if (decodedByBlock.has(block.id)) continue
-    const entries: Array<{name: string, hidden: boolean, decoded: Decoded}> = []
-    for (const [name, raw] of Object.entries(block.properties ?? {})) {
+    if (preparedByBlock.has(block.id)) continue
+    const bag = block.properties ?? {}
+    const plain: string[] = []
+    const namespaced: string[] = []
+    const hidden: string[] = []
+    for (const name of Object.keys(bag)) {
       if (name === typesProp.name) continue
-      const hidden = isPropertyPanelHiddenProperty(name, schemas, overrides, definitions)
-      const decoded = decodeProperty(schemas.get(name), raw)
-      if (!hidden && decoded.kind === 'refs') decoded.ids.slice(0, MAX_REFS).forEach(id => refIds.add(id))
-      entries.push({name, hidden, decoded})
+      if (isPropertyPanelHiddenProperty(name, schemas, overrides, definitions)) hidden.push(name)
+      else (isNamespaced(name) ? namespaced : plain).push(name)
     }
-    decodedByBlock.set(block.id, entries)
+    // Plain names first, so the cap can never crowd out the vocabulary the
+    // brief form is built from.
+    const visible = [...plain, ...namespaced]
+    const shown = visible.slice(0, MAX_PROPERTIES).map(name => ({name, decoded: decodeProperty(schemas.get(name), bag[name])}))
+    for (const {decoded} of shown) {
+      if (decoded.kind === 'refs') decoded.ids.slice(0, MAX_REFS).forEach(id => refIds.add(id))
+    }
+    preparedByBlock.set(block.id, {shown, omitted: visible.length - shown.length, hidden})
   }
 
   const titles = new Map<string, {title: string, workspaceId: string}>()
@@ -195,24 +211,18 @@ export const createPropertyRenderer = async (
 
   return {
     view(block, detail) {
-      const visible: PropertyLine[] = []
-      const hidden: string[] = []
+      const prepared = preparedByBlock.get(block.id) ?? {shown: [], omitted: 0, hidden: []}
       const maxChars = detail === 'brief' ? BRIEF_VALUE_CHARS : FULL_VALUE_CHARS
-      for (const {name, hidden: isHidden, decoded} of decodedByBlock.get(block.id) ?? []) {
-        if (isHidden) {
-          hidden.push(name)
-          continue
-        }
+      const visible: PropertyLine[] = []
+      for (const {name, decoded} of prepared.shown) {
         const value = display(decoded, block, name, maxChars)
         if (value === '') continue
         visible.push({name: clipLine(name, NAME_CHARS).text, value: clipLine(value, maxChars).text})
       }
-      // Plain names first, so the cap can never crowd out the vocabulary the
-      // brief form is built from. Stable within each group.
-      visible.sort((a, b) => Number(isNamespaced(a.name)) - Number(isNamespaced(b.name)))
+      const hidden = prepared.hidden
       return {
-        visible: visible.slice(0, MAX_PROPERTIES),
-        omitted: Math.max(0, visible.length - MAX_PROPERTIES),
+        visible,
+        omitted: prepared.omitted,
         hidden: boundLabels(hidden, MAX_HIDDEN_NAMES, NAME_CHARS),
       }
     },

@@ -581,6 +581,31 @@ describe('structural edge cases', () => {
     expect(message).not.toMatch(/[\n\u202E]/u)
   })
 
+  it("a link-only backlink does not quote a parent from another workspace", async () => {
+    const target = uuid('7a0a0a0a', 1)
+    const source = uuid('7b0b0b0b', 2)
+    const foreignParent = uuid('7c0c0c0c', 3)
+    await create({id: target, content: 'Target'})
+    await repo.tx(async tx => {
+      await tx.create({id: foreignParent, workspaceId: 'ws-2', parentId: null, orderKey: 'a0', content: 'private elsewhere', references: []})
+    }, {scope: ChangeScope.BlockDefault})
+    await create({id: source, content: '[[Target]]', references: [{id: target, alias: 'Target'}]})
+    await sharedDb.db.execute('UPDATE blocks SET parent_id = ? WHERE id = ?', [foreignParent, source])
+    const out = await view<BacklinksView>({type: 'view-backlinks', ref: target, format: 'json'})
+    expect(out.rows[0]).not.toHaveProperty('parentContent')
+  })
+
+  it('page caps its candidates, whatever limit is asked for', async () => {
+    await repo.tx(async tx => {
+      for (let i = 0; i < 105; i++) {
+        const name = `Candidate ${String(i).padStart(3, '0')}`
+        await tx.create({id: uuid('7d0d0d0d', i), workspaceId: WS, parentId: null, orderKey: `c${i}`, content: name, properties: {alias: [name]}, references: []})
+      }
+    }, {scope: ChangeScope.BlockDefault})
+    const out = await executeCommand({commandId: 'p', type: 'page', name: 'Candidate', limit: 100_000}, context) as {candidates: unknown[]}
+    expect(out.candidates).toHaveLength(100)
+  }, 20_000)
+
   it('sql summarizes a binary cell by its size', async () => {
     const out = await executeCommand({
       commandId: 's', type: 'sql', mode: 'all', maxRows: 1, sql: 'SELECT randomblob(10) AS b',

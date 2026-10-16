@@ -870,12 +870,12 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   // talks to, the resolve path is a pure read. The only write either could
   // make is that same one-time prefs-block creation, before the bootstrap.
   'backlinks': {
-    usage: "kmagent backlinks <ref> --raw [--filter none|stored|effective|<json>] [--workspace <id>]",
+    usage: "kmagent backlinks <ref> --raw [--filter none|stored|effective|<json>]",
     description: 'Every backlink of a block (blocks whose references point at it), hydrated, unbounded — for programmatic use (the agent view is `view-backlinks`). --filter defaults to none. See `kmagent data-model`.',
     readOnly: true,
   },
   'grouped-backlinks': {
-    usage: "kmagent grouped-backlinks <ref> --raw [--filter none|stored|effective|<json>] [--grouping user|none|<json>] [--workspace <id>]",
+    usage: "kmagent grouped-backlinks <ref> --raw [--filter none|stored|effective|<json>] [--grouping user|none|<json>]",
     description: 'The grouped-references view for a block, every group and member hydrated (+ Other fallback) — unbounded (the agent view is `view-grouped-backlinks`). --grouping defaults to the user config (matches the UI); --filter defaults to none. See `kmagent data-model`.',
     readOnly: true,
   },
