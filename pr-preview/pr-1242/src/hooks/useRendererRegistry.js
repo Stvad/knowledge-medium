@@ -1,1 +1,1 @@
-import{$E as e,QE as t,ZE as n}from"../../chunks/app-D3jBtOLQ.js";export{e as defaultRegistry,n as refreshRendererRegistry,t as useRenderer};
+import{$E as e,QE as t,ZE as n}from"../../chunks/app-CU3-DGAM.js";export{e as defaultRegistry,n as refreshRendererRegistry,t as useRenderer};

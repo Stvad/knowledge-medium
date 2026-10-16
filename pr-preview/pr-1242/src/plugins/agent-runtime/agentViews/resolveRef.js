@@ -1,1 +1,1 @@
-import{Cu as e,Su as t,bu as n,xu as r}from"../../../../chunks/app-D3jBtOLQ.js";export{n as BlockRefError,r as MIN_ID_PREFIX,t as resolveBlockRef,e as shortIds};
+import{Cu as e,Su as t,bu as n,xu as r}from"../../../../chunks/app-CU3-DGAM.js";export{n as BlockRefError,r as MIN_ID_PREFIX,t as resolveBlockRef,e as shortIds};

@@ -1,1 +1,1 @@
-import{IT as e,LT as t}from"../chunks/app-D3jBtOLQ.js";export{e as appUpdate,t as useAppUpdateAvailable};
+import{IT as e,LT as t}from"../chunks/app-CU3-DGAM.js";export{e as appUpdate,t as useAppUpdateAvailable};

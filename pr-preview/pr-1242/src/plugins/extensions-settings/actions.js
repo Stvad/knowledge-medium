@@ -1,1 +1,1 @@
-import{lT as e,uT as t}from"../../../chunks/app-D3jBtOLQ.js";export{e as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,t as openExtensionsSettingsAction};
+import{lT as e,uT as t}from"../../../chunks/app-CU3-DGAM.js";export{e as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,t as openExtensionsSettingsAction};

@@ -1,1 +1,1 @@
-import{id as e}from"../../../chunks/app-D3jBtOLQ.js";export{e as BlockMetaCard};
+import{id as e}from"../../../chunks/app-CU3-DGAM.js";export{e as BlockMetaCard};

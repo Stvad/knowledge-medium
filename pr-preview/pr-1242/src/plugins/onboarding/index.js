@@ -1,1 +1,1 @@
-import{Gh as e,Jh as t,Kh as n,Nh as r,qh as i}from"../../../chunks/app-D3jBtOLQ.js";export{n as EXTENSIONS_PAGE_TITLE,i as TUTORIAL_DEFAULT_TITLE,t as TUTORIAL_VIM_TITLE,r as onboardingPlugin,e as seedTutorial};
+import{Gh as e,Jh as t,Kh as n,Nh as r,qh as i}from"../../../chunks/app-CU3-DGAM.js";export{n as EXTENSIONS_PAGE_TITLE,i as TUTORIAL_DEFAULT_TITLE,t as TUTORIAL_VIM_TITLE,r as onboardingPlugin,e as seedTutorial};

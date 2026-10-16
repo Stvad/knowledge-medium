@@ -1,1 +1,1 @@
-import{fT as e,gt as t,pT as n}from"../../../chunks/app-D3jBtOLQ.js";export{e as extensionsOverridesProp,n as extensionsPrefsType,t as extensionsSettingsPlugin};
+import{fT as e,gt as t,pT as n}from"../../../chunks/app-CU3-DGAM.js";export{e as extensionsOverridesProp,n as extensionsPrefsType,t as extensionsSettingsPlugin};

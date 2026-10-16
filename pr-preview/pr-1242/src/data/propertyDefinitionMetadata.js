@@ -1,1 +1,1 @@
-import{FX as e,IX as t}from"../../chunks/app-D3jBtOLQ.js";export{e as parsePropertyDefinitionMetadata,t as propertySchemaOriginForSeedKey};
+import{IX as e,LX as t}from"../../chunks/app-CU3-DGAM.js";export{e as parsePropertyDefinitionMetadata,t as propertySchemaOriginForSeedKey};

@@ -1,1 +1,1 @@
-import{h$ as e,m$ as t}from"../../chunks/app-D3jBtOLQ.js";export{t as InvalidBlockIdError,e as assertCanonicalBlockId};
+import{g$ as e,h$ as t}from"../../chunks/app-CU3-DGAM.js";export{t as InvalidBlockIdError,e as assertCanonicalBlockId};
