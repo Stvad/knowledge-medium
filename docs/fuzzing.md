@@ -290,9 +290,10 @@ one.
   `is_field_form`/`reference_target_id` equal a fresh derive (the shared
   input, which no SQL-vs-JS differential can see), `VISIBLE_CHILDREN_SQL`
   equals `visibleChildrenOf` for every live block, and
-  `VISIBLE_SUBTREE_SQL` equals a walk over those lists. The one excused
-  divergence is #1202 (below), for bags the generator made unbuildable,
-  with a tripwire per clause that fails once it is fixed.
+  `VISIBLE_SUBTREE_SQL` equals a walk over those lists. Nothing is
+  excused: the generator's unbuildable and unparseable definitions are
+  where #1202 (below) was found, and its canary reaches the veto that
+  fixed it.
 - `src/data/propertyDefinitionRename.fuzz.test.ts` — N-way definition
   renames through `core.migratePropertyDefinition`: swaps and longer
   cycles across codecs, renames onto fresh names, a seed's name and a
@@ -704,22 +705,20 @@ its first deep minutes:
   mints from the stale cell.
 
 The visible-children differential found one on its first smoke run
-(#1202, open): the outline SQL counts any `property-schema`-tagged block
-as a definition, while the tx layer's checker needs the registry to have
-parsed its metadata and, for a name winner, built its schema. So a
-definition whose preset does not load (synced from a peer with the
-plugin, or the plugin uninstalled) or whose change scope is invalid
-hides its field rows on screen while gestures resolve against them.
-Filed rather than fixed: the fix that makes the class impossible binds
-the registry's classified set into the SQL, which is a design call. The
-suite keeps generating those shapes and excuses exactly that divergence.
-A first version stopped generating them instead (review caught it), which
-loses every OTHER check in states holding a broken definition. Which
-definitions are excused is decided by the generator's own model of the
-bags it made unbuildable, read off the row. Asking the parse/build under
-test would excuse a regression that rejects a valid definition, and asking
-the projector's published state would excuse a projector that lags; planted
-versions of both are caught.
+(#1202, fixed + pinned): the outline SQL counted any `property-schema`-tagged
+block as a definition, while the tx layer's checker needed the registry to
+have parsed its metadata and, for a name winner, built its schema. So a
+definition whose preset does not load (synced from a peer with the plugin,
+or the plugin uninstalled), or whose change scope is invalid, hid its field
+rows on screen while gestures resolved against them. The registry now
+decides for both views. A definition it parsed but cannot build classifies
+(`behavior-unavailable` counts in `isResolvableFieldDefinition`). A tagged
+block it cannot parse is reported in `unparseableDefinitionIds`, which the
+SQL binds as a veto on its `block_types` leg, so its field row is a visible
+unknown-field row in both views. The suite kept generating those shapes
+while the bug was open, excusing exactly that divergence; a first version
+stopped generating them instead (review caught it), which loses every OTHER
+check in states holding a broken definition.
 
 The definition-rename fuzzer (roadmap #430's N-way same-tx renames)
 found one product bug in its first minute (fixed + pinned):
