@@ -1,1 +1,1 @@
-import{PC as e}from"../../../chunks/app-DJoN4MtS.js";export{e as SwipeActionMenu};
+import{PC as e}from"../../../chunks/app-zGzA28OG.js";export{e as SwipeActionMenu};

@@ -1,1 +1,1 @@
-import{GO as e,HO as t,KO as n,UO as r,WO as i}from"../../chunks/app-DJoN4MtS.js";export{t as __resetDialogsForTests,r as getDialogQueue,i as isDialogOpenForWorkspace,e as openDialog,n as subscribeDialogs};
+import{GO as e,HO as t,KO as n,UO as r,WO as i}from"../../chunks/app-zGzA28OG.js";export{t as __resetDialogsForTests,r as getDialogQueue,i as isDialogOpenForWorkspace,e as openDialog,n as subscribeDialogs};
