@@ -68,6 +68,11 @@ export const decodeProperty = (schema: AnyPropertySchema | undefined, raw: unkno
   }
 }
 
+/** A page's alias list holding just its title renders as nothing (the
+ *  title is already the line), so like an empty value it takes no slot. */
+const isTitleOnlyAlias = (name: string, value: unknown, block: BlockData): boolean =>
+  name === aliasesProp.name && Array.isArray(value) && value.length === 1 && value[0] === block.content.trim()
+
 /** A value that renders as nothing; it must not spend a slot under the cap. */
 const isEmptyValue = (value: unknown): boolean =>
   value === null || value === undefined || value === '' || (Array.isArray(value) && value.length === 0)
@@ -183,7 +188,7 @@ export const createPropertyRenderer = async (
     const namespaced: string[] = []
     const hidden: string[] = []
     for (const name of Object.keys(bag)) {
-      if (name === typesProp.name || isEmptyValue(bag[name])) continue
+      if (name === typesProp.name || isEmptyValue(bag[name]) || isTitleOnlyAlias(name, bag[name], block)) continue
       if (isPropertyPanelHiddenProperty(name, schemas, overrides, definitions)) hidden.push(name)
       else (isNamespaced(name) ? namespaced : plain).push(name)
     }

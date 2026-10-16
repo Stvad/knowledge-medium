@@ -88,7 +88,7 @@ const describeCandidates = async (repo: Repo, ids: readonly string[]): Promise<s
   )
   const byId = new Map(rows.map(row => [row.id, row.content ?? '']))
   return ids
-    .map(id => `  ${oneLine(id)}  ${clipLine(byId.get(id) ?? '', 60).text}`)
+    .map(id => `  ${clipLine(id, 64).text}  ${clipLine(byId.get(id) ?? '', 60).text}`)
     .join('\n')
 }
 

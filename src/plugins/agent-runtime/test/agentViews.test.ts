@@ -768,6 +768,21 @@ describe('structural edge cases', () => {
     for (const group of out.groups) expect(group.members.length).toBeLessThanOrEqual(250)
   })
 
+  it("a title-only alias takes no property slot", async () => {
+    const id = uuid('e0e0e0e0', 1)
+    await create({id, content: 'Page Title', properties: {alias: ['Page Title'], a: 1, b: 2, c: 3, d: 4}})
+    const line = (await view<string>({type: 'view-outline', ref: id})).split('\n')[0]
+    expect(line).toContain('a:: 1  b:: 2  c:: 3  +1 props')
+  })
+
+  it('clips a long id listed in an ambiguous-prefix error', async () => {
+    await create({id: `e1e1e1e1-${'f'.repeat(300)}`, content: 'long'})
+    await create({id: uuid('e1e1e1e1', 2), content: 'short'})
+    const message = await resolveBlockRef(repo, 'e1e1e1e1', {workspaceId: WS}).then(() => '', (error: Error) => error.message)
+    expect(message).toMatch(/ambiguous/)
+    expect(message).not.toContain('f'.repeat(100))
+  })
+
   it('sql summarizes a binary cell by its size', async () => {
     const out = await executeCommand({
       commandId: 's', type: 'sql', mode: 'all', maxRows: 1, sql: 'SELECT randomblob(10) AS b',
