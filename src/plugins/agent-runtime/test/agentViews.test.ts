@@ -604,7 +604,18 @@ describe('structural edge cases', () => {
     }, {scope: ChangeScope.BlockDefault})
     const out = await executeCommand({commandId: 'p', type: 'page', name: 'Candidate', limit: 100_000}, context) as {candidates: unknown[]}
     expect(out.candidates).toHaveLength(100)
-  }, 20_000)
+  })
+
+  it('empty values never spend a slot under the property cap', async () => {
+    const id = uuid('8a8a8a8a', 1)
+    const properties: Record<string, unknown> = {}
+    for (let i = 0; i < 60; i++) properties[`optional-${i}`] = null
+    properties.status = 'done'
+    await create({id, content: 'sparse', properties})
+    const out = await view<BlockView>({type: 'view-block', ref: id, format: 'json'})
+    expect(out.properties).toEqual([{name: 'status', value: 'done'}])
+    expect(out.omittedProperties).toBe(0)
+  })
 
   it('sql summarizes a binary cell by its size', async () => {
     const out = await executeCommand({
@@ -757,7 +768,7 @@ describe('view-search', () => {
     expect(out.hits.map(hit => hit.snippet)).toEqual(['banana split', 'we also like banana'])
     expect(out.hits[0].duplicateIds).toHaveLength(109)
     expect(out.nextOffset).toBeNull()
-  }, 20_000)
+  })
 
   it('excludes extension source unless asked, and filters by type and ancestry inside the query', async () => {
     const project = uuid('dddd0000', 1)

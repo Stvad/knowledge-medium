@@ -59,6 +59,10 @@ const decodeProperty = (schema: AnyPropertySchema | undefined, raw: unknown): De
   }
 }
 
+/** A value that renders as nothing; it must not spend a slot under the cap. */
+const isEmptyValue = (value: unknown): boolean =>
+  value === null || value === undefined || value === '' || (Array.isArray(value) && value.length === 0)
+
 const isScalar = (value: unknown): value is string | number | boolean =>
   typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean'
 
@@ -72,21 +76,22 @@ const formatDate = (date: Date): string => {
  *  summarized, never dumped — they are what made raw outlines unreadable. A
  *  list is joined only until it passes `budget`, so a huge one costs no more
  *  than the line it ends up on. */
-const formatValue = (value: unknown, budget: number): string => {
+const formatValue = (value: unknown, budget: number, from = 0): string => {
   if (value === null || value === undefined) return ''
   if (value instanceof Date) return formatDate(value)
   if (isScalar(value)) return String(value)
   if (Array.isArray(value)) {
     if (!value.every(item => isScalar(item) || item instanceof Date)) return `[${value.length} items]`
     let joined = ''
-    for (const [index, item] of value.entries()) {
+    for (let index = from; index < value.length; index++) {
+      const item: unknown = value[index]
       const left = value.length - index - 1
-      const separator = index > 0 ? ', ' : ''
+      const separator = index > from ? ', ' : ''
       // Room for the count of what follows, so the line's own clip never cuts it off.
       const space = budget - joined.length - separator.length - (left > 0 ? `, …+${left} more`.length : 0)
       const text = formatValue(item, budget)
       if (text.length > space && left > 0) {
-        if (index > 0) return `${joined}, …+${value.length - index} more`
+        if (index > from) return `${joined}, …+${value.length - index} more`
         return `${text.slice(0, charBoundary(text, Math.max(1, space - 1)))}…, …+${left} more`
       }
       joined += `${separator}${text}`
@@ -163,7 +168,7 @@ export const createPropertyRenderer = async (
     const namespaced: string[] = []
     const hidden: string[] = []
     for (const name of Object.keys(bag)) {
-      if (name === typesProp.name) continue
+      if (name === typesProp.name || isEmptyValue(bag[name])) continue
       if (isPropertyPanelHiddenProperty(name, schemas, overrides, definitions)) hidden.push(name)
       else (isNamespaced(name) ? namespaced : plain).push(name)
     }
@@ -201,10 +206,10 @@ export const createPropertyRenderer = async (
       const rest = decoded.ids.length - shown.length
       return rest > 0 ? `${shown.join(', ')}, …+${rest} more` : shown.join(', ')
     }
-    // A page's first alias is its title, already on the line.
+    // A page's first alias is its title, already on the line; skipped in
+    // place, since an alias list can be huge.
     if (name === aliasesProp.name && Array.isArray(decoded.value)) {
-      const content = block.content.trim()
-      return formatValue(decoded.value.filter(alias => alias !== content), budget)
+      return formatValue(decoded.value, budget, decoded.value[0] === block.content.trim() ? 1 : 0)
     }
     return formatValue(decoded.value, budget)
   }
