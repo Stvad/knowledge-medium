@@ -1,1 +1,1 @@
-import{KC as e}from"../../../chunks/app-CxlMCmSC.js";export{e as BlockEmbed};
+import{JC as e}from"../../../chunks/app-D3jBtOLQ.js";export{e as BlockEmbed};

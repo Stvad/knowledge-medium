@@ -1,1 +1,1 @@
-import{_d as e}from"../../../chunks/app-CxlMCmSC.js";export{e as backlinksPlugin};
+import{yd as e}from"../../../chunks/app-D3jBtOLQ.js";export{e as backlinksPlugin};

@@ -1,1 +1,1 @@
-import{fC as e,mC as t,pC as n}from"../../../chunks/app-CxlMCmSC.js";export{e as SWIPE_QUICK_ACTIONS_GESTURE_ID,n as SWIPE_TRIGGER_PX,t as swipeRecognizer};
+import{gC as e,hC as t,mC as n}from"../../../chunks/app-D3jBtOLQ.js";export{n as SWIPE_QUICK_ACTIONS_GESTURE_ID,t as SWIPE_TRIGGER_PX,e as swipeRecognizer};

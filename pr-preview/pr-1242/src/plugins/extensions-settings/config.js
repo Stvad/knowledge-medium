@@ -1,1 +1,1 @@
-import{dT as e,fT as t,lT as n,uT as r}from"../../../chunks/app-CxlMCmSC.js";export{n as extensionsOverridesPresetCore,r as extensionsOverridesProp,e as extensionsPrefsType,t as overridesCodec};
+import{dT as e,fT as t,mT as n,pT as r}from"../../../chunks/app-D3jBtOLQ.js";export{e as extensionsOverridesPresetCore,t as extensionsOverridesProp,r as extensionsPrefsType,n as overridesCodec};
