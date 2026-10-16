@@ -162,16 +162,6 @@ describe('resolveBlockRef', () => {
     }
   })
 
-  it('resolves a stored id that looks like a prefix or a wrapper to itself', async () => {
-    const inner = uuid('a1b2c3d4', 9)
-    await create({id: inner, content: 'Inner'})
-    const lookalikes = ['^a1b2c3d4', `((${inner}))`, '[[Project Alpha]]']
-    for (const id of lookalikes) await create({id, content: 'lookalike'})
-    for (const id of lookalikes) {
-      expect(await resolveBlockRef(repo, id, {workspaceId: WS})).toEqual({id, via: 'id'})
-    }
-  })
-
   it('keeps a non-canonical UUID exactly as given, and never shortens one', async () => {
     const mixedCase = 'ABCDEF12-0000-4000-8000-000000000001'
     expect(await resolveBlockRef(repo, mixedCase, {workspaceId: WS})).toEqual({id: mixedCase, via: 'id'})

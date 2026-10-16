@@ -158,10 +158,6 @@ export const resolveBlockRef = async (
   ref: string,
   {workspaceId, onMissing = 'error', accept = 'any'}: ResolveBlockRefOptions,
 ): Promise<BlockRefResolution> => {
-  // A ref that IS a stored id names that block before any reading of it as a
-  // wrapper or prefix: sync and restore admit non-canonical ids, which can
-  // look like `((x))`, `^x` or `[[x]]` and must not resolve to some other block.
-  if (ref !== '' && await repo.db.getOptional(EXISTS_SQL, [ref])) return {id: ref, via: 'id'}
   const {text, forced} = unwrap(ref)
   if (!text) throw new BlockRefError('A block reference is required.')
 
