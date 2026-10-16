@@ -54,11 +54,19 @@ export interface BacklinksView {
   rows: BacklinkRow[]
 }
 
+/** The first few property names each source references the target through,
+ *  plus how many there are — windowed in SQL, so a source with thousands
+ *  of ref fields costs its shown few. */
 const SOURCE_FIELDS_FOR_SOURCES_SQL = `
-  SELECT DISTINCT r.source_id AS source_id, r.source_field AS source_field
-    FROM json_each(?) j
-    JOIN block_references r ON r.source_id = j.value
-   WHERE r.workspace_id = ? AND r.target_id = ?
+  SELECT source_id, source_field, n FROM (
+    SELECT source_id, source_field,
+           ROW_NUMBER() OVER (PARTITION BY source_id ORDER BY source_field) AS rn,
+           COUNT(*) OVER (PARTITION BY source_id) AS n
+      FROM (SELECT DISTINCT r.source_id AS source_id, r.source_field AS source_field
+              FROM json_each(?) j
+              JOIN block_references r ON r.source_id = j.value
+             WHERE r.workspace_id = ? AND r.target_id = ? AND r.source_field != '')
+  ) WHERE rn <= ?
 `
 
 const viaPropertiesBySource = async (
@@ -67,19 +75,17 @@ const viaPropertiesBySource = async (
   targetId: string,
   sourceIds: readonly string[],
 ): Promise<Map<string, string[]>> => {
-  const rows = await repo.db.getAll<{source_id: string, source_field: string}>(
+  const rows = await repo.db.getAll<{source_id: string, source_field: string, n: number}>(
     SOURCE_FIELDS_FOR_SOURCES_SQL,
-    [JSON.stringify(sourceIds), workspaceId, targetId],
+    [JSON.stringify(sourceIds), workspaceId, targetId, MAX_VIA],
   )
-  const out = new Map<string, string[]>()
+  const fields = new Map<string, {names: string[], total: number}>()
   for (const row of rows) {
-    if (row.source_field === '') continue
-    const fields = out.get(row.source_id)
-    if (fields) fields.push(row.source_field)
-    else out.set(row.source_id, [row.source_field])
+    const entry = fields.get(row.source_id) ?? {names: [], total: row.n}
+    entry.names.push(row.source_field)
+    fields.set(row.source_id, entry)
   }
-  for (const fields of out.values()) fields.sort()
-  return out
+  return new Map([...fields].map(([id, {names, total}]) => [id, boundLabels(names, MAX_VIA, NAME_CHARS, total)]))
 }
 
 const loadTarget = async (repo: Repo, ref: string, workspaceId: string): Promise<{block: BlockData, target: Target}> => {
@@ -124,7 +130,7 @@ const backlinkRows = async (
       parentId: source.parentId,
       breadcrumb: crumbs.get(source.id) ?? [],
       childCount: childCounts.get(source.id) ?? 0,
-      viaProperties: boundLabels(via.get(source.id) ?? [], MAX_VIA, NAME_CHARS),
+      viaProperties: via.get(source.id) ?? [],
     }
     if (isReferenceOnly(source.content)) {
       const parent = source.parentId ? parentById.get(source.parentId) : undefined

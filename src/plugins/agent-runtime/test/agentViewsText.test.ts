@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { hasLoneSurrogate } from '@/utils/string'
 import { snippet } from '../agentViews/text'
-import { decodeProperty, isEmptyValue } from '../agentViews/properties'
+import { decodeProperty, isBlank } from '../agentViews/properties'
+import type { BlockData } from '@/data/api'
 import type { AnyPropertySchema } from '@/data/api'
 
 describe('snippet', () => {
@@ -49,11 +50,24 @@ describe('decodeProperty', () => {
   })
 })
 
-describe('isEmptyValue', () => {
-  it('treats [] as empty only for a list, never for an atomic encoding', () => {
-    const atomic = {codec: {type: 'test-atomic', encode: (v: unknown) => v, decode: (v: unknown) => v}} as unknown as AnyPropertySchema
-    expect(isEmptyValue([], undefined)).toBe(true)
-    expect(isEmptyValue([], atomic)).toBe(false)
-    expect(isEmptyValue(null, atomic)).toBe(true)
+describe('isBlank', () => {
+  const block = {content: 'Title'} as BlockData
+  // An atomic codec may encode a real value as '' or [].
+  const atomic = {codec: {
+    type: 'test-atomic',
+    encode: (v: unknown) => v,
+    decode: (v: unknown) => (v === '' ? 'zero' : Array.isArray(v) && v.length === 0 ? 'none set' : v),
+  }} as unknown as AnyPropertySchema
+
+  it('judges the decoded value, so an atomic encoding of "" or [] still shows', () => {
+    expect(isBlank(decodeProperty(atomic, ''), 'p', block)).toBe(false)
+    expect(isBlank(decodeProperty(atomic, []), 'p', block)).toBe(false)
+    expect(isBlank(decodeProperty(undefined, ''), 'p', block)).toBe(true)
+    expect(isBlank(decodeProperty(undefined, []), 'p', block)).toBe(true)
+  })
+
+  it('treats a title-only alias list as blank', () => {
+    expect(isBlank(decodeProperty(undefined, ['Title']), 'alias', block)).toBe(true)
+    expect(isBlank(decodeProperty(undefined, ['Title', 'Other']), 'alias', block)).toBe(false)
   })
 })

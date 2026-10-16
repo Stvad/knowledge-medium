@@ -3,9 +3,6 @@ import type { AnyPropertySchema, BlockData } from '@/data/api'
 import { decodeRefId, decodeRefListIds, isRefCodec, isRefListCodec, memberCodecOf } from '@/data/api/codecs.js'
 import { aliasesProp, typesProp } from '@/data/properties.js'
 import { isPropertyPanelHiddenProperty } from '@/components/propertyPanel/visibility.js'
-import { labelForBlockData } from '@/utils/linkTargetAutocomplete.js'
-import { parseBlockRow } from '@/data/blockSchema.js'
-import type { BlockRow } from '@/data/blockSchema.js'
 import { boundLabels, charBoundary, clipLine, oneLine } from './text.ts'
 
 export interface PropertyLine {
@@ -68,17 +65,19 @@ export const decodeProperty = (schema: AnyPropertySchema | undefined, raw: unkno
   }
 }
 
-/** A page's alias list holding just its title renders as nothing (the
- *  title is already the line), so like an empty value it takes no slot. */
-const isTitleOnlyAlias = (name: string, value: unknown, block: BlockData): boolean =>
-  name === aliasesProp.name && Array.isArray(value) && value.length === 1 && value[0] === block.content.trim()
+/** Property candidates decoded per block before the rest are only counted. */
+const MAX_SCANNED = 200
 
-/** A value that renders as nothing; it must not spend a slot under the cap.
- *  `[]` is empty only for a list (no codec, or a member-wise one): an atomic
- *  codec may encode a real value as an empty array. */
-export const isEmptyValue = (value: unknown, schema: AnyPropertySchema | undefined): boolean =>
-  value === null || value === undefined || value === ''
-  || (Array.isArray(value) && value.length === 0 && (schema === undefined || memberCodecOf(schema.codec) !== undefined))
+/** A decoded value that renders as nothing — no refs, no value, an empty
+ *  list, or a page's alias list holding just its title (the title is the line). */
+export const isBlank = (decoded: Decoded, name: string, block: BlockData): boolean => {
+  if (decoded.kind === 'refs') return decoded.total === 0
+  const value = decoded.value
+  if (value === null || value === undefined || value === '') return true
+  if (!Array.isArray(value)) return false
+  if (value.length === 0) return true
+  return name === aliasesProp.name && value.length === 1 && value[0] === block.content.trim() && (decoded.total ?? 1) === 1
+}
 
 const isScalar = (value: unknown): value is string | number | boolean =>
   typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean'
@@ -150,8 +149,14 @@ export interface PropertyRenderer {
   typeLabels(block: BlockData): string[]
 }
 
+/** What a ref's title needs, projected at the database: the first alias and
+ *  a bounded head of the content, never a whole (possibly huge) row. */
 const TITLE_ROWS_SQL = `
-  SELECT b.* FROM json_each(?) j JOIN blocks b ON b.id = j.value WHERE b.deleted = 0
+  SELECT b.id AS id, b.workspace_id AS workspace_id,
+         substr(json_extract(b.properties_json, '$.alias[0]'), 1, 400) AS alias,
+         substr(b.content, 1, 400) AS content
+    FROM json_each(?) j JOIN blocks b ON b.id = j.value
+   WHERE b.deleted = 0
 `
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -191,7 +196,7 @@ export const createPropertyRenderer = async (
     const namespaced: string[] = []
     const hidden: string[] = []
     for (const name of Object.keys(bag)) {
-      if (name === typesProp.name || isEmptyValue(bag[name], schemas.get(name)) || isTitleOnlyAlias(name, bag[name], block)) continue
+      if (name === typesProp.name) continue
       if (isPropertyPanelHiddenProperty(name, schemas, overrides, definitions)) hidden.push(name)
       else (isNamespaced(name) ? namespaced : plain).push(name)
     }
@@ -199,19 +204,36 @@ export const createPropertyRenderer = async (
     // vocabulary; brief shows plain names only.
     const visible = [...plain, ...namespaced]
     const candidates = detail === 'brief' ? plain : visible
-    const shown = candidates.slice(0, showable).map(name => ({name, decoded: decodeProperty(schemas.get(name), bag[name])}))
+    // Candidates are decoded in order until enough show; one whose DECODED
+    // value is blank takes no slot — judged after decoding, since a codec may
+    // encode a real value as '' or []. At most MAX_SCANNED are decoded (a cost
+    // bound); the rest are counted, not read.
+    const shown: Array<{name: string, decoded: Decoded}> = []
+    let blank = 0
+    let scanned = 0
+    for (const name of candidates) {
+      if (shown.length >= showable || scanned >= MAX_SCANNED) break
+      scanned += 1
+      const decoded = decodeProperty(schemas.get(name), bag[name])
+      if (isBlank(decoded, name, block)) blank += 1
+      else shown.push({name, decoded})
+    }
     for (const {decoded} of shown) {
       if (decoded.kind === 'refs') decoded.ids.slice(0, MAX_REFS).forEach(id => refIds.add(id))
     }
-    preparedByBlock.set(block.id, {shown, omitted: visible.length - shown.length, hidden})
+    preparedByBlock.set(block.id, {shown, omitted: visible.length - shown.length - blank, hidden})
   }
 
   const titles = new Map<string, {title: string, workspaceId: string}>()
   if (refIds.size > 0) {
-    const rows = await repo.db.getAll<BlockRow>(TITLE_ROWS_SQL, [JSON.stringify([...refIds])])
+    const rows = await repo.db.getAll<{id: string, workspace_id: string, alias: unknown, content: string | null}>(
+      TITLE_ROWS_SQL,
+      [JSON.stringify([...refIds])],
+    )
     for (const row of rows) {
-      const data = parseBlockRow(row)
-      titles.set(data.id, {title: oneLine(labelForBlockData(data, data.id)), workspaceId: data.workspaceId})
+      const alias = typeof row.alias === 'string' ? row.alias.trim() : ''
+      const title = alias || row.content?.trim() || row.id
+      titles.set(row.id, {title: oneLine(title), workspaceId: row.workspace_id})
     }
   }
   // References resolve within a workspace, so another workspace's block
