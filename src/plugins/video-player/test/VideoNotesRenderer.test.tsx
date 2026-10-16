@@ -331,7 +331,12 @@ describe('pane resize drag', () => {
     .find(separator => separator.getAttribute('aria-orientation') === 'vertical')!
   const shownRatio = () => columnSeparator().getAttribute('aria-valuenow')
   const storedRatio = () => repo.block(VIDEO).peekProperty(videoNotesPaneRatioProp)
-  const movePointer = (clientX: number, buttons: number) => fireEvent.pointerMove(window, {clientX, buttons})
+  const DRAG_POINTER = 1
+  const OTHER_POINTER = 2
+  const movePointer = (clientX: number, buttons: number, pointerId = DRAG_POINTER) =>
+    fireEvent.pointerMove(window, {clientX, buttons, pointerId})
+  const releasePointer = (clientX: number, pointerId = DRAG_POINTER) =>
+    fireEvent.pointerUp(window, {clientX, buttons: 0, pointerId})
   const RATIO_WRITE_WAIT = 5_000
 
   const startColumnDrag = async (clientX: number) => {
@@ -339,7 +344,7 @@ describe('pane resize drag', () => {
     renderLayout()
     vi.spyOn(screen.getByTestId('video-notes-root'), 'getBoundingClientRect')
       .mockReturnValue(DOMRect.fromRect({x: 0, y: 0, width: 1000, height: 600}))
-    fireEvent.pointerDown(columnSeparator(), {button: 0, buttons: 1, clientX})
+    fireEvent.pointerDown(columnSeparator(), {button: 0, buttons: 1, clientX, pointerId: DRAG_POINTER})
   }
 
   it('a release the window never received (let go outside it) ends the drag at the next move', async () => {
@@ -357,7 +362,7 @@ describe('pane resize drag', () => {
     await startColumnDrag(500)
     expect(screen.getByTestId('video-notes-resize-shield')).toBeTruthy()
 
-    fireEvent.pointerUp(window, {clientX: 500, buttons: 0})
+    releasePointer(500)
     expect(screen.queryByTestId('video-notes-resize-shield')).toBeNull()
     await vi.waitFor(() => expect(storedRatio()).toBeCloseTo(0.5), {timeout: RATIO_WRITE_WAIT})
   }, 15_000)
@@ -365,13 +370,28 @@ describe('pane resize drag', () => {
   it('a resize key pressed mid-drag leaves the drag, and its shield, in charge', async () => {
     await startColumnDrag(500)
     const writeRatio = vi.spyOn(repo.block(VIDEO), 'set')
-    fireEvent.keyDown(columnSeparator(), {key: 'ArrowRight'})
+    const notPrevented = fireEvent.keyDown(columnSeparator(), {key: 'ArrowDown'})
+    expect(notPrevented).toBe(false) // a resize key never scrolls the column out from under the drag
     expect(writeRatio).not.toHaveBeenCalled() // the release writes the drag's ratio; nothing before it
     expect(screen.getByTestId('video-notes-resize-shield')).toBeTruthy()
     expect(shownRatio()).toBe('50')
 
-    fireEvent.pointerUp(window, {clientX: 500, buttons: 0})
+    releasePointer(500)
     await vi.waitFor(() => expect(storedRatio()).toBeCloseTo(0.5), {timeout: RATIO_WRITE_WAIT})
+  }, 15_000)
+
+  it('only the pointer that started the drag moves or ends it', async () => {
+    await startColumnDrag(500)
+    movePointer(800, 0, OTHER_POINTER) // e.g. a mouse hovering while a finger drags
+    movePointer(700, 1, OTHER_POINTER)
+    releasePointer(700, OTHER_POINTER)
+    fireEvent.pointerCancel(window, {pointerId: OTHER_POINTER})
+    expect(screen.getByTestId('video-notes-resize-shield')).toBeTruthy()
+    expect(shownRatio()).toBe('50')
+
+    movePointer(600, 1)
+    releasePointer(600)
+    await vi.waitFor(() => expect(storedRatio()).toBeCloseTo(0.6), {timeout: RATIO_WRITE_WAIT})
   }, 15_000)
 })
 
