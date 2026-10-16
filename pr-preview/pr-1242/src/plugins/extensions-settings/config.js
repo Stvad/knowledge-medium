@@ -1,1 +1,1 @@
-import{$w as e,eT as t,nT as n,tT as r}from"../../../chunks/app-DUTnplNZ.js";export{e as extensionsOverridesPresetCore,t as extensionsOverridesProp,r as extensionsPrefsType,n as overridesCodec};
+import{$w as e,eT as t,nT as n,tT as r}from"../../../chunks/app-CV82QQBd.js";export{e as extensionsOverridesPresetCore,t as extensionsOverridesProp,r as extensionsPrefsType,n as overridesCodec};

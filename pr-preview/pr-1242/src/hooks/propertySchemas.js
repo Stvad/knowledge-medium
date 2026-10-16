@@ -1,1 +1,1 @@
-import{JP as e}from"../../chunks/app-DUTnplNZ.js";export{e as usePropertySchemas};
+import{JP as e}from"../../chunks/app-CV82QQBd.js";export{e as usePropertySchemas};

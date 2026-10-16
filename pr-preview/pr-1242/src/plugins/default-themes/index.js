@@ -1,1 +1,1 @@
-import{Gv as e,Kv as t,cy as n,sy as r}from"../../../chunks/app-DUTnplNZ.js";export{r as DEFAULT_THEME_ID_DARK,n as DEFAULT_THEME_ID_LIGHT,t as defaultThemeContributions,e as defaultThemesPlugin};
+import{Gv as e,Kv as t,cy as n,sy as r}from"../../../chunks/app-CV82QQBd.js";export{r as DEFAULT_THEME_ID_DARK,n as DEFAULT_THEME_ID_LIGHT,t as defaultThemeContributions,e as defaultThemesPlugin};

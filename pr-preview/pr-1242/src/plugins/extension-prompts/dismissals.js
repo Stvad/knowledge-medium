@@ -1,1 +1,1 @@
-import{aT as e,oT as t,sT as n}from"../../../chunks/app-DUTnplNZ.js";export{e as ExtensionPromptDismissalStore,t as extensionPromptDismissals,n as useExtensionPromptDismissals};
+import{aT as e,oT as t,sT as n}from"../../../chunks/app-CV82QQBd.js";export{e as ExtensionPromptDismissalStore,t as extensionPromptDismissals,n as useExtensionPromptDismissals};
