@@ -10,6 +10,7 @@ import type { Repo } from '@/data/repo'
 import { parseMarkdownToBlocks, type ParsedBlock } from '@/utils/markdownParser.js'
 import { parseRelativeDate } from '@/utils/relativeDate.js'
 import { agentTxOptions } from './agentWrites.ts'
+import { shortIds } from './agentViews/resolveRef.ts'
 import {
   resolveAgentTarget,
   resolveBlockId,
@@ -37,6 +38,8 @@ export interface AppendMarkdownInput {
 
 export interface AppendedBlock {
   id: string
+  /** Unique id prefix the read views print as `^short`. */
+  shortId: string
   parentId: string
   /** 0 for a direct child of the target. */
   depth: number
@@ -44,7 +47,7 @@ export interface AppendedBlock {
 }
 
 export interface AppendMarkdownResult {
-  target: ResolvedAgentTarget & {content: string}
+  target: ResolvedAgentTarget & {shortId: string; content: string}
   /** Created blocks in pre-order. */
   blocks: AppendedBlock[]
 }
@@ -70,9 +73,9 @@ export const appendMarkdown = async (
 
   // A created page / daily note commits in its own tx; one undo entry for both.
   return outerRepo.undoGroup(async repo => {
-    const target = await resolveAgentTarget(repo, input.target, {verb, create: true})
+    const target = await resolveAgentTarget(repo, input.target, verb)
     const firstPosition = await siblingPosition(repo, verb, input.position)
-    const blocks: AppendedBlock[] = []
+    const blocks: Array<Omit<AppendedBlock, 'shortId'>> = []
     let targetContent = ''
 
     await repo.tx(async tx => {
@@ -98,7 +101,11 @@ export const appendMarkdown = async (
       }
     }, agentTxOptions(verb))
 
-    return {target: {...target, content: targetContent}, blocks}
+    const short = await shortIds(repo, [target.id, ...blocks.map(block => block.id)])
+    return {
+      target: {...target, shortId: short.get(target.id)!, content: targetContent},
+      blocks: blocks.map(block => ({...block, shortId: short.get(block.id)!})),
+    }
   })
 }
 
@@ -167,12 +174,11 @@ export const createPage = async (
   if ((input.name === undefined) === (input.date === undefined)) {
     throw new Error(`${verb}: pass exactly one of name or date.`)
   }
-  const options = {verb, create: true}
   let resolved: ResolvedAgentTarget
   if (input.name !== undefined) {
     const name = input.name.trim().replace(/^\[\[(.*)\]\]$/s, '$1').trim()
     if (name === '') throw new Error(`${verb}: name is empty.`)
-    resolved = await resolvePageTarget(repo, name, options)
+    resolved = await resolvePageTarget(repo, name, verb)
   } else {
     const date = parseRelativeDate(input.date!)
     if (!date) {
@@ -180,7 +186,7 @@ export const createPage = async (
         `${verb}: Could not parse "${input.date}" as a date. Try today | yesterday | 2026-06-18 | "June 17th, 2026" | "next monday".`,
       )
     }
-    resolved = await resolveDailyNoteTarget(repo, date.iso, options)
+    resolved = await resolveDailyNoteTarget(repo, date.iso, verb)
   }
   return {...resolved, content: (await repo.load(resolved.id))?.content ?? ''}
 }

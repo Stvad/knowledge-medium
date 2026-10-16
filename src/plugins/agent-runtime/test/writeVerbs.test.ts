@@ -36,7 +36,8 @@ beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => {
   await resetTestDb(sharedDb.db)
-  repo = createTestRepo({db: sharedDb.db, user: USER}).repo
+  // Real uuids, so created blocks get `^short` ids like production ones.
+  repo = createTestRepo({db: sharedDb.db, user: USER, newId: () => crypto.randomUUID()}).repo
   const runtime = resolveFacetRuntimeSync([staticDataExtensions], {repo, workspaceId: WS, safeMode: false})
   repo.setFacetRuntime(runtime)
   repo.setActiveWorkspaceId(WS)
@@ -90,16 +91,14 @@ describe('target resolution', () => {
     expect(await resolveBlockId(repo, '((7d41e0aa))', 'test')).toBe(LONE)
   })
 
-  it('refuses an ambiguous prefix, counting a tombstone as a match', async () => {
+  it('refuses an ambiguous prefix', async () => {
     await seed([{id: NOTE}, {id: NOTE_TWIN}])
-    await repo.mutate.delete({id: NOTE_TWIN})
-    await expect(resolveBlockId(repo, '3f2a9c1b', 'test')).rejects.toThrow(/ambiguous.*deleted/s)
+    await expect(resolveBlockId(repo, '^3f2a9c1b', 'test')).rejects.toThrow(/ambiguous/)
   })
 
-  it('only matches a prefix inside the active workspace', async () => {
-    await seed([{id: LONE, workspaceId: OTHER_WS}])
-    // Unresolved refs pass through so the verb reports its own not-found.
+  it('passes a ref that matches nothing through, so the verb reports its own not-found', async () => {
     expect(await resolveBlockId(repo, '7d41e0aa', 'test')).toBe('7d41e0aa')
+    await expect(run({type: 'update-block', id: '7d41e0aa', content: 'x'})).rejects.toThrow(/not found/)
   })
 
   it('refuses a page target in an id field', async () => {
@@ -111,15 +110,15 @@ describe('target resolution', () => {
       await tx.create({id: LONE, workspaceId: WS, parentId: null, orderKey: 'a0', content: 'Inbox'})
       await tx.setProperty(LONE, aliasesProp, ['Inbox'])
     }, {scope: ChangeScope.BlockDefault})
-    expect(await resolveAgentTarget(repo, '[[Inbox]]', {verb: 'test', create: true}))
-      .toEqual({id: LONE, workspaceId: WS, kind: 'page', created: false})
+    expect(await resolveAgentTarget(repo, '[[Inbox]]', 'test'))
+      .toEqual({id: LONE, kind: 'page', created: false})
+    expect(await resolveAgentTarget(repo, 'Inbox', 'test'))
+      .toEqual({id: LONE, kind: 'page', created: false})
   })
 
   it('creates a missing page at the alias seat a wikilink would mint', async () => {
-    const resolved = await resolveAgentTarget(repo, '[[Project X]]', {verb: 'test', create: true})
-    expect(resolved).toEqual({
-      id: computeAliasSeatId('Project X', WS, 0), workspaceId: WS, kind: 'page', created: true,
-    })
+    const resolved = await resolveAgentTarget(repo, '[[Project X]]', 'test')
+    expect(resolved).toEqual({id: computeAliasSeatId('Project X', WS, 0), kind: 'page', created: true})
     const page = (await repo.load(resolved.id))!
     expect(page.parentId).toBeNull()
     expect(getBlockTypes(page)).toContain(PAGE_TYPE)
@@ -134,7 +133,7 @@ describe('target resolution', () => {
     const spy = vi.spyOn(repo, 'activeWorkspaceId', 'get')
       .mockImplementation(() => (reads++ === 0 ? WS : 'ws-elsewhere'))
     try {
-      await expect(resolveAgentTarget(repo, '[[Drifted]]', {verb: 'test', create: true}))
+      await expect(resolveAgentTarget(repo, '[[Drifted]]', 'test'))
         .rejects.toThrow(/not the active one/)
     } finally {
       spy.mockRestore()
@@ -142,23 +141,28 @@ describe('target resolution', () => {
     expect(await sharedDb.db.getAll('SELECT block_id FROM block_aliases WHERE alias = ?', ['Drifted'])).toEqual([])
   })
 
-  it('refuses a missing page without create', async () => {
-    await expect(resolveAgentTarget(repo, '[[Nope]]', {verb: 'test'})).rejects.toThrow(/no page named \[\[Nope\]\]/)
+  it('never resolves an id field by page name — the page is not touched', async () => {
+    await repo.tx(async tx => {
+      await tx.create({id: LONE, workspaceId: WS, parentId: null, orderKey: 'a0', content: 'Inbox'})
+      await tx.setProperty(LONE, aliasesProp, ['Inbox'])
+    }, {scope: ChangeScope.BlockDefault})
+    await expect(run({type: 'delete-block', id: 'Inbox'})).rejects.toThrow(/does not exist/)
+    expect((await repo.load(LONE))?.deleted).toBe(false)
   })
 
   it('routes a date-literal page name and a bare date expression to the daily note', async () => {
     const iso = '2026-10-15'
-    const literal = await resolveAgentTarget(repo, `[[${iso}]]`, {verb: 'test', create: true})
-    expect(literal).toEqual({id: dailyNoteBlockId(WS, iso), workspaceId: WS, kind: 'daily', created: true})
+    const literal = await resolveAgentTarget(repo, `[[${iso}]]`, 'test')
+    expect(literal).toEqual({id: dailyNoteBlockId(WS, iso), kind: 'daily', created: true})
     expect((await repo.load(literal.id))!.parentId).toBe(journalBlockId(WS))
 
-    const bare = await resolveAgentTarget(repo, 'October 15th, 2026', {verb: 'test', create: true})
+    const bare = await resolveAgentTarget(repo, 'October 15th, 2026', 'test')
     expect(bare).toEqual({...literal, created: false})
   })
 
-  it('refuses a bare name rather than reading it as a page', async () => {
-    await expect(resolveAgentTarget(repo, 'Inbox', {verb: 'test', create: true}))
-      .rejects.toThrow(/wrap its name: \[\[Inbox\]\]/)
+  it('refuses to create from a bare name — that takes [[Name]]', async () => {
+    await expect(resolveAgentTarget(repo, 'Inbox', 'test'))
+      .rejects.toThrow(/pass \[\[Inbox\]\]/)
     expect(await sharedDb.db.getAll('SELECT block_id FROM block_aliases WHERE alias = ?', ['Inbox'])).toEqual([])
   })
 })
@@ -170,13 +174,18 @@ describe('append-markdown', () => {
 
     const result = await run({
       type: 'append-markdown', target: NOTE, markdown: '- first\n  - nested\n- second',
-    }) as {target: {id: string, created: boolean}, blocks: Array<{id: string, parentId: string, depth: number, content: string}>}
+    }) as {
+      target: {id: string, created: boolean}
+      blocks: Array<{id: string, shortId: string, parentId: string, depth: number, content: string}>
+    }
 
     expect(result.target).toMatchObject({id: NOTE, created: false})
     expect(result.blocks.map(block => [block.depth, block.content])).toEqual([
       [0, 'first'], [1, 'nested'], [0, 'second'],
     ])
     expect(result.blocks[1].parentId).toBe(result.blocks[0].id)
+    expect(result.blocks.map(block => block.id.startsWith(block.shortId) && block.shortId.length >= 8))
+      .toEqual([true, true, true])
     expect((await liveChildren(NOTE)).map(row => row.content)).toEqual(['existing', 'first', 'second'])
     expect(await agentDescriptionsAfter(since)).toEqual(['agent runtime append-markdown'])
   })
@@ -272,9 +281,9 @@ describe('edit-block', () => {
     await expect(run({type: 'edit-block', id: NOTE, old: 'x', new: 'y'})).rejects.toThrow(/not found/)
   })
 
-  it('refuses a block in another workspace', async () => {
+  it('refuses a block in another workspace, even when named by prefix', async () => {
     await seed([{id: NOTE, content: 'x', workspaceId: OTHER_WS}])
-    await expect(run({type: 'edit-block', id: NOTE, old: 'x', new: 'y'})).rejects.toThrow(/not the active one/)
+    await expect(run({type: 'edit-block', id: '3f2a9c1b', old: 'x', new: 'y'})).rejects.toThrow(/not the active one/)
     expect(await contentOf(NOTE)).toBe('x')
   })
 })

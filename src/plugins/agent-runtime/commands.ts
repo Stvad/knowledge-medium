@@ -924,7 +924,7 @@ const createRuntimeBlock = async (
     const parentRef = input.parentId
     // A [[page]] / date parent is created when missing; one undo entry for both.
     const id = await repo.undoGroup(async repo => {
-      const parent = await resolveAgentTarget(repo, parentRef, {verb: 'create-block', create: true})
+      const parent = await resolveAgentTarget(repo, parentRef, 'create-block')
       await assertActiveWorkspaceBlock(repo, 'create-block', parent.id)
       return runAgentMutator(repo, 'create-block', createChild, {
         parentId: parent.id,
