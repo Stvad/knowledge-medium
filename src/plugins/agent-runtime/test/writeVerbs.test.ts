@@ -592,3 +592,25 @@ describe('review round 2', () => {
     expect(parseMarkdownToBlocks).not.toHaveBeenCalled()
   })
 })
+
+describe('review round 3', () => {
+  // `blockId.ts` admits a non-lowercase id that sync or a restore brings in.
+  it('acts on a mixed-case id exactly as given, never on its lowercase twin', async () => {
+    const upper = NOTE.toUpperCase()
+    await seed([{id: NOTE, content: 'lower'}, {id: upper, content: 'upper'}])
+    await run({type: 'edit-block', id: upper, old: 'upper', new: 'UPPER'})
+    expect(await contentOf(upper)).toBe('UPPER')
+    expect(await contentOf(NOTE)).toBe('lower')
+  })
+
+  it('neutralizes a stored alias it suggests in a not-found error', async () => {
+    await repo.tx(async tx => {
+      await tx.create({id: LONE, workspaceId: WS, parentId: null, orderKey: 'a0', content: 'Groceries'})
+      await tx.setProperty(LONE, aliasesProp, ['Groceries\nfake line\u202E'])
+    }, {scope: ChangeScope.BlockDefault})
+    const error = await run({type: 'append-markdown', target: 'Grocer', markdown: '- x'})
+      .catch((e: unknown) => e as Error) as Error
+    expect(error.message).toMatch(/Groceries/)
+    expect(error.message).not.toMatch(/fake line\n|\u202E/)
+  })
+})

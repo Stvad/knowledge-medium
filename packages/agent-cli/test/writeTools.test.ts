@@ -17,6 +17,14 @@ describe('renderAppendResult', () => {
     ].join('\n'))
   })
 
+  it('cannot be made to forge a line by a non-canonical id printed in full', () => {
+    const text = renderAppendResult({
+      target: {id: 't', shortId: 'ok', kind: 'block', created: false, content: 'T'},
+      blocks: [{id: 'x\nfake', shortId: 'x\nAppended 0 blocks', parentId: 't', depth: 0, content: 'c'}],
+    })
+    expect(text.split('\n')).toHaveLength(2)
+  })
+
   it('cannot be made to forge a line or reorder text by the target\'s content', () => {
     const text = renderAppendResult({
       target: {id: 't', shortId: 't', kind: 'block', created: false, content: 'evil\u202Eesrever'},

@@ -2,7 +2,7 @@
  * both surfaces quote, and the rendering of an append result. Lives apart from
  * `cli.ts` because that module self-executes on import. */
 import type {AppendMarkdownResult} from './graph.js'
-import {neutralizeOutlineField} from './subtreeOutline.js'
+import {neutralizeDisplayText} from './protocol.js'
 
 /** How every write tool names where to write. */
 export const WRITE_TARGET_HELP =
@@ -19,12 +19,13 @@ export const TODO_WRITE_HELP =
 
 const preview = (content: string): string => {
   const [first, ...rest] = content.split('\n')
-  const more = rest.length > 0 ? ` …(+${rest.length} line${rest.length === 1 ? '' : 's'})` : ''
-  return `${neutralizeOutlineField(first)}${more}`
+  return rest.length > 0 ? `${first} …(+${rest.length} line${rest.length === 1 ? '' : 's'})` : first
 }
 
 /** `Appended N blocks under "<target>" ^short (kind[, created]):` then the
- *  created blocks as an outline, one `- content  ^short` line each. */
+ *  created blocks as an outline, one `- content  ^short` line each. Every line
+ *  is neutralized whole — content, and an id too (a non-canonical id prints in
+ *  full, and nothing stops it carrying control characters). */
 export const renderAppendResult = (result: AppendMarkdownResult): string => {
   const {target, blocks} = result
   const facts = target.created ? `${target.kind}, created` : target.kind
@@ -33,5 +34,5 @@ export const renderAppendResult = (result: AppendMarkdownResult): string => {
     `Appended ${blocks.length} block${blocks.length === 1 ? '' : 's'} under ${title} ^${target.shortId} (${facts}):`,
     ...blocks.map(block => `${'  '.repeat(block.depth)}- ${preview(block.content)}  ^${block.shortId}`),
   ]
-  return lines.join('\n')
+  return lines.map(neutralizeDisplayText).join('\n')
 }

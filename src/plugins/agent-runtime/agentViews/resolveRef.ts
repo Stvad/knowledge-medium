@@ -2,6 +2,7 @@ import type { Repo } from '@/data/repo'
 import type { BlockData } from '@/data/api'
 import { parseRelativeDate } from '@/utils/relativeDate.js'
 import { dailyNoteBlockId } from '@/plugins/daily-notes/dailyNotes.js'
+import { clipLine, oneLine } from './text.ts'
 
 /** How an agent names a block, in the order they are tried:
  *  - `((id))` / `^prefix` — explicitly an id or id prefix;
@@ -36,6 +37,9 @@ const MAX_PREFIX_CANDIDATES = 10
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const ID_PREFIX_RE = /^[0-9a-f][0-9a-f-]*$/i
 
+/** Its message reaches an agent verbatim through the CLI and MCP, so every
+ *  piece of user text in it (the ref, candidate content, aliases) is
+ *  neutralized like any other display text. */
 export class BlockRefError extends Error {
   constructor(message: string, readonly candidates: readonly string[] = []) {
     super(message)
@@ -84,7 +88,7 @@ const describeCandidates = async (repo: Repo, ids: readonly string[]): Promise<s
   )
   const byId = new Map(rows.map(row => [row.id, row.content ?? '']))
   return ids
-    .map(id => `  ${id}  ${(byId.get(id) ?? '').replace(/\s+/g, ' ').slice(0, 60)}`)
+    .map(id => `  ${id}  ${clipLine(byId.get(id) ?? '', 60).text}`)
     .join('\n')
 }
 
@@ -92,7 +96,9 @@ const resolveIdLike = async (
   repo: Repo,
   text: string,
 ): Promise<BlockRefResolution | null> => {
-  if (UUID_RE.test(text)) return {id: text.toLowerCase(), via: 'id'}
+  // Verbatim: sync and restore admit non-canonical (mixed-case) ids, and
+  // lowercasing one would read a different row, or none.
+  if (UUID_RE.test(text)) return {id: text, via: 'id'}
   const exists = await repo.db.getOptional(EXISTS_SQL, [text])
   if (exists) return {id: text, via: 'id'}
   if (text.length < MIN_ID_PREFIX || !ID_PREFIX_RE.test(text)) return null
@@ -104,7 +110,7 @@ const resolveIdLike = async (
     const shown = matches.slice(0, MAX_PREFIX_CANDIDATES)
     const more = matches.length > MAX_PREFIX_CANDIDATES ? '\n  …and more' : ''
     throw new BlockRefError(
-      `Id prefix "${text}" is ambiguous; it matches:\n${await describeCandidates(repo, shown)}${more}\n`
+      `Id prefix "${oneLine(text)}" is ambiguous; it matches:\n${await describeCandidates(repo, shown)}${more}\n`
       + 'Pass more characters of the id.',
       shown,
     )
@@ -137,10 +143,10 @@ const notFound = async (
     ? await repo.query.aliasMatches({workspaceId, filter: text, limit: 5}).load()
     : []
   const hint = candidates.length > 0
-    ? `\nPages with similar names:\n${candidates.map(row => `  ${row.alias}`).join('\n')}`
+    ? `\nPages with similar names:\n${candidates.map(row => `  ${oneLine(row.alias)}`).join('\n')}`
     : ''
   return new BlockRefError(
-    `No block matches "${ref}" (tried: id, id prefix, page name, date).${hint}`,
+    `No block matches "${oneLine(ref)}" (tried: id, id prefix, page name, date).${hint}`,
     candidates.map(row => row.blockId),
   )
 }
@@ -168,13 +174,17 @@ export const resolveBlockRef = async (
 
   if (onMissing === 'verbatim') return {id: ref, via: 'verbatim'}
   if (accept === 'id') {
-    throw new BlockRefError(`No block has id or id prefix "${ref}". This operation takes an id (or a unique prefix of one), not a name.`)
+    throw new BlockRefError(`No block has id or id prefix "${oneLine(ref)}". This operation takes an id (or a unique prefix of one), not a name.`)
   }
   throw await notFound(repo, ref, text, workspaceId)
 }
 
+/** Prefix lookup is lowercase (canonical ids are), so only an id already in
+ *  that form is shortened; any other prints whole and resolves exactly. */
+const CANONICAL_PREFIXABLE_RE = /^[0-9a-f][0-9a-f-]*$/
+
 const isShortenable = (id: string): boolean =>
-  id.length > SHORT_ID_LENGTHS[0] && ID_PREFIX_RE.test(id)
+  id.length > SHORT_ID_LENGTHS[0] && CANONICAL_PREFIXABLE_RE.test(id)
 
 const SHORT_ID_COUNTS_SQL = `
   SELECT j.value AS id,
