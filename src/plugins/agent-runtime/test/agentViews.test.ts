@@ -665,6 +665,25 @@ describe('structural edge cases', () => {
     expect(viaGroupWith.groups.map(group => group.label)).not.toContain('Foreign topic')
   })
 
+  it('a group context walk stops at a foreign ancestor', async () => {
+    const target = uuid('a0a0a0a0', 1)
+    const outerRoot = uuid('a1a1a1a1', 2)
+    const foreignParent = uuid('a2a2a2a2', 3)
+    await create({id: target, content: 'Target'})
+    await create({id: outerRoot, content: 'Outer root'})
+    await repo.tx(async tx => {
+      await tx.create({id: foreignParent, workspaceId: 'ws-2', parentId: null, orderKey: 'a0', content: 'bridge', references: []})
+    }, {scope: ChangeScope.BlockDefault})
+    await sharedDb.db.execute('UPDATE blocks SET parent_id = ? WHERE id = ?', [outerRoot, foreignParent])
+    for (let i = 0; i < 2; i++) {
+      const source = uuid('a3a3a3a3', i)
+      await create({id: source, content: `src ${i}`, references: [{id: target, alias: 'T'}]})
+      await sharedDb.db.execute('UPDATE blocks SET parent_id = ? WHERE id = ?', [foreignParent, source])
+    }
+    const out = await view<GroupedBacklinksView>({type: 'view-grouped-backlinks', ref: target, format: 'json'})
+    expect(out.groups.map(group => group.label)).not.toContain('Outer root')
+  })
+
   it('reads only a head of a huge types list, counting the rest', async () => {
     const id = uuid('9d1d1d1d', 1)
     await create({id, content: 'typed', properties: {types: Array.from({length: 200_000}, (_, i) => `kind-${i}`)}})

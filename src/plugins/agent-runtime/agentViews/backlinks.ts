@@ -225,6 +225,9 @@ export interface BacklinkGroup {
   fallback: boolean
   memberCount: number
   members: ViewRow[]
+  /** Where this group's listing continues: past the member ids consumed,
+   *  hydrated or not (one deleted meanwhile is skipped, not re-listed). */
+  nextMemberOffset: number | null
 }
 
 export interface GroupedBacklinksView {
@@ -284,13 +287,16 @@ export const buildGroupedBacklinksView = async (
     memberOffset,
     groups: page.map(group => {
       const isBlock = blockGroupIds.has(group.groupId)
+      const consumed = membersOf(group.sourceIds)
+      const nextMemberOffset = memberOffset + consumed.length
       return {
         label: clipLine(group.label, TITLE_CHARS).text,
         groupId: isBlock ? group.groupId : null,
         shortId: isBlock ? shortIds.get(group.groupId) ?? group.groupId : null,
         fallback: group.fallback,
         memberCount: group.sourceIds.length,
-        members: membersOf(group.sourceIds)
+        nextMemberOffset: nextMemberOffset < group.sourceIds.length ? nextMemberOffset : null,
+        members: consumed
           .flatMap(id => {
             const member = memberById.get(id)
             return member ? [toViewRow(member, {shortIds, renderer, maxChars: ROW_CHARS, detail: 'brief'})] : []
@@ -309,10 +315,9 @@ export const renderGroupedBacklinksView = (view: GroupedBacklinksView): string =
     lines.push(`## ${group.label}${id}  (${formatCount(group.memberCount)})`)
     if (view.memberOffset > 0) lines.push(`  (members from #${formatCount(view.memberOffset + 1)})`)
     for (const member of group.members) lines.push(`- ${member.content}${metaSuffix(member, 'brief')}  ^${member.shortId}`)
-    const shownEnd = view.memberOffset + group.members.length
-    const rest = group.memberCount - shownEnd
-    if (rest > 0) {
-      lines.push(`  +${formatCount(rest)} more — memberOffset=${shownEnd} offset=${view.offset + index} limit=1 continues this group`)
+    if (group.nextMemberOffset !== null) {
+      const rest = group.memberCount - group.nextMemberOffset
+      lines.push(`  +${formatCount(rest)} more — memberOffset=${group.nextMemberOffset} offset=${view.offset + index} limit=1 continues this group`)
     }
   })
   if (view.groups.some(group => group.members.some(member => member.cut > 0))) lines.push(CUT_LEGEND)

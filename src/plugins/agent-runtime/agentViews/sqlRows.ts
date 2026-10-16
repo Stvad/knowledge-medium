@@ -1,8 +1,10 @@
 import { charBoundary, cutMarker } from './text.ts'
 
-/** Past this a string cell is cut (and marked): one extension-source or
- *  long-note cell would otherwise dominate a result. `substr()` in the
- *  query reads a cell piecewise. */
+/** Past this a string cell is cut (and marked) in the RESULT: one
+ *  extension-source or long-note cell would otherwise dominate it. The cut
+ *  happens after SQLite hands the row over, so a query naming a huge cell
+ *  still reads it once; bounding that is the query's job (`substr()`,
+ *  `length()`), since an arbitrary statement's columns cannot be rewritten. */
 export const SQL_CELL_CHARS = 2000
 /** The ceiling on `maxRows`, whatever the caller asks: like every other
  *  bounded view, the caller picks a size inside a bound, not the bound. */

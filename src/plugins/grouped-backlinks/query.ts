@@ -204,8 +204,8 @@ export const SELECT_GROUPED_BACKLINK_MEMBER_ROWS_SQL = `
 export const SELECT_GROUPED_BACKLINK_CANDIDATES_SQL = `
   WITH RECURSIVE
     ${SOURCE_IDS_CTE},
-    ancestor_chain(source_id, anc_id, anc_parent_id, depth, path) AS (
-      SELECT s.id, b.id, b.parent_id, 0, '!' || hex(b.id) || '/'
+    ancestor_chain(source_id, anc_id, anc_parent_id, depth, path, ws) AS (
+      SELECT s.id, b.id, b.parent_id, 0, '!' || hex(b.id) || '/', b.workspace_id
       FROM source_ids s
       JOIN blocks b ON b.id = s.id
       WHERE b.deleted = 0
@@ -215,10 +215,14 @@ export const SELECT_GROUPED_BACKLINK_CANDIDATES_SQL = `
         parent.id,
         parent.parent_id,
         ancestor_chain.depth + 1,
-        ancestor_chain.path || '!' || hex(parent.id) || '/'
+        ancestor_chain.path || '!' || hex(parent.id) || '/',
+        ancestor_chain.ws
       FROM ancestor_chain
       JOIN blocks parent ON parent.id = ancestor_chain.anc_parent_id
       WHERE parent.deleted = 0
+        -- A sync-applied parent edge can leave the source's workspace; the
+        -- context walk stops there, so nothing past it becomes a group.
+        AND parent.workspace_id = ancestor_chain.ws
         AND ancestor_chain.depth < 100
         AND INSTR(ancestor_chain.path, '!' || hex(parent.id) || '/') = 0
     ),
