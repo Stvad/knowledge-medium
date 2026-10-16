@@ -1,1 +1,1 @@
-import{Cq as e,Sq as t}from"../../chunks/app-Dj0Te4CQ.js";export{t as agree,e as pluralize};
+import{Cq as e,Sq as t}from"../../chunks/app-BakXaPzX.js";export{t as agree,e as pluralize};
