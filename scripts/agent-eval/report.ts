@@ -207,7 +207,7 @@ const totalsRow = (label: string, rows: readonly TaskSummary[], baseRows?: reado
     + `| ${cell(thousands, ...pair(row => row.contextTokens))} | `
     + `| ${cell(thousands, ...pair(row => row.outputTokens))} `
     + `| ${cell(dollars, ...pair(row => row.costUsd))} `
-    + `| ${seconds(sum(rows.map(row => row.elapsedMs)))} |`
+    + `| ${cell(seconds, ...pair(row => row.elapsedMs))} |`
 }
 
 export const renderMarkdown = (report: EvalReport, compareWith?: EvalReport): string => {
@@ -255,7 +255,7 @@ export const renderMarkdown = (report: EvalReport, compareWith?: EvalReport): st
       + `| ${cell(thousands, row.peakContext, was?.peakContext)} `
       + `| ${cell(thousands, row.outputTokens, was?.outputTokens)} `
       + `| ${cell(dollars, row.costUsd, was?.costUsd)} `
-      + `| ${seconds(row.elapsedMs)} |`)
+      + `| ${cell(seconds, row.elapsedMs, was?.elapsedMs)} |`)
   }
   // Aggregates compare like with like: when some tasks are new or changed,
   // the all-tasks total carries no delta and a comparable-subset row does.

@@ -71,9 +71,10 @@ export interface EvalTask {
   check: (input: CheckInput) => Promise<CheckOutcome>
 }
 
-/** Bump when a helper the checks share changes (normalizeText, compareSets,
- *  …): a task's hash covers only its own definition. */
-const SHARED_SCORING_VERSION = 3
+/** Bump when a helper the checks or resets share changes (normalizeText,
+ *  compareSets, purgeLike, requireTarget, …): a hash covers only the
+ *  definitions' own source. */
+const SHARED_HELPERS_VERSION = 3
 
 /** The values checks close over, which their source text only names. Shared
  *  by every task's hash: changing any of them may change any task's verdict. */
@@ -84,12 +85,15 @@ const scoringData = (truth: FixtureTruth) => JSON.parse(JSON.stringify(
 
 /** Identifies the setup every run performs: all tasks' resets run before a
  *  run's one snapshot, whichever tasks it selects. */
-export const setupHash = (): string => definitionHash(TASKS.map(task => task.reset?.toString() ?? null))
+export const setupHash = (): string => definitionHash({
+  shared: SHARED_HELPERS_VERSION,
+  resets: TASKS.map(task => task.reset?.toString() ?? null),
+})
 
 /** Identifies what a task measures, so a report only compares a task with an
  *  earlier run of the same definition. */
 export const taskDefinitionHash = (task: EvalTask, truth: FixtureTruth): string => definitionHash({
-  shared: SHARED_SCORING_VERSION,
+  shared: SHARED_HELPERS_VERSION,
   scoring: scoringData(truth),
   kind: task.kind,
   prompt: task.prompt({probe: {workspaceId: '', command: async () => null}, truth, runTag: '<tag>'}),

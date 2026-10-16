@@ -86,11 +86,13 @@ describe('summarize', () => {
 describe('renderMarkdown', () => {
   it('puts deltas against the baseline beside each figure, and lists failures', () => {
     const baseline = reportOf('before', [runRecord('a', 1, {toolCalls: 8}), runRecord('b', 1)])
-    const current = reportOf('after', [runRecord('a', 1, {toolCalls: 4}), runRecord('b', 1, {pass: false, detail: 'missing [x]'})], {
+    const current = reportOf('after', [runRecord('a', 1, {toolCalls: 4, elapsedMs: 5_000}), runRecord('b', 1, {pass: false, detail: 'missing [x]'})], {
       outputSizes: {'search:x': 250},
     })
     const markdown = renderMarkdown(current, baseline)
     expect(markdown).toContain('| a | read | 1/1 (was 1/1) | 4 (−50%) |')
+    expect(markdown).toMatch(/^\| a \|.*\| 5s \(−50%\) \|$/m)
+    expect(markdown).toMatch(/^\| \*\*all\*\* \|.*\| 15s \(−25%\) \|$/m)
     expect(markdown).toContain('| search:x | 250 (−75%) |')
     expect(markdown).toContain('- b #1: missing [x]')
   })

@@ -12,7 +12,7 @@
   "conditions": {
     "fixture": "9d499d1fadc8",
     "importedFixture": "dda75dc2999a",
-    "setup": "3cd967d27cf2",
+    "setup": "6818b81b3ee5",
     "model": "claude-sonnet-5-5",
     "effort": "default",
     "mcpOutputTokens": 25000,

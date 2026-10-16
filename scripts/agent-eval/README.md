@@ -123,9 +123,10 @@ A task's definition is part of the measurement. A report stores a hash of each t
 prompt, check, reset and allowed changes, plus the values the checks close over (the
 truth, its patterns, the target blocks). `--compare` shows deltas only for tasks whose
 hash matches, and aggregates cover those tasks only. Output-size probes carry a hash
-of their call the same way. When you change a helper the checks share
-(`normalizeText`, `compareSets`, `strayChanges`), bump `SHARED_SCORING_VERSION` in
-`tasks.ts`. Prefer adding a task to rewording one. A new task needs a reference solution
+of their call the same way. When you change a helper the checks or resets share
+(`normalizeText`, `compareSets`, `strayChanges`, `purgeLike`), bump
+`SHARED_HELPERS_VERSION` in `tasks.ts`, which both the task hashes and the setup hash
+carry. Prefer adding a task to rewording one. A new task needs a reference solution
 and wrong ones in `fixtureGraph.test.ts`.
 
 So is what a run holds fixed, recorded together as the report's `conditions`: the

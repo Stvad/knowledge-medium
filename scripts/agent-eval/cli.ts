@@ -381,8 +381,6 @@ const run = async (options: RunOptions) => {
         onStdoutText: text => { stdout += text },
       })
       const elapsedMs = Date.now() - startedAt
-      // After the task, so a change during it — the last task's included — is caught.
-      const codeChanged = codeDigest() !== code
       await requireSameTab(`while ${task.id} ran`)
       writeFileSync(transcriptPath, stdout)
       rmSync(cwd, {recursive: true, force: true})
@@ -396,8 +394,10 @@ const run = async (options: RunOptions) => {
         .catch((error: unknown) => ({pass: false, detail: `check threw: ${errorText(error)}`}))
       const changes = await restoreSnapshot(probe, snapshot)
         .catch((error: unknown) => fail(`aborting the run: ${errorText(error)}`))
+      // After the check and the restore, so a change while any of them ran, the
+      // last task's included, is caught before the task is accepted.
+      if (codeDigest() !== code) fail(`the checkout or the built MCP server changed while ${task.id} ran, so it may have run other code; start the run again`)
       journal.taskRestored()
-      if (codeChanged) fail(`the checkout or the built MCP server changed while ${task.id} ran, so it may have run other code; start the run again`)
       if (modelResolved) requireComparable(false)
       if (modelChanged) fail(`${task.id} ran on ${metrics.model}, not ${report.conditions.model} like the tasks before it; start the run again`)
       const allowed = allowedChanges(task, probe.workspaceId, outcome)
