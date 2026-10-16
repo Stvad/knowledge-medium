@@ -1026,6 +1026,11 @@ describe('view-search', () => {
     })
     const mid = uuid('cdcd0001', 2)
     await create({id: mid, parentId: page, content: 'Notes'})
+    // A raw write can leave a non-list alias, which names nothing in the panel either.
+    await sharedDb.db.execute(
+      `UPDATE blocks SET properties_json = json_set(properties_json, '$.alias', 'Scalar') WHERE id = ?`,
+      [mid],
+    )
     for (let i = 0; i < 3; i++) await create({id: uuid('cdcd0002', 3 + i), parentId: mid, content: `kiwi ${i}`})
 
     const getAll = vi.spyOn(repo.db, 'getAll')
