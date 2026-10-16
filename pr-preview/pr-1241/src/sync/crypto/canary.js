@@ -1,1 +1,1 @@
-import{ey as e,ty as t}from"../../../chunks/app-UdMriO5l.js";export{e as mintCanary,t as validateCanary};
+import{ey as e,ty as t}from"../../../chunks/app-CD3y0Jlf.js";export{e as mintCanary,t as validateCanary};

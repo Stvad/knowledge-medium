@@ -1,1 +1,1 @@
-import{Gj as e,Hj as t,Uj as n,Wj as r}from"../../../chunks/app-UdMriO5l.js";export{t as addProperty,n as deleteProperty,r as renameProperty,e as writeProperty};
+import{Gj as e,Hj as t,Uj as n,Wj as r}from"../../../chunks/app-CD3y0Jlf.js";export{t as addProperty,n as deleteProperty,r as renameProperty,e as writeProperty};

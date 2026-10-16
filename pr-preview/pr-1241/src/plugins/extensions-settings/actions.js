@@ -1,1 +1,1 @@
-import{AT as e,kT as t}from"../../../chunks/app-UdMriO5l.js";export{t as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,e as openExtensionsSettingsAction};
+import{AT as e,kT as t}from"../../../chunks/app-CD3y0Jlf.js";export{t as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,e as openExtensionsSettingsAction};
