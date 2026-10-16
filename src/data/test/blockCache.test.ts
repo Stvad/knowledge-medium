@@ -11,9 +11,10 @@
  *   - Subscriptions: fire on set + delete, dedupe on no-op set,
  *     unsubscribe stops firing
  *   - applyIfNewer (LWW): rejects arrivals whose updatedAt is
- *     older than the cached snapshot; accepts strictly newer. Both
- *     'sync' and 'hydrate' sources share the gate; the source label
- *     only routes per-bucket metric counters.
+ *     older than the cached snapshot; accepts strictly newer. At an
+ *     EQUAL stamp the sources differ — 'sync' accepts a differing
+ *     snapshot, 'hydrate' rejects it — and the source also routes the
+ *     per-bucket metric counters.
  *   - trackedIds: subscribed listener ids
  *   - missing markers: markMissing notifies on first transition,
  *     clearMissing notifies, setSnapshot clears missing

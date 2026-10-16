@@ -61,6 +61,11 @@ const columnsMatch = (
   columns: readonly SyncedColumn[], local: BlockRow, staged: BlockRow,
 ): boolean => columns.every(name => local[name] === staged[name])
 
+/** Are two rows the same synced version? The only sound version identity:
+ *  `updated_at` alone is not one (see {@link localHoldsStagedRow}). */
+export const syncedColumnsEqual = (a: BlockRow, b: BlockRow): boolean =>
+  columnsMatch(COMPARED_COLUMNS, a, b)
+
 /**
  * Does the app-visible `blocks` row already hold exactly this staged row?
  *
@@ -84,7 +89,7 @@ const columnsMatch = (
 export const localHoldsStagedRow = (
   local: BlockRow | null | undefined,
   staged: BlockRow,
-): boolean => local != null && columnsMatch(COMPARED_COLUMNS, local, staged)
+): boolean => local != null && syncedColumnsEqual(local, staged)
 
 /**
  * The pre-decode gate for one staging row: defer it, let a pending local edit

@@ -86,8 +86,8 @@ describe('materializeStagingRows — the needs_apply flag', () => {
       { getMaterializability: constMat('copy'), getCek: noKey },
     )
 
-    expect(out.applied).toEqual(['b1'])          // v1 went in, as it always did
-    expect(out.resolved).toEqual([])             // but nothing was marked applied
+    expect(out.applied).toEqual([])              // v1 is no longer staged, so not written
+    expect(out.resolved).toEqual([])             // and nothing was marked applied
     expect(await needsApply('b1')).toBe(1)
   })
 
@@ -561,15 +561,13 @@ describe('materializeStagingRows — removed (stream-exit)', () => {
 })
 
 describe('materializeStagingRows — Phase-1/Phase-2 TOCTOU re-gate', () => {
-  // The Phase-1 staleness reads run outside the write tx, so a local edit can
-  // land between them and the lock. These cover the race the second phase exists
-  // to close — Phase 1 sees a clean gate, something changes in the window, and
-  // the in-tx re-gate re-reads the AUTHORITATIVE state (both updated_at and
-  // updated_by). Two ways a window change protects the local row: a pending
-  // upload, and — under the strict provenance gate — a real (non-system) edit
-  // that bumps the stamp strictly above staging. A window change to an own
-  // system mint instead heals (applies), proving the re-gate isn't a mere
-  // skip-detector.
+  // The Phase-1 reads run outside the write tx, so the local row or the staged
+  // row can change between them and the lock. These cover the race the second
+  // phase exists to close — Phase 1 judges one state, something changes in the
+  // window, and the in-tx re-gate decides on what is there NOW: a pending
+  // upload wins, a local row that has become the staged one needs no write, and
+  // a staged row replaced in the window is left for its own delivery. A
+  // strictly newer local row that is NOT pending gets no protection here.
 
   it('skips a candidate when a local edit is queued for upload in the window', async () => {
     await seedLocalBlock(blockData({ content: 'local v1', updatedAt: 200 }))
@@ -585,6 +583,44 @@ describe('materializeStagingRows — Phase-1/Phase-2 TOCTOU re-gate', () => {
     expect(out.skippedStale).toEqual(['b1'])
     expect(out.snapshots.has('b1')).toBe(false) // nothing written ⇒ nothing to invalidate
     expect((await allBlocks())[0]!.content).toBe('local v1')
+  })
+
+  it('leaves a candidate whose staged row was replaced in the window to that row\'s own delivery', async () => {
+    // Replaced at the SAME stamp, so the stamp cannot tell the two versions
+    // apart — the row is what identifies the version that was judged.
+    await seedLocalBlock(blockData({ content: 'local v1', updatedAt: 200 }))
+    await stageRow(blockData({ content: 'server v2', updatedAt: 300 }))
+    const deps = { getMaterializability: constMat('copy'), getCek: noKey }
+
+    const out = await materializeStagingRows(
+      racingDb(env.db, () => stageRow(blockData({ content: 'server v3', updatedAt: 300 }))),
+      { upserted: ['b1'], removed: [] },
+      deps,
+    )
+
+    expect(out.applied).toEqual([])
+    expect(out.snapshots.size).toBe(0)
+    expect((await allBlocks())[0]!.content).toBe('local v1')
+    expect(await needsApply('b1'), 'the replacement was never judged').toBe(1)
+
+    const next = await materializeStagingRows(env.db, { upserted: ['b1'], removed: [] }, deps)
+    expect(next.applied).toEqual(['b1'])
+    expect((await allBlocks())[0]!.content).toBe('server v3')
+  })
+
+  it('does not record a judgment for a staged row replaced in the window', async () => {
+    // Phase 1 finds the row already held and clears nothing yet; the
+    // replacement arriving before the lock must keep its own flag.
+    await seedLocalBlock(blockData({ updatedAt: 300 }))
+    await stageRow(blockData({ updatedAt: 300 }))
+
+    await materializeStagingRows(
+      racingDb(env.db, () => stageRow(blockData({ content: 'changed', updatedAt: 300 }))),
+      { upserted: ['b1'], removed: [] },
+      { getMaterializability: constMat('copy'), getCek: noKey },
+    )
+
+    expect(await needsApply('b1')).toBe(1)
   })
 
   it('writes nothing when a racing write makes the local row the staged one in the window', async () => {

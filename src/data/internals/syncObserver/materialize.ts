@@ -46,6 +46,7 @@ import {
   blocksAlreadyReflects,
   decideStagingRow,
   localHoldsStagedRow,
+  syncedColumnsEqual,
 } from './reconcile.js'
 import {
   ARRIVAL_PROCESSORS,
@@ -86,15 +87,17 @@ const setNeedsApplySql = (value: 0 | 1, count: number): string =>
 
 /** What the drain decided about ONE staged version, and which version it was.
  *
- *  The stamp is load-bearing, not bookkeeping: Phase 1 reads the staging rows
+ *  The row is load-bearing, not bookkeeping: Phase 1 reads the staging rows
  *  OUTSIDE the write lock, so a newer delivery can replace one before Phase 2
  *  commits — and that delivery has already reset the flag, correctly, for a
  *  version nobody has judged yet. Writing by id alone would wipe that reset and
  *  leave the newer row reading as applied while `blocks` holds the older
- *  content. */
+ *  content. The whole row, not its stamp: a replacement can carry the same
+ *  `updated_at` (#1163). */
 interface FlagDecision {
   readonly id: string
-  readonly stagedUpdatedAt: number
+  /** The staged row as Phase 1 read it — raw, not decoded. */
+  readonly staged: BlockRow
   /** The drain's answer: does `blocks` still need this row applied? */
   readonly needsApply: boolean
 }
@@ -204,7 +207,8 @@ export interface MaterializeOutcome {
 
 interface ApplyCandidate {
   readonly plaintext: BlockRow
-  readonly stagingUpdatedAt: number
+  /** The staged row `plaintext` was decoded from, as Phase 1 read it. */
+  readonly staged: BlockRow
   readonly materializability: Exclude<Materializability, 'defer'>
 }
 
@@ -265,23 +269,21 @@ const readPendingUploadIds = async (db: RowsReader): Promise<Set<string>> => {
   return new Set(rows.map(row => row.id))
 }
 
-/** Current staged version + flag for `ids`, read INSIDE the write tx so the
+/** Current staged row + flag for `ids`, read INSIDE the write tx so the
  *  decision and its record commit together. Chunked like the other id-keyed
  *  reads. Absent ids left the staging table since Phase 1. */
-const readStagingFlagState = async (
+const readStagedNow = async (
   db: RowsReader, ids: readonly string[], chunkSize: number,
-): Promise<Map<string, { updatedAt: number; needsApply: boolean }>> => {
-  const out = new Map<string, { updatedAt: number; needsApply: boolean }>()
+): Promise<Map<string, { row: BlockRow; needsApply: boolean }>> => {
+  const out = new Map<string, { row: BlockRow; needsApply: boolean }>()
   for (let i = 0; i < ids.length; i += chunkSize) {
     const chunk = ids.slice(i, i + chunkSize)
-    const rows = await db.getAll<{ id: string; updated_at: number; needs_apply: number }>(
-      `SELECT id, updated_at, needs_apply FROM blocks_synced
+    const rows = await db.getAll<BlockRow & { needs_apply: number }>(
+      `SELECT ${COLUMN_NAMES.join(', ')}, needs_apply FROM blocks_synced
         WHERE id IN (${buildInClause(chunk.length)})`,
       chunk,
     )
-    for (const row of rows) {
-      out.set(row.id, { updatedAt: row.updated_at, needsApply: row.needs_apply === 1 })
-    }
+    for (const row of rows) out.set(row.id, { row, needsApply: row.needs_apply === 1 })
   }
   return out
 }
@@ -370,7 +372,7 @@ export const materializeStagingRows = async (
     const materializability = await resolveMaterializability(row.workspace_id)
     const localRow = localRowById.get(row.id)
     const decide = (needsApply: boolean) =>
-      decisions.push({id: row.id, stagedUpdatedAt: row.updated_at, needsApply})
+      decisions.push({id: row.id, staged: row, needsApply})
     // Asked before the branch that depends on materializability, because this
     // does not: `defer` is not only the locked-workspace case — a failed
     // key-store read lands there too — so an unchanged re-delivery arriving in
@@ -420,7 +422,7 @@ export const materializeStagingRows = async (
       decide(false)
       continue
     }
-    candidates.push({ plaintext, stagingUpdatedAt: row.updated_at, materializability })
+    candidates.push({ plaintext, staged: row, materializability })
   }
 
   const snapshots = new Map<string, SyncSnapshot>()
@@ -453,9 +455,28 @@ export const materializeStagingRows = async (
       tx, candidates.map(candidate => candidate.plaintext.id), readChunkSize,
     )
     const pendingNow = await readPendingUploadIds(tx)
+    // Ids are disjoint between the two lists: a row is either decided in
+    // Phase 1 or carried here as a candidate.
+    const stagedNow = await readStagedNow(
+      tx,
+      [...decisions.map(decision => decision.id), ...candidates.map(candidate => candidate.plaintext.id)],
+      readChunkSize,
+    )
+    const stillStaged = (id: string, judged: BlockRow): boolean => {
+      const now = stagedNow.get(id)
+      return now !== undefined && syncedColumnsEqual(now.row, judged)
+    }
 
     for (const candidate of candidates) {
-      const { plaintext, stagingUpdatedAt, materializability } = candidate
+      const { plaintext, staged, materializability } = candidate
+      if (!stillStaged(plaintext.id, staged)) {
+        // Replaced since Phase 1, so `plaintext` is no longer the staged
+        // version. Writing it would show an older row, and judging it would
+        // clear the replacement's flag; the replacement's own delivery is
+        // queued and re-drives it.
+        skippedStale.push(plaintext.id)
+        continue
+      }
       const beforeRow = beforeRowById.get(plaintext.id) ?? null
       const action = decideStagingRow(materializability, {
         hasPendingUpload: pendingNow.has(plaintext.id),
@@ -491,7 +512,7 @@ export const materializeStagingRows = async (
         skippedStale.push(plaintext.id)
       }
       // Decided either way — written, or ruled against by the gate.
-      decisions.push({id: plaintext.id, stagedUpdatedAt: stagingUpdatedAt, needsApply: false})
+      decisions.push({id: plaintext.id, staged, needsApply: false})
     }
 
     // ── Arrival-processor pass (`arrivalProcessors.ts`): runs AFTER every
@@ -539,13 +560,11 @@ export const materializeStagingRows = async (
     // re-derives. A pass that reads the flag inside its own write transaction
     // is excluded from this one by the write lock, so it never sees a decision
     // half-made. Only for the version actually judged: a row replaced since
-    // Phase 1 belongs to whoever judges THAT version.
-    const stagedNow = await readStagingFlagState(
-      tx, decisions.map(decision => decision.id), readChunkSize,
-    )
+    // Phase 1 belongs to whoever judges THAT version. `stagedNow` is still
+    // current here — nothing in this transaction writes `blocks_synced`.
     for (const decision of decisions) {
-      const now = stagedNow.get(decision.id)
-      if (now === undefined || now.updatedAt !== decision.stagedUpdatedAt) continue
+      if (!stillStaged(decision.id, decision.staged)) continue
+      const now = stagedNow.get(decision.id)!
       // Only rows whose flag actually MOVES — see `resolved` / `reflagged` on
       // MaterializeOutcome. The write is a no-op either way; the report is not.
       if (decision.needsApply === now.needsApply) continue
