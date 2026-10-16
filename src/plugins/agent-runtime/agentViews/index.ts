@@ -22,8 +22,10 @@ type ViewCommand = Extract<KnownAgentCommand, {type: `view-${string}`}>
  *  Accepted for every view, unless the result would misdirect a write, cross
  *  a user or workspace, or break a cost bound:
  *  - rows only sync can produce (an id spelling `[[x]]` or `field:…`, an
- *    alias two pages claim, a malformed list entry) render as they are,
- *    beyond never cutting an id;
+ *    alias two pages claim, a malformed list entry) render as they are; a
+ *    line's length budget still never cuts an id, though one over 64
+ *    characters or carrying control characters prints changed in text
+ *    (`format: 'json'` has it exact);
  *  - data changing between a view's reads: within one response, counts and
  *    rows may disagree by what changed. Kept regardless: no count is below
  *    what is shown, the workspace is bound in SQL, and no offset is offered
