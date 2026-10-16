@@ -1,1 +1,1 @@
-import{Bz as e,Vz as t}from"../../chunks/app-DyNmS77d.js";export{e as pluginPrefsExtension,t as pluginUIStateExtension};
+import{Bz as e,Vz as t}from"../../chunks/app-CynxoXPU.js";export{e as pluginPrefsExtension,t as pluginUIStateExtension};

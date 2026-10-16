@@ -1,1 +1,1 @@
-import{CQ as e,wQ as t}from"../../chunks/app-DyNmS77d.js";export{e as InvalidBlockIdError,t as assertCanonicalBlockId};
+import{TQ as e,wQ as t}from"../../chunks/app-CynxoXPU.js";export{t as InvalidBlockIdError,e as assertCanonicalBlockId};
