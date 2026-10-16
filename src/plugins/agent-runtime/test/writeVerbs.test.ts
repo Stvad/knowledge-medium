@@ -10,6 +10,7 @@ import { ChangeScope } from '@/data/api'
 import { PAGE_TYPE } from '@/data/blockTypes'
 import { aliasesProp, getBlockTypes } from '@/data/properties'
 import { computeAliasSeatId } from '@/data/targets'
+import { ensureDailyNoteTarget } from '@/plugins/daily-notes/dailyNotes'
 import type { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
@@ -474,5 +475,70 @@ describe('todo writes through the raw property bag', () => {
     const done = (await repo.load(created.id))!
     expect(done.properties.status).toBe('done')
     expect(getBlockTypes(done)).toContain('todo')
+  })
+})
+
+describe('review round 1', () => {
+  it('resolve-block-id expands a short id the way the write verbs do, and never takes a name', async () => {
+    await seed([{id: NOTE}])
+    expect(await run({type: 'resolve-block-id', ref: '^3f2a9c1b'})).toEqual({id: NOTE})
+    expect(await run({type: 'resolve-block-id', ref: 'no-such'})).toEqual({id: 'no-such'})
+    await expect(run({type: 'resolve-block-id', ref: '[[Inbox]]'})).rejects.toThrow(/expected a block id/)
+  })
+
+  it('promotes a daily-note seat a date wikilink minted, instead of appending under it at root', async () => {
+    const iso = '2026-10-15'
+    await repo.tx(async tx => {
+      await ensureDailyNoteTarget(tx, repo, iso, WS)
+    }, {scope: ChangeScope.BlockDefault})
+    const seatId = dailyNoteBlockId(WS, iso)
+    expect((await repo.load(seatId))!.parentId).toBeNull()
+
+    for (const target of [iso, `[[${iso}]]`]) {
+      const result = await run({type: 'append-markdown', target, markdown: '- note'}) as {
+        target: {id: string, kind: string, created: boolean}
+      }
+      expect(result.target).toMatchObject({id: seatId, kind: 'daily', created: false})
+    }
+    expect((await repo.load(seatId))!.parentId).toBe(journalBlockId(WS))
+  })
+
+  it('refuses to create a daily note when the workspace moved since it was pinned', async () => {
+    let reads = 0
+    const spy = vi.spyOn(repo, 'activeWorkspaceId', 'get')
+      .mockImplementation(() => (reads++ === 0 ? WS : 'ws-elsewhere'))
+    try {
+      await expect(run({type: 'create-page', date: '2026-10-15'})).rejects.toThrow(/not the active one/)
+    } finally {
+      spy.mockRestore()
+    }
+    expect(await repo.load(dailyNoteBlockId(WS, '2026-10-15'))).toBeNull()
+  })
+
+  it('an anchored append never creates its target — a bad anchor leaves no empty page', async () => {
+    await seed([{id: NOTE}, {id: LONE, parentId: NOTE}])
+    await expect(run({
+      type: 'append-markdown', target: '[[Ghost]]', markdown: '- x', position: {kind: 'after', siblingId: LONE},
+    })).rejects.toThrow(/no page named \[\[Ghost\]\]/)
+    await expect(run({
+      type: 'append-markdown', target: '2026-10-15', markdown: '- x', position: {kind: 'before', siblingId: LONE},
+    })).rejects.toThrow(/does not exist/)
+    expect(await sharedDb.db.getAll('SELECT block_id FROM block_aliases WHERE alias = ?', ['Ghost'])).toEqual([])
+    expect(await repo.load(dailyNoteBlockId(WS, '2026-10-15'))).toBeNull()
+  })
+
+  it('refuses an anchor that is not a child of the target, before writing anything', async () => {
+    await seed([{id: NOTE}, {id: NOTE_TWIN}, {id: LONE, parentId: NOTE_TWIN}])
+    await expect(run({
+      type: 'append-markdown', target: NOTE, markdown: '- x', position: {kind: 'after', siblingId: LONE},
+    })).rejects.toThrow(/not found under/)
+    expect(await liveChildren(NOTE)).toEqual([])
+  })
+
+  it('quotes stored content in an error so control and bidi characters cannot forge the diagnostic', async () => {
+    await seed([{id: NOTE, content: 'line one\nfake: ok\u202Eevil\u2028'}])
+    const error = await run({type: 'edit-block', id: NOTE, old: 'absent', new: 'x'}).catch((e: unknown) => e as Error) as Error
+    expect(error.message).toContain(String.raw`"line one\nfake: ok\u202eevil\u2028"`)
+    expect(error.message).not.toMatch(/[\u202E\u2028]/)
   })
 })

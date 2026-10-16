@@ -372,26 +372,11 @@ describe('createBlockedWikilinkWriteGuard — markdown and edit writes', () => {
   })
 
   it('blocks edit_block when the edit completes a blocked ref out of the stored content', async () => {
-    // Only the prefix query answers — the exact-id lookup misses, as it does
-    // for a short id.
-    const sqlAll = vi.fn<GuardGraph['sqlAll']>(async (sql: string) =>
-      sql.includes('id >= ?') ? [{content: 'ping [[cla-ude]] later'}] : [])
+    const sqlAll = vi.fn<GuardGraph['sqlAll']>(async () => [{content: 'ping [[cla-ude]] later'}])
     const guard = createBlockedWikilinkWriteGuard(graphFrom({sqlAll}), ['claude'])
-    // Uppercase too: the app lowercases a prefix, so the guard must look up
-    // the same block or it would skip the check on a write the app applies.
-    for (const id of ['^3f2a9c1b', '((3f2a9c1b))', '^3F2A9C1B']) {
-      await expect(guard.beforeWrite({type: 'edit_block', id, old: '-', new: ''}))
-        .rejects.toThrow('references a blocked page')
-      expect(sqlAll.mock.calls.at(-1)?.[1]).toEqual(['3f2a9c1b', '3f2a9c1b'])
-    }
-  })
-
-  it('previews an edit of a block named by its exact id before trying a prefix', async () => {
-    const sqlAll = vi.fn<GuardGraph['sqlAll']>(async (sql: string, params?: unknown[]) =>
-      sql.includes('id = ?') && params?.[0] === 'Legacy-ID' ? [{content: 'ping [[cla-ude]]'}] : [])
-    const guard = createBlockedWikilinkWriteGuard(graphFrom({sqlAll}), ['claude'])
-    await expect(guard.beforeWrite({type: 'edit_block', id: 'Legacy-ID', old: '-', new: ''}))
+    await expect(guard.beforeWrite({type: 'edit_block', id: 'block-1', old: '-', new: ''}))
       .rejects.toThrow('references a blocked page')
+    expect(sqlAll.mock.calls.at(-1)?.[1]).toEqual(['block-1'])
   })
 
   it('lets create_page through — get-or-create references nothing', async () => {

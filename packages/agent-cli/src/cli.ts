@@ -881,12 +881,22 @@ const appendPosition = (options: {first?: boolean, after?: unknown, before?: unk
   return {}
 }
 
-// Markdown usually starts with `- `, which an option parser reads as a flag:
-// take it after `--`, or from stdin when omitted / `-`.
+// Block text often starts with `-` (a bullet, a flag in a code sample), which
+// the option parser reads as an option — so text args are also taken verbatim
+// from after `--`, which cac hands over as `options['--']`.
 const markdownArgument = async (markdown: unknown, afterDashes: unknown): Promise<string> => {
   const rest = toStringArray(afterDashes)
   if (rest.length > 0) return rest.join(' ')
   return markdown === undefined || String(markdown) === '-' ? readStdin() : String(markdown)
+}
+
+const editArguments = (old: unknown, replacement: unknown, afterDashes: unknown): {old: string, new: string} => {
+  const rest = toStringArray(afterDashes)
+  const [oldText, newText] = rest.length > 0 ? rest : [old, replacement]
+  if (rest.length > 2 || oldText === undefined || newText === undefined) {
+    throw new Error("edit-block takes exactly <old> and <new> — after `--` when either starts with '-'")
+  }
+  return {old: String(oldText), new: String(newText)}
 }
 
 cli
@@ -917,9 +927,9 @@ cli
   })
 
 cli
-  .command('edit-block <id> <old> <new>', wireDescription('edit-block'))
-  .action(async (id: unknown, old: unknown, replacement: unknown) => {
-    await runAndPrint({type: 'edit-block', id: String(id), old: String(old), new: String(replacement)})
+  .command('edit-block <id> [old] [new]', wireDescription('edit-block'))
+  .action(async (id: unknown, old: unknown, replacement: unknown, options: {'--'?: unknown}) => {
+    await runAndPrint({type: 'edit-block', id: String(id), ...editArguments(old, replacement, options['--'])})
   })
 
 cli

@@ -54,6 +54,13 @@ export interface ResolvedAgentTarget {
   created: boolean
 }
 
+export interface ResolveTargetOptions {
+  /** Create a missing page / daily note (default). Off for an anchored
+   *  insert: the anchor's parent already exists, so a miss is the caller's
+   *  error and must not leave a new empty page behind. */
+  create?: boolean
+}
+
 const activeWorkspace = (repo: Repo, verb: string): string => {
   const workspaceId = repo.activeWorkspaceId
   if (!workspaceId) throw new Error(`${verb}: no active workspace — open one in the app and retry.`)
@@ -82,18 +89,18 @@ export const resolveDailyNoteTarget = async (
   repo: Repo,
   iso: string,
   verb: string,
+  {create = true}: ResolveTargetOptions = {},
 ): Promise<ResolvedAgentTarget> => {
   const workspaceId = activeWorkspace(repo, verb)
-  const id = dailyNoteBlockId(workspaceId, iso)
-  if (await repo.load(id)) return {id, kind: 'daily', created: false}
+  const existed = (await repo.load(dailyNoteBlockId(workspaceId, iso))) !== null
+  if (!existed && !create) throw new Error(`${verb}: the daily note for ${iso} does not exist yet.`)
+  // Its txs write through the ACTIVE workspace's registries. The residual — a
+  // switch inside the call — is shared with every UI caller of it.
+  assertActiveWorkspace(repo, verb, workspaceId)
+  // Even for an existing row: get-or-create also promotes the seat a
+  // `[[date]]` wikilink mints at workspace root into the Journal's note.
   const note = await getOrCreateDailyNote(repo, workspaceId, iso)
-  return {id: note.id, kind: 'daily', created: true}
-}
-
-/** A page found by name is labelled `daily` when it is that date's note. */
-const namedKind = (workspaceId: string, name: string, id: string): ResolvedTargetKind => {
-  const date = parseLiteralDailyPageTitle(name)
-  return date && dailyNoteBlockId(workspaceId, date.iso) === id ? 'daily' : 'page'
+  return {id: note.id, kind: 'daily', created: !existed}
 }
 
 /** A page by name, exactly as `[[name]]` resolves and creates it (see the
@@ -102,12 +109,18 @@ export const resolvePageTarget = async (
   repo: Repo,
   name: string,
   verb: string,
+  options: ResolveTargetOptions = {},
 ): Promise<ResolvedAgentTarget> => {
   const workspaceId = activeWorkspace(repo, verb)
   const existing = await repo.query.aliasLookup({workspaceId, alias: name}).load()
-  if (existing) return {id: existing.id, kind: namedKind(workspaceId, name, existing.id), created: false}
   const date = parseLiteralDailyPageTitle(name)
-  if (date) return resolveDailyNoteTarget(repo, date.iso, verb)
+  // A date-literal name is that day's note — unless a different page claims
+  // the name, which is what a wikilink binds to.
+  if (date && (!existing || existing.id === dailyNoteBlockId(workspaceId, date.iso))) {
+    return resolveDailyNoteTarget(repo, date.iso, verb, options)
+  }
+  if (existing) return {id: existing.id, kind: 'page', created: false}
+  if (options.create === false) throw new Error(`${verb}: no page named [[${name}]].`)
   let result: {id: string; inserted: boolean} | undefined
   await repo.tx(async tx => {
     // The seat is minted through the ACTIVE workspace's type registry.
@@ -124,9 +137,10 @@ export const resolveAgentTarget = async (
   repo: Repo,
   raw: string,
   verb: string,
+  options: ResolveTargetOptions = {},
 ): Promise<ResolvedAgentTarget> => {
   const target = parseAgentTarget(raw)
-  if (target.kind === 'page') return resolvePageTarget(repo, target.name, verb)
+  if (target.kind === 'page') return resolvePageTarget(repo, target.name, verb, options)
   const workspaceId = activeWorkspace(repo, verb)
   let found
   try {
@@ -138,11 +152,11 @@ export const resolveAgentTarget = async (
   }
   switch (found.via) {
     case 'alias':
-      return {id: found.id, kind: namedKind(workspaceId, raw.trim(), found.id), created: false}
+      return resolvePageTarget(repo, raw.trim(), verb, options)
     case 'date':
       // `resolveBlockRef` names the day's deterministic id; the note itself may
       // not exist yet.
-      return resolveDailyNoteTarget(repo, parseRelativeDate(raw)!.iso, verb)
+      return resolveDailyNoteTarget(repo, parseRelativeDate(raw)!.iso, verb, options)
     default:
       return {id: found.id, kind: 'block', created: false}
   }

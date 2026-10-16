@@ -202,6 +202,14 @@ export const createBridgeGraph = (client: BridgeClient) => {
     includeUser?: boolean
   }): Promise<unknown> => client.runCommand({type: 'recent-changes', ...input})
 
+  /** The full id a write verb's id field resolves `ref` to; unchanged when it
+   *  matches nothing. */
+  const resolveBlockId = async (ref: string): Promise<string> => {
+    const {id} = asRecord(await client.runCommand({type: 'resolve-block-id', ref}), 'resolve-block-id')
+    if (typeof id !== 'string') throw new Error('Unexpected resolve-block-id result shape')
+    return id
+  }
+
   const blockHistory = async (input: {id: string, limit?: number}): Promise<unknown> =>
     client.runCommand({type: 'block-history', ...input})
 
@@ -292,6 +300,7 @@ export const createBridgeGraph = (client: BridgeClient) => {
     createPage,
     recentChanges,
     blockHistory,
+    resolveBlockId,
     moveBlock,
     deleteBlock,
     restoreBlock,

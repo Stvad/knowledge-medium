@@ -73,8 +73,12 @@ export const appendMarkdown = async (
 
   // A created page / daily note commits in its own tx; one undo entry for both.
   return outerRepo.undoGroup(async repo => {
-    const target = await resolveAgentTarget(repo, input.target, verb)
     const firstPosition = await siblingPosition(repo, verb, input.position)
+    // An anchor's parent exists already, so an anchored insert never creates
+    // its target; one that is not the anchor's parent is refused by
+    // `createChild` inside the tx below, before anything is written.
+    const anchored = firstPosition.kind === 'before' || firstPosition.kind === 'after'
+    const target = await resolveAgentTarget(repo, input.target, verb, {create: !anchored})
     const blocks: Array<Omit<AppendedBlock, 'shortId'>> = []
     let targetContent = ''
 
@@ -125,12 +129,23 @@ const occurrences = (text: string, needle: string): number => {
 
 const CONTENT_ECHO_LIMIT = 1000
 
-/** The block's content as an error shows it — enough for the agent to re-plan
- *  without another read. */
-export const contentEcho = (content: string): string =>
-  content.length > CONTENT_ECHO_LIMIT
-    ? `${content.slice(0, CONTENT_ECHO_LIMIT)}… (${content.length} chars; read the block for the rest)`
-    : content
+/** What `JSON.stringify` leaves raw of the display-forging class — DEL, C1
+ *  controls, line/paragraph separators, bidi controls (C0 it escapes). */
+const UNESCAPED_DISPLAY_CONTROL = /[\u007f-\u009f\u2028\u2029\p{Bidi_Control}]/gu
+
+/** The block's content as an error shows it: quoted losslessly, so the agent
+ *  can re-plan from it exactly, and escaped, so stored text can neither fake a
+ *  line of the diagnostic nor reorder it. */
+export const contentEcho = (content: string): string => {
+  const clipped = content.length > CONTENT_ECHO_LIMIT ? content.slice(0, CONTENT_ECHO_LIMIT) : content
+  const quoted = JSON.stringify(clipped).replace(
+    UNESCAPED_DISPLAY_CONTROL,
+    char => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`,
+  )
+  return clipped === content
+    ? quoted
+    : `${quoted}… (${content.length} chars; read the block for the rest)`
+}
 
 export const editBlock = async (repo: Repo, input: EditBlockInput): Promise<BlockData | null> => {
   const verb = 'edit-block'
@@ -145,7 +160,7 @@ export const editBlock = async (repo: Repo, input: EditBlockInput): Promise<Bloc
     const at = block.content.indexOf(input.old)
     if (at < 0) {
       throw new Error(
-        `${verb}: old text not found in block ${id}. Its current content is:\n${contentEcho(block.content)}`,
+        `${verb}: old text not found in block ${id}. Its current content is: ${contentEcho(block.content)}`,
       )
     }
     const count = occurrences(block.content, input.old)

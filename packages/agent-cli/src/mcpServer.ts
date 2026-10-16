@@ -34,6 +34,11 @@ const agentCliPackageVersion = (() => {
 
 type MoveBlockPositionInput = z.infer<typeof moveBlockPositionSchema>
 
+/** What a write tool is about to do, as the write guard sees it. Block-id
+ *  fields (`id`, move_block's `parentId` and `position.siblingId`) carry the
+ *  FULL id the write will act on — a `^short` / `((id))` / prefix the caller
+ *  typed is resolved first — so a guard looking rows up by id checks the same
+ *  block. Targets (`parentId` of create_block, `target`) stay as typed. */
 export type GraphMcpWriteOperation =
   | {type: 'create_block', parentId: string, content: string, properties?: Record<string, unknown>}
   | {type: 'update_block', id: string, content?: string, properties?: Record<string, unknown>, expectedContent?: string}
@@ -74,6 +79,13 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
   const beforeWrite = async (operation: GraphMcpWriteOperation) => {
     await writeGuard?.beforeWrite(operation)
   }
+
+  // Resolved once, here, so the guard and the write act on one block.
+  const blockId = (ref: string): Promise<string> => graph.resolveBlockId(ref)
+  const resolvedPosition = async (position: MoveBlockPositionInput): Promise<MoveBlockPositionInput> =>
+    position.kind === 'before' || position.kind === 'after'
+      ? {kind: position.kind, siblingId: await blockId(position.siblingId)}
+      : position
 
   const json = (value: unknown) => ({
     content: [{type: 'text' as const, text: JSON.stringify(value, null, 2)}],
@@ -154,7 +166,8 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
       properties: z.record(z.string(), z.unknown()).optional(),
       expectedContent: z.string().optional(),
     },
-  }, async ({id, content, properties, expectedContent}) => {
+  }, async ({id: ref, content, properties, expectedContent}) => {
+    const id = await blockId(ref)
     await beforeWrite({type: 'update_block', id, content, properties, expectedContent})
     return json(await graph.updateBlock(id, {content, properties, expectedContent}))
   })
@@ -166,7 +179,10 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
       parentId: z.string().nullable(),
       position: moveBlockPositionSchema,
     },
-  }, async ({id, parentId, position}) => {
+  }, async input => {
+    const id = await blockId(input.id)
+    const parentId = input.parentId === null ? null : await blockId(input.parentId)
+    const position = await resolvedPosition(input.position)
     await beforeWrite({type: 'move_block', id, parentId, position})
     return json(await graph.moveBlock({id, parentId, position}))
   })
@@ -176,7 +192,8 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
     inputSchema: {
       id: z.string(),
     },
-  }, async ({id}) => {
+  }, async ({id: ref}) => {
+    const id = await blockId(ref)
     await beforeWrite({type: 'delete_block', id})
     return json(await graph.deleteBlock(id))
   })
@@ -186,7 +203,8 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
     inputSchema: {
       id: z.string(),
     },
-  }, async ({id}) => {
+  }, async ({id: ref}) => {
+    const id = await blockId(ref)
     await beforeWrite({type: 'restore_block', id})
     return json(await graph.restoreBlock(id))
   })
@@ -195,7 +213,8 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
     description: 'Write markdown into the graph like appending to a file: it is split into blocks exactly as the app '
     + '"paste as markdown" does (bullets and headings nest, a fenced code block or table stays one block) and '
     + 'inserted under the target in ONE transaction. Returns the created blocks as a ^short-id outline. '
-    + `Position defaults to after the target's last child. ${WRITE_TARGET_HELP} `
+    + `Position defaults to after the target's last child; a before/after anchor must be a child of the target, `
+    + `and then a missing target is refused rather than created. ${WRITE_TARGET_HELP} `
     + 'shape "block" keeps the whole markdown as one block.',
     inputSchema: {
       target: z.string(),
@@ -203,7 +222,8 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
       position: moveBlockPositionSchema.optional(),
       shape: z.enum(['outline', 'block']).optional(),
     },
-  }, async ({target, markdown, position, shape}) => {
+  }, async ({target, markdown, position: requested, shape}) => {
+    const position = requested && await resolvedPosition(requested)
     await beforeWrite({type: 'append_markdown', target, markdown, position, shape})
     return text(renderAppendResult(await graph.appendMarkdown({target, markdown, position, shape})))
   })
@@ -219,8 +239,9 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
       new: z.string(),
     },
   }, async input => {
-    await beforeWrite({type: 'edit_block', ...input})
-    return json(await graph.editBlock(input))
+    const edit = {...input, id: await blockId(input.id)}
+    await beforeWrite({type: 'edit_block', ...edit})
+    return json(await graph.editBlock(edit))
   })
 
   server.registerTool('create_page' satisfies KmMcpToolName, {

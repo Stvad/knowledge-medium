@@ -1177,7 +1177,7 @@ const updateRuntimeBlock = async (
     if (input.expectedContent !== undefined && before.content !== input.expectedContent) {
       throw new Error(
         `update-block: block ${input.id} changed since it was read — nothing was written. `
-        + `Its current content is:\n${contentEcho(before.content)}\n`
+        + `Its current content is: ${contentEcho(before.content)}. `
         + 'Re-plan against it, or use edit-block to change one passage.',
       )
     }
@@ -2356,6 +2356,9 @@ export const executeCommand = async (
         limit: command.limit,
         includeUser: command.includeUser === true,
       })
+
+    case 'resolve-block-id':
+      return {id: await resolveBlockId(context.repo, requireString(command.ref, 'ref'), 'resolve-block-id')}
 
     case 'block-history':
       return blockHistory(context.repo, {

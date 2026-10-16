@@ -244,6 +244,15 @@ export const recentChangesCommandSchema = z.looseObject({
   ...commandIdField,
 })
 
+/** The full id an id-typed field resolves to (`^short`, `((id))`, a unique
+ *  prefix) — what a write verb would act on. A ref matching nothing comes back
+ *  unchanged. Lets a caller check the same block the write will touch. */
+export const resolveBlockIdCommandSchema = z.looseObject({
+  type: z.literal('resolve-block-id'),
+  ref: z.string(),
+  ...commandIdField,
+})
+
 /** One block's recorded changes, newest first — local and sync-applied. */
 export const blockHistoryCommandSchema = z.looseObject({
   type: z.literal('block-history'),
@@ -563,6 +572,7 @@ export const knownCommandSchema = z.discriminatedUnion('type', [
   createPageCommandSchema,
   recentChangesCommandSchema,
   blockHistoryCommandSchema,
+  resolveBlockIdCommandSchema,
   installExtensionCommandSchema,
   enableExtensionCommandSchema,
   disableExtensionCommandSchema,
@@ -612,6 +622,7 @@ export const knownAgentCommandSchema = z.discriminatedUnion('type', [
   createPageCommandSchema,
   recentChangesCommandSchema,
   blockHistoryCommandSchema,
+  resolveBlockIdCommandSchema,
   installExtensionCommandSchema,
   enableExtensionCommandSchema,
   disableExtensionCommandSchema,
@@ -737,11 +748,11 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   },
   'append-markdown': {
     usage: "kmagent append-markdown <target> [--first | --after <id> | --before <id>] [--one-block] -- '<markdown>'   (or pipe it on stdin)",
-    description: 'Parse markdown with the app paste parser (the same split as "paste as markdown") and insert it under <target> in ONE transaction; prints the created blocks. <target>: a block id or unique id prefix (≥8 hex), a [[Page]] (created the way a wikilink creates it when missing — a date-literal name is that day\'s daily note), or a date expression (today | 2026-10-15 | next monday → that daily note, created if missing). A bare word that is none of these is refused — wrap page names in [[…]]. Default position is after the target\'s last child. Put the markdown after `--` (it usually starts with `- `, which would read as a flag), or omit it to read stdin.',
+    description: 'Parse markdown with the app paste parser (the same split as "paste as markdown") and insert it under <target> in ONE transaction; prints the created blocks. <target>: a block id or unique id prefix (≥8 hex), a [[Page]] (created the way a wikilink creates it when missing — a date-literal name is that day\'s daily note), or a date expression (today | 2026-10-15 | next monday → that daily note, created if missing). A bare word that is none of these is refused — wrap page names in [[…]]. Default position is after the target\'s last child; with --after/--before the anchor must be a child of the target, and a missing target is then refused rather than created. Put the markdown after `--` (it usually starts with `- `, which would read as a flag), or omit it to read stdin.',
     readOnly: false,
   },
   'edit-block': {
-    usage: 'kmagent edit-block <id> <old> <new>',
+    usage: "kmagent edit-block <id> <old> <new>   (or: kmagent edit-block <id> -- '<old>' '<new>' when either starts with -)",
     description: 'Replace the one occurrence of <old> in a block\'s content with <new> (literally — no regex, no $-patterns). Applied inside the writing transaction against the block\'s CURRENT content, so an edit made elsewhere since you read it survives. Refuses when <old> is empty, not found (the error shows the current content), or found more than once (include more surrounding text). <id> may be a unique id prefix.',
     readOnly: false,
   },
@@ -758,6 +769,11 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   'block-history': {
     usage: 'kmagent block-history <id> [--limit <n>]',
     description: 'One block\'s recorded changes, newest first: kind (create/update/move/soft-delete/restore), source (local or sync), the transaction description, and content before/after — the full prior content, for review or to restore with update-block.',
+    readOnly: true,
+  },
+  'resolve-block-id': {
+    usage: 'kmagent raw \'{"type":"resolve-block-id","ref":"^3f2a9c1b"}\'',
+    description: 'The full block id an id-typed write field resolves to (^short, ((id)), unique prefix) — never a name or date. A ref that matches nothing comes back unchanged. km-mcp uses it so its write guard checks the block the write will touch.',
     readOnly: true,
   },
   'install-extension': {
