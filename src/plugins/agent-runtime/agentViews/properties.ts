@@ -1,6 +1,6 @@
 import type { Repo } from '@/data/repo'
 import type { AnyPropertySchema, BlockData } from '@/data/api'
-import { decodeRefId, decodeRefListIds, isRefCodec, isRefListCodec } from '@/data/api/codecs.js'
+import { decodeRefId, decodeRefListIds, isRefCodec, isRefListCodec, memberCodecOf } from '@/data/api/codecs.js'
 import { aliasesProp, typesProp } from '@/data/properties.js'
 import { isPropertyPanelHiddenProperty } from '@/components/propertyPanel/visibility.js'
 import { labelForBlockData } from '@/utils/linkTargetAutocomplete.js'
@@ -41,19 +41,21 @@ const MAX_REFS = 20
 const SUMMARY_KEYS = 3
 
 /** A list value is decoded from a head this long — more than any line can
- *  show — with its real length kept for the "+N more" count. A cost bound:
- *  decoding the whole list would render the same. */
+ *  show — with its real length kept for the "+N more" count. Only for a
+ *  codec that declares its array member-wise (`memberCodecOf`), or none: an
+ *  atomic array encoding may need its tail, so that one is decoded whole. */
 const MAX_DECODED_ITEMS = 100
 
-type Decoded =
+export type Decoded =
   | {kind: 'refs', ids: string[], total: number}
   | {kind: 'value', value: unknown, total?: number}
 
-const decodeProperty = (schema: AnyPropertySchema | undefined, raw: unknown): Decoded => {
-  const total = Array.isArray(raw) ? raw.length : undefined
-  const head = Array.isArray(raw) && raw.length > MAX_DECODED_ITEMS ? raw.slice(0, MAX_DECODED_ITEMS) : raw
-  if (!schema) return {kind: 'value', value: head, total}
-  const codec = schema.codec
+export const decodeProperty = (schema: AnyPropertySchema | undefined, raw: unknown): Decoded => {
+  const codec = schema?.codec
+  const memberWise = codec === undefined || memberCodecOf(codec) !== undefined
+  const total = Array.isArray(raw) && memberWise ? raw.length : undefined
+  const head = memberWise && Array.isArray(raw) && raw.length > MAX_DECODED_ITEMS ? raw.slice(0, MAX_DECODED_ITEMS) : raw
+  if (!codec) return {kind: 'value', value: head, total}
   if (isRefCodec(codec)) {
     const id = decodeRefId(codec, raw)
     return id ? {kind: 'refs', ids: [id], total: 1} : {kind: 'value', value: raw}
@@ -161,6 +163,8 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 export const createPropertyRenderer = async (
   repo: Repo,
   blocks: readonly BlockData[],
+  // Off when a view shows no properties: a cost bound, type labels still work.
+  {properties = true}: {properties?: boolean} = {},
 ): Promise<PropertyRenderer> => {
   const schemas = repo.propertySchemas
   const overrides = repo.propertyEditorOverrides
@@ -173,7 +177,7 @@ export const createPropertyRenderer = async (
   }
   const preparedByBlock = new Map<string, Prepared>()
   const refIds = new Set<string>()
-  for (const block of blocks) {
+  for (const block of properties ? blocks : []) {
     if (preparedByBlock.has(block.id)) continue
     const bag = block.properties ?? {}
     const plain: string[] = []

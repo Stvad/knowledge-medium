@@ -14,8 +14,7 @@ import {
 import { labelForBlockData } from '@/utils/linkTargetAutocomplete.js'
 import { firstVisibleChildren, loadBlocks, loadCrumbs, visibleChildCounts } from './context.ts'
 import { createPropertyRenderer, NAME_CHARS } from './properties.ts'
-import { shortIds as loadShortIds } from './resolveRef.ts'
-import { clampInt, CUT_LEGEND, crumbLine, joinDisplayLines, loadRoot, metaSuffix, plural, toViewRow, type ViewRow } from './shared.ts'
+import { clampInt, CUT_LEGEND, crumbLine, displayIds, joinDisplayLines, loadRoot, metaSuffix, plural, toViewRow, type ViewRow } from './shared.ts'
 import { boundLabels, clipLine, formatCount, isReferenceOnly } from './text.ts'
 
 const MAX_BACKLINKS = 500
@@ -82,7 +81,7 @@ const viaPropertiesBySource = async (
 
 const loadTarget = async (repo: Repo, ref: string, workspaceId: string): Promise<{block: BlockData, target: Target}> => {
   const {root} = await loadRoot(repo, ref, workspaceId, async id => (await loadBlocks(repo, [id]))[0])
-  const shortIds = await loadShortIds(repo, [root.id])
+  const shortIds = await displayIds(repo, [root.id])
   const title = labelForBlockData(root, root.id)
   return {
     block: root,
@@ -106,7 +105,7 @@ const backlinkRows = async (
     .filter((id, index): id is string => id !== null && id !== linkOnly[index].id))]
   const [renderer, shortIds, crumbs, childCounts, via, parents, firstChildren] = await Promise.all([
     createPropertyRenderer(repo, sources),
-    loadShortIds(repo, ids),
+    displayIds(repo, ids),
     loadCrumbs(repo, ids, workspaceId),
     visibleChildCounts(repo, ids),
     viaPropertiesBySource(repo, workspaceId, targetId, ids),
@@ -277,7 +276,7 @@ export const buildGroupedBacklinksView = async (
   const blockGroupIds = new Set(groupIds)
   const [renderer, shortIds] = await Promise.all([
     createPropertyRenderer(repo, members),
-    loadShortIds(repo, [...memberIds, ...groupIds]),
+    displayIds(repo, [...memberIds, ...groupIds]),
   ])
   const memberById = new Map(members.map(member => [member.id, member]))
   const end = offset + page.length

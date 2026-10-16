@@ -4,10 +4,10 @@ import { isCollapsedProp } from '@/data/properties.js'
 import { AGENT_VIEW_DEFAULTS } from '@knowledge-medium/agent-cli/protocol'
 import { loadBlocks, loadCrumbs, visibleChildCounts, visibleChildrenLevel } from './context.ts'
 import { createPropertyRenderer, type PropertyDetail } from './properties.ts'
-import { shortIds as loadShortIds } from './resolveRef.ts'
 import {
   clampInt,
   CUT_LEGEND,
+  displayIds,
   crumbLine,
   joinDisplayLines,
   loadRoot,
@@ -56,6 +56,9 @@ interface Node {
   childCount: number
   depth: number
   children: string[]
+  /** Child rows refused as a cycle back to an already-placed block: counted
+   *  by `childCount`, but nothing more to expand. */
+  cycleChildren: number
 }
 
 const isCollapsed = (block: BlockData): boolean => block.properties[isCollapsedProp.name] === true
@@ -79,8 +82,12 @@ const selectNodes = async (
     for (const {block, childCount} of rows) {
       // A parent cycle (sync applies parent ids verbatim) leads back to a
       // block already placed; placing it again would re-parent it.
-      if (block.id === root.id || nodes.has(block.id)) continue
-      nodes.set(block.id, {block, childCount, depth: level, children: []})
+      if (block.id === root.id || nodes.has(block.id)) {
+        const parent = nodes.get(block.parentId ?? '')
+        if (parent) parent.cycleChildren += 1
+        continue
+      }
+      nodes.set(block.id, {block, childCount, depth: level, children: [], cycleChildren: 0})
       const parent = nodes.get(block.parentId ?? '')
       parent?.children.push(block.id)
       if (childCount > 0 && (expandCollapsed || !isCollapsed(block))) next.push(block.id)
@@ -110,8 +117,8 @@ export const buildOutlineView = async (
 
   const blocks = [root, ...[...nodes.values()].map(node => node.block)]
   const [renderer, shortIds] = await Promise.all([
-    createPropertyRenderer(repo, blocks),
-    loadShortIds(repo, blocks.map(block => block.id)),
+    createPropertyRenderer(repo, blocks, {properties: detail !== 'none'}),
+    displayIds(repo, blocks.map(block => block.id)),
   ])
 
   const rows: OutlineRow[] = []
@@ -123,7 +130,7 @@ export const buildOutlineView = async (
         parentId,
         depth: node.depth,
         childCount: node.childCount,
-        hiddenChildren: node.childCount - node.children.length,
+        hiddenChildren: node.childCount - node.children.length - node.cycleChildren,
         collapsed: isCollapsed(node.block),
       })
       visit(id, node.children)

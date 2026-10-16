@@ -1,9 +1,9 @@
 import type { BlockData } from '@/data/api'
 import type { Repo } from '@/data/repo'
-import { BlockRefError, resolveBlockRef, type BlockRefResolution } from './resolveRef.ts'
+import { BlockRefError, resolveBlockRef, shortIds, type BlockRefResolution } from './resolveRef.ts'
 import { formatPropertyPairs, type PropertyDetail, type PropertyLine, type PropertyRenderer } from './properties.ts'
 import { neutralizeDisplayText } from '@knowledge-medium/agent-cli/protocol'
-import { clipLine, formatCount, oneLine } from './text.ts'
+import { charBoundary, clipLine, formatCount, oneLine } from './text.ts'
 
 /** One block as a view row: everything a line needs, already bounded. */
 export interface ViewRow {
@@ -100,6 +100,21 @@ export const loadRoot = async (
  *  changed and does not resolve back; `format: 'json'` prints it exactly. */
 export const joinDisplayLines = (lines: readonly string[]): string =>
   lines.map(neutralizeDisplayText).join('\n')
+
+const MAX_DISPLAY_ID = 64
+
+/** An id as a view prints it. A canonical id never reaches the bound; a
+ *  longer one (only sync can deliver it) is clipped and so does not resolve
+ *  back — accepted, `format: 'json'` carries it exactly. */
+export const boundDisplayId = (id: string): string =>
+  id.length > MAX_DISPLAY_ID ? `${id.slice(0, charBoundary(id, MAX_DISPLAY_ID - 1))}…` : id
+
+/** {@link shortIds}, bounded for display: the one source of every id a
+ *  text view prints. */
+export const displayIds = async (repo: Repo, ids: Iterable<string>): Promise<Map<string, string>> => {
+  const short = await shortIds(repo, ids)
+  return new Map([...short].map(([id, display]) => [id, boundDisplayId(display)]))
+}
 
 /** An empty block still occupies a line; say so rather than print nothing. */
 export const EMPTY_CONTENT = '(empty)'

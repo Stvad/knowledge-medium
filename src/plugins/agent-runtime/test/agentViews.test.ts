@@ -713,6 +713,25 @@ describe('structural edge cases', () => {
     expect(lines).toContain('(next: offset=2)')
   })
 
+  it('a cycle row is not counted as a hidden child', async () => {
+    const root = uuid('c0c0c0c0', 1)
+    const child = uuid('c1c1c1c1', 2)
+    await create({id: root, content: 'Root'})
+    await create({id: child, parentId: root, content: 'Child'})
+    await sharedDb.db.execute('UPDATE blocks SET parent_id = ? WHERE id = ?', [child, root])
+    const out = await view<OutlineView>({type: 'view-outline', ref: root, depth: 3, format: 'json'})
+    expect(out.rows).toMatchObject([{content: 'Child', hiddenChildren: 0}])
+  })
+
+  it('clips an over-long id when printing it', async () => {
+    const longId = `id-${'x'.repeat(300)}`
+    await create({id: longId, content: 'odd id'})
+    const text = await view<string>({type: 'view-block', ref: longId})
+    expect(text).not.toContain('x'.repeat(100))
+    const json = await view<BlockView>({type: 'view-block', ref: longId, format: 'json'})
+    expect(json.id).toBe(longId)
+  })
+
   it('sql summarizes a binary cell by its size', async () => {
     const out = await executeCommand({
       commandId: 's', type: 'sql', mode: 'all', maxRows: 1, sql: 'SELECT randomblob(10) AS b',

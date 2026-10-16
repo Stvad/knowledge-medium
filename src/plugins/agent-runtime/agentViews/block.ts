@@ -3,8 +3,7 @@ import { AGENT_VIEW_DEFAULTS } from '@knowledge-medium/agent-cli/protocol'
 import { BACKLINKS_FOR_BLOCK_QUERY } from '@/plugins/backlinks/query.js'
 import { loadCrumbs, visibleChildCounts } from './context.ts'
 import { createPropertyRenderer, type PropertyLine } from './properties.ts'
-import { shortIds as loadShortIds } from './resolveRef.ts'
-import { crumbLine, joinDisplayLines, loadRoot, plural } from './shared.ts'
+import { boundDisplayId, crumbLine, displayIds, joinDisplayLines, loadRoot, plural } from './shared.ts'
 import { charBoundary, formatCount } from './text.ts'
 
 export interface BlockViewParams {
@@ -60,7 +59,7 @@ export const buildBlockView = async (
 
   const [renderer, shortIds, crumbs, childCounts, backlinks] = await Promise.all([
     createPropertyRenderer(repo, [block]),
-    loadShortIds(repo, [block.id]),
+    displayIds(repo, [block.id]),
     loadCrumbs(repo, [block.id], block.workspaceId),
     visibleChildCounts(repo, [block.id]),
     // The backlinks view's own set, so the two counts cannot disagree.
@@ -97,7 +96,7 @@ export const renderBlockView = (view: BlockView): string => {
     plural(view.backlinkCount, 'backlink'),
     view.editedAt ? `edited ${view.editedAt.slice(0, 10)}` : null,
   ].filter(Boolean)
-  lines.push(`^${view.shortId}  (${view.id})  ${facts.join(' · ')}`)
+  lines.push(`^${view.shortId}  (${boundDisplayId(view.id)})  ${facts.join(' · ')}`)
   lines.push(`in: ${crumbLine(view.breadcrumb)}`)
   lines.push('')
   if (view.contentOffset > 0) lines.push(`…[${formatCount(view.contentOffset)} chars before]`)

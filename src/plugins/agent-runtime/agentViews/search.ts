@@ -6,8 +6,7 @@ import { AGENT_VIEW_DEFAULTS } from '@knowledge-medium/agent-cli/protocol'
 import { searchBlocksAcrossSources } from '@/utils/linkTargetAutocomplete.js'
 import { loadBlocks, loadCrumbs } from './context.ts'
 import { createPropertyRenderer, formatPropertyPairs, type PropertyLine } from './properties.ts'
-import { shortIds as loadShortIds } from './resolveRef.ts'
-import { clampInt, crumbLine, joinDisplayLines, loadRoot } from './shared.ts'
+import { clampInt, crumbLine, displayIds, joinDisplayLines, loadRoot } from './shared.ts'
 import { formatCount, snippet } from './text.ts'
 
 export interface SearchParams {
@@ -128,7 +127,7 @@ export const buildSearchView = async (
   const duplicateIds = page.flatMap(group => group.slice(1, 1 + MAX_DUPLICATES_SHOWN).map(block => block.id))
   const [renderer, shortIds, crumbs] = await Promise.all([
     createPropertyRenderer(repo, shown),
-    loadShortIds(repo, [...shown.map(block => block.id), ...duplicateIds]),
+    displayIds(repo, [...shown.map(block => block.id), ...duplicateIds]),
     loadCrumbs(repo, shown.map(block => block.id), workspaceId),
   ])
   const end = offset + page.length
