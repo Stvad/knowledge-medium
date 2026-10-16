@@ -1,1 +1,1 @@
-import{TG as e,wG as t}from"../../chunks/app-BBLVaMNu.js";export{t as Block,e as requireLoadedBlock};
+import{TG as e,wG as t}from"../../chunks/app-Chxacnpu.js";export{t as Block,e as requireLoadedBlock};

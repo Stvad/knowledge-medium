@@ -1,1 +1,1 @@
-import{GO as e}from"../../chunks/app-BBLVaMNu.js";export{e as BlockEditor};
+import{GO as e}from"../../chunks/app-Chxacnpu.js";export{e as BlockEditor};

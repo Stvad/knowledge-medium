@@ -1,1 +1,1 @@
-import{qu as e}from"../../../../chunks/app-BBLVaMNu.js";export{e as inlineBacklinksApplies};
+import{qu as e}from"../../../../chunks/app-Chxacnpu.js";export{e as inlineBacklinksApplies};

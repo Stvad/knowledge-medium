@@ -1,1 +1,1 @@
-import{hC as e}from"../../../chunks/app-BBLVaMNu.js";export{e as BlockEmbed};
+import{hC as e}from"../../../chunks/app-Chxacnpu.js";export{e as BlockEmbed};

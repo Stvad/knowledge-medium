@@ -1,1 +1,1 @@
-import{qD as e}from"../../../chunks/app-BBLVaMNu.js";export{e as BlockInfoDialog};
+import{qD as e}from"../../../chunks/app-Chxacnpu.js";export{e as BlockInfoDialog};

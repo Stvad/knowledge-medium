@@ -1,1 +1,1 @@
-import{eV as e,nV as t,tV as n}from"../../chunks/app-BBLVaMNu.js";export{e as SYNCED_TABLES,n as syncedWriteTarget,t as writeTargets};
+import{eV as e,nV as t,tV as n}from"../../chunks/app-Chxacnpu.js";export{e as SYNCED_TABLES,n as syncedWriteTarget,t as writeTargets};
