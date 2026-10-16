@@ -1,1 +1,1 @@
-import{Ca as e,Ea as t,Ta as n,wa as r}from"../../../chunks/app-8zj9jRj5.js";export{e as extractBlockDetails,r as parseRejectionError,n as shortenId,t as summarizeOp};
+import{Ca as e,Ea as t,Ta as n,wa as r}from"../../../chunks/app-DOtJgR5I.js";export{e as extractBlockDetails,r as parseRejectionError,n as shortenId,t as summarizeOp};

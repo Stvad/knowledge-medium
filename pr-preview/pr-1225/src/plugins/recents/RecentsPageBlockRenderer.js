@@ -1,1 +1,1 @@
-import{Kv as e,qv as t}from"../../../chunks/app-8zj9jRj5.js";export{e as RecentsList,t as RecentsPageBlockRenderer};
+import{Kv as e,qv as t}from"../../../chunks/app-DOtJgR5I.js";export{e as RecentsList,t as RecentsPageBlockRenderer};
