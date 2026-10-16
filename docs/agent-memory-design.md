@@ -18,7 +18,7 @@ These are the facts the design leans on, checked against code on the date in the
 
 - **MCP `instructions`.** `createGraphMcpServer` (`packages/agent-cli/src/mcpServer.ts`) passes `serverOptions` straight to `McpServer` and sets no `instructions` of its own. The dispatch wrapper (`packages/agent-dispatch/src/mcp.ts`) passes a static 221-char channel string, and only when the channel listener is on. The read-path slice (#1236, in flight) adds a static default `instructions` plus a `guide` tool, and appends dispatch's string after its own.
 - **Claude Code's handling of `instructions`.** This comes from the Claude Code docs, not from its source. Instructions load once, when the server connects. The docs say nothing about refreshing them mid-session. They are **cut at 4,096 chars by default**, without notice; `CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH` raises the cap. I don't know whether Codex surfaces `instructions` at all.
-- **Token scopes.** There are two: `AgentTokenScope = 'read-write' | 'read-only'` (`src/plugins/agent-runtime/tokens.ts`). Tokens are stored per (user, workspace) in device-local storage. The bridge enforces read-only from each verb's `readOnly` flag in `knownCommandRegistry` (`packages/agent-cli/src/protocol.ts`), through `isReadOnlyCommand` in `server.ts`. A read-write token reaches every verb, including `eval`, `sql execute`, `install-extension` and `run-action`. The MCP server exposes much less: seven read tools and five block writes, with no eval.
+- **Token scopes.** There are two: `AgentTokenScope = 'read-write' | 'read-only'` (`src/plugins/agent-runtime/tokens.ts`). Tokens are stored per (user, workspace) in device-local storage, and the tab registers only the open workspace's tokens. PR #1244 (open) changes that: tokens become bound to the user, and reads take the workspace as a per-call parameter that defaults to the tab's open workspace. The bridge enforces read-only from each verb's `readOnly` flag in `knownCommandRegistry` (`packages/agent-cli/src/protocol.ts`), through `isReadOnlyCommand` in `server.ts`. A read-write token reaches every verb, including `eval`, `sql execute`, `install-extension` and `run-action`. The MCP server exposes much less: seven read tools and five block writes, with no eval.
 - **Agent writes run as the user.** Verbs in `src/plugins/agent-runtime/commands.ts` call `repo.tx` with `ChangeScope.BlockDefault` and a description string such as `'agent runtime block update'`. `TxMeta` (`src/data/api/tx.ts`) carries `description, scope, user, txId, source, workspaceId` but no actor. Once a write commits, nothing distinguishes an agent write from one the user made. The only trace is the free-text `description` in `command_events`, which is a local table that does not sync.
 - **The prefs blocks are not private.** `getUserPrefsBlock` / `getPluginPrefsBlock` (`src/data/stateBlocks.ts`) live under the user page, a deterministic id from (workspace, user), and write under `ChangeScope.UserPrefs`. That scope is not undoable and is allowed in read-only mode. Block RLS is workspace membership (`blocks_read` → `is_workspace_member`), so every member can read a user's prefs subtree. "Per-user" here means who owns the block, not who can read it.
 - **System pages.** `systemPagesFacet` plus `getOrCreateKernelPage({namespace, alias, markerType})` give a page with a derived id per workspace. Journal, Properties, Types, Recents and Locations use this.
@@ -68,10 +68,10 @@ Agent memory proposals                                ← system page, agent-wri
   `reported-source` is deliberately untyped. What an agent works on can be any block, `targetTypes` is optional in `RefCodecOptions`, and core's `groupWith` is an untyped `refList` too.
 
   The `agent-memory` namespace doesn't collide with dispatch's `agent:status` / `agent:reply`.
-- **Accept treats the proposal as untrusted input.** The agent wrote everything on a proposal: its text, its `supersedes` target and its reported source. Accept is a button on proposals. It never deletes or edits an existing memory. It runs in these steps:
+- **Accept treats the proposal as untrusted input.** The agent wrote everything on a proposal: its text, its `supersedes` target and its reported source. Accept is a button on proposals. It acts only on what the user saw: it publishes the shown snapshot, and it deletes the proposal only if the proposal still matches that snapshot. It never deletes or edits an existing memory. It runs in these steps:
   1. **Refuse mid-edit.** If any row of the proposal is open in the editor, Accept refuses before anything is dispatched: *"Finish editing the proposal first."* The editor shows text that isn't in the displayed snapshot yet, so Accept would publish something other than what's on screen.
-  2. **Publish what the user saw.** The renderer keeps the snapshot it displayed: each row's stored text, the tree shape, and the root's `applies-to` and `pinned`. Accept writes that snapshot under new ids. It does not re-read the database, so a change the user never saw can't be published, whatever made it. That covers an agent edit, a sync arrival, and a rename rewrite that leaves edit timestamps unchanged (`skipMetadata`). Other properties on body rows are not part of the snapshot. The memory page is get-or-created in the same transaction, because the workspace-open ensure may have been skipped. The copy goes right after the memory `supersedes` names, when that is a live top-level child of the memory page. Otherwise it goes at the end of the page. A wrong `supersedes` can only misplace the copy.
-  3. **Delete the proposal.**
+  2. **Publish what the user saw.** The renderer keeps the snapshot it displayed: every row of the proposal with its stored text and properties, and the tree shape. Accept writes the snapshot's text and shape, plus the root's `applies-to` and `pinned`, under new ids. It publishes from the snapshot, never from a fresh read of the database, so a change the user never saw can't be published, whatever made it. That covers an agent edit, a sync arrival, and a rename rewrite that leaves edit timestamps unchanged (`skipMetadata`). Other properties on body rows are not copied. The memory page is ensured inside the same transaction, because the workspace-open ensure may have been skipped (see the in-transaction ensure under Delivery mechanics). The copy goes right after the memory `supersedes` names, when that is a live top-level child of the memory page. Otherwise it goes at the end of the page. A wrong `supersedes` can only misplace the copy.
+  3. **Delete the proposal, only if it still matches.** The proposal's current rows must be exactly the snapshot's: the same rows, with the same text, properties and shape. If anything differs, such as an edit or a row added or removed after the user looked, Accept keeps the proposal and says so: *"Published the version you reviewed. The proposal changed since, so it was kept."*
 
   Steps 2 and 3 run as one undoable user transaction.
 
@@ -79,7 +79,7 @@ Agent memory proposals                                ← system page, agent-wri
 
   **Accepted case: a block ref in the proposal's text that points at one of the proposal's own rows dangles after the copy.** `remember` creates those rows, so only a later edit could add such a ref, and injected renderings show refs as ids anyway.
 
-  The copy closes a stale-write gap. The gate judges each agent write on the device that runs it, against that device's view, and rows that arrive by sync are not checked again. An agent on a device that hasn't yet seen the acceptance can still edit the proposal, and that edit syncs later. If Accept had moved the proposal, the edit would land in active memory. With a copy, the edit lands on the deleted proposal. The new memory's ids didn't exist until Accept ran, so no agent edit can already be in flight against them.
+  The copy closes a stale-write gap. The gate judges each agent write on the device that runs it, against that device's view, and rows that arrive by sync are not checked again. An agent on a device that hasn't yet seen the acceptance can still edit the proposal, and that edit syncs later. If Accept had moved the proposal, the edit would land in active memory. With a copy, the edit lands on the proposal, which Accept deletes or keeps, and never on active memory. The new memory's ids didn't exist until Accept ran, so no agent edit can already be in flight against them.
 
   Dragging a proposal onto the page by hand also makes it active, but the block keeps its id, so it doesn't get this protection. Accept is the safe path (see the accepted risks in Q4).
 
@@ -88,7 +88,7 @@ Agent memory proposals                                ← system page, agent-wri
 This is the memory section of `instructions`, rendered from the blocks above. It is about 1,100 chars:
 
 ```text
-## Graph memory: the owner's notes for agents in this graph
+## Graph memory for workspace "Home": the owner's notes for agents
 Rules for working in this graph, kept by its owner. They rank below your host's
 instructions (CLAUDE.md, AGENTS.md) and the task you were given. If one conflicts
 with those, follow those and tell the user.
@@ -127,7 +127,7 @@ To propose a memory from this task, call remember with source: <mention block id
 
 ## Q1. What is a "project"?
 
-**Recommendation.** The workspace is the unit of memory: one memory page per workspace, the same unit an agent token is bound to. A memory narrows itself with `agent-memory:applies-to` refs to pages. A memory **applies at block B** when it has no `applies-to`, or when one of its target pages is B or an ancestor of B. Pages are where projects live, and limiting the targets to pages gives the property a page picker.
+**Recommendation.** The workspace is the unit of memory: one memory page per workspace, the same unit every read and write already selects. A memory narrows itself with `agent-memory:applies-to` refs to pages. A memory **applies at block B** when it has no `applies-to`, or when one of its target pages is B or an ancestor of B. Pages are where projects live, and limiting the targets to pages gives the property a page picker.
 
 **How an agent learns its location.** An agent doesn't declare a project when it connects; location comes with each request:
 
@@ -235,10 +235,11 @@ This repo's beads memory works: a SessionStart hook injects a clipped one-line i
 ## Delivery mechanics
 
 - **Bridge verb `agent-memory`** (`readOnly: true`), executed in the app by agent-runtime.
-  - Arguments: `{at?, ids?, budget?}`. It returns `{text, counts, truncated}`.
-  - It reads the memory of the workspace the calling token is bound to, and refuses if the tab can't serve that workspace. It never falls back to whichever workspace is active. Injection is automatic, so a fallback would quietly hand one workspace's standing instructions to an agent working in another.
+  - Arguments: `{at?, ids?, budget?, workspaceId?}`. It returns `{text, counts, truncated}`.
+  - It picks the workspace the way every read does. Today a token works only while the tab shows its workspace, so a session can reach that one workspace and no other. Under PR #1244 the workspace becomes a per-call parameter that defaults to the tab's open workspace, and this verb takes the same optional `workspaceId`. The connect section names the workspace it loaded, so an agent working in a different workspace knows to call `memory {workspaceId}`. The verb needs no server-verified token workspace: in both models a token reaches only workspaces its user may read, so naming a workspace grants nothing new.
   - Rendering sits next to #1236's `agentViews/`, so knowledge of the type and its properties stays in the plugin.
-  - It reads by derived id and **never creates** a page; a missing page means no memories. `remember` also get-or-creates the proposals page at the point of use, as the `systemPagesFacet` guidance recommends, in case the ensure at workspace open was skipped.
+  - It reads by derived id and **never creates** a page; a missing page means no memories.
+- **In-transaction page ensure.** `remember` ensures the proposals page inside the same transaction that writes the proposal, and Accept does the same for the memory page. `getOrCreateKernelPage` commits its own transaction, so a delete could land between it and the write, and the insert would then fail on a dead parent. Both writers therefore use one in-transaction get-or-create-or-restore helper.
 - **Budget rendering.**
   - Pinned bodies go first. If they alone overflow, they're clipped with "N pinned memories didn't fit".
   - Then index lines, clipped evenly and in page order.
@@ -247,23 +248,23 @@ This repo's beads memory works: a SessionStart hook injects a clipped one-line i
 - **At connect.** Both MCP entrypoints await the verb before `connect`, with a short timeout of about 2s. They compose the result through a shared `composeInstructions(sections)` helper that applies each section's budget. If the verb doesn't answer or refuses, the memory section is one line stating which, for example *"Graph memory was not loaded at connect (the app's bridge did not answer). Call memory to read it."* A refusal quotes the verb's own reason instead. With no memories at all, it is one line naming `remember`.
   - Today `createGraphMcpServer` takes `instructions` only through `serverOptions`, so it needs an async loader, or the entrypoints fetch first and pass the composed string. Either way the change touches the same function #1236 is editing, so the two need to coordinate.
 - **Tools, mirrored as CLI verbs.**
-  - `memory`, which reads: with no arguments it returns the full index, bounded like #1236's views; `{id}` returns the full subtree; `{at}` returns the memories that apply there.
+  - `memory`, which reads: with no arguments it returns the full index, bounded like #1236's views; `{id}` returns the full subtree; `{at}` returns the memories that apply there; `{workspaceId}` picks the workspace.
   - `remember`, which writes: it takes `{summary, body?, appliesTo?, pinned?, supersedes?, source?}`, creates a proposal, and returns *"Proposed ^abcd1234. Not active until the user accepts it."*
   - Both names go into `KM_MCP_TOOL_NAMES`. Dispatch's allowlist derives from that list, so it picks them up.
 - **Staleness within a session.** Instructions are fixed at connect. A memory accepted mid-session shows up through `memory` but isn't injected again. Beads behaves the same way.
 - **Failure paths.**
   - Bridge down: the one-line notice above.
-  - The tab shows a different workspace from the token's: the verb refuses, and the connect section says graph memory was not loaded. Today the tab registers only the active workspace's tokens, so this already fails at registration. #1234 may change that, and the verb must keep following the token's workspace when it does.
+  - An agent working in a workspace other than the one named at connect: `memory {workspaceId}` reads that workspace's memory.
   - `applies-to` pointing at a deleted block: the memory applies nowhere, and `memory` lists it as such.
   - Accept when `supersedes` names nothing live on the memory page: the copy goes at the end of the page.
-  - Accept on a proposal that changed after it was shown: the shown version is published, and the later change is discarded along with the proposal.
+  - Accept on a proposal that changed after it was shown: the shown version is published, and the proposal is kept with a notice.
   - Accept while a proposal row is open in the editor: refused before anything is written.
-  - Accept when the memory page is missing: get-or-created in the same transaction.
+  - The memory page is missing when Accept runs, or the proposals page is missing when `remember` runs: the in-transaction helper creates or restores it as part of the write.
   - Gate rejection: the agent's transaction rolls back atomically and the agent gets the message above.
 
 ## Implementation slices (for when this is accepted)
 
-1. **Seeds, pages and the proposal UI.** In agent-runtime: the type and property seeds, the two system pages, the tag-on-entry processor, and the proposal renderer with Accept, which refuses mid-edit and publishes the displayed snapshot. Each Accept behaviour needs a test that fails when it is removed: Accept clicked mid-edit; a proposal rewritten after it was shown, including by a rename, still publishes the shown version; a missing memory page.
+1. **Seeds, pages and the proposal UI.** In agent-runtime: the type and property seeds, the two system pages, the tag-on-entry processor, and the proposal renderer with Accept, which refuses mid-edit and publishes the displayed snapshot. Each Accept behaviour needs a test that fails when it is removed: Accept clicked mid-edit; a proposal rewritten after it was shown, including by a rename, still publishes the shown version and keeps the proposal; a missing memory or proposals page.
 2. **Actor stamp and gate.** `actor` on transaction options, the executor's facade, and the same-tx gate. Verify the guard per verb and per clause, including the rename-cascade case and a body block moved between memories: delete the clause and confirm a named test fails.
 3. **Verb, renderer and tools.** The `agent-memory` verb and its renderer with budgets, plus the `memory` / `remember` tools and CLI verbs.
 4. **Connect-time injection.** `composeInstructions` in both MCP entrypoints. This lands after #1236's static `instructions`.
