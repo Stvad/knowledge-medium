@@ -1047,3 +1047,27 @@ const CONTROL_CHAR_RUN_REGEX = /[\u0000-\u0008\u000a-\u001f\u007f-\u009f\u2028\u
  *  app's agent views. */
 export const neutralizeDisplayText = (text: string): string =>
   text.replace(CONTROL_CHAR_RUN_REGEX, ' ⏎ ')
+
+/** What `JSON.stringify` leaves raw of that class — DEL, C1 controls, the
+ *  line/paragraph separators, bidi controls (it escapes the rest of C0). */
+const UNESCAPED_JSON_DISPLAY_CONTROL = /[\u007f-\u009f\u2028\u2029\p{Bidi_Control}]/gu
+
+/** `\u`-escape what `JSON.stringify` leaves raw of the display-forging class.
+ *  Lossless — unlike {@link neutralizeDisplayText} — and only valid on JSON
+ *  text, where these characters occur only inside string literals and the
+ *  escape denotes the same string. */
+export const escapeJsonDisplayControls = (json: string): string =>
+  json.replace(UNESCAPED_JSON_DISPLAY_CONTROL, char => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`)
+
+/** A value as agent-facing JSON: pretty-printed and display-safe, losslessly. */
+export const toDisplayJson = (value: unknown): string => {
+  const json = JSON.stringify(value, null, 2) as string | undefined
+  return json === undefined ? String(value) : escapeJsonDisplayControls(json)
+}
+
+/** The page name in a `[[Name]]` write target — what a missing page is created
+ *  under, and so its content — or null when `text` is not one. */
+export const pageNameInTarget = (text: string): string | null => {
+  const match = /^\s*\[\[([\s\S]*)\]\]\s*$/.exec(text)
+  return match ? match[1].trim() : null
+}

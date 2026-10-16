@@ -11,6 +11,8 @@
  * update `snapshotOf` here.
  */
 import { ChangeScope } from '@/data/api'
+import { registryRecognitionParams } from '@/data/internals/kernelQueries.js'
+import { recognizedFieldRowSql } from '@/data/internals/treeQueries.js'
 import type { Repo } from '@/data/repo'
 import { AGENT_TX_DESCRIPTION_PREFIX } from './agentWrites.ts'
 import { shortIds } from './agentViews/resolveRef.ts'
@@ -113,6 +115,28 @@ const describeRowEvent = (row: RowEventRow, contentLimit?: number): Omit<BlockCh
   }
 }
 
+const RECOGNIZED_FIELD_ROWS_SQL = `
+  SELECT b.id FROM blocks b
+   WHERE b.id IN (SELECT value FROM json_each(?))
+     AND ${recognizedFieldRowSql('b')}`
+
+/** Rows of property storage — recognized field rows (the outline's own
+ *  predicate) and the value rows under them — among `rows`. A same-tx
+ *  processor writes them for a property the owner's own change already
+ *  names, so listing them would present machinery as changed content. */
+const propertyStorageIds = async (repo: Repo, rows: readonly RowEventRow[]): Promise<Set<string>> => {
+  const parentOf = new Map(rows.map(row =>
+    [row.block_id, snapshotOf(row.after_json ?? row.before_json)?.parentId ?? null]))
+  const candidates = [...new Set([...parentOf.keys(), ...parentOf.values()])].filter(id => id !== null)
+  const fields = new Set((await repo.db.getAll<{id: string}>(
+    RECOGNIZED_FIELD_ROWS_SQL,
+    [JSON.stringify(candidates), ...registryRecognitionParams(repo)],
+  )).map(row => row.id))
+  return new Set([...parentOf]
+    .filter(([id, parent]) => fields.has(id) || (parent !== null && fields.has(parent)))
+    .map(([id]) => id))
+}
+
 const parseSince = (value: unknown): number => {
   if (value === undefined) return 0
   if (typeof value === 'number' && Number.isFinite(value)) return value
@@ -184,9 +208,11 @@ export const recentChanges = async (repo: Repo, input: RecentChangesInput): Prom
       ORDER BY id`,
     [JSON.stringify(page.map(tx => tx.tx_id))],
   )
-  const short = await shortIds(repo, rows.map(row => row.block_id))
+  const storage = await propertyStorageIds(repo, rows)
+  const visible = rows.filter(row => !storage.has(row.block_id))
+  const short = await shortIds(repo, visible.map(row => row.block_id))
   const changesByTx = new Map<string, BlockChange[]>()
-  for (const row of rows) {
+  for (const row of visible) {
     const list = changesByTx.get(row.tx_id!) ?? []
     list.push({...describeRowEvent(row, RECENT_CONTENT_LIMIT), shortId: short.get(row.block_id)!})
     changesByTx.set(row.tx_id!, list)

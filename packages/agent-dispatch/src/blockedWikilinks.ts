@@ -1,5 +1,6 @@
 import type { BridgeGraph } from '@knowledge-medium/agent-cli/graph'
 import type { GraphMcpWriteGuard } from '@knowledge-medium/agent-cli/mcpServer'
+import { pageNameInTarget } from '@knowledge-medium/agent-cli/protocol'
 
 /** Dispatch-owned MCP policy: page aliases whose wikilinks the spawned
  *  agent write tools must refuse to create. JSON-array encoded; legacy
@@ -134,8 +135,7 @@ const deleteGuardRowFromSqlRow = (row: unknown): DeleteGuardRow | null => {
 
 /** The name a `[[Name]]` target creates a page under when it is missing —
  *  the page's content, so a wikilink nested in it is a reference. */
-const createdPageName = (target: string): string | undefined =>
-  /^\s*\[\[([\s\S]*)\]\]\s*$/.exec(target)?.[1]
+const createdPageName = (target: string): string | undefined => pageNameInTarget(target) ?? undefined
 
 export const createBlockedWikilinkWriteGuard = (
   graph: Pick<BridgeGraph, 'resolvePageId' | 'getBlock' | 'sqlAll'>,
@@ -372,7 +372,8 @@ export const createBlockedWikilinkWriteGuard = (
           return
         case 'create_page':
           // A created page's content is its name, so a nested [[…]] in it is a reference.
-          await assertNoBlockedRefs(operation.name)
+          // As create-page reads it: one outer [[…]] is the name's wrapper.
+          await assertNoBlockedRefs(operation.name === undefined ? undefined : pageNameInTarget(operation.name) ?? operation.name)
           return
         default: {
           // A new write tool must say here what it can make reference.

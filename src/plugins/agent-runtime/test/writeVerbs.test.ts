@@ -20,6 +20,7 @@ import { dailyNoteBlockId, journalBlockId } from '@/plugins/daily-notes/dailyNot
 import { createAgentRuntimeContext, executeCommand } from '../commands'
 import type { AgentRuntimeContext } from '../protocol'
 import { resolveAgentTarget, resolveBlockId } from '../targets'
+import { agentTxOptions } from '../agentWrites'
 import { parseMarkdownToBlocks } from '@/utils/markdownParser.js'
 
 // Passthrough spy, so a test can tell whether a refusal beat the parse.
@@ -620,5 +621,48 @@ describe('review round 3', () => {
       .catch((e: unknown) => e as Error) as Error
     expect(error.message).toMatch(/Groceries/)
     expect(error.message).not.toMatch(/fake line\n|\u202E/)
+  })
+})
+
+describe('review round 4', () => {
+  // Sync and restore admit non-canonical ids; one that looks like reference
+  // syntax must name itself, not the block its inner text would resolve to.
+  it('addresses a stored id that looks like ^prefix, ((id)) or [[name]] as itself', async () => {
+    await seed([{id: NOTE, content: 'victim'}])
+    for (const odd of ['^3f2a9c1b', `((${NOTE}))`, '[[Literal]]']) {
+      await seed([{id: odd, content: 'odd'}])
+      expect(await resolveBlockId(repo, odd, 'test')).toBe(odd)
+      await run({type: 'edit-block', id: odd, old: 'odd', new: 'odd!'})
+      expect(await contentOf(odd)).toBe('odd!')
+      await run({type: 'update-block', id: odd, content: 'odd'})
+    }
+    expect(await contentOf(NOTE)).toBe('victim')
+    const appended = await run({type: 'append-markdown', target: '[[Literal]]', markdown: '- child'}) as {
+      target: {id: string, kind: string}
+    }
+    expect(appended.target).toMatchObject({id: '[[Literal]]', kind: 'block'})
+  })
+})
+
+describe('review round 5', () => {
+  // The rows a same-tx materialization writes for a property are storage for
+  // the owner's property, which the owner's own change already names.
+  it('leaves property field/value rows out of recent-changes', async () => {
+    await seed([{id: 'defn', content: 'status'}, {id: NOTE, content: 'Owner'}])
+    await sharedDb.db.execute(
+      "INSERT OR IGNORE INTO block_types (block_id, workspace_id, type) VALUES ('defn', ?, 'property-schema')",
+      [WS],
+    )
+    await repo.tx(async tx => {
+      await tx.update(NOTE, {properties: {status: 'open'}})
+      await tx.create({
+        id: 'field', workspaceId: WS, parentId: NOTE, orderKey: 'a0',
+        content: '::((defn))', referenceTargetId: 'defn',
+      })
+      await tx.create({id: 'value', workspaceId: WS, parentId: 'field', orderKey: 'a0', content: 'open'})
+    }, agentTxOptions('update-block'))
+
+    const out = await run({type: 'recent-changes'}) as {txs: Array<{changes: Array<{blockId: string}>}>}
+    expect(out.txs[0].changes.map(change => change.blockId)).toEqual([NOTE])
   })
 })

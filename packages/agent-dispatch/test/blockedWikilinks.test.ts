@@ -387,8 +387,12 @@ describe('createBlockedWikilinkWriteGuard — markdown and edit writes', () => {
       .rejects.toThrow('references a blocked page')
     await expect(guard.beforeWrite({type: 'create_block', parentId: '[[notes [[claude]]]]', content: 'x'}))
       .rejects.toThrow('references a blocked page')
-    // Naming the blocked page itself creates no reference to it.
+    // Naming the blocked page itself creates no reference to it — wrapped or not,
+    // since create-page strips one outer [[…]].
     await expect(guard.beforeWrite({type: 'create_page', name: 'claude'})).resolves.toBeUndefined()
+    await expect(guard.beforeWrite({type: 'create_page', name: '[[claude]]'})).resolves.toBeUndefined()
+    await expect(guard.beforeWrite({type: 'create_page', name: '[[notes [[claude]]]]'}))
+      .rejects.toThrow('references a blocked page')
     await expect(guard.beforeWrite({type: 'append_markdown', target: '[[claude]]', markdown: '- x'})).resolves.toBeUndefined()
   })
 })

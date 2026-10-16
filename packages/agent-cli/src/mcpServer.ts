@@ -16,7 +16,7 @@ import { createBridgeClient, type BridgeClient } from './client.js'
 import { renderSubtreeOutline, type SubtreeOutlineRow } from './subtreeOutline.js'
 import { createBridgeGraph, type BridgeGraph } from './graph.js'
 import { isReadOnlySql, type KmMcpToolName, MCP_SERVER_NAME } from './mcpShared.js'
-import { moveBlockPositionSchema } from './protocol.js'
+import { moveBlockPositionSchema, toDisplayJson } from './protocol.js'
 import { renderAppendResult, TODO_WRITE_HELP, WRITE_TARGET_HELP } from './writeTools.js'
 
 interface PackageJson {
@@ -80,7 +80,8 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
     await writeGuard?.beforeWrite(operation)
   }
 
-  // Resolved once, here, so the guard and the write act on one block.
+  // Resolved once, here, so the guard and the write act on one block — and so
+  // a `^short` id from append_markdown's output works in the read tools too.
   const blockId = (ref: string): Promise<string> => graph.resolveBlockId(ref)
   const resolvedPosition = async (position: MoveBlockPositionInput): Promise<MoveBlockPositionInput> =>
     position.kind === 'before' || position.kind === 'after'
@@ -88,7 +89,7 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
       : position
 
   const json = (value: unknown) => ({
-    content: [{type: 'text' as const, text: JSON.stringify(value, null, 2)}],
+    content: [{type: 'text' as const, text: toDisplayJson(value)}],
   })
   const text = (value: string) => ({
     content: [{type: 'text' as const, text: value}],
@@ -105,19 +106,19 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
   server.registerTool('get_block' satisfies KmMcpToolName, {
     description: 'Fetch a single block (content, properties, parentId) by id. For its children, use the subtree tool.',
     inputSchema: {id: z.string()},
-  }, async ({id}) => json(await graph.getBlock(id)))
+  }, async ({id}) => json(await graph.getBlock(await blockId(id))))
 
   server.registerTool('subtree' satisfies KmMcpToolName, {
     description: 'Fetch the subtree under a block as a depth-indented outline (one line per block: `- [<id>] <content> <propsJSON>`). '
     + "Each block's properties (e.g. status, type) are appended as compact JSON by default; pass includeProperties:false for the lean id+content form.",
     inputSchema: {rootId: z.string(), includeProperties: z.boolean().optional().default(true)},
   }, async ({rootId, includeProperties}) =>
-    text(renderSubtreeOutline(await graph.getSubtree(rootId) as SubtreeOutlineRow[], {includeProperties})))
+    text(renderSubtreeOutline(await graph.getSubtree(await blockId(rootId)) as SubtreeOutlineRow[], {includeProperties})))
 
   server.registerTool('backlinks' satisfies KmMcpToolName, {
     description: 'List blocks that reference the given block/page (hydrated: id, content, deepLink).',
     inputSchema: {id: z.string()},
-  }, async ({id}) => json(await graph.backlinkSources(id)))
+  }, async ({id}) => json(await graph.backlinkSources(await blockId(id))))
 
   server.registerTool('page' satisfies KmMcpToolName, {
     description: 'Resolve a page by alias/title. Returns the exact match (if any) plus substring candidates.',

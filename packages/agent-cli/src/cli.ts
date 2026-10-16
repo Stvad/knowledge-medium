@@ -22,6 +22,7 @@ import {
   moveBlockCommandSchema,
   sqlModeSchema,
   type WhoamiInfo,
+  toDisplayJson,
 } from './protocol.js'
 import {
   createBridgeClient,
@@ -512,7 +513,7 @@ const runCommand = (command: KnownCommand): Promise<unknown> =>
 const runAndPrint = async (command: KnownCommand): Promise<void> => {
   await ensureBridgeRunning()
   const value = await runCommand(command)
-  process.stdout.write(`${JSON.stringify(value, null, 2)}\n`)
+  process.stdout.write(`${toDisplayJson(value)}\n`)
 }
 
 const cli = cac('kmagent')

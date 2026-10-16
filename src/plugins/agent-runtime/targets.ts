@@ -10,12 +10,13 @@
  * A bare name that matches nothing is refused rather than created, so a typo'd
  * id or name never mints a page — creating one takes the explicit `[[…]]`.
  */
+import { pageNameInTarget } from '@knowledge-medium/agent-cli/protocol'
 import type { Repo } from '@/data/repo'
 import { ensureAliasTarget } from '@/data/targets.js'
 import { dailyNoteBlockId, getOrCreateDailyNote } from '@/plugins/daily-notes/dailyNotes.js'
 import { parseLiteralDailyPageTitle, parseRelativeDate } from '@/utils/relativeDate.js'
 import { agentTxOptions } from './agentWrites.ts'
-import { BlockRefError, resolveBlockRef } from './agentViews/resolveRef.ts'
+import { BlockRefError, resolveBlockRef, type BlockRefResolution } from './agentViews/resolveRef.ts'
 import { assertActiveWorkspace } from './workspaceGuard.ts'
 
 export type ParsedAgentTarget =
@@ -32,7 +33,7 @@ const wrapped = (raw: string, open: string, close: string): string | null =>
 export const parseAgentTarget = (raw: string): ParsedAgentTarget => {
   const text = raw.trim()
   if (text === '') throw new Error('Target is empty. Pass a block id, a [[Page]], or a date.')
-  const page = wrapped(text, '[[', ']]')
+  const page = pageNameInTarget(text)
   if (page !== null) {
     if (page === '') throw new Error('Target [[ ]] is empty — put the page name inside the brackets.')
     return {kind: 'page', name: page}
@@ -59,6 +60,9 @@ export interface ResolveTargetOptions {
    *  insert: the anchor's parent already exists, so a miss is the caller's
    *  error and must not leave a new empty page behind. */
   create?: boolean
+  /** The workspace the call was pinned to; read once, so a switch later in
+   *  the call is refused rather than silently re-pinned. */
+  workspaceId?: string
 }
 
 const activeWorkspace = (repo: Repo, verb: string): string => {
@@ -71,15 +75,16 @@ const activeWorkspace = (repo: Repo, verb: string): string => {
  *  prefix, never a name or a date — one typo from the wrong block. A ref that
  *  matches nothing comes back as given, so the verb reports its own not-found. */
 export const resolveBlockId = async (repo: Repo, raw: string, verb: string): Promise<string> => {
-  if (parseAgentTarget(raw).kind === 'page') {
-    throw new Error(`${verb}: expected a block id, got the page target ${raw.trim()}.`)
-  }
   const resolved = await resolveBlockRef(repo, raw, {
     // Only names and dates are workspace-scoped, and `accept: 'id'` rules both out.
     workspaceId: null,
     onMissing: 'verbatim',
     accept: 'id',
   })
+  // After the lookup: a stored id may itself look like `[[x]]`.
+  if (resolved.via === 'verbatim' && parseAgentTarget(raw).kind === 'page') {
+    throw new Error(`${verb}: expected a block id, got the page target ${raw.trim()}.`)
+  }
   return resolved.id
 }
 
@@ -89,9 +94,8 @@ export const resolveDailyNoteTarget = async (
   repo: Repo,
   iso: string,
   verb: string,
-  {create = true}: ResolveTargetOptions = {},
+  {create = true, workspaceId = activeWorkspace(repo, verb)}: ResolveTargetOptions = {},
 ): Promise<ResolvedAgentTarget> => {
-  const workspaceId = activeWorkspace(repo, verb)
   const existed = (await repo.load(dailyNoteBlockId(workspaceId, iso))) !== null
   if (!existed && !create) throw new Error(`${verb}: the daily note for ${iso} does not exist yet.`)
   // Its txs write through the ACTIVE workspace's registries. The residual — a
@@ -111,13 +115,14 @@ export const resolvePageTarget = async (
   verb: string,
   options: ResolveTargetOptions = {},
 ): Promise<ResolvedAgentTarget> => {
-  const workspaceId = activeWorkspace(repo, verb)
+  const workspaceId = options.workspaceId ?? activeWorkspace(repo, verb)
+  const pinned = {...options, workspaceId}
   const existing = await repo.query.aliasLookup({workspaceId, alias: name}).load()
   const date = parseLiteralDailyPageTitle(name)
   // A date-literal name is that day's note — unless a different page claims
   // the name, which is what a wikilink binds to.
   if (date && (!existing || existing.id === dailyNoteBlockId(workspaceId, date.iso))) {
-    return resolveDailyNoteTarget(repo, date.iso, verb, options)
+    return resolveDailyNoteTarget(repo, date.iso, verb, pinned)
   }
   if (existing) return {id: existing.id, kind: 'page', created: false}
   if (options.create === false) throw new Error(`${verb}: no page named [[${name}]].`)
@@ -140,24 +145,25 @@ export const resolveAgentTarget = async (
   options: ResolveTargetOptions = {},
 ): Promise<ResolvedAgentTarget> => {
   const target = parseAgentTarget(raw)
-  if (target.kind === 'page') return resolvePageTarget(repo, target.name, verb, options)
-  const workspaceId = activeWorkspace(repo, verb)
-  let found
+  const pinned = {...options, workspaceId: options.workspaceId ?? activeWorkspace(repo, verb)}
+  let found: BlockRefResolution | null = null
   try {
-    found = await resolveBlockRef(repo, raw, {workspaceId})
+    found = await resolveBlockRef(repo, raw, {workspaceId: pinned.workspaceId})
   } catch (error) {
     if (!(error instanceof BlockRefError)) throw error
-    const hint = target.kind === 'bare' ? ` To create a page by that name, pass [[${target.text}]].` : ''
-    throw new Error(`${verb}: ${error.message}${hint}`, {cause: error})
+    // A missing [[page]] is created below; any other miss is the caller's.
+    if (target.kind !== 'page') {
+      const hint = target.kind === 'bare' ? ` To create a page by that name, pass [[${target.text}]].` : ''
+      throw new Error(`${verb}: ${error.message}${hint}`, {cause: error})
+    }
   }
-  switch (found.via) {
-    case 'alias':
-      return resolvePageTarget(repo, raw.trim(), verb, options)
-    case 'date':
-      // `resolveBlockRef` names the day's deterministic id; the note itself may
-      // not exist yet.
-      return resolveDailyNoteTarget(repo, parseRelativeDate(raw)!.iso, verb, options)
-    default:
-      return {id: found.id, kind: 'block', created: false}
+  // An id first — a stored id may itself look like `[[x]]`.
+  if (found?.via === 'id' || found?.via === 'prefix') return {id: found.id, kind: 'block', created: false}
+  if (target.kind === 'page') return resolvePageTarget(repo, target.name, verb, pinned)
+  if (found?.via === 'date') {
+    // `resolveBlockRef` names the day's deterministic id; the note itself may
+    // not exist yet.
+    return resolveDailyNoteTarget(repo, parseRelativeDate(raw)!.iso, verb, pinned)
   }
+  return resolvePageTarget(repo, raw.trim(), verb, pinned)
 }

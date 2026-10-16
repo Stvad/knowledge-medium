@@ -9,6 +9,7 @@ import { createChild, type InsertPosition } from '@/data/mutators.js'
 import type { Repo } from '@/data/repo'
 import { parseMarkdownToBlocks, type ParsedBlock } from '@/utils/markdownParser.js'
 import { parseRelativeDate } from '@/utils/relativeDate.js'
+import { escapeJsonDisplayControls, pageNameInTarget } from '@knowledge-medium/agent-cli/protocol'
 import { agentTxOptions } from './agentWrites.ts'
 import { shortIds } from './agentViews/resolveRef.ts'
 import {
@@ -77,6 +78,9 @@ export const appendMarkdown = async (
     // its target; one that is not the anchor's parent is refused by
     // `createChild` inside the tx below, before anything is written.
     const anchored = firstPosition.kind === 'before' || firstPosition.kind === 'after'
+    // Accepted, not made atomic: if the insert below then fails, a page or
+    // daily note created here stays — what typing the wikilink or opening that
+    // day leaves too; a daily note cannot be created inside the insert's tx.
     const target = await resolveAgentTarget(repo, input.target, verb, {create: !anchored})
     // After the target: a refused one should not pay for a large document's
     // parse. Parsing cannot fail, so nothing created above is left orphaned.
@@ -131,19 +135,12 @@ const occurrences = (text: string, needle: string): number => {
 
 const CONTENT_ECHO_LIMIT = 1000
 
-/** What `JSON.stringify` leaves raw of the display-forging class — DEL, C1
- *  controls, line/paragraph separators, bidi controls (C0 it escapes). */
-const UNESCAPED_DISPLAY_CONTROL = /[\u007f-\u009f\u2028\u2029\p{Bidi_Control}]/gu
-
 /** The block's content as an error shows it: quoted losslessly, so the agent
  *  can re-plan from it exactly, and escaped, so stored text can neither fake a
  *  line of the diagnostic nor reorder it. */
 export const contentEcho = (content: string): string => {
   const clipped = content.length > CONTENT_ECHO_LIMIT ? content.slice(0, CONTENT_ECHO_LIMIT) : content
-  const quoted = JSON.stringify(clipped).replace(
-    UNESCAPED_DISPLAY_CONTROL,
-    char => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`,
-  )
+  const quoted = escapeJsonDisplayControls(JSON.stringify(clipped))
   return clipped === content
     ? quoted
     : `${quoted}… (${content.length} chars; read the block for the rest)`
@@ -193,7 +190,7 @@ export const createPage = async (
   }
   let resolved: ResolvedAgentTarget
   if (input.name !== undefined) {
-    const name = input.name.trim().replace(/^\[\[(.*)\]\]$/s, '$1').trim()
+    const name = pageNameInTarget(input.name) ?? input.name.trim()
     if (name === '') throw new Error(`${verb}: name is empty.`)
     resolved = await resolvePageTarget(repo, name, verb)
   } else {

@@ -203,3 +203,36 @@ describe('recent_changes', () => {
       .toEqual(['ws-2', 'ws-2', 'ws-2', undefined])
   })
 })
+
+describe('read tools take the ids the write tools print', () => {
+  it('resolves a ^short id before get_block, subtree and backlinks', async () => {
+    const commands: KnownCommand[] = []
+    const server = createGraphMcpServer({
+      client: clientFrom(async command => {
+        if (command.type === 'resolve-block-id') return {id: `full-${command.ref}`}
+        commands.push(command)
+        return command.type === 'get-subtree' ? [] : command.type === 'backlinks' ? {backlinks: []} : {}
+      }),
+      serverOptions: {capabilities: {tools: {}}},
+    })
+    const tools = (server as unknown as RegisteredToolHarness)._registeredTools
+    await tools.get_block.handler({id: '^a1b2c3d4'}, {})
+    await tools.subtree.handler({rootId: '^a1b2c3d4', includeProperties: true}, {})
+    await tools.backlinks.handler({id: '^a1b2c3d4'}, {})
+    expect(commands.map(command => [command.type, (command as {id?: string, rootId?: string}).id ?? (command as {rootId?: string}).rootId]))
+      .toEqual([['get-block', 'full-^a1b2c3d4'], ['get-subtree', 'full-^a1b2c3d4'], ['backlinks', 'full-^a1b2c3d4']])
+  })
+
+  it('escapes display controls in JSON output, losslessly', async () => {
+    const server = createGraphMcpServer({
+      client: clientFrom(async command =>
+        command.type === 'resolve-block-id' ? {id: command.ref} : {content: 'a\u2028b\u202Ec'}),
+      serverOptions: {capabilities: {tools: {}}},
+    })
+    const tools = (server as unknown as RegisteredToolHarness)._registeredTools
+    const result = await tools.get_block.handler({id: 'x'}, {})
+    const out = (result.content[0] as {text: string}).text
+    expect(out).not.toMatch(/[\u2028\u202E]/)
+    expect(JSON.parse(out)).toMatchObject({content: 'a\u2028b\u202Ec'})
+  })
+})
