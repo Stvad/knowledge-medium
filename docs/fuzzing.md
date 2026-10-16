@@ -19,7 +19,7 @@ The same property code runs at three intensities (mechanics in
 |---|---|---|---|
 | smoke | part of the normal `pnpm test` / `pnpm run check` gate | fixed | small run counts, ~1s/file |
 | local deep | `pnpm fuzz [files…]` | random | `FUZZ_TIME_MS` per property (default 15s) |
-| nightly | `.github/workflows/fuzz-nightly.yml` (06:23 UTC cron + manual dispatch) | random | 15s/property across all suites, then a 20-minute dedicated pass on the stateful data-layer suite |
+| nightly | `.github/workflows/fuzz-nightly.yml` (06:23 UTC cron + manual dispatch) | random | 15s/property across all suites, then a 20-minute dedicated pass on the stateful data-layer suite and a 15-minute one on the props-as-blocks dual-write suite |
 
 The smoke tier is deliberately deterministic: the gate re-explores the
 same cases every run, so a pre-existing bug can only surface in the
@@ -233,6 +233,36 @@ one.
   atomicity under poisoning, bag code-ownership through every tx
   primitive, restore-preserves-bag, and a registry-resolution tie-in
   after each sequence.
+- `src/data/internals/propertyDualWrite.fuzz.test.ts` — stateful, the
+  properties-as-blocks dual representation (cell + field/value child
+  rows, roadmap #430's "eager dual-write oracle"): sequences mixing every
+  writer — eager `setProperty`/`unsetProperty`/`setProperties`, raw
+  `tx.update({properties})`, direct field/value-row edits (content,
+  delete, move, reorder, stray and `::`-marked children), owner
+  delete/restore, undo/redo, and sync-shaped raw `db.writeTransaction`
+  arrivals (a peer's duplicate field row, a value edit without its cell,
+  a live child under a tombstone) — often several per tx. Oracles after
+  every tx: the cell equals what the live children project to; re-running
+  PROJECT, and MATERIALIZE on pairs a cell write just converged, writes
+  nothing; no duplicate field rows or orphans except where a tree edit or
+  an arrival could have minted one and no cell write has collapsed it
+  since; a cell-writes-only pair ends at the LAST write; a rejected tx
+  leaves no trace; each undo and redo lands exactly on the state
+  recorded on that side of its tx (a mirror of the undo stack, which
+  also restores the waivers that state was checked under), and so do
+  undo-all and redo-all. Arrivals deliberately leave the touched pairs
+  incoherent (the arrival path never re-projects), so the suite waives
+  exactly those pairs until a local write re-settles them — read the
+  docblock before tightening it. A case aims most ops at one "hot"
+  (owner, property) pair, and a multi-op tx crowds onto it; blind
+  targets over 3 owners × 5 properties seldom met. The property asserts
+  over its own sample that every writer and oracle was reached: on the
+  fixed smoke sample, or on any random one of 200+ cases (so a short
+  `FUZZ_RUNS` triage run reports only property failures). Three composite
+  shapes are asserted only from 5,000 cases, which the nightly's dedicated
+  pass for this suite reaches: the order-blind carve-out, a field row
+  already live at its owner's revival, and a restore checked against a
+  key that held a value.
 - `src/utils/test/linkTargetAutocomplete.fuzz.test.ts` — the
   `searchSourcesFacet` merge point (`searchBlocksAcrossSources`): model
   differential against an independent group-then-fold reference over
@@ -281,6 +311,21 @@ one.
   writes nothing; and sync convergence. Two fixed canaries (a 3-cycle, a
   sync-delivered swap) run in every tier, because a planted
   non-swap-safe re-key slipped past the first smoke sample.
+- `src/data/internals/typedBlockQuery.fuzz.test.ts` — the typed-block
+  query compiler, #430's flagship: random block forests written raw (the
+  sync-applied shape) and random `TypedBlockQuery` specs; every SQL path
+  (the compiler's rows / ids / count projections and the Repo resolvers,
+  incl. the single-type fast path and the ancestor-dep walk) diffed in
+  order against a JS interpreter written from the documented semantics,
+  never from the SQL builder. Generators lean on NULL ≠ FALSE: absent vs
+  JSON null vs `''`/`0`/`false`/`[]`, comparators and excludes over unset
+  properties, `target` through dangling / deleted / cross-workspace refs,
+  multi-type blocks, deleted parents, `created_at` ties, the ancestor-walk
+  gate. Every property kind also draws cells of a foreign JSON shape (what
+  a re-type leaves behind), and the date pool runs past years 0000–9999:
+  extended-year cells, and rarely an out-of-range operand whose refusal the
+  model predicts on every path. A model-only canary pins each of those as
+  reached.
 
 ## Found so far
 
@@ -411,8 +456,15 @@ binding oracle + an 11-suite discovery sweep) found six more:
   (reconcile I1) and that device permanently misses the merged-under
   edit. The property was left strict rather than relaxed to green, so
   the convergence deep tier stayed KNOWN RED until the fix shipped
-  (base row-version on PATCH, PR #525) — the standing-red exemption is
-  retired and the deep tier is expected green again.
+  (base row-version on PATCH, PR #525). That fix narrowed the door
+  rather than closing it — issue #1163: the same I1 skip still strands a
+  peer's CONTENT, because the UN-drifted path future-clamps an author's
+  proposal *below* the stamp that author keeps locally, and a later
+  drifted bump can then land on it. Needs no clock skew and survives
+  reload. Rarer than #381 was (the two devices must also write different
+  content), so it is not a standing red: a 50-minute random-seed deep run
+  did not hit it. Issue #1163 carries the counterexample and the replay
+  seed; the property is again left strict rather than relaxed.
 - The binding-oracle sweep found that a long-form date literal bound to
   its resolved target was never CLAIMED by it — any later block could
   legitimately claim the spelling and existing bindings stayed silently
@@ -588,6 +640,69 @@ restore half of the release-reclaim residual (issue #706, seed
   rewriting content, so the deferred decision stays deferred); the drop
   is itself the write that schedules the referrer's rebind.
 
+The properties-as-blocks dual-write suite (roadmap #430) found one within
+its first deep minutes:
+
+- Restoring an owner revives its tombstoned field row and value row
+  (#787), but under §9 flat recognition a value row can own properties
+  of its own — and it came back with its bag while ITS field rows stayed
+  tombstoned: a cell claiming a property no child backed, the #778 shape
+  one level down. MATERIALIZE performs those restores itself, and the
+  commit pipeline never re-runs a processor over its own writes, so the
+  revival rule never saw the value row. The revival now re-materializes
+  every row it restores with the untouched-names policy.
+- The cell→children half of the same revival had a mirror gap, raised in
+  review and then made reachable by the suite. Sync-apply skips the
+  parent-liveness trigger, so a peer's field row can sit LIVE under a
+  tombstone. The revival policy says the children win, but PROJECT only
+  re-projected owners whose child rows changed in the tx, so the revived
+  owner kept its pre-delete cell. PROJECT now re-projects a revived row's
+  own live field rows.
+- Two more in the same revival, both raised in review and pinned by
+  deterministic tests:
+  - Adding values from the cell for keys the tx never wrote resurrected
+    a peer's delete. A field row already live and empty (or a list
+    missing a member) got the stale cell value back. The revival now
+    takes no value from the cell into an already-live field row; the
+    suite asserts that it mints nothing there.
+  - A value row brought back by its owner's revival treated its whole
+    bag as untouched, so a key the same tx had written on it could be
+    unset. Every revived row now goes through one rule
+    (`materializeRevivedRow`), which splits written keys from untouched
+    ones by the row's tx baseline: its tx-start state, with what a
+    settled processor wrote last read as current.
+- Folding a repeated list member into its survivor moved the folded
+  row's own `::` field rows over wholesale. When the member carried
+  properties of its own, the survivor ended up with two field rows for
+  one property. The value-row fold now folds field rows the way the
+  field-row fold already did, through one shared lookup.
+- Two more the suite found, fixed after it landed, with their carve-outs
+  removed. Both come from MATERIALIZE reading the tx's net change, so the
+  fix reads the tx's write log instead:
+  - #1211: deleting and restoring a block in ONE tx is no revival to a
+    net diff (live → live), while PROJECT saw its field rows die, so
+    every property was silently unset. MATERIALIZE now asks the write
+    log whether a row passed through a tombstone, and finds such an
+    owner through the dying field rows the event does carry.
+  - #1210: the revival picked field rows by the `is_field_form` bit
+    before DERIVE re-stamped it. So a restore in the same tx as an edit
+    that un-marks a row under the restored owner left a cell key with no
+    field row. The re-run pass now re-runs a revived owner's revival when
+    a row under it changed after MATERIALIZE first read it.
+  The suite's revival oracle now covers an owner deleted and restored
+  inside one tx as well.
+- A third, found while fixing those two and pinned by a deterministic
+  test: on the re-run pass, the revival diffed a row's bag against its
+  raw tx-start state, so PROJECT's settled unset of an unparseable key
+  read as the tx removing it, and the field row and value §9 keeps for
+  repair were tombstoned. The baseline now reads settled-last paths as
+  current, the same mask the re-run pass's `before` already applies.
+- Still open, raised in review and filed, though the suite cannot see it
+  (cell and children agree afterwards): #1212. A peer's property delete
+  whose owner-cell update lost last-writer-wins leaves a stale cell. A
+  later local delete and restore then revives the peer's tombstones, or
+  mints from the stale cell.
+
 The visible-children differential found one on its first smoke run
 (#1202, open): the outline SQL counts any `property-schema`-tagged block
 as a definition, while the tx layer's checker needs the registry to have
@@ -635,6 +750,59 @@ never fires between them. The previous case's sync observer drained the
 next case's `blocks_synced` rows into handles nobody read, and the
 registry never saw the delivery — release each case's Repo yourself
 (`releaseTestRepos`, rule 11 under "Adding a suite").
+
+The typed-block query differential found two compiler bugs on its first
+deep runs (each fixed with pinned tests in the same PR):
+
+- `target` joined the referenced row on id and liveness only, so a ref
+  naming a live block in ANOTHER workspace satisfied `target: {}` and had
+  its inner where-map read against that workspace's properties — while
+  the deps that wake the handle are keyed by the query's workspace, so the
+  match could never be invalidated. The traversal now requires the source
+  row's workspace.
+- A refList cell that is not a JSON array — what a `ref` → `refList`
+  re-type leaves behind in a workspace with no field rows — made
+  `json_each` throw `malformed JSON`, failing every `target` query on the
+  property; the ancestor-dep walk's hand-copied fan-out failed the same
+  way. Both now go through one helper that reads only array cells.
+
+Its probe of the rest of that malformed-cell class filed #1204:
+comparators matched cells of the wrong JSON type, because SQLite orders
+`json_extract` results across storage classes (`{gt: 3}` matched a stale
+`'abc'`, `true` a stored `1`, a date `{lt}` the empty string, and a
+`+010000-…` date sorted before every four-digit year). Fixed in a
+follow-up: each where-capable codec declares a `WhereStorage`, and the
+compiler ANDs that shape's test onto every comparator. Dates compare only
+in canonical `toISOString()` form with a four-digit year; outside years
+0000–9999 a cell matches nothing and an operand is refused. The generator
+then lost its carve-out, so the model's existing "a cell the codec could
+not have written matches no comparator" is the regression test. Its fixed
+smoke sample catches deleting any one storage test; deleting the guard on
+the `between` branch alone surfaces only in deep runs (within seconds),
+and the example tests pin it.
+
+And one finding about the suite itself: its first coverage
+canary showed that across 300 sampled worlds no ancestor-scoped predicate
+ever matched through a PROPER ancestor, and only 24 of ~750 queries
+returned anything at all — stacked single-row filters, and parents picked
+without regard to workspace. The property was green over that. The canary
+stays.
+
+The clipboard-HTML converter's tag-soup suite
+(`src/plugins/rich-paste/test/htmlToOutline.fuzz.test.ts`, oracle: no
+block that renders nothing) found two classes in deep runs, both fixed
+with pinned tests:
+
+- Code spans markdown cannot spell: an empty `<code>` writes as two
+  literal backticks, so two in a row opened a code fence that swallowed
+  the rest of the block. Empty spans are dropped and touching ones joined.
+- Blocks left inside phrasing: the converter reads a `<summary>` as a
+  paragraph and leaves a list inside `<b>`/`<i>`, so an empty one took
+  the escape off a leading `-`, which read back as an empty list item.
+  The same shape glued text (`<b><p>x</p><p>y</p></b>` pasted as
+  `**xy**`) and, through the converter's split of a link around a list,
+  dropped it — losses this oracle cannot see. One pass now lifts every
+  block out of phrasing.
 
 ## Adding a suite
 

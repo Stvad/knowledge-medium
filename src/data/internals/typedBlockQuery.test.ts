@@ -21,7 +21,7 @@ import { definitionSeedsFacet, typeSeedsFacet } from '../facets'
 import { kernelDataExtension } from '../kernelDataExtension'
 import { Repo } from '../repo'
 import { compileTypedBlockQuery } from './typedBlockQuery'
-import type { ResolvedTypedBlockQuery } from '@/data/api'
+import type { AnyPropertySchema, ResolvedTypedBlockQuery } from '@/data/api'
 import { trackTestRepo } from '@/data/test/testRepoScope'
 
 const WS = 'ws-1'
@@ -65,7 +65,12 @@ const reviewerProp = seedProperty({
   preset: 'ref', defaultValue: '', changeScope: ChangeScope.BlockDefault,
 })
 
-const queryProps = [statusProp, doneProp, priorityProp, dueProp, weirdNameProp, labelsProp, reviewerProp]
+const reviewersProp = seedProperty({
+  seedKey: 'test/property/reviewers', revision: 1, name: 'reviewers',
+  preset: 'refList', defaultValue: [], changeScope: ChangeScope.BlockDefault,
+})
+
+const queryProps = [statusProp, doneProp, priorityProp, dueProp, weirdNameProp, labelsProp, reviewerProp, reviewersProp]
 
 interface Harness {
   h: TestDb
@@ -296,6 +301,80 @@ describe('repo.queryBlocks', () => {
         .rejects.toThrow('is not where-queryable')
     })
 
+    // Each foreign cell is one the comparison alone admits: SQLite orders
+    // values across storage classes, so a re-type's leftover compared anyway.
+    it.each([
+      {
+        storage: 'text', name: 'status', canonical: 'alpha', foreign: [5, false, ['a']],
+        values: [{lt: 'm'}, {between: ['', 'm']}],
+      },
+      {
+        storage: 'number', name: 'priority', canonical: 5, foreign: ['abc', true, [5]],
+        values: [{gte: 1}, {between: [1, 10]}],
+      },
+      {
+        storage: 'boolean', name: 'done', canonical: true, foreign: [1],
+        values: [true, {between: [false, true]}],
+      },
+      {
+        storage: 'iso-date',
+        name: 'due',
+        values: [
+          {lt: new Date('2026-05-01T00:00:00.000Z')},
+          {between: [new Date('0000-01-01T00:00:00.000Z'), new Date('2026-05-01T00:00:00.000Z')]},
+        ],
+        canonical: '2026-01-01T00:00:00.000Z',
+        // Date-only and second-precision spellings parse, but are not what
+        // the codec writes; a signed six-digit year sorts before every
+        // four-digit one; GLOB reads only up to an embedded NUL.
+        foreign: [
+          '', '2026-01-01', '2026-01-01T00:00:00Z', '+010000-01-01T00:00:00.000Z', 20260101,
+          '2026-01-01T00:00:00.000Z\u0000junk',
+        ],
+      },
+    ])('a $storage comparator admits only a cell of its storage shape', async ({name, values, canonical, foreign}) => {
+      await create({id: 'canonical', properties: {[name]: canonical}})
+      const foreignIds = foreign.map((_, i) => `foreign-${i}`)
+      for (const [i, cell] of foreign.entries()) {
+        await create({id: foreignIds[i]!, properties: {[name]: cell}})
+      }
+      // Precondition: the cells are stored as written, not normalized.
+      const stored = await env.h.db.getAll<{id: string; properties_json: string}>(
+        `SELECT id, properties_json FROM blocks WHERE id LIKE 'foreign-%' ORDER BY id`)
+      expect(stored.map(row => JSON.parse(row.properties_json)[name])).toEqual(foreign)
+
+      for (const value of values) {
+        expect(ids(await env.repo.queryBlocks({workspaceId: WS, where: {[name]: value}})))
+          .toEqual(['canonical'])
+        expect(ids(await env.repo.queryBlocks({workspaceId: WS, exclude: [{where: {[name]: value}}]})).sort())
+          .toEqual(foreignIds.sort())
+      }
+    })
+
+    it('refuses a date operand outside years 0000-9999 instead of comparing it as text', async () => {
+      await create({id: 'dated', properties: {[dueProp.name]: '2026-01-01T00:00:00.000Z'}})
+
+      for (const operand of [new Date('+010000-01-01T00:00:00.000Z'), '-000001-12-31T23:59:59.999Z']) {
+        await expect(env.repo.queryBlocks({workspaceId: WS, where: {due: {gt: operand}}}))
+          .rejects.toThrow('date in years 0000-9999')
+      }
+      expect(ids(await env.repo.queryBlocks({workspaceId: WS,
+        where: {due: {between: [new Date('0000-01-01T00:00:00.000Z'), new Date('9999-12-31T23:59:59.999Z')]}},
+      }))).toEqual(['dated'])
+    })
+
+    it('rejects a where capability with no storage shape the compiler knows', () => {
+      // A DB-stored extension codec is never type-checked against `WhereStorage`.
+      const legacy = {
+        ...priorityProp,
+        codec: {...priorityProp.codec, where: {encode: (v: number) => v}},
+      } as unknown as AnyPropertySchema
+      expect(() => compileTypedBlockQuery(
+        {workspaceId: WS, where: {priority: {gt: 1}}},
+        new Map([['priority', legacy]]),
+      )).toThrow('declares where.storage undefined')
+    })
+
     it('traverses ref-typed properties via the target operator', async () => {
       // Realistic shape: a ref-typed property points at a "target"
       // block that carries its own queryable properties (the daily-
@@ -466,6 +545,59 @@ describe('repo.queryBlocks', () => {
         channel: TYPED_BLOCKS_STRUCTURE_CHANNEL,
         key: typedBlocksStructureKey(WS, 'live-target'),
       })
+    })
+
+    it('target does not resolve to a live block in another workspace', async () => {
+      // Reference resolution and the target deps that wake a handle are both
+      // workspace-scoped, so a ref naming another workspace's block is
+      // dangling here — on the ref and the refList branch alike.
+      await create({id: 'foreign-target', workspaceId: OTHER_WS, properties: {status: 'done'}})
+      await create({id: 'local-target', properties: {status: 'done'}})
+      await create({
+        id: 'via-ref',
+        properties: {[reviewerProp.name]: reviewerProp.codec.encode('foreign-target')},
+      })
+      await create({
+        id: 'via-ref-list',
+        properties: {[reviewersProp.name]: reviewersProp.codec.encode(['foreign-target'])},
+      })
+      await create({
+        id: 'via-ref-list-mixed',
+        properties: {[reviewersProp.name]: reviewersProp.codec.encode(['foreign-target', 'local-target'])},
+      })
+
+      for (const inner of [{}, {status: 'done'}]) {
+        expect(ids(await env.repo.queryBlocks({workspaceId: WS,
+          where: {[reviewerProp.name]: {target: inner}},
+        }))).toEqual([])
+        expect(ids(await env.repo.queryBlocks({workspaceId: WS,
+          where: {[reviewersProp.name]: {target: inner}},
+        }))).toEqual(['via-ref-list-mixed'])
+      }
+    })
+
+    it('a refList cell that is not an array names no targets instead of failing the query', async () => {
+      // A ref → refList re-type leaves the old plain-string cells behind (an
+      // accepted residual of the definition-change processor). A bare
+      // `json_each` over one throws `malformed JSON`, failing every target
+      // query on the property — both the predicate and the ancestor-dep walk.
+      await create({id: 'live-target'})
+      await create({id: 'stale', properties: {[reviewersProp.name]: 'live-target'}})
+      await create({id: 'object-cell', properties: {[reviewersProp.name]: {a: 'live-target'}}})
+      await create({
+        id: 'current',
+        properties: {[reviewersProp.name]: reviewersProp.codec.encode(['live-target'])},
+      })
+      await create({id: 'entry-stale', parentId: 'stale', types: ['entry']})
+      await create({id: 'entry-current', parentId: 'current', types: ['entry']})
+
+      expect(ids(await env.repo.queryBlocks({workspaceId: WS,
+        where: {[reviewersProp.name]: {target: {}}},
+      }))).toEqual(['current'])
+      expect(ids(await env.repo.queryBlocks({workspaceId: WS,
+        types: ['entry'],
+        match: [{scope: 'ancestor', where: {[reviewersProp.name]: {target: {}}}}],
+      }))).toEqual(['entry-current'])
     })
 
     it('rejects the target operator on non-ref properties', async () => {
