@@ -229,7 +229,7 @@ describe('view-outline', () => {
     const text = await view<string>({type: 'view-outline', ref: 'Root page'})
     const lines = text.split('\n')
     expect(lines[0]).toBe('Root page  ^00000001  · 1 child')
-    expect(lines[1]).toBe('- First child ⏎ second line  groupWith:: [[Other page]]  snapshot-history:: [2 items]  ^00000003')
+    expect(lines[1]).toBe('- First child ⏎ second line  groupWith:: [[Other page]] ^00000002  snapshot-history:: [2 items]  ^00000003')
     expect(text).not.toContain('system:collapsed')
   })
 
@@ -507,9 +507,33 @@ describe('structural edge cases', () => {
     for (const [i, target] of targets.entries()) await create({id: target, content: `r${i}`, properties: {alias: [`r${i}`]}})
     const holder = uuid('7f7f7f7f', 1)
     await create({id: holder, content: 'holder', properties: {groupWith: targets}})
+    const getAll = vi.spyOn(repo.db, 'getAll')
     const out = await view<BlockView>({type: 'view-block', ref: holder, format: 'json'})
+    const titleQuery = getAll.mock.calls.find(call => call[0].includes("'$.alias[0]'"))
+    getAll.mockRestore()
+    expect(JSON.parse(titleQuery![1]![0] as string)).toHaveLength(20)
     const value = out.properties.find(property => property.name === 'groupWith')!.value
-    expect(value).toMatch(/^\[\[r0\]\], .*\[\[r19\]\], …\+5 more$/)
+    const [, shown, rest] = value.match(/^((?:\[\[r\d+\]\] \^7e7e7e\d\d, )+)…\+(\d+) more$/)!
+    expect(shown.split(', ').length - 1 + Number(rest)).toBe(25)
+  })
+
+  it('gives an aliased ref its id: an alias two pages claim resolves to the older one', async () => {
+    const older = uuid('7e8e0001', 1)
+    const younger = uuid('7e8e0002', 2)
+    await create({id: older, content: 'Plans', properties: {alias: ['Plans']}})
+    // A local write refuses a claimed alias; sync applies one verbatim.
+    await create({id: younger, content: 'Plans'})
+    await sharedDb.db.execute(
+      `UPDATE blocks SET properties_json = json_set(properties_json, '$.alias', json(?)) WHERE id = ?`,
+      ['["Plans"]', younger],
+    )
+    const holder = uuid('7e8e0003', 3)
+    await create({id: holder, content: 'holder', properties: {groupWith: [younger]}})
+    expect((await resolveBlockRef(repo, '[[Plans]]', {workspaceId: WS})).id).toBe(older)
+
+    const out = await view<BlockView>({type: 'view-block', ref: holder, format: 'json'})
+    expect(out.properties.find(property => property.name === 'groupWith')!.value).toBe('[[Plans]] ^7e8e0002')
+    expect((await resolveBlockRef(repo, '^7e8e0002', {workspaceId: WS})).id).toBe(younger)
   })
 
   it('names a ref to a block with no alias by its content and a short id that resolves back', async () => {
@@ -525,7 +549,7 @@ describe('structural edge cases', () => {
 
     const out = await view<BlockView>({type: 'view-block', ref: holder, format: 'json'})
     expect(out.properties.find(property => property.name === 'groupWith')!.value)
-      .toBe(`"${content}" ^7a7a7a7a, [[Plans]]`)
+      .toBe(`"${content}" ^7a7a7a7a, [[Plans]] ^7b7b7b7b`)
     expect((await resolveBlockRef(repo, '^7a7a7a7a', {workspaceId: WS})).id).toBe(task)
     // A brief line is 40 characters: the label gives way, never the id.
     const outline = await view<string>({type: 'view-outline', ref: root})
@@ -675,7 +699,7 @@ describe('structural edge cases', () => {
     }})
     const out = await view<BlockView>({type: 'view-block', ref: id, format: 'json'})
     const value = (name: string) => out.properties.find(property => property.name === name)!.value
-    expect(value('groupWith')).toMatch(/^\[\[t0\]\], \[\[t1\]\], \[\[t2\]\], .*, …\+\d+ more$/)
+    expect(value('groupWith')).toMatch(/^\[\[t0\]\] \^8b8b8b80, \[\[t1\]\] \^8b8b8b81, \[\[t2\]\] \^8b8b8b82, .*, …\+\d+ more$/)
     expect(value('numbers')).toMatch(/…\+\d+ more$/)
     expect(value('history')).toBe('[200001 items]')
   })

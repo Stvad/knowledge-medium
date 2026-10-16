@@ -174,7 +174,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  *  it can show — visible ones, plain names first, at most
  *  {@link MAX_PROPERTIES} — and decodes only those through the registry, then
  *  loads the titles of their referenced blocks in one query, so a ref renders
- *  as `[[Title]]` (or quoted content and `^shortid`). A huge bag costs its names, not its decoding (a cost
+ *  as `[[Title]]` or quoted content, then its `^shortid`. A huge bag costs its names, not its decoding (a cost
  *  bound: decoding everything would render the same). Visibility
  *  is the property panel's rule (`isPropertyPanelHiddenProperty`), so an
  *  agent sees what the user sees. */
@@ -250,21 +250,23 @@ export const createPropertyRenderer = async (
       titles.set(row.id, {workspaceId: row.workspace_id, alias: alias || null, content: oneLine(row.content ?? '')})
     }
   }
-  const unaliased = [...titles].filter(([, title]) => title.alias === null).map(([id]) => id)
-  const refShortIds = unaliased.length > 0 ? await displayIds(repo, unaliased) : new Map<string, string>()
+  const refShortIds = titles.size > 0 ? await displayIds(repo, titles.keys()) : new Map<string, string>()
 
-  // A page reads as its [[alias]], which resolves by name. Any other block
-  // reads as its quoted content and ^shortid: its content names nothing, so
-  // the id must survive the line's cut. References resolve within a
-  // workspace, so another workspace's block stays a dangling ((id)) here, as
+  // A ref reads as its page's [[alias]] or its block's quoted content, then
+  // the ^shortid that resolves to it. The id is what addresses the target —
+  // content names nothing, and an alias two pages claim names the older one —
+  // so the label gives way to it, never the reverse. References resolve within
+  // a workspace, so another workspace's block stays a dangling ((id)) here, as
   // it is everywhere else.
   const refText = (id: string, workspaceId: string, budget: number): string => {
     const title = titles.get(id)
     if (title?.workspaceId !== workspaceId) return `((${boundDisplayId(id)}))`
-    if (title.alias !== null) return `[[${title.alias}]]`
     const shortId = refShortIds.get(id) ?? boundDisplayId(id)
-    if (!title.content) return `^${shortId}`
-    return `"${ellipsize(title.content, Math.max(MIN_REF_LABEL, budget - shortId.length - 4))}" ^${shortId}`
+    const label = title.alias ?? title.content
+    if (!label) return `^${shortId}`
+    const [open, close] = title.alias !== null ? ['[[', ']]'] : ['"', '"']
+    const room = budget - shortId.length - 2 - open.length - close.length
+    return `${open}${ellipsize(label, Math.max(MIN_REF_LABEL, room))}${close} ^${shortId}`
   }
 
   const display = (decoded: Decoded, block: BlockData, name: string, budget: number): string => {
