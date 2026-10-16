@@ -1,1 +1,1 @@
-import{gR as e,hR as t,mR as n}from"../../../chunks/app-Cslk8jKc.js";export{n as matchAtTrigger,t as placeCompletionSource,e as planResolvedInsert};
+import{gR as e,hR as t,mR as n}from"../../../chunks/app-Yu5CDlbH.js";export{n as matchAtTrigger,t as placeCompletionSource,e as planResolvedInsert};
