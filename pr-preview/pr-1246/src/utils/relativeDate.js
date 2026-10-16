@@ -1,1 +1,1 @@
-import{GI as e,KI as t,WI as n}from"../../chunks/app-wP8IQr_K.js";export{n as parseLiteralDailyPageTitle,e as parseRelativeDate,t as relativeDateCandidates};
+import{GI as e,KI as t,WI as n}from"../../chunks/app-DkWskxfL.js";export{n as parseLiteralDailyPageTitle,e as parseRelativeDate,t as relativeDateCandidates};
