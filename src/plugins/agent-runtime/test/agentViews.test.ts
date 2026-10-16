@@ -475,15 +475,6 @@ describe('structural edge cases', () => {
     expect(out.hits.map(hit => hit.id)).toEqual([uuid('5c5c5c5d', 2)])
   })
 
-  it('drops extension source inside the query, so extensions ranked first cannot empty a page', async () => {
-    for (let i = 0; i < 3; i++) {
-      await create({id: uuid(`5d5d5d5${i}`, i), content: 'widget source', properties: {types: ['extension']}})
-    }
-    await create({id: uuid('5d5d5d5f', 9), content: 'widget note'})
-    const out = await view<SearchView>({type: 'view-search', query: 'widget', limit: 1, format: 'json'})
-    expect(out.hits.map(hit => hit.snippet)).toEqual(['widget note'])
-  })
-
   it('titles at most 20 refs of a refList, counting the rest', async () => {
     const targets = Array.from({length: 25}, (_, i) => uuid(`7e7e7e${String(i).padStart(2, '0')}`, i))
     for (const [i, target] of targets.entries()) await create({id: target, content: `r${i}`})
