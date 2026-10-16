@@ -1,1 +1,0 @@
-import{Jm as e,Km as t,qm as n}from"../../../chunks/app-D80vlFxK.js";export{t as DEFAULT_VIDEO_NOTES_PANE_RATIO,n as VIDEO_NOTES_VIEW_MODE,e as videoNotesPaneRatioProp};

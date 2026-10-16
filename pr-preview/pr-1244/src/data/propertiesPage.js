@@ -1,1 +1,0 @@
-import{J1 as e,Y1 as t}from"../../chunks/app-D80vlFxK.js";export{e as getOrCreatePropertiesPage,t as propertiesPageBlockId};

@@ -1,1 +1,0 @@
-import{hw as e,mw as t}from"../../chunks/app-D80vlFxK.js";export{t as BlockPasteShellDecorator,e as blockPasteShellDecorator};
