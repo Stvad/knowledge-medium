@@ -6,7 +6,7 @@ import { isPropertyPanelHiddenProperty } from '@/components/propertyPanel/visibi
 import { labelForBlockData, readTypeIds } from '@/utils/linkTargetAutocomplete.js'
 import { parseBlockRow } from '@/data/blockSchema.js'
 import type { BlockRow } from '@/data/blockSchema.js'
-import { boundLabels, clipLine, oneLine } from './text.ts'
+import { boundLabels, charBoundary, clipLine, oneLine } from './text.ts'
 
 export interface PropertyLine {
   name: string
@@ -80,7 +80,8 @@ const formatValue = (value: unknown, budget: number): string => {
     if (!value.every(item => isScalar(item) || item instanceof Date)) return `[${value.length} items]`
     let joined = ''
     for (const [index, item] of value.entries()) {
-      const part = `${index > 0 ? ', ' : ''}${formatValue(item, budget)}`
+      const text = formatValue(item, budget)
+      const part = `${index > 0 ? ', ' : ''}${text.length > budget ? `${text.slice(0, charBoundary(text, budget))}…` : text}`
       const marker = `, …+${value.length - index} more`
       // Room is kept for the marker, so the line's own clip never cuts the count off.
       const room = index < value.length - 1 ? marker.length : 0
@@ -187,6 +188,9 @@ export const createPropertyRenderer = async (
         if (value === '') continue
         visible.push({name: clipLine(name, NAME_CHARS).text, value: clipLine(value, maxChars).text})
       }
+      // Plain names first, so the cap can never crowd out the vocabulary the
+      // brief form is built from. Stable within each group.
+      visible.sort((a, b) => Number(isNamespaced(a.name)) - Number(isNamespaced(b.name)))
       return {
         visible: visible.slice(0, MAX_PROPERTIES),
         omitted: Math.max(0, visible.length - MAX_PROPERTIES),

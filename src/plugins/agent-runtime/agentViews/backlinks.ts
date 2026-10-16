@@ -32,6 +32,7 @@ interface Target {
 }
 
 export interface BacklinkRow extends ViewRow {
+  parentId: string | null
   breadcrumb: string[]
   childCount: number
   /** Property names it references the target through; empty for a link in
@@ -96,7 +97,10 @@ const backlinkRows = async (
 ): Promise<BacklinkRow[]> => {
   const ids = sources.map(source => source.id)
   const linkOnly = sources.filter(source => isReferenceOnly(source.content))
-  const parentIds = [...new Set(linkOnly.map(source => source.parentId).filter((id): id is string => id !== null))]
+  // A self-parented source (sync applies parent ids verbatim) has no parent to quote.
+  const parentIds = [...new Set(linkOnly
+    .map(source => source.parentId)
+    .filter((id, index): id is string => id !== null && id !== linkOnly[index].id))]
   const [renderer, shortIds, crumbs, childCounts, via, parents, firstChildren] = await Promise.all([
     createPropertyRenderer(repo, sources),
     loadShortIds(repo, ids),
@@ -110,6 +114,7 @@ const backlinkRows = async (
   return sources.map(source => {
     const row: BacklinkRow = {
       ...toViewRow(source, {shortIds, renderer, maxChars: ROW_CHARS, detail: 'brief'}),
+      parentId: source.parentId,
       breadcrumb: crumbs.get(source.id) ?? [],
       childCount: childCounts.get(source.id) ?? 0,
       viaProperties: boundLabels(via.get(source.id) ?? [], MAX_VIA, NAME_CHARS),
@@ -158,11 +163,11 @@ export const buildBacklinksView = async (
   }
 }
 
-/** A row's location, for spotting runs of siblings: many backlinks in one
- *  place (a page's worth of `[[Topic]]` bullets) share it, and repeating it
- *  per row is the noise this view exists to remove. */
-const placeOf = (row: BacklinkRow): string =>
-  JSON.stringify([row.breadcrumb, row.parentContent ?? null])
+/** Rows under one parent block share their location (a page's worth of
+ *  `[[Topic]]` bullets), and repeating it per row is the noise this view
+ *  exists to remove. Compared by parent id — two parents can read alike. */
+const samePlace = (row: BacklinkRow, previous: BacklinkRow): boolean =>
+  row.parentId !== null && row.parentId === previous.parentId
 
 const renderBacklinkRow = (row: BacklinkRow, index: number, samePlace: boolean): string[] => {
   const via = row.viaProperties.length > 0 ? `  [via ${row.viaProperties.join(', ')}]` : ''
@@ -189,8 +194,7 @@ export const renderBacklinksView = (view: BacklinksView): string => {
     `Backlinks of "${view.target.title}" ^${view.target.shortId} — ${rangeNote(view.offset, view.rows.length, view.total, view.nextOffset)}`,
   ]
   view.rows.forEach((row, index) => {
-    const samePlace = index > 0 && placeOf(row) === placeOf(view.rows[index - 1])
-    lines.push(...renderBacklinkRow(row, view.offset + index + 1, samePlace))
+    lines.push(...renderBacklinkRow(row, view.offset + index + 1, index > 0 && samePlace(row, view.rows[index - 1])))
   })
   if (view.rows.some(row => row.cut > 0)) lines.push(CUT_LEGEND)
   return joinDisplayLines(lines)

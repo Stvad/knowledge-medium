@@ -23,10 +23,14 @@ export const limitedSelectSql = (sql: string, maxRows: number): string | null =>
 }
 
 /** The agent-bounded form of an `all` result: at most `maxRows` rows, long
- *  string cells cut with their char count. */
+ *  string cells cut with their char count, binary cells summarized by size. */
 export const boundSqlRows = (rows: readonly unknown[], maxRows: number): BoundedSqlRows => {
   let truncatedCells = 0
   const cutCell = (value: unknown): unknown => {
+    if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) {
+      truncatedCells += 1
+      return `[blob ${value.byteLength} bytes]`
+    }
     if (typeof value !== 'string' || value.length <= SQL_CELL_CHARS) return value
     truncatedCells += 1
     const end = charBoundary(value, SQL_CELL_CHARS)

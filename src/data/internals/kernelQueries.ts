@@ -118,7 +118,7 @@ const stripOuterQuotePair = (query: string): string => {
     : trimmed
 }
 
-const tokenizeContentSearchQuery = (query: string): ContentSearchToken[] => {
+export const tokenizeContentSearchQuery = (query: string): ContentSearchToken[] => {
   const tokens: ContentSearchToken[] = []
   let i = 0
 

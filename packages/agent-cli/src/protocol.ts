@@ -897,7 +897,7 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
     readOnly: true,
   },
   'search': {
-    usage: 'kmagent search <query> --raw [--limit <n>] [--workspace <id>]',
+    usage: 'kmagent raw \'{"type":"search","query":"<query>","limit":<n>,"workspaceId":"<id>"}\'',
     description: 'Full-text search over block content; whole hydrated rows (the agent view is `view-search`).',
     readOnly: true,
   },

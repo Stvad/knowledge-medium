@@ -1,4 +1,5 @@
 import { neutralizeDisplayText } from '@knowledge-medium/agent-cli/protocol'
+import { tokenizeContentSearchQuery } from '@/data/internals/kernelQueries.js'
 
 /** One display line: hostile characters (line breaks included) collapsed, so
  *  a block can never render as two lines or reorder the id printed after it. */
@@ -31,9 +32,19 @@ export const clip = (text: string, max: number): Clipped => {
   return {text: `${text.slice(0, end)}${cutMarker(text.length - end)}`, cut: text.length - end}
 }
 
-/** {@link oneLine} then {@link clip}: the form every list row uses. The
- *  reported cut counts characters of the neutralized line. */
-export const clipLine = (text: string, max: number): Clipped => clip(oneLine(text), max)
+/** {@link oneLine} then {@link clip}: the form every list row uses. Only a
+ *  head of twice the budget is neutralized, so a multi-megabyte block costs
+ *  what its line costs; the cut it reports counts the original characters
+ *  left out (neutralizing can shift that by a few). */
+export const clipLine = (text: string, max: number): Clipped => {
+  const head = text.length > max * 2 ? text.slice(0, charBoundary(text, max * 2)) : text
+  const line = oneLine(head)
+  const dropped = text.length - head.length
+  if (line.length <= max && dropped === 0) return {text: line, cut: 0}
+  const end = charBoundary(line, Math.min(max, line.length))
+  const cut = dropped + (line.length - end)
+  return {text: `${line.slice(0, end)}${cutMarker(cut)}`, cut}
+}
 
 /** A row's list of user-data names (type labels, property names), bounded
  *  like the row's content: each one clipped, at most `max` kept, and the rest
@@ -46,14 +57,19 @@ export const boundLabels = (labels: readonly string[], max: number, chars: numbe
 
 const SNIPPET_CONTEXT = 70
 
-/** The words a snippet can anchor on: quoted phrases whole, operators and
- *  `-excluded` terms dropped — mirroring what the content search matches. */
+/** The words a snippet can anchor on: the positive terms of the query as the
+ *  content search itself tokenizes it (a `-"quoted phrase"` or a term after
+ *  NOT is excluded, not a match), longest first. */
 const snippetTerms = (query: string): string[] => {
   const terms: string[] = []
-  for (const match of query.matchAll(/"([^"]+)"|(\S+)/g)) {
-    const phrase = match[1] ?? match[2]
-    if (!phrase || phrase === 'OR' || phrase === 'NOT' || phrase.startsWith('-')) continue
-    terms.push(phrase.toLowerCase())
+  let negateNext = false
+  for (const token of tokenizeContentSearchQuery(query)) {
+    if (token.kind === 'operator') {
+      negateNext = token.op === 'NOT'
+      continue
+    }
+    if (!token.excluded && !negateNext) terms.push(token.text.toLowerCase())
+    negateNext = false
   }
   return terms.sort((a, b) => b.length - a.length)
 }

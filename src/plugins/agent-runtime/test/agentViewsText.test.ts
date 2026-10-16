@@ -13,3 +13,11 @@ describe('snippet', () => {
     }
   })
 })
+
+describe('snippet anchoring', () => {
+  it('never centers on a word from an excluded phrase', () => {
+    const content = `enormousword ${'filler '.repeat(40)} the cat sat`
+    expect(snippet(content, 'cat -"one enormousword three"')).toContain('cat sat')
+    expect(snippet(content, 'cat NOT enormousword')).toContain('cat sat')
+  })
+})

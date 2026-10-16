@@ -494,6 +494,59 @@ describe('structural edge cases', () => {
     expect(value).toMatch(/^0, 1, .*, …\+\d+ more$/)
   })
 
+  it('sql summarizes a binary cell by its size', async () => {
+    const out = await executeCommand({
+      commandId: 's', type: 'sql', mode: 'all', maxRows: 1, sql: 'SELECT randomblob(10) AS b',
+    }, context) as {rows: Array<{b: unknown}>, truncatedCells: number}
+    expect(out.rows[0].b).toBe('[blob 10 bytes]')
+    expect(out.truncatedCells).toBe(1)
+  })
+
+  it('a self-parented link-only backlink quotes neither itself as parent nor as first child', async () => {
+    const target = uuid('1a1a1a1a', 1)
+    const source = uuid('1b1b1b1b', 2)
+    await create({id: target, content: 'Target'})
+    await create({id: source, content: '[[Target]]', references: [{id: target, alias: 'Target'}]})
+    await sharedDb.db.execute('UPDATE blocks SET parent_id = ? WHERE id = ?', [source, source])
+    const out = await view<BacklinksView>({type: 'view-backlinks', ref: target, format: 'json'})
+    expect(out.rows[0]).not.toHaveProperty('parentContent')
+    expect(out.rows[0]).not.toHaveProperty('firstChildContent')
+  })
+
+  it('marks "same place" by parent identity, not by matching labels', async () => {
+    const target = uuid('2a2a2a2a', 1)
+    await create({id: target, content: 'Target'})
+    for (const n of [1, 2]) {
+      const parent = uuid(`2b2b2b2${n}`, n)
+      await create({id: parent, content: 'Weekly sync'})
+      await create({id: uuid(`2c2c2c2${n}`, n), parentId: parent, content: '[[Target]]', references: [{id: target, alias: 'Target'}]})
+    }
+    const text = await view<string>({type: 'view-backlinks', ref: target})
+    expect(text).not.toContain('same place as above')
+  })
+
+  it('plain-named properties survive the cap, ahead of importer metadata', async () => {
+    const id = uuid('3a3a3a3a', 1)
+    const properties: Record<string, unknown> = {}
+    for (let i = 0; i < 55; i++) properties[`importer:field-${i}`] = i
+    properties.status = 'done'
+    await create({id, content: 'imported', properties})
+    const line = (await view<string>({type: 'view-outline', ref: id})).split('\n')[0]
+    expect(line).toContain('status:: done  +55 props')
+  })
+
+  it('a huge value costs its line, whether alone or first in a list', async () => {
+    const id = uuid('3b3b3b3b', 1)
+    const huge = 'q'.repeat(1_000_000)
+    await create({id, content: huge, properties: {notes: [huge, 'tail']}})
+    const out = await view<OutlineView>({type: 'view-outline', ref: id, format: 'json'})
+    expect(out.root.content.length).toBeLessThan(400)
+    expect(out.root.cut).toBe(1_000_000 - 300)
+    // Bounded by the brief budget plus at most one cut marker.
+    const value = out.root.properties.find(property => property.name === 'notes')!.value
+    expect(value.length).toBeLessThan(60)
+  })
+
   it('sql cuts a long cell on a character boundary', async () => {
     await create({id: uuid('5a5a5a5a', 1), content: `${'y'.repeat(1999)}\u{1F600}${'z'.repeat(10)}`})
     const out = await executeCommand({
