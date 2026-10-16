@@ -1,1 +1,1 @@
-import{Cm as e}from"../../../chunks/app-cZMr1QxY.js";export{e as videoPlayerPlugin};
+import{Cm as e}from"../../../chunks/app-CTubxIAQ.js";export{e as videoPlayerPlugin};

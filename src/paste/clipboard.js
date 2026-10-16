@@ -1,1 +1,1 @@
-import{kO as e}from"../../chunks/app-cZMr1QxY.js";export{e as readClipboardContent};
+import{kO as e}from"../../chunks/app-CTubxIAQ.js";export{e as readClipboardContent};
