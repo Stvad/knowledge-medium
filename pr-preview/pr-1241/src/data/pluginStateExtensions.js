@@ -1,1 +1,1 @@
-import{NB as e,PB as t}from"../../chunks/app-D4dWEnX8.js";export{e as pluginPrefsExtension,t as pluginUIStateExtension};
+import{NB as e,PB as t}from"../../chunks/app-CcDnsE04.js";export{e as pluginPrefsExtension,t as pluginUIStateExtension};

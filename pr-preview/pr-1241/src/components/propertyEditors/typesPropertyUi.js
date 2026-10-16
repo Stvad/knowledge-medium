@@ -1,1 +1,1 @@
-import{dw as e,fw as t,pw as n}from"../../../chunks/app-D4dWEnX8.js";export{e as kernelPropertyUiExtension,t as typesPropertyUi,n as typesPropertyUiExtension};
+import{dw as e,fw as t,pw as n}from"../../../chunks/app-CcDnsE04.js";export{e as kernelPropertyUiExtension,t as typesPropertyUi,n as typesPropertyUiExtension};

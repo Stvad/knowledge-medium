@@ -1,1 +1,1 @@
-import{Tv as e}from"../../../chunks/app-D4dWEnX8.js";export{e as WorkspaceSettingsDialog};
+import{Tv as e}from"../../../chunks/app-CcDnsE04.js";export{e as WorkspaceSettingsDialog};

@@ -1,1 +1,1 @@
-import{My as e,Ny as t,_y as n,gy as r}from"../../../chunks/app-D4dWEnX8.js";export{e as DEFAULT_THEME_ID_DARK,t as DEFAULT_THEME_ID_LIGHT,n as defaultThemeContributions,r as defaultThemesPlugin};
+import{My as e,Ny as t,_y as n,gy as r}from"../../../chunks/app-CcDnsE04.js";export{e as DEFAULT_THEME_ID_DARK,t as DEFAULT_THEME_ID_LIGHT,n as defaultThemeContributions,r as defaultThemesPlugin};

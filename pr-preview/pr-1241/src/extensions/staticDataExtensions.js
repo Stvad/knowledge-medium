@@ -1,1 +1,1 @@
-import{kI as e}from"../../chunks/app-D4dWEnX8.js";export{e as staticDataExtensions};
+import{kI as e}from"../../chunks/app-CcDnsE04.js";export{e as staticDataExtensions};

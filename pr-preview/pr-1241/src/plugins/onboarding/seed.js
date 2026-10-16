@@ -1,1 +1,1 @@
-import{ig as e}from"../../../chunks/app-D4dWEnX8.js";export{e as seedTutorial};
+import{ig as e}from"../../../chunks/app-CcDnsE04.js";export{e as seedTutorial};
