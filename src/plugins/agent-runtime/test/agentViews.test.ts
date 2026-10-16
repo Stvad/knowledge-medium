@@ -641,6 +641,28 @@ describe('structural edge cases', () => {
     expect(out.editedAt).toBeNull()
   })
 
+  it("a block in another workspace never heads a group", async () => {
+    const target = uuid('9a1a1a1a', 1)
+    const foreign = uuid('9b1b1b1b', 2)
+    await create({id: target, content: 'Target'})
+    await repo.tx(async tx => {
+      await tx.create({id: foreign, workspaceId: 'ws-2', parentId: null, orderKey: 'a0', content: 'Foreign topic', references: []})
+    }, {scope: ChangeScope.BlockDefault})
+    for (let i = 0; i < 2; i++) {
+      await create({id: uuid('9c1c1c1c', i), content: `src ${i}`, references: [{id: target, alias: 'T'}, {id: foreign, alias: 'F'}]})
+    }
+    const out = await view<GroupedBacklinksView>({type: 'view-grouped-backlinks', ref: target, format: 'json'})
+    expect(out.groups.map(group => group.label)).not.toContain('Foreign topic')
+  })
+
+  it('reads only a head of a huge types list, counting the rest', async () => {
+    const id = uuid('9d1d1d1d', 1)
+    await create({id, content: 'typed', properties: {types: Array.from({length: 200_000}, (_, i) => `kind-${i}`)}})
+    const out = await view<BlockView>({type: 'view-block', ref: id, format: 'json'})
+    expect(out.types).toHaveLength(11)
+    expect(out.types.at(-1)).toBe('+199,990 more')
+  })
+
   it('sql summarizes a binary cell by its size', async () => {
     const out = await executeCommand({
       commandId: 's', type: 'sql', mode: 'all', maxRows: 1, sql: 'SELECT randomblob(10) AS b',

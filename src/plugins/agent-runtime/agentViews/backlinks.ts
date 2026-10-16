@@ -142,6 +142,9 @@ export interface BacklinksParams {
   filter?: BacklinksFilterSpec
 }
 
+/** Pages the shared backlinks query's full id list, as the backlinks panel
+ *  loads it; a count and a paged variant belong in that query, so the panel
+ *  and this view keep one definition of the set (a tracked follow-up). */
 export const buildBacklinksView = async (
   repo: Repo,
   workspaceId: string,

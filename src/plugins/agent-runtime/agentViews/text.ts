@@ -42,9 +42,14 @@ export const clipLine = (text: string, max: number): Clipped => clip(oneLine(tex
  *  like the row's content: each one clipped, at most `max` kept, and the rest
  *  counted in a last `+N more`. Every such list goes through here — one
  *  unbounded list would make a single block's row arbitrarily large. */
-export const boundLabels = (labels: readonly string[], max: number, chars: number): string[] => {
+export const boundLabels = (
+  labels: readonly string[],
+  max: number,
+  chars: number,
+  total = labels.length,
+): string[] => {
   const shown = labels.slice(0, max).map(label => clipLine(label, chars).text)
-  return labels.length > max ? [...shown, `+${formatCount(labels.length - max)} more`] : shown
+  return total > shown.length ? [...shown, `+${formatCount(total - shown.length)} more`] : shown
 }
 
 const SNIPPET_CONTEXT = 70

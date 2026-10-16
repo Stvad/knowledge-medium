@@ -3,7 +3,7 @@ import type { AnyPropertySchema, BlockData } from '@/data/api'
 import { decodeRefId, decodeRefListIds, isRefCodec, isRefListCodec } from '@/data/api/codecs.js'
 import { aliasesProp, typesProp } from '@/data/properties.js'
 import { isPropertyPanelHiddenProperty } from '@/components/propertyPanel/visibility.js'
-import { labelForBlockData, readTypeIds } from '@/utils/linkTargetAutocomplete.js'
+import { labelForBlockData } from '@/utils/linkTargetAutocomplete.js'
 import { parseBlockRow } from '@/data/blockSchema.js'
 import type { BlockRow } from '@/data/blockSchema.js'
 import { boundLabels, charBoundary, clipLine, oneLine } from './text.ts'
@@ -244,13 +244,20 @@ export const createPropertyRenderer = async (
       }
     },
     typeLabels(block) {
-      const labels: string[] = []
-      for (const typeId of readTypeIds(block)) {
+      // Only a head of the stored list is read (a cost bound); the rest is
+      // counted, not resolved.
+      const raw = block.properties[typesProp.name]
+      if (!Array.isArray(raw)) return []
+      const labels = new Set<string>()
+      const scanned = Math.min(raw.length, MAX_DECODED_ITEMS)
+      for (let index = 0; index < scanned; index++) {
+        const typeId: unknown = raw[index]
+        if (typeof typeId !== 'string') continue
         const label = repo.types.get(typeId)?.label?.trim()
-        if (label) labels.push(label)
-        else if (!UUID_RE.test(typeId)) labels.push(typeId)
+        if (label) labels.add(label)
+        else if (!UUID_RE.test(typeId)) labels.add(typeId)
       }
-      return boundLabels([...new Set(labels)], MAX_TYPES, NAME_CHARS)
+      return boundLabels([...labels], MAX_TYPES, NAME_CHARS, labels.size + (raw.length - scanned))
     },
   }
 }
