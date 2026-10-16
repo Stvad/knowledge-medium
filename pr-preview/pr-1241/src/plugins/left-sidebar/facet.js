@@ -1,1 +1,1 @@
-import{Sv as e,xv as t}from"../../../chunks/app-CcDnsE04.js";export{t as isLeftSidebarSectionContribution,e as leftSidebarSectionsFacet};
+import{Sv as e,xv as t}from"../../../chunks/app-C8dd_66u.js";export{t as isLeftSidebarSectionContribution,e as leftSidebarSectionsFacet};

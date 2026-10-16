@@ -1,1 +1,1 @@
-import{FE as e,IE as t,NE as n,PE as r}from"../../chunks/app-CcDnsE04.js";export{n as extensionDisplayName,r as extensionName,e as userExtensionShellToggle,t as userExtensionToggle};
+import{FE as e,IE as t,NE as n,PE as r}from"../../chunks/app-C8dd_66u.js";export{n as extensionDisplayName,r as extensionName,e as userExtensionShellToggle,t as userExtensionToggle};

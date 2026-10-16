@@ -1,1 +1,1 @@
-import{dD as e,fD as t,uD as n}from"../../chunks/app-CcDnsE04.js";export{t as defaultRegistry,n as refreshRendererRegistry,e as useRenderer};
+import{dD as e,fD as t,uD as n}from"../../chunks/app-C8dd_66u.js";export{t as defaultRegistry,n as refreshRendererRegistry,e as useRenderer};

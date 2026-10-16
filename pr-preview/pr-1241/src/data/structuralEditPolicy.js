@@ -1,1 +1,1 @@
-import{Xw as e,Zw as t}from"../../chunks/app-CcDnsE04.js";export{e as resolveStructuralEditPolicy,t as structuralEditPolicyForBlock};
+import{Xw as e,Zw as t}from"../../chunks/app-C8dd_66u.js";export{e as resolveStructuralEditPolicy,t as structuralEditPolicyForBlock};

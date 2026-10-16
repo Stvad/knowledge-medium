@@ -1,1 +1,1 @@
-import{ED as e,TD as t}from"../../../chunks/app-CcDnsE04.js";export{t as PropertySchemaBlockRenderer,e as PropertySchemaContentRenderer};
+import{ED as e,TD as t}from"../../../chunks/app-C8dd_66u.js";export{t as PropertySchemaBlockRenderer,e as PropertySchemaContentRenderer};

@@ -1,1 +1,1 @@
-import{RT as e}from"../../../chunks/app-CcDnsE04.js";export{e as appUpdatePromptExtension};
+import{RT as e}from"../../../chunks/app-C8dd_66u.js";export{e as appUpdatePromptExtension};
