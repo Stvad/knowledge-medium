@@ -169,7 +169,13 @@ export class BlockCache {
    *  back to the server. 'hydrate' rejects it: a read that started before the
    *  drain rewrote a row at an unchanged stamp carries the pre-rewrite row, and
    *  accepting it would undo the rewrite in memory. An identical snapshot
-   *  dedups to a no-op in `setSnapshot` either way. */
+   *  dedups to a no-op in `setSnapshot` either way.
+   *
+   *  Accepted, not guarded: a STALE peer version can also sit at an equal stamp
+   *  — staged before a local edit that lands in the same millisecond, and
+   *  drained after that edit's ack but before its echo — and is shown until
+   *  the echo arrives. Telling it from #1163 needs per-row delivery order that
+   *  nothing records. */
   applyIfNewer(snapshot: BlockData, source: ApplyIfNewerSource): boolean {
     if (source === 'sync') this.metrics.applyIfNewerSyncCalls++
     else this.metrics.applyIfNewerHydrateCalls++
