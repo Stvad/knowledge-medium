@@ -1,1 +1,0 @@
-import{DB as e}from"../../../chunks/app-CynxoXPU.js";export{e as aliasDataExtension};

@@ -1,1 +1,0 @@
-import{C3 as e,E3 as t,S3 as n,T3 as r,b3 as i,v3 as a,w3 as o,x3 as s,y3 as c}from"../../../chunks/app-CynxoXPU.js";export{a as CHANGE_SCOPE_POLICIES,c as ChangeScope,i as isChangeScope,s as policyForScope,n as scopeAllowedInReadOnly,e as scopeIsUndoable,o as scopePoliciesEquivalent,r as scopeUploadsToServer,t as sourceForScope};

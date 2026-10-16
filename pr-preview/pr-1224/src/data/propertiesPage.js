@@ -1,1 +1,0 @@
-import{L1 as e,R1 as t}from"../../chunks/app-CynxoXPU.js";export{e as getOrCreatePropertiesPage,t as propertiesPageBlockId};
