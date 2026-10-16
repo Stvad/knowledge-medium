@@ -1,1 +1,1 @@
-import{cd as e}from"../../../chunks/app-B8ukPBUj.js";export{e as DATA_MODEL_GUIDE};
+import{cd as e}from"../../../chunks/app-XptEjlZN.js";export{e as DATA_MODEL_GUIDE};

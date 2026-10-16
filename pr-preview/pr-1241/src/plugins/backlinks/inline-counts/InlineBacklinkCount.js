@@ -1,1 +1,1 @@
-import{Fd as e,Id as t}from"../../../../chunks/app-B8ukPBUj.js";export{e as inlineBacklinkCountDecoratorContribution,t as inlineBacklinkExpansionFooterContribution};
+import{Fd as e,Id as t}from"../../../../chunks/app-XptEjlZN.js";export{e as inlineBacklinkCountDecoratorContribution,t as inlineBacklinkExpansionFooterContribution};
