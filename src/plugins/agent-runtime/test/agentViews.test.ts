@@ -269,6 +269,8 @@ describe('view-block', () => {
     // A boundary inside the pair moves back; a page too short for the pair takes both halves.
     expect(await page(0, 3)).toMatchObject({content: 'ab', nextContentOffset: 2})
     expect(await page(2, 1)).toMatchObject({content: '\u{1F600}', nextContentOffset: 4})
+    // An offset given inside the pair starts at the pair.
+    expect(await page(3, 2)).toMatchObject({content: '\u{1F600}', contentOffset: 2})
 
     const text = await view<string>({type: 'view-block', ref: id, maxChars: 30})
     expect(text).toContain('…[+70 chars — continue with contentOffset=30]')
