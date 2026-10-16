@@ -1,1 +1,1 @@
-import{Ux as e}from"../../../chunks/app-BbFSL_Ue.js";export{e as openKeybindingsSettingsAction};
+import{Ux as e}from"../../../chunks/app-C2msHKh5.js";export{e as openKeybindingsSettingsAction};

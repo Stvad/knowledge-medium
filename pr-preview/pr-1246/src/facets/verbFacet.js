@@ -1,1 +1,1 @@
-import{yN as e}from"../../chunks/app-BbFSL_Ue.js";export{e as defineVerbFacet};
+import{yN as e}from"../../chunks/app-C2msHKh5.js";export{e as defineVerbFacet};
