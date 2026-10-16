@@ -93,6 +93,9 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
   const text = (value: string) => ({
     content: [{type: 'text' as const, text: value}],
   })
+  const workspaceId = z.string().optional().describe(
+    "Workspace to read. Defaults to the one open in the app tab; the token reaches every workspace of its user.",
+  )
 
   const server = new McpServer(
     {name: MCP_SERVER_NAME, version: agentCliPackageVersion},
@@ -118,18 +121,18 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
 
   server.registerTool('page' satisfies KmMcpToolName, {
     description: 'Resolve a page by alias/title. Returns the exact match (if any) plus substring candidates.',
-    inputSchema: {name: z.string()},
-  }, async ({name}) => json(await client.runCommand({type: 'page', name})))
+    inputSchema: {name: z.string(), workspaceId},
+  }, async ({name, workspaceId}) => json(await client.runCommand({type: 'page', name, workspaceId})))
 
   server.registerTool('daily_note' satisfies KmMcpToolName, {
     description: 'Resolve a date expression (today | yesterday | ISO date | natural language) to its daily-note block.',
-    inputSchema: {date: z.string()},
-  }, async ({date}) => json(await client.runCommand({type: 'daily-note', date})))
+    inputSchema: {date: z.string(), workspaceId},
+  }, async ({date, workspaceId}) => json(await client.runCommand({type: 'daily-note', date, workspaceId})))
 
   server.registerTool('search' satisfies KmMcpToolName, {
     description: 'Full-text search over block content.',
-    inputSchema: {query: z.string(), limit: z.number().int().positive().optional()},
-  }, async ({query, limit}) => json(await client.runCommand({type: 'search', query, limit})))
+    inputSchema: {query: z.string(), limit: z.number().int().positive().optional(), workspaceId},
+  }, async ({query, limit, workspaceId}) => json(await client.runCommand({type: 'search', query, limit, workspaceId})))
 
   server.registerTool('sql_query' satisfies KmMcpToolName, {
     description: 'Run a read-only SQL query (single SELECT/WITH statement) against the client database. Key tables: blocks(id, content, properties_json, parent_id, workspace_id).',

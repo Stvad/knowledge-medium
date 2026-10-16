@@ -19,9 +19,13 @@ export const assertActiveWorkspace = (repo: Repo, verb: string, workspaceId: str
   if (workspaceId === repo.activeWorkspaceId) return
   throw new Error(
     `${verb}: target is in workspace ${workspaceId}, which is not the active one `
-    + `(${repo.activeWorkspaceId ?? 'none'}). Mutating verbs write through the active `
-    + "workspace's property and alias registries, which resolve nothing for another "
-    + 'workspace — open that workspace and re-run.',
+    + `(${repo.activeWorkspaceId ?? 'none'}) in the app tab serving this call. `
+    + 'This is not a permission check — the token reaches every workspace of its user, '
+    + "and reads can name any of them — but writes resolve through the open workspace's "
+    + 'property and alias registries, which resolve nothing for another workspace. '
+    + 'Switch the app tab to that workspace and re-run. If another tab already has it open, '
+    + `a call carrying workspaceId ${workspaceId}, or made with AGENT_RUNTIME_WORKSPACE=${workspaceId} `
+    + 'set, is routed to that tab.',
   )
 }
 

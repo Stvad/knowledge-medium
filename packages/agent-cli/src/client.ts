@@ -22,6 +22,7 @@ import {
   type CommandStatusResponse,
   type EventsNextResponse,
   type KnownCommand,
+  namedWorkspaceId,
   UNKNOWN_TOKEN_MARKER,
   type WhoamiInfo,
   neutralizeDisplayText,
@@ -371,6 +372,11 @@ export interface BridgeClientOptions {
   timeoutMs?: number
   /** Poll cadence while waiting for a command result. */
   pollIntervalMs?: number
+  /** Workspace to name on every command that names none. Unpinned, such a
+   *  command acts on whichever workspace the user's most recently focused app
+   *  tab has open, which moves as they navigate; an unattended consumer pins
+   *  to stay put. Defaults to AGENT_RUNTIME_WORKSPACE. */
+  workspaceId?: string
 }
 
 export interface BridgeClient {
@@ -395,6 +401,7 @@ export const createBridgeClient = (options: BridgeClientOptions = {}): BridgeCli
   // AGENT_RUNTIME_PROFILE is the documented shell default; non-CLI
   // consumers (daemon, MCP server) must honor it too, not just cli.ts.
   const profileName = normalizeProfileName(options.profile ?? process.env.AGENT_RUNTIME_PROFILE ?? '')
+  const pinnedWorkspaceId = (options.workspaceId ?? process.env.AGENT_RUNTIME_WORKSPACE ?? '').trim() || undefined
   const defaultTimeoutMs = options.timeoutMs ?? 30_000
   const pollIntervalMs = options.pollIntervalMs ?? 100
 
@@ -441,9 +448,12 @@ export const createBridgeClient = (options: BridgeClientOptions = {}): BridgeCli
   }
 
   const submitCommand = async (command: KnownCommand): Promise<string> => {
+    const pinned = pinnedWorkspaceId && namedWorkspaceId(command) === null
+      ? {...command, workspaceId: pinnedWorkspaceId}
+      : command
     const response = await authedRequest<{id: string}>(`${bridgeUrl}/runtime/commands`, {
       method: 'POST',
-      body: JSON.stringify(command),
+      body: JSON.stringify(pinned),
     })
 
     return response.id

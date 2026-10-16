@@ -182,4 +182,24 @@ describe('recent_changes', () => {
     expect(sessionDefault.since).toBeLessThanOrEqual(Date.now())
     expect(explicit.since).toBe(0)
   })
+
+  // A token reaches every workspace of its user; these reads resolve against
+  // one workspace, so the tool takes it as a parameter (default: the open one).
+  it('forwards a workspaceId on the workspace-scoped reads', async () => {
+    const commands: KnownCommand[] = []
+    const client = clientFrom(async command => {
+      commands.push(command)
+      return {}
+    })
+    const server = createGraphMcpServer({client, serverOptions: {capabilities: {tools: {}}}})
+    const tools = (server as unknown as RegisteredToolHarness)._registeredTools
+
+    await tools.page.handler({name: 'Inbox', workspaceId: 'ws-2'}, {})
+    await tools.daily_note.handler({date: 'today', workspaceId: 'ws-2'}, {})
+    await tools.search.handler({query: 'x', workspaceId: 'ws-2'}, {})
+    await tools.search.handler({query: 'x'}, {})
+
+    expect(commands.map(command => (command as {workspaceId?: string}).workspaceId))
+      .toEqual(['ws-2', 'ws-2', 'ws-2', undefined])
+  })
 })
