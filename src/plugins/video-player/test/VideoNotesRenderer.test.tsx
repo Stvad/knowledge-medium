@@ -361,6 +361,16 @@ describe('pane resize drag', () => {
     expect(screen.queryByTestId('video-notes-resize-shield')).toBeNull()
     await vi.waitFor(() => expect(storedRatio()).toBeCloseTo(0.5), {timeout: RATIO_WRITE_WAIT})
   }, 15_000)
+
+  it('a resize key pressed mid-drag leaves the drag, and its shield, in charge', async () => {
+    await startColumnDrag(500)
+    fireEvent.keyDown(columnSeparator(), {key: 'ArrowRight'})
+    expect(screen.getByTestId('video-notes-resize-shield')).toBeTruthy()
+    expect(shownRatio()).toBe('50')
+
+    fireEvent.pointerUp(window, {clientX: 500, buttons: 0})
+    await vi.waitFor(() => expect(storedRatio()).toBeCloseTo(0.5), {timeout: RATIO_WRITE_WAIT})
+  }, 15_000)
 })
 
 describe('enter affordance gating', () => {

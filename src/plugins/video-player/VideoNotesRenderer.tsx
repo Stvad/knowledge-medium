@@ -78,7 +78,7 @@ export const VideoNotesLayout: BlockLayout = (slots) => {
   const containerRef = useRef<HTMLDivElement>(null)
   const dragCleanupRef = useRef<(() => void) | null>(null)
   const videoPaneRatio = draftVideoPaneRatio ?? storedVideoPaneRatio
-  // The draft exists exactly while a drag is in progress.
+  // The draft exists exactly while a drag is in progress: only the drag writes it.
   const isResizing = draftVideoPaneRatio !== null
 
   useEffect(() => () => {
@@ -173,7 +173,6 @@ export const VideoNotesLayout: BlockLayout = (slots) => {
     if (delta === undefined) return
 
     event.preventDefault()
-    setDraftVideoPaneRatio(null)
     setStoredVideoPaneRatio(clampVideoNotesPaneRatio(videoPaneRatio + delta))
   }
 
