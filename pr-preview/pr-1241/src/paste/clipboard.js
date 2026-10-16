@@ -1,1 +1,1 @@
-import{bk as e}from"../../chunks/app-DadIP9tC.js";export{e as readClipboardContent};
+import{Sk as e}from"../../chunks/app-kRpxukLV.js";export{e as readClipboardContent};

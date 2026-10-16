@@ -1,1 +1,1 @@
-import{Ih as e,Lh as t,Rh as n}from"../../../chunks/app-DadIP9tC.js";export{e as DEFAULT_VIDEO_NOTES_PANE_RATIO,t as VIDEO_NOTES_VIEW_MODE,n as videoNotesPaneRatioProp};
+import{Bh as e,Rh as t,zh as n}from"../../../chunks/app-kRpxukLV.js";export{t as DEFAULT_VIDEO_NOTES_PANE_RATIO,n as VIDEO_NOTES_VIEW_MODE,e as videoNotesPaneRatioProp};

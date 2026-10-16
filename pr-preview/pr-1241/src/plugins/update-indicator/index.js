@@ -1,1 +1,1 @@
-import{gd as e}from"../../../chunks/app-DadIP9tC.js";export{e as updateIndicatorPlugin};
+import{vd as e}from"../../../chunks/app-kRpxukLV.js";export{e as updateIndicatorPlugin};

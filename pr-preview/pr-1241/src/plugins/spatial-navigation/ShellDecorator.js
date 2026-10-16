@@ -1,1 +1,1 @@
-import{Ng as e}from"../../../chunks/app-DadIP9tC.js";export{e as SpatialNavigationShellDecorator};
+import{Fg as e}from"../../../chunks/app-kRpxukLV.js";export{e as SpatialNavigationShellDecorator};
