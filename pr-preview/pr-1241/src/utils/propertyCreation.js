@@ -1,1 +1,1 @@
-import{Ok as e,kk as t}from"../../chunks/app-SPfsOdC3.js";export{e as canConvertEmptyChildBlockToProperty,t as convertEmptyChildBlockToProperty};
+import{Ok as e,kk as t}from"../../chunks/app-DJoN4MtS.js";export{e as canConvertEmptyChildBlockToProperty,t as convertEmptyChildBlockToProperty};

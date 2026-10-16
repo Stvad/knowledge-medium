@@ -1,1 +1,1 @@
-import{_B as e,gB as t,vB as n}from"../../../chunks/app-SPfsOdC3.js";export{t as charLimitProp,e as charProfileProp,n as charScopeProp};
+import{_B as e,gB as t,vB as n}from"../../../chunks/app-DJoN4MtS.js";export{t as charLimitProp,e as charProfileProp,n as charScopeProp};

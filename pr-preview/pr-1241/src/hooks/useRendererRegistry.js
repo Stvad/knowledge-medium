@@ -1,1 +1,1 @@
-import{bD as e,vD as t,yD as n}from"../../chunks/app-SPfsOdC3.js";export{e as defaultRegistry,t as refreshRendererRegistry,n as useRenderer};
+import{bD as e,vD as t,yD as n}from"../../chunks/app-DJoN4MtS.js";export{e as defaultRegistry,t as refreshRendererRegistry,n as useRenderer};

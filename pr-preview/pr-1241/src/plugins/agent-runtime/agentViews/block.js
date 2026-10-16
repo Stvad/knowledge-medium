@@ -1,1 +1,1 @@
-import{Su as e,xu as t}from"../../../../chunks/app-SPfsOdC3.js";export{t as buildBlockView,e as renderBlockView};
+import{Su as e,xu as t}from"../../../../chunks/app-DJoN4MtS.js";export{t as buildBlockView,e as renderBlockView};
