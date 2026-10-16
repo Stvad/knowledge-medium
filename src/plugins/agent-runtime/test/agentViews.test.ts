@@ -554,6 +554,13 @@ describe('structural edge cases', () => {
     expect(outline.rows).toEqual([])
     const out = await view<SearchView>({type: 'view-search', query: 'crossing', under: root, format: 'json'})
     expect(out.hits).toEqual([])
+
+    // The crossing one level down is caught at the recursive step, not the seed.
+    const mid = uuid('6e6e6e6e', 4)
+    await create({id: mid, parentId: root, content: 'Middle'})
+    await sharedDb.db.execute('UPDATE blocks SET parent_id = ? WHERE id = ?', [mid, foreign])
+    const deeper = await view<SearchView>({type: 'view-search', query: 'crossing', under: root, format: 'json'})
+    expect(deeper.hits).toEqual([])
   })
 
   it('summarizes a structured value from its first keys, each clipped', async () => {
