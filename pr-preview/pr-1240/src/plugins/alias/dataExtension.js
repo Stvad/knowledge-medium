@@ -1,0 +1,1 @@
+import{DB as e}from"../../../chunks/app-Cslk8jKc.js";export{e as aliasDataExtension};

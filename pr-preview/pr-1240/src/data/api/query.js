@@ -1,0 +1,1 @@
+import{L4 as e}from"../../../chunks/app-Cslk8jKc.js";export{e as defineQuery};
