@@ -131,7 +131,8 @@ export const renderMarkdown = (report: EvalReport, baseline?: EvalReport): strin
       + `| ${seconds(row.durationMs)} |`)
   }
   const total = (pick: (row: TaskSummary) => number) => sum(rows.map(pick))
-  const baseRows = [...base.values()]
+  // A --tasks subset compares against the same subset of the baseline.
+  const baseRows = rows.flatMap(row => base.get(row.task) ?? [])
   const baseTotal = (pick: (row: TaskSummary) => number) => (baseRows.length ? sum(baseRows.map(pick)) : undefined)
   lines.push(`| **all** | | ${total(row => row.passes)}/${total(row => row.reps)} `
     + `| ${total(row => row.toolCalls)}${delta(total(row => row.toolCalls), baseTotal(row => row.toolCalls))} `

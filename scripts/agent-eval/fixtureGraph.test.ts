@@ -11,15 +11,18 @@
  *   tools, so the task is doable on the current surface), and a wrong one
  *   fails it.
  *
- * Budgets run first: the task section writes to the graph.
+ * - isolation: the runner's snapshot restore undoes every kind of change.
+ *
+ * Budgets run first: the later sections write to the graph.
  */
 import { writeFileSync } from 'node:fs'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
-import { buildFixture, DESIGN_PAGE, PEOPLE, PRICING_FAQ_TODO, PROJECT_PAGE, READING_LOG_PAGE, ROLLOUT_BLOCK_TEXT } from './fixture'
+import { buildFixture, DESIGN_PAGE, PEOPLE, PRICING_FAQ_TODO, PROJECT_PAGE, READING_LOG_PAGE, ROLLOUT_BLOCK_TEXT, TARGET_UIDS } from './fixture'
 import { childrenOf, dailyNoteId, descendantsOf, type GraphProbe, pageIdByTitle, requirePageId, sqlAll } from './graphQueries'
+import { changesSince, restoreSnapshot, snapshotWorkspace, strayChanges } from './isolation'
 import { OUTPUT_PROBES, type ProbeContext } from './outputBudgets'
-import { type CheckInput, type CheckOutcome, TASKS, type TaskEnv } from './tasks'
+import { type CheckInput, type CheckOutcome, targetId, TASKS, type TaskEnv } from './tasks'
 import { seedFixtureTestGraph, TEST_WORKSPACE_ID, type FixtureTestGraph } from './testGraph'
 
 let db: TestDb
@@ -70,9 +73,16 @@ const fixtureDays = (from: string, to: string) => {
 /** Answers derived from the imported graph, independently of the generator's truth. */
 const deriveReadAnswers = async (): Promise<Record<string, unknown>> => {
   const kestrelDates: string[] = []
+  const kestrelAbout: Record<string, string> = {}
   for (const iso of fixtureDays('2026-06-01', '2026-06-30')) {
-    const rows = await descendantsOf(probe, await dailyNoteId(probe, iso))
-    if (rows.some(row => /kestrel/i.test(row.content))) kestrelDates.push(iso)
+    const mentions: string[] = []
+    for (const child of await childrenOf(probe, await dailyNoteId(probe, iso))) {
+      const text = [child.content, ...(await descendantsOf(probe, child.id)).map(row => row.content)].join(' ')
+      if (/kestrel/i.test(text)) mentions.push(text)
+    }
+    if (mentions.length === 0) continue
+    kestrelDates.push(iso)
+    kestrelAbout[iso] = mentions.join(' / ')
   }
 
   const dailyByBlockId = new Map<string, string>()
@@ -121,7 +131,7 @@ const deriveReadAnswers = async (): Promise<Record<string, unknown>> => {
     .sort((a, b) => a.order_key.localeCompare(b.order_key))
 
   return {
-    'kestrel-june': {dates: kestrelDates},
+    'kestrel-june': {dates: kestrelDates, about: kestrelAbout},
     'standup-blockers': {dates: blockers.map(row => dailyByBlockId.get(row.daily))},
     'orchard-open-todos': {todos: openTodos},
     'reading-log-needle': {rating: Number(needleMatch?.[1]), recommendedBy: needleMatch?.[2]},
@@ -138,7 +148,11 @@ const deriveReadAnswers = async (): Promise<Record<string, unknown>> => {
 
 /** One wrong answer per read task — a near miss, not garbage. */
 const wrongAnswers: Record<string, unknown> = {
-  'kestrel-june': {dates: truth.kestrelJuneDates.slice(1)},
+  // Every date found, but the summaries only restate that Kestrel came up.
+  'kestrel-june': {
+    dates: truth.kestrelJuneDates,
+    about: Object.fromEntries(truth.kestrelJuneDates.map(date => [date, 'Kestrel was mentioned in the notes'])),
+  },
   'standup-blockers': {dates: [...truth.stagingBlockerDates, '2026-06-03']},
   'orchard-open-todos': {todos: [...truth.openOrchardTodos, 'Book launch venue']},
   'reading-log-needle': {rating: 5, recommendedBy: truth.needleBook.recommendedBy},
@@ -248,4 +262,42 @@ describe('task checks', () => {
     await solveWithMcp[task.id](env)
     expectOutcome(await task.check({...env, answer: undefined, startedAt}), true)
   }, 20_000)
+})
+
+describe('isolation', () => {
+  it('undoes every kind of change a task can make, and names the ones it was not asked for', async () => {
+    const snapshot = await snapshotWorkspace(probe)
+    const design = await descendantsOf(probe, await requirePageId(probe, DESIGN_PAGE))
+    const byText = (prefix: string) => design.find(row => row.content.startsWith(prefix))!
+    const edited = byText('Devices stay offline')
+    const tagged = byText('Support sees roughly')
+    const removed = byText('The current protocol ships')
+    const moved = byText('Migration runs per workspace')
+    const rollout = targetId(TEST_WORKSPACE_ID, TARGET_UIDS.rollout)
+    const startedAt = Date.now()
+
+    await graph.callTool('update_block', {id: edited.id, content: 'rewritten'})
+    await graph.callTool('update_block', {id: tagged.id, properties: {'eval:tag': 'x'}})
+    await graph.callTool('delete_block', {id: removed.id})
+    await graph.callTool('move_block', {id: moved.id, parentId: edited.parent_id, position: {kind: 'first'}})
+    await graph.callTool('update_block', {id: rollout, content: 'Target: Q4 2026.'})
+    await graph.callTool('create_block', {parentId: edited.id, content: 'a new child'})
+
+    const changes = await restoreSnapshot(probe, snapshot, startedAt)
+    expect(changes.created).toHaveLength(1)
+    expect(changes.modified.map(change => change.id).sort())
+      .toEqual([edited.id, tagged.id, removed.id, moved.id, rollout].sort())
+    // The rollout edit is what edit-rollout-phrase is asked to make; the rest are stray.
+    expect(strayChanges(changes, new Set([rollout]), 'write')).toBe(4)
+    expect(strayChanges(changes, new Set(), 'read')).toBe(6)
+
+    const after = await changesSince(probe, snapshot, startedAt)
+    expect(after.created).toEqual([])
+    expect(after.modified.filter(change => change.before.order_key === change.after.order_key)).toEqual([])
+    const restored = new Map((await descendantsOf(probe, await requirePageId(probe, DESIGN_PAGE))).map(row => [row.id, row]))
+    for (const block of [edited, tagged, removed, moved]) {
+      expect({content: restored.get(block.id)?.content, properties: JSON.parse(restored.get(block.id)?.properties_json ?? 'null'), parent: restored.get(block.id)?.parent_id})
+        .toEqual({content: block.content, properties: JSON.parse(block.properties_json), parent: block.parent_id})
+    }
+  }, 30_000)
 })

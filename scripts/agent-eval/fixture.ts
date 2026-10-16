@@ -63,9 +63,23 @@ export const TARGET_UIDS = {
   vendorsSection: 'eval-vendors-section',
 } as const
 
+/** What a Kestrel mention can be about, as word-start patterns. Every mention
+ *  in the fixture matches one, so an answer can be checked for having read
+ *  the mention rather than only having found its date. */
+export const KESTREL_SIGNALS: Readonly<Record<string, RegExp>> = {
+  renewal: /\brenew/i,
+  pricing: /\bpric/i,
+  sla: /\bsla\b/i,
+  webhook: /\bwebhook/i,
+  dashboard: /\bdashboard/i,
+  invoice: /\binvoic/i,
+}
+
 export interface FixtureTruth {
   /** ISO dates in June 2026 whose daily note mentions Kestrel anywhere in its outline. */
   kestrelJuneDates: string[]
+  /** Per such date, the KESTREL_SIGNALS names its mentions are about. */
+  kestrelJuneSignals: Record<string, string[]>
   /** ISO dates whose standup reported a blocker involving the staging database. */
   stagingBlockerDates: string[]
   /** Open (not done) todos anywhere in the Project Orchard page's outline. */
@@ -554,6 +568,18 @@ export const buildFixture = (): Fixture => {
     (blocks ?? []).some(child => /kestrel/i.test(child.string ?? '') || mentionsKestrel(child.children))
   const kestrelJuneDates = days.filter((iso, index) =>
     iso.startsWith('2026-06-') && mentionsKestrel(dailyPages[index].children))
+  const outlineText = (block: RoamBlock): string =>
+    [block.string ?? '', ...(block.children ?? []).map(outlineText)].join('\n')
+  const kestrelJuneSignals = Object.fromEntries(kestrelJuneDates.map(iso => {
+    const mentions = (dailyPages[days.indexOf(iso)].children ?? [])
+      .map(outlineText)
+      .filter(text => /kestrel/i.test(text))
+    const signals = Object.entries(KESTREL_SIGNALS)
+      .filter(([, pattern]) => mentions.some(text => pattern.test(text)))
+      .map(([name]) => name)
+    if (signals.length === 0) throw new Error(`Kestrel mention on ${iso} matches no KESTREL_SIGNALS pattern`)
+    return [iso, signals]
+  }))
 
   const julyMeetingsWithInes = days.flatMap((iso, index) => iso.startsWith('2026-07-')
     ? (dailyPages[index].children ?? [])
@@ -578,6 +604,7 @@ export const buildFixture = (): Fixture => {
     pages: [...pages, marker],
     truth: {
       kestrelJuneDates,
+      kestrelJuneSignals,
       stagingBlockerDates: [...STAGING_BLOCKER_DAYS].filter(isWeekday).sort(),
       openOrchardTodos,
       renewalDueVendors: VENDORS.filter(vendor => vendor.status === 'renewal due').map(vendor => vendor.name),

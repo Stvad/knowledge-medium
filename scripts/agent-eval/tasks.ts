@@ -11,6 +11,7 @@ import { roamBlockId } from '@/plugins/roam-import/blockIds'
 import {
   DESIGN_PAGE,
   type FixtureTruth,
+  KESTREL_SIGNALS,
   PRICING_FAQ_TODO,
   PROJECT_PAGE,
   READING_LOG_PAGE,
@@ -18,12 +19,12 @@ import {
   TARGET_UIDS,
 } from './fixture'
 import {
-  changedSince,
   childrenOf,
   dailyNoteId,
   getBlock,
   type GraphProbe,
   pageIdByTitle,
+  sqlAll,
 } from './graphQueries'
 
 export interface TaskEnv {
@@ -51,9 +52,12 @@ export interface EvalTask {
   /** The everyday job this task stands for. */
   covers: string
   prompt: (env: TaskEnv) => string
-  /** Puts the blocks this task edits back in their fixture state. The runner
-   *  calls it before AND after the task, so a later task never reads an edit;
-   *  must be idempotent. */
+  /** Roam uids of the fixture blocks this task is asked to change. Changing
+   *  any other existing block fails the task (the runner undoes it either way). */
+  edits?: readonly string[]
+  /** Clears what an interrupted earlier run of this task may have left and
+   *  sets up its preconditions; the runner calls it before snapshotting.
+   *  Must be idempotent. */
   reset?: (env: TaskEnv) => Promise<void>
   check: (input: CheckInput) => Promise<CheckOutcome>
 }
@@ -110,15 +114,26 @@ const answerField = <T>(answer: unknown, field: string, read: (value: unknown) =
 
 const isoDates = (value: unknown) => stringList(value)?.map(date => date.trim()) ?? null
 
-const targetId = (probe: GraphProbe, uid: string) => roamBlockId(probe.workspaceId, uid)
+/** The block id a fixture block's Roam uid imports to in this workspace. */
+export const targetId = (workspaceId: string, uid: string) => roamBlockId(workspaceId, uid)
 
 const requireTarget = async (probe: GraphProbe, uid: string) => {
-  const block = await getBlock(probe, targetId(probe, uid))
+  const block = await getBlock(probe, targetId(probe.workspaceId, uid))
   if (!block) throw new Error(`fixture block ${uid} not found — is the fixture seeded? (pnpm agent-eval seed)`)
   return block
 }
 
-const vendorReviewTitle = (runTag: string) => `Vendor Review: Kestrel ${runTag}`
+const VENDOR_REVIEW_PREFIX = 'Vendor Review: Kestrel'
+const vendorReviewTitle = (runTag: string) => `${VENDOR_REVIEW_PREFIX} ${runTag}`
+
+const deleteAll = async (probe: GraphProbe, rows: ReadonlyArray<{id: string}>) => {
+  for (const row of rows) await probe.command({type: 'delete-block', id: row.id})
+}
+
+/** Live blocks anywhere in the workspace whose content matches a LIKE pattern. */
+const blocksLike = (probe: GraphProbe, pattern: string) => sqlAll<{id: string}>(probe,
+  'SELECT id FROM blocks WHERE workspace_id = ? AND deleted = 0 AND content LIKE ?',
+  [probe.workspaceId, pattern])
 
 export const TASKS: readonly EvalTask[] = [
   {
@@ -127,12 +142,23 @@ export const TASKS: readonly EvalTask[] = [
     covers: 'find what was noted about a topic in a date window',
     prompt: () => readPrompt(
       'Which daily notes from June 2026 (2026-06-01 through 2026-06-30) mention the vendor Kestrel, '
-      + 'and what was each mention about? Include every such date.',
-      '{"dates": ["YYYY-MM-DD", ...]}',
+      + 'and what was noted about Kestrel on each of those days? Include every such date.',
+      '{"dates": ["YYYY-MM-DD", ...], "about": {"YYYY-MM-DD": "<what was noted>", ...}}',
     ),
     check: async ({answer, truth}) => {
       const dates = answerField(answer, 'dates', isoDates)
-      return dates ? compareSets(dates, truth.kestrelJuneDates) : noAnswer
+      if (!dates || !isRecord(answer) || !isRecord(answer.about)) return noAnswer
+      const datesOutcome = compareSets(dates, truth.kestrelJuneDates)
+      const about = answer.about
+      const misread = truth.kestrelJuneDates.filter(date => {
+        const note = about[date]
+        return typeof note !== 'string'
+          || !truth.kestrelJuneSignals[date].some(signal => KESTREL_SIGNALS[signal].test(note))
+      })
+      return {
+        pass: datesOutcome.pass && misread.length === 0,
+        detail: `dates: ${datesOutcome.detail}; ${misread.length === 0 ? 'every mention summarized' : `wrong or missing summary for [${misread.join(', ')}]`}`,
+      }
     },
   },
   {
@@ -260,6 +286,15 @@ export const TASKS: readonly EvalTask[] = [
       + '"Eval check-in", with exactly three child blocks in this order: '
       + '"Done: drafted the sync rollout plan", "Next: review the Kestrel renewal", "Blockers: none".',
     ),
+    reset: async ({probe}) => {
+      await deleteAll(probe, await blocksLike(probe, 'Eval check-in'))
+      // `daily-note` resolves the id without creating the note, and without
+      // the note the task cannot be done at all (`create_block` refuses a
+      // missing parent) — a failure of the setup, not of the agent.
+      if (!(await probe.command({type: 'daily-note', date: 'today'}) as {exists: boolean}).exists) {
+        await probe.command({type: 'run-action', id: 'open_today'})
+      }
+    },
     check: async ({probe, startedAt}) => {
       const today = await dailyNoteId(probe, 'today')
       const added = (await childrenOf(probe, today))
@@ -281,20 +316,19 @@ export const TASKS: readonly EvalTask[] = [
       `On the page "${DESIGN_PAGE}", the rollout block says the target is Q3 2026. `
       + 'Change it to Q4 2026, leaving the rest of that block exactly as it is.',
     ),
+    edits: [TARGET_UIDS.rollout],
     reset: async ({probe}) => {
       const block = await requireTarget(probe, TARGET_UIDS.rollout)
       if (block.content !== ROLLOUT_BLOCK_TEXT) {
         await probe.command({type: 'update-block', id: block.id, content: ROLLOUT_BLOCK_TEXT})
       }
     },
-    check: async ({probe, startedAt}) => {
+    check: async ({probe}) => {
       const block = await requireTarget(probe, TARGET_UIDS.rollout)
       const expected = ROLLOUT_BLOCK_TEXT.replace('Q3 2026', 'Q4 2026')
-      if (block.content !== expected) return {pass: false, detail: `content is ${JSON.stringify(block.content)}`}
-      const others = (await changedSince(probe, startedAt)).filter(row => row.id !== block.id)
-      return others.length === 0
-        ? {pass: true, detail: 'phrase replaced, nothing else touched'}
-        : {pass: false, detail: `phrase replaced, but ${others.length} other block(s) changed`}
+      return block.content === expected
+        ? {pass: true, detail: 'phrase replaced'}
+        : {pass: false, detail: `content is ${JSON.stringify(block.content)}`}
     },
   },
   {
@@ -306,13 +340,17 @@ export const TASKS: readonly EvalTask[] = [
       + `Then link to it from the "${PROJECT_PAGE}" page: under that page's "Vendors" section block, `
       + `add a child block containing [[${vendorReviewTitle(runTag)}]].`,
     ),
+    reset: async ({probe}) => {
+      await deleteAll(probe, await blocksLike(probe, `%[[${VENDOR_REVIEW_PREFIX}%`))
+      await deleteAll(probe, await blocksLike(probe, `${VENDOR_REVIEW_PREFIX}%`))
+    },
     check: async ({probe, runTag, startedAt}) => {
       const title = vendorReviewTitle(runTag)
       const pageId = await pageIdByTitle(probe, title)
       if (!pageId) return {pass: false, detail: 'page does not exist'}
       const first = (await childrenOf(probe, pageId))[0]
       const statusOk = first !== undefined && normalizeText(first.content) === 'status: under review'
-      const linkOk = (await childrenOf(probe, targetId(probe, TARGET_UIDS.vendorsSection)))
+      const linkOk = (await childrenOf(probe, targetId(probe.workspaceId, TARGET_UIDS.vendorsSection)))
         .some(row => row.created_at >= startedAt && row.content.includes(`[[${title}]]`))
       return {
         pass: statusOk && linkOk,
@@ -325,6 +363,7 @@ export const TASKS: readonly EvalTask[] = [
     kind: 'write',
     covers: 'change a todo’s state',
     prompt: () => writePrompt(`On the page "${PROJECT_PAGE}", mark the todo "${PRICING_FAQ_TODO}" as done.`),
+    edits: [TARGET_UIDS.pricingFaqTodo],
     reset: async ({probe}) => {
       const todo = await requireTarget(probe, TARGET_UIDS.pricingFaqTodo)
       await probe.command({

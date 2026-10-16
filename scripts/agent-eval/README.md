@@ -30,9 +30,15 @@ references with context through bare backlinks, open todos under a page, a needl
 `ANSWER: {json}` line. There are four write tasks: append a structured note to today's
 daily note, edit one phrase in a block, create a page and link it, and complete a todo.
 They are scored on graph state read back through raw wire commands and SQL, never
-through the MCP tools under test. Each write task resets the blocks it edits before and
-after it runs, and the runner soft-deletes whatever the task created, so a later read
-task never sees an earlier edit.
+through the MCP tools under test. A run passes only if the task's check passes, `claude`
+exits cleanly, and the agent changed nothing it wasn't asked to. Each write task
+declares the fixture blocks it may edit, and a read task may edit none.
+
+Every task starts from the same graph. The runner snapshots the workspace once, after
+each task's `reset` has cleared anything an interrupted earlier run left behind. After
+each task it undoes every change against that snapshot, whether expected or stray:
+content, properties, deletions, moves and created blocks. It then re-reads the graph to
+prove the undo worked, and aborts rather than measure the next task on a different graph.
 
 A task's wording is part of the measurement. **Add a task rather than rewording one**:
 a reworded task is no longer comparable with earlier reports. A new task needs a
@@ -56,17 +62,22 @@ reference solution and a wrong one in `fixtureGraph.test.ts`.
    pnpm agent-eval seed
    ```
 
-`seed` refuses a workspace that looks like real data or that holds a different fixture
-version. Re-seeding the same fixture is safe: the importer upserts onto the same block
-ids, so a re-seed puts fixture blocks back in place.
+`seed` and `run` refuse a tab that has ever synced (connected PowerSync, or holds any
+downloaded row), because both write thousands of blocks. `seed` also refuses a workspace
+that holds a different fixture version. Re-seeding the same fixture puts fixture blocks'
+content, position and deletion back, but not properties a run changed. The run's own
+undo handles those, so a re-seed is only a repair step.
 
 ## Running
 
 ```bash
-pnpm run compile:packages          # the runs launch packages/agent-cli/dist/mcp.js; run refuses a stale build
 pnpm agent reload --profile km-eval # the tab runs the working tree's src/
 pnpm agent-eval run --repeat 3 --compare scripts/agent-eval/results/baseline-2026-10-15-sonnet.json
 ```
+
+`run` builds `packages/agent-cli` first (incremental), because the runs launch its
+`dist/mcp.js` and a stale build would measure old code. `--compare` refuses a report
+measured on a different fixture hash.
 
 Options: `--model` (default `sonnet`), `--effort`, `--repeat`, `--tasks id,id`,
 `--label`, `--timeout-min`, `--profile` (default `km-eval`).
@@ -90,7 +101,7 @@ or more, and read the per-task table rather than a single total.
 
 ## After the read / write slices land (#1236, #1235)
 
-1. Rebuild and reload, as above, then `pnpm agent-eval run --repeat 3 --compare <baseline>.json`.
+1. Reload the tab, as above, then `pnpm agent-eval run --repeat 3 --compare <baseline>.json` (the run rebuilds the packages itself).
 2. Lower the budgets in `outputBudgets.ts` to the new sizes (`pnpm agent-eval sizes`).
    The budgets are a ratchet. They stop a tool's output from growing back.
 3. If a tool's inputs changed, update its probe in `outputBudgets.ts` and the MCP

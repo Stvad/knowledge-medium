@@ -13,7 +13,7 @@
  */
 import { spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -24,9 +24,10 @@ import type { KnownCommand } from '../../packages/agent-cli/src/protocol'
 import { runJsonlProcess } from '../../packages/agent-dispatch/src/execProcess'
 import { BILLING_ENV_DENYLIST, envForBilling } from '../../packages/agent-dispatch/src/runner'
 import { buildFixture, FIXTURE_HASH_PREFIX, FIXTURE_MARKER_PAGE } from './fixture'
-import { changedSince, childrenOf, type GraphProbe, pageIdByTitle } from './graphQueries'
+import { childrenOf, type GraphProbe, pageIdByTitle } from './graphQueries'
+import { restoreSnapshot, snapshotWorkspace, strayChanges } from './isolation'
 import { type EvalReport, renderMarkdown, type TaskRunRecord } from './report'
-import { type EvalTask, TASKS } from './tasks'
+import { type EvalTask, targetId, TASKS } from './tasks'
 import { extractAnswer, parseTranscript } from './transcript'
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
@@ -47,9 +48,27 @@ const connect = async (profile: string): Promise<{probe: GraphProbe, client: Ret
       + 'Pair it against the local-only dev tab first (see scripts/agent-eval/README.md).'))
   if (!who.connected || !who.audience.workspaceId) fail(`profile "${profile}" has no connected tab`)
   if (who.scope !== 'read-write') fail(`profile "${profile}" is ${who.scope}; seeding and write tasks need read-write`)
+  await requireNeverSynced(client, profile)
   return {
     client,
     probe: {workspaceId: who.audience.workspaceId!, command: command => client.runCommand(command as KnownCommand)},
+  }
+}
+
+/** Seeding and runs write thousands of blocks, so the tab must be one that
+ *  has never synced: a local-only session never connects PowerSync and never
+ *  downloads a row. A signed-in tab — even offline, even on a dev origin —
+ *  shows at least one of these, and is refused. */
+const requireNeverSynced = async (client: ReturnType<typeof createBridgeClient>, profile: string) => {
+  const status = await client.runCommand({
+    type: 'eval',
+    code: `const status = db.currentStatus
+const {count} = await sql('SELECT count(*) AS count FROM blocks_synced', [], 'get')
+return {connected: Boolean(status?.connected), connecting: Boolean(status?.connecting), hasSynced: Boolean(status?.hasSynced), lastSyncedAt: status?.lastSyncedAt ? String(status.lastSyncedAt) : null, syncedRows: count}`,
+  }) as {connected: boolean, connecting: boolean, hasSynced: boolean, lastSyncedAt: string | null, syncedRows: number}
+  if (status.connected || status.connecting || status.hasSynced || status.lastSyncedAt || status.syncedRows > 0) {
+    fail(`profile "${profile}" is paired to a tab that syncs (${JSON.stringify(status)}). The eval writes to its graph, `
+      + 'so it only runs against a local-only dev tab (README: "One-time setup").')
   }
 }
 
@@ -69,19 +88,7 @@ const seed = async (profile: string) => {
     fail(`this workspace holds fixture ${existing}, not ${fixture.hash}. Re-importing a different fixture leaves the old `
       + 'blocks behind; seed a fresh local-only dev origin instead (README: "Resetting").')
   }
-  if (!existing) {
-    // A fresh workspace carries a few system pages (and hundreds of system
-    // blocks), so count the pages a person would have made.
-    const [{count}] = await probe.command({
-      type: 'sql', mode: 'all', params: [probe.workspaceId],
-      sql: `SELECT count(*) AS count FROM blocks
-        WHERE workspace_id = ? AND deleted = 0
-          AND EXISTS (SELECT 1 FROM json_each(properties_json, '$.types') WHERE value = 'page')
-          AND NOT EXISTS (SELECT 1 FROM json_each(properties_json, '$.types') WHERE value = 'daily-note')`,
-    }) as Array<{count: number}>
-    if (count > 20) fail(`workspace already holds ${count} pages and no fixture marker — refusing to import into what looks like real data`)
-  }
-  process.stdout.write(`${existing ? 'Re-importing (restores fixture blocks in place)' : 'Importing'} fixture ${fixture.hash}…\n`)
+  process.stdout.write(`${existing ? 'Re-importing' : 'Importing'} fixture ${fixture.hash}…\n`)
   const summary = await client.runCommand({
     type: 'eval',
     data: fixture.pages,
@@ -96,16 +103,12 @@ const gitInfo = () => {
   return {sha: git('rev-parse', 'HEAD'), branch: git('rev-parse', '--abbrev-ref', 'HEAD'), dirty: git('status', '--porcelain') !== ''}
 }
 
-const newestMtime = (dir: string): number => readdirSync(dir, {withFileTypes: true, recursive: true})
-  .filter(entry => entry.isFile())
-  .reduce((newest, entry) => Math.max(newest, statSync(path.join(entry.parentPath, entry.name)).mtimeMs), 0)
-
-/** The runs launch the BUILT server; a stale build silently measures old code. */
-const requireFreshMcpBuild = () => {
-  if (!existsSync(MCP_ENTRY)) fail('packages/agent-cli/dist/mcp.js is missing — run `pnpm run compile:packages`')
-  if (newestMtime(path.join(REPO_ROOT, 'packages/agent-cli/src')) > statSync(MCP_ENTRY).mtimeMs) {
-    fail('packages/agent-cli/dist is older than its src — run `pnpm run compile:packages`')
-  }
+/** The runs launch the BUILT server, and a stale build silently measures old
+ *  code, so every run builds first (incremental, a few seconds). */
+const buildPackages = () => {
+  process.stdout.write('building packages/agent-cli…\n')
+  const build = spawnSync('pnpm', ['run', 'compile:packages'], {cwd: REPO_ROOT, encoding: 'utf8'})
+  if (build.status !== 0) fail(`pnpm run compile:packages failed:\n${`${build.stdout}${build.stderr}`.trim().split('\n').slice(-15).join('\n')}`)
 }
 
 /** Deterministic sizes from the fixture-graph test; null if it could not run. */
@@ -141,15 +144,6 @@ const claudeArgs = (options: {model: string, effort: string | null, mcpConfig: s
   '--permission-prompts', 'none',
 ]
 
-/** Soft-delete what a write task created, outermost blocks first. */
-const removeCreated = async (probe: GraphProbe, created: ReadonlyArray<{id: string, parent_id: string | null}>) => {
-  const ids = new Set(created.map(row => row.id))
-  for (const row of created) {
-    if (row.parent_id && ids.has(row.parent_id)) continue
-    await probe.command({type: 'delete-block', id: row.id}).catch(() => {})
-  }
-}
-
 interface RunOptions {
   profile: string
   model: string
@@ -162,7 +156,7 @@ interface RunOptions {
 }
 
 const run = async (options: RunOptions) => {
-  requireFreshMcpBuild()
+  buildPackages()
   const {probe} = await connect(options.profile)
   const fixture = buildFixture()
   const seeded = await seededHash(probe)
@@ -194,14 +188,14 @@ const run = async (options: RunOptions) => {
     runs: [],
   }
 
-  // An interrupted earlier run can leave a task's edit behind; read tasks
-  // must never see one.
+  // Clear what an interrupted earlier run left, then freeze the starting
+  // state every task gets: each task's changes are undone against it.
   for (const task of TASKS) await task.reset?.({probe, truth: fixture.truth, runTag: ''})
+  const snapshot = await snapshotWorkspace(probe)
 
   for (let rep = 1; rep <= options.repeat; rep++) {
     for (const task of options.tasks) {
       const env = {probe, truth: fixture.truth, runTag: randomBytes(2).toString('hex')}
-      await task.reset?.(env)
       const cwd = mkdtempSync(path.join(tmpdir(), 'agent-eval-cwd-'))
       const transcriptPath = path.join(runDir, 'transcripts', `${task.id}-${rep}.jsonl`)
       let stdout = ''
@@ -225,20 +219,22 @@ const run = async (options: RunOptions) => {
       report.claudeCodeVersion ??= metrics.claudeCodeVersion
       const outcome = await task.check({...env, answer: extractAnswer(metrics.resultText), startedAt})
         .catch((error: unknown) => ({pass: false, detail: `check threw: ${error instanceof Error ? error.message : String(error)}`}))
-      const changes = await changedSince(probe, startedAt)
-      const created = changes.filter(row => row.created_at >= startedAt)
-      if (task.kind === 'write') {
-        await removeCreated(probe, created)
-        await task.reset?.(env)
-      }
+      const changes = await restoreSnapshot(probe, snapshot, startedAt)
+        .catch((error: unknown) => fail(`aborting the run: ${error instanceof Error ? error.message : String(error)}`))
+      const strayEdits = strayChanges(changes, new Set((task.edits ?? []).map(uid => targetId(probe.workspaceId, uid))), task.kind)
+      const failures = [
+        proc.timedOut ? 'timed out' : null,
+        !proc.timedOut && (proc.exitCode !== 0 || metrics.isError) ? `claude exited ${proc.exitCode}${metrics.isError ? ' with an error result' : ''}` : null,
+        strayEdits > 0 ? `changed ${strayEdits} block(s) it was not asked to` : null,
+      ].filter((reason): reason is string => reason !== null)
 
       const outputs = metrics.toolCalls.map(call => call.outputBytes ?? 0)
       const record: TaskRunRecord = {
         task: task.id,
         kind: task.kind,
         rep,
-        pass: outcome.pass && !proc.timedOut,
-        detail: proc.timedOut ? `timed out; ${outcome.detail}` : outcome.detail,
+        pass: outcome.pass && failures.length === 0,
+        detail: [...failures, outcome.detail].join('; '),
         toolCalls: metrics.toolCalls.length,
         toolCallsByName: metrics.toolCalls.reduce<Record<string, number>>((counts, call) =>
           ({...counts, [call.name]: (counts[call.name] ?? 0) + 1}), {}),
@@ -252,7 +248,7 @@ const run = async (options: RunOptions) => {
         terminalReason: metrics.terminalReason,
         exitCode: proc.exitCode,
         timedOut: proc.timedOut,
-        writes: {created: created.length, modified: changes.length - created.length},
+        writes: {created: changes.created.length, modified: changes.modified.length},
         transcript: path.relative(REPO_ROOT, transcriptPath),
       }
       report.runs.push(record)
@@ -269,6 +265,10 @@ const run = async (options: RunOptions) => {
 
 const writeReport = (report: EvalReport, compare: string | null) => {
   const baseline = compare ? JSON.parse(readFileSync(compare, 'utf8')) as EvalReport : undefined
+  if (baseline && baseline.fixtureHash !== report.fixtureHash) {
+    fail(`${compare} was measured on fixture ${baseline.fixtureHash}, this report on ${report.fixtureHash}; `
+      + 'different graphs and truths make the deltas meaningless')
+  }
   mkdirSync(RESULTS_DIR, {recursive: true})
   const base = path.join(RESULTS_DIR, report.label)
   writeFileSync(`${base}.json`, `${JSON.stringify(report, null, 2)}\n`)
@@ -302,16 +302,20 @@ const main = async () => {
       if (selected && tasks.length !== selected.length) {
         fail(`unknown task id; known: ${TASKS.map(task => task.id).join(', ')}`)
       }
+      const repeat = Number(values.repeat)
+      const timeoutMin = Number(values['timeout-min'])
+      if (!Number.isInteger(repeat) || repeat < 1 || repeat > 50) fail(`--repeat must be an integer from 1 to 50, got ${values.repeat}`)
+      if (!Number.isFinite(timeoutMin) || timeoutMin <= 0) fail(`--timeout-min must be a positive number, got ${values['timeout-min']}`)
       const date = new Date().toISOString().slice(0, 10)
       return run({
         profile: values.profile,
         model: values.model,
         effort: values.effort ?? null,
-        repeat: Math.max(1, Number(values.repeat)),
+        repeat,
         tasks,
         label: values.label ?? `${date}-${gitInfo().sha.slice(0, 7)}-${values.model}`,
         compare: values.compare ?? null,
-        timeoutMs: Number(values['timeout-min']) * 60_000,
+        timeoutMs: timeoutMin * 60_000,
       })
     }
     case 'report': {

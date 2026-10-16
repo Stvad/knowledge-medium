@@ -64,6 +64,12 @@ describe('renderMarkdown', () => {
     expect(markdown).toContain('- b #1: missing [x]')
   })
 
+  it('totals a task subset against the same subset of the baseline', () => {
+    const baseline = reportOf('before', [runRecord('a', 1, {toolCalls: 4}), runRecord('b', 1, {toolCalls: 100})])
+    const markdown = renderMarkdown(reportOf('after', [runRecord('a', 1, {toolCalls: 4})]), baseline)
+    expect(markdown).toContain('| **all** | | 1/1 | 4 (±0%) |')
+  })
+
   it('flags writes made during a read task', () => {
     const markdown = renderMarkdown(reportOf('r', [runRecord('a', 1, {writes: {created: 2, modified: 1}})]))
     expect(markdown).toContain('- a #1: 2 created, 1 modified')
