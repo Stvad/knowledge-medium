@@ -1,1 +1,1 @@
-import{SF as e,xF as t}from"../../../chunks/app-DdiM6XSo.js";export{t as PropertyShapeButton,e as PropertyShapeGlyph};
+import{SF as e,xF as t}from"../../../chunks/app-JCFXsd1w.js";export{t as PropertyShapeButton,e as PropertyShapeGlyph};

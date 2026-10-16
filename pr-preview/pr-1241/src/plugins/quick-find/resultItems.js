@@ -1,1 +1,1 @@
-import{db as e,fb as t,ub as n}from"../../../chunks/app-DdiM6XSo.js";export{n as aliasResultItems,e as blockResultItems,t as recentResultItems};
+import{db as e,fb as t,ub as n}from"../../../chunks/app-JCFXsd1w.js";export{n as aliasResultItems,e as blockResultItems,t as recentResultItems};

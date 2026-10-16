@@ -1,1 +1,1 @@
-import{ah as e,ch as t,ih as n,lh as r,oh as i,sh as a}from"../../../chunks/app-DdiM6XSo.js";export{n as ASSETS_ROOT,e as InMemoryByteStore,i as OpfsByteStore,a as assetPathSegments,t as createByteStore,r as getByteStore};
+import{ah as e,ch as t,ih as n,lh as r,oh as i,sh as a}from"../../../chunks/app-JCFXsd1w.js";export{n as ASSETS_ROOT,e as InMemoryByteStore,i as OpfsByteStore,a as assetPathSegments,t as createByteStore,r as getByteStore};
