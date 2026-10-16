@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { hasLoneSurrogate } from '@/utils/string'
 import { snippet } from '../agentViews/text'
-import { decodeProperty } from '../agentViews/properties'
+import { decodeProperty, isEmptyValue } from '../agentViews/properties'
 import type { AnyPropertySchema } from '@/data/api'
 
 describe('snippet', () => {
@@ -46,5 +46,14 @@ describe('decodeProperty', () => {
     const decoded = decodeProperty(undefined, raw) as {value: unknown[], total: number}
     expect(decoded.value).toHaveLength(100)
     expect(decoded.total).toBe(151)
+  })
+})
+
+describe('isEmptyValue', () => {
+  it('treats [] as empty only for a list, never for an atomic encoding', () => {
+    const atomic = {codec: {type: 'test-atomic', encode: (v: unknown) => v, decode: (v: unknown) => v}} as unknown as AnyPropertySchema
+    expect(isEmptyValue([], undefined)).toBe(true)
+    expect(isEmptyValue([], atomic)).toBe(false)
+    expect(isEmptyValue(null, atomic)).toBe(true)
   })
 })

@@ -73,9 +73,12 @@ export const decodeProperty = (schema: AnyPropertySchema | undefined, raw: unkno
 const isTitleOnlyAlias = (name: string, value: unknown, block: BlockData): boolean =>
   name === aliasesProp.name && Array.isArray(value) && value.length === 1 && value[0] === block.content.trim()
 
-/** A value that renders as nothing; it must not spend a slot under the cap. */
-const isEmptyValue = (value: unknown): boolean =>
-  value === null || value === undefined || value === '' || (Array.isArray(value) && value.length === 0)
+/** A value that renders as nothing; it must not spend a slot under the cap.
+ *  `[]` is empty only for a list (no codec, or a member-wise one): an atomic
+ *  codec may encode a real value as an empty array. */
+export const isEmptyValue = (value: unknown, schema: AnyPropertySchema | undefined): boolean =>
+  value === null || value === undefined || value === ''
+  || (Array.isArray(value) && value.length === 0 && (schema === undefined || memberCodecOf(schema.codec) !== undefined))
 
 const isScalar = (value: unknown): value is string | number | boolean =>
   typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean'
@@ -188,7 +191,7 @@ export const createPropertyRenderer = async (
     const namespaced: string[] = []
     const hidden: string[] = []
     for (const name of Object.keys(bag)) {
-      if (name === typesProp.name || isEmptyValue(bag[name]) || isTitleOnlyAlias(name, bag[name], block)) continue
+      if (name === typesProp.name || isEmptyValue(bag[name], schemas.get(name)) || isTitleOnlyAlias(name, bag[name], block)) continue
       if (isPropertyPanelHiddenProperty(name, schemas, overrides, definitions)) hidden.push(name)
       else (isNamespaced(name) ? namespaced : plain).push(name)
     }
