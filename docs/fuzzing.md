@@ -804,6 +804,50 @@ with pinned tests:
   dropped it — losses this oracle cannot see. One pass now lifts every
   block out of phrasing.
 
+A second oracle there — a paste shows every letter and digit of the
+HTML's content, in order — would have caught those losses (reverting
+either fix fails it within seconds), and found more, each fixed with a
+pinned test:
+
+- Text in a list but outside its items (`<ul>text<li>…`, or a list with
+  no items at all): the converter puts it in an item as bare phrasing,
+  which the outline walk skipped. Its smoke tier found this on the first
+  run; the fix (the pass that lifts blocks out of phrasing also wraps
+  such phrasing in a paragraph) landed in #1222's last commit.
+- Text left touching by what the converter drops (a `data:` image, an
+  empty `<b>`, an unwrapped link): the serializer escapes each text node
+  on its own, so `1` and `. Install` read back as a list item, its number
+  no longer text. Touching text is joined, as touching code spans were.
+- A code span holding `]:` inside a link: `` [`a]: b`](url) `` reads
+  back as a link definition, because a label ends at its first `]`, code
+  or not, so the block showed nothing. Such a code span is written as
+  link text, which the serializer can escape.
+- A backslash before a letter beside emphasis that opens or closes on
+  punctuation (`\A<i>!</i>`): the serializer writes that letter as a
+  character reference after escaping the text, so the backslash escaped
+  the reference's `&` and the block showed `&#x41;`. An upstream bug,
+  still in mdast-util-to-markdown 2.2.0; the converter escapes such a
+  backslash itself. Probing the same step by hand turned up its astral
+  twin, which the arbitrary's ASCII-only strings could not generate: an
+  emoji beside that emphasis lost half its surrogate pair to the
+  reference. Fixed upstream in 2.1.3; the dependency is now on 2.2.0.
+  The arbitrary now draws a non-ASCII and an astral letter as well, and
+  finds it on 2.1.2 within a second.
+
+The oracle reads each block's markdown back rather than matching the raw
+string, because the serializer spells a letter beside such emphasis as a
+character reference (`&#x41;**!**`) so the emphasis can still form; its
+first draft took that for a loss. The converter's own `keepsAllText`
+check could see none of these: it compares the html→mdast step only, and
+only when there is plain text to fall back to.
+
+A long deep run of this suite exhausted the heap (60,000 runs did):
+happy-dom's query caches hold `WeakRef`s, which keep each parsed
+document alive until the current task ends, and a synchronous property
+never ends it. Its properties now let a task end every few hundred
+cases. A suite that parses a document per case in a DOM environment
+needs the same.
+
 ## Adding a suite
 
 1. Create `<target>.fuzz.test.ts` next to the existing tests, line 1

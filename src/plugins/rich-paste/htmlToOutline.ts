@@ -1,7 +1,7 @@
 import { fromDom } from 'hast-util-from-dom'
 import { toMdast } from 'hast-util-to-mdast'
 import type {
-  Delete, Emphasis, Link, Nodes, Paragraph, Parents, PhrasingContent, Root, RootContent, Strong, Text,
+  Delete, Emphasis, InlineCode, Link, Nodes, Paragraph, Parents, PhrasingContent, Root, RootContent, Strong, Text,
 } from 'mdast'
 import { gfmToMarkdown } from 'mdast-util-gfm'
 import { toMarkdown, type Options as ToMarkdownOptions } from 'mdast-util-to-markdown'
@@ -166,6 +166,10 @@ const MARKDOWN_OPTIONS: ToMarkdownOptions = {
   // break — the same thing Shift+Enter types — where markdown's `\` hard
   // break would show its backslash in the editor.
   handlers: {break: () => '\n'},
+  // The serializer spells the character beside emphasis as a reference when
+  // it must (the `A` of `A**!**`), but only after escaping the text, so a
+  // backslash before it would escape the `&` instead (an upstream bug).
+  unsafe: [{character: '\\', after: '.[*_]', unicode: true}],
 }
 
 const markdown = (node: Nodes): string =>
@@ -284,11 +288,12 @@ const splitParagraph = (paragraph: Paragraph): Paragraph[] => {
 }
 
 /** Drop what can't work once pasted (fragment and relative links, `data:`/
- *  `blob:` images) and link titles, and tidy inline markup and code spans,
- *  in place. `markupAround` is the inline markup `node` sits in. */
+ *  `blob:` images) and link titles, and tidy inline markup, code spans and
+ *  the text left touching, in place. `markupAround` is the inline markup
+ *  `node` sits in. */
 const sanitize = (node: Parents, markupAround: ReadonlySet<Nodes['type']> = new Set()): void => {
   const around = isInlineMarkup(node) ? new Set([...markupAround, node.type]) : markupAround
-  node.children = spellableCodeSpans(node.children.flatMap((child): Nodes[] => {
+  node.children = spellable(around.has('link'), node.children.flatMap((child): Nodes[] => {
     if (child.type === 'link') {
       const href = absoluteHref(child.url)
       if (href === undefined) {
@@ -310,20 +315,38 @@ const sanitize = (node: Parents, markupAround: ReadonlySet<Nodes['type']> = new 
   })) as typeof node.children
 }
 
-/** `nodes` without empty code spans, and with touching ones joined: markdown
- *  can spell neither. An empty one writes as two literal backticks (two in a
- *  row open a code fence), and `` `a``b` `` reads back as one span holding
- *  the backticks. */
-const spellableCodeSpans = (nodes: Nodes[]): Nodes[] => {
+/** `nodes` as markdown can spell them: touching text joined, touching code
+ *  spans too, and empty code spans dropped. The serializer escapes each text
+ *  on its own, so syntax that forms only across two goes unescaped (`1` and
+ *  `. Install` read back as a list item); an empty code span writes as two
+ *  literal backticks (two in a row open a code fence); and `` `a``b` `` reads
+ *  back as one span holding the backticks. In a link, code that would end a
+ *  definition's label becomes a text of its own — checked once spans are
+ *  joined, as `]:` can form across two. */
+const spellable = (inLink: boolean, nodes: Nodes[]): Nodes[] => {
+  const joined = joinTouching(nodes)
+  if (!inLink) return joined
+  return joined.map((node): Nodes => endsDefinitionLabel(node) ? {type: 'text', value: node.value} : node)
+}
+
+/** Read back, a link's text ends at its first `]` when it could be a
+ *  definition's label (`` [`a]: b`](…) `` defines `` `a ``), and code can't
+ *  escape one. */
+const endsDefinitionLabel = (node: Nodes): node is InlineCode =>
+  node.type === 'inlineCode' && node.value.includes(']:')
+
+const joinTouching = (nodes: readonly Nodes[]): Nodes[] => {
   const kept: Nodes[] = []
   for (const node of nodes) {
+    if (node.type === 'inlineCode' && node.value === '') continue
     const previous = kept.at(-1)
-    if (node.type !== 'inlineCode') kept.push(node)
-    else if (previous?.type === 'inlineCode') previous.value += node.value
-    else if (node.value !== '') kept.push(node)
+    if (joinable(node) && previous && joinable(previous) && previous.type === node.type) previous.value += node.value
+    else kept.push(node)
   }
   return kept
 }
+
+const joinable = (node: Nodes): node is InlineCode | Text => node.type === 'inlineCode' || node.type === 'text'
 
 type InlineMarkup = Delete | Emphasis | Link | Strong
 
