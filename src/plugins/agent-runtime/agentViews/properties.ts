@@ -134,13 +134,9 @@ const formatValue = (value: unknown, budget: number, from = 0, total?: number): 
  *  the second, so per-message importer metadata cannot crowd out the text. */
 const isNamespaced = (name: string): boolean => name.includes(':')
 
-export const briefProperties = (lines: readonly PropertyLine[]): {shown: PropertyLine[], rest: number} => {
-  const shown = lines.filter(line => !isNamespaced(line.name)).slice(0, BRIEF_PROPERTY_COUNT)
-  return {shown, rest: lines.length - shown.length}
-}
-
 export interface PropertyRenderer {
-  view(block: BlockData, detail: PropertyDetail): PropertyView
+  /** The block's properties at the detail the renderer was made for. */
+  view(block: BlockData): PropertyView
   /** Type labels for display (`todo`, a user type's name); an unknown
    *  user-type id is dropped rather than printed as a uuid. */
   typeLabels(block: BlockData): string[]
@@ -163,9 +159,12 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 export const createPropertyRenderer = async (
   repo: Repo,
   blocks: readonly BlockData[],
-  // Off when a view shows no properties: a cost bound, type labels still work.
-  {properties = true}: {properties?: boolean} = {},
+  detail: PropertyDetail | 'none',
 ): Promise<PropertyRenderer> => {
+  // Only what the detail can show is prepared: brief inlines the first few
+  // plain names, full the first MAX_PROPERTIES, none nothing (type labels
+  // still work). The rest are counted.
+  const showable = detail === 'brief' ? BRIEF_PROPERTY_COUNT : detail === 'full' ? MAX_PROPERTIES : 0
   const schemas = repo.propertySchemas
   const overrides = repo.propertyEditorOverrides
   const definitions = repo.propertyDefinitions
@@ -177,7 +176,7 @@ export const createPropertyRenderer = async (
   }
   const preparedByBlock = new Map<string, Prepared>()
   const refIds = new Set<string>()
-  for (const block of properties ? blocks : []) {
+  for (const block of showable > 0 ? blocks : []) {
     if (preparedByBlock.has(block.id)) continue
     const bag = block.properties ?? {}
     const plain: string[] = []
@@ -188,10 +187,11 @@ export const createPropertyRenderer = async (
       if (isPropertyPanelHiddenProperty(name, schemas, overrides, definitions)) hidden.push(name)
       else (isNamespaced(name) ? namespaced : plain).push(name)
     }
-    // Plain names first, so the cap can never crowd out the vocabulary the
-    // brief form is built from.
+    // Plain names first, so the cap can never crowd out the shared
+    // vocabulary; brief shows plain names only.
     const visible = [...plain, ...namespaced]
-    const shown = visible.slice(0, MAX_PROPERTIES).map(name => ({name, decoded: decodeProperty(schemas.get(name), bag[name])}))
+    const candidates = detail === 'brief' ? plain : visible
+    const shown = candidates.slice(0, showable).map(name => ({name, decoded: decodeProperty(schemas.get(name), bag[name])}))
     for (const {decoded} of shown) {
       if (decoded.kind === 'refs') decoded.ids.slice(0, MAX_REFS).forEach(id => refIds.add(id))
     }
@@ -231,7 +231,7 @@ export const createPropertyRenderer = async (
   }
 
   return {
-    view(block, detail) {
+    view(block) {
       const prepared = preparedByBlock.get(block.id) ?? {shown: [], omitted: 0, hidden: []}
       const maxChars = detail === 'brief' ? BRIEF_VALUE_CHARS : FULL_VALUE_CHARS
       const visible: PropertyLine[] = []
@@ -266,16 +266,10 @@ export const createPropertyRenderer = async (
   }
 }
 
-/** `key:: value` pairs for one line; the brief form is {@link briefProperties}.
- *  Everything not shown — brief's leftovers and the renderer's `omitted` — is
- *  counted. */
-export const formatPropertyPairs = (
-  lines: readonly PropertyLine[],
-  detail: PropertyDetail,
-  omitted = 0,
-): string => {
-  const {shown, rest} = detail === 'brief' ? briefProperties(lines) : {shown: lines, rest: 0}
-  const pairs = shown.map(line => `${line.name}:: ${line.value}`)
-  if (rest + omitted > 0) pairs.push(`+${rest + omitted} props`)
+/** `key:: value` pairs for one line, then the count of what the renderer
+ *  left out. */
+export const formatPropertyPairs = (lines: readonly PropertyLine[], omitted = 0): string => {
+  const pairs = lines.map(line => `${line.name}:: ${line.value}`)
+  if (omitted > 0) pairs.push(`+${omitted} props`)
   return pairs.join('  ')
 }

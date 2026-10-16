@@ -57,7 +57,10 @@ interface Node {
   depth: number
   children: string[]
   /** Child rows refused as a cycle back to an already-placed block: counted
-   *  by `childCount`, but nothing more to expand. */
+   *  by `childCount`, but nothing more to expand. Only rows actually fetched
+   *  are seen; a cycle edge past the depth or under a collapsed block still
+   *  counts — accepted, since excluding it needs an ancestry walk per child
+   *  and only corrupt (cyclic) data has one. */
   cycleChildren: number
 }
 
@@ -117,7 +120,7 @@ export const buildOutlineView = async (
 
   const blocks = [root, ...[...nodes.values()].map(node => node.block)]
   const [renderer, shortIds] = await Promise.all([
-    createPropertyRenderer(repo, blocks, {properties: detail !== 'none'}),
+    createPropertyRenderer(repo, blocks, detail),
     displayIds(repo, blocks.map(block => block.id)),
   ])
 
@@ -126,7 +129,7 @@ export const buildOutlineView = async (
     for (const id of childIds) {
       const node = nodes.get(id)!
       rows.push({
-        ...toViewRow(node.block, {shortIds, renderer, maxChars: LINE_CHARS, detail}),
+        ...toViewRow(node.block, {shortIds, renderer, maxChars: LINE_CHARS}),
         parentId,
         depth: node.depth,
         childCount: node.childCount,
@@ -142,7 +145,7 @@ export const buildOutlineView = async (
   const shownEnd = offset + rootChildren.length
   return {
     root: {
-      ...toViewRow(root, {shortIds, renderer, maxChars: ROOT_CHARS, detail}),
+      ...toViewRow(root, {shortIds, renderer, maxChars: ROOT_CHARS}),
       breadcrumb: crumbs.get(root.id) ?? [],
       childCount: rootChildCount,
     },
@@ -152,10 +155,10 @@ export const buildOutlineView = async (
   }
 }
 
-export const renderOutlineView = (view: OutlineView, detail: PropertyDetail | 'none' = 'brief'): string => {
+export const renderOutlineView = (view: OutlineView): string => {
   const {root, rows} = view
   const lines: string[] = []
-  lines.push(`${root.content}  ^${root.shortId}${metaSuffix(root, detail)}  · ${plural(root.childCount, 'child', 'children')}`)
+  lines.push(`${root.content}  ^${root.shortId}${metaSuffix(root)}  · ${plural(root.childCount, 'child', 'children')}`)
   if (root.breadcrumb.length > 0) lines.push(`in: ${crumbLine(root.breadcrumb)}`)
   if (view.offset > 0) lines.push(`(children from #${formatCount(view.offset + 1)})`)
 
@@ -167,7 +170,7 @@ export const renderOutlineView = (view: OutlineView, detail: PropertyDetail | 'n
       : ''
     sawHidden ||= hidden !== ''
     sawCut ||= row.cut > 0
-    lines.push(`${'  '.repeat(row.depth - 1)}- ${row.content}${metaSuffix(row, detail)}  ^${row.shortId}${hidden}`)
+    lines.push(`${'  '.repeat(row.depth - 1)}- ${row.content}${metaSuffix(row)}  ^${row.shortId}${hidden}`)
   }
 
   if (view.nextOffset !== null) {

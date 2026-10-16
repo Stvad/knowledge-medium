@@ -29,7 +29,7 @@ export const runViewCommand = async (
     }
     case 'view-outline': {
       const view = await buildOutlineView(repo, workspaceId, command)
-      return json ? view : renderOutlineView(view, command.properties ?? 'brief')
+      return json ? view : renderOutlineView(view)
     }
     case 'view-backlinks': {
       const view = await buildBacklinksView(repo, workspaceId, command)

@@ -31,6 +31,9 @@ interface Target {
 }
 
 export interface BacklinkRow extends ViewRow {
+  /** 1-based position in the backlink listing, counting ids consumed even
+   *  when their block was deleted before it could be read. */
+  position: number
   parentId: string | null
   breadcrumb: string[]
   childCount: number
@@ -96,6 +99,7 @@ const backlinkRows = async (
   workspaceId: string,
   targetId: string,
   sources: readonly BlockData[],
+  positionOf: (id: string) => number,
 ): Promise<BacklinkRow[]> => {
   const ids = sources.map(source => source.id)
   const linkOnly = sources.filter(source => isReferenceOnly(source.content))
@@ -104,7 +108,7 @@ const backlinkRows = async (
     .map(source => source.parentId)
     .filter((id, index): id is string => id !== null && id !== linkOnly[index].id))]
   const [renderer, shortIds, crumbs, childCounts, via, parents, firstChildren] = await Promise.all([
-    createPropertyRenderer(repo, sources),
+    createPropertyRenderer(repo, sources, 'brief'),
     displayIds(repo, ids),
     loadCrumbs(repo, ids, workspaceId),
     visibleChildCounts(repo, ids),
@@ -115,7 +119,8 @@ const backlinkRows = async (
   const parentById = new Map(parents.map(parent => [parent.id, parent]))
   return sources.map(source => {
     const row: BacklinkRow = {
-      ...toViewRow(source, {shortIds, renderer, maxChars: ROW_CHARS, detail: 'brief'}),
+      ...toViewRow(source, {shortIds, renderer, maxChars: ROW_CHARS}),
+      position: positionOf(source.id),
       parentId: source.parentId,
       breadcrumb: crumbs.get(source.id) ?? [],
       childCount: childCounts.get(source.id) ?? 0,
@@ -167,7 +172,7 @@ export const buildBacklinksView = async (
     offset,
     nextOffset: end < ids.length ? end : null,
     filter: filter ?? null,
-    rows: await backlinkRows(repo, block.workspaceId, block.id, sources),
+    rows: await backlinkRows(repo, block.workspaceId, block.id, sources, id => offset + page.indexOf(id) + 1),
   }
 }
 
@@ -180,7 +185,7 @@ const samePlace = (row: BacklinkRow, previous: BacklinkRow): boolean =>
 const renderBacklinkRow = (row: BacklinkRow, index: number, samePlace: boolean): string[] => {
   const via = row.viaProperties.length > 0 ? `  [via ${row.viaProperties.join(', ')}]` : ''
   const children = row.childCount > 0 ? `  (${plural(row.childCount, 'child', 'children')})` : ''
-  const body = `${row.content}${metaSuffix(row, 'brief')}${children}`
+  const body = `${row.content}${metaSuffix(row)}${children}`
   const firstChild = row.firstChildContent ? `   ↳ first child: ${row.firstChildContent}` : null
   if (samePlace) {
     return [`${index}. ^${row.shortId}  (same place as above)${via}  ${body}`, ...(firstChild ? [firstChild] : [])]
@@ -191,22 +196,24 @@ const renderBacklinkRow = (row: BacklinkRow, index: number, samePlace: boolean):
   return lines
 }
 
-const rangeNote = (offset: number, shown: number, total: number, nextOffset: number | null): string => {
-  if (shown === 0) {
+/** `consumed` counts the listing positions this page took, which can exceed
+ *  the rows shown when some were deleted before they could be read. */
+const rangeNote = (offset: number, consumed: number, total: number, nextOffset: number | null): string => {
+  if (consumed === 0) {
     // Ids consumed but all deleted meanwhile still leave a next page.
     if (nextOffset !== null) return `none left on this page of ${formatCount(total)} (next: offset=${nextOffset})`
     return offset > 0 ? `none past offset ${formatCount(offset)} of ${formatCount(total)}` : 'none'
   }
-  const range = `${formatCount(offset + 1)}–${formatCount(offset + shown)} of ${formatCount(total)}`
+  const range = `${formatCount(offset + 1)}–${formatCount(offset + consumed)} of ${formatCount(total)}`
   return nextOffset === null ? range : `${range} (next: offset=${nextOffset})`
 }
 
 export const renderBacklinksView = (view: BacklinksView): string => {
   const lines = [
-    `Backlinks of "${view.target.title}" ^${view.target.shortId} — ${rangeNote(view.offset, view.rows.length, view.total, view.nextOffset)}`,
+    `Backlinks of "${view.target.title}" ^${view.target.shortId} — ${rangeNote(view.offset, Math.max(0, (view.nextOffset ?? view.total) - view.offset), view.total, view.nextOffset)}`,
   ]
   view.rows.forEach((row, index) => {
-    lines.push(...renderBacklinkRow(row, view.offset + index + 1, index > 0 && samePlace(row, view.rows[index - 1])))
+    lines.push(...renderBacklinkRow(row, row.position, index > 0 && samePlace(row, view.rows[index - 1])))
   })
   if (view.rows.some(row => row.cut > 0)) lines.push(CUT_LEGEND)
   return joinDisplayLines(lines)
@@ -250,7 +257,7 @@ export const buildGroupedBacklinksView = async (
   params: GroupedBacklinksParams,
 ): Promise<GroupedBacklinksView> => {
   const limit = clampInt(params.limit, AGENT_VIEW_DEFAULTS.groupsLimit, MAX_GROUPS)
-  const membersPerGroup = clampInt(params.membersPerGroup, AGENT_VIEW_DEFAULTS.membersPerGroup, MAX_BACKLINKS)
+  const requestedPerGroup = clampInt(params.membersPerGroup, AGENT_VIEW_DEFAULTS.membersPerGroup, MAX_BACKLINKS)
   const memberOffset = params.memberOffset ?? 0
   const membersOf = (sourceIds: readonly string[]) => sourceIds.slice(memberOffset, memberOffset + membersPerGroup)
   const offset = params.offset ?? 0
@@ -265,6 +272,9 @@ export const buildGroupedBacklinksView = async (
   }).load() as GroupedBacklinksResult
 
   const page = result.groups.slice(offset, offset + limit)
+  // One member budget for the whole page, so many groups times many members
+  // cannot multiply past what a single backlinks page may hydrate.
+  const membersPerGroup = Math.max(1, Math.min(requestedPerGroup, Math.floor(MAX_BACKLINKS / Math.max(1, page.length))))
   const memberIds = [...new Set(page.flatMap(group => membersOf(group.sourceIds)))]
   // A group is a block when that block exists — not when its id looks like
   // one: sync admits non-canonical ids, and the fallback group is no block.
@@ -275,7 +285,7 @@ export const buildGroupedBacklinksView = async (
   const groupIds = groupBlocks.map(groupBlock => groupBlock.id)
   const blockGroupIds = new Set(groupIds)
   const [renderer, shortIds] = await Promise.all([
-    createPropertyRenderer(repo, members),
+    createPropertyRenderer(repo, members, 'brief'),
     displayIds(repo, [...memberIds, ...groupIds]),
   ])
   const memberById = new Map(members.map(member => [member.id, member]))
@@ -302,7 +312,7 @@ export const buildGroupedBacklinksView = async (
         members: consumed
           .flatMap(id => {
             const member = memberById.get(id)
-            return member ? [toViewRow(member, {shortIds, renderer, maxChars: ROW_CHARS, detail: 'brief'})] : []
+            return member ? [toViewRow(member, {shortIds, renderer, maxChars: ROW_CHARS})] : []
           }),
       }
     }),
@@ -317,7 +327,7 @@ export const renderGroupedBacklinksView = (view: GroupedBacklinksView): string =
     const id = group.shortId ? `  ^${group.shortId}` : ''
     lines.push(`## ${group.label}${id}  (${formatCount(group.memberCount)})`)
     if (view.memberOffset > 0) lines.push(`  (members from #${formatCount(view.memberOffset + 1)})`)
-    for (const member of group.members) lines.push(`- ${member.content}${metaSuffix(member, 'brief')}  ^${member.shortId}`)
+    for (const member of group.members) lines.push(`- ${member.content}${metaSuffix(member)}  ^${member.shortId}`)
     if (group.nextMemberOffset !== null) {
       const rest = group.memberCount - group.nextMemberOffset
       lines.push(`  +${formatCount(rest)} more — memberOffset=${group.nextMemberOffset} offset=${view.offset + index} limit=1 continues this group`)

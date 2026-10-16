@@ -58,14 +58,14 @@ export const buildBlockView = async (
   const end = boundary > contentOffset ? boundary : Math.min(block.content.length, contentOffset + 2)
 
   const [renderer, shortIds, crumbs, childCounts, backlinks] = await Promise.all([
-    createPropertyRenderer(repo, [block]),
+    createPropertyRenderer(repo, [block], 'full'),
     displayIds(repo, [block.id]),
     loadCrumbs(repo, [block.id], block.workspaceId),
     visibleChildCounts(repo, [block.id]),
     // The backlinks view's own set, so the two counts cannot disagree.
     repo.query[BACKLINKS_FOR_BLOCK_QUERY]({workspaceId: block.workspaceId, id: block.id}).load(),
   ])
-  const properties = renderer.view(block, 'full')
+  const properties = renderer.view(block)
   const editedAt = block.userUpdatedAt ?? block.updatedAt
 
   return {
@@ -114,7 +114,8 @@ export const renderBlockView = (view: BlockView): string => {
       // The id goes in params, never the SQL text: a synced id is not
       // guaranteed free of quotes.
       `(+${formatCount(view.omittedProperties)} more properties — sql_query: SELECT key, value FROM blocks, `
-      + `json_each(blocks.properties_json) WHERE blocks.id = ? with params ${JSON.stringify([view.id])})`,
+      + `json_each(blocks.properties_json) WHERE blocks.id = ? with params `
+      + `${boundDisplayId(view.id) === view.id ? JSON.stringify([view.id]) : '[this block\'s id from format: "json"]'})`,
     )
   }
   if (view.hiddenProperties.length > 0) {

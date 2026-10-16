@@ -1,7 +1,7 @@
 import type { BlockData } from '@/data/api'
 import type { Repo } from '@/data/repo'
 import { BlockRefError, resolveBlockRef, shortIds, type BlockRefResolution } from './resolveRef.ts'
-import { formatPropertyPairs, type PropertyDetail, type PropertyLine, type PropertyRenderer } from './properties.ts'
+import { formatPropertyPairs, type PropertyLine, type PropertyRenderer } from './properties.ts'
 import { neutralizeDisplayText } from '@knowledge-medium/agent-cli/protocol'
 import { charBoundary, clipLine, formatCount, oneLine } from './text.ts'
 
@@ -20,15 +20,14 @@ export interface ViewRow {
 
 export const toViewRow = (
   block: BlockData,
-  {shortIds, renderer, maxChars, detail}: {
+  {shortIds, renderer, maxChars}: {
     shortIds: ReadonlyMap<string, string>
     renderer: PropertyRenderer
     maxChars: number
-    detail: PropertyDetail | 'none'
   },
 ): ViewRow => {
   const clipped = clipLine(block.content, maxChars)
-  const properties = detail === 'none' ? {visible: [], omitted: 0} : renderer.view(block, detail)
+  const properties = renderer.view(block)
   return {
     id: block.id,
     shortId: shortIds.get(block.id) ?? block.id,
@@ -41,11 +40,11 @@ export const toViewRow = (
 }
 
 /** The metadata tail of a line: `type:: …` then the property pairs. */
-export const metaSuffix = (row: ViewRow, detail: PropertyDetail | 'none'): string => {
+export const metaSuffix = (row: ViewRow): string => {
   const parts: string[] = []
   if (row.types.length > 0) parts.push(`type:: ${row.types.join(', ')}`)
-  if (detail !== 'none' && row.properties.length + row.omittedProperties > 0) {
-    parts.push(formatPropertyPairs(row.properties, detail, row.omittedProperties))
+  if (row.properties.length + row.omittedProperties > 0) {
+    parts.push(formatPropertyPairs(row.properties, row.omittedProperties))
   }
   return parts.length > 0 ? `  ${parts.join('  ')}` : ''
 }

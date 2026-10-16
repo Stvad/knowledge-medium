@@ -46,9 +46,10 @@ export interface SearchView {
 }
 
 const MAX_RESULTS = 200
-/** Fetched up front and deduped as a whole, so consecutive pages slice ONE
- *  ranking: a window that grew per page could reorder its top and repeat or
- *  skip a hit across pages. */
+/** Fetched up front and deduped as a whole, so pages within it slice ONE
+ *  ranking. A page past it fetches a larger window, which sources may rank
+ *  differently, so a hit can repeat or be skipped there — accepted over
+ *  fetching the maximum window for every search. */
 const SEARCH_WINDOW = 100
 const MAX_DUPLICATES_SHOWN = 5
 const MAX_WINDOW = 2000
@@ -126,7 +127,7 @@ export const buildSearchView = async (
   const shown = page.map(group => group[0])
   const duplicateIds = page.flatMap(group => group.slice(1, 1 + MAX_DUPLICATES_SHOWN).map(block => block.id))
   const [renderer, shortIds, crumbs] = await Promise.all([
-    createPropertyRenderer(repo, shown),
+    createPropertyRenderer(repo, shown, 'brief'),
     displayIds(repo, [...shown.map(block => block.id), ...duplicateIds]),
     loadCrumbs(repo, shown.map(block => block.id), workspaceId),
   ])
@@ -143,7 +144,7 @@ export const buildSearchView = async (
     hits: page.map(group => {
       const [block] = group
       const duplicates = group.slice(1, 1 + MAX_DUPLICATES_SHOWN)
-      const properties = renderer.view(block, 'brief')
+      const properties = renderer.view(block)
       return {
         id: block.id,
         shortId: shortIds.get(block.id) ?? block.id,
@@ -185,7 +186,7 @@ export const renderSearchView = (view: SearchView): string => {
     const meta = [
       hit.types.length > 0 ? `type:: ${hit.types.join(', ')}` : null,
       hit.properties.length + hit.omittedProperties > 0
-        ? formatPropertyPairs(hit.properties, 'brief', hit.omittedProperties)
+        ? formatPropertyPairs(hit.properties, hit.omittedProperties)
         : null,
     ].filter(Boolean).join('  ')
     const unlisted = hit.duplicateCount - hit.duplicateShortIds.length

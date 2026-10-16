@@ -701,6 +701,20 @@ describe('structural edge cases', () => {
     expect(out.hits.map(hit => hit.duplicateCount).sort()).toEqual([0, 1])
   })
 
+  it('numbers backlinks by the positions consumed, a deleted one included', () => {
+    const row = (id: string, position: number) => ({
+      id, shortId: id, content: `row ${id}`, cut: 0, types: [], properties: [], omittedProperties: 0,
+      position, parentId: null, breadcrumb: [], childCount: 0, viaProperties: [],
+    })
+    const text = renderBacklinksView({
+      target: {id: 't', shortId: 't', title: 'Target'},
+      total: 5, offset: 0, nextOffset: 3, filter: null,
+      rows: [row('a', 1), row('c', 3)],
+    })
+    expect(text.split('\n')[0]).toContain('1–3 of 5 (next: offset=3)')
+    expect(text).toContain('3. ^c')
+  })
+
   it("a backlinks page whose sources were all deleted still points to the next one", async () => {
     const lines = renderBacklinksView({
       target: {id: 't', shortId: 't', title: 'Target'},
@@ -723,13 +737,35 @@ describe('structural edge cases', () => {
     expect(out.rows).toMatchObject([{content: 'Child', hiddenChildren: 0}])
   })
 
-  it('clips an over-long id when printing it', async () => {
+  it('clips an over-long id when printing it, even in a hint', async () => {
     const longId = `id-${'x'.repeat(300)}`
-    await create({id: longId, content: 'odd id'})
+    const properties: Record<string, unknown> = {}
+    for (let i = 0; i < 60; i++) properties[`field-${i}`] = i
+    await create({id: longId, content: 'odd id', properties})
     const text = await view<string>({type: 'view-block', ref: longId})
     expect(text).not.toContain('x'.repeat(100))
+    expect(text).toContain("[this block's id from format")
     const json = await view<BlockView>({type: 'view-block', ref: longId, format: 'json'})
     expect(json.id).toBe(longId)
+  })
+
+  it('grouped backlinks share one member budget across the page', async () => {
+    const target = uuid('d0d0d0d0', 1)
+    await create({id: target, content: 'Target'})
+    const topics = [uuid('d1d1d1d1', 1), uuid('d2d2d2d2', 2)]
+    for (const [n, topic] of topics.entries()) await create({id: topic, content: `Topic ${n}`})
+    await repo.tx(async tx => {
+      for (let i = 0; i < 520; i++) {
+        const topic = topics[i % 2]
+        await tx.create({
+          id: uuid('d3d3d3d3', i), workspaceId: WS, parentId: null, orderKey: `m${i}`, content: `member ${i}`,
+          references: [{id: target, alias: 'T'}, {id: topic, alias: 'Topic'}],
+        })
+      }
+    }, {scope: ChangeScope.BlockDefault})
+    const out = await view<GroupedBacklinksView>({type: 'view-grouped-backlinks', ref: target, membersPerGroup: 500, format: 'json'})
+    expect(out.groups.length).toBeGreaterThanOrEqual(2)
+    for (const group of out.groups) expect(group.members.length).toBeLessThanOrEqual(250)
   })
 
   it('sql summarizes a binary cell by its size', async () => {
