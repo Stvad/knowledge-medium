@@ -1,1 +1,1 @@
-import{AE as e,kE as t}from"../../chunks/app-D-tdqB40.js";export{t as ClientLocalSettings,e as clientLocalSettings};
+import{AE as e,kE as t}from"../../chunks/app-Dlt-6sZI.js";export{t as ClientLocalSettings,e as clientLocalSettings};
