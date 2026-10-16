@@ -1,1 +1,1 @@
-import{YS as e}from"../../../chunks/app-C_pYS5dK.js";export{e as useCommandPaletteActions};
+import{YS as e}from"../../../chunks/app-D59ylnOt.js";export{e as useCommandPaletteActions};
