@@ -1,1 +1,1 @@
-import{Jd as e,Kd as t,Xd as n,Yd as r,qd as i}from"../../../chunks/app-KOQT7xlF.js";export{t as DEFAULT_BACKLINKS_VIEW_ID,i as FLAT_BACKLINKS_VIEW_ID,e as GROUPED_BACKLINKS_VIEW_ID,r as backlinksViewProp,n as defaultBacklinksViewIdForBlock};
+import{Jd as e,Kd as t,Xd as n,Yd as r,qd as i}from"../../../chunks/app-B9-xxJAz.js";export{t as DEFAULT_BACKLINKS_VIEW_ID,i as FLAT_BACKLINKS_VIEW_ID,e as GROUPED_BACKLINKS_VIEW_ID,r as backlinksViewProp,n as defaultBacklinksViewIdForBlock};

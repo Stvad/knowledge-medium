@@ -1,1 +1,1 @@
-import{JD as e,XD as t,YD as n}from"../../../chunks/app-KOQT7xlF.js";export{e as BlockTypeBlockRenderer,n as BlockTypeContentRenderer,t as writeBlockTypeLabel};
+import{JD as e,XD as t,YD as n}from"../../../chunks/app-B9-xxJAz.js";export{e as BlockTypeBlockRenderer,n as BlockTypeContentRenderer,t as writeBlockTypeLabel};

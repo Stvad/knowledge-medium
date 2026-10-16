@@ -1,1 +1,1 @@
-import{BT as e,RT as t,VT as n,zT as r}from"../../chunks/app-KOQT7xlF.js";export{t as ExtensionApprovalStatusProvider,r as ExtensionApprovalStatusStore,e as useExtensionApprovalStatus,n as useExtensionApprovalStatuses};
+import{BT as e,RT as t,VT as n,zT as r}from"../../chunks/app-B9-xxJAz.js";export{t as ExtensionApprovalStatusProvider,r as ExtensionApprovalStatusStore,e as useExtensionApprovalStatus,n as useExtensionApprovalStatuses};

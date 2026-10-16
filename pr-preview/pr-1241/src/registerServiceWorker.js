@@ -1,1 +1,1 @@
-import{QT as e,ZT as t}from"../chunks/app-KOQT7xlF.js";export{t as checkForAppUpdate,e as registerServiceWorker};
+import{QT as e,ZT as t}from"../chunks/app-B9-xxJAz.js";export{t as checkForAppUpdate,e as registerServiceWorker};

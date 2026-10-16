@@ -1,1 +1,1 @@
-import{M3 as e,N3 as t,P3 as n}from"../../../chunks/app-KOQT7xlF.js";export{e as SYSTEM_AUTHOR_PREFIX,t as isSystemAuthor,n as systemAuthor};
+import{M3 as e,N3 as t,P3 as n}from"../../../chunks/app-B9-xxJAz.js";export{e as SYSTEM_AUTHOR_PREFIX,t as isSystemAuthor,n as systemAuthor};
