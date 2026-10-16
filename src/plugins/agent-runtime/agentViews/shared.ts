@@ -90,7 +90,9 @@ export const loadRoot = async (
  *  neutralizer whatever it was built from — content, crumbs, type labels,
  *  property names and values all come from user data — so no field can
  *  forge a line or reorder the id printed after it. Multi-line text must be
- *  split into lines BEFORE this, or its breaks are collapsed too. */
+ *  split into lines BEFORE this, or its breaks are collapsed too. Accepted:
+ *  an id carrying such a character (only sync can deliver one) prints
+ *  changed and does not resolve back; `format: 'json'` prints it exactly. */
 export const joinDisplayLines = (lines: readonly string[]): string =>
   lines.map(neutralizeDisplayText).join('\n')
 
