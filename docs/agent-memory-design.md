@@ -5,7 +5,7 @@
 ## The proposal in brief
 
 - Each workspace gets one **Agent memory** system page. Every top-level child of that page is one memory. The child's content is the memory's one-line index entry, and its children are the body. If a block is on the page, it is active. Taking it off the page retires it.
-- When an agent connects, the km MCP server puts a memory section into its `instructions`. Pinned memories appear in full. Every other memory appears as one index line. The section ends with a few lines on how to propose changes. Agents read full text with a `memory` tool.
+- When an agent connects, the km MCP server puts a memory section into its `instructions`. Pinned workspace-wide memories appear in full. Every other memory appears as one index line, including a pinned one whose `applies-to` scope can't be matched without a location. The section ends with a few lines on how to propose changes. Agents read full text with a `memory` tool.
 - A memory can narrow itself to part of the graph with `agent-memory:applies-to` refs. A memory with no refs applies to the whole workspace.
 - **Agents never write the memory page.** An agent proposes a memory through a `remember` tool, and the proposal lands on a separate **Agent memory proposals** page. It only reaches future agents after the user accepts it. Accept checks the proposal and publishes a fresh copy onto the memory page; it doesn't move the proposal. One check inside the writing transaction refuses any agent-origin write to the memory page's subtree.
 - Composition is plain concatenation with a stated precedence: host files (CLAUDE.md / AGENTS.md) and the current task come first, then graph memory, then the server's static guide.
@@ -31,6 +31,8 @@ These are the facts the design leans on, checked against code on the date in the
 ### Stored blocks
 
 The agent-runtime plugin registers two system pages through `systemPagesFacet`, so both are ensured when a workspace opens. Both have ids derived from the workspace id, the same way the Journal page does. The key contains no user text, so under e2ee the id reveals no more than Journal's does.
+
+Unlike Journal, the pages claim **no alias**. An existing workspace may already have an ordinary page called "Agent memory". With a contested alias, `[[Agent memory]]` would keep opening that old page while the tools use the system page, and the user could edit the wrong one with no effect. Users open the pages with an "Open agent memory" command and from the agent tokens dialog instead. A `[[Agent memory]]` link typed by hand is an ordinary page link; accepted.
 
 ```text
 Agent memory                                          ← system page
@@ -61,7 +63,7 @@ Agent memory proposals                                ← system page, agent-wri
   | ---------------------------- | -------------- | ----------------------------- |
   | type `agent-memory`          |                | memories and proposals        |
   | `agent-memory:applies-to`    | `refList` (`targetTypes: ['page']`) | memories; empty means whole workspace |
-  | `agent-memory:pinned`        | `boolean`      | memories; inject the body, not just the line |
+  | `agent-memory:pinned`        | `boolean`      | memories; inject the body, not just the line, wherever the memory applies |
   | `agent-memory:supersedes`    | `optional-ref` (`targetTypes: ['agent-memory']`) | proposals; a placement and display hint only |
   | `agent-memory:reported-source` | `optional-ref` (untyped) | proposals; agent-reported, not provenance |
 
@@ -240,7 +242,7 @@ This repo's beads memory works: a SessionStart hook injects a clipped one-line i
   - It reads by derived id and **never creates** a page; a missing page means no memories.
 - **In-transaction page ensure.** `remember` ensures the proposals page inside the same transaction that writes the proposal, and Accept does the same for the memory page. `getOrCreateKernelPage` commits its own transaction, so a delete could land between it and the write, and the insert would then fail on a dead parent. Both writers therefore use one in-transaction get-or-create-or-restore helper.
 - **Budget rendering.**
-  - Pinned bodies go first. If they alone overflow, they're clipped with "N pinned memories didn't fit".
+  - Pinned bodies go first, but only for memories that apply at this rendering's location: workspace-wide ones at connect, and those matching `at` in a location rendering. A pinned scoped memory is an index line at connect. If the pinned bodies alone overflow, they're clipped with "N pinned memories didn't fit".
   - Then index lines, clipped evenly and in page order.
   - Then a continuation line: "+N more: call memory to page through the full index." It carries no cursor. Pinned bodies come first, so the memories listed are not a contiguous run in page order, and resuming after any one of them could skip some. Paging from the top repeats a few lines but never skips one.
   - Every cut is stated in the text.
@@ -250,7 +252,7 @@ This repo's beads memory works: a SessionStart hook injects a clipped one-line i
   - `memory`, which reads: with no arguments it returns the index one bounded page at a time, in page order, like #1236's views; `{after: id}` continues after that memory, so a memory cut by any budget can still be reached; `{id}` returns the full subtree; `{at}` returns the memories that apply there; `{workspaceId}` picks the workspace.
   - `remember`, which writes: it takes `{summary, body?, appliesTo?, pinned?, supersedes?, source?}`, creates a proposal, and returns *"Proposed ^abcd1234. Not active until the user accepts it."*
   - Both names go into `KM_MCP_TOOL_NAMES`. Dispatch's allowlist derives from that list, so it picks them up.
-  - **Every MCP write tool, `remember` included, goes through the server's `beforeWrite` guard.** `GraphMcpWriteOperation` gains a `remember` variant carrying the summary and body. Dispatch's blocked-wikilink guard then refuses a proposal whose text holds a watcher target. Without it, a run could file a proposal containing `[[claude]]`, and that proposal would itself become a watcher target and start a new run.
+  - **Every MCP write tool, `remember` included, goes through the server's `beforeWrite` guard.** `GraphMcpWriteOperation` gains a `remember` variant. It carries everything the proposal will store, in the same `{content, properties}` shape the guard already checks for `create_block`: the summary and body as content, and the encoded `applies-to`, `reported-source`, `supersedes` and `pinned` as properties. Dispatch's blocked-wikilink guard then refuses a proposal that holds a watcher target anywhere, whether as a wikilink in the text or as a target id in a ref property. Without this, a run could file a proposal containing `[[claude]]`, or with `appliesTo` set to the watcher's page. Either one projects a backlink, so the proposal would itself become a watcher target and start a new run.
 - **Staleness within a session.** Instructions are fixed at connect. A memory accepted mid-session shows up through `memory` but isn't injected again. Beads behaves the same way.
 - **Failure paths.**
   - Bridge down: the one-line notice above.
@@ -266,7 +268,7 @@ This repo's beads memory works: a SessionStart hook injects a clipped one-line i
 
 1. **Seeds, pages and the proposal UI.** In agent-runtime: the type and property seeds, the two system pages, the tag-on-entry processor, and the proposal renderer with Accept, which refuses mid-edit and publishes the displayed snapshot. Each Accept behaviour needs a test that fails when it is removed: Accept clicked mid-edit; a proposal rewritten after it was shown, including by a rename, still publishes the shown version and keeps the proposal; a missing memory or proposals page.
 2. **Actor stamp and gate.** `actor` on transaction options, the executor's facade, the terminal commit-guard phase, and the gate as its first guard. Verify the guard per verb and per clause, including the rename-cascade case, a body block moved between memories, and a memory moved off the page: delete the clause and confirm a named test fails.
-3. **Verb, renderer and tools.** The `agent-memory` verb and its renderer with budgets, plus the `memory` / `remember` tools and CLI verbs. `remember` goes through `beforeWrite`, and a test pins that a proposal containing a blocked watcher wikilink is refused under the dispatch entrypoint.
+3. **Verb, renderer and tools.** The `agent-memory` verb and its renderer with budgets, plus the `memory` / `remember` tools and CLI verbs. `remember` goes through `beforeWrite`, and tests pin two refusals under the dispatch entrypoint: a proposal whose text contains a blocked watcher wikilink, and one whose `appliesTo` names the watcher's page.
 4. **Connect-time injection.** `composeInstructions` in both MCP entrypoints. This lands after #1236's static `instructions`.
 5. **Dispatch.** Location-scoped memory appended to rendered prompts, and the Codex `instructions` check.
 6. **Optional.** The #1236 view hint line, and the CLI SessionStart-hook recipe.
