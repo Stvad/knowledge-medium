@@ -1,1 +1,1 @@
-import{a_ as e,o_ as t}from"../../../chunks/app-CpB6ze3H.js";export{e as ENTER_BLOCK_EDIT_MODE_ACTION_ID,t as enterBlockEditModeOnClickAction};
+import{o_ as e,s_ as t}from"../../../chunks/app-Dskyy1PZ.js";export{e as ENTER_BLOCK_EDIT_MODE_ACTION_ID,t as enterBlockEditModeOnClickAction};
