@@ -78,12 +78,14 @@ const describeRowEvent = (row: RowEventRow, contentLimit?: number): Omit<BlockCh
   const after = snapshotOf(row.after_json)
   if (!before || !after) {
     const only = (after ?? before)!
+    const properties = Object.keys(only.properties).sort()
     return {
       blockId: row.block_id,
       kind: after ? 'create' : 'delete',
-      changed: ['content'],
+      changed: ['content', 'parent', ...(properties.length > 0 ? ['properties' as const] : [])],
       content: after ? {after: clip(only.content, contentLimit)} : {before: clip(only.content, contentLimit)},
       parentId: after ? {before: null, after: only.parentId} : {before: only.parentId, after: null},
+      ...(properties.length > 0 ? {properties} : {}),
     }
   }
   const changed: ChangedField[] = []

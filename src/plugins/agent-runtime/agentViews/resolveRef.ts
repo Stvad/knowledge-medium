@@ -178,14 +178,24 @@ const isShortenable = (id: string): boolean =>
 
 const SHORT_ID_COUNTS_SQL = `
   SELECT j.value AS id,
+         (SELECT deleted FROM blocks WHERE id = j.value) AS deleted,
          (SELECT count(*) FROM blocks b
            WHERE b.id >= substr(j.value, 1, ?) AND b.id < substr(j.value, 1, ?) || char(1114111)
-             AND b.deleted = 0) AS n
+             AND b.deleted = 0) AS live,
+         (SELECT count(*) FROM blocks b
+           WHERE b.id >= substr(j.value, 1, ?) AND b.id < substr(j.value, 1, ?) || char(1114111)) AS total
     FROM json_each(?) j
 `
 
+/** Whether the prefix resolves back to this id under `prefixMatches`' rule:
+ *  live blocks answer first, so a live id needs to be the only live match and
+ *  a deleted one needs no live match at all. */
+const prefixResolvesBack = (row: {deleted: number | null, live: number, total: number}): boolean =>
+  row.deleted === 0 ? row.live === 1 : row.deleted === 1 && row.live === 0 && row.total === 1
+
 /** The shortest prefix of each id (8, 12 or 16 characters, else the whole id)
- *  that {@link resolveBlockRef} resolves back to it — unique among live blocks.
+ *  that {@link resolveBlockRef} resolves back to it — deleted ids included,
+ *  which a prefix shared with any live block would not reach.
  *  Ids that are not hex-like are returned whole, since only hex input is
  *  treated as a prefix. One index probe per id per length tried. */
 export const shortIds = async (
@@ -200,14 +210,14 @@ export const shortIds = async (
   }
   for (const length of SHORT_ID_LENGTHS) {
     if (pending.length === 0) break
-    const rows = await repo.db.getAll<{id: string, n: number}>(
+    const rows = await repo.db.getAll<{id: string, deleted: number | null, live: number, total: number}>(
       SHORT_ID_COUNTS_SQL,
-      [length, length, JSON.stringify(pending)],
+      [length, length, length, length, JSON.stringify(pending)],
     )
     const ambiguous = new Set<string>()
     for (const row of rows) {
-      if (row.n > 1) ambiguous.add(row.id)
-      else out.set(row.id, row.id.slice(0, length))
+      if (prefixResolvesBack(row)) out.set(row.id, row.id.slice(0, length))
+      else ambiguous.add(row.id)
     }
     pending = pending.filter(id => ambiguous.has(id))
   }

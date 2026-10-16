@@ -69,7 +69,6 @@ export const appendMarkdown = async (
   const verb = 'append-markdown'
   // Before resolving the target: resolution can CREATE a page.
   if (input.markdown.trim() === '') throw new Error(`${verb}: markdown is empty — nothing to append.`)
-  const parsed = parseAgentMarkdown(input.markdown, input.shape)
 
   // A created page / daily note commits in its own tx; one undo entry for both.
   return outerRepo.undoGroup(async repo => {
@@ -79,6 +78,9 @@ export const appendMarkdown = async (
     // `createChild` inside the tx below, before anything is written.
     const anchored = firstPosition.kind === 'before' || firstPosition.kind === 'after'
     const target = await resolveAgentTarget(repo, input.target, verb, {create: !anchored})
+    // After the target: a refused one should not pay for a large document's
+    // parse. Parsing cannot fail, so nothing created above is left orphaned.
+    const parsed = parseAgentMarkdown(input.markdown, input.shape)
     const blocks: Array<Omit<AppendedBlock, 'shortId'>> = []
     let targetContent = ''
 

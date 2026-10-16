@@ -20,6 +20,13 @@ import { dailyNoteBlockId, journalBlockId } from '@/plugins/daily-notes/dailyNot
 import { createAgentRuntimeContext, executeCommand } from '../commands'
 import type { AgentRuntimeContext } from '../protocol'
 import { resolveAgentTarget, resolveBlockId } from '../targets'
+import { parseMarkdownToBlocks } from '@/utils/markdownParser.js'
+
+// Passthrough spy, so a test can tell whether a refusal beat the parse.
+vi.mock('@/utils/markdownParser.js', async original => {
+  const actual = await original<typeof import('@/utils/markdownParser.js')>()
+  return {...actual, parseMarkdownToBlocks: vi.fn(actual.parseMarkdownToBlocks)}
+})
 
 const WS = 'ws-1'
 const OTHER_WS = 'ws-other'
@@ -540,5 +547,48 @@ describe('review round 1', () => {
     const error = await run({type: 'edit-block', id: NOTE, old: 'absent', new: 'x'}).catch((e: unknown) => e as Error) as Error
     expect(error.message).toContain(String.raw`"line one\nfake: ok\u202eevil\u2028"`)
     expect(error.message).not.toMatch(/[\u202E\u2028]/)
+  })
+})
+
+describe('review round 2', () => {
+  // NOTE and NOTE_TWIN share their first 35 characters, so no 8/12/16-char
+  // prefix tells them apart.
+  it('never prints a deleted block a short id that resolves to a live one', async () => {
+    await seed([{id: NOTE, content: 'live'}, {id: NOTE_TWIN, content: 'doomed'}])
+    await run({type: 'delete-block', id: NOTE_TWIN})
+
+    const history = await run({type: 'block-history', id: NOTE_TWIN}) as {shortId: string}
+    expect(await resolveBlockId(repo, `^${history.shortId}`, 'test')).toBe(NOTE_TWIN)
+
+    const changes = await run({type: 'recent-changes'}) as {txs: Array<{changes: Array<{blockId: string, shortId: string}>}>}
+    const deleted = changes.txs.flatMap(tx => tx.changes).find(change => change.blockId === NOTE_TWIN)!
+    expect(await resolveBlockId(repo, `^${deleted.shortId}`, 'test')).toBe(NOTE_TWIN)
+  })
+
+  it('prints a deleted block whose prefix another deleted block shares an id that is not ambiguous', async () => {
+    await seed([{id: NOTE}, {id: NOTE_TWIN}])
+    await run({type: 'delete-block', id: NOTE})
+    await run({type: 'delete-block', id: NOTE_TWIN})
+
+    const history = await run({type: 'block-history', id: NOTE_TWIN}) as {shortId: string}
+    expect(await resolveBlockId(repo, `^${history.shortId}`, 'test')).toBe(NOTE_TWIN)
+  })
+
+  it('names the properties a create set', async () => {
+    await seed([{id: NOTE}])
+    await run({type: 'create-block', parentId: NOTE, content: 'task', properties: {types: ['todo'], status: 'open'}})
+    const out = await run({type: 'recent-changes'}) as {
+      txs: Array<{changes: Array<{kind: string, changed: string[], properties?: string[]}>}>
+    }
+    const created = out.txs[0].changes.find(change => change.kind === 'create')!
+    expect(created.changed).toContain('properties')
+    expect(created.properties).toEqual(expect.arrayContaining(['status', 'types']))
+  })
+
+  it('refuses a missing append target before parsing the markdown', async () => {
+    vi.mocked(parseMarkdownToBlocks).mockClear()
+    await expect(run({type: 'append-markdown', target: '^7d41e0aa', markdown: '- a\n- b'}))
+      .rejects.toThrow(/No block matches/)
+    expect(parseMarkdownToBlocks).not.toHaveBeenCalled()
   })
 })
