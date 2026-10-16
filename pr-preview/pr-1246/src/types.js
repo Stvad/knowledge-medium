@@ -1,1 +1,1 @@
-import{B1 as e}from"../chunks/app-BRDxm8nH.js";export{e as isChildBackedPropertiesWorkspace};
+import{B1 as e}from"../chunks/app-Szag09K6.js";export{e as isChildBackedPropertiesWorkspace};
