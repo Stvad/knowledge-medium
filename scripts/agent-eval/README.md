@@ -87,7 +87,7 @@ undo handles those, so a re-seed is only a repair step.
 
 ```bash
 pnpm agent reload --profile km-eval # the tab runs the working tree's src/
-pnpm agent-eval run --repeat 3 --compare scripts/agent-eval/results/baseline-2026-10-15-sonnet.json
+pnpm agent-eval run --repeat 3 --compare scripts/agent-eval/results/baseline-2026-10-16-sonnet.json
 ```
 
 `run` builds `packages/agent-cli` first (incremental), because the runs launch its
