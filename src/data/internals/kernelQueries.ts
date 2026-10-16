@@ -294,7 +294,9 @@ const blockTypeInSql = `
  *  UNION ALL) drops a row already seen, so a parent cycle ends it, and the
  *  root is excluded at every step, so a cycle through it cannot add it, and
  *  every step stays in the searched workspace (a sync-applied parent edge
- *  can cross one). Binds, in order: `[underId]` when filtering by
+ *  can cross one). The subtree is walked down once, not each match up: the
+ *  ancestry check must run on every match ahead of the LIMIT, and a common
+ *  word matches most of the graph. Binds, in order: `[underId]` when filtering by
  *  ancestry, workspaceId (twice when filtering by ancestry), the MATCH query, `[typesJson]`, `[excludeTypesJson]`,
  *  then the two rank parameters and the limit. */
 export const selectBlocksByContentSql = (filter: BlockSearchFilter = {}): string => `
