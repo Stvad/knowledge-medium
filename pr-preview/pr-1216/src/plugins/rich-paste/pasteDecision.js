@@ -1,1 +1,1 @@
-import{Tf as e}from"../../../chunks/app-BUJsZabD.js";export{e as richPasteDecisionContribution};
+import{Tf as e}from"../../../chunks/app-QUeETBem.js";export{e as richPasteDecisionContribution};

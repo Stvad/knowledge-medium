@@ -1,1 +1,1 @@
-import{DB as e}from"../../../chunks/app-BUJsZabD.js";export{e as aliasDataExtension};
+import{DB as e}from"../../../chunks/app-QUeETBem.js";export{e as aliasDataExtension};
