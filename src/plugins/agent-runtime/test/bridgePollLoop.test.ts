@@ -32,6 +32,9 @@ let commandQueue: Array<Record<string, unknown>>
 let queueWaiters: Array<(command: Record<string, unknown>) => void>
 let resultPosts: Array<{commandId: string, body: {ok: boolean}}>
 let registrations: Array<Registration>
+/** When set, each registration waits here until the test lets it reach the
+ *  server, so the test picks the order registrations land in. */
+let heldRegistrations: Array<() => void> | null
 
 interface Registration {
   audience: {userId: string | null, workspaceId: string | null}
@@ -48,8 +51,16 @@ const enqueueCommand = (command: Record<string, unknown>) => {
 const fakeBridgeFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
   const url = new URL(String(input instanceof Request ? input.url : input))
   if (/^\/runtime\/clients\//.test(url.pathname)) {
-    registrations.push(JSON.parse(String(init?.body)) as Registration)
-    return jsonResponse({ok: true})
+    const land = () => registrations.push(JSON.parse(String(init?.body)) as Registration)
+    if (!heldRegistrations) {
+      land()
+      return jsonResponse({ok: true})
+    }
+    const held = heldRegistrations
+    return new Promise<Response>(resolve => held.push(() => {
+      land()
+      resolve(jsonResponse({ok: true}))
+    }))
   }
   const resultMatch = url.pathname.match(/^\/runtime\/commands\/([^/]+)\/result$/)
   if (resultMatch) {
@@ -84,6 +95,7 @@ beforeEach(() => {
   queueWaiters = []
   resultPosts = []
   registrations = []
+  heldRegistrations = null
   mockState.executions.length = 0
   window.localStorage.setItem('agent-runtime:bridge-secret', 'test-secret')
   vi.spyOn(window, 'fetch').mockImplementation(fakeBridgeFetch)
@@ -221,16 +233,41 @@ describe('bridge registration — tokens changed in another tab', () => {
     await vi.waitFor(() => expect(registeredTokens(registrations.at(-1)!)).toEqual(['T-keep']))
   })
 
-  it('ignores storage changes to other keys', async () => {
+  // The server replaces a tab's grants with each registration it receives, so
+  // a list read before the revoke must never land after the one read after it.
+  it('a revoke is not overwritten by a registration already in flight', async () => {
+    storeTokens('agent-runtime:user-tokens:user-1', ['T-keep', 'T-revoked'])
     cleanup = startAgentRuntimeBridge(bridgeOptions)
     await vi.waitFor(() => expect(registrations.length).toBeGreaterThan(0))
-    const registered = registrations.length
+    const held: Array<() => void> = []
+    heldRegistrations = held
 
-    // Both handlers post synchronously, so the count is final on return; the
-    // second event proves the first had the same chance to register.
-    window.dispatchEvent(new StorageEvent('storage', {key: 'unrelated-setting'}))
+    window.dispatchEvent(new Event('focus'))
+    await vi.waitFor(() => expect(held).toHaveLength(1))
+    storeTokens('agent-runtime:user-tokens:user-1', ['T-keep'])
     window.dispatchEvent(new StorageEvent('storage', {key: 'agent-runtime:user-tokens:user-1'}))
 
+    // Lets the newest registration sent so far reach the server first.
+    await vi.waitFor(() => {
+      held.pop()?.()
+      expect(held).toHaveLength(0)
+      expect(registeredTokens(registrations.at(-1)!)).toEqual(['T-keep'])
+    })
+  })
+
+  it('ignores storage changes to other keys', async () => {
+    cleanup = startAgentRuntimeBridge(bridgeOptions)
+    // Parked on its long poll, the loop has no registration in flight, so the
+    // first event's registration, had it made one, would post the list as it
+    // stood before the second event's change.
+    await vi.waitFor(() => expect(queueWaiters.length).toBeGreaterThan(0))
+    const registered = registrations.length
+
+    window.dispatchEvent(new StorageEvent('storage', {key: 'unrelated-setting'}))
+    storeTokens('agent-runtime:user-tokens:user-1', ['T-after'])
+    window.dispatchEvent(new StorageEvent('storage', {key: 'agent-runtime:user-tokens:user-1'}))
+
+    await vi.waitFor(() => expect(registeredTokens(registrations.at(-1)!)).toEqual(['T-after']))
     expect(registrations.length).toBe(registered + 1)
   })
 })

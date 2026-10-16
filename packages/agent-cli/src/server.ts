@@ -16,6 +16,7 @@ import {
   isReadOnlySql,
   knownCommandRegistry,
   type KnownCommandMeta,
+  namedWorkspaceId,
   registerClientMetadataSchema,
   registerTokenSpecSchema,
   unknownTokenMessage,
@@ -491,14 +492,6 @@ const routeToken = (
   return best ? {client: best, grant: best.tokens.get(token)!} : null
 }
 
-/** The workspace a command names — its `workspaceId`, or a root create-block's
- *  `data.workspaceId` — which `routeToken` prefers a tab for. */
-const routingWorkspaceId = (payload: CommandPayload): string | null => {
-  const named = (value: unknown) => typeof value === 'string' && value.trim() !== '' ? value.trim() : null
-  const {workspaceId, data} = payload as {workspaceId?: unknown, data?: {workspaceId?: unknown} | null}
-  return named(workspaceId) ?? named(data?.workspaceId)
-}
-
 const sendUnknownToken = (response: http.ServerResponse, token: Token): void => {
   const tokenUserId = tokenUsers.get(hashToken(token))
   const connected = Array.from(clients.values())
@@ -882,7 +875,7 @@ const handleRequest = async (
       }
       const payload = parsed.data
       // Re-routed after the body read: the tab set can change while it streams.
-      const route = routeToken(token, routingWorkspaceId(payload))
+      const route = routeToken(token, namedWorkspaceId(payload))
       if (!route) {
         sendUnknownToken(response, token)
         return

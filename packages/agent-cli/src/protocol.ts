@@ -85,6 +85,15 @@ export const commandPayloadSchema = z.looseObject({
 })
 export type CommandPayload = z.infer<typeof commandPayloadSchema>
 
+/** The workspace a command names — its `workspaceId`, or a root create-block's
+ *  `data.workspaceId` — which the bridge routes it to a tab for, and which a
+ *  pinned client leaves alone. */
+export const namedWorkspaceId = (payload: object): string | null => {
+  const named = (value: unknown) => typeof value === 'string' && value.trim() !== '' ? value.trim() : null
+  const {workspaceId, data} = payload as {workspaceId?: unknown, data?: {workspaceId?: unknown} | null}
+  return named(workspaceId) ?? named(data?.workspaceId)
+}
+
 // ---------- Known command discriminated union ----------
 //
 // Each branch below pins the body shape for a specific kernel handler, so

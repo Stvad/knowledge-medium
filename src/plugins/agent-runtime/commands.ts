@@ -2040,7 +2040,9 @@ const assertedWorkspaceOverride = (override: unknown): string | undefined => {
 /** Refuses a named workspace this tab has nothing to read from, instead of
  *  answering "nothing found" for it (#606). Asks whether its blocks ARE here,
  *  not whether new synced rows would apply: those differ when a key-store
- *  read fails or another tab holds a session-only plaintext confirmation. */
+ *  read fails or another tab holds a session-only plaintext confirmation.
+ *  A never-opened empty workspace is refused too, and accepted: opening it
+ *  writes its daily note and system pages, so the refusal's advice clears it. */
 const assertReadableWorkspace = async (repo: Repo, workspaceId: string): Promise<void> => {
   if (!await getLocalWorkspace(repo, workspaceId)) {
     throw new Error(

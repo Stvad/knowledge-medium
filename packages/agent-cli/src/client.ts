@@ -22,6 +22,7 @@ import {
   type CommandStatusResponse,
   type EventsNextResponse,
   type KnownCommand,
+  namedWorkspaceId,
   UNKNOWN_TOKEN_MARKER,
   type WhoamiInfo,
 } from './protocol.js'
@@ -446,7 +447,7 @@ export const createBridgeClient = (options: BridgeClientOptions = {}): BridgeCli
   }
 
   const submitCommand = async (command: KnownCommand): Promise<string> => {
-    const pinned = pinnedWorkspaceId && (command as {workspaceId?: unknown}).workspaceId === undefined
+    const pinned = pinnedWorkspaceId && namedWorkspaceId(command) === null
       ? {...command, workspaceId: pinnedWorkspaceId}
       : command
     const response = await authedRequest<{id: string}>(`${bridgeUrl}/runtime/commands`, {

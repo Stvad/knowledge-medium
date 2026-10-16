@@ -38,6 +38,13 @@ describe('bridge client workspace pin', () => {
     expect(submitted[0]!.workspaceId).toBe('ws-other')
   })
 
+  // A root block names its workspace in `data`, where the bridge routes by it.
+  it('leaves a root create-block that names its workspace in data alone', async () => {
+    await client({workspaceId: 'ws-pinned'}).runCommand({type: 'create-block', data: {workspaceId: 'ws-other'}})
+
+    expect(submitted[0]).not.toHaveProperty('workspaceId')
+  })
+
   // The MCP tools pass `workspaceId: undefined` when the caller gave none.
   it('pins a call whose workspaceId is present but undefined', async () => {
     await client({workspaceId: 'ws-pinned'}).runCommand({type: 'search', query: 'x', workspaceId: undefined})

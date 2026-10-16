@@ -295,7 +295,20 @@ export const startAgentRuntimeBridge = (
     }
   }
 
+  // One registration at a time, each reading the token list at its own turn:
+  // the server replaces a tab's grants with every registration it receives,
+  // so two in flight could land stale-last and re-list a revoked token.
+  let registrationTail: Promise<unknown> | null = null
   const register = (baseUrl = bridgeUrl()) => {
+    const send = () => postRegistration(baseUrl)
+    const turn = registrationTail ? registrationTail.then(send, send) : send()
+    registrationTail = turn
+    const release = () => { if (registrationTail === turn) registrationTail = null }
+    turn.then(release, release)
+    return turn
+  }
+
+  const postRegistration = (baseUrl: string) => {
     const {repo, safeMode} = options
     const userId = repo.user.id
     const workspaceId = repo.activeWorkspaceId
