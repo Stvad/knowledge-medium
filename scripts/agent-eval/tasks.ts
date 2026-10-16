@@ -435,9 +435,12 @@ export const TASKS: readonly EvalTask[] = [
       const todo = await requireTarget(probe, TARGET_UIDS.pricingFaqTodo)
       const status = todo.properties.status
       const textKept = todo.content === PRICING_FAQ_TODO
+      const marker = todo.properties['roam:todo-state']
+      const markerValid = marker === undefined || marker === 'TODO' || marker === 'DONE'
       return {
-        pass: status === 'done' && textKept,
-        detail: `status is ${JSON.stringify(status ?? null)}; text ${textKept ? 'unchanged' : `is ${JSON.stringify(todo.content)}`}`,
+        pass: status === 'done' && textKept && markerValid,
+        detail: `status is ${JSON.stringify(status ?? null)}; text ${textKept ? 'unchanged' : `is ${JSON.stringify(todo.content)}`}`
+          + (markerValid ? '' : `; roam:todo-state is ${JSON.stringify(marker)}`),
       }
     },
   },

@@ -27,8 +27,9 @@ export interface TaskRunRecord {
   maxSeenChars: number
   /** Results over Claude Code's MCP output cap, which the agent never saw. */
   cappedCalls: number
-  /** What the tools returned, capped results at their real size. */
-  returnedChars: number
+  /** What the tools returned, capped results at their real size; null when
+   *  a call never returned, as in a run that timed out mid-call. */
+  returnedChars: number | null
   apiCalls: number
   tokens: TokenUsage
   /** Wall-clock, measured by the runner, so a run that timed out has one. */
@@ -124,11 +125,11 @@ export interface TaskSummary {
   seenChars: number
   maxSeenChars: number
   cappedCalls: number
-  returnedChars: number
+  /** Null when any repetition's figure is unknown, as is the cost. */
+  returnedChars: number | null
   contextTokens: number
   peakContext: number
   outputTokens: number
-  /** Null when any repetition's cost is unknown. */
   costUsd: number | null
   elapsedMs: number
 }
@@ -144,12 +145,16 @@ const median = (values: readonly number[]): number => {
 const known = (values: ReadonlyArray<number | null>): readonly number[] | null =>
   values.every((value): value is number => value !== null) ? values : null
 
+const knownMedian = (values: ReadonlyArray<number | null>): number | null => {
+  const all = known(values)
+  return all && median(all)
+}
+
 /** Per task, medians across repetitions (pass count is a count). */
 export const summarize = (report: EvalReport): TaskSummary[] => {
   const byTask = new Map<string, TaskRunRecord[]>()
   for (const run of report.runs) byTask.set(run.task, [...(byTask.get(run.task) ?? []), run])
   return [...byTask.entries()].map(([task, runs]) => {
-    const costs = known(runs.map(run => run.costUsd))
     return {
       task,
       kind: runs[0].kind,
@@ -159,11 +164,11 @@ export const summarize = (report: EvalReport): TaskSummary[] => {
       seenChars: median(runs.map(run => run.seenChars)),
       maxSeenChars: median(runs.map(run => run.maxSeenChars)),
       cappedCalls: median(runs.map(run => run.cappedCalls)),
-      returnedChars: median(runs.map(run => run.returnedChars)),
+      returnedChars: knownMedian(runs.map(run => run.returnedChars)),
       contextTokens: median(runs.map(run => run.tokens.contextTotal)),
       peakContext: median(runs.map(run => run.tokens.peakContext)),
       outputTokens: median(runs.map(run => run.tokens.output)),
-      costUsd: costs && median(costs),
+      costUsd: knownMedian(runs.map(run => run.costUsd)),
       elapsedMs: median(runs.map(run => run.elapsedMs)),
     }
   })
@@ -187,22 +192,21 @@ const cell = (format: (n: number) => string, current: number | null, base?: numb
   (current === null ? 'n/a' : `${format(current)}${delta(current, base)}`)
 
 const totalsRow = (label: string, rows: readonly TaskSummary[], baseRows?: readonly TaskSummary[]) => {
-  const total = (from: readonly TaskSummary[], pick: (row: TaskSummary) => number) => sum(from.map(pick))
-  const pair = (pick: (row: TaskSummary) => number) =>
-    [total(rows, pick), baseRows ? total(baseRows, pick) : undefined] as const
-  const cost = (from: readonly TaskSummary[]) => {
-    const costs = known(from.map(row => row.costUsd))
-    return costs && sum(costs)
+  const total = (from: readonly TaskSummary[], pick: (row: TaskSummary) => number | null) => {
+    const all = known(from.map(pick))
+    return all && sum(all)
   }
-  return `| ${label} | | ${total(rows, row => row.passes)}/${total(rows, row => row.reps)} `
+  const pair = (pick: (row: TaskSummary) => number | null) =>
+    [total(rows, pick), baseRows ? total(baseRows, pick) : undefined] as const
+  return `| ${label} | | ${sum(rows.map(row => row.passes))}/${sum(rows.map(row => row.reps))} `
     + `| ${cell(String, ...pair(row => row.toolCalls))} `
     + `| ${cell(String, ...pair(row => row.cappedCalls))} `
     + `| ${cell(thousands, ...pair(row => row.seenChars))} `
     + `| ${cell(thousands, ...pair(row => row.returnedChars))} `
     + `| ${cell(thousands, ...pair(row => row.contextTokens))} | `
     + `| ${cell(thousands, ...pair(row => row.outputTokens))} `
-    + `| ${cell(dollars, cost(rows), baseRows && cost(baseRows))} `
-    + `| ${seconds(total(rows, row => row.elapsedMs))} |`
+    + `| ${cell(dollars, ...pair(row => row.costUsd))} `
+    + `| ${seconds(sum(rows.map(row => row.elapsedMs)))} |`
 }
 
 export const renderMarkdown = (report: EvalReport, compareWith?: EvalReport): string => {
@@ -222,7 +226,7 @@ export const renderMarkdown = (report: EvalReport, compareWith?: EvalReport): st
   const {conditions} = report
   lines.push(`- model \`${conditions.model ?? report.model}\`${conditions.effort === 'default' ? '' : `, effort ${conditions.effort}`}, Claude Code ${report.claudeCodeVersion ?? '?'}`)
   lines.push(`- km tools: ${report.kmTools.map(tool => `\`${tool}\``).join(', ')}; MCP output cap ${conditions.mcpOutputTokens} tokens`)
-  lines.push('- sizes are characters; "capped": results over that cap, which Claude Code replaced with a short notice; "seen" is what reached the model, "returned" what the tools produced')
+  lines.push('- sizes are characters; "capped": results over that cap, which Claude Code replaced with a short notice; "seen" is what reached the model, "returned" what the tools produced, n/a where a call never returned')
   lines.push(`- fixture \`${conditions.fixture}\` (stored as \`${conditions.importedFixture ?? '?'}\`), ${reps} repetition(s) per task, ${conditions.timeoutMs / 60_000} min timeout each; per-task figures are medians; lower is better except pass`)
   lines.push('- list $ is the API list-price equivalent the CLI reports (a subscription run is not charged it); it weights input, cache and output tokens in one number; n/a where a run ended without reporting it')
   if (compareWith && !baseline) {

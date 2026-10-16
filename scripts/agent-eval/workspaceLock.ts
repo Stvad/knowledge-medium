@@ -5,6 +5,8 @@
  * (killed or crashed holders never release); the next process takes it over.
  * Two processes taking over the same stale lock at the same instant can both
  * win: accepted, as that needs two runs started together right after one died.
+ * A dead holder's pid reused by another process makes its lock look held:
+ * accepted, as the refusal names the file to delete.
  */
 import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
@@ -45,7 +47,7 @@ const tryCreate = (file: string): boolean => {
 const refuseIfAlive = (file: string) => {
   const holder = readHolder(file)
   if (holder && isAlive(holder.pid)) {
-    throw new Error(`another agent-eval process (pid ${holder.pid}, since ${holder.since}) holds ${file}; wait for it to finish or stop it`)
+    throw new Error(`another agent-eval process (pid ${holder.pid}, since ${holder.since}) holds ${file}; wait for it to finish, or delete the file if that pid is not an agent-eval run`)
   }
 }
 

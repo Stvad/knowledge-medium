@@ -422,7 +422,8 @@ const run = async (options: RunOptions) => {
         seenChars: seen.reduce((total, chars) => total + chars, 0),
         maxSeenChars: Math.max(0, ...seen),
         cappedCalls: metrics.toolCalls.filter(call => call.capped).length,
-        returnedChars: metrics.toolCalls.reduce((total, call) => total + (call.returnedChars ?? 0), 0),
+        returnedChars: metrics.toolCalls.some(call => call.returnedChars === null)
+          ? null : metrics.toolCalls.reduce((total, call) => total + (call.returnedChars ?? 0), 0),
         apiCalls: metrics.apiCalls,
         tokens: metrics.tokens,
         elapsedMs,

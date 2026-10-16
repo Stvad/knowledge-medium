@@ -73,13 +73,13 @@ describe('summarize', () => {
     expect(row).toMatchObject({task: 'a', reps: 3, passes: 2, toolCalls: 3})
   })
 
-  it('leaves a cost unknown when a repetition did not report one, rather than counting it as $0', () => {
+  it.each(['costUsd', 'returnedChars'] as const)('leaves %s unknown when a repetition did not report it, rather than counting it as 0', field => {
     const [row] = summarize(reportOf('r', [
-      runRecord('a', 1, {costUsd: 0.02}),
-      runRecord('a', 2, {costUsd: null, timedOut: true, elapsedMs: 600_000}),
-      runRecord('a', 3, {costUsd: 0.04}),
+      runRecord('a', 1, {[field]: 2}),
+      runRecord('a', 2, {[field]: null, timedOut: true, elapsedMs: 600_000}),
+      runRecord('a', 3, {[field]: 4}),
     ]))
-    expect(row).toMatchObject({costUsd: null, elapsedMs: 10_000})
+    expect(row).toMatchObject({[field]: null, elapsedMs: 10_000})
   })
 })
 
@@ -143,6 +143,13 @@ describe('renderMarkdown', () => {
     const markdown = renderMarkdown(reportOf('r', [runRecord('a', 1, {costUsd: null}), runRecord('b', 1)]))
     expect(markdown).toMatch(/^\| a \|.*\| n\/a \| 10s \|$/m)
     expect(markdown).toMatch(/^\| \*\*all\*\* \|.*\| n\/a \| 20s \|$/m)
+  })
+
+  it('renders unknown returned characters as n/a, in the task row and the total', () => {
+    const markdown = renderMarkdown(reportOf('r', [runRecord('a', 1, {returnedChars: null}), runRecord('b', 1)]))
+    // label, kind, pass, tool calls, capped, seen, then returned
+    expect(markdown).toMatch(/^\| a \|(?:[^|]*\|){5} n\/a \|/m)
+    expect(markdown).toMatch(/^\| \*\*all\*\* \|(?:[^|]*\|){5} n\/a \|/m)
   })
 
   it('flags writes made during a read task', () => {

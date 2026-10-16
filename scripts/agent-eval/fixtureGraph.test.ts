@@ -333,6 +333,10 @@ const solveWrongly: Record<string, Array<(env: TaskEnv) => Promise<void>>> = {
     async () => {
       await graph.callTool('update_block', {id: fixtureId('pricingFaqTodo'), properties: {status: 'done', 'eval:note': 'done'}})
     },
+    // Status right, but the importer's marker set to a value its enum does not have.
+    async () => {
+      await graph.callTool('update_block', {id: fixtureId('pricingFaqTodo'), properties: {status: 'done', 'roam:todo-state': 'done'}})
+    },
     // Status right, but the todo moved off its section.
     async () => {
       await graph.callTool('update_block', {id: fixtureId('pricingFaqTodo'), properties: {status: 'done'}})
