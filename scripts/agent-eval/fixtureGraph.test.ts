@@ -42,7 +42,7 @@ import { diffAgainst, restoreSnapshot, snapshotWorkspace, strayChanges, waitForQ
 import { differingUids, fixtureState } from './fixtureState'
 import { OUTPUT_PROBES, type ProbeContext } from './outputBudgets'
 import { createRunJournal } from './runJournal'
-import { openWorkspace } from './workspace'
+import { beginRun, openWorkspace } from './workspace'
 import {
   allowedChanges,
   type CheckInput,
@@ -481,6 +481,12 @@ describe('fixture state', () => {
       .toEqual(expect.arrayContaining(['+{{[[TODO]]}} hand-written', '+Blockers: staging database again']))
   }, 20_000)
 
+  it('sees a change to a daily page, whose id the import derives from its date rather than its uid', async () => {
+    const before = await fixtureState(probe, pages)
+    await graph.callTool('update_block', {id: await dailyNoteId(probe, '2026-06-04'), properties: {'eval:note': 'x'}})
+    expect(differingUids(before, await fixtureState(probe, pages))).toEqual(['=June 4th, 2026'])
+  }, 20_000)
+
   it('ignores where a page sits at the top level, which differs from one import to the next', async () => {
     const before = await fixtureState(probe, pages)
     const halyard = await requirePageId(probe, 'Halyard Security')
@@ -620,6 +626,25 @@ describe('run journal', () => {
     await graph.callTool('update_block', {id: hashLine.id, content: `${FIXTURE_HASH_PREFIX}tampered`})
 
     expect(await openWorkspace(probe, createRunJournal(dir), fixtureHash, QUIET)).toEqual({recovered: 1, seeded: fixtureHash})
+  }, 20_000)
+
+  it('validates a run\'s graph before its setup writes anything, and journals what setup adds', async () => {
+    const dir = path.join(mkdtempSync(path.join(tmpdir(), 'agent-eval-journal-')), 'journal')
+    let setUpRan = false
+    await expect(beginRun(probe, createRunJournal(dir), fixtureHash, {
+      validate: async () => { throw new Error('refused') },
+      setUp: async () => { setUpRan = true },
+    }, QUIET)).rejects.toThrow('refused')
+    expect(setUpRan).toBe(false)
+
+    let added = ''
+    const {setupCreated} = await beginRun(probe, createRunJournal(dir), fixtureHash, {
+      validate: async () => {},
+      setUp: async () => { added = resultIdOf(await graph.callTool('create_block', {parentId: fixtureId('vendorsSection'), content: 'set up'})) },
+    }, QUIET)
+    expect(setupCreated).toEqual([added])
+    expect(await createRunJournal(dir).recover(probe, fixtureHash, QUIET)).toBe(1)
+    expect(await getBlock(probe, added)).toBeNull()
   }, 20_000)
 
   // A block standing in for the daily note a reset creates when it is missing.

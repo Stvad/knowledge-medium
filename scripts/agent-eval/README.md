@@ -73,9 +73,10 @@ taken over.
 
 Before the first task, `run` also checks that the tab holds the fixture as this
 checkout's code imports it, which is what the gate's checks are proven on. Every block
-the export defines, and every block that sits under one or under a daily page holding
-one, is read from the tab and from a fresh in-process import, in a form that does not
-depend on the workspace (`fixtureState.ts`). The two must be equal.
+the export defines, every daily page holding one, and every block that sits under
+either is read from the tab and from a fresh in-process import, in a form that does not
+depend on the workspace (`fixtureState.ts`). The two must be equal. This check runs
+before the resets write anything, so a refused run leaves nothing behind.
 A tab seeded by older code, or holding a change made by hand, is refused before
 anything is spent, and so is a run whose in-process import fails. The run also aborts if
 `packages/agent-cli/dist` changed while a task ran, since every task launches the
@@ -96,7 +97,8 @@ A baseline that differs in any of them gets no deltas at all, since they
 would measure that difference rather than the tools. That includes a run whose model
 never resolved because no task got far enough. `run` refuses such a `--compare` before
 it starts, and stops after the first task when the resolved model differs, since the
-model is known only once a task has run. Claude Code's version is shown, not required
+model is known only once a task has run. A run also stops if a later task resolves to
+another model than the first. Claude Code's version is shown, not required
 to match.
 
 ## One-time setup

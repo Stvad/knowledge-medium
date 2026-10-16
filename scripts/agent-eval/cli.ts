@@ -23,8 +23,8 @@ import { KM_MCP_ALLOWED_TOOLS, KM_MCP_TOOL_NAMES, MCP_SERVER_NAME } from '../../
 import { runJsonlProcess } from '../../packages/agent-dispatch/src/execProcess'
 import { BILLING_ENV_DENYLIST, envForBilling } from '../../packages/agent-dispatch/src/runner'
 import { buildFixture, type Fixture } from './fixture'
-import { dailyNoteId, type GraphProbe, requirePageId, sqlAll } from './graphQueries'
-import { restoreSnapshot, snapshotWorkspace, strayChanges } from './isolation'
+import { dailyNoteId, type GraphProbe, requirePageId } from './graphQueries'
+import { restoreSnapshot, strayChanges } from './isolation'
 import { connectMcpClient } from './mcpClient'
 import { differingUids, fixtureState } from './fixtureState'
 import { measureProbes, OUTPUT_PROBES, outputProbeHash } from './outputBudgets'
@@ -39,7 +39,7 @@ import {
 } from './report'
 import { allowedChanges, type CheckOutcome, type EvalTask, taskDefinitionHash, TASKS } from './tasks'
 import { extractAnswer, parseTranscript } from './transcript'
-import { openWorkspace } from './workspace'
+import { beginRun, openWorkspace } from './workspace'
 import { acquireWorkspaceLock } from './workspaceLock'
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
@@ -299,15 +299,11 @@ const run = async (options: RunOptions) => {
   }
   requireComparable(true)
 
-  // Freeze the starting state every task gets: each task's changes are
-  // undone against it.
-  const existing = new Set((await sqlAll<{id: string}>(probe, 'SELECT id FROM blocks WHERE workspace_id = ?', [probe.workspaceId])).map(row => row.id))
-  for (const task of TASKS) await task.reset?.({probe, truth: fixture.truth, runTag: ''})
   process.stdout.write('checking the tab against this checkout\'s import…\n')
-  report.outputSizes = await requireImportedGraph(client, probe, fixture)
-  const snapshot = await snapshotWorkspace(probe)
-  const setupCreated = [...snapshot.rows.keys()].filter(id => !existing.has(id))
-  journal.begin(snapshot, fixture.hash, setupCreated)
+  const {snapshot, setupCreated} = await beginRun(probe, journal, fixture.hash, {
+    validate: async () => { report.outputSizes = await requireImportedGraph(client, probe, fixture) },
+    setUp: async () => { for (const task of TASKS) await task.reset?.({probe, truth: fixture.truth, runTag: ''}) },
+  })
 
   mkdirSync(path.join(runDir, 'transcripts'), {recursive: true})
   const mcpConfig = writeMcpConfig(runDir, options.profile)
@@ -342,6 +338,7 @@ const run = async (options: RunOptions) => {
 
       const metrics = parseTranscript(stdout)
       const modelResolved = report.conditions.model === null && metrics.model !== null
+      const modelChanged = !modelResolved && metrics.model !== null && metrics.model !== report.conditions.model
       report.conditions.model ??= metrics.model
       report.claudeCodeVersion ??= metrics.claudeCodeVersion
       const outcome: CheckOutcome = await task.check({...env, answer: extractAnswer(metrics.resultText), startedAt})
@@ -351,6 +348,7 @@ const run = async (options: RunOptions) => {
       journal.taskRestored()
       if (rebuilt) fail(`packages/agent-cli/dist changed while ${task.id} ran, so it may have run other tools; start the run again`)
       if (modelResolved) requireComparable(false)
+      if (modelChanged) fail(`${task.id} ran on ${metrics.model}, not ${report.conditions.model} like the tasks before it; start the run again`)
       const allowed = allowedChanges(task, probe.workspaceId, outcome)
       const strayEdits = strayChanges(changes, allowed)
       const failures = [
@@ -446,15 +444,17 @@ const main = async () => {
       if (!Number.isFinite(timeoutMin) || timeoutMin <= 0) fail(`--timeout-min must be a positive number, got ${values['timeout-min']}`)
       const mcpOutputTokens = Number(values['mcp-output-tokens'])
       if (!Number.isInteger(mcpOutputTokens) || mcpOutputTokens < 1) fail(`--mcp-output-tokens must be a positive integer, got ${values['mcp-output-tokens']}`)
-      if (values.label) requireSafeLabel(values.label)
       const now = new Date().toISOString()
+      const label = values.label
+        ?? `${now.slice(0, 10)}T${now.slice(11, 16).replace(':', '')}-${gitInfo().sha.slice(0, 7)}-${values.model.replace(/[^\w.-]/g, '-')}`
+      requireSafeLabel(label)
       return run({
         profile: values.profile,
         model: values.model,
         effort: values.effort ?? null,
         repeat,
         tasks,
-        label: values.label ?? `${now.slice(0, 10)}T${now.slice(11, 16).replace(':', '')}-${gitInfo().sha.slice(0, 7)}-${values.model}`,
+        label,
         baseline: values.compare ? loadReport(values.compare) : undefined,
         timeoutMs: timeoutMin * 60_000,
         mcpOutputTokens,
