@@ -161,6 +161,8 @@ export const VideoNotesLayout: BlockLayout = (slots) => {
   }
 
   const handleResizeKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    // A drag owns the ratio until its release, which overwrites any write before it.
+    if (isResizing) return
     const deltas: Partial<Record<string, number>> = {
       ArrowDown: VIDEO_NOTES_KEYBOARD_STEP,
       ArrowRight: VIDEO_NOTES_KEYBOARD_STEP,
