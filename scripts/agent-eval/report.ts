@@ -214,7 +214,7 @@ export const renderMarkdown = (report: EvalReport, compareWith?: EvalReport): st
   lines.push(`- model \`${conditions.model ?? report.model}\`${conditions.effort === 'default' ? '' : `, effort ${conditions.effort}`}, Claude Code ${report.claudeCodeVersion ?? '?'}`)
   lines.push(`- km tools: ${report.kmTools.map(tool => `\`${tool}\``).join(', ')}; MCP output cap ${conditions.mcpOutputTokens} tokens`)
   lines.push('- sizes are characters; "capped": results over that cap, which Claude Code replaced with a short notice; "seen" is what reached the model, "returned" what the tools produced')
-  lines.push(`- fixture \`${conditions.fixture}\`, ${reps} repetition(s) per task, ${conditions.timeoutMs / 60_000} min timeout each; per-task figures are medians; lower is better except pass`)
+  lines.push(`- fixture \`${conditions.fixture}\` (stored as \`${conditions.importedFixture ?? '?'}\`), ${reps} repetition(s) per task, ${conditions.timeoutMs / 60_000} min timeout each; per-task figures are medians; lower is better except pass`)
   lines.push('- list $ is the API list-price equivalent the CLI reports (a subscription run is not charged it); it weights input, cache and output tokens in one number; n/a where a run ended without reporting it')
   if (compareWith && !baseline) {
     lines.push(`- **not compared** with ${compareWith.label}: the runs differ in ${mismatches.join('; ')}`)
