@@ -1,1 +1,1 @@
-import{Ef as e}from"../../../chunks/app-Chxacnpu.js";export{e as richPasteDecisionContribution};
+import{Ef as e}from"../../../chunks/app-DNLUKqkj.js";export{e as richPasteDecisionContribution};

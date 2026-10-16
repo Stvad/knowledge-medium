@@ -1,1 +1,1 @@
-import{od as e}from"../../../chunks/app-Chxacnpu.js";export{e as LazyBlockEntry};
+import{od as e}from"../../../chunks/app-DNLUKqkj.js";export{e as LazyBlockEntry};

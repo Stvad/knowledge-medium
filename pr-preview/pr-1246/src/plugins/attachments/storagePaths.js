@@ -1,1 +1,1 @@
-import{Cm as e,Sm as t}from"../../../chunks/app-Chxacnpu.js";export{t as attachmentObjectPath,e as authenticatedObjectUrl};
+import{Cm as e,Sm as t}from"../../../chunks/app-DNLUKqkj.js";export{t as attachmentObjectPath,e as authenticatedObjectUrl};
