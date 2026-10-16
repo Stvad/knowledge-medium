@@ -1,0 +1,1 @@
+import{qg as e}from"../../../chunks/app-uX4fIHoQ.js";export{e as mobileBottomNavItemsFacet};
