@@ -118,6 +118,11 @@ describe('resolveBlockRef', () => {
     const ambiguous = await resolveBlockRef(repo, 'a1b2c3d4', {workspaceId: WS}).then(() => '', (error: Error) => error.message)
     expect(ambiguous).toContain('Twin ⏎ forged')
     expect(ambiguous).not.toMatch(/\p{Bidi_Control}/u)
+    // A synced id is not guaranteed canonical either.
+    await create({id: 'a1b2c3d4-x\nfake line \u202E', content: 'odd id'})
+    const oddId = await resolveBlockRef(repo, 'a1b2c3d4', {workspaceId: WS}).then(() => '', (error: Error) => error.message)
+    expect(oddId).toContain('a1b2c3d4-x ⏎ fake line')
+    expect(oddId).not.toMatch(/fake line \u202E|\nfake/u)
     await create({id: uuid('a1b2c3d5', 5), content: 'x', properties: {alias: ['Project\nAlpha two']}})
     const missing = await resolveBlockRef(repo, 'Project', {workspaceId: WS}).then(() => '', (error: Error) => error.message)
     expect(missing).toContain('  Project ⏎ Alpha two')
