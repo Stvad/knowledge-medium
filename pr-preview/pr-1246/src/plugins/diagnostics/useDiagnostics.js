@@ -1,1 +1,1 @@
-import{ba as e,xa as t}from"../../../chunks/app-D3JmkA1u.js";export{e as aggregateDiagnostics,t as useDiagnostics};
+import{ba as e,xa as t}from"../../../chunks/app-DWw2EQ3a.js";export{e as aggregateDiagnostics,t as useDiagnostics};
