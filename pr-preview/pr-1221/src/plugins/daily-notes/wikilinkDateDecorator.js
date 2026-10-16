@@ -1,1 +1,0 @@
-import{Hb as e}from"../../../chunks/app-BRvdyPMu.js";export{e as dailyDateWikilinkDecorator};
