@@ -1,1 +1,0 @@
-import{Bs as e,zs as t}from"../../../chunks/app-Duh4xm89.js";export{t as collectTypeCandidates,e as formatTypeCandidateReport};
