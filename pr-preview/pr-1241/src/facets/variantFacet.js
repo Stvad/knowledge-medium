@@ -1,0 +1,1 @@
+import{$A as e,QA as t}from"../../chunks/app-C2u7rMt_.js";export{t as defineVariant,e as defineVariantFacet};

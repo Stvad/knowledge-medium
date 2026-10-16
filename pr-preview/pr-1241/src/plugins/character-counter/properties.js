@@ -1,0 +1,1 @@
+import{aB as e,oB as t,sB as n}from"../../../chunks/app-C2u7rMt_.js";export{e as charLimitProp,t as charProfileProp,n as charScopeProp};

@@ -1,0 +1,1 @@
+import{_T as e,vT as t}from"../../../chunks/app-C2u7rMt_.js";export{e as extensionPromptDiagnosticContribution,t as extensionPromptDiagnosticSource};

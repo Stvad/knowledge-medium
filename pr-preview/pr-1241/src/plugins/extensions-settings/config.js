@@ -1,0 +1,1 @@
+import{CT as e,ST as t,wT as n,xT as r}from"../../../chunks/app-C2u7rMt_.js";export{r as extensionsOverridesPresetCore,t as extensionsOverridesProp,e as extensionsPrefsType,n as overridesCodec};

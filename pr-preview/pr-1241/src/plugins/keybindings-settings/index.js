@@ -1,0 +1,1 @@
+import{FS as e,IS as t,ct as n}from"../../../chunks/app-C2u7rMt_.js";export{e as keybindingOverridesProp,t as keybindingsPrefsType,n as keybindingsSettingsPlugin};

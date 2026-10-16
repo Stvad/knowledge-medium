@@ -1,0 +1,1 @@
+import{B_ as e,G_ as t,H_ as n,K_ as r,U_ as i,V_ as a,W_ as o,q_ as s}from"../../../chunks/app-C2u7rMt_.js";export{s as BreadcrumbList,o as BreadcrumbRenderer,r as Breadcrumbs,i as PromotableBreadcrumbList,e as breadcrumbRendererContribution,a as breadcrumbsPlugin,t as getBreadcrumbContentPreview,n as usePromotableBreadcrumb};

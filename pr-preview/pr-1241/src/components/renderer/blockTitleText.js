@@ -1,0 +1,1 @@
+import{TA as e,wA as t}from"../../../chunks/app-C2u7rMt_.js";export{t as BLOCK_TITLE_TEXT_CLASS,e as useBlockTitleTextClass};

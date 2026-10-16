@@ -1,0 +1,1 @@
+import{Uh as e,ig as t,ng as n,rg as r,tg as i}from"../../../chunks/app-C2u7rMt_.js";export{n as EXTENSIONS_PAGE_TITLE,r as TUTORIAL_DEFAULT_TITLE,t as TUTORIAL_VIM_TITLE,e as onboardingPlugin,i as seedTutorial};
