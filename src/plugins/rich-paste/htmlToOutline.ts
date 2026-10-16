@@ -29,8 +29,7 @@ export const convertClipboardHtml = (html: string, plainText: string): Clipboard
   const body = new DOMParser().parseFromString(html, 'text/html').body
   if (hasOutlinerReferences(plainText, body)) return {kind: 'plain'}
   normalizeClipboardDom(body)
-  const mdast = toMdast(fromDom(body)) as Root
-  fitContentModel(mdast)
+  const mdast = separateBlocks(toMdast(fromDom(body)) as Root)
   sanitize(mdast)
   splitAtBlankLines(mdast)
   // With no plain text (an html-only clipboard) the html is the only source.
@@ -205,53 +204,47 @@ const BLOCKS: ReadonlySet<Nodes['type']> = new Set([
   'blockquote', 'code', 'heading', 'list', 'listItem', 'paragraph', 'table', 'thematicBreak',
 ])
 
-/** Fit the tree to mdast's content model, which the converter breaks where
- *  the HTML did; serialized out of place, text runs into its neighbours or
- *  is dropped. In place.
- *  - Phrasing can't hold blocks, but the converter leaves them in a
- *    `<summary>` (read as a paragraph), in `<b>` or `<i>`, and, splitting a
- *    link around the blocks in it, in a link inside a list. Each block is
- *    lifted out beside the phrasing around it, dropping the inline markup
- *    that wrapped it.
- *  - A list item holds blocks, but the converter puts what sits in a list
- *    outside its items (`<ul>text<li>…`) into the next item as bare
- *    phrasing. It is wrapped in a paragraph. */
-const fitContentModel = (root: Root): void => {
-  root.children = root.children.flatMap(fit) as RootContent[]
-}
+/** Markdown keeps phrasing and blocks apart; the converter mixes them where
+ *  the HTML does. It reads a `<summary>` as a paragraph, leaves blocks inside
+ *  `<b>` or `<i>`, and, splitting a link around the blocks in it, puts the
+ *  link inside a list; serialized there, a block's text runs into its
+ *  neighbours or is dropped. And it puts a list's content outside its items
+ *  in an item of its own, bare, where no block reads it. So each block is
+ *  lifted out beside the phrasing around it, dropping the inline markup that
+ *  wrapped it, and bare phrasing in a list item becomes a paragraph. */
+const separateBlocks = (root: Root): Root => separate(root)[0] as Root
 
-const fit = (node: Nodes): Nodes[] => {
+/** `node` as a sequence of nodes in which phrasing and blocks don't mix. */
+const separate = (node: Nodes): Nodes[] => {
   if (!('children' in node)) return [node]
-  const children = (node.children as Nodes[]).flatMap(fit)
-  if (node.type === 'listItem') {
-    // A run with nothing to show (a `<br>` between items) would push the
-    // item's own text down a level.
-    const paragraph = (run: PhrasingContent[]): Nodes[] => run.some(hasContent) ? [{type: 'paragraph', children: run}] : []
-    return [{...node, children: wrapPhrasing(children, paragraph)} as Nodes]
-  }
+  const children = (node.children as Nodes[]).flatMap(separate)
   if (node.type === 'paragraph' || node.type === 'heading' || isInlineMarkup(node)) {
-    return wrapPhrasing(children, run => [{...node, children: run} as Nodes])
+    return aroundBlocks(children, run => [{...node, children: run} as Nodes])
+  }
+  if (node.type === 'listItem') {
+    // A run with no text (a `<br>` between items) is no paragraph.
+    const paragraph = (run: Nodes[]): Nodes[] =>
+      run.some(hasContent) ? [{type: 'paragraph', children: run as PhrasingContent[]}] : []
+    return [{...node, children: aroundBlocks(children, paragraph)} as Nodes]
   }
   return [{...node, children} as Nodes]
 }
 
-/** `nodes` with each run of phrasing between its blocks replaced by `wrap`'s nodes. */
-const wrapPhrasing = (nodes: readonly Nodes[], wrap: (run: PhrasingContent[]) => Nodes[]): Nodes[] => {
-  const wrapped: Nodes[] = []
-  let run: PhrasingContent[] = []
-  const endRun = () => {
-    if (run.length > 0) wrapped.push(...wrap(run))
+/** `nodes` with each run of phrasing between their blocks replaced by `wrap(run)`. */
+const aroundBlocks = (nodes: readonly Nodes[], wrap: (run: Nodes[]) => Nodes[]): Nodes[] => {
+  const result: Nodes[] = []
+  let run: Nodes[] = []
+  for (const node of nodes) {
+    if (!BLOCKS.has(node.type)) {
+      run.push(node)
+      continue
+    }
+    if (run.length > 0) result.push(...wrap(run))
+    result.push(node)
     run = []
   }
-  for (const node of nodes) {
-    if (!BLOCKS.has(node.type)) run.push(node as PhrasingContent)
-    else {
-      endRun()
-      wrapped.push(node)
-    }
-  }
-  endRun()
-  return wrapped
+  if (run.length > 0) result.push(...wrap(run))
+  return result
 }
 
 /** Split paragraphs where two or more line breaks meet: `<br><br>` is how

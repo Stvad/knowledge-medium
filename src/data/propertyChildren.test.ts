@@ -2543,6 +2543,241 @@ describe('revival re-materializes property children (#778)', () => {
     // duplicate field row appears.
     expect(await liveFieldRows('p')).toEqual([])
   })
+
+  it('brings the properties back when the delete and the restore share ONE tx (#1211)', async () => {
+    // Net, the owner went live → live, so nothing about it changed; only its
+    // field rows did, live → dead. Read as a net diff that is the user unsetting
+    // every key — the owner passing through a tombstone is in the write log.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    const [field] = await liveFieldRows('p')
+
+    await repo.tx(async tx => {
+      await deleteSubtreeInTx(tx, 'p')
+      await tx.restore('p')
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(await cellValue('p')).toBe('done')
+    expect((await liveFieldRows('p')).map(row => row.id)).toEqual([field!.id])
+    expect(await liveValueContents('p')).toEqual(['done'])
+  })
+
+  it('keeps the untouched keys when a same-tx delete + restore also writes one (#1211)', async () => {
+    // The owner IS in MATERIALIZE's event here, with a LIVE tx-start state, so
+    // it would take the diff path — which materializes only the key written.
+    const NOTE_FIELD_ID = 'field-note-children'
+    const noteSchema = defineProperty('note', {
+      codec: codecs.string, defaultValue: '', changeScope: ChangeScope.BlockDefault,
+    })
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    registerDefinition(repo, 'test-note-definition', NOTE_FIELD_ID, noteSchema)
+    await repo.tx(tx => tx.setProperty('p', noteSchema, 'kept'), {scope: ChangeScope.BlockDefault})
+    const [noteField] = await liveFieldRowsFor(NOTE_FIELD_ID)('p')
+
+    await repo.tx(async tx => {
+      await deleteSubtreeInTx(tx, 'p')
+      await tx.restore('p')
+      await tx.setProperty('p', statusSchema, 'new')
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(await bagOf('p')).toEqual({[statusSchema.name]: 'new', [noteSchema.name]: 'kept'})
+    expect((await liveFieldRowsFor(NOTE_FIELD_ID)('p')).map(row => row.id)).toEqual([noteField!.id])
+    expect(await liveValueContents('p')).toEqual(['new'])
+  })
+
+  it('revives the owner\'s own field row when the same tx unmarks a row moved under it (#1210)', async () => {
+    // MATERIALIZE runs before DERIVE, so on its first pass the moved row still
+    // carries the bit its old content earned and reads as the restored owner's
+    // live field row — which leaves the owner's own tombstone where it lies.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    const [ownField] = await liveFieldRows('p')
+    await createBlock(repo, 'q')
+    await repo.tx(tx => tx.setProperty('q', statusSchema, 'other'), {scope: ChangeScope.BlockDefault})
+    const [movedField] = await liveFieldRows('q')
+    await repo.mutate.delete({id: 'p'})
+
+    await repo.tx(async tx => {
+      await tx.restore('p')
+      await tx.move(movedField!.id, {parentId: 'p', orderKey: 'zz'})
+      await tx.update(movedField!.id, {content: 'plain text'})
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(await cellValue('p')).toBe('done')
+    expect((await liveFieldRows('p')).map(row => row.id)).toEqual([ownField!.id])
+    expect(await liveValueContents('p')).toEqual(['done'])
+    expect(await cellValue('q')).toBeUndefined()
+  })
+
+  it('a pass-two revival reads PROJECT\'s unset as settled, not as the tx removing the key', async () => {
+    // PROJECT unsets a key whose value no longer parses and keeps the rows for
+    // the user to repair (§9) — a SETTLED write. When a later writer dirties the
+    // revived row, the revival runs again, and its "what did this tx write" diff
+    // has to start from a baseline that already holds that unset. From raw tx
+    // start, the key reads as removed by this tx, and its rows get tombstoned.
+    const COUNT_FIELD_ID = 'field-count-revival'
+    const countSchema = defineProperty<number>('count', {
+      codec: codecs.number, defaultValue: 0, changeScope: ChangeScope.BlockDefault,
+    })
+    const countFieldRows = liveFieldRowsFor(COUNT_FIELD_ID)
+    await seedWorkspace('children')
+    const repo = setup()
+    registerDefinition(repo, 'test-count-definition', COUNT_FIELD_ID, countSchema)
+    await createBlock(repo, 'p')
+    await createBlock(repo, 'target', 'a target')
+    await repo.tx(tx => tx.setProperty('p', countSchema, 5), {scope: ChangeScope.BlockDefault})
+    const [field] = await countFieldRows('p')
+    const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+    await repo.mutate.delete({id: 'p'})
+    // A peer's edit that landed while the owner was dead.
+    await sharedDb.db.execute('UPDATE blocks SET content = ? WHERE id = ?', ['not a number', value!.id])
+
+    await repo.tx(tx => tx.restore('p', {content: '((target))'}),
+      {scope: ChangeScope.BlockDefault})
+
+    const row = await sharedDb.db.get<{reference_target_id: string | null}>(
+      'SELECT reference_target_id FROM blocks WHERE id = ?', ['p'])
+    // DERIVE stamped the owner after MATERIALIZE, so the revival ran twice.
+    expect(row.reference_target_id).toBe('target')
+    expect((await bagOf('p'))[countSchema.name]).toBeUndefined()
+    expect((await countFieldRows('p')).map(r => r.id)).toEqual([field!.id])
+    expect((await childrenRows(field!.id)).filter(v => v.deleted === 0).map(v => v.content))
+      .toEqual(['not a number'])
+  })
+
+  it('does not bring back a field row the restoring tx itself deleted under the live owner', async () => {
+    // The revival brings back what the owner's death took down. A field row this
+    // tx deleted AFTER restoring the owner is the user unsetting the property
+    // through the tree, and neither reviving it nor minting from the cell may
+    // undo that.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    const [field] = await liveFieldRows('p')
+    const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+    await repo.mutate.delete({id: 'p'})
+    // The sync-shaped state: the field row and its value live under the tombstone.
+    await sharedDb.db.execute('UPDATE blocks SET deleted = 0 WHERE id IN (?, ?)', [field!.id, value!.id])
+
+    await repo.tx(async tx => {
+      await tx.restore('p')
+      await deleteSubtreeInTx(tx, field!.id)
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(await cellValue('p')).toBeUndefined()
+    expect(await liveFieldRows('p')).toEqual([])
+  })
+
+  it('mints a fresh field row for a key the tx writes after deleting its old one', async () => {
+    // The write is the user's word for the key, so it materializes — but into a
+    // new row, not the one this same tx deleted.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    const [field] = await liveFieldRows('p')
+    const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+    await repo.mutate.delete({id: 'p'})
+    await sharedDb.db.execute('UPDATE blocks SET deleted = 0 WHERE id IN (?, ?)', [field!.id, value!.id])
+
+    await repo.tx(async tx => {
+      await tx.restore('p')
+      await deleteSubtreeInTx(tx, field!.id)
+      await tx.update('p', {properties: {[statusSchema.name]: 'new'}})
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(await cellValue('p')).toBe('new')
+    const fields = await liveFieldRows('p')
+    expect(fields).toHaveLength(1)
+    expect(fields[0]!.id).not.toBe(field!.id)
+    expect(await liveValueContents('p')).toEqual(['new'])
+  })
+
+  it('revives the duplicate field row the owner\'s delete took, past one the tx deleted on its own', async () => {
+    // Provenance is per tombstone, not per property: the one the cascade took
+    // was live when the owner died, so the property was still set then.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    const [field] = await liveFieldRows('p')
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'twin-field', workspaceId: WS, parentId: 'p', orderKey: 'zz',
+        content: propertyFieldContent(STATUS_FIELD_ID),
+      })
+      await tx.create({
+        id: 'twin-value', workspaceId: WS, parentId: 'twin-field', orderKey: keyAtStart(), content: 'other',
+      })
+    }, {scope: ChangeScope.BlockDefault})
+
+    await repo.tx(async tx => {
+      await deleteSubtreeInTx(tx, field!.id)
+      await deleteSubtreeInTx(tx, 'p')
+      await tx.restore('p')
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect((await liveFieldRows('p')).map(row => row.id)).toEqual(['twin-field'])
+    expect(await cellValue('p')).toBe('other')
+  })
+
+  it('revives the field row the owner\'s delete took over an older tombstone for the property', async () => {
+    // An unset/re-set cycle leaves an older tombstone; with only the before-tx
+    // view that pair is ambiguous and mints. The write log says which one died
+    // with the owner.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    await repo.tx(tx => tx.unsetProperty('p', statusSchema), {scope: ChangeScope.BlockDefault})
+    await repo.tx(tx => tx.setProperty('p', statusSchema, 'done'), {scope: ChangeScope.BlockDefault})
+    const [current] = await liveFieldRows('p')
+
+    await repo.tx(async tx => {
+      await deleteSubtreeInTx(tx, 'p')
+      await tx.restore('p')
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect((await liveFieldRows('p')).map(row => row.id)).toEqual([current!.id])
+    expect(await liveValueContents('p')).toEqual(['done'])
+  })
+
+  it('a key written after the tx deleted its live field row does not revive an older one', async () => {
+    // The tx's own delete of the row that was live outranks a tombstone from
+    // before it, which was deleted before that row was ever made.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    const [older] = await liveFieldRows('p')
+    await repo.tx(tx => tx.unsetProperty('p', statusSchema), {scope: ChangeScope.BlockDefault})
+    await repo.tx(tx => tx.setProperty('p', statusSchema, 'done'), {scope: ChangeScope.BlockDefault})
+    const [current] = await liveFieldRows('p')
+    const [currentValue] = (await childrenRows(current!.id)).filter(v => v.deleted === 0)
+    await repo.mutate.delete({id: 'p'})
+    await sharedDb.db.execute('UPDATE blocks SET deleted = 0 WHERE id IN (?, ?)', [current!.id, currentValue!.id])
+
+    await repo.tx(async tx => {
+      await tx.restore('p')
+      await deleteSubtreeInTx(tx, current!.id)
+      await tx.update('p', {properties: {[statusSchema.name]: 'new'}})
+    }, {scope: ChangeScope.BlockDefault})
+
+    const fields = await liveFieldRows('p')
+    expect(fields).toHaveLength(1)
+    expect([older!.id, current!.id]).not.toContain(fields[0]!.id)
+    expect(await liveValueContents('p')).toEqual(['new'])
+  })
+
+  it('does not bring back a field row deleted before the owner, in one delete + restore tx', async () => {
+    // Only the owner's subtree delete takes its field rows down AFTER the owner:
+    // the cascade tombstones the root first. A field row that died while the
+    // owner was still live was deleted on its own.
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    const [field] = await liveFieldRows('p')
+
+    await repo.tx(async tx => {
+      await deleteSubtreeInTx(tx, field!.id)
+      await deleteSubtreeInTx(tx, 'p')
+      await tx.restore('p')
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(await cellValue('p')).toBeUndefined()
+    expect(await liveFieldRows('p')).toEqual([])
+  })
 })
 
 describe('§9 recognition on the WRITE side (round-2 review fixes)', () => {
@@ -4281,6 +4516,33 @@ describe('multi-value properties are N sibling value children (km-h1hy)', () => 
       expect((await liveFieldRowsFor(TAGS_FIELD_ID)(keep!.id)).map(row => row.id)).toEqual([keepField!.id])
       expect(await memberContents(keep!.id, TAGS_FIELD_ID)).toEqual(['x', 'y'])
       expect((await bagOf(keep!.id))[tagsSchema.name]).toEqual(['x', 'y'])
+    })
+
+    it('folding a member that owns two field rows for one property leaves the survivor one', async () => {
+      // The survivor gains each row the fold moves over, so the folded member's
+      // second field row for a property folds into the first rather than
+      // landing beside it as a duplicate the fold made.
+      const repo = await setupWithLists()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['a', 'a']),
+        {scope: ChangeScope.BlockDefault})
+      const [keep, fold] = await memberRows('p', TAGS_FIELD_ID)
+      await repo.tx(tx => tx.setProperty(fold!.id, tagsSchema, ['y']), {scope: ChangeScope.BlockDefault})
+      const twinKey = await appendKey(fold!.id)
+      await repo.tx(async tx => {
+        await tx.create({
+          id: 'twin-field', workspaceId: WS, parentId: fold!.id, orderKey: twinKey,
+          content: propertyFieldContent(TAGS_FIELD_ID),
+        })
+        await tx.create({
+          id: 'twin-value', workspaceId: WS, parentId: 'twin-field', orderKey: keyAtStart(), content: 'z',
+        })
+      }, {scope: ChangeScope.BlockDefault})
+      expect(await liveFieldRowsFor(TAGS_FIELD_ID)(fold!.id)).toHaveLength(2)
+
+      await repo.tx(tx => tx.setProperty('p', tagsSchema, ['a']), {scope: ChangeScope.BlockDefault})
+
+      expect([...await memberContents(keep!.id, TAGS_FIELD_ID)].sort()).toEqual(['y', 'z'])
     })
 
     it('folding a repeated member folds field rows of a seed whose block the same tx deletes', async () => {

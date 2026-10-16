@@ -178,14 +178,6 @@ describe('convertClipboardHtml: content', () => {
     expect(outline('<h1>T</h1><li>x</li><b><li>y</li></b>')).toEqual(['# T', '  x', '  y'])
   })
 
-  it('keeps text that is in a list but outside its items', () => {
-    // The converter puts it in the next item (or one of its own), as that item's first line.
-    expect(outline('<h1>T</h1><ol start="2">loose</ol><ul><b>lead</b><li>a</li></ul>'))
-      .toEqual(['# T', '  2. loose', '  **lead**', '    a'])
-    // A line break there has no text to keep, so it doesn't push the item's own down a level.
-    expect(outline('<ul><li>a</li><br><li>b</li></ul>')).toEqual(['a', 'b'])
-  })
-
   it('keeps a line break inside one block even with no other markup', () => {
     expect(outline('<p>first<br>second</p>')).toEqual(['first\nsecond'])
   })
@@ -299,6 +291,13 @@ describe('convertClipboardHtml: content', () => {
       .toEqual(['# T', '  [See](https://e.com/)', '    x'])
     // An empty block left inside would take the escape off the text before it.
     expect(convert('<summary>-<ul></ul></summary>')).toEqual({kind: 'inline', markdown: '\\-'})
+  })
+
+  it('keeps text a list holds outside its items', () => {
+    // The converter puts it in an item of its own, bare, where no block reads it.
+    expect(outline('<h1>T</h1><ul><li>kept<ul>nested</ul></li></ul>')).toEqual(['# T', '  kept', '    nested'])
+    expect(outline('<h1>T</h1><li>kept<ul>nested</ul></li>')).toEqual(['# T', '  kept', '    nested'])
+    expect(outline('<h1>T</h1><ul><li>a</li><br><li>b</li></ul>')).toEqual(['# T', '  a', '  b'])
   })
 
   it('makes no block of markup with no text in it', () => {
