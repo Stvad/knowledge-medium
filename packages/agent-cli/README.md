@@ -57,7 +57,7 @@ The CLI exposes both *local* commands (pairing, profile management) and *bridge*
 | `kmagent move-block <json>` | Move a block to a parent/position from a JSON body. |
 | `kmagent delete-block <id>` | Soft-delete a block and its descendants. |
 | `kmagent restore-block <id>` | Restore one soft-deleted block; descendants stay deleted unless restored separately. |
-| `kmagent append-markdown <target> <markdown\|->` | Split markdown into blocks the way "paste as markdown" does and insert them under a target in one transaction (`--first`, `--after <id>`, `--before <id>`, `--one-block`). See [Writing](#writing). |
+| `kmagent append-markdown <target> -- '<markdown>'` (or markdown on stdin) | Split markdown into blocks the way "paste as markdown" does and insert them under a target in one transaction (`--first`, `--after <id>`, `--before <id>`, `--one-block`). See [Writing](#writing). |
 | `kmagent edit-block <id> <old> <new>` | Replace the one occurrence of `<old>` in a block, against its content at write time. |
 | `kmagent create-page <name> \| --date <expr>` | Get-or-create a page (as `[[name]]` would) or a daily note. |
 | `kmagent recent-changes [--since <t>] [--all]` | Recent agent-bridge transactions and the blocks each changed (`--all` adds your own edits). |

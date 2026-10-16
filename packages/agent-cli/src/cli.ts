@@ -881,8 +881,16 @@ const appendPosition = (options: {first?: boolean, after?: unknown, before?: unk
   return {}
 }
 
+// Markdown usually starts with `- `, which an option parser reads as a flag:
+// take it after `--`, or from stdin when omitted / `-`.
+const markdownArgument = async (markdown: unknown, afterDashes: unknown): Promise<string> => {
+  const rest = toStringArray(afterDashes)
+  if (rest.length > 0) return rest.join(' ')
+  return markdown === undefined || String(markdown) === '-' ? readStdin() : String(markdown)
+}
+
 cli
-  .command('append-markdown <target> <markdown>', wireDescription('append-markdown'))
+  .command('append-markdown <target> [markdown]', wireDescription('append-markdown'))
   .option('--first', "Insert before the target's existing children (default: after them)")
   .option('--after <id>', 'Insert right after this child of the target')
   .option('--before <id>', 'Insert right before this child of the target')
@@ -891,12 +899,12 @@ cli
   .action(async (
     target: unknown,
     markdown: unknown,
-    options: {first?: boolean, after?: unknown, before?: unknown, oneBlock?: boolean, json?: boolean},
+    options: {first?: boolean, after?: unknown, before?: unknown, oneBlock?: boolean, json?: boolean, '--'?: unknown},
   ) => {
     const command: KnownCommand = {
       type: 'append-markdown',
       target: String(target),
-      markdown: String(markdown) === '-' ? await readStdin() : String(markdown),
+      markdown: await markdownArgument(markdown, options['--']),
       ...appendPosition(options),
       ...(options.oneBlock ? {shape: 'block' as const} : {}),
     }

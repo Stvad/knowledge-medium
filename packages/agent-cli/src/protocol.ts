@@ -736,8 +736,8 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
     readOnly: false,
   },
   'append-markdown': {
-    usage: 'kmagent append-markdown <target> <markdown|-> [--first | --after <id> | --before <id>] [--one-block]',
-    description: 'Parse markdown with the app paste parser (the same split as "paste as markdown") and insert it under <target> in ONE transaction; prints the created blocks. <target>: a block id or unique id prefix (≥8 hex), a [[Page]] (created the way a wikilink creates it when missing — a date-literal name is that day\'s daily note), or a date expression (today | 2026-10-15 | next monday → that daily note, created if missing). A bare word that is none of these is refused — wrap page names in [[…]]. Default position is after the target\'s last child. Pass `-` to read markdown from stdin.',
+    usage: "kmagent append-markdown <target> [--first | --after <id> | --before <id>] [--one-block] -- '<markdown>'   (or pipe it on stdin)",
+    description: 'Parse markdown with the app paste parser (the same split as "paste as markdown") and insert it under <target> in ONE transaction; prints the created blocks. <target>: a block id or unique id prefix (≥8 hex), a [[Page]] (created the way a wikilink creates it when missing — a date-literal name is that day\'s daily note), or a date expression (today | 2026-10-15 | next monday → that daily note, created if missing). A bare word that is none of these is refused — wrap page names in [[…]]. Default position is after the target\'s last child. Put the markdown after `--` (it usually starts with `- `, which would read as a flag), or omit it to read stdin.',
     readOnly: false,
   },
   'edit-block': {
