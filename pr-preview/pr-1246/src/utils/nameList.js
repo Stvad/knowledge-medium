@@ -1,1 +1,1 @@
-import{Eq as e,Tq as t,wq as n}from"../../chunks/app-ChSET2Tp.js";export{n as NAMES_IN_A_SENTENCE,t as describeNames,e as firstFew};
+import{Eq as e,Tq as t,wq as n}from"../../chunks/app-Do5FIVhx.js";export{n as NAMES_IN_A_SENTENCE,t as describeNames,e as firstFew};
