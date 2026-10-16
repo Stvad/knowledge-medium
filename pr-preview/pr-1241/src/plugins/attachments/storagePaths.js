@@ -1,1 +1,1 @@
-import{Ch as e,Sh as t}from"../../../chunks/app-B4pcbHFA.js";export{t as attachmentObjectPath,e as authenticatedObjectUrl};
+import{Ch as e,Sh as t}from"../../../chunks/app-ouUKMhvi.js";export{t as attachmentObjectPath,e as authenticatedObjectUrl};

@@ -1,1 +1,1 @@
-import{iE as e,rE as t}from"../chunks/app-B4pcbHFA.js";export{t as appUpdate,e as useAppUpdateAvailable};
+import{iE as e,rE as t}from"../chunks/app-ouUKMhvi.js";export{t as appUpdate,e as useAppUpdateAvailable};

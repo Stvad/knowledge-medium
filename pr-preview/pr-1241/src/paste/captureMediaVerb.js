@@ -1,1 +1,1 @@
-import{Vk as e}from"../../chunks/app-B4pcbHFA.js";export{e as captureMediaVerb};
+import{Vk as e}from"../../chunks/app-ouUKMhvi.js";export{e as captureMediaVerb};
