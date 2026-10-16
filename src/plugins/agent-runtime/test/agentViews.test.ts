@@ -351,8 +351,11 @@ describe('view-block bounds', () => {
 
   it('bounds every per-row list of names: an outline root, type labels, a backlink\'s via-properties', async () => {
     const root = uuid('0000b110', 1)
-    const rootProps: Record<string, unknown> = {types: Array.from({length: 15}, (_, i) => `kind-${i}`)}
-    for (let i = 0; i < 60; i++) rootProps[`field-${i}`] = i
+    const rootProps: Record<string, unknown> = {
+      types: Array.from({length: 15}, (_, i) => `kind-${i}`),
+      summary: 'v'.repeat(200),
+    }
+    for (let i = 0; i < 59; i++) rootProps[`field-${i}`] = i
     await create({id: root, content: 'root', properties: rootProps})
 
     const outline = await view<OutlineView>({type: 'view-outline', ref: root, properties: 'full', format: 'json'})
@@ -360,9 +363,10 @@ describe('view-block bounds', () => {
     expect(outline.root.omittedProperties).toBe(10)
     expect(outline.root.types).toHaveLength(11)
     expect(outline.root.types.at(-1)).toBe('+5 more')
-    // The default brief root shows three plain names and counts the rest.
+    // The default brief root shows three plain names, values clipped like
+    // any brief line, and counts the rest.
     const header = (await view<string>({type: 'view-outline', ref: root})).split('\n')[0]
-    expect(header).toContain('field-2:: 2  +57 props')
+    expect(header).toContain(`summary:: ${'v'.repeat(40)}…[+160 chars]  field-0:: 0  field-1:: 1  +57 props`)
 
     const source = uuid('0000b111', 2)
     await create({
