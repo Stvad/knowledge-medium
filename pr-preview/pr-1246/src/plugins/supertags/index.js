@@ -1,1 +1,1 @@
-import{v as e}from"../../../chunks/app-DK9xrlqB.js";export{e as supertagsPlugin};
+import{v as e}from"../../../chunks/app-CSXyBWhb.js";export{e as supertagsPlugin};
