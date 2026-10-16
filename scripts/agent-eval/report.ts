@@ -55,6 +55,9 @@ export interface RunConditions {
    *  the tab was checked against: an importer or data-layer change moves it
    *  while the export stays the same. Null until the run has checked. */
   importedFixture: string | null
+  /** Of every task's reset: all of them run before every run's one
+   *  snapshot, so each shapes every task's starting graph. */
+  setup: string
   /** As the first run resolved it; null until then, or when no run got that far. */
   model: string | null
   effort: string

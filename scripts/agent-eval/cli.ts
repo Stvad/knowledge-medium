@@ -13,7 +13,7 @@
  */
 import { spawnSync } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -39,7 +39,7 @@ import {
   definitionHash,
   type TaskRunRecord,
 } from './report'
-import { allowedChanges, type CheckOutcome, type EvalTask, taskDefinitionHash, TASKS } from './tasks'
+import { allowedChanges, type CheckOutcome, type EvalTask, setupHash, taskDefinitionHash, TASKS } from './tasks'
 import { extractAnswer, parseTranscript } from './transcript'
 import { beginRun, openWorkspace } from './workspace'
 import { acquireWorkspaceLock } from './workspaceLock'
@@ -50,7 +50,8 @@ const RUNS_DIR = path.join(REPO_ROOT, 'tmp/agent-eval/runs')
 // Beside the CLI's token store, so runs from every checkout on this machine
 // share one lock and one journal per paired tab.
 const EVAL_STATE_DIR = path.join(agentRuntimeConfigDir(), 'agent-eval')
-const MCP_ENTRY = path.join(REPO_ROOT, 'packages/agent-cli/dist/mcp.js')
+const MCP_DIST = path.join(REPO_ROOT, 'packages/agent-cli/dist')
+const MCP_ENTRY = path.join(MCP_DIST, 'mcp.js')
 const DEFAULT_PROFILE = 'km-eval'
 
 const fail = (message: string): never => {
@@ -161,15 +162,24 @@ const buildPackages = () => {
   if (build.status !== 0) fail(`pnpm run compile:packages failed:\n${`${build.stdout}${build.stderr}`.trim().split('\n').slice(-15).join('\n')}`)
 }
 
-/** Of the checkout both halves of the tools run from: the dev tab serves the
- *  app from it, hot-reloading edits, and the MCP server is built from it. A
- *  change while a task runs (an edit, a rebuild after one, another branch)
- *  would hand it other code under this report's one git identity. */
-const checkoutDigest = (): string => {
+/** Of the code both halves of the tools run: the checkout, which the dev
+ *  tab serves the app from, hot-reloading edits, and the built MCP server,
+ *  which a compile can change without leaving a source difference behind (an
+ *  edit, a compile, a revert). A change while a task runs would hand it other
+ *  code under this report's one git identity. */
+const codeDigest = (): string => {
   const git = (...args: string[]) => spawnSync('git', args, {cwd: REPO_ROOT}).stdout
   const hash = createHash('sha256').update(git('rev-parse', 'HEAD')).update(git('diff', 'HEAD', '--binary'))
   const untracked = git('ls-files', '--others', '--exclude-standard', '-z').toString('utf8').split('\0').filter(Boolean)
   for (const file of untracked.sort()) hash.update(file).update(readFileSync(path.join(REPO_ROOT, file)))
+  const built = (dir: string): void => {
+    for (const entry of readdirSync(dir, {withFileTypes: true}).sort((a, b) => (a.name < b.name ? -1 : 1))) {
+      const file = path.join(dir, entry.name)
+      if (entry.isDirectory()) built(file)
+      else hash.update(path.relative(MCP_DIST, file)).update(readFileSync(file))
+    }
+  }
+  built(MCP_DIST)
   return hash.digest('hex')
 }
 
@@ -269,7 +279,7 @@ const run = async (options: RunOptions) => {
     }
   })
   buildPackages()
-  const checkout = checkoutDigest()
+  const code = codeDigest()
   const {probe, client, pairing} = await connect(options.profile)
   const fixture = buildFixture()
   const {release, journal, seeded} = await prepareWorkspace(probe, pairing, fixture)
@@ -292,6 +302,7 @@ const run = async (options: RunOptions) => {
     conditions: {
       fixture: fixture.hash,
       importedFixture: null,
+      setup: setupHash(),
       model: null,
       effort: options.effort ?? 'default',
       mcpOutputTokens: options.mcpOutputTokens,
@@ -351,7 +362,7 @@ const run = async (options: RunOptions) => {
       })
       const elapsedMs = Date.now() - startedAt
       // After the task, so a change during it — the last task's included — is caught.
-      const checkoutChanged = checkoutDigest() !== checkout
+      const codeChanged = codeDigest() !== code
       const pairingChanged = await repaired()
       writeFileSync(transcriptPath, stdout)
       rmSync(cwd, {recursive: true, force: true})
@@ -366,7 +377,7 @@ const run = async (options: RunOptions) => {
       const changes = await restoreSnapshot(probe, snapshot)
         .catch((error: unknown) => fail(`aborting the run: ${errorText(error)}`))
       journal.taskRestored()
-      if (checkoutChanged) fail(`the checkout changed while ${task.id} ran, so it may have run other code; start the run again`)
+      if (codeChanged) fail(`the checkout or the built MCP server changed while ${task.id} ran, so it may have run other code; start the run again`)
       if (pairingChanged) fail(`profile "${options.profile}" was paired with another tab while ${task.id} ran; start the run again`)
       if (modelResolved) requireComparable(false)
       if (modelChanged) fail(`${task.id} ran on ${metrics.model}, not ${report.conditions.model} like the tasks before it; start the run again`)

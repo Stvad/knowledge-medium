@@ -82,6 +82,10 @@ const scoringData = (truth: FixtureTruth) => JSON.parse(JSON.stringify(
   (_key, value: unknown) => (value instanceof RegExp ? {regex: value.source, flags: value.flags} : value),
 )) as unknown
 
+/** Identifies the setup every run performs: all tasks' resets run before a
+ *  run's one snapshot, whichever tasks it selects. */
+export const setupHash = (): string => definitionHash(TASKS.map(task => task.reset?.toString() ?? null))
+
 /** Identifies what a task measures, so a report only compares a task with an
  *  earlier run of the same definition. */
 export const taskDefinitionHash = (task: EvalTask, truth: FixtureTruth): string => definitionHash({

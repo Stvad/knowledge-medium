@@ -47,7 +47,7 @@ const reportOf = (
   git: {sha: '0123456789abcdef', branch: 'master', dirty: false},
   model: 'sonnet',
   conditions: {
-    fixture: 'abc', importedFixture: 'state-1', model: 'claude-test', effort: 'default', mcpOutputTokens: 25_000, timeoutMs: 600_000,
+    fixture: 'abc', importedFixture: 'state-1', setup: 'setup-1', model: 'claude-test', effort: 'default', mcpOutputTokens: 25_000, timeoutMs: 600_000,
     ...conditions,
   },
   claudeCodeVersion: '1.0.0',
@@ -125,6 +125,7 @@ describe('renderMarkdown', () => {
     ['timeout', {timeoutMs: 60_000}, 'timeoutMs 600000 → 60000'],
     ['fixture', {fixture: 'def'}, 'fixture abc → def'],
     ['stored fixture', {importedFixture: 'state-2'}, 'importedFixture state-1 → state-2'],
+    ['setup', {setup: 'setup-2'}, 'setup setup-1 → setup-2'],
   ] as const)('compares nothing with a baseline run under another %s', (_name, conditions, named) => {
     const baseline = reportOf('before', [runRecord('a', 1, {toolCalls: 8})])
     const current = reportOf('after', [runRecord('a', 1, {toolCalls: 4})], {outputSizes: {'search:x': 250}}, conditions)
