@@ -1,1 +1,1 @@
-import{NC as e}from"../../../chunks/app-jTNb6cwO.js";export{e as SwipeActionMenu};
+import{PC as e}from"../../../chunks/app-SPfsOdC3.js";export{e as SwipeActionMenu};

@@ -1,1 +1,1 @@
-import{EJ as e,TJ as t,wJ as n}from"../../chunks/app-jTNb6cwO.js";export{n as NAMES_IN_A_SENTENCE,t as describeNames,e as firstFew};
+import{DJ as e,EJ as t,TJ as n}from"../../chunks/app-SPfsOdC3.js";export{n as NAMES_IN_A_SENTENCE,t as describeNames,e as firstFew};

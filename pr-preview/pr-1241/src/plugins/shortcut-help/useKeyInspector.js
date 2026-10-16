@@ -1,1 +1,1 @@
-import{DS as e}from"../../../chunks/app-jTNb6cwO.js";export{e as useKeyInspector};
+import{OS as e}from"../../../chunks/app-SPfsOdC3.js";export{e as useKeyInspector};

@@ -1,1 +1,1 @@
-import{GT as e}from"../../../chunks/app-jTNb6cwO.js";export{e as appUpdatePromptExtension};
+import{KT as e}from"../../../chunks/app-SPfsOdC3.js";export{e as appUpdatePromptExtension};
