@@ -1,1 +1,1 @@
-import{Gu as e}from"../../../../chunks/app-D7xapPGR.js";export{e as useBacklinkCount};
+import{Ku as e}from"../../../../chunks/app-BRDxm8nH.js";export{e as useBacklinkCount};

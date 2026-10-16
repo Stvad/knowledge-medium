@@ -1,1 +1,1 @@
-import{i_ as e}from"../../../chunks/app-D7xapPGR.js";export{e as plainOutlinerPlugin};
+import{a_ as e}from"../../../chunks/app-BRDxm8nH.js";export{e as plainOutlinerPlugin};

@@ -1,1 +1,1 @@
-import{BC as e}from"../../chunks/app-D7xapPGR.js";export{e as WipeLocalDataDialog};
+import{VC as e}from"../../chunks/app-BRDxm8nH.js";export{e as WipeLocalDataDialog};
