@@ -1,1 +1,1 @@
-import{cj as e,lj as t}from"../../chunks/app-CD3y0Jlf.js";export{e as defineVariant,t as defineVariantFacet};
+import{cj as e,lj as t}from"../../chunks/app-DUyf_Bp1.js";export{e as defineVariant,t as defineVariantFacet};

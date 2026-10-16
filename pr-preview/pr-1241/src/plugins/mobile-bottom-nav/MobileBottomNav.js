@@ -1,1 +1,1 @@
-import{G_ as e}from"../../../chunks/app-CD3y0Jlf.js";export{e as MobileBottomNav};
+import{G_ as e}from"../../../chunks/app-DUyf_Bp1.js";export{e as MobileBottomNav};

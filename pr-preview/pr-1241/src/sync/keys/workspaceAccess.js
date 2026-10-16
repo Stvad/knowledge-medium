@@ -1,1 +1,1 @@
-import{d as e,f as t}from"../../../chunks/app-CD3y0Jlf.js";export{e as decideWorkspaceEntry,t as resolveWorkspaceAccess};
+import{d as e,f as t}from"../../../chunks/app-DUyf_Bp1.js";export{e as decideWorkspaceEntry,t as resolveWorkspaceAccess};
