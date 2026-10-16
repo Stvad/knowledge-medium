@@ -1,1 +1,0 @@
-import{Of as e}from"../../../chunks/app-BtU7quzD.js";export{e as attachmentsPlugin};
