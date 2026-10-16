@@ -1,1 +1,1 @@
-import{wm as e}from"../../../chunks/app-Szag09K6.js";export{e as videoPlayerPlugin};
+import{wm as e}from"../../../chunks/app-CHAfTjA2.js";export{e as videoPlayerPlugin};
