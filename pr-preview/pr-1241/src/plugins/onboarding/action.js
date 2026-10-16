@@ -1,1 +1,1 @@
-import{eg as e,ng as t,rg as n,tg as r}from"../../../chunks/app-D59ylnOt.js";export{e as INSERT_TUTORIAL_ACTION_ID,r as insertTutorialAction,t as insertTutorialIntoWorkspace,n as openTutorialInActiveWorkspace};
+import{eg as e,ng as t,rg as n,tg as r}from"../../../chunks/app-B41NzeC5.js";export{e as INSERT_TUTORIAL_ACTION_ID,r as insertTutorialAction,t as insertTutorialIntoWorkspace,n as openTutorialInActiveWorkspace};
