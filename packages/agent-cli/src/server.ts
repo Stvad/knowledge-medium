@@ -486,10 +486,14 @@ const commandWorkspaceId = (payload: CommandPayload): string | null => {
 }
 
 const sendUnknownToken = (response: http.ServerResponse, token: Token): void => {
+  const tokenUserId = tokenUsers.get(hashToken(token))
+  const connected = Array.from(clients.values())
   sendJson(response, 401, {
     error: unknownTokenMessage({
-      tokenUserId: tokenUsers.get(hashToken(token)) ?? null,
-      connectedUserIds: Array.from(clients.values(), client => client.audience?.userId ?? null),
+      connectedTabs: connected.length,
+      tokenUser: tokenUserId === undefined
+        ? 'unseen'
+        : connected.some(client => client.audience?.userId === tokenUserId) ? 'connected' : 'not-connected',
     }),
   })
 }

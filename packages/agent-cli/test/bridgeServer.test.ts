@@ -606,8 +606,8 @@ describe('a token belongs to its user, not to a workspace', () => {
   })
 })
 
-// Facts, not a guessed cause: which tabs are connected and as whom, and
-// whether one of them listed this token before.
+// Facts, not a guessed cause: how many tabs are connected, and whether one
+// signed in as the token's user is among them — never who.
 describe('an unregistered token reports what the bridge can see', () => {
   const whoamiError = async (token = 'TOKEN-A'): Promise<string> => {
     const response = await fetch(`${baseUrl}/runtime/whoami`, {
@@ -623,7 +623,7 @@ describe('an unregistered token reports what the bridge can see', () => {
     expect(await whoamiError()).toMatch(/no app tab is connected/i)
   })
 
-  it('names the token\'s user when only tabs of other users are connected', async () => {
+  it('says when only tabs of other users are connected', async () => {
     await registerClient('the-tab', {
       audience: {userId: 'alice', workspaceId: 'ws-1'},
       tokens: [{token: 'TOKEN-A', label: 'cli', userId: 'alice'}],
@@ -634,10 +634,7 @@ describe('an unregistered token reports what the bridge can see', () => {
       tokens: [{token: 'TOKEN-B', label: 'cli', userId: 'bob'}],
     })
 
-    const error = await whoamiError()
-
-    expect(error).toMatch(/no connected tab is signed in as alice/i)
-    expect(error).toContain('bob')
+    expect(await whoamiError()).toMatch(/no connected tab is signed in as this token's user/i)
   })
 
   it('says when a tab of the token\'s user is connected but does not list it', async () => {
@@ -647,19 +644,30 @@ describe('an unregistered token reports what the bridge can see', () => {
     })
     await registerClient('alice-tab', {audience: {userId: 'alice', workspaceId: 'ws-1'}, tokens: []})
 
-    expect(await whoamiError()).toMatch(/signed in as this token's user \(alice\) but does not list it/i)
+    expect(await whoamiError()).toMatch(/signed in as this token's user but does not list it/i)
   })
 
-  it('lists who the connected tabs are signed in as for a token none has listed', async () => {
+  it('says how many tabs are connected for a token none has listed', async () => {
     await registerClient('bob-tab', {
       audience: {userId: 'bob', workspaceId: 'ws-9'},
       tokens: [{token: 'TOKEN-B', label: 'cli', userId: 'bob'}],
     })
 
-    const error = await whoamiError('NEVER-REGISTERED')
+    expect(await whoamiError('NEVER-REGISTERED'))
+      .toMatch(/1 app tab is connected.*no tab has listed this token since the bridge started/i)
+  })
 
-    expect(error).toContain('bob')
-    expect(error).toMatch(/no tab has listed this token since the bridge started/i)
+  // The 401 needs no bridge secret, and /health hides who is connected from
+  // anyone without one — so the message must not name users either.
+  it('names no user to a caller holding an unregistered token', async () => {
+    await registerClient('alice-tab', {
+      audience: {userId: 'alice-user-id', workspaceId: 'ws-1'},
+      tokens: [{token: 'TOKEN-A', label: 'cli', userId: 'alice-user-id'}],
+    })
+    await registerClient('alice-tab', {audience: {userId: 'alice-user-id', workspaceId: 'ws-1'}, tokens: []})
+
+    expect(await whoamiError()).not.toContain('alice-user-id')
+    expect(await whoamiError('NEVER-REGISTERED')).not.toContain('alice-user-id')
   })
 })
 

@@ -23,37 +23,35 @@ import {z} from 'zod'
  *  across versions (an older bridge may still be running). */
 export const UNKNOWN_TOKEN_MARKER = 'Agent token is not registered with the local bridge.'
 
-/** What the bridge can see when no connected tab lists a token. */
+/** What the bridge can see when no connected tab lists a token. Names no
+ *  user: the 401 it feeds needs no bridge secret, unlike /health's client
+ *  listing. */
 export interface UnknownTokenFacts {
-  /** The user whose tab last listed this token since the bridge started, or
-   *  null when none has. */
-  tokenUserId: string | null
-  /** The user each connected tab is signed in as; null when a tab did not say. */
-  connectedUserIds: readonly (string | null)[]
+  connectedTabs: number
+  /** Where the user whose tab last listed this token stands: no tab has
+   *  listed it since the bridge started, or a connected tab is / no connected
+   *  tab is signed in as that user. */
+  tokenUser: 'unseen' | 'connected' | 'not-connected'
 }
 
 /** What the bridge returns for a token no connected tab lists. States what
  *  the bridge can see rather than guessing at a cause. Built here, not in the
  *  server, because the CLI appends the half only IT can know — which profiles
  *  are actually paired on this machine. */
-export const unknownTokenMessage = ({tokenUserId, connectedUserIds}: UnknownTokenFacts): string => {
+export const unknownTokenMessage = ({connectedTabs, tokenUser}: UnknownTokenFacts): string => {
   const parts = [UNKNOWN_TOKEN_MARKER]
-  if (connectedUserIds.length === 0) {
+  if (connectedTabs === 0) {
     parts.push('No app tab is connected to it: open the app in the browser profile this token was minted in.')
   } else {
-    const users = [...new Set(connectedUserIds.map(id => id ?? '(not reported)'))].join(', ')
-    if (tokenUserId === null) {
-      parts.push(`Connected app tabs are signed in as: ${users}. No tab has listed this token since the bridge started.`)
-    } else if (connectedUserIds.includes(tokenUserId)) {
-      parts.push(
-        `A connected tab is signed in as this token's user (${tokenUserId}) but does not list it: `
+    parts.push(`${connectedTabs} app ${connectedTabs === 1 ? 'tab is' : 'tabs are'} connected.`)
+    parts.push({
+      unseen: 'No tab has listed this token since the bridge started.',
+      connected: "A connected tab is signed in as this token's user but does not list it: "
         + 'a token is listed only in the browser profile and app origin that minted it, until it is revoked there.',
-      )
-    } else {
-      parts.push(`No connected tab is signed in as ${tokenUserId}, whose tab listed this token; connected tabs are signed in as: ${users}.`)
-    }
+      'not-connected': "No connected tab is signed in as this token's user.",
+    }[tokenUser])
   }
-  parts.push("A token is not tied to a workspace: any open tab of its user registers it, whichever workspace that tab has open.")
+  parts.push('A token is not tied to a workspace: any open tab of its user registers it, whichever workspace that tab has open.')
   return parts.join(' ')
 }
 

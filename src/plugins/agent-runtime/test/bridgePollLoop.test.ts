@@ -204,6 +204,37 @@ describe('bridge registration — tokens belong to the user', () => {
   })
 })
 
+// Every tab of the user registers every token, so a revoke made in ONE tab
+// must reach the others at once — otherwise the token stays reachable through
+// them until each one's next loop turn.
+describe('bridge registration — tokens changed in another tab', () => {
+  it('re-registers without a token another tab of the same origin revoked', async () => {
+    storeTokens('agent-runtime:tokens:user-1', ['T-keep', 'T-revoked'])
+    cleanup = startAgentRuntimeBridge(bridgeOptions)
+    await vi.waitFor(() => expect(registrations.length).toBeGreaterThan(0))
+
+    // What the other tab's revoke leaves in the shared localStorage, and the
+    // event the browser then fires in this one.
+    storeTokens('agent-runtime:tokens:user-1', ['T-keep'])
+    window.dispatchEvent(new StorageEvent('storage', {key: 'agent-runtime:tokens:user-1'}))
+
+    await vi.waitFor(() => expect(registeredTokens(registrations.at(-1)!)).toEqual(['T-keep']))
+  })
+
+  it('ignores storage changes to other keys', async () => {
+    cleanup = startAgentRuntimeBridge(bridgeOptions)
+    await vi.waitFor(() => expect(registrations.length).toBeGreaterThan(0))
+    const registered = registrations.length
+
+    // Both handlers post synchronously, so the count is final on return; the
+    // second event proves the first had the same chance to register.
+    window.dispatchEvent(new StorageEvent('storage', {key: 'unrelated-setting'}))
+    window.dispatchEvent(new StorageEvent('storage', {key: 'agent-runtime:tokens:user-1'}))
+
+    expect(registrations.length).toBe(registered + 1)
+  })
+})
+
 // With every tab of a user holding every token, the bridge picks among them;
 // a call that names no workspace goes to the tab focused most recently.
 describe('bridge registration — focus stamp', () => {

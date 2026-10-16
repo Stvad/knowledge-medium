@@ -144,10 +144,10 @@ describe('withProfileHelp', () => {
   })
 
   it.each([
-    ['no tab connected', {tokenUserId: null, connectedUserIds: []}],
-    ['token never listed', {tokenUserId: null, connectedUserIds: ['bob']}],
-    ['its user\'s tab does not list it', {tokenUserId: 'alice', connectedUserIds: ['alice']}],
-    ['only other users connected', {tokenUserId: 'alice', connectedUserIds: ['bob', null]}],
+    ['no tab connected', {connectedTabs: 0, tokenUser: 'unseen'}],
+    ['token never listed', {connectedTabs: 1, tokenUser: 'unseen'}],
+    ['its user\'s tab does not list it', {connectedTabs: 1, tokenUser: 'connected'}],
+    ['only other users connected', {connectedTabs: 2, tokenUser: 'not-connected'}],
   ] as const)('opens every server message with the marker the CLI matches (%s)', async (_label, facts) => {
     const { unknownTokenMessage } = await import('../src/protocol.js')
     expect(unknownTokenMessage(facts).startsWith(UNKNOWN_TOKEN_MARKER)).toBe(true)

@@ -1,6 +1,6 @@
 import type { AppEffectCleanup } from '@/extensions/core.js'
 import { openDialog } from '@/utils/dialogs.js'
-import { agentTokenStore, agentTokensChangedEvent } from './tokens.ts'
+import { agentTokenStore, agentTokensChangedEvent, isAgentTokensStorageKey } from './tokens.ts'
 // Pairing via the hash URL surfaces the tokens dialog. We open it
 // imperatively rather than over a CustomEvent (audit B3). This pulls a
 // UI component into the transport module, but it's bundle-safe: nothing
@@ -339,6 +339,13 @@ export const startAgentRuntimeBridge = (
     register().catch(() => { /* loop will retry */ })
   }
 
+  // Every tab of the user registers every token, so a revoke made in another
+  // tab must reach this one now, not at its next loop turn. A null key is a
+  // storage clear.
+  const handleStorageChanged = (event: StorageEvent) => {
+    if (event.key === null || isAgentTokensStorageKey(event.key)) handleTokensChanged()
+  }
+
   // Re-registers at once rather than at the next loop turn, so a call made
   // right after the user switches tabs already goes to the one in front.
   const handleFocused = () => {
@@ -377,6 +384,7 @@ export const startAgentRuntimeBridge = (
 
   window.addEventListener(agentRuntimeBridgeRestartEvent, handleRestart)
   window.addEventListener(agentTokensChangedEvent, handleTokensChanged)
+  window.addEventListener('storage', handleStorageChanged)
   window.addEventListener('focus', handleFocused)
   window.addEventListener('hashchange', handleHashChanged)
   window.addEventListener('online', handleWakeEvent)
@@ -525,6 +533,7 @@ export const startAgentRuntimeBridge = (
     offEditResumed()
     window.removeEventListener(agentRuntimeBridgeRestartEvent, handleRestart)
     window.removeEventListener(agentTokensChangedEvent, handleTokensChanged)
+    window.removeEventListener('storage', handleStorageChanged)
     window.removeEventListener('focus', handleFocused)
     window.removeEventListener('hashchange', handleHashChanged)
     window.removeEventListener('online', handleWakeEvent)

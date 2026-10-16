@@ -30,6 +30,9 @@ const KEY_PREFIX = 'agent-runtime:tokens'
 
 const storageKey = (userId: string) => `${KEY_PREFIX}:${userId}`
 
+/** Whether a localStorage key holds agent tokens (any user, either shape). */
+export const isAgentTokensStorageKey = (key: string): boolean => key.startsWith(`${KEY_PREFIX}:`)
+
 /** Where tokens lived when they were stored per (user, workspace). */
 const legacyKeyPrefix = (userId: string) => `${storageKey(userId)}:`
 
