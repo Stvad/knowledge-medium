@@ -128,6 +128,26 @@ describe('resolveBlockRef', () => {
       .rejects.toThrow(/Pages with similar names:\n {2}Project Alpha/)
   })
 
+  it("gives a deleted block a prefix only when that prefix resolves back to it", async () => {
+    const live = 'cafe0001-1111-4000-8000-000000000001'
+    const deletedTwin = 'cafe0001-2222-4000-8000-000000000002'
+    const deletedA = 'cafe0002-1111-4000-8000-000000000003'
+    const deletedB = 'cafe0002-2222-4000-8000-000000000004'
+    for (const id of [live, deletedTwin, deletedA, deletedB]) await create({id})
+    for (const id of [deletedTwin, deletedA, deletedB]) {
+      await executeCommand({commandId: 'd', type: 'delete-block', id}, context)
+    }
+    const short = await shortIds(repo, [live, deletedTwin, deletedA, deletedB])
+    // `cafe0001` resolves to the live block, so its deleted twin needs more characters.
+    expect(short.get(live)).toBe('cafe0001')
+    expect(short.get(deletedTwin)).toBe('cafe0001-222')
+    // Two deleted blocks sharing a prefix tell each other apart the same way.
+    expect(short.get(deletedA)).toBe('cafe0002-111')
+    for (const id of [live, deletedTwin, deletedA, deletedB]) {
+      expect((await resolveBlockRef(repo, short.get(id)!, {workspaceId: WS})).id).toBe(id)
+    }
+  })
+
   it('keeps a non-canonical UUID exactly as given, and never shortens one', async () => {
     const mixedCase = 'ABCDEF12-0000-4000-8000-000000000001'
     expect(await resolveBlockRef(repo, mixedCase, {workspaceId: WS})).toEqual({id: mixedCase, via: 'id'})
