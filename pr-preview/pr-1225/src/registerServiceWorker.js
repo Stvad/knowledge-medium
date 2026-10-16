@@ -1,0 +1,1 @@
+import{eT as e,tT as t}from"../chunks/app-8zj9jRj5.js";export{e as checkForAppUpdate,t as registerServiceWorker};
