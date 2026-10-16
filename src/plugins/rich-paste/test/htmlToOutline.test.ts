@@ -178,6 +178,14 @@ describe('convertClipboardHtml: content', () => {
     expect(outline('<h1>T</h1><li>x</li><b><li>y</li></b>')).toEqual(['# T', '  x', '  y'])
   })
 
+  it('keeps text that is in a list but outside its items', () => {
+    // The converter puts it in the next item (or one of its own), as that item's first line.
+    expect(outline('<h1>T</h1><ol start="2">loose</ol><ul><b>lead</b><li>a</li></ul>'))
+      .toEqual(['# T', '  2. loose', '  **lead**', '    a'])
+    // A line break there has no text to keep, so it doesn't push the item's own down a level.
+    expect(outline('<ul><li>a</li><br><li>b</li></ul>')).toEqual(['a', 'b'])
+  })
+
   it('keeps a line break inside one block even with no other markup', () => {
     expect(outline('<p>first<br>second</p>')).toEqual(['first\nsecond'])
   })
@@ -254,11 +262,24 @@ describe('convertClipboardHtml: content', () => {
       .toEqual(['# T', '  ~~struck~~ **a *b***'])
   })
 
+  it('escapes text left touching by what it drops, as one text', () => {
+    // Escaped apart, `1` and `. Install` would read back as a list item.
+    expect(outline('<h1>T</h1><p>1<img src="data:image/png;base64,AAAA">. Install</p><p>2<b></b>) Run</p>'))
+      .toEqual(['# T', '  1\\. Install', '  2\\) Run'])
+  })
+
   it('drops empty code spans and joins touching ones, which markdown cannot spell', () => {
     expect(outline(
       '<h1>T</h1><p><code></code>x</p><p><code></code><code></code><img src="https://e.com/i.png" alt="i"></p>',
     )).toEqual(['# T', '  x', '  ![i](https://e.com/i.png)'])
     expect(outline('<h1>T</h1><p><code>a</code><code></code><code>b</code> c</p>')).toEqual(['# T', '  `ab` c'])
+  })
+
+  it('keeps the character beside emphasis that markdown has to spell as a reference', () => {
+    // Bold opening or closing on punctuation can't touch a letter, so the letter is written `&#x…;`.
+    expect(convert('<b>Done!</b>🎉')).toEqual({kind: 'inline', markdown: '**Done!**&#x1F389;'})
+    // `a\\&#x62;*(c)*`, which reads back as `a\b` and an emphasized `(c)`.
+    expect(convert('a\\b<i>(c)</i>')).toEqual({kind: 'inline', markdown: 'a\\\\&#x62;*(c)*'})
   })
 
   it('lifts blocks out of the paragraph or inline markup that holds them', () => {

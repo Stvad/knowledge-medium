@@ -1,7 +1,7 @@
 import { fromDom } from 'hast-util-from-dom'
 import { toMdast } from 'hast-util-to-mdast'
 import type {
-  Delete, Emphasis, Link, Nodes, Paragraph, Parents, PhrasingContent, Root, RootContent, Strong, Text,
+  Delete, Emphasis, InlineCode, Link, Nodes, Paragraph, Parents, PhrasingContent, Root, RootContent, Strong, Text,
 } from 'mdast'
 import { gfmToMarkdown } from 'mdast-util-gfm'
 import { toMarkdown, type Options as ToMarkdownOptions } from 'mdast-util-to-markdown'
@@ -30,7 +30,7 @@ export const convertClipboardHtml = (html: string, plainText: string): Clipboard
   if (hasOutlinerReferences(plainText, body)) return {kind: 'plain'}
   normalizeClipboardDom(body)
   const mdast = toMdast(fromDom(body)) as Root
-  liftBlocks(mdast)
+  fitContentModel(mdast)
   sanitize(mdast)
   splitAtBlankLines(mdast)
   // With no plain text (an html-only clipboard) the html is the only source.
@@ -167,6 +167,10 @@ const MARKDOWN_OPTIONS: ToMarkdownOptions = {
   // break — the same thing Shift+Enter types — where markdown's `\` hard
   // break would show its backslash in the editor.
   handlers: {break: () => '\n'},
+  // The serializer spells the character beside emphasis as a reference when
+  // it must (the `A` of `A**!**`), but only after escaping the text, so a
+  // backslash before it would escape the `&` instead (an upstream bug).
+  unsafe: [{character: '\\', after: '.[*_]', unicode: true}],
 }
 
 const markdown = (node: Nodes): string =>
@@ -201,38 +205,53 @@ const BLOCKS: ReadonlySet<Nodes['type']> = new Set([
   'blockquote', 'code', 'heading', 'list', 'listItem', 'paragraph', 'table', 'thematicBreak',
 ])
 
-/** Phrasing can't hold blocks, but the converter leaves them where the HTML
- *  put them: in a `<summary>` (read as a paragraph), in `<b>` or `<i>`, and,
- *  splitting a link around the blocks in it, in a link inside a list.
- *  Serialized there, a block's text runs into its neighbours or is dropped.
- *  Lift each block out beside the phrasing around it, dropping the inline
- *  markup that wrapped it. In place. */
-const liftBlocks = (root: Root): void => {
-  root.children = root.children.flatMap(lift) as RootContent[]
+/** Fit the tree to mdast's content model, which the converter breaks where
+ *  the HTML did; serialized out of place, text runs into its neighbours or
+ *  is dropped. In place.
+ *  - Phrasing can't hold blocks, but the converter leaves them in a
+ *    `<summary>` (read as a paragraph), in `<b>` or `<i>`, and, splitting a
+ *    link around the blocks in it, in a link inside a list. Each block is
+ *    lifted out beside the phrasing around it, dropping the inline markup
+ *    that wrapped it.
+ *  - A list item holds blocks, but the converter puts what sits in a list
+ *    outside its items (`<ul>text<li>…`) into the next item as bare
+ *    phrasing. It is wrapped in a paragraph. */
+const fitContentModel = (root: Root): void => {
+  root.children = root.children.flatMap(fit) as RootContent[]
 }
 
-/** `node` as a sequence of nodes in which no phrasing holds a block. */
-const lift = (node: Nodes): Nodes[] => {
+const fit = (node: Nodes): Nodes[] => {
   if (!('children' in node)) return [node]
-  const children = (node.children as Nodes[]).flatMap(lift)
-  if (!(node.type === 'paragraph' || node.type === 'heading' || isInlineMarkup(node))) {
-    return [{...node, children} as Nodes]
+  const children = (node.children as Nodes[]).flatMap(fit)
+  if (node.type === 'listItem') {
+    // A run with nothing to show (a `<br>` between items) would push the
+    // item's own text down a level.
+    const paragraph = (run: PhrasingContent[]): Nodes[] => run.some(hasContent) ? [{type: 'paragraph', children: run}] : []
+    return [{...node, children: wrapPhrasing(children, paragraph)} as Nodes]
   }
-  const pieces: Nodes[] = []
-  let run: Nodes[] = []
+  if (node.type === 'paragraph' || node.type === 'heading' || isInlineMarkup(node)) {
+    return wrapPhrasing(children, run => [{...node, children: run} as Nodes])
+  }
+  return [{...node, children} as Nodes]
+}
+
+/** `nodes` with each run of phrasing between its blocks replaced by `wrap`'s nodes. */
+const wrapPhrasing = (nodes: readonly Nodes[], wrap: (run: PhrasingContent[]) => Nodes[]): Nodes[] => {
+  const wrapped: Nodes[] = []
+  let run: PhrasingContent[] = []
   const endRun = () => {
-    if (run.length > 0) pieces.push({...node, children: run} as Nodes)
+    if (run.length > 0) wrapped.push(...wrap(run))
     run = []
   }
-  for (const child of children) {
-    if (!BLOCKS.has(child.type)) run.push(child)
+  for (const node of nodes) {
+    if (!BLOCKS.has(node.type)) run.push(node as PhrasingContent)
     else {
       endRun()
-      pieces.push(child)
+      wrapped.push(node)
     }
   }
   endRun()
-  return pieces
+  return wrapped
 }
 
 /** Split paragraphs where two or more line breaks meet: `<br><br>` is how
@@ -276,11 +295,12 @@ const splitParagraph = (paragraph: Paragraph): Paragraph[] => {
 }
 
 /** Drop what can't work once pasted (fragment and relative links, `data:`/
- *  `blob:` images) and link titles, and tidy inline markup and code spans,
- *  in place. `markupAround` is the inline markup `node` sits in. */
+ *  `blob:` images) and link titles, and tidy inline markup, code spans and
+ *  the text left touching, in place. `markupAround` is the inline markup
+ *  `node` sits in. */
 const sanitize = (node: Parents, markupAround: ReadonlySet<Nodes['type']> = new Set()): void => {
   const around = isInlineMarkup(node) ? new Set([...markupAround, node.type]) : markupAround
-  node.children = spellableCodeSpans(node.children.flatMap((child): Nodes[] => {
+  node.children = spellable(node.children.flatMap((child): Nodes[] => {
     if (child.type === 'link') {
       const href = absoluteHref(child.url)
       if (href === undefined) {
@@ -302,20 +322,24 @@ const sanitize = (node: Parents, markupAround: ReadonlySet<Nodes['type']> = new 
   })) as typeof node.children
 }
 
-/** `nodes` without empty code spans, and with touching ones joined: markdown
- *  can spell neither. An empty one writes as two literal backticks (two in a
- *  row open a code fence), and `` `a``b` `` reads back as one span holding
- *  the backticks. */
-const spellableCodeSpans = (nodes: Nodes[]): Nodes[] => {
+/** `nodes` as markdown can spell them: touching text joined, touching code
+ *  spans too, and empty code spans dropped. The serializer escapes each text
+ *  on its own, so syntax that forms only across two goes unescaped (`1` and
+ *  `. Install` read back as a list item); an empty code span writes as two
+ *  literal backticks (two in a row open a code fence); and `` `a``b` `` reads
+ *  back as one span holding the backticks. */
+const spellable = (nodes: Nodes[]): Nodes[] => {
   const kept: Nodes[] = []
   for (const node of nodes) {
+    if (node.type === 'inlineCode' && node.value === '') continue
     const previous = kept.at(-1)
-    if (node.type !== 'inlineCode') kept.push(node)
-    else if (previous?.type === 'inlineCode') previous.value += node.value
-    else if (node.value !== '') kept.push(node)
+    if (joinable(node) && previous && joinable(previous) && previous.type === node.type) previous.value += node.value
+    else kept.push(node)
   }
   return kept
 }
+
+const joinable = (node: Nodes): node is InlineCode | Text => node.type === 'inlineCode' || node.type === 'text'
 
 type InlineMarkup = Delete | Emphasis | Link | Strong
 
