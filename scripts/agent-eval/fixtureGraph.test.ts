@@ -275,6 +275,11 @@ const solveWrongly: Record<string, Array<(env: TaskEnv) => Promise<void>>> = {
       await solveWithMcp['create-linked-page'](env)
       await graph.callTool('create_block', {parentId: fixtureId('vendorsSection'), content: '[[Kestrel]] — renewal notes'})
     },
+    // The link added twice.
+    async env => {
+      await solveWithMcp['create-linked-page'](env)
+      await graph.callTool('create_block', {parentId: fixtureId('vendorsSection'), content: `[[${vendorReviewTitle(env.runTag)}]]`})
+    },
   ],
   'complete-todo': [
     // Marked done in the text, not the status.
