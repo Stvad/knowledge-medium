@@ -179,26 +179,28 @@ describe('BlockCache applyIfNewer (LWW)', () => {
     expect(cache.getSnapshot('block-1')?.content).toBe('newer')
   })
 
-  it('rejects an equal-time snapshot (LWW gate is `<=`, not `<`)', () => {
+  it('takes an equal-stamp SYNC snapshot that differs, and dedups an identical one', () => {
+    // The drain writes a row only when it differs from disk, so an equal-stamp
+    // sync delivery is a peer write that landed on a stamp this device already
+    // held (#1163) — rejecting it would leave open views on the pre-merge row.
     const cache = new BlockCache()
-    cache.setSnapshot(snap({content: 'x', updatedAt: 100}))
-    // Same-updatedAt-same-content is a no-op either way (was previously
-    // a fingerprint-dedup no-op; now an LWW reject). The strict `<=`
-    // exists so equal-updatedAt-DIFFERENT-content can't clobber the
-    // cache via an in-flight sync read that overlapped a same-ms write
-    // — covered by the test below.
-    expect(cache.applyIfNewer(snap({content: 'x', updatedAt: 100}), 'sync')).toBe(false)
-    expect(cache.getSnapshot('block-1')?.content).toBe('x')
+    cache.setSnapshot(snap({content: 'B', updatedAt: 100}))
+    const listener = vi.fn()
+    cache.subscribe('block-1', listener)
+    expect(cache.applyIfNewer(snap({content: 'B', updatedAt: 100}), 'sync')).toBe(false)
+    expect(listener).not.toHaveBeenCalled()
+    expect(cache.applyIfNewer(snap({content: 'A', updatedAt: 100}), 'sync')).toBe(true)
+    expect(cache.getSnapshot('block-1')?.content).toBe('A')
+    expect(listener).toHaveBeenCalledOnce()
   })
 
-  it('rejects an equal-time snapshot with DIFFERENT content (clobber guard)', () => {
+  it('rejects an equal-stamp HYDRATE snapshot with different content', () => {
+    // A query that read SQL before the drain rewrote this row at an unchanged
+    // stamp lands afterwards carrying the pre-rewrite row.
     const cache = new BlockCache()
-    // Simulates: local commit lands with updatedAt=100, content='B'.
-    // An in-flight sync read that captured content='A' at the same ms
-    // arrives later — `<` would let it clobber, `<=` rejects.
-    cache.setSnapshot(snap({content: 'B', updatedAt: 100}))
-    expect(cache.applyIfNewer(snap({content: 'A', updatedAt: 100}), 'sync')).toBe(false)
-    expect(cache.getSnapshot('block-1')?.content).toBe('B')
+    cache.setSnapshot(snap({content: 'merged', updatedAt: 100}))
+    expect(cache.applyIfNewer(snap({content: 'pre-merge', updatedAt: 100}), 'hydrate')).toBe(false)
+    expect(cache.getSnapshot('block-1')?.content).toBe('merged')
   })
 
   it('does not notify subscribers when an older snapshot is rejected', () => {
@@ -210,7 +212,7 @@ describe('BlockCache applyIfNewer (LWW)', () => {
     expect(listener).not.toHaveBeenCalled()
   })
 
-  it('shares the LWW gate across sources but routes counters separately', () => {
+  it('rejects a strictly older snapshot from either source and routes counters separately', () => {
     const cache = new BlockCache()
     cache.setSnapshot(snap({updatedAt: 100}))
     expect(cache.applyIfNewer(snap({updatedAt: 50}), 'hydrate')).toBe(false)

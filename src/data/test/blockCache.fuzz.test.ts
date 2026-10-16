@@ -18,14 +18,15 @@
  *   notify, `dedupHits++`) iff the incoming snapshot is deep-equal to what's
  *   cached; otherwise writes + deep-freezes + clears any missing marker +
  *   notifies (`dedupMisses++`, `notifies++`) and returns `true`.
- * - `applyIfNewer` (:179-189) — the LWW gate: rejects (`false`, no write) an
- *   incoming snapshot whose `updatedAt` is NOT STRICTLY NEWER than the
- *   cached one (`snapshot.updatedAt <= existing.updatedAt`, :183, STRICT
- *   `<=` per the docblock at :164-174 — a same-ms collision must not
- *   clobber). No existing entry skips the gate entirely and falls through
- *   to `setSnapshot`. `source` (:180-181, :184-185) only routes which
- *   `applyIfNewer{Sync,Hydrate}{Calls,Rejected}` counters move — the gate
- *   itself is identical for both.
+ * - `applyIfNewer` — the LWW gate: rejects (`false`, no write) an incoming
+ *   snapshot whose `updatedAt` is strictly OLDER than the cached one, from
+ *   either source. At an EQUAL stamp the sources differ: 'hydrate' rejects
+ *   (a stale read must not undo a same-stamp sync rewrite), 'sync' falls
+ *   through to `setSnapshot` (a peer write on a stamp this device held,
+ *   #1163), whose dedup makes an identical one a no-op. No existing entry
+ *   skips the gate entirely and falls through to `setSnapshot`. `source`
+ *   also routes which `applyIfNewer{Sync,Hydrate}{Calls,Rejected}` counters
+ *   move.
  * - `deleteSnapshot` (:191-196): `Map.delete`'s own return value gates the
  *   notify — no-op (`false`) if nothing was cached.
  * - `markMissing` (:244-251): drops any cached snapshot as part of the
@@ -187,7 +188,7 @@ const modelSetSnapshot = (
   return true
 }
 
-/** Mirrors `applyIfNewer` (blockCache.ts:179-189) — the LWW gate. */
+/** Mirrors `applyIfNewer` — the LWW gate. */
 const modelApplyIfNewer = (
   model: Model, metrics: MetricsModel, id: Id, content: string, updatedAt: number,
   source: ApplyIfNewerSource,
@@ -195,7 +196,10 @@ const modelApplyIfNewer = (
   if (source === 'sync') metrics.applyIfNewerSyncCalls++
   else metrics.applyIfNewerHydrateCalls++
   const existing = model.snapshots.get(id)
-  if (existing && updatedAt <= existing.updatedAt) {
+  const stale = existing !== undefined && (
+    source === 'sync' ? updatedAt < existing.updatedAt : updatedAt <= existing.updatedAt
+  )
+  if (stale) {
     if (source === 'sync') metrics.applyIfNewerSyncRejected++
     else metrics.applyIfNewerHydrateRejected++
     return false

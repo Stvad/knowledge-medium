@@ -21,6 +21,7 @@ import {
 } from '@/data/internals/clientSchema'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import type { BlockData } from '@/data/api'
+import { SEALED_COLUMNS } from '@/sync/transform'
 
 const WS = 'ws-migration'
 
@@ -78,7 +79,7 @@ beforeEach(rewindToPreMigration)
 describe('ensureStagingNeedsApplyColumn', () => {
   it('seeds each staged row from what the two tables can still show', async () => {
     await deliver(row({id: 'applied', updatedAt: 5}))
-    await seedLocal('applied', 5)                       // I1: same nonzero stamp
+    await seedLocal('applied', 5)                       // same nonzero stamp, clear columns equal
     await deliver(row({id: 'behind', updatedAt: 9}))
     await seedLocal('behind', 4)                        // server ahead
     await deliver(row({id: 'never-arrived', updatedAt: 5}))   // no local row
@@ -126,6 +127,23 @@ describe('ensureStagingNeedsApplyColumn', () => {
     await ensureStagingNeedsApplyColumn(sharedDb.db)
 
     expect(await unapplied()).toEqual(['not-twins'])
+  })
+
+  // A nonzero stamp vouches only for the sealed columns, which the seed cannot
+  // compare against local plaintext; a CLEAR column that differs at an equal
+  // stamp is a peer write landing on this device's stamp (#1163), not an echo.
+  const CLEAR = PERTURBABLE.filter(name => !(SEALED_COLUMNS as readonly string[]).includes(name))
+  it.each(CLEAR)('keeps the flag at an equal nonzero stamp when clear column %s differs', async (column) => {
+    const twin = row({id: 'same-stamp', updatedAt: 5, userUpdatedAt: 5})
+    await seedLocalFrom(twin)
+    const params = blockToSyncedRowParams(twin)
+    const at = BLOCK_STORAGE_COLUMNS.findIndex(c => c.name === column)
+    params[at] = typeof params[at] === 'number' ? (params[at] as number) + 7 : 'perturbed'
+    await sharedDb.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, params)
+
+    await ensureStagingNeedsApplyColumn(sharedDb.db)
+
+    expect(await unapplied()).toEqual(['same-stamp'])
   })
 
   it('re-seeds a device that recorded the PREVIOUS marker version', async () => {
