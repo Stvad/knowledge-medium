@@ -458,14 +458,16 @@ binding oracle + an 11-suite discovery sweep) found six more:
   edit. The property was left strict rather than relaxed to green, so
   the convergence deep tier stayed KNOWN RED until the fix shipped
   (base row-version on PATCH, PR #525). That fix narrowed the door
-  rather than closing it — issue #1163: the same I1 skip still strands a
+  rather than closing it — issue #1163: the same I1 skip still stranded a
   peer's CONTENT, because the UN-drifted path future-clamps an author's
   proposal *below* the stamp that author keeps locally, and a later
-  drifted bump can then land on it. Needs no clock skew and survives
-  reload. Rarer than #381 was (the two devices must also write different
-  content), so it is not a standing red: a 50-minute random-seed deep run
-  did not hit it. Issue #1163 carries the counterexample and the replay
-  seed; the property is again left strict rather than relaxed.
+  drifted bump can then land on it. Needed no clock skew and survived
+  reload. Closed on the client rather than the server: equal stamps were
+  never proof of an equal row (the server merges each column on its
+  own), so the drain now skips only a row identical in every synced
+  column (`localHoldsStagedRow`). The suite's oracle compares all 13
+  columns again, and the #1162 / #1163 counterexamples are pinned as
+  non-fuzz cases beside the property.
 - The binding-oracle sweep found that a long-form date literal bound to
   its resolved target was never CLAIMED by it — any later block could
   legitimately claim the spelling and existing bindings stayed silently

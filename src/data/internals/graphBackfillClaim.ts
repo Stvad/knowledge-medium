@@ -411,12 +411,10 @@ export const createGraphBackfillClaim = (
           return 'minted'
         }
         // `systemMint` (stamp 0) like every other deterministic-id creator.
-        // Without it this is a nonzero-stamp mint of a shared id, which
-        // `syncObserver/reconcile.ts` names as its known blind spot: two devices
-        // minting the same id produce equal nonzero stamps from different
-        // writes, invariant I1 reads them as identical, the incoming row is
-        // skip-stale'd, and the loser strands believing it won. Stamp 0 yields
-        // via I2 instead, so both devices adopt the server's answer.
+        // Without it this is a nonzero-stamp mint of a shared id: two devices
+        // minting it in one millisecond get equal stamps from different writes,
+        // which a reader that cannot decode the row takes for one write
+        // (`blocksAlreadyReflects`, #744). Stamp 0 never vouches.
         await tx.create({
           id: claimId,
           workspaceId,
