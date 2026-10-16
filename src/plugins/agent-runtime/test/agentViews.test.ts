@@ -334,6 +334,15 @@ describe('view-outline', () => {
     expect(out.root.childCount).toBe(1)
   })
 
+  it('reports the real child count for an offset past the last child', async () => {
+    await create({id: ROOT, content: 'Root'})
+    for (let i = 0; i < 2; i++) await create({id: uuid('0000e400', i), parentId: ROOT, content: `c${i}`})
+    const out = await view<OutlineView>({type: 'view-outline', ref: ROOT, offset: 100, format: 'json'})
+    expect(out.rows).toEqual([])
+    expect(out.root.childCount).toBe(2)
+    expect(out.nextOffset).toBeNull()
+  })
+
   it('lists children of the viewed workspace even if sync moves the root mid-view', async () => {
     await create({id: ROOT, content: 'Root'})
     const child = uuid('0000e100', 1)
