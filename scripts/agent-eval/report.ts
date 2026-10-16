@@ -3,6 +3,7 @@
  * deterministic output sizes, and a markdown rendering that can put a
  * second report beside it as a baseline.
  */
+import { MCP_SERVER_NAME } from '../../packages/agent-cli/src/mcpShared'
 import type { TokenUsage } from './transcript'
 
 export interface TaskRunRecord {
@@ -209,7 +210,7 @@ export const renderMarkdown = (report: EvalReport, baseline?: EvalReport): strin
     }
     const rendered = Object.entries(counts)
       .sort((a, b) => b[1] - a[1])
-      .map(([name, count]) => `${name.replace(/^mcp__km__/, '')} ×${count}`)
+      .map(([name, count]) => `${name.replace(`mcp__${MCP_SERVER_NAME}__`, '')} ×${count}`)
       .join(', ')
     lines.push(`| ${row.task} | ${rendered || '—'} | ${errors} |`)
   }

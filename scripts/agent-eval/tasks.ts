@@ -146,7 +146,7 @@ const requireTarget = async (probe: GraphProbe, uid: string) => {
 }
 
 const VENDOR_REVIEW_PREFIX = 'Vendor Review: Kestrel'
-const vendorReviewTitle = (runTag: string) => `${VENDOR_REVIEW_PREFIX} ${runTag}`
+export const vendorReviewTitle = (runTag: string) => `${VENDOR_REVIEW_PREFIX} ${runTag}`
 
 /** Purges blocks anywhere in the workspace whose content matches a LIKE
  *  pattern, deleted ones included. */

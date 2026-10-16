@@ -3,10 +3,11 @@
  * never the MCP tools under test, so a change to a tool's output cannot
  * change how its task is scored.
  */
+import type { KnownCommand } from '@knowledge-medium/agent-cli/protocol'
 
 export interface GraphProbe {
   workspaceId: string
-  command: (command: Record<string, unknown>) => Promise<unknown>
+  command: (command: KnownCommand) => Promise<unknown>
 }
 
 export interface BlockRow {
@@ -55,12 +56,6 @@ export const descendantsOf = (probe: GraphProbe, rootId: string): Promise<BlockR
     )
     SELECT ${BLOCK_COLUMNS} FROM blocks WHERE id IN (SELECT id FROM tree)`,
   [rootId])
-
-/** Every block written since `since` (ms), deleted ones included. */
-export const changedSince = (probe: GraphProbe, since: number): Promise<BlockRow[]> =>
-  sqlAll<BlockRow>(probe,
-    `SELECT ${BLOCK_COLUMNS} FROM blocks WHERE workspace_id = ? AND updated_at >= ? ORDER BY created_at, id`,
-    [probe.workspaceId, since])
 
 /** Hard-deletes blocks and everything under them, deleted rows included, so
  *  nothing is left for an agent's raw SQL to find. A raw write to a synced

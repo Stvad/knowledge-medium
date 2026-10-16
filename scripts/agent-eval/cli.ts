@@ -18,9 +18,8 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
-import { createBridgeClient } from '../../packages/agent-cli/src/client'
-import { KM_MCP_ALLOWED_TOOLS, MCP_SERVER_NAME } from '../../packages/agent-cli/src/mcpShared'
-import type { KnownCommand } from '../../packages/agent-cli/src/protocol'
+import { type BridgeClient, createBridgeClient } from '../../packages/agent-cli/src/client'
+import { KM_MCP_ALLOWED_TOOLS, KM_MCP_TOOL_NAMES, MCP_SERVER_NAME } from '../../packages/agent-cli/src/mcpShared'
 import { runJsonlProcess } from '../../packages/agent-dispatch/src/execProcess'
 import { BILLING_ENV_DENYLIST, envForBilling } from '../../packages/agent-dispatch/src/runner'
 import { buildFixture, FIXTURE_HASH_PREFIX, FIXTURE_MARKER_PAGE } from './fixture'
@@ -42,7 +41,7 @@ const fail = (message: string): never => {
   process.exit(1)
 }
 
-const connect = async (profile: string): Promise<{probe: GraphProbe, client: ReturnType<typeof createBridgeClient>}> => {
+const connect = async (profile: string): Promise<{probe: GraphProbe, client: BridgeClient}> => {
   const client = createBridgeClient({profile, timeoutMs: 120_000})
   const who = await client.whoami().catch((error: unknown) =>
     fail(`cannot reach the bridge with profile "${profile}": ${error instanceof Error ? error.message : String(error)}\n`
@@ -52,7 +51,7 @@ const connect = async (profile: string): Promise<{probe: GraphProbe, client: Ret
   await requireNeverSynced(client, profile)
   return {
     client,
-    probe: {workspaceId: who.audience.workspaceId!, command: command => client.runCommand(command as KnownCommand)},
+    probe: {workspaceId: who.audience.workspaceId!, command: command => client.runCommand(command)},
   }
 }
 
@@ -61,7 +60,7 @@ const connect = async (profile: string): Promise<{probe: GraphProbe, client: Ret
  *  connects PowerSync and never downloads a row. A signed-in tab — even
  *  offline, even before its first connect — shows at least one of these and
  *  is refused. Checked again before every task: a run can last hours. */
-const requireNeverSynced = async (client: ReturnType<typeof createBridgeClient>, profile: string) => {
+const requireNeverSynced = async (client: BridgeClient, profile: string) => {
   const status = await client.runCommand({
     type: 'eval',
     code: `const status = db.currentStatus
@@ -185,7 +184,7 @@ const run = async (options: RunOptions) => {
     resolvedModel: null,
     effort: options.effort,
     claudeCodeVersion: null,
-    kmTools: [...KM_MCP_ALLOWED_TOOLS].map(tool => tool.replace(`mcp__${MCP_SERVER_NAME}__`, '')),
+    kmTools: [...KM_MCP_TOOL_NAMES],
     mcpOutputTokens: options.mcpOutputTokens,
     fixtureHash: fixture.hash,
     taskHashes: Object.fromEntries(options.tasks.map(task => [task.id, taskDefinitionHash(task, fixture.truth)])),

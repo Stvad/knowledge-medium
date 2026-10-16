@@ -20,12 +20,23 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
-import { buildFixture, DESIGN_PAGE, PRICING_FAQ_TODO, PROJECT_PAGE, READING_LOG_PAGE, ROLLOUT_BLOCK_TEXT, TARGET_UIDS } from './fixture'
+import {
+  buildFixture,
+  DESIGN_PAGE,
+  FIXTURE_FIRST_DAY,
+  FIXTURE_LAST_DAY,
+  isoDays,
+  PRICING_FAQ_TODO,
+  PROJECT_PAGE,
+  READING_LOG_PAGE,
+  ROLLOUT_BLOCK_TEXT,
+  TARGET_UIDS,
+} from './fixture'
 import { childrenOf, dailyNoteId, descendantsOf, getBlock, type GraphProbe, pageIdByTitle, requirePageId, sqlAll } from './graphQueries'
 import { diffAgainst, restoreSnapshot, snapshotWorkspace, strayChanges, type WorkspaceSnapshot } from './isolation'
 import { OUTPUT_PROBES, type ProbeContext } from './outputBudgets'
 import { createRunJournal } from './runJournal'
-import { type CheckInput, type CheckOutcome, targetId, TASKS, type TaskEnv } from './tasks'
+import { type CheckInput, type CheckOutcome, targetId, TASKS, type TaskEnv, vendorReviewTitle } from './tasks'
 import { seedFixtureTestGraph, TEST_WORKSPACE_ID, type FixtureTestGraph } from './testGraph'
 
 let db: TestDb
@@ -75,19 +86,11 @@ describe('output budgets', () => {
   }, 20_000)
 })
 
-const fixtureDays = (from: string, to: string) => {
-  const days: string[] = []
-  for (let t = Date.parse(`${from}T00:00:00Z`); t <= Date.parse(`${to}T00:00:00Z`); t += 86_400_000) {
-    days.push(new Date(t).toISOString().slice(0, 10))
-  }
-  return days
-}
-
 /** Answers derived from the imported graph, independently of the generator's truth. */
 const deriveReadAnswers = async (): Promise<Record<string, unknown>> => {
   const kestrelDates: string[] = []
   const kestrelAbout: Record<string, string> = {}
-  for (const iso of fixtureDays('2026-06-01', '2026-06-30')) {
+  for (const iso of isoDays('2026-06-01', '2026-06-30')) {
     const mentions: string[] = []
     for (const child of await childrenOf(probe, await dailyNoteId(probe, iso))) {
       const text = [child.content, ...(await descendantsOf(probe, child.id)).map(row => row.content)].join(' ')
@@ -99,7 +102,7 @@ const deriveReadAnswers = async (): Promise<Record<string, unknown>> => {
   }
 
   const dailyByBlockId = new Map<string, string>()
-  for (const iso of fixtureDays('2026-01-01', '2026-08-31')) dailyByBlockId.set(await dailyNoteId(probe, iso), iso)
+  for (const iso of isoDays(FIXTURE_FIRST_DAY, FIXTURE_LAST_DAY)) dailyByBlockId.set(await dailyNoteId(probe, iso), iso)
   const blockers = await sqlAll<{daily: string}>(probe, `
     SELECT standup.parent_id AS daily FROM blocks blocker
     JOIN blocks standup ON standup.id = blocker.parent_id
@@ -127,7 +130,7 @@ const deriveReadAnswers = async (): Promise<Record<string, unknown>> => {
   [TEST_WORKSPACE_ID, vendorPageId])
 
   const julyMeetingsWithInes: string[] = []
-  for (const iso of fixtureDays('2026-07-01', '2026-07-31')) {
+  for (const iso of isoDays('2026-07-01', '2026-07-31')) {
     for (const meeting of (await childrenOf(probe, await dailyNoteId(probe, iso))).filter(row => row.content === '[[Meeting]]')) {
       if ((await childrenOf(probe, meeting.id)).some(row => row.content === 'with [[Ines Varga]]')) julyMeetingsWithInes.push(iso)
     }
@@ -191,6 +194,9 @@ const wrongAnswers: Record<string, unknown[]> = {
 
 const resultIdOf = (text: string) => (JSON.parse(text) as {id: string}).id
 
+/** The id a fixture block with a known Roam uid imported to. */
+const fixtureId = (uid: keyof typeof TARGET_UIDS) => targetId(TEST_WORKSPACE_ID, TARGET_UIDS[uid])
+
 /** A correct solution for each write task, done through the km MCP tools. */
 const solveWithMcp: Record<string, (env: TaskEnv) => Promise<void>> = {
   'daily-checkin': async () => {
@@ -201,15 +207,11 @@ const solveWithMcp: Record<string, (env: TaskEnv) => Promise<void>> = {
     }
   },
   'edit-rollout-phrase': async () => {
-    const [block] = (await descendantsOf(probe, await requirePageId(probe, DESIGN_PAGE)))
-      .filter(row => row.content === ROLLOUT_BLOCK_TEXT)
-    await graph.callTool('update_block', {id: block.id, content: ROLLOUT_BLOCK_TEXT.replace('Q3 2026', 'Q4 2026')})
+    await graph.callTool('update_block', {id: fixtureId('rollout'), content: ROLLOUT_BLOCK_TEXT.replace('Q3 2026', 'Q4 2026')})
   },
   'create-linked-page': async ({runTag}) => {
-    const title = `Vendor Review: Kestrel ${runTag}`
-    const vendors = (await descendantsOf(probe, await requirePageId(probe, PROJECT_PAGE)))
-      .find(row => row.content === '## Vendors')!
-    await graph.callTool('create_block', {parentId: vendors.id, content: `[[${title}]]`})
+    const title = vendorReviewTitle(runTag)
+    await graph.callTool('create_block', {parentId: fixtureId('vendorsSection'), content: `[[${title}]]`})
     // The linked page is created by the references processor after commit.
     const pageId = await vi.waitFor(async () => {
       const id = await pageIdByTitle(probe, title)
@@ -219,9 +221,7 @@ const solveWithMcp: Record<string, (env: TaskEnv) => Promise<void>> = {
     await graph.callTool('create_block', {parentId: pageId, content: 'Status: under review'})
   },
   'complete-todo': async () => {
-    const [todo] = (await descendantsOf(probe, await requirePageId(probe, PROJECT_PAGE)))
-      .filter(row => row.content === PRICING_FAQ_TODO)
-    await graph.callTool('update_block', {id: todo.id, properties: {status: 'done'}})
+    await graph.callTool('update_block', {id: fixtureId('pricingFaqTodo'), properties: {status: 'done'}})
   },
 }
 
@@ -235,27 +235,25 @@ const solveWrongly: Record<string, Array<(env: TaskEnv) => Promise<void>>> = {
     })
   }],
   'edit-rollout-phrase': [async () => {
-    const [block] = (await descendantsOf(probe, await requirePageId(probe, DESIGN_PAGE)))
-      .filter(row => row.content === ROLLOUT_BLOCK_TEXT)
-    await graph.callTool('update_block', {id: block.id, content: 'Target: Q4 2026.'})
+    await graph.callTool('update_block', {id: fixtureId('rollout'), content: 'Target: Q4 2026.'})
   }],
   'create-linked-page': [async ({runTag}) => {
     const today = (JSON.parse(await graph.callTool('daily_note', {date: 'today'})) as {blockId: string}).blockId
-    await graph.callTool('create_block', {parentId: today, content: `[[Vendor Review: Kestrel ${runTag}]]`})
+    await graph.callTool('create_block', {parentId: today, content: `[[${vendorReviewTitle(runTag)}]]`})
   }],
   'complete-todo': [
     // Marked done in the text, not the status.
     async () => {
-      await graph.callTool('update_block', {id: pricingTodoId(), content: `{{[[DONE]]}} ${PRICING_FAQ_TODO}`})
+      await graph.callTool('update_block', {id: fixtureId('pricingFaqTodo'), content: `{{[[DONE]]}} ${PRICING_FAQ_TODO}`})
     },
     // Status right, but the todo's text rewritten.
     async () => {
-      await graph.callTool('update_block', {id: pricingTodoId(), content: 'Draft FAQ', properties: {status: 'done'}})
+      await graph.callTool('update_block', {id: fixtureId('pricingFaqTodo'), content: 'Draft FAQ', properties: {status: 'done'}})
     },
   ],
 }
 
-const pricingTodoId = () => targetId(TEST_WORKSPACE_ID, TARGET_UIDS.pricingFaqTodo)
+
 
 const expectOutcome = (outcome: CheckOutcome, pass: boolean) => expect(outcome.pass, outcome.detail).toBe(pass)
 
@@ -315,7 +313,7 @@ describe('isolation', () => {
     const removed = byText('The current protocol ships')
     const moved = byText('Migration runs per workspace')
     const movedToo = byText('Success metric')
-    const rollout = targetId(TEST_WORKSPACE_ID, TARGET_UIDS.rollout)
+    const rollout = fixtureId('rollout')
 
     await graph.callTool('update_block', {id: edited.id, content: 'rewritten'})
     await graph.callTool('update_block', {id: tagged.id, properties: {'eval:tag': 'x'}})
@@ -359,7 +357,7 @@ describe('isolation', () => {
 describe('isolation edge cases', () => {
   it('purges a page a link minted, which is born with updated_at = 0', async () => {
     const snapshot = await snapshotWorkspace(probe)
-    const host = targetId(TEST_WORKSPACE_ID, TARGET_UIDS.vendorsSection)
+    const host = fixtureId('vendorsSection')
     await graph.callTool('create_block', {parentId: host, content: '[[Minted Seat Probe]]'})
     await vi.waitFor(async () => { expect(await pageIdByTitle(probe, 'Minted Seat Probe')).not.toBeNull() }, {timeout: 5_000})
 
@@ -385,7 +383,7 @@ describe('isolation edge cases', () => {
 
   it('brings back a fixture block an agent moved under a block it created', async () => {
     const snapshot = await snapshotWorkspace(probe)
-    const rollout = targetId(TEST_WORKSPACE_ID, TARGET_UIDS.rollout)
+    const rollout = fixtureId('rollout')
     const before = snapshot.get(rollout)!
     const parentId = resultIdOf(await graph.callTool('create_block', {parentId: before.parent_id, content: 'new container'}))
     await graph.callTool('move_block', {id: rollout, parentId, position: {kind: 'first'}})
@@ -402,7 +400,7 @@ describe('run journal', () => {
     const interrupted = createRunJournal(dir)
     interrupted.begin(await snapshotWorkspace(probe), fixtureHash)
     interrupted.taskStarted()
-    const rollout = targetId(TEST_WORKSPACE_ID, TARGET_UIDS.rollout)
+    const rollout = fixtureId('rollout')
     await graph.callTool('update_block', {id: rollout, content: 'left behind'})
 
     expect(await createRunJournal(dir).recover(probe, fixtureHash, QUIET)).toBe(1)

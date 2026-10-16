@@ -2,8 +2,6 @@ import { dailyNoteBlockId } from '@/plugins/daily-notes'
 import { parseLiteralDailyPageTitle } from '@/utils/relativeDate'
 import type { RoamPage } from './types'
 
-export { ROAM_IMPORT_NS, roamBlockId } from './blockIds'
-
 export interface DailyPageInfo {
   iso: string
   blockId: string

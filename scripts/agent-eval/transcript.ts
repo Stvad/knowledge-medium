@@ -19,7 +19,6 @@
 export interface ToolCallRecord {
   id: string
   name: string
-  inputBytes: number
   /** Bytes the model saw; null when the transcript ended before the tool returned. */
   outputBytes: number | null
   /** Replaced by Claude Code's over-the-cap notice. */
@@ -42,7 +41,6 @@ export interface TokenUsage {
 }
 
 export interface TranscriptMetrics {
-  sessionId: string | null
   model: string | null
   claudeCodeVersion: string | null
   toolCalls: ToolCallRecord[]
@@ -83,7 +81,6 @@ const toolResultText = (content: unknown): string => {
 
 export const parseTranscript = (raw: string): TranscriptMetrics => {
   const metrics: TranscriptMetrics = {
-    sessionId: null,
     model: null,
     claudeCodeVersion: null,
     toolCalls: [],
@@ -110,7 +107,6 @@ export const parseTranscript = (raw: string): TranscriptMetrics => {
     }
 
     if (event.type === 'system' && event.subtype === 'init') {
-      metrics.sessionId = typeof event.session_id === 'string' ? event.session_id : null
       metrics.model = typeof event.model === 'string' ? event.model : null
       metrics.claudeCodeVersion = typeof event.claude_code_version === 'string' ? event.claude_code_version : null
     } else if (event.type === 'assistant') {
@@ -121,7 +117,6 @@ export const parseTranscript = (raw: string): TranscriptMetrics => {
         const call: ToolCallRecord = {
           id: block.id,
           name: typeof block.name === 'string' ? block.name : '?',
-          inputBytes: byteLength(JSON.stringify(block.input ?? {})),
           outputBytes: null,
           capped: false,
           returnedBytes: null,

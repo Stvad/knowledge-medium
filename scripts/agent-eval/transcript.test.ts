@@ -40,9 +40,9 @@ describe('parseTranscript', () => {
 
   it('records each tool call once with the UTF-8 bytes it returned', () => {
     expect(metrics.toolCalls).toEqual([
-      {id: 't1', name: 'mcp__km__page', inputBytes: 18, outputBytes: 20, capped: false, returnedBytes: 20, isError: false},
-      {id: 't2', name: 'mcp__km__search', inputBytes: 13, outputBytes: capNotice.length, capped: true, returnedBytes: 644_156, isError: false},
-      {id: 't3', name: 'mcp__km__backlinks', inputBytes: 10, outputBytes: 4, capped: false, returnedBytes: 4, isError: true},
+      {id: 't1', name: 'mcp__km__page', outputBytes: 20, capped: false, returnedBytes: 20, isError: false},
+      {id: 't2', name: 'mcp__km__search', outputBytes: capNotice.length, capped: true, returnedBytes: 644_156, isError: false},
+      {id: 't3', name: 'mcp__km__backlinks', outputBytes: 4, capped: false, returnedBytes: 4, isError: true},
     ])
   })
 
@@ -66,7 +66,7 @@ describe('parseTranscript', () => {
 
   it('reads run metadata from the init and result lines', () => {
     expect(metrics).toMatchObject({
-      sessionId: 's-1', model: 'claude-test', claudeCodeVersion: '9.9.9',
+      model: 'claude-test', claudeCodeVersion: '9.9.9',
       numTurns: 4, durationMs: 1234, costUsd: 0.01, terminalReason: 'completed', isError: false,
     })
   })

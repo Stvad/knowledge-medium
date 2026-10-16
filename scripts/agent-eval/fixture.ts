@@ -15,6 +15,7 @@
  */
 import { createHash } from 'node:crypto'
 import type { RoamBlock, RoamExport, RoamPage } from '@/plugins/roam-import/types'
+import { formatRoamDate } from '@/utils/dailyPage'
 
 export const FIXTURE_FIRST_DAY = '2026-01-01'
 export const FIXTURE_LAST_DAY = '2026-08-31'
@@ -128,25 +129,11 @@ const createRng = (seed: number) => {
 
 type Rng = ReturnType<typeof createRng>
 
-const MONTHS = [
-  'January', 'February', 'March', 'April', 'May', 'June',
-  'July', 'August', 'September', 'October', 'November', 'December',
-]
-
-const ordinalSuffix = (day: number): string => {
-  if (day >= 11 && day <= 13) return 'th'
-  switch (day % 10) {
-    case 1: return 'st'
-    case 2: return 'nd'
-    case 3: return 'rd'
-    default: return 'th'
-  }
-}
-
-/** Roam's daily-page title, e.g. "June 12th, 2026". */
-export const roamDailyTitle = (iso: string): string => {
+/** Roam's daily-page title, e.g. "June 12th, 2026" — the app's own format,
+ *  which is what the importer recognizes as a daily page. */
+const roamDailyTitle = (iso: string): string => {
   const [year, month, day] = iso.split('-').map(Number)
-  return `${MONTHS[month - 1]} ${day}${ordinalSuffix(day)}, ${year}`
+  return formatRoamDate(new Date(year, month - 1, day))
 }
 
 const roamDailyUid = (iso: string): string => {
@@ -154,7 +141,7 @@ const roamDailyUid = (iso: string): string => {
   return `${month}-${day}-${year}`
 }
 
-const isoDays = (first: string, last: string): string[] => {
+export const isoDays = (first: string, last: string): string[] => {
   const out: string[] = []
   const end = Date.parse(`${last}T00:00:00Z`)
   for (let t = Date.parse(`${first}T00:00:00Z`); t <= end; t += 86_400_000) {
@@ -567,16 +554,16 @@ export const buildFixture = (): Fixture => {
   const days = isoDays(FIXTURE_FIRST_DAY, FIXTURE_LAST_DAY)
   const dailyPages = days.map(iso => dailyNote(iso, rng, f))
 
-  const mentionsKestrel = (blocks: readonly RoamBlock[] | undefined): boolean =>
-    (blocks ?? []).some(child => /kestrel/i.test(child.string ?? '') || mentionsKestrel(child.children))
-  const kestrelJuneDates = days.filter((iso, index) =>
-    iso.startsWith('2026-06-') && mentionsKestrel(dailyPages[index].children))
   const outlineText = (block: RoamBlock): string =>
     [block.string ?? '', ...(block.children ?? []).map(outlineText)].join('\n')
-  const kestrelJuneSignals = Object.fromEntries(kestrelJuneDates.map(iso => {
-    const mentions = (dailyPages[days.indexOf(iso)].children ?? [])
-      .map(outlineText)
-      .filter(text => /kestrel/i.test(text))
+  /** Per June date with a Kestrel mention, the outline text of each mention. */
+  const juneKestrelMentions = days.flatMap((iso, index) => {
+    if (!iso.startsWith('2026-06-')) return []
+    const mentions = (dailyPages[index].children ?? []).map(outlineText).filter(text => /kestrel/i.test(text))
+    return mentions.length > 0 ? [[iso, mentions] as const] : []
+  })
+  const kestrelJuneDates = juneKestrelMentions.map(([iso]) => iso)
+  const kestrelJuneSignals = Object.fromEntries(juneKestrelMentions.map(([iso, mentions]) => {
     const signals = Object.entries(KESTREL_SIGNALS)
       .filter(([, pattern]) => mentions.some(text => pattern.test(text)))
       .map(([name]) => name)
@@ -624,10 +611,3 @@ export const buildFixture = (): Fixture => {
   }
 }
 
-/** Count every block (pages included) in an export — the fingerprint test
- *  pins it so a generator change is a visible decision. */
-export const countBlocks = (pages: RoamExport): number => {
-  const walk = (blocks: readonly RoamBlock[] | undefined): number =>
-    (blocks ?? []).reduce((sum, child) => sum + 1 + walk(child.children), 0)
-  return pages.reduce((sum, p) => sum + 1 + walk(p.children), 0)
-}

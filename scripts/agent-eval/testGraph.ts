@@ -7,7 +7,7 @@
 import { provideRuntimeGlobals } from './nodeShims'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
-import { knownAgentCommandSchema } from '@knowledge-medium/agent-cli/protocol'
+import { knownAgentCommandSchema, type KnownCommand } from '@knowledge-medium/agent-cli/protocol'
 import type { BridgeClient } from '../../packages/agent-cli/src/client'
 import { createGraphMcpServer } from '../../packages/agent-cli/src/mcpServer'
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
@@ -52,12 +52,11 @@ export const createInProcessBridgeClient = (context: AgentRuntimeContext): Bridg
 })
 
 export interface FixtureTestGraph {
-  context: AgentRuntimeContext
   /** Calls a km MCP tool by name and returns its text output. */
   callTool: (name: string, args: Record<string, unknown>) => Promise<string>
   /** A raw wire command, for test setup that must not depend on a tool's
    *  rendered output (which the read-path work reshapes). */
-  command: (command: Record<string, unknown>) => Promise<unknown>
+  command: (command: KnownCommand) => Promise<unknown>
   close: () => Promise<void>
 }
 
@@ -91,9 +90,8 @@ export const seedFixtureTestGraph = async (db: TestDb['db']): Promise<FixtureTes
   }
 
   return {
-    context,
     callTool,
-    command: command => bridge.runCommand(command as never),
+    command: command => bridge.runCommand(command),
     close: async () => {
       await client.close()
       await server.close()
