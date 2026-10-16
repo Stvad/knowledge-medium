@@ -14,7 +14,8 @@ import { agentTxOptions } from './agentWrites.ts'
 import { shortIds } from './agentViews/resolveRef.ts'
 import {
   resolveAgentTarget,
-  resolveBlockId,
+  blockIdField,
+  blockPositionField,
   resolveDailyNoteTarget,
   resolvePageTarget,
   type ResolvedAgentTarget,
@@ -35,6 +36,8 @@ export interface AppendMarkdownInput {
   markdown: string
   position?: InsertPosition
   shape?: MarkdownShape
+  /** The anchor's siblingId is already a stored id (see `blockIdField`). */
+  exactIds?: boolean
 }
 
 export interface AppendedBlock {
@@ -53,16 +56,6 @@ export interface AppendMarkdownResult {
   blocks: AppendedBlock[]
 }
 
-const siblingPosition = async (
-  repo: Repo,
-  verb: string,
-  position: InsertPosition | undefined,
-): Promise<InsertPosition> => {
-  if (position === undefined) return {kind: 'last'}
-  if (position.kind === 'first' || position.kind === 'last') return position
-  return {kind: position.kind, siblingId: await resolveBlockId(repo, position.siblingId, verb)}
-}
-
 export const appendMarkdown = async (
   outerRepo: Repo,
   input: AppendMarkdownInput,
@@ -73,7 +66,7 @@ export const appendMarkdown = async (
 
   // A created page / daily note commits in its own tx; one undo entry for both.
   return outerRepo.undoGroup(async repo => {
-    const firstPosition = await siblingPosition(repo, verb, input.position)
+    const firstPosition = await blockPositionField(repo, input.position ?? {kind: 'last'}, verb, input.exactIds)
     // An anchor's parent exists already, so an anchored insert never creates
     // its target; one that is not the anchor's parent is refused by
     // `createChild` inside the tx below, before anything is written.
@@ -123,6 +116,8 @@ export interface EditBlockInput {
   id: string
   old: string
   new: string
+  /** `id` is already a stored id (see `blockIdField`). */
+  exactIds?: boolean
 }
 
 /** Overlapping occurrences — `aa` occurs twice in `aaa`, which is ambiguous to
@@ -151,7 +146,7 @@ export const editBlock = async (repo: Repo, input: EditBlockInput): Promise<Bloc
   if (input.old === '') {
     throw new Error(`${verb}: old must not be empty — use update-block to replace the whole content.`)
   }
-  const id = await resolveBlockId(repo, input.id, verb)
+  const id = await blockIdField(repo, input.id, verb, input.exactIds)
   await repo.tx(async tx => {
     const block = await tx.get(id)
     if (!block || block.deleted) throw new Error(`${verb}: block ${id} not found.`)

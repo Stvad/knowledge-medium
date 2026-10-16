@@ -936,8 +936,9 @@ cli
 cli
   .command('create-page [...name]', wireDescription('create-page'))
   .option('--date <expr>', "A daily note's date instead of a page name (today, 2026-10-15, next monday)")
-  .action(async (name: unknown, options: {date?: unknown}) => {
-    const text = toStringArray(name).join(' ').trim()
+  .action(async (name: unknown, options: {date?: unknown, '--'?: unknown}) => {
+    // A name starting with `-` reads as a flag; it is taken after `--` too.
+    const text = [...toStringArray(name), ...toStringArray(options['--'])].join(' ').trim()
     await runAndPrint({
       type: 'create-page',
       ...(text ? {name: text} : {}),

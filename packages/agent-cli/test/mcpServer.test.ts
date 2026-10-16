@@ -124,9 +124,16 @@ describe('createGraphMcpServer', () => {
       {type: 'edit_block', id: 'full-b', old: 'a', new: 'b'},
       {type: 'create_page', name: 'Inbox', date: undefined},
     ])
-    // The write acts on the id the guard checked.
+    // The write acts on the id the guard checked, marked so the runtime uses it
+    // exactly rather than reading it as a ref again.
     expect(commands.filter(command => 'id' in command).map(command => (command as {id?: unknown}).id))
       .toEqual(['full-b', 'full-b', 'full-b', 'full-b', 'full-b'])
+    expect(commands.filter(command => command.type !== 'create-block' && command.type !== 'create-page')
+      .map(command => [command.type, (command as {exactIds?: unknown}).exactIds]))
+      .toEqual([
+        ['update-block', true], ['move-block', true], ['delete-block', true],
+        ['restore-block', true], ['append-markdown', true], ['edit-block', true],
+      ])
     expect(commands.map(command => command.type)).toEqual([
       'create-block',
       'update-block',

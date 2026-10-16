@@ -31,7 +31,7 @@ import {
   assertActiveWorkspaceBlocks,
 } from './workspaceGuard.ts'
 import { agentTxOptions, runAgentMutator } from './agentWrites.ts'
-import { resolveAgentTarget, resolveBlockId } from './targets.ts'
+import { blockIdField, blockPositionField, resolveAgentTarget, resolveBlockId } from './targets.ts'
 import { appendMarkdown, contentEcho, createPage, editBlock, parseAgentMarkdown } from './writeCommands.ts'
 import { blockHistory, recentChanges } from './changeHistory.ts'
 import { keyAtEnd, keyBetween } from '@/data/orderKey.js'
@@ -179,21 +179,13 @@ const getPosition = (value: unknown): BlockPosition | undefined => {
   return value
 }
 
-/** The verb's target block id, a short id expanded (see `resolveBlockId`). */
+/** The verb's target block id as it acts on it (see `blockIdField`). */
 const commandBlockId = (
   repo: Repo,
-  command: {blockId?: unknown; id?: unknown},
+  command: {blockId?: unknown; id?: unknown; exactIds?: unknown},
   verb: string,
-): Promise<string> => resolveBlockId(repo, requireString(command.blockId ?? command.id, 'blockId'), verb)
-
-const resolvedPosition = async (
-  repo: Repo,
-  position: MoveBlockPosition,
-  verb: string,
-): Promise<MoveBlockPosition> =>
-  position.kind === 'before' || position.kind === 'after'
-    ? {kind: position.kind, siblingId: await resolveBlockId(repo, position.siblingId, verb)}
-    : position
+): Promise<string> =>
+  blockIdField(repo, requireString(command.blockId ?? command.id, 'blockId'), verb, command.exactIds === true)
 
 const getMoveBlockPosition = (value: unknown): MoveBlockPosition => {
   if (!isRecord(value)) {
@@ -2348,11 +2340,13 @@ export const executeCommand = async (
     case 'move-block': {
       const parentId = command.parentId === null
         ? null
-        : await resolveBlockId(context.repo, requireString(command.parentId, 'parentId'), 'move-block')
+        : await blockIdField(context.repo, requireString(command.parentId, 'parentId'), 'move-block', command.exactIds === true)
       return context.moveBlock({
         id: await commandBlockId(context.repo, command, 'move-block'),
         parentId,
-        position: await resolvedPosition(context.repo, getMoveBlockPosition(command.position), 'move-block'),
+        position: await blockPositionField(
+          context.repo, getMoveBlockPosition(command.position), 'move-block', command.exactIds === true,
+        ),
       })
     }
 
@@ -2372,6 +2366,7 @@ export const executeCommand = async (
         markdown: requireString(command.markdown, 'markdown'),
         position: command.position === undefined ? undefined : getMoveBlockPosition(command.position),
         shape: command.shape === 'block' ? 'block' : command.shape === 'outline' ? 'outline' : undefined,
+        exactIds: command.exactIds === true,
       })
 
     case 'edit-block':
@@ -2379,6 +2374,7 @@ export const executeCommand = async (
         id: requireString(command.id, 'id'),
         old: requireString(command.old, 'old'),
         new: requireString(command.new, 'new'),
+        exactIds: command.exactIds === true,
       })
 
     case 'create-page':

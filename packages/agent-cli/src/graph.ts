@@ -51,6 +51,13 @@ export interface MoveBlockInput {
   id: string
   parentId: string | null
   position: MoveBlockPosition
+  /** The id fields are already stored ids (see the wire `exactIds`). */
+  exactIds?: boolean
+}
+
+/** The wire `exactIds` flag, for verbs whose id fields the caller resolved. */
+export interface ExactIds {
+  exactIds?: boolean
 }
 
 export interface AppendedBlock {
@@ -172,7 +179,7 @@ export const createBridgeGraph = (client: BridgeClient) => {
    *  update unless the block still has exactly that content. */
   const updateBlock = async (
     id: string,
-    patch: {content?: string, properties?: Record<string, unknown>, expectedContent?: string},
+    patch: {content?: string, properties?: Record<string, unknown>, expectedContent?: string} & ExactIds,
   ): Promise<unknown> => {
     return client.runCommand({type: 'update-block', id, ...patch})
   }
@@ -182,12 +189,12 @@ export const createBridgeGraph = (client: BridgeClient) => {
     markdown: string
     position?: MoveBlockPosition
     shape?: 'outline' | 'block'
-  }): Promise<AppendMarkdownResult> => {
+  } & ExactIds): Promise<AppendMarkdownResult> => {
     const result = await client.runCommand({type: 'append-markdown', ...input})
     return asRecord(result, 'append-markdown') as unknown as AppendMarkdownResult
   }
 
-  const editBlock = async (input: {id: string, old: string, new: string}): Promise<BlockData | null> => {
+  const editBlock = async (input: {id: string, old: string, new: string} & ExactIds): Promise<BlockData | null> => {
     const result = await client.runCommand({type: 'edit-block', ...input})
     if (result === null || result === undefined) return null
     return asRecord(result, 'edit-block') as unknown as BlockData
@@ -219,13 +226,13 @@ export const createBridgeGraph = (client: BridgeClient) => {
     return asRecord(result, 'move-block') as unknown as BlockData
   }
 
-  const deleteBlock = async (id: string): Promise<DeleteBlockResult> => {
-    const result = await client.runCommand({type: 'delete-block', id})
+  const deleteBlock = async (id: string, options: ExactIds = {}): Promise<DeleteBlockResult> => {
+    const result = await client.runCommand({type: 'delete-block', id, ...options})
     return asRecord(result, 'delete-block') as unknown as DeleteBlockResult
   }
 
-  const restoreBlock = async (id: string): Promise<BlockData | null> => {
-    const result = await client.runCommand({type: 'restore-block', id})
+  const restoreBlock = async (id: string, options: ExactIds = {}): Promise<BlockData | null> => {
+    const result = await client.runCommand({type: 'restore-block', id, ...options})
     if (result === null || result === undefined) return null
     return asRecord(result, 'restore-block') as unknown as BlockData
   }

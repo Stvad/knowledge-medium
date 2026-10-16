@@ -691,3 +691,48 @@ describe('review round 6', () => {
     expect(changes).toContainEqual(expect.objectContaining({blockId: created.id, kind: 'create'}))
   })
 })
+
+describe('review round 7', () => {
+  // `exactIds` says the id fields are already stored ids — km-mcp resolves
+  // before its write guard and must not have the write read them as refs again.
+  it('acts on exactIds values as stored ids, never re-reading them as refs', async () => {
+    await seed([
+      {id: NOTE, content: 'real'},
+      {id: '^3f2a9c1b', content: 'odd'},
+      {id: LONE, content: 'parent'},
+      {id: 'kid', parentId: LONE, content: 'kid'},
+    ])
+    await run({type: 'update-block', id: '^3f2a9c1b', content: 'odd 2', exactIds: true})
+    await run({type: 'edit-block', id: '^3f2a9c1b', old: '2', new: '3', exactIds: true})
+    expect(await contentOf('^3f2a9c1b')).toBe('odd 3')
+    await run({type: 'move-block', id: '^3f2a9c1b', parentId: LONE, position: {kind: 'after', siblingId: 'kid'}, exactIds: true})
+    expect((await liveChildren(LONE)).map(row => row.id)).toEqual(['kid', '^3f2a9c1b'])
+    await run({type: 'append-markdown', target: LONE, markdown: '- x', position: {kind: 'before', siblingId: '^3f2a9c1b'}, exactIds: true})
+    expect((await liveChildren(LONE)).map(row => row.content)).toEqual(['kid', 'x', 'odd 3'])
+    await run({type: 'delete-block', id: '^3f2a9c1b', exactIds: true})
+    await run({type: 'restore-block', id: '^3f2a9c1b', exactIds: true})
+    expect(await contentOf(NOTE)).toBe('real')
+  })
+
+  // Read as refs, '^7d41e0aa' would name LONE and '^3f2a9c1b' NOTE.
+  it('moves under an exactIds parent and after an exactIds sibling', async () => {
+    await seed([
+      {id: NOTE}, {id: LONE},
+      {id: '^7d41e0aa', content: 'odd parent'},
+      {id: '^3f2a9c1b', parentId: '^7d41e0aa', content: 'odd sibling'},
+      {id: 'mover', content: 'mover'},
+    ])
+    await run({
+      type: 'move-block', id: 'mover', parentId: '^7d41e0aa',
+      position: {kind: 'after', siblingId: '^3f2a9c1b'}, exactIds: true,
+    })
+    expect((await liveChildren('^7d41e0aa')).map(row => row.id)).toEqual(['^3f2a9c1b', 'mover'])
+  })
+
+  it('names a stored id with surrounding whitespace exactly; a ref is trimmed', async () => {
+    await seed([{id: ' victim ', content: 'spaced'}, {id: 'victim', content: 'plain'}])
+    await run({type: 'update-block', id: ' victim ', content: 'spaced!', exactIds: true})
+    expect(await contentOf(' victim ')).toBe('spaced!')
+    expect(await contentOf('victim')).toBe('plain')
+  })
+})

@@ -12,6 +12,7 @@
  */
 import { pageNameInTarget } from '@knowledge-medium/agent-cli/protocol'
 import type { Repo } from '@/data/repo'
+import type { InsertPosition } from '@/data/mutators.js'
 import { ensureAliasTarget } from '@/data/targets.js'
 import { dailyNoteBlockId, getOrCreateDailyNote } from '@/plugins/daily-notes/dailyNotes.js'
 import { parseLiteralDailyPageTitle, parseRelativeDate } from '@/utils/relativeDate.js'
@@ -88,6 +89,26 @@ export const resolveBlockId = async (repo: Repo, raw: string, verb: string): Pro
   }
   return resolved.id
 }
+
+/** An id field as the verb acts on it. `exact` is the caller saying the value
+ *  is already a stored id — km-mcp resolves before its write guard and sends
+ *  that, so the guard and the write cannot pick different blocks; it is also
+ *  the one lossless spelling of an odd stored id (a ref is trimmed and read
+ *  as syntax). Otherwise {@link resolveBlockId}. */
+export const blockIdField = (repo: Repo, raw: string, verb: string, exact = false): Promise<string> =>
+  exact ? Promise.resolve(raw) : resolveBlockId(repo, raw, verb)
+
+/** A first / last / before / after position, its sibling id resolved as an
+ *  id field (see {@link blockIdField}). */
+export const blockPositionField = async (
+  repo: Repo,
+  position: InsertPosition,
+  verb: string,
+  exact = false,
+): Promise<InsertPosition> =>
+  position.kind === 'before' || position.kind === 'after'
+    ? {kind: position.kind, siblingId: await blockIdField(repo, position.siblingId, verb, exact)}
+    : position
 
 /** The daily note for an ISO date in the active workspace, created if missing.
  *  `verb` names the caller in errors and attributes a page it creates. */

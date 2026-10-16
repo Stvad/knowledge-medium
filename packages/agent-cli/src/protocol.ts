@@ -109,6 +109,12 @@ export const namedWorkspaceId = (payload: object): string | null => {
 
 const commandIdField = {commandId: z.string().optional()}
 
+/** Write verbs' id fields (`id`, `parentId`, `position.siblingId`) are already
+ *  stored ids: used exactly, never read as a ref. km-mcp sends it after it has
+ *  resolved them for its write guard, so the two cannot diverge; it is also
+ *  the one lossless way to name an odd stored id. */
+const exactIdsField = {exactIds: z.boolean().optional()}
+
 // Variants are `looseObject` so the kernel's field-access fallbacks (e.g.
 // `command.id ?? command.actionId`) keep working through the narrowing:
 // declared fields are still type-checked, extras flow through as `unknown`.
@@ -216,6 +222,7 @@ export const updateBlockCommandSchema = z.looseObject({
    *  still exactly this — what the caller read before deciding to write. */
   expectedContent: z.string().optional(),
   // properties forwarded verbatim (looseObject).
+  ...exactIdsField,
   ...commandIdField,
 })
 
@@ -232,6 +239,7 @@ export const moveBlockCommandSchema = z.looseObject({
   blockId: z.string().optional(),
   parentId: z.string().nullable(),
   position: moveBlockPositionSchema,
+  ...exactIdsField,
   ...commandIdField,
 })
 
@@ -245,6 +253,7 @@ export const appendMarkdownCommandSchema = z.looseObject({
   markdown: z.string(),
   position: moveBlockPositionSchema.optional(),
   shape: z.enum(['outline', 'block']).optional(),
+  ...exactIdsField,
   ...commandIdField,
 })
 
@@ -255,6 +264,7 @@ export const editBlockCommandSchema = z.looseObject({
   id: z.string(),
   old: z.string(),
   new: z.string(),
+  ...exactIdsField,
   ...commandIdField,
 })
 
@@ -299,6 +309,7 @@ export const deleteBlockCommandSchema = z.looseObject({
   type: z.literal('delete-block'),
   id: z.string().optional(),
   blockId: z.string().optional(),
+  ...exactIdsField,
   ...commandIdField,
 })
 
@@ -306,6 +317,7 @@ export const restoreBlockCommandSchema = z.looseObject({
   type: z.literal('restore-block'),
   id: z.string().optional(),
   blockId: z.string().optional(),
+  ...exactIdsField,
   ...commandIdField,
 })
 
@@ -791,7 +803,7 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
     readOnly: false,
   },
   'create-page': {
-    usage: 'kmagent create-page <name> | --date <expr>',
+    usage: "kmagent create-page <name> | --date <expr>   (a name starting with - goes after --: kmagent create-page -- '-Inbox')",
     description: 'Get-or-create a page by name, exactly as typing [[name]] would (alias lookup first, else the deterministic alias seat; a date-literal name is that day\'s daily note), or a daily note by date expression (--date today). Reports whether it was created.',
     readOnly: false,
   },
