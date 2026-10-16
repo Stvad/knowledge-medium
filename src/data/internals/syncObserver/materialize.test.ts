@@ -608,6 +608,27 @@ describe('materializeStagingRows — Phase-1/Phase-2 TOCTOU re-gate', () => {
     expect((await allBlocks())[0]!.content).toBe('server v3')
   })
 
+  it('does not write a version another drain superseded and resolved in the window', async () => {
+    // Two drains over one database, as two tabs run. Once the other drain has
+    // resolved the newer row, nothing is left queued or flagged to undo an
+    // older write here (#1226).
+    await seedLocalBlock(blockData({ content: 'edited', updatedAt: 300 }))
+    await stageRow(blockData({ content: 'created', updatedAt: 200 }))
+    const deps = { getMaterializability: constMat('copy'), getCek: noKey }
+
+    await materializeStagingRows(
+      racingDb(env.db, async () => {
+        await stageRow(blockData({ content: 'edited', updatedAt: 300 }))
+        await materializeStagingRows(env.db, { upserted: ['b1'], removed: [] }, deps)
+      }),
+      { upserted: ['b1'], removed: [] },
+      deps,
+    )
+
+    expect((await allBlocks())[0]!.content).toBe('edited')
+    expect(await needsApply('b1')).toBe(0)
+  })
+
   it('does not record a judgment for a staged row replaced in the window', async () => {
     // Phase 1 finds the row already held and clears nothing yet; the
     // replacement arriving before the lock must keep its own flag.

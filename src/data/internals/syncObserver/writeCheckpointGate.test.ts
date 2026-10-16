@@ -138,6 +138,25 @@ describe('download gating on this device\'s own uploads', () => {
     expect(await stagedContent()).toBe(edited.content)
   })
 
+  it('holds a foreign edit cut before this device\'s edit of a downloaded block landed', async () => {
+    const serverCheckpoint = serverBucket()
+    await serverCheckpoint([putOp(1, created)], null)
+    await drain()
+    // The device's first local write is this edit, so nothing earlier has
+    // raised the hold.
+    await writeLocally(
+      'UPDATE blocks SET content = ?, updated_at = ?, user_updated_at = ? WHERE id = ?',
+      [edited.content, edited.updatedAt, edited.userUpdatedAt, edited.id],
+    )
+    await acknowledgeUploads('3')
+
+    const foreign: BlockData = {...created, content: 'foreign', updatedAt: created.updatedAt + 100, updatedBy: 'user-2'}
+    await serverCheckpoint([putOp(2, foreign)], null)
+    expect(await stagedContent()).toBe(created.content)
+    await drain()
+    expect(await localContent()).toBe(edited.content)
+  })
+
   it('holds a checkpoint carrying an older server copy of a block this device just created', async () => {
     const serverCheckpoint = serverBucket()
     const serverCopy: BlockData = {...created, content: 'older copy', updatedAt: created.updatedAt - 1000}
