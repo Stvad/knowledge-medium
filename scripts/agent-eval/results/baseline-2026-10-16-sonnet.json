@@ -1,0 +1,1411 @@
+{
+  "schemaVersion": 3,
+  "label": "baseline-2026-10-16-sonnet",
+  "startedAt": "2026-10-16T21:14:10.230Z",
+  "finishedAt": "2026-10-16T21:24:20.542Z",
+  "git": {
+    "sha": "a67deb9d5b748b308ea3c73180429f0fa1ef480e",
+    "branch": "claude/nostalgic-golick-2428f5",
+    "dirty": false
+  },
+  "model": "sonnet",
+  "conditions": {
+    "fixture": "9d499d1fadc8",
+    "model": "claude-sonnet-5-5",
+    "effort": "default",
+    "mcpOutputTokens": 25000,
+    "timeoutMs": 600000
+  },
+  "claudeCodeVersion": "2.1.285",
+  "kmTools": [
+    "get_block",
+    "subtree",
+    "backlinks",
+    "page",
+    "daily_note",
+    "search",
+    "sql_query",
+    "create_block",
+    "update_block",
+    "move_block",
+    "delete_block",
+    "restore_block"
+  ],
+  "taskHashes": {
+    "kestrel-june": "a2974aba63b5",
+    "summarize-design": "8488cb145ce7",
+    "standup-blockers": "40ce2fc04a58",
+    "orchard-open-todos": "13c6b468cb70",
+    "reading-log-needle": "b7a6327fa5c2",
+    "renewal-vendors": "b8f645e190e7",
+    "meetings-with-person": "7dc59c94a5de",
+    "reading-log-filter": "7db84bb745f4",
+    "daily-checkin": "bd5cc582320f",
+    "edit-rollout-phrase": "bae0858ce3c1",
+    "create-linked-page": "e3e645872f69",
+    "complete-todo": "668c22fd2b00"
+  },
+  "outputSizes": {
+    "search:pricing": 122443,
+    "search:kestrel": 2435,
+    "backlinks:Meeting": 143764,
+    "backlinks:Kestrel": 3416,
+    "subtree:Reading Log": 644156,
+    "subtree:pasted source": 123563,
+    "subtree:daily note": 2828,
+    "subtree:project page": 4064,
+    "subtree:design doc": 3776,
+    "page:Project Orchard": 571
+  },
+  "probeHashes": {
+    "search:pricing": "31bb52c81619",
+    "search:kestrel": "f6ca516143cf",
+    "backlinks:Meeting": "844152b4a55a",
+    "backlinks:Kestrel": "53663d3a41e9",
+    "subtree:Reading Log": "bc7d6060b37e",
+    "subtree:pasted source": "aa63e61bfaf4",
+    "subtree:daily note": "76e5ac2dd5b7",
+    "subtree:project page": "d50f9bf86afe",
+    "subtree:design doc": "665403e63d0b",
+    "page:Project Orchard": "22e6163754c4"
+  },
+  "runs": [
+    {
+      "task": "kestrel-june",
+      "kind": "read",
+      "rep": 1,
+      "pass": true,
+      "detail": "dates: all 5 matched; every mention summarized",
+      "toolCalls": 9,
+      "toolCallsByName": {
+        "mcp__km__search": 1,
+        "mcp__km__page": 1,
+        "mcp__km__sql_query": 5,
+        "mcp__km__daily_note": 1,
+        "mcp__km__backlinks": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 8249,
+      "maxSeenChars": 3416,
+      "cappedCalls": 1,
+      "returnedChars": 133356,
+      "apiCalls": 8,
+      "tokens": {
+        "input": 16,
+        "cacheCreation": 9231,
+        "cacheRead": 56093,
+        "output": 2238,
+        "contextTotal": 65340,
+        "peakContext": 11950
+      },
+      "elapsedMs": 22312,
+      "costUsd": 0.07055460000000001,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet/transcripts/kestrel-june-1.jsonl"
+    },
+    {
+      "task": "summarize-design",
+      "kind": "read",
+      "rep": 1,
+      "pass": true,
+      "detail": "author, both approaches, count right",
+      "toolCalls": 2,
+      "toolCallsByName": {
+        "mcp__km__page": 1,
+        "mcp__km__subtree": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 4379,
+      "maxSeenChars": 3776,
+      "cappedCalls": 0,
+      "returnedChars": 4379,
+      "apiCalls": 3,
+      "tokens": {
+        "input": 6,
+        "cacheCreation": 5024,
+        "cacheRead": 13624,
+        "output": 574,
+        "contextTotal": 18654,
+        "peakContext": 7743
+      },
+      "elapsedMs": 8172,
+      "costUsd": 0.028572800000000002,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet/transcripts/summarize-design-1.jsonl"
+    },
+    {
+      "task": "standup-blockers",
+      "kind": "read",
+      "rep": 1,
+      "pass": true,
+      "detail": "all 5 matched",
+      "toolCalls": 5,
+      "toolCallsByName": {
+        "mcp__km__page": 1,
+        "mcp__km__search": 1,
+        "mcp__km__sql_query": 3
+      },
+      "toolErrors": 0,
+      "seenChars": 44342,
+      "maxSeenChars": 24595,
+      "cappedCalls": 1,
+      "returnedChars": 166160,
+      "apiCalls": 4,
+      "tokens": {
+        "input": 8,
+        "cacheCreation": 28440,
+        "cacheRead": 21478,
+        "output": 1056,
+        "contextTotal": 49926,
+        "peakContext": 31159
+      },
+      "elapsedMs": 13338,
+      "costUsd": 0.1286316,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet/transcripts/standup-blockers-1.jsonl"
+    },
+    {
+      "task": "orchard-open-todos",
+      "kind": "read",
+      "rep": 1,
+      "pass": true,
+      "detail": "all 6 matched",
+      "toolCalls": 2,
+      "toolCallsByName": {
+        "mcp__km__page": 1,
+        "mcp__km__subtree": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 4635,
+      "maxSeenChars": 4064,
+      "cappedCalls": 0,
+      "returnedChars": 4635,
+      "apiCalls": 3,
+      "tokens": {
+        "input": 6,
+        "cacheCreation": 5248,
+        "cacheRead": 13525,
+        "output": 387,
+        "contextTotal": 18779,
+        "peakContext": 7967
+      },
+      "elapsedMs": 7591,
+      "costUsd": 0.027579,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet/transcripts/orchard-open-todos-1.jsonl"
+    },
+    {
+      "task": "reading-log-needle",
+      "kind": "read",
+      "rep": 1,
+      "pass": true,
+      "detail": "rating and recommender right",
+      "toolCalls": 4,
+      "toolCallsByName": {
+        "mcp__km__page": 1,
+        "mcp__km__subtree": 1,
+        "mcp__km__search": 1,
+        "mcp__km__get_block": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 3434,
+      "maxSeenChars": 1324,
+      "cappedCalls": 1,
+      "returnedChars": 646266,
+      "apiCalls": 5,
+      "tokens": {
+        "input": 10,
+        "cacheCreation": 4717,
+        "cacheRead": 26686,
+        "output": 440,
+        "contextTotal": 31413,
+        "peakContext": 7436
+      },
+      "elapsedMs": 8686,
+      "costUsd": 0.0286252,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet/transcripts/reading-log-needle-1.jsonl"
+    },
+    {
+      "task": "renewal-vendors",
+      "kind": "read",
+      "rep": 1,
+      "pass": true,
+      "detail": "all 3 matched",
+      "toolCalls": 3,
+      "toolCallsByName": {
+        "mcp__km__page": 1,
+        "mcp__km__search": 1,
+        "mcp__km__sql_query": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 4274,
+      "maxSeenChars": 2741,
+      "cappedCalls": 0,
+      "returnedChars": 4274,
+      "apiCalls": 3,
+      "tokens": {
+        "input": 6,
+        "cacheCreation": 5271,
+        "cacheRead": 14192,
+        "output": 407,
+        "contextTotal": 19469,
+        "peakContext": 7990
+      },
+      "elapsedMs": 6965,
+      "costUsd": 0.0280044,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet/transcripts/renewal-vendors-1.jsonl"
+    },
+    {
+      "task": "meetings-with-person",
+      "kind": "read",
+      "rep": 1,
+      "pass": true,
+      "detail": "count right; dates: all 9 matched",
+      "toolCalls": 3,
+      "toolCallsByName": {
+        "mcp__km__page": 1,
+        "mcp__km__backlinks": 1,
+        "mcp__km__sql_query": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 82629,
+      "maxSeenChars": 44158,
+      "cappedCalls": 0,
+      "returnedChars": 82629,
+      "apiCalls": 4,
+      "tokens": {
+        "input": 8,
+        "cacheCreation": 53019,
+        "cacheRead": 45602,
+        "output": 1053,
+        "contextTotal": 98629,
+        "peakContext": 55738
+      },
+      "elapsedMs": 20310,
+      "costUsd": 0.2317424,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet/transcripts/meetings-with-person-1.jsonl"
+    },
+    {
+      "task": "reading-log-filter",
+      "kind": "read",
+      "rep": 1,
+      "pass": true,
+      "detail": "all 12 matched",
+      "toolCalls": 6,
+      "toolCallsByName": {
+        "mcp__km__page": 1,
+        "mcp__km__subtree": 1,
+        "mcp__km__sql_query": 4
+      },
+      "toolErrors": 0,
+      "seenChars": 27763,
+      "maxSeenChars": 12214,
+      "cappedCalls": 1,
+      "returnedChars": 670595,
+      "apiCalls": 6,
+      "tokens": {
+        "input": 12,
+        "cacheCreation": 18820,
+        "cacheRead": 53697,
+        "output": 1104,
+        "contextTotal": 72529,
+        "peakContext": 21539
+      },
+      "elapsedMs": 14840,
+      "costUsd": 0.0970834,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet/transcripts/reading-log-filter-1.jsonl"
+    },
+    {
+      "task": "daily-checkin",
+      "kind": "write",
+      "rep": 1,
+      "pass": true,
+      "detail": "structure matches",
+      "toolCalls": 5,
+      "toolCallsByName": {
+        "mcp__km__daily_note": 1,
+        "mcp__km__create_block": 4
+      },
+      "toolErrors": 0,
+      "seenChars": 2485,
+      "maxSeenChars": 551,
+      "cappedCalls": 0,
+      "returnedChars": 2485,
+      "apiCalls": 4,
+      "tokens": {
+        "input": 8,
+        "cacheCreation": 4602,
+        "cacheRead": 19603,
+        "output": 636,
+        "contextTotal": 24213,
+        "peakContext": 7321
+      },
+      "elapsedMs": 9888,
+      "costUsd": 0.028704600000000004,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 4,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet/transcripts/daily-checkin-1.jsonl"
+    },
+    {
+      "task": "edit-rollout-phrase",
+      "kind": "write",
+      "rep": 1,
+      "pass": true,
+      "detail": "phrase replaced",
+      "toolCalls": 3,
+      "toolCallsByName": {
+        "mcp__km__page": 1,
+        "mcp__km__subtree": 1,
+        "mcp__km__update_block": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 4986,
+      "maxSeenChars": 3776,
+      "cappedCalls": 0,
+      "returnedChars": 4986,
+      "apiCalls": 4,
+      "tokens": {
+        "input": 8,
+        "cacheCreation": 5467,
+        "cacheRead": 21269,
+        "output": 381,
+        "contextTotal": 26744,
+        "peakContext": 8186
+      },
+      "elapsedMs": 9780,
+      "costUsd": 0.0299478,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 1
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet/transcripts/edit-rollout-phrase-1.jsonl"
+    },
+    {
+      "task": "create-linked-page",
+      "kind": "write",
+      "rep": 1,
+      "pass": true,
+      "detail": "first block ok; 1 link(s) under Vendors",
+      "toolCalls": 7,
+      "toolCallsByName": {
+        "mcp__km__page": 2,
+        "mcp__km__subtree": 1,
+        "mcp__km__sql_query": 1,
+        "mcp__km__create_block": 3
+      },
+      "toolErrors": 0,
+      "seenChars": 7055,
+      "maxSeenChars": 4064,
+      "cappedCalls": 0,
+      "returnedChars": 7055,
+      "apiCalls": 6,
+      "tokens": {
+        "input": 12,
+        "cacheCreation": 7647,
+        "cacheRead": 40337,
+        "output": 1015,
+        "contextTotal": 47996,
+        "peakContext": 10366
+      },
+      "elapsedMs": 14775,
+      "costUsd": 0.0488294,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 3,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet/transcripts/create-linked-page-1.jsonl"
+    },
+    {
+      "task": "complete-todo",
+      "kind": "write",
+      "rep": 1,
+      "pass": true,
+      "detail": "status is \"done\"; text unchanged",
+      "toolCalls": 3,
+      "toolCallsByName": {
+        "mcp__km__page": 1,
+        "mcp__km__subtree": 1,
+        "mcp__km__update_block": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 5270,
+      "maxSeenChars": 4064,
+      "cappedCalls": 0,
+      "returnedChars": 5270,
+      "apiCalls": 4,
+      "tokens": {
+        "input": 8,
+        "cacheCreation": 5743,
+        "cacheRead": 21418,
+        "output": 367,
+        "contextTotal": 27169,
+        "peakContext": 8462
+      },
+      "elapsedMs": 8207,
+      "costUsd": 0.0309416,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 1
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet/transcripts/complete-todo-1.jsonl"
+    },
+    {
+      "task": "kestrel-june",
+      "kind": "read",
+      "rep": 2,
+      "pass": false,
+      "detail": "dates: all 5 matched; wrong or missing summary for [2026-06-04, 2026-06-18]",
+      "toolCalls": 9,
+      "toolCallsByName": {
+        "mcp__km__search": 1,
+        "mcp__km__page": 1,
+        "mcp__km__sql_query": 5,
+        "mcp__km__daily_note": 1,
+        "mcp__km__backlinks": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 12997,
+      "maxSeenChars": 3598,
+      "cappedCalls": 2,
+      "returnedChars": 260911,
+      "apiCalls": 8,
+      "tokens": {
+        "input": 16,
+        "cacheCreation": 11572,
+        "cacheRead": 64506,
+        "output": 2260,
+        "contextTotal": 76094,
+        "peakContext": 14291
+      },
+      "elapsedMs": 19922,
+      "costUsd": 0.0818212,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet/transcripts/kestrel-june-2.jsonl"
+    },
+    {
+      "task": "summarize-design",
+      "kind": "read",
+      "rep": 2,
+      "pass": true,
+      "detail": "author, both approaches, count right",
+      "toolCalls": 2,
+      "toolCallsByName": {
+        "mcp__km__page": 1,
+        "mcp__km__subtree": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 4379,
+      "maxSeenChars": 3776,
+      "cappedCalls": 0,
+      "returnedChars": 4379,
+      "apiCalls": 3,
+      "tokens": {
+        "input": 6,
+        "cacheCreation": 5030,
+        "cacheRead": 13636,
+        "output": 691,
+        "contextTotal": 18672,
+        "peakContext": 7749
+      },
+      "elapsedMs": 8587,
+      "costUsd": 0.029769200000000003,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet/transcripts/summarize-design-2.jsonl"
+    },
+    {
+      "task": "standup-blockers",
+      "kind": "read",
+      "rep": 2,
+      "pass": true,
+      "detail": "all 5 matched",
+      "toolCalls": 7,
+      "toolCallsByName": {
+        "mcp__km__page": 1,
+        "mcp__km__backlinks": 1,
+        "mcp__km__sql_query": 4,
+        "mcp__km__subtree": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 48131,
+      "maxSeenChars": 41664,
+      "cappedCalls": 0,
+      "returnedChars": 48131,
+      "apiCalls": 7,
+      "tokens": {
+        "input": 14,
+        "cacheCreation": 32280,
+        "cacheRead": 142431,
+        "output": 1262,
+        "contextTotal": 174725,
+        "peakContext": 34999
+      },
+      "elapsedMs": 14146,
+      "costUsd": 0.17025420000000002,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet/transcripts/standup-blockers-2.jsonl"
+    },
+    {
+      "task": "orchard-open-todos",
+      "kind": "read",
+      "rep": 2,
+      "pass": true,
+      "detail": "all 6 matched",
+      "toolCalls": 2,
+      "toolCallsByName": {
+        "mcp__km__page": 1,
+        "mcp__km__subtree": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 4635,
+      "maxSeenChars": 4064,
+      "cappedCalls": 0,
+      "returnedChars": 4635,
+      "apiCalls": 3,
+      "tokens": {
+        "input": 6,
+        "cacheCreation": 5253,
+        "cacheRead": 13535,
+        "output": 379,
+        "contextTotal": 18794,
+        "peakContext": 7972
+      },
+      "elapsedMs": 6424,
+      "costUsd": 0.027521,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet/transcripts/orchard-open-todos-2.jsonl"
+    },
+    {
+      "task": "reading-log-needle",
+      "kind": "read",
+      "rep": 2,
+      "pass": true,
+      "detail": "rating and recommender right",
+      "toolCalls": 4,
+      "toolCallsByName": {
+        "mcp__km__page": 1,
+        "mcp__km__subtree": 1,
+        "mcp__km__search": 1,
+        "mcp__km__get_block": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 3434,
+      "maxSeenChars": 1324,
+      "cappedCalls": 1,
+      "returnedChars": 646266,
+      "apiCalls": 5,
+      "tokens": {
+        "input": 10,
+        "cacheCreation": 4713,
+        "cacheRead": 26676,
+        "output": 443,
+        "contextTotal": 31399,
+        "peakContext": 7432
+      },
+      "elapsedMs": 9579,
+      "costUsd": 0.0286372,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet/transcripts/reading-log-needle-2.jsonl"
+    },
+    {
+      "task": "renewal-vendors",
+      "kind": "read",
+      "rep": 2,
+      "pass": true,
+      "detail": "all 3 matched",
+      "toolCalls": 4,
+      "toolCallsByName": {
+        "mcp__km__page": 1,
+        "mcp__km__search": 1,
+        "mcp__km__sql_query": 1,
+        "mcp__km__backlinks": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 6832,
+      "maxSeenChars": 3443,
+      "cappedCalls": 0,
+      "returnedChars": 6832,
+      "apiCalls": 3,
+      "tokens": {
+        "input": 6,
+        "cacheCreation": 7109,
+        "cacheRead": 14214,
+        "output": 542,
+        "contextTotal": 21329,
+        "peakContext": 9828
+      },
+      "elapsedMs": 7768,
+      "costUsd": 0.0367108,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet/transcripts/renewal-vendors-2.jsonl"
+    },
+    {
+      "task": "meetings-with-person",
+      "kind": "read",
+      "rep": 2,
+      "pass": true,
+      "detail": "count right; dates: all 9 matched",
+      "toolCalls": 4,
+      "toolCallsByName": {
+        "mcp__km__page": 1,
+        "mcp__km__backlinks": 1,
+        "mcp__km__sql_query": 2
+      },
+      "toolErrors": 0,
+      "seenChars": 95462,
+      "maxSeenChars": 44158,
+      "cappedCalls": 0,
+      "returnedChars": 95462,
+      "apiCalls": 5,
+      "tokens": {
+        "input": 10,
+        "cacheCreation": 59763,
+        "cacheRead": 103815,
+        "output": 1328,
+        "contextTotal": 163588,
+        "peakContext": 62482
+      },
+      "elapsedMs": 15383,
+      "costUsd": 0.273115,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet/transcripts/meetings-with-person-2.jsonl"
+    },
+    {
+      "task": "reading-log-filter",
+      "kind": "read",
+      "rep": 2,
+      "pass": true,
+      "detail": "all 12 matched",
+      "toolCalls": 9,
+      "toolCallsByName": {
+        "mcp__km__page": 1,
+        "mcp__km__subtree": 2,
+        "mcp__km__sql_query": 4,
+        "mcp__km__get_block": 2
+      },
+      "toolErrors": 0,
+      "seenChars": 18214,
+      "maxSeenChars": 12214,
+      "cappedCalls": 1,
+      "returnedChars": 661046,
+      "apiCalls": 7,
+      "tokens": {
+        "input": 14,
+        "cacheCreation": 14057,
+        "cacheRead": 65010,
+        "output": 1362,
+        "contextTotal": 79081,
+        "peakContext": 16776
+      },
+      "elapsedMs": 18152,
+      "costUsd": 0.08287800000000001,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet/transcripts/reading-log-filter-2.jsonl"
+    },
+    {
+      "task": "daily-checkin",
+      "kind": "write",
+      "rep": 2,
+      "pass": true,
+      "detail": "structure matches",
+      "toolCalls": 5,
+      "toolCallsByName": {
+        "mcp__km__daily_note": 1,
+        "mcp__km__create_block": 4
+      },
+      "toolErrors": 0,
+      "seenChars": 2485,
+      "maxSeenChars": 551,
+      "cappedCalls": 0,
+      "returnedChars": 2485,
+      "apiCalls": 6,
+      "tokens": {
+        "input": 12,
+        "cacheCreation": 4546,
+        "cacheRead": 32948,
+        "output": 598,
+        "contextTotal": 37506,
+        "peakContext": 7265
+      },
+      "elapsedMs": 10393,
+      "costUsd": 0.030777600000000002,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 4,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet/transcripts/daily-checkin-2.jsonl"
+    },
+    {
+      "task": "edit-rollout-phrase",
+      "kind": "write",
+      "rep": 2,
+      "pass": true,
+      "detail": "phrase replaced",
+      "toolCalls": 3,
+      "toolCallsByName": {
+        "mcp__km__page": 1,
+        "mcp__km__subtree": 1,
+        "mcp__km__update_block": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 4986,
+      "maxSeenChars": 3776,
+      "cappedCalls": 0,
+      "returnedChars": 4986,
+      "apiCalls": 4,
+      "tokens": {
+        "input": 8,
+        "cacheCreation": 5465,
+        "cacheRead": 21263,
+        "output": 371,
+        "contextTotal": 26736,
+        "peakContext": 8184
+      },
+      "elapsedMs": 7979,
+      "costUsd": 0.0298386,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 1
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet/transcripts/edit-rollout-phrase-2.jsonl"
+    },
+    {
+      "task": "create-linked-page",
+      "kind": "write",
+      "rep": 2,
+      "pass": true,
+      "detail": "first block ok; 1 link(s) under Vendors",
+      "toolCalls": 8,
+      "toolCallsByName": {
+        "mcp__km__page": 2,
+        "mcp__km__subtree": 1,
+        "mcp__km__get_block": 1,
+        "mcp__km__create_block": 3,
+        "mcp__km__move_block": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 7944,
+      "maxSeenChars": 4064,
+      "cappedCalls": 0,
+      "returnedChars": 7944,
+      "apiCalls": 7,
+      "tokens": {
+        "input": 14,
+        "cacheCreation": 8224,
+        "cacheRead": 50578,
+        "output": 1110,
+        "contextTotal": 58816,
+        "peakContext": 10943
+      },
+      "elapsedMs": 17168,
+      "costUsd": 0.054139599999999996,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 3,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet/transcripts/create-linked-page-2.jsonl"
+    },
+    {
+      "task": "complete-todo",
+      "kind": "write",
+      "rep": 2,
+      "pass": true,
+      "detail": "status is \"done\"; text unchanged",
+      "toolCalls": 3,
+      "toolCallsByName": {
+        "mcp__km__page": 1,
+        "mcp__km__subtree": 1,
+        "mcp__km__update_block": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 5270,
+      "maxSeenChars": 4064,
+      "cappedCalls": 0,
+      "returnedChars": 5270,
+      "apiCalls": 4,
+      "tokens": {
+        "input": 8,
+        "cacheCreation": 5745,
+        "cacheRead": 21421,
+        "output": 368,
+        "contextTotal": 27174,
+        "peakContext": 8464
+      },
+      "elapsedMs": 7551,
+      "costUsd": 0.0309602,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 1
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet/transcripts/complete-todo-2.jsonl"
+    },
+    {
+      "task": "kestrel-june",
+      "kind": "read",
+      "rep": 3,
+      "pass": false,
+      "detail": "dates: all 5 matched; wrong or missing summary for [2026-06-04, 2026-06-18]",
+      "toolCalls": 7,
+      "toolCallsByName": {
+        "mcp__km__search": 1,
+        "mcp__km__page": 1,
+        "mcp__km__sql_query": 4,
+        "mcp__km__daily_note": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 5213,
+      "maxSeenChars": 1443,
+      "cappedCalls": 2,
+      "returnedChars": 253807,
+      "apiCalls": 6,
+      "tokens": {
+        "input": 12,
+        "cacheCreation": 6741,
+        "cacheRead": 39317,
+        "output": 1650,
+        "contextTotal": 46070,
+        "peakContext": 9460
+      },
+      "elapsedMs": 19341,
+      "costUsd": 0.0513514,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet/transcripts/kestrel-june-3.jsonl"
+    },
+    {
+      "task": "summarize-design",
+      "kind": "read",
+      "rep": 3,
+      "pass": true,
+      "detail": "author, both approaches, count right",
+      "toolCalls": 2,
+      "toolCallsByName": {
+        "mcp__km__page": 1,
+        "mcp__km__subtree": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 4379,
+      "maxSeenChars": 3776,
+      "cappedCalls": 0,
+      "returnedChars": 4379,
+      "apiCalls": 3,
+      "tokens": {
+        "input": 6,
+        "cacheCreation": 5021,
+        "cacheRead": 13618,
+        "output": 707,
+        "contextTotal": 18645,
+        "peakContext": 7740
+      },
+      "elapsedMs": 9700,
+      "costUsd": 0.029889600000000002,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet/transcripts/summarize-design-3.jsonl"
+    },
+    {
+      "task": "standup-blockers",
+      "kind": "read",
+      "rep": 3,
+      "pass": true,
+      "detail": "all 5 matched",
+      "toolCalls": 5,
+      "toolCallsByName": {
+        "mcp__km__page": 1,
+        "mcp__km__search": 1,
+        "mcp__km__sql_query": 3
+      },
+      "toolErrors": 0,
+      "seenChars": 32293,
+      "maxSeenChars": 16759,
+      "cappedCalls": 1,
+      "returnedChars": 154111,
+      "apiCalls": 5,
+      "tokens": {
+        "input": 10,
+        "cacheCreation": 21233,
+        "cacheRead": 54905,
+        "output": 1159,
+        "contextTotal": 76148,
+        "peakContext": 23952
+      },
+      "elapsedMs": 15619,
+      "costUsd": 0.10752300000000001,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet/transcripts/standup-blockers-3.jsonl"
+    },
+    {
+      "task": "orchard-open-todos",
+      "kind": "read",
+      "rep": 3,
+      "pass": true,
+      "detail": "all 6 matched",
+      "toolCalls": 2,
+      "toolCallsByName": {
+        "mcp__km__page": 1,
+        "mcp__km__subtree": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 4635,
+      "maxSeenChars": 4064,
+      "cappedCalls": 0,
+      "returnedChars": 4635,
+      "apiCalls": 3,
+      "tokens": {
+        "input": 6,
+        "cacheCreation": 5251,
+        "cacheRead": 13531,
+        "output": 348,
+        "contextTotal": 18788,
+        "peakContext": 7970
+      },
+      "elapsedMs": 6498,
+      "costUsd": 0.0272022,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet/transcripts/orchard-open-todos-3.jsonl"
+    },
+    {
+      "task": "reading-log-needle",
+      "kind": "read",
+      "rep": 3,
+      "pass": true,
+      "detail": "rating and recommender right",
+      "toolCalls": 3,
+      "toolCallsByName": {
+        "mcp__km__page": 1,
+        "mcp__km__search": 1,
+        "mcp__km__get_block": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 2110,
+      "maxSeenChars": 897,
+      "cappedCalls": 0,
+      "returnedChars": 2110,
+      "apiCalls": 3,
+      "tokens": {
+        "input": 6,
+        "cacheCreation": 4019,
+        "cacheRead": 14034,
+        "output": 348,
+        "contextTotal": 18059,
+        "peakContext": 6738
+      },
+      "elapsedMs": 7861,
+      "costUsd": 0.0223748,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet/transcripts/reading-log-needle-3.jsonl"
+    },
+    {
+      "task": "renewal-vendors",
+      "kind": "read",
+      "rep": 3,
+      "pass": true,
+      "detail": "all 3 matched",
+      "toolCalls": 3,
+      "toolCallsByName": {
+        "mcp__km__page": 1,
+        "mcp__km__search": 1,
+        "mcp__km__sql_query": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 4274,
+      "maxSeenChars": 2741,
+      "cappedCalls": 0,
+      "returnedChars": 4274,
+      "apiCalls": 3,
+      "tokens": {
+        "input": 6,
+        "cacheCreation": 5275,
+        "cacheRead": 14192,
+        "output": 407,
+        "contextTotal": 19473,
+        "peakContext": 7994
+      },
+      "elapsedMs": 7082,
+      "costUsd": 0.0280204,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet/transcripts/renewal-vendors-3.jsonl"
+    },
+    {
+      "task": "meetings-with-person",
+      "kind": "read",
+      "rep": 3,
+      "pass": true,
+      "detail": "count right; dates: all 9 matched",
+      "toolCalls": 4,
+      "toolCallsByName": {
+        "mcp__km__page": 1,
+        "mcp__km__backlinks": 1,
+        "mcp__km__sql_query": 2
+      },
+      "toolErrors": 0,
+      "seenChars": 66832,
+      "maxSeenChars": 44158,
+      "cappedCalls": 0,
+      "returnedChars": 66832,
+      "apiCalls": 5,
+      "tokens": {
+        "input": 10,
+        "cacheCreation": 43605,
+        "cacheRead": 90485,
+        "output": 878,
+        "contextTotal": 134100,
+        "peakContext": 46324
+      },
+      "elapsedMs": 14040,
+      "costUsd": 0.20131700000000002,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet/transcripts/meetings-with-person-3.jsonl"
+    },
+    {
+      "task": "reading-log-filter",
+      "kind": "read",
+      "rep": 3,
+      "pass": true,
+      "detail": "all 12 matched",
+      "toolCalls": 4,
+      "toolCallsByName": {
+        "mcp__km__page": 1,
+        "mcp__km__subtree": 1,
+        "mcp__km__sql_query": 2
+      },
+      "toolErrors": 0,
+      "seenChars": 28802,
+      "maxSeenChars": 25727,
+      "cappedCalls": 1,
+      "returnedChars": 671634,
+      "apiCalls": 5,
+      "tokens": {
+        "input": 10,
+        "cacheCreation": 19562,
+        "cacheRead": 41297,
+        "output": 820,
+        "contextTotal": 60869,
+        "peakContext": 22281
+      },
+      "elapsedMs": 11858,
+      "costUsd": 0.0947274,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet/transcripts/reading-log-filter-3.jsonl"
+    },
+    {
+      "task": "daily-checkin",
+      "kind": "write",
+      "rep": 3,
+      "pass": true,
+      "detail": "structure matches",
+      "toolCalls": 5,
+      "toolCallsByName": {
+        "mcp__km__daily_note": 1,
+        "mcp__km__create_block": 4
+      },
+      "toolErrors": 0,
+      "seenChars": 2485,
+      "maxSeenChars": 551,
+      "cappedCalls": 0,
+      "returnedChars": 2485,
+      "apiCalls": 6,
+      "tokens": {
+        "input": 12,
+        "cacheCreation": 4604,
+        "cacheRead": 33027,
+        "output": 676,
+        "contextTotal": 37643,
+        "peakContext": 7323
+      },
+      "elapsedMs": 10912,
+      "costUsd": 0.0318054,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 4,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet/transcripts/daily-checkin-3.jsonl"
+    },
+    {
+      "task": "edit-rollout-phrase",
+      "kind": "write",
+      "rep": 3,
+      "pass": true,
+      "detail": "phrase replaced",
+      "toolCalls": 3,
+      "toolCallsByName": {
+        "mcp__km__page": 1,
+        "mcp__km__subtree": 1,
+        "mcp__km__update_block": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 4986,
+      "maxSeenChars": 3776,
+      "cappedCalls": 0,
+      "returnedChars": 4986,
+      "apiCalls": 4,
+      "tokens": {
+        "input": 8,
+        "cacheCreation": 5462,
+        "cacheRead": 21254,
+        "output": 371,
+        "contextTotal": 26724,
+        "peakContext": 8181
+      },
+      "elapsedMs": 8756,
+      "costUsd": 0.0298248,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 1
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet/transcripts/edit-rollout-phrase-3.jsonl"
+    },
+    {
+      "task": "create-linked-page",
+      "kind": "write",
+      "rep": 3,
+      "pass": true,
+      "detail": "first block ok; 1 link(s) under Vendors",
+      "toolCalls": 8,
+      "toolCallsByName": {
+        "mcp__km__page": 3,
+        "mcp__km__subtree": 1,
+        "mcp__km__get_block": 1,
+        "mcp__km__create_block": 3
+      },
+      "toolErrors": 1,
+      "seenChars": 7424,
+      "maxSeenChars": 4064,
+      "cappedCalls": 0,
+      "returnedChars": 7424,
+      "apiCalls": 7,
+      "tokens": {
+        "input": 14,
+        "cacheCreation": 7813,
+        "cacheRead": 51686,
+        "output": 1034,
+        "contextTotal": 59513,
+        "peakContext": 10532
+      },
+      "elapsedMs": 16832,
+      "costUsd": 0.0519572,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 3,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet/transcripts/create-linked-page-3.jsonl"
+    },
+    {
+      "task": "complete-todo",
+      "kind": "write",
+      "rep": 3,
+      "pass": true,
+      "detail": "status is \"done\"; text unchanged",
+      "toolCalls": 3,
+      "toolCallsByName": {
+        "mcp__km__page": 1,
+        "mcp__km__subtree": 1,
+        "mcp__km__update_block": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 5270,
+      "maxSeenChars": 4064,
+      "cappedCalls": 0,
+      "returnedChars": 5270,
+      "apiCalls": 4,
+      "tokens": {
+        "input": 8,
+        "cacheCreation": 5741,
+        "cacheRead": 21430,
+        "output": 367,
+        "contextTotal": 27179,
+        "peakContext": 8460
+      },
+      "elapsedMs": 7293,
+      "costUsd": 0.030936,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 1
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet/transcripts/complete-todo-3.jsonl"
+    }
+  ]
+}
