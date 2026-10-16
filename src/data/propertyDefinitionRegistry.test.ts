@@ -6,6 +6,8 @@ import {
   buildPropertyDefinitionRegistry,
   combineProjectedPropertyDefinitions,
   resolveEditorOverride,
+  sameFieldRecognition,
+  type ProjectedPropertyDefinition,
 } from '@/data/propertyDefinitionRegistry'
 import {createPropertySchemaResolver} from '@/data/internals/propertySchemaResolution'
 import {seedProperty} from '@/data/propertySeeds'
@@ -28,6 +30,15 @@ const competingTitleSeed = seedProperty({
   name: titleSeed.name,
   preset: 'number',
   defaultValue: 5,
+  changeScope: ChangeScope.BlockDefault,
+})
+
+const otherSeed = seedProperty({
+  seedKey: 'system:kernel-data/property/other',
+  revision: 1,
+  name: 'other-seed',
+  preset: 'string',
+  defaultValue: '',
   changeScope: ChangeScope.BlockDefault,
 })
 
@@ -230,6 +241,31 @@ describe('property definition registry snapshot', () => {
       const snapshot = build({projectedDefinitions: combineProjectedPropertyDefinitions(values)})
       expect(snapshot.definitionsByFieldId.get('dual')).toBe(parsed.metadata)
       expect(snapshot.unparseableDefinitionIds.has('dual')).toBe(false)
+    }
+  })
+
+  it('compares snapshots on what recognition reads, not on names', () => {
+    const base = {
+      projectedDefinitions: new Map([['def', {metadata: metadata('def', 'status', 1)}]]),
+      seeds: [titleSeed],
+    }
+    const snapshot = build(base)
+    expect(sameFieldRecognition(snapshot, build({
+      ...base,
+      projectedDefinitions: new Map([['def', {metadata: metadata('def', 'renamed', 1)}]]),
+    })), 'a rename').toBe(true)
+    for (const [change, other] of [
+      ['a definition added', build({...base, projectedDefinitions: new Map([
+        ...base.projectedDefinitions, ['def-2', {metadata: metadata('def-2', 'other', 2)}],
+      ])})],
+      ['a block stops parsing', build({...base, projectedDefinitions: new Map<string, ProjectedPropertyDefinition>([
+        ...base.projectedDefinitions, ['broken', {unparseable: {fieldId: 'broken', workspaceId: WS}}],
+      ])})],
+      ['a seed declared', build({...base, seeds: [titleSeed, otherSeed]})],
+      ['another workspace', build({...base, workspaceId: 'ws-other'})],
+      ['no registry', null],
+    ] as const) {
+      expect(sameFieldRecognition(snapshot, other), change).toBe(false)
     }
   })
 
