@@ -96,6 +96,8 @@ const canonical = (value: unknown): unknown => {
   return value
 }
 const JSON_COLUMNS = new Set(['properties_json', 'references_json'])
+/** Defence in depth for JSON columns: the undo writes a bag back in its
+ *  original key order, so a reordering is not seen today. */
 const sameColumn = (column: string, a: unknown, b: unknown) => a === b
   || (JSON_COLUMNS.has(column) && typeof a === 'string' && typeof b === 'string'
     && JSON.stringify(canonical(JSON.parse(a))) === JSON.stringify(canonical(JSON.parse(b))))
