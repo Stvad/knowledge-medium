@@ -266,17 +266,23 @@ export const createBlockedWikilinkWriteGuard = (
       }
     }
 
-    /** The content an `edit_block` will produce, when its id (full, or a
-     *  `^`/`((…))` prefix as the read tools print it) names exactly one live
-     *  row whose content contains `old`. Otherwise the app refuses the edit
-     *  itself, so only `new` needs checking. */
+    /** The content an `edit_block` will produce, when its id names exactly one
+     *  live row whose content contains `old` — resolved in the app resolver's
+     *  order (exact id, then a lowercased unique prefix, the `^`/`((…))` forms
+     *  the read tools print), so the two cannot pick different blocks.
+     *  Otherwise the app refuses the edit itself, so only `new` needs checking.
+     *  A concurrent edit between this read and the write is accepted, as for the
+     *  move/delete/restore reads: the policy stops accidental loops, not an
+     *  adversary, so no compare-and-set is threaded through. */
     const editResult = async (op: {id: string, old: string, new: string}): Promise<string | null> => {
       const ref = op.id.trim().replace(/^\(\((.*)\)\)$/s, '$1').replace(/^\^/, '').trim()
-      const rows = await graph.sqlAll(
+      const exact = await graph.sqlAll('SELECT content FROM blocks WHERE deleted = 0 AND id = ?', [ref])
+      const prefix = ref.toLowerCase()
+      const rows = exact.length > 0 ? exact : await graph.sqlAll(
         `SELECT content FROM blocks
           WHERE deleted = 0 AND id >= ? AND id < ? || char(1114111)
           LIMIT 2`,
-        [ref, ref],
+        [prefix, prefix],
       )
       const content = rows.length === 1 ? refsFromSqlRow(rows[0]).content : undefined
       const at = content?.indexOf(op.old) ?? -1
