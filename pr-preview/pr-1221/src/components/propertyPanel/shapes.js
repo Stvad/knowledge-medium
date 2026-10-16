@@ -1,1 +1,1 @@
-import{AP as e}from"../../../chunks/app-uX4fIHoQ.js";export{e as propertyShapeLabel};
+import{AP as e}from"../../../chunks/app-BRvdyPMu.js";export{e as propertyShapeLabel};
