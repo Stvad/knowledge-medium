@@ -19,8 +19,8 @@ const seededHash = async (probe: GraphProbe): Promise<string | null> => {
   return line ? line.content.slice(FIXTURE_HASH_PREFIX.length).trim() : null
 }
 
-export const openWorkspace = async (probe: GraphProbe, journal: RunJournal, fixtureHash: string, quiet?: QuietOptions) => {
-  const recovered = await journal.recover(probe, fixtureHash, quiet)
+export const openWorkspace = async (probe: GraphProbe, journal: RunJournal, quiet?: QuietOptions) => {
+  const recovered = await journal.recover(probe, quiet)
   return {recovered, seeded: await seededHash(probe)}
 }
 
@@ -31,7 +31,6 @@ export const openWorkspace = async (probe: GraphProbe, journal: RunJournal, fixt
 export const beginRun = async (
   probe: GraphProbe,
   journal: RunJournal,
-  fixtureHash: string,
   steps: {validate: () => Promise<void>, setUp: () => Promise<void>},
   quiet?: QuietOptions,
 ): Promise<{snapshot: WorkspaceSnapshot, setupCreated: string[]}> => {
@@ -41,6 +40,6 @@ export const beginRun = async (
   await steps.setUp()
   const snapshot = await snapshotWorkspace(probe, quiet)
   const setupCreated = [...snapshot.rows.keys()].filter(id => !existing.has(id))
-  journal.begin(snapshot, fixtureHash, setupCreated)
+  journal.begin(snapshot, setupCreated)
   return {snapshot, setupCreated}
 }

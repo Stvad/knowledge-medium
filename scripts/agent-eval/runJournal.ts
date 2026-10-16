@@ -24,8 +24,9 @@ import {
   type WorkspaceSnapshot,
 } from './isolation'
 
+/** Belongs to one paired tab (see where the runner keeps it), so whichever
+ *  checkout recovers it, its snapshot is that tab's to restore. */
 interface JournalSnapshot extends StoredSnapshot {
-  fixtureHash: string
   setupCreated: string[]
 }
 
@@ -37,9 +38,9 @@ export const createRunJournal = (dir: string) => {
   return {
     /** Undo what an earlier run that did not close its journal left.
      *  Returns the number of blocks restored or removed (0 when it closed). */
-    recover: async (probe: GraphProbe, fixtureHash: string, quiet?: QuietOptions): Promise<number> => {
+    recover: async (probe: GraphProbe, quiet?: QuietOptions): Promise<number> => {
       const journal = existsSync(snapshotFile) ? JSON.parse(readFileSync(snapshotFile, 'utf8')) as JournalSnapshot : null
-      if (!journal || journal.fixtureHash !== fixtureHash) {
+      if (!journal) {
         clear()
         return 0
       }
@@ -48,9 +49,9 @@ export const createRunJournal = (dir: string) => {
       clear()
       return (changes ? changes.created.length + changes.modified.length : 0) + journal.setupCreated.length
     },
-    begin: (snapshot: WorkspaceSnapshot, fixtureHash: string, setupCreated: readonly string[]) => {
+    begin: (snapshot: WorkspaceSnapshot, setupCreated: readonly string[]) => {
       mkdirSync(dir, {recursive: true})
-      writeFileSync(snapshotFile, JSON.stringify({fixtureHash, ...storeSnapshot(snapshot), setupCreated: [...setupCreated]} satisfies JournalSnapshot))
+      writeFileSync(snapshotFile, JSON.stringify({...storeSnapshot(snapshot), setupCreated: [...setupCreated]} satisfies JournalSnapshot))
     },
     taskStarted: () => writeFileSync(inFlightFile, '{}'),
     taskRestored: () => rmSync(inFlightFile, {force: true}),

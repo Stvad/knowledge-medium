@@ -1,13 +1,17 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import {
   conditionMismatches,
   type EvalReport,
   parseReport,
   renderMarkdown,
+  RUN_CONDITIONS,
   type RunConditions,
   summarize,
   type TaskRunRecord,
 } from './report'
+
+const BASELINE = 'scripts/agent-eval/results/baseline-2026-10-16-sonnet.json'
 
 const runRecord = (task: string, rep: number, overrides: Partial<TaskRunRecord> = {}): TaskRunRecord => ({
   task,
@@ -160,6 +164,13 @@ describe('conditionMismatches', () => {
     expect(conditionMismatches(reportOf('after', [], {}, {model: null}), baseline)).toEqual(['model claude-test → unknown'])
     expect(conditionMismatches(reportOf('after', [], {}, {model: null}), reportOf('before', [], {}, {model: null})))
       .toEqual(['model unknown → unknown'])
+  })
+})
+
+describe('the checked-in baseline', () => {
+  it('reads in this format and records every run condition, or no run could compare with it', () => {
+    const baseline = parseReport(readFileSync(BASELINE, 'utf8'), BASELINE)
+    expect(RUN_CONDITIONS.filter(name => baseline.conditions[name] === null || baseline.conditions[name] === undefined)).toEqual([])
   })
 })
 

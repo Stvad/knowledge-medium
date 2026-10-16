@@ -634,14 +634,14 @@ describe('run journal', () => {
     const userPage = (await probe.command({type: 'create-block', content: 'Eval User', properties: {types: ['user']}}) as {id: string}).id
     const [stateRoot] = userStateRootBlockIds(userPage)
     await probe.command({type: 'create-block', parentId: userPage, content: 'ui-state', data: {id: stateRoot}})
-    interrupted.begin(await snapshotWorkspace(probe, QUIET), fixtureHash, [])
+    interrupted.begin(await snapshotWorkspace(probe, QUIET), [])
     interrupted.taskStarted()
     const rollout = fixtureId('rollout')
     await graph.callTool('update_block', {id: rollout, content: 'left behind'})
 
     const panelState = resultIdOf(await graph.callTool('create_block', {parentId: stateRoot, content: 'panel state'}))
 
-    expect(await createRunJournal(dir).recover(probe, fixtureHash, QUIET)).toBe(1)
+    expect(await createRunJournal(dir).recover(probe, QUIET)).toBe(1)
     expect((await getBlock(probe, rollout))?.content).toBe(ROLLOUT_BLOCK_TEXT)
     // The app's own state, as the interrupted run saw it, is left alone.
     expect(await getBlock(probe, panelState)).not.toBeNull()
@@ -651,40 +651,40 @@ describe('run journal', () => {
   it('recovers nothing after a task whose undo finished', async () => {
     const dir = path.join(mkdtempSync(path.join(tmpdir(), 'agent-eval-journal-')), 'journal')
     const clean = createRunJournal(dir)
-    clean.begin(await snapshotWorkspace(probe, QUIET), fixtureHash, [])
+    clean.begin(await snapshotWorkspace(probe, QUIET), [])
     clean.taskStarted()
     clean.taskRestored()
-    expect(await createRunJournal(dir).recover(probe, fixtureHash, QUIET)).toBe(0)
+    expect(await createRunJournal(dir).recover(probe, QUIET)).toBe(0)
   }, 20_000)
 
   it('reads the fixture marker only after undoing what an interrupted task did to it', async () => {
     const dir = path.join(mkdtempSync(path.join(tmpdir(), 'agent-eval-journal-')), 'journal')
     const interrupted = createRunJournal(dir)
-    interrupted.begin(await snapshotWorkspace(probe, QUIET), fixtureHash, [])
+    interrupted.begin(await snapshotWorkspace(probe, QUIET), [])
     interrupted.taskStarted()
     const hashLine = (await childrenOf(probe, await requirePageId(probe, FIXTURE_MARKER_PAGE)))
       .find(row => row.content.startsWith(FIXTURE_HASH_PREFIX))!
     await graph.callTool('update_block', {id: hashLine.id, content: `${FIXTURE_HASH_PREFIX}tampered`})
 
-    expect(await openWorkspace(probe, createRunJournal(dir), fixtureHash, QUIET)).toEqual({recovered: 1, seeded: fixtureHash})
+    expect(await openWorkspace(probe, createRunJournal(dir), QUIET)).toEqual({recovered: 1, seeded: fixtureHash})
   }, 20_000)
 
   it('validates a run\'s graph before its setup writes anything, and journals what setup adds', async () => {
     const dir = path.join(mkdtempSync(path.join(tmpdir(), 'agent-eval-journal-')), 'journal')
     let setUpRan = false
-    await expect(beginRun(probe, createRunJournal(dir), fixtureHash, {
+    await expect(beginRun(probe, createRunJournal(dir), {
       validate: async () => { throw new Error('refused') },
       setUp: async () => { setUpRan = true },
     }, QUIET)).rejects.toThrow('refused')
     expect(setUpRan).toBe(false)
 
     let added = ''
-    const {setupCreated} = await beginRun(probe, createRunJournal(dir), fixtureHash, {
+    const {setupCreated} = await beginRun(probe, createRunJournal(dir), {
       validate: async () => {},
       setUp: async () => { added = resultIdOf(await graph.callTool('create_block', {parentId: fixtureId('vendorsSection'), content: 'set up'})) },
     }, QUIET)
     expect(setupCreated).toEqual([added])
-    expect(await createRunJournal(dir).recover(probe, fixtureHash, QUIET)).toBe(1)
+    expect(await createRunJournal(dir).recover(probe, QUIET)).toBe(1)
     expect(await getBlock(probe, added)).toBeNull()
   }, 20_000)
 
@@ -695,7 +695,7 @@ describe('run journal', () => {
     const dir = path.join(mkdtempSync(path.join(tmpdir(), 'agent-eval-journal-')), 'journal')
     const journal = createRunJournal(dir)
     const added = await setUp()
-    journal.begin(await snapshotWorkspace(probe, QUIET), fixtureHash, [added])
+    journal.begin(await snapshotWorkspace(probe, QUIET), [added])
     await journal.end(probe, [added])
     expect(await getBlock(probe, added)).toBeNull()
   }, 20_000)
@@ -704,10 +704,10 @@ describe('run journal', () => {
     const dir = path.join(mkdtempSync(path.join(tmpdir(), 'agent-eval-journal-')), 'journal')
     const stopped = createRunJournal(dir)
     const added = await setUp()
-    stopped.begin(await snapshotWorkspace(probe, QUIET), fixtureHash, [added])
+    stopped.begin(await snapshotWorkspace(probe, QUIET), [added])
     stopped.taskStarted()
     stopped.taskRestored()
-    expect(await createRunJournal(dir).recover(probe, fixtureHash, QUIET)).toBe(1)
+    expect(await createRunJournal(dir).recover(probe, QUIET)).toBe(1)
     expect(await getBlock(probe, added)).toBeNull()
     expect(existsSync(dir)).toBe(false)
   }, 20_000)
