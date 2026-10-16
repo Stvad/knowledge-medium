@@ -1,1 +1,1 @@
-import{Jw as e,qw as t}from"../../chunks/app-CU3-DGAM.js";export{t as BlockPasteShellDecorator,e as blockPasteShellDecorator};
+import{Jw as e,qw as t}from"../../chunks/app-DNxqegs1.js";export{t as BlockPasteShellDecorator,e as blockPasteShellDecorator};

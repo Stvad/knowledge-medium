@@ -1,1 +1,1 @@
-import{G_ as e,K_ as t,U_ as n,W_ as r}from"../../../chunks/app-CU3-DGAM.js";export{n as WorkspaceSwitcherSidebarSection,r as pendingInvitationsHeaderItem,e as workspaceHeaderPlugin,t as workspaceSwitcherSidebarSection};
+import{G_ as e,K_ as t,U_ as n,W_ as r}from"../../../chunks/app-DNxqegs1.js";export{n as WorkspaceSwitcherSidebarSection,r as pendingInvitationsHeaderItem,e as workspaceHeaderPlugin,t as workspaceSwitcherSidebarSection};

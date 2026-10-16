@@ -1,1 +1,1 @@
-import{B$ as e,L$ as t,R$ as n,V$ as r,z$ as i}from"../../chunks/app-CU3-DGAM.js";export{t as deviceSurface,n as getClientId,i as getDeviceLabel,e as isClientIdPersistent,r as resetClientIdCache};
+import{B$ as e,L$ as t,R$ as n,V$ as r,z$ as i}from"../../chunks/app-DNxqegs1.js";export{t as deviceSurface,n as getClientId,i as getDeviceLabel,e as isClientIdPersistent,r as resetClientIdCache};

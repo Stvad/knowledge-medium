@@ -1,1 +1,1 @@
-import{$E as e,eD as t,tD as n}from"../../chunks/app-CU3-DGAM.js";export{e as defaultRegistry,t as defaultRendererContributions,n as defaultRenderersExtension};
+import{$E as e,eD as t,tD as n}from"../../chunks/app-DNxqegs1.js";export{e as defaultRegistry,t as defaultRendererContributions,n as defaultRenderersExtension};

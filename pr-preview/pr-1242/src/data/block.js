@@ -1,1 +1,1 @@
-import{nK as e,rK as t}from"../../chunks/app-CU3-DGAM.js";export{e as Block,t as requireLoadedBlock};
+import{nK as e,rK as t}from"../../chunks/app-DNxqegs1.js";export{e as Block,t as requireLoadedBlock};

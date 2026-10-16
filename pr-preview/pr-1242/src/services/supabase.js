@@ -1,1 +1,1 @@
-import{C0 as e,S0 as t,b0 as n,w0 as r,x0 as i}from"../../chunks/app-CU3-DGAM.js";export{n as hasSupabaseAuthConfig,i as isAuthCallbackUrl,t as readPersistedSession,e as sessionUserToAppUser,r as supabase};
+import{C0 as e,S0 as t,b0 as n,w0 as r,x0 as i}from"../../chunks/app-DNxqegs1.js";export{n as hasSupabaseAuthConfig,i as isAuthCallbackUrl,t as readPersistedSession,e as sessionUserToAppUser,r as supabase};

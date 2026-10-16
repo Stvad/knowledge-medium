@@ -1,1 +1,1 @@
-import{Fw as e,Iw as t}from"../../chunks/app-CU3-DGAM.js";export{e as exampleExtensions,t as insertExampleExtensionsUnder};
+import{Fw as e,Iw as t}from"../../chunks/app-DNxqegs1.js";export{e as exampleExtensions,t as insertExampleExtensionsUnder};

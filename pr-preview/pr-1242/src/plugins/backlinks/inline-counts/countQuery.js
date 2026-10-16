@@ -1,1 +1,1 @@
-import{Fd as e,Pd as t}from"../../../../chunks/app-CU3-DGAM.js";export{t as BACKLINKS_COUNT_FOR_BLOCK_QUERY,e as backlinksCountForBlockQuery};
+import{Fd as e,Pd as t}from"../../../../chunks/app-DNxqegs1.js";export{t as BACKLINKS_COUNT_FOR_BLOCK_QUERY,e as backlinksCountForBlockQuery};

@@ -1,1 +1,1 @@
-import{CE as e,SE as t,bE as n,xE as r}from"../../chunks/app-CU3-DGAM.js";export{n as extensionDisplayName,r as extensionName,t as userExtensionShellToggle,e as userExtensionToggle};
+import{CE as e,SE as t,bE as n,xE as r}from"../../chunks/app-DNxqegs1.js";export{n as extensionDisplayName,r as extensionName,t as userExtensionShellToggle,e as userExtensionToggle};

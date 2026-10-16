@@ -1,1 +1,1 @@
-import{db as e,fb as t,pb as n,ub as r}from"../../chunks/app-CU3-DGAM.js";export{r as CRUMB_MAX_CHARS,e as CRUMB_MAX_SEGMENTS,t as collapseCrumbs,n as crumbsFromAncestors};
+import{db as e,fb as t,pb as n,ub as r}from"../../chunks/app-DNxqegs1.js";export{r as CRUMB_MAX_CHARS,e as CRUMB_MAX_SEGMENTS,t as collapseCrumbs,n as crumbsFromAncestors};

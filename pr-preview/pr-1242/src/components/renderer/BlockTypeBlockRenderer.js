@@ -1,1 +1,1 @@
-import{MD as e,ND as t,jD as n}from"../../../chunks/app-CU3-DGAM.js";export{n as BlockTypeBlockRenderer,e as BlockTypeContentRenderer,t as writeBlockTypeLabel};
+import{MD as e,ND as t,jD as n}from"../../../chunks/app-DNxqegs1.js";export{n as BlockTypeBlockRenderer,e as BlockTypeContentRenderer,t as writeBlockTypeLabel};

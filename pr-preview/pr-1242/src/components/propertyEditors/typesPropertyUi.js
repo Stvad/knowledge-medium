@@ -1,1 +1,1 @@
-import{$C as e,QC as t,ew as n}from"../../../chunks/app-CU3-DGAM.js";export{t as kernelPropertyUiExtension,e as typesPropertyUi,n as typesPropertyUiExtension};
+import{$C as e,QC as t,ew as n}from"../../../chunks/app-DNxqegs1.js";export{t as kernelPropertyUiExtension,e as typesPropertyUi,n as typesPropertyUiExtension};

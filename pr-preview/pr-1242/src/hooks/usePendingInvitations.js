@@ -1,1 +1,1 @@
-import{Bv as e}from"../../chunks/app-CU3-DGAM.js";export{e as usePendingInvitations};
+import{Bv as e}from"../../chunks/app-DNxqegs1.js";export{e as usePendingInvitations};
