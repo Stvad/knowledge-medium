@@ -7,7 +7,6 @@
  * A task's wording is part of the measurement: changing it invalidates
  * comparisons with earlier reports, so add a task rather than rewording one.
  */
-import { createHash } from 'node:crypto'
 import { roamBlockId } from '@/plugins/roam-import/blockIds'
 import {
   DESIGN_PAGE,
@@ -28,6 +27,8 @@ import {
   purgeBlocks,
   sqlAll,
 } from './graphQueries'
+import type { AllowedChanges, AllowedEdit } from './isolation'
+import { definitionHash } from './report'
 
 export interface TaskEnv {
   probe: GraphProbe
@@ -54,8 +55,9 @@ export interface EvalTask {
   /** The everyday job this task stands for. */
   covers: string
   prompt: (env: TaskEnv) => string
-  /** Roam uids of the fixture blocks this task is asked to change. */
-  edits?: readonly string[]
+  /** The fixture blocks this task is asked to change, by Roam uid, and which
+   *  of their fields. */
+  edits?: Readonly<Record<string, AllowedEdit>>
   /** Blocks under (or equal to) which this task is asked to create, resolved
    *  after it ran. Any other change fails the task; the runner undoes all of
    *  them either way. */
@@ -69,20 +71,19 @@ export interface EvalTask {
 
 /** Bump when a helper the checks share changes (normalizeText, compareSets,
  *  …): a task's hash covers only its own definition. */
-const SHARED_SCORING_VERSION = 1
+const SHARED_SCORING_VERSION = 2
 
 /** Identifies what a task measures, so a report only compares a task with an
  *  earlier run of the same definition. */
-export const taskDefinitionHash = (task: EvalTask, truth: FixtureTruth): string =>
-  createHash('sha256').update(JSON.stringify({
-    shared: SHARED_SCORING_VERSION,
-    kind: task.kind,
-    prompt: task.prompt({probe: {workspaceId: '', command: async () => null}, truth, runTag: '<tag>'}),
-    check: task.check.toString(),
-    reset: task.reset?.toString() ?? null,
-    edits: task.edits ?? [],
-    createsUnder: task.createsUnder?.toString() ?? null,
-  })).digest('hex').slice(0, 12)
+export const taskDefinitionHash = (task: EvalTask, truth: FixtureTruth): string => definitionHash({
+  shared: SHARED_SCORING_VERSION,
+  kind: task.kind,
+  prompt: task.prompt({probe: {workspaceId: '', command: async () => null}, truth, runTag: '<tag>'}),
+  check: task.check.toString(),
+  reset: task.reset?.toString() ?? null,
+  edits: task.edits ?? {},
+  createsUnder: task.createsUnder?.toString() ?? null,
+})
 
 const PREAMBLE =
   'You have access to a Knowledge Medium notes graph (an outliner of pages and nested blocks, '
@@ -138,6 +139,13 @@ const isoDates = (value: unknown) => stringList(value)?.map(date => date.trim())
 
 /** The block id a fixture block's Roam uid imports to in this workspace. */
 export const targetId = (workspaceId: string, uid: string) => roamBlockId(workspaceId, uid)
+
+/** What `task` may change, resolved against the graph: call it before the
+ *  runner's undo, which removes the blocks the task created. */
+export const allowedChanges = async (task: EvalTask, env: TaskEnv): Promise<AllowedChanges> => ({
+  edits: new Map(Object.entries(task.edits ?? {}).map(([uid, edit]) => [targetId(env.probe.workspaceId, uid), edit])),
+  createRoots: new Set(await task.createsUnder?.(env) ?? []),
+})
 
 const requireTarget = async (probe: GraphProbe, uid: string) => {
   const block = await getBlock(probe, targetId(probe.workspaceId, uid))
@@ -342,7 +350,7 @@ export const TASKS: readonly EvalTask[] = [
       `On the page "${DESIGN_PAGE}", the rollout block says the target is Q3 2026. `
       + 'Change it to Q4 2026, leaving the rest of that block exactly as it is.',
     ),
-    edits: [TARGET_UIDS.rollout],
+    edits: {[TARGET_UIDS.rollout]: {content: true}},
     reset: async ({probe}) => {
       const block = await requireTarget(probe, TARGET_UIDS.rollout)
       if (block.content !== ROLLOUT_BLOCK_TEXT) {
@@ -393,7 +401,8 @@ export const TASKS: readonly EvalTask[] = [
     kind: 'write',
     covers: 'change a todo’s state',
     prompt: () => writePrompt(`On the page "${PROJECT_PAGE}", mark the todo "${PRICING_FAQ_TODO}" as done.`),
-    edits: [TARGET_UIDS.pricingFaqTodo],
+    // The importer's own todo marker may follow the status.
+    edits: {[TARGET_UIDS.pricingFaqTodo]: {properties: ['status', 'roam:todo-state']}},
     reset: async ({probe}) => {
       const todo = await requireTarget(probe, TARGET_UIDS.pricingFaqTodo)
       await probe.command({

@@ -38,11 +38,11 @@ const transcript = [
 describe('parseTranscript', () => {
   const metrics = parseTranscript(transcript)
 
-  it('records each tool call once with the UTF-8 bytes it returned', () => {
+  it('records each tool call once with the characters it returned', () => {
     expect(metrics.toolCalls).toEqual([
-      {id: 't1', name: 'mcp__km__page', outputBytes: 20, capped: false, returnedBytes: 20, isError: false},
-      {id: 't2', name: 'mcp__km__search', outputBytes: capNotice.length, capped: true, returnedBytes: 644_156, isError: false},
-      {id: 't3', name: 'mcp__km__backlinks', outputBytes: 4, capped: false, returnedBytes: 4, isError: true},
+      {id: 't1', name: 'mcp__km__page', seenChars: 10, capped: false, returnedChars: 10, isError: false},
+      {id: 't2', name: 'mcp__km__search', seenChars: capNotice.length, capped: true, returnedChars: 644_156, isError: false},
+      {id: 't3', name: 'mcp__km__backlinks', seenChars: 4, capped: false, returnedChars: 4, isError: true},
     ])
   })
 
@@ -60,14 +60,14 @@ describe('parseTranscript', () => {
   it('falls back to summing per-call usage when the run ended without a result line', () => {
     const truncated = parseTranscript(transcript.split('\n').slice(0, 7).join('\n'))
     expect(truncated.tokens.contextTotal).toBe(5002 + 5402)
-    expect(truncated.toolCalls.map(call => call.outputBytes)).toEqual([20, capNotice.length, 4])
+    expect(truncated.toolCalls.map(call => call.seenChars)).toEqual([10, capNotice.length, 4])
     expect(truncated.numTurns).toBeNull()
   })
 
   it('reads run metadata from the init and result lines', () => {
     expect(metrics).toMatchObject({
       model: 'claude-test', claudeCodeVersion: '9.9.9',
-      numTurns: 4, durationMs: 1234, costUsd: 0.01, terminalReason: 'completed', isError: false,
+      numTurns: 4, costUsd: 0.01, terminalReason: 'completed', isError: false,
     })
   })
 })

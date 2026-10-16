@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { type EvalReport, renderMarkdown, summarize, type TaskRunRecord } from './report'
+import { conditionMismatches, type EvalReport, parseReport, renderMarkdown, summarize, type TaskRunRecord } from './report'
 
 const runRecord = (task: string, rep: number, overrides: Partial<TaskRunRecord> = {}): TaskRunRecord => ({
   task,
@@ -10,13 +10,13 @@ const runRecord = (task: string, rep: number, overrides: Partial<TaskRunRecord> 
   toolCalls: 4,
   toolCallsByName: {mcp__km__search: 4},
   toolErrors: 0,
-  toolResultBytes: 4096,
-  maxToolResultBytes: 2048,
+  seenChars: 4096,
+  maxSeenChars: 2048,
   cappedCalls: 0,
-  returnedBytes: 4096,
+  returnedChars: 4096,
   apiCalls: 5,
   tokens: {input: 10, cacheCreation: 1000, cacheRead: 9000, output: 300, contextTotal: 10_010, peakContext: 3000},
-  durationMs: 10_000,
+  elapsedMs: 10_000,
   costUsd: 0.02,
   terminalReason: 'completed',
   exitCode: 0,
@@ -26,8 +26,8 @@ const runRecord = (task: string, rep: number, overrides: Partial<TaskRunRecord> 
   ...overrides,
 })
 
-const reportOf = (label: string, runs: TaskRunRecord[], taskHashes?: Record<string, string>): EvalReport => ({
-  schemaVersion: 1,
+const reportOf = (label: string, runs: TaskRunRecord[], overrides: Partial<EvalReport> = {}): EvalReport => ({
+  schemaVersion: 2,
   label,
   startedAt: '2026-10-15T00:00:00Z',
   finishedAt: '2026-10-15T00:10:00Z',
@@ -39,9 +39,11 @@ const reportOf = (label: string, runs: TaskRunRecord[], taskHashes?: Record<stri
   kmTools: ['search'],
   mcpOutputTokens: 25_000,
   fixtureHash: 'abc',
-  taskHashes: taskHashes ?? Object.fromEntries(runs.map(run => [run.task, `${run.task}-v1`])),
+  taskHashes: Object.fromEntries(runs.map(run => [run.task, `${run.task}-v1`])),
   outputSizes: {'search:x': 1000},
+  probeHashes: {'search:x': 'x-v1'},
   runs,
+  ...overrides,
 })
 
 describe('summarize', () => {
@@ -53,15 +55,23 @@ describe('summarize', () => {
     ]))
     expect(row).toMatchObject({task: 'a', reps: 3, passes: 2, toolCalls: 3})
   })
+
+  it('leaves a cost unknown when a repetition did not report one, rather than counting it as $0', () => {
+    const [row] = summarize(reportOf('r', [
+      runRecord('a', 1, {costUsd: 0.02}),
+      runRecord('a', 2, {costUsd: null, timedOut: true, elapsedMs: 600_000}),
+      runRecord('a', 3, {costUsd: 0.04}),
+    ]))
+    expect(row).toMatchObject({costUsd: null, elapsedMs: 10_000})
+  })
 })
 
 describe('renderMarkdown', () => {
   it('puts deltas against the baseline beside each figure, and lists failures', () => {
     const baseline = reportOf('before', [runRecord('a', 1, {toolCalls: 8}), runRecord('b', 1)])
-    const current = {
-      ...reportOf('after', [runRecord('a', 1, {toolCalls: 4}), runRecord('b', 1, {pass: false, detail: 'missing [x]'})]),
+    const current = reportOf('after', [runRecord('a', 1, {toolCalls: 4}), runRecord('b', 1, {pass: false, detail: 'missing [x]'})], {
       outputSizes: {'search:x': 250},
-    }
+    })
     const markdown = renderMarkdown(current, baseline)
     expect(markdown).toContain('| a | read | 1/1 (was 1/1) | 4 (−50%) |')
     expect(markdown).toContain('| search:x | 250 (−75%) |')
@@ -83,14 +93,54 @@ describe('renderMarkdown', () => {
 
   it('shows no delta for a task whose definition changed', () => {
     const baseline = reportOf('before', [runRecord('a', 1, {toolCalls: 8})])
-    const current = reportOf('after', [runRecord('a', 1, {toolCalls: 4})], {a: 'a-v2'})
+    const current = reportOf('after', [runRecord('a', 1, {toolCalls: 4})], {taskHashes: {a: 'a-v2'}})
     const markdown = renderMarkdown(current, baseline)
     expect(markdown).toContain('| a | read | 1/1 (task changed since baseline) | 4 |')
     expect(markdown).not.toContain('(−50%)')
   })
 
+  it('shows no size delta for a probe whose call changed', () => {
+    const baseline = reportOf('before', [runRecord('a', 1)])
+    const current = reportOf('after', [runRecord('a', 1)], {outputSizes: {'search:x': 250}, probeHashes: {'search:x': 'x-v2'}})
+    expect(renderMarkdown(current, baseline)).toContain('| search:x | 250 |')
+  })
+
+  it.each([
+    ['model', {resolvedModel: 'claude-other'}, 'model claude-test → claude-other'],
+    ['effort', {effort: 'high'}, 'effort default → high'],
+    ['MCP output cap', {mcpOutputTokens: 5_000}, 'MCP output cap 25000 → 5000'],
+    ['fixture', {fixtureHash: 'def'}, 'fixture abc → def'],
+  ] as const)('compares nothing with a baseline run under another %s', (_name, overrides, named) => {
+    const baseline = reportOf('before', [runRecord('a', 1, {toolCalls: 8})])
+    const current = reportOf('after', [runRecord('a', 1, {toolCalls: 4})], {...overrides, outputSizes: {'search:x': 250}})
+    const markdown = renderMarkdown(current, baseline)
+    expect(markdown).toContain(`**not compared** with before: the runs differ in ${named}`)
+    expect(markdown).not.toContain('(was ')
+    expect(markdown).not.toMatch(/\((?:[+−]\d+|±0)%\)/)
+  })
+
+  it('renders an unknown cost as n/a, in the task row and the total', () => {
+    const markdown = renderMarkdown(reportOf('r', [runRecord('a', 1, {costUsd: null}), runRecord('b', 1)]))
+    expect(markdown).toMatch(/^\| a \|.*\| n\/a \| 10s \|$/m)
+    expect(markdown).toMatch(/^\| \*\*all\*\* \|.*\| n\/a \| 20s \|$/m)
+  })
+
   it('flags writes made during a read task', () => {
     const markdown = renderMarkdown(reportOf('r', [runRecord('a', 1, {writes: {created: 2, modified: 1}})]))
     expect(markdown).toContain('- a #1: 2 created, 1 modified')
+  })
+})
+
+describe('conditionMismatches', () => {
+  it('does not hold a model the run has not resolved yet against the baseline', () => {
+    const baseline = reportOf('before', [])
+    expect(conditionMismatches(reportOf('after', [], {resolvedModel: null}), baseline)).toEqual([])
+  })
+})
+
+describe('parseReport', () => {
+  it('refuses a report written in another format', () => {
+    expect(() => parseReport(JSON.stringify({...reportOf('old', []), schemaVersion: 1}), 'old.json'))
+      .toThrow('old.json is report format 1, not 2')
   })
 })

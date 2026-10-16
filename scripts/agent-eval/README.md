@@ -8,8 +8,11 @@ It has two halves:
 
 | half | what | where it runs |
 |---|---|---|
-| **deterministic** | byte size of representative tool outputs on the fixture, with a budget each; every task's checker proven against the graph | `pnpm run check` (node, no browser, ~8s) — `fixtureGraph.test.ts` |
-| **model** | `claude -p` does 12 tasks with only the km tools; per task: pass/fail, tool calls, bytes returned, tokens, time | on demand, `pnpm agent-eval run` — costs subscription usage |
+| **deterministic** | size of representative tool outputs on the fixture, with a budget each; every task's checker proven against the graph | `pnpm run check` (node, no browser, ~20s) — `fixtureGraph.test.ts` |
+| **model** | `claude -p` does 12 tasks with only the km tools; per task: pass/fail, tool calls, characters returned, tokens, time | on demand, `pnpm agent-eval run` — costs subscription usage |
+
+Sizes are characters (string length) throughout: the unit Claude Code's MCP output
+cap counts, and the only one its over-the-cap notice reports.
 
 ## The fixture
 
@@ -32,8 +35,9 @@ daily note, edit one phrase in a block, create a page and link it, and complete 
 They are scored on graph state read back through raw wire commands and SQL, never
 through the MCP tools under test. A run passes only if the task's check passes, `claude`
 exits cleanly, and the agent changed nothing it wasn't asked to. Each write task
-declares the fixture blocks it may edit and where it may create blocks; a read task may
-change nothing.
+declares which fields of which fixture blocks it may edit (the rollout block's content;
+the todo's status) and where it may create blocks. Any other change, such as another
+property, a move or a deletion, fails the run. A read task may change nothing.
 
 Every task starts from the same graph. The runner snapshots every block row once,
 after each task's `reset` has cleared anything an interrupted earlier run left behind.
@@ -41,23 +45,34 @@ The snapshot leaves out the app's own per-user state, which changes by itself. A
 each task, the runner:
 
 1. waits until the graph is quiet, so late processor writes land first;
-2. diffs the whole table against the snapshot by id, deleted rows included, and never
-   by timestamp, because some rows are minted at `updated_at = 0`;
+2. diffs the whole table against the snapshot by id, every column (derived ones
+   included) and deleted rows too, and never by timestamp, because some rows are
+   minted at `updated_at = 0`;
 3. undoes every difference: content, properties, deletions and moves, and purges the
    rows the task created, so the agent's raw SQL finds no leftovers;
-4. puts the restored rows' timestamps back, so recency ordering is unchanged;
+4. waits until the graph is quiet again, so the processors the undo's own writes
+   started have landed;
 5. diffs again to prove the result, and aborts rather than score the next task on a
-   different graph.
+   different graph;
+6. puts back the recency timestamps of every row whose timestamps moved, whoever
+   moved them, so recency ordering is unchanged.
 
 The run's snapshot is also journaled to `tmp/agent-eval/journal/`, so a run killed
 mid-task is undone by the next run.
 
 A task's definition is part of the measurement. A report stores a hash of each task's
 prompt, check, reset and allowed changes, and `--compare` shows deltas only for tasks
-whose hash matches; aggregates cover those tasks only. When you change a helper the
-checks share (`normalizeText`, `compareSets`), bump `SHARED_SCORING_VERSION` in
+whose hash matches; aggregates cover those tasks only. Output-size probes carry a hash
+of their call the same way. When you change a helper the checks share
+(`normalizeText`, `compareSets`, `strayChanges`), bump `SHARED_SCORING_VERSION` in
 `tasks.ts`. Prefer adding a task to rewording one. A new task needs a reference solution
 and wrong ones in `fixtureGraph.test.ts`.
+
+So is what a run holds fixed: the fixture, the resolved model, the effort and the MCP
+output cap. A baseline that differs in any of them gets no deltas at all, since they
+would measure that difference rather than the tools. `run` refuses such a `--compare`
+before it starts, except for the model, which is known only once the first task has
+run. Claude Code's version is shown, not required to match.
 
 ## One-time setup
 
@@ -91,8 +106,9 @@ pnpm agent-eval run --repeat 3 --compare scripts/agent-eval/results/baseline-202
 ```
 
 `run` builds `packages/agent-cli` first (incremental), because the runs launch its
-`dist/mcp.js` and a stale build would measure old code. `--compare` refuses a report
-measured on a different fixture hash.
+`dist/mcp.js` and a stale build would measure old code. It refuses a `--label` that
+already has a report or transcripts; the default label is the date and time, the commit
+and the model.
 
 Options: `--model` (default `sonnet`), `--effort`, `--repeat`, `--tasks id,id`,
 `--label`, `--timeout-min`, `--profile` (default `km-eval`), and `--mcp-output-tokens`
@@ -109,11 +125,14 @@ login. Credential env vars are scrubbed the way agent-dispatch does it
 (`BILLING_ENV_DENYLIST`). A key stored by the CLI's own login or an `apiKeyHelper` is
 outside the env and can't be scrubbed, so check your login if unsure.
 
-Reports go to `results/<label>.{json,md}`. Transcripts go to
+Reports go to `results/<label>.{json,md}`; a report written by a runner with another
+`schemaVersion` is refused, so record it again. Transcripts go to
 `tmp/agent-eval/runs/<label>/` (gitignored). A result over the MCP output cap appears there only as
 Claude Code's notice, never as the full output; the report counts such calls as "capped" and records
 the size the tool returned.
-Per-task figures are medians across repetitions. "Context tokens" is input plus
+Per-task figures are medians across repetitions. Time is wall-clock, measured by the
+runner, so a run that timed out counts in full. "List $" is n/a for a task when any of
+its runs ended without reporting a cost. "Context tokens" is input plus
 cache-creation plus cache-read tokens, summed over the run's API calls. "Peak context"
 is the largest single call. Model runs are noisy, so compare medians of `--repeat 3`
 or more, and read the per-task table rather than a single total.

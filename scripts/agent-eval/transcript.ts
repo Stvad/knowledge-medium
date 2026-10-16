@@ -1,6 +1,6 @@
 /**
  * Per-run metrics from a `claude -p --output-format stream-json --verbose`
- * transcript: every tool call with the bytes it sent and got back, token
+ * transcript: every tool call with the size of what it got back, token
  * usage, turns, and the final reply.
  *
  * Usage arrives once per API call but the stream repeats an assistant
@@ -10,22 +10,22 @@
  * `output_tokens` the stream carries are partial.
  *
  * A tool result over Claude Code's MCP output cap never reaches the model:
- * it is replaced by a short notice naming the size. Such a call is recorded
- * as `capped`, with the bytes the model saw and the size the server returned
- * kept apart — otherwise a tool that shrinks its output below the cap would
- * read as a regression.
+ * it is replaced by a short notice naming its size in characters. Such a
+ * call is recorded as `capped`, with what the model saw and what the server
+ * returned kept apart — otherwise a tool that shrinks its output below the
+ * cap would read as a regression. Sizes are characters (string length), the
+ * unit the notice reports.
  */
 
 export interface ToolCallRecord {
   id: string
   name: string
-  /** Bytes the model saw; null when the transcript ended before the tool returned. */
-  outputBytes: number | null
+  /** Characters the model saw; null when the transcript ended before the tool returned. */
+  seenChars: number | null
   /** Replaced by Claude Code's over-the-cap notice. */
   capped: boolean
-  /** Size the server returned: the notice's character count when capped,
-   *  else `outputBytes`. */
-  returnedBytes: number | null
+  /** Characters the server returned: the notice's count when capped, else `seenChars`. */
+  returnedChars: number | null
   isError: boolean
 }
 
@@ -47,7 +47,6 @@ export interface TranscriptMetrics {
   apiCalls: number
   tokens: TokenUsage
   numTurns: number | null
-  durationMs: number | null
   /** List-price equivalent the CLI reports; under subscription billing nothing is charged. */
   costUsd: number | null
   resultText: string
@@ -64,7 +63,6 @@ interface MessageUsage {
 
 type Json = Record<string, unknown>
 
-const byteLength = (text: string) => Buffer.byteLength(text, 'utf8')
 const num = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) ? value : 0)
 const contextOf = (usage: MessageUsage) =>
   num(usage.input_tokens) + num(usage.cache_creation_input_tokens) + num(usage.cache_read_input_tokens)
@@ -87,7 +85,6 @@ export const parseTranscript = (raw: string): TranscriptMetrics => {
     apiCalls: 0,
     tokens: {input: 0, cacheCreation: 0, cacheRead: 0, output: 0, contextTotal: 0, peakContext: 0},
     numTurns: null,
-    durationMs: null,
     costUsd: null,
     resultText: '',
     isError: false,
@@ -117,9 +114,9 @@ export const parseTranscript = (raw: string): TranscriptMetrics => {
         const call: ToolCallRecord = {
           id: block.id,
           name: typeof block.name === 'string' ? block.name : '?',
-          outputBytes: null,
+          seenChars: null,
           capped: false,
-          returnedBytes: null,
+          returnedChars: null,
           isError: false,
         }
         callsById.set(call.id, call)
@@ -133,16 +130,15 @@ export const parseTranscript = (raw: string): TranscriptMetrics => {
         if (!call) continue
         const text = toolResultText(block.content)
         const cap = CAP_NOTICE.exec(text)
-        call.outputBytes = byteLength(text)
+        call.seenChars = text.length
         call.capped = cap !== null
-        call.returnedBytes = cap ? Number(cap[1].replace(/,/g, '')) : call.outputBytes
+        call.returnedChars = cap ? Number(cap[1].replace(/,/g, '')) : call.seenChars
         call.isError = block.is_error === true
       }
     } else if (event.type === 'result') {
       metrics.resultText = typeof event.result === 'string' ? event.result : ''
       metrics.isError = event.is_error === true
       metrics.numTurns = typeof event.num_turns === 'number' ? event.num_turns : null
-      metrics.durationMs = typeof event.duration_ms === 'number' ? event.duration_ms : null
       metrics.costUsd = typeof event.total_cost_usd === 'number' ? event.total_cost_usd : null
       metrics.terminalReason = typeof event.terminal_reason === 'string' ? event.terminal_reason : null
       resultUsage = (event.usage ?? null) as MessageUsage | null

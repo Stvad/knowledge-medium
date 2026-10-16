@@ -2,9 +2,16 @@
  * The eval's comparable output: one JSON record per task execution plus the
  * deterministic output sizes, and a markdown rendering that can put a
  * second report beside it as a baseline.
+ *
+ * Sizes are characters (JavaScript string length) throughout: the unit
+ * Claude Code's MCP output cap counts, and the only one its over-the-cap
+ * notice reports.
  */
+import { createHash } from 'node:crypto'
 import { MCP_SERVER_NAME } from '../../packages/agent-cli/src/mcpShared'
 import type { TokenUsage } from './transcript'
+
+export const REPORT_SCHEMA_VERSION = 2
 
 export interface TaskRunRecord {
   task: string
@@ -15,16 +22,18 @@ export interface TaskRunRecord {
   toolCalls: number
   toolCallsByName: Record<string, number>
   toolErrors: number
-  /** UTF-8 bytes of every tool result the agent saw. */
-  toolResultBytes: number
-  maxToolResultBytes: number
+  /** Characters of every tool result the agent saw. */
+  seenChars: number
+  maxSeenChars: number
   /** Results over Claude Code's MCP output cap, which the agent never saw. */
   cappedCalls: number
   /** What the tools returned, capped results at their real size. */
-  returnedBytes: number
+  returnedChars: number
   apiCalls: number
   tokens: TokenUsage
-  durationMs: number | null
+  /** Wall-clock, measured by the runner, so a run that timed out has one. */
+  elapsedMs: number
+  /** Null when the run ended without a result line to report it. */
   costUsd: number | null
   terminalReason: string | null
   exitCode: number | null
@@ -35,7 +44,7 @@ export interface TaskRunRecord {
 }
 
 export interface EvalReport {
-  schemaVersion: 1
+  schemaVersion: typeof REPORT_SCHEMA_VERSION
   label: string
   startedAt: string
   finishedAt: string
@@ -51,10 +60,44 @@ export interface EvalReport {
   /** Per task, a hash of its definition (prompt, check, reset, allowed
    *  changes). Deltas are shown only for tasks whose hash matches. */
   taskHashes: Record<string, string>
-  /** Deterministic output sizes (bytes) per probe, from the fixture-graph test. */
+  /** Deterministic output sizes per probe, from the fixture-graph test. */
   outputSizes: Record<string, number> | null
+  /** Per probe, a hash of its call; deltas only where it matches. */
+  probeHashes: Record<string, string>
   runs: TaskRunRecord[]
 }
+
+/** Identifies a definition, so a report compares only like with like. */
+export const definitionHash = (definition: unknown): string =>
+  createHash('sha256').update(JSON.stringify(definition)).digest('hex').slice(0, 12)
+
+/** A report as stored, refused when it was written in another format. */
+export const parseReport = (json: string, source: string): EvalReport => {
+  const report = JSON.parse(json) as EvalReport
+  if (report.schemaVersion !== REPORT_SCHEMA_VERSION) {
+    throw new Error(`${source} is report format ${report.schemaVersion}, not ${REPORT_SCHEMA_VERSION}; record it again with this runner`)
+  }
+  return report
+}
+
+/** What a run holds fixed besides its tasks: a baseline that differs in any
+ *  of these measures that difference, not the tools, so it gets no deltas.
+ *  Claude Code's version is shown, not required to match, or a baseline
+ *  would expire with every CLI release. */
+const RUN_CONDITIONS: ReadonlyArray<readonly [string, (report: EvalReport) => string | null]> = [
+  ['fixture', report => report.fixtureHash],
+  ['model', report => report.resolvedModel],
+  ['effort', report => report.effort ?? 'default'],
+  ['MCP output cap', report => String(report.mcpOutputTokens)],
+]
+
+/** The run conditions on which the two reports differ. A value not known on
+ *  one side (the model, before the first run resolves it) is no difference. */
+export const conditionMismatches = (report: EvalReport, baseline: EvalReport): string[] =>
+  RUN_CONDITIONS.flatMap(([name, read]) => {
+    const [was, now] = [read(baseline), read(report)]
+    return was === null || now === null || was === now ? [] : [`${name} ${was} → ${now}`]
+  })
 
 export interface TaskSummary {
   task: string
@@ -62,15 +105,16 @@ export interface TaskSummary {
   reps: number
   passes: number
   toolCalls: number
-  toolResultBytes: number
-  maxToolResultBytes: number
+  seenChars: number
+  maxSeenChars: number
   cappedCalls: number
-  returnedBytes: number
+  returnedChars: number
   contextTokens: number
   peakContext: number
   outputTokens: number
-  costUsd: number
-  durationMs: number
+  /** Null when any repetition's cost is unknown. */
+  costUsd: number | null
+  elapsedMs: number
 }
 
 const median = (values: readonly number[]): number => {
@@ -80,36 +124,42 @@ const median = (values: readonly number[]): number => {
   return sorted.length % 2 === 1 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2
 }
 
+/** Unknown in, unknown out: a figure missing from any input is not zero. */
+const known = (values: ReadonlyArray<number | null>): readonly number[] | null =>
+  values.every((value): value is number => value !== null) ? values : null
+
 /** Per task, medians across repetitions (pass count is a count). */
 export const summarize = (report: EvalReport): TaskSummary[] => {
   const byTask = new Map<string, TaskRunRecord[]>()
   for (const run of report.runs) byTask.set(run.task, [...(byTask.get(run.task) ?? []), run])
-  return [...byTask.entries()].map(([task, runs]) => ({
-    task,
-    kind: runs[0].kind,
-    reps: runs.length,
-    passes: runs.filter(run => run.pass).length,
-    toolCalls: median(runs.map(run => run.toolCalls)),
-    toolResultBytes: median(runs.map(run => run.toolResultBytes)),
-    maxToolResultBytes: median(runs.map(run => run.maxToolResultBytes)),
-    cappedCalls: median(runs.map(run => run.cappedCalls)),
-    returnedBytes: median(runs.map(run => run.returnedBytes)),
-    contextTokens: median(runs.map(run => run.tokens.contextTotal)),
-    peakContext: median(runs.map(run => run.tokens.peakContext)),
-    outputTokens: median(runs.map(run => run.tokens.output)),
-    costUsd: median(runs.map(run => run.costUsd ?? 0)),
-    durationMs: median(runs.map(run => run.durationMs ?? 0)),
-  }))
+  return [...byTask.entries()].map(([task, runs]) => {
+    const costs = known(runs.map(run => run.costUsd))
+    return {
+      task,
+      kind: runs[0].kind,
+      reps: runs.length,
+      passes: runs.filter(run => run.pass).length,
+      toolCalls: median(runs.map(run => run.toolCalls)),
+      seenChars: median(runs.map(run => run.seenChars)),
+      maxSeenChars: median(runs.map(run => run.maxSeenChars)),
+      cappedCalls: median(runs.map(run => run.cappedCalls)),
+      returnedChars: median(runs.map(run => run.returnedChars)),
+      contextTokens: median(runs.map(run => run.tokens.contextTotal)),
+      peakContext: median(runs.map(run => run.tokens.peakContext)),
+      outputTokens: median(runs.map(run => run.tokens.output)),
+      costUsd: costs && median(costs),
+      elapsedMs: median(runs.map(run => run.elapsedMs)),
+    }
+  })
 }
 
-const kb = (bytes: number) => (bytes >= 10_240 ? `${Math.round(bytes / 1024)} KB` : `${(bytes / 1024).toFixed(1)} KB`)
 const thousands = (n: number) => (n >= 10_000 ? `${Math.round(n / 1000)}k` : `${(n / 1000).toFixed(1)}k`)
 const seconds = (ms: number) => `${Math.round(ms / 1000)}s`
 const dollars = (usd: number) => `$${usd.toFixed(3)}`
 
 /** "+12%" / "−40%" against a baseline value; empty when there is none. */
-const delta = (current: number, base: number | undefined): string => {
-  if (base === undefined || base === 0) return ''
+const delta = (current: number, base: number | null | undefined): string => {
+  if (base === null || base === undefined || base === 0) return ''
   const pct = Math.round(((current - base) / base) * 100)
   return pct === 0 ? ' (±0%)' : ` (${pct > 0 ? '+' : '−'}${Math.abs(pct)}%)`
 }
@@ -117,30 +167,37 @@ const delta = (current: number, base: number | undefined): string => {
 const sum = (values: readonly number[]) => values.reduce((total, value) => total + value, 0)
 
 /** A figure with its delta against the baseline figure, when there is one. */
-const cell = (format: (n: number) => string, current: number, base?: number) => `${format(current)}${delta(current, base)}`
+const cell = (format: (n: number) => string, current: number | null, base?: number | null) =>
+  (current === null ? 'n/a' : `${format(current)}${delta(current, base)}`)
 
 const totalsRow = (label: string, rows: readonly TaskSummary[], baseRows?: readonly TaskSummary[]) => {
   const total = (from: readonly TaskSummary[], pick: (row: TaskSummary) => number) => sum(from.map(pick))
   const pair = (pick: (row: TaskSummary) => number) =>
     [total(rows, pick), baseRows ? total(baseRows, pick) : undefined] as const
+  const cost = (from: readonly TaskSummary[]) => {
+    const costs = known(from.map(row => row.costUsd))
+    return costs && sum(costs)
+  }
   return `| ${label} | | ${total(rows, row => row.passes)}/${total(rows, row => row.reps)} `
     + `| ${cell(String, ...pair(row => row.toolCalls))} `
     + `| ${cell(String, ...pair(row => row.cappedCalls))} `
-    + `| ${cell(kb, ...pair(row => row.toolResultBytes))} `
-    + `| ${cell(kb, ...pair(row => row.returnedBytes))} `
+    + `| ${cell(thousands, ...pair(row => row.seenChars))} `
+    + `| ${cell(thousands, ...pair(row => row.returnedChars))} `
     + `| ${cell(thousands, ...pair(row => row.contextTokens))} | `
     + `| ${cell(thousands, ...pair(row => row.outputTokens))} `
-    + `| ${cell(dollars, ...pair(row => row.costUsd))} `
-    + `| ${seconds(total(rows, row => row.durationMs))} |`
+    + `| ${cell(dollars, cost(rows), baseRows && cost(baseRows))} `
+    + `| ${seconds(total(rows, row => row.elapsedMs))} |`
 }
 
-export const renderMarkdown = (report: EvalReport, baseline?: EvalReport): string => {
+export const renderMarkdown = (report: EvalReport, compareWith?: EvalReport): string => {
+  const mismatches = compareWith ? conditionMismatches(report, compareWith) : []
+  const baseline = mismatches.length === 0 ? compareWith : undefined
   const rows = summarize(report)
   const baselineRows = new Map((baseline ? summarize(baseline) : []).map(row => [row.task, row]))
   // Only a task measured on the same definition is comparable; a reworded
   // prompt or changed check is a different workload.
   const comparable = (task: string) => baselineRows.has(task)
-    && baseline?.taskHashes?.[task] !== undefined && baseline.taskHashes[task] === report.taskHashes?.[task]
+    && baseline?.taskHashes[task] !== undefined && baseline.taskHashes[task] === report.taskHashes[task]
   const lines: string[] = []
   const reps = Math.max(...rows.map(row => row.reps))
 
@@ -148,16 +205,21 @@ export const renderMarkdown = (report: EvalReport, baseline?: EvalReport): strin
   lines.push(`- commit \`${report.git.sha.slice(0, 10)}\` on \`${report.git.branch}\`${report.git.dirty ? ' (dirty tree)' : ''}`)
   lines.push(`- model \`${report.resolvedModel ?? report.model}\`${report.effort ? `, effort ${report.effort}` : ''}, Claude Code ${report.claudeCodeVersion ?? '?'}`)
   lines.push(`- km tools: ${report.kmTools.map(tool => `\`${tool}\``).join(', ')}; MCP output cap ${report.mcpOutputTokens} tokens`)
-  lines.push('- "capped": results over that cap, which Claude Code replaced with a short notice; "seen" is what reached the model, "returned" what the tools produced')
+  lines.push('- sizes are characters; "capped": results over that cap, which Claude Code replaced with a short notice; "seen" is what reached the model, "returned" what the tools produced')
   lines.push(`- fixture \`${report.fixtureHash}\`, ${reps} repetition(s) per task; per-task figures are medians; lower is better except pass`)
-  lines.push('- list $ is the API list-price equivalent the CLI reports (a subscription run is not charged it); it weights input, cache and output tokens in one number')
+  lines.push('- list $ is the API list-price equivalent the CLI reports (a subscription run is not charged it); it weights input, cache and output tokens in one number; n/a where a run ended without reporting it')
+  if (compareWith && !baseline) {
+    lines.push(`- **not compared** with ${compareWith.label}: the runs differ in ${mismatches.join('; ')}`)
+  }
   if (baseline) {
-    lines.push(`- compared with **${baseline.label}** (commit \`${baseline.git.sha.slice(0, 10)}\`); deltas in parentheses, `
+    const cli = baseline.claudeCodeVersion !== report.claudeCodeVersion
+      ? `; Claude Code ${baseline.claudeCodeVersion ?? '?'} → ${report.claudeCodeVersion ?? '?'}` : ''
+    lines.push(`- compared with **${baseline.label}** (commit \`${baseline.git.sha.slice(0, 10)}\`${cli}); deltas in parentheses, `
       + `for the ${rows.filter(row => comparable(row.task)).length} of ${rows.length} tasks whose definition is unchanged`)
   }
   lines.push('')
 
-  lines.push('| task | kind | pass | tool calls | capped | bytes seen (total / max) | bytes returned | context tokens | peak context | output tokens | list $ | time |')
+  lines.push('| task | kind | pass | tool calls | capped | chars seen (total / max) | chars returned | context tokens | peak context | output tokens | list $ | time |')
   lines.push('|---|---|---|---|---|---|---|---|---|---|---|---|')
   for (const row of rows) {
     const was = comparable(row.task) ? baselineRows.get(row.task) : undefined
@@ -165,13 +227,13 @@ export const renderMarkdown = (report: EvalReport, baseline?: EvalReport): strin
     lines.push(`| ${row.task} | ${row.kind} | ${row.passes}/${row.reps}${note} `
       + `| ${cell(String, row.toolCalls, was?.toolCalls)} `
       + `| ${cell(String, row.cappedCalls, was?.cappedCalls)} `
-      + `| ${cell(kb, row.toolResultBytes, was?.toolResultBytes)} / ${kb(row.maxToolResultBytes)} `
-      + `| ${cell(kb, row.returnedBytes, was?.returnedBytes)} `
+      + `| ${cell(thousands, row.seenChars, was?.seenChars)} / ${thousands(row.maxSeenChars)} `
+      + `| ${cell(thousands, row.returnedChars, was?.returnedChars)} `
       + `| ${cell(thousands, row.contextTokens, was?.contextTokens)} `
       + `| ${cell(thousands, row.peakContext, was?.peakContext)} `
       + `| ${cell(thousands, row.outputTokens, was?.outputTokens)} `
       + `| ${cell(dollars, row.costUsd, was?.costUsd)} `
-      + `| ${seconds(row.durationMs)} |`)
+      + `| ${seconds(row.elapsedMs)} |`)
   }
   // Aggregates compare like with like: when some tasks are new or changed,
   // the all-tasks total carries no delta and a comparable-subset row does.
@@ -217,11 +279,16 @@ export const renderMarkdown = (report: EvalReport, baseline?: EvalReport): strin
   lines.push('')
 
   if (report.outputSizes) {
+    // A probe whose call changed measures a different workload.
+    const baseSize = (probe: string) => {
+      const hash = report.probeHashes[probe]
+      return hash !== undefined && baseline?.probeHashes[probe] === hash ? baseline.outputSizes?.[probe] : undefined
+    }
     lines.push('## Output sizes on the fixture (deterministic)', '')
-    lines.push('| probe | bytes |')
+    lines.push('| probe | characters |')
     lines.push('|---|---|')
-    for (const [probe, bytes] of Object.entries(report.outputSizes)) {
-      lines.push(`| ${probe} | ${bytes.toLocaleString('en-US')}${delta(bytes, baseline?.outputSizes?.[probe])} |`)
+    for (const [probe, chars] of Object.entries(report.outputSizes)) {
+      lines.push(`| ${probe} | ${chars.toLocaleString('en-US')}${delta(chars, baseSize(probe))} |`)
     }
     lines.push('')
   }

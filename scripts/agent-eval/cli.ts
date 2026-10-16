@@ -25,9 +25,17 @@ import { BILLING_ENV_DENYLIST, envForBilling } from '../../packages/agent-dispat
 import { buildFixture, FIXTURE_HASH_PREFIX, FIXTURE_MARKER_PAGE } from './fixture'
 import { childrenOf, type GraphProbe, pageIdByTitle } from './graphQueries'
 import { restoreSnapshot, snapshotWorkspace, strayChanges } from './isolation'
+import { OUTPUT_PROBES, outputProbeHash } from './outputBudgets'
 import { createRunJournal } from './runJournal'
-import { type EvalReport, renderMarkdown, type TaskRunRecord } from './report'
-import { type EvalTask, targetId, taskDefinitionHash, TASKS } from './tasks'
+import {
+  conditionMismatches,
+  type EvalReport,
+  parseReport,
+  renderMarkdown,
+  REPORT_SCHEMA_VERSION,
+  type TaskRunRecord,
+} from './report'
+import { allowedChanges, type EvalTask, taskDefinitionHash, TASKS } from './tasks'
 import { extractAnswer, parseTranscript } from './transcript'
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
@@ -39,6 +47,16 @@ const DEFAULT_PROFILE = 'km-eval'
 const fail = (message: string): never => {
   process.stderr.write(`agent-eval: ${message}\n`)
   process.exit(1)
+}
+
+const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error))
+
+const loadReport = (file: string): EvalReport => {
+  try {
+    return parseReport(readFileSync(file, 'utf8'), file)
+  } catch (error) {
+    return fail(`cannot read report ${file}: ${errorText(error)}`)
+  }
 }
 
 const connect = async (profile: string): Promise<{probe: GraphProbe, client: BridgeClient}> => {
@@ -112,7 +130,7 @@ const buildPackages = () => {
   if (build.status !== 0) fail(`pnpm run compile:packages failed:\n${`${build.stdout}${build.stderr}`.trim().split('\n').slice(-15).join('\n')}`)
 }
 
-/** Deterministic sizes from the fixture-graph test; null if it could not run. */
+/** Deterministic sizes (characters) from the fixture-graph test; null if it could not run. */
 const measureOutputSizes = (): Record<string, number> | null => {
   const out = path.join(mkdtempSync(path.join(tmpdir(), 'agent-eval-sizes-')), 'sizes.json')
   spawnSync('pnpm', ['vitest', 'run', 'scripts/agent-eval/fixtureGraph.test.ts', '-t', 'output budgets'], {
@@ -152,12 +170,18 @@ interface RunOptions {
   repeat: number
   tasks: readonly EvalTask[]
   label: string
-  compare: string | null
+  baseline: EvalReport | undefined
   timeoutMs: number
   mcpOutputTokens: number
 }
 
 const run = async (options: RunOptions) => {
+  const runDir = path.join(RUNS_DIR, options.label)
+  const taken = [path.join(RESULTS_DIR, `${options.label}.json`), runDir].filter(existsSync)
+  if (taken.length > 0) {
+    fail(`label ${options.label} is already used by ${taken.map(file => path.relative(REPO_ROOT, file)).join(' and ')}; `
+      + 'pass another --label, or delete those to record over it')
+  }
   buildPackages()
   const {probe, client} = await connect(options.profile)
   const fixture = buildFixture()
@@ -168,14 +192,13 @@ const run = async (options: RunOptions) => {
       : 'the tab has no fixture — run `pnpm agent-eval seed` first')
   }
 
-  const runDir = path.join(RUNS_DIR, options.label)
   mkdirSync(path.join(runDir, 'transcripts'), {recursive: true})
   const mcpConfig = writeMcpConfig(runDir, options.profile)
   const scrubbed = BILLING_ENV_DENYLIST.filter(key => process.env[key])
   process.stdout.write(`billing: subscription login${scrubbed.length ? ` (scrubbed ${scrubbed.join(', ')})` : ''}\n`)
 
   const report: EvalReport = {
-    schemaVersion: 1,
+    schemaVersion: REPORT_SCHEMA_VERSION,
     label: options.label,
     startedAt: new Date().toISOString(),
     finishedAt: '',
@@ -189,14 +212,18 @@ const run = async (options: RunOptions) => {
     fixtureHash: fixture.hash,
     taskHashes: Object.fromEntries(options.tasks.map(task => [task.id, taskDefinitionHash(task, fixture.truth)])),
     outputSizes: null,
+    probeHashes: Object.fromEntries(OUTPUT_PROBES.map(probe => [probe.id, outputProbeHash(probe)])),
     runs: [],
   }
+  // Checked again on the resolved model once the runs have reported it.
+  const mismatches = options.baseline ? conditionMismatches(report, options.baseline) : []
+  if (mismatches.length > 0) fail(`this run cannot be compared with ${options.baseline!.label}: they differ in ${mismatches.join('; ')}`)
 
   // Clear what an interrupted earlier run left, then freeze the starting
   // state every task gets: each task's changes are undone against it.
   const journal = createRunJournal(path.join(REPO_ROOT, 'tmp/agent-eval/journal', probe.workspaceId))
   const recovered = await journal.recover(probe, fixture.hash)
-    .catch((error: unknown) => fail(`could not undo an interrupted run: ${error instanceof Error ? error.message : String(error)}`))
+    .catch((error: unknown) => fail(`could not undo an interrupted run: ${errorText(error)}`))
   if (recovered > 0) process.stdout.write(`undid ${recovered} change(s) an interrupted run left\n`)
   for (const task of TASKS) await task.reset?.({probe, truth: fixture.truth, runTag: ''})
   const snapshot = await snapshotWorkspace(probe)
@@ -222,6 +249,7 @@ const run = async (options: RunOptions) => {
         timeoutMs: options.timeoutMs,
         onStdoutText: text => { stdout += text },
       })
+      const elapsedMs = Date.now() - startedAt
       writeFileSync(transcriptPath, stdout)
       rmSync(cwd, {recursive: true, force: true})
 
@@ -229,14 +257,10 @@ const run = async (options: RunOptions) => {
       report.resolvedModel ??= metrics.model
       report.claudeCodeVersion ??= metrics.claudeCodeVersion
       const outcome = await task.check({...env, answer: extractAnswer(metrics.resultText), startedAt})
-        .catch((error: unknown) => ({pass: false, detail: `check threw: ${error instanceof Error ? error.message : String(error)}`}))
-      // Resolved before the undo, which removes what the task created.
-      const allowed = {
-        editIds: new Set((task.edits ?? []).map(uid => targetId(probe.workspaceId, uid))),
-        createRoots: new Set(await task.createsUnder?.(env) ?? []),
-      }
+        .catch((error: unknown) => ({pass: false, detail: `check threw: ${errorText(error)}`}))
+      const allowed = await allowedChanges(task, env)
       const changes = await restoreSnapshot(probe, snapshot)
-        .catch((error: unknown) => fail(`aborting the run: ${error instanceof Error ? error.message : String(error)}`))
+        .catch((error: unknown) => fail(`aborting the run: ${errorText(error)}`))
       journal.taskRestored()
       const strayEdits = strayChanges(changes, allowed)
       const failures = [
@@ -245,7 +269,7 @@ const run = async (options: RunOptions) => {
         strayEdits > 0 ? `changed ${strayEdits} block(s) it was not asked to` : null,
       ].filter((reason): reason is string => reason !== null)
 
-      const outputs = metrics.toolCalls.map(call => call.outputBytes ?? 0)
+      const seen = metrics.toolCalls.map(call => call.seenChars ?? 0)
       const record: TaskRunRecord = {
         task: task.id,
         kind: task.kind,
@@ -256,13 +280,13 @@ const run = async (options: RunOptions) => {
         toolCallsByName: metrics.toolCalls.reduce<Record<string, number>>((counts, call) =>
           ({...counts, [call.name]: (counts[call.name] ?? 0) + 1}), {}),
         toolErrors: metrics.toolCalls.filter(call => call.isError).length,
-        toolResultBytes: outputs.reduce((total, bytes) => total + bytes, 0),
-        maxToolResultBytes: Math.max(0, ...outputs),
+        seenChars: seen.reduce((total, chars) => total + chars, 0),
+        maxSeenChars: Math.max(0, ...seen),
         cappedCalls: metrics.toolCalls.filter(call => call.capped).length,
-        returnedBytes: metrics.toolCalls.reduce((total, call) => total + (call.returnedBytes ?? 0), 0),
+        returnedChars: metrics.toolCalls.reduce((total, call) => total + (call.returnedChars ?? 0), 0),
         apiCalls: metrics.apiCalls,
         tokens: metrics.tokens,
-        durationMs: metrics.durationMs,
+        elapsedMs,
         costUsd: metrics.costUsd,
         terminalReason: metrics.terminalReason,
         exitCode: proc.exitCode,
@@ -272,7 +296,7 @@ const run = async (options: RunOptions) => {
       }
       report.runs.push(record)
       process.stdout.write(`${record.pass ? 'pass' : 'FAIL'} · ${record.toolCalls} calls · `
-        + `${Math.round(record.toolResultBytes / 1024)} KB read · ${Math.round(record.tokens.contextTotal / 1000)}k context tokens\n`)
+        + `${Math.round(record.seenChars / 1000)}k chars read · ${Math.round(record.tokens.contextTotal / 1000)}k context tokens\n`)
       if (proc.exitCode !== 0 && proc.stderr.trim()) process.stdout.write(`    stderr: ${proc.stderr.trim().split('\n').slice(-3).join(' | ')}\n`)
     }
   }
@@ -280,7 +304,7 @@ const run = async (options: RunOptions) => {
   report.outputSizes = measureOutputSizes()
   journal.end()
   report.finishedAt = new Date().toISOString()
-  writeReport(report, options.compare)
+  writeReport(report, options.baseline)
 }
 
 /** A label names files in results/, so it must stay a plain file name. */
@@ -288,13 +312,8 @@ const requireSafeLabel = (label: string) => {
   if (!/^[\w][\w.-]*$/.test(label)) fail(`label ${JSON.stringify(label)} must be letters, digits, '.', '_' or '-' (it names a file in results/)`)
 }
 
-const writeReport = (report: EvalReport, compare: string | null) => {
+const writeReport = (report: EvalReport, baseline: EvalReport | undefined) => {
   requireSafeLabel(report.label)
-  const baseline = compare ? JSON.parse(readFileSync(compare, 'utf8')) as EvalReport : undefined
-  if (baseline && baseline.fixtureHash !== report.fixtureHash) {
-    fail(`${compare} was measured on fixture ${baseline.fixtureHash}, this report on ${report.fixtureHash}; `
-      + 'different graphs and truths make the deltas meaningless')
-  }
   mkdirSync(RESULTS_DIR, {recursive: true})
   const base = path.join(RESULTS_DIR, report.label)
   writeFileSync(`${base}.json`, `${JSON.stringify(report, null, 2)}\n`)
@@ -338,22 +357,22 @@ const main = async () => {
       const mcpOutputTokens = Number(values['mcp-output-tokens'])
       if (!Number.isInteger(mcpOutputTokens) || mcpOutputTokens < 1) fail(`--mcp-output-tokens must be a positive integer, got ${values['mcp-output-tokens']}`)
       if (values.label) requireSafeLabel(values.label)
-      const date = new Date().toISOString().slice(0, 10)
+      const now = new Date().toISOString()
       return run({
         profile: values.profile,
         model: values.model,
         effort: values.effort ?? null,
         repeat,
         tasks,
-        label: values.label ?? `${date}-${gitInfo().sha.slice(0, 7)}-${values.model}`,
-        compare: values.compare ?? null,
+        label: values.label ?? `${now.slice(0, 10)}T${now.slice(11, 16).replace(':', '')}-${gitInfo().sha.slice(0, 7)}-${values.model}`,
+        baseline: values.compare ? loadReport(values.compare) : undefined,
         timeoutMs: timeoutMin * 60_000,
         mcpOutputTokens,
       })
     }
     case 'report': {
       if (!rest[0]) fail('usage: pnpm agent-eval report <report.json> [--compare <report.json>]')
-      return writeReport(JSON.parse(readFileSync(rest[0], 'utf8')) as EvalReport, values.compare ?? null)
+      return writeReport(loadReport(rest[0]), values.compare ? loadReport(values.compare) : undefined)
     }
     case 'sizes':
       process.stdout.write(`${JSON.stringify(measureOutputSizes(), null, 2)}\n`)

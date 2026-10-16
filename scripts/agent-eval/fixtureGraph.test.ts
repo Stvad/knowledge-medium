@@ -3,13 +3,13 @@
  * The deterministic half of the agent-ergonomics eval, on the fixture
  * imported into a node test repo (no browser):
  *
- * - output budgets: byte size of representative km MCP tool outputs, called
+ * - output budgets: size in characters of representative km MCP tool outputs, called
  *   through the real MCP server. `AGENT_EVAL_SIZES_OUT=<path>` writes the
  *   measured sizes as JSON for the eval report and for re-baselining.
  * - task checks: each task's ground truth agrees with the imported graph,
- *   a correct solution passes its check (write tasks solve through the MCP
- *   tools, so the task is doable on the current surface), and a wrong one
- *   fails it.
+ *   a correct solution passes (write tasks solve through the MCP tools, so
+ *   the task is doable on the current surface), and a wrong one fails —
+ *   a write task on its check or on a change it was not asked to make.
  *
  * - isolation: the runner's snapshot restore undoes every kind of change.
  *
@@ -33,10 +33,19 @@ import {
   TARGET_UIDS,
 } from './fixture'
 import { childrenOf, dailyNoteId, descendantsOf, getBlock, type GraphProbe, pageIdByTitle, requirePageId, sqlAll } from './graphQueries'
-import { diffAgainst, restoreSnapshot, snapshotWorkspace, strayChanges, type WorkspaceSnapshot } from './isolation'
+import { diffAgainst, restoreSnapshot, snapshotWorkspace, strayChanges, waitForQuiet, type WorkspaceSnapshot } from './isolation'
 import { OUTPUT_PROBES, type ProbeContext } from './outputBudgets'
 import { createRunJournal } from './runJournal'
-import { type CheckInput, type CheckOutcome, targetId, TASKS, type TaskEnv, vendorReviewTitle } from './tasks'
+import {
+  allowedChanges,
+  type CheckInput,
+  type CheckOutcome,
+  type EvalTask,
+  targetId,
+  TASKS,
+  type TaskEnv,
+  vendorReviewTitle,
+} from './tasks'
 import { seedFixtureTestGraph, TEST_WORKSPACE_ID, type FixtureTestGraph } from './testGraph'
 
 let db: TestDb
@@ -53,7 +62,7 @@ beforeAll(async () => {
   db = await createTestDb()
   graph = await seedFixtureTestGraph(db.db)
   probe = {workspaceId: TEST_WORKSPACE_ID, command: graph.command}
-  fixtureSnapshot = await snapshotWorkspace(probe)
+  fixtureSnapshot = await snapshotWorkspace(probe, QUIET)
 }, 60_000)
 
 // One import is shared by every case, so each case's writes are undone
@@ -79,10 +88,10 @@ describe('output budgets', () => {
       pageId: title => requirePageId(probe, title),
       dailyNoteId: iso => dailyNoteId(probe, iso),
     }
-    const bytes = Buffer.byteLength(await outputProbe.run(context), 'utf8')
-    measured[outputProbe.id] = bytes
-    expect(bytes, `${outputProbe.id} (${outputProbe.standsFor}) returned ${bytes} bytes; budget ${outputProbe.maxBytes}`)
-      .toBeLessThanOrEqual(outputProbe.maxBytes)
+    const chars = (await outputProbe.run(context)).length
+    measured[outputProbe.id] = chars
+    expect(chars, `${outputProbe.id} (${outputProbe.standsFor}) returned ${chars} characters; budget ${outputProbe.maxChars}`)
+      .toBeLessThanOrEqual(outputProbe.maxChars)
   }, 20_000)
 })
 
@@ -234,9 +243,19 @@ const solveWrongly: Record<string, Array<(env: TaskEnv) => Promise<void>>> = {
       content: 'Eval check-in\nDone: drafted the sync rollout plan\nNext: review the Kestrel renewal\nBlockers: none',
     })
   }],
-  'edit-rollout-phrase': [async () => {
-    await graph.callTool('update_block', {id: fixtureId('rollout'), content: 'Target: Q4 2026.'})
-  }],
+  'edit-rollout-phrase': [
+    async () => {
+      await graph.callTool('update_block', {id: fixtureId('rollout'), content: 'Target: Q4 2026.'})
+    },
+    // The phrase right, but the block's properties touched too.
+    async () => {
+      await graph.callTool('update_block', {
+        id: fixtureId('rollout'),
+        content: ROLLOUT_BLOCK_TEXT.replace('Q3 2026', 'Q4 2026'),
+        properties: {'eval:note': 'edited'},
+      })
+    },
+  ],
   'create-linked-page': [async ({runTag}) => {
     const today = (JSON.parse(await graph.callTool('daily_note', {date: 'today'})) as {blockId: string}).blockId
     await graph.callTool('create_block', {parentId: today, content: `[[${vendorReviewTitle(runTag)}]]`})
@@ -250,12 +269,32 @@ const solveWrongly: Record<string, Array<(env: TaskEnv) => Promise<void>>> = {
     async () => {
       await graph.callTool('update_block', {id: fixtureId('pricingFaqTodo'), content: 'Draft FAQ', properties: {status: 'done'}})
     },
+    // Status right, plus a property nobody asked for.
+    async () => {
+      await graph.callTool('update_block', {id: fixtureId('pricingFaqTodo'), properties: {status: 'done', 'eval:note': 'done'}})
+    },
+    // Status right, but the todo moved off its section.
+    async () => {
+      await graph.callTool('update_block', {id: fixtureId('pricingFaqTodo'), properties: {status: 'done'}})
+      await graph.callTool('move_block', {id: fixtureId('pricingFaqTodo'), parentId: await requirePageId(probe, PROJECT_PAGE), position: {kind: 'last'}})
+    },
   ],
 }
 
-
-
 const expectOutcome = (outcome: CheckOutcome, pass: boolean) => expect(outcome.pass, outcome.detail).toBe(pass)
+
+/** One attempt at a write task, scored as the runner scores it: reset, then
+ *  the state every attempt starts from, then the check and the changes the
+ *  task was not asked to make. */
+const attempt = async (task: EvalTask, env: TaskEnv, solve: (env: TaskEnv) => Promise<void>): Promise<CheckOutcome> => {
+  await task.reset?.(env)
+  const before = await snapshotWorkspace(probe, QUIET)
+  const startedAt = Date.now()
+  await solve(env)
+  const outcome = await task.check({...env, answer: undefined, startedAt})
+  const stray = strayChanges(await diffAgainst(probe, before, QUIET), await allowedChanges(task, env))
+  return {pass: outcome.pass && stray === 0, detail: `${outcome.detail}; ${stray} stray change(s)`}
+}
 
 describe('task checks', () => {
   let derived: Record<string, unknown>
@@ -278,34 +317,30 @@ describe('task checks', () => {
     expectOutcome(await task.check(input(undefined)), false)
   })
 
-  // Wrong first, then reset restores the starting state, then the right
-  // solution — which also proves reset undoes a botched attempt.
+  // Wrong attempts first, each reset on top of the last, then the right
+  // solution — which also proves reset undoes what a botched attempt broke.
   it.each(writeTasks.map(task => [task.id, task] as const))('%s: wrong edits fail; reset then an MCP solution passes', async (_id, task) => {
     for (const [index, solveWrong] of solveWrongly[task.id].entries()) {
-      const wrongEnv: TaskEnv = {probe, truth, runTag: `w${index}`}
-      await task.reset?.(wrongEnv)
-      const wrongStart = Date.now()
-      await solveWrong(wrongEnv)
-      expectOutcome(await task.check({...wrongEnv, answer: undefined, startedAt: wrongStart}), false)
+      expectOutcome(await attempt(task, {probe, truth, runTag: `w${index}`}, solveWrong), false)
     }
-
-    const env: TaskEnv = {probe, truth, runTag: `r${task.id.length}`}
-    await task.reset?.(env)
-    const startedAt = Date.now()
-    await solveWithMcp[task.id](env)
-    expectOutcome(await task.check({...env, answer: undefined, startedAt}), true)
-    // The solution stays inside what the task declares it may change.
-    const allowed = {
-      editIds: new Set((task.edits ?? []).map(uid => targetId(TEST_WORKSPACE_ID, uid))),
-      createRoots: new Set(await task.createsUnder?.(env) ?? []),
-    }
-    expect(strayChanges(await diffAgainst(probe, fixtureSnapshot), allowed)).toBe(0)
-  }, 20_000)
+    expectOutcome(await attempt(task, {probe, truth, runTag: `r${task.id.length}`}, solveWithMcp[task.id]), true)
+  }, 30_000)
 })
+
+/** Snapshot rows whose recency stamps differ from the snapshot's; search and
+ *  recents order by them. */
+const stampsMovedSince = async (snapshot: WorkspaceSnapshot) =>
+  (await sqlAll<{id: string, updated_at: number, user_updated_at: number | null}>(probe,
+    'SELECT id, updated_at, user_updated_at FROM blocks WHERE workspace_id = ?', [TEST_WORKSPACE_ID]))
+    .filter(row => {
+      const before = snapshot.get(row.id)
+      return before !== undefined && (row.updated_at !== before.updated_at || row.user_updated_at !== before.user_updated_at)
+    })
+    .map(row => row.id)
 
 describe('isolation', () => {
   it('undoes every kind of change a task can make, and names the ones it was not asked for', async () => {
-    const snapshot = await snapshotWorkspace(probe)
+    const snapshot = await snapshotWorkspace(probe, QUIET)
     const design = await descendantsOf(probe, await requirePageId(probe, DESIGN_PAGE))
     const byText = (prefix: string) => design.find(row => row.content.startsWith(prefix))!
     const edited = byText('Devices stay offline')
@@ -330,11 +365,12 @@ describe('isolation', () => {
     expect(changes.modified.map(change => change.id).sort())
       .toEqual([edited.id, tagged.id, removed.id, moved.id, movedToo.id, rollout].sort())
     // The rollout edit is what edit-rollout-phrase is asked to make; the rest are stray.
-    expect(strayChanges(changes, {editIds: new Set([rollout]), createRoots: new Set()})).toBe(6)
-    expect(strayChanges(changes, {editIds: new Set([rollout]), createRoots: new Set([edited.id])})).toBe(5)
-    expect(strayChanges(changes, {editIds: new Set(), createRoots: new Set()})).toBe(7)
+    const rolloutContent = new Map([[rollout, {content: true} as const]])
+    expect(strayChanges(changes, {edits: rolloutContent, createRoots: new Set()})).toBe(6)
+    expect(strayChanges(changes, {edits: rolloutContent, createRoots: new Set([edited.id])})).toBe(5)
+    expect(strayChanges(changes, {edits: new Map(), createRoots: new Set()})).toBe(7)
 
-    expect(await diffAgainst(probe, snapshot)).toEqual({created: [], modified: []})
+    expect(await diffAgainst(probe, snapshot, QUIET)).toEqual({created: [], modified: []})
     const restored = new Map((await descendantsOf(probe, await requirePageId(probe, DESIGN_PAGE))).map(row => [row.id, row]))
     for (const block of [edited, tagged, removed, moved, movedToo]) {
       expect({content: restored.get(block.id)?.content, properties: JSON.parse(restored.get(block.id)?.properties_json ?? 'null'), parent: restored.get(block.id)?.parent_id})
@@ -343,20 +379,39 @@ describe('isolation', () => {
     expect((await childrenOf(probe, moved.parent_id!)).map(row => row.id))
       .toEqual(design.filter(row => row.parent_id === moved.parent_id)
         .sort((a, b) => a.order_key.localeCompare(b.order_key)).map(row => row.id))
-    // Restored rows keep their recency, which search and recents order by.
-    const timestamps = await sqlAll<{id: string, updated_at: number, user_updated_at: number | null}>(probe,
-      `SELECT id, updated_at, user_updated_at FROM blocks WHERE id IN (${changes.modified.map(() => '?').join(', ')})`,
-      changes.modified.map(change => change.id))
-    for (const row of timestamps) {
-      const before = snapshot.get(row.id)!
-      expect([row.updated_at, row.user_updated_at]).toEqual([before.updated_at, before.user_updated_at])
-    }
+    expect(await stampsMovedSince(snapshot)).toEqual([])
   }, 30_000)
+
+  it('waits out the writes its own undo starts, and puts back the stamps they move', async () => {
+    const snapshot = await snapshotWorkspace(probe, QUIET)
+    const rollout = fixtureId('rollout')
+    const bystander = fixtureId('vendorsSection')
+    await graph.callTool('update_block', {id: rollout, content: 'Target: Q4 2026.'})
+    // A post-commit processor the undo's write starts: it lands a moment
+    // later and rewrites a block the task never touched, changing only its
+    // recency stamp — as a re-derive that finds nothing to change does.
+    const lateProcessor: GraphProbe = {
+      ...probe,
+      command: async command => {
+        const result = await probe.command(command)
+        if (command.type === 'update-block' && command.id === rollout) {
+          setTimeout(() => {
+            void probe.command({type: 'sql', mode: 'execute', sql: 'UPDATE blocks SET updated_at = ? WHERE id = ?', params: [Date.now(), bystander], allowSyncedWrite: true})
+          }, 20)
+        }
+        return result
+      },
+    }
+
+    await restoreSnapshot(lateProcessor, snapshot, QUIET)
+    await waitForQuiet(probe, QUIET)
+    expect(await stampsMovedSince(snapshot)).toEqual([])
+  }, 20_000)
 })
 
 describe('isolation edge cases', () => {
   it('purges a page a link minted, which is born with updated_at = 0', async () => {
-    const snapshot = await snapshotWorkspace(probe)
+    const snapshot = await snapshotWorkspace(probe, QUIET)
     const host = fixtureId('vendorsSection')
     await graph.callTool('create_block', {parentId: host, content: '[[Minted Seat Probe]]'})
     await vi.waitFor(async () => { expect(await pageIdByTitle(probe, 'Minted Seat Probe')).not.toBeNull() }, {timeout: 5_000})
@@ -371,25 +426,25 @@ describe('isolation edge cases', () => {
     const tombstone = (await descendantsOf(probe, await requirePageId(probe, DESIGN_PAGE)))
       .find(row => row.content.startsWith('Older clients will keep'))!
     await graph.callTool('delete_block', {id: tombstone.id})
-    const snapshot = await snapshotWorkspace(probe)
+    const snapshot = await snapshotWorkspace(probe, QUIET)
     await graph.callTool('restore_block', {id: tombstone.id})
     await graph.callTool('update_block', {id: tombstone.id, content: 'revived and edited'})
 
     await restoreSnapshot(probe, snapshot, QUIET)
-    expect(await diffAgainst(probe, snapshot)).toEqual({created: [], modified: []})
+    expect(await diffAgainst(probe, snapshot, QUIET)).toEqual({created: [], modified: []})
     await graph.callTool('restore_block', {id: tombstone.id})
     expect((await getBlock(probe, tombstone.id))?.content).toBe(tombstone.content)
   }, 20_000)
 
   it('brings back a fixture block an agent moved under a block it created', async () => {
-    const snapshot = await snapshotWorkspace(probe)
+    const snapshot = await snapshotWorkspace(probe, QUIET)
     const rollout = fixtureId('rollout')
     const before = snapshot.get(rollout)!
     const parentId = resultIdOf(await graph.callTool('create_block', {parentId: before.parent_id, content: 'new container'}))
     await graph.callTool('move_block', {id: rollout, parentId, position: {kind: 'first'}})
 
     await restoreSnapshot(probe, snapshot, QUIET)
-    expect(await diffAgainst(probe, snapshot)).toEqual({created: [], modified: []})
+    expect(await diffAgainst(probe, snapshot, QUIET)).toEqual({created: [], modified: []})
     expect((await getBlock(probe, rollout))?.content).toBe(before.content)
   }, 20_000)
 })
@@ -398,7 +453,7 @@ describe('run journal', () => {
   it('undoes what a task left when its run was interrupted, on the next run', async () => {
     const dir = path.join(mkdtempSync(path.join(tmpdir(), 'agent-eval-journal-')), 'journal')
     const interrupted = createRunJournal(dir)
-    interrupted.begin(await snapshotWorkspace(probe), fixtureHash)
+    interrupted.begin(await snapshotWorkspace(probe, QUIET), fixtureHash)
     interrupted.taskStarted()
     const rollout = fixtureId('rollout')
     await graph.callTool('update_block', {id: rollout, content: 'left behind'})
@@ -411,7 +466,7 @@ describe('run journal', () => {
   it('recovers nothing after a task whose undo finished', async () => {
     const dir = path.join(mkdtempSync(path.join(tmpdir(), 'agent-eval-journal-')), 'journal')
     const clean = createRunJournal(dir)
-    clean.begin(await snapshotWorkspace(probe), fixtureHash)
+    clean.begin(await snapshotWorkspace(probe, QUIET), fixtureHash)
     clean.taskStarted()
     clean.taskRestored()
     expect(await createRunJournal(dir).recover(probe, fixtureHash, QUIET)).toBe(0)
