@@ -114,13 +114,16 @@ describe('Repo.syncDivergence — what it reports', () => {
     }])
   })
 
-  it('counts each kind, names its smallest id as the example, and groups by workspace', async () => {
+  it('counts each kind, names its smallest id as the example, and lists workspaces in id order', async () => {
     await strand(syncedRow({id: 'z'}), syncedRow({id: 'z', updatedAt: 901}))
     await strand(syncedRow({id: 'y'}), syncedRow({id: 'y', updatedAt: 901}))
     await strand(null, syncedRow({id: 'x'}))
     await strand(null, syncedRow({id: 'other', workspaceId: 'ws0'}))
+    await stage(syncedRow({id: 'flagged', workspaceId: 'ws-a'}))
+    await sharedDb.db.execute("DELETE FROM blocks_synced_changes WHERE id = 'flagged'")
 
     expect(await makeRepo().syncDivergence()).toEqual([
+      {workspaceId: 'ws-a', sealedColumnsCompared: true, unapplied: 1, stranded: {}},
       {workspaceId: 'ws0', sealedColumnsCompared: true, unapplied: 0,
         stranded: {missing: {count: 1, example: 'other'}}},
       {workspaceId: WS, sealedColumnsCompared: true, unapplied: 0, stranded: {
@@ -188,10 +191,10 @@ describe('Repo.syncDivergence — what it leaves alone', () => {
   it('a row with a local edit waiting to upload', async () => {
     await strand(base, differing)
     await queuePendingUpload('b1')
-    // A crud entry for another table that happens to carry no `id`: must not
-    // blank the whole answer (`NOT IN` over a NULL is never true).
+    // A blocks envelope with no `id` must not blank the whole answer: `NOT IN`
+    // over a set holding NULL is never true.
     await sharedDb.db.execute(
-      "INSERT INTO ps_crud (tx_id, data) VALUES (2, json_object('op','PUT','type','other'))")
+      "INSERT INTO ps_crud (tx_id, data) VALUES (2, json_object('op','PUT','type','blocks'))")
     const repo = makeRepo()
     expect(await repo.syncDivergence()).toEqual([])
 

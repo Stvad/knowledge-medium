@@ -498,8 +498,9 @@ export interface WorkspaceSyncDivergence {
  * construction; that is the point of asking without it. Excluded, because
  * something will still re-judge them: a queued row, a row with a local edit
  * waiting to upload (its echo re-delivers), and a tombstone nobody can see on
- * either side. A sealed column is compared only for workspaces in the bound
- * list, whose staged rows hold plaintext.
+ * either side. A missing `blocks` row needs no arm of its own: the join's NULLs
+ * never match a staged `workspace_id`. A sealed column is compared only for
+ * workspaces in the bound list, whose staged rows hold plaintext.
  *
  * A DIAGNOSTIC, never a gate. It is the outside approximation of the drain's
  * judgment that {@link WORKSPACE_UNAPPLIED_SQL} deliberately is not — it cannot
@@ -524,8 +525,7 @@ const SYNC_DIVERGENCE_SQL = `
      AND ${NOT_QUEUED}
      AND s.id NOT IN (${PENDING_UPLOAD_IDS_SQL})
      AND NOT (s.deleted = 1 AND COALESCE(b.deleted, 1) = 1)
-     AND (b.id IS NULL
-          OR NOT ${columnsMatchSql(CLEAR_COLUMNS, 'b', 's')}
+     AND (NOT ${columnsMatchSql(CLEAR_COLUMNS, 'b', 's')}
           OR (s.workspace_id IN (SELECT value FROM json_each(?))
               AND NOT ${columnsMatchSql(SEALED, 'b', 's')}))
    GROUP BY s.workspace_id, kind
