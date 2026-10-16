@@ -98,9 +98,9 @@ taken, so a fixture block is compared wherever it ends up. After each task, the 
    moved them, so recency ordering is unchanged.
 
 The run's snapshot is also journaled, beside the CLI's token store
-(`~/.config/knowledge-medium/agent-eval/`, one directory per paired tab, shared by every
-checkout on the machine). A run killed mid-task is undone by the next one, from any
-checkout, before it even reads which fixture the tab holds. What the resets themselves
+(`~/.config/knowledge-medium/agent-eval/`, one directory per tab, keyed by its user and
+workspace, so every checkout and every profile paired with it shares it). A run killed
+mid-task is undone by the next one, from any checkout, before it even reads which fixture the tab holds. What the resets themselves
 add (today's daily note, when it is missing) is recorded there too. It is removed when
 the run ends, or by the next run when this one stopped early, so runs on later days
 don't leave the graph a note longer each time. `seed` and `run` hold a lock per paired

@@ -1,17 +1,16 @@
 /**
  * The fixture as a graph stores it, in a form that does not depend on the
  * workspace. One line per block the export defines, found by the id the
- * importer derives from its Roam uid; one per page that holds such a block
- * without being found that way (a daily page, whose id the import derives
- * from its date); and one per block that is in neither but sits under
- * either (a hand-written todo, a leftover). Block ids inside a line are named
- * by uid, or otherwise by the content of the row they point at (a daily
- * page, a page a link minted). Position is a rank among siblings,
- * because a block the runner moved back keeps a new order key; pages have
- * none, as top-level order means nothing and differs per import. Equal lines
- * mean the same fixture state, whichever workspace holds it. A row that is
- * none of these, such as a page added by hand at the top level, is out of
- * reach: the eval tab is a dedicated one.
+ * importer derives from its Roam uid; one per block those sit under or link
+ * to that the import derives instead (a daily page, whose id comes from its
+ * date; a page a link minted); and one per block under any of these that is
+ * neither (a hand-written todo, a leftover). Block ids inside a line are named
+ * by uid, by the derived block's content, or otherwise '?'. Position is a rank
+ * among siblings, because a block the runner moved back keeps a new order
+ * key; pages have none, as top-level order means nothing and differs per
+ * import. Equal lines mean the same fixture state, whichever workspace holds
+ * it. The rest of the workspace is not compared: the app's own pages
+ * (onboarding, property definitions, import logs) differ per workspace.
  */
 import { roamBlockId } from '@/plugins/roam-import/blockIds'
 import type { RoamBlock, RoamPage } from '@/plugins/roam-import/types'
@@ -46,14 +45,12 @@ const rowsWhere = async <T>(probe: GraphProbe, column: 'id' | 'parent_id', value
 export const fixtureState = async (probe: GraphProbe, pages: readonly RoamPage[]): Promise<string[]> => {
   const uidById = new Map(uidsOf(pages).map(uid => [roamBlockId(probe.workspaceId, uid), uid]))
   const exported = await rowsWhere<StoredRow>(probe, 'id', [...uidById.keys()], STORED_COLUMNS)
-  const holderIds = [...new Set(exported.flatMap(row => (row.parent_id !== null && !uidById.has(row.parent_id) ? [row.parent_id] : [])))]
-  const holders = await rowsWhere<StoredRow>(probe, 'id', holderIds, STORED_COLUMNS)
-  const others = (await rowsWhere<StoredRow>(probe, 'parent_id', [...exported, ...holders].map(row => row.id), STORED_COLUMNS))
-    .filter(row => !uidById.has(row.id))
-  const rows = [...exported, ...holders, ...others]
-  const referenced = new Set(rows.flatMap(row =>
+  const pointedAt = new Set(exported.flatMap(row =>
     `${row.parent_id ?? ''} ${row.content} ${row.properties_json} ${row.references_json}`.match(BLOCK_ID) ?? []))
-  const derived = await rowsWhere<{id: string, content: string}>(probe, 'id', [...referenced].filter(id => !uidById.has(id)), 'id, content')
+  const derived = await rowsWhere<StoredRow>(probe, 'id', [...pointedAt].filter(id => !uidById.has(id)), STORED_COLUMNS)
+  const others = (await rowsWhere<StoredRow>(probe, 'parent_id', [...exported, ...derived].map(row => row.id), STORED_COLUMNS))
+    .filter(row => !uidById.has(row.id))
+  const rows = [...exported, ...derived, ...others]
   const names = new Map<string, string>([...uidById, ...derived.map(row => [row.id, `=${row.content}`] as const)])
   const named = (text: string) => text.replace(BLOCK_ID, id => names.get(id) ?? '?')
 
@@ -77,10 +74,10 @@ export const fixtureState = async (probe: GraphProbe, pages: readonly RoamPage[]
   ])).sort()
 }
 
-/** The uids on which two fixture states differ. */
-export const differingUids = (a: readonly string[], b: readonly string[]): string[] => {
+/** The blocks, by the names `fixtureState` gives them, on which two states differ. */
+export const differingBlocks = (a: readonly string[], b: readonly string[]): string[] => {
   const inA = new Set(a)
   const inB = new Set(b)
-  const uid = (line: string) => (JSON.parse(line) as [string])[0]
-  return [...new Set([...a.filter(line => !inB.has(line)), ...b.filter(line => !inA.has(line))].map(uid))]
+  const name = (line: string) => (JSON.parse(line) as [string])[0]
+  return [...new Set([...a.filter(line => !inB.has(line)), ...b.filter(line => !inA.has(line))].map(name))]
 }

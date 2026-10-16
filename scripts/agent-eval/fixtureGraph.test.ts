@@ -39,7 +39,7 @@ import {
 import { userStateRootBlockIds } from '@/data/derivedIds'
 import { childrenOf, dailyNoteId, descendantsOf, getBlock, type GraphProbe, pageIdByTitle, requirePageId, sqlAll } from './graphQueries'
 import { diffAgainst, restoreSnapshot, snapshotWorkspace, strayChanges, waitForQuiet, type WorkspaceSnapshot } from './isolation'
-import { differingUids, fixtureState } from './fixtureState'
+import { differingBlocks, fixtureState } from './fixtureState'
 import { OUTPUT_PROBES, type ProbeContext } from './outputBudgets'
 import { createRunJournal } from './runJournal'
 import { beginRun, openWorkspace } from './workspace'
@@ -483,21 +483,27 @@ describe('fixture state', () => {
     const before = await fixtureState(probe, pages)
     const halyard = await requirePageId(probe, 'Halyard Security')
     await graph.callTool('update_block', {id: halyard, properties: {'roam:Status': 'active'}})
-    expect(differingUids(before, await fixtureState(probe, pages))).toEqual(['vendor-halyard-security'])
+    expect(differingBlocks(before, await fixtureState(probe, pages))).toEqual(['vendor-halyard-security'])
   }, 20_000)
 
   it('sees a block added under a fixture page or daily note, which no exported row records', async () => {
     const before = await fixtureState(probe, pages)
     await graph.callTool('create_block', {parentId: await requirePageId(probe, PROJECT_PAGE), content: '{{[[TODO]]}} hand-written'})
     await graph.callTool('create_block', {parentId: await dailyNoteId(probe, '2026-06-03'), content: 'Blockers: staging database again'})
-    expect(differingUids(before, await fixtureState(probe, pages)))
+    expect(differingBlocks(before, await fixtureState(probe, pages)))
       .toEqual(expect.arrayContaining(['+{{[[TODO]]}} hand-written', '+Blockers: staging database again']))
   }, 20_000)
 
   it('sees a change to a daily page, whose id the import derives from its date rather than its uid', async () => {
     const before = await fixtureState(probe, pages)
     await graph.callTool('update_block', {id: await dailyNoteId(probe, '2026-06-04'), properties: {'eval:note': 'x'}})
-    expect(differingUids(before, await fixtureState(probe, pages))).toEqual(['=June 4th, 2026'])
+    expect(differingBlocks(before, await fixtureState(probe, pages))).toEqual(['=June 4th, 2026'])
+  }, 20_000)
+
+  it('sees a change to a page a link minted, which the export does not define', async () => {
+    const before = await fixtureState(probe, pages)
+    await graph.callTool('update_block', {id: await requirePageId(probe, 'Vendor'), properties: {'eval:note': 'x'}})
+    expect(differingBlocks(before, await fixtureState(probe, pages))).toEqual(['=Vendor'])
   }, 20_000)
 
   it('ignores where a page sits at the top level, which differs from one import to the next', async () => {

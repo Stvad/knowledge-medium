@@ -27,7 +27,7 @@ import { buildFixture, type Fixture } from './fixture'
 import { dailyNoteId, type GraphProbe, requirePageId } from './graphQueries'
 import { restoreSnapshot, strayChanges } from './isolation'
 import { connectMcpClient } from './mcpClient'
-import { differingUids, fixtureState } from './fixtureState'
+import { differingBlocks, fixtureState } from './fixtureState'
 import { measureProbes, OUTPUT_PROBES, outputProbeHash } from './outputBudgets'
 import { createRunJournal } from './runJournal'
 import {
@@ -76,9 +76,15 @@ const tokenOf = async (profile: string): Promise<string> =>
  *  changes when it is re-paired, and only then. */
 const pairingOf = (token: string): string => createHash('sha256').update(token).digest('hex').slice(0, 16)
 
+/** Keys the lock and the journal: a tab's audience (its user and workspace)
+ *  is the same for every profile paired with it. Two tabs logged in under one
+ *  name share an audience, and so a lock and a journal. */
+const tabOf = (audience: {userId: string | null, workspaceId: string | null}): string =>
+  createHash('sha256').update(`${audience.userId}\0${audience.workspaceId}`).digest('hex').slice(0, 16)
+
 /** The runner's own client keeps the token it started with, so its checks and
  *  restores reach that tab even if the profile is re-paired meanwhile. */
-const connect = async (profile: string): Promise<{probe: GraphProbe, client: BridgeClient, pairing: string}> => {
+const connect = async (profile: string): Promise<{probe: GraphProbe, client: BridgeClient, pairing: string, tab: string}> => {
   const token = await tokenOf(profile)
   const client = createBridgeClient({profile, token, timeoutMs: 120_000})
   const who = await client.whoami().catch((error: unknown) =>
@@ -90,6 +96,7 @@ const connect = async (profile: string): Promise<{probe: GraphProbe, client: Bri
   return {
     client,
     pairing: pairingOf(token),
+    tab: tabOf(who.audience),
     probe: {workspaceId: who.audience.workspaceId!, command: command => client.runCommand(command)},
   }
 }
@@ -113,9 +120,9 @@ return {signedIn: Object.keys(localStorage).some(key => /^sb-.+-auth-token$/.tes
 }
 
 /** `seed` and `run` both write the graph: one at a time per workspace. */
-const lockWorkspace = (pairing: string): (() => void) => {
+const lockWorkspace = (tab: string): (() => void) => {
   try {
-    return acquireWorkspaceLock(path.join(EVAL_STATE_DIR, pairing, 'run.lock'))
+    return acquireWorkspaceLock(path.join(EVAL_STATE_DIR, tab, 'run.lock'))
   } catch (error) {
     return fail(errorText(error))
   }
@@ -123,9 +130,9 @@ const lockWorkspace = (pairing: string): (() => void) => {
 
 /** Locks the workspace, then undoes what an earlier run left before the
  *  fixture marker is read (see `openWorkspace`). */
-const prepareWorkspace = async (probe: GraphProbe, pairing: string) => {
-  const release = lockWorkspace(pairing)
-  const journal = createRunJournal(path.join(EVAL_STATE_DIR, pairing, 'journal'))
+const prepareWorkspace = async (probe: GraphProbe, tab: string) => {
+  const release = lockWorkspace(tab)
+  const journal = createRunJournal(path.join(EVAL_STATE_DIR, tab, 'journal'))
   const {recovered, seeded} = await openWorkspace(probe, journal)
     .catch((error: unknown) => fail(`could not undo what an earlier run left: ${errorText(error)}`))
   if (recovered > 0) process.stdout.write(`undid ${recovered} change(s) an earlier run left\n`)
@@ -133,9 +140,9 @@ const prepareWorkspace = async (probe: GraphProbe, pairing: string) => {
 }
 
 const seed = async (profile: string) => {
-  const {client, probe, pairing} = await connect(profile)
+  const {client, probe, tab} = await connect(profile)
   const fixture = buildFixture()
-  const {release, seeded: existing} = await prepareWorkspace(probe, pairing)
+  const {release, seeded: existing} = await prepareWorkspace(probe, tab)
   if (existing && existing !== fixture.hash) {
     fail(`this workspace holds fixture ${existing}, not ${fixture.hash}. Re-importing a different fixture leaves the old `
       + 'blocks behind; seed a fresh local-only dev origin instead (README: "Resetting").')
@@ -170,7 +177,12 @@ const buildPackages = () => {
  *  edit, a compile, a revert). A change while a task runs would hand it other
  *  code under this report's one git identity. */
 const codeDigest = (): string => {
-  const git = (...args: string[]) => spawnSync('git', args, {cwd: REPO_ROOT}).stdout
+  // A listing cut off at the output buffer would hash only its start.
+  const git = (...args: string[]): Buffer => {
+    const result = spawnSync('git', args, {cwd: REPO_ROOT, maxBuffer: 2 ** 31})
+    if (result.error || result.status !== 0) fail(`git ${args[0]} failed while fingerprinting the checkout: ${result.error?.message ?? result.stderr.toString().trim()}`)
+    return result.stdout
+  }
   const hash = createHash('sha256').update(git('rev-parse', 'HEAD')).update(git('diff', 'HEAD', '--binary'))
   const untracked = git('ls-files', '--others', '--exclude-standard', '-z').toString('utf8').split('\0').filter(Boolean)
   for (const file of untracked.sort()) hash.update(file).update(readFileSync(path.join(REPO_ROOT, file)))
@@ -211,9 +223,9 @@ const importedFixture = (): ImportedFixture | null => {
 const requireImportedGraph = async (client: BridgeClient, probe: GraphProbe, fixture: Fixture): Promise<{outputs: Record<string, number>, state: string}> => {
   const expected = importedFixture()
     ?? fail('the in-process import to check the tab against failed; see pnpm vitest run scripts/agent-eval/fixtureGraph.test.ts -t "imported fixture"')
-  const differing = differingUids(expected.state, await fixtureState(probe, fixture.pages))
+  const differing = differingBlocks(expected.state, await fixtureState(probe, fixture.pages))
   if (differing.length > 0) {
-    fail(`the tab's fixture is not the one this checkout imports (${differing.length} block(s) differ, e.g. uid ${differing.slice(0, 5).join(', ')}); `
+    fail(`the tab's fixture is not the one this checkout imports (${differing.length} block(s) differ, e.g. ${differing.slice(0, 5).join(', ')}); `
       + 'it was seeded by other code, or holds changes an earlier run left. Seed a fresh origin (README: "Resetting the dev origin").')
   }
   const mcp = await connectMcpClient(client)
@@ -282,9 +294,9 @@ const run = async (options: RunOptions) => {
   })
   buildPackages()
   const code = codeDigest()
-  const {probe, client, pairing} = await connect(options.profile)
+  const {probe, client, pairing, tab} = await connect(options.profile)
   const fixture = buildFixture()
-  const {release, journal, seeded} = await prepareWorkspace(probe, pairing)
+  const {release, journal, seeded} = await prepareWorkspace(probe, tab)
   // Checked before each task and as soon as its agent exits, before the
   // check or the restore writes anything: the tab must still be local-only,
   // and the profile still paired with it, or the agent's MCP server (which
