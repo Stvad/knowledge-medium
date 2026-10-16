@@ -1,0 +1,1 @@
+import{Fk as e,Pk as t}from"../../../chunks/app-DyNmS77d.js";export{t as BLOCK_TITLE_TEXT_CLASS,e as useBlockTitleTextClass};

@@ -1,0 +1,1 @@
+import{dT as e,fT as t}from"../../chunks/app-DyNmS77d.js";export{e as dispatchPointerAction,t as setPointerActionDispatcher};

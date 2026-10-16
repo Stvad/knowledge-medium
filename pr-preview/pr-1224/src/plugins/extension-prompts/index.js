@@ -1,0 +1,1 @@
+import{Ew as e,Tw as t}from"../../../chunks/app-DyNmS77d.js";export{t as ExtensionPromptSurface,e as extensionPromptsExtension};

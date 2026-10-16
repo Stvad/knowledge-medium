@@ -1,0 +1,1 @@
+import{KA as e,qA as t}from"../../../chunks/app-DyNmS77d.js";export{e as declarationOnlyDefinitionForName,t as declarationOnlyStatusText};

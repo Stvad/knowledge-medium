@@ -1,0 +1,1 @@
+import{$Q as e,QQ as t,XQ as n,ZQ as r,e$ as i,t$ as a}from"../../chunks/app-DyNmS77d.js";export{n as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,r as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,t as __resetLayoutSessionIdForTesting,e as getLayoutSessionId,i as isInstalledAppDisplayMode,a as readOrCreateLayoutSessionId};
