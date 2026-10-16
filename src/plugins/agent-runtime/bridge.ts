@@ -1,6 +1,6 @@
 import type { AppEffectCleanup } from '@/extensions/core.js'
 import { openDialog } from '@/utils/dialogs.js'
-import { agentTokenStore, agentTokensChangedEvent } from './tokens.ts'
+import { agentTokenStore, agentTokensChangedEvent, isAgentTokensStorageKey } from './tokens.ts'
 // Pairing via the hash URL surfaces the tokens dialog. We open it
 // imperatively rather than over a CustomEvent (audit B3). This pulls a
 // UI component into the transport module, but it's bundle-safe: nothing
@@ -18,6 +18,7 @@ import { knownAgentCommandSchema, type KnownAgentCommand } from '@knowledge-medi
 const defaultBridgeUrl = 'http://127.0.0.1:8787'
 const bridgeUrlStorageKey = 'agent-runtime:bridge-url'
 const bridgeSecretStorageKey = 'agent-runtime:bridge-secret'
+const focusedAtStorageKey = 'agent-runtime:focused-at'
 const longPollMs = 25_000
 const retryBaseMs = 1_000
 const retryMaxMs = 30_000
@@ -181,6 +182,28 @@ const readTrustedStoredBridgeUrl = (): string | null => {
   return null
 }
 
+/** When this tab last had the user's attention. Every tab of the user holds
+ *  every token, and the bridge sends a call that names no workspace to the
+ *  most recently focused one. In sessionStorage so it is per tab yet survives
+ *  the reloads `kmagent reload` drives. Best effort: storage that throws
+ *  costs the stamp, never the registration. */
+const readFocusedAt = (): number | null => {
+  try {
+    const stored = Number(window.sessionStorage.getItem(focusedAtStorageKey))
+    return Number.isFinite(stored) && stored > 0 ? stored : null
+  } catch {
+    return null
+  }
+}
+
+const stampFocusedAt = () => {
+  try {
+    window.sessionStorage.setItem(focusedAtStorageKey, String(Date.now()))
+  } catch {
+    // See readFocusedAt.
+  }
+}
+
 const getStoredBridgeSecret = () =>
   window.localStorage.getItem(bridgeSecretStorageKey)?.trim()
   || import.meta.env.VITE_AGENT_RUNTIME_BRIDGE_SECRET?.trim()
@@ -240,6 +263,7 @@ export const startAgentRuntimeBridge = (
   // Gated by user confirmation + a loopback check; nothing is persisted
   // or used here directly.
   processBridgePairingFromHash()
+  if (document.hasFocus()) stampFocusedAt()
   let retryMs = retryBaseMs
   let attempts = 0
   let wakeResolve: (() => void) | null = null
@@ -271,17 +295,31 @@ export const startAgentRuntimeBridge = (
     }
   }
 
+  // One registration at a time, each reading the token list at its own turn:
+  // the server replaces a tab's grants with every registration it receives,
+  // so two in flight could land stale-last and re-list a revoked token.
+  let registrationTail: Promise<unknown> | null = null
   const register = (baseUrl = bridgeUrl()) => {
+    const send = () => postRegistration(baseUrl)
+    const turn = registrationTail ? registrationTail.then(send, send) : send()
+    registrationTail = turn
+    const release = () => { if (registrationTail === turn) registrationTail = null }
+    turn.then(release, release)
+    return turn
+  }
+
+  const postRegistration = (baseUrl: string) => {
     const {repo, safeMode} = options
     const userId = repo.user.id
     const workspaceId = repo.activeWorkspaceId
-    const tokens = userId && workspaceId
-      ? agentTokenStore.list(userId, workspaceId).map(t => ({
+    // Every token of the signed-in user, whichever workspace is open: the
+    // workspace a call acts on is the call's parameter, not the token's.
+    const tokens = userId
+      ? agentTokenStore.list(userId).map(t => ({
           token: t.token,
           label: t.label,
           scope: t.scope ?? 'read-write',
           userId,
-          workspaceId,
         }))
       : []
 
@@ -294,6 +332,7 @@ export const startAgentRuntimeBridge = (
       href: window.location.href,
       userAgent: window.navigator.userAgent,
       audience: { userId, workspaceId },
+      focusedAt: readFocusedAt(),
       tokens,
     }, abortController.signal)
   }
@@ -321,8 +360,23 @@ export const startAgentRuntimeBridge = (
     register().catch(() => { /* loop will retry */ })
   }
 
+  // Every tab of the user registers every token, so a revoke made in another
+  // tab must reach this one now, not at its next loop turn. A null key is a
+  // storage clear.
+  const handleStorageChanged = (event: StorageEvent) => {
+    if (event.key === null || isAgentTokensStorageKey(event.key)) handleTokensChanged()
+  }
+
+  // Re-registers at once rather than at the next loop turn, so a call made
+  // right after the user switches tabs already goes to the one in front.
+  const handleFocused = () => {
+    stampFocusedAt()
+    wakeBridgeLoop()
+    register().catch(() => { /* loop will retry */ })
+  }
+
   const handleVisibilityChanged = () => {
-    if (document.visibilityState === 'visible') wakeBridgeLoop()
+    if (document.visibilityState === 'visible') handleFocused()
   }
 
   const handleWakeEvent = () => {
@@ -351,7 +405,8 @@ export const startAgentRuntimeBridge = (
 
   window.addEventListener(agentRuntimeBridgeRestartEvent, handleRestart)
   window.addEventListener(agentTokensChangedEvent, handleTokensChanged)
-  window.addEventListener('focus', handleWakeEvent)
+  window.addEventListener('storage', handleStorageChanged)
+  window.addEventListener('focus', handleFocused)
   window.addEventListener('hashchange', handleHashChanged)
   window.addEventListener('online', handleWakeEvent)
   document.addEventListener('visibilitychange', handleVisibilityChanged)
@@ -499,7 +554,8 @@ export const startAgentRuntimeBridge = (
     offEditResumed()
     window.removeEventListener(agentRuntimeBridgeRestartEvent, handleRestart)
     window.removeEventListener(agentTokensChangedEvent, handleTokensChanged)
-    window.removeEventListener('focus', handleWakeEvent)
+    window.removeEventListener('storage', handleStorageChanged)
+    window.removeEventListener('focus', handleFocused)
     window.removeEventListener('hashchange', handleHashChanged)
     window.removeEventListener('online', handleWakeEvent)
     document.removeEventListener('visibilitychange', handleVisibilityChanged)

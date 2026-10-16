@@ -23,18 +23,43 @@ import {z} from 'zod'
  *  across versions (an older bridge may still be running). */
 export const UNKNOWN_TOKEN_MARKER = 'Agent token is not registered with the local bridge.'
 
-/** What the bridge returns for a token it has no client for. Lives here, not
- *  in the server, because the CLI appends the half only IT can know — which
- *  profiles are actually paired on this machine. */
-export const unknownTokenMessage = [
-  UNKNOWN_TOKEN_MARKER,
-  'Open or focus the app tab for the same workspace, then retry; if needed, run `kmagent connect` to pair a fresh token.',
-  'Common causes: the bridge restarted, the app tab disconnected or idled out, the token was revoked, or the CLI is using a token/profile from another workspace or browser profile.',
-].join(' ')
+/** What the bridge can see when no connected tab lists a token. Names no
+ *  user: the 401 it feeds needs no bridge secret, unlike /health's client
+ *  listing. */
+export interface UnknownTokenFacts {
+  connectedTabs: number
+  /** Where the user whose tab last listed this token stands: no tab has
+   *  listed it since the bridge started, or a connected tab is / no connected
+   *  tab is signed in as that user. */
+  tokenUser: 'unseen' | 'connected' | 'not-connected'
+}
+
+/** What the bridge returns for a token no connected tab lists. States what
+ *  the bridge can see rather than guessing at a cause. Built here, not in the
+ *  server, because the CLI appends the half only IT can know — which profiles
+ *  are actually paired on this machine. */
+export const unknownTokenMessage = ({connectedTabs, tokenUser}: UnknownTokenFacts): string => {
+  if (connectedTabs === 0) {
+    return `${UNKNOWN_TOKEN_MARKER} No app tab is connected to it: open the app in the browser profile and at the app address this token was minted in.`
+  }
+  const tabs = `${connectedTabs} app ${connectedTabs === 1 ? 'tab is' : 'tabs are'} connected.`
+  const user = {
+    unseen: 'No tab has listed this token since the bridge started.',
+    connected: "A connected tab is signed in as this token's user but does not list it. A tab lists the "
+      + 'tokens stored in its own browser profile at its own app address, minus revoked ones; a tab '
+      + "running an app version older than this bridge lists only its open workspace's (reload it).",
+    'not-connected': "No connected tab is signed in as this token's user.",
+  }[tokenUser]
+  return `${UNKNOWN_TOKEN_MARKER} ${tabs} ${user}`
+}
 
 export const tokenScopeSchema = z.enum(['read-write', 'read-only'])
 export type TokenScope = z.infer<typeof tokenScopeSchema>
 
+/** Who a tab is signed in as and which workspace it has open. On a token
+ *  (`TokenAudience`), `workspaceId` is the open workspace of the tab a call
+ *  naming no workspace goes to — the default, not a limit: a token reaches
+ *  every workspace of its user. */
 export const audienceSchema = z.object({
   userId: z.string().nullable(),
   workspaceId: z.string().nullable(),
@@ -59,6 +84,15 @@ export const commandPayloadSchema = z.looseObject({
   type: z.string(),
 })
 export type CommandPayload = z.infer<typeof commandPayloadSchema>
+
+/** The workspace a command names — its `workspaceId`, or a root create-block's
+ *  `data.workspaceId` — which the bridge routes it to a tab for, and which a
+ *  pinned client leaves alone. */
+export const namedWorkspaceId = (payload: object): string | null => {
+  const named = (value: unknown) => typeof value === 'string' && value.trim() !== '' ? value.trim() : null
+  const {workspaceId, data} = payload as {workspaceId?: unknown, data?: {workspaceId?: unknown} | null}
+  return named(workspaceId) ?? named(data?.workspaceId)
+}
 
 // ---------- Known command discriminated union ----------
 //
@@ -841,7 +875,6 @@ export const registerTokenSpecSchema = z
   .looseObject({
     token: z.string().min(1),
     userId: z.string().optional(),
-    workspaceId: z.string().optional(),
     label: z.string().optional(),
     scope: z.string().optional(),
   })
@@ -858,5 +891,8 @@ export const registerClientMetadataSchema = z.looseObject({
       workspaceId: z.string().optional(),
     })
     .optional(),
+  /** When the tab last had focus (ms); a call naming no workspace goes to
+   *  the user's most recently focused tab. Null when it never has. */
+  focusedAt: z.number().nullable().optional(),
 })
 export type RegisterClientMetadata = z.infer<typeof registerClientMetadataSchema>

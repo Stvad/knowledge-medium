@@ -160,6 +160,7 @@ That puts `km-agent-dispatch` and `kmagent` on your PATH. Then:
    ```jsonc
    {
      "profile": "agent-dispatch",
+     "workspaceId": "YOUR_WORKSPACE_ID", // required: the workspace the daemon acts on
      "pollIntervalMs": 5000,
      "maxConcurrent": 2,
      "watchers": [
@@ -210,7 +211,11 @@ That puts `km-agent-dispatch` and `kmagent` on your PATH. Then:
 
    The `claude` page must exist (type `[[claude]]` once and click it).
 
-   **Always scope query watchers to a `workspace_id`** — the local `blocks` table holds *every* synced workspace, so an unscoped query fires runs (and their `update_block` writes) against workspaces you aren't working in. Get yours from `kmagent runtime-summary`. Backlink watchers don't need this (a page alias resolves within the active workspace).
+   **`workspaceId` is required.** It is the workspace the daemon acts on. List yours with `pnpm agent --profile agent-dispatch sql all "SELECT id, name FROM workspaces"`.
+   - Every graph call the daemon and its runs make names this workspace. Backlink watchers resolve their page alias in it, whatever workspace the app tab has open.
+   - Its writes (claims, replies) only run while an app tab has this workspace open. While none does, it claims nothing and starts no runs.
+
+   **Also scope query watchers' SQL to the same `workspace_id`.** The local `blocks` table holds *every* synced workspace, and a query watcher's SQL runs as written, so an unscoped query fires runs against workspaces you aren't working in.
 
    Set `"disabled": true` on any watcher to keep it parked in the config without registering it, blocking its target wikilinks, affecting billing posture, or processing tasks. Disabled watchers still have to be valid watcher objects, so broken parked config is caught at startup instead of drifting silently. They also still reserve their `name`, because cursors and baselines are keyed by watcher name. If every configured watcher is disabled, the daemon clears its existing push registration and stops.
 

@@ -19,6 +19,7 @@ export const buildMcpServerDef = (config: DaemonConfig) => {
     args: [mcpServerScript],
     env: {
       AGENT_RUNTIME_PROFILE: config.profile,
+      AGENT_RUNTIME_WORKSPACE: config.workspaceId,
       ...(blockedTargets.length > 0 ? {[BLOCKED_WIKILINKS_ENV]: encodeBlockedWikilinks(blockedTargets)} : {}),
     },
   }

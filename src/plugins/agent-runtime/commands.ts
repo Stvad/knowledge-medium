@@ -21,6 +21,7 @@ import { searchBlocksAcrossSources } from '@/utils/linkTargetAutocomplete.js'
 import { formatRoamDate } from '@/utils/dailyPage.js'
 import { dailyNoteBlockId } from '@/plugins/daily-notes/dailyNotes.js'
 import { assertCanonicalBlockId } from '@/data/blockId.js'
+import { getLocalWorkspace } from '@/data/workspaces.js'
 import { DATA_MODEL_GUIDE } from './dataModelGuide.ts'
 import { runHealthCommand } from './healthCommand.ts'
 import { watchEventsRegistry } from './watchEvents.ts'
@@ -893,9 +894,13 @@ const assertActiveWorkspace = (repo: Repo, verb: string, workspaceId: string): v
   if (workspaceId === repo.activeWorkspaceId) return
   throw new Error(
     `${verb}: target is in workspace ${workspaceId}, which is not the active one `
-    + `(${repo.activeWorkspaceId ?? 'none'}). Mutating verbs write through the active `
-    + "workspace's property and alias registries, which resolve nothing for another "
-    + 'workspace — open that workspace and re-run.',
+    + `(${repo.activeWorkspaceId ?? 'none'}) in the app tab serving this call. `
+    + 'This is not a permission check — the token reaches every workspace of its user, '
+    + "and reads can name any of them — but writes resolve through the open workspace's "
+    + 'property and alias registries, which resolve nothing for another workspace. '
+    + 'Switch the app tab to that workspace and re-run. If another tab already has it open, '
+    + `a call carrying workspaceId ${workspaceId}, or made with AGENT_RUNTIME_WORKSPACE=${workspaceId} `
+    + 'set, is routed to that tab.',
   )
 }
 
@@ -1871,9 +1876,14 @@ const resolveBlockWorkspaceId = async (
   blockId: string,
   override: unknown,
 ): Promise<string> => {
-  const asserted = assertedWorkspaceOverride(override)
-  if (asserted) return asserted
+  const asserted = await readableWorkspaceOverride(repo, override)
   const data = await repo.load(blockId)
+  if (asserted) {
+    if (data && data.workspaceId !== asserted) {
+      throw new Error(`Block ${blockId} is in workspace ${data.workspaceId}, not ${asserted}.`)
+    }
+    return asserted
+  }
   if (data?.workspaceId) return data.workspaceId
   if (repo.activeWorkspaceId) return repo.activeWorkspaceId
   throw new Error(`Cannot resolve a workspace for block ${blockId}; pass workspaceId`)
@@ -2027,8 +2037,39 @@ const assertedWorkspaceOverride = (override: unknown): string | undefined => {
   return asserted
 }
 
-const commandWorkspaceId = (repo: Repo, override: unknown): string => {
+/** Refuses a named workspace this tab has nothing to read from, instead of
+ *  answering "nothing found" for it (#606). Asks whether its blocks ARE here,
+ *  not whether new synced rows would apply: those differ when a key-store
+ *  read fails or another tab holds a session-only plaintext confirmation.
+ *  A never-opened empty workspace is refused too, and accepted: opening it
+ *  writes its daily note and system pages, so the refusal's advice clears it. */
+const assertReadableWorkspace = async (repo: Repo, workspaceId: string): Promise<void> => {
+  if (!await getLocalWorkspace(repo, workspaceId)) {
+    throw new Error(
+      `Workspace ${workspaceId} is not known on this device: the local workspaces table has `
+      + 'no row for it (`SELECT id, name FROM workspaces` lists the ones it has).',
+    )
+  }
+  const anyBlock = await repo.db.getOptional('SELECT 1 FROM blocks WHERE workspace_id = ? LIMIT 1', [workspaceId])
+  if (!anyBlock) {
+    throw new Error(
+      `Workspace ${workspaceId} has no blocks in this device's local database (one never opened `
+      + 'here has none, nor does an end-to-end encrypted one whose key was not entered here). '
+      + 'Open it in the app, entering its key if asked, then retry.',
+    )
+  }
+}
+
+/** A `workspaceId` override, once it names a workspace readable here; undefined
+ *  when none was given. */
+const readableWorkspaceOverride = async (repo: Repo, override: unknown): Promise<string | undefined> => {
   const asserted = assertedWorkspaceOverride(override)
+  if (asserted) await assertReadableWorkspace(repo, asserted)
+  return asserted
+}
+
+const commandWorkspaceId = async (repo: Repo, override: unknown): Promise<string> => {
+  const asserted = await readableWorkspaceOverride(repo, override)
   if (asserted) return asserted
   if (repo.activeWorkspaceId) return repo.activeWorkspaceId
   throw new Error('No active workspace; pass workspaceId')
@@ -2046,7 +2087,7 @@ const runPageCommand = async (
   command: KnownAgentCommand,
 ): Promise<PageCommandResult> => {
   const name = requireString(command.name, 'name')
-  const workspaceId = commandWorkspaceId(repo, command.workspaceId)
+  const workspaceId = await commandWorkspaceId(repo, command.workspaceId)
   const limit = typeof command.limit === 'number' ? command.limit : 20
 
   const exact = await repo.query.aliasLookup({workspaceId, alias: name}).load() as BlockData | null
@@ -2081,7 +2122,7 @@ const runDailyNoteCommand = async (
   command: KnownAgentCommand,
 ): Promise<DailyNoteCommandResult> => {
   const input = requireString(command.date, 'date')
-  const workspaceId = commandWorkspaceId(repo, command.workspaceId)
+  const workspaceId = await commandWorkspaceId(repo, command.workspaceId)
   const parsed = parseRelativeDate(input)
   if (!parsed) {
     throw new Error(
@@ -2118,7 +2159,7 @@ const runSearchCommand = async (
   command: KnownAgentCommand,
 ): Promise<SearchCommandResult> => {
   const query = requireString(command.query, 'query')
-  const workspaceId = commandWorkspaceId(repo, command.workspaceId)
+  const workspaceId = await commandWorkspaceId(repo, command.workspaceId)
   const limit = typeof command.limit === 'number' ? command.limit : 50
 
   // Shared merge point (searchSourcesFacet), not a direct
