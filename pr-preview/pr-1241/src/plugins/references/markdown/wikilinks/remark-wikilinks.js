@@ -1,1 +1,1 @@
-import{Lf as e}from"../../../../../chunks/app-DH3mfezx.js";export{e as remarkWikilinks};
+import{If as e}from"../../../../../chunks/app-D67WovTT.js";export{e as remarkWikilinks};

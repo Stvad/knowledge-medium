@@ -1,1 +1,1 @@
-import{nv as e,rv as t}from"../../../chunks/app-DH3mfezx.js";export{e as ENTER_BLOCK_EDIT_MODE_ACTION_ID,t as enterBlockEditModeOnClickAction};
+import{nv as e,tv as t}from"../../../chunks/app-D67WovTT.js";export{t as ENTER_BLOCK_EDIT_MODE_ACTION_ID,e as enterBlockEditModeOnClickAction};
