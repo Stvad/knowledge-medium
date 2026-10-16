@@ -172,6 +172,11 @@ describe('conditionMismatches', () => {
     expect(conditionMismatches(reportOf('after', [], {}, {model: null}), reportOf('before', [], {}, {model: null})))
       .toEqual(['model unknown → unknown'])
   })
+
+  it('refuses such a baseline before the run, when its own model is not resolved yet either', () => {
+    expect(conditionMismatches(reportOf('after', [], {}, {model: null}), reportOf('before', [], {}, {model: null}), {planned: true}))
+      .toEqual(['model unknown → unknown'])
+  })
 })
 
 describe('the checked-in baseline', () => {

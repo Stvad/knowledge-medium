@@ -108,11 +108,12 @@ const CONDITION_NAMES: Record<keyof RunConditions, true> = {
 export const RUN_CONDITIONS = Object.keys(CONDITION_NAMES) as Array<keyof RunConditions>
 
 /** The run conditions on which the two reports differ; an unknown value
- *  matches nothing. `planned` leaves out what a run has not resolved yet. */
+ *  matches nothing. `planned` leaves out what a run has not resolved yet,
+ *  unless the baseline never resolved it either: nothing could match then. */
 export const conditionMismatches = (report: EvalReport, baseline: EvalReport, {planned = false} = {}): string[] =>
   RUN_CONDITIONS.flatMap(name => {
     const [was, now] = [baseline.conditions[name], report.conditions[name]]
-    if (planned && now === null) return []
+    if (planned && now === null && was !== null) return []
     return was !== null && was === now ? [] : [`${name} ${was ?? 'unknown'} → ${now ?? 'unknown'}`]
   })
 
