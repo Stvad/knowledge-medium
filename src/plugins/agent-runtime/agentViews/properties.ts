@@ -41,7 +41,8 @@ const MAX_REFS = 20
 const SUMMARY_KEYS = 3
 
 /** A list value is decoded from a head this long — more than any line can
- *  show — with its real length kept for the "+N more" count. */
+ *  show — with its real length kept for the "+N more" count. A cost bound:
+ *  decoding the whole list would render the same. */
 const MAX_DECODED_ITEMS = 100
 
 type Decoded =
