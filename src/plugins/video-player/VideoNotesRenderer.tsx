@@ -113,7 +113,15 @@ export const VideoNotesLayout: BlockLayout = (slots) => {
       setDraftVideoPaneRatio(latestRatio)
     }
 
-    const handlePointerMove = (moveEvent: globalThis.PointerEvent) => {
+    // Only the pointer that pressed the handle drives the drag: a hovering
+    // mouse or a second finger is a separate stream with its own buttons.
+    const dragPointerId = event.pointerId
+    const fromDragPointer = (handler: (pointerEvent: globalThis.PointerEvent) => void) =>
+      (pointerEvent: globalThis.PointerEvent) => {
+        if (pointerEvent.pointerId === dragPointerId) handler(pointerEvent)
+      }
+
+    const handlePointerMove = fromDragPointer(moveEvent => {
       // A release this window never received (the button let go outside it,
       // or while focus was elsewhere) surfaces as a move with the button up.
       if ((moveEvent.buttons & 1) === 0) {
@@ -122,7 +130,7 @@ export const VideoNotesLayout: BlockLayout = (slots) => {
       }
       moveEvent.preventDefault()
       updateRatio(moveEvent.clientX, moveEvent.clientY)
-    }
+    })
 
     const cleanupPointerListeners = () => {
       window.removeEventListener('pointermove', handlePointerMove)
@@ -139,15 +147,15 @@ export const VideoNotesLayout: BlockLayout = (slots) => {
       if (commit) setStoredVideoPaneRatio(latestRatio)
     }
 
-    const handlePointerUp = (upEvent: globalThis.PointerEvent) => {
+    const handlePointerUp = fromDragPointer(upEvent => {
       upEvent.preventDefault()
       finishResize(true)
-    }
+    })
 
-    const handlePointerCancel = (cancelEvent: globalThis.PointerEvent) => {
+    const handlePointerCancel = fromDragPointer(cancelEvent => {
       cancelEvent.preventDefault()
       finishResize(false)
-    }
+    })
 
     document.body.style.cursor = isDesktopLayout ? 'col-resize' : 'row-resize'
     document.body.style.userSelect = 'none'
@@ -161,8 +169,6 @@ export const VideoNotesLayout: BlockLayout = (slots) => {
   }
 
   const handleResizeKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    // A drag owns the ratio until its release, which overwrites any write before it.
-    if (isResizing) return
     const deltas: Partial<Record<string, number>> = {
       ArrowDown: VIDEO_NOTES_KEYBOARD_STEP,
       ArrowRight: VIDEO_NOTES_KEYBOARD_STEP,
@@ -175,6 +181,8 @@ export const VideoNotesLayout: BlockLayout = (slots) => {
     if (delta === undefined) return
 
     event.preventDefault()
+    // A drag owns the ratio until its release, which overwrites any write before it.
+    if (isResizing) return
     setStoredVideoPaneRatio(clampVideoNotesPaneRatio(videoPaneRatio + delta))
   }
 
