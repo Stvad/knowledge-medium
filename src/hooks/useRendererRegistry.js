@@ -1,1 +1,1 @@
-import{_E as e,vE as t,yE as n}from"../../chunks/app-Dp8OJTUT.js";export{n as defaultRegistry,e as refreshRendererRegistry,t as useRenderer};
+import{_E as e,vE as t,yE as n}from"../../chunks/app-d3Hcg1OX.js";export{n as defaultRegistry,e as refreshRendererRegistry,t as useRenderer};
