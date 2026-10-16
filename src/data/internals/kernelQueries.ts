@@ -291,16 +291,19 @@ const blockTypeInSql = `
 /** Content search — case-insensitive trigram FTS substring match, optionally
  *  narrowed by a {@link BlockSearchFilter}. Every clause sits in the WHERE,
  *  ahead of the LIMIT. The descendant walk has no depth cap: UNION (not
- *  UNION ALL) drops a row already seen, so a parent cycle ends it. Binds, in order: `[underId]` when filtering by
+ *  UNION ALL) drops a row already seen, so a parent cycle ends it, and the
+ *  root is excluded at every step, so a cycle through it cannot add it. Binds, in order: `[underId]` when filtering by
  *  ancestry, workspaceId, the MATCH query, `[typesJson]`, `[excludeTypesJson]`,
  *  then the two rank parameters and the limit. */
 export const selectBlocksByContentSql = (filter: BlockSearchFilter = {}): string => `
-  ${filter.underId !== undefined ? `WITH RECURSIVE under_tree(id) AS (
-    SELECT c.id FROM blocks c WHERE c.parent_id = ? AND c.deleted = 0
+  ${filter.underId !== undefined ? `WITH RECURSIVE under_root(id) AS (SELECT ?),
+  under_tree(id) AS (
+    SELECT c.id FROM blocks c, under_root
+     WHERE c.parent_id = under_root.id AND c.id != under_root.id AND c.deleted = 0
     UNION
     SELECT c.id FROM blocks c
-      JOIN under_tree ON c.parent_id = under_tree.id
-     WHERE c.deleted = 0
+      JOIN under_tree ON c.parent_id = under_tree.id, under_root
+     WHERE c.deleted = 0 AND c.id != under_root.id
   )` : ''}
   SELECT ${buildQualifiedBlockColumnsSql('b')}
   FROM blocks_fts

@@ -130,6 +130,13 @@ describe('resolveBlockRef', () => {
     expect(missing).toContain('  Project ⏎ Alpha two')
   })
 
+  it('clips a long alias in its suggestions', async () => {
+    await create({id: uuid('a1b2c3d6', 6), content: 'x', properties: {alias: [`Projection ${'z'.repeat(300)}`]}})
+    const message = await resolveBlockRef(repo, 'Projection', {workspaceId: WS}).then(() => '', (error: Error) => error.message)
+    expect(message).toContain('Projection zzz')
+    expect(message).not.toContain('z'.repeat(100))
+  })
+
   it('suggests similar page names when nothing matches', async () => {
     await expect(resolveBlockRef(repo, 'Project', {workspaceId: WS}))
       .rejects.toThrow(/Pages with similar names:\n {2}Project Alpha/)
@@ -421,6 +428,78 @@ describe('structural edge cases', () => {
     expect(out.hits).toEqual([])
   })
 
+  it('a self-parented root is not its own child, so paging ends', async () => {
+    const root = uuid('5b5b5b5b', 1)
+    await create({id: root, content: 'Self'})
+    await create({id: uuid('5b5b5b5c', 2), parentId: root, content: 'Kid'})
+    await sharedDb.db.execute('UPDATE blocks SET parent_id = ? WHERE id = ?', [root, root])
+    const out = await view<OutlineView>({type: 'view-outline', ref: root, format: 'json'})
+    expect(out.root.childCount).toBe(1)
+    expect(out.rows.map(row => row.content)).toEqual(['Kid'])
+    expect(out.nextOffset).toBeNull()
+  })
+
+  it('a search stopped by the window cap says so, even when folding left the page empty', async () => {
+    const dup = (i: number) => ({
+      id: `dup-${i}`, workspaceId: WS, parentId: null, orderKey: `d${i}`, content: 'same text',
+      properties: {}, references: [], createdAt: 1, updatedAt: 1, userUpdatedAt: 1,
+      createdBy: USER.id, updatedBy: USER.id, deleted: false,
+    })
+    repo.setRuntimeContributions(searchSourcesFacet, 'test:dups', [{
+      id: 'test.dups',
+      search: async (_repo, args) => Array.from({length: args.limit}, (_, i) => ({block: dup(i) as never, score: 1000})),
+    }])
+    const out = await view<SearchView>({type: 'view-search', query: 'same', offset: 1, format: 'json'})
+    expect(out.hits).toEqual([])
+    expect(out.windowCap).toBe(2000)
+  })
+
+  it('search refuses an `under` block from another workspace', async () => {
+    const foreign = uuid('5e5e5e5f', 1)
+    await repo.tx(async tx => {
+      await tx.create({id: foreign, workspaceId: 'ws-2', parentId: null, orderKey: 'a0', content: 'elsewhere', references: []})
+    }, {scope: ChangeScope.BlockDefault})
+    await expect(view({type: 'view-search', query: 'anything', under: foreign})).rejects.toThrow(/not the active one/)
+  })
+
+  it('search under a self-parented root never returns the root', async () => {
+    const root = uuid('5c5c5c5c', 1)
+    await create({id: root, content: 'loop topic'})
+    await create({id: uuid('5c5c5c5d', 2), parentId: root, content: 'loop topic child'})
+    await sharedDb.db.execute('UPDATE blocks SET parent_id = ? WHERE id = ?', [root, root])
+    const out = await view<SearchView>({type: 'view-search', query: 'loop topic', under: root, format: 'json'})
+    expect(out.hits.map(hit => hit.id)).toEqual([uuid('5c5c5c5d', 2)])
+  })
+
+  it('the extension over-fetch counts against the window cap', async () => {
+    await create({id: uuid('5d5d5d5d', 1), content: 'slack query'})
+    await sharedDb.db.execute(
+      `INSERT INTO block_types (block_id, workspace_id, type)
+       WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 2500)
+       SELECT 'ext-' || i, ?, 'extension' FROM n`,
+      [WS],
+    )
+    const limits: number[] = []
+    repo.setRuntimeContributions(searchSourcesFacet, 'test:spy', [{
+      id: 'test.spy',
+      search: async (_repo, args) => {
+        limits.push(args.limit)
+        return []
+      },
+    }])
+    await view({type: 'view-search', query: 'slack'})
+    expect(Math.max(...limits)).toBeLessThanOrEqual(2000)
+  })
+
+  it('formats a huge list value only as far as its line, counting the rest', async () => {
+    const id = uuid('5f5f5f5f', 1)
+    await create({id, content: 'list holder', properties: {numbers: Array.from({length: 100_000}, (_, i) => i)}})
+    const out = await view<OutlineView>({type: 'view-outline', ref: id, format: 'json'})
+    const value = out.root.properties.find(property => property.name === 'numbers')!.value
+    expect(value.length).toBeLessThanOrEqual(40)
+    expect(value).toMatch(/^0, 1, .*, …\+\d+ more$/)
+  })
+
   it('sql cuts a long cell on a character boundary', async () => {
     await create({id: uuid('5a5a5a5a', 1), content: `${'y'.repeat(1999)}\u{1F600}${'z'.repeat(10)}`})
     const out = await executeCommand({
@@ -479,7 +558,10 @@ describe('view-backlinks', () => {
 
     const text = await view<string>({type: 'view-grouped-backlinks', ref: TARGET, membersPerGroup: 2})
     expect(text).toContain('## Topic A  ^70b1c000  (4)')
-    expect(text).toContain('+2 more — membersPerGroup=4 offset=0 limit=1 lists them')
+    expect(text).toContain('+2 more — memberOffset=2 offset=0 limit=1 continues this group')
+    const rest = await view<GroupedBacklinksView>({type: 'view-grouped-backlinks', ref: TARGET, membersPerGroup: 2, memberOffset: 2, limit: 1, format: 'json'})
+    expect(rest.groups[0].members).toHaveLength(2)
+    expect(new Set([...out.groups[0].members, ...rest.groups[0].members].map(member => member.id)).size).toBe(4)
   })
 })
 

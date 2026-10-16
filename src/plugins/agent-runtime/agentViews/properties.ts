@@ -36,6 +36,8 @@ export const NAME_CHARS = 80
 const MAX_PROPERTIES = 50
 const MAX_HIDDEN_NAMES = 20
 const MAX_TYPES = 10
+/** Refs titled and shown per property; a refList can hold thousands. */
+const MAX_REFS = 20
 const SUMMARY_KEYS = 3
 
 type Decoded =
@@ -67,16 +69,25 @@ const formatDate = (date: Date): string => {
 }
 
 /** Structured values (an SRS snapshot history, an importer's payload) are
- *  summarized, never dumped — they are what made raw outlines unreadable. */
-const formatValue = (value: unknown): string => {
+ *  summarized, never dumped — they are what made raw outlines unreadable. A
+ *  list is joined only until it passes `budget`, so a huge one costs no more
+ *  than the line it ends up on. */
+const formatValue = (value: unknown, budget: number): string => {
   if (value === null || value === undefined) return ''
   if (value instanceof Date) return formatDate(value)
   if (isScalar(value)) return String(value)
   if (Array.isArray(value)) {
-    if (value.every(item => isScalar(item) || item instanceof Date)) {
-      return value.map(formatValue).join(', ')
+    if (!value.every(item => isScalar(item) || item instanceof Date)) return `[${value.length} items]`
+    let joined = ''
+    for (const [index, item] of value.entries()) {
+      const part = `${index > 0 ? ', ' : ''}${formatValue(item, budget)}`
+      const marker = `, …+${value.length - index} more`
+      // Room is kept for the marker, so the line's own clip never cuts the count off.
+      const room = index < value.length - 1 ? marker.length : 0
+      if (index > 0 && joined.length + part.length + room > budget) return `${joined}${marker}`
+      joined += part
     }
-    return `[${value.length} items]`
+    return joined
   }
   if (typeof value === 'object') {
     const keys = Object.keys(value)
@@ -133,7 +144,7 @@ export const createPropertyRenderer = async (
       if (name === typesProp.name) continue
       const hidden = isPropertyPanelHiddenProperty(name, schemas, overrides, definitions)
       const decoded = decodeProperty(schemas.get(name), raw)
-      if (!hidden && decoded.kind === 'refs') decoded.ids.forEach(id => refIds.add(id))
+      if (!hidden && decoded.kind === 'refs') decoded.ids.slice(0, MAX_REFS).forEach(id => refIds.add(id))
       entries.push({name, hidden, decoded})
     }
     decodedByBlock.set(block.id, entries)
@@ -148,16 +159,18 @@ export const createPropertyRenderer = async (
     }
   }
 
-  const display = (decoded: Decoded, block: BlockData, name: string): string => {
+  const display = (decoded: Decoded, block: BlockData, name: string, budget: number): string => {
     if (decoded.kind === 'refs') {
-      return decoded.ids.map(id => titles.has(id) ? `[[${titles.get(id)}]]` : `((${id}))`).join(', ')
+      const shown = decoded.ids.slice(0, MAX_REFS).map(id => titles.has(id) ? `[[${titles.get(id)}]]` : `((${id}))`)
+      const rest = decoded.ids.length - shown.length
+      return rest > 0 ? `${shown.join(', ')}, …+${rest} more` : shown.join(', ')
     }
     // A page's first alias is its title, already on the line.
     if (name === aliasesProp.name && Array.isArray(decoded.value)) {
       const content = block.content.trim()
-      return formatValue(decoded.value.filter(alias => alias !== content))
+      return formatValue(decoded.value.filter(alias => alias !== content), budget)
     }
-    return formatValue(decoded.value)
+    return formatValue(decoded.value, budget)
   }
 
   return {
@@ -170,7 +183,7 @@ export const createPropertyRenderer = async (
           hidden.push(name)
           continue
         }
-        const value = display(decoded, block, name)
+        const value = display(decoded, block, name, maxChars)
         if (value === '') continue
         visible.push({name: clipLine(name, NAME_CHARS).text, value: clipLine(value, maxChars).text})
       }

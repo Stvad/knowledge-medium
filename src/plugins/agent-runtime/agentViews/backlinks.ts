@@ -200,6 +200,7 @@ export const renderBacklinksView = (view: BacklinksView): string => {
 
 export interface GroupedBacklinksParams extends BacklinksParams {
   membersPerGroup?: number
+  memberOffset?: number
   grouping?: GroupedBacklinksGroupingSpec
 }
 
@@ -219,6 +220,8 @@ export interface GroupedBacklinksView {
   groupCount: number
   offset: number
   nextOffset: number | null
+  /** Where each group's member listing starts. */
+  memberOffset: number
   groups: BacklinkGroup[]
 }
 
@@ -229,6 +232,8 @@ export const buildGroupedBacklinksView = async (
 ): Promise<GroupedBacklinksView> => {
   const limit = clampInt(params.limit, AGENT_VIEW_DEFAULTS.groupsLimit, MAX_GROUPS)
   const membersPerGroup = clampInt(params.membersPerGroup, AGENT_VIEW_DEFAULTS.membersPerGroup, MAX_BACKLINKS)
+  const memberOffset = params.memberOffset ?? 0
+  const membersOf = (sourceIds: readonly string[]) => sourceIds.slice(memberOffset, memberOffset + membersPerGroup)
   const offset = params.offset ?? 0
   const {block, target} = await loadTarget(repo, params.ref, workspaceId)
   const filter = await resolveBacklinksFilter(repo, block.workspaceId, block.id, params.filter)
@@ -241,7 +246,7 @@ export const buildGroupedBacklinksView = async (
   }).load() as GroupedBacklinksResult
 
   const page = result.groups.slice(offset, offset + limit)
-  const memberIds = [...new Set(page.flatMap(group => group.sourceIds.slice(0, membersPerGroup)))]
+  const memberIds = [...new Set(page.flatMap(group => membersOf(group.sourceIds)))]
   // A group is a block when that block exists — not when its id looks like
   // one: sync admits non-canonical ids, and the fallback group is no block.
   const [members, groupBlocks] = await Promise.all([
@@ -263,6 +268,7 @@ export const buildGroupedBacklinksView = async (
     groupCount: result.groups.length,
     offset,
     nextOffset: end < result.groups.length ? end : null,
+    memberOffset,
     groups: page.map(group => {
       const isBlock = blockGroupIds.has(group.groupId)
       return {
@@ -271,8 +277,7 @@ export const buildGroupedBacklinksView = async (
         shortId: isBlock ? shortIds.get(group.groupId) ?? group.groupId : null,
         fallback: group.fallback,
         memberCount: group.sourceIds.length,
-        members: group.sourceIds
-          .slice(0, membersPerGroup)
+        members: membersOf(group.sourceIds)
           .flatMap(id => {
             const member = memberById.get(id)
             return member ? [toViewRow(member, {shortIds, renderer, maxChars: ROW_CHARS, detail: 'brief'})] : []
@@ -289,11 +294,12 @@ export const renderGroupedBacklinksView = (view: GroupedBacklinksView): string =
   view.groups.forEach((group, index) => {
     const id = group.shortId ? `  ^${group.shortId}` : ''
     lines.push(`## ${group.label}${id}  (${formatCount(group.memberCount)})`)
+    if (view.memberOffset > 0) lines.push(`  (members from #${formatCount(view.memberOffset + 1)})`)
     for (const member of group.members) lines.push(`- ${member.content}${metaSuffix(member, 'brief')}  ^${member.shortId}`)
-    const rest = group.memberCount - group.members.length
+    const shownEnd = view.memberOffset + group.members.length
+    const rest = group.memberCount - shownEnd
     if (rest > 0) {
-      const wanted = Math.min(group.memberCount, MAX_BACKLINKS)
-      lines.push(`  +${formatCount(rest)} more — membersPerGroup=${wanted} offset=${view.offset + index} limit=1 lists ${wanted === group.memberCount ? 'them' : `the first ${formatCount(wanted)}`}`)
+      lines.push(`  +${formatCount(rest)} more — memberOffset=${shownEnd} offset=${view.offset + index} limit=1 continues this group`)
     }
   })
   if (view.groups.some(group => group.members.some(member => member.cut > 0))) lines.push(CUT_LEGEND)

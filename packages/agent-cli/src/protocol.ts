@@ -478,6 +478,7 @@ export const viewGroupedBacklinksCommandSchema = z.looseObject({
   limit: viewLimitField('groups', AGENT_VIEW_DEFAULTS.groupsLimit),
   offset: viewOffsetField('groups'),
   membersPerGroup: viewLimitField('members shown per group', AGENT_VIEW_DEFAULTS.membersPerGroup),
+  memberOffset: viewOffsetField('members of each group'),
   filter: backlinksFilterField,
   grouping: z
     .union([z.enum(['user', 'none']), z.record(z.string(), z.unknown())])

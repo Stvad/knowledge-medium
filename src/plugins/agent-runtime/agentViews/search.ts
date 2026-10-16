@@ -120,16 +120,18 @@ export const buildSearchView = async (
   const extensionSlack = includeExtensions || scoped ? 0 : await extensionBlockCount(repo, workspaceId)
 
   const fetchWindow = async (window: number) => {
+    // The over-fetch for extension blocks counts against the cap too.
+    const requested = Math.min(window + extensionSlack, MAX_WINDOW)
     const fetched = await searchBlocksAcrossSources(repo, {
       workspaceId,
       query: params.query,
-      limit: window + extensionSlack,
+      limit: requested,
       filter,
     })
     const found = includeExtensions
       ? fetched
       : fetched.filter(block => !readTypeIds(block).includes(EXTENSION_TYPE))
-    return {groups: groupIdentical(found), exhausted: fetched.length < window + extensionSlack}
+    return {groups: groupIdentical(found), exhausted: fetched.length < requested}
   }
 
   // Folding identical blocks shrinks the window, so it grows until it holds
