@@ -162,6 +162,17 @@ describe('resolveBlockRef', () => {
     }
   })
 
+  it('keeps a wrapped ref meaning its target when a stored id spells the ref itself', async () => {
+    const planted = ['[[Project Alpha]]', '^a1b2c3d4', `((${PAGE}))`]
+    for (const id of planted) await create({id, content: 'planted'})
+    expect(await resolveBlockRef(repo, '[[Project Alpha]]', {workspaceId: WS})).toEqual({id: PAGE, via: 'alias'})
+    expect(await resolveBlockRef(repo, '^a1b2c3d4', {workspaceId: WS})).toEqual({id: PAGE, via: 'prefix'})
+    expect(await resolveBlockRef(repo, `((${PAGE}))`, {workspaceId: WS})).toEqual({id: PAGE, via: 'id'})
+    for (const id of planted) {
+      expect(await resolveBlockRef(repo, `((${id}))`, {workspaceId: WS})).toEqual({id, via: 'id'})
+    }
+  })
+
   it('keeps a non-canonical UUID exactly as given, and never shortens one', async () => {
     const mixedCase = 'ABCDEF12-0000-4000-8000-000000000001'
     expect(await resolveBlockRef(repo, mixedCase, {workspaceId: WS})).toEqual({id: mixedCase, via: 'id'})

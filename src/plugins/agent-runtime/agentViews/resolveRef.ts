@@ -158,6 +158,8 @@ export const resolveBlockRef = async (
   ref: string,
   {workspaceId, onMissing = 'error', accept = 'any'}: ResolveBlockRefOptions,
 ): Promise<BlockRefResolution> => {
+  // Unwrapped before any exact-id probe: a synced row planted with the id `[[Inbox]]`
+  // must not capture refs to the real page. Such an id is reached as `((id))`.
   const {text, forced} = unwrap(ref)
   if (!text) throw new BlockRefError('A block reference is required.')
 
