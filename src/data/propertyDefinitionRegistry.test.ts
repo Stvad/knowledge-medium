@@ -262,11 +262,14 @@ describe('property definition registry snapshot', () => {
         ...base.projectedDefinitions, ['broken', {unparseable: {fieldId: 'broken', workspaceId: WS}}],
       ])})],
       ['a seed declared', build({...base, seeds: [titleSeed, otherSeed]})],
-      ['another workspace', build({...base, workspaceId: 'ws-other'})],
       ['no registry', null],
     ] as const) {
       expect(sameFieldRecognition(snapshot, other), change).toBe(false)
     }
+    // Same seed keys, so only the workspace differs — and with it every seed's
+    // deterministic id.
+    expect(sameFieldRecognition(build(), build({workspaceId: 'ws-other'})), 'another workspace')
+      .toBe(false)
   })
 
   it('rejects a structural handle that borrows another declaration seed key', () => {
