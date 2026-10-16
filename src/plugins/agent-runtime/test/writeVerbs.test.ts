@@ -603,6 +603,14 @@ describe('review round 3', () => {
     expect(await contentOf(NOTE)).toBe('lower')
   })
 
+  // A non-canonical id that sync delivered can carry anything after its hex prefix.
+  it('neutralizes candidate ids it lists in an ambiguity error', async () => {
+    await seed([{id: 'abcdef12-ok'}, {id: 'abcdef12-x\nfake line\u2028'}])
+    const error = await resolveBlockId(repo, 'abcdef12', 'test').catch((e: unknown) => e as Error) as Error
+    expect(error.message).toMatch(/ambiguous/)
+    expect(error.message).not.toMatch(/fake line\n|\u2028/)
+  })
+
   it('neutralizes a stored alias it suggests in a not-found error', async () => {
     await repo.tx(async tx => {
       await tx.create({id: LONE, workspaceId: WS, parentId: null, orderKey: 'a0', content: 'Groceries'})
