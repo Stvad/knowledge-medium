@@ -1,1 +1,1 @@
-import{ch as e,lh as t,sh as n,uh as r}from"../../../chunks/app-DpUv1pr2.js";export{n as INSERT_TUTORIAL_ACTION_ID,e as insertTutorialAction,t as insertTutorialIntoWorkspace,r as openTutorialInActiveWorkspace};
+import{ch as e,lh as t,sh as n,uh as r}from"../../../chunks/app-BbFSL_Ue.js";export{n as INSERT_TUTORIAL_ACTION_ID,e as insertTutorialAction,t as insertTutorialIntoWorkspace,r as openTutorialInActiveWorkspace};

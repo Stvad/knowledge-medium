@@ -1,1 +1,1 @@
-import{vh as e,yh as t}from"../../../chunks/app-DpUv1pr2.js";export{e as vimNormalModeInteractionExtension,t as vimNormalModePlugin};
+import{vh as e,yh as t}from"../../../chunks/app-BbFSL_Ue.js";export{e as vimNormalModeInteractionExtension,t as vimNormalModePlugin};
