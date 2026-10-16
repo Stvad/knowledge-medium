@@ -18,7 +18,8 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
-import { type BridgeClient, createBridgeClient } from '../../packages/agent-cli/src/client'
+import { type BridgeClient, createBridgeClient, resolveToken } from '../../packages/agent-cli/src/client'
+import { agentRuntimeConfigDir } from '../../packages/agent-cli/src/config'
 import { KM_MCP_ALLOWED_TOOLS, KM_MCP_TOOL_NAMES, MCP_SERVER_NAME } from '../../packages/agent-cli/src/mcpShared'
 import { runJsonlProcess } from '../../packages/agent-dispatch/src/execProcess'
 import { BILLING_ENV_DENYLIST, envForBilling } from '../../packages/agent-dispatch/src/runner'
@@ -46,7 +47,9 @@ import { acquireWorkspaceLock } from './workspaceLock'
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const RESULTS_DIR = path.join(REPO_ROOT, 'scripts/agent-eval/results')
 const RUNS_DIR = path.join(REPO_ROOT, 'tmp/agent-eval/runs')
-const JOURNAL_DIR = path.join(REPO_ROOT, 'tmp/agent-eval/journal')
+// Beside the CLI's token store, so runs from every checkout on this machine
+// share one lock and one journal per paired tab.
+const EVAL_STATE_DIR = path.join(agentRuntimeConfigDir(), 'agent-eval')
 const MCP_ENTRY = path.join(REPO_ROOT, 'packages/agent-cli/dist/mcp.js')
 const DEFAULT_PROFILE = 'km-eval'
 
@@ -65,7 +68,15 @@ const loadReport = (file: string): EvalReport => {
   }
 }
 
-const connect = async (profile: string): Promise<{probe: GraphProbe, client: BridgeClient}> => {
+/** Which tab the profile is paired with, without the secret: the profile's
+ *  token changes when it is re-paired, and only then. */
+const pairingOf = async (profile: string): Promise<string> => {
+  const token = await resolveToken(profile) ?? fail(`profile "${profile}" has no token; pair it first (README: "One-time setup")`)
+  return createHash('sha256').update(token).digest('hex').slice(0, 16)
+}
+
+const connect = async (profile: string): Promise<{probe: GraphProbe, client: BridgeClient, pairing: string}> => {
+  const pairing = await pairingOf(profile)
   const client = createBridgeClient({profile, timeoutMs: 120_000})
   const who = await client.whoami().catch((error: unknown) =>
     fail(`cannot reach the bridge with profile "${profile}": ${error instanceof Error ? error.message : String(error)}\n`
@@ -75,6 +86,7 @@ const connect = async (profile: string): Promise<{probe: GraphProbe, client: Bri
   await requireNeverSynced(client, profile)
   return {
     client,
+    pairing,
     probe: {workspaceId: who.audience.workspaceId!, command: command => client.runCommand(command)},
   }
 }
@@ -98,9 +110,9 @@ return {signedIn: Object.keys(localStorage).some(key => /^sb-.+-auth-token$/.tes
 }
 
 /** `seed` and `run` both write the graph: one at a time per workspace. */
-const lockWorkspace = (probe: GraphProbe): (() => void) => {
+const lockWorkspace = (pairing: string): (() => void) => {
   try {
-    return acquireWorkspaceLock(path.join(JOURNAL_DIR, `${probe.workspaceId}.lock`))
+    return acquireWorkspaceLock(path.join(EVAL_STATE_DIR, pairing, 'run.lock'))
   } catch (error) {
     return fail(errorText(error))
   }
@@ -108,9 +120,9 @@ const lockWorkspace = (probe: GraphProbe): (() => void) => {
 
 /** Locks the workspace, then undoes what an earlier run left before the
  *  fixture marker is read (see `openWorkspace`). */
-const prepareWorkspace = async (probe: GraphProbe, fixture: Fixture) => {
-  const release = lockWorkspace(probe)
-  const journal = createRunJournal(path.join(JOURNAL_DIR, probe.workspaceId))
+const prepareWorkspace = async (probe: GraphProbe, pairing: string, fixture: Fixture) => {
+  const release = lockWorkspace(pairing)
+  const journal = createRunJournal(path.join(EVAL_STATE_DIR, pairing, 'journal'))
   const {recovered, seeded} = await openWorkspace(probe, journal, fixture.hash)
     .catch((error: unknown) => fail(`could not undo what an earlier run left: ${errorText(error)}`))
   if (recovered > 0) process.stdout.write(`undid ${recovered} change(s) an earlier run left\n`)
@@ -118,9 +130,9 @@ const prepareWorkspace = async (probe: GraphProbe, fixture: Fixture) => {
 }
 
 const seed = async (profile: string) => {
-  const {client, probe} = await connect(profile)
+  const {client, probe, pairing} = await connect(profile)
   const fixture = buildFixture()
-  const {release, seeded: existing} = await prepareWorkspace(probe, fixture)
+  const {release, seeded: existing} = await prepareWorkspace(probe, pairing, fixture)
   if (existing && existing !== fixture.hash) {
     fail(`this workspace holds fixture ${existing}, not ${fixture.hash}. Re-importing a different fixture leaves the old `
       + 'blocks behind; seed a fresh local-only dev origin instead (README: "Resetting").')
@@ -258,9 +270,12 @@ const run = async (options: RunOptions) => {
   })
   buildPackages()
   const checkout = checkoutDigest()
-  const {probe, client} = await connect(options.profile)
+  const {probe, client, pairing} = await connect(options.profile)
   const fixture = buildFixture()
-  const {release, journal, seeded} = await prepareWorkspace(probe, fixture)
+  const {release, journal, seeded} = await prepareWorkspace(probe, pairing, fixture)
+  // A profile re-paired mid-run would send later tasks to another tab, which
+  // the diff (keyed to this workspace) would neither score nor restore.
+  const repaired = async () => await pairingOf(options.profile) !== pairing
   if (seeded !== fixture.hash) {
     fail(seeded
       ? `the tab holds fixture ${seeded} but this checkout generates ${fixture.hash}; seed a fresh dev origin`
@@ -322,6 +337,7 @@ const run = async (options: RunOptions) => {
       process.stdout.write(`[${rep}/${options.repeat}] ${task.id} … `)
 
       await requireNeverSynced(client, options.profile)
+      if (await repaired()) fail(`profile "${options.profile}" was paired with another tab during the run; start the run again`)
       const startedAt = Date.now()
       journal.taskStarted()
       const proc = await runJsonlProcess({
@@ -336,6 +352,7 @@ const run = async (options: RunOptions) => {
       const elapsedMs = Date.now() - startedAt
       // After the task, so a change during it — the last task's included — is caught.
       const checkoutChanged = checkoutDigest() !== checkout
+      const pairingChanged = await repaired()
       writeFileSync(transcriptPath, stdout)
       rmSync(cwd, {recursive: true, force: true})
 
@@ -350,6 +367,7 @@ const run = async (options: RunOptions) => {
         .catch((error: unknown) => fail(`aborting the run: ${errorText(error)}`))
       journal.taskRestored()
       if (checkoutChanged) fail(`the checkout changed while ${task.id} ran, so it may have run other code; start the run again`)
+      if (pairingChanged) fail(`profile "${options.profile}" was paired with another tab while ${task.id} ran; start the run again`)
       if (modelResolved) requireComparable(false)
       if (modelChanged) fail(`${task.id} ran on ${metrics.model}, not ${report.conditions.model} like the tasks before it; start the run again`)
       const allowed = allowedChanges(task, probe.workspaceId, outcome)

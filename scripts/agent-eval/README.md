@@ -63,13 +63,16 @@ taken, so a fixture block is compared wherever it ends up. After each task, the 
 6. puts back the recency timestamps of every row whose timestamps moved, whoever
    moved them, so recency ordering is unchanged.
 
-The run's snapshot is also journaled to `tmp/agent-eval/journal/`, so a run killed
-mid-task is undone by the next run, before it even reads which fixture the tab holds. What the resets themselves add (today's daily note,
-when it is missing) is recorded there too, and removed when the run ends, or by the next
-run when this one stopped early. Runs on later days therefore don't leave the graph a
-note longer each time. `seed` and `run` hold a lock per workspace there,
-so two of them never write one graph at once; a lock left by a process that died is
-taken over.
+The run's snapshot is also journaled, beside the CLI's token store
+(`~/.config/knowledge-medium/agent-eval/`, one directory per paired tab, shared by every
+checkout on the machine). A run killed mid-task is undone by the next one, from any
+checkout, before it even reads which fixture the tab holds. What the resets themselves
+add (today's daily note, when it is missing) is recorded there too. It is removed when
+the run ends, or by the next run when this one stopped early, so runs on later days
+don't leave the graph a note longer each time. `seed` and `run` hold a lock per paired
+tab there, so two of them never write one graph at once; a lock left by a process that
+died is taken over. A run also stops if its profile is paired with another tab while
+it runs.
 
 Before the first task, `run` also checks that the tab holds the fixture as this
 checkout's code imports it, which is what the gate's checks are proven on. Every block

@@ -191,8 +191,9 @@ export const diffAgainst = async (probe: GraphProbe, snapshot: WorkspaceSnapshot
  *  fixture rows the task put under a block it created come out first, or the
  *  purge would take them along; created rows go before any field is put back,
  *  since one can hold a key a restored field needs (a page that took over
- *  another's name); revived rows before edits (an edit refuses a deleted
- *  row); moves once every anchor is live, last sibling first; tombstones
+ *  another's name); revived rows, parents first, before edits (an edit
+ *  refuses a deleted row); moves once every anchor is live, last sibling
+ *  first; tombstones
  *  re-deleted last. Derived columns are left to the processors these writes
  *  start. */
 const undoChanges = async (probe: GraphProbe, snapshot: WorkspaceSnapshot, changes: TaskChanges): Promise<void> => {
@@ -204,8 +205,18 @@ const undoChanges = async (probe: GraphProbe, snapshot: WorkspaceSnapshot, chang
     await probe.command({type: 'move-block', id, parentId: before.parent_id, position: {kind: 'last'}})
   }
   await purgeBlocks(probe, [...createdIds])
-  for (const {id, before, after} of changes.modified) {
-    if (!before.deleted && after.deleted && !rescued.some(change => change.id === id)) await revive(id)
+  // Parents first: a block cannot come back under a deleted parent, and a
+  // task may have deleted both (one moved under the other, then that deleted).
+  const toRevive = new Map(changes.modified
+    .filter(({id, before, after}) => !before.deleted && after.deleted && !rescued.some(change => change.id === id))
+    .map(({id, after}) => [id, after.parent_id]))
+  while (toRevive.size > 0) {
+    const ready = [...toRevive].filter(([, parent]) => parent === null || !toRevive.has(parent))
+    if (ready.length === 0) break // not reachable in a tree; the proof reports what is left
+    for (const [id] of ready) {
+      await revive(id)
+      toRevive.delete(id)
+    }
   }
   for (const id of changes.appStateDeleted) await revive(id)
   for (const {id, before, after} of changes.modified) {

@@ -563,6 +563,18 @@ describe('isolation edge cases', () => {
     expect(await pageIdByTitle(probe, 'Office Lease')).toBe(lease)
   }, 20_000)
 
+  it('revives a deleted parent before the block an agent moved under it', async () => {
+    const snapshot = await snapshotWorkspace(probe, QUIET)
+    const rollout = fixtureId('rollout')
+    // A block imported after the rollout block, so it comes later in table order.
+    const [later] = await childrenOf(probe, await requirePageId(probe, 'Team Handbook'))
+    await graph.callTool('move_block', {id: rollout, parentId: later.id, position: {kind: 'first'}})
+    await graph.callTool('delete_block', {id: later.id})
+
+    await restoreSnapshot(probe, snapshot, QUIET)
+    expect(await diffAgainst(probe, snapshot, QUIET)).toEqual({created: [], modified: [], appStateDeleted: []})
+  }, 20_000)
+
   it('brings back a fixture block an agent moved under a block it created', async () => {
     const snapshot = await snapshotWorkspace(probe, QUIET)
     const rollout = fixtureId('rollout')
