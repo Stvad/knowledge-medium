@@ -132,6 +132,11 @@ const deleteGuardRowFromSqlRow = (row: unknown): DeleteGuardRow | null => {
   return {id, ...refsFromSqlRow(row)}
 }
 
+/** The name a `[[Name]]` target creates a page under when it is missing —
+ *  the page's content, so a wikilink nested in it is a reference. */
+const createdPageName = (target: string): string | undefined =>
+  /^\s*\[\[([\s\S]*)\]\]\s*$/.exec(target)?.[1]
+
 export const createBlockedWikilinkWriteGuard = (
   graph: Pick<BridgeGraph, 'resolvePageId' | 'getBlock' | 'sqlAll'>,
   blockedWikilinks: string[],
@@ -334,6 +339,9 @@ export const createBlockedWikilinkWriteGuard = (
       } = createWriteAssertions()
       switch (operation.type) {
         case 'create_block':
+          await assertNoBlockedRefs(createdPageName(operation.parentId))
+          await assertNoBlockedRefs(operation.content, operation.properties)
+          return
         case 'update_block':
           await assertNoBlockedRefs(operation.content, operation.properties)
           return
@@ -355,6 +363,7 @@ export const createBlockedWikilinkWriteGuard = (
           await assertNoBlockedRefsInLiveDescendants(operation.id)
           return
         case 'append_markdown':
+          await assertNoBlockedRefs(createdPageName(operation.target))
           await assertNoBlockedRefs(operation.markdown)
           return
         case 'edit_block':
@@ -362,7 +371,8 @@ export const createBlockedWikilinkWriteGuard = (
           await assertNoBlockedRefs((await editResult(operation)) ?? undefined)
           return
         case 'create_page':
-          // Get-or-create by name writes no reference to anything.
+          // A created page's content is its name, so a nested [[…]] in it is a reference.
+          await assertNoBlockedRefs(operation.name)
           return
         default: {
           // A new write tool must say here what it can make reference.

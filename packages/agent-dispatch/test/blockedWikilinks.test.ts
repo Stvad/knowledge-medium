@@ -379,8 +379,16 @@ describe('createBlockedWikilinkWriteGuard — markdown and edit writes', () => {
     expect(sqlAll.mock.calls.at(-1)?.[1]).toEqual(['block-1'])
   })
 
-  it('lets create_page through — get-or-create references nothing', async () => {
+  it('blocks a page title that would carry a blocked wikilink — create_page and [[…]] targets', async () => {
     const guard = createBlockedWikilinkWriteGuard(graphFrom(), ['claude'])
+    await expect(guard.beforeWrite({type: 'create_page', name: 'notes [[claude]]'}))
+      .rejects.toThrow('references a blocked page')
+    await expect(guard.beforeWrite({type: 'append_markdown', target: '[[notes [[claude]]]]', markdown: '- x'}))
+      .rejects.toThrow('references a blocked page')
+    await expect(guard.beforeWrite({type: 'create_block', parentId: '[[notes [[claude]]]]', content: 'x'}))
+      .rejects.toThrow('references a blocked page')
+    // Naming the blocked page itself creates no reference to it.
     await expect(guard.beforeWrite({type: 'create_page', name: 'claude'})).resolves.toBeUndefined()
+    await expect(guard.beforeWrite({type: 'append_markdown', target: '[[claude]]', markdown: '- x'})).resolves.toBeUndefined()
   })
 })
