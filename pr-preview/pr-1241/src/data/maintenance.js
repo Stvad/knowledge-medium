@@ -1,1 +1,1 @@
-import{KG as e,qG as t}from"../../chunks/app-JCFXsd1w.js";export{e as runAnalyzeIfStale,t as runAnalyzeNow};
+import{JG as e,qG as t}from"../../chunks/app-DbXBhdVL.js";export{t as runAnalyzeIfStale,e as runAnalyzeNow};

@@ -1,1 +1,1 @@
-import{GI as e}from"../../../chunks/app-JCFXsd1w.js";export{e as referencesDataExtension};
+import{KI as e}from"../../../chunks/app-DbXBhdVL.js";export{e as referencesDataExtension};
