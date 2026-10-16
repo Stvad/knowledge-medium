@@ -7,7 +7,7 @@
 - Each workspace gets one **Agent memory** system page. Every top-level child of that page is one memory. The child's content is the memory's one-line index entry, and its children are the body. If a block is on the page, it is active. Taking it off the page retires it.
 - When an agent connects, the km MCP server puts a memory section into its `instructions`. Pinned memories appear in full. Every other memory appears as one index line. The section ends with a few lines on how to propose changes. Agents read full text with a `memory` tool.
 - A memory can narrow itself to part of the graph with `agent-memory:applies-to` refs. A memory with no refs applies to the whole workspace.
-- **Agents never write the memory page.** An agent proposes a memory through a `remember` tool, and the proposal lands on a separate **Agent memory proposals** page. It only reaches future agents after the user moves it onto the memory page, which is what Accept does. One check inside the writing transaction refuses any agent-origin write to the memory page's subtree.
+- **Agents never write the memory page.** An agent proposes a memory through a `remember` tool, and the proposal lands on a separate **Agent memory proposals** page. It only reaches future agents after the user accepts it. Accept checks the proposal and publishes a fresh copy onto the memory page; it doesn't move the proposal. One check inside the writing transaction refuses any agent-origin write to the memory page's subtree.
 - Composition is plain concatenation with a stated precedence: host files (CLAUDE.md / AGENTS.md) and the current task come first, then graph memory, then the server's static guide.
 
 The sections below answer the issue's four questions in order. Each gives one recommendation, the rejected alternatives in a line each, and the facts it rests on.
@@ -47,12 +47,12 @@ Agent memory                                          ← system page
 
 Agent memory proposals                                ← system page, agent-writable
 - Book notes: quotes get a source ref to the book's page
-  agent-memory:proposed-from: ((the mention block the run was handling))
+  agent-memory:reported-source: ((the block the agent says it was working on))
 - Recipes: one page per recipe, ingredients and steps as child blocks
   agent-memory:supersedes: ((the "Recipes" memory above))
 ```
 
-- **What counts as a memory.** A memory is defined by **where it sits**, not by its type. A plain block the user types on the memory page is an active memory that applies everywhere and isn't pinned. The `agent-memory` type is there so property editors show up on these blocks, and so a typed query can find them.
+- **What counts as a memory.** Position decides, and nothing else does: the memory set is the memory page's top-level children. The renderer and the gate both read it that way. Nothing lists memories by type, because proposals and blocks moved off the page carry the type too, so a type query never equals the memory set. Property editors still need the type, so a same-tx processor adds `agent-memory` to any block that becomes a top-level child of the page, whether it was created there or moved in. The tag lands in the user's own transaction. So a plain block the user types on the page gets typed as it's created, and it's an active memory that applies everywhere and isn't pinned.
 - **Order is priority.** The page's sibling order is the order used for injection. When the budget runs out, the clipped memories are the ones at the bottom, so dragging a block up raises its priority.
 - **Retiring a memory.** Delete it or move it off the page. Its history lives where every block's history does. No status property is needed.
 - **Seeds.** Each name below is FROZEN once shipped (`src/data/seedIdentityLedger.ts`), so the names should be settled before the first release:
@@ -63,10 +63,18 @@ Agent memory proposals                                ← system page, agent-wri
   | `agent-memory:applies-to`    | `refList`      | memories; empty means whole workspace |
   | `agent-memory:pinned`        | `boolean`      | memories; inject the body, not just the line |
   | `agent-memory:supersedes`    | `optional-ref` (`targetTypes: ['agent-memory']`) | proposals |
-  | `agent-memory:proposed-from` | `optional-ref` | proposals; provenance          |
+  | `agent-memory:reported-source` | `optional-ref` | proposals; agent-reported, not provenance |
 
   The `agent-memory` namespace doesn't collide with dispatch's `agent:status` / `agent:reply`.
-- **Accept.** Accept is a button on proposals and runs as a single undoable user transaction. It moves the proposal onto the memory page, at the position of the memory it supersedes if there is one. It then deletes the superseded memory and clears `supersedes`. The user can also drag a proposal onto the page by hand, which accepts it without retiring anything.
+- **Accept treats the proposal as untrusted input.** The agent wrote everything on a proposal: its text, its `supersedes` target and its reported source. Accept is a button on proposals and runs as one undoable user transaction with four steps:
+  1. **Confirm it's what the user saw.** The renderer records the ids and `user_updated_at` of the proposal's rows. If any of them differ inside the transaction, Accept refuses: *"This proposal changed after it was shown. Review it again."*
+  2. **Check `supersedes`.** It must name a live top-level child of the memory page. Anything else is ignored, and Accept says so; that includes another proposal, a deleted block and a block elsewhere in the graph.
+  3. **Publish a copy under new ids.** The copy carries the proposal's text, body, `applies-to` and `pinned`. It goes where the superseded memory was, or at the end of the page.
+  4. **Clean up.** Delete the superseded memory, if any, and then the proposal.
+
+  The copy closes a stale-write gap. The gate judges each agent write on the device that runs it, against that device's view, and rows that arrive by sync are not checked again. An agent on a device that hasn't yet seen the acceptance can still edit the proposal, and that edit syncs later. If Accept had moved the proposal, the edit would land in active memory. With a copy, the edit lands on the deleted proposal. The new memory's ids didn't exist until Accept ran, so no agent edit can already be in flight against them.
+
+  Dragging a proposal onto the page by hand also makes it active, but the block keeps its id, so it doesn't get this protection. Accept is the safe path (see the accepted risks in Q4).
 
 ### What the agent sees at connect
 
@@ -96,7 +104,7 @@ you hit. Status and progress belong in todo blocks. Lead with the subject. To
 replace a memory, pass supersedes; don't add a duplicate.
 ```
 
-The `^xxxxxxxx` short ids are the form #1236 introduces. The age suffix comes from each block's `updated_at`.
+The `^xxxxxxxx` short ids are the form #1236 introduces. The age suffix is the newest `user_updated_at` anywhere in the memory's subtree, so editing one body line counts as an edit.
 
 When a dispatched run handles a mention under the Garden planner page, its rendered prompt also gets the memories that apply at that location, in full:
 
@@ -104,7 +112,7 @@ When a dispatched run handles a mention under the Garden planner page, its rende
 Graph memory for this location:
 - Garden planner: plant records are blocks typed garden-plant, one per variety
   - Sowing dates go in the garden:sown date property, not in the text
-To propose a memory from this task, call remember with from: <mention block id>.
+To propose a memory from this task, call remember with source: <mention block id>.
 ```
 
 **Rule for every auto-injected rendering** (the `instructions` section and the dispatch appendix): each character comes either from the memory page's subtree, which the write gate below protects, or from the renderer itself: its fixed strings, short ids and dates. Block refs, embeds and `applies-to` targets therefore render as short ids. They never expand into the referenced block's content or a page's current title, because an agent can edit those freely.
@@ -167,8 +175,8 @@ Memories are documents. The user wants to edit, undo, link and review them like 
 **Recommendation: only the user writes the memory page.**
 
 1. **Proposals are the only agent path.** `remember` creates a typed block on the proposals page. That page is ordinary, so agents may create, edit and delete proposals freely. A proposal is never injected.
-2. **Accept is the review.** It is a UI action. The MCP surface has no `run-action`, so no MCP agent can invoke it.
-3. **One gate, inside the writing transaction.** The bridge command executor stamps every transaction it opens as agent-origin. One same-tx processor, contributed by agent-runtime, rejects any agent-origin transaction that touches a row in the memory page's subtree, including the page itself. That covers create, edit, move in or out, delete and restore. The rejection message states the fact and the fix: *"The Agent memory page is edited only by the user. Use remember to propose a change."*
+2. **Accept is the review, and it publishes a copy.** It is a UI action, and the MCP surface has no `run-action`, so no MCP agent can invoke it. It re-checks the proposal inside its own transaction and publishes it under new ids (see Accept above), so a stale agent edit to the proposal can't reach active memory by sync.
+3. **One gate, inside the writing transaction.** The bridge command executor stamps every transaction it opens as agent-origin. One same-tx processor, contributed by agent-runtime, rejects any agent-origin transaction that touches a row in the memory page's subtree, including the page itself. That covers create, edit, move in or out, delete and restore. The gate judges each write against the tree as the executing device sees it. Rows that arrive by sync are not checked again, which is why Accept copies instead of moving. The rejection message states the fact and the fix: *"The Agent memory page is edited only by the user. Use remember to propose a change."*
    - **Why app-side and inside the transaction.** The check has to happen inside the writing transaction, not against an earlier snapshot. With one owner, every write verb is covered, including the new ones from #1235, and no verb has to remember to call a check.
    - **What it needs from core.** One small addition: an `actor: 'agent'` field on `RepoTxOptions`, surfaced on `TxMeta`. The executor stamps it by handing verbs a repo facade, the same way `repo.undoGroup` injects `groupId`. Agent-origin transactions are small, and the ancestor walk runs only for them, so the UI commit path pays nothing.
    - **Ordering requirement.** The gate must see every row the transaction wrote, including rows other same-tx processors amend. Example: an agent renames a page that a memory links to. The rename processor then rewrites the memory's `[[…]]` text in the same transaction, and that rewrite must be refused, because it is an indirect way to edit memory text. The consequence is that an agent can't rename a page a memory links to, though the user can. That's rare, so I accept it. The test that pins the gate covers this case.
@@ -177,8 +185,9 @@ Memories are documents. The user wants to edit, undo, link and review them like 
 **The boundary, stated plainly.** The gate protects against agents on the MCP surface: dispatched runs and MCP clients, which never had eval. A read-write token used through the CLI can run `eval`, `sql execute`, `install-extension` and `run-action`, and those can reach the database without going through the facade. Nothing here changes that, because such a token already carries the user's full authority in the app. A dispatched run granted `Bash` can reach the CLI with the same token profile. Per-watcher `Bash` is already a documented opt-in.
 
 **Accepted residual risks.**
-- **Rubber-stamping.** An accepted memory that contains injected text still gets injected; the user's Accept is the only content review. Each proposal shows `proposed-from` so the user can see where it came from. The header's "these are notes" framing is not a security boundary, and nothing relies on it.
-- **Proposal spam.** Bounded by dispatch's `runsPerHour` breaker. There is no separate cap.
+- **Rubber-stamping.** An accepted memory that contains injected text still gets injected; the user's Accept is the only content review. A proposal shows the source the agent reported, labelled as agent-reported. An injected run can name any block, so that field is context, not provenance. The header's "these are notes" framing is not a security boundary, and nothing relies on it.
+- **Proposal spam.** Nothing limits how many proposals one run files: `runsPerHour` caps launches, not tool calls within a run. Proposals are never injected, so spam costs the user review effort and nothing more. That is the same as an agent flooding any ordinary page today, so I accept it. If it becomes a problem, the cheap fix is a cap on pending proposals inside `remember`.
+- **Blocks moved onto the page by hand.** When the user drags a proposal, or any other block, onto the memory page, the block keeps its id. An agent edit made against that id on a device that hadn't yet seen the move can still sync in. It takes a deliberate move plus an agent write already in flight, so I accept it. Accept is the path that avoids it.
 - **Leaking memory.** A run can read memory and leak it through a `WebFetch` URL. This is already true of all graph content.
 - **Injection through ordinary blocks.** An agent can still leave instructions in ordinary blocks that a later run reads. That isn't amplified by auto-injection and is unchanged from today.
 
@@ -201,7 +210,7 @@ This repo's beads memory works: a SessionStart hook injects a clipped one-line i
 - **Replace instead of piling up.** `supersedes` does the job of `bd remember --key`.
 
 **Better here.**
-- **Timestamps.** bd memories have none, which is the staleness problem AGENTS.md describes. Blocks have `updated_at`, so the index shows each memory's age.
+- **Timestamps.** bd memories have none, which is the staleness problem AGENTS.md describes. Blocks carry edit times, so the index shows each memory's age, taken from the newest edit anywhere in its subtree.
 - **Links.** Memories can link pages, and scoped memories show up in their target's backlinks.
 
 **Doesn't carry over.**
@@ -225,19 +234,20 @@ This repo's beads memory works: a SessionStart hook injects a clipped one-line i
   - Today `createGraphMcpServer` takes `instructions` only through `serverOptions`, so it needs an async loader, or the entrypoints fetch first and pass the composed string. Either way the change touches the same function #1236 is editing, so the two need to coordinate.
 - **Tools, mirrored as CLI verbs.**
   - `memory`, which reads: with no arguments it returns the full index, bounded like #1236's views; `{id}` returns the full subtree; `{at}` returns the memories that apply there.
-  - `remember`, which writes: it takes `{summary, body?, appliesTo?, pinned?, supersedes?, from?}`, creates a proposal, and returns *"Proposed ^abcd1234. Not active until the user accepts it."*
+  - `remember`, which writes: it takes `{summary, body?, appliesTo?, pinned?, supersedes?, source?}`, creates a proposal, and returns *"Proposed ^abcd1234. Not active until the user accepts it."*
   - Both names go into `KM_MCP_TOOL_NAMES`. Dispatch's allowlist derives from that list, so it picks them up.
 - **Staleness within a session.** Instructions are fixed at connect. A memory accepted mid-session shows up through `memory` but isn't injected again. Beads behaves the same way.
 - **Failure paths.**
   - Bridge down: the one-line notice above.
   - Tab on another workspace (#1234): the memory loaded is the active workspace's, as with every other read.
   - `applies-to` pointing at a deleted block: the memory applies nowhere, and `memory` lists it as such.
-  - Accept when the superseded memory is already gone: it just moves the proposal in.
+  - Accept when the superseded memory is already gone, or `supersedes` names something else: it ignores `supersedes`, says so, and puts the copy at the end of the page.
+  - Accept on a proposal that changed after it was shown: refused, and the user reviews it again.
   - Gate rejection: the agent's transaction rolls back atomically and the agent gets the message above.
 
 ## Implementation slices (for when this is accepted)
 
-1. **Seeds, pages and the proposal UI.** In agent-runtime: the type and property seeds, the two system pages, and a memory-page renderer with Accept.
+1. **Seeds, pages and the proposal UI.** In agent-runtime: the type and property seeds, the two system pages, the tag-on-entry processor, and the proposal renderer with Accept (check, then copy). Each Accept check needs a test that fails when the check is removed: a proposal that changed after it was shown, and a `supersedes` that names another proposal.
 2. **Actor stamp and gate.** `actor` on transaction options, the executor's facade, and the same-tx gate. Verify the guard per verb and per clause, including the rename-cascade case and a body block moved between memories: delete the clause and confirm a named test fails.
 3. **Verb, renderer and tools.** The `agent-memory` verb and its renderer with budgets, plus the `memory` / `remember` tools and CLI verbs.
 4. **Connect-time injection.** `composeInstructions` in both MCP entrypoints. This lands after #1236's static `instructions`.
@@ -251,5 +261,5 @@ This repo's beads memory works: a SessionStart hook injects a clipped one-line i
 3. **Scope memories with `applies-to` refs, rather than placing them under the pages they govern?** I recommend refs. Keeping every memory on one page is what makes review, and so the safety story, workable.
 4. **Accept a small core addition, `actor: 'agent'` on transaction options and `TxMeta`, so the gate can be one same-tx processor?** I recommend yes. The alternative is a check inside each agent write verb. That's smaller today, but every new verb (#1235) would have to remember to call it.
 5. **Give memory about 1,500 of Claude Code's 4,096 `instructions` chars, with pinned bodies first and index lines clipped, and the rest reached through `memory`?** I recommend yes. It leaves room for #1236's static guide and dispatch's channel text.
-6. **Approve the frozen names: type `agent-memory`, and `agent-memory:applies-to`, `agent-memory:pinned`, `agent-memory:supersedes` and `agent-memory:proposed-from`?** I recommend yes. They can't be renamed after the first release without a migration.
+6. **Approve the frozen names: type `agent-memory`, and `agent-memory:applies-to`, `agent-memory:pinned`, `agent-memory:supersedes` and `agent-memory:reported-source`?** I recommend yes. They can't be renamed after the first release without a migration.
 7. **Leave the read-write CLI surface (`eval`, `sql execute`, `install-extension`, `run-action`) outside the gate, documented as trusted?** I recommend yes. Gating it would mean sandboxing eval, which this design doesn't attempt. Such a token already holds the user's full authority in the app.
