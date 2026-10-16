@@ -464,6 +464,18 @@ describe('fixture state', () => {
     expect(differingUids(before, await fixtureState(probe, pages))).toEqual(['vendor-halyard-security'])
   }, 20_000)
 
+  it('ignores where a page sits at the top level, which differs from one import to the next', async () => {
+    const before = await fixtureState(probe, pages)
+    const halyard = await requirePageId(probe, 'Halyard Security')
+    const orderKey = fixtureSnapshot.rows.get(halyard)!.order_key
+    const setOrderKey = (key: string) => probe.command({
+      type: 'sql', mode: 'execute', sql: 'UPDATE blocks SET order_key = ? WHERE id = ?', params: [key, halyard], allowSyncedWrite: true,
+    })
+    await setOrderKey('zzzz')
+    expect(await fixtureState(probe, pages)).toEqual(before)
+    await setOrderKey(orderKey)
+  }, 20_000)
+
   it('is unchanged by a move the runner undoes, which leaves the block a new order key', async () => {
     const snapshot = await snapshotWorkspace(probe, QUIET)
     const before = await fixtureState(probe, pages)
