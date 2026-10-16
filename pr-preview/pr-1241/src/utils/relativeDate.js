@@ -1,1 +1,1 @@
-import{GL as e,UL as t,WL as n}from"../../chunks/app-9MgbYcKu.js";export{t as parseLiteralDailyPageTitle,n as parseRelativeDate,e as relativeDateCandidates};
+import{GL as e,KL as t,WL as n}from"../../chunks/app-UdMriO5l.js";export{n as parseLiteralDailyPageTitle,e as parseRelativeDate,t as relativeDateCandidates};

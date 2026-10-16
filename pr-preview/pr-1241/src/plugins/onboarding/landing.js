@@ -1,1 +1,1 @@
-import{lg as e}from"../../../chunks/app-9MgbYcKu.js";export{e as onboardingLanding};
+import{ug as e}from"../../../chunks/app-UdMriO5l.js";export{e as onboardingLanding};
