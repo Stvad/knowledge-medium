@@ -31,6 +31,13 @@ export interface GroupedBacklinkGroup {
 const isBlockKind = (kind: GroupedBacklinkCandidate['kind']): boolean =>
   kind === 'ref' || kind === 'root' || kind === 'attribute'
 
+/** Candidates merge into one group by this key: a block reached several ways
+ *  is one group, but a field or type group never merges with a block, since
+ *  sync can deliver a block whose id spells `field:…` or `type:…`. Two such
+ *  groups then share a `groupId` downstream (accepted). */
+const groupKey = (candidate: GroupedBacklinkCandidate): string =>
+  `${isBlockKind(candidate.kind) ? 'block' : candidate.kind}\u0000${candidate.groupId}`
+
 interface CandidateGroup {
   groupId: string
   label: string
@@ -146,7 +153,8 @@ export const buildGroupedBacklinks = ({
       continue
     }
     const priority = classify(candidate, matcher)
-    const existing = groups.get(candidate.groupId)
+    const key = groupKey(candidate)
+    const existing = groups.get(key)
     if (existing) {
       existing.sourceIds.add(candidate.sourceId)
       if (priorityRank(priority) > priorityRank(existing.priority)) {
@@ -154,7 +162,7 @@ export const buildGroupedBacklinks = ({
       }
       continue
     }
-    groups.set(candidate.groupId, {
+    groups.set(key, {
       groupId: candidate.groupId,
       label: candidate.groupLabel,
       sourceIds: new Set([candidate.sourceId]),

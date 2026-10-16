@@ -131,7 +131,7 @@ export interface LinkTargetValueCandidate {
 }
 
 export const labelForBlockData = (
-  data: BlockData | null | undefined,
+  data: Pick<BlockData, 'properties' | 'content'> | null | undefined,
   fallback: string,
 ): string => {
   const aliases = data?.properties[aliasesProp.name]

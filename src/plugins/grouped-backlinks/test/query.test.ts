@@ -301,6 +301,25 @@ describe('groupedBacklinksDataExtension query', () => {
     expect(out.groups.find(group => group.label === 'Project')?.blockId).toBe('project')
   })
 
+  it('keeps a field group apart from a block whose id spells the field group id', async () => {
+    await create({id: 'target', content: 'Target'})
+    // Sync can deliver a block with any id.
+    await create({id: 'field:reviewer', content: 'Planted'})
+    for (const id of ['src-ref-1', 'src-ref-2']) {
+      await create({id, references: [{id: 'target', alias: 'T'}, {id: 'field:reviewer', alias: 'Planted'}]})
+    }
+    await create({id: 'src-field', references: [{id: 'target', alias: 'target', sourceField: 'reviewer'}]})
+
+    const out = await env.repo.query[GROUPED_BACKLINKS_FOR_BLOCK_QUERY]({
+      workspaceId: WS,
+      id: 'target',
+    }).load()
+
+    expect(out.groups.find(group => group.label === 'reviewer')).toMatchObject({blockId: null, sourceIds: ['src-field']})
+    expect(sorted(out.groups.find(group => group.blockId === 'field:reviewer')!.sourceIds))
+      .toEqual(['src-ref-1', 'src-ref-2'])
+  })
+
   it('keeps two source fields from the same source to the same target distinct', async () => {
     await create({id: 'target', content: 'Target'})
     await create({

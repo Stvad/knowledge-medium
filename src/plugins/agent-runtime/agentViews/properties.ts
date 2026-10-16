@@ -8,9 +8,13 @@ import { boundLabels, charBoundary, clipLine, ellipsize, oneLine } from './text.
 
 export interface PropertyLine {
   name: string
-  /** One-line display form: refs as `[[Title]]`, dates as ISO, lists joined,
-   *  structured values summarized. */
+  /** One-line display form: refs as `[[Title]] ^shortid`, dates as ISO, lists
+   *  joined, structured values summarized. */
   value: string
+  /** A ref property's target ids, exactly as stored, for the refs it titles
+   *  (the first {@link MAX_REFS}, whether or not `value` had room to name
+   *  them). The display form bounds ids; this does not. */
+  refIds?: string[]
 }
 
 export interface PropertyView {
@@ -294,7 +298,11 @@ export const createPropertyRenderer = async (
       for (const {name, decoded} of prepared.shown) {
         const value = display(decoded, block, name, maxChars)
         if (value === '') continue
-        visible.push({name: clipLine(name, NAME_CHARS).text, value: clipLine(value, maxChars).text})
+        visible.push({
+          name: clipLine(name, NAME_CHARS).text,
+          value: clipLine(value, maxChars).text,
+          ...(decoded.kind === 'refs' ? {refIds: decoded.ids.slice(0, MAX_REFS)} : {}),
+        })
       }
       const hidden = prepared.hidden
       return {

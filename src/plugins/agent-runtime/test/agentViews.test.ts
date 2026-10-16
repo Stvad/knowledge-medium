@@ -517,6 +517,18 @@ describe('structural edge cases', () => {
     expect(shown.split(', ').length - 1 + Number(rest)).toBe(25)
   })
 
+  it('gives JSON the exact ids of a ref property, which the text bounds', async () => {
+    const target = uuid('7f8f0001', 1)
+    await create({id: target, content: 'Target', properties: {alias: ['Target']}})
+    const dangling = `dangling-${'z'.repeat(100)}`
+    const holder = uuid('7f8f0002', 2)
+    await create({id: holder, content: 'holder', properties: {groupWith: [target, dangling]}})
+    const out = await view<BlockView>({type: 'view-block', ref: holder, format: 'json'})
+    const line = out.properties.find(property => property.name === 'groupWith')!
+    expect(line.refIds).toEqual([target, dangling])
+    expect(line.value).toMatch(/^\[\[Target\]\] \^7f8f0001, \(\(dangling-z+…\)\)$/)
+  })
+
   it('gives an aliased ref its id: an alias two pages claim resolves to the older one', async () => {
     const older = uuid('7e8e0001', 1)
     const younger = uuid('7e8e0002', 2)
@@ -1003,6 +1015,29 @@ describe('view-search', () => {
 
     const firstPage = await view<SearchView>({type: 'view-search', query: 'banana', limit: 1, format: 'json'})
     expect(firstPage.nextOffset).toBe(1)
+  })
+
+  it('reads breadcrumb ancestors as bounded projections, never whole rows', async () => {
+    const page = uuid('cdcd0000', 1)
+    await create({
+      id: page,
+      content: `${' '.repeat(300)}Imported archive ${'x'.repeat(5000)}`,
+      properties: {'importer:payload': 'y'.repeat(100_000)},
+    })
+    const mid = uuid('cdcd0001', 2)
+    await create({id: mid, parentId: page, content: 'Notes'})
+    for (let i = 0; i < 3; i++) await create({id: uuid('cdcd0002', 3 + i), parentId: mid, content: `kiwi ${i}`})
+
+    const getAll = vi.spyOn(repo.db, 'getAll')
+    const out = await view<SearchView>({type: 'view-search', query: 'kiwi', format: 'json'})
+    const statements = getAll.mock.calls.map(call => call[0])
+    getAll.mockRestore()
+    expect(out.hits).toHaveLength(3)
+    for (const hit of out.hits) {
+      expect(hit.breadcrumb[0]).toMatch(/^Imported archive x+…$/)
+      expect(hit.breadcrumb[1]).toBe('Notes')
+    }
+    expect(statements.filter(sql => /\b(parent|blocks)\.\*/.test(sql))).toEqual([])
   })
 
   it('grows its window past a run of identical blocks, so a distinct hit below them stays reachable', async () => {

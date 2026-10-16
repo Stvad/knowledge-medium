@@ -3,7 +3,8 @@ import type { BlockData } from '@/data/api'
 import { parseBlockRow, type BlockRow } from '@/data/blockSchema.js'
 import { recognizedFieldRowSql } from '@/data/internals/treeQueries.js'
 import { registryRecognitionParams } from '@/data/internals/kernelQueries.js'
-import { crumbsFromAncestors } from '@/utils/blockCrumbs.js'
+import { aliasesProp } from '@/data/properties.js'
+import { crumbsFromAncestors, type CrumbAncestor } from '@/utils/blockCrumbs.js'
 import { propertyNameResolverFor } from '@/utils/propertyValueContext.js'
 
 /** Live rows for `ids`, in input order; missing or deleted ids are skipped. */
@@ -16,25 +17,94 @@ export const loadBlocks = async (repo: Repo, ids: readonly string[]): Promise<Bl
   return rows.map(parseBlockRow)
 }
 
+/** Each start's ancestor ids, root-most last, with each row's parent edge:
+ *  the walk `core.ancestors` makes (live rows, depth < 100, cycle-safe), over
+ *  ids alone. */
+const ANCESTOR_IDS_SQL = `
+  WITH RECURSIVE chain(start_id, id, parent_id, path, depth) AS (
+    SELECT b.id, b.id, b.parent_id, '!' || hex(b.id) || '/', 0
+      FROM json_each(?) j JOIN blocks b ON b.id = j.value
+     WHERE b.deleted = 0
+    UNION ALL
+    SELECT chain.start_id, p.id, p.parent_id, chain.path || '!' || hex(p.id) || '/', chain.depth + 1
+      FROM chain JOIN blocks p ON p.id = chain.parent_id
+     WHERE p.deleted = 0 AND chain.depth < 100
+       AND INSTR(chain.path, '!' || hex(p.id) || '/') = 0
+  )
+  SELECT start_id, id, parent_id, depth FROM chain ORDER BY start_id, depth
+`
+
+/** How much of an ancestor's content and first alias a crumb reads; it shows
+ *  24 characters. A cost bound: an ancestor shared by every hit is read once
+ *  and cut, never hydrated whole. Accepted: an alias longer than this is
+ *  ellipsized from the middle of its cut, not of the whole. */
+const CRUMB_SOURCE_CHARS = 200
+
+const CRUMB_ROWS_SQL = `
+  SELECT b.id AS id, b.parent_id AS parent_id, b.workspace_id AS workspace_id,
+         b.is_field_form AS is_field_form, b.reference_target_id AS reference_target_id,
+         substr(ltrim(b.content, ' ' || char(9, 10, 13)), 1, ${CRUMB_SOURCE_CHARS}) AS content,
+         CASE WHEN json_type(b.properties_json, '$.alias') = 'array' THEN (
+           SELECT substr(a.value, 1, ${CRUMB_SOURCE_CHARS}) FROM json_each(b.properties_json, '$.alias') a
+            WHERE a.type = 'text' AND trim(a.value) != '' LIMIT 1
+         ) END AS alias
+    FROM json_each(?) j JOIN blocks b ON b.id = j.value
+`
+
+interface CrumbRow {
+  id: string
+  parent_id: string | null
+  workspace_id: string
+  is_field_form: number | null
+  reference_target_id: string | null
+  content: string | null
+  alias: string | null
+}
+
+const toCrumbAncestor = (row: CrumbRow): CrumbAncestor => ({
+  workspaceId: row.workspace_id,
+  parentId: row.parent_id,
+  isFieldForm: row.is_field_form === 1,
+  referenceTargetId: row.reference_target_id,
+  content: row.content ?? '',
+  properties: row.alias === null ? {} : {[aliasesProp.name]: [row.alias]},
+})
+
 /** Root→parent crumb labels per block (the panel's own formatter: aliases
  *  over content, field rows named by their property, a leading `…` where the
- *  chain is cut). Walks started together coalesce into one statement. */
+ *  chain is cut). Reads each distinct ancestor once, as a bounded projection. */
 export const loadCrumbs = async (
   repo: Repo,
   ids: readonly string[],
   workspaceId: string,
 ): Promise<Map<string, string[]>> => {
   const unique = [...new Set(ids)]
-  const walks = await Promise.all(unique.map(id => repo.query.ancestors({id}).load()))
+  if (unique.length === 0) return new Map()
+  const steps = await repo.db.getAll<{start_id: string, id: string, parent_id: string | null, depth: number}>(
+    ANCESTOR_IDS_SQL,
+    [JSON.stringify(unique)],
+  )
+  const ancestorIds = [...new Set(steps.filter(step => step.depth > 0).map(step => step.id))]
+  const rows = ancestorIds.length === 0
+    ? []
+    : await repo.db.getAll<CrumbRow>(CRUMB_ROWS_SQL, [JSON.stringify(ancestorIds)])
+  const ancestorById = new Map(rows.map(row => [row.id, toCrumbAncestor(row)]))
+
+  // Rows come depth-ascending per start, so the last one's parent edge is
+  // where the walk stopped: null when it reached a root.
+  const walks = new Map<string, {chain: CrumbAncestor[], stoppedAtParentId: string | null}>()
+  for (const step of steps) {
+    const walk = walks.get(step.start_id) ?? {chain: [], stoppedAtParentId: null}
+    const ancestor = step.depth > 0 ? ancestorById.get(step.id) : undefined
+    if (ancestor) walk.chain.push(ancestor)
+    walk.stoppedAtParentId = step.parent_id
+    walks.set(step.start_id, walk)
+  }
   const propertyName = propertyNameResolverFor(repo, workspaceId)
-  return new Map(unique.map((id, index) => [
-    id,
-    crumbsFromAncestors(walks[index].ancestors, {
-      workspaceId,
-      stoppedAtParentId: walks[index].stoppedAtParentId,
-      propertyName,
-    }),
-  ]))
+  return new Map(unique.map(id => {
+    const walk = walks.get(id) ?? {chain: [], stoppedAtParentId: null}
+    return [id, crumbsFromAncestors(walk.chain, {workspaceId, stoppedAtParentId: walk.stoppedAtParentId, propertyName})]
+  }))
 }
 
 /** `childRef` is a child an outline shows of the block whose id is

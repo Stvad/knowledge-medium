@@ -171,37 +171,9 @@ describe('displayableTypes', () => {
 
 describe('link target autocomplete helpers', () => {
   it('labels blocks by first alias, then content, then fallback', () => {
-    expect(labelForBlockData({
-      id: 'with-alias',
-      workspaceId: WS,
-      parentId: null,
-      orderKey: 'a0',
-      content: 'Content',
-      properties: {[aliasesProp.name]: ['Page']},
-      references: [],
-      createdAt: 1,
-      updatedAt: 1,
-      userUpdatedAt: 1,
-      createdBy: 'u',
-      updatedBy: 'u',
-      deleted: false,
-    }, 'fallback')).toBe('Page')
+    expect(labelForBlockData({content: 'Content', properties: {[aliasesProp.name]: ['Page']}}, 'fallback')).toBe('Page')
 
-    expect(labelForBlockData({
-      id: 'with-content',
-      workspaceId: WS,
-      parentId: null,
-      orderKey: 'a0',
-      content: 'Content',
-      properties: {},
-      references: [],
-      createdAt: 1,
-      updatedAt: 1,
-      userUpdatedAt: 1,
-      createdBy: 'u',
-      updatedBy: 'u',
-      deleted: false,
-    }, 'fallback')).toBe('Content')
+    expect(labelForBlockData({content: 'Content', properties: {}}, 'fallback')).toBe('Content')
   })
 
   it('searches aliases and content while de-duping content hits covered by aliases', async () => {
