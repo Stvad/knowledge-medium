@@ -41,36 +41,34 @@ export interface WorkspaceSnapshot {
   /** Mutable: a block moved back gets a new order key, which becomes its
    *  snapshot key once the restore is verified. */
   rows: Map<string, SnapshotRow>
-  /** The app's own state when the snapshot was taken. */
-  appState: ReadonlySet<string>
+  /** The app's own state when the snapshot was taken, parents before
+   *  children, and whether each row was live then. */
+  appState: ReadonlyMap<string, boolean>
 }
 
 /** A snapshot as the run journal stores it. */
 export interface StoredSnapshot {
   rows: SnapshotRow[]
-  appState: string[]
+  appState: Array<[string, boolean]>
 }
 
 export const storeSnapshot = (snapshot: WorkspaceSnapshot): StoredSnapshot =>
   ({rows: [...snapshot.rows.values()], appState: [...snapshot.appState]})
 
 export const loadSnapshot = (stored: StoredSnapshot): WorkspaceSnapshot =>
-  ({rows: new Map(stored.rows.map(row => [row.id, row])), appState: new Set(stored.appState)})
+  ({rows: new Map(stored.rows.map(row => [row.id, row])), appState: new Map(stored.appState)})
 
-/** The rows of `rows` that are the app's own state: those that were at
- *  snapshot time, and rows created under them since — never a snapshot row. */
-const appStateIn = (snapshot: WorkspaceSnapshot, rows: readonly SnapshotRow[]): Set<string> => {
+/** `seeds` and the rows of `rows` under them, parents before children,
+ *  never descending into a compared row. */
+const appStateIn = (seeds: Iterable<string>, rows: readonly SnapshotRow[], compared: ReadonlyMap<string, SnapshotRow>): Set<string> => {
   const children = new Map<string, SnapshotRow[]>()
   for (const row of rows) {
     if (row.parent_id !== null) children.set(row.parent_id, [...(children.get(row.parent_id) ?? []), row])
   }
-  const found = new Set(snapshot.appState)
-  const queue = [...snapshot.appState]
-  for (let id = queue.pop(); id !== undefined; id = queue.pop()) {
+  const found = new Set(seeds)
+  for (const id of found) {
     for (const child of children.get(id) ?? []) {
-      if (snapshot.rows.has(child.id) || found.has(child.id)) continue
-      found.add(child.id)
-      queue.push(child.id)
+      if (!compared.has(child.id)) found.add(child.id)
     }
   }
   return found
@@ -85,8 +83,12 @@ const isUserPage = (row: SnapshotRow) => {
 const snapshotFromRows = (rows: readonly SnapshotRow[]): WorkspaceSnapshot => {
   const ids = new Set(rows.map(row => row.id))
   const roots = rows.filter(isUserPage).flatMap(page => userStateRootBlockIds(page.id)).filter(id => ids.has(id))
-  const appState = appStateIn({rows: new Map(), appState: new Set(roots)}, rows)
-  return {rows: new Map(rows.filter(row => !appState.has(row.id)).map(row => [row.id, row])), appState}
+  const appState = appStateIn(roots, rows, new Map())
+  const byId = new Map(rows.map(row => [row.id, row]))
+  return {
+    rows: new Map(rows.filter(row => !appState.has(row.id)).map(row => [row.id, row])),
+    appState: new Map([...appState].map(id => [id, byId.get(id)?.deleted === 0])),
+  }
 }
 
 /** Waits until nothing in the workspace has been written for `quietMs`, and
@@ -128,6 +130,10 @@ export interface TaskChanges {
   created: SnapshotRow[]
   /** Snapshot rows whose state differs from the snapshot. */
   modified: Array<{id: string, before: SnapshotRow, after: SnapshotRow}>
+  /** App-state rows live at snapshot time and deleted now, parents first:
+   *  deleting a user page tombstones its state too, and reviving the page
+   *  does not bring that back. */
+  appStateDeleted: string[]
 }
 
 /** Key order is not part of a JSON column's value. */
@@ -162,8 +168,13 @@ const stampsMoved = (before: SnapshotRow, after: SnapshotRow) =>
   before.updated_at !== after.updated_at || before.user_updated_at !== after.user_updated_at
 
 const changesBetween = (snapshot: WorkspaceSnapshot, rows: readonly SnapshotRow[]): TaskChanges => {
-  const changes: TaskChanges = {created: [], modified: []}
-  const appState = appStateIn(snapshot, rows)
+  const appState = appStateIn(snapshot.appState.keys(), rows, snapshot.rows)
+  const deletedNow = new Set(rows.filter(row => row.deleted).map(row => row.id))
+  const changes: TaskChanges = {
+    created: [],
+    modified: [],
+    appStateDeleted: [...snapshot.appState].filter(([id, live]) => live && deletedNow.has(id)).map(([id]) => id),
+  }
   for (const row of rows) {
     if (appState.has(row.id)) continue
     const before = snapshot.rows.get(row.id)
@@ -196,6 +207,7 @@ const undoChanges = async (probe: GraphProbe, snapshot: WorkspaceSnapshot, chang
   for (const {id, before, after} of changes.modified) {
     if (!before.deleted && after.deleted && !rescued.some(change => change.id === id)) await revive(id)
   }
+  for (const id of changes.appStateDeleted) await revive(id)
   for (const {id, before, after} of changes.modified) {
     if (before.content !== after.content || !sameColumn('properties_json', before.properties_json, after.properties_json)) {
       await probe.command({
@@ -245,6 +257,7 @@ export const restoreSnapshot = async (
   const left = changesBetween(snapshot, rows)
   const unrestored = [
     ...left.created.map(row => row.id),
+    ...left.appStateDeleted,
     ...left.modified.filter(({before, after}) => !sameState(before, {...after, order_key: before.order_key})).map(({id}) => id),
   ]
   if (unrestored.length > 0) {
@@ -277,11 +290,11 @@ export interface AllowedEdit {
 }
 
 /** What a task was asked to change: fields of existing blocks, by block id,
- *  and the blocks it was asked to create, each with the property keys it may
- *  carry. A read task gets neither. */
+ *  and the blocks it was asked to create, each with exactly the properties it
+ *  must carry. A read task gets neither. */
 export interface AllowedChanges {
   edits: ReadonlyMap<string, AllowedEdit>
-  creates: ReadonlyMap<string, readonly string[]>
+  creates: ReadonlyMap<string, Readonly<Record<string, unknown>>>
 }
 
 const NO_EDIT: AllowedEdit = {}
@@ -301,12 +314,12 @@ const exceedsEdit = (before: SnapshotRow, after: SnapshotRow, edit: AllowedEdit)
 }
 
 const allowedCreation = (row: SnapshotRow, allowed: AllowedChanges): boolean => {
-  const keys = allowed.creates.get(row.id)
-  return keys !== undefined && Object.keys(JSON.parse(row.properties_json) as object).every(key => keys.includes(key))
+  const properties = allowed.creates.get(row.id)
+  return properties !== undefined && sameColumn('properties_json', row.properties_json, JSON.stringify(properties))
 }
 
 /** How many changes fall outside `allowed`. A block the task created and
  *  deleted again is not counted. */
-export const strayChanges = (changes: TaskChanges, allowed: AllowedChanges): number =>
+export const strayChanges = (changes: Pick<TaskChanges, 'created' | 'modified'>, allowed: AllowedChanges): number =>
   changes.modified.filter(({id, before, after}) => exceedsEdit(before, after, allowed.edits.get(id) ?? NO_EDIT)).length
   + changes.created.filter(row => !row.deleted && !allowedCreation(row, allowed)).length

@@ -25,7 +25,9 @@ export const openWorkspace = async (probe: GraphProbe, journal: RunJournal, fixt
 }
 
 /** The starting state every task of a run gets: each task's changes are
- *  undone against the snapshot this returns. */
+ *  undone against the snapshot this returns. A kill between setup and the
+ *  journal's first write leaves what setup added, at most today's empty
+ *  note: accepted for a window of about a second. */
 export const beginRun = async (
   probe: GraphProbe,
   journal: RunJournal,

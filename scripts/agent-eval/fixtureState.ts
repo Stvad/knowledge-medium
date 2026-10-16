@@ -9,7 +9,9 @@
  * page, a page a link minted). Position is a rank among siblings,
  * because a block the runner moved back keeps a new order key; pages have
  * none, as top-level order means nothing and differs per import. Equal lines
- * mean the same fixture state, whichever workspace holds it.
+ * mean the same fixture state, whichever workspace holds it. A row that is
+ * none of these, such as a page added by hand at the top level, is out of
+ * reach: the eval tab is a dedicated one.
  */
 import { roamBlockId } from '@/plugins/roam-import/blockIds'
 import type { RoamBlock, RoamPage } from '@/plugins/roam-import/types'

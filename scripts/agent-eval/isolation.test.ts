@@ -15,7 +15,7 @@ const row = (id: string, overrides: Partial<SnapshotRow> = {}): SnapshotRow => (
   ...overrides,
 })
 
-const allowing = (edit?: AllowedEdit, creates: Record<string, readonly string[]> = {}): AllowedChanges => ({
+const allowing = (edit?: AllowedEdit, creates: Record<string, Record<string, unknown>> = {}): AllowedChanges => ({
   edits: new Map(edit ? [['todo', edit]] : []),
   creates: new Map(Object.entries(creates)),
 })
@@ -62,14 +62,16 @@ describe('strayChanges', () => {
       row('beside', {parent_id: 'section', ...plain}),
       row('gone', {parent_id: 'section', deleted: 1, ...plain}),
     ]
-    expect(strayChanges({created, modified: []}, allowing(undefined, {new: [], child: []}))).toBe(1)
+    expect(strayChanges({created, modified: []}, allowing(undefined, {new: {}, child: {}}))).toBe(1)
     expect(strayChanges({created, modified: []}, allowing())).toBe(3)
   })
 
-  it('counts a requested block that carries a property it was not asked for', () => {
-    const page = row('page', {parent_id: null, properties_json: JSON.stringify({types: ['page'], alias: ['Review']})})
-    expect(strayChanges({created: [page], modified: []}, allowing(undefined, {page: ['types', 'alias']}))).toBe(0)
-    expect(strayChanges({created: [page], modified: []}, allowing(undefined, {page: ['types']}))).toBe(1)
+  it('counts a requested block whose properties are not exactly the ones it was asked for', () => {
+    const page = (properties: Record<string, unknown>) => row('page', {parent_id: null, properties_json: JSON.stringify(properties)})
+    const expected = {page: {types: ['page'], alias: ['Review']}}
+    expect(strayChanges({created: [page({alias: ['Review'], types: ['page']})], modified: []}, allowing(undefined, expected))).toBe(0)
+    expect(strayChanges({created: [page({types: ['page'], alias: ['Review'], note: 'x'})], modified: []}, allowing(undefined, expected))).toBe(1)
+    expect(strayChanges({created: [page({types: ['page', 'todo'], alias: ['Review']})], modified: []}, allowing(undefined, expected))).toBe(1)
   })
 })
 

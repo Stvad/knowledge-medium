@@ -46,7 +46,10 @@ const reportOf = (
   finishedAt: '2026-10-15T00:10:00Z',
   git: {sha: '0123456789abcdef', branch: 'master', dirty: false},
   model: 'sonnet',
-  conditions: {fixture: 'abc', model: 'claude-test', effort: 'default', mcpOutputTokens: 25_000, timeoutMs: 600_000, ...conditions},
+  conditions: {
+    fixture: 'abc', importedFixture: 'state-1', model: 'claude-test', effort: 'default', mcpOutputTokens: 25_000, timeoutMs: 600_000,
+    ...conditions,
+  },
   claudeCodeVersion: '1.0.0',
   kmTools: ['search'],
   taskHashes: Object.fromEntries(runs.map(run => [run.task, `${run.task}-v1`])),
@@ -121,6 +124,7 @@ describe('renderMarkdown', () => {
     ['MCP output cap', {mcpOutputTokens: 5_000}, 'mcpOutputTokens 25000 → 5000'],
     ['timeout', {timeoutMs: 60_000}, 'timeoutMs 600000 → 60000'],
     ['fixture', {fixture: 'def'}, 'fixture abc → def'],
+    ['stored fixture', {importedFixture: 'state-2'}, 'importedFixture state-1 → state-2'],
   ] as const)('compares nothing with a baseline run under another %s', (_name, conditions, named) => {
     const baseline = reportOf('before', [runRecord('a', 1, {toolCalls: 8})])
     const current = reportOf('after', [runRecord('a', 1, {toolCalls: 4})], {outputSizes: {'search:x': 250}}, conditions)

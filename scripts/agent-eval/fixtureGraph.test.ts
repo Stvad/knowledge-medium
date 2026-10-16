@@ -295,6 +295,19 @@ const solveWrongly: Record<string, Array<(env: TaskEnv) => Promise<void>>> = {
       await solveWithMcp['create-linked-page'](env)
       await graph.callTool('create_block', {parentId: fixtureId('vendorsSection'), content: '[[Kestrel]] — renewal notes'})
     },
+    // The page created right, then retitled while asking to keep the old name:
+    // the app moves the name with the title, so the page is no longer found.
+    async env => {
+      await solveWithMcp['create-linked-page'](env)
+      const title = vendorReviewTitle(env.runTag)
+      await graph.callTool('update_block', {id: await requirePageId(probe, title), content: 'Kestrel review notes', properties: {alias: [title]}})
+    },
+    // The page created right, then given another type as well.
+    async env => {
+      await solveWithMcp['create-linked-page'](env)
+      const pageId = await requirePageId(probe, vendorReviewTitle(env.runTag))
+      await graph.callTool('update_block', {id: pageId, properties: {types: ['page', 'todo']}})
+    },
     // The page created right, then filed under a block instead of left a page.
     async env => {
       await solveWithMcp['create-linked-page'](env)
@@ -414,10 +427,10 @@ describe('isolation', () => {
     // The rollout edit is what edit-rollout-phrase is asked to make; the rest are stray.
     const rolloutContent = new Map([[rollout, {content: true} as const]])
     expect(strayChanges(changes, {edits: rolloutContent, creates: new Map()})).toBe(6)
-    expect(strayChanges(changes, {edits: rolloutContent, creates: new Map([[changes.created[0].id, []]])})).toBe(5)
+    expect(strayChanges(changes, {edits: rolloutContent, creates: new Map([[changes.created[0].id, {}]])})).toBe(5)
     expect(strayChanges(changes, {edits: new Map(), creates: new Map()})).toBe(7)
 
-    expect(await diffAgainst(probe, snapshot, QUIET)).toEqual({created: [], modified: []})
+    expect(await diffAgainst(probe, snapshot, QUIET)).toEqual({created: [], modified: [], appStateDeleted: []})
     const restored = new Map((await descendantsOf(probe, await requirePageId(probe, DESIGN_PAGE))).map(row => [row.id, row]))
     for (const block of [edited, tagged, removed, moved, movedToo]) {
       expect({content: restored.get(block.id)?.content, properties: JSON.parse(restored.get(block.id)?.properties_json ?? 'null'), parent: restored.get(block.id)?.parent_id})
@@ -532,7 +545,7 @@ describe('isolation edge cases', () => {
     await graph.callTool('update_block', {id: tombstone.id, content: 'revived and edited'})
 
     await restoreSnapshot(probe, snapshot, QUIET)
-    expect(await diffAgainst(probe, snapshot, QUIET)).toEqual({created: [], modified: []})
+    expect(await diffAgainst(probe, snapshot, QUIET)).toEqual({created: [], modified: [], appStateDeleted: []})
     await graph.callTool('restore_block', {id: tombstone.id})
     expect((await getBlock(probe, tombstone.id))?.content).toBe(tombstone.content)
   }, 20_000)
@@ -546,7 +559,7 @@ describe('isolation edge cases', () => {
     await vi.waitFor(async () => { expect(await pageIdByTitle(probe, 'Office Lease')).not.toBe(lease) }, {timeout: 5_000})
 
     await restoreSnapshot(probe, snapshot, QUIET)
-    expect(await diffAgainst(probe, snapshot, QUIET)).toEqual({created: [], modified: []})
+    expect(await diffAgainst(probe, snapshot, QUIET)).toEqual({created: [], modified: [], appStateDeleted: []})
     expect(await pageIdByTitle(probe, 'Office Lease')).toBe(lease)
   }, 20_000)
 
@@ -558,7 +571,7 @@ describe('isolation edge cases', () => {
     await graph.callTool('move_block', {id: rollout, parentId, position: {kind: 'first'}})
 
     await restoreSnapshot(probe, snapshot, QUIET)
-    expect(await diffAgainst(probe, snapshot, QUIET)).toEqual({created: [], modified: []})
+    expect(await diffAgainst(probe, snapshot, QUIET)).toEqual({created: [], modified: [], appStateDeleted: []})
     expect((await getBlock(probe, rollout))?.content).toBe(before.content)
   }, 20_000)
 })
@@ -583,6 +596,22 @@ describe('app state', () => {
     const [restored] = await sqlAll<{parent_id: string}>(probe, 'SELECT parent_id FROM blocks WHERE id = ?', [rollout])
     expect(restored.parent_id).toBe(snapshot.rows.get(rollout)!.parent_id)
     expect([await getBlock(probe, note), await getBlock(probe, panelState)].map(block => block !== null)).toEqual([false, true])
+  }, 20_000)
+})
+
+describe('app state cascades', () => {
+  it('revives the app\'s state that deleting its user page took along', async () => {
+    const userPage = (await probe.command({type: 'create-block', content: 'Eval User', properties: {types: ['user']}}) as {id: string}).id
+    const [stateRoot] = userStateRootBlockIds(userPage)
+    await probe.command({type: 'create-block', parentId: userPage, content: 'ui-state', data: {id: stateRoot}})
+    const panelState = resultIdOf(await graph.callTool('create_block', {parentId: stateRoot, content: 'panel state'}))
+    const snapshot = await snapshotWorkspace(probe, QUIET)
+    await graph.callTool('delete_block', {id: userPage})
+
+    const changes = await restoreSnapshot(probe, snapshot, QUIET)
+    expect(changes.appStateDeleted).toEqual([stateRoot, panelState])
+    const live = await sqlAll<{id: string}>(probe, 'SELECT id FROM blocks WHERE deleted = 0 AND id IN (?, ?, ?)', [userPage, stateRoot, panelState])
+    expect(live.map(row => row.id).sort()).toEqual([userPage, stateRoot, panelState].sort())
   }, 20_000)
 })
 

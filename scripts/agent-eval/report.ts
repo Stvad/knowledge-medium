@@ -49,7 +49,12 @@ export interface TaskRunRecord {
  *  beside them, not among them, or a baseline would expire with every CLI
  *  release. */
 export interface RunConditions {
+  /** Of the generated export. */
   fixture: string
+  /** Of the fixture as this checkout's code stores it (`fixtureState`), which
+   *  the tab was checked against: an importer or data-layer change moves it
+   *  while the export stays the same. Null until the run has checked. */
+  importedFixture: string | null
   /** As the first run resolved it; null until then, or when no run got that far. */
   model: string | null
   effort: string

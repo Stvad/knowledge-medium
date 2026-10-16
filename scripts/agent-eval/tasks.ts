@@ -48,10 +48,10 @@ export interface CheckOutcome {
   pass: boolean
   detail: string
   /** The blocks the check accepted as the ones the task was asked to create,
-   *  each with the property keys it may carry. Any other block the run
-   *  created, or another property on one of these, is a change it was not
+   *  each with exactly the properties it must carry. Any other block the run
+   *  created, or other properties on one of these, is a change it was not
    *  asked to make. */
-  created?: Readonly<Record<string, readonly string[]>>
+  created?: Readonly<Record<string, Readonly<Record<string, unknown>>>>
 }
 
 export interface EvalTask {
@@ -352,7 +352,7 @@ export const TASKS: readonly EvalTask[] = [
           'Next: review the Kestrel renewal',
           'Blockers: none',
         ]),
-        created: Object.fromEntries([added[0], ...children].map(row => [row.id, []])),
+        created: Object.fromEntries([added[0], ...children].map(row => [row.id, {}])),
       }
     },
   },
@@ -406,8 +406,8 @@ export const TASKS: readonly EvalTask[] = [
       return {
         pass: statusOk && linkOk,
         detail: `first block ${statusOk ? 'ok' : `is ${JSON.stringify(first?.content ?? null)}`}; ${links.length} link(s) under Vendors`,
-        // A page carries the type and alias the app gives every page.
-        created: Object.fromEntries([[pageId, ['types', 'alias']], ...[...(first ? [first] : []), ...links].map(row => [row.id, []])]),
+        // A page carries the type and alias the app gives every page, nothing more.
+        created: Object.fromEntries([[pageId, {types: ['page'], alias: [title]}], ...[...(first ? [first] : []), ...links].map(row => [row.id, {}])]),
       }
     },
   },

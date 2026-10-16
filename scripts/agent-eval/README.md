@@ -78,9 +78,9 @@ either is read from the tab and from a fresh in-process import, in a form that d
 depend on the workspace (`fixtureState.ts`). The two must be equal. This check runs
 before the resets write anything, so a refused run leaves nothing behind.
 A tab seeded by older code, or holding a change made by hand, is refused before
-anything is spent, and so is a run whose in-process import fails. The run also aborts if
-`packages/agent-cli/dist` changed while a task ran, since every task launches the
-server from there.
+anything is spent, and so is a run whose in-process import fails. The run also aborts if the checkout changed
+while a task ran, since both halves of the tools run from it: the dev tab hot-reloads
+the app from it, and the MCP server is built from it.
 
 A task's definition is part of the measurement. A report stores a hash of each task's
 prompt, check, reset and allowed changes, plus the values the checks close over (the
@@ -92,7 +92,9 @@ of their call the same way. When you change a helper the checks share
 and wrong ones in `fixtureGraph.test.ts`.
 
 So is what a run holds fixed, recorded together as the report's `conditions`: the
-fixture, the resolved model, the effort, the MCP output cap and the per-task timeout.
+fixture, the fixture as this checkout stores it (a digest of `fixtureState`, which moves
+when the importer or the data layer does), the resolved model, the effort, the MCP
+output cap and the per-task timeout.
 A baseline that differs in any of them gets no deltas at all, since they
 would measure that difference rather than the tools. That includes a run whose model
 never resolved because no task got far enough. `run` refuses such a `--compare` before

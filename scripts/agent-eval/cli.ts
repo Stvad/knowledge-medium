@@ -13,7 +13,7 @@
  */
 import { spawnSync } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -35,6 +35,7 @@ import {
   parseReport,
   renderMarkdown,
   REPORT_SCHEMA_VERSION,
+  definitionHash,
   type TaskRunRecord,
 } from './report'
 import { allowedChanges, type CheckOutcome, type EvalTask, taskDefinitionHash, TASKS } from './tasks'
@@ -46,8 +47,7 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 const RESULTS_DIR = path.join(REPO_ROOT, 'scripts/agent-eval/results')
 const RUNS_DIR = path.join(REPO_ROOT, 'tmp/agent-eval/runs')
 const JOURNAL_DIR = path.join(REPO_ROOT, 'tmp/agent-eval/journal')
-const MCP_DIST = path.join(REPO_ROOT, 'packages/agent-cli/dist')
-const MCP_ENTRY = path.join(MCP_DIST, 'mcp.js')
+const MCP_ENTRY = path.join(REPO_ROOT, 'packages/agent-cli/dist/mcp.js')
 const DEFAULT_PROFILE = 'km-eval'
 
 const fail = (message: string): never => {
@@ -143,26 +143,21 @@ const gitInfo = () => {
 
 /** The runs launch the BUILT server, and a stale build silently measures old
  *  code, so every run builds first (incremental, a few seconds). */
-const buildPackages = (): string => {
+const buildPackages = () => {
   process.stdout.write('building packages/agent-cli…\n')
   const build = spawnSync('pnpm', ['run', 'compile:packages'], {cwd: REPO_ROOT, encoding: 'utf8'})
   if (build.status !== 0) fail(`pnpm run compile:packages failed:\n${`${build.stdout}${build.stderr}`.trim().split('\n').slice(-15).join('\n')}`)
-  return buildDigest()
 }
 
-/** Of the built MCP server every task launches: a rebuild mid-run (another
- *  run's build, a compile after an edit) would hand later tasks other tools
- *  under this report's one identity. */
-const buildDigest = (): string => {
-  const hash = createHash('sha256')
-  const walk = (dir: string) => {
-    for (const entry of readdirSync(dir, {withFileTypes: true}).sort((a, b) => (a.name < b.name ? -1 : 1))) {
-      const file = path.join(dir, entry.name)
-      if (entry.isDirectory()) walk(file)
-      else hash.update(path.relative(MCP_DIST, file)).update(readFileSync(file))
-    }
-  }
-  walk(MCP_DIST)
+/** Of the checkout both halves of the tools run from: the dev tab serves the
+ *  app from it, hot-reloading edits, and the MCP server is built from it. A
+ *  change while a task runs (an edit, a rebuild after one, another branch)
+ *  would hand it other code under this report's one git identity. */
+const checkoutDigest = (): string => {
+  const git = (...args: string[]) => spawnSync('git', args, {cwd: REPO_ROOT}).stdout
+  const hash = createHash('sha256').update(git('rev-parse', 'HEAD')).update(git('diff', 'HEAD', '--binary'))
+  const untracked = git('ls-files', '--others', '--exclude-standard', '-z').toString('utf8').split('\0').filter(Boolean)
+  for (const file of untracked.sort()) hash.update(file).update(readFileSync(path.join(REPO_ROOT, file)))
   return hash.digest('hex')
 }
 
@@ -189,7 +184,7 @@ const importedFixture = (): ImportedFixture | null => {
 /** The agent must query the graph this checkout's code imports, which the
  *  gate's checks are proven on, not one seeded by other code or left dirty.
  *  Returns the tab's probe output sizes. */
-const requireImportedGraph = async (client: BridgeClient, probe: GraphProbe, fixture: Fixture): Promise<Record<string, number>> => {
+const requireImportedGraph = async (client: BridgeClient, probe: GraphProbe, fixture: Fixture): Promise<{outputs: Record<string, number>, state: string}> => {
   const expected = importedFixture()
     ?? fail('the in-process import to check the tab against failed; see pnpm vitest run scripts/agent-eval/fixtureGraph.test.ts -t "imported fixture"')
   const differing = differingUids(expected.state, await fixtureState(probe, fixture.pages))
@@ -198,11 +193,12 @@ const requireImportedGraph = async (client: BridgeClient, probe: GraphProbe, fix
       + 'it was seeded by other code, or holds changes an earlier run left. Seed a fresh origin (README: "Resetting the dev origin").')
   }
   const mcp = await connectMcpClient(client)
-  return measureProbes({
+  const outputs = await measureProbes({
     callTool: mcp.callTool,
     pageId: title => requirePageId(probe, title),
     dailyNoteId: iso => dailyNoteId(probe, iso),
   }).finally(() => mcp.close())
+  return {outputs, state: definitionHash(expected.state)}
 }
 
 const writeMcpConfig = (dir: string, profile: string): string => {
@@ -260,7 +256,8 @@ const run = async (options: RunOptions) => {
       // Not empty: the run wrote into it.
     }
   })
-  const build = buildPackages()
+  buildPackages()
+  const checkout = checkoutDigest()
   const {probe, client} = await connect(options.profile)
   const fixture = buildFixture()
   const {release, journal, seeded} = await prepareWorkspace(probe, fixture)
@@ -279,6 +276,7 @@ const run = async (options: RunOptions) => {
     model: options.model,
     conditions: {
       fixture: fixture.hash,
+      importedFixture: null,
       model: null,
       effort: options.effort ?? 'default',
       mcpOutputTokens: options.mcpOutputTokens,
@@ -301,7 +299,12 @@ const run = async (options: RunOptions) => {
 
   process.stdout.write('checking the tab against this checkout\'s import…\n')
   const {snapshot, setupCreated} = await beginRun(probe, journal, fixture.hash, {
-    validate: async () => { report.outputSizes = await requireImportedGraph(client, probe, fixture) },
+    validate: async () => {
+      const imported = await requireImportedGraph(client, probe, fixture)
+      report.outputSizes = imported.outputs
+      report.conditions.importedFixture = imported.state
+      requireComparable(true)
+    },
     setUp: async () => { for (const task of TASKS) await task.reset?.({probe, truth: fixture.truth, runTag: ''}) },
   })
 
@@ -331,8 +334,8 @@ const run = async (options: RunOptions) => {
         onStdoutText: text => { stdout += text },
       })
       const elapsedMs = Date.now() - startedAt
-      // After the task, so a rebuild during it — the last task's included — is caught.
-      const rebuilt = buildDigest() !== build
+      // After the task, so a change during it — the last task's included — is caught.
+      const checkoutChanged = checkoutDigest() !== checkout
       writeFileSync(transcriptPath, stdout)
       rmSync(cwd, {recursive: true, force: true})
 
@@ -346,7 +349,7 @@ const run = async (options: RunOptions) => {
       const changes = await restoreSnapshot(probe, snapshot)
         .catch((error: unknown) => fail(`aborting the run: ${errorText(error)}`))
       journal.taskRestored()
-      if (rebuilt) fail(`packages/agent-cli/dist changed while ${task.id} ran, so it may have run other tools; start the run again`)
+      if (checkoutChanged) fail(`the checkout changed while ${task.id} ran, so it may have run other code; start the run again`)
       if (modelResolved) requireComparable(false)
       if (modelChanged) fail(`${task.id} ran on ${metrics.model}, not ${report.conditions.model} like the tasks before it; start the run again`)
       const allowed = allowedChanges(task, probe.workspaceId, outcome)
