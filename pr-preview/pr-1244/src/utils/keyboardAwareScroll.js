@@ -1,1 +1,1 @@
-import{ek as e,tk as t}from"../../chunks/app-NjtM2hfB.js";export{e as keyboardAwareScroll,t as shouldReassertCaret};
+import{ek as e,tk as t}from"../../chunks/app-BOC81cRe.js";export{e as keyboardAwareScroll,t as shouldReassertCaret};

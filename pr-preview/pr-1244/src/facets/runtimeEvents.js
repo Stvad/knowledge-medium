@@ -1,1 +1,1 @@
-import{FP as e,PP as t}from"../../chunks/app-NjtM2hfB.js";export{t as appRuntimeUpdateEvent,e as refreshAppRuntime};
+import{FP as e,PP as t}from"../../chunks/app-BOC81cRe.js";export{t as appRuntimeUpdateEvent,e as refreshAppRuntime};
