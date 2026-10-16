@@ -1,0 +1,1 @@
+import{nw as e,tw as t}from"../../chunks/app-Cwd4bSiy.js";export{t as exampleExtensions,e as insertExampleExtensionsUnder};

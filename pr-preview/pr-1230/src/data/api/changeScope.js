@@ -1,0 +1,1 @@
+import{A3 as e,D3 as t,E3 as n,M3 as r,O3 as i,T3 as a,j3 as o,k3 as s,w3 as c}from"../../../chunks/app-Cwd4bSiy.js";export{c as CHANGE_SCOPE_POLICIES,a as ChangeScope,n as isChangeScope,t as policyForScope,i as scopeAllowedInReadOnly,s as scopeIsUndoable,e as scopePoliciesEquivalent,o as scopeUploadsToServer,r as sourceForScope};
