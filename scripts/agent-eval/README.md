@@ -41,10 +41,12 @@ property, a move or a deletion, fails the run. A read task may change nothing.
 
 Every task starts from the same graph. The runner snapshots every block row once,
 after each task's `reset` has cleared anything an interrupted earlier run left behind.
-The snapshot leaves out the app's own per-user state, which changes by itself. After
-each task, the runner:
+The snapshot leaves out the app's own per-user state, which changes by itself. Which
+rows those are is fixed when the snapshot is taken, so a fixture block is compared
+wherever it ends up, even under the user page. After each task, the runner:
 
-1. waits until the graph is quiet, so late processor writes land first;
+1. waits until the graph is quiet, so late processor writes land first, and aborts if
+   it is still being written to after 20s;
 2. diffs the whole table against the snapshot by id, every column (derived ones
    included) and deleted rows too, and never by timestamp, because some rows are
    minted at `updated_at = 0`;
@@ -58,7 +60,15 @@ each task, the runner:
    moved them, so recency ordering is unchanged.
 
 The run's snapshot is also journaled to `tmp/agent-eval/journal/`, so a run killed
-mid-task is undone by the next run.
+mid-task is undone by the next run. `seed` and `run` hold a lock per workspace there,
+so two of them never write one graph at once; a lock left by a process that died is
+taken over.
+
+Before the first task, `run` also checks that the tab holds the graph this checkout's
+code imports. That graph is the one the gate's checks are proven on. The ten output
+probes run against the tab and against a fresh in-process import of the fixture, and
+their outputs must match, with block ids numbered by first appearance. A tab seeded by
+older code, or holding changes made by hand, is refused before anything is spent.
 
 A task's definition is part of the measurement. A report stores a hash of each task's
 prompt, check, reset and allowed changes, and `--compare` shows deltas only for tasks
@@ -70,9 +80,10 @@ and wrong ones in `fixtureGraph.test.ts`.
 
 So is what a run holds fixed: the fixture, the resolved model, the effort and the MCP
 output cap. A baseline that differs in any of them gets no deltas at all, since they
-would measure that difference rather than the tools. `run` refuses such a `--compare`
-before it starts, except for the model, which is known only once the first task has
-run. Claude Code's version is shown, not required to match.
+would measure that difference rather than the tools. That includes a run whose model
+never resolved because no task got far enough. `run` refuses such a `--compare` before
+it starts, except for the model, which is known only once the first task has run.
+Claude Code's version is shown, not required to match.
 
 ## One-time setup
 

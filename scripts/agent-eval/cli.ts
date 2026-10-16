@@ -23,9 +23,10 @@ import { KM_MCP_ALLOWED_TOOLS, KM_MCP_TOOL_NAMES, MCP_SERVER_NAME } from '../../
 import { runJsonlProcess } from '../../packages/agent-dispatch/src/execProcess'
 import { BILLING_ENV_DENYLIST, envForBilling } from '../../packages/agent-dispatch/src/runner'
 import { buildFixture, FIXTURE_HASH_PREFIX, FIXTURE_MARKER_PAGE } from './fixture'
-import { childrenOf, type GraphProbe, pageIdByTitle } from './graphQueries'
+import { childrenOf, dailyNoteId, type GraphProbe, pageIdByTitle, requirePageId } from './graphQueries'
 import { restoreSnapshot, snapshotWorkspace, strayChanges } from './isolation'
-import { OUTPUT_PROBES, outputProbeHash } from './outputBudgets'
+import { connectMcpClient } from './mcpClient'
+import { measureProbes, OUTPUT_PROBES, outputProbeHash, type ProbeOutput } from './outputBudgets'
 import { createRunJournal } from './runJournal'
 import {
   conditionMismatches,
@@ -37,10 +38,12 @@ import {
 } from './report'
 import { allowedChanges, type EvalTask, taskDefinitionHash, TASKS } from './tasks'
 import { extractAnswer, parseTranscript } from './transcript'
+import { acquireWorkspaceLock } from './workspaceLock'
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const RESULTS_DIR = path.join(REPO_ROOT, 'scripts/agent-eval/results')
 const RUNS_DIR = path.join(REPO_ROOT, 'tmp/agent-eval/runs')
+const JOURNAL_DIR = path.join(REPO_ROOT, 'tmp/agent-eval/journal')
 const MCP_ENTRY = path.join(REPO_ROOT, 'packages/agent-cli/dist/mcp.js')
 const DEFAULT_PROFILE = 'km-eval'
 
@@ -91,6 +94,15 @@ return {signedIn: Object.keys(localStorage).some(key => /^sb-.+-auth-token$/.tes
   }
 }
 
+/** `seed` and `run` both write the graph: one at a time per workspace. */
+const lockWorkspace = (probe: GraphProbe): (() => void) => {
+  try {
+    return acquireWorkspaceLock(path.join(JOURNAL_DIR, `${probe.workspaceId}.lock`))
+  } catch (error) {
+    return fail(errorText(error))
+  }
+}
+
 /** The fixture hash the seeded graph carries, or null when it carries none. */
 const seededHash = async (probe: GraphProbe): Promise<string | null> => {
   const markerId = await pageIdByTitle(probe, FIXTURE_MARKER_PAGE)
@@ -101,6 +113,7 @@ const seededHash = async (probe: GraphProbe): Promise<string | null> => {
 
 const seed = async (profile: string) => {
   const {client, probe} = await connect(profile)
+  const release = lockWorkspace(probe)
   const fixture = buildFixture()
   const existing = await seededHash(probe)
   if (existing && existing !== fixture.hash) {
@@ -114,6 +127,7 @@ const seed = async (profile: string) => {
     code: `const summary = await window.__omniliner.roamImport.run(data, {onProgress: () => {}})
 return {blocksWritten: summary.blocksWritten, pagesDaily: summary.pagesDaily, durationMs: summary.durationMs, diagnostics: summary.diagnostics.length}`,
   }, {timeoutMs: 600_000})
+  release()
   process.stdout.write(`${JSON.stringify(summary)}\n`)
 }
 
@@ -130,15 +144,36 @@ const buildPackages = () => {
   if (build.status !== 0) fail(`pnpm run compile:packages failed:\n${`${build.stdout}${build.stderr}`.trim().split('\n').slice(-15).join('\n')}`)
 }
 
-/** Deterministic sizes (characters) from the fixture-graph test; null if it could not run. */
-const measureOutputSizes = (): Record<string, number> | null => {
+/** The probes' outputs on the fixture as this checkout imports it, from the
+ *  fixture-graph test; null if it could not run. */
+const importedOutputs = (): Record<string, ProbeOutput> | null => {
   const out = path.join(mkdtempSync(path.join(tmpdir(), 'agent-eval-sizes-')), 'sizes.json')
   spawnSync('pnpm', ['vitest', 'run', 'scripts/agent-eval/fixtureGraph.test.ts', '-t', 'output budgets'], {
     cwd: REPO_ROOT,
     env: {...process.env, AGENT_EVAL_SIZES_OUT: out},
     stdio: 'ignore',
   })
-  return existsSync(out) ? JSON.parse(readFileSync(out, 'utf8')) as Record<string, number> : null
+  return existsSync(out) ? JSON.parse(readFileSync(out, 'utf8')) as Record<string, ProbeOutput> : null
+}
+
+/** The agent must query the graph this checkout's code imports, which the
+ *  gate's checks are proven on, not one seeded by other code or left dirty.
+ *  Returns the tab's probe outputs. */
+const requireImportedGraph = async (client: BridgeClient, probe: GraphProbe): Promise<Record<string, ProbeOutput>> => {
+  const expected = importedOutputs()
+    ?? fail('could not import the fixture in-process to check the tab against (pnpm vitest run scripts/agent-eval/fixtureGraph.test.ts)')
+  const mcp = await connectMcpClient(client)
+  const live = await measureProbes({
+    callTool: mcp.callTool,
+    pageId: title => requirePageId(probe, title),
+    dailyNoteId: iso => dailyNoteId(probe, iso),
+  }).finally(() => mcp.close())
+  const differing = Object.keys(expected).filter(id => live[id]?.digest !== expected[id].digest)
+  if (differing.length > 0) {
+    fail(`the tab's graph is not the one this checkout imports (probes that differ: ${differing.join(', ')}); it was seeded by other `
+      + 'code, or holds changes an earlier run left. Seed a fresh origin (README: "Resetting the dev origin").')
+  }
+  return live
 }
 
 const writeMcpConfig = (dir: string, profile: string): string => {
@@ -184,6 +219,7 @@ const run = async (options: RunOptions) => {
   }
   buildPackages()
   const {probe, client} = await connect(options.profile)
+  const release = lockWorkspace(probe)
   const fixture = buildFixture()
   const seeded = await seededHash(probe)
   if (seeded !== fixture.hash) {
@@ -191,11 +227,6 @@ const run = async (options: RunOptions) => {
       ? `the tab holds fixture ${seeded} but this checkout generates ${fixture.hash}; seed a fresh dev origin`
       : 'the tab has no fixture — run `pnpm agent-eval seed` first')
   }
-
-  mkdirSync(path.join(runDir, 'transcripts'), {recursive: true})
-  const mcpConfig = writeMcpConfig(runDir, options.profile)
-  const scrubbed = BILLING_ENV_DENYLIST.filter(key => process.env[key])
-  process.stdout.write(`billing: subscription login${scrubbed.length ? ` (scrubbed ${scrubbed.join(', ')})` : ''}\n`)
 
   const report: EvalReport = {
     schemaVersion: REPORT_SCHEMA_VERSION,
@@ -215,19 +246,27 @@ const run = async (options: RunOptions) => {
     probeHashes: Object.fromEntries(OUTPUT_PROBES.map(probe => [probe.id, outputProbeHash(probe)])),
     runs: [],
   }
-  // Checked again on the resolved model once the runs have reported it.
-  const mismatches = options.baseline ? conditionMismatches(report, options.baseline) : []
+  // The resolved model is compared once the runs have reported it.
+  const mismatches = options.baseline ? conditionMismatches(report, options.baseline, {planned: true}) : []
   if (mismatches.length > 0) fail(`this run cannot be compared with ${options.baseline!.label}: they differ in ${mismatches.join('; ')}`)
 
   // Clear what an interrupted earlier run left, then freeze the starting
   // state every task gets: each task's changes are undone against it.
-  const journal = createRunJournal(path.join(REPO_ROOT, 'tmp/agent-eval/journal', probe.workspaceId))
+  const journal = createRunJournal(path.join(JOURNAL_DIR, probe.workspaceId))
   const recovered = await journal.recover(probe, fixture.hash)
     .catch((error: unknown) => fail(`could not undo an interrupted run: ${errorText(error)}`))
   if (recovered > 0) process.stdout.write(`undid ${recovered} change(s) an interrupted run left\n`)
   for (const task of TASKS) await task.reset?.({probe, truth: fixture.truth, runTag: ''})
+  process.stdout.write('checking the tab against this checkout\'s import…\n')
+  const outputs = await requireImportedGraph(client, probe)
+  report.outputSizes = Object.fromEntries(Object.entries(outputs).map(([id, output]) => [id, output.chars]))
   const snapshot = await snapshotWorkspace(probe)
   journal.begin(snapshot, fixture.hash)
+
+  mkdirSync(path.join(runDir, 'transcripts'), {recursive: true})
+  const mcpConfig = writeMcpConfig(runDir, options.profile)
+  const scrubbed = BILLING_ENV_DENYLIST.filter(key => process.env[key])
+  process.stdout.write(`billing: subscription login${scrubbed.length ? ` (scrubbed ${scrubbed.join(', ')})` : ''}\n`)
 
   for (let rep = 1; rep <= options.repeat; rep++) {
     for (const task of options.tasks) {
@@ -301,8 +340,8 @@ const run = async (options: RunOptions) => {
     }
   }
 
-  report.outputSizes = measureOutputSizes()
   journal.end()
+  release()
   report.finishedAt = new Date().toISOString()
   writeReport(report, options.baseline)
 }
@@ -374,9 +413,11 @@ const main = async () => {
       if (!rest[0]) fail('usage: pnpm agent-eval report <report.json> [--compare <report.json>]')
       return writeReport(loadReport(rest[0]), values.compare ? loadReport(values.compare) : undefined)
     }
-    case 'sizes':
-      process.stdout.write(`${JSON.stringify(measureOutputSizes(), null, 2)}\n`)
+    case 'sizes': {
+      const outputs = importedOutputs() ?? fail('the fixture-graph test did not run')
+      process.stdout.write(`${JSON.stringify(Object.fromEntries(Object.entries(outputs).map(([id, output]) => [id, output.chars])), null, 2)}\n`)
       return
+    }
     default:
       fail('usage: pnpm agent-eval <seed|run|report|sizes> — see scripts/agent-eval/README.md')
   }

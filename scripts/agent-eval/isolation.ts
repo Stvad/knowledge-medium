@@ -13,9 +13,11 @@
  * processor started by the agent's writes or by the undo's own — would
  * otherwise land after the read, inside the next task.
  *
- * The app's own per-user state (the subtree under the `user` page: ui-state,
- * prefs, panels) churns by itself and is not part of what a task measures, so
- * it is outside the snapshot.
+ * The app's own per-user state (the `user` page and everything under it:
+ * ui-state, prefs, panels) churns by itself and is not part of what a task
+ * measures, so it is outside the snapshot. Which rows those are is fixed when
+ * the snapshot is taken: a fixture row is compared wherever it ends up, so
+ * moving it under the user page or retyping it cannot hide a change.
  */
 import { type GraphProbe, purgeBlocks, sqlAll } from './graphQueries'
 
@@ -33,15 +35,58 @@ export interface SnapshotRow {
   [column: string]: unknown
 }
 
-/** Mutable: a block moved back gets a new order key, which becomes its
- *  snapshot key once the restore is verified. */
-export type WorkspaceSnapshot = Map<string, SnapshotRow>
+export interface WorkspaceSnapshot {
+  /** Mutable: a block moved back gets a new order key, which becomes its
+   *  snapshot key once the restore is verified. */
+  rows: Map<string, SnapshotRow>
+  /** The app's own state when the snapshot was taken. */
+  appState: ReadonlySet<string>
+}
 
-export const snapshotFromRows = (rows: readonly SnapshotRow[]): WorkspaceSnapshot =>
-  new Map(rows.map(row => [row.id, row]))
+/** A snapshot as the run journal stores it. */
+export interface StoredSnapshot {
+  rows: SnapshotRow[]
+  appState: string[]
+}
 
-/** Waits until nothing in the workspace has been written for `quietMs`.
- *  Gives up after `maxMs`. */
+export const storeSnapshot = (snapshot: WorkspaceSnapshot): StoredSnapshot =>
+  ({rows: [...snapshot.rows.values()], appState: [...snapshot.appState]})
+
+export const loadSnapshot = (stored: StoredSnapshot): WorkspaceSnapshot =>
+  ({rows: new Map(stored.rows.map(row => [row.id, row])), appState: new Set(stored.appState)})
+
+/** The rows of `rows` that are the app's own state: those that were at
+ *  snapshot time, and rows created under them since — never a snapshot row. */
+const appStateIn = (snapshot: WorkspaceSnapshot, rows: readonly SnapshotRow[]): Set<string> => {
+  const children = new Map<string, SnapshotRow[]>()
+  for (const row of rows) {
+    if (row.parent_id !== null) children.set(row.parent_id, [...(children.get(row.parent_id) ?? []), row])
+  }
+  const found = new Set(snapshot.appState)
+  const queue = [...snapshot.appState]
+  for (let id = queue.pop(); id !== undefined; id = queue.pop()) {
+    for (const child of children.get(id) ?? []) {
+      if (snapshot.rows.has(child.id) || found.has(child.id)) continue
+      found.add(child.id)
+      queue.push(child.id)
+    }
+  }
+  return found
+}
+
+const isUserPage = (row: SnapshotRow) => {
+  const {types} = JSON.parse(row.properties_json) as {types?: unknown}
+  return Array.isArray(types) && types.includes('user')
+}
+
+const snapshotFromRows = (rows: readonly SnapshotRow[]): WorkspaceSnapshot => {
+  const appState = appStateIn({rows: new Map(), appState: new Set(rows.filter(isUserPage).map(row => row.id))}, rows)
+  return {rows: new Map(rows.filter(row => !appState.has(row.id)).map(row => [row.id, row])), appState}
+}
+
+/** Waits until nothing in the workspace has been written for `quietMs`, and
+ *  throws when that has not happened after `maxMs`: a graph still being
+ *  written to is not one a diff can be trusted on. */
 export interface QuietOptions {
   quietMs?: number
   maxMs?: number
@@ -54,7 +99,8 @@ export const waitForQuiet = async (probe: GraphProbe, {quietMs = 1_500, maxMs = 
   const deadline = Date.now() + maxMs
   let last = await fingerprint()
   let stableSince = Date.now()
-  while (Date.now() - stableSince < quietMs && Date.now() < deadline) {
+  while (Date.now() - stableSince < quietMs) {
+    if (Date.now() >= deadline) throw new Error(`the graph was still being written to after ${maxMs / 1000}s; stop whatever is writing to it`)
     await new Promise(resolve => setTimeout(resolve, Math.min(250, quietMs)))
     const next = await fingerprint()
     if (next !== last) {
@@ -66,15 +112,7 @@ export const waitForQuiet = async (probe: GraphProbe, {quietMs = 1_500, maxMs = 
 
 const settledRows = async (probe: GraphProbe, quiet: QuietOptions): Promise<SnapshotRow[]> => {
   await waitForQuiet(probe, quiet)
-  return sqlAll<SnapshotRow>(probe, `
-    WITH RECURSIVE app_state(id) AS (
-      SELECT id FROM blocks WHERE workspace_id = ?
-        AND EXISTS (SELECT 1 FROM json_each(properties_json, '$.types') WHERE value = 'user')
-      UNION ALL
-      SELECT b.id FROM blocks b JOIN app_state ON b.parent_id = app_state.id
-    )
-    SELECT * FROM blocks WHERE workspace_id = ? AND id NOT IN (SELECT id FROM app_state)`,
-  [probe.workspaceId, probe.workspaceId])
+  return sqlAll<SnapshotRow>(probe, 'SELECT * FROM blocks WHERE workspace_id = ?', [probe.workspaceId])
 }
 
 export const snapshotWorkspace = async (probe: GraphProbe, quiet: QuietOptions = {}): Promise<WorkspaceSnapshot> =>
@@ -117,8 +155,10 @@ const byOrderKey = (a: SnapshotRow, b: SnapshotRow) => (a.order_key < b.order_ke
 
 const changesBetween = (snapshot: WorkspaceSnapshot, rows: readonly SnapshotRow[]): TaskChanges => {
   const changes: TaskChanges = {created: [], modified: []}
+  const appState = appStateIn(snapshot, rows)
   for (const row of rows) {
-    const before = snapshot.get(row.id)
+    if (appState.has(row.id)) continue
+    const before = snapshot.rows.get(row.id)
     if (!before) changes.created.push(row)
     else if (!sameState(before, row)) changes.modified.push({id: row.id, before, after: row})
   }
@@ -153,7 +193,7 @@ const undoChanges = async (probe: GraphProbe, snapshot: WorkspaceSnapshot, chang
   const moves = changes.modified.filter(({before, after}) => moved(before, after))
     .sort((a, b) => byOrderKey(b.before, a.before))
   for (const {id, before} of moves) {
-    const next = [...snapshot.values()]
+    const next = [...snapshot.rows.values()]
       .filter(row => row.parent_id === before.parent_id && !row.deleted && row.order_key > before.order_key)
       .sort(byOrderKey)[0]
     await probe.command({
@@ -163,13 +203,7 @@ const undoChanges = async (probe: GraphProbe, snapshot: WorkspaceSnapshot, chang
       position: next ? {kind: 'before', siblingId: next.id} : {kind: 'last'},
     })
   }
-  // Deleted through the app first, so its cached queries (alias lookups,
-  // search handles) drop the rows; a raw delete alone leaves them answering.
-  const createdIds = new Set(changes.created.map(row => row.id))
-  for (const row of changes.created) {
-    if (!row.deleted && !(row.parent_id && createdIds.has(row.parent_id))) await probe.command({type: 'delete-block', id: row.id})
-  }
-  await purgeBlocks(probe, [...createdIds])
+  await purgeBlocks(probe, changes.created.map(row => row.id))
   for (const {id, before, after} of changes.modified) {
     if (before.deleted && !after.deleted) await probe.command({type: 'delete-block', id})
   }
@@ -198,13 +232,13 @@ export const restoreSnapshot = async (
   if (unrestored.length > 0) {
     throw new Error(`could not restore ${unrestored.length} block(s) to the fixture state (${unrestored.slice(0, 5).join(', ')}); re-seed before running again`)
   }
-  for (const {id, after} of left.modified) snapshot.set(id, {...snapshot.get(id)!, order_key: after.order_key})
+  for (const {id, after} of left.modified) snapshot.rows.set(id, {...snapshot.rows.get(id)!, order_key: after.order_key})
   // A raw write is safe only because runs are refused on any tab that syncs;
   // through repo.tx there is no way to set these, and a raw write starts no
   // processor that could move them again.
   for (const row of rows) {
-    const before = snapshot.get(row.id)!
-    if (row.updated_at === before.updated_at && row.user_updated_at === before.user_updated_at) continue
+    const before = snapshot.rows.get(row.id)
+    if (!before || (row.updated_at === before.updated_at && row.user_updated_at === before.user_updated_at)) continue
     await probe.command({
       type: 'sql',
       mode: 'execute',

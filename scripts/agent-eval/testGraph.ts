@@ -5,11 +5,8 @@
  * and serialized the way bridge.ts does it.
  */
 import { provideRuntimeGlobals } from './nodeShims'
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
-import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { knownAgentCommandSchema, type KnownCommand } from '@knowledge-medium/agent-cli/protocol'
 import type { BridgeClient } from '../../packages/agent-cli/src/client'
-import { createGraphMcpServer } from '../../packages/agent-cli/src/mcpServer'
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
 import type { TestDb } from '@/data/test/createTestDb'
@@ -21,6 +18,7 @@ import type { AgentRuntimeContext } from '@/plugins/agent-runtime/protocol'
 import { serializeError, serializeValue } from '@/plugins/agent-runtime/serialization'
 import { importRoam } from '@/plugins/roam-import/import'
 import { buildFixture } from './fixture'
+import { connectMcpClient } from './mcpClient'
 
 /** UUID-shaped so ids and deep links have the byte length a live
  *  workspace gives them; output sizes here should match the dev tab's. */
@@ -76,25 +74,13 @@ export const seedFixtureTestGraph = async (db: TestDb['db']): Promise<FixtureTes
   provideRuntimeGlobals()
   const context = createAgentRuntimeContext({repo, runtime, safeMode: false})
   const bridge = createInProcessBridgeClient(context)
-  const server = createGraphMcpServer({client: bridge})
-  const client = new Client({name: 'agent-eval', version: '0'})
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
-  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)])
-
-  const callTool = async (name: string, args: Record<string, unknown>): Promise<string> => {
-    const result = await client.callTool({name, arguments: args})
-    const content = result.content as Array<{type: string, text?: string}>
-    const text = content.map(part => part.text ?? '').join('')
-    if (result.isError) throw new Error(`${name} failed: ${text}`)
-    return text
-  }
+  const mcp = await connectMcpClient(bridge)
 
   return {
-    callTool,
+    callTool: mcp.callTool,
     command: command => bridge.runCommand(command),
     close: async () => {
-      await client.close()
-      await server.close()
+      await mcp.close()
       repo.stopSyncObserver()
     },
   }

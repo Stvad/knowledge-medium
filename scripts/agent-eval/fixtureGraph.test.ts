@@ -4,8 +4,9 @@
  * imported into a node test repo (no browser):
  *
  * - output budgets: size in characters of representative km MCP tool outputs, called
- *   through the real MCP server. `AGENT_EVAL_SIZES_OUT=<path>` writes the
- *   measured sizes as JSON for the eval report and for re-baselining.
+ *   through the real MCP server. `AGENT_EVAL_SIZES_OUT=<path>` writes each
+ *   output's size and digest as JSON, which the runner checks the live tab
+ *   against and reports, and which re-baselining reads.
  * - task checks: each task's ground truth agrees with the imported graph,
  *   a correct solution passes (write tasks solve through the MCP tools, so
  *   the task is doable on the current surface), and a wrong one fails —
@@ -34,7 +35,7 @@ import {
 } from './fixture'
 import { childrenOf, dailyNoteId, descendantsOf, getBlock, type GraphProbe, pageIdByTitle, requirePageId, sqlAll } from './graphQueries'
 import { diffAgainst, restoreSnapshot, snapshotWorkspace, strayChanges, waitForQuiet, type WorkspaceSnapshot } from './isolation'
-import { OUTPUT_PROBES, type ProbeContext } from './outputBudgets'
+import { OUTPUT_PROBES, type ProbeContext, type ProbeOutput, probeOutput } from './outputBudgets'
 import { createRunJournal } from './runJournal'
 import {
   allowedChanges,
@@ -76,7 +77,7 @@ afterAll(async () => {
 })
 
 describe('output budgets', () => {
-  const measured: Record<string, number> = {}
+  const measured: Record<string, ProbeOutput> = {}
   afterAll(() => {
     const out = process.env.AGENT_EVAL_SIZES_OUT
     if (out) writeFileSync(out, `${JSON.stringify(measured, null, 2)}\n`)
@@ -88,9 +89,9 @@ describe('output budgets', () => {
       pageId: title => requirePageId(probe, title),
       dailyNoteId: iso => dailyNoteId(probe, iso),
     }
-    const chars = (await outputProbe.run(context)).length
-    measured[outputProbe.id] = chars
-    expect(chars, `${outputProbe.id} (${outputProbe.standsFor}) returned ${chars} characters; budget ${outputProbe.maxChars}`)
+    const output = probeOutput(await outputProbe.run(context))
+    measured[outputProbe.id] = output
+    expect(output.chars, `${outputProbe.id} (${outputProbe.standsFor}) returned ${output.chars} characters; budget ${outputProbe.maxChars}`)
       .toBeLessThanOrEqual(outputProbe.maxChars)
   }, 20_000)
 })
@@ -333,7 +334,7 @@ const stampsMovedSince = async (snapshot: WorkspaceSnapshot) =>
   (await sqlAll<{id: string, updated_at: number, user_updated_at: number | null}>(probe,
     'SELECT id, updated_at, user_updated_at FROM blocks WHERE workspace_id = ?', [TEST_WORKSPACE_ID]))
     .filter(row => {
-      const before = snapshot.get(row.id)
+      const before = snapshot.rows.get(row.id)
       return before !== undefined && (row.updated_at !== before.updated_at || row.user_updated_at !== before.user_updated_at)
     })
     .map(row => row.id)
@@ -408,7 +409,7 @@ describe('isolation', () => {
 
   it('proves derived columns too: one a late processor leaves different fails the restore', async () => {
     const snapshot = await snapshotWorkspace(probe, QUIET)
-    const stored = snapshot.get(bystander)!.references_json
+    const stored = snapshot.rows.get(bystander)!.references_json
     await graph.callTool('update_block', {id: rollout, content: 'Target: Q4 2026.'})
     await expect(restoreSnapshot(withLateProcessor('UPDATE blocks SET references_json = ? WHERE id = ?', ['[{"stale":true}]', bystander]), snapshot, QUIET))
       .rejects.toThrow(`could not restore 1 block(s) to the fixture state (${bystander})`)
@@ -446,13 +447,35 @@ describe('isolation edge cases', () => {
   it('brings back a fixture block an agent moved under a block it created', async () => {
     const snapshot = await snapshotWorkspace(probe, QUIET)
     const rollout = fixtureId('rollout')
-    const before = snapshot.get(rollout)!
+    const before = snapshot.rows.get(rollout)!
     const parentId = resultIdOf(await graph.callTool('create_block', {parentId: before.parent_id, content: 'new container'}))
     await graph.callTool('move_block', {id: rollout, parentId, position: {kind: 'first'}})
 
     await restoreSnapshot(probe, snapshot, QUIET)
     expect(await diffAgainst(probe, snapshot, QUIET)).toEqual({created: [], modified: []})
     expect((await getBlock(probe, rollout))?.content).toBe(before.content)
+  }, 20_000)
+})
+
+describe('app state', () => {
+  it('compares a fixture block wherever it ends up, and leaves the app\'s own state alone', async () => {
+    // A per-user page as the app keeps one, which it writes its own state under.
+    const userPage = (await probe.command({type: 'create-block', content: 'Eval User', properties: {types: ['user']}}) as {id: string}).id
+    const snapshot = await snapshotWorkspace(probe, QUIET)
+    expect(snapshot.appState.has(userPage)).toBe(true)
+    const rollout = fixtureId('rollout')
+    const retyped = fixtureId('vendorsSection')
+
+    await graph.callTool('move_block', {id: rollout, parentId: userPage, position: {kind: 'first'}})
+    await graph.callTool('update_block', {id: retyped, properties: {types: ['user']}})
+    const panelState = resultIdOf(await graph.callTool('create_block', {parentId: userPage, content: 'panel state'}))
+
+    const changes = await restoreSnapshot(probe, snapshot, QUIET)
+    expect(changes.modified.map(change => change.id).sort()).toEqual([rollout, retyped].sort())
+    expect(changes.created).toEqual([])
+    const [restored] = await sqlAll<{parent_id: string}>(probe, 'SELECT parent_id FROM blocks WHERE id = ?', [rollout])
+    expect(restored.parent_id).toBe(snapshot.rows.get(rollout)!.parent_id)
+    expect(await getBlock(probe, panelState)).not.toBeNull()
   }, 20_000)
 })
 

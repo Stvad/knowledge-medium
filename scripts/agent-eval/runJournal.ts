@@ -8,11 +8,17 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import type { GraphProbe } from './graphQueries'
-import { type QuietOptions, restoreSnapshot, type SnapshotRow, snapshotFromRows, type WorkspaceSnapshot } from './isolation'
+import {
+  loadSnapshot,
+  type QuietOptions,
+  restoreSnapshot,
+  storeSnapshot,
+  type StoredSnapshot,
+  type WorkspaceSnapshot,
+} from './isolation'
 
-interface JournalSnapshot {
+interface JournalSnapshot extends StoredSnapshot {
   fixtureHash: string
-  rows: SnapshotRow[]
 }
 
 export const createRunJournal = (dir: string) => {
@@ -33,13 +39,13 @@ export const createRunJournal = (dir: string) => {
         clear()
         return 0
       }
-      const changes = await restoreSnapshot(probe, snapshotFromRows(journal.rows), quiet)
+      const changes = await restoreSnapshot(probe, loadSnapshot(journal), quiet)
       clear()
       return changes.created.length + changes.modified.length
     },
     begin: (snapshot: WorkspaceSnapshot, fixtureHash: string) => {
       mkdirSync(dir, {recursive: true})
-      writeFileSync(snapshotFile, JSON.stringify({fixtureHash, rows: [...snapshot.values()]} satisfies JournalSnapshot))
+      writeFileSync(snapshotFile, JSON.stringify({fixtureHash, ...storeSnapshot(snapshot)} satisfies JournalSnapshot))
     },
     taskStarted: () => writeFileSync(inFlightFile, '{}'),
     taskRestored: () => rmSync(inFlightFile, {force: true}),

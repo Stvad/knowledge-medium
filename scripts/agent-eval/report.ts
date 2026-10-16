@@ -84,19 +84,20 @@ export const parseReport = (json: string, source: string): EvalReport => {
  *  of these measures that difference, not the tools, so it gets no deltas.
  *  Claude Code's version is shown, not required to match, or a baseline
  *  would expire with every CLI release. */
-const RUN_CONDITIONS: ReadonlyArray<readonly [string, (report: EvalReport) => string | null]> = [
-  ['fixture', report => report.fixtureHash],
-  ['model', report => report.resolvedModel],
-  ['effort', report => report.effort ?? 'default'],
-  ['MCP output cap', report => String(report.mcpOutputTokens)],
+const RUN_CONDITIONS: ReadonlyArray<{name: string, read: (report: EvalReport) => string | null, knownBeforeRun: boolean}> = [
+  {name: 'fixture', read: report => report.fixtureHash, knownBeforeRun: true},
+  // Resolved from the first run's transcript; unknown when no run got that far.
+  {name: 'model', read: report => report.resolvedModel, knownBeforeRun: false},
+  {name: 'effort', read: report => report.effort ?? 'default', knownBeforeRun: true},
+  {name: 'MCP output cap', read: report => String(report.mcpOutputTokens), knownBeforeRun: true},
 ]
 
-/** The run conditions on which the two reports differ. A value not known on
- *  one side (the model, before the first run resolves it) is no difference. */
-export const conditionMismatches = (report: EvalReport, baseline: EvalReport): string[] =>
-  RUN_CONDITIONS.flatMap(([name, read]) => {
+/** The run conditions on which the two reports differ; an unknown value
+ *  matches nothing. `planned` compares only what is known before a run. */
+export const conditionMismatches = (report: EvalReport, baseline: EvalReport, {planned = false} = {}): string[] =>
+  RUN_CONDITIONS.filter(condition => !planned || condition.knownBeforeRun).flatMap(({name, read}) => {
     const [was, now] = [read(baseline), read(report)]
-    return was === null || now === null || was === now ? [] : [`${name} ${was} → ${now}`]
+    return was !== null && was === now ? [] : [`${name} ${was ?? 'unknown'} → ${now ?? 'unknown'}`]
   })
 
 export interface TaskSummary {

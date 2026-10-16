@@ -28,6 +28,31 @@ export interface OutputProbe {
 
 export const outputProbeHash = (probe: OutputProbe): string => definitionHash(probe.run.toString())
 
+export interface ProbeOutput {
+  chars: number
+  /** Of the output with block ids numbered by first appearance: ids derive
+   *  from the workspace, so one graph imported into two workspaces gives
+   *  one digest. */
+  digest: string
+}
+
+const BLOCK_ID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g
+
+export const probeOutput = (text: string): ProbeOutput => {
+  const ids = new Map<string, number>()
+  const numbered = text.replace(BLOCK_ID, id => {
+    if (!ids.has(id)) ids.set(id, ids.size)
+    return `#${ids.get(id)}`
+  })
+  return {chars: text.length, digest: definitionHash(numbered)}
+}
+
+export const measureProbes = async (context: ProbeContext): Promise<Record<string, ProbeOutput>> => {
+  const outputs: Record<string, ProbeOutput> = {}
+  for (const probe of OUTPUT_PROBES) outputs[probe.id] = probeOutput(await probe.run(context))
+  return outputs
+}
+
 export const OUTPUT_PROBES: readonly OutputProbe[] = [
   {
     id: 'search:pricing',

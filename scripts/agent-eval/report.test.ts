@@ -132,9 +132,18 @@ describe('renderMarkdown', () => {
 })
 
 describe('conditionMismatches', () => {
-  it('does not hold a model the run has not resolved yet against the baseline', () => {
+  it('leaves the model out before the run has resolved it', () => {
     const baseline = reportOf('before', [])
-    expect(conditionMismatches(reportOf('after', [], {resolvedModel: null}), baseline)).toEqual([])
+    expect(conditionMismatches(reportOf('after', [], {resolvedModel: null}), baseline, {planned: true})).toEqual([])
+    expect(conditionMismatches(reportOf('after', [], {resolvedModel: null, mcpOutputTokens: 5}), baseline, {planned: true}))
+      .toEqual(['MCP output cap 25000 → 5'])
+  })
+
+  it('compares nothing with a recorded run whose model never resolved', () => {
+    const baseline = reportOf('before', [])
+    expect(conditionMismatches(reportOf('after', [], {resolvedModel: null}), baseline)).toEqual(['model claude-test → unknown'])
+    expect(conditionMismatches(reportOf('after', [], {resolvedModel: null}), reportOf('before', [], {resolvedModel: null})))
+      .toEqual(['model unknown → unknown'])
   })
 })
 
