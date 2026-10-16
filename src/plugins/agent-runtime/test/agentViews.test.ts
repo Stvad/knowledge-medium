@@ -75,6 +75,28 @@ const create = async (args: {
 const view = async <T,>(command: Record<string, unknown>): Promise<T> =>
   await executeCommand({commandId: 'v', ...command} as never, context) as T
 
+/** Run `body` while every `repo.db.getAll` also runs `hook` around the read —
+ *  for changing the database between a view's reads, as sync can. Calls the
+ *  unspied method (`repo.db` is a timing proxy that would re-enter the spy). */
+const duringReads = async <T,>(
+  hook: {before?: (sql: string, params: unknown) => Promise<void>, after?: (sql: string, params: unknown) => Promise<void>},
+  body: () => Promise<T>,
+): Promise<T> => {
+  const target = sharedDb.db
+  const original = Object.getPrototypeOf(target).getAll as typeof target.getAll
+  const spy = vi.spyOn(repo.db, 'getAll').mockImplementation(async (sql: string, params?: unknown[]) => {
+    await hook.before?.(sql, params)
+    const rows = await original.call(target, sql, params)
+    await hook.after?.(sql, params)
+    return rows
+  })
+  try {
+    return await body()
+  } finally {
+    spy.mockRestore()
+  }
+}
+
 describe('resolveBlockRef', () => {
   const PAGE = uuid('a1b2c3d4', 1)
 
@@ -128,6 +150,12 @@ describe('resolveBlockRef', () => {
     await create({id: uuid('a1b2c3d5', 5), content: 'x', properties: {alias: ['Project\nAlpha two']}})
     const missing = await resolveBlockRef(repo, 'Project', {workspaceId: WS}).then(() => '', (error: Error) => error.message)
     expect(missing).toContain('  Project ⏎ Alpha two')
+  })
+
+  it('describes an ambiguous candidate by its content head, past leading whitespace', async () => {
+    await create({id: uuid('a1b2c3d4', 7), content: `${' '.repeat(300)}Real head ${'x'.repeat(5000)}`})
+    const message = await resolveBlockRef(repo, 'a1b2c3d4', {workspaceId: WS}).then(() => '', (error: Error) => error.message)
+    expect(message).toContain('Real head xxx')
   })
 
   it('clips a long alias in its suggestions', async () => {
@@ -255,6 +283,21 @@ describe('view-outline', () => {
     // A collapsed root still shows its children, as the app does when zoomed into it.
     const asRoot = await view<string>({type: 'view-outline', ref: collapsed})
     expect(asRoot).toContain('- Hidden under fold  ^000000c1')
+  })
+
+  it('counts the root children after reading the page, so a child added meanwhile leaves a continuation', async () => {
+    await create({id: ROOT, content: 'Root'})
+    for (let i = 0; i < 3; i++) await create({id: uuid('0000e000', i), parentId: ROOT, content: `c${i}`})
+    let added = false
+    const out = await duringReads({
+      after: async sql => {
+        if (added || !sql.includes('AS child_count')) return
+        added = true
+        await create({id: uuid('0000e000', 9), parentId: ROOT, content: 'late'})
+      },
+    }, () => view<OutlineView>({type: 'view-outline', ref: ROOT, limit: 3, depth: 1, format: 'json'}))
+    expect(out.rows.map(row => row.content)).toEqual(['c0', 'c1', 'c2'])
+    expect(out.nextOffset).toBe(3)
   })
 
   it('fills shallower levels first and pages the root children by offset', async () => {
@@ -515,6 +558,20 @@ describe('structural edge cases', () => {
     const value = out.properties.find(property => property.name === 'groupWith')!.value
     const [, shown, rest] = value.match(/^((?:\[\[r\d+\]\] \^7e7e7e\d\d, )+)…\+(\d+) more$/)!
     expect(shown.split(', ').length - 1 + Number(rest)).toBe(25)
+  })
+
+  it('shows a ref whole or counts it, never cutting its id, when prefixes collide', async () => {
+    const first = uuid('7a7b7c7d', 1)
+    const second = uuid('7a7b7c7d', 2)
+    for (const id of [first, second]) await create({id, content: `Twin ${id.slice(-1)}`})
+    const root = uuid('7a7b7c7e', 1)
+    await create({id: root, content: 'root'})
+    await create({id: uuid('7a7b7c7f', 1), parentId: root, content: 'one', properties: {groupWith: [first]}})
+    await create({id: uuid('7a7b7c7f', 2), parentId: root, content: 'two', properties: {groupWith: [first, second]}})
+    // Every shorter prefix of these ids is shared, so each prints whole (36 characters).
+    const text = await view<string>({type: 'view-outline', ref: root})
+    expect(text).toContain(`- one  groupWith:: ^${first}  `)
+    expect(text).toContain('- two  groupWith:: [2 refs]  ')
   })
 
   it('gives JSON the exact ids of a ref property, which the text bounds', async () => {
@@ -940,6 +997,28 @@ describe('structural edge cases', () => {
 
 describe('view-backlinks', () => {
   const TARGET = uuid('7a7a7a7a', 1)
+
+  it('drops a source that leaves the workspace between being listed and being read', async () => {
+    await create({id: TARGET, content: 'Target', properties: {alias: ['Target']}})
+    const mover = uuid('5100000a', 1)
+    const stayer = uuid('5100000b', 2)
+    for (const id of [mover, stayer]) {
+      await create({id, content: `mention of [[Target]] ${id.slice(0, 8)}`, references: [{id: TARGET, alias: 'Target'}]})
+    }
+    // Sync rewrites the mover's workspace once its id is listed, before it is read.
+    const moveOnRead = {
+      before: async (sql: string, params: unknown) => {
+        if (!sql.includes('SELECT b.* FROM json_each') || !String((params as unknown[])[0]).includes(mover)) return
+        await sharedDb.db.execute('UPDATE blocks SET workspace_id = ? WHERE id = ?', ['ws-2', mover])
+      },
+    }
+    const flat = await duringReads(moveOnRead, () => view<BacklinksView>({type: 'view-backlinks', ref: TARGET, format: 'json'}))
+    await sharedDb.db.execute('UPDATE blocks SET workspace_id = ? WHERE id = ?', [WS, mover])
+    const grouped = await duringReads(moveOnRead, () =>
+      view<GroupedBacklinksView>({type: 'view-grouped-backlinks', ref: TARGET, format: 'json'}))
+    expect(flat.rows.map(row => row.id)).toEqual([stayer])
+    expect(grouped.groups.flatMap(group => group.members.map(member => member.id))).toEqual([stayer])
+  })
 
   it('pages with the real total, and gives a link-only block its parent and first child', async () => {
     await create({id: TARGET, content: 'Target', properties: {alias: ['Target']}})

@@ -113,12 +113,13 @@ export const buildOutlineView = async (
   const detail = params.properties ?? 'brief'
 
   const {root} = await loadRoot(repo, params.ref, workspaceId, async id => (await loadBlocks(repo, [id]))[0])
-  const [rootCounts, crumbs] = await Promise.all([
-    visibleChildCounts(repo, [root.id]),
+  const [nodes, crumbs] = await Promise.all([
+    selectNodes(repo, root, {depth, limit, offset, expandCollapsed: params.expandCollapsed === true}),
     loadCrumbs(repo, [root.id], workspaceId),
   ])
-  const rootChildCount = rootCounts.get(root.id) ?? 0
-  const nodes = await selectNodes(repo, root, {depth, limit, offset, expandCollapsed: params.expandCollapsed === true})
+  // Counted after the page, so a child sync adds while it is read leaves a
+  // continuation; a count taken first could end a full page with none.
+  const rootChildCount = (await visibleChildCounts(repo, [root.id])).get(root.id) ?? 0
 
   const blocks = [root, ...[...nodes.values()].map(node => node.block)]
   const [renderer, shortIds] = await Promise.all([

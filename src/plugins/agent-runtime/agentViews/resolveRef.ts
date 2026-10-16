@@ -2,7 +2,7 @@ import type { Repo } from '@/data/repo'
 import type { BlockData } from '@/data/api'
 import { parseRelativeDate } from '@/utils/relativeDate.js'
 import { dailyNoteBlockId } from '@/plugins/daily-notes/dailyNotes.js'
-import { clipLine, oneLine } from './text.ts'
+import { clipLine, oneLine, textHeadSql } from './text.ts'
 
 /** How an agent names a block, in the order they are tried:
  *  - `((id))` / `^prefix` — explicitly an id or id prefix;
@@ -83,7 +83,7 @@ const prefixMatches = async (repo: Repo, prefix: string): Promise<string[]> => {
 
 const describeCandidates = async (repo: Repo, ids: readonly string[]): Promise<string> => {
   const rows = await repo.db.getAll<{id: string, content: string | null}>(
-    'SELECT b.id AS id, b.content AS content FROM json_each(?) j JOIN blocks b ON b.id = j.value',
+    `SELECT b.id AS id, ${textHeadSql('b.content', 200)} AS content FROM json_each(?) j JOIN blocks b ON b.id = j.value`,
     [JSON.stringify(ids)],
   )
   const byId = new Map(rows.map(row => [row.id, row.content ?? '']))

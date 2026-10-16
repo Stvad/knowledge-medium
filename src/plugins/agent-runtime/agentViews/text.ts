@@ -25,6 +25,12 @@ const isHighSurrogate = (code: number): boolean => code >= 0xd800 && code <= 0xd
 export const charBoundary = (text: string, at: number): number =>
   at > 0 && at < text.length && isHighSurrogate(text.charCodeAt(at - 1)) ? at - 1 : at
 
+/** SQL for a bounded head of a text column, read where a whole value could
+ *  be megabytes (an importer's content). Leading whitespace is skipped first,
+ *  so a head that is all whitespace cannot read as empty. A cost bound. */
+export const textHeadSql = (column: string, chars: number): string =>
+  `substr(ltrim(${column}, ' ' || char(9, 10, 13)), 1, ${chars})`
+
 /** Cut to at most `max` characters, ending in `…` when cut: for a label or an
  *  id inside a line, where a char-count marker would crowd out the rest. */
 export const ellipsize = (text: string, max: number): string =>

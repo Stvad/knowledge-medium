@@ -4,7 +4,7 @@ import { decodeRefId, decodeRefListIds, isRefCodec, isRefListCodec, memberCodecO
 import { aliasesProp, typesProp } from '@/data/properties.js'
 import { isPropertyPanelHiddenProperty } from '@/components/propertyPanel/visibility.js'
 import { boundDisplayId, displayIds } from './displayIds.ts'
-import { boundLabels, charBoundary, clipLine, ellipsize, oneLine } from './text.ts'
+import { boundLabels, charBoundary, clipLine, ellipsize, formatCount, oneLine, textHeadSql } from './text.ts'
 
 export interface PropertyLine {
   name: string
@@ -40,7 +40,7 @@ const MAX_HIDDEN_NAMES = 20
 const MAX_TYPES = 10
 /** Refs titled and shown per property; a refList can hold thousands. */
 const MAX_REFS = 20
-/** A block ref's quoted label keeps at least this much beside its id. */
+/** A ref's label shows only with at least this much room beside its id. */
 const MIN_REF_LABEL = 12
 const SUMMARY_KEYS = 3
 
@@ -167,7 +167,7 @@ export interface PropertyRenderer {
 const TITLE_ROWS_SQL = `
   SELECT b.id AS id, b.workspace_id AS workspace_id,
          substr(json_extract(b.properties_json, '$.alias[0]'), 1, 400) AS alias,
-         substr(b.content, 1, 400) AS content
+         ${textHeadSql('b.content', 400)} AS content
     FROM json_each(?) j JOIN blocks b ON b.id = j.value
    WHERE b.deleted = 0
 `
@@ -270,7 +270,8 @@ export const createPropertyRenderer = async (
     if (!label) return `^${shortId}`
     const [open, close] = title.alias !== null ? ['[[', ']]'] : ['"', '"']
     const room = budget - shortId.length - 2 - open.length - close.length
-    return `${open}${ellipsize(label, Math.max(MIN_REF_LABEL, room))}${close} ^${shortId}`
+    if (room < MIN_REF_LABEL) return `^${shortId}`
+    return `${open}${ellipsize(label, room)}${close} ^${shortId}`
   }
 
   const display = (decoded: Decoded, block: BlockData, name: string, budget: number): string => {
@@ -279,6 +280,11 @@ export const createPropertyRenderer = async (
       // count of the rest, so no cut can drop a ref's id.
       const space = budget - (decoded.total > 1 ? moreSuffix(decoded.total - 1).length : 0)
       const shown = decoded.ids.slice(0, MAX_REFS).map(id => refText(id, block.workspaceId, space))
+      // A ref is shown whole or counted, never cut; when not even the first
+      // fits (a long id beside the count), the property says how many it holds.
+      if ((shown[0]?.length ?? 0) > space) {
+        return decoded.total === 1 ? '[1 ref]' : `[${formatCount(decoded.total)} refs]`
+      }
       // Joined like any list, so the count of the rest stays on the line.
       return formatValue(shown, budget, 0, decoded.total)
     }

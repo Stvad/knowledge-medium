@@ -171,7 +171,7 @@ export const buildBacklinksView = async (
     ...(filter ? {filter} : {}),
   }).load()
   const page = ids.slice(offset, offset + limit)
-  const sources = await loadBlocks(repo, page)
+  const sources = await loadBlocks(repo, page, {workspaceId: block.workspaceId})
   const end = offset + page.length
   return {
     target,
@@ -284,7 +284,7 @@ export const buildGroupedBacklinksView = async (
   const membersPerGroup = Math.max(1, Math.min(requestedPerGroup, Math.floor(MAX_BACKLINKS / Math.max(1, page.length))))
   const memberIds = [...new Set(page.flatMap(group => membersOf(group.sourceIds)))]
   const groupIds = page.flatMap(group => group.blockId === null ? [] : [group.blockId])
-  const members = await loadBlocks(repo, memberIds)
+  const members = await loadBlocks(repo, memberIds, {workspaceId: block.workspaceId})
   const [renderer, shortIds] = await Promise.all([
     createPropertyRenderer(repo, members, 'brief'),
     displayIds(repo, [...memberIds, ...groupIds]),
