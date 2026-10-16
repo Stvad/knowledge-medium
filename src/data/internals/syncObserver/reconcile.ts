@@ -137,10 +137,12 @@ const isInvisibleEitherWay = (staged: BlockRow, local: BlockRow | undefined): bo
  * a reader that can; this one sees the sealed columns only as ciphertext, so:
  *
  *   - every CLEAR column must match, `updated_at` included;
- *   - a nonzero stamp then vouches for the sealed columns it cannot read
- *     (invariant I1). A row matching in every column needs no vouching, so stamp
- *     0 — shared by construction across independent deterministic-id mints (I2)
- *     and therefore proof of nothing — still passes when the row is identical.
+ *   - a nonzero stamp then vouches for the sealed columns it cannot read: the
+ *     server strictly advances `updated_at` on a content change, so two rows at
+ *     one nonzero stamp share content unless a write landed on a stamp the
+ *     server never issued (below). Stamp 0 vouches for nothing — independent
+ *     deterministic-id mints all sit there — but a row matching in every
+ *     column needs no vouching, so an identical stamp-0 row still passes.
  *
  * What the vouch costs, accepted: a peer's write landing on a stamp this device
  * holds (#1163) that differs ONLY in sealed columns reads as reflected. A user
