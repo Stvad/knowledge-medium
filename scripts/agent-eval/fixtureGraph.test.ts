@@ -483,6 +483,7 @@ describe('run journal', () => {
   it('undoes what a task left when its run was interrupted, on the next run', async () => {
     const dir = path.join(mkdtempSync(path.join(tmpdir(), 'agent-eval-journal-')), 'journal')
     const interrupted = createRunJournal(dir)
+    const userPage = (await probe.command({type: 'create-block', content: 'Eval User', properties: {types: ['user']}}) as {id: string}).id
     interrupted.begin(await snapshotWorkspace(probe, QUIET), fixtureHash)
     interrupted.taskStarted()
     const rollout = fixtureId('rollout')
@@ -490,6 +491,8 @@ describe('run journal', () => {
 
     expect(await createRunJournal(dir).recover(probe, fixtureHash, QUIET)).toBe(1)
     expect((await getBlock(probe, rollout))?.content).toBe(ROLLOUT_BLOCK_TEXT)
+    // The app's own state, as the interrupted run saw it, is left alone.
+    expect(await getBlock(probe, userPage)).not.toBeNull()
     expect(existsSync(dir)).toBe(false)
   }, 20_000)
 
