@@ -1,6 +1,6 @@
 import type { Repo } from '@/data/repo'
 import { AGENT_VIEW_DEFAULTS } from '@knowledge-medium/agent-cli/protocol'
-import { BACKLINKS_FOR_BLOCK_QUERY } from '@/plugins/backlinks/query.js'
+import { BACKLINKS_COUNT_FOR_BLOCK_QUERY } from '@/plugins/backlinks/inline-counts/countQuery.js'
 import { loadCrumbs, visibleChildCounts } from './context.ts'
 import { createPropertyRenderer, type PropertyLine } from './properties.ts'
 import { boundDisplayId, displayIds } from './displayIds.ts'
@@ -58,13 +58,14 @@ export const buildBlockView = async (
   const boundary = charBoundary(block.content, Math.min(block.content.length, contentOffset + maxChars))
   const end = boundary > contentOffset ? boundary : Math.min(block.content.length, contentOffset + 2)
 
-  const [renderer, shortIds, crumbs, childCounts, backlinks] = await Promise.all([
+  const [renderer, shortIds, crumbs, childCounts, backlinkCount] = await Promise.all([
     createPropertyRenderer(repo, [block], 'full'),
     displayIds(repo, [block.id]),
     loadCrumbs(repo, [block.id], block.workspaceId),
     visibleChildCounts(repo, [block.id], workspaceId),
-    // The backlinks view's own set, so the two counts cannot disagree.
-    repo.query[BACKLINKS_FOR_BLOCK_QUERY]({workspaceId: block.workspaceId, id: block.id}).load(),
+    // The count of the backlinks view's own set, which owns that equality;
+    // it aggregates in SQL where it can, never listing the sources.
+    repo.query[BACKLINKS_COUNT_FOR_BLOCK_QUERY]({workspaceId: block.workspaceId, id: block.id}).load(),
   ])
   const properties = renderer.view(block)
   const editedAt = block.userUpdatedAt ?? block.updatedAt
@@ -84,7 +85,7 @@ export const buildBlockView = async (
     omittedProperties: properties.omitted,
     hiddenProperties: properties.hidden,
     childCount: childCounts.get(block.id) ?? 0,
-    backlinkCount: backlinks.length,
+    backlinkCount,
     editedAt: validIso(editedAt),
   }
 }

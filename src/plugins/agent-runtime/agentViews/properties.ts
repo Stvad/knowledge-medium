@@ -64,7 +64,12 @@ export const decodeProperty = (schema: AnyPropertySchema | undefined, raw: unkno
     const id = decodeRefId(codec, raw)
     return id ? {kind: 'refs', ids: [id], total: 1} : {kind: 'value', value: raw}
   }
-  if (isRefListCodec(codec)) return {kind: 'refs', ids: decodeRefListIds(codec, head), total: total ?? 0}
+  if (isRefListCodec(codec)) {
+    // Within the head, only an entry that decodes is a ref (sync can deliver
+    // `[id, 42]`); entries past it are counted unread.
+    const ids = decodeRefListIds(codec, head)
+    return {kind: 'refs', ids, total: ids.length + (total ?? 0) - (Array.isArray(head) ? head.length : 0)}
+  }
   try {
     return {kind: 'value', value: codec.decode(head), total}
   } catch {

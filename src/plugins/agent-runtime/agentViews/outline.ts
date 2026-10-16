@@ -131,12 +131,16 @@ export const buildOutlineView = async (
   const visit = (parentId: string, childIds: readonly string[]) => {
     for (const id of childIds) {
       const node = nodes.get(id)!
+      // A count read a level before its children can be short of them by
+      // what sync added since; the children shown are the floor.
+      const shown = node.children.length + node.cycleChildren
+      const childCount = Math.max(node.childCount, shown)
       rows.push({
         ...toViewRow(node.block, {shortIds, renderer, maxChars: LINE_CHARS}),
         parentId,
         depth: node.depth,
-        childCount: node.childCount,
-        hiddenChildren: node.childCount - node.children.length - node.cycleChildren,
+        childCount,
+        hiddenChildren: childCount - shown,
         collapsed: isCollapsed(node.block),
       })
       visit(id, node.children)

@@ -300,6 +300,24 @@ describe('view-outline', () => {
     expect(out.nextOffset).toBe(3)
   })
 
+  it('never reports fewer children than it shows when sync adds some mid-walk', async () => {
+    await create({id: ROOT, content: 'Root'})
+    const a = uuid('0000e200', 1)
+    await create({id: a, parentId: ROOT, content: 'A'})
+    await create({id: uuid('0000e200', 3), parentId: a, content: 'counted with A'})
+    let added = false
+    const out = await duringReads({
+      after: async sql => {
+        if (added || !sql.includes('AS child_count')) return
+        added = true
+        await create({id: uuid('0000e200', 2), parentId: a, content: 'arrived after A was counted'})
+      },
+    }, () => view<OutlineView>({type: 'view-outline', ref: ROOT, depth: 2, format: 'json'}))
+    const rowA = out.rows.find(row => row.id === a)!
+    expect(out.rows).toHaveLength(3)
+    expect(rowA).toMatchObject({childCount: 2, hiddenChildren: 0})
+  })
+
   it('lists children of the viewed workspace even if sync moves the root mid-view', async () => {
     await create({id: ROOT, content: 'Root'})
     const child = uuid('0000e100', 1)
@@ -585,6 +603,22 @@ describe('structural edge cases', () => {
     const text = await view<string>({type: 'view-outline', ref: root})
     expect(text).toContain(`- one  groupWith:: ^${first}  `)
     expect(text).toContain('- two  groupWith:: [2 refs]  ')
+  })
+
+  it('counts only the refs that decode, not malformed list entries', async () => {
+    const target = uuid('7f9f0001', 1)
+    await create({id: target, content: 'Target', properties: {alias: ['Target']}})
+    const holder = uuid('7f9f0002', 2)
+    await create({id: holder, content: 'holder'})
+    // Sync can deliver a list the codec would never write.
+    await sharedDb.db.execute(
+      `UPDATE blocks SET properties_json = json_set(properties_json, '$.groupWith', json(?)) WHERE id = ?`,
+      [JSON.stringify([target, 42]), holder],
+    )
+    const out = await view<BlockView>({type: 'view-block', ref: holder, format: 'json'})
+    const line = out.properties.find(property => property.name === 'groupWith')!
+    expect(line.value).toBe('[[Target]] ^7f9f0001')
+    expect(line.refIds).toEqual([target])
   })
 
   it('gives JSON the exact ids of a ref property, which the text bounds', async () => {
@@ -1160,6 +1194,21 @@ describe('view-search', () => {
       expect(hit.breadcrumb[1]).toBe('Notes')
     }
     expect(statements.filter(sql => /\b(parent|blocks)\.\*/.test(sql))).toEqual([])
+  })
+
+  it('marks a breadcrumb cut where an ancestor is deleted between the walk and the read', async () => {
+    const page = uuid('cece0000', 1)
+    await create({id: page, content: 'Live page', properties: {alias: ['Live page']}})
+    const mid = uuid('cece0001', 2)
+    await create({id: mid, parentId: page, content: 'Soon deleted'})
+    await create({id: uuid('cece0002', 3), parentId: mid, content: 'kiwi'})
+    const out = await duringReads({
+      after: async sql => {
+        if (!sql.includes('WITH RECURSIVE chain(start_id')) return
+        await sharedDb.db.execute('UPDATE blocks SET deleted = 1 WHERE id = ?', [mid])
+      },
+    }, () => view<SearchView>({type: 'view-search', query: 'kiwi', format: 'json'}))
+    expect(out.hits[0].breadcrumb).toEqual(['…'])
   })
 
   it('grows its window past a run of identical blocks, so a distinct hit below them stays reachable', async () => {

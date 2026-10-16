@@ -8,7 +8,12 @@ import { crumbsFromAncestors, type CrumbAncestor } from '@/utils/blockCrumbs.js'
 import { textHeadSql } from './text.ts'
 import { propertyNameResolverFor } from '@/utils/propertyValueContext.js'
 
-/** Live rows for `ids`, in input order; missing or deleted ids are skipped,
+/** Cost rule for every view: a block the view SHOWS is read whole, as the app
+ *  reads it to render — the bound is on how many rows, not how big each is.
+ *  What a view only quotes (crumbs, context lines, candidates) or counts is
+ *  read bounded in SQL (`textHeadSql`, an aggregate), never as whole rows.
+ *
+ *  Live rows for `ids`, in input order; missing or deleted ids are skipped,
  *  and with `workspaceId` so is a row in another workspace — ids a
  *  workspace-filtered query returned can leave it before they are read, as
  *  sync rewrites `workspace_id` in place. */
@@ -58,6 +63,7 @@ const CRUMB_ROWS_SQL = `
             WHERE a.type = 'text' AND trim(a.value) != '' LIMIT 1
          ) END AS alias
     FROM json_each(?) j JOIN blocks b ON b.id = j.value
+   WHERE b.deleted = 0
 `
 
 interface CrumbRow {
@@ -100,14 +106,23 @@ export const loadCrumbs = async (
   const ancestorById = new Map(rows.map(row => [row.id, toCrumbAncestor(row)]))
 
   // Rows come depth-ascending per start, so the last one's parent edge is
-  // where the walk stopped: null when it reached a root.
-  const walks = new Map<string, {chain: CrumbAncestor[], stoppedAtParentId: string | null}>()
+  // where the walk stopped: null when it reached a root. An ancestor that is
+  // gone by the second read (sync deleted it meanwhile) cuts the walk there.
+  const walks = new Map<string, {chain: CrumbAncestor[], stoppedAtParentId: string | null, cut: boolean}>()
   for (const step of steps) {
-    const walk = walks.get(step.start_id) ?? {chain: [], stoppedAtParentId: null}
-    const ancestor = step.depth > 0 ? ancestorById.get(step.id) : undefined
-    if (ancestor) walk.chain.push(ancestor)
-    walk.stoppedAtParentId = step.parent_id
+    const walk = walks.get(step.start_id) ?? {chain: [], stoppedAtParentId: null, cut: false}
     walks.set(step.start_id, walk)
+    if (walk.cut) continue
+    if (step.depth > 0) {
+      const ancestor = ancestorById.get(step.id)
+      if (!ancestor) {
+        walk.cut = true
+        walk.stoppedAtParentId = step.id
+        continue
+      }
+      walk.chain.push(ancestor)
+    }
+    walk.stoppedAtParentId = step.parent_id
   }
   const propertyName = propertyNameResolverFor(repo, workspaceId)
   return new Map(unique.map(id => {
