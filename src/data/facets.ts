@@ -550,7 +550,10 @@ export interface SearchSourceContribution {
   readonly id: string
   /** Applies `SearchSourceArgs.filter` in its own query, before its limit.
    *  For a source without it the merge point drops candidates the filter's
-   *  type clauses exclude, and the source sits out a filter with `underId`. */
+   *  type clauses exclude, and the source sits out a filter with `underId`.
+   *  Its share of a filtered result is therefore best effort (it limits
+   *  before the filter) — kept over sitting it out, so contributed sources
+   *  still take part in the agent's default, extension-excluding search. */
   readonly supportsFilter?: boolean
   search: (repo: Repo, args: SearchSourceArgs) => Promise<readonly SearchSourceCandidate[]>
 }

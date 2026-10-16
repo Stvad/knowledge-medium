@@ -58,7 +58,8 @@ numeric coercion (it is not a number). And you rarely need to: \`subtree\`,
 - Pages can have **multiple names**: the \`alias\` property is a string array,
   and any alias resolves to the page. \`[[Some Name]]\` in text links to
   whichever block claims that alias.
-- Every read command takes a **block ref**: a full id, a unique id prefix as
+- Commands that take a block (\`get-block\`, \`subtree\`, \`backlinks\`,
+  \`grouped-backlinks\`, \`search --under\`) accept a **block ref**: a full id, a unique id prefix as
   printed (\`^3f2a9c1d\`), a page name (or \`[[Page name]]\`), or a date for its
   daily note — so \`subtree "Project Alpha"\` and \`subtree today\` need no lookup.
 - To find a page by name use \`pnpm agent page <name>\` (exact alias hit +

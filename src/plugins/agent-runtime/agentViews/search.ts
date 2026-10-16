@@ -8,7 +8,7 @@ import { loadBlocks, loadCrumbs } from './context.ts'
 import { createPropertyRenderer, formatPropertyPairs, type PropertyLine } from './properties.ts'
 import { shortIds as loadShortIds } from './resolveRef.ts'
 import { clampInt, crumbLine, joinDisplayLines, loadRoot } from './shared.ts'
-import { formatCount, oneLine, snippet } from './text.ts'
+import { formatCount, snippet } from './text.ts'
 
 export interface SearchParams {
   query: string
@@ -72,14 +72,14 @@ const resolveTypeIds = (repo: Repo, types: readonly string[]): string[] => {
   return [...ids]
 }
 
-const dedupeKey = (block: BlockData): string => oneLine(block.content).toLowerCase()
 
 /** Blocks with the same text, in rank order, each group led by its best. */
 const groupIdentical = (blocks: readonly BlockData[]): BlockData[][] => {
   const groups: BlockData[][] = []
   const byKey = new Map<string, BlockData[]>()
   for (const block of blocks) {
-    const key = dedupeKey(block)
+    // Exactly identical stored text only: case or spacing can carry meaning (code).
+    const key = block.content
     const group = byKey.get(key)
     if (group) group.push(block)
     else {

@@ -193,7 +193,11 @@ const renderBacklinkRow = (row: BacklinkRow, index: number, samePlace: boolean):
 }
 
 const rangeNote = (offset: number, shown: number, total: number, nextOffset: number | null): string => {
-  if (shown === 0) return offset > 0 ? `none past offset ${formatCount(offset)} of ${formatCount(total)}` : 'none'
+  if (shown === 0) {
+    // Ids consumed but all deleted meanwhile still leave a next page.
+    if (nextOffset !== null) return `none left on this page of ${formatCount(total)} (next: offset=${nextOffset})`
+    return offset > 0 ? `none past offset ${formatCount(offset)} of ${formatCount(total)}` : 'none'
+  }
   const range = `${formatCount(offset + 1)}–${formatCount(offset + shown)} of ${formatCount(total)}`
   return nextOffset === null ? range : `${range} (next: offset=${nextOffset})`
 }

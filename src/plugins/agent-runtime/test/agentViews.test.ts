@@ -22,7 +22,7 @@ import type { AgentRuntimeContext } from '../protocol'
 import { resolveBlockRef, shortIds } from '../agentViews/resolveRef'
 import type { OutlineView } from '../agentViews/outline'
 import type { BlockView } from '../agentViews/block'
-import type { BacklinksView, GroupedBacklinksView } from '../agentViews/backlinks'
+import { renderBacklinksView, type BacklinksView, type GroupedBacklinksView } from '../agentViews/backlinks'
 import type { SearchView } from '../agentViews/search'
 
 const WS = 'ws-1'
@@ -690,6 +690,27 @@ describe('structural edge cases', () => {
     const out = await view<BlockView>({type: 'view-block', ref: id, format: 'json'})
     expect(out.types).toHaveLength(11)
     expect(out.types.at(-1)).toBe('+199,990 more')
+  })
+
+  it('folds only exactly identical text into one search hit', async () => {
+    await create({id: uuid('b0b0b0b0', 1), content: 'Const Value'})
+    await create({id: uuid('b0b0b0b1', 2), content: 'const value'})
+    await create({id: uuid('b0b0b0b2', 3), content: 'const value'})
+    const out = await view<SearchView>({type: 'view-search', query: 'const value', format: 'json'})
+    expect(out.hits).toHaveLength(2)
+    expect(out.hits.map(hit => hit.duplicateCount).sort()).toEqual([0, 1])
+  })
+
+  it("a backlinks page whose sources were all deleted still points to the next one", async () => {
+    const lines = renderBacklinksView({
+      target: {id: 't', shortId: 't', title: 'Target'},
+      total: 5,
+      offset: 0,
+      nextOffset: 2,
+      filter: null,
+      rows: [],
+    })
+    expect(lines).toContain('(next: offset=2)')
   })
 
   it('sql summarizes a binary cell by its size', async () => {
