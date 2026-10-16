@@ -475,24 +475,13 @@ describe('structural edge cases', () => {
     expect(out.hits.map(hit => hit.id)).toEqual([uuid('5c5c5c5d', 2)])
   })
 
-  it('the extension over-fetch counts against the window cap', async () => {
-    await create({id: uuid('5d5d5d5d', 1), content: 'slack query'})
-    await sharedDb.db.execute(
-      `INSERT INTO block_types (block_id, workspace_id, type)
-       WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 2500)
-       SELECT 'ext-' || i, ?, 'extension' FROM n`,
-      [WS],
-    )
-    const limits: number[] = []
-    repo.setRuntimeContributions(searchSourcesFacet, 'test:spy', [{
-      id: 'test.spy',
-      search: async (_repo, args) => {
-        limits.push(args.limit)
-        return []
-      },
-    }])
-    await view({type: 'view-search', query: 'slack'})
-    expect(Math.max(...limits)).toBeLessThanOrEqual(2000)
+  it('drops extension source inside the query, so extensions ranked first cannot empty a page', async () => {
+    for (let i = 0; i < 3; i++) {
+      await create({id: uuid(`5d5d5d5${i}`, i), content: 'widget source', properties: {types: ['extension']}})
+    }
+    await create({id: uuid('5d5d5d5f', 9), content: 'widget note'})
+    const out = await view<SearchView>({type: 'view-search', query: 'widget', limit: 1, format: 'json'})
+    expect(out.hits.map(hit => hit.snippet)).toEqual(['widget note'])
   })
 
   it('titles at most 20 refs of a refList, counting the rest', async () => {

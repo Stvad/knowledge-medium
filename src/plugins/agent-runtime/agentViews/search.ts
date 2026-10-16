@@ -1,9 +1,9 @@
 import type { Repo } from '@/data/repo'
 import type { BlockData } from '@/data/api'
 import { EXTENSION_TYPE } from '@/data/blockTypes'
-import { isActiveSearchFilter, type BlockSearchFilter } from '@/data/searchFilter'
+import type { BlockSearchFilter } from '@/data/searchFilter'
 import { AGENT_VIEW_DEFAULTS } from '@knowledge-medium/agent-cli/protocol'
-import { readTypeIds, searchBlocksAcrossSources } from '@/utils/linkTargetAutocomplete.js'
+import { searchBlocksAcrossSources } from '@/utils/linkTargetAutocomplete.js'
 import { loadBlocks, loadCrumbs } from './context.ts'
 import { createPropertyRenderer, formatPropertyPairs, type PropertyLine } from './properties.ts'
 import { shortIds as loadShortIds } from './resolveRef.ts'
@@ -88,14 +88,6 @@ const groupIdentical = (blocks: readonly BlockData[]): BlockData[][] => {
   return groups
 }
 
-const extensionBlockCount = async (repo: Repo, workspaceId: string): Promise<number> => {
-  const [row] = await repo.db.getAll<{n: number}>(
-    'SELECT count(*) AS n FROM block_types WHERE workspace_id = ? AND type = ?',
-    [workspaceId, EXTENSION_TYPE],
-  )
-  return row?.n ?? 0
-}
-
 export const buildSearchView = async (
   repo: Repo,
   workspaceId: string,
@@ -107,31 +99,15 @@ export const buildSearchView = async (
   const underId = params.under === undefined
     ? undefined
     : (await loadRoot(repo, params.under, workspaceId, async id => (await loadBlocks(repo, [id]))[0])).root.id
-  const scope: BlockSearchFilter = {
+  const filter: BlockSearchFilter = {
     ...(params.types?.length ? {types: resolveTypeIds(repo, params.types)} : {}),
+    ...(includeExtensions ? {} : {excludeTypes: [EXTENSION_TYPE]}),
     ...(underId !== undefined ? {underId} : {}),
   }
-  // Extension source is dropped AFTER the fan-out when nothing else filters:
-  // an active filter limits the search to sources that can apply it, and
-  // excluding extensions must not cost a default search its contributed
-  // sources. Fetching that many extra rows keeps the page exact.
-  const scoped = isActiveSearchFilter(scope)
-  const filter = scoped && !includeExtensions ? {...scope, excludeTypes: [EXTENSION_TYPE]} : scope
-  const extensionSlack = includeExtensions || scoped ? 0 : await extensionBlockCount(repo, workspaceId)
 
   const fetchWindow = async (window: number) => {
-    // The over-fetch for extension blocks counts against the cap too.
-    const requested = Math.min(window + extensionSlack, MAX_WINDOW)
-    const fetched = await searchBlocksAcrossSources(repo, {
-      workspaceId,
-      query: params.query,
-      limit: requested,
-      filter,
-    })
-    const found = includeExtensions
-      ? fetched
-      : fetched.filter(block => !readTypeIds(block).includes(EXTENSION_TYPE))
-    return {groups: groupIdentical(found), exhausted: fetched.length < requested}
+    const fetched = await searchBlocksAcrossSources(repo, {workspaceId, query: params.query, limit: window, filter})
+    return {groups: groupIdentical(fetched), exhausted: fetched.length < window}
   }
 
   // Folding identical blocks shrinks the window, so it grows until it holds

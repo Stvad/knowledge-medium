@@ -64,6 +64,8 @@ describe('cliInputFrom', () => {
     // `--under 00123456` reaches the action as the number 123456.
     expect(() => cliInputFrom(tool('search'), ['x'], {under: 123456}))
       .toThrow(/--under got the number 123456.*\^123456/)
+    expect(() => cliInputFrom(tool('search'), ['x'], {types: ['todo', 123]}))
+      .toThrow(/--types got the number 123/)
   })
 
   it('accepts a single or repeated string-array flag, splitting commas', () => {

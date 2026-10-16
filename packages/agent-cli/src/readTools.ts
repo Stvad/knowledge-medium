@@ -231,6 +231,17 @@ const cacKey = (key: string): string => key.replace(/-([a-z])/g, (_, c: string) 
 
 const EMPTY_VALUE_HINT = ' An empty value (a shell expanding an unset variable) arrives as 0.'
 
+/** cac numberifies every digits-only option value, so `00123` arrives as 123
+ *  and turning it back into a string names something else (another id
+ *  prefix, another type). */
+const refuseNumberified = (flag: string, value: unknown): void => {
+  if (typeof value !== 'number') return
+  throw new Error(
+    `${flag} got the number ${value}: a digits-only value loses its leading zeros. `
+    + `Prefix it so it stays text (an id prefix as printed: ^${value}).`,
+  )
+}
+
 const coerceOption = (spec: CliOptionSpec, value: unknown): unknown => {
   const flag = flagOf(spec.field)
   switch (spec.kind) {
@@ -249,18 +260,12 @@ const coerceOption = (spec: CliOptionSpec, value: unknown): unknown => {
         throw new Error(`${flag} expects a single value; got ${JSON.stringify(value)}.`)
       }
       if (value === 0) return ''
-      // cac numberifies every digits-only option value, so `00123456` arrives
-      // as 123456: resolving that as an id prefix would name another block.
-      if (typeof value === 'number') {
-        throw new Error(
-          `${flag} got the number ${value}: a digits-only value loses its leading zeros. `
-          + `Write an id prefix with its caret (^${value}) as the views print it.`,
-        )
-      }
+      refuseNumberified(flag, value)
       return String(value)
     }
     case 'string-array': {
       const items = Array.isArray(value) ? value : [value]
+      for (const item of items) refuseNumberified(flag, item)
       return items
         .flatMap(item => String(item).split(','))
         .map(item => item.trim())

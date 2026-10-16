@@ -881,33 +881,31 @@ describe('searchBlocksAcrossSources (searchSourcesFacet merge point)', () => {
     expect(results[0].content).toBe('sync notes')
   })
 
-  it('a filtered search runs only the sources that apply the filter, and core applies it before its limit', async () => {
+  it('core applies a filter before its limit; other sources are type-filtered, and sit out an ancestry filter', async () => {
     await create({id: 'plain', content: 'sync plain'})
     await create({id: 'tagged', content: 'sync tagged', types: ['todo']})
-    const unfiltering = vi.fn(async () => [{block: blockData('semantic-hit', 'unrelated'), score: 999}])
+    const unfiltering = vi.fn(async () => [
+      {block: blockData('semantic-untyped', 'unrelated'), score: 999},
+      {block: {...blockData('semantic-todo', 'unrelated'), properties: {types: ['todo']}}, score: 998},
+    ])
     env.repo.setRuntimeContributions(searchSourcesFacet, 'test:toy-source', [{id: 'test.toy', search: unfiltering}])
-
-    const filtered = await searchBlocksAcrossSources(env.repo, {
-      workspaceId: WS,
-      query: 'sync',
-      limit: 1,
-      filter: {types: ['todo']},
-    })
-    expect(filtered.map(block => block.id)).toEqual(['tagged'])
-    expect(unfiltering).not.toHaveBeenCalled()
-
-    // A run that skipped a source would read, to a health consumer, as that
-    // source having left — so it reports nothing.
     const reports: SearchSourceHealthReport[] = []
     env.repo.setRuntimeContributions(searchSourceHealthFacet, 'test:reporter', [
       {id: 'test.reporter', report: (r) => { reports.push(r) }},
     ])
-    await searchBlocksAcrossSources(env.repo, {workspaceId: WS, query: 'sync', limit: 1, filter: {types: ['todo']}})
-    expect(reports).toHaveLength(0)
 
-    // An empty filter is no filter: every source takes part.
-    await searchBlocksAcrossSources(env.repo, {workspaceId: WS, query: 'sync', limit: 10, filter: {}})
-    expect(unfiltering).toHaveBeenCalledTimes(1)
+    // A type filter: the other source runs, and only its matching candidate survives.
+    const typed = await searchBlocksAcrossSources(env.repo, {workspaceId: WS, query: 'sync', limit: 2, filter: {types: ['todo']}})
+    expect(typed.map(block => block.id)).toEqual(['semantic-todo', 'tagged'])
+    expect(reports).toHaveLength(1)
+
+    // An ancestry filter cannot be checked on a candidate: that source sits
+    // out, and the partial run files no health report (an absent source
+    // would read as one that left).
+    unfiltering.mockClear()
+    await searchBlocksAcrossSources(env.repo, {workspaceId: WS, query: 'sync', limit: 1, filter: {underId: 'nowhere'}})
+    expect(unfiltering).not.toHaveBeenCalled()
+    expect(reports).toHaveLength(1)
   })
 
   it('drops a source that throws without failing the others', async () => {

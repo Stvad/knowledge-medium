@@ -3,6 +3,7 @@ import type { Repo } from '@/data/repo'
 import { aliasesProp, typesProp } from '@/data/properties.js'
 import {
   isActiveSearchFilter,
+  matchesTypeFilter,
   searchSourceHealthFacet,
   searchSourcesFacet,
   type SearchSourceArgs,
@@ -707,10 +708,15 @@ export const searchBlocksAcrossSources = async (
   const registered = sources && sources.size > 0
     ? [...sources.values()]
     : [coreContentSearchSource]
-  const contributions = isActiveSearchFilter(args.filter)
+  const filter = isActiveSearchFilter(args.filter) ? args.filter : undefined
+  const contributions = filter?.underId !== undefined
     ? registered.filter(source => source.supportsFilter === true)
     : registered
   if (contributions.length === 0) return []
+  const keep = (source: SearchSourceContribution, candidates: readonly SearchSourceCandidate[]) =>
+    filter && source.supportsFilter !== true
+      ? candidates.filter(candidate => matchesTypeFilter(readTypeIds(candidate.block), filter))
+      : candidates
 
   const failures: {index: number; error: unknown}[] = []
   // Written by INDEX, not pushed: a push orders outcomes by settle order, so
@@ -725,7 +731,7 @@ export const searchBlocksAcrossSources = async (
         outcomes[index] = detail === null
           ? {sourceId: source.id, kind: 'ok'}
           : {sourceId: source.id, kind: 'malformed-candidate', detail}
-        return candidates
+        return keep(source, candidates)
       } catch (error) {
         console.error(`[searchBlocksAcrossSources] source "${source.id}" threw`, error)
         outcomes[index] = {sourceId: source.id, kind: 'threw', error}
