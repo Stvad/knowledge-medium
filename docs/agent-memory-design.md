@@ -17,7 +17,7 @@ The sections below answer the issue's four questions in order. Each gives one re
 These are the facts the design leans on, checked against code on the date in the banner.
 
 - **MCP `instructions`.** `createGraphMcpServer` (`packages/agent-cli/src/mcpServer.ts`) passes `serverOptions` straight to `McpServer` and sets no `instructions` of its own. The dispatch wrapper (`packages/agent-dispatch/src/mcp.ts`) passes a static 221-char channel string, and only when the channel listener is on. The read-path slice (#1236, in flight) adds a static default `instructions` plus a `guide` tool, and appends dispatch's string after its own.
-- **Claude Code's handling of `instructions`.** This comes from the Claude Code docs, not from its source. Instructions load once, when the server connects. The docs say nothing about refreshing them mid-session. They are **cut at 4,096 chars by default**, without notice; `CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH` raises the cap. I don't know whether Codex surfaces `instructions` at all.
+- **Claude Code's handling of `instructions`.** According to the Claude Code docs, instructions load once, when the server connects, and the docs say nothing about refreshing them mid-session. The cap comes from the Claude Code changelog. Text past it is cut without notice. Versions from 2.1.84 cut at **2,048 chars**. From 2.1.296 the default is 4,096. The version installed on the machine where this was written is 2.1.285, which still cuts at 2,048. `CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH` changes the cap. I don't know whether Codex surfaces `instructions` at all.
 - **Token scopes.** There are two: `AgentTokenScope = 'read-write' | 'read-only'` (`src/plugins/agent-runtime/tokens.ts`). Tokens are stored per (user, workspace) in device-local storage, and the tab registers only the open workspace's tokens. PR #1244 (open) changes that: tokens become bound to the user, and reads take the workspace as a per-call parameter that defaults to the tab's open workspace. The bridge enforces read-only from each verb's `readOnly` flag in `knownCommandRegistry` (`packages/agent-cli/src/protocol.ts`), through `isReadOnlyCommand` in `server.ts`. A read-write token reaches every verb, including `eval`, `sql execute`, `install-extension` and `run-action`. The MCP server exposes much less: seven read tools and five block writes, with no eval.
 - **Agent writes run as the user.** Verbs in `src/plugins/agent-runtime/commands.ts` call `repo.tx` with `ChangeScope.BlockDefault` and a description string such as `'agent runtime block update'`. `TxMeta` (`src/data/api/tx.ts`) carries `description, scope, user, txId, source, workspaceId` but no actor. Once a write commits, nothing distinguishes an agent write from one the user made. The only trace is the free-text `description` in `command_events`, which is a local table that does not sync.
 - **The prefs blocks are not private.** `getUserPrefsBlock` / `getPluginPrefsBlock` (`src/data/stateBlocks.ts`) live under the user page, a deterministic id from (workspace, user), and write under `ChangeScope.UserPrefs`. That scope is not undoable and is allowed in read-only mode. Block RLS is workspace membership (`blocks_read` → `is_workspace_member`), so every member can read a user's prefs subtree. "Per-user" here means who owns the block, not who can read it.
@@ -85,7 +85,7 @@ Agent memory proposals                                ← system page, agent-wri
 
 ### What the agent sees at connect
 
-This is the memory section of `instructions`, rendered from the blocks above. It is about 1,250 chars:
+This is the memory section of `instructions`, rendered from the blocks above. It is about 1,100 chars. The full update guidance, covering what to propose, leading with the subject, and `supersedes`, lives in a `memory` topic of #1236's `guide` tool, so the injected footer costs two lines:
 
 ```text
 ## Graph memory for workspace "Home": notes for agents from its members
@@ -106,10 +106,8 @@ Index (full text: memory {id}):
 Scoped (apply only under the named block; full text: memory {at}):
 - ^5d2e8b10 Garden planner: plant records are blocks typed garden-plant · under ^9a0bc3f1
 
-To add or change a memory, call remember. It becomes a proposal the user reviews,
-not a rule. Propose only what stays true: a stated preference, a correction, a trap
-you hit. Status and progress belong in todo blocks. Lead with the subject. To
-replace a memory, pass supersedes; don't add a duplicate.
+To add or change a memory, call remember: it files a proposal the user reviews.
+Propose only what stays true; status belongs in todo blocks. More: guide memory.
 ```
 
 The `^xxxxxxxx` short ids are the form #1236 introduces. The age suffix is the newest `user_updated_at` anywhere in the memory's subtree, so editing one body line counts as an edit.
@@ -143,7 +141,7 @@ This also gives backlinks at no extra cost: `applies-to` is a ref, so the Garden
 - *A separate project entity* (a project type, or a picker at connect). This adds a second scoping concept to maintain beside the tree, and the tree already says "under this page."
 - *Placement as scope* (memories living under the pages they govern). Memory would be scattered across the graph, so there would be no single page to review, and review is the safety story (Q4). Moving a block would also silently change its scope.
 - *An agent-declared project name* (an env var or argument). A name is not an identity: it breaks on rename (record-grain doctrine), and nothing validates it.
-- *Workspace only, with no sub-scope.* A workspace holds unrelated contexts, which is the issue's own premise. Every project's conventions would land in every session and use up the 4,096-char budget.
+- *Workspace only, with no sub-scope.* A workspace holds unrelated contexts, which is the issue's own premise. Every project's conventions would land in every session and use up the instructions budget, which is 2,048 chars by default.
 
 ## Q2. Where does memory live?
 
@@ -159,16 +157,16 @@ Memories are documents. The user wants to edit, undo, link and review them like 
 
 ## Q3. Precedence and composition
 
-**Facts.** We control only the text inside our server's `instructions`. The host decides where that text sits and how it's framed. In Claude Code, CLAUDE.md is presented as user instructions that override defaults, while MCP instructions are a section provided by the server. All of our `instructions` share one 4,096-char cap.
+**Facts.** We control only the text inside our server's `instructions`. The host decides where that text sits and how it's framed. In Claude Code, CLAUDE.md is presented as user instructions that override defaults, while MCP instructions are a section provided by the server. All of our `instructions` share one cap: 2,048 chars on Claude Code before 2.1.296, 4,096 from it.
 
 **Recommendation.** Graph memory covers the graph's domain; it doesn't compete with CLAUDE.md. It governs how to work with this graph. It ranks **below** the host's instruction files and the current task, and **above** the server's static defaults. Composition is concatenation in a fixed order, with a budget for each section and no merging:
 
 ```text
-[#1236 static guide ~2,000] → [graph memory ~1,500] → [caller's instructions, e.g. dispatch channel ~220]
+[static guide 633 (PR #1241)] → [graph memory ≤ ~1,100] → [caller's instructions, e.g. dispatch channel 221]
 ```
 
 - The memory header states the precedence in one sentence, so the model gets it whatever framing the host uses (see the example above). It also says to tell the user about any conflict, so conflicts surface rather than getting resolved silently.
-- Each section is clipped to its own budget by our renderer. That keeps the total under the host's cap, so the host's silent cut never lands in the middle of our text.
+- The composition is budgeted for **2,048 chars in total by default**. That is the cap of every Claude Code release before 2.1.296, including the version installed here, which is the binary dispatch spawns. The total is a setting, for clients known to allow more (4,096 from 2.1.296, or whatever `CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH` says). The static guide and the caller's text are fixed sizes, so memory gets what's left, about 1,100 chars by default. Each section is clipped to its own budget by our renderer. That keeps the total under the host's cap, so the host's silent cut never lands in the middle of our text.
 - Dispatch's own rules cannot be overridden: the reply shape, and never writing the watcher wikilink. They are part of the task, which ranks above memory, and dispatch's instructions come last in the composed text. A memory saying "always mention [[claude]]" would still be outranked.
 - **Unverified:** I don't know whether Codex surfaces `instructions`. If it doesn't, the Codex executor also gets the workspace-wide section in its prompt, from the same renderer.
 
@@ -186,7 +184,7 @@ Memories are documents. The user wants to edit, undo, link and review them like 
 
 1. **Proposals are the only agent path.** `remember` creates a typed block on the proposals page. That page is ordinary, so agents may create, edit and delete proposals freely. A proposal is never injected.
 2. **Accept is the review, and it publishes a copy.** It is a UI action, and the MCP surface has no `run-action`, so no MCP agent can invoke it. It publishes the snapshot the user was shown, under new ids (see Accept above). So no later change to the proposal, a stale agent edit arriving by sync included, can reach active memory.
-3. **One gate, inside the writing transaction.** The bridge command executor stamps every transaction it opens as agent-origin. One commit guard, contributed by agent-runtime, rejects any agent-origin transaction that touches a row in the memory page's subtree, including the page itself. That covers create, edit, move in or out, delete and restore. The gate judges each write against the tree as the executing device sees it. Rows that arrive by sync are not checked again, which is why Accept copies instead of moving. The rejection message states the fact and the fix: *"The Agent memory page is edited only by the user. Use remember to propose a change."*
+3. **One gate, inside the writing transaction.** The bridge command executor stamps every transaction it opens as agent-origin. One commit guard, contributed by agent-runtime, rejects any agent-origin transaction that touches a row in the memory page's subtree, including the page itself. That covers create, edit, move in or out, delete and restore. It checks each written row's ancestry both before and after the transaction. So moving a memory off the page is refused as well as moving a block onto it, and an agent can't retire a memory and then edit it. The gate judges each write against the tree as the executing device sees it. Rows that arrive by sync are not checked again, which is why Accept copies instead of moving. The rejection message states the fact and the fix: *"The Agent memory page is edited only by the user. Use remember to propose a change."*
    - **Why app-side and inside the transaction.** The check has to happen inside the writing transaction, not against an earlier snapshot. With one owner, every write verb is covered, including the new ones from #1235, and no verb has to remember to call a check.
    - **What it needs from core.** Two small additions. The first is an `actor: 'agent'` field on `RepoTxOptions`, surfaced on `TxMeta`. The second is the terminal commit-guard phase described in the next point. The executor stamps the actor by handing verbs a repo facade, the same way `repo.undoGroup` injects `groupId`. Agent-origin transactions are small, and the ancestor walk runs only for them, so the UI commit path pays nothing.
    - **It runs last, as a commit guard, not as a same-tx processor.** The gate must see every row the transaction wrote, including rows that same-tx processors amend. Those processors run once each, in registration order, with no fixpoint (`src/data/api/sameTxProcessor.ts`). So a gate written as one of them would miss the amendments of any processor registered after it, and staying correct would depend on registration order. Core therefore gains a terminal phase that runs after the whole processor pipeline, over every row the transaction wrote. A guard in this phase can only reject; it writes nothing, so nothing runs after it. Example: an agent renames a page that a memory links to. The rename processor then rewrites the memory's `[[…]]` text in the same transaction, and that rewrite must be refused, because it is an indirect way to edit memory text. The consequence is that an agent can't rename a page a memory links to, though the user can. That's rare, so I accept it. The test that pins the gate covers this case.
@@ -230,7 +228,7 @@ This repo's beads memory works: a SessionStart hook injects a clipped one-line i
 **Doesn't carry over.**
 - **Free writes** (see Q4).
 - **Key prefixes as kinds** (`feedback_`, `reference_`). Here the block id is the identity, and v1 doesn't need a kind property.
-- **The delivery channel.** Beads uses a Claude Code SessionStart hook with a 10K limit. Graph memory uses MCP `instructions`, capped at 4,096 chars but available to any MCP client. For agents that use only the CLI, a `kmagent memory --index` verb could feed a SessionStart hook the same way `bd prime` does. That is optional.
+- **The delivery channel.** Beads uses a Claude Code SessionStart hook with a 10K limit. Graph memory uses MCP `instructions`, capped at 2,048 chars by default (4,096 on newer Claude Code) but available to any MCP client. For agents that use only the CLI, a `kmagent memory --index` verb could feed a SessionStart hook the same way `bd prime` does. That is optional.
 - **Privacy.** Beads memory syncs to a private remote. Every member of the workspace can read graph memory.
 
 ## Delivery mechanics
@@ -267,7 +265,7 @@ This repo's beads memory works: a SessionStart hook injects a clipped one-line i
 ## Implementation slices (for when this is accepted)
 
 1. **Seeds, pages and the proposal UI.** In agent-runtime: the type and property seeds, the two system pages, the tag-on-entry processor, and the proposal renderer with Accept, which refuses mid-edit and publishes the displayed snapshot. Each Accept behaviour needs a test that fails when it is removed: Accept clicked mid-edit; a proposal rewritten after it was shown, including by a rename, still publishes the shown version and keeps the proposal; a missing memory or proposals page.
-2. **Actor stamp and gate.** `actor` on transaction options, the executor's facade, the terminal commit-guard phase, and the gate as its first guard. Verify the guard per verb and per clause, including the rename-cascade case and a body block moved between memories: delete the clause and confirm a named test fails.
+2. **Actor stamp and gate.** `actor` on transaction options, the executor's facade, the terminal commit-guard phase, and the gate as its first guard. Verify the guard per verb and per clause, including the rename-cascade case, a body block moved between memories, and a memory moved off the page: delete the clause and confirm a named test fails.
 3. **Verb, renderer and tools.** The `agent-memory` verb and its renderer with budgets, plus the `memory` / `remember` tools and CLI verbs. `remember` goes through `beforeWrite`, and a test pins that a proposal containing a blocked watcher wikilink is refused under the dispatch entrypoint.
 4. **Connect-time injection.** `composeInstructions` in both MCP entrypoints. This lands after #1236's static `instructions`.
 5. **Dispatch.** Location-scoped memory appended to rendered prompts, and the Codex `instructions` check.
@@ -279,6 +277,6 @@ This repo's beads memory works: a SessionStart hook injects a clipped one-line i
 2. **Workspace-shared memory only, with no per-user tier in v1?** I recommend yes. A later `agent-memory:for-user` ref can be added without breaking anything if a shared workspace needs it.
 3. **Scope memories with `applies-to` refs, rather than placing them under the pages they govern?** I recommend refs. Keeping every memory on one page is what makes review, and so the safety story, workable.
 4. **Accept two small core additions, so the gate can be one check that sees every row a transaction wrote?** The additions are `actor: 'agent'` on transaction options and `TxMeta`, and a terminal commit-guard phase that runs after the same-tx processors. I recommend yes. The alternative is a check inside each agent write verb. That's smaller today, but every new verb (#1235) would have to remember to call it, and it would miss rows that processors rewrite, such as a rename cascade.
-5. **Give memory about 1,500 of Claude Code's 4,096 `instructions` chars, with pinned bodies first and index lines clipped, and the rest reached through `memory`?** I recommend yes. It leaves room for #1236's static guide and dispatch's channel text.
+5. **Budget the whole `instructions` string for 2,048 chars by default, giving memory what's left after the static guide and dispatch text (about 1,100), with a setting to raise the total for newer clients?** I recommend yes. Pinned bodies go first, index lines are clipped, and the rest is reached through `memory`. 2,048 is the cap on every Claude Code before 2.1.296, including the one installed here, so a 4,096 default would be cut silently on those versions.
 6. **Approve the frozen names: type `agent-memory`, and `agent-memory:applies-to`, `agent-memory:pinned`, `agent-memory:supersedes` and `agent-memory:reported-source`?** I recommend yes. They can't be renamed after the first release without a migration.
 7. **Leave the read-write CLI surface (`eval`, `sql execute`, `install-extension`, `run-action`) outside the gate, documented as trusted?** I recommend yes. Gating it would mean sandboxing eval, which this design doesn't attempt. Such a token already holds the user's full authority in the app. The trusted class includes every run with a shell and loopback access: a Claude run granted `Bash`, and a Codex run with `networkAccess: true`.
