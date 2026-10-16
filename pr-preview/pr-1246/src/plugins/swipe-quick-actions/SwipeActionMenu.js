@@ -1,1 +1,1 @@
-import{PS as e}from"../../../chunks/app-ZuOS_1G7.js";export{e as SwipeActionMenu};
+import{PS as e}from"../../../chunks/app-ChSET2Tp.js";export{e as SwipeActionMenu};

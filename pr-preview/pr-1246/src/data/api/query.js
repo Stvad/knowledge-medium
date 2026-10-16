@@ -1,1 +1,1 @@
-import{z4 as e}from"../../../chunks/app-ZuOS_1G7.js";export{e as defineQuery};
+import{z4 as e}from"../../../chunks/app-ChSET2Tp.js";export{e as defineQuery};

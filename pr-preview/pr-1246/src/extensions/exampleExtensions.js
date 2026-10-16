@@ -1,1 +1,1 @@
-import{nw as e,rw as t}from"../../chunks/app-ZuOS_1G7.js";export{e as exampleExtensions,t as insertExampleExtensionsUnder};
+import{nw as e,rw as t}from"../../chunks/app-ChSET2Tp.js";export{e as exampleExtensions,t as insertExampleExtensionsUnder};

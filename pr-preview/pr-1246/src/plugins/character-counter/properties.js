@@ -1,1 +1,1 @@
-import{_z as e,gz as t,vz as n}from"../../../chunks/app-ZuOS_1G7.js";export{t as charLimitProp,e as charProfileProp,n as charScopeProp};
+import{_z as e,gz as t,vz as n}from"../../../chunks/app-ChSET2Tp.js";export{t as charLimitProp,e as charProfileProp,n as charScopeProp};

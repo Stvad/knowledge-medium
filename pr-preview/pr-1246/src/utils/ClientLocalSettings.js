@@ -1,1 +1,1 @@
-import{MT as e,jT as t}from"../../chunks/app-ZuOS_1G7.js";export{t as ClientLocalSettings,e as clientLocalSettings};
+import{MT as e,jT as t}from"../../chunks/app-ChSET2Tp.js";export{t as ClientLocalSettings,e as clientLocalSettings};

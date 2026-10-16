@@ -1,1 +1,1 @@
-import{Aw as e,jw as t}from"../../../chunks/app-ZuOS_1G7.js";export{e as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,t as openExtensionsSettingsAction};
+import{Aw as e,jw as t}from"../../../chunks/app-ChSET2Tp.js";export{e as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,t as openExtensionsSettingsAction};

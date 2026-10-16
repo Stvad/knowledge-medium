@@ -1,1 +1,1 @@
-import{Am as e,Mm as t,jm as n}from"../../../chunks/app-ZuOS_1G7.js";export{e as VideoNotesLayout,n as VideoNotesRenderer,t as videoNotesLayoutContribution};
+import{Am as e,Mm as t,jm as n}from"../../../chunks/app-ChSET2Tp.js";export{e as VideoNotesLayout,n as VideoNotesRenderer,t as videoNotesLayoutContribution};
