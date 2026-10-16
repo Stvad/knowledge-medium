@@ -1,1 +1,1 @@
-import{Nu as e}from"../../../chunks/app-BeHMdDVM.js";export{e as backlinksViewPlugin};
+import{Nu as e}from"../../../chunks/app-DkdRGd2b.js";export{e as backlinksViewPlugin};

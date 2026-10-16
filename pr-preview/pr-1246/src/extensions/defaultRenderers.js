@@ -1,1 +1,1 @@
-import{SE as e,bE as t,xE as n}from"../../chunks/app-BeHMdDVM.js";export{t as defaultRegistry,n as defaultRendererContributions,e as defaultRenderersExtension};
+import{SE as e,bE as t,xE as n}from"../../chunks/app-DkdRGd2b.js";export{t as defaultRegistry,n as defaultRendererContributions,e as defaultRenderersExtension};

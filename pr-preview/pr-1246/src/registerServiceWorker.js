@@ -1,1 +1,1 @@
-import{nT as e,tT as t}from"../chunks/app-BeHMdDVM.js";export{t as checkForAppUpdate,e as registerServiceWorker};
+import{nT as e,tT as t}from"../chunks/app-DkdRGd2b.js";export{t as checkForAppUpdate,e as registerServiceWorker};

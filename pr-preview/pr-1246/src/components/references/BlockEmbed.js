@@ -1,1 +1,1 @@
-import{hC as e}from"../../../chunks/app-BeHMdDVM.js";export{e as BlockEmbed};
+import{hC as e}from"../../../chunks/app-DkdRGd2b.js";export{e as BlockEmbed};
