@@ -1,1 +1,1 @@
-import{Sg as e,bg as t,xg as n,yg as r}from"../../../chunks/app-C9IAJbVb.js";export{r as ENTER_BLOCK_EDIT_MODE_GESTURE_ACTION_ID,t as enterBlockEditModeOnGestureAction,n as vimClickToFocusDecorator,e as vimNormalModeActivation};
+import{Sg as e,bg as t,xg as n,yg as r}from"../../../chunks/app-jTNb6cwO.js";export{r as ENTER_BLOCK_EDIT_MODE_GESTURE_ACTION_ID,t as enterBlockEditModeOnGestureAction,n as vimClickToFocusDecorator,e as vimNormalModeActivation};
