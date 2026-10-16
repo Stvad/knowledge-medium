@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import type { CSSProperties, KeyboardEvent, PointerEvent } from 'react'
 import { BlockRendererProps, BlockRenderer } from '@/types.js'
 import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.js'
@@ -77,6 +78,8 @@ export const VideoNotesLayout: BlockLayout = (slots) => {
   const containerRef = useRef<HTMLDivElement>(null)
   const dragCleanupRef = useRef<(() => void) | null>(null)
   const videoPaneRatio = draftVideoPaneRatio ?? storedVideoPaneRatio
+  // The draft exists exactly while a drag is in progress.
+  const isResizing = draftVideoPaneRatio !== null
 
   useEffect(() => () => {
     dragCleanupRef.current?.()
@@ -111,6 +114,12 @@ export const VideoNotesLayout: BlockLayout = (slots) => {
     }
 
     const handlePointerMove = (moveEvent: globalThis.PointerEvent) => {
+      // A release this window never received (the button let go outside it,
+      // or while focus was elsewhere) surfaces as a move with the button up.
+      if ((moveEvent.buttons & 1) === 0) {
+        finishResize(true)
+        return
+      }
       moveEvent.preventDefault()
       updateRatio(moveEvent.clientX, moveEvent.clientY)
     }
@@ -263,6 +272,14 @@ export const VideoNotesLayout: BlockLayout = (slots) => {
         </NestedBlockContextProvider>
       </aside>
       </div>
+      {/* A pointer over a cross-origin iframe (the player sits flush against
+          the handle) sends its moves and release to that frame, not this
+          window — so the page is covered for the drag. As a child of body it
+          shows the body's resize cursor. */}
+      {isResizing && createPortal(
+        <div data-testid="video-notes-resize-shield" className="fixed inset-0 z-50"/>,
+        document.body,
+      )}
     </div>
   )
 
