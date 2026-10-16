@@ -1,1 +1,1 @@
-import{_E as e}from"../../chunks/app-DrdA5Anv.js";export{e as BlockLoadingPlaceholder};
+import{_E as e}from"../../chunks/app-BeHMdDVM.js";export{e as BlockLoadingPlaceholder};

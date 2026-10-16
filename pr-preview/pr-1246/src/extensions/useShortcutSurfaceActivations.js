@@ -1,1 +1,1 @@
-import{$O as e}from"../../chunks/app-DrdA5Anv.js";export{e as useShortcutSurfaceActivations};
+import{$O as e}from"../../chunks/app-BeHMdDVM.js";export{e as useShortcutSurfaceActivations};

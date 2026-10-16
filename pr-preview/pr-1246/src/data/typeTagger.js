@@ -1,1 +1,1 @@
-import{sU as e}from"../../chunks/app-DrdA5Anv.js";export{e as TypeTagger};
+import{sU as e}from"../../chunks/app-BeHMdDVM.js";export{e as TypeTagger};

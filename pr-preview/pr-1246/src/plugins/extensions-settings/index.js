@@ -1,1 +1,1 @@
-import{Nw as e,Pw as t,gt as n}from"../../../chunks/app-DrdA5Anv.js";export{e as extensionsOverridesProp,t as extensionsPrefsType,n as extensionsSettingsPlugin};
+import{Nw as e,Pw as t,gt as n}from"../../../chunks/app-BeHMdDVM.js";export{e as extensionsOverridesProp,t as extensionsPrefsType,n as extensionsSettingsPlugin};

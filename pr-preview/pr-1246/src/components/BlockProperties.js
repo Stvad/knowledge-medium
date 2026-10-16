@@ -1,1 +1,1 @@
-import{bA as e}from"../../chunks/app-DrdA5Anv.js";export{e as BlockProperties};
+import{bA as e}from"../../chunks/app-BeHMdDVM.js";export{e as BlockProperties};

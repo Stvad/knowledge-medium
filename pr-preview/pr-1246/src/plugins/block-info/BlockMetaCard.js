@@ -1,1 +1,1 @@
-import{Tu as e}from"../../../chunks/app-DrdA5Anv.js";export{e as BlockMetaCard};
+import{Tu as e}from"../../../chunks/app-BeHMdDVM.js";export{e as BlockMetaCard};

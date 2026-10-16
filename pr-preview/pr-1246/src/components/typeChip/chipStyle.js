@@ -1,1 +1,1 @@
-import{TC as e}from"../../../chunks/app-DrdA5Anv.js";export{e as chipStyle};
+import{TC as e}from"../../../chunks/app-BeHMdDVM.js";export{e as chipStyle};
