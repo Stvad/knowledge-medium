@@ -1,1 +1,1 @@
-import{JD as e}from"../../chunks/app-Dskyy1PZ.js";export{e as ExtensionRenderBoundary};
+import{JD as e}from"../../chunks/app-NjtM2hfB.js";export{e as ExtensionRenderBoundary};
