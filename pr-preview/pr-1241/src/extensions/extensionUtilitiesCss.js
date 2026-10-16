@@ -1,1 +1,1 @@
-import{JE as e}from"../../chunks/app-C2u7rMt_.js";export{e as ensureExtensionUtilitiesCss};
+import{XE as e}from"../../chunks/app-DDkLdC5s.js";export{e as ensureExtensionUtilitiesCss};

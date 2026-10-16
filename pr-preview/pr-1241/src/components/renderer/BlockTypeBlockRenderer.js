@@ -1,1 +1,1 @@
-import{HD as e,UD as t,VD as n}from"../../../chunks/app-C2u7rMt_.js";export{n as BlockTypeBlockRenderer,e as BlockTypeContentRenderer,t as writeBlockTypeLabel};
+import{GD as e,UD as t,WD as n}from"../../../chunks/app-DDkLdC5s.js";export{t as BlockTypeBlockRenderer,n as BlockTypeContentRenderer,e as writeBlockTypeLabel};

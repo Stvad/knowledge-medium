@@ -1,1 +1,1 @@
-import{PR as e}from"../../../chunks/app-C2u7rMt_.js";export{e as geoDataExtension};
+import{IR as e}from"../../../chunks/app-DDkLdC5s.js";export{e as geoDataExtension};
