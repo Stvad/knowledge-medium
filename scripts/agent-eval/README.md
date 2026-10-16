@@ -64,7 +64,7 @@ taken, so a fixture block is compared wherever it ends up. After each task, the 
    moved them, so recency ordering is unchanged.
 
 The run's snapshot is also journaled to `tmp/agent-eval/journal/`, so a run killed
-mid-task is undone by the next run. What the resets themselves add (today's daily note,
+mid-task is undone by the next run, before it even reads which fixture the tab holds. What the resets themselves add (today's daily note,
 when it is missing) is recorded there too, and removed when the run ends, or by the next
 run when this one stopped early. Runs on later days therefore don't leave the graph a
 note longer each time. `seed` and `run` hold a lock per workspace there,
@@ -73,8 +73,9 @@ taken over.
 
 Before the first task, `run` also checks that the tab holds the fixture as this
 checkout's code imports it, which is what the gate's checks are proven on. Every block
-the export defines is read from the tab and from a fresh in-process import, in a form
-that does not depend on the workspace (`fixtureState.ts`), and the two must be equal.
+the export defines, and every block that sits under one or under a daily page holding
+one, is read from the tab and from a fresh in-process import, in a form that does not
+depend on the workspace (`fixtureState.ts`). The two must be equal.
 A tab seeded by older code, or holding a change made by hand, is refused before
 anything is spent, and so is a run whose in-process import fails. The run also aborts if
 `packages/agent-cli/dist` changed while a task ran, since every task launches the

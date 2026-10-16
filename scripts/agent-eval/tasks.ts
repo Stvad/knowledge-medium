@@ -329,6 +329,8 @@ export const TASKS: readonly EvalTask[] = [
       + '"Eval check-in", with exactly three child blocks in this order: '
       + '"Done: drafted the sync rollout plan", "Next: review the Kestrel renewal", "Blockers: none".',
     ),
+    // A run that crosses local midnight leaves later executions without
+    // that day's note: accepted, as a run takes minutes.
     reset: async ({probe}) => {
       await purgeLike(probe, 'Eval check-in%')
       // `daily-note` resolves the id without creating the note, and without
@@ -394,6 +396,8 @@ export const TASKS: readonly EvalTask[] = [
       const title = vendorReviewTitle(runTag)
       const pageId = await pageIdByTitle(probe, title)
       if (!pageId) return {pass: false, detail: 'page does not exist'}
+      const [{parent_id: pageParent}] = await sqlAll<{parent_id: string | null}>(probe, 'SELECT parent_id FROM blocks WHERE id = ?', [pageId])
+      if (pageParent !== null) return {pass: false, detail: 'the page was filed under a block, not left a page'}
       const first = (await childrenOf(probe, pageId))[0]
       const statusOk = first !== undefined && normalizeText(first.content) === 'status: under review'
       const links = (await childrenOf(probe, targetId(probe.workspaceId, TARGET_UIDS.vendorsSection)))

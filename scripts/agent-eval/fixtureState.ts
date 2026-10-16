@@ -1,7 +1,10 @@
 /**
  * The fixture as a graph stores it, in a form that does not depend on the
  * workspace: one line per block the export defines, found by the id the
- * importer derives from its Roam uid. Block ids inside a line are named by
+ * importer derives from its Roam uid, and one per block that is not in the
+ * export but sits under one that is, or under a daily page holding one (a
+ * hand-written todo, a leftover), named by its content. Block ids inside a
+ * line are named by
  * uid, or, for a row the import derives some other way (a daily page, a
  * page a link minted), by its content. Position is a rank among siblings,
  * because a block the runner moved back keeps a new order key; pages have
@@ -27,22 +30,26 @@ interface StoredRow {
 const uidsOf = (blocks: ReadonlyArray<RoamBlock | RoamPage>): string[] =>
   blocks.flatMap(block => [block.uid, ...uidsOf(block.children ?? [])])
 
-const rowsWithIds = async <T>(probe: GraphProbe, ids: readonly string[], columns: string): Promise<T[]> => {
+const STORED_COLUMNS = 'id, parent_id, order_key, content, properties_json, references_json, deleted'
+
+const rowsWhere = async <T>(probe: GraphProbe, column: 'id' | 'parent_id', values: readonly string[], columns: string): Promise<T[]> => {
   const rows: T[] = []
-  for (let start = 0; start < ids.length; start += 500) {
-    const chunk = ids.slice(start, start + 500)
-    rows.push(...await sqlAll<T>(probe, `SELECT ${columns} FROM blocks WHERE id IN (${chunk.map(() => '?').join(', ')})`, chunk))
+  for (let start = 0; start < values.length; start += 500) {
+    const chunk = values.slice(start, start + 500)
+    rows.push(...await sqlAll<T>(probe, `SELECT ${columns} FROM blocks WHERE ${column} IN (${chunk.map(() => '?').join(', ')})`, chunk))
   }
   return rows
 }
 
 export const fixtureState = async (probe: GraphProbe, pages: readonly RoamPage[]): Promise<string[]> => {
   const uidById = new Map(uidsOf(pages).map(uid => [roamBlockId(probe.workspaceId, uid), uid]))
-  const rows = await rowsWithIds<StoredRow>(probe, [...uidById.keys()],
-    'id, parent_id, order_key, content, properties_json, references_json, deleted')
+  const exported = await rowsWhere<StoredRow>(probe, 'id', [...uidById.keys()], STORED_COLUMNS)
+  const holders = [...new Set(exported.flatMap(row => [row.id, ...(row.parent_id === null ? [] : [row.parent_id])]))]
+  const others = (await rowsWhere<StoredRow>(probe, 'parent_id', holders, STORED_COLUMNS)).filter(row => !uidById.has(row.id))
+  const rows = [...exported, ...others]
   const referenced = new Set(rows.flatMap(row =>
     `${row.parent_id ?? ''} ${row.content} ${row.properties_json} ${row.references_json}`.match(BLOCK_ID) ?? []))
-  const derived = await rowsWithIds<{id: string, content: string}>(probe, [...referenced].filter(id => !uidById.has(id)), 'id, content')
+  const derived = await rowsWhere<{id: string, content: string}>(probe, 'id', [...referenced].filter(id => !uidById.has(id)), 'id, content')
   const names = new Map<string, string>([...uidById, ...derived.map(row => [row.id, `=${row.content}`] as const)])
   const named = (text: string) => text.replace(BLOCK_ID, id => names.get(id) ?? '?')
 
@@ -56,7 +63,7 @@ export const fixtureState = async (probe: GraphProbe, pages: readonly RoamPage[]
       .forEach((row, index) => rank.set(row.id, index))
   }
   return rows.map(row => JSON.stringify([
-    uidById.get(row.id),
+    uidById.get(row.id) ?? `+${named(row.content).slice(0, 60)}`,
     named(row.parent_id ?? ''),
     rank.get(row.id) ?? null,
     named(row.content),

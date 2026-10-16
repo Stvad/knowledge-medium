@@ -177,13 +177,24 @@ export const diffAgainst = async (probe: GraphProbe, snapshot: WorkspaceSnapshot
   changesBetween(snapshot, await settledRows(probe, quiet))
 
 /** Puts every row back, in an order where each step's preconditions hold:
- *  revived rows before edits (an edit refuses a deleted row), edits before
- *  moves, moves before removing created rows (a fixture block an agent moved
- *  under a new block must come out first), tombstones re-deleted last.
- *  Derived columns are left to the processors these writes start. */
+ *  fixture rows the task put under a block it created come out first, or the
+ *  purge would take them along; created rows go before any field is put back,
+ *  since one can hold a key a restored field needs (a page that took over
+ *  another's name); revived rows before edits (an edit refuses a deleted
+ *  row); moves once every anchor is live, last sibling first; tombstones
+ *  re-deleted last. Derived columns are left to the processors these writes
+ *  start. */
 const undoChanges = async (probe: GraphProbe, snapshot: WorkspaceSnapshot, changes: TaskChanges): Promise<void> => {
+  const createdIds = new Set(changes.created.map(row => row.id))
+  const revive = (id: string) => probe.command({type: 'restore-block', id})
+  const rescued = changes.modified.filter(({after}) => after.parent_id !== null && createdIds.has(after.parent_id))
+  for (const {id, before, after} of rescued) {
+    if (after.deleted) await revive(id)
+    await probe.command({type: 'move-block', id, parentId: before.parent_id, position: {kind: 'last'}})
+  }
+  await purgeBlocks(probe, [...createdIds])
   for (const {id, before, after} of changes.modified) {
-    if (!before.deleted && after.deleted) await probe.command({type: 'restore-block', id})
+    if (!before.deleted && after.deleted && !rescued.some(change => change.id === id)) await revive(id)
   }
   for (const {id, before, after} of changes.modified) {
     if (before.content !== after.content || !sameColumn('properties_json', before.properties_json, after.properties_json)) {
@@ -211,7 +222,6 @@ const undoChanges = async (probe: GraphProbe, snapshot: WorkspaceSnapshot, chang
       position: next ? {kind: 'before', siblingId: next.id} : {kind: 'last'},
     })
   }
-  await purgeBlocks(probe, changes.created.map(row => row.id))
   for (const {id, before, after} of changes.modified) {
     if (before.deleted && !after.deleted) await probe.command({type: 'delete-block', id})
   }

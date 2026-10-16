@@ -22,8 +22,8 @@ import { type BridgeClient, createBridgeClient } from '../../packages/agent-cli/
 import { KM_MCP_ALLOWED_TOOLS, KM_MCP_TOOL_NAMES, MCP_SERVER_NAME } from '../../packages/agent-cli/src/mcpShared'
 import { runJsonlProcess } from '../../packages/agent-dispatch/src/execProcess'
 import { BILLING_ENV_DENYLIST, envForBilling } from '../../packages/agent-dispatch/src/runner'
-import { buildFixture, type Fixture, FIXTURE_HASH_PREFIX, FIXTURE_MARKER_PAGE } from './fixture'
-import { childrenOf, dailyNoteId, type GraphProbe, pageIdByTitle, requirePageId, sqlAll } from './graphQueries'
+import { buildFixture, type Fixture } from './fixture'
+import { dailyNoteId, type GraphProbe, requirePageId, sqlAll } from './graphQueries'
 import { restoreSnapshot, snapshotWorkspace, strayChanges } from './isolation'
 import { connectMcpClient } from './mcpClient'
 import { differingUids, fixtureState } from './fixtureState'
@@ -39,6 +39,7 @@ import {
 } from './report'
 import { allowedChanges, type CheckOutcome, type EvalTask, taskDefinitionHash, TASKS } from './tasks'
 import { extractAnswer, parseTranscript } from './transcript'
+import { openWorkspace } from './workspace'
 import { acquireWorkspaceLock } from './workspaceLock'
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
@@ -105,19 +106,21 @@ const lockWorkspace = (probe: GraphProbe): (() => void) => {
   }
 }
 
-/** The fixture hash the seeded graph carries, or null when it carries none. */
-const seededHash = async (probe: GraphProbe): Promise<string | null> => {
-  const markerId = await pageIdByTitle(probe, FIXTURE_MARKER_PAGE)
-  if (!markerId) return null
-  const line = (await childrenOf(probe, markerId)).find(row => row.content.startsWith(FIXTURE_HASH_PREFIX))
-  return line ? line.content.slice(FIXTURE_HASH_PREFIX.length).trim() : null
+/** Locks the workspace, then undoes what an earlier run left before the
+ *  fixture marker is read (see `openWorkspace`). */
+const prepareWorkspace = async (probe: GraphProbe, fixture: Fixture) => {
+  const release = lockWorkspace(probe)
+  const journal = createRunJournal(path.join(JOURNAL_DIR, probe.workspaceId))
+  const {recovered, seeded} = await openWorkspace(probe, journal, fixture.hash)
+    .catch((error: unknown) => fail(`could not undo what an earlier run left: ${errorText(error)}`))
+  if (recovered > 0) process.stdout.write(`undid ${recovered} change(s) an earlier run left\n`)
+  return {release, journal, seeded}
 }
 
 const seed = async (profile: string) => {
   const {client, probe} = await connect(profile)
-  const release = lockWorkspace(probe)
   const fixture = buildFixture()
-  const existing = await seededHash(probe)
+  const {release, seeded: existing} = await prepareWorkspace(probe, fixture)
   if (existing && existing !== fixture.hash) {
     fail(`this workspace holds fixture ${existing}, not ${fixture.hash}. Re-importing a different fixture leaves the old `
       + 'blocks behind; seed a fresh local-only dev origin instead (README: "Resetting").')
@@ -259,9 +262,8 @@ const run = async (options: RunOptions) => {
   })
   const build = buildPackages()
   const {probe, client} = await connect(options.profile)
-  const release = lockWorkspace(probe)
   const fixture = buildFixture()
-  const seeded = await seededHash(probe)
+  const {release, journal, seeded} = await prepareWorkspace(probe, fixture)
   if (seeded !== fixture.hash) {
     fail(seeded
       ? `the tab holds fixture ${seeded} but this checkout generates ${fixture.hash}; seed a fresh dev origin`
@@ -289,7 +291,6 @@ const run = async (options: RunOptions) => {
     probeHashes: Object.fromEntries(OUTPUT_PROBES.map(probe => [probe.id, outputProbeHash(probe)])),
     runs: [],
   }
-  // The resolved model is compared once the runs have reported it.
   // Checked before anything is spent, and again once the first task has
   // resolved the model.
   const requireComparable = (planned: boolean) => {
@@ -298,12 +299,8 @@ const run = async (options: RunOptions) => {
   }
   requireComparable(true)
 
-  // Clear what an interrupted earlier run left, then freeze the starting
-  // state every task gets: each task's changes are undone against it.
-  const journal = createRunJournal(path.join(JOURNAL_DIR, probe.workspaceId))
-  const recovered = await journal.recover(probe, fixture.hash)
-    .catch((error: unknown) => fail(`could not undo an interrupted run: ${errorText(error)}`))
-  if (recovered > 0) process.stdout.write(`undid ${recovered} change(s) an interrupted run left\n`)
+  // Freeze the starting state every task gets: each task's changes are
+  // undone against it.
   const existing = new Set((await sqlAll<{id: string}>(probe, 'SELECT id FROM blocks WHERE workspace_id = ?', [probe.workspaceId])).map(row => row.id))
   for (const task of TASKS) await task.reset?.({probe, truth: fixture.truth, runTag: ''})
   process.stdout.write('checking the tab against this checkout\'s import…\n')

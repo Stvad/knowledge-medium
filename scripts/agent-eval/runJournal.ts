@@ -61,3 +61,5 @@ export const createRunJournal = (dir: string) => {
     },
   }
 }
+
+export type RunJournal = ReturnType<typeof createRunJournal>

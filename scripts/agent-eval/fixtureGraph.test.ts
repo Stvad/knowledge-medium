@@ -25,6 +25,8 @@ import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import {
   buildFixture,
   DESIGN_PAGE,
+  FIXTURE_HASH_PREFIX,
+  FIXTURE_MARKER_PAGE,
   FIXTURE_FIRST_DAY,
   FIXTURE_LAST_DAY,
   isoDays,
@@ -40,6 +42,7 @@ import { diffAgainst, restoreSnapshot, snapshotWorkspace, strayChanges, waitForQ
 import { differingUids, fixtureState } from './fixtureState'
 import { OUTPUT_PROBES, type ProbeContext } from './outputBudgets'
 import { createRunJournal } from './runJournal'
+import { openWorkspace } from './workspace'
 import {
   allowedChanges,
   type CheckInput,
@@ -292,6 +295,12 @@ const solveWrongly: Record<string, Array<(env: TaskEnv) => Promise<void>>> = {
       await solveWithMcp['create-linked-page'](env)
       await graph.callTool('create_block', {parentId: fixtureId('vendorsSection'), content: '[[Kestrel]] — renewal notes'})
     },
+    // The page created right, then filed under a block instead of left a page.
+    async env => {
+      await solveWithMcp['create-linked-page'](env)
+      const pageId = await requirePageId(probe, vendorReviewTitle(env.runTag))
+      await graph.callTool('move_block', {id: pageId, parentId: fixtureId('vendorsSection'), position: {kind: 'last'}})
+    },
     // The link added twice.
     async env => {
       await solveWithMcp['create-linked-page'](env)
@@ -464,6 +473,14 @@ describe('fixture state', () => {
     expect(differingUids(before, await fixtureState(probe, pages))).toEqual(['vendor-halyard-security'])
   }, 20_000)
 
+  it('sees a block added under a fixture page or daily note, which no exported row records', async () => {
+    const before = await fixtureState(probe, pages)
+    await graph.callTool('create_block', {parentId: await requirePageId(probe, PROJECT_PAGE), content: '{{[[TODO]]}} hand-written'})
+    await graph.callTool('create_block', {parentId: await dailyNoteId(probe, '2026-06-03'), content: 'Blockers: staging database again'})
+    expect(differingUids(before, await fixtureState(probe, pages)))
+      .toEqual(expect.arrayContaining(['+{{[[TODO]]}} hand-written', '+Blockers: staging database again']))
+  }, 20_000)
+
   it('ignores where a page sits at the top level, which differs from one import to the next', async () => {
     const before = await fixtureState(probe, pages)
     const halyard = await requirePageId(probe, 'Halyard Security')
@@ -512,6 +529,19 @@ describe('isolation edge cases', () => {
     expect(await diffAgainst(probe, snapshot, QUIET)).toEqual({created: [], modified: []})
     await graph.callTool('restore_block', {id: tombstone.id})
     expect((await getBlock(probe, tombstone.id))?.content).toBe(tombstone.content)
+  }, 20_000)
+
+  it('restores a page\'s name after a page the task created took it over', async () => {
+    const snapshot = await snapshotWorkspace(probe, QUIET)
+    const lease = await requirePageId(probe, 'Office Lease')
+    await graph.callTool('update_block', {id: lease, content: 'Office Lease (old)'})
+    await vi.waitFor(async () => { expect(await pageIdByTitle(probe, 'Office Lease')).toBeNull() }, {timeout: 5_000})
+    await graph.callTool('create_block', {parentId: fixtureId('vendorsSection'), content: '[[Office Lease]]'})
+    await vi.waitFor(async () => { expect(await pageIdByTitle(probe, 'Office Lease')).not.toBe(lease) }, {timeout: 5_000})
+
+    await restoreSnapshot(probe, snapshot, QUIET)
+    expect(await diffAgainst(probe, snapshot, QUIET)).toEqual({created: [], modified: []})
+    expect(await pageIdByTitle(probe, 'Office Lease')).toBe(lease)
   }, 20_000)
 
   it('brings back a fixture block an agent moved under a block it created', async () => {
@@ -578,6 +608,18 @@ describe('run journal', () => {
     clean.taskStarted()
     clean.taskRestored()
     expect(await createRunJournal(dir).recover(probe, fixtureHash, QUIET)).toBe(0)
+  }, 20_000)
+
+  it('reads the fixture marker only after undoing what an interrupted task did to it', async () => {
+    const dir = path.join(mkdtempSync(path.join(tmpdir(), 'agent-eval-journal-')), 'journal')
+    const interrupted = createRunJournal(dir)
+    interrupted.begin(await snapshotWorkspace(probe, QUIET), fixtureHash, [])
+    interrupted.taskStarted()
+    const hashLine = (await childrenOf(probe, await requirePageId(probe, FIXTURE_MARKER_PAGE)))
+      .find(row => row.content.startsWith(FIXTURE_HASH_PREFIX))!
+    await graph.callTool('update_block', {id: hashLine.id, content: `${FIXTURE_HASH_PREFIX}tampered`})
+
+    expect(await openWorkspace(probe, createRunJournal(dir), fixtureHash, QUIET)).toEqual({recovered: 1, seeded: fixtureHash})
   }, 20_000)
 
   // A block standing in for the daily note a reset creates when it is missing.
