@@ -1,1 +1,1 @@
-import{mC as e}from"../../../chunks/app-DJbhRzyW.js";export{e as BlockEmbed};
+import{mC as e}from"../../../chunks/app-DnILfZL0.js";export{e as BlockEmbed};
