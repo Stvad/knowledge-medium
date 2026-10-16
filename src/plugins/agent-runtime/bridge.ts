@@ -184,16 +184,24 @@ const readTrustedStoredBridgeUrl = (): string | null => {
 
 /** When this tab last had the user's attention. Every tab of the user holds
  *  every token, and the bridge sends a call that names no workspace to the
- *  most recently focused one — the workspace the user last looked at. In
- *  sessionStorage so it is per tab yet survives the reloads `kmagent reload`
- *  drives; otherwise a reload would demote the tab the agent was using. */
+ *  most recently focused one. In sessionStorage so it is per tab yet survives
+ *  the reloads `kmagent reload` drives. Best effort: storage that throws
+ *  costs the stamp, never the registration. */
 const readFocusedAt = (): number | null => {
-  const stored = Number(window.sessionStorage.getItem(focusedAtStorageKey))
-  return Number.isFinite(stored) && stored > 0 ? stored : null
+  try {
+    const stored = Number(window.sessionStorage.getItem(focusedAtStorageKey))
+    return Number.isFinite(stored) && stored > 0 ? stored : null
+  } catch {
+    return null
+  }
 }
 
 const stampFocusedAt = () => {
-  window.sessionStorage.setItem(focusedAtStorageKey, String(Date.now()))
+  try {
+    window.sessionStorage.setItem(focusedAtStorageKey, String(Date.now()))
+  } catch {
+    // See readFocusedAt.
+  }
 }
 
 const getStoredBridgeSecret = () =>

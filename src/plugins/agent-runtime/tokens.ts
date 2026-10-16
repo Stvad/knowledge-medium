@@ -10,6 +10,7 @@
  *  user's session and can do anything from the running app. */
 import { hex } from '@scure/base'
 import { ClientLocalSettings, clientLocalSettings } from '@/utils/ClientLocalSettings.js'
+import { UUID_RE_SOURCE } from '@/data/referenceBlock.js'
 
 export interface AgentToken {
   /** Random secret. Treat as a credential. */
@@ -26,15 +27,23 @@ export interface AgentToken {
 
 export type AgentTokenScope = 'read-write' | 'read-only'
 
-const KEY_PREFIX = 'agent-runtime:tokens'
+const KEY_PREFIX = 'agent-runtime:user-tokens'
+/** Where tokens lived when they were stored per (user, workspace). A prefix
+ *  the per-user key cannot share, since local-only user ids are free text. */
+const LEGACY_KEY_PREFIX = 'agent-runtime:tokens'
 
-const storageKey = (userId: string) => `${KEY_PREFIX}:${userId}`
+const storageKey = (userId: string) => `${KEY_PREFIX}:${encodeURIComponent(userId)}`
 
 /** Whether a localStorage key holds agent tokens (any user, either shape). */
-export const isAgentTokensStorageKey = (key: string): boolean => key.startsWith(`${KEY_PREFIX}:`)
+export const isAgentTokensStorageKey = (key: string): boolean =>
+  key.startsWith(`${KEY_PREFIX}:`) || key.startsWith(`${LEGACY_KEY_PREFIX}:`)
 
-/** Where tokens lived when they were stored per (user, workspace). */
-const legacyKeyPrefix = (userId: string) => `${storageKey(userId)}:`
+/** Exactly `<prefix>:<userId>:<workspace uuid>`, so user `vlad` never matches
+ *  the keys of user `vlad:work`. */
+const isLegacyKeyOf = (userId: string, key: string): boolean => {
+  const prefix = `${LEGACY_KEY_PREFIX}:${userId}:`
+  return key.startsWith(prefix) && new RegExp(`^${UUID_RE_SOURCE}$`, 'i').test(key.slice(prefix.length))
+}
 
 const readTokens = (settings: ClientLocalSettings, key: string): AgentToken[] => {
   const tokens = settings.get<AgentToken[]>(key, [])
@@ -62,8 +71,7 @@ export class AgentTokenStore {
 
   list(userId: string): AgentToken[] {
     if (!userId) return []
-    this.adoptPerWorkspaceTokens(userId)
-    return readTokens(this.settings, storageKey(userId))
+    return this.adoptPerWorkspaceTokens(userId)
   }
 
   create(
@@ -108,14 +116,16 @@ export class AgentTokenStore {
     if (changed) this.settings.set(storageKey(userId), next)
   }
 
-  /** Fold tokens stored under the old per-(user, workspace) keys into the
-   *  user's list. The merged list is written BEFORE the old keys go, so an
-   *  interruption leaves a duplicate (deduped next time), never a loss. */
-  private adoptPerWorkspaceTokens(userId: string): void {
-    const legacyKeys = this.settings.keys().filter(key => key.startsWith(legacyKeyPrefix(userId)))
-    if (legacyKeys.length === 0) return
+  /** The user's tokens, with any still stored under the old per-(user,
+   *  workspace) keys folded in. The old keys go only once the merged list
+   *  reads back whole: a write that failed (a full quota) keeps them, and
+   *  this read still returns every token. */
+  private adoptPerWorkspaceTokens(userId: string): AgentToken[] {
+    const current = readTokens(this.settings, storageKey(userId))
+    const legacyKeys = this.settings.keys().filter(key => isLegacyKeyOf(userId, key))
+    if (legacyKeys.length === 0) return current
 
-    const merged = readTokens(this.settings, storageKey(userId))
+    const merged = [...current]
     const known = new Set(merged.map(t => t.token))
     for (const key of legacyKeys) {
       for (const token of readTokens(this.settings, key)) {
@@ -125,7 +135,11 @@ export class AgentTokenStore {
       }
     }
     if (merged.length > 0) this.settings.set(storageKey(userId), merged)
-    for (const key of legacyKeys) this.settings.remove(key)
+    const written = new Set(readTokens(this.settings, storageKey(userId)).map(t => t.token))
+    if (merged.every(t => written.has(t.token))) {
+      for (const key of legacyKeys) this.settings.remove(key)
+    }
+    return merged
   }
 }
 

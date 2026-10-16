@@ -177,10 +177,10 @@ const nextLoopTurn = async (commandId: string) => {
 // agent's token and every call failed as if the bridge were down.
 describe('bridge registration — tokens belong to the user', () => {
   it('registers every token of the signed-in user, whichever workspace is open', async () => {
-    storeTokens('agent-runtime:tokens:user-1', ['T-user'])
+    storeTokens('agent-runtime:user-tokens:user-1', ['T-user'])
     // Minted while another workspace was active, before tokens were per user.
-    storeTokens('agent-runtime:tokens:user-1:workspace-2', ['T-minted-in-ws-2'])
-    storeTokens('agent-runtime:tokens:someone-else', ['T-other-user'])
+    storeTokens('agent-runtime:tokens:user-1:22222222-2222-4222-8222-222222222222', ['T-minted-in-ws-2'])
+    storeTokens('agent-runtime:user-tokens:someone-else', ['T-other-user'])
 
     cleanup = startAgentRuntimeBridge(bridgeOptionsIn('workspace-1'))
 
@@ -190,7 +190,7 @@ describe('bridge registration — tokens belong to the user', () => {
   })
 
   it('keeps the same tokens registered after the tab switches workspace', async () => {
-    storeTokens('agent-runtime:tokens:user-1', ['T-user'])
+    storeTokens('agent-runtime:user-tokens:user-1', ['T-user'])
     const options = bridgeOptionsIn('workspace-1')
     cleanup = startAgentRuntimeBridge(options)
     await vi.waitFor(() => expect(registrations.length).toBeGreaterThan(0))
@@ -209,14 +209,14 @@ describe('bridge registration — tokens belong to the user', () => {
 // them until each one's next loop turn.
 describe('bridge registration — tokens changed in another tab', () => {
   it('re-registers without a token another tab of the same origin revoked', async () => {
-    storeTokens('agent-runtime:tokens:user-1', ['T-keep', 'T-revoked'])
+    storeTokens('agent-runtime:user-tokens:user-1', ['T-keep', 'T-revoked'])
     cleanup = startAgentRuntimeBridge(bridgeOptions)
     await vi.waitFor(() => expect(registrations.length).toBeGreaterThan(0))
 
     // What the other tab's revoke leaves in the shared localStorage, and the
     // event the browser then fires in this one.
-    storeTokens('agent-runtime:tokens:user-1', ['T-keep'])
-    window.dispatchEvent(new StorageEvent('storage', {key: 'agent-runtime:tokens:user-1'}))
+    storeTokens('agent-runtime:user-tokens:user-1', ['T-keep'])
+    window.dispatchEvent(new StorageEvent('storage', {key: 'agent-runtime:user-tokens:user-1'}))
 
     await vi.waitFor(() => expect(registeredTokens(registrations.at(-1)!)).toEqual(['T-keep']))
   })
@@ -229,7 +229,7 @@ describe('bridge registration — tokens changed in another tab', () => {
     // Both handlers post synchronously, so the count is final on return; the
     // second event proves the first had the same chance to register.
     window.dispatchEvent(new StorageEvent('storage', {key: 'unrelated-setting'}))
-    window.dispatchEvent(new StorageEvent('storage', {key: 'agent-runtime:tokens:user-1'}))
+    window.dispatchEvent(new StorageEvent('storage', {key: 'agent-runtime:user-tokens:user-1'}))
 
     expect(registrations.length).toBe(registered + 1)
   })
@@ -263,5 +263,16 @@ describe('bridge registration — focus stamp', () => {
 
     await vi.waitFor(() => expect(registrations.length).toBeGreaterThan(0))
     expect(registrations[0]!.focusedAt).toBe(stamp)
+  })
+
+  it('still registers when sessionStorage refuses the stamp', async () => {
+    vi.spyOn(window.sessionStorage, 'setItem').mockImplementation(() => {
+      throw new DOMException('quota', 'QuotaExceededError')
+    })
+    cleanup = startAgentRuntimeBridge(bridgeOptions)
+
+    window.dispatchEvent(new Event('focus'))
+
+    await vi.waitFor(() => expect(registrations.length).toBeGreaterThan(1))
   })
 })

@@ -210,7 +210,7 @@ That puts `km-agent-dispatch` and `kmagent` on your PATH. Then:
 
    The `claude` page must exist (type `[[claude]]` once and click it).
 
-   **Always scope query watchers to a `workspace_id`** — the local `blocks` table holds *every* synced workspace, so an unscoped query fires runs (and their `update_block` writes) against workspaces you aren't working in. Get yours from `kmagent runtime-summary`. Backlink watchers don't need this (a page alias resolves within the active workspace).
+   **Always scope query watchers to a `workspace_id`** — the local `blocks` table holds *every* synced workspace, so an unscoped query fires runs (and their `update_block` writes) against workspaces you aren't working in. Get yours from `kmagent runtime-summary`. Backlink watchers don't need this, but their page alias resolves in the workspace open in the app tab you focused last, so it follows you as you switch workspaces. Set `AGENT_RUNTIME_WORKSPACE=<id>` in the daemon's environment to pin it to one.
 
    Set `"disabled": true` on any watcher to keep it parked in the config without registering it, blocking its target wikilinks, affecting billing posture, or processing tasks. Disabled watchers still have to be valid watcher objects, so broken parked config is caught at startup instead of drifting silently. They also still reserve their `name`, because cursors and baselines are keyed by watcher name. If every configured watcher is disabled, the daemon clears its existing push registration and stops.
 

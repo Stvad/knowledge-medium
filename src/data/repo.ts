@@ -3451,13 +3451,6 @@ export class Repo {
     }
   }
 
-  /** How `workspaceId`'s synced rows reach `blocks` on this device right now.
-   *  `'defer'` means none do: it is locked (e2ee without its key) or was never
-   *  opened here, so a read against it finds nothing. */
-  async workspaceMaterializability(workspaceId: string): Promise<Materializability> {
-    return this.materializationPolicy.getMaterializability(workspaceId)
-  }
-
   /**
    * Per workspace, the downloaded rows `blocks` does not hold with nothing in
    * flight to deliver them: the flagged ones {@link workspaceViewGap} refuses

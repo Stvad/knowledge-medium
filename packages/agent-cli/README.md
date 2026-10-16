@@ -143,12 +143,13 @@ kmagent eval --data-json '{"x":1}' 'return data.x'
 
 ## Workspaces
 
-A token acts as the user who minted it, in any of their workspaces, not only the one open when it was minted. Any open tab of the app signed in as that user registers it, so switching workspace in the tab does not disconnect the agent.
+A token acts as the user who minted it, in any of their workspaces, not only the one open when it was minted. Every open tab of the app in the browser profile and at the app address that minted it registers it, whichever workspace the tab has open, so switching workspace does not disconnect the agent.
 
 - **Reads take the workspace per call:** `--workspace <id>` on `page`, `search`, `daily-note`, `backlinks` and `grouped-backlinks`, and `workspaceId` on the `km-mcp` `page` / `daily_note` / `search` tools. Without it they use the workspace open in the app tab. `get-block` and `subtree` go by block id, and `sql` sees every workspace in the tab's local database.
 - **A workspace the device cannot read is refused**, not answered with empty results: one this device has no row for, or one that is end-to-end encrypted without its key entered here, or that was never opened here.
 - **Writes go to the workspace open in the app tab only.** They resolve properties and aliases through that workspace's registries, so a write to a block in another workspace is refused; switch the tab to it and re-run. This is a correctness limit, not a permission boundary.
-- **Several tabs of the same user:** a call that names a workspace goes to a tab that has it open; otherwise it goes to the tab focused most recently.
+- **Several tabs of the same user:** a call that names a workspace (its `workspaceId`, or a root `create-block`'s `data.workspaceId`) goes to a tab that has it open; otherwise it goes to the tab focused most recently.
+- **Pinning a workspace:** with `AGENT_RUNTIME_WORKSPACE=<id>` set, every call that names no workspace names that one. Use it for unattended consumers such as the `agent-dispatch` daemon, which otherwise act on whichever workspace you last looked at.
 
 ## Profiles
 
@@ -213,6 +214,7 @@ Single-module output is not bundled with its transitive dependencies; use the di
 | `AGENT_RUNTIME_APP_URL` | App URL to pair with. Defaults to the canonical deploy. |
 | `AGENT_RUNTIME_URL` | Bridge URL the CLI talks to. Defaults to `http://127.0.0.1:8787`. |
 | `AGENT_RUNTIME_TOKEN` | One-shot token, skips the persisted profile lookup. |
+| `AGENT_RUNTIME_WORKSPACE` | Workspace id to name on every call that names none (see [Workspaces](#workspaces)). |
 | `AGENT_RUNTIME_PROFILE` | Default profile selection for `kmagent <command>`. |
 | `AGENT_RUNTIME_CONFIG_DIR` | Override the config directory (default: `$XDG_CONFIG_HOME/knowledge-medium`). |
 | `AGENT_RUNTIME_BRIDGE_SECRET` | Override the bridge secret (otherwise auto-generated per machine). |

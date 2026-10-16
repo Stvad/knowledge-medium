@@ -39,7 +39,7 @@ export function AgentTokensDialog({
           <DialogDescription>
             {pairing
               ? 'Generate a token, copy it, then paste it into the waiting terminal prompt.'
-              : 'Tokens let a local agent process act as you in this app, in any of your workspaces. They work while a tab of the app is open in this browser. Stored on this device only; each token is shown once at mint.'}
+              : 'Tokens let a local agent process act as you in this app, in any of your workspaces. They work while a tab of the app is open in this browser profile, at this app address. Stored on this device only; each token is shown once at mint.'}
           </DialogDescription>
         </DialogHeader>
 

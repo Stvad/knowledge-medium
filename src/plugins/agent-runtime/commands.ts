@@ -896,9 +896,11 @@ const assertActiveWorkspace = (repo: Repo, verb: string, workspaceId: string): v
     `${verb}: target is in workspace ${workspaceId}, which is not the active one `
     + `(${repo.activeWorkspaceId ?? 'none'}) in the app tab serving this call. `
     + 'This is not a permission check — the token reaches every workspace of its user, '
-    + "and reads work in any of them — but writes resolve through the open workspace's "
+    + "and reads can name any of them — but writes resolve through the open workspace's "
     + 'property and alias registries, which resolve nothing for another workspace. '
-    + 'Switch the app tab to that workspace and re-run.',
+    + 'Switch the app tab to that workspace and re-run. If another tab already has it open, '
+    + `a call carrying workspaceId ${workspaceId}, or made with AGENT_RUNTIME_WORKSPACE=${workspaceId} `
+    + 'set, is routed to that tab.',
   )
 }
 
@@ -1874,13 +1876,12 @@ const resolveBlockWorkspaceId = async (
   blockId: string,
   override: unknown,
 ): Promise<string> => {
-  const asserted = assertedWorkspaceOverride(override)
+  const asserted = await readableWorkspaceOverride(repo, override)
   const data = await repo.load(blockId)
   if (asserted) {
     if (data && data.workspaceId !== asserted) {
       throw new Error(`Block ${blockId} is in workspace ${data.workspaceId}, not ${asserted}.`)
     }
-    await assertReadableWorkspace(repo, asserted)
     return asserted
   }
   if (data?.workspaceId) return data.workspaceId
@@ -2036,32 +2037,38 @@ const assertedWorkspaceOverride = (override: unknown): string | undefined => {
   return asserted
 }
 
-/** Refuses a workspace a read cannot see into from this tab, instead of
- *  answering "nothing found" for it (#606). The active workspace already
- *  passed the app's own entry gate, so only another one is checked. */
+/** Refuses a named workspace this tab has nothing to read from, instead of
+ *  answering "nothing found" for it (#606). Asks whether its blocks ARE here,
+ *  not whether new synced rows would apply: those differ when a key-store
+ *  read fails or another tab holds a session-only plaintext confirmation. */
 const assertReadableWorkspace = async (repo: Repo, workspaceId: string): Promise<void> => {
-  if (workspaceId === repo.activeWorkspaceId) return
   if (!await getLocalWorkspace(repo, workspaceId)) {
     throw new Error(
       `Workspace ${workspaceId} is not known on this device: the local workspaces table has `
       + 'no row for it (`SELECT id, name FROM workspaces` lists the ones it has).',
     )
   }
-  if (await repo.workspaceMaterializability(workspaceId) === 'defer') {
+  const anyBlock = await repo.db.getOptional('SELECT 1 FROM blocks WHERE workspace_id = ? LIMIT 1', [workspaceId])
+  if (!anyBlock) {
     throw new Error(
-      `Workspace ${workspaceId} is not readable on this device yet: it is end-to-end encrypted `
-      + 'without its key entered here, or has never been opened here, so none of its blocks are '
-      + 'in the local database. Open it once in the app, entering its key if asked, then retry.',
+      `Workspace ${workspaceId} has no blocks in this device's local database (one never opened `
+      + 'here has none, nor does an end-to-end encrypted one whose key was not entered here). '
+      + 'Open it in the app, entering its key if asked, then retry.',
     )
   }
 }
 
-const commandWorkspaceId = async (repo: Repo, override: unknown): Promise<string> => {
+/** A `workspaceId` override, once it names a workspace readable here; undefined
+ *  when none was given. */
+const readableWorkspaceOverride = async (repo: Repo, override: unknown): Promise<string | undefined> => {
   const asserted = assertedWorkspaceOverride(override)
-  if (asserted) {
-    await assertReadableWorkspace(repo, asserted)
-    return asserted
-  }
+  if (asserted) await assertReadableWorkspace(repo, asserted)
+  return asserted
+}
+
+const commandWorkspaceId = async (repo: Repo, override: unknown): Promise<string> => {
+  const asserted = await readableWorkspaceOverride(repo, override)
+  if (asserted) return asserted
   if (repo.activeWorkspaceId) return repo.activeWorkspaceId
   throw new Error('No active workspace; pass workspaceId')
 }

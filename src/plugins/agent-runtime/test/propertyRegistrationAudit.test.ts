@@ -465,6 +465,14 @@ describe('audit-properties command', () => {
   })
 })
 
+/** A workspace this device has a row for — what sync or local bootstrap leaves. */
+const knownWorkspace = (id: string) => repo.db.execute(
+  `INSERT OR REPLACE INTO workspaces
+     (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary,
+      properties_migration)
+   VALUES (?, ?, ?, 1, 1, 'none', NULL, 'cell')`,
+  [id, id, 'user-1'])
+
 describe('shared workspace resolution', () => {
   // Three resolvers reach `assertedWorkspaceOverride`: `commandWorkspaceId`
   // (page/search/daily-note), `resolveBlockWorkspaceId` (the backlinks verbs),
@@ -505,6 +513,9 @@ describe('shared workspace resolution', () => {
   // trimmed, the read verbs passed ' ws-1 ' through to the lookup and
   // answered "no such page" for a workspace that exists.
   it('trims a padded assertion rather than resolving it as a literal id', async () => {
+    await knownWorkspace(WS)
+    await create({id: 'b1'})
+
     const result = await executeCommand(
       {commandId: 'w-2', type: 'page', name: 'x', workspaceId: `  ${WS}  `},
       context,
@@ -519,14 +530,14 @@ describe('shared workspace resolution', () => {
 // than answered with "nothing found" (#606).
 describe('reads that name another workspace', () => {
   const OTHER = 'ws-other'
-  const LOCKED = 'ws-locked'
+  const EMPTY = 'ws-empty'
 
-  const knownWorkspace = (id: string) => repo.db.execute(
-    `INSERT OR REPLACE INTO workspaces
-       (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary,
-        properties_migration)
-     VALUES (?, ?, ?, 1, 1, 'none', NULL, 'cell')`,
-    [id, id, 'user-1'])
+  const seedOther = async () => {
+    await knownWorkspace(OTHER)
+    await repo.tx(async tx => {
+      await tx.create({id: 'other-page', workspaceId: OTHER, parentId: null, orderKey: 'a0', content: 'Elsewhere'})
+    }, {scope: ChangeScope.BlockDefault, description: 'seed other workspace'})
+  }
 
   const readVerbs = [
     ['page', {type: 'page', name: 'x'}],
@@ -543,24 +554,19 @@ describe('reads that name another workspace', () => {
     )).rejects.toThrow(/ws-no-such is not known on this device/)
   })
 
-  it.each(readVerbs)('%s refuses a workspace whose blocks are not readable here', async (_label, base) => {
-    installRepo(undefined, {
-      getMaterializability: workspaceId => workspaceId === LOCKED ? 'defer' : 'copy',
-      getCek: async () => null,
-    })
-    await knownWorkspace(LOCKED)
+  // A workspace never opened here, or e2ee without its key here, has a row
+  // but nothing materialized.
+  it.each(readVerbs)('%s refuses a workspace with no blocks on this device', async (_label, base) => {
+    await knownWorkspace(EMPTY)
 
     await expect(executeCommand(
-      {commandId: 'r-2', ...base, workspaceId: LOCKED} as never,
+      {commandId: 'r-2', ...base, workspaceId: EMPTY} as never,
       context,
-    )).rejects.toThrow(/ws-locked is not readable on this device/)
+    )).rejects.toThrow(/ws-empty has no blocks in this device's local database/)
   })
 
-  it('answers for another workspace that is readable here', async () => {
-    await knownWorkspace(OTHER)
-    await repo.tx(async tx => {
-      await tx.create({id: 'other-page', workspaceId: OTHER, parentId: null, orderKey: 'a0', content: 'Elsewhere'})
-    }, {scope: ChangeScope.BlockDefault, description: 'seed other workspace'})
+  it('answers for another workspace whose blocks are here', async () => {
+    await seedOther()
 
     const result = await executeCommand(
       {commandId: 'r-3', type: 'search', query: 'Elsewhere', workspaceId: OTHER},
@@ -571,8 +577,23 @@ describe('reads that name another workspace', () => {
     expect(result.results.map(hit => hit.id)).toEqual(['other-page'])
   })
 
+  // Whether NEW synced rows would apply is not whether blocks are already
+  // here: a key-store read failure, or a plaintext confirmation another tab
+  // holds for its session only, defers while the blocks stay readable.
+  it('answers for a workspace whose blocks are here even while its sync defers', async () => {
+    installRepo(undefined, {getMaterializability: () => 'defer', getCek: async () => null})
+    await seedOther()
+
+    const result = await executeCommand(
+      {commandId: 'r-5', type: 'search', query: 'Elsewhere', workspaceId: OTHER},
+      context,
+    ) as {results: Array<{id: string}>}
+
+    expect(result.results.map(hit => hit.id)).toEqual(['other-page'])
+  })
+
   it('backlinks refuses a block that is not in the workspace it names', async () => {
-    await knownWorkspace(OTHER)
+    await seedOther()
     await create({id: 'b1'})
 
     await expect(executeCommand(

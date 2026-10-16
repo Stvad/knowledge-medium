@@ -594,6 +594,52 @@ describe('a token belongs to its user, not to a workspace', () => {
     expect((await nextFor('alice-after-reload'))?.type).toBe('ping')
   })
 
+  // Every poll refreshes a tab's lastSeen, so breaking ties on it would hand
+  // the token back and forth between two equally focused live tabs.
+  it('among equally focused tabs, keeps preferring the one that connected last', async () => {
+    await registerClient('alice-older', {
+      audience: {userId: 'alice', workspaceId: 'ws-1'}, focusedAt: null, tokens: tokenOf('alice'),
+    })
+    await registerClient('alice-newer', {
+      audience: {userId: 'alice', workspaceId: 'ws-2'}, focusedAt: null, tokens: tokenOf('alice'),
+    })
+    // The older tab's next loop turn.
+    await registerClient('alice-older', {
+      audience: {userId: 'alice', workspaceId: 'ws-1'}, focusedAt: null, tokens: tokenOf('alice'),
+    })
+
+    await submit({type: 'ping'})
+
+    expect((await nextFor('alice-newer'))?.type).toBe('ping')
+  })
+
+  it('routes a root create-block by the workspace in its data', async () => {
+    await registerAliceTabs({ws1: 1_000, ws2: 2_000})
+
+    await submit({type: 'create-block', data: {workspaceId: 'ws-1', content: 'x'}})
+
+    expect((await nextFor('alice-ws-1'))?.type).toBe('create-block')
+  })
+
+  it('fails a queued command once its tab stops listing the token that sent it', async () => {
+    await registerTab('ws-1', 1_000)
+    const response = await fetch(`${baseUrl}/runtime/commands`, {
+      method: 'POST',
+      headers: {'content-type': 'application/json', authorization: 'Bearer TOKEN-A'},
+      body: JSON.stringify({type: 'eval', code: 'return 1'}),
+    })
+    const {id} = await response.json()
+
+    // Revoked in the app: the tab's next registration no longer lists it.
+    await registerClient('alice-ws-1', {audience: {userId: 'alice', workspaceId: 'ws-1'}, tokens: []})
+
+    const status = await (await fetch(`${baseUrl}/runtime/commands/${id}`, {
+      headers: {authorization: 'Bearer TOKEN-A'},
+    })).json()
+    expect(status.status).toBe('failed')
+    expect(await nextFor('alice-ws-1')).toBeNull()
+  })
+
   it('whoami reports the workspace a call that names none acts on', async () => {
     await registerAliceTabs({ws1: 2_000, ws2: 1_000})
 
@@ -761,6 +807,22 @@ describe('events channel', () => {
 
     const body = await nextEvents('TOKEN-A', '?afterSeq=0&timeoutMs=100').then(response => response.json())
     expect(body.events.map((entry: {event: {watcher: string}}) => entry.event.watcher)).toEqual(['from-ws-2'])
+  })
+
+  // Local-only user ids are the typed name, so two browser profiles can share
+  // one; a stream follows the tabs that list the token, not the user id.
+  it('keeps the streams of two tokens apart even when their tabs share a user id', async () => {
+    await registerClient('profile-1-tab', {
+      audience: {userId: 'dev', workspaceId: 'ws-1'}, tokens: [{token: 'TOKEN-P1', label: 'cli', userId: 'dev'}],
+    })
+    await registerClient('profile-2-tab', {
+      audience: {userId: 'dev', workspaceId: 'ws-2'}, tokens: [{token: 'TOKEN-P2', label: 'cli', userId: 'dev'}],
+    })
+
+    await postEvent('profile-2-tab', {type: 'watcher-settled', watcher: 'profile-2-only'})
+
+    const body = await nextEvents('TOKEN-P1', '?afterSeq=0&timeoutMs=100').then(response => response.json())
+    expect(body.events).toEqual([])
   })
 
   it('flags a stale cursor after a bridge restart instead of parking forever', async () => {

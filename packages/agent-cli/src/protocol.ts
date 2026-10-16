@@ -39,20 +39,18 @@ export interface UnknownTokenFacts {
  *  server, because the CLI appends the half only IT can know — which profiles
  *  are actually paired on this machine. */
 export const unknownTokenMessage = ({connectedTabs, tokenUser}: UnknownTokenFacts): string => {
-  const parts = [UNKNOWN_TOKEN_MARKER]
   if (connectedTabs === 0) {
-    parts.push('No app tab is connected to it: open the app in the browser profile this token was minted in.')
-  } else {
-    parts.push(`${connectedTabs} app ${connectedTabs === 1 ? 'tab is' : 'tabs are'} connected.`)
-    parts.push({
-      unseen: 'No tab has listed this token since the bridge started.',
-      connected: "A connected tab is signed in as this token's user but does not list it: "
-        + 'a token is listed only in the browser profile and app origin that minted it, until it is revoked there.',
-      'not-connected': "No connected tab is signed in as this token's user.",
-    }[tokenUser])
+    return `${UNKNOWN_TOKEN_MARKER} No app tab is connected to it: open the app in the browser profile and at the app address this token was minted in.`
   }
-  parts.push('A token is not tied to a workspace: any open tab of its user registers it, whichever workspace that tab has open.')
-  return parts.join(' ')
+  const tabs = `${connectedTabs} app ${connectedTabs === 1 ? 'tab is' : 'tabs are'} connected.`
+  const user = {
+    unseen: 'No tab has listed this token since the bridge started.',
+    connected: "A connected tab is signed in as this token's user but does not list it. A tab lists the "
+      + 'tokens stored in its own browser profile at its own app address, minus revoked ones; a tab '
+      + "running an app version older than this bridge lists only its open workspace's (reload it).",
+    'not-connected': "No connected tab is signed in as this token's user.",
+  }[tokenUser]
+  return `${UNKNOWN_TOKEN_MARKER} ${tabs} ${user}`
 }
 
 export const tokenScopeSchema = z.enum(['read-write', 'read-only'])
