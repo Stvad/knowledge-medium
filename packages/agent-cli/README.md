@@ -149,7 +149,7 @@ A token acts as the user who minted it, in any of their workspaces, not only the
 - **A workspace the device cannot read is refused**, not answered with empty results: one this device has no row for, or one that is end-to-end encrypted without its key entered here, or that was never opened here.
 - **Writes go to the workspace open in the app tab only.** They resolve properties and aliases through that workspace's registries, so a write to a block in another workspace is refused; switch the tab to it and re-run. This is a correctness limit, not a permission boundary.
 - **Several tabs of the same user:** a call that names a workspace (its `workspaceId`, or a root `create-block`'s `data.workspaceId`) goes to a tab that has it open; otherwise it goes to the tab focused most recently.
-- **Pinning a workspace:** with `AGENT_RUNTIME_WORKSPACE=<id>` set, every call that names no workspace names that one. Use it for unattended consumers such as the `agent-dispatch` daemon, which otherwise act on whichever workspace you last looked at.
+- **Pinning a workspace:** with `AGENT_RUNTIME_WORKSPACE=<id>` set, every call that names no workspace names that one, instead of acting on whichever workspace you last looked at. The `agent-dispatch` daemon pins this way from its required `workspaceId` config field.
 
 ## Profiles
 
