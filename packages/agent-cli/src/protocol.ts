@@ -178,6 +178,9 @@ export const updateBlockCommandSchema = z.looseObject({
   blockId: z.string().optional(),
   content: z.string().optional(),
   replaceProperties: z.boolean().optional(),
+  /** Compare-and-set: refuse the whole update unless the block's content is
+   *  still exactly this — what the caller read before deciding to write. */
+  expectedContent: z.string().optional(),
   // properties forwarded verbatim (looseObject).
   ...commandIdField,
 })
@@ -195,6 +198,57 @@ export const moveBlockCommandSchema = z.looseObject({
   blockId: z.string().optional(),
   parentId: z.string().nullable(),
   position: moveBlockPositionSchema,
+  ...commandIdField,
+})
+
+/** Parse markdown with the app paste parser and insert it under a target, in
+ *  one transaction. `target` is a block id / id prefix, a `[[Page]]` or a date
+ *  expression (a missing page or daily note is created). `position` places the
+ *  inserted run among the target's children (default last). */
+export const appendMarkdownCommandSchema = z.looseObject({
+  type: z.literal('append-markdown'),
+  target: z.string(),
+  markdown: z.string(),
+  position: moveBlockPositionSchema.optional(),
+  shape: z.enum(['outline', 'block']).optional(),
+  ...commandIdField,
+})
+
+/** Replace the one occurrence of `old` in a block's content with `new`,
+ *  against the content current inside the writing transaction. */
+export const editBlockCommandSchema = z.looseObject({
+  type: z.literal('edit-block'),
+  id: z.string(),
+  old: z.string(),
+  new: z.string(),
+  ...commandIdField,
+})
+
+/** Get-or-create a page by `name` (as a `[[name]]` wikilink would), or a daily
+ *  note by `date` expression. Exactly one of the two. */
+export const createPageCommandSchema = z.looseObject({
+  type: z.literal('create-page'),
+  name: z.string().optional(),
+  date: z.string().optional(),
+  ...commandIdField,
+})
+
+/** Recent local transactions of the active workspace, newest first, with the
+ *  blocks each changed. Agent-bridge writes only unless `includeUser`.
+ *  `since` is epoch ms or an ISO timestamp. */
+export const recentChangesCommandSchema = z.looseObject({
+  type: z.literal('recent-changes'),
+  since: z.union([z.number(), z.string()]).optional(),
+  limit: z.number().int().positive().optional(),
+  includeUser: z.boolean().optional(),
+  ...commandIdField,
+})
+
+/** One block's recorded changes, newest first — local and sync-applied. */
+export const blockHistoryCommandSchema = z.looseObject({
+  type: z.literal('block-history'),
+  id: z.string(),
+  limit: z.number().int().positive().optional(),
   ...commandIdField,
 })
 
@@ -504,6 +558,11 @@ export const knownCommandSchema = z.discriminatedUnion('type', [
   moveBlockCommandSchema,
   deleteBlockCommandSchema,
   restoreBlockCommandSchema,
+  appendMarkdownCommandSchema,
+  editBlockCommandSchema,
+  createPageCommandSchema,
+  recentChangesCommandSchema,
+  blockHistoryCommandSchema,
   installExtensionCommandSchema,
   enableExtensionCommandSchema,
   disableExtensionCommandSchema,
@@ -548,6 +607,11 @@ export const knownAgentCommandSchema = z.discriminatedUnion('type', [
   moveBlockCommandSchema,
   deleteBlockCommandSchema,
   restoreBlockCommandSchema,
+  appendMarkdownCommandSchema,
+  editBlockCommandSchema,
+  createPageCommandSchema,
+  recentChangesCommandSchema,
+  blockHistoryCommandSchema,
   installExtensionCommandSchema,
   enableExtensionCommandSchema,
   disableExtensionCommandSchema,
@@ -653,7 +717,7 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   },
   'update-block': {
     usage: 'kmagent update-block <json>',
-    description: 'Update a block (body shape per <json>).',
+    description: 'Update a block (body shape per <json>: {id, content?, properties?, replaceProperties?, expectedContent?}). Properties MERGE unless replaceProperties. expectedContent is a compare-and-set: the update is refused, with the current content in the error, unless the block still has exactly that content. id may be a unique id prefix.',
     readOnly: false,
   },
   'move-block': {
@@ -670,6 +734,31 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
     usage: 'kmagent restore-block <id>',
     description: 'Restore one soft-deleted block via core.restore. Descendants remain deleted unless restored separately.',
     readOnly: false,
+  },
+  'append-markdown': {
+    usage: 'kmagent append-markdown <target> <markdown|-> [--first | --after <id> | --before <id>] [--one-block]',
+    description: 'Parse markdown with the app paste parser (the same split as "paste as markdown") and insert it under <target> in ONE transaction; prints the created blocks. <target>: a block id or unique id prefix (≥8 hex), a [[Page]] (created the way a wikilink creates it when missing — a date-literal name is that day\'s daily note), or a date expression (today | 2026-10-15 | next monday → that daily note, created if missing). A bare word that is none of these is refused — wrap page names in [[…]]. Default position is after the target\'s last child. Pass `-` to read markdown from stdin.',
+    readOnly: false,
+  },
+  'edit-block': {
+    usage: 'kmagent edit-block <id> <old> <new>',
+    description: 'Replace the one occurrence of <old> in a block\'s content with <new> (literally — no regex, no $-patterns). Applied inside the writing transaction against the block\'s CURRENT content, so an edit made elsewhere since you read it survives. Refuses when <old> is empty, not found (the error shows the current content), or found more than once (include more surrounding text). <id> may be a unique id prefix.',
+    readOnly: false,
+  },
+  'create-page': {
+    usage: 'kmagent create-page <name> | --date <expr>',
+    description: 'Get-or-create a page by name, exactly as typing [[name]] would (alias lookup first, else the deterministic alias seat; a date-literal name is that day\'s daily note), or a daily note by date expression (--date today). Reports whether it was created.',
+    readOnly: false,
+  },
+  'recent-changes': {
+    usage: 'kmagent recent-changes [--since <ms|iso>] [--limit <n>] [--all]',
+    description: 'Recent local transactions in the active workspace, newest first, each with the blocks it changed (content before/after, parent, deleted, property keys). Defaults to agent-bridge writes only (txs described `agent runtime …`); --all includes the user\'s own edits on this device. Sync-applied changes from other devices are not transactions here — use block-history for one block\'s full record. Not attributed to the agent: eval / sql execute / run-action writes, and a daily note created on the way to an append.',
+    readOnly: true,
+  },
+  'block-history': {
+    usage: 'kmagent block-history <id> [--limit <n>]',
+    description: 'One block\'s recorded changes, newest first: kind (create/update/move/soft-delete/restore), source (local or sync), the transaction description, and content before/after — the full prior content, for review or to restore with update-block.',
+    readOnly: true,
   },
   'install-extension': {
     usage: 'kmagent install-extension [--verify] [--allow-preset-change] [--description <text>] <file> [label]',
