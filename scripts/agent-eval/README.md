@@ -14,6 +14,40 @@ It has two halves:
 Sizes are characters (string length) throughout: the unit Claude Code's MCP output
 cap counts, and the only one its over-the-cap notice reports.
 
+## What it guards against
+
+The eval is a measuring tool for a dedicated local-only tab, not a defence against a
+hostile machine. It holds these, and a gap in any of them is a bug:
+
+- **The agent under test.** Whatever it does to the graph through the km tools, raw
+  SQL included, is scored and then undone, so it never reaches another task's
+  starting graph.
+- **Scoring.** A correct answer passes and plausible wrong ones fail. A write task
+  passes only when it made the requested change and nothing else.
+- **Comparability.** A delta is shown only between runs that held the same
+  conditions (below), and only for tasks whose definitions match.
+- **Accidents around a run.**
+  - A run killed mid-task: the next run repairs the graph before using it.
+  - Two runs on one tab: the second is refused while the first holds the lock.
+  - The checkout or the built server changing during a run: the run stops.
+  - The profile being paired with another tab: the run stops.
+  - A tab that has synced, or whose fixture differs from this checkout's import: it is
+    refused before anything is spent.
+
+It does not try to hold these, and a finding about them is declined:
+
+- Someone working in the eval tab, its browser storage or the runner's state directory
+  while a run is going, including signing the tab in. Hand edits made between runs are
+  caught if they touch the fixture or what sits under it, not if they add new
+  top-level pages.
+- Two processes racing within the same instant, such as both taking over one stale lock.
+- A kill in the second between a run's setup and its journal's first write.
+- A run that crosses local midnight, which moves the daily-note task to another day.
+- An answer built to fool a check. The read checks reject plausible mistakes, not text
+  written to satisfy two predicates at once.
+- Recency timestamps of the seeded fixture, which the importer sets from the clock. The
+  start-of-run check compares everything else.
+
 ## The fixture
 
 `fixture.ts` generates a deterministic Roam export of a fictional team's notebook
