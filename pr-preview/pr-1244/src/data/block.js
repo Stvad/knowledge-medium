@@ -1,1 +1,1 @@
-import{CG as e,wG as t}from"../../chunks/app-BOC81cRe.js";export{e as Block,t as requireLoadedBlock};
+import{CG as e,wG as t}from"../../chunks/app-D80vlFxK.js";export{e as Block,t as requireLoadedBlock};
