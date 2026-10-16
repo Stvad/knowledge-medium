@@ -91,7 +91,8 @@ export interface FixtureTruth {
   julyMeetingsWithInes: string[]
   /** Reading-log titles rated 5/5 and recommended by Tomas Reyes. */
   tomasFiveStarBooks: string[]
-  design: {author: string, openQuestions: number, decisionKeyword: string}
+  /** `adopted` / `rejected`: the approach the design chose and the one it turned down. */
+  design: {author: string, openQuestions: number, adopted: string, rejected: string}
 }
 
 export interface Fixture {
@@ -611,7 +612,7 @@ export const buildFixture = (): Fixture => {
       needleBook: NEEDLE_BOOK,
       julyMeetingsWithInes,
       tomasFiveStarBooks,
-      design: {author: 'Priya Nand', openQuestions: DESIGN_OPEN_QUESTIONS.length, decisionKeyword: 'last-writer-wins'},
+      design: {author: 'Priya Nand', openQuestions: DESIGN_OPEN_QUESTIONS.length, adopted: 'last-writer-wins', rejected: 'crdt'},
     },
   }
 }

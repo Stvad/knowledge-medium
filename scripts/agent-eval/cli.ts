@@ -263,7 +263,13 @@ const run = async (options: RunOptions) => {
   writeReport(report, options.compare)
 }
 
+/** A label names files in results/, so it must stay a plain file name. */
+const requireSafeLabel = (label: string) => {
+  if (!/^[\w][\w.-]*$/.test(label)) fail(`label ${JSON.stringify(label)} must be letters, digits, '.', '_' or '-' (it names a file in results/)`)
+}
+
 const writeReport = (report: EvalReport, compare: string | null) => {
+  requireSafeLabel(report.label)
   const baseline = compare ? JSON.parse(readFileSync(compare, 'utf8')) as EvalReport : undefined
   if (baseline && baseline.fixtureHash !== report.fixtureHash) {
     fail(`${compare} was measured on fixture ${baseline.fixtureHash}, this report on ${report.fixtureHash}; `
@@ -306,6 +312,7 @@ const main = async () => {
       const timeoutMin = Number(values['timeout-min'])
       if (!Number.isInteger(repeat) || repeat < 1 || repeat > 50) fail(`--repeat must be an integer from 1 to 50, got ${values.repeat}`)
       if (!Number.isFinite(timeoutMin) || timeoutMin <= 0) fail(`--timeout-min must be a positive number, got ${values['timeout-min']}`)
+      if (values.label) requireSafeLabel(values.label)
       const date = new Date().toISOString().slice(0, 10)
       return run({
         profile: values.profile,

@@ -166,20 +166,25 @@ export const TASKS: readonly EvalTask[] = [
     kind: 'read',
     covers: 'summarize a page',
     prompt: () => readPrompt(
-      `Summarize the page "${DESIGN_PAGE}": what was decided, who wrote it, and how many open questions it lists.`,
-      '{"author": "<name>", "decision": "<one sentence>", "openQuestions": <number>}',
+      `Summarize the page "${DESIGN_PAGE}": which approach it adopted and which it rejected, who wrote it, `
+      + 'and how many open questions it lists.',
+      '{"author": "<name>", "adopted": "<approach adopted>", "rejected": "<approach rejected>", "openQuestions": <number>}',
     ),
     check: async ({answer, truth}) => {
       if (!isRecord(answer)) return noAnswer
-      const author = typeof answer.author === 'string' ? normalizeText(answer.author) : ''
-      const decision = typeof answer.decision === 'string' ? normalizeText(answer.decision) : ''
+      // Hyphens folded so "last writer wins" and "last-writer-wins" agree.
+      const field = (value: unknown) => (typeof value === 'string' ? normalizeText(value).replace(/-/g, ' ') : '')
+      const {author, adopted, rejected} = truth.design
       const results = {
-        author: author.includes(normalizeText(truth.design.author)),
-        decision: decision.replace(/-/g, ' ').includes(truth.design.decisionKeyword.replace(/-/g, ' ')),
+        author: field(answer.author).includes(normalizeText(author)),
+        // Both directions are required: a reversed answer names the right
+        // words in the wrong fields.
+        adopted: field(answer.adopted).includes(field(adopted)),
+        rejected: field(answer.rejected).includes(field(rejected)),
         openQuestions: answer.openQuestions === truth.design.openQuestions,
       }
-      const failed = Object.entries(results).filter(([, ok]) => !ok).map(([field]) => field)
-      return {pass: failed.length === 0, detail: failed.length === 0 ? 'author, decision, count right' : `wrong: ${failed.join(', ')}`}
+      const failed = Object.entries(results).filter(([, ok]) => !ok).map(([name]) => name)
+      return {pass: failed.length === 0, detail: failed.length === 0 ? 'author, both approaches, count right' : `wrong: ${failed.join(', ')}`}
     },
   },
   {
@@ -287,7 +292,7 @@ export const TASKS: readonly EvalTask[] = [
       + '"Done: drafted the sync rollout plan", "Next: review the Kestrel renewal", "Blockers: none".',
     ),
     reset: async ({probe}) => {
-      await deleteAll(probe, await blocksLike(probe, 'Eval check-in'))
+      await deleteAll(probe, await blocksLike(probe, 'Eval check-in%'))
       // `daily-note` resolves the id without creating the note, and without
       // the note the task cannot be done at all (`create_block` refuses a
       // missing parent) — a failure of the setup, not of the agent.
@@ -376,7 +381,11 @@ export const TASKS: readonly EvalTask[] = [
     check: async ({probe}) => {
       const todo = await requireTarget(probe, TARGET_UIDS.pricingFaqTodo)
       const status = todo.properties.status
-      return {pass: status === 'done', detail: `status is ${JSON.stringify(status ?? null)}; content ${JSON.stringify(todo.content)}`}
+      const textKept = todo.content === PRICING_FAQ_TODO
+      return {
+        pass: status === 'done' && textKept,
+        detail: `status is ${JSON.stringify(status ?? null)}; text ${textKept ? 'unchanged' : `is ${JSON.stringify(todo.content)}`}`,
+      }
     },
   },
 ]

@@ -13,14 +13,14 @@
  *
  * - isolation: the runner's snapshot restore undoes every kind of change.
  *
- * Budgets run first: the later sections write to the graph.
+ * Every case starts from the imported fixture (see the afterEach below).
  */
 import { writeFileSync } from 'node:fs'
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
-import { buildFixture, DESIGN_PAGE, PEOPLE, PRICING_FAQ_TODO, PROJECT_PAGE, READING_LOG_PAGE, ROLLOUT_BLOCK_TEXT, TARGET_UIDS } from './fixture'
+import { buildFixture, DESIGN_PAGE, PRICING_FAQ_TODO, PROJECT_PAGE, READING_LOG_PAGE, ROLLOUT_BLOCK_TEXT, TARGET_UIDS } from './fixture'
 import { childrenOf, dailyNoteId, descendantsOf, type GraphProbe, pageIdByTitle, requirePageId, sqlAll } from './graphQueries'
-import { changesSince, restoreSnapshot, snapshotWorkspace, strayChanges } from './isolation'
+import { changesSince, restoreSnapshot, snapshotWorkspace, strayChanges, type WorkspaceSnapshot } from './isolation'
 import { OUTPUT_PROBES, type ProbeContext } from './outputBudgets'
 import { type CheckInput, type CheckOutcome, targetId, TASKS, type TaskEnv } from './tasks'
 import { seedFixtureTestGraph, TEST_WORKSPACE_ID, type FixtureTestGraph } from './testGraph'
@@ -30,12 +30,22 @@ let graph: FixtureTestGraph
 let probe: GraphProbe
 const {truth} = buildFixture()
 
+let fixtureSnapshot: WorkspaceSnapshot
+let caseStartedAt = 0
+
 // Seeding imports ~5.8k blocks: ~5s alone, budgeted for 6x under the gate.
 beforeAll(async () => {
   db = await createTestDb()
   graph = await seedFixtureTestGraph(db.db)
   probe = {workspaceId: TEST_WORKSPACE_ID, command: graph.command}
+  fixtureSnapshot = await snapshotWorkspace(probe)
 }, 60_000)
+
+// One import is shared by every case, so each case's writes are undone
+// against the post-import snapshot — the runner's own restore — and no case
+// depends on another's leftovers or on declaration order.
+beforeEach(() => { caseStartedAt = Date.now() })
+afterEach(async () => { await restoreSnapshot(probe, fixtureSnapshot, caseStartedAt) })
 
 afterAll(async () => {
   await graph?.close()
@@ -140,27 +150,40 @@ const deriveReadAnswers = async (): Promise<Record<string, unknown>> => {
     'reading-log-filter': {titles: tomasFiveStar},
     'summarize-design': {
       author: /\[\[([^\]]+)\]\]/.exec(design.find(row => row.content.startsWith('Author::'))!.content)?.[1],
-      decision: childrenOfRow(heading('Decision').id)[0].content,
+      adopted: childrenOfRow(heading('Decision').id)[0].content,
+      rejected: childrenOfRow(heading('Decision').id).find(row => row.content.startsWith('Rejected:'))!.content,
       openQuestions: childrenOfRow(heading('Open questions').id).length,
     },
   }
 }
 
-/** One wrong answer per read task — a near miss, not garbage. */
-const wrongAnswers: Record<string, unknown> = {
+const designAnswer = {
+  author: truth.design.author,
+  adopted: truth.design.adopted,
+  rejected: truth.design.rejected,
+  openQuestions: truth.design.openQuestions,
+}
+
+/** Wrong answers per read task — near misses, not garbage. */
+const wrongAnswers: Record<string, unknown[]> = {
   // Every date found, but the summaries only restate that Kestrel came up.
-  'kestrel-june': {
+  'kestrel-june': [{
     dates: truth.kestrelJuneDates,
     about: Object.fromEntries(truth.kestrelJuneDates.map(date => [date, 'Kestrel was mentioned in the notes'])),
-  },
-  'standup-blockers': {dates: [...truth.stagingBlockerDates, '2026-06-03']},
-  'orchard-open-todos': {todos: [...truth.openOrchardTodos, 'Book launch venue']},
-  'reading-log-needle': {rating: 5, recommendedBy: truth.needleBook.recommendedBy},
-  'renewal-vendors': {vendors: [...truth.renewalDueVendors, 'Office Lease']},
+  }],
+  'standup-blockers': [{dates: [...truth.stagingBlockerDates, '2026-06-03']}],
+  'orchard-open-todos': [{todos: [...truth.openOrchardTodos, 'Book launch venue']}],
+  'reading-log-needle': [{rating: 5, recommendedBy: truth.needleBook.recommendedBy}],
+  'renewal-vendors': [{vendors: [...truth.renewalDueVendors, 'Office Lease']}],
   // Distinct dates, but counting days instead of meetings.
-  'meetings-with-person': {count: new Set(truth.julyMeetingsWithInes).size, dates: [...new Set(truth.julyMeetingsWithInes)]},
-  'reading-log-filter': {titles: truth.tomasFiveStarBooks.slice(1)},
-  'summarize-design': {author: PEOPLE[0], decision: 'Adopt a CRDT', openQuestions: truth.design.openQuestions},
+  'meetings-with-person': [{count: new Set(truth.julyMeetingsWithInes).size, dates: [...new Set(truth.julyMeetingsWithInes)]}],
+  'reading-log-filter': [{titles: truth.tomasFiveStarBooks.slice(1)}],
+  'summarize-design': [
+    // The decision read backwards.
+    {...designAnswer, adopted: 'a CRDT for content', rejected: 'per-field last-writer-wins'},
+    {...designAnswer, adopted: 'a server-side merge queue'},
+    {...designAnswer, rejected: 'a server-side merge queue'},
+  ],
 }
 
 const resultIdOf = (text: string) => (JSON.parse(text) as {id: string}).id
@@ -199,30 +222,37 @@ const solveWithMcp: Record<string, (env: TaskEnv) => Promise<void>> = {
   },
 }
 
-/** A plausible wrong solution per write task: the edit an agent gets wrong. */
-const solveWrongly: Record<string, (env: TaskEnv) => Promise<void>> = {
-  'daily-checkin': async () => {
+/** Plausible wrong solutions per write task: the edits an agent gets wrong. */
+const solveWrongly: Record<string, Array<(env: TaskEnv) => Promise<void>>> = {
+  'daily-checkin': [async () => {
     const today = (JSON.parse(await graph.callTool('daily_note', {date: 'today'})) as {blockId: string}).blockId
     await graph.callTool('create_block', {
       parentId: today,
       content: 'Eval check-in\nDone: drafted the sync rollout plan\nNext: review the Kestrel renewal\nBlockers: none',
     })
-  },
-  'edit-rollout-phrase': async () => {
+  }],
+  'edit-rollout-phrase': [async () => {
     const [block] = (await descendantsOf(probe, await requirePageId(probe, DESIGN_PAGE)))
       .filter(row => row.content === ROLLOUT_BLOCK_TEXT)
     await graph.callTool('update_block', {id: block.id, content: 'Target: Q4 2026.'})
-  },
-  'create-linked-page': async ({runTag}) => {
+  }],
+  'create-linked-page': [async ({runTag}) => {
     const today = (JSON.parse(await graph.callTool('daily_note', {date: 'today'})) as {blockId: string}).blockId
     await graph.callTool('create_block', {parentId: today, content: `[[Vendor Review: Kestrel ${runTag}]]`})
-  },
-  'complete-todo': async () => {
-    const [todo] = (await descendantsOf(probe, await requirePageId(probe, PROJECT_PAGE)))
-      .filter(row => row.content === PRICING_FAQ_TODO)
-    await graph.callTool('update_block', {id: todo.id, content: `{{[[DONE]]}} ${PRICING_FAQ_TODO}`})
-  },
+  }],
+  'complete-todo': [
+    // Marked done in the text, not the status.
+    async () => {
+      await graph.callTool('update_block', {id: pricingTodoId(), content: `{{[[DONE]]}} ${PRICING_FAQ_TODO}`})
+    },
+    // Status right, but the todo's text rewritten.
+    async () => {
+      await graph.callTool('update_block', {id: pricingTodoId(), content: 'Draft FAQ', properties: {status: 'done'}})
+    },
+  ],
 }
+
+const pricingTodoId = () => targetId(TEST_WORKSPACE_ID, TARGET_UIDS.pricingFaqTodo)
 
 const expectOutcome = (outcome: CheckOutcome, pass: boolean) => expect(outcome.pass, outcome.detail).toBe(pass)
 
@@ -243,18 +273,20 @@ describe('task checks', () => {
 
   it.each(readTasks.map(task => [task.id, task] as const))('%s: truth matches the graph; a near miss fails', async (_id, task) => {
     expectOutcome(await task.check(input(derived[task.id])), true)
-    expectOutcome(await task.check(input(wrongAnswers[task.id])), false)
+    for (const wrong of wrongAnswers[task.id]) expectOutcome(await task.check(input(wrong)), false)
     expectOutcome(await task.check(input(undefined)), false)
   })
 
   // Wrong first, then reset restores the starting state, then the right
   // solution — which also proves reset undoes a botched attempt.
-  it.each(writeTasks.map(task => [task.id, task] as const))('%s: a wrong edit fails; reset then an MCP solution passes', async (_id, task) => {
-    const wrongEnv: TaskEnv = {probe, truth, runTag: `w${task.id.length}`}
-    await task.reset?.(wrongEnv)
-    const wrongStart = Date.now()
-    await solveWrongly[task.id](wrongEnv)
-    expectOutcome(await task.check({...wrongEnv, answer: undefined, startedAt: wrongStart}), false)
+  it.each(writeTasks.map(task => [task.id, task] as const))('%s: wrong edits fail; reset then an MCP solution passes', async (_id, task) => {
+    for (const [index, solveWrong] of solveWrongly[task.id].entries()) {
+      const wrongEnv: TaskEnv = {probe, truth, runTag: `w${index}`}
+      await task.reset?.(wrongEnv)
+      const wrongStart = Date.now()
+      await solveWrong(wrongEnv)
+      expectOutcome(await task.check({...wrongEnv, answer: undefined, startedAt: wrongStart}), false)
+    }
 
     const env: TaskEnv = {probe, truth, runTag: `r${task.id.length}`}
     await task.reset?.(env)
