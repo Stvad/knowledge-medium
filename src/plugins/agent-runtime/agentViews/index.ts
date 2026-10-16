@@ -17,7 +17,17 @@ type ViewCommand = Extract<KnownAgentCommand, {type: `view-${string}`}>
 
 /** Answer a `view-*` command: the rendered text, or with `format: 'json'`
  *  the structured view it was rendered from (same bounds either way).
- *  `namedWorkspaceId` is the workspace the call names, if any. */
+ *  `namedWorkspaceId` is the workspace the call names, if any.
+ *
+ *  Accepted for every view, unless the result would misdirect a write, cross
+ *  a user or workspace, or break a cost bound:
+ *  - rows only sync can produce (an id spelling `[[x]]` or `field:…`, an
+ *    alias two pages claim, a malformed list entry) render as they are,
+ *    beyond never cutting an id;
+ *  - data changing between a view's reads: within one response, counts and
+ *    rows may disagree by what changed. Kept regardless: no count is below
+ *    what is shown, the workspace is bound in SQL, and no offset is offered
+ *    that cannot be read. One read snapshot per view would end this: #1250. */
 export const runViewCommand = async (
   repo: Repo,
   command: ViewCommand,
