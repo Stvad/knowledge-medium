@@ -23,7 +23,7 @@ import { KM_MCP_ALLOWED_TOOLS, KM_MCP_TOOL_NAMES, MCP_SERVER_NAME } from '../../
 import { runJsonlProcess } from '../../packages/agent-dispatch/src/execProcess'
 import { BILLING_ENV_DENYLIST, envForBilling } from '../../packages/agent-dispatch/src/runner'
 import { buildFixture, FIXTURE_HASH_PREFIX, FIXTURE_MARKER_PAGE } from './fixture'
-import { childrenOf, dailyNoteId, type GraphProbe, pageIdByTitle, requirePageId } from './graphQueries'
+import { childrenOf, dailyNoteId, type GraphProbe, pageIdByTitle, purgeBlocks, requirePageId, sqlAll } from './graphQueries'
 import { restoreSnapshot, snapshotWorkspace, strayChanges } from './isolation'
 import { connectMcpClient } from './mcpClient'
 import { measureProbes, OUTPUT_PROBES, outputProbeHash, type ProbeOutput } from './outputBudgets'
@@ -36,7 +36,7 @@ import {
   REPORT_SCHEMA_VERSION,
   type TaskRunRecord,
 } from './report'
-import { allowedChanges, type EvalTask, taskDefinitionHash, TASKS } from './tasks'
+import { allowedChanges, type CheckOutcome, type EvalTask, taskDefinitionHash, TASKS } from './tasks'
 import { extractAnswer, parseTranscript } from './transcript'
 import { acquireWorkspaceLock } from './workspaceLock'
 
@@ -247,8 +247,13 @@ const run = async (options: RunOptions) => {
     runs: [],
   }
   // The resolved model is compared once the runs have reported it.
-  const mismatches = options.baseline ? conditionMismatches(report, options.baseline, {planned: true}) : []
-  if (mismatches.length > 0) fail(`this run cannot be compared with ${options.baseline!.label}: they differ in ${mismatches.join('; ')}`)
+  // Checked before anything is spent, and again once the first task has
+  // resolved the model.
+  const requireComparable = (planned: boolean) => {
+    const mismatches = options.baseline ? conditionMismatches(report, options.baseline, {planned}) : []
+    if (mismatches.length > 0) fail(`this run cannot be compared with ${options.baseline!.label}: they differ in ${mismatches.join('; ')}`)
+  }
+  requireComparable(true)
 
   // Clear what an interrupted earlier run left, then freeze the starting
   // state every task gets: each task's changes are undone against it.
@@ -256,6 +261,9 @@ const run = async (options: RunOptions) => {
   const recovered = await journal.recover(probe, fixture.hash)
     .catch((error: unknown) => fail(`could not undo an interrupted run: ${errorText(error)}`))
   if (recovered > 0) process.stdout.write(`undid ${recovered} change(s) an interrupted run left\n`)
+  // What the resets add (today's daily note) is removed after the run, so
+  // runs on later days do not leave the graph a note longer each time.
+  const existing = new Set((await sqlAll<{id: string}>(probe, 'SELECT id FROM blocks WHERE workspace_id = ?', [probe.workspaceId])).map(row => row.id))
   for (const task of TASKS) await task.reset?.({probe, truth: fixture.truth, runTag: ''})
   process.stdout.write('checking the tab against this checkout\'s import…\n')
   const outputs = await requireImportedGraph(client, probe)
@@ -293,14 +301,16 @@ const run = async (options: RunOptions) => {
       rmSync(cwd, {recursive: true, force: true})
 
       const metrics = parseTranscript(stdout)
+      const modelResolved = report.resolvedModel === null && metrics.model !== null
       report.resolvedModel ??= metrics.model
       report.claudeCodeVersion ??= metrics.claudeCodeVersion
-      const outcome = await task.check({...env, answer: extractAnswer(metrics.resultText), startedAt})
+      const outcome: CheckOutcome = await task.check({...env, answer: extractAnswer(metrics.resultText), startedAt})
         .catch((error: unknown) => ({pass: false, detail: `check threw: ${errorText(error)}`}))
-      const allowed = await allowedChanges(task, env)
       const changes = await restoreSnapshot(probe, snapshot)
         .catch((error: unknown) => fail(`aborting the run: ${errorText(error)}`))
       journal.taskRestored()
+      if (modelResolved) requireComparable(false)
+      const allowed = allowedChanges(task, probe.workspaceId, outcome)
       const strayEdits = strayChanges(changes, allowed)
       const failures = [
         proc.timedOut ? 'timed out' : null,
@@ -341,6 +351,7 @@ const run = async (options: RunOptions) => {
   }
 
   journal.end()
+  await purgeBlocks(probe, [...snapshot.rows.keys()].filter(id => !existing.has(id)))
   release()
   report.finishedAt = new Date().toISOString()
   writeReport(report, options.baseline)

@@ -15,9 +15,9 @@ const row = (id: string, overrides: Partial<SnapshotRow> = {}): SnapshotRow => (
   ...overrides,
 })
 
-const allowing = (edit?: AllowedEdit, createRoots: string[] = []): AllowedChanges => ({
+const allowing = (edit?: AllowedEdit, creates: string[] = []): AllowedChanges => ({
   edits: new Map(edit ? [['todo', edit]] : []),
-  createRoots: new Set(createRoots),
+  creates: new Set(creates),
 })
 
 /** Stray count of one change to the `todo` block. */
@@ -54,14 +54,14 @@ describe('strayChanges', () => {
     expect(strayOf({references_json: '[{"id":"p"}]', updated_at: 2})).toBe(0)
   })
 
-  it('allows creating under a root, at any depth, and ignores what was created and deleted again', () => {
+  it('allows exactly the blocks a task was asked to create, and ignores what was created and deleted again', () => {
     const created = [
       row('new', {parent_id: 'section'}),
       row('child', {parent_id: 'new'}),
-      row('elsewhere', {parent_id: 'other'}),
-      row('gone', {parent_id: 'other', deleted: 1}),
+      row('beside', {parent_id: 'section'}),
+      row('gone', {parent_id: 'section', deleted: 1}),
     ]
-    expect(strayChanges({created, modified: []}, allowing(undefined, ['section']))).toBe(1)
+    expect(strayChanges({created, modified: []}, allowing(undefined, ['new', 'child']))).toBe(1)
     expect(strayChanges({created, modified: []}, allowing(undefined, []))).toBe(3)
   })
 })

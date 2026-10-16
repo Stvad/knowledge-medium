@@ -47,6 +47,9 @@ export interface CheckInput extends TaskEnv {
 export interface CheckOutcome {
   pass: boolean
   detail: string
+  /** The blocks the check accepted as the ones the task was asked to create.
+   *  Any other block the run created is a change it was not asked to make. */
+  created?: readonly string[]
 }
 
 export interface EvalTask {
@@ -56,12 +59,9 @@ export interface EvalTask {
   covers: string
   prompt: (env: TaskEnv) => string
   /** The fixture blocks this task is asked to change, by Roam uid, and which
-   *  of their fields. */
+   *  of their fields. Any other change fails the task (see
+   *  `CheckOutcome.created`); the runner undoes all of them either way. */
   edits?: Readonly<Record<string, AllowedEdit>>
-  /** Blocks under (or equal to) which this task is asked to create, resolved
-   *  after it ran. Any other change fails the task; the runner undoes all of
-   *  them either way. */
-  createsUnder?: (env: TaskEnv) => Promise<string[]>
   /** Clears what an interrupted earlier run of this task may have left and
    *  sets up its preconditions; the runner calls it before snapshotting.
    *  Must be idempotent. */
@@ -71,7 +71,7 @@ export interface EvalTask {
 
 /** Bump when a helper the checks share changes (normalizeText, compareSets,
  *  …): a task's hash covers only its own definition. */
-const SHARED_SCORING_VERSION = 2
+const SHARED_SCORING_VERSION = 3
 
 /** Identifies what a task measures, so a report only compares a task with an
  *  earlier run of the same definition. */
@@ -82,7 +82,6 @@ export const taskDefinitionHash = (task: EvalTask, truth: FixtureTruth): string 
   check: task.check.toString(),
   reset: task.reset?.toString() ?? null,
   edits: task.edits ?? {},
-  createsUnder: task.createsUnder?.toString() ?? null,
 })
 
 const PREAMBLE =
@@ -140,11 +139,10 @@ const isoDates = (value: unknown) => stringList(value)?.map(date => date.trim())
 /** The block id a fixture block's Roam uid imports to in this workspace. */
 export const targetId = (workspaceId: string, uid: string) => roamBlockId(workspaceId, uid)
 
-/** What `task` may change, resolved against the graph: call it before the
- *  runner's undo, which removes the blocks the task created. */
-export const allowedChanges = async (task: EvalTask, env: TaskEnv): Promise<AllowedChanges> => ({
-  edits: new Map(Object.entries(task.edits ?? {}).map(([uid, edit]) => [targetId(env.probe.workspaceId, uid), edit])),
-  createRoots: new Set(await task.createsUnder?.(env) ?? []),
+/** What a run of `task` was allowed to change, given its check's outcome. */
+export const allowedChanges = (task: EvalTask, workspaceId: string, outcome: CheckOutcome): AllowedChanges => ({
+  edits: new Map(Object.entries(task.edits ?? {}).map(([uid, edit]) => [targetId(workspaceId, uid), edit])),
+  creates: new Set(outcome.created ?? []),
 })
 
 const requireTarget = async (probe: GraphProbe, uid: string) => {
@@ -319,7 +317,6 @@ export const TASKS: readonly EvalTask[] = [
       + '"Eval check-in", with exactly three child blocks in this order: '
       + '"Done: drafted the sync rollout plan", "Next: review the Kestrel renewal", "Blockers: none".',
     ),
-    createsUnder: async ({probe}) => [await dailyNoteId(probe, 'today')],
     reset: async ({probe}) => {
       await purgeLike(probe, 'Eval check-in%')
       // `daily-note` resolves the id without creating the note, and without
@@ -334,12 +331,15 @@ export const TASKS: readonly EvalTask[] = [
       const added = (await childrenOf(probe, today))
         .filter(row => row.created_at >= startedAt && normalizeText(row.content) === 'eval check-in')
       if (added.length !== 1) return {pass: false, detail: `found ${added.length} new "Eval check-in" blocks on today's note`}
-      const children = (await childrenOf(probe, added[0].id)).map(row => row.content)
-      return compareOrdered(children, [
-        'Done: drafted the sync rollout plan',
-        'Next: review the Kestrel renewal',
-        'Blockers: none',
-      ])
+      const children = await childrenOf(probe, added[0].id)
+      return {
+        ...compareOrdered(children.map(row => row.content), [
+          'Done: drafted the sync rollout plan',
+          'Next: review the Kestrel renewal',
+          'Blockers: none',
+        ]),
+        created: [added[0].id, ...children.map(row => row.id)],
+      }
     },
   },
   {
@@ -374,10 +374,6 @@ export const TASKS: readonly EvalTask[] = [
       + `Then link to it from the "${PROJECT_PAGE}" page: under that page's "Vendors" section block, `
       + `add a child block containing [[${vendorReviewTitle(runTag)}]].`,
     ),
-    createsUnder: async ({probe, runTag}) => {
-      const page = await pageIdByTitle(probe, vendorReviewTitle(runTag))
-      return [targetId(probe.workspaceId, TARGET_UIDS.vendorsSection), ...(page ? [page] : [])]
-    },
     reset: async ({probe}) => {
       await purgeLike(probe, `%[[${VENDOR_REVIEW_PREFIX}%`)
       await purgeLike(probe, `${VENDOR_REVIEW_PREFIX}%`)
@@ -388,11 +384,13 @@ export const TASKS: readonly EvalTask[] = [
       if (!pageId) return {pass: false, detail: 'page does not exist'}
       const first = (await childrenOf(probe, pageId))[0]
       const statusOk = first !== undefined && normalizeText(first.content) === 'status: under review'
-      const linkOk = (await childrenOf(probe, targetId(probe.workspaceId, TARGET_UIDS.vendorsSection)))
-        .some(row => row.created_at >= startedAt && row.content.includes(`[[${title}]]`))
+      const links = (await childrenOf(probe, targetId(probe.workspaceId, TARGET_UIDS.vendorsSection)))
+        .filter(row => row.created_at >= startedAt && row.content.includes(`[[${title}]]`))
+      const linkOk = links.length === 1
       return {
         pass: statusOk && linkOk,
-        detail: `first block ${statusOk ? 'ok' : `is ${JSON.stringify(first?.content ?? null)}`}; link under Vendors ${linkOk ? 'ok' : 'missing'}`,
+        detail: `first block ${statusOk ? 'ok' : `is ${JSON.stringify(first?.content ?? null)}`}; ${links.length} link(s) under Vendors`,
+        created: [pageId, ...(first ? [first.id] : []), ...links.map(row => row.id)],
       }
     },
   },

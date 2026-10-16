@@ -36,8 +36,9 @@ They are scored on graph state read back through raw wire commands and SQL, neve
 through the MCP tools under test. A run passes only if the task's check passes, `claude`
 exits cleanly, and the agent changed nothing it wasn't asked to. Each write task
 declares which fields of which fixture blocks it may edit (the rollout block's content;
-the todo's status) and where it may create blocks. Any other change, such as another
-property, a move or a deletion, fails the run. A read task may change nothing.
+the todo's status), and its check names the blocks it accepted as the ones it asked
+for. Any other change fails the run: another property, a move, a deletion, or one more
+block beside the requested ones. A read task may change nothing.
 
 Every task starts from the same graph. The runner snapshots every block row once,
 after each task's `reset` has cleared anything an interrupted earlier run left behind.
@@ -60,7 +61,9 @@ wherever it ends up, even under the user page. After each task, the runner:
    moved them, so recency ordering is unchanged.
 
 The run's snapshot is also journaled to `tmp/agent-eval/journal/`, so a run killed
-mid-task is undone by the next run. `seed` and `run` hold a lock per workspace there,
+mid-task is undone by the next run. What the resets themselves add (today's daily note,
+when it is missing) is removed when the run ends, so runs on later days don't leave
+the graph a note longer each time. `seed` and `run` hold a lock per workspace there,
 so two of them never write one graph at once; a lock left by a process that died is
 taken over.
 
@@ -82,8 +85,9 @@ So is what a run holds fixed: the fixture, the resolved model, the effort and th
 output cap. A baseline that differs in any of them gets no deltas at all, since they
 would measure that difference rather than the tools. That includes a run whose model
 never resolved because no task got far enough. `run` refuses such a `--compare` before
-it starts, except for the model, which is known only once the first task has run.
-Claude Code's version is shown, not required to match.
+it starts, and stops after the first task when the resolved model differs, since the
+model is known only once a task has run. Claude Code's version is shown, not required
+to match.
 
 ## One-time setup
 

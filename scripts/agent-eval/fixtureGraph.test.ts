@@ -237,13 +237,21 @@ const solveWithMcp: Record<string, (env: TaskEnv) => Promise<void>> = {
 
 /** Plausible wrong solutions per write task: the edits an agent gets wrong. */
 const solveWrongly: Record<string, Array<(env: TaskEnv) => Promise<void>>> = {
-  'daily-checkin': [async () => {
-    const today = (JSON.parse(await graph.callTool('daily_note', {date: 'today'})) as {blockId: string}).blockId
-    await graph.callTool('create_block', {
-      parentId: today,
-      content: 'Eval check-in\nDone: drafted the sync rollout plan\nNext: review the Kestrel renewal\nBlockers: none',
-    })
-  }],
+  'daily-checkin': [
+    async () => {
+      const today = (JSON.parse(await graph.callTool('daily_note', {date: 'today'})) as {blockId: string}).blockId
+      await graph.callTool('create_block', {
+        parentId: today,
+        content: 'Eval check-in\nDone: drafted the sync rollout plan\nNext: review the Kestrel renewal\nBlockers: none',
+      })
+    },
+    // The check-in right, plus a block nobody asked for beside it.
+    async env => {
+      await solveWithMcp['daily-checkin'](env)
+      const today = (JSON.parse(await graph.callTool('daily_note', {date: 'today'})) as {blockId: string}).blockId
+      await graph.callTool('create_block', {parentId: today, content: 'Also: water the plants'})
+    },
+  ],
   'edit-rollout-phrase': [
     async () => {
       await graph.callTool('update_block', {id: fixtureId('rollout'), content: 'Target: Q4 2026.'})
@@ -257,10 +265,17 @@ const solveWrongly: Record<string, Array<(env: TaskEnv) => Promise<void>>> = {
       })
     },
   ],
-  'create-linked-page': [async ({runTag}) => {
-    const today = (JSON.parse(await graph.callTool('daily_note', {date: 'today'})) as {blockId: string}).blockId
-    await graph.callTool('create_block', {parentId: today, content: `[[${vendorReviewTitle(runTag)}]]`})
-  }],
+  'create-linked-page': [
+    async ({runTag}) => {
+      const today = (JSON.parse(await graph.callTool('daily_note', {date: 'today'})) as {blockId: string}).blockId
+      await graph.callTool('create_block', {parentId: today, content: `[[${vendorReviewTitle(runTag)}]]`})
+    },
+    // The page and link right, plus another block under Vendors.
+    async env => {
+      await solveWithMcp['create-linked-page'](env)
+      await graph.callTool('create_block', {parentId: fixtureId('vendorsSection'), content: '[[Kestrel]] — renewal notes'})
+    },
+  ],
   'complete-todo': [
     // Marked done in the text, not the status.
     async () => {
@@ -293,7 +308,7 @@ const attempt = async (task: EvalTask, env: TaskEnv, solve: (env: TaskEnv) => Pr
   const startedAt = Date.now()
   await solve(env)
   const outcome = await task.check({...env, answer: undefined, startedAt})
-  const stray = strayChanges(await diffAgainst(probe, before, QUIET), await allowedChanges(task, env))
+  const stray = strayChanges(await diffAgainst(probe, before, QUIET), allowedChanges(task, TEST_WORKSPACE_ID, outcome))
   return {pass: outcome.pass && stray === 0, detail: `${outcome.detail}; ${stray} stray change(s)`}
 }
 
@@ -367,9 +382,9 @@ describe('isolation', () => {
       .toEqual([edited.id, tagged.id, removed.id, moved.id, movedToo.id, rollout].sort())
     // The rollout edit is what edit-rollout-phrase is asked to make; the rest are stray.
     const rolloutContent = new Map([[rollout, {content: true} as const]])
-    expect(strayChanges(changes, {edits: rolloutContent, createRoots: new Set()})).toBe(6)
-    expect(strayChanges(changes, {edits: rolloutContent, createRoots: new Set([edited.id])})).toBe(5)
-    expect(strayChanges(changes, {edits: new Map(), createRoots: new Set()})).toBe(7)
+    expect(strayChanges(changes, {edits: rolloutContent, creates: new Set()})).toBe(6)
+    expect(strayChanges(changes, {edits: rolloutContent, creates: new Set([changes.created[0].id])})).toBe(5)
+    expect(strayChanges(changes, {edits: new Map(), creates: new Set()})).toBe(7)
 
     expect(await diffAgainst(probe, snapshot, QUIET)).toEqual({created: [], modified: []})
     const restored = new Map((await descendantsOf(probe, await requirePageId(probe, DESIGN_PAGE))).map(row => [row.id, row]))
