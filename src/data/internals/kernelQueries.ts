@@ -58,6 +58,8 @@ import {
 import {
   KERNEL_ALIASES_CHANNEL,
   KERNEL_CONTENT_CHANNEL,
+  KERNEL_FIELD_RECOGNITION_CHANNEL,
+  KERNEL_FIELD_RECOGNITION_KEY,
   TYPED_BLOCKS_LIVE_CHANNEL,
   TYPED_BLOCKS_PROPERTY_CHANNEL,
   TYPED_BLOCKS_REFERENCE_CHANNEL,
@@ -643,7 +645,7 @@ export const subtreeQuery = defineQuery<
     ctx.depend({kind: 'row', id})
     ctx.depend({kind: 'parent-edge', parentId: id})
     const rows = hidePropertyChildren
-      ? await ctx.db.getAll<BlockRow & {depth: number}>(VISIBLE_SUBTREE_SQL, [id, ...registryRecognitionParams(ctx.repo)])
+      ? await ctx.db.getAll<BlockRow & {depth: number}>(VISIBLE_SUBTREE_SQL, [id, ...dependOnRecognitionParams(ctx)])
       : await ctx.db.getAll<BlockRow & {depth: number}>(SUBTREE_SQL, [id])
     const out = ctx.hydrateBlocks(asBlockRows(rows))
     // SUBTREE_SQL already computes depth (0 at the root, +1 per level) and
@@ -782,6 +784,19 @@ export const manyAncestorsQuery = defineQuery<
  *  WeakMap key expresses. */
 const recognitionParamsBySnapshot = new WeakMap<object, RecognitionParams>()
 
+/** {@link registryRecognitionParams} for a query that BINDS them: declares the
+ *  dependency that re-runs it when they change, which no row write announces —
+ *  the registry republishes after the write that moved them. Bind through this,
+ *  never the bare params, or a mounted view keeps the old answer. */
+export const dependOnRecognitionParams = (ctx: QueryCtx): RecognitionParams => {
+  ctx.depend({
+    kind: 'plugin',
+    channel: KERNEL_FIELD_RECOGNITION_CHANNEL,
+    key: KERNEL_FIELD_RECOGNITION_KEY,
+  })
+  return registryRecognitionParams(ctx.repo)
+}
+
 export const registryRecognitionParams = (repo: Repo): RecognitionParams => {
   const registry = repo.propertyDefinitions
   if (!registry) return NO_REGISTRY_RECOGNITION_PARAMS
@@ -816,7 +831,7 @@ export const childrenQuery = defineQuery<
   resolve: async ({id, hidePropertyChildren = false}, ctx) => {
     ctx.depend({kind: 'parent-edge', parentId: id})
     const rows = hidePropertyChildren
-      ? await ctx.db.getAll<BlockRow>(VISIBLE_CHILDREN_SQL, [id, ...registryRecognitionParams(ctx.repo)])
+      ? await ctx.db.getAll<BlockRow>(VISIBLE_CHILDREN_SQL, [id, ...dependOnRecognitionParams(ctx)])
       : await ctx.db.getAll<BlockRow>(CHILDREN_SQL, [id])
     return ctx.hydrateBlocks(asBlockRows(rows))
   },
@@ -842,12 +857,12 @@ export const childIdsQuery = defineQuery<
     ctx.depend({kind: 'parent-edge', parentId: id})
     if (!hydrate) {
       const rows = hidePropertyChildren
-        ? await ctx.db.getAll<{id: string}>(VISIBLE_CHILDREN_IDS_SQL, [id, ...registryRecognitionParams(ctx.repo)])
+        ? await ctx.db.getAll<{id: string}>(VISIBLE_CHILDREN_IDS_SQL, [id, ...dependOnRecognitionParams(ctx)])
         : await ctx.db.getAll<{id: string}>(CHILDREN_IDS_SQL, [id])
       return rows.map(r => r.id)
     }
     const rows = hidePropertyChildren
-      ? await ctx.db.getAll<BlockRow>(VISIBLE_CHILDREN_SQL, [id, ...registryRecognitionParams(ctx.repo)])
+      ? await ctx.db.getAll<BlockRow>(VISIBLE_CHILDREN_SQL, [id, ...dependOnRecognitionParams(ctx)])
       : await ctx.db.getAll<BlockRow>(CHILDREN_SQL, [id])
     // declareRowDeps:false — result is the id list; per-row deps would
     // wake the handle on content/property edits that can't change the

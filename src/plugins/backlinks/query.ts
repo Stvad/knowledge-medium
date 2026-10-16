@@ -12,7 +12,7 @@ import {
   typedBlocksStructureKey,
 } from '@/data/invalidation'
 import { recognizedFieldRowSql, type RecognitionParams } from '@/data/internals/treeQueries'
-import { registryRecognitionParams } from '@/data/internals/kernelQueries'
+import { dependOnRecognitionParams } from '@/data/internals/kernelQueries'
 
 export const BACKLINKS_FOR_BLOCK_QUERY = 'backlinks.forBlock'
 
@@ -272,7 +272,7 @@ export const backlinksForBlockQuery: Query<
     // visible block. km-nc46.
     if (rawSources || ids.length === 0) return ids
     if (!(await workspaceHasPropertyMachinery(ctx.db, workspaceId))) return ids
-    const machinery = await propertyMachinerySourceIds(ctx.db, ids, registryRecognitionParams(ctx.repo))
+    const machinery = await propertyMachinerySourceIds(ctx.db, ids, dependOnRecognitionParams(ctx))
     return machinery.size === 0 ? ids : ids.filter(sourceId => !machinery.has(sourceId))
   },
 })

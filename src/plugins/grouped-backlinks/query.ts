@@ -23,7 +23,7 @@ import {
   typedBlocksStructureKey,
 } from '@/data/invalidation'
 import { typesProp } from '@/data/properties.js'
-import { registryRecognitionParams } from '@/data/internals/kernelQueries'
+import { dependOnRecognitionParams } from '@/data/internals/kernelQueries'
 import {
   buildGroupedBacklinks,
   type GroupedBacklinkCandidate,
@@ -143,7 +143,7 @@ const resolveBacklinkSourceIds = async (
   // undeclared-ancestry-dependency residual too (km-nc46).
   if (ids.length === 0) return ids
   if (!(await workspaceHasPropertyMachinery(ctx.db, workspaceId))) return ids
-  const machinery = await propertyMachinerySourceIds(ctx.db, ids, registryRecognitionParams(ctx.repo))
+  const machinery = await propertyMachinerySourceIds(ctx.db, ids, dependOnRecognitionParams(ctx))
   return machinery.size === 0 ? ids : ids.filter(sourceId => !machinery.has(sourceId))
 }
 

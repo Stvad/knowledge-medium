@@ -201,6 +201,31 @@ export const effectivePropertyDefinitionName = (
   return declared?.name ?? row.name
 }
 
+const sameKeys = (
+  a: ReadonlyMap<string, unknown> | ReadonlySet<string>,
+  b: ReadonlyMap<string, unknown> | ReadonlySet<string>,
+): boolean => {
+  if (a.size !== b.size) return false
+  for (const key of a.keys()) if (!b.has(key)) return false
+  return true
+}
+
+/** Do two snapshots recognize the same field ids as definitions (§9
+ *  condition 3)? The inputs to both views' answer: the parsed definitions, the
+ *  unparseable blocks, the seed slots, and the workspace they belong to. A
+ *  rename or a re-type changes none of them. */
+export const sameFieldRecognition = (
+  a: PropertyDefinitionRegistrySnapshot | null,
+  b: PropertyDefinitionRegistrySnapshot | null,
+): boolean => {
+  if (a === b) return true
+  if (a === null || b === null) return false
+  return a.workspaceId === b.workspaceId
+    && sameKeys(a.definitionsByFieldId, b.definitionsByFieldId)
+    && sameKeys(a.unparseableDefinitionIds, b.unparseableDefinitionIds)
+    && sameKeys(a.seedsByKey, b.seedsByKey)
+}
+
 /** Build one immutable-by-replacement workspace snapshot. Source precedence is
  * explicit during the cutover: block-built behavior replaces transitional
  * direct registrations, then a unique local declaration replaces its block

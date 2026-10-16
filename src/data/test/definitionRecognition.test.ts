@@ -91,3 +91,30 @@ describe('a property-schema block whose metadata does not parse', () => {
     expect(await views(repo)).toEqual({sql: [NOTE, FIELD], tx: [NOTE, FIELD]})
   })
 })
+
+describe('a mounted outline view follows the registry', () => {
+  // The registry moves AFTER the write that moved it, and none of these writes
+  // touches the owner's parent edge, so only the recognition channel can
+  // re-run a handle already holding the old answer.
+  const untyped = {'property-schema:name': 'status', 'property-schema:preset': 'string'}
+  it.each([
+    {why: 'a definition stops parsing', from: definitionBag({}),
+      to: definitionBag({'property-schema:change-scope': 'not-a-change-scope'}), before: [NOTE], after: [NOTE, FIELD]},
+    {why: 'a tagged block starts parsing', from: definitionBag({'property-schema:name': ''}),
+      to: definitionBag({}), before: [NOTE, FIELD], after: [NOTE]},
+    {why: 'a block gains the property-schema type', from: untyped,
+      to: definitionBag({}), before: [NOTE, FIELD], after: [NOTE]},
+  ])('re-resolves when $why', async ({from, to, before, after}) => {
+    const repo = await openRepo()
+    await seed(repo, from)
+    const handle = repo.query.childIds({id: OWNER, hidePropertyChildren: true})
+    const unsubscribe = handle.subscribe(() => {})
+    try {
+      await vi.waitFor(() => expect(handle.peek()).toEqual(before))
+      await repo.tx(tx => tx.update(DEF, {properties: to}), {scope: ChangeScope.BlockDefault})
+      await vi.waitFor(() => expect(handle.peek()).toEqual(after))
+    } finally {
+      unsubscribe()
+    }
+  })
+})
