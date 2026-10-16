@@ -318,6 +318,22 @@ describe('view-outline', () => {
     expect(rowA).toMatchObject({childCount: 2, hiddenChildren: 0})
   })
 
+  it('never reports the root with fewer children than it shows when sync removes one', async () => {
+    await create({id: ROOT, content: 'Root'})
+    const doomed = uuid('0000e300', 1)
+    await create({id: doomed, parentId: ROOT, content: 'deleted after the page was read'})
+    let removed = false
+    const out = await duringReads({
+      after: async sql => {
+        if (removed || !sql.includes('AS child_count')) return
+        removed = true
+        await sharedDb.db.execute('UPDATE blocks SET deleted = 1 WHERE id = ?', [doomed])
+      },
+    }, () => view<OutlineView>({type: 'view-outline', ref: ROOT, depth: 1, format: 'json'}))
+    expect(out.rows).toHaveLength(1)
+    expect(out.root.childCount).toBe(1)
+  })
+
   it('lists children of the viewed workspace even if sync moves the root mid-view', async () => {
     await create({id: ROOT, content: 'Root'})
     const child = uuid('0000e100', 1)
@@ -599,7 +615,7 @@ describe('structural edge cases', () => {
     await create({id: holder, content: 'holder', properties: {groupWith: targets}})
     const getAll = vi.spyOn(repo.db, 'getAll')
     const out = await view<BlockView>({type: 'view-block', ref: holder, format: 'json'})
-    const titleQuery = getAll.mock.calls.find(call => call[0].includes("'$.alias[0]'"))
+    const titleQuery = getAll.mock.calls.find(call => /, 400\) AS content/.test(call[0]))
     getAll.mockRestore()
     expect(JSON.parse(titleQuery![1]![0] as string)).toHaveLength(20)
     const value = out.properties.find(property => property.name === 'groupWith')!.value
@@ -1084,6 +1100,30 @@ describe('view-backlinks', () => {
     expect(out.rows[0].firstChildContent).toMatch(/^Big child c+…$/)
     expect(out.rows[0].parentContent!.length).toBeLessThanOrEqual(160)
     expect(wholeRowReads).toEqual([])
+  })
+
+  it('takes no group from another workspace when sync moves sources before the grouping walk', async () => {
+    await create({id: TARGET, content: 'Target', properties: {alias: ['Target']}})
+    const movers = [uuid('5200000a', 1), uuid('5200000b', 2)]
+    for (const id of movers) {
+      await create({id, content: `mention of [[Target]] ${id.slice(0, 8)}`, references: [{id: TARGET, alias: 'Target'}]})
+    }
+    const foreignRoot = uuid('5200000c', 3)
+    await repo.tx(async tx => {
+      await tx.create({id: foreignRoot, workspaceId: 'ws-2', parentId: null, orderKey: 'a0', content: 'Foreign root', references: []})
+    }, {scope: ChangeScope.BlockDefault})
+    let fired = false
+    const out = await duringReads({
+      before: async sql => {
+        if (fired || !sql.includes('ancestor_chain(source_id')) return
+        fired = true
+        for (const id of movers) {
+          await sharedDb.db.execute('UPDATE blocks SET workspace_id = ?, parent_id = ? WHERE id = ?', ['ws-2', foreignRoot, id])
+        }
+      },
+    }, () => view<GroupedBacklinksView>({type: 'view-grouped-backlinks', ref: TARGET, format: 'json'}))
+    expect(fired).toBe(true)
+    expect(out.groups.map(group => group.label)).not.toContain('Foreign root')
   })
 
   it('drops a source that leaves the workspace between being listed and being read', async () => {

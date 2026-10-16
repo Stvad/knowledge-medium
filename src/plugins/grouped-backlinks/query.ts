@@ -260,8 +260,10 @@ export const SELECT_GROUPED_BACKLINK_CANDIDATES_SQL = `
   JOIN blocks group_block ON group_block.id = cr.context_id
   WHERE group_block.deleted = 0
     -- A sync-applied edge (a parent or a reference) can reach another
-    -- workspace's block; it is not a group of this one.
-    AND group_block.workspace_id = (SELECT workspace_id FROM blocks WHERE id = cr.source_id)
+    -- workspace's block; it is not a group of this one. The requested
+    -- workspace is bound, not read off the source: sync rewrites a row's
+    -- workspace_id in place, so the source may have moved since it was listed.
+    AND group_block.workspace_id = ?
   ORDER BY cr.source_id, coalesce(group_block.user_updated_at, group_block.updated_at) DESC, group_block.id
 `
 
@@ -416,7 +418,7 @@ export const groupedBacklinksForBlockQuery = defineQuery<
 
     const candidateRows = await ctx.db.getAll<CandidateRow>(
       SELECT_GROUPED_BACKLINK_CANDIDATES_SQL,
-      [sourceIdsJson, workspaceId, id],
+      [sourceIdsJson, workspaceId, id, workspaceId],
     )
     const fieldCandidateRows = await ctx.db.getAll<FieldCandidateRow>(
       SELECT_GROUPED_BACKLINK_FIELD_CANDIDATES_SQL,

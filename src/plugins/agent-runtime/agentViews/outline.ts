@@ -118,8 +118,11 @@ export const buildOutlineView = async (
     loadCrumbs(repo, [root.id], workspaceId),
   ])
   // Counted after the page, so a child sync adds while it is read leaves a
-  // continuation; a count taken first could end a full page with none.
-  const rootChildCount = (await visibleChildCounts(repo, [root.id], workspaceId)).get(root.id) ?? 0
+  // continuation; a count taken first could end a full page with none. The
+  // children already shown are its floor, as for every row below.
+  const rootChildren = [...nodes.values()].filter(node => node.depth === 1).map(node => node.block.id)
+  const counted = (await visibleChildCounts(repo, [root.id], workspaceId)).get(root.id) ?? 0
+  const rootChildCount = Math.max(counted, offset + rootChildren.length)
 
   const blocks = [root, ...[...nodes.values()].map(node => node.block)]
   const [renderer, shortIds] = await Promise.all([
@@ -146,7 +149,6 @@ export const buildOutlineView = async (
       visit(id, node.children)
     }
   }
-  const rootChildren = [...nodes.values()].filter(node => node.depth === 1).map(node => node.block.id)
   visit(root.id, rootChildren)
 
   const shownEnd = offset + rootChildren.length

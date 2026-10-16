@@ -5,7 +5,7 @@ import { recognizedFieldRowSql } from '@/data/internals/treeQueries.js'
 import { registryRecognitionParams } from '@/data/internals/kernelQueries.js'
 import { aliasesProp } from '@/data/properties.js'
 import { crumbsFromAncestors, type CrumbAncestor } from '@/utils/blockCrumbs.js'
-import { textHeadSql } from './text.ts'
+import { firstAliasSql, textHeadSql } from './text.ts'
 import { propertyNameResolverFor } from '@/utils/propertyValueContext.js'
 
 /** Cost rule for every view: a block the view SHOWS is read whole, as the app
@@ -58,10 +58,7 @@ const CRUMB_ROWS_SQL = `
   SELECT b.id AS id, b.parent_id AS parent_id, b.workspace_id AS workspace_id,
          b.is_field_form AS is_field_form, b.reference_target_id AS reference_target_id,
          ${textHeadSql('b.content', CRUMB_SOURCE_CHARS)} AS content,
-         CASE WHEN json_type(b.properties_json, '$.alias') = 'array' THEN (
-           SELECT substr(a.value, 1, ${CRUMB_SOURCE_CHARS}) FROM json_each(b.properties_json, '$.alias') a
-            WHERE a.type = 'text' AND trim(a.value) != '' LIMIT 1
-         ) END AS alias
+         ${firstAliasSql('b.properties_json', CRUMB_SOURCE_CHARS)} AS alias
     FROM json_each(?) j JOIN blocks b ON b.id = j.value
    WHERE b.deleted = 0
 `

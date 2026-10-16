@@ -4,7 +4,7 @@ import { decodeRefId, decodeRefListIds, isRefCodec, isRefListCodec, memberCodecO
 import { aliasesProp, typesProp } from '@/data/properties.js'
 import { isPropertyPanelHiddenProperty } from '@/components/propertyPanel/visibility.js'
 import { boundDisplayId, displayIds } from './displayIds.ts'
-import { boundLabels, charBoundary, clipLine, ellipsize, formatCount, oneLine, textHeadSql } from './text.ts'
+import { boundLabels, charBoundary, clipLine, ellipsize, firstAliasSql, formatCount, oneLine, textHeadSql } from './text.ts'
 
 export interface PropertyLine {
   name: string
@@ -171,7 +171,7 @@ export interface PropertyRenderer {
  *  a bounded head of the content, never a whole (possibly huge) row. */
 const TITLE_ROWS_SQL = `
   SELECT b.id AS id, b.workspace_id AS workspace_id,
-         substr(json_extract(b.properties_json, '$.alias[0]'), 1, 400) AS alias,
+         ${firstAliasSql('b.properties_json', 400)} AS alias,
          ${textHeadSql('b.content', 400)} AS content
     FROM json_each(?) j JOIN blocks b ON b.id = j.value
    WHERE b.deleted = 0

@@ -31,6 +31,16 @@ export const charBoundary = (text: string, at: number): number =>
 export const textHeadSql = (column: string, chars: number): string =>
   `substr(ltrim(${column}, ' ' || char(9, 10, 13)), 1, ${chars})`
 
+/** SQL for a block's first alias that says something (the one
+ *  `labelForBlockData` picks), cut to `chars`; null when it has none. For live
+ *  rows only: no `json_valid` guard, since the alias-index triggers parse a
+ *  live row's bag on every write, so `blocks` holds no malformed one. */
+export const firstAliasSql = (propertiesColumn: string, chars: number): string => `
+  CASE WHEN json_type(${propertiesColumn}, '$.alias') = 'array' THEN (
+    SELECT substr(a.value, 1, ${chars}) FROM json_each(${propertiesColumn}, '$.alias') a
+     WHERE a.type = 'text' AND trim(a.value) != '' LIMIT 1
+  ) END`
+
 /** Cut to at most `max` characters, ending in `…` when cut: for a label or an
  *  id inside a line, where a char-count marker would crowd out the rest. */
 export const ellipsize = (text: string, max: number): string =>
