@@ -1,1 +1,1 @@
-import{DC as e,EC as t,OC as n}from"../../chunks/app-DWw2EQ3a.js";export{t as DEFAULT_TYPE_COLORS,e as defaultTypeColor,n as pickLeastUsedTypeColor};
+import{DC as e,EC as t,OC as n}from"../../chunks/app-DpUv1pr2.js";export{t as DEFAULT_TYPE_COLORS,e as defaultTypeColor,n as pickLeastUsedTypeColor};

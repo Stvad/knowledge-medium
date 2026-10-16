@@ -1,1 +1,1 @@
-import{Gu as e,Wu as t}from"../../../../chunks/app-DWw2EQ3a.js";export{t as toggleBacklinkExpansion,e as useBacklinkExpansion};
+import{Gu as e,Wu as t}from"../../../../chunks/app-DpUv1pr2.js";export{t as toggleBacklinkExpansion,e as useBacklinkExpansion};
