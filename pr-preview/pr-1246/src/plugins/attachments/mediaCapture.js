@@ -1,1 +1,1 @@
-import{ap as e,ip as t,rp as n}from"../../../chunks/app-CHvH-tXM.js";export{n as DEFAULT_MAX_CAPTURE_BYTES,t as captureMedia,e as mediaBlockId};
+import{ap as e,ip as t,rp as n}from"../../../chunks/app-DrdA5Anv.js";export{n as DEFAULT_MAX_CAPTURE_BYTES,t as captureMedia,e as mediaBlockId};

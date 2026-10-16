@@ -1,1 +1,1 @@
-import{FT as e}from"../../chunks/app-CHvH-tXM.js";export{e as dynamicExtensionsExtension};
+import{FT as e}from"../../chunks/app-DrdA5Anv.js";export{e as dynamicExtensionsExtension};
