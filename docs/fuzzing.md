@@ -796,6 +796,10 @@ pinned test:
   empty `<b>`, an unwrapped link): the serializer escapes each text node
   on its own, so `1` and `. Install` read back as a list item, its number
   no longer text. Touching text is joined, as touching code spans were.
+- A code span holding `]:` inside a link: `` [`a]: b`](url) `` reads
+  back as a link definition, because a label ends at its first `]`, code
+  or not, so the block showed nothing. Such a code span is written as
+  link text, which the serializer can escape.
 - A backslash before a letter beside emphasis that opens or closes on
   punctuation (`\A<i>!</i>`): the serializer writes that letter as a
   character reference after escaping the text, so the backslash escaped

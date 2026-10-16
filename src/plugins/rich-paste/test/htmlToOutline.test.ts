@@ -268,6 +268,11 @@ describe('convertClipboardHtml: content', () => {
       .toEqual(['# T', '  1\\. Install', '  2\\) Run'])
   })
 
+  it('keeps a link whose code would read back as a link definition, as plain link text', () => {
+    // As code, `` [`a]: b`](…) `` defines the label `` `a ``, and the block shows nothing.
+    expect(convert('<a href="https://e.com/"><code>a]: b</code></a>')).toEqual({kind: 'inline', markdown: '[a\\]: b](https://e.com/)'})
+  })
+
   it('drops empty code spans and joins touching ones, which markdown cannot spell', () => {
     expect(outline(
       '<h1>T</h1><p><code></code>x</p><p><code></code><code></code><img src="https://e.com/i.png" alt="i"></p>',

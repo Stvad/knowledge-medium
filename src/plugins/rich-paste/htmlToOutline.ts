@@ -314,6 +314,12 @@ const sanitize = (node: Parents, markupAround: ReadonlySet<Nodes['type']> = new 
       if (absoluteHref(child.url, IMAGE_PROTOCOLS) === undefined) return []
       child.title = null
     }
+    // Read back, a link's text ends at its first `]` when it could be a
+    // definition's label (`` [`a]: b`](…) `` defines `` `a ``), and code
+    // can't escape one.
+    if (child.type === 'inlineCode' && around.has('link') && child.value.includes(']:')) {
+      return [{type: 'text', value: child.value}]
+    }
     if ('children' in child) sanitize(child, around)
     if (!isInlineMarkup(child)) return [child]
     // Markup inside the same markup adds nothing, and nested strikes (`~~~~`)
