@@ -1,1 +1,1 @@
-import{ov as e,sv as t}from"../../../chunks/app-Dk-adeah.js";export{e as isLeftSidebarSectionContribution,t as leftSidebarSectionsFacet};
+import{ov as e,sv as t}from"../../../chunks/app-CxlMCmSC.js";export{e as isLeftSidebarSectionContribution,t as leftSidebarSectionsFacet};

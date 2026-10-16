@@ -1,1 +1,1 @@
-import{aT as e,oT as t}from"../../../chunks/app-Dk-adeah.js";export{e as extensionPromptDiagnosticContribution,t as extensionPromptDiagnosticSource};
+import{aT as e,oT as t}from"../../../chunks/app-CxlMCmSC.js";export{e as extensionPromptDiagnosticContribution,t as extensionPromptDiagnosticSource};

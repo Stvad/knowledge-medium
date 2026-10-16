@@ -1,1 +1,1 @@
-import{vd as e}from"../../../../chunks/app-Dk-adeah.js";export{e as inlineBacklinkCountsExtension};
+import{vd as e}from"../../../../chunks/app-CxlMCmSC.js";export{e as inlineBacklinkCountsExtension};

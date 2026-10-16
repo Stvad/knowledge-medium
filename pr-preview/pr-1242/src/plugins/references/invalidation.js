@@ -1,1 +1,1 @@
-import{MI as e,jI as t}from"../../../chunks/app-Dk-adeah.js";export{t as REFERENCES_TARGET_INVALIDATION_CHANNEL,e as referencesInvalidationRule};
+import{MI as e,jI as t}from"../../../chunks/app-CxlMCmSC.js";export{t as REFERENCES_TARGET_INVALIDATION_CHANNEL,e as referencesInvalidationRule};

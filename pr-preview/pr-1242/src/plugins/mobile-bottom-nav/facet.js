@@ -1,1 +1,1 @@
-import{T_ as e}from"../../../chunks/app-Dk-adeah.js";export{e as mobileBottomNavItemsFacet};
+import{T_ as e}from"../../../chunks/app-CxlMCmSC.js";export{e as mobileBottomNavItemsFacet};

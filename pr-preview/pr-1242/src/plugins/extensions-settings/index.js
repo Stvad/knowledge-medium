@@ -1,1 +1,1 @@
-import{dT as e,gt as t,uT as n}from"../../../chunks/app-Dk-adeah.js";export{n as extensionsOverridesProp,e as extensionsPrefsType,t as extensionsSettingsPlugin};
+import{dT as e,gt as t,uT as n}from"../../../chunks/app-CxlMCmSC.js";export{n as extensionsOverridesProp,e as extensionsPrefsType,t as extensionsSettingsPlugin};

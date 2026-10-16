@@ -1,1 +1,1 @@
-import{cE as e,lE as t}from"../../chunks/app-Dk-adeah.js";export{e as ClientLocalSettings,t as clientLocalSettings};
+import{cE as e,lE as t}from"../../chunks/app-CxlMCmSC.js";export{e as ClientLocalSettings,t as clientLocalSettings};

@@ -1,1 +1,1 @@
-import{HA as e,UA as t}from"../../chunks/app-Dk-adeah.js";export{e as isFocalRender,t as useIsFocalRender};
+import{HA as e,UA as t}from"../../chunks/app-CxlMCmSC.js";export{e as isFocalRender,t as useIsFocalRender};

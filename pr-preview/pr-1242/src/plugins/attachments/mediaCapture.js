@@ -1,1 +1,1 @@
-import{Fp as e,Ip as t,Pp as n}from"../../../chunks/app-Dk-adeah.js";export{n as DEFAULT_MAX_CAPTURE_BYTES,e as captureMedia,t as mediaBlockId};
+import{Fp as e,Ip as t,Pp as n}from"../../../chunks/app-CxlMCmSC.js";export{n as DEFAULT_MAX_CAPTURE_BYTES,e as captureMedia,t as mediaBlockId};

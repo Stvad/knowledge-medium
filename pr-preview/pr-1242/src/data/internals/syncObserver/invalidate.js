@@ -1,1 +1,1 @@
-import{UG as e}from"../../../../chunks/app-Dk-adeah.js";export{e as applySyncInvalidation};
+import{UG as e}from"../../../../chunks/app-CxlMCmSC.js";export{e as applySyncInvalidation};

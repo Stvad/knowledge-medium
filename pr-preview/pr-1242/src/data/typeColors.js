@@ -1,1 +1,1 @@
-import{aw as e,iw as t,rw as n}from"../../chunks/app-Dk-adeah.js";export{n as DEFAULT_TYPE_COLORS,t as defaultTypeColor,e as pickLeastUsedTypeColor};
+import{aw as e,iw as t,rw as n}from"../../chunks/app-CxlMCmSC.js";export{n as DEFAULT_TYPE_COLORS,t as defaultTypeColor,e as pickLeastUsedTypeColor};

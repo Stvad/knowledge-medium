@@ -1,1 +1,1 @@
-import{Fw as e,Iw as t}from"../../chunks/app-Dk-adeah.js";export{e as resolveStructuralEditPolicy,t as structuralEditPolicyForBlock};
+import{Fw as e,Iw as t}from"../../chunks/app-CxlMCmSC.js";export{e as resolveStructuralEditPolicy,t as structuralEditPolicyForBlock};

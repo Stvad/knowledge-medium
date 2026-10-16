@@ -1,1 +1,1 @@
-import{Ak as e}from"../../chunks/app-Dk-adeah.js";export{e as useShortcutSurfaceActivations};
+import{Ak as e}from"../../chunks/app-CxlMCmSC.js";export{e as useShortcutSurfaceActivations};

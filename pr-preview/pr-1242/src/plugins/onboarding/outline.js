@@ -1,1 +1,1 @@
-import{Gh as e,Jh as t,Kh as n,Wh as r,qh as i}from"../../../chunks/app-Dk-adeah.js";export{r as EXTENSIONS_PAGE_TITLE,e as TUTORIAL_DEFAULT_TITLE,n as TUTORIAL_VIM_TITLE,i as extensionsPageOutline,t as tutorialOutline};
+import{Gh as e,Jh as t,Kh as n,Wh as r,qh as i}from"../../../chunks/app-CxlMCmSC.js";export{r as EXTENSIONS_PAGE_TITLE,e as TUTORIAL_DEFAULT_TITLE,n as TUTORIAL_VIM_TITLE,i as extensionsPageOutline,t as tutorialOutline};

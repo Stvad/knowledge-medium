@@ -1,1 +1,1 @@
-import{lv as e}from"../../../chunks/app-Dk-adeah.js";export{e as WorkspaceSwitcher};
+import{lv as e}from"../../../chunks/app-CxlMCmSC.js";export{e as WorkspaceSwitcher};

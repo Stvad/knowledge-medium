@@ -1,1 +1,1 @@
-import{AI as e}from"../../../chunks/app-Dk-adeah.js";export{e as referencesDataExtension};
+import{AI as e}from"../../../chunks/app-CxlMCmSC.js";export{e as referencesDataExtension};
