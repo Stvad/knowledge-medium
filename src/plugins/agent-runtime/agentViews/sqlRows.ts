@@ -7,9 +7,19 @@ export const SQL_CELL_CHARS = 2000
 
 export interface BoundedSqlRows {
   rows: unknown[]
-  totalRows: number
+  /** More rows matched than `rows` holds. */
   truncated: boolean
   truncatedCells: number
+}
+
+/** A single SELECT/WITH statement wrapped so SQLite stops after
+ *  `maxRows + 1` rows — the extra row is how `truncated` is known — or null
+ *  for any other statement, which is then bounded only after it runs. The
+ *  newlines keep a trailing `--` comment from swallowing the closing paren. */
+export const limitedSelectSql = (sql: string, maxRows: number): string | null => {
+  const body = sql.trim().replace(/;\s*$/, '')
+  if (!/^(select|with)\b/i.test(body) || body.includes(';')) return null
+  return `SELECT * FROM (\n${body}\n) LIMIT ${maxRows + 1}`
 }
 
 /** The agent-bounded form of an `all` result: at most `maxRows` rows, long
@@ -25,5 +35,5 @@ export const boundSqlRows = (rows: readonly unknown[], maxRows: number): Bounded
     row !== null && typeof row === 'object' && !Array.isArray(row)
       ? Object.fromEntries(Object.entries(row).map(([key, value]) => [key, cutCell(value)]))
       : cutCell(row))
-  return {rows: shown, totalRows: rows.length, truncated: rows.length > maxRows, truncatedCells}
+  return {rows: shown, truncated: rows.length > maxRows, truncatedCells}
 }

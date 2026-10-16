@@ -896,6 +896,15 @@ describe('searchBlocksAcrossSources (searchSourcesFacet merge point)', () => {
     expect(filtered.map(block => block.id)).toEqual(['tagged'])
     expect(unfiltering).not.toHaveBeenCalled()
 
+    // A run that skipped a source would read, to a health consumer, as that
+    // source having left — so it reports nothing.
+    const reports: SearchSourceHealthReport[] = []
+    env.repo.setRuntimeContributions(searchSourceHealthFacet, 'test:reporter', [
+      {id: 'test.reporter', report: (r) => { reports.push(r) }},
+    ])
+    await searchBlocksAcrossSources(env.repo, {workspaceId: WS, query: 'sync', limit: 1, filter: {types: ['todo']}})
+    expect(reports).toHaveLength(0)
+
     // An empty filter is no filter: every source takes part.
     await searchBlocksAcrossSources(env.repo, {workspaceId: WS, query: 'sync', limit: 10, filter: {}})
     expect(unfiltering).toHaveBeenCalledTimes(1)

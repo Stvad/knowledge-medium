@@ -4,7 +4,7 @@
 // against a real Repo. Same minimal runtime as dataCommands.test.ts: kernel +
 // the backlinks / grouped-backlinks data extensions, with references written
 // by hand (the trigger-maintained indexes project them on insert).
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope, type BlockReference } from '@/data/api'
 import type { BlockProperties } from '@/types.js'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -111,6 +111,16 @@ describe('resolveBlockRef', () => {
 
   it('a too-short prefix is not treated as one', async () => {
     await expect(resolveBlockRef(repo, 'a1b2', {workspaceId: WS})).rejects.toThrow(/No block matches/)
+  })
+
+  it('keeps user text in its errors on one line, without bidi controls', async () => {
+    await create({id: uuid('a1b2c3d4', 4), content: 'Twin\n\u202Eforged'})
+    const ambiguous = await resolveBlockRef(repo, 'a1b2c3d4', {workspaceId: WS}).then(() => '', (error: Error) => error.message)
+    expect(ambiguous).toContain('Twin ⏎ forged')
+    expect(ambiguous).not.toMatch(/\p{Bidi_Control}/u)
+    await create({id: uuid('a1b2c3d5', 5), content: 'x', properties: {alias: ['Project\nAlpha two']}})
+    const missing = await resolveBlockRef(repo, 'Project', {workspaceId: WS}).then(() => '', (error: Error) => error.message)
+    expect(missing).toContain('  Project ⏎ Alpha two')
   })
 
   it('suggests similar page names when nothing matches', async () => {
@@ -223,6 +233,14 @@ describe('view-outline', () => {
     expect(text).toContain('get_block on that id reads the rest')
   })
 
+  it("refuses a block in another workspace: it would decode with this workspace's registries", async () => {
+    const foreign = uuid('0f0f0f0f', 1)
+    await repo.tx(async tx => {
+      await tx.create({id: foreign, workspaceId: 'ws-2', parentId: null, orderKey: 'a0', content: 'elsewhere', references: []})
+    }, {scope: ChangeScope.BlockDefault})
+    await expect(view({type: 'view-block', ref: foreign})).rejects.toThrow(/not the active one.*--raw/s)
+  })
+
   it('says a dated daily note that does not exist yet has not been created', async () => {
     await expect(view({type: 'view-outline', ref: '2026-06-18'})).rejects.toThrow(/has not been created yet/)
   })
@@ -243,6 +261,14 @@ describe('view-block', () => {
     const rest = await view<BlockView>({type: 'view-block', ref: 'Long', contentOffset: 90, format: 'json'})
     expect(rest.content).toBe('abcdefghij')
     expect(rest.nextContentOffset).toBeNull()
+
+    const emoji = uuid('0000b10e', 3)
+    await create({id: emoji, content: 'ab\u{1F600}cd'})
+    const page = (contentOffset: number, maxChars: number) =>
+      view<BlockView>({type: 'view-block', ref: emoji, contentOffset, maxChars, format: 'json'})
+    // A boundary inside the pair moves back; a page too short for the pair takes both halves.
+    expect(await page(0, 3)).toMatchObject({content: 'ab', nextContentOffset: 2})
+    expect(await page(2, 1)).toMatchObject({content: '\u{1F600}', nextContentOffset: 4})
 
     const text = await view<string>({type: 'view-block', ref: id, maxChars: 30})
     expect(text).toContain('…[+70 chars — continue with contentOffset=30]')
@@ -341,6 +367,20 @@ describe('view-search', () => {
     expect(firstPage.nextOffset).toBe(1)
   })
 
+  it('grows its window past a run of identical blocks, so a distinct hit below them stays reachable', async () => {
+    await repo.tx(async tx => {
+      for (let i = 0; i < 110; i++) {
+        await tx.create({id: uuid('bbbb0000', i), workspaceId: WS, parentId: null, orderKey: `b${i}`, content: 'banana split', references: []})
+      }
+    }, {scope: ChangeScope.BlockDefault})
+    await create({id: uuid('bbbbffff', 1), content: 'we also like banana'})
+
+    const out = await view<SearchView>({type: 'view-search', query: 'banana', format: 'json'})
+    expect(out.hits.map(hit => hit.snippet)).toEqual(['banana split', 'we also like banana'])
+    expect(out.hits[0].duplicateIds).toHaveLength(109)
+    expect(out.nextOffset).toBeNull()
+  }, 20_000)
+
   it('excludes extension source unless asked, and filters by type and ancestry inside the query', async () => {
     const project = uuid('dddd0000', 1)
     await create({id: project, content: 'Project'})
@@ -371,16 +411,19 @@ describe('raw commands accept the same refs', () => {
 })
 
 describe('sql maxRows', () => {
-  it('caps rows and cuts long cells, saying so', async () => {
+  it('caps rows inside the statement and cuts long cells, saying so', async () => {
     for (let i = 0; i < 3; i++) await create({id: uuid(`f000000${i}`, i), content: 'y'.repeat(2500)})
+    const getAll = vi.spyOn(repo.db, 'getAll')
     const out = await executeCommand({
       commandId: 's',
       type: 'sql',
       mode: 'all',
-      sql: 'SELECT content FROM blocks ORDER BY id',
+      sql: 'SELECT content FROM blocks ORDER BY id;',
       maxRows: 2,
-    }, context) as {rows: Array<{content: string}>, totalRows: number, truncated: boolean, truncatedCells: number}
-    expect(out.totalRows).toBe(3)
+    }, context) as {rows: Array<{content: string}>, truncated: boolean, truncatedCells: number}
+    // SQLite stops after maxRows + 1 rows instead of materializing every match.
+    expect(getAll.mock.calls.at(-1)?.[0]).toMatch(/\) LIMIT 3$/)
+    getAll.mockRestore()
     expect(out.truncated).toBe(true)
     expect(out.rows).toHaveLength(2)
     expect(out.truncatedCells).toBe(2)

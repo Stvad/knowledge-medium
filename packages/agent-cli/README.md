@@ -75,7 +75,7 @@ The CLI exposes both *local* commands (pairing, profile management) and *bridge*
 | `kmagent types [outDir]` | Write compiled declarations for Knowledge Medium `@/` modules; `--module <spec>` prints one declaration. |
 | `kmagent raw <json>` | Send an arbitrary JSON command envelope to the bridge. |
 
-The read verbs above take a block `<ref>`: a full id, a unique id prefix as printed (`^3f2a9c1d`), a page name, or a date (`today`, `yesterday`, `2026-06-18`) for that day's daily note. Their output is bounded text by default (truncation is marked, and a cut-off list says where to continue). `--json` prints the same bounded view as structured JSON; `--raw` sends the stored, unbounded command instead (`get-block`, `subtree`, `backlinks`, `grouped-backlinks`, `search`) and prints its JSON. `--workspace <id>` selects a workspace on any of them.
+The read verbs above take a block `<ref>`: a full id, a unique id prefix as printed (`^3f2a9c1d`), a page name, or a date (`today`, `yesterday`, `2026-06-18`) for that day's daily note. Their output is bounded text by default (truncation is marked, and a cut-off list says where to continue). `--json` prints the same bounded view as structured JSON; `--raw` sends the stored, unbounded command instead (`get-block`, `subtree`, `backlinks`, `grouped-backlinks`, `search`) and prints its JSON. They read the app's active workspace (`page` and `daily-note` also take `--workspace <id>`).
 
 Run `kmagent <command> --help` for per-command details or `kmagent --help` for the full menu.
 

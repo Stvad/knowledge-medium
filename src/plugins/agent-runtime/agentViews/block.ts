@@ -4,7 +4,7 @@ import { backlinkCount, loadCrumbs, visibleChildCounts } from './context.ts'
 import { createPropertyRenderer, type PropertyLine } from './properties.ts'
 import { shortIds as loadShortIds } from './resolveRef.ts'
 import { crumbLine, joinDisplayLines, loadRoot, plural } from './shared.ts'
-import { formatCount } from './text.ts'
+import { charBoundary, formatCount } from './text.ts'
 
 export interface BlockViewParams {
   ref: string
@@ -42,8 +42,10 @@ export const buildBlockView = async (
 ): Promise<BlockView> => {
   const {root: block} = await loadRoot(repo, params.ref, workspaceId, async id => await repo.load(id) ?? undefined)
   const maxChars = Math.min(params.maxChars ?? AGENT_VIEW_DEFAULTS.blockMaxChars, MAX_CHARS)
-  const contentOffset = Math.min(params.contentOffset ?? 0, block.content.length)
-  const end = Math.min(block.content.length, contentOffset + maxChars)
+  const contentOffset = charBoundary(block.content, Math.min(params.contentOffset ?? 0, block.content.length))
+  // A page always advances: a one-char page that would split a pair takes both halves.
+  const boundary = charBoundary(block.content, Math.min(block.content.length, contentOffset + maxChars))
+  const end = boundary > contentOffset ? boundary : Math.min(block.content.length, contentOffset + 2)
 
   const [renderer, shortIds, crumbs, childCounts, backlinks] = await Promise.all([
     createPropertyRenderer(repo, [block]),

@@ -123,9 +123,10 @@ export const sqlCommandSchema = z.looseObject({
    *  (or false) keeps the guard on; true is a deliberate, one-call opt-out
    *  (the CLI's `--allow-synced-write`). */
   allowSyncedWrite: z.boolean().optional(),
-  /** Bound an `all` read for an agent: return `{rows, totalRows, truncated,
-   *  truncatedCells}` with at most this many rows and every string cell cut
-   *  to a fixed length (marked). Unset returns the bare row array. */
+  /** Bound an `all` read for an agent: return `{rows, truncated,
+   *  truncatedCells}` with at most this many rows (a SELECT stops at the
+   *  bound) and every string cell cut to a fixed length (marked). Unset
+   *  returns the bare row array. */
   maxRows: z.number().int().positive().optional(),
   ...commandIdField,
 })
@@ -410,11 +411,13 @@ const viewRefField = z.string().describe(
   + '(or [[Page name]]), or a date for its daily note (today, yesterday, 2026-06-18).',
 )
 
+// No `workspaceId`: a view decodes values with the app's ACTIVE-workspace
+// property and type registries, so it reads the active workspace only (the
+// raw commands still take one).
 const viewFields = {
   format: z.enum(['text', 'json']).optional().describe(
     'text (default): compact markdown-ish rendering. json: the same bounded view, structured.',
   ),
-  workspaceId: z.string().optional().describe('Workspace id (defaults to the active workspace)'),
 }
 
 const viewLimitField = (what: string, defaultValue: number) =>
@@ -447,7 +450,7 @@ export const viewOutlineCommandSchema = z.looseObject({
   depth: z.number().int().positive().optional().describe(
     `Levels below the root to expand (default ${AGENT_VIEW_DEFAULTS.outlineDepth})`,
   ),
-  limit: viewLimitField('blocks shown; shallower levels are filled first', AGENT_VIEW_DEFAULTS.outlineLimit),
+  limit: viewLimitField('blocks shown below the root; shallower levels are filled first', AGENT_VIEW_DEFAULTS.outlineLimit),
   offset: viewOffsetField("of the root's children"),
   properties: z.enum(['brief', 'none', 'full']).optional().describe(
     'Properties per line: brief (default; the first few, compactly), none, or full',
@@ -906,7 +909,7 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   },
   'view-outline': {
     usage: 'kmagent subtree <ref> [--depth <n>] [--limit <n>] [--offset <n>] [--properties brief|none|full] [--expand-collapsed] [--json]',
-    description: 'A block and its descendants as a markdown outline: `- content  key:: value  ^shortid`, one line per block. Bounded: expands `depth` levels and at most `limit` blocks, shallower levels first; unexpanded children show as `(+N children)`, long content as `…[+N chars]`, and a cut-off list of the root\'s children ends with the offset to continue from.',
+    description: 'A block and its descendants as a markdown outline: `- content  key:: value  ^shortid`, one line per block. Bounded: expands `depth` levels and at most `limit` blocks below the root, shallower levels first; unexpanded children show as `(+N children)`, long content as `…[+N chars]`, and a cut-off list of the root\'s children ends with the offset to continue from.',
     readOnly: true,
   },
   'view-backlinks': {

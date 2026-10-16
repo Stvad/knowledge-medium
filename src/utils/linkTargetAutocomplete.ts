@@ -738,7 +738,9 @@ export const searchBlocksAcrossSources = async (
   // After the barrier, so the report names exactly the set of sources this
   // search ran — a source that has left the runtime is absent from it, which
   // is how a consumer retires state it could never be told to clear.
-  reportSearchSourceHealth(repo, generation, outcomes)
+  // A report names the whole set of sources (an absent one reads as having
+  // left the runtime), so a filtered search that skipped some reports nothing.
+  if (contributions.length === registered.length) reportSearchSourceHealth(repo, generation, outcomes)
 
   // Every source failed (including the single-source case) — there is
   // nothing to rank, and silently returning [] would hide the failure

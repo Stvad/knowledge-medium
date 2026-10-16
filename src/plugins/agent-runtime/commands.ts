@@ -24,7 +24,7 @@ import { assertCanonicalBlockId } from '@/data/blockId.js'
 import { DATA_MODEL_GUIDE } from './dataModelGuide.ts'
 import { runHealthCommand } from './healthCommand.ts'
 import { resolveBlockRef, runViewCommand } from './agentViews/index.ts'
-import { boundSqlRows } from './agentViews/sqlRows.ts'
+import { boundSqlRows, limitedSelectSql } from './agentViews/sqlRows.ts'
 import { watchEventsRegistry } from './watchEvents.ts'
 import { keyAtEnd, keyBetween } from '@/data/orderKey.js'
 import { deleteSubtreeInTx } from '@/data/subtreeDelete.js'
@@ -2286,10 +2286,13 @@ export const executeCommand = async (
         throw new Error('mode must be one of: all, get, optional, execute')
       }
 
-      const result = await context.sql(sql, getParams(command.params), mode, command.allowSyncedWrite === true)
-      return command.maxRows !== undefined && mode === 'all' && Array.isArray(result)
-        ? boundSqlRows(result, command.maxRows)
-        : result
+      const allowSyncedWrite = command.allowSyncedWrite === true
+      if (command.maxRows !== undefined && mode === 'all') {
+        const limited = limitedSelectSql(sql, command.maxRows) ?? sql
+        const rows = await context.sql(limited, getParams(command.params), mode, allowSyncedWrite)
+        return boundSqlRows(Array.isArray(rows) ? rows : [], command.maxRows)
+      }
+      return context.sql(sql, getParams(command.params), mode, allowSyncedWrite)
     }
 
     case 'get-block':
@@ -2307,7 +2310,7 @@ export const executeCommand = async (
     case 'view-backlinks':
     case 'view-grouped-backlinks':
     case 'view-search':
-      return runViewCommand(context.repo, command, commandWorkspaceId(context.repo, command.workspaceId))
+      return runViewCommand(context.repo, command, commandWorkspaceId(context.repo, undefined))
 
     case 'create-block':
       return context.createBlock({

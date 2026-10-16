@@ -3,7 +3,7 @@ import type { Repo } from '@/data/repo'
 import { BlockRefError, resolveBlockRef, type BlockRefResolution } from './resolveRef.ts'
 import { formatPropertyPairs, type PropertyDetail, type PropertyLine, type PropertyRenderer } from './properties.ts'
 import { neutralizeDisplayText } from '@knowledge-medium/agent-cli/protocol'
-import { clipLine, formatCount } from './text.ts'
+import { clipLine, formatCount, oneLine } from './text.ts'
 
 /** One block as a view row: everything a line needs, already bounded. */
 export interface ViewRow {
@@ -59,15 +59,25 @@ export const clampInt = (value: number | undefined, fallback: number, max: numbe
 export const loadRoot = async (
   repo: Repo,
   ref: string,
-  workspaceId: string | null,
+  workspaceId: string,
   load: (id: string) => Promise<BlockData | undefined>,
 ): Promise<{root: BlockData, resolution: BlockRefResolution}> => {
   const resolution = await resolveBlockRef(repo, ref, {workspaceId})
   const root = await load(resolution.id)
-  if (root) return {root, resolution}
-  throw new BlockRefError(resolution.via === 'date'
-    ? `The daily note for "${ref}" has not been created yet (its id would be ${resolution.id}).`
-    : `Block ${resolution.id} does not exist or is deleted.`)
+  if (!root) {
+    throw new BlockRefError(resolution.via === 'date'
+      ? `The daily note for "${oneLine(ref)}" has not been created yet (its id would be ${resolution.id}).`
+      : `Block ${resolution.id} does not exist or is deleted.`)
+  }
+  // A view decodes with the active workspace's registries; another
+  // workspace's block would render with the wrong codecs and visibility.
+  if (root.workspaceId !== workspaceId) {
+    throw new BlockRefError(
+      `Block ${root.id} is in workspace ${root.workspaceId}, not the active one (${workspaceId}). `
+      + 'Views read the active workspace only: switch the app to that workspace, or use the raw command (--raw).',
+    )
+  }
+  return {root, resolution}
 }
 
 /** Every text view's last step. Each line goes through the shared display

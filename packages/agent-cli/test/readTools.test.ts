@@ -21,11 +21,11 @@ describe('cliOptionsFor', () => {
     const options = cliOptionsFor(tool('subtree'))
     const byKey = Object.fromEntries(options.map(o => [o.key, o]))
     expect(Object.keys(byKey).sort()).toEqual(
-      ['depth', 'expand-collapsed', 'limit', 'offset', 'properties', 'workspace'],
+      ['depth', 'expand-collapsed', 'limit', 'offset', 'properties'],
     )
     expect(byKey['expand-collapsed'].flag).toBe('--expand-collapsed')
     expect(byKey.depth.flag).toBe('--depth <value>')
-    expect(byKey.workspace.flag).toBe('--workspace <id>')
+    expect(cliOptionsFor(tool('page')).find(o => o.field === 'workspaceId')?.flag).toBe('--workspace <id>')
     expect(byKey.depth.description).toMatch(/Levels below the root/)
   })
 
@@ -52,11 +52,11 @@ describe('cliInputFrom', () => {
   })
 
   it('maps workspace and rejects a repeated string flag', () => {
-    expect(cliInputFrom(tool('get_block'), '^3f2a', {workspace: 'ws-1'}))
-      .toEqual({ref: '^3f2a', workspaceId: 'ws-1'})
+    expect(cliInputFrom(tool('page'), ['Alpha'], {workspace: 'ws-1'}))
+      .toEqual({name: 'Alpha', workspaceId: 'ws-1'})
     expect(() => cliInputFrom(tool('search'), ['x'], {under: ['a', 'b']}))
       .toThrow(/--under expects a single value/)
-    expect(() => cliInputFrom(tool('get_block'), 'x', {workspace: ['a', 'b']}))
+    expect(() => cliInputFrom(tool('page'), ['x'], {workspace: ['a', 'b']}))
       .toThrow(/--workspace/)
   })
 
@@ -103,8 +103,8 @@ describe('cliCommandFrom', () => {
   it('maps --raw onto the stored command shapes', () => {
     expect(cliCommandFrom(tool('get_block'), 'b1', {raw: true})).toEqual({type: 'get-block', id: 'b1'})
     expect(cliCommandFrom(tool('subtree'), 'b1', {raw: true})).toEqual({type: 'get-subtree', rootId: 'b1'})
-    expect(cliCommandFrom(tool('backlinks'), 'b1', {raw: true, filter: 'stored', workspace: 'w'}))
-      .toEqual({type: 'backlinks', id: 'b1', filter: 'stored', workspaceId: 'w'})
+    expect(cliCommandFrom(tool('backlinks'), 'b1', {raw: true, filter: 'stored'}))
+      .toEqual({type: 'backlinks', id: 'b1', filter: 'stored'})
     expect(cliCommandFrom(tool('search'), ['q'], {raw: true, limit: 3}))
       .toEqual({type: 'search', query: 'q', limit: 3})
   })

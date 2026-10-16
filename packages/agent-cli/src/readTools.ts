@@ -116,15 +116,15 @@ export const GRAPH_READ_TOOLS: readonly GraphReadTool[] = [
   }),
   wireTool('backlinks', 'view-backlinks', viewBacklinksCommandSchema, {
     cli: {verb: 'backlinks', positional: {field: 'ref', variadic: false}},
-    raw: {type: 'backlinks', rename: {ref: 'id'}, keep: ['filter', 'workspaceId']},
+    raw: {type: 'backlinks', rename: {ref: 'id'}, keep: ['filter']},
   }),
   wireTool('grouped_backlinks', 'view-grouped-backlinks', viewGroupedBacklinksCommandSchema, {
     cli: {verb: 'grouped-backlinks', positional: {field: 'ref', variadic: false}},
-    raw: {type: 'grouped-backlinks', rename: {ref: 'id'}, keep: ['filter', 'grouping', 'workspaceId']},
+    raw: {type: 'grouped-backlinks', rename: {ref: 'id'}, keep: ['filter', 'grouping']},
   }),
   wireTool('search', 'view-search', viewSearchCommandSchema, {
     cli: {verb: 'search', positional: {field: 'query', variadic: true}},
-    raw: {type: 'search', rename: {}, keep: ['query', 'limit', 'workspaceId']},
+    raw: {type: 'search', rename: {}, keep: ['query', 'limit']},
   }),
   wireTool('page', 'page', pageCommandSchema, {
     cli: {verb: 'page', positional: {field: 'name', variadic: true}},

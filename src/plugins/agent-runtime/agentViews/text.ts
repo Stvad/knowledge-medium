@@ -17,13 +17,17 @@ export interface Clipped {
   cut: number
 }
 
-/** Cut to at most `max` characters of the ORIGINAL text, marked. Never splits
- *  a surrogate pair. */
+const isHighSurrogate = (code: number): boolean => code >= 0xd800 && code <= 0xdbff
+
+/** `at` moved back by one when it would split a surrogate pair, so a slice
+ *  boundary there keeps an astral character (an emoji) whole on one side. */
+export const charBoundary = (text: string, at: number): number =>
+  at > 0 && at < text.length && isHighSurrogate(text.charCodeAt(at - 1)) ? at - 1 : at
+
+/** Cut to at most `max` characters of the ORIGINAL text, marked. */
 export const clip = (text: string, max: number): Clipped => {
   if (text.length <= max) return {text, cut: 0}
-  let end = max
-  const code = text.charCodeAt(end - 1)
-  if (code >= 0xd800 && code <= 0xdbff) end -= 1
+  const end = charBoundary(text, max)
   return {text: `${text.slice(0, end)}${cutMarker(text.length - end)}`, cut: text.length - end}
 }
 

@@ -45,6 +45,7 @@ const MAX_RESULTS = 200
  *  ranking: a window that grew per page could reorder its top and repeat or
  *  skip a hit across pages. */
 const SEARCH_WINDOW = 100
+const MAX_WINDOW = 2000
 
 /** A filter type is a type id or a type's label (`todo`, a user type's
  *  name), matched case-insensitively. An unknown one is kept as an id so the
@@ -65,6 +66,23 @@ const resolveTypeIds = (repo: Repo, types: readonly string[]): string[] => {
 }
 
 const dedupeKey = (block: BlockData): string => oneLine(block.content).toLowerCase()
+
+/** Blocks with the same text, in rank order, each group led by its best. */
+const groupIdentical = (blocks: readonly BlockData[]): BlockData[][] => {
+  const groups: BlockData[][] = []
+  const byKey = new Map<string, BlockData[]>()
+  for (const block of blocks) {
+    const key = dedupeKey(block)
+    const group = byKey.get(key)
+    if (group) group.push(block)
+    else {
+      const created = [block]
+      byKey.set(key, created)
+      groups.push(created)
+    }
+  }
+  return groups
+}
 
 const extensionBlockCount = async (repo: Repo, workspaceId: string): Promise<number> => {
   const [row] = await repo.db.getAll<{n: number}>(
@@ -97,28 +115,27 @@ export const buildSearchView = async (
   const filter = scoped && !includeExtensions ? {...scope, excludeTypes: [EXTENSION_TYPE]} : scope
   const extensionSlack = includeExtensions || scoped ? 0 : await extensionBlockCount(repo, workspaceId)
 
-  const window = Math.max(SEARCH_WINDOW, offset + limit + 1)
-  const fetched = await searchBlocksAcrossSources(repo, {
-    workspaceId,
-    query: params.query,
-    limit: window + extensionSlack,
-    filter,
-  })
-  const found = includeExtensions
-    ? fetched
-    : fetched.filter(block => !readTypeIds(block).includes(EXTENSION_TYPE))
+  const fetchWindow = async (window: number) => {
+    const fetched = await searchBlocksAcrossSources(repo, {
+      workspaceId,
+      query: params.query,
+      limit: window + extensionSlack,
+      filter,
+    })
+    const found = includeExtensions
+      ? fetched
+      : fetched.filter(block => !readTypeIds(block).includes(EXTENSION_TYPE))
+    return {groups: groupIdentical(found), exhausted: fetched.length < window + extensionSlack}
+  }
 
-  const groups: BlockData[][] = []
-  const groupByKey = new Map<string, BlockData[]>()
-  for (const block of found) {
-    const key = dedupeKey(block)
-    const group = groupByKey.get(key)
-    if (group) group.push(block)
-    else {
-      const created = [block]
-      groupByKey.set(key, created)
-      groups.push(created)
-    }
+  // Folding identical blocks shrinks the window, so it grows until it holds
+  // one distinct hit past this page — or the sources run dry, or the cap.
+  const wanted = offset + limit + 1
+  let window = Math.max(SEARCH_WINDOW, wanted)
+  let {groups, exhausted} = await fetchWindow(window)
+  while (groups.length < wanted && !exhausted && window < MAX_WINDOW) {
+    window = Math.min(window * 4, MAX_WINDOW)
+    ;({groups, exhausted} = await fetchWindow(window))
   }
 
   const page = groups.slice(offset, offset + limit)
@@ -130,8 +147,10 @@ export const buildSearchView = async (
     loadCrumbs(repo, shown.map(block => block.id), workspaceId),
   ])
   const end = offset + page.length
-  // A window that came back full may have cut off matches past it.
-  const more = end < groups.length || (fetched.length >= window + extensionSlack && page.length === limit)
+  // A window stopped by the cap rather than by the sources may have cut off
+  // matches, so a non-empty page still offers the next offset; an empty one
+  // ends the listing instead of offering the same offset again.
+  const more = end < groups.length || (!exhausted && page.length > 0)
 
   return {
     query: params.query,

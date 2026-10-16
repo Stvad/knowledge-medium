@@ -36,7 +36,7 @@ const agentCliPackageVersion = (() => {
  *  `serverOptions.instructions` is appended after it. */
 export const KM_MCP_INSTRUCTIONS = `Knowledge Medium is an outliner: everything is a block (markdown content plus typed properties) nested under a parent. A page is a top-level block whose content is its title; [[Page name]] in content links to a page; a block's backlinks are the blocks that reference it. Daily notes are pages, one per date.
 
-Addressing: every tool that takes a block accepts a full id, a unique id prefix as printed (^3f2a9c1d), a page name, or a date (today, yesterday, 2026-06-18) for that day's daily note.
+Addressing: the read tools take a block as a full id, a unique id prefix as printed (^3f2a9c1d), a page name, or a date (today, yesterday, 2026-06-18) for that day's daily note. The write tools take full ids: get_block prints one, and so does any read with format: "json".
 
 Reads are bounded and say so: an outline line is \`- content  key:: value  ^shortid\`, \`(+N children)\` marks children not expanded, \`…[+N chars]\` marks cut text (get_block reads it in full), and a cut-off list ends with the offset to continue from. Pass format: "json" for structured output.
 
