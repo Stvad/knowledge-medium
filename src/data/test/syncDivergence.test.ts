@@ -23,7 +23,7 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { createTestRepo } from '@/data/test/createTestRepo'
 import type { Repo } from '@/data/repo'
 import type { BlockData } from '@/data/api'
-import type { Materializability } from '@/sync/transform'
+import type { GetMaterializability, Materializability } from '@/sync/transform'
 
 const WS = 'ws1'
 
@@ -41,7 +41,7 @@ beforeEach(async () => { await resetTestDb(sharedDb.db) })
 afterEach(() => { for (const repo of repos.splice(0)) repo.stopSyncObserver() })
 
 const makeRepo = (
-  materializability: (workspaceId: string) => Materializability = () => 'copy',
+  materializability: GetMaterializability = () => 'copy',
   {startSyncObserver = false} = {},
 ): Repo => {
   const {repo} = createTestRepo({
@@ -108,7 +108,7 @@ describe('Repo.syncDivergence — what it reports', () => {
     await strand(local, staged)
     expect(await makeRepo().syncDivergence()).toEqual([{
       workspaceId: WS,
-      sealedColumnsCompared: true,
+      materializability: 'copy', rematerializing: false,
       unapplied: 0,
       stranded: {[kind]: {count: 1, example: 'b1'}},
     }])
@@ -123,10 +123,10 @@ describe('Repo.syncDivergence — what it reports', () => {
     await sharedDb.db.execute("DELETE FROM blocks_synced_changes WHERE id = 'flagged'")
 
     expect(await makeRepo().syncDivergence()).toEqual([
-      {workspaceId: 'ws-a', sealedColumnsCompared: true, unapplied: 1, stranded: {}},
-      {workspaceId: 'ws0', sealedColumnsCompared: true, unapplied: 0,
+      {workspaceId: 'ws-a', materializability: 'copy', rematerializing: false, unapplied: 1, stranded: {}},
+      {workspaceId: 'ws0', materializability: 'copy', rematerializing: false, unapplied: 0,
         stranded: {missing: {count: 1, example: 'other'}}},
-      {workspaceId: WS, sealedColumnsCompared: true, unapplied: 0, stranded: {
+      {workspaceId: WS, materializability: 'copy', rematerializing: false, unapplied: 0, stranded: {
         'staged-newer': {count: 2, example: 'y'},
         missing: {count: 1, example: 'x'},
       }},
@@ -145,7 +145,7 @@ describe('Repo.syncDivergence — what it reports', () => {
     const repo = makeRepo(ws => ({plain: 'copy', sealed: 'decrypt', locked: 'defer'} as const)[ws]!)
 
     expect(await repo.syncDivergence()).toEqual([{
-      workspaceId: 'plain', sealedColumnsCompared: true, unapplied: 0,
+      workspaceId: 'plain', materializability: 'copy', rematerializing: false, unapplied: 0,
       stranded: {'same-stamp': {count: 1, example: 'p'}},
     }])
   })
@@ -153,7 +153,7 @@ describe('Repo.syncDivergence — what it reports', () => {
   it('still compares the clear columns of a workspace it cannot read sealed', async () => {
     await strand(base, {...base, content: 'enc:ciphertext', updatedAt: 901})
     expect(await makeRepo(() => 'decrypt').syncDivergence()).toEqual([{
-      workspaceId: WS, sealedColumnsCompared: false, unapplied: 0,
+      workspaceId: WS, materializability: 'decrypt', rematerializing: false, unapplied: 0,
       stranded: {'staged-newer': {count: 1, example: 'b1'}},
     }])
   })
@@ -166,8 +166,52 @@ describe('Repo.syncDivergence — what it reports', () => {
     await sharedDb.db.execute('DELETE FROM blocks_synced_changes')
 
     expect(await makeRepo().syncDivergence()).toEqual([{
-      workspaceId: WS, sealedColumnsCompared: true, unapplied: 1, stranded: {},
+      workspaceId: WS, materializability: 'copy', rematerializing: false, unapplied: 1, stranded: {},
     }])
+  })
+})
+
+describe('Repo.syncDivergence — whether a rescan can act on what it reports', () => {
+  it('names a workspace the drain defers, where a rescan defers its rows again', async () => {
+    await seedLocalFrom(base)
+    await stage({...base, updatedAt: 901, content: 'enc:ciphertext'})
+    await sharedDb.db.execute('DELETE FROM blocks_synced_changes')
+
+    expect(await makeRepo(() => 'defer').syncDivergence()).toEqual([{
+      workspaceId: WS, materializability: 'defer', rematerializing: false, unapplied: 1, stranded: {},
+    }])
+  })
+
+  it('marks a workspace whose rescan is still running', async () => {
+    // The rescan rewrites `blocks` without the queue, so nothing else in the
+    // report could say these rows are already being repaired.
+    await strand(base, {...base, updatedAt: 901})
+    let holdNextResolve = false
+    let reached!: () => void
+    const drainReached = new Promise<void>(resolve => { reached = resolve })
+    let release!: () => void
+    const released = new Promise<void>(resolve => { release = resolve })
+    const repo = makeRepo(async (): Promise<Materializability> => {
+      if (holdNextResolve) {
+        holdNextResolve = false
+        reached()
+        await released
+      }
+      return 'copy'
+    }, {startSyncObserver: true})
+    await repo.flushSyncObserver()
+
+    holdNextResolve = true
+    const pass = repo.rematerializeWorkspace(WS, {scope: 'all'})
+    await drainReached
+    expect(await repo.syncDivergence()).toEqual([{
+      workspaceId: WS, materializability: 'copy', rematerializing: true, unapplied: 0,
+      stranded: {'staged-newer': {count: 1, example: 'b1'}},
+    }])
+
+    release()
+    await pass
+    expect(await repo.syncDivergence()).toEqual([])
   })
 })
 
@@ -237,7 +281,7 @@ describe('Repo.syncDivergence — against the drain', () => {
     expect(flag.needs_apply).toBe(0)
     expect(await repo.workspaceViewGap(WS)).toBeNull()
     expect(await repo.syncDivergence()).toEqual([{
-      workspaceId: WS, sealedColumnsCompared: true, unapplied: 0,
+      workspaceId: WS, materializability: 'copy', rematerializing: false, unapplied: 0,
       stranded: {'staged-newer': {count: 1, example: 'b1'}},
     }])
 

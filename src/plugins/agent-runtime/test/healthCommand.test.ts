@@ -48,7 +48,7 @@ describe('runHealthCommand', () => {
     await shared.db.execute('DELETE FROM blocks_synced_changes')
 
     expect((await runHealthCommand(repo)).syncDivergence).toEqual([{
-      workspaceId: 'ws-1', sealedColumnsCompared: true, unapplied: 0,
+      workspaceId: 'ws-1', materializability: 'copy', rematerializing: false, unapplied: 0,
       stranded: { missing: { count: 1, example: 'stuck' } },
     }])
   })

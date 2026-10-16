@@ -47,7 +47,7 @@ The CLI exposes both *local* commands (pairing, profile management) and *bridge*
 | `kmagent ping` | Ping the bridge + runtime; print a status summary. |
 | `kmagent status` | Show bridge status (clients, commands). |
 | `kmagent runtime-summary` | Compact agent-oriented runtime context. |
-| `kmagent health` | Sync-health snapshot: block vs blocks_synced counts, upload queue, materialization backlog, and per-workspace `syncDivergence` — downloaded rows `blocks` does not hold with nothing in flight, including stranded ones no flag reports (remedy: `rematerialize-workspace --scope all`). |
+| `kmagent health` | Sync-health snapshot: block vs blocks_synced counts, upload queue, materialization backlog, and per-workspace `syncDivergence` — downloaded rows `blocks` does not hold with nothing in flight, including stranded ones no flag reports (remedy: `rematerialize-workspace --scope all`, unless the entry is already `rematerializing` or its `materializability` is `defer`). |
 | `kmagent describe-runtime` | Full or targeted runtime diagnostics (`--guide <id>`, `--storage`, …). |
 | `kmagent sql <mode> <sql> [paramsJson] [--allow-synced-write]` | Run SQL (mode: `all\|get\|optional\|execute`). Refuses a raw write to a synced table (`blocks`, `workspaces`, `workspace_members`) unless `--allow-synced-write` is passed — see note below. |
 | `kmagent get-block <id>` | Fetch a block. |

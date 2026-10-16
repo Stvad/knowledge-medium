@@ -475,13 +475,20 @@ export interface StrandedRows {
  *  with nothing in flight to close the distance. */
 export interface WorkspaceSyncDivergence {
   readonly workspaceId: string
-  /** False for an e2ee or not-yet-resolved workspace: its staged sealed columns
-   *  are ciphertext, so only the clear ones were compared and a row differing
-   *  ONLY in sealed columns is not reported. */
-  readonly sealedColumnsCompared: boolean
+  /** How the drain can materialize the workspace now, which decides what a
+   *  rescan can do about the rows below. `'defer'`: nothing — it defers them
+   *  again until the key or mode resolves. Anything but `'copy'`: the staged
+   *  sealed columns are ciphertext, so only the clear ones were compared and a
+   *  row differing ONLY in sealed columns is not reported. */
+  readonly materializability: Materializability
+  /** A rescan of the workspace is still in flight as the read finishes — it
+   *  rewrites `blocks` without the queue, so these rows may be mid-repair.
+   *  Re-read once it finishes before acting on them. */
+  readonly rematerializing: boolean
   /** Rows still flagged for the drain — the durable gap
    *  {@link WORKSPACE_UNAPPLIED_SQL} counts, which `workspaceViewGap` refuses
-   *  on. Either rescan scope reaches them. */
+   *  on. Either rescan scope reaches them; one that leaves them flagged says
+   *  why in its `deferred` / `quarantined` counts. */
   readonly unapplied: number
   /** Rows the drain let go of that `blocks` does not hold, by kind. Nothing
    *  else reports these, and only an `'all'` rescan re-judges them. */
@@ -535,6 +542,14 @@ const SYNC_DIVERGENCE_SQL = `
    WHERE ${UNAPPLIED_ROW}
    GROUP BY s.workspace_id`
 
+/** What {@link readSyncDivergence} needs to know about a workspace that the
+ *  tables cannot say — the drain's own state, asked of the drain. */
+export interface DrainState {
+  readonly materializabilityOf: GetMaterializability
+  /** `BlocksSyncedObserver.isRematerializingWorkspace`. */
+  readonly isRematerializing: (workspaceId: string) => boolean
+}
+
 /**
  * {@link SYNC_DIVERGENCE_SQL}, per workspace, for every workspace with any
  * divergence; empty when `blocks` holds everything downloaded. A full scan of
@@ -543,21 +558,22 @@ const SYNC_DIVERGENCE_SQL = `
  */
 export const readSyncDivergence = async (
   reader: {getAll<T>(sql: string, params?: unknown[]): Promise<T[]>},
-  materializabilityOf: GetMaterializability,
+  drain: DrainState,
 ): Promise<WorkspaceSyncDivergence[]> => {
   const staged = await reader.getAll<{workspaceId: string}>(
     'SELECT DISTINCT workspace_id AS workspaceId FROM blocks_synced')
-  const plaintext = new Set<string>()
+  const materializability = new Map<string, Materializability>()
   for (const {workspaceId} of staged) {
-    if (await materializabilityOf(workspaceId) === 'copy') plaintext.add(workspaceId)
+    materializability.set(workspaceId, await drain.materializabilityOf(workspaceId))
   }
+  const plaintext = [...materializability].filter(([, m]) => m === 'copy').map(([id]) => id)
 
   const rows = await reader.getAll<{
     workspaceId: string
     kind: StrandedKind | 'unapplied'
     count: number
     example: string | null
-  }>(SYNC_DIVERGENCE_SQL, [JSON.stringify([...plaintext])])
+  }>(SYNC_DIVERGENCE_SQL, [JSON.stringify(plaintext)])
 
   const byWorkspace = new Map<string, {
     unapplied: number
@@ -569,9 +585,17 @@ export const readSyncDivergence = async (
     if (kind === 'unapplied') entry.unapplied = count
     else entry.stranded[kind] = {count, example: example!}
   }
-  return [...byWorkspace.keys()].sort().map(workspaceId => ({
-    workspaceId,
-    sealedColumnsCompared: plaintext.has(workspaceId),
-    ...byWorkspace.get(workspaceId)!,
-  }))
+  const out: WorkspaceSyncDivergence[] = []
+  for (const workspaceId of [...byWorkspace.keys()].sort()) {
+    out.push({
+      workspaceId,
+      // Accepted: a workspace first staged during the scan is resolved only
+      // now, so its sealed columns went uncompared on this one read.
+      materializability: materializability.get(workspaceId)
+        ?? await drain.materializabilityOf(workspaceId),
+      rematerializing: drain.isRematerializing(workspaceId),
+      ...byWorkspace.get(workspaceId)!,
+    })
+  }
+  return out
 }

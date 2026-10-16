@@ -37,8 +37,10 @@ export interface SyncHealthResult {
   /** Per workspace, downloaded rows `blocks` does not hold with nothing in
    *  flight to deliver them — including STRANDED rows, which no flag or queue
    *  reports. Healthy: []. Remedy: `rematerialize-workspace --scope all` with
-   *  that workspace active, except for `local-newer` rows, which usually clear
-   *  on their own once an upload's echo arrives. */
+   *  that workspace active — unless the entry is `rematerializing` (one is
+   *  already running) or `'defer'` (a rescan defers the rows again), and not
+   *  for `local-newer` rows, which usually clear once an upload's echo
+   *  arrives. */
   syncDivergence: WorkspaceSyncDivergence[]
 }
 

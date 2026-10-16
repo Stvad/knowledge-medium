@@ -3462,7 +3462,11 @@ export class Repo {
    * a client, never for a gate. `readSyncDivergence` owns what it reports.
    */
   syncDivergence(): Promise<WorkspaceSyncDivergence[]> {
-    return readSyncDivergence(this.db, this.materializationPolicy.getMaterializability)
+    return readSyncDivergence(this.db, {
+      materializabilityOf: this.materializationPolicy.getMaterializability,
+      isRematerializing: workspaceId =>
+        this.syncObserver?.isRematerializingWorkspace(workspaceId) ?? false,
+    })
   }
 
   /** How many of `workspaceId`'s downloaded rows the drain has not applied —
