@@ -21,7 +21,7 @@ describe('cliOptionsFor', () => {
     const options = cliOptionsFor(tool('subtree'))
     const byKey = Object.fromEntries(options.map(o => [o.key, o]))
     expect(Object.keys(byKey).sort()).toEqual(
-      ['depth', 'expand-collapsed', 'limit', 'offset', 'properties'],
+      ['depth', 'expand-collapsed', 'limit', 'offset', 'properties', 'workspace'],
     )
     expect(byKey['expand-collapsed'].flag).toBe('--expand-collapsed')
     expect(byKey.depth.flag).toBe('--depth <value>')
@@ -107,6 +107,8 @@ describe('cliCommandFrom', () => {
     expect(cliCommandFrom(tool('subtree'), 'b1', {raw: true})).toEqual({type: 'get-subtree', rootId: 'b1'})
     expect(cliCommandFrom(tool('backlinks'), 'b1', {raw: true, filter: 'stored'}))
       .toEqual({type: 'backlinks', id: 'b1', filter: 'stored'})
+    expect(cliCommandFrom(tool('get_block'), 'today', {raw: true, workspace: 'ws-2'}))
+      .toEqual({type: 'get-block', id: 'today', workspaceId: 'ws-2'})
     expect(() => cliCommandFrom(tool('search'), ['q'], {raw: true})).toThrow(/no --raw form/)
   })
 

@@ -9,18 +9,21 @@ import {
   renderGroupedBacklinksView,
 } from './backlinks.ts'
 import { buildSearchView, renderSearchView } from './search.ts'
+import { viewWorkspace } from './shared.ts'
 
 export { BlockRefError, resolveBlockRef, shortIds, type ResolveBlockRefOptions } from './resolveRef.ts'
 
 type ViewCommand = Extract<KnownAgentCommand, {type: `view-${string}`}>
 
 /** Answer a `view-*` command: the rendered text, or with `format: 'json'`
- *  the structured view it was rendered from (same bounds either way). */
+ *  the structured view it was rendered from (same bounds either way).
+ *  `namedWorkspaceId` is the workspace the call names, if any. */
 export const runViewCommand = async (
   repo: Repo,
   command: ViewCommand,
-  workspaceId: string,
+  namedWorkspaceId: string | undefined,
 ): Promise<unknown> => {
+  const workspaceId = viewWorkspace(repo, namedWorkspaceId)
   const json = command.format === 'json'
   switch (command.type) {
     case 'view-block': {

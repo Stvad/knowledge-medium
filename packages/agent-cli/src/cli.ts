@@ -411,7 +411,7 @@ const printConnectSuccess = (info: WhoamiInfo): void => {
   process.stdout.write(
     `Connected. Token saved at ${tokenStorePath} (profile: ${selectedProfileName})\n` +
     `User: ${audience.userId ?? '?'}\n` +
-    `Workspace: ${audience.workspaceId ?? '?'}\n` +
+    `Active workspace: ${audience.workspaceId ?? '?'} (the default; reads take --workspace for any other)\n` +
     `Connected client: ${info.connected ? 'yes' : 'no (will auto-connect when the app reaches the bridge)'}\n`,
   )
 }
@@ -460,7 +460,7 @@ const connectInteractively = async ({force = false} = {}) => {
       process.stdout.write(
         `Profile "${selectedProfileName}" is already paired with a connected app tab.\n` +
         `User: ${audience.userId ?? '?'}\n` +
-        `Workspace: ${audience.workspaceId ?? '?'}\n` +
+        `Active workspace: ${audience.workspaceId ?? '?'} (the default; reads take --workspace for any other)\n` +
         `Pass --force to re-pair (revokes nothing on its own — generate a new token in the app first if you want to rotate).\n`,
       )
       return
@@ -579,7 +579,7 @@ cli
   })
 
 cli
-  .command('whoami', 'Show the audience the persisted token resolves to')
+  .command('whoami', 'Show the user the persisted token acts as, and the workspace open in the app tab that serves it')
   .action(async () => {
     await ensureBridgeRunning()
     const token = await resolveToken()

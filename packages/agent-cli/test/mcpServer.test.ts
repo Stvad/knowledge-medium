@@ -13,6 +13,7 @@ const packageJsonPath = path.resolve(here, '../package.json')
 
 interface RegisteredToolHarness {
   _registeredTools: Record<string, {
+    inputSchema: {parse: (args: unknown) => Record<string, unknown>}
     handler: (
       args: Record<string, unknown>,
       extra: Record<string, never>,
@@ -188,5 +189,32 @@ describe('createGraphMcpServer', () => {
     expect((plain as unknown as ServerInfoHarness).server._instructions).toBe(KM_MCP_INSTRUCTIONS)
     expect((extended as unknown as ServerInfoHarness).server._instructions)
       .toBe(`${KM_MCP_INSTRUCTIONS}\n\ndispatch rules`)
+  })
+
+  // A token reaches every workspace of its user, so each graph read takes the
+  // workspace to read; through the tool's own input schema, which the SDK
+  // applies and which would strip a field it does not declare.
+  it('forwards a workspaceId on every workspace-scoped read', async () => {
+    const commands: KnownCommand[] = []
+    const client = clientFrom(async command => {
+      commands.push(command)
+      return {}
+    })
+    const server = createGraphMcpServer({client, serverOptions: {capabilities: {tools: {}}}})
+    const tools = (server as unknown as RegisteredToolHarness)._registeredTools
+    const call = (name: string, args: Record<string, unknown>) =>
+      tools[name].handler(tools[name].inputSchema.parse(args), {})
+
+    await call('page', {name: 'Inbox', workspaceId: 'ws-2'})
+    await call('daily_note', {date: 'today', workspaceId: 'ws-2'})
+    await call('search', {query: 'x', workspaceId: 'ws-2'})
+    await call('get_block', {ref: 'x', workspaceId: 'ws-2'})
+    await call('subtree', {ref: 'x', workspaceId: 'ws-2'})
+    await call('backlinks', {ref: 'x', workspaceId: 'ws-2'})
+    await call('grouped_backlinks', {ref: 'x', workspaceId: 'ws-2'})
+    await call('search', {query: 'x'})
+
+    expect(commands.map(command => (command as {workspaceId?: string}).workspaceId))
+      .toEqual(['ws-2', 'ws-2', 'ws-2', 'ws-2', 'ws-2', 'ws-2', 'ws-2', undefined])
   })
 })

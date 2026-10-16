@@ -108,22 +108,19 @@ const sqlQueryTool: GraphReadTool = {
 export const GRAPH_READ_TOOLS: readonly GraphReadTool[] = [
   wireTool('get_block', 'view-block', viewBlockCommandSchema, {
     cli: {verb: 'get-block', positional: {field: 'ref', variadic: false}},
-    raw: {type: 'get-block', rename: {ref: 'id'}, keep: []},
+    raw: {type: 'get-block', rename: {ref: 'id'}, keep: ['workspaceId']},
   }),
   wireTool('subtree', 'view-outline', viewOutlineCommandSchema, {
     cli: {verb: 'subtree', positional: {field: 'ref', variadic: false}},
-    raw: {type: 'get-subtree', rename: {ref: 'rootId'}, keep: []},
+    raw: {type: 'get-subtree', rename: {ref: 'rootId'}, keep: ['workspaceId']},
   }),
-  // No --workspace on the raw backlink forms: the app reads it from the target
-  // block, and a page NAME of another workspace takes that workspace active
-  // (or `kmagent raw`) — rather than a raw-only flag on a view's CLI.
   wireTool('backlinks', 'view-backlinks', viewBacklinksCommandSchema, {
     cli: {verb: 'backlinks', positional: {field: 'ref', variadic: false}},
-    raw: {type: 'backlinks', rename: {ref: 'id'}, keep: ['filter']},
+    raw: {type: 'backlinks', rename: {ref: 'id'}, keep: ['filter', 'workspaceId']},
   }),
   wireTool('grouped_backlinks', 'view-grouped-backlinks', viewGroupedBacklinksCommandSchema, {
     cli: {verb: 'grouped-backlinks', positional: {field: 'ref', variadic: false}},
-    raw: {type: 'grouped-backlinks', rename: {ref: 'id'}, keep: ['filter', 'grouping']},
+    raw: {type: 'grouped-backlinks', rename: {ref: 'id'}, keep: ['filter', 'grouping', 'workspaceId']},
   }),
   wireTool('search', 'view-search', viewSearchCommandSchema, {
     // No --raw: the stored search answer is whole rows, the unbounded shape

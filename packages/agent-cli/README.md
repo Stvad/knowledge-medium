@@ -75,7 +75,7 @@ The CLI exposes both *local* commands (pairing, profile management) and *bridge*
 | `kmagent types [outDir]` | Write compiled declarations for Knowledge Medium `@/` modules; `--module <spec>` prints one declaration. |
 | `kmagent raw <json>` | Send an arbitrary JSON command envelope to the bridge. |
 
-`get-block`, `subtree`, `backlinks`, `grouped-backlinks` (and `search --under`) take a block `<ref>`: a full id, a unique id prefix as printed (`^3f2a9c1d`), a page name, or a date (`today`, `yesterday`, `2026-06-18`) for that day's daily note. The read verbs' output is bounded text by default (truncation is marked, and a cut-off list says where to continue). `--json` prints the same bounded view as structured JSON; `--raw` sends the stored, unbounded command instead (`get-block`, `subtree`, `backlinks`, `grouped-backlinks`) and prints its JSON; the stored `search` (whole rows) is `kmagent raw '{"type":"search",…}'`. They read the app's active workspace (`page` and `daily-note` also take `--workspace <id>`).
+`get-block`, `subtree`, `backlinks`, `grouped-backlinks` (and `search --under`) take a block `<ref>`: a full id, a unique id prefix as printed (`^3f2a9c1d`), a page name, or a date (`today`, `yesterday`, `2026-06-18`) for that day's daily note. The read verbs' output is bounded text by default (truncation is marked, and a cut-off list says where to continue). `--json` prints the same bounded view as structured JSON; `--raw` sends the stored, unbounded command instead (`get-block`, `subtree`, `backlinks`, `grouped-backlinks`) and prints its JSON; the stored `search` (whole rows) is `kmagent raw '{"type":"search",…}'`. Each takes `--workspace <id>` (see [Workspaces](#workspaces)).
 
 Run `kmagent <command> --help` for per-command details or `kmagent --help` for the full menu.
 
@@ -148,9 +148,19 @@ kmagent eval --data-json '{"x":1}' 'return data.x'
 
 `--data` reads JSON from a file and parses it; `--data-json` parses the inline argument directly. The parsed value is bound as `data` in the eval scope. The two flags are mutually exclusive.
 
+## Workspaces
+
+A token acts as the user who minted it, in any of their workspaces, not only the one open when it was minted. Every open tab of the app in the browser profile and at the app address that minted it registers it, whichever workspace the tab has open, so switching workspace does not disconnect the agent.
+
+- **Reads take the workspace per call:** `--workspace <id>` on every read verb, and `workspaceId` on every `km-mcp` read tool but `guide` and `sql_query`. Without it they use the workspace open in the app tab. The views (`get-block`, `subtree`, `backlinks`, `grouped-backlinks`, `search`) decode values through the open workspace's registries, so they read only the workspace open in the tab serving the call: naming another one sends the call to a tab that has it open, and is refused when none does. `page`, `daily-note` and the `--raw` forms read any workspace, and `sql` sees every workspace in the tab's local database.
+- **A workspace the device cannot read is refused**, not answered with empty results: one this device has no row for, or one that is end-to-end encrypted without its key entered here, or that was never opened here.
+- **Writes go to the workspace open in the app tab only.** They resolve properties and aliases through that workspace's registries, so a write to a block in another workspace is refused; switch the tab to it and re-run. This is a correctness limit, not a permission boundary.
+- **Several tabs of the same user:** a call that names a workspace (its `workspaceId`, or a root `create-block`'s `data.workspaceId`) goes to a tab that has it open; otherwise it goes to the tab focused most recently.
+- **Pinning a workspace:** with `AGENT_RUNTIME_WORKSPACE=<id>` set, every call that names no workspace names that one, instead of acting on whichever workspace you last looked at. The `agent-dispatch` daemon pins this way from its required `workspaceId` config field.
+
 ## Profiles
 
-If you connect to multiple browser profiles or workspaces, name each pairing:
+A token lives in the browser profile (and app origin) that minted it. If you connect to more than one, name each pairing:
 
 ```bash
 kmagent --profile chrome-dev connect
@@ -211,6 +221,7 @@ Single-module output is not bundled with its transitive dependencies; use the di
 | `AGENT_RUNTIME_APP_URL` | App URL to pair with. Defaults to the canonical deploy. |
 | `AGENT_RUNTIME_URL` | Bridge URL the CLI talks to. Defaults to `http://127.0.0.1:8787`. |
 | `AGENT_RUNTIME_TOKEN` | One-shot token, skips the persisted profile lookup. |
+| `AGENT_RUNTIME_WORKSPACE` | Workspace id to name on every call that names none (see [Workspaces](#workspaces)). |
 | `AGENT_RUNTIME_PROFILE` | Default profile selection for `kmagent <command>`. |
 | `AGENT_RUNTIME_CONFIG_DIR` | Override the config directory (default: `$XDG_CONFIG_HOME/knowledge-medium`). |
 | `AGENT_RUNTIME_BRIDGE_SECRET` | Override the bridge secret (otherwise auto-generated per machine). |

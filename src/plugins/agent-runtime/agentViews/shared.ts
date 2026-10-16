@@ -58,6 +58,25 @@ export const plural = (n: number, one: string, many = `${one}s`): string =>
 export const clampInt = (value: number | undefined, fallback: number, max: number): number =>
   Math.min(value ?? fallback, max)
 
+const OPEN_WORKSPACE_ONLY = "A view reads only the open workspace, whose registries decode its values"
+
+/** The workspace a view reads: the one open in the app tab serving the call.
+ *  A call naming another one is refused rather than answered from this one;
+ *  the bridge sends a call naming a workspace to a connected tab that has it
+ *  open, when there is one. */
+export const viewWorkspace = (repo: Repo, named: string | undefined): string => {
+  const open = repo.activeWorkspaceId
+  if (named !== undefined && named !== open) {
+    throw new Error(
+      `Workspace ${oneLine(named)} is not the one open in the app tab serving this call (${oneLine(open ?? 'none')}). `
+      + `${OPEN_WORKSPACE_ONLY}, and a call naming a workspace goes to a connected app tab that has it open: `
+      + 'open it in a tab and re-run, or use a raw command, which reads any workspace.',
+    )
+  }
+  if (!open) throw new Error('No workspace is open in the app tab serving this call.')
+  return open
+}
+
 /** Resolve a view's root and load it, with a not-found message that says
  *  what the ref resolved to — a date names a daily note that may simply not
  *  have been created yet. */
@@ -79,12 +98,13 @@ export const loadRoot = async (
         ? `${what} has not been created yet.`
         : `${what} does not exist.`)
   }
-  // A view decodes with the active workspace's registries; another
-  // workspace's block would render with the wrong codecs and visibility.
+  // Another workspace's block would render with the wrong codecs and visibility.
   if (root.workspaceId !== workspaceId) {
+    const home = oneLine(root.workspaceId)
     throw new BlockRefError(
-      `Block ${oneLine(root.id)} is in workspace ${oneLine(root.workspaceId)}, not the active one (${oneLine(workspaceId)}). `
-      + 'Views read the active workspace only: switch the app to that workspace, or use the raw command (--raw).',
+      `Block ${oneLine(root.id)} is in workspace ${home}, not the one open in the app tab serving this call (${oneLine(workspaceId)}). `
+      + `${OPEN_WORKSPACE_ONLY}: pass workspaceId ${home} (--workspace) to send the call to an app tab that has it open, `
+      + 'or use the raw command (--raw).',
     )
   }
   return {root, resolution}

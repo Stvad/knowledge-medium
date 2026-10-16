@@ -278,7 +278,19 @@ describe('view-outline', () => {
     await repo.tx(async tx => {
       await tx.create({id: foreign, workspaceId: 'ws-2', parentId: null, orderKey: 'a0', content: 'elsewhere', references: []})
     }, {scope: ChangeScope.BlockDefault})
-    await expect(view({type: 'view-block', ref: foreign})).rejects.toThrow(/not the active one.*--raw/s)
+    await expect(view({type: 'view-block', ref: foreign})).rejects.toThrow(/not the one open.*workspaceId ws-2.*--raw/s)
+  })
+
+  // A pinned client names a workspace on every call, and the bridge falls back
+  // to another workspace's tab when none has it open.
+  it('refuses a view naming a workspace other than the open one, and serves one naming it', async () => {
+    await create({id: ROOT, content: 'Root page'})
+    await create({id: uuid('0f0f0f10', 1), parentId: ROOT, content: 'here'})
+    await expect(view({type: 'view-outline', ref: ROOT, workspaceId: 'ws-2'}))
+      .rejects.toThrow(/Workspace ws-2 is not the one open/)
+    await expect(view({type: 'view-search', query: 'here', workspaceId: 'ws-2'}))
+      .rejects.toThrow(/Workspace ws-2 is not the one open/)
+    expect(await view<string>({type: 'view-outline', ref: ROOT, workspaceId: ` ${WS} `})).toContain('- here')
   })
 
   it('says a dated daily note that does not exist yet has not been created', async () => {
@@ -463,7 +475,7 @@ describe('structural edge cases', () => {
     await repo.tx(async tx => {
       await tx.create({id: foreign, workspaceId: 'ws-2', parentId: null, orderKey: 'a0', content: 'elsewhere', references: []})
     }, {scope: ChangeScope.BlockDefault})
-    await expect(view({type: 'view-search', query: 'anything', under: foreign})).rejects.toThrow(/not the active one/)
+    await expect(view({type: 'view-search', query: 'anything', under: foreign})).rejects.toThrow(/not the one open/)
   })
 
   it('search under a self-parented root never returns the root', async () => {
@@ -968,6 +980,23 @@ describe('raw commands accept the same refs', () => {
     const block = await executeCommand({commandId: 'r', type: 'get-block', id: 'e0e0e0e0'}, context) as {id: string}
     expect(block.id).toBe(id)
     expect(await executeCommand({commandId: 'r2', type: 'get-block', id: 'not-a-block'}, context)).toBeNull()
+  })
+
+  it('resolves a ref in the workspace the call names', async () => {
+    const here = uuid('e1e1e1e1', 1)
+    const there = uuid('e2e2e2e2', 2)
+    await create({id: here, content: 'Shared name', properties: {alias: ['Shared name']}})
+    await repo.tx(async tx => {
+      await tx.create({
+        id: there, workspaceId: 'ws-2', parentId: null, orderKey: 'a0',
+        content: 'Shared name', properties: {alias: ['Shared name']}, references: [],
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    const named = {commandId: 'r', id: 'Shared name', rootId: 'Shared name', workspaceId: 'ws-2'}
+    expect((await executeCommand({...named, type: 'get-block'}, context) as {id: string}).id).toBe(there)
+    expect((await executeCommand({...named, type: 'get-subtree'}, context) as Array<{id: string}>)[0].id).toBe(there)
+    expect((await executeCommand({commandId: 'r', type: 'get-block', id: 'Shared name'}, context) as {id: string}).id)
+      .toBe(here)
   })
 })
 

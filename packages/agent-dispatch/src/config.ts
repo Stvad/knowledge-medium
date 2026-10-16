@@ -222,6 +222,8 @@ export type BacklinksWatcher = ActiveWatcher<RawBacklinksWatcher>
 export type QueryWatcher = ActiveWatcher<RawQueryWatcher>
 export type Watcher = BacklinksWatcher | QueryWatcher
 
+const workspaceIdRequired = 'workspaceId is required: the id of the workspace this daemon acts on. List yours with `kmagent --profile <profile> sql all "SELECT id, name FROM workspaces"`.'
+
 const rawConfigSchema = z.strictObject({
   /** kmagent token profile the daemon pairs under. Keep it dedicated
    *  (not "default") so its access can be revoked independently.
@@ -236,6 +238,11 @@ const rawConfigSchema = z.strictObject({
       return false
     }
   }, {message: 'profile names may only contain letters, numbers, underscores, dots, and dashes'}),
+  /** The workspace the daemon acts on. Every bridge call it and its runs
+   *  make names it: one that named none would act on whichever workspace the
+   *  user's focused app tab has open, and move as they navigate. Its writes
+   *  run only while an app tab has this workspace open. */
+  workspaceId: z.string({error: workspaceIdRequired}).trim().min(1, workspaceIdRequired),
   /** Sweep cadence. With push active (see `push`) this is only the
    *  correctness backstop — 30s is plenty; without push it is the
    *  detection latency, so keep it low. */
