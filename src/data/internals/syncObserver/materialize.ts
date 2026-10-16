@@ -46,6 +46,7 @@ import {
   blocksAlreadyReflects,
   decideStagingRow,
   localHoldsStagedRow,
+  PENDING_UPLOAD_IDS_SQL,
   syncedColumnsEqual,
 } from './reconcile.js'
 import {
@@ -101,18 +102,6 @@ interface FlagDecision {
   /** The drain's answer: does `blocks` still need this row applied? */
   readonly needsApply: boolean
 }
-
-// All block ids with an unsent local edit queued for upload. A pending edit
-// always wins over an incoming snapshot (the echo reconciles), so the gate
-// needs this set. `ps_crud.data` is the upload envelope the blocks_upload_*
-// triggers write: `{op, type, id, data}`. DISTINCT ids only — an editing burst
-// fans out to many crud rows for one block. Read once per pass instead of a
-// per-row probe: the queue holds only local, not-yet-synced edits (tiny in
-// steady state, empty during a large initial download).
-const PENDING_UPLOAD_IDS_SQL = `
-  SELECT DISTINCT json_extract(data, '$.id') AS id FROM ps_crud
-   WHERE json_extract(data, '$.type') = 'blocks'
-`
 
 const blockRowParams = (row: BlockRow): unknown[] =>
   COLUMN_NAMES.map(name => row[name])
@@ -262,8 +251,11 @@ const readBlocksByIds = async (
   return out
 }
 
-/** Block ids with an unsent local edit queued for upload (a single read of the
- *  whole upload queue, not a per-row probe). */
+/** Block ids with an unsent local edit queued for upload. A pending edit always
+ *  wins over an incoming snapshot (the echo reconciles), so the gate needs this
+ *  set. One read of the whole upload queue rather than a per-row probe: it holds
+ *  only local, not-yet-synced edits (tiny in steady state, empty during a large
+ *  initial download). */
 const readPendingUploadIds = async (db: RowsReader): Promise<Set<string>> => {
   const rows = await db.getAll<{ id: string }>(PENDING_UPLOAD_IDS_SQL)
   return new Set(rows.map(row => row.id))

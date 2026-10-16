@@ -615,7 +615,7 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   },
   'health': {
     usage: 'kmagent health',
-    description: 'Layout B sync-health snapshot: app-visible block count vs blocks_synced, distinct blocks queued for upload, and the materialization backlog. One read to triage a stuck or unsynced client (healthy = both queues 0 and blocks ≈ blocks_synced).',
+    description: 'Layout B sync-health snapshot: app-visible block count vs blocks_synced, distinct blocks queued for upload, the materialization backlog, and `syncDivergence` — per workspace, downloaded rows `blocks` does not hold with nothing in flight to deliver them: `unapplied` (still flagged for the drain) and `stranded` (the drain cleared the flag but the rows differ; nothing else reports these), by kind with an example id. Remedy for both: `rematerialize-workspace --scope all` with that workspace active — except `local-newer`, usually an upload whose echo has not arrived, which the rescan would temporarily revert. An e2ee workspace (`sealedColumnsCompared: false`) is checked on its clear columns only. One read to triage a stuck or unsynced client (healthy = both queues 0, blocks ≈ blocks_synced, syncDivergence empty).',
     readOnly: true,
   },
   'describe-runtime': {
