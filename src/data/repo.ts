@@ -95,10 +95,12 @@ import {
   type RematerializeScope,
 } from '@/data/internals/syncObserver/observer'
 import {
+  readSyncDivergence,
   WORKSPACE_UNAPPLIED_COUNT_CAP,
   WORKSPACE_UNAPPLIED_EXACT_COUNT_SQL,
   viewGapReadsOver,
   type ViewGapReads,
+  type WorkspaceSyncDivergence,
 } from '@/data/internals/syncObserver/reconcile'
 import type { MaterializeDeps } from '@/data/internals/syncObserver/materialize'
 import type { Materializability } from '@/sync/transform'
@@ -1262,11 +1264,7 @@ export class Repo {
    *  flushing. */
   startSyncObserver(options?: SyncObserverOptions): BlocksSyncedObserver {
     if (this.syncObserver) this.syncObserver.dispose()
-    // Production passes the §6 mode/key resolver (initRepo). Tests omit it
-    // and fall back to plaintext copy-through with no key — the historical
-    // behavior, so non-e2ee tests are unaffected.
-    const policyDeps = this.syncObserverDeps
-      ?? { getMaterializability: (): Materializability => 'copy', getCek: async () => null }
+    const policyDeps = this.materializationPolicy
     this.syncObserver = startBlocksSyncedObserver({
       db: this.db,
       cache: this.cache,
@@ -1292,6 +1290,14 @@ export class Repo {
       onError: options?.onError,
     })
     return this.syncObserver
+  }
+
+  /** Production passes the §6 mode/key resolver (initRepo). Tests omit it and
+   *  fall back to plaintext copy-through with no key — the historical
+   *  behavior, so non-e2ee tests are unaffected. */
+  private get materializationPolicy(): MaterializeDeps {
+    return this.syncObserverDeps
+      ?? { getMaterializability: (): Materializability => 'copy', getCek: async () => null }
   }
 
   /** Dispose the active sync observer (no-op if none). Tests use this to
@@ -3443,6 +3449,24 @@ export class Repo {
       // have been told on the next attempt anyway, one round earlier.
       remainingGap: await this.workspaceViewGap(workspaceId),
     }
+  }
+
+  /**
+   * Per workspace, the downloaded rows `blocks` does not hold with nothing in
+   * flight to deliver them: the flagged ones {@link workspaceViewGap} refuses
+   * on, and the STRANDED ones it cannot see — the drain cleared their flag, so
+   * no reader that trusts it ever will. `rematerializeWorkspace` at scope
+   * `'all'` re-judges both.
+   *
+   * Device-wide, and a full scan of the staging table: for an operator triaging
+   * a client, never for a gate. `readSyncDivergence` owns what it reports.
+   */
+  syncDivergence(): Promise<WorkspaceSyncDivergence[]> {
+    return readSyncDivergence(this.db, {
+      materializabilityOf: this.materializationPolicy.getMaterializability,
+      isRematerializing: workspaceId =>
+        this.syncObserver?.isRematerializingWorkspace(workspaceId) ?? false,
+    })
   }
 
   /** How many of `workspaceId`'s downloaded rows the drain has not applied —

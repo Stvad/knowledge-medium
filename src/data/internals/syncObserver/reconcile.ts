@@ -18,7 +18,11 @@
  * staging forever.
  */
 
-import { SEALED_COLUMNS, type Materializability } from '@/sync/transform.js'
+import {
+  SEALED_COLUMNS,
+  type GetMaterializability,
+  type Materializability,
+} from '@/sync/transform.js'
 import { BLOCK_STORAGE_COLUMNS, type BlockRow } from '@/data/blockSchema.js'
 
 /** Local state for the block id a staging row targets. */
@@ -173,16 +177,33 @@ export const blocksAlreadyReflects = (
     && (local.updated_at !== 0 || columnsMatch(SEALED, local, staged)))
   || isInvisibleEitherWay(staged, local)
 
-/** {@link blocksAlreadyReflects}'s column arms in SQL, over a live-row alias and
- *  a staged-row alias. `IS` rather than `=` so NULL matches NULL — `parent_id`
- *  is NULL on a top-level block on both sides, and `user_updated_at` is
- *  nullable too. The tombstone arm is NOT included: the seed has its own, and
- *  the gap probe deliberately counts tombstones. */
-const blocksReflectsStagedSql = (local: string, staged: string): string => {
-  const match = (columns: readonly SyncedColumn[]) =>
-    columns.map(name => `${local}.${name} IS ${staged}.${name}`).join(' AND ')
-  return `(${match(CLEAR_COLUMNS)} AND (${local}.updated_at <> 0 OR (${match(SEALED)})))`
-}
+/** {@link columnsMatch} in SQL, over a live-row alias and a staged-row alias.
+ *  `IS` rather than `=` so NULL matches NULL — `parent_id` is NULL on a
+ *  top-level block on both sides, and `user_updated_at` is nullable too. */
+const columnsMatchSql = (
+  columns: readonly SyncedColumn[], local: string, staged: string,
+): string => `(${columns.map(name => `${local}.${name} IS ${staged}.${name}`).join(' AND ')})`
+
+/** {@link blocksAlreadyReflects}'s column arms in SQL. The tombstone arm is NOT
+ *  included: the seed has its own, and the gap probe deliberately counts
+ *  tombstones. */
+const blocksReflectsStagedSql = (local: string, staged: string): string =>
+  `(${columnsMatchSql(CLEAR_COLUMNS, local, staged)} AND (${local}.updated_at <> 0 `
+  + `OR ${columnsMatchSql(SEALED, local, staged)}))`
+
+/** Staged row `s` has no delivery waiting in the drain's queue. */
+const NOT_QUEUED = 'NOT EXISTS (SELECT 1 FROM blocks_synced_changes c WHERE c.id = s.id)'
+
+/** Block ids with an unsent local edit in PowerSync's upload queue.
+ *  `ps_crud.data` is the envelope the blocks_upload_* triggers write,
+ *  `{op, type, id, data}`; DISTINCT because an editing burst fans out to many
+ *  crud rows for one block. Never yields NULL, so it is safe under `NOT IN`,
+ *  where one NULL makes every row's answer NULL. */
+export const PENDING_UPLOAD_IDS_SQL = `
+  SELECT DISTINCT json_extract(data, '$.id') AS id FROM ps_crud
+   WHERE json_extract(data, '$.type') = 'blocks'
+     AND json_extract(data, '$.id') IS NOT NULL
+`
 
 /**
  * Is any staged row one the drain would actually APPLY?
@@ -341,9 +362,10 @@ export const stagedViewGapReason = async (
  * Bind `[workspaceId, cap]`; `cap` bounds only the COUNT (so a wholly
  * unapplied workspace stops counting early), never the coverage.
  */
+const UNAPPLIED_ROW = `s.needs_apply = 1 AND ${NOT_QUEUED}`
+
 const WORKSPACE_UNAPPLIED_WHERE = `
-     WHERE s.workspace_id = ? AND s.needs_apply = 1
-       AND NOT EXISTS (SELECT 1 FROM blocks_synced_changes c WHERE c.id = s.id)`
+     WHERE s.workspace_id = ? AND ${UNAPPLIED_ROW}`
 
 export const WORKSPACE_UNAPPLIED_SQL = `
   SELECT COUNT(*) AS behind FROM (
@@ -428,3 +450,156 @@ export const SEED_STAGING_NEEDS_APPLY_SQL = `
            )
          )
 `
+
+/** How a stranded staged row differs from its `blocks` row. */
+export type StrandedKind =
+  /** `blocks` has no row for it. */
+  | 'missing'
+  /** The staged version is newer: `blocks` is behind. */
+  | 'staged-newer'
+  /** One stamp, two rows: a peer write that landed on a stamp this device
+   *  already held (#1163). */
+  | 'same-stamp'
+  /** `blocks` is newer. Usually an acked local edit whose echo has not arrived
+   *  yet, which an `'all'` rescan would overwrite with the older staged row until
+   *  the echo lands. Persisting with sync settled, it is a real divergence. */
+  | 'local-newer'
+
+export interface StrandedRows {
+  readonly count: number
+  /** The smallest id of the kind — somewhere to start looking. */
+  readonly example: string
+}
+
+/** How far one workspace's `blocks` is from the rows this device downloaded,
+ *  with nothing in flight to close the distance. */
+export interface WorkspaceSyncDivergence {
+  readonly workspaceId: string
+  /** How the drain can materialize the workspace now, which decides what a
+   *  rescan can do about the rows below. `'defer'`: nothing — it defers them
+   *  again until the key or mode resolves. Anything but `'copy'`: the staged
+   *  sealed columns are ciphertext, so only the clear ones were compared and a
+   *  row differing ONLY in sealed columns is not reported. */
+  readonly materializability: Materializability
+  /** A rescan of the workspace was in flight when the read started or as it
+   *  finished — it rewrites `blocks` without the queue, so these rows may be
+   *  mid-repair. Re-read once it finishes before acting on them. Accepted: a
+   *  rescan that starts and ends wholly inside the read goes unseen. */
+  readonly rematerializing: boolean
+  /** Rows still flagged for the drain — the durable gap
+   *  {@link WORKSPACE_UNAPPLIED_SQL} counts, which `workspaceViewGap` refuses
+   *  on. Either rescan scope reaches them; one that leaves them flagged says
+   *  why in its `deferred` / `quarantined` counts. */
+  readonly unapplied: number
+  /** Rows the drain let go of that `blocks` does not hold, by kind. Nothing
+   *  else reports these, and only an `'all'` rescan re-judges them. */
+  readonly stranded: Readonly<Partial<Record<StrandedKind, StrandedRows>>>
+}
+
+/**
+ * Per workspace and kind, the staged rows `blocks` does not hold that nothing
+ * on this device will deliver again — plus the flagged ones, as kind
+ * `unapplied`.
+ *
+ * STRANDED: the drain cleared the flag and consumed the queue entry, but
+ * `blocks` differs. Every reader that trusts the flag is blind to these by
+ * construction; that is the point of asking without it. Excluded, because
+ * something will still re-judge them: a queued row, a row with a local edit
+ * waiting to upload (its echo re-delivers), and a tombstone nobody can see on
+ * either side. A missing `blocks` row needs no arm of its own: the join's NULLs
+ * never match a staged `workspace_id`. A sealed column is compared only for
+ * workspaces in the bound list, whose staged rows hold plaintext.
+ *
+ * A DIAGNOSTIC, never a gate. It is the outside approximation of the drain's
+ * judgment that {@link WORKSPACE_UNAPPLIED_SQL} deliberately is not — it cannot
+ * see a decode result — and it scans every staged row, so it is far too slow to
+ * ask per transaction.
+ *
+ * ONE statement, so the two populations come from one snapshot and a row the
+ * drain moves mid-read is not counted in both. Bind `[JSON array of the
+ * workspace ids whose sealed columns to compare]`.
+ */
+const SYNC_DIVERGENCE_SQL = `
+  SELECT s.workspace_id AS workspaceId,
+         CASE WHEN b.id IS NULL THEN 'missing'
+              WHEN s.updated_at > b.updated_at THEN 'staged-newer'
+              WHEN s.updated_at < b.updated_at THEN 'local-newer'
+              ELSE 'same-stamp' END AS kind,
+         COUNT(*) AS count,
+         MIN(s.id) AS example
+    FROM blocks_synced s
+    LEFT JOIN blocks b ON b.id = s.id
+   WHERE s.needs_apply = 0
+     AND ${NOT_QUEUED}
+     AND s.id NOT IN (${PENDING_UPLOAD_IDS_SQL})
+     AND NOT (s.deleted = 1 AND COALESCE(b.deleted, 1) = 1)
+     AND (NOT ${columnsMatchSql(CLEAR_COLUMNS, 'b', 's')}
+          OR (s.workspace_id IN (SELECT value FROM json_each(?))
+              AND NOT ${columnsMatchSql(SEALED, 'b', 's')}))
+   GROUP BY s.workspace_id, kind
+  UNION ALL
+  SELECT s.workspace_id, 'unapplied', COUNT(*), NULL
+    FROM blocks_synced s
+   WHERE ${UNAPPLIED_ROW}
+   GROUP BY s.workspace_id`
+
+/** What {@link readSyncDivergence} needs to know about a workspace that the
+ *  tables cannot say — the drain's own state, asked of the drain. */
+export interface DrainState {
+  readonly materializabilityOf: GetMaterializability
+  /** `BlocksSyncedObserver.isRematerializingWorkspace`. */
+  readonly isRematerializing: (workspaceId: string) => boolean
+}
+
+/**
+ * {@link SYNC_DIVERGENCE_SQL}, per workspace, for every workspace with any
+ * divergence; empty when `blocks` holds everything downloaded. A full scan of
+ * the staging table, for an operator asking — see the SQL for what it
+ * reports and why it is never a gate.
+ */
+export const readSyncDivergence = async (
+  reader: {getAll<T>(sql: string, params?: unknown[]): Promise<T[]>},
+  drain: DrainState,
+): Promise<WorkspaceSyncDivergence[]> => {
+  const staged = await reader.getAll<{workspaceId: string}>(
+    'SELECT DISTINCT workspace_id AS workspaceId FROM blocks_synced')
+  const materializability = new Map<string, Materializability>()
+  const rematerializingAtStart = new Set<string>()
+  for (const {workspaceId} of staged) {
+    materializability.set(workspaceId, await drain.materializabilityOf(workspaceId))
+    if (drain.isRematerializing(workspaceId)) rematerializingAtStart.add(workspaceId)
+  }
+  const plaintext = [...materializability].filter(([, m]) => m === 'copy').map(([id]) => id)
+
+  const rows = await reader.getAll<{
+    workspaceId: string
+    kind: StrandedKind | 'unapplied'
+    count: number
+    example: string | null
+  }>(SYNC_DIVERGENCE_SQL, [JSON.stringify(plaintext)])
+
+  const byWorkspace = new Map<string, {
+    unapplied: number
+    stranded: Partial<Record<StrandedKind, StrandedRows>>
+  }>()
+  for (const {workspaceId, kind, count, example} of rows) {
+    let entry = byWorkspace.get(workspaceId)
+    if (!entry) byWorkspace.set(workspaceId, entry = {unapplied: 0, stranded: {}})
+    if (kind === 'unapplied') entry.unapplied = count
+    else entry.stranded[kind] = {count, example: example!}
+  }
+  const out: WorkspaceSyncDivergence[] = []
+  for (const workspaceId of [...byWorkspace.keys()].sort()) {
+    out.push({
+      workspaceId,
+      // Accepted: a workspace first staged during the scan is resolved only
+      // now, so its sealed columns went uncompared on this one read.
+      materializability: materializability.get(workspaceId)
+        ?? await drain.materializabilityOf(workspaceId),
+      rematerializing: rematerializingAtStart.has(workspaceId)
+        || drain.isRematerializing(workspaceId),
+      ...byWorkspace.get(workspaceId)!,
+    })
+  }
+  return out
+}
