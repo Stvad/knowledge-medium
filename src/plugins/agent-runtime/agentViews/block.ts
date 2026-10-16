@@ -110,8 +110,10 @@ export const renderBlockView = (view: BlockView): string => {
   }
   if (view.omittedProperties > 0) {
     lines.push(
+      // The id goes in params, never the SQL text: a synced id is not
+      // guaranteed free of quotes.
       `(+${formatCount(view.omittedProperties)} more properties — sql_query: SELECT key, value FROM blocks, `
-      + `json_each(blocks.properties_json) WHERE blocks.id = '${view.id}')`,
+      + `json_each(blocks.properties_json) WHERE blocks.id = ? with params ${JSON.stringify([view.id])})`,
     )
   }
   if (view.hiddenPropertyCount > 0) {

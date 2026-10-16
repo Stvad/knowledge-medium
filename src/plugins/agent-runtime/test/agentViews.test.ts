@@ -317,7 +317,7 @@ describe('view-block bounds', () => {
     expect(out.hiddenProperties).toHaveLength(20)
     expect(out.hiddenPropertyCount).toBe(25)
     const text = await view<string>({type: 'view-block', ref: id})
-    expect(text).toContain('(+11 more properties — sql_query:')
+    expect(text).toContain(`WHERE blocks.id = ? with params ["${id}"])`)
     expect(text).toMatch(/hidden in the UI: .*, \+5 more\)/)
     expect(text).not.toContain('n'.repeat(100))
   })
