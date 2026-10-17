@@ -1,8 +1,9 @@
 /**
- * Browser globals the agent-runtime command module needs under vitest's NODE
- * environment. Node rather than happy-dom because the web environments run
- * Vite's `new URL(<literal>, import.meta.url)` asset rewrite, which turns the
- * km MCP server's package.json lookup into an http URL. Import this module
+ * Browser globals the agent-runtime command module needs in node: in the
+ * fixture test (vitest's NODE environment, not happy-dom, whose web
+ * environment runs Vite's `new URL(<literal>, import.meta.url)` asset rewrite
+ * and turns the km MCP server's package.json lookup into an http URL) and in
+ * the eval's graph host. Import this module
  * FIRST: the command module's graph reads `localStorage` at load time.
  * `window` / `document` are deliberately left undefined here — libraries
  * probe `typeof document` at load and take a DOM path when it exists — and

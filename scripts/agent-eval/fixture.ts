@@ -101,14 +101,15 @@ export interface FixtureTruth {
 export interface Fixture {
   pages: RoamExport
   truth: FixtureTruth
-  /** Hash of the generated pages; the seeded graph carries it on the marker page. */
+  /** Of the generated pages. */
   hash: string
 }
 
-/** Holds the fixture hash in the seeded graph, so a run can tell whether the
- *  graph it is about to score was seeded from THIS generator. */
-export const FIXTURE_MARKER_PAGE = 'Agent Eval Fixture'
-export const FIXTURE_HASH_PREFIX = 'Fixture hash: '
+/** The workspace and user the fixture is imported under, in the template and
+ *  in every copy of it. UUID-shaped, so ids and deep links have the length a
+ *  live workspace gives them. */
+export const TEST_WORKSPACE_ID = '0e7a1000-0000-4000-8000-000000000001'
+export const TEST_USER = {id: 'km-eval', name: 'km-eval'}
 
 /** mulberry32: small, fast, and stable across engines — the fixture has to
  *  be byte-identical on every machine that seeds it. */
@@ -583,15 +584,9 @@ export const buildFixture = (): Fixture => {
     .filter((title): title is string => title !== undefined)
 
   const pages = [...staticPages, ...dailyPages]
-  const hash = createHash('sha256').update(JSON.stringify(pages)).digest('hex').slice(0, 12)
-  const marker = page(FIXTURE_MARKER_PAGE, 'agent-eval-fixture', [
-    f.block(`${FIXTURE_HASH_PREFIX}${hash}`),
-    f.block('Seeded by `pnpm agent-eval seed` (scripts/agent-eval). Do not edit this workspace by hand.'),
-  ], Date.parse('2026-01-01T00:00:00Z'))
-
   return {
-    hash,
-    pages: [...pages, marker],
+    hash: createHash('sha256').update(JSON.stringify(pages)).digest('hex').slice(0, 12),
+    pages,
     truth: {
       kestrelJuneDates,
       kestrelJuneSignals,

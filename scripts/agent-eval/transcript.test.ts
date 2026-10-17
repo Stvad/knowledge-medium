@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { extractAnswer, parseTranscript, toolUses } from './transcript'
+import { extractAnswer, parseTranscript } from './transcript'
 
 const usage = (input: number, created: number, read: number, output: number) => ({
   input_tokens: input,
@@ -40,9 +40,9 @@ describe('parseTranscript', () => {
 
   it('records each tool call once with the characters it returned', () => {
     expect(metrics.toolCalls).toEqual([
-      {id: 't1', name: 'mcp__km__page', uses: ['mcp__km__page'], seenChars: 10, capped: false, returnedChars: 10, isError: false},
-      {id: 't2', name: 'mcp__km__search', uses: ['mcp__km__search'], seenChars: capNotice.length, capped: true, returnedChars: 644_156, isError: false},
-      {id: 't3', name: 'mcp__km__backlinks', uses: ['mcp__km__backlinks'], seenChars: 4, capped: false, returnedChars: 4, isError: true},
+      {id: 't1', seenChars: 10, capped: false, returnedChars: 10, isError: false},
+      {id: 't2', seenChars: capNotice.length, capped: true, returnedChars: 644_156, isError: false},
+      {id: 't3', seenChars: 4, capped: false, returnedChars: 4, isError: true},
     ])
   })
 
@@ -94,42 +94,31 @@ describe('extractAnswer', () => {
   })
 })
 
-describe('toolUses', () => {
-  const bash = (command: string) => toolUses({type: 'tool_use', name: 'Bash', input: {command}})
-
-  it('counts a shell call once for each CLI verb it runs, piped or not', () => {
-    expect(bash('kmagent subtree abc')).toEqual(['kmagent subtree'])
-    expect(bash('kmagent sql all "SELECT 1" | jq .')).toEqual(['kmagent sql'])
-    expect(bash('kmagent data-model; kmagent page Project Orchard')).toEqual(['kmagent data-model', 'kmagent page'])
-    expect(bash('kmagent --help')).toEqual(['kmagent --help'])
-  })
-
-  it('names any other command by its program, never by an argument or a path', () => {
-    expect(bash('ls -la')).toEqual(['bash ls'])
-    expect(bash('f=/home/someone/.cache/out.txt; grep x $f')).toEqual(['bash grep'])
-    expect(bash('/usr/bin/env true')).toEqual(['bash'])
-  })
-
-  it('keeps any other tool\'s name', () => {
-    expect(toolUses({type: 'tool_use', name: 'mcp__km__page', input: {name: 'x'}})).toEqual(['mcp__km__page'])
-  })
-})
-
 describe('a shell result over the cap', () => {
   const preview = '<persisted-output>\nOutput too large (97.7KB). Full output saved to: /x.txt\n\nPreview (first 2KB):\nabc\n...\n</persisted-output>'
-  const shellCall = (size?: number) => [
+  const shellCall = (savedTo?: string) => [
     assistant('m1', [{type: 'tool_use', id: 't1', name: 'Bash', input: {command: 'kmagent subtree x'}}], usage(1, 1, 1, 1)),
     JSON.stringify({type: 'user', message: {role: 'user', content: [{type: 'tool_result', tool_use_id: 't1', content: preview}]},
-      tool_use_result: {stdout: 'abc', persistedOutputSize: size}}),
+      tool_use_result: {stdout: 'abc', persistedOutputPath: savedTo, persistedOutputSize: 100_200}}),
   ].join('\n')
 
-  it('is capped: the preview is what the model saw, the saved size what the tool returned', () => {
-    expect(parseTranscript(shellCall(100_000)).toolCalls).toEqual([expect.objectContaining({
-      uses: ['kmagent subtree'], capped: true, seenChars: preview.length, returnedChars: 100_000,
+  it('is capped: the preview is what the model saw, the saved file\'s characters what the tool returned', () => {
+    const chars = (path: string) => (path === '/x.txt' ? 100_000 : null)
+    expect(parseTranscript(shellCall('/x.txt'), chars).toolCalls).toEqual([expect.objectContaining({
+      capped: true, seenChars: preview.length, returnedChars: 100_000,
     })])
   })
 
-  it('returned an unknown size when the stream does not carry one', () => {
+  it('returned an unknown size when the saved file cannot be read', () => {
+    expect(parseTranscript(shellCall('/gone.txt'), () => null).toolCalls[0]).toEqual(expect.objectContaining({capped: true, returnedChars: null}))
     expect(parseTranscript(shellCall()).toolCalls[0]).toEqual(expect.objectContaining({capped: true, returnedChars: null}))
+  })
+})
+
+describe('an API error', () => {
+  it('is recorded with its status', () => {
+    const limited = JSON.stringify({type: 'result', subtype: 'error_during_execution', is_error: true, api_error_status: 429, result: ''})
+    expect(parseTranscript(limited).apiErrorStatus).toBe(429)
+    expect(parseTranscript(transcript).apiErrorStatus).toBeNull()
   })
 })

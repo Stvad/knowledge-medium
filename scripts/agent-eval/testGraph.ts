@@ -3,8 +3,7 @@
  * is the graph every eval task runs on: the runner's hosts serve it to the
  * agent bridge (host.ts), and the fixture test drives it in-process through
  * the real km MCP server, over a BridgeClient that hands each wire command to
- * the runtime's own `executeCommand`, validated and serialized the way the
- * bridge loop does it.
+ * the runtime's own `executeCommand` and returns what the bridge loop would.
  */
 import { provideRuntimeGlobals } from './nodeShims'
 import { knownAgentCommandSchema, type KnownCommand } from '@knowledge-medium/agent-cli/protocol'
@@ -17,16 +16,12 @@ import { staticDataExtensions } from '@/extensions/staticDataExtensions'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { createAgentRuntimeContext, executeCommand } from '@/plugins/agent-runtime/commands'
 import type { AgentRuntimeContext } from '@/plugins/agent-runtime/protocol'
-import { serializeError, serializeValue } from '@/plugins/agent-runtime/serialization'
+import { commandResult } from '@/plugins/agent-runtime/bridgeLoop'
 import { getOrCreateDailyNote, todayIso } from '@/plugins/daily-notes'
 import { importRoam } from '@/plugins/roam-import/import'
-import { buildFixture } from './fixture'
+import { buildFixture, TEST_USER, TEST_WORKSPACE_ID } from './fixture'
 import { connectMcpClient } from './mcpClient'
 
-/** UUID-shaped so ids and deep links have the byte length a live
- *  workspace gives them. */
-export const TEST_WORKSPACE_ID = '0e7a1000-0000-4000-8000-000000000001'
-export const TEST_USER = {id: 'km-eval', name: 'km-eval'}
 
 export interface FixtureRuntime {
   context: AgentRuntimeContext
@@ -38,19 +33,10 @@ export interface FixtureRuntime {
  *  task appends to), and returns once the processors those writes started
  *  have landed; without it, `db` is a copy of a seeded one. */
 export const openFixtureRuntime = async (db: TestDb['db'], {seed}: {seed: boolean}): Promise<FixtureRuntime> => {
-  // The app's generators rather than the test defaults: wall-clock `now`, so
-  // task checks can compare block timestamps with a task's start time; and
-  // ids and tx seqs that a Repo opened on a copy cannot mint twice.
-  let txSeq = Date.now()
-  const {repo} = createTestRepo({
-    db,
-    user: TEST_USER,
-    startSyncObserver: true,
-    now: Date.now,
-    newId: () => crypto.randomUUID(),
-    newTxSeq: () => ++txSeq,
-    blockIdPolicy: 'canonical',
-  })
+  // The app's generators: task checks compare block timestamps with a
+  // task's start time, and a Repo opened on a copy must not mint an id the
+  // seeding Repo already used.
+  const {repo} = createTestRepo({db, user: TEST_USER, startSyncObserver: true, appGenerators: true})
   repo.setActiveWorkspaceId(TEST_WORKSPACE_ID)
   const runtime = resolveFacetRuntimeSync(
     [kernelValuePresetsExtension, ...staticDataExtensions],
@@ -73,14 +59,9 @@ export const openFixtureRuntime = async (db: TestDb['db'], {seed}: {seed: boolea
 export const createInProcessBridgeClient = (context: AgentRuntimeContext): BridgeClient => ({
   bridgeUrl: 'in-process://agent-eval',
   runCommand: async command => {
-    const parsed = knownAgentCommandSchema.parse(command)
-    let value: unknown
-    try {
-      value = serializeValue(await executeCommand(parsed, context))
-    } catch (error) {
-      throw new Error(serializeError(error).message, {cause: error})
-    }
-    return JSON.parse(JSON.stringify(value)) as unknown
+    const result = await commandResult(() => executeCommand(knownAgentCommandSchema.parse(command), context))
+    if (!result.ok) throw new Error(result.error.message)
+    return JSON.parse(JSON.stringify(result.value)) as unknown
   },
   nextEvents: async () => ({events: [], nextSeq: 0}),
   whoami: async () => ({

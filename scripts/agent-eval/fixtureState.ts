@@ -1,16 +1,15 @@
 /**
- * The fixture as a graph stores it, in a form that does not depend on the
- * workspace. One line per block the export defines, found by the id the
- * importer derives from its Roam uid; one per block those sit under or link
- * to that the import derives instead (a daily page, whose id comes from its
- * date; a page a link minted); and one per block under any of these that is
- * neither (a hand-written todo, a leftover). Block ids inside a line are named
- * by uid, by the derived block's content, or otherwise '?'. Position is a rank
- * among siblings, because a block the runner moved back keeps a new order
- * key; pages have none, as top-level order means nothing and differs per
- * import. Equal lines mean the same fixture state, whichever workspace holds
- * it. The rest of the workspace is not compared: the app's own pages
- * (onboarding, property definitions, import logs) differ per workspace.
+ * The fixture as this checkout's code stores it — a run's `importedFixture`
+ * condition — in a form that is the same from one import to the next. One
+ * line per block the export defines, found by the id the importer derives
+ * from its Roam uid; one per block those sit under or link to that the import
+ * derives instead (a daily page, whose id comes from its date; a page a link
+ * minted); and one per block under any of these that is neither. Block ids
+ * inside a line are named by uid, by the derived block's content, or
+ * otherwise '?', since minted ids are random. Position is a rank among
+ * siblings rather than an order key; pages have none, as top-level order
+ * differs per import. The app's own pages (property definitions, the import
+ * log) are not covered.
  */
 import { roamBlockId } from '@/plugins/roam-import/blockIds'
 import type { RoamBlock, RoamPage } from '@/plugins/roam-import/types'
@@ -72,12 +71,4 @@ export const fixtureState = async (probe: GraphProbe, pages: readonly RoamPage[]
     named(row.references_json),
     row.deleted,
   ])).sort()
-}
-
-/** The blocks, by the names `fixtureState` gives them, on which two states differ. */
-export const differingBlocks = (a: readonly string[], b: readonly string[]): string[] => {
-  const inA = new Set(a)
-  const inB = new Set(b)
-  const name = (line: string) => (JSON.parse(line) as [string])[0]
-  return [...new Set([...a.filter(line => !inB.has(line)), ...b.filter(line => !inA.has(line))].map(name))]
 }

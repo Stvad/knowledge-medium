@@ -21,7 +21,7 @@ const allowing = (edit?: AllowedEdit, creates: Record<string, Record<string, unk
 
 /** Stray count of one change to the `todo` block. */
 const strayOf = (after: Partial<SnapshotRow>, edit?: AllowedEdit) =>
-  strayChanges({created: [], modified: [{id: 'todo', before: row('todo'), after: row('todo', after)}]}, allowing(edit))
+  strayChanges({created: [], removed: [], modified: [{id: 'todo', before: row('todo'), after: row('todo', after)}]}, allowing(edit))
 
 const properties = (bag: Record<string, unknown>) => ({properties_json: JSON.stringify(bag)})
 
@@ -61,15 +61,22 @@ describe('strayChanges', () => {
       row('beside', {parent_id: 'section', ...plain}),
       row('gone', {parent_id: 'section', deleted: 1, ...plain}),
     ]
-    expect(strayChanges({created, modified: []}, allowing(undefined, {new: {}, child: {}}))).toBe(1)
-    expect(strayChanges({created, modified: []}, allowing())).toBe(3)
+    expect(strayChanges({created, modified: [], removed: []}, allowing(undefined, {new: {}, child: {}}))).toBe(1)
+    expect(strayChanges({created, modified: [], removed: []}, allowing())).toBe(3)
   })
 
   it('counts a requested block whose properties are not exactly the ones it was asked for', () => {
     const page = (properties: Record<string, unknown>) => row('page', {parent_id: null, properties_json: JSON.stringify(properties)})
     const expected = {page: {types: ['page'], alias: ['Review']}}
-    expect(strayChanges({created: [page({alias: ['Review'], types: ['page']})], modified: []}, allowing(undefined, expected))).toBe(0)
-    expect(strayChanges({created: [page({types: ['page'], alias: ['Review'], note: 'x'})], modified: []}, allowing(undefined, expected))).toBe(1)
-    expect(strayChanges({created: [page({types: ['page', 'todo'], alias: ['Review']})], modified: []}, allowing(undefined, expected))).toBe(1)
+    expect(strayChanges({created: [page({alias: ['Review'], types: ['page']})], modified: [], removed: []}, allowing(undefined, expected))).toBe(0)
+    expect(strayChanges({created: [page({types: ['page'], alias: ['Review'], note: 'x'})], modified: [], removed: []}, allowing(undefined, expected))).toBe(1)
+    expect(strayChanges({created: [page({types: ['page', 'todo'], alias: ['Review']})], modified: [], removed: []}, allowing(undefined, expected))).toBe(1)
+  })
+})
+
+describe('strayChanges, removed rows', () => {
+  it('counts a block removed from the workspace, whatever the task was allowed', () => {
+    const removed = {created: [], modified: [], removed: [row('todo')]}
+    expect(strayChanges(removed, allowing({content: true, properties: ['status']}))).toBe(1)
   })
 })

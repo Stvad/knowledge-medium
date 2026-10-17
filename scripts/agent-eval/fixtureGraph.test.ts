@@ -13,8 +13,9 @@
  *   a correct solution passes (write tasks solve through the MCP tools, so
  *   the task is doable on the current surface), and a wrong one fails —
  *   a write task on its check or on a change it was not asked to make.
- * - task changes and fixture state: the diff and the state see every kind of
- *   change a task can make.
+ * - task changes: the diff sees every kind of change a task can make.
+ * - fixture state: the stored-fixture digest moves with what an importer or
+ *   data-layer change would move, and not with what differs per import.
  */
 import { rmSync } from 'node:fs'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
@@ -30,21 +31,22 @@ import {
   READING_LOG_PAGE,
   ROLLOUT_BLOCK_TEXT,
   TARGET_UIDS,
+  TEST_WORKSPACE_ID,
 } from './fixture'
 import { childrenOf, dailyNoteId, descendantsOf, type GraphProbe, pageIdByTitle, requirePageId, sqlAll } from './graphQueries'
-import { differingBlocks, fixtureState } from './fixtureState'
+import { fixtureState } from './fixtureState'
 import { OUTPUT_PROBES, type ProbeContext } from './outputBudgets'
 import { diffAgainst, type Snapshot, snapshotWorkspace, strayChanges } from './taskChanges'
 import {
-  allowedChanges,
   type CheckInput,
   type CheckOutcome,
   type EvalTask,
   targetId,
+  scoreTask,
   TASKS,
   VENDOR_REVIEW_TITLE,
 } from './tasks'
-import { type FixtureTestGraph, openFixtureTestGraph, TEST_WORKSPACE_ID } from './testGraph'
+import { type FixtureTestGraph, openFixtureTestGraph } from './testGraph'
 
 const {truth} = buildFixture()
 
@@ -56,7 +58,9 @@ interface Graph extends FixtureTestGraph {
 let template: string
 let templateRows: Snapshot
 
-/** A fresh copy of the template, as the runner gives each task. */
+/** A fresh copy of the template, as the runner gives each task. One per
+ *  writing case rather than one shared database: the copy is the reset, and
+ *  re-importing the fixture costs about 5 s a case. */
 const openGraph = async (): Promise<Graph> => {
   const db = await createTestDb({from: template})
   const graph = await openFixtureTestGraph(db.db, {seed: false})
@@ -119,10 +123,10 @@ describe('imported fixture', () => {
 
   it('a copy differs from its template in nothing, opened and read from', async () => {
     await onFreshGraph(async fresh => {
-      expect(await diffAgainst(fresh.probe, templateRows)).toEqual({created: [], modified: []})
+      expect(await diffAgainst(fresh.probe, templateRows)).toEqual({created: [], modified: [], removed: []})
       await fresh.callTool('page', {name: PROJECT_PAGE})
       await fresh.callTool('search', {query: 'Kestrel'})
-      expect(await diffAgainst(fresh.probe, templateRows)).toEqual({created: [], modified: []})
+      expect(await diffAgainst(fresh.probe, templateRows)).toEqual({created: [], modified: [], removed: []})
     })
   }, 20_000)
 })
@@ -371,8 +375,7 @@ const expectOutcome = (outcome: CheckOutcome, pass: boolean) => expect(outcome.p
 const attempt = (task: EvalTask, solve: (graph: Graph) => Promise<void>): Promise<CheckOutcome> => onFreshGraph(async fresh => {
   const startedAt = Date.now()
   await solve(fresh)
-  const outcome = await task.check({probe: fresh.probe, truth, answer: undefined, startedAt})
-  const stray = strayChanges(await diffAgainst(fresh.probe, templateRows), allowedChanges(task, TEST_WORKSPACE_ID, outcome))
+  const {outcome, stray} = await scoreTask(task, {probe: fresh.probe, truth, answer: undefined, startedAt}, templateRows)
   return {pass: outcome.pass && stray === 0, detail: `${outcome.detail}; ${stray} stray change(s)`}
 })
 
@@ -419,16 +422,20 @@ describe('task changes', () => {
       await fresh.callTool('move_block', {id: moved.id, parentId: edited.parent_id, position: {kind: 'first'}})
       await fresh.callTool('update_block', {id: rollout, content: 'Target: Q4 2026.'})
       await fresh.callTool('create_block', {parentId: edited.id, content: 'a new child'})
+      // A raw-SQL hard delete leaves no row behind to compare.
+      const purged = byText('Success metric')
+      await fresh.command({type: 'sql', mode: 'execute', sql: 'DELETE FROM blocks WHERE id = ?', params: [purged.id], allowSyncedWrite: true})
 
       const changes = await diffAgainst(fresh.probe, templateRows)
       expect(changes.created).toHaveLength(1)
       expect(changes.modified.map(change => change.id).sort())
         .toEqual([edited.id, tagged.id, removed.id, moved.id, rollout].sort())
+      expect(changes.removed.map(row => row.id)).toEqual([purged.id])
       // The rollout edit is what edit-rollout-phrase is asked to make; the rest are stray.
       const rolloutContent = new Map([[rollout, {content: true} as const]])
-      expect(strayChanges(changes, {edits: rolloutContent, creates: new Map()})).toBe(5)
-      expect(strayChanges(changes, {edits: rolloutContent, creates: new Map([[changes.created[0].id, {}]])})).toBe(4)
-      expect(strayChanges(changes, {edits: new Map(), creates: new Map()})).toBe(6)
+      expect(strayChanges(changes, {edits: rolloutContent, creates: new Map()})).toBe(6)
+      expect(strayChanges(changes, {edits: rolloutContent, creates: new Map([[changes.created[0].id, {}]])})).toBe(5)
+      expect(strayChanges(changes, {edits: new Map(), creates: new Map()})).toBe(7)
     })
   }, 30_000)
 
@@ -445,6 +452,14 @@ describe('task changes', () => {
     })
   }, 20_000)
 })
+
+/** The blocks, by the names `fixtureState` gives them, on which two states differ. */
+const differingBlocks = (a: readonly string[], b: readonly string[]): string[] => {
+  const inA = new Set(a)
+  const inB = new Set(b)
+  const name = (line: string) => (JSON.parse(line) as [string])[0]
+  return [...new Set([...a.filter(line => !inB.has(line)), ...b.filter(line => !inA.has(line))].map(name))]
+}
 
 describe('fixture state', () => {
   const pages = buildFixture().pages

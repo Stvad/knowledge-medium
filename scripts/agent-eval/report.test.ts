@@ -21,7 +21,7 @@ const runRecord = (task: string, rep: number, overrides: Partial<TaskRunRecord> 
   pass: true,
   detail: 'ok',
   toolCalls: 4,
-  toolCallsByName: {mcp__km__search: 4},
+  graphCommands: {search: 4},
   toolErrors: 0,
   seenChars: 4096,
   maxSeenChars: 2048,
@@ -34,7 +34,7 @@ const runRecord = (task: string, rep: number, overrides: Partial<TaskRunRecord> 
   terminalReason: 'completed',
   exitCode: 0,
   timedOut: false,
-  writes: {created: 0, modified: 0},
+  writes: {created: 0, modified: 0, removed: 0},
   transcript: 't.jsonl',
   ...overrides,
 })
@@ -162,8 +162,8 @@ describe('renderMarkdown', () => {
   })
 
   it('flags writes made during a read task', () => {
-    const markdown = renderMarkdown(reportOf('r', [runRecord('a', 1, {writes: {created: 2, modified: 1}})]))
-    expect(markdown).toContain('- a #1: 2 created, 1 modified')
+    const markdown = renderMarkdown(reportOf('r', [runRecord('a', 1, {writes: {created: 2, modified: 1, removed: 1}})]))
+    expect(markdown).toContain('- a #1: 2 created, 1 modified, 1 removed')
   })
 })
 

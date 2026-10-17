@@ -7,6 +7,7 @@
  * A task's wording is part of the measurement: changing it invalidates
  * comparisons with earlier reports, so add a task rather than rewording one.
  */
+import { readFileSync } from 'node:fs'
 import { roamBlockId } from '@/plugins/roam-import/blockIds'
 import {
   DESIGN_PAGE,
@@ -26,15 +27,12 @@ import {
   pageIdByTitle,
   sqlAll,
 } from './graphQueries'
-import type { AllowedChanges, AllowedEdit } from './taskChanges'
+import { type AllowedChanges, type AllowedEdit, diffAgainst, type Snapshot, strayChanges, type TaskChanges } from './taskChanges'
 import { definitionHash } from './report'
 
-export interface TaskEnv {
+export interface CheckInput {
   probe: GraphProbe
   truth: FixtureTruth
-}
-
-export interface CheckInput extends TaskEnv {
   /** Parsed `ANSWER:` JSON from the reply, undefined when absent or malformed. */
   answer: unknown
   /** Wall-clock ms just before the agent started. */
@@ -65,9 +63,16 @@ export interface EvalTask {
   check: (input: CheckInput) => Promise<CheckOutcome>
 }
 
-/** Bump when a helper the checks share changes (normalizeText, compareSets,
- *  requireTarget, …): a hash covers only the definitions' own source. */
-const SHARED_HELPERS_VERSION = 4
+/** Bump when a helper in this file the checks share changes (normalizeText,
+ *  compareSets, requireTarget, …): a hash covers only the definitions' own
+ *  source. */
+const SHARED_HELPERS_VERSION = 5
+
+/** The modules every verdict also runs through: how the reply's answer is
+ *  read, how the graph is queried, and how changes are judged. Hashed whole,
+ *  so editing one needs no version bump. */
+const SCORING_MODULES = ['./transcript.ts', './graphQueries.ts', './taskChanges.ts']
+  .map(module => readFileSync(new URL(module, import.meta.url), 'utf8'))
 
 /** The values checks close over, which their source text only names. Shared
  *  by every task's hash: changing any of them may change any task's verdict. */
@@ -80,6 +85,7 @@ const scoringData = (truth: FixtureTruth) => JSON.parse(JSON.stringify(
  *  earlier run of the same definition. */
 export const taskDefinitionHash = (task: EvalTask, truth: FixtureTruth): string => definitionHash({
   shared: SHARED_HELPERS_VERSION,
+  modules: SCORING_MODULES,
   scoring: scoringData(truth),
   kind: task.kind,
   prompt: task.prompt,
@@ -139,10 +145,28 @@ const isoDates = (value: unknown) => stringList(value)?.map(date => date.trim())
 export const targetId = (workspaceId: string, uid: string) => roamBlockId(workspaceId, uid)
 
 /** What a run of `task` was allowed to change, given its check's outcome. */
-export const allowedChanges = (task: EvalTask, workspaceId: string, outcome: CheckOutcome): AllowedChanges => ({
+const allowedChanges = (task: EvalTask, workspaceId: string, outcome: CheckOutcome): AllowedChanges => ({
   edits: new Map(Object.entries(task.edits ?? {}).map(([uid, edit]) => [targetId(workspaceId, uid), edit])),
   creates: new Map(Object.entries(outcome.created ?? {})),
 })
+
+export interface TaskScore {
+  outcome: CheckOutcome
+  changes: TaskChanges
+  /** Changes outside what the task was asked to make. */
+  stray: number
+}
+
+/** Scores one execution of `task` on its own graph, as the runner and the
+ *  gate both do. The diff comes first because it waits out the graph's
+ *  deferred work, and a check may read what a processor writes (the page a
+ *  link mints). */
+export const scoreTask = async (task: EvalTask, input: CheckInput, template: Snapshot): Promise<TaskScore> => {
+  const changes = await diffAgainst(input.probe, template)
+  const outcome: CheckOutcome = await task.check(input)
+    .catch((error: unknown) => ({pass: false, detail: `check threw: ${error instanceof Error ? error.message : String(error)}`}))
+  return {outcome, changes, stray: strayChanges(changes, allowedChanges(task, input.probe.workspaceId, outcome))}
+}
 
 const requireTarget = async (probe: GraphProbe, uid: string) => {
   const block = await getBlock(probe, targetId(probe.workspaceId, uid))
@@ -354,21 +378,20 @@ export const TASKS: readonly EvalTask[] = [
       + `add a child block containing [[${VENDOR_REVIEW_TITLE}]].`,
     ),
     check: async ({probe, startedAt}) => {
-      const title = VENDOR_REVIEW_TITLE
-      const pageId = await pageIdByTitle(probe, title)
+      const pageId = await pageIdByTitle(probe, VENDOR_REVIEW_TITLE)
       if (!pageId) return {pass: false, detail: 'page does not exist'}
       const [{parent_id: pageParent}] = await sqlAll<{parent_id: string | null}>(probe, 'SELECT parent_id FROM blocks WHERE id = ?', [pageId])
       if (pageParent !== null) return {pass: false, detail: 'the page was filed under a block, not left a page'}
       const first = (await childrenOf(probe, pageId))[0]
       const statusOk = first !== undefined && normalizeText(first.content) === 'status: under review'
       const links = (await childrenOf(probe, targetId(probe.workspaceId, TARGET_UIDS.vendorsSection)))
-        .filter(row => row.created_at >= startedAt && row.content.includes(`[[${title}]]`))
+        .filter(row => row.created_at >= startedAt && row.content.includes(`[[${VENDOR_REVIEW_TITLE}]]`))
       const linkOk = links.length === 1
       return {
         pass: statusOk && linkOk,
         detail: `first block ${statusOk ? 'ok' : `is ${JSON.stringify(first?.content ?? null)}`}; ${links.length} link(s) under Vendors`,
         // A page carries the type and alias the app gives every page, nothing more.
-        created: Object.fromEntries([[pageId, {types: ['page'], alias: [title]}], ...[...(first ? [first] : []), ...links].map(row => [row.id, {}])]),
+        created: Object.fromEntries([[pageId, {types: ['page'], alias: [VENDOR_REVIEW_TITLE]}], ...[...(first ? [first] : []), ...links].map(row => [row.id, {}])]),
       }
     },
   },

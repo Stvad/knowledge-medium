@@ -14,18 +14,18 @@
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmdirSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 import { createBridgeClient } from '../../packages/agent-cli/src/client'
 import { MCP_SERVER_NAME } from '../../packages/agent-cli/src/mcpShared'
 import { runJsonlProcess } from '../../packages/agent-dispatch/src/execProcess'
-import { BILLING_ENV_DENYLIST, envForBilling } from '../../packages/agent-dispatch/src/runner'
-import { buildFixture, type Fixture } from './fixture'
+import { BILLING_ENV_DENYLIST } from '../../packages/agent-dispatch/src/runner'
+import { buildFixture, type Fixture, TEST_WORKSPACE_ID } from './fixture'
 import { fixtureState } from './fixtureState'
 import { dailyNoteId, type GraphProbe, requirePageId } from './graphQueries'
-import { type Bridge, envWithoutAgentRuntime, startBridge, startHost } from './hosting'
+import { AGENT_CLI_DIST, type Bridge, childEnv, startBridge, startHost } from './hosting'
 import { connectMcpClient } from './mcpClient'
 import { measureProbes, OUTPUT_PROBES, outputProbeHash } from './outputBudgets'
 import {
@@ -38,20 +38,14 @@ import {
   type TaskRunRecord,
 } from './report'
 import { allowedTools, SURFACE_NAMES, type SurfaceName, SURFACES, surfaceHash, toolArgs } from './surfaces'
-import { diffAgainst, type Snapshot, snapshotWorkspace, strayChanges } from './taskChanges'
-import { allowedChanges, type CheckOutcome, type EvalTask, taskDefinitionHash, TASKS } from './tasks'
+import { type Snapshot, snapshotWorkspace } from './taskChanges'
+import { type EvalTask, scoreTask, taskDefinitionHash, TASKS } from './tasks'
 import { extractAnswer, parseTranscript } from './transcript'
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const RESULTS_DIR = path.join(REPO_ROOT, 'scripts/agent-eval/results')
 const RUNS_DIR = path.join(REPO_ROOT, 'tmp/agent-eval/runs')
-const AGENT_CLI_DIST = path.join(REPO_ROOT, 'packages/agent-cli/dist')
-/** vite-node with the test config, which resolves `@/` the way the fixture
- *  test does. */
-const HOST_COMMAND = {
-  bin: path.join(REPO_ROOT, 'node_modules/.bin/vite-node'),
-  args: ['--config', path.join(REPO_ROOT, 'vitest.config.ts'), path.join(REPO_ROOT, 'scripts/agent-eval/host.ts'), '--'],
-}
+const CLAUDE_PROJECTS = path.join(homedir(), '.claude', 'projects')
 
 const fail = (message: string): never => {
   process.stderr.write(`agent-eval: ${message}\n`)
@@ -108,15 +102,14 @@ const codeDigest = (): string => {
 }
 
 /** The checker's view of one hosted graph: wire commands under its token. */
-const probeFor = (bridge: Bridge, token: string, workspaceId: string) => {
+const probeFor = (bridge: Bridge, token: string) => {
   const client = createBridgeClient({bridgeUrl: bridge.url, token, timeoutMs: 120_000})
-  return {client, probe: {workspaceId, command: command => client.runCommand(command)} satisfies GraphProbe}
+  return {client, probe: {workspaceId: TEST_WORKSPACE_ID, command: command => client.runCommand(command)} satisfies GraphProbe}
 }
 
 interface Template {
   /** The closed database every task's graph is a copy of. */
   dir: string
-  workspaceId: string
   rows: Snapshot
   /** `fixtureState`, hashed. */
   state: string
@@ -126,14 +119,12 @@ interface Template {
 
 /** Seeds the graph every task starts from, and measures it: its rows, its
  *  fixture state and the probes' output sizes. */
-const prepareTemplate = async (bridge: Bridge, fixture: Fixture, logDir: string): Promise<Template> => {
+const prepareTemplate = async (bridge: Bridge, fixture: Fixture, scratch: string, logDir: string): Promise<Template> => {
   process.stdout.write('importing the fixture…\n')
-  const host = await startHost({command: HOST_COMMAND, bridge, log: path.join(logDir, 'template.log')})
+  const host = await startHost({bridge, tmpDir: scratch, log: path.join(logDir, 'template.log')})
     .catch((error: unknown) => fail(errorText(error)))
   try {
-    const whoami = await createBridgeClient({bridgeUrl: bridge.url, token: host.token}).whoami()
-    const workspaceId = whoami.audience.workspaceId ?? fail('the template host registered no workspace')
-    const {client, probe} = probeFor(bridge, host.token, workspaceId)
+    const {client, probe} = probeFor(bridge, host.token)
     const rows = await snapshotWorkspace(probe)
     const state = definitionHash(await fixtureState(probe, fixture.pages))
     const mcp = await connectMcpClient(client)
@@ -142,9 +133,37 @@ const prepareTemplate = async (bridge: Bridge, fixture: Fixture, logDir: string)
       pageId: title => requirePageId(probe, title),
       dailyNoteId: iso => dailyNoteId(probe, iso),
     }).finally(() => mcp.close())
-    return {dir: host.dir, workspaceId, rows, state, outputs}
+    return {dir: host.dir, rows, state, outputs}
   } finally {
     await host.stop()
+  }
+}
+
+/** What `run` and `sizes` both start from: a build, a scratch directory, a
+ *  private bridge and a measured template, all removed when the process
+ *  exits. */
+const prepareRun = async (fixture: Fixture, logDir: string) => {
+  buildPackages()
+  const scratch = mkdtempSync(path.join(tmpdir(), 'agent-eval-'))
+  process.on('exit', () => rmSync(scratch, {recursive: true, force: true}))
+  const bridge = await startBridge(path.join(scratch, 'bridge')).catch((error: unknown) => fail(errorText(error)))
+  process.on('exit', () => bridge.stop())
+  return {scratch, bridge, template: await prepareTemplate(bridge, fixture, scratch, logDir)}
+}
+
+/** Claude Code's project directory for one job's working directory, which
+ *  holds the session's memory and saved tool output; null unless the stream
+ *  named one that is plainly that. */
+const jobProjectDir = (memoryDir: string | null, cwd: string): string | null => {
+  const dir = memoryDir && path.dirname(path.resolve(memoryDir))
+  return dir && path.dirname(dir) === CLAUDE_PROJECTS && dir.endsWith(`-${path.basename(path.dirname(cwd))}-work`) ? dir : null
+}
+
+const savedOutputChars = (file: string): number | null => {
+  try {
+    return readFileSync(file, 'utf8').length
+  } catch {
+    return null
   }
 }
 
@@ -195,18 +214,14 @@ const run = async (options: RunOptions) => {
       // Not empty: the run wrote into it.
     }
   })
-  buildPackages()
-  const code = codeDigest()
-  const fixture = buildFixture()
-  const surface = SURFACES[options.surface]
-  const scratch = mkdtempSync(path.join(tmpdir(), 'agent-eval-'))
-  process.on('exit', () => rmSync(scratch, {recursive: true, force: true}))
-  const bridge = await startBridge(path.join(AGENT_CLI_DIST, 'server.js'), path.join(scratch, 'bridge'))
-    .catch((error: unknown) => fail(errorText(error)))
-  process.on('exit', () => bridge.stop())
   mkdirSync(path.join(runDir, 'hosts'), {recursive: true})
-  const template = await prepareTemplate(bridge, fixture, path.join(runDir, 'hosts'))
-  process.on('exit', () => rmSync(template.dir, {recursive: true, force: true}))
+  const fixture = buildFixture()
+  const {scratch, bridge, template} = await prepareRun(fixture, path.join(runDir, 'hosts'))
+  const code = codeDigest()
+  const surface = SURFACES[options.surface]
+  const jobs: Job[] = []
+  for (let rep = 1; rep <= options.repeat; rep++) for (const task of options.tasks) jobs.push({task, rep})
+  const workers = Math.min(options.workers, jobs.length)
 
   const report: EvalReport = {
     schemaVersion: REPORT_SCHEMA_VERSION,
@@ -225,7 +240,7 @@ const run = async (options: RunOptions) => {
       mcpOutputTokens: options.mcpOutputTokens,
       bashOutputChars: options.bashOutputChars,
       timeoutMs: options.timeoutMs,
-      workers: options.workers,
+      workers,
     },
     claudeCodeVersion: null,
     allowedTools: allowedTools(surface),
@@ -250,10 +265,8 @@ const run = async (options: RunOptions) => {
   const binDir = path.join(scratch, 'bin')
   writeCliShim(binDir)
   const scrubbed = BILLING_ENV_DENYLIST.filter(key => process.env[key])
-  process.stdout.write(`billing: subscription login${scrubbed.length ? ` (scrubbed ${scrubbed.join(', ')})` : ''}\n`)
+  process.stdout.write(`billing: subscription login${scrubbed.length ? ` (not passed: ${scrubbed.join(', ')})` : ''}\n`)
 
-  const jobs: Job[] = []
-  for (let rep = 1; rep <= options.repeat; rep++) for (const task of options.tasks) jobs.push({task, rep})
   const records = new Map<Job, TaskRunRecord>()
   const abort = new AbortController()
 
@@ -262,9 +275,10 @@ const run = async (options: RunOptions) => {
     const jobDir = mkdtempSync(path.join(scratch, `${task.id}-${rep}-`))
     const cwd = path.join(jobDir, 'work')
     mkdirSync(cwd)
-    const graph = await startHost({command: HOST_COMMAND, bridge, from: template.dir, log: path.join(runDir, 'hosts', `${task.id}-${rep}.log`)})
+    const hostLog = path.join(runDir, 'hosts', `${task.id}-${rep}.log`)
+    const graph = await startHost({bridge, from: template.dir, tmpDir: scratch, log: hostLog})
     try {
-      const {probe} = probeFor(bridge, graph.token, template.workspaceId)
+      const {probe} = probeFor(bridge, graph.token)
       // The agent's CLI and MCP server reach this graph and nothing else:
       // the private bridge, this graph's token, and a config dir with no
       // profiles in it.
@@ -299,13 +313,12 @@ const run = async (options: RunOptions) => {
         ],
         prompt: `${surface.preamble}\n\n${task.prompt}`,
         cwd,
-        env: {
-          ...envForBilling(envWithoutAgentRuntime(process.env), 'subscription'),
+        env: childEnv({
           ...runtimeEnv,
           PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ''}`,
           MAX_MCP_OUTPUT_TOKENS: String(report.conditions.mcpOutputTokens),
           BASH_MAX_OUTPUT_LENGTH: String(report.conditions.bashOutputChars),
-        },
+        }),
         timeoutMs: report.conditions.timeoutMs,
         onStdoutText: text => { stdout += text },
         signal: abort.signal,
@@ -313,26 +326,34 @@ const run = async (options: RunOptions) => {
       const elapsedMs = Date.now() - startedAt
       if (abort.signal.aborted) throw new Error('aborted')
       writeFileSync(transcriptPath, stdout)
+      if (!graph.running()) throw new Error(`the graph host exited while the agent ran; see ${path.relative(REPO_ROOT, hostLog)}`)
+      // Before the checker's own commands reach the host.
+      const graphCommands = await graph.commandCounts()
 
-      const metrics = parseTranscript(stdout)
+      const metrics = parseTranscript(stdout, savedOutputChars)
+      const projectDir = jobProjectDir(metrics.memoryDir, cwd)
+      if (projectDir) rmSync(projectDir, {recursive: true, force: true})
+      if (metrics.apiErrorStatus !== null) throw new Error(`the API answered ${metrics.apiErrorStatus} (a rate or usage limit, or an outage), so the run measured that; start it again later`)
+      // The model and the CLI are known only once a task has run, and must
+      // stay the same for every task.
       const modelResolved = report.conditions.model === null && metrics.model !== null
       if (!modelResolved && metrics.model !== null && metrics.model !== report.conditions.model) {
-        throw new Error(`${task.id} ran on ${metrics.model}, not ${report.conditions.model} like the tasks before it; start the run again`)
+        throw new Error(`it ran on ${metrics.model}, not ${report.conditions.model} like the tasks before it; start the run again`)
+      }
+      if (report.claudeCodeVersion !== null && metrics.claudeCodeVersion !== null && metrics.claudeCodeVersion !== report.claudeCodeVersion) {
+        throw new Error(`it ran on Claude Code ${metrics.claudeCodeVersion}, not ${report.claudeCodeVersion} like the tasks before it; start the run again`)
       }
       report.conditions.model ??= metrics.model
       report.claudeCodeVersion ??= metrics.claudeCodeVersion
       if (modelResolved) requireComparable(false)
-      const outcome: CheckOutcome = await task.check({probe, truth: fixture.truth, answer: extractAnswer(metrics.resultText), startedAt})
-        .catch((error: unknown) => ({pass: false, detail: `check threw: ${errorText(error)}`}))
-      const changes = await diffAgainst(probe, template.rows)
-      // After the check, so a change while any part of this task ran is
-      // caught before the task is accepted.
-      if (codeDigest() !== code) throw new Error(`the checkout or the built agent CLI changed while ${task.id} ran, so it may have run other code; start the run again`)
-      const strayEdits = strayChanges(changes, allowedChanges(task, probe.workspaceId, outcome))
+      const {outcome, changes, stray} = await scoreTask(task, {probe, truth: fixture.truth, answer: extractAnswer(metrics.resultText), startedAt}, template.rows)
+      // After scoring, so a change while any part of this task ran is caught
+      // before the task is accepted.
+      if (codeDigest() !== code) throw new Error('the checkout or the built agent CLI changed while it ran, so it may have run other code; start the run again')
       const failures = [
         proc.timedOut ? 'timed out' : null,
         !proc.timedOut && (proc.exitCode !== 0 || metrics.isError) ? `claude exited ${proc.exitCode}${metrics.isError ? ' with an error result' : ''}` : null,
-        strayEdits > 0 ? `changed ${strayEdits} block(s) it was not asked to` : null,
+        stray > 0 ? `changed ${stray} block(s) it was not asked to` : null,
       ].filter((reason): reason is string => reason !== null)
 
       const seen = metrics.toolCalls.map(call => call.seenChars ?? 0)
@@ -343,8 +364,7 @@ const run = async (options: RunOptions) => {
         pass: outcome.pass && failures.length === 0,
         detail: [...failures, outcome.detail].join('; '),
         toolCalls: metrics.toolCalls.length,
-        toolCallsByName: metrics.toolCalls.flatMap(call => call.uses).reduce<Record<string, number>>((counts, use) =>
-          ({...counts, [use]: (counts[use] ?? 0) + 1}), {}),
+        graphCommands,
         toolErrors: metrics.toolCalls.filter(call => call.isError).length,
         seenChars: seen.reduce((total, chars) => total + chars, 0),
         maxSeenChars: Math.max(0, ...seen),
@@ -358,7 +378,7 @@ const run = async (options: RunOptions) => {
         terminalReason: metrics.terminalReason,
         exitCode: proc.exitCode,
         timedOut: proc.timedOut,
-        writes: {created: changes.created.length, modified: changes.modified.length},
+        writes: {created: changes.created.length, modified: changes.modified.length, removed: changes.removed.length},
         transcript: path.relative(REPO_ROOT, transcriptPath),
       }
       if (proc.exitCode !== 0 && proc.stderr.trim()) {
@@ -384,13 +404,13 @@ const run = async (options: RunOptions) => {
         process.stdout.write(`[${records.size}/${jobs.length}] ${job.task.id} #${job.rep} ${record.pass ? 'pass' : 'FAIL'} · ${record.toolCalls} calls · `
           + `${Math.round(record.seenChars / 1000)}k chars read · ${Math.round(record.tokens.contextTotal / 1000)}k context tokens · ${Math.round(record.elapsedMs / 1000)}s\n`)
       } catch (error) {
-        firstError ??= error
+        firstError ??= new Error(`${job.task.id} #${job.rep}: ${errorText(error)}`)
         abort.abort()
       }
     }
   }
-  process.stdout.write(`running ${jobs.length} task(s) on the ${options.surface} surface, ${options.workers} at a time…\n`)
-  await Promise.all(Array.from({length: Math.min(options.workers, jobs.length)}, worker))
+  process.stdout.write(`running ${jobs.length} task(s) on the ${options.surface} surface, ${workers} at a time…\n`)
+  await Promise.all(Array.from({length: workers}, worker))
   if (firstError !== null) fail(`aborting the run: ${errorText(firstError)}`)
 
   report.runs = jobs.map(job => records.get(job)!)
@@ -415,14 +435,9 @@ const writeReport = (report: EvalReport, baseline: EvalReport | undefined) => {
 }
 
 const sizes = async () => {
-  buildPackages()
-  const scratch = mkdtempSync(path.join(tmpdir(), 'agent-eval-'))
-  process.on('exit', () => rmSync(scratch, {recursive: true, force: true}))
-  const bridge = await startBridge(path.join(AGENT_CLI_DIST, 'server.js'), path.join(scratch, 'bridge'))
-    .catch((error: unknown) => fail(errorText(error)))
-  process.on('exit', () => bridge.stop())
-  const template = await prepareTemplate(bridge, buildFixture(), scratch)
-  rmSync(template.dir, {recursive: true, force: true})
+  const logDir = mkdtempSync(path.join(tmpdir(), 'agent-eval-sizes-'))
+  const {template} = await prepareRun(buildFixture(), logDir)
+  rmSync(logDir, {recursive: true, force: true})
   process.stdout.write(`${JSON.stringify(template.outputs, null, 2)}\n`)
   process.exit(0)
 }
@@ -432,6 +447,10 @@ const positiveInteger = (flag: string, raw: string, max = Number.MAX_SAFE_INTEGE
   if (!Number.isInteger(value) || value < 1 || value > max) fail(`--${flag} must be an integer from 1 to ${max}, got ${raw}`)
   return value
 }
+
+// Ctrl-C and a parent's SIGTERM run the exit hooks too, which stop the
+// bridge and the hosts and remove the scratch directory.
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(signal, () => process.exit(130))
 
 const main = async () => {
   const {positionals, values} = parseArgs({

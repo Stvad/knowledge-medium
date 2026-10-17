@@ -32,7 +32,7 @@ export type Snapshot = ReadonlyMap<string, SnapshotRow>
 
 /** Waits until the graph's processors and deferred passes have nothing
  *  pending, as a harness tearing a Repo down does. */
-export const settle = async (probe: GraphProbe): Promise<void> => {
+const settle = async (probe: GraphProbe): Promise<void> => {
   await probe.command({type: 'eval', code: 'await repo.awaitDeferredWork()'})
 }
 
@@ -49,6 +49,9 @@ export interface TaskChanges {
   created: SnapshotRow[]
   /** Template rows whose state differs from the template. */
   modified: Array<{id: string, before: SnapshotRow, after: SnapshotRow}>
+  /** Template rows gone from the workspace: hard-deleted by raw SQL, or
+   *  moved to another workspace. */
+  removed: SnapshotRow[]
 }
 
 /** Key order is not part of a JSON column's value. */
@@ -69,12 +72,15 @@ const sameState = (a: SnapshotRow, b: SnapshotRow) => [...new Set([...Object.key
   .every(column => RECENCY_STAMPS.has(column) || a[column] === b[column])
 
 export const diffAgainst = async (probe: GraphProbe, template: Snapshot): Promise<TaskChanges> => {
-  const changes: TaskChanges = {created: [], modified: []}
-  for (const row of await settledRows(probe)) {
+  const rows = await settledRows(probe)
+  const changes: TaskChanges = {created: [], modified: [], removed: []}
+  for (const row of rows) {
     const before = template.get(row.id)
     if (!before) changes.created.push(row)
     else if (!sameState(before, row)) changes.modified.push({id: row.id, before, after: row})
   }
+  const present = new Set(rows.map(row => row.id))
+  changes.removed = [...template.values()].filter(row => !present.has(row.id))
   return changes
 }
 
@@ -119,7 +125,8 @@ const allowedCreation = (row: SnapshotRow, allowed: AllowedChanges): boolean => 
 }
 
 /** How many changes fall outside `allowed`. A block the task created and
- *  deleted again is not counted. */
+ *  deleted again is not counted; a removed one always is. */
 export const strayChanges = (changes: TaskChanges, allowed: AllowedChanges): number =>
   changes.modified.filter(({id, before, after}) => exceedsEdit(before, after, allowed.edits.get(id) ?? NO_EDIT)).length
   + changes.created.filter(row => !row.deleted && !allowedCreation(row, allowed)).length
+  + changes.removed.length
