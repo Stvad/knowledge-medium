@@ -1,1 +1,1 @@
-import{Ud as e}from"../../../../../chunks/app-DRyRcK_b.js";export{e as remarkBlockrefs};
+import{Ud as e}from"../../../../../chunks/app-BPM2FJDj.js";export{e as remarkBlockrefs};

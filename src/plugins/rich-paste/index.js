@@ -1,1 +1,1 @@
-import{Tf as e}from"../../../chunks/app-DRyRcK_b.js";export{e as richPastePlugin};
+import{Tf as e}from"../../../chunks/app-BPM2FJDj.js";export{e as richPastePlugin};

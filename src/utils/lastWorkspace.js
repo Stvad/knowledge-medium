@@ -1,1 +1,1 @@
-import{av as e,iv as t,rv as n}from"../../chunks/app-DRyRcK_b.js";export{n as forgetRememberedWorkspace,t as recallRememberedWorkspace,e as rememberWorkspace};
+import{av as e,iv as t,rv as n}from"../../chunks/app-BPM2FJDj.js";export{n as forgetRememberedWorkspace,t as recallRememberedWorkspace,e as rememberWorkspace};

@@ -1,1 +1,1 @@
-import{Fk as e,Ik as t}from"../../../chunks/app-DRyRcK_b.js";export{e as BLOCK_TITLE_TEXT_CLASS,t as useBlockTitleTextClass};
+import{Fk as e,Ik as t}from"../../../chunks/app-BPM2FJDj.js";export{e as BLOCK_TITLE_TEXT_CLASS,t as useBlockTitleTextClass};

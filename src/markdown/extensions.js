@@ -1,1 +1,1 @@
-import{mA as e,pA as t}from"../../chunks/app-DRyRcK_b.js";export{t as markdownExtensionsFacet,e as resolveMarkdownRenderConfig};
+import{mA as e,pA as t}from"../../chunks/app-BPM2FJDj.js";export{t as markdownExtensionsFacet,e as resolveMarkdownRenderConfig};

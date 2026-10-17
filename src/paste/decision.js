@@ -1,1 +1,1 @@
-import{BO as e,zO as t}from"../../chunks/app-DRyRcK_b.js";export{t as defaultPasteDecision,e as pasteDecisionVerb};
+import{BO as e,zO as t}from"../../chunks/app-BPM2FJDj.js";export{t as defaultPasteDecision,e as pasteDecisionVerb};

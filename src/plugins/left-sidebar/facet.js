@@ -1,1 +1,1 @@
-import{A_ as e,k_ as t}from"../../../chunks/app-DRyRcK_b.js";export{t as isLeftSidebarSectionContribution,e as leftSidebarSectionsFacet};
+import{A_ as e,k_ as t}from"../../../chunks/app-BPM2FJDj.js";export{t as isLeftSidebarSectionContribution,e as leftSidebarSectionsFacet};

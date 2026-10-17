@@ -1,1 +1,1 @@
-import{$E as e,QE as t,eD as n}from"../../../chunks/app-DRyRcK_b.js";export{t as BlockTypeBlockRenderer,e as BlockTypeContentRenderer,n as writeBlockTypeLabel};
+import{$E as e,QE as t,eD as n}from"../../../chunks/app-BPM2FJDj.js";export{t as BlockTypeBlockRenderer,e as BlockTypeContentRenderer,n as writeBlockTypeLabel};

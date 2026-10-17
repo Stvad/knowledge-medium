@@ -1,1 +1,1 @@
-import{GA as e,KA as t,UA as n,WA as r}from"../../../chunks/app-DRyRcK_b.js";export{n as addProperty,r as deleteProperty,e as renameProperty,t as writeProperty};
+import{GA as e,KA as t,UA as n,WA as r}from"../../../chunks/app-BPM2FJDj.js";export{n as addProperty,r as deleteProperty,e as renameProperty,t as writeProperty};
