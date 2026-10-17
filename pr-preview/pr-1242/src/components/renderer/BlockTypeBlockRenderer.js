@@ -1,1 +1,1 @@
-import{CO as e,SO as t,xO as n}from"../../../chunks/app-pbMA-h5x.js";export{n as BlockTypeBlockRenderer,t as BlockTypeContentRenderer,e as writeBlockTypeLabel};
+import{CO as e,SO as t,wO as n}from"../../../chunks/app-XTibIypG.js";export{t as BlockTypeBlockRenderer,e as BlockTypeContentRenderer,n as writeBlockTypeLabel};

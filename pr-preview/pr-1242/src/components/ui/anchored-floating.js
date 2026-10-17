@@ -1,1 +1,1 @@
-import{JF as e,YF as t}from"../../../chunks/app-pbMA-h5x.js";export{e as floatingAnchorFromRect,t as useAnchoredFloating};
+import{XF as e,YF as t}from"../../../chunks/app-XTibIypG.js";export{t as floatingAnchorFromRect,e as useAnchoredFloating};

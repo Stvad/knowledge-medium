@@ -1,1 +1,1 @@
-import{g6 as e}from"../../../chunks/app-pbMA-h5x.js";export{e as defineQuery};
+import{_6 as e}from"../../../chunks/app-XTibIypG.js";export{e as defineQuery};

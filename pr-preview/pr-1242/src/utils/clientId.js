@@ -1,1 +1,1 @@
-import{F1 as e,I1 as t,L1 as n,R1 as r,z1 as i}from"../../chunks/app-pbMA-h5x.js";export{e as deviceSurface,t as getClientId,n as getDeviceLabel,r as isClientIdPersistent,i as resetClientIdCache};
+import{B1 as e,I1 as t,L1 as n,R1 as r,z1 as i}from"../../chunks/app-XTibIypG.js";export{t as deviceSurface,n as getClientId,r as getDeviceLabel,i as isClientIdPersistent,e as resetClientIdCache};

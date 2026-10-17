@@ -1,1 +1,1 @@
-import{gS as e,hS as t,mS as n}from"../../../../../chunks/app-pbMA-h5x.js";export{n as isWikilinkDisplayParts,t as resolveWikilinkDisplay,e as wikilinkDisplayDecoratorFacet};
+import{_S as e,gS as t,hS as n}from"../../../../../chunks/app-XTibIypG.js";export{n as isWikilinkDisplayParts,t as resolveWikilinkDisplay,e as wikilinkDisplayDecoratorFacet};

@@ -1,1 +1,1 @@
-import{fV as e,pV as t}from"../../chunks/app-pbMA-h5x.js";export{e as pluginPrefsExtension,t as pluginUIStateExtension};
+import{mV as e,pV as t}from"../../chunks/app-XTibIypG.js";export{t as pluginPrefsExtension,e as pluginUIStateExtension};

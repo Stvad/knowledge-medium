@@ -1,1 +1,1 @@
-import{_T as e,fT as t,gT as n,hT as r,mT as i,pT as a}from"../../chunks/app-pbMA-h5x.js";export{t as bindBlockActionContext,a as createSharedBlockActions,i as enterEditMode,r as extendSelectionDown,n as extendSelectionUp,e as requestEditorFocusIfEditing};
+import{_T as e,gT as t,hT as n,mT as r,pT as i,vT as a}from"../../chunks/app-XTibIypG.js";export{i as bindBlockActionContext,r as createSharedBlockActions,n as enterEditMode,t as extendSelectionDown,e as extendSelectionUp,a as requestEditorFocusIfEditing};

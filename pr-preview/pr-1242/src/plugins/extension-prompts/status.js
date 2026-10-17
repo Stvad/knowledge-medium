@@ -1,1 +1,1 @@
-import{QT as e,ZT as t}from"../../../chunks/app-pbMA-h5x.js";export{t as extensionPromptDiagnosticContribution,e as extensionPromptDiagnosticSource};
+import{$T as e,QT as t}from"../../../chunks/app-XTibIypG.js";export{t as extensionPromptDiagnosticContribution,e as extensionPromptDiagnosticSource};

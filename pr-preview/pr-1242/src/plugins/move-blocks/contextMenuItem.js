@@ -1,1 +1,1 @@
-import{Sp as e,xp as t}from"../../../chunks/app-pbMA-h5x.js";export{t as MOVE_BLOCKS_CONTEXT_MENU_ITEM_ID,e as moveBlocksContextMenuItem};
+import{Cp as e,Sp as t}from"../../../chunks/app-XTibIypG.js";export{t as MOVE_BLOCKS_CONTEXT_MENU_ITEM_ID,e as moveBlocksContextMenuItem};

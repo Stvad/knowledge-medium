@@ -1,1 +1,1 @@
-import{_C as e,gC as t,hC as n,mC as r,pC as i}from"../../../chunks/app-pbMA-h5x.js";export{i as keybindingOverridesCodec,r as keybindingOverridesPresetCore,n as keybindingOverridesProp,t as keybindingsPrefsType,e as overrideEntryKey};
+import{_C as e,gC as t,hC as n,mC as r,vC as i}from"../../../chunks/app-XTibIypG.js";export{r as keybindingOverridesCodec,n as keybindingOverridesPresetCore,t as keybindingOverridesProp,e as keybindingsPrefsType,i as overrideEntryKey};

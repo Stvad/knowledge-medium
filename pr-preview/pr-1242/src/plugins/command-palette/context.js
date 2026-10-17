@@ -1,1 +1,1 @@
-import{AC as e,OC as t,jC as n,kC as r}from"../../../chunks/app-pbMA-h5x.js";export{t as COMMAND_PALETTE_ACTION_ID,r as COMMAND_PALETTE_CONTEXT,e as COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,n as commandPaletteActionContext};
+import{AC as e,MC as t,jC as n,kC as r}from"../../../chunks/app-XTibIypG.js";export{r as COMMAND_PALETTE_ACTION_ID,e as COMMAND_PALETTE_CONTEXT,n as COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,t as commandPaletteActionContext};

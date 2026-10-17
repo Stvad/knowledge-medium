@@ -1,1 +1,1 @@
-import{Cf as e,Sf as t,Tf as n,wf as r,xf as i}from"../../../chunks/app-pbMA-h5x.js";export{i as DEFAULT_BACKLINKS_VIEW_ID,t as FLAT_BACKLINKS_VIEW_ID,e as GROUPED_BACKLINKS_VIEW_ID,r as backlinksViewProp,n as defaultBacklinksViewIdForBlock};
+import{Cf as e,Ef as t,Sf as n,Tf as r,wf as i}from"../../../chunks/app-XTibIypG.js";export{n as DEFAULT_BACKLINKS_VIEW_ID,e as FLAT_BACKLINKS_VIEW_ID,i as GROUPED_BACKLINKS_VIEW_ID,r as backlinksViewProp,t as defaultBacklinksViewIdForBlock};

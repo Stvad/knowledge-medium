@@ -1,1 +1,1 @@
-import{iD as e}from"../../chunks/app-pbMA-h5x.js";export{e as dynamicExtensionsExtension};
+import{aD as e}from"../../chunks/app-XTibIypG.js";export{e as dynamicExtensionsExtension};

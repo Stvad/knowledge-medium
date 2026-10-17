@@ -1,1 +1,1 @@
-import{gt as e,nE as t,rE as n}from"../../../chunks/app-pbMA-h5x.js";export{t as extensionsOverridesProp,n as extensionsPrefsType,e as extensionsSettingsPlugin};
+import{gt as e,iE as t,rE as n}from"../../../chunks/app-XTibIypG.js";export{n as extensionsOverridesProp,t as extensionsPrefsType,e as extensionsSettingsPlugin};

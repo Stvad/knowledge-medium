@@ -1,1 +1,1 @@
-import{dM as e}from"../../chunks/app-pbMA-h5x.js";export{e as buildPropertyPanelSections};
+import{fM as e}from"../../chunks/app-XTibIypG.js";export{e as buildPropertyPanelSections};

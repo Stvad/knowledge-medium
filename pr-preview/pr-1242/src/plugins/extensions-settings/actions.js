@@ -1,1 +1,1 @@
-import{$T as e,eE as t}from"../../../chunks/app-pbMA-h5x.js";export{e as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,t as openExtensionsSettingsAction};
+import{eE as e,tE as t}from"../../../chunks/app-XTibIypG.js";export{e as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,t as openExtensionsSettingsAction};

@@ -1,1 +1,1 @@
-import{a3 as e,i3 as t,o3 as n,r3 as r,s3 as i}from"../../chunks/app-pbMA-h5x.js";export{r as backlinkRenderScopeId,t as breadcrumbRenderScopeId,e as embedRenderScopeId,n as outlineRenderScopeId,i as panelRenderScopeId};
+import{a3 as e,c3 as t,i3 as n,o3 as r,s3 as i}from"../../chunks/app-XTibIypG.js";export{n as backlinkRenderScopeId,e as breadcrumbRenderScopeId,r as embedRenderScopeId,i as outlineRenderScopeId,t as panelRenderScopeId};

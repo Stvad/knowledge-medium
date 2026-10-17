@@ -1,1 +1,1 @@
-import{Ag as e,Mg as t,Ng as n,jg as r}from"../../../chunks/app-pbMA-h5x.js";export{e as INSERT_TUTORIAL_ACTION_ID,r as insertTutorialAction,t as insertTutorialIntoWorkspace,n as openTutorialInActiveWorkspace};
+import{Mg as e,Ng as t,Pg as n,jg as r}from"../../../chunks/app-XTibIypG.js";export{r as INSERT_TUTORIAL_ACTION_ID,e as insertTutorialAction,t as insertTutorialIntoWorkspace,n as openTutorialInActiveWorkspace};

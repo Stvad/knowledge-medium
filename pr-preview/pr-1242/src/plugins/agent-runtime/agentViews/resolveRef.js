@@ -1,1 +1,1 @@
-import{ad as e,cd as t,od as n,sd as r}from"../../../../chunks/app-pbMA-h5x.js";export{e as BlockRefError,n as MIN_ID_PREFIX,r as resolveBlockRef,t as shortIds};
+import{cd as e,ld as t,od as n,sd as r}from"../../../../chunks/app-XTibIypG.js";export{n as BlockRefError,r as MIN_ID_PREFIX,e as resolveBlockRef,t as shortIds};

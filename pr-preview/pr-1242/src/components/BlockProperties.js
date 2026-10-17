@@ -1,1 +1,1 @@
-import{Uj as e}from"../../chunks/app-pbMA-h5x.js";export{e as BlockProperties};
+import{Wj as e}from"../../chunks/app-XTibIypG.js";export{e as BlockProperties};

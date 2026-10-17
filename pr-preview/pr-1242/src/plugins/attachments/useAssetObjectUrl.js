@@ -1,1 +1,1 @@
-import{Um as e}from"../../../chunks/app-pbMA-h5x.js";export{e as useAssetObjectUrl};
+import{Wm as e}from"../../../chunks/app-XTibIypG.js";export{e as useAssetObjectUrl};

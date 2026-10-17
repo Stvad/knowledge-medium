@@ -1,1 +1,1 @@
-import{em as e,nm as t,tm as n}from"../../../chunks/app-pbMA-h5x.js";export{e as insertImageAction,n as insertImageNormalModeAction,t as insertImageToolbarItem};
+import{nm as e,rm as t,tm as n}from"../../../chunks/app-XTibIypG.js";export{n as insertImageAction,e as insertImageNormalModeAction,t as insertImageToolbarItem};
