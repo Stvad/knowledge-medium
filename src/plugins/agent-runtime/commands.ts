@@ -79,7 +79,7 @@ import {
 } from './presetIdentity.ts'
 import { auditExtensionData, writeWarnings, type GrainWarning } from './grainAudit.ts'
 import { auditPropertyRegistration, type PropertyRegistrationAudit } from './propertyRegistrationAudit.ts'
-import { getPluginPrefsBlock } from '@/data/stateBlocks.js'
+import { getPluginPrefsBlock, readPluginPref } from '@/data/stateBlocks.js'
 import {
   extensionsOverridesProp,
   extensionsPrefsType,
@@ -539,8 +539,8 @@ const readExtensionOverrides = async (
   workspaceId: string,
 ): Promise<Overrides | null> => {
   try {
-    const prefsBlock = await getPluginPrefsBlock(repo, workspaceId, repo.user, extensionsPrefsType)
-    return prefsBlock.peekProperty(extensionsOverridesProp) ?? new Map<string, boolean>()
+    // A copy: with nothing stored this is the schema's shared default.
+    return new Map(await readPluginPref(repo, workspaceId, repo.user, extensionsPrefsType, extensionsOverridesProp))
   } catch {
     return null
   }
@@ -592,8 +592,7 @@ const resolveInstallLiveness = async (
   // override.
   if (existing === null) {
     // Read only for `--verify`, whose isolated resolution needs the real
-    // toggles: `getPluginPrefsBlock` CREATES the prefs subtree when absent, and
-    // a plain install has no use for the answer.
+    // toggles; a plain install has no use for the answer.
     return {
       kind: 'dormant',
       overrides: verify ? await readExtensionOverrides(repo, workspaceId) ?? new Map() : new Map(),
