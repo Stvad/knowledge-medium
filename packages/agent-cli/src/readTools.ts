@@ -43,7 +43,8 @@ export interface GraphReadTool {
   cli?: {
     verb: string
     alias?: string
-    positional?: {field: string, variadic: boolean}
+    /** `optional`: the field may be left out, or passed as its option instead. */
+    positional?: {field: string, variadic: boolean, optional?: boolean}
   }
   raw?: RawCommandSpec
   buildCommand: (input: ToolInput) => KnownCommand
@@ -135,7 +136,7 @@ export const GRAPH_READ_TOOLS: readonly GraphReadTool[] = [
     cli: {verb: 'daily-note', positional: {field: 'date', variadic: true}},
   }),
   wireTool('guide', 'data-model', dataModelCommandSchema, {
-    cli: {verb: 'data-model', alias: 'guide'},
+    cli: {verb: 'data-model', alias: 'guide', positional: {field: 'topic', variadic: false, optional: true}},
   }),
   sqlQueryTool,
 ]
@@ -205,12 +206,14 @@ const classify = (field: string, type: z.ZodType): {kind: OptionKind, keywords: 
   throw new Error(`readTools: no CLI option mapping for field "${field}"`)
 }
 
-const positionalField = (tool: GraphReadTool): string | undefined => tool.cli?.positional?.field
+/** A field the CLI takes only as the positional argument. */
+const positionalOnly = (tool: GraphReadTool, field: string): boolean =>
+  field === tool.cli?.positional?.field && tool.cli.positional.optional !== true
 
-/** Every field but the positional one and `format` becomes an option. */
+/** Every field but a positional-only one and `format` becomes an option. */
 export const cliOptionsFor = (tool: GraphReadTool): CliOptionSpec[] =>
   Object.entries(tool.shape)
-    .filter(([field]) => field !== positionalField(tool) && field !== 'format')
+    .filter(([field]) => !positionalOnly(tool, field) && field !== 'format')
     .map(([field, type]) => {
       const {kind, keywords} = classify(field, type)
       const name = flagName(field)
@@ -303,16 +306,19 @@ export const cliInputFrom = (
 ): ToolInput => {
   const input: ToolInput = {}
   const verb = tool.cli?.verb ?? tool.name
-  const field = positionalField(tool)
-  if (field) {
+  const spec = tool.cli?.positional
+  if (spec) {
     const text = (Array.isArray(positional) ? positional.map(String).join(' ') : String(positional ?? '')).trim()
-    if (!text) throw new Error(`${verb} requires a <${field}> (see \`kmagent ${verb} --help\`)`)
-    input[field] = text
+    if (text) input[spec.field] = text
+    else if (!spec.optional) throw new Error(`${verb} requires a <${spec.field}> (see \`kmagent ${verb} --help\`)`)
   }
-  for (const spec of cliOptionsFor(tool)) {
-    const value = options[cacKey(spec.key)]
+  for (const option of cliOptionsFor(tool)) {
+    const value = options[cacKey(option.key)]
     if (value === undefined) continue
-    input[spec.field] = coerceOption(spec, value)
+    if (option.field in input) {
+      throw new Error(`Pass the ${option.field} once: as \`kmagent ${verb} <${option.field}>\` or as --${option.key}.`)
+    }
+    input[option.field] = coerceOption(option, value)
   }
   if (hasJsonFormat(tool) && options.json) input.format = 'json'
 

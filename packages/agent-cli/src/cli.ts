@@ -706,9 +706,11 @@ cli
 for (const tool of GRAPH_READ_TOOLS) {
   if (!tool.cli) continue
   const {verb, alias, positional} = tool.cli
-  const usage = positional
-    ? `${verb} ${positional.variadic ? `[...${positional.field}]` : `<${positional.field}>`}`
-    : verb
+  const usage = !positional
+    ? verb
+    : positional.variadic
+      ? `${verb} [...${positional.field}]`
+      : positional.optional ? `${verb} [${positional.field}]` : `${verb} <${positional.field}>`
   const command = cli.command(usage, tool.description)
   if (alias) command.alias(alias)
   for (const spec of cliOptionsFor(tool)) command.option(spec.flag, spec.description)

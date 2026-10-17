@@ -928,7 +928,7 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
     readOnly: true,
   },
   'data-model': {
-    usage: 'kmagent data-model [--topic <id>|all]',
+    usage: 'kmagent data-model [<topic id>|all]',
     description: `The agent-facing data-model guide; read it first when working with a user's data. A short index by default, one section with --topic <id> (${DATA_MODEL_TOPICS.join(', ')}), everything with --topic all.`,
     readOnly: true,
   },

@@ -91,6 +91,13 @@ describe('cliInputFrom', () => {
     expect(() => cliInputFrom(tool('search'), [], {})).toThrow(/search requires a <query>/)
   })
 
+  it('takes an optional positional as the argument or as its option, once', () => {
+    expect(cliInputFrom(tool('guide'), 'properties', {})).toEqual({topic: 'properties'})
+    expect(cliInputFrom(tool('guide'), undefined, {topic: 'pages'})).toEqual({topic: 'pages'})
+    expect(cliInputFrom(tool('guide'), undefined, {})).toEqual({})
+    expect(() => cliInputFrom(tool('guide'), 'pages', {topic: 'sql'})).toThrow(/Pass the topic once/)
+  })
+
   it('sets format from --json', () => {
     expect(cliInputFrom(tool('get_block'), 'x', {json: true})).toEqual({ref: 'x', format: 'json'})
   })

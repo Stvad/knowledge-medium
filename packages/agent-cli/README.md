@@ -56,7 +56,7 @@ The CLI exposes both *local* commands (pairing, profile management) and *bridge*
 | `kmagent grouped-backlinks <ref> [--limit <n>] [--members-per-group <n>] [--filter …] [--grouping …]` | The grouped-references view of a block. |
 | `kmagent search <query> [--limit <n>] [--offset <n>] [--types <t>]… [--under <ref>] [--include-extensions]` | Full-text search with snippet, breadcrumb and types per hit. Repeat `--types` for several (a value is taken whole, commas included). |
 | `kmagent page <name>` / `kmagent daily-note <date>` | Resolve a page by name/alias, or a date to its daily note. |
-| `kmagent data-model [--topic <id>\|all]` (alias `guide`) | The agent-facing data-model guide: a short index of its topics by default, one section with `--topic <id>`, all of it with `--topic all`. |
+| `kmagent data-model [<topic id>\|all]` (alias `guide`) | The agent-facing data-model guide: a short index of its topics by default, one section with a topic id (`data-model pages`, or `--topic pages`), all of it with `all`. |
 | `kmagent create-block <json>` | Create a block from a JSON body. |
 | `kmagent update-block <json>` | Update a block from a JSON body. |
 | `kmagent move-block <json>` | Move a block to a parent/position from a JSON body. |
