@@ -23,6 +23,15 @@ const maxConcurrentCommands = 4
 // exactly the park boundary.
 const saturatedParkMs = 45_000
 
+/** A command's result as it goes back over the wire. */
+export const commandResult = async (run: () => Promise<unknown>): Promise<{ok: true, value: unknown} | {ok: false, error: ReturnType<typeof serializeError>}> => {
+  try {
+    return {ok: true, value: serializeValue(await run())}
+  } catch (error) {
+    return {ok: false, error: serializeError(error)}
+  }
+}
+
 export interface BridgeLoopOptions {
   clientId: string
   /** Read at every use, so a pairing approved while the loop runs is picked
@@ -119,12 +128,7 @@ export const startBridgeLoop = (options: BridgeLoopOptions): BridgeLoop => {
   const inFlightCommands = new Set<Promise<void>>()
 
   const runCommand = async (command: KnownAgentCommand, baseUrl: string) => {
-    let payload: unknown
-    try {
-      payload = {ok: true, value: serializeValue(await options.execute(command))}
-    } catch (error) {
-      payload = {ok: false, error: serializeError(error)}
-    }
+    const payload = await commandResult(() => options.execute(command))
     try {
       await reportResult(command.commandId!, payload, baseUrl)
     } catch (reportError) {
@@ -236,10 +240,7 @@ export const startBridgeLoop = (options: BridgeLoopOptions): BridgeLoop => {
     post: (path, body) => postJson(`${options.baseUrl()}${path}`, body, true),
     stop: () => {
       abortController.abort()
-      if (wakeResolve) {
-        wakeResolve()
-        wakeResolve = null
-      }
+      wake()
     },
   }
 }
