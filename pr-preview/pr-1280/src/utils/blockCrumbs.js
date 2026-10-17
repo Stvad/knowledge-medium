@@ -1,0 +1,1 @@
+import{Fb as e,Ib as t,Lb as n,Pb as r}from"../../chunks/app-DocQ5-I0.js";export{r as CRUMB_MAX_CHARS,e as CRUMB_MAX_SEGMENTS,t as collapseCrumbs,n as crumbsFromAncestors};

@@ -1,0 +1,1 @@
+import{aE as e,iE as t}from"../chunks/app-DocQ5-I0.js";export{t as checkForAppUpdate,e as registerServiceWorker};

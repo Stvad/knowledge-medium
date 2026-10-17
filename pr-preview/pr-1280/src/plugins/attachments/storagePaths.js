@@ -1,0 +1,1 @@
+import{Eh as e,Th as t}from"../../../chunks/app-DocQ5-I0.js";export{t as attachmentObjectPath,e as authenticatedObjectUrl};

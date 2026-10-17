@@ -1,0 +1,1 @@
+import{_T as e,vT as t}from"../../chunks/app-DocQ5-I0.js";export{e as BlockPasteShellDecorator,t as blockPasteShellDecorator};

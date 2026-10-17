@@ -1,0 +1,1 @@
+import{hd as e,md as t}from"../../../chunks/app-DocQ5-I0.js";export{t as DATA_MODEL_GUIDE,e as dataModelGuide};

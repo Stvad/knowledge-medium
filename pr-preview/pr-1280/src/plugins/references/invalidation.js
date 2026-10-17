@@ -1,0 +1,1 @@
+import{iL as e,rL as t}from"../../../chunks/app-DocQ5-I0.js";export{t as REFERENCES_TARGET_INVALIDATION_CHANNEL,e as referencesInvalidationRule};
