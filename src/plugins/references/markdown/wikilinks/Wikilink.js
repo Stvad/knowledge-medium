@@ -1,1 +1,1 @@
-import{yp as e}from"../../../../../chunks/app-BWp0cVXd.js";export{e as Wikilink};
+import{yp as e}from"../../../../../chunks/app-XJidm9du.js";export{e as Wikilink};
