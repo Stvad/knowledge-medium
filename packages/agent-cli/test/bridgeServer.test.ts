@@ -1,7 +1,7 @@
 /** End-to-end test of the bridge HTTP server. We spawn the built script
  *  as a child process on a random port and exercise it over the wire:
  *  token auth, per-client queues, and client-gone failure modes. */
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { spawn } from 'node:child_process'
 import http from 'node:http'
 import path from 'node:path'
@@ -67,8 +67,8 @@ beforeEach(async () => {
   expect(response.ok).toBe(true)
 })
 
-const registerClient = async (clientId: string, body: object) => {
-  const response = await fetch(`${baseUrl}/runtime/clients/${clientId}`, {
+const registerClient = async (clientId: string, body: object, url = baseUrl) => {
+  const response = await fetch(`${url}/runtime/clients/${clientId}`, {
     method: 'POST',
     headers: {'content-type': 'application/json', ...bridgeHeaders},
     body: JSON.stringify(body),
@@ -345,6 +345,15 @@ describe('agent runtime bridge', () => {
     await registerClient('alice-tab', {tokens: [{token: 'TOKEN-A', label: 'cli', userId: 'alice'}]})
     const id = await deliverPing()
 
+    // The handler counts a result post toward the client's TTL before it
+    // reads the body, so a later `lastSeen` proves the post is being handled.
+    const lastSeen = async () => {
+      const health = await (await fetch(`${baseUrl}/health?detail=1`, {headers: bridgeHeaders})).json() as {clients: Array<{id: string, lastSeen: number}>}
+      return health.clients.find(client => client.id === 'alice-tab')!.lastSeen
+    }
+    const before = await lastSeen()
+    await vi.waitFor(() => expect(Date.now()).toBeGreaterThan(before))
+
     // A large result reaches the server over several reads; a poll between
     // them must not see a completed command with no result yet.
     const body = JSON.stringify({ok: true, value: 'pong'})
@@ -354,7 +363,7 @@ describe('agent runtime bridge', () => {
     })
     const posted = new Promise(resolve => post.on('response', resolve))
     post.write(body.slice(0, 5))
-    await new Promise(resolve => setTimeout(resolve, 100))
+    await vi.waitFor(async () => expect(await lastSeen()).toBeGreaterThan(before))
     expect((await statusOf(id)).status).toBe('delivered')
 
     post.end(body.slice(5))
@@ -365,12 +374,7 @@ describe('agent runtime bridge', () => {
   it('fails a command whose result is over the size limit, saying why', async () => {
     const server = await spawnBridgeServer({AGENT_RUNTIME_BRIDGE_SECRET: bridgeSecret, AGENT_RUNTIME_MAX_BODY_BYTES: '1000'})
     try {
-      const register = await fetch(`${server.baseUrl}/runtime/clients/alice-tab`, {
-        method: 'POST',
-        headers: {'content-type': 'application/json', ...bridgeHeaders},
-        body: JSON.stringify({tokens: [{token: 'TOKEN-A', label: 'cli', userId: 'alice'}]}),
-      })
-      expect(register.ok).toBe(true)
+      await registerClient('alice-tab', {tokens: [{token: 'TOKEN-A', label: 'cli', userId: 'alice'}]}, server.baseUrl)
       const id = await deliverPing(server.baseUrl)
       const posted = await fetch(`${server.baseUrl}/runtime/commands/${id}/result`, {
         method: 'POST',
