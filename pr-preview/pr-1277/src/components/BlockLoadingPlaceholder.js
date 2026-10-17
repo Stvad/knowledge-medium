@@ -1,1 +1,1 @@
-import{bD as e}from"../../chunks/app-35vbAQgT.js";export{e as BlockLoadingPlaceholder};
+import{bD as e}from"../../chunks/app-CusHlWBh.js";export{e as BlockLoadingPlaceholder};
