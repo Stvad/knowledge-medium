@@ -1,1 +1,1 @@
-import{Ld as e}from"../../../chunks/app-DLiPEFsh.js";export{e as blockInfoPlugin};
+import{Rd as e}from"../../../chunks/app-D9XX4azo.js";export{e as blockInfoPlugin};

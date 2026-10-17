@@ -1,1 +1,1 @@
-import{rp as e}from"../../chunks/app-DLiPEFsh.js";export{e as blockrefCompletionSource};
+import{ip as e}from"../../chunks/app-D9XX4azo.js";export{e as blockrefCompletionSource};

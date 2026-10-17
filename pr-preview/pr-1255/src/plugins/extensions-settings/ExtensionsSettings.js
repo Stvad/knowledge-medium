@@ -1,1 +1,1 @@
-import{Ct as e}from"../../../chunks/app-DLiPEFsh.js";export{e as ExtensionsSettings};
+import{Ct as e}from"../../../chunks/app-D9XX4azo.js";export{e as ExtensionsSettings};

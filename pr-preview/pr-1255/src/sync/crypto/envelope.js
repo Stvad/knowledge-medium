@@ -1,1 +1,1 @@
-import{aZ as e,cZ as t,iZ as n,nZ as r,oZ as i,rZ as a,sZ as o}from"../../../chunks/app-DLiPEFsh.js";export{r as ENVELOPE_PREFIX,a as GCM_TAG_BYTES,n as NONCE_BYTES,e as SCHEMA_VERSION,i as decodeEnvelope,o as encodeEnvelope,t as hasEnvelopePrefix};
+import{aZ as e,cZ as t,iZ as n,lZ as r,oZ as i,rZ as a,sZ as o}from"../../../chunks/app-D9XX4azo.js";export{a as ENVELOPE_PREFIX,n as GCM_TAG_BYTES,e as NONCE_BYTES,i as SCHEMA_VERSION,o as decodeEnvelope,t as encodeEnvelope,r as hasEnvelopePrefix};

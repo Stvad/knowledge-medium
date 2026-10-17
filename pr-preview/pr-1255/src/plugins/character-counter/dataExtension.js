@@ -1,1 +1,1 @@
-import{wB as e}from"../../../chunks/app-DLiPEFsh.js";export{e as characterCounterDataExtension};
+import{TB as e}from"../../../chunks/app-D9XX4azo.js";export{e as characterCounterDataExtension};

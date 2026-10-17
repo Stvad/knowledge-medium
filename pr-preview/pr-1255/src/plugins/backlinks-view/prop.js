@@ -1,1 +1,1 @@
-import{df as e,ff as t,lf as n,pf as r,uf as i}from"../../../chunks/app-DLiPEFsh.js";export{n as DEFAULT_BACKLINKS_VIEW_ID,i as FLAT_BACKLINKS_VIEW_ID,e as GROUPED_BACKLINKS_VIEW_ID,t as backlinksViewProp,r as defaultBacklinksViewIdForBlock};
+import{df as e,ff as t,mf as n,pf as r,uf as i}from"../../../chunks/app-D9XX4azo.js";export{i as DEFAULT_BACKLINKS_VIEW_ID,e as FLAT_BACKLINKS_VIEW_ID,t as GROUPED_BACKLINKS_VIEW_ID,r as backlinksViewProp,n as defaultBacklinksViewIdForBlock};

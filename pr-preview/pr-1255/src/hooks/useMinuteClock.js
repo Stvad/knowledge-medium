@@ -1,1 +1,1 @@
-import{pb as e}from"../../chunks/app-DLiPEFsh.js";export{e as useMinuteClock};
+import{mb as e}from"../../chunks/app-D9XX4azo.js";export{e as useMinuteClock};

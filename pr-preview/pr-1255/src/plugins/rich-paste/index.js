@@ -1,1 +1,1 @@
-import{Ip as e}from"../../../chunks/app-DLiPEFsh.js";export{e as richPastePlugin};
+import{Lp as e}from"../../../chunks/app-D9XX4azo.js";export{e as richPastePlugin};

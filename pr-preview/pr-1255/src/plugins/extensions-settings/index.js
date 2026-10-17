@@ -1,1 +1,1 @@
-import{GT as e,WT as t,gt as n}from"../../../chunks/app-DLiPEFsh.js";export{t as extensionsOverridesProp,e as extensionsPrefsType,n as extensionsSettingsPlugin};
+import{GT as e,KT as t,gt as n}from"../../../chunks/app-D9XX4azo.js";export{e as extensionsOverridesProp,t as extensionsPrefsType,n as extensionsSettingsPlugin};
