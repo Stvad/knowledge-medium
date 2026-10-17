@@ -28,9 +28,9 @@ import { openFixtureRuntime } from './testGraph'
 
 // vite-node loads the checkout's .env files into the environment as it
 // starts; `eval` code the agent sends must see only what the runner passed.
-const kept = new Set(CHILD_ENV)
+const kept = new Set([...CHILD_ENV, 'NODE_OPTIONS', 'AGENT_EVAL_BRIDGE_URL', 'AGENT_EVAL_BRIDGE_SECRET', 'AGENT_EVAL_TOKEN'])
 for (const key of Object.keys(process.env)) {
-  if (!kept.has(key) && !key.startsWith('NODE_') && !key.startsWith('AGENT_EVAL_')) delete process.env[key]
+  if (!kept.has(key)) delete process.env[key]
 }
 
 /** Read once and removed, so `eval` code cannot read the run's bridge secret. */

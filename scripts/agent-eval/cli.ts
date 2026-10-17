@@ -47,6 +47,12 @@ const RESULTS_DIR = path.join(REPO_ROOT, 'scripts/agent-eval/results')
 const RUNS_DIR = path.join(REPO_ROOT, 'tmp/agent-eval/runs')
 const CLAUDE_PROJECTS = path.join(homedir(), '.claude', 'projects')
 
+/** Exits once `text` has reached stdout: a piped stdout is written
+ *  asynchronously, and an immediate exit would cut off its tail. */
+const exitAfter = (text: string) => {
+  process.stdout.write(text, () => process.exit(0))
+}
+
 const fail = (message: string): never => {
   process.stderr.write(`agent-eval: ${message}\n`)
   process.exit(1)
@@ -416,8 +422,8 @@ const run = async (options: RunOptions) => {
 
   report.runs = jobs.map(job => records.get(job)!)
   report.finishedAt = new Date().toISOString()
-  writeReport(report, options.baseline)
-  process.exit(0)
+  // The hosts are gone; the bridge would keep the process alive.
+  exitAfter(writeReport(report, options.baseline))
 }
 
 /** A label names files in results/, so it must stay a plain file name. */
@@ -425,22 +431,22 @@ const requireSafeLabel = (label: string) => {
   if (!/^[\w][\w.-]*$/.test(label)) fail(`label ${JSON.stringify(label)} must be letters, digits, '.', '_' or '-' (it names a file in results/)`)
 }
 
-const writeReport = (report: EvalReport, baseline: EvalReport | undefined) => {
+/** Writes the report's files and returns what to print. */
+const writeReport = (report: EvalReport, baseline: EvalReport | undefined): string => {
   requireSafeLabel(report.label)
   mkdirSync(RESULTS_DIR, {recursive: true})
   const base = path.join(RESULTS_DIR, report.label)
   writeFileSync(`${base}.json`, `${JSON.stringify(report, null, 2)}\n`)
   const markdown = renderMarkdown(report, baseline)
   writeFileSync(`${base}.md`, markdown)
-  process.stdout.write(`\n${markdown}\nwrote ${path.relative(REPO_ROOT, base)}.{json,md}\n`)
+  return `\n${markdown}\nwrote ${path.relative(REPO_ROOT, base)}.{json,md}\n`
 }
 
 const sizes = async () => {
   const logDir = mkdtempSync(path.join(tmpdir(), 'agent-eval-sizes-'))
   const {template} = await prepareRun(buildFixture(), logDir)
   rmSync(logDir, {recursive: true, force: true})
-  process.stdout.write(`${JSON.stringify(template.outputs, null, 2)}\n`)
-  process.exit(0)
+  exitAfter(`${JSON.stringify(template.outputs, null, 2)}\n`)
 }
 
 const positiveInteger = (flag: string, raw: string, max = Number.MAX_SAFE_INTEGER): number => {
@@ -505,7 +511,7 @@ const main = async () => {
     }
     case 'report': {
       if (!rest[0]) fail('usage: pnpm agent-eval report <report.json> [--compare <report.json>]')
-      return writeReport(loadReport(rest[0]), values.compare ? loadReport(values.compare) : undefined)
+      return exitAfter(writeReport(loadReport(rest[0]), values.compare ? loadReport(values.compare) : undefined))
     }
     case 'sizes':
       return sizes()

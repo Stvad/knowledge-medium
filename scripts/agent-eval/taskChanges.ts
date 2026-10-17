@@ -68,6 +68,10 @@ const sameBag = (a: string, b: string) => JSON.stringify(canonical(JSON.parse(a)
  *  touched, not changed. */
 const RECENCY_STAMPS = new Set(['updated_at', 'user_updated_at'])
 
+/** Columns that follow from a change instead of being one: what the app
+ *  derives from content and properties, and the stamps of the last write. */
+const FOLLOWING_COLUMNS = new Set([...RECENCY_STAMPS, 'updated_by', 'references_json', 'reference_target_id', 'is_field_form'])
+
 const sameState = (a: SnapshotRow, b: SnapshotRow) => [...new Set([...Object.keys(a), ...Object.keys(b)])]
   .every(column => RECENCY_STAMPS.has(column) || a[column] === b[column])
 
@@ -84,8 +88,9 @@ export const diffAgainst = async (probe: GraphProbe, template: Snapshot): Promis
   return changes
 }
 
-/** The fields of an existing block a task may change. Moving or deleting a
- *  block is never allowed: no task asks for it. */
+/** The fields of an existing block a task may change; every other column
+ *  must keep its value. Moving or deleting a block is never allowed: no task
+ *  asks for it. */
 export interface AllowedEdit {
   content?: true
   /** Property keys; every other key must keep its value. */
@@ -102,21 +107,19 @@ export interface AllowedChanges {
 
 const NO_EDIT: AllowedEdit = {}
 
-const moved = (before: SnapshotRow, after: SnapshotRow) =>
-  before.parent_id !== after.parent_id || before.order_key !== after.order_key
-
-/** Judged on the fields an agent writes; derived columns and recency stamps
- *  follow from them. */
+/** Every column but the following ones must keep its value, apart from the
+ *  content and the property keys `edit` allows. */
 const exceedsEdit = (before: SnapshotRow, after: SnapshotRow, edit: AllowedEdit): boolean => {
   const otherProperties = (json: string) => {
     const bag = JSON.parse(json) as Record<string, unknown>
     for (const key of edit.properties ?? []) delete bag[key]
     return JSON.stringify(canonical(bag))
   }
-  return (!edit.content && before.content !== after.content)
-    || otherProperties(before.properties_json) !== otherProperties(after.properties_json)
-    || moved(before, after)
-    || before.deleted !== after.deleted
+  return [...new Set([...Object.keys(before), ...Object.keys(after)])].some(column => {
+    if (FOLLOWING_COLUMNS.has(column) || (column === 'content' && edit.content)) return false
+    if (column === 'properties_json') return otherProperties(before.properties_json) !== otherProperties(after.properties_json)
+    return before[column] !== after[column]
+  })
 }
 
 const allowedCreation = (row: SnapshotRow, allowed: AllowedChanges): boolean => {

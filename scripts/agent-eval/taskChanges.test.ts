@@ -44,13 +44,16 @@ describe('strayChanges', () => {
     expect(strayOf({parent_id: 'elsewhere'}, statusOnly)).toBe(1)
     expect(strayOf({order_key: 'b0'}, statusOnly)).toBe(1)
     expect(strayOf({deleted: 1}, statusOnly)).toBe(1)
+    // A raw-SQL write reaches columns no tool edits.
+    expect(strayOf({created_at: 2}, {content: true})).toBe(1)
+    expect(strayOf({created_by: 'someone'}, {content: true})).toBe(1)
   })
 
   it('counts every change to a block the task was not asked to edit, but not what follows from one', () => {
     expect(strayOf({content: 'Draft the FAQ'})).toBe(1)
     // A derived column or a recency stamp moves because something upstream
     // was written; that write is what counts.
-    expect(strayOf({references_json: '[{"id":"p"}]', updated_at: 2})).toBe(0)
+    expect(strayOf({references_json: '[{"id":"p"}]', updated_at: 2, updated_by: 'km-eval'})).toBe(0)
   })
 
   it('allows exactly the blocks a task was asked to create, and ignores what was created and deleted again', () => {
