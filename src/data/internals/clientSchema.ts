@@ -324,18 +324,23 @@ export const CREATE_PS_CRUD_REJECTED_TX_ID_INDEX_SQL = `
  *  `ps_crud`, until the SDK swaps in the upload's write checkpoint and a
  *  checkpoint carrying it arrives. Without it, a checkpoint cut before the
  *  upload landed is published, and the drain applies that older version over
- *  the newer local row (#1226). Same effect as PowerSync's own crud path,
+ *  the newer local row (#1226). The row PowerSync's own crud path writes,
  *  which our writers bypass by inserting into `ps_crud` directly. */
-const HOLD_DOWNLOADS_SQL =
-  "INSERT OR REPLACE INTO ps_buckets(name, last_op, target_op) SELECT '$local', 0, 9223372036854775807"
+const LOCAL_HOLD_ROW_SQL = "'$local', 0, 9223372036854775807"
 
 /** On the queue rather than on its writers, so every enqueue holds: the block
- *  upload triggers and a direct insert (the rejected-upload retry) alike. */
+ *  upload triggers and a direct insert (the rejected-upload retry) alike.
+ *
+ *  A DELETE then a plain INSERT, not PowerSync's `INSERT OR REPLACE`, for the
+ *  same row: a trigger's own conflict clause yields to the one on the statement
+ *  that fired it, so a `blocks` write carrying `OR IGNORE` would skip the hold
+ *  and one carrying `OR ABORT` would fail on it. */
 export const CREATE_PS_CRUD_HOLD_DOWNLOADS_TRIGGER_SQL = `
   CREATE TRIGGER IF NOT EXISTS ps_crud_hold_downloads
   AFTER INSERT ON ps_crud
   BEGIN
-    ${HOLD_DOWNLOADS_SQL};
+    DELETE FROM ps_buckets WHERE name = '$local';
+    INSERT INTO ps_buckets(name, last_op, target_op) VALUES(${LOCAL_HOLD_ROW_SQL});
   END
 `
 
@@ -343,7 +348,7 @@ export const CREATE_PS_CRUD_HOLD_DOWNLOADS_TRIGGER_SQL = `
  *  nothing queued it writes nothing, and with something queued the hold is
  *  already the state PowerSync keeps. */
 export const HOLD_DOWNLOADS_FOR_QUEUED_UPLOADS_SQL =
-  `${HOLD_DOWNLOADS_SQL} WHERE EXISTS (SELECT 1 FROM ps_crud)`
+  `INSERT OR REPLACE INTO ps_buckets(name, last_op, target_op) SELECT ${LOCAL_HOLD_ROW_SQL} WHERE EXISTS (SELECT 1 FROM ps_crud)`
 
 // ============================================================================
 // blocks_synced change-capture queue (Layout B, design doc §9.2) — the
@@ -557,8 +562,9 @@ export const CREATE_BLOCKS_DELETE_ROW_EVENT_TRIGGER_SQL = `
 //   ps_crud (tx_id INTEGER, data TEXT)
 // where data is a JSON envelope { op, type, id, data }. PowerSync picks
 // rows out of ps_crud and uploads them via the configured connector.
-// Writing it directly bypasses PowerSync's own crud path; the one other thing
-// that path does is the queue's own trigger, {@link CREATE_PS_CRUD_HOLD_DOWNLOADS_TRIGGER_SQL}.
+// Writing it directly bypasses PowerSync's own crud path. The part of that
+// path these writes need, the download hold, is the queue's own trigger:
+// {@link CREATE_PS_CRUD_HOLD_DOWNLOADS_TRIGGER_SQL}.
 // ============================================================================
 
 interface UploadColumnSpec {
