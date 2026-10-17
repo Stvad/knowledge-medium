@@ -1,1 +1,1 @@
-import{MY as e,jY as t}from"../../../chunks/app-DN4ewQsO.js";export{t as onFirstSync,e as onSyncSettled};
+import{MY as e,NY as t}from"../../../chunks/app-DIytRu5z.js";export{e as onFirstSync,t as onSyncSettled};

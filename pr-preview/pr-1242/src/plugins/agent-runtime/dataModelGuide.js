@@ -1,1 +1,1 @@
-import{Fd as e,Pd as t}from"../../../chunks/app-DN4ewQsO.js";export{t as DATA_MODEL_GUIDE,e as dataModelGuide};
+import{Fd as e,Id as t}from"../../../chunks/app-DIytRu5z.js";export{e as DATA_MODEL_GUIDE,t as dataModelGuide};
