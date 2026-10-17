@@ -35,7 +35,7 @@ import { reviewDeckBlockId } from '@/plugins/srs-review/deck'
 import { ASSETS_NS } from '@/plugins/attachments/mediaBlock'
 import { pluginBlockId } from '@/extensions/pluginIds'
 import { dailyNoteBlockId, journalBlockId } from '@/plugins/daily-notes'
-import { roamBlockId } from '@/plugins/roam-import/ids'
+import { roamBlockId } from '@/plugins/roam-import/blockIds'
 import { mediaBlockId } from '@/plugins/attachments/mediaCapture'
 import { shortcutsBlockId, journalShortcutBlockId } from '@/plugins/left-sidebar/shortcuts'
 

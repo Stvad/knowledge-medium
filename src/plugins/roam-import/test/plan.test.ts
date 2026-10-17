@@ -6,7 +6,7 @@ import {
   parseRoamImportReferences,
   planImport,
 } from '../plan'
-import { roamBlockId } from '../ids'
+import { roamBlockId } from '../blockIds'
 import { dailyNoteBlockId } from '@/plugins/daily-notes'
 import { aliasesProp, typesProp } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
