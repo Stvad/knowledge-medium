@@ -1,1 +1,1 @@
-import{zB as e}from"../../../chunks/app-BPM2FJDj.js";export{e as agentDispatchCompanionDataExtension};
+import{VB as e}from"../../../chunks/app-7qvMlh0c.js";export{e as agentDispatchCompanionDataExtension};
