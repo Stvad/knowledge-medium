@@ -1,1 +1,0 @@
-import{rv as e}from"../../../chunks/app-CDKvMpD8.js";export{e as PromotableBreadcrumbList};

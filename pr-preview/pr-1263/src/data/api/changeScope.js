@@ -1,1 +1,0 @@
-import{G6 as e,H6 as t,J6 as n,K6 as r,U6 as i,W6 as a,X6 as o,Y6 as s,q6 as c}from"../../../chunks/app-CDKvMpD8.js";export{t as CHANGE_SCOPE_POLICIES,i as ChangeScope,a as isChangeScope,e as policyForScope,r as scopeAllowedInReadOnly,c as scopeIsUndoable,n as scopePoliciesEquivalent,s as scopeUploadsToServer,o as sourceForScope};

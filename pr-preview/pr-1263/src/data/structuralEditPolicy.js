@@ -1,1 +1,0 @@
-import{cT as e,sT as t}from"../../chunks/app-CDKvMpD8.js";export{t as resolveStructuralEditPolicy,e as structuralEditPolicyForBlock};

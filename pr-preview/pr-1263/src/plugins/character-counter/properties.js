@@ -1,1 +1,0 @@
-import{bB as e,xB as t,yB as n}from"../../../chunks/app-CDKvMpD8.js";export{n as charLimitProp,e as charProfileProp,t as charScopeProp};

@@ -1,1 +1,0 @@
-import{Xj as e,Zj as t}from"../../../chunks/app-CDKvMpD8.js";export{e as declarationOnlyDefinitionForName,t as declarationOnlyStatusText};
