@@ -1,1 +1,0 @@
-import{ng as e,tg as t}from"../../../chunks/app-KxTcR3hR.js";export{t as attachmentObjectPath,e as authenticatedObjectUrl};

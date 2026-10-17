@@ -1,1 +1,0 @@
-import{IT as e,LT as t}from"../../chunks/app-KxTcR3hR.js";export{e as exampleExtensions,t as insertExampleExtensionsUnder};
