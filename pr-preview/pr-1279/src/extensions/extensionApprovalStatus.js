@@ -1,1 +1,1 @@
-import{GT as e,JT as t,KT as n,qT as r}from"../../chunks/app-DGET1k5x.js";export{e as ExtensionApprovalStatusProvider,n as ExtensionApprovalStatusStore,r as useExtensionApprovalStatus,t as useExtensionApprovalStatuses};
+import{GT as e,JT as t,KT as n,qT as r}from"../../chunks/app-Bci7gMD9.js";export{e as ExtensionApprovalStatusProvider,n as ExtensionApprovalStatusStore,r as useExtensionApprovalStatus,t as useExtensionApprovalStatuses};

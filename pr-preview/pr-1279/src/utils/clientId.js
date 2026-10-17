@@ -1,1 +1,1 @@
-import{_1 as e,b1 as t,v1 as n,x1 as r,y1 as i}from"../../chunks/app-DGET1k5x.js";export{e as deviceSurface,n as getClientId,i as getDeviceLabel,t as isClientIdPersistent,r as resetClientIdCache};
+import{_1 as e,b1 as t,v1 as n,x1 as r,y1 as i}from"../../chunks/app-Bci7gMD9.js";export{e as deviceSurface,n as getClientId,i as getDeviceLabel,t as isClientIdPersistent,r as resetClientIdCache};
