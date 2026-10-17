@@ -1,1 +1,1 @@
-import{Fb as e}from"../../chunks/app-DWMuJFlE.js";export{e as useMinuteClock};
+import{Fb as e}from"../../chunks/app-Q5QVHF6E.js";export{e as useMinuteClock};
