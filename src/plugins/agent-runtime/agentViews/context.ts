@@ -214,7 +214,7 @@ export const recordLabels = async (
     `SELECT b.id AS id, b.content AS content
        FROM json_each(?) j CROSS JOIN blocks b ON b.id = j.value
       WHERE b.deleted = 0 AND b.workspace_id = ? AND b.is_field_form IS NOT 1
-        AND length(b.content) <= ${LABEL_CHARS}`,
+        AND length(substr(b.content, 1, ${LABEL_CHARS + 1})) <= ${LABEL_CHARS}`,
     [JSON.stringify(parentIds), workspaceId],
   )
   const labels = new Set(rows.filter(row => isLabel(row.content)).map(row => row.id))

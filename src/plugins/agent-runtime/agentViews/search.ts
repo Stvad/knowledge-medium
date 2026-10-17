@@ -111,9 +111,12 @@ const groupIdentical = (blocks: readonly BlockData[], records: ReadonlyMap<strin
 
 /** Where a block is: its breadcrumb's last two steps. One alone can be a
  *  property's name (a value's crumb ends `Kestrel › status`) or a section
- *  heading every page repeats. */
+ *  heading every page repeats. A cut chain's crumbs open with a `…` marker,
+ *  dropped here; a collapsed chain's marker never reaches the last two.
+ *  Accepted: a root block literally named `…` reads as that marker. */
 const placeOf = (breadcrumb: readonly string[] | undefined): string | null => {
-  const steps = (breadcrumb ?? []).filter(step => step !== CRUMB_ELLIPSIS).slice(-2)
+  const crumbs = breadcrumb ?? []
+  const steps = (crumbs[0] === CRUMB_ELLIPSIS ? crumbs.slice(1) : crumbs).slice(-2)
   return steps.length > 0 ? steps.join(' › ') : null
 }
 

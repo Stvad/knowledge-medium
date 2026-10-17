@@ -1,5 +1,6 @@
 import { neutralizeDisplayText } from '@knowledge-medium/agent-cli/protocol'
 import { tokenizeContentSearchQuery } from '@/data/internals/kernelQueries.js'
+import { parseBlockRefs, parseOutermostReferences } from '@/plugins/references/referenceParser.js'
 
 /** One display line: hostile characters (line breaks included) collapsed, so
  *  a block can never render as two lines or reorder the id printed after it. */
@@ -116,19 +117,20 @@ export const snippet = (content: string, query: string, width = SNIPPET_CONTEXT 
   return `${start > 0 ? '…' : ''}${line.slice(start, end)}${end < line.length ? '…' : ''}`
 }
 
-/** The link syntax a block's text can carry: `[[Page]]` / `#[[Tag]]`,
- *  `((id))`, `#tag`. Stripped in this order, so a tag never eats a link. */
-const LINK_PATTERNS = [/#?\[\[[^\]]*\]\]/g, /\(\([^)]*\)\)/g, /(^|\s)#[^\s#]+/g]
-
-/** Strip link syntax to see whether a block says anything beyond the links
- *  it carries. */
+/** Strip link-like syntax — `[[Page]]`, `#tag`, `#[[Tag]]`, `((id))` — to see
+ *  whether a block says anything beyond what it links. A noise heuristic,
+ *  so it is looser than the reference parser {@link isLabel} goes by. */
 export const textBeyondLinks = (content: string): string =>
-  LINK_PATTERNS.reduce((text, pattern) => text.replace(pattern, ' '), content)
+  content
+    .replace(/#?\[\[[^\]]*\]\]/g, ' ')
+    .replace(/\(\([^)]*\)\)/g, ' ')
+    .replace(/(^|\s)#[^\s#]+/g, ' ')
     .replace(/[\s,.;:—–-]+/g, ' ')
     .trim()
 
-// `search` ignores a global pattern's lastIndex, so the shared patterns stay reusable.
-const hasLink = (content: string): boolean => LINK_PATTERNS.some(pattern => content.search(pattern) >= 0)
+/** What may sit between a label's references: spacing, punctuation, and the
+ *  `#` that makes a wikilink a tag link (`#[[Tag]]`). */
+const LABEL_FILLER = /[\s,.;:—–#-]/g
 
 /** How long a quoted neighbour's line is. */
 const CONTEXT_CHARS = 160
@@ -146,8 +148,20 @@ export const contextPreview = (head: string): string => ellipsize(oneLine(head),
 export const isReferenceOnly = (content: string): boolean =>
   textBeyondLinks(content).length < 3
 
-/** A label is a block of links and nothing else, at least one (`[[Meeting]]`,
- *  `#standup`): the head of a record whose lines are its children. Stricter
- *  than {@link isReferenceOnly}, which lets a short title through. */
-export const isLabel = (content: string): boolean =>
-  textBeyondLinks(content) === '' && hasLink(content)
+/** A label is a block of references and nothing else, at least one, as the
+ *  reference parser reads them (`[[Meeting]]`, `#[[Tag]]`, `((block id))`):
+ *  the head of a record whose lines are its children. A bare `#tag` is text
+ *  here, as it is to backlinks. */
+export const isLabel = (content: string): boolean => {
+  const spans = [...parseOutermostReferences(content), ...parseBlockRefs(content)]
+    .sort((a, b) => a.startIndex - b.startIndex)
+  if (spans.length === 0) return false
+  let rest = ''
+  let cursor = 0
+  for (const span of spans) {
+    if (span.startIndex > cursor) rest += content.slice(cursor, span.startIndex)
+    cursor = Math.max(cursor, span.endIndex)
+  }
+  rest += content.slice(cursor)
+  return rest.replace(LABEL_FILLER, '') === ''
+}

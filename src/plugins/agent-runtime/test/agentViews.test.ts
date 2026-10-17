@@ -1241,7 +1241,7 @@ describe('view-backlinks', () => {
     expect(text).toContain('   ↳ sibling: topic: contract renewal terms')
   })
 
-  it('judges a label by all of its text: no link, words, or links past the head it reads make it a parent', async () => {
+  it('judges a label by all of its text: no reference, words, or links past the length it reads make it a parent', async () => {
     await create({id: TARGET, content: 'Target', properties: {alias: ['Target']}})
     const parents = [
       uuid('6b000001', 1),
@@ -1249,22 +1249,30 @@ describe('view-backlinks', () => {
       uuid('6b000003', 3),
       uuid('6b000004', 4),
       uuid('6b000005', 5),
+      uuid('6b000006', 6),
+      uuid('6b000007', 7),
+      uuid('6b000008', 8),
     ]
     await create({id: parents[0], content: 'ok'})
-    // Its first 200 characters are whole tags: a parent past that length is no label.
-    await create({id: parents[1], content: `${'#tag '.repeat(50)}then the actual words`})
-    // No link at all: bare punctuation, and a word.
+    // 200 characters of links, then words: a parent past that length is no label.
+    await create({id: parents[1], content: `${'[[tag]] '.repeat(25)}then the actual words`})
+    // No reference at all: bare punctuation, and a word.
     await create({id: parents[2], content: '-'})
     await create({id: parents[3], content: 'OK:'})
     // A link plus a short title is a titled parent, not a bare label.
     await create({id: parents[4], content: '[[Meeting]] Q1'})
+    // Link delimiters the reference parser does not read as references.
+    await create({id: parents[5], content: '[[]]'})
+    await create({id: parents[6], content: '((notes))'})
+    // A bare tag is text here: only wikilinks and block refs are references.
+    await create({id: parents[7], content: '#standup'})
     for (const [index, parent] of parents.entries()) {
       await create({id: uuid('6b00001' + index, 10 + index), parentId: parent, content: `line ${index} of [[Target]]`, references: [{id: TARGET, alias: 'Target'}]})
       await create({id: uuid('6b00002' + index, 20 + index), parentId: parent, content: 'a line beside it'})
     }
 
     const out = await view<BacklinksView>({type: 'view-backlinks', ref: TARGET, format: 'json'})
-    expect(out.rows).toHaveLength(5)
+    expect(out.rows).toHaveLength(8)
     expect(out.rows.filter(row => row.siblings)).toEqual([])
   })
 
@@ -1453,6 +1461,35 @@ describe('view-search', () => {
     const sizes = await Promise.all(getAll.mock.results.map(async result => JSON.stringify(await result.value).length))
     getAll.mockRestore()
     expect(Math.max(...sizes)).toBeLessThan(100_000)
+  })
+
+  it('reads a tag link or a block ref as a label', async () => {
+    const target = uuid('7b7b7b7b', 1)
+    await create({id: target, content: 'Target', properties: {alias: ['Target']}})
+    const labels = [uuid('6b100001', 1), uuid('6b100002', 2)]
+    await create({id: labels[0], content: '#[[Meeting]]'})
+    await create({id: labels[1], content: `((${target}))`})
+    for (const [index, label] of labels.entries()) {
+      await create({id: uuid(`6b10001${index}`, 10 + index), parentId: label, content: `line ${index} of [[Target]]`, references: [{id: target, alias: 'Target'}]})
+      await create({id: uuid(`6b10002${index}`, 20 + index), parentId: label, content: `topic ${index}`})
+    }
+
+    const out = await view<BacklinksView>({type: 'view-backlinks', ref: target, format: 'json'})
+    expect(out.rows.filter(row => row.content.startsWith('line ')).map(row => row.siblings).sort())
+      .toEqual([['topic 0'], ['topic 1']])
+  })
+
+  it('keeps a breadcrumb step that is literally named …', async () => {
+    const page = uuid('6c700000', 0)
+    await create({id: page, content: 'Projects', properties: {alias: ['Projects']}})
+    for (const index of [1, 2]) {
+      const section = uuid(`6c70000${index}`, index)
+      await create({id: section, parentId: page, content: '…'})
+      await create({id: uuid(`6c70001${index}`, 10 + index), parentId: section, content: 'ellipsis notes'})
+    }
+
+    const out = await view<SearchView>({type: 'view-search', query: 'ellipsis', format: 'json'})
+    expect(out.hits[0].duplicates.map(duplicate => duplicate.place)).toEqual(['Projects › …'])
   })
 
   it('names a duplicate\'s place by the last two steps of its breadcrumb', async () => {
