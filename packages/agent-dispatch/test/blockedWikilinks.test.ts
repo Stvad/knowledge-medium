@@ -1,3 +1,4 @@
+import {DatabaseSync} from 'node:sqlite'
 import {describe, expect, it, vi} from 'vitest'
 import type {BridgeGraph} from '@knowledge-medium/agent-cli/graph'
 import {
@@ -467,6 +468,29 @@ describe('createBlockedWikilinkWriteGuard — anchored appends', () => {
     await expect(guard.beforeWrite({
       type: 'append_markdown', target: 'parent', markdown: '- safe', position: {kind: 'after', siblingId: 'anchor'},
     })).rejects.toThrow('references a blocked page')
+  })
+
+  it('reads only the siblings tied with the anchor, however many the parent has', async () => {
+    const db = new DatabaseSync(':memory:')
+    db.exec(`CREATE TABLE blocks (id TEXT PRIMARY KEY, workspace_id TEXT, parent_id TEXT, order_key TEXT,
+      deleted INTEGER, content TEXT, properties_json TEXT)`)
+    const insert = db.prepare('INSERT INTO blocks VALUES (?, ?, ?, ?, 0, ?, ?)')
+    insert.run('parent', 'ws-1', null, 'a0', 'parent', '{}')
+    insert.run('anchor', 'ws-1', 'parent', 'a1', 'anchor', '{}')
+    insert.run('tied-blocked', 'ws-1', 'parent', 'a1', 'mentions [[claude]]', '{}')
+    insert.run('far-blocked', 'ws-1', 'parent', 'a5', 'also mentions [[claude]]', '{}')
+    const returned: unknown[] = []
+    const sqlAll = vi.fn<GuardGraph['sqlAll']>(async (sql, params = []) => {
+      const rows = db.prepare(sql).all(...(params as never[]))
+      returned.push(...rows)
+      return rows
+    })
+    const guard = createBlockedWikilinkWriteGuard(graphFrom({sqlAll}), ['claude'])
+
+    await expect(guard.beforeWrite({
+      type: 'append_markdown', target: 'parent', markdown: '- safe', position: {kind: 'after', siblingId: 'anchor'},
+    })).rejects.toThrow('references a blocked page')
+    expect(returned.map(row => (row as {id?: unknown}).id)).not.toContain('far-blocked')
   })
 
   it('lets an unanchored append through without reading siblings', async () => {
