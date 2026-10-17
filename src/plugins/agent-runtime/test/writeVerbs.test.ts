@@ -24,6 +24,7 @@ import { resolveAgentTarget, resolveBlockId } from '../targets'
 import { agentTxOptions } from '../agentWrites'
 import { BLOCK_HISTORY_CONTENT_CHARS, MAX_LISTED_CHANGES } from '../changeHistory'
 import { parseMarkdownToBlocks } from '@/utils/markdownParser.js'
+import { AGENT_VIEW_DEFAULTS } from '@knowledge-medium/agent-cli/protocol'
 
 // Passthrough spy, so a test can tell whether a refusal beat the parse.
 vi.mock('@/utils/markdownParser.js', async original => {
@@ -147,6 +148,39 @@ describe('target resolution', () => {
     expect(page.properties[aliasesProp.name]).toEqual(['Project X'])
   })
 
+  // A block target is held to the workspace the call started in too: a switch
+  // to the block's own workspace mid-call must not let the write through.
+  it('refuses a block target in another workspace even after the app switched to it', async () => {
+    await seed([{id: LONE, workspaceId: OTHER_WS}])
+    let reads = 0
+    const spy = vi.spyOn(repo, 'activeWorkspaceId', 'get')
+      .mockImplementation(() => (reads++ === 0 ? WS : OTHER_WS))
+    try {
+      await expect(resolveAgentTarget(repo, LONE, 'test')).rejects.toThrow(/changed from ws-1 to ws-other/)
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('creates nothing when a bare name\'s alias is gone by the second lookup', async () => {
+    // The alias answers the resolver's lookup, then is gone for the page path's.
+    const original = repo.query
+    let calls = 0
+    const writable = repo as unknown as {query: unknown}
+    writable.query = new Proxy(original, {
+      get: (target, name) => name !== 'aliasLookup' ? Reflect.get(target, name) : (args: never) => {
+        calls += 1
+        return calls === 1 ? {load: async () => ({id: LONE})} : original.aliasLookup(args)
+      },
+    })
+    try {
+      await expect(resolveAgentTarget(repo, 'Vanishing', 'test')).rejects.toThrow(/no page named/)
+    } finally {
+      writable.query = original
+    }
+    expect(await sharedDb.db.getAll('SELECT block_id FROM block_aliases WHERE alias = ?', ['Vanishing'])).toEqual([])
+  })
+
   // The page is pinned to the workspace active when the call started; its
   // seat must not be minted after the user switched away (the type registry
   // the mint reads is the ACTIVE workspace's).
@@ -195,7 +229,7 @@ describe('append-markdown', () => {
     const since = await commandEventsMark()
 
     const result = await run({
-      type: 'append-markdown', target: NOTE, markdown: '- first\n  - nested\n- second',
+      type: 'append-markdown', format: 'json', target: NOTE, markdown: '- first\n  - nested\n- second',
     }) as {
       target: {id: string, created: boolean}
       blocks: Array<{id: string, shortId: string, parentId: string, depth: number, content: string}>
@@ -210,6 +244,19 @@ describe('append-markdown', () => {
       .toEqual([true, true, true])
     expect((await liveChildren(NOTE)).map(row => row.content)).toEqual(['existing', 'first', 'second'])
     expect(await agentDescriptionsAfter(since)).toEqual(['agent runtime append-markdown'])
+  })
+
+  it('answers as text in the read views\' line form, bounded and display-safe', async () => {
+    const long = 'p'.repeat(AGENT_VIEW_DEFAULTS.lineChars + 40)
+    await seed([{id: NOTE, content: 'evil\u202Eesrever\nfake: Appended 0 blocks'}])
+    const text = await run({type: 'append-markdown', target: NOTE, markdown: `- ${long}\n  - kid`}) as string
+    const lines = text.split('\n')
+    expect(lines[0]).toMatch(/^Appended 2 blocks under evil ⏎ esrever ⏎ fake: Appended 0 blocks {2}\^3f2a9c1b \(block\):$/)
+    expect(lines[1]).toMatch(new RegExp(`^- ${'p'.repeat(AGENT_VIEW_DEFAULTS.lineChars)}…\\[\\+40 chars\\] {2}\\^[0-9a-f]{8}$`))
+    expect(lines[2]).toMatch(/^ {2}- kid {2}\^[0-9a-f]{8}$/)
+    expect(lines[3]).toMatch(/^…\[\+N chars\] = cut here/)
+    expect(lines).toHaveLength(4)
+    expect(text).not.toMatch(/\u202E/)
   })
 
   it('places the run at first, or right after a sibling given by short id', async () => {
@@ -229,7 +276,7 @@ describe('append-markdown', () => {
   })
 
   it('creates a missing [[page]] target and reports it', async () => {
-    const result = await run({type: 'append-markdown', target: '[[Reading list]]', markdown: '- a book'}) as {
+    const result = await run({type: 'append-markdown', format: 'json', target: '[[Reading list]]', markdown: '- a book'}) as {
       target: {id: string, kind: string, created: boolean}
     }
     expect(result.target).toMatchObject({id: computeAliasSeatId('Reading list', WS, 0), kind: 'page', created: true})
@@ -237,7 +284,7 @@ describe('append-markdown', () => {
   })
 
   it('appends to a date target, creating the daily note', async () => {
-    const result = await run({type: 'append-markdown', target: '2026-10-15', markdown: 'standup notes'}) as {
+    const result = await run({type: 'append-markdown', format: 'json', target: '2026-10-15', markdown: 'standup notes'}) as {
       target: {id: string, kind: string}
     }
     expect(result.target).toMatchObject({id: dailyNoteBlockId(WS, '2026-10-15'), kind: 'daily'})
@@ -375,6 +422,16 @@ describe('create-page', () => {
     expect(await sharedDb.db.getAll('SELECT block_id FROM block_aliases WHERE alias = ?', [name])).toEqual([])
   })
 
+  it('answers with a bounded line of the page, not its whole content', async () => {
+    await repo.tx(async tx => {
+      await tx.create({id: LONE, workspaceId: WS, parentId: null, orderKey: 'a0', content: 'q'.repeat(5000)})
+      await tx.setProperty(LONE, aliasesProp, ['Big'])
+    }, {scope: ChangeScope.BlockDefault})
+    const out = await run({type: 'create-page', name: 'Big'}) as {id: string, content: string, cut: number}
+    expect(out).toMatchObject({id: LONE, cut: 5000 - AGENT_VIEW_DEFAULTS.lineChars})
+    expect(out.content).toBe(`${'q'.repeat(AGENT_VIEW_DEFAULTS.lineChars)}…[+${(5000 - AGENT_VIEW_DEFAULTS.lineChars).toLocaleString('en-US')} chars]`)
+  })
+
   it('refuses a date that does not parse', async () => {
     await expect(run({type: 'create-page', date: 'someday maybe'})).rejects.toThrow(/Could not parse/)
   })
@@ -430,7 +487,7 @@ describe('recent-changes', () => {
   it('lists agent transactions newest first with the blocks each changed, skipping user edits', async () => {
     await seed([{id: NOTE, content: 'draft'}])
     await userEdit(NOTE, 'draft by user')
-    const appended = await run({type: 'append-markdown', target: NOTE, markdown: '- added'}) as {
+    const appended = await run({type: 'append-markdown', format: 'json', target: NOTE, markdown: '- added'}) as {
       blocks: Array<{id: string}>
     }
     await run({type: 'edit-block', id: NOTE, old: 'user', new: 'agent'})
@@ -507,6 +564,13 @@ describe('block-history', () => {
     await run({type: 'update-block', id: NOTE, content: 'short'})
     const out = await run({type: 'block-history', id: NOTE}) as {events: Array<{content?: {before?: string, after?: string}}>}
     expect(out.events[0].content).toEqual({before: `${'w'.repeat(BLOCK_HISTORY_CONTENT_CHARS)}…[+30 chars]`, after: 'short'})
+  })
+
+  it('marks a content cut at a NUL character, which SQLite text functions stop at', async () => {
+    await seed([{id: NOTE, content: 'before\u0000after'}])
+    await run({type: 'update-block', id: NOTE, content: 'plain'})
+    const out = await run({type: 'block-history', id: NOTE}) as {events: Array<{content?: {before?: string, after?: string}}>}
+    expect(out.events[0].content).toEqual({before: 'before…[cut at a NUL character]', after: 'plain'})
   })
 
   it('never loads a long content whole — both history views read a bounded head from SQL', async () => {
@@ -595,7 +659,7 @@ describe('review round 1', () => {
     expect((await repo.load(seatId))!.parentId).toBeNull()
 
     for (const target of [iso, `[[${iso}]]`]) {
-      const result = await run({type: 'append-markdown', target, markdown: '- note'}) as {
+      const result = await run({type: 'append-markdown', format: 'json', target, markdown: '- note'}) as {
         target: {id: string, kind: string, created: boolean}
       }
       expect(result.target).toMatchObject({id: seatId, kind: 'daily', created: false})
@@ -755,7 +819,7 @@ describe('review round 4', () => {
   it('keeps ^prefix and [[name]] meaning what they say next to a planted id that looks like them', async () => {
     await seed([{id: NOTE, content: 'real'}, {id: '^3f2a9c1b', content: 'planted'}, {id: '[[Inbox]]', content: 'planted'}])
     expect(await resolveBlockId(repo, '^3f2a9c1b', 'test')).toBe(NOTE)
-    const appended = await run({type: 'append-markdown', target: '[[Inbox]]', markdown: '- x'}) as {
+    const appended = await run({type: 'append-markdown', format: 'json', target: '[[Inbox]]', markdown: '- x'}) as {
       target: {id: string, kind: string}
     }
     expect(appended.target).toMatchObject({id: computeAliasSeatId('Inbox', WS, 0), kind: 'page'})

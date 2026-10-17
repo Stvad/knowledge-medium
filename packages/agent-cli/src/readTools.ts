@@ -8,6 +8,7 @@ import {z} from 'zod'
 import {isReadOnlySql, type KmMcpToolName} from './mcpShared.js'
 import {
   AGENT_VIEW_DEFAULTS,
+  blockHistoryCommandSchema,
   dailyNoteCommandSchema,
   dataModelCommandSchema,
   getCommandMeta,
@@ -137,6 +138,9 @@ export const GRAPH_READ_TOOLS: readonly GraphReadTool[] = [
   }),
   wireTool('guide', 'data-model', dataModelCommandSchema, {
     cli: {verb: 'data-model', alias: 'guide'},
+  }),
+  wireTool('block_history', 'block-history', blockHistoryCommandSchema, {
+    cli: {verb: 'block-history', positional: {field: 'id', variadic: false}},
   }),
   sqlQueryTool,
 ]

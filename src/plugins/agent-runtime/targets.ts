@@ -21,7 +21,7 @@ import { agentTxOptions } from './agentWrites.ts'
 import { BlockRefError, resolveBlockRef, type BlockRefResolution } from './agentViews/resolveRef.ts'
 import { assertActiveWorkspace } from './workspaceGuard.ts'
 
-export type ParsedAgentTarget =
+type ParsedAgentTarget =
   | {kind: 'page'; name: string}
   | {kind: 'block'; ref: string}
   /** An id, an id prefix, a page name or a date expression. */
@@ -48,7 +48,7 @@ export const parseAgentTarget = (raw: string): ParsedAgentTarget => {
   return {kind: 'bare', text}
 }
 
-export type ResolvedTargetKind = 'block' | 'page' | 'daily'
+type ResolvedTargetKind = 'block' | 'page' | 'daily'
 
 export interface ResolvedAgentTarget {
   id: string
@@ -57,7 +57,7 @@ export interface ResolvedAgentTarget {
   created: boolean
 }
 
-export interface ResolveTargetOptions {
+interface ResolveTargetOptions {
   /** Create a missing page / daily note (default). Off for an anchored
    *  insert: the anchor's parent already exists, so a miss is the caller's
    *  error and must not leave a new empty page behind. */
@@ -121,6 +121,8 @@ export const resolveDailyNoteTarget = async (
   verb: string,
   {create = true, workspaceId = activeWorkspace(repo, verb)}: ResolveTargetOptions = {},
 ): Promise<ResolvedAgentTarget> => {
+  // `created` is read before the write: a note another device creates in the
+  // same instant reports as created here (informational; accepted).
   const existed = (await repo.load(dailyNoteBlockId(workspaceId, iso))) !== null
   if (!existed && !create) throw new Error(`${verb}: the daily note for ${iso} does not exist yet.`)
   // Its txs write through the ACTIVE workspace's registries. The residual — a
@@ -172,17 +174,29 @@ const EXPLICIT_RELATIVE_DATE =
 const isExplicitDate = (text: string): boolean =>
   EXPLICIT_RELATIVE_DATE.test(text) || parseLiteralDailyPageTitle(text) !== null
 
-/** A block target must be a live block in the active workspace. A UUID-shaped
- *  ref resolves without a lookup, so this is where a missing one is caught —
- *  before the write pays for its payload. The writing tx checks again; this
- *  is the early refusal, not the authoritative one. */
-const liveBlockTarget = async (repo: Repo, id: string, verb: string): Promise<ResolvedAgentTarget> => {
+/** A block target must be a live block in the workspace the call was pinned
+ *  to, still active. A UUID-shaped ref resolves without a lookup, so this is
+ *  where a missing one is caught — before the write pays for its payload. The
+ *  writing tx checks again; this is the early refusal, not the authoritative
+ *  one. */
+const liveBlockTarget = async (
+  repo: Repo,
+  id: string,
+  verb: string,
+  workspaceId: string,
+): Promise<ResolvedAgentTarget> => {
   const row = await repo.db.getOptional<{deleted: number, workspace_id: string}>(
     'SELECT deleted, workspace_id FROM blocks WHERE id = ?', [id],
   )
   if (!row) throw new Error(`${verb}: block ${id} not found.`)
   if (row.deleted) throw new Error(`${verb}: block ${id} is deleted — restore it first, or write elsewhere.`)
   assertActiveWorkspace(repo, verb, row.workspace_id)
+  if (row.workspace_id !== workspaceId) {
+    throw new Error(
+      `${verb}: the active workspace changed from ${workspaceId} to ${row.workspace_id} while resolving this `
+      + 'command\'s target.',
+    )
+  }
   return {id, kind: 'block', created: false}
 }
 
@@ -227,7 +241,7 @@ export const resolveAgentTarget = async (
     const hint = target.kind === 'bare' ? ` To create a page by that name, pass [[${target.text}]].` : ''
     throw new Error(`${verb}: ${error.message}${hint}`, {cause: error})
   }
-  if (found.via === 'id' || found.via === 'prefix') return liveBlockTarget(repo, found.id, verb)
+  if (found.via === 'id' || found.via === 'prefix') return liveBlockTarget(repo, found.id, verb, pinned.workspaceId)
   if (found.via === 'date') {
     // `resolveBlockRef` names the day's deterministic id; the note itself may
     // not exist yet.
@@ -241,5 +255,7 @@ export const resolveAgentTarget = async (
     }
     return resolveDailyNoteTarget(repo, iso, verb, pinned)
   }
-  return resolvePageTarget(repo, raw.trim(), verb, pinned)
+  // A bare name that resolved through an alias: if the alias is gone by this
+  // second lookup, bare text still creates nothing.
+  return resolvePageTarget(repo, raw.trim(), verb, {...pinned, create: false})
 }

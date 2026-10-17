@@ -16,6 +16,7 @@ import { recognizedFieldRowSql } from '@/data/internals/treeQueries.js'
 import type { Repo } from '@/data/repo'
 import { AGENT_TX_DESCRIPTION_PREFIX } from './agentWrites.ts'
 import { shortIds } from './agentViews/resolveRef.ts'
+import { clampInt, viewWorkspace } from './agentViews/shared.ts'
 import { cutMarker } from './agentViews/text.ts'
 
 /** A change as the views read it: the before / after snapshots without their
@@ -33,6 +34,8 @@ interface ChangeRow {
   before_len: number | null
   after_head: string | null
   after_len: number | null
+  before_nul: number | null
+  after_nul: number | null
   content_changed: number
 }
 
@@ -47,6 +50,8 @@ const changeColumnsSql = (b: string, a: string): string => `
   length(json_extract(${b}.before_json, '$.content')) AS before_len,
   substr(json_extract(${a}.after_json, '$.content'), 1, ?) AS after_head,
   length(json_extract(${a}.after_json, '$.content')) AS after_len,
+  instr(CAST(json_extract(${b}.before_json, '$.content') AS BLOB), x'00') > 0 AS before_nul,
+  instr(CAST(json_extract(${a}.after_json, '$.content') AS BLOB), x'00') > 0 AS after_nul,
   json_extract(${b}.before_json, '$.content') IS NOT json_extract(${a}.after_json, '$.content') AS content_changed`
 
 interface Snapshot {
@@ -70,14 +75,18 @@ const snapshotOf = (json: string | null): Snapshot | null => {
 }
 
 /** A content head as shown: SQLite counted `length` and cut `head` in
- *  characters, so a cut is exactly `length - limit` of them. */
-const shownContent = (head: string | null, length: number | null, limit: number): string =>
-  head === null ? '' : length !== null && length > limit ? `${head}${cutMarker(length - limit)}` : head
+ *  characters, so a cut is exactly `length - limit` of them. Both stop at a
+ *  NUL character, so a content holding one is shown up to it and marked. */
+const shownContent = (head: string | null, length: number | null, nul: number | null, limit: number): string => {
+  if (head === null) return ''
+  if (nul) return `${head}…[cut at a NUL character]`
+  return length !== null && length > limit ? `${head}${cutMarker(length - limit)}` : head
+}
 
-export type ChangeKind = 'create' | 'update' | 'move' | 'soft-delete' | 'restore' | 'delete'
-export type ChangedField = 'content' | 'parent' | 'order' | 'properties' | 'references' | 'deleted'
+type ChangeKind = 'create' | 'update' | 'move' | 'soft-delete' | 'restore' | 'delete'
+type ChangedField = 'content' | 'parent' | 'order' | 'properties' | 'references' | 'deleted'
 
-export interface BlockChange {
+interface BlockChange {
   blockId: string
   /** Unique id prefix, as the read views print it (`^short`). */
   shortId: string
@@ -101,8 +110,8 @@ const describeChange = (row: ChangeRow, contentLimit: number): Omit<BlockChange,
   const before = snapshotOf(row.before_meta)
   const after = snapshotOf(row.after_meta)
   const content = {
-    before: shownContent(row.before_head, row.before_len, contentLimit),
-    after: shownContent(row.after_head, row.after_len, contentLimit),
+    before: shownContent(row.before_head, row.before_len, row.before_nul, contentLimit),
+    after: shownContent(row.after_head, row.after_len, row.after_nul, contentLimit),
   }
   if (!before || !after) {
     const only = (after ?? before)!
@@ -172,10 +181,12 @@ const propertyStorageOwners = async (repo: Repo, rows: readonly ChangeRow[]): Pr
 /** Storage rows a same-tx processor wrote for a property change the owner's
  *  own line already names. One whose owner shows no property change in that
  *  tx is kept: nothing else would report it. */
-const withoutCoveredPropertyStorage = async <T extends {row: ChangeRow; change: Omit<BlockChange, 'shortId'>}>(
+type DescribedChange = {row: ChangeRow; change: Omit<BlockChange, 'shortId'>}
+
+const withoutCoveredPropertyStorage = async (
   repo: Repo,
-  described: readonly T[],
-): Promise<T[]> => {
+  described: readonly DescribedChange[],
+): Promise<DescribedChange[]> => {
   const owners = await propertyStorageOwners(repo, described.map(({row}) => row))
   const propertyOwnersByTx = new Map<string, Set<string>>()
   for (const {row, change} of described) {
@@ -200,24 +211,16 @@ const parseSince = (value: unknown): number => {
   throw new Error(`since must be epoch milliseconds or an ISO timestamp, got ${JSON.stringify(value)}.`)
 }
 
-const parseLimit = (value: unknown, fallback: number, max: number): number => {
-  if (value === undefined) return fallback
-  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) {
-    throw new Error(`limit must be a positive integer, got ${JSON.stringify(value)}.`)
-  }
-  return Math.min(value, max)
-}
-
 const isoAt = (ms: number): string => new Date(ms).toISOString()
 
-export interface RecentChangesInput {
-  since?: unknown
-  limit?: unknown
+interface RecentChangesInput {
+  since?: number | string
+  limit?: number
   /** Include the user's own local edits, not only agent-bridge writes. */
   includeUser: boolean
 }
 
-export interface RecentChangeTx {
+interface RecentChangeTx {
   txId: string
   at: string
   description: string | null
@@ -227,7 +230,7 @@ export interface RecentChangeTx {
   incomplete?: true
 }
 
-export interface RecentChangesResult {
+interface RecentChangesResult {
   workspaceId: string
   since: string
   agentOnly: boolean
@@ -274,10 +277,9 @@ const RANKED_BLOCKS_CTE = `
 `
 
 export const recentChanges = async (repo: Repo, input: RecentChangesInput): Promise<RecentChangesResult> => {
-  const workspaceId = repo.activeWorkspaceId
-  if (!workspaceId) throw new Error('recent-changes: no active workspace — open one in the app and retry.')
+  const workspaceId = viewWorkspace(repo, undefined)
   const since = parseSince(input.since)
-  const limit = parseLimit(input.limit, 20, 200)
+  const limit = clampInt(input.limit, 20, 200)
   // Document edits only: UI-state and preference txs are not changes to review.
   const txs = await repo.db.getAll<{tx_id: string; description: string | null; created_at: number}>(
     `SELECT tx_id, description, created_at FROM command_events
@@ -334,12 +336,12 @@ export const recentChanges = async (repo: Repo, input: RecentChangesInput): Prom
   }
 }
 
-export interface BlockHistoryInput {
+interface BlockHistoryInput {
   id: string
-  limit?: unknown
+  limit?: number
 }
 
-export interface BlockHistoryEvent extends BlockChange {
+interface BlockHistoryEvent extends BlockChange {
   at: string
   /** `local` — a transaction on this device; `sync` — applied from the server. */
   source: 'local' | 'sync'
@@ -347,7 +349,7 @@ export interface BlockHistoryEvent extends BlockChange {
   description: string | null
 }
 
-export interface BlockHistoryResult {
+interface BlockHistoryResult {
   blockId: string
   shortId: string
   /** Newest first; content cut at {@link BLOCK_HISTORY_CONTENT_CHARS}. */
@@ -360,7 +362,7 @@ export interface BlockHistoryResult {
 export const BLOCK_HISTORY_CONTENT_CHARS = 2000
 
 export const blockHistory = async (repo: Repo, input: BlockHistoryInput): Promise<BlockHistoryResult> => {
-  const limit = parseLimit(input.limit, 20, 100)
+  const limit = clampInt(input.limit, 20, 100)
   const rows = await repo.db.getAll<ChangeRow & {description: string | null}>(
     `SELECT ${changeColumnsSql('r', 'r')}, c.description
        FROM row_events r LEFT JOIN command_events c ON c.tx_id = r.tx_id

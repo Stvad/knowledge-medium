@@ -47,32 +47,15 @@ export type MoveBlockPosition =
   | {kind: 'before', siblingId: string}
   | {kind: 'after', siblingId: string}
 
-export interface MoveBlockInput {
-  id: string
-  parentId: string | null
-  position: MoveBlockPosition
-  /** The id fields are already stored ids (see the wire `exactIds`). */
-  exactIds?: boolean
-}
-
 /** The wire `exactIds` flag, for verbs whose id fields the caller resolved. */
 export interface ExactIds {
   exactIds?: boolean
 }
 
-export interface AppendedBlock {
+export interface MoveBlockInput extends ExactIds {
   id: string
-  shortId: string
-  parentId: string
-  /** 0 for a direct child of the target. */
-  depth: number
-  content: string
-}
-
-export interface AppendMarkdownResult {
-  target: {id: string, shortId: string, kind: 'block' | 'page' | 'daily', created: boolean, content: string}
-  /** Created blocks in pre-order. */
-  blocks: AppendedBlock[]
+  parentId: string | null
+  position: MoveBlockPosition
 }
 
 export interface EditBlockResult {
@@ -196,10 +179,8 @@ export const createBridgeGraph = (client: BridgeClient) => {
     markdown: string
     position?: MoveBlockPosition
     shape?: 'outline' | 'block'
-  } & ExactIds): Promise<AppendMarkdownResult> => {
-    const result = await client.runCommand({type: 'append-markdown', ...input})
-    return asRecord(result, 'append-markdown') as unknown as AppendMarkdownResult
-  }
+    format?: 'text' | 'json'
+  } & ExactIds): Promise<unknown> => client.runCommand({type: 'append-markdown', ...input})
 
   const editBlock = async (input: {id: string, old: string, new: string} & ExactIds): Promise<EditBlockResult> => {
     const result = await client.runCommand({type: 'edit-block', ...input})
@@ -223,8 +204,6 @@ export const createBridgeGraph = (client: BridgeClient) => {
     return id
   }
 
-  const blockHistory = async (input: {id: string, limit?: number}): Promise<unknown> =>
-    client.runCommand({type: 'block-history', ...input})
 
   const moveBlock = async (input: MoveBlockInput): Promise<BlockData | null> => {
     const result = await client.runCommand({type: 'move-block', ...input})
@@ -312,7 +291,6 @@ export const createBridgeGraph = (client: BridgeClient) => {
     editBlock,
     createPage,
     recentChanges,
-    blockHistory,
     resolveBlockId,
     moveBlock,
     deleteBlock,

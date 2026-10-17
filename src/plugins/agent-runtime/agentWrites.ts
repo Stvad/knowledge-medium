@@ -16,12 +16,12 @@ export const agentTxOptions = (verb: string) => ({
   description: `${AGENT_TX_DESCRIPTION_PREFIX}${verb}`,
 })
 
-/** `repo.mutate[name](args)`, but in an agent-attributed tx — a mutator
- *  dispatch otherwise describes the tx with the mutator's own `describe`. */
+/** `repo.mutate[name](args)`, but described as an agent write — a mutator
+ *  dispatch otherwise describes its tx with the mutator's own `describe`. */
 export const runAgentMutator = <Args, R>(
   repo: Repo,
   verb: string,
   mutator: Mutator<Args, R>,
   args: Args,
 ): Promise<R> =>
-  repo.tx(tx => tx.run(mutator, mutator.argsSchema.parse(args)), agentTxOptions(verb))
+  repo.run<R>(mutator.name, args, {description: agentTxOptions(verb).description})

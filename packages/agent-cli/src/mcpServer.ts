@@ -18,7 +18,6 @@ import { createBridgeGraph, type BridgeGraph } from './graph.js'
 import { type KmMcpToolName, MCP_SERVER_NAME } from './mcpShared.js'
 import { moveBlockPositionSchema, TODO_WRITE_HELP, toDisplayJson, WRITE_TARGET_HELP } from './protocol.js'
 import { GRAPH_READ_TOOLS, renderToolResult, toolCommand } from './readTools.js'
-import { renderAppendResult } from './writeTools.js'
 
 interface PackageJson {
   version?: unknown
@@ -209,7 +208,7 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
   }, async ({target, markdown, position: requested, shape}) => {
     const position = requested && await resolvedPosition(requested)
     await beforeWrite({type: 'append_markdown', target, markdown, position, shape})
-    return text(renderAppendResult(await graph.appendMarkdown({target, markdown, position, shape, exactIds})))
+    return text(renderToolResult(await graph.appendMarkdown({target, markdown, position, shape, exactIds})))
   })
 
   server.registerTool('edit_block' satisfies KmMcpToolName, {
@@ -255,16 +254,6 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
     },
   }, async ({since, limit, includeUser}) =>
     json(await graph.recentChanges({since: since ?? sessionStartedAt, limit, includeUser})))
-
-  server.registerTool('block_history' satisfies KmMcpToolName, {
-    description: 'One block\'s recorded changes, newest first, with content before/after (cut past 2,000 chars) — '
-    + 'local edits and ones synced from other devices — to review a change. A content ending in a cut marker is not '
-    + 'whole, so do not write it back.',
-    inputSchema: {
-      id: z.string(),
-      limit: z.number().int().positive().optional(),
-    },
-  }, async ({id, limit}) => json(await graph.blockHistory({id, limit})))
 
   return server
 }

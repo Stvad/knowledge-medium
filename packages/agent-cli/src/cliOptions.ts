@@ -91,3 +91,25 @@ export const appendPositionOption = (
   }
   return {}
 }
+
+/** A repeatable option, or the text after `--`, as a string list. */
+export const toStringArray = (value: unknown): string[] => {
+  if (Array.isArray(value)) return value.map(String)
+  if (typeof value === 'string') return [value]
+  return []
+}
+
+/** `edit-block`'s <old> and <new>: positional, or after `--` when either
+ *  starts with `-` (which would read as a flag). */
+export const editArgumentsOption = (
+  old: unknown,
+  replacement: unknown,
+  afterDashes: unknown,
+): {old: string, new: string} => {
+  const rest = toStringArray(afterDashes)
+  const [oldText, newText] = rest.length > 0 ? rest : [old, replacement]
+  if (rest.length > 2 || oldText === undefined || newText === undefined) {
+    throw new Error("edit-block takes exactly <old> and <new> — after `--` when either starts with '-'")
+  }
+  return {old: String(oldText), new: String(newText)}
+}

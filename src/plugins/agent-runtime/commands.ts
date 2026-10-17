@@ -34,7 +34,7 @@ import {
 } from './workspaceGuard.ts'
 import { agentTxOptions, runAgentMutator } from './agentWrites.ts'
 import { blockIdField, blockPositionField, resolveAgentTarget, resolveBlockId } from './targets.ts'
-import { appendMarkdown, contentEcho, createPage, editBlock, parseAgentMarkdown } from './writeCommands.ts'
+import { appendMarkdown, contentEcho, createPage, editBlock, parseAgentMarkdown, renderAppendView } from './writeCommands.ts'
 import { blockHistory, recentChanges } from './changeHistory.ts'
 import { keyAtEnd, keyBetween } from '@/data/orderKey.js'
 import { deleteSubtreeInTx } from '@/data/subtreeDelete.js'
@@ -2387,12 +2387,12 @@ export const executeCommand = async (
     case 'move-block': {
       const parentId = command.parentId === null
         ? null
-        : await blockIdField(context.repo, requireString(command.parentId, 'parentId'), 'move-block', command.exactIds === true)
+        : await blockIdField(context.repo, requireString(command.parentId, 'parentId'), 'move-block', command.exactIds)
       return context.moveBlock({
         id: await commandBlockId(context.repo, command, 'move-block'),
         parentId,
         position: await blockPositionField(
-          context.repo, getMoveBlockPosition(command.position), 'move-block', command.exactIds === true,
+          context.repo, getMoveBlockPosition(command.position), 'move-block', command.exactIds,
         ),
       })
     }
@@ -2407,21 +2407,23 @@ export const executeCommand = async (
         id: await commandBlockId(context.repo, command, 'restore-block'),
       })
 
-    case 'append-markdown':
-      return appendMarkdown(context.repo, {
+    case 'append-markdown': {
+      const view = await appendMarkdown(context.repo, {
         target: requireString(command.target, 'target'),
         markdown: requireString(command.markdown, 'markdown'),
         position: command.position === undefined ? undefined : getMoveBlockPosition(command.position),
         shape: command.shape === 'block' ? 'block' : command.shape === 'outline' ? 'outline' : undefined,
-        exactIds: command.exactIds === true,
+        exactIds: command.exactIds,
       })
+      return command.format === 'json' ? view : renderAppendView(view)
+    }
 
     case 'edit-block':
       return editBlock(context.repo, {
         id: requireString(command.id, 'id'),
         old: requireString(command.old, 'old'),
         new: requireString(command.new, 'new'),
-        exactIds: command.exactIds === true,
+        exactIds: command.exactIds,
       })
 
     case 'create-page':

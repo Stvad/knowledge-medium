@@ -8,9 +8,12 @@ import { orderKeysForInsert, type InsertPosition } from '@/data/mutators.js'
 import type { Repo } from '@/data/repo'
 import { parseMarkdownToBlocks, type ParsedBlock } from '@/utils/markdownParser.js'
 import { parseRelativeDate } from '@/utils/relativeDate.js'
-import { charBoundary, createPageName, cutMarker, toDisplayJson } from '@knowledge-medium/agent-cli/protocol'
+import { AGENT_VIEW_DEFAULTS, charBoundary, createPageName, cutMarker, toDisplayJson } from '@knowledge-medium/agent-cli/protocol'
 import { agentTxOptions } from './agentWrites.ts'
+import { displayIds } from './agentViews/displayIds.ts'
 import { shortIds } from './agentViews/resolveRef.ts'
+import { CUT_LEGEND, EMPTY_CONTENT, joinDisplayLines, plural } from './agentViews/shared.ts'
+import { clipLine } from './agentViews/text.ts'
 import {
   assertAnchorUnder,
   resolveAgentTarget,
@@ -22,7 +25,7 @@ import {
 } from './targets.ts'
 import { assertActiveWorkspace } from './workspaceGuard.ts'
 
-export type MarkdownShape = 'outline' | 'block'
+type MarkdownShape = 'outline' | 'block'
 
 /** Markdown → blocks to create: the app paste parser's split for `'outline'`
  *  (the default), or the whole text as ONE block for `'block'`. */
@@ -31,7 +34,7 @@ export const parseAgentMarkdown = (markdown: string, shape: MarkdownShape = 'out
     ? (markdown.length === 0 ? [] : [{id: 'block-root', orderKey: '', content: markdown}])
     : parseMarkdownToBlocks(markdown)
 
-export interface AppendMarkdownInput {
+interface AppendMarkdownInput {
   target: string
   markdown: string
   position?: InsertPosition
@@ -40,26 +43,52 @@ export interface AppendMarkdownInput {
   exactIds?: boolean
 }
 
-export interface AppendedBlock {
-  id: string
-  /** Unique id prefix the read views print as `^short`. */
+/** A block as an append reports it: one display line, cut at the read views'
+ *  line budget, and its id as they print it. */
+interface AppendedLine {
   shortId: string
+  content: string
+  /** Characters cut from `content` (0 when it fit). */
+  cut: number
+}
+
+interface AppendedBlock extends AppendedLine {
+  id: string
   parentId: string
   /** 0 for a direct child of the target. */
   depth: number
-  content: string
 }
 
-export interface AppendMarkdownResult {
-  target: ResolvedAgentTarget & {shortId: string; content: string}
+/** What `append-markdown` answers: bounded like a read view, rendered as text
+ *  by {@link renderAppendView} unless the call asks for `format: 'json'`. */
+interface AppendMarkdownView {
+  target: ResolvedAgentTarget & AppendedLine
   /** Created blocks in pre-order. */
   blocks: AppendedBlock[]
+}
+
+const appendedLine = (content: string, shortId: string): AppendedLine => {
+  const clipped = clipLine(content, AGENT_VIEW_DEFAULTS.lineChars)
+  return {shortId, content: clipped.text === '' ? EMPTY_CONTENT : clipped.text, cut: clipped.cut}
+}
+
+/** `Appended N blocks under <target>  ^short (kind[, created]):`, then the new
+ *  blocks as an outline in the read views' line form. */
+export const renderAppendView = (view: AppendMarkdownView): string => {
+  const {target, blocks} = view
+  const facts = target.created ? `${target.kind}, created` : target.kind
+  const lines = [
+    `Appended ${plural(blocks.length, 'block')} under ${target.content}  ^${target.shortId} (${facts}):`,
+    ...blocks.map(block => `${'  '.repeat(block.depth)}- ${block.content}  ^${block.shortId}`),
+  ]
+  if ([target, ...blocks].some(line => line.cut > 0)) lines.push(CUT_LEGEND)
+  return joinDisplayLines(lines)
 }
 
 export const appendMarkdown = async (
   outerRepo: Repo,
   input: AppendMarkdownInput,
-): Promise<AppendMarkdownResult> => {
+): Promise<AppendMarkdownView> => {
   const verb = 'append-markdown'
   // Before resolving the target: resolution can CREATE a page.
   if (input.markdown.trim() === '') throw new Error(`${verb}: markdown is empty — nothing to append.`)
@@ -79,7 +108,7 @@ export const appendMarkdown = async (
     // After the target: a refused one should not pay for a large document's
     // parse. Parsing cannot fail, so nothing created above is left orphaned.
     const parsed = parseAgentMarkdown(input.markdown, input.shape)
-    const blocks: Array<Omit<AppendedBlock, 'shortId'>> = []
+    const blocks: Array<{id: string, parentId: string, depth: number, content: string}> = []
     let targetContent = ''
 
     await repo.tx(async tx => {
@@ -113,15 +142,15 @@ export const appendMarkdown = async (
       }
     }, agentTxOptions(verb))
 
-    const short = await shortIds(repo, [target.id, ...blocks.map(block => block.id)])
+    const ids = await displayIds(repo, [target.id, ...blocks.map(block => block.id)])
     return {
-      target: {...target, shortId: short.get(target.id)!, content: targetContent},
-      blocks: blocks.map(block => ({...block, shortId: short.get(block.id)!})),
+      target: {...target, ...appendedLine(targetContent, ids.get(target.id)!)},
+      blocks: blocks.map(({content, ...block}) => ({...block, ...appendedLine(content, ids.get(block.id)!)})),
     }
   })
 }
 
-export interface EditBlockInput {
+interface EditBlockInput {
   id: string
   old: string
   new: string
@@ -149,7 +178,7 @@ export const contentEcho = (content: string): string => {
   return end === content.length ? quoted : `${quoted}${cutMarker(content.length - end)}`
 }
 
-export interface EditBlockResult {
+interface EditBlockResult {
   id: string
   shortId: string
   /** The replacement with up to {@link EDIT_CONTEXT_CHARS} of context on each
@@ -197,7 +226,7 @@ export const editBlock = async (repo: Repo, input: EditBlockInput): Promise<Edit
   return {id, shortId: (await shortIds(repo, [id])).get(id)!, excerpt}
 }
 
-export interface CreatePageInput {
+interface CreatePageInput {
   name?: string
   date?: string
 }
@@ -205,7 +234,7 @@ export interface CreatePageInput {
 export const createPage = async (
   repo: Repo,
   input: CreatePageInput,
-): Promise<ResolvedAgentTarget & {content: string}> => {
+): Promise<ResolvedAgentTarget & AppendedLine> => {
   const verb = 'create-page'
   if ((input.name === undefined) === (input.date === undefined)) {
     throw new Error(`${verb}: pass exactly one of name or date.`)
@@ -224,5 +253,7 @@ export const createPage = async (
     }
     resolved = await resolveDailyNoteTarget(repo, date.iso, verb)
   }
-  return {...resolved, content: (await repo.load(resolved.id))?.content ?? ''}
+  const content = (await repo.load(resolved.id))?.content ?? ''
+  const ids = await displayIds(repo, [resolved.id])
+  return {...resolved, ...appendedLine(content, ids.get(resolved.id)!)}
 }

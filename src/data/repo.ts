@@ -621,6 +621,13 @@ export type OperatorBackfillClaimOutcome<T = void> =
   | {readonly claimed: true; readonly value: T}
   | {readonly claimed: false; readonly result: OperatorBackfillResult}
 
+/** Options for {@link Repo.run}: `description` replaces the mutator's own
+ *  `describe` as the tx's audit text (the agent bridge attributes its
+ *  writes this way). */
+export interface RunOptions {
+  description?: string
+}
+
 export class Repo {
   readonly db: PowerSyncDb
   readonly cache: BlockCache
@@ -1993,8 +2000,8 @@ export class Repo {
     const facade = Object.create(this) as Repo
     const tx = <R,>(fn: (tx: Tx) => Promise<R>, opts: RepoTxOptions): Promise<R> =>
       this.tx(fn, {...opts, groupId})
-    const run = ((name: string, args: unknown) =>
-      this.dispatchMutator(name, groupId)(args)) as Repo['run']
+    const run = ((name: string, args: unknown, options?: RunOptions) =>
+      this.dispatchMutator(name, groupId, options)(args)) as Repo['run']
     const mutate = nameDispatchProxy<MutateProxy>(name => this.dispatchMutator(name, groupId))
     // Async so a synchronously-throwing callback rejects like the outer
     // `undoGroup` does instead of throwing through the caller.
@@ -2415,8 +2422,8 @@ export class Repo {
    *  TypeScript identity isn't available. `name` is the full mutator
    *  name (e.g. `'tasks:setDueDate'` or `'core.indent'`). Args are
    *  validated at the boundary via the mutator's argsSchema. */
-  async run<R = unknown>(name: string, args: unknown): Promise<R> {
-    return this.dispatchMutator(name)(args) as Promise<R>
+  async run<R = unknown>(name: string, args: unknown, options?: RunOptions): Promise<R> {
+    return this.dispatchMutator(name, undefined, options)(args) as Promise<R>
   }
 
   /** Dynamic query dispatch — `repo.query[name]` for runtime-loaded
@@ -4833,7 +4840,11 @@ export class Repo {
    *  Throws `MutatorNotRegisteredError` if neither matches.
    *  `groupId` (from an `undoGroup` facade) stamps the dispatched tx so
    *  it merges into the group's undo entry. */
-  private dispatchMutator(name: string, groupId?: string): (args: unknown) => Promise<unknown> {
+  private dispatchMutator(
+    name: string,
+    groupId?: string,
+    options: RunOptions = {},
+  ): (args: unknown) => Promise<unknown> {
     return async (args: unknown) => {
       const m = this.mutators.get(name) ?? this.mutators.get(`core.${name}`)
       if (!m) throw new MutatorNotRegisteredError(name)
@@ -4841,7 +4852,7 @@ export class Repo {
       const scope = typeof m.scope === 'function' ? m.scope(validated) : m.scope
       return this.tx(tx => tx.run(m, validated) as Promise<unknown>, {
         scope,
-        description: m.describe?.(validated),
+        description: options.description ?? m.describe?.(validated),
         groupId,
       })
     }

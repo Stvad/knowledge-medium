@@ -1,6 +1,6 @@
 import { cac } from 'cac'
 import { describe, expect, it } from 'vitest'
-import { appendPositionOption, limitOption, scopeAssertion, workspaceAssertion } from '../src/cliOptions.js'
+import { appendPositionOption, editArgumentsOption, limitOption, scopeAssertion, workspaceAssertion } from '../src/cliOptions.js'
 
 /** Parse argv the way the real CLI does and hand back what the option
  *  actually became — so this pins CAC's behaviour too, not just our handling
@@ -123,5 +123,35 @@ describe('appendPositionOption', () => {
 
   it('refuses more than one position flag', () => {
     expect(() => appendPositionOption(parseAppend(['--first', '--after', 'abc']))).toThrow(/at most one/)
+  })
+})
+
+describe('editArgumentsOption', () => {
+  const parseEdit = (argv: string[]): {old: unknown, replacement: unknown, options: Record<string, unknown>} => {
+    const cli = cac('t')
+    let seen = {old: undefined as unknown, replacement: undefined as unknown, options: {} as Record<string, unknown>}
+    cli.command('edit-block <id> [old] [new]', 'x')
+      .action((_id, old, replacement, options) => { seen = {old, replacement, options} })
+    cli.parse(['node', 't', 'edit-block', 'b1', ...argv])
+    return seen
+  }
+  const editOf = (argv: string[]) => {
+    const {old, replacement, options} = parseEdit(argv)
+    return editArgumentsOption(old, replacement, options['--'])
+  }
+
+  it('takes <old> and <new> positionally, or after -- when either starts with -', () => {
+    expect(editOf(['milk', 'oat milk'])).toEqual({old: 'milk', new: 'oat milk'})
+    expect(editOf(['--', '- [ ]', '- [x]'])).toEqual({old: '- [ ]', new: '- [x]'})
+  })
+
+  it('keeps digits-only text as typed — CAC leaves positionals and `--` text as strings', () => {
+    expect(editOf(['007', '008'])).toEqual({old: '007', new: '008'})
+    expect(editOf(['--', '007', '008'])).toEqual({old: '007', new: '008'})
+  })
+
+  it('refuses anything but exactly two texts', () => {
+    expect(() => editOf(['only-old'])).toThrow(/exactly <old> and <new>/)
+    expect(() => editOf(['--', 'a', 'b', 'c'])).toThrow(/exactly <old> and <new>/)
   })
 })

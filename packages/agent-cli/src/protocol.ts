@@ -249,6 +249,13 @@ export const moveBlockCommandSchema = z.looseObject({
   ...commandIdField,
 })
 
+/** How a bounded answer comes back: the read views and append-markdown. */
+const formatField = {
+  format: z.enum(['text', 'json']).optional().describe(
+    'text (default): compact markdown-ish rendering. json: the same bounded view, structured.',
+  ),
+}
+
 /** Parse markdown with the app paste parser and insert it under a target, in
  *  one transaction. `target` is a block id / id prefix, a `[[Page]]` or a date
  *  expression (a missing page or daily note is created). `position` places the
@@ -259,6 +266,7 @@ export const appendMarkdownCommandSchema = z.looseObject({
   markdown: z.string(),
   position: moveBlockPositionSchema.optional(),
   shape: z.enum(['outline', 'block']).optional(),
+  ...formatField,
   ...exactIdsField,
   ...commandIdField,
 })
@@ -307,8 +315,8 @@ export const resolveBlockIdCommandSchema = z.looseObject({
 /** One block's recorded changes, newest first — local and sync-applied. */
 export const blockHistoryCommandSchema = z.looseObject({
   type: z.literal('block-history'),
-  id: z.string(),
-  limit: z.number().int().positive().optional(),
+  id: z.string().describe('The block: a full id or a unique id prefix as printed (^3f2a9c1d)'),
+  limit: z.number().int().positive().optional().describe('Max events (default 20, at most 100)'),
   ...commandIdField,
 })
 
@@ -546,9 +554,7 @@ const viewFields = {
     'Workspace to read. The call goes to an app tab that has it open (default: the most recently '
     + 'focused tab), and is refused when no connected tab does.',
   ),
-  format: z.enum(['text', 'json']).optional().describe(
-    'text (default): compact markdown-ish rendering. json: the same bounded view, structured.',
-  ),
+  ...formatField,
 }
 
 const viewLimitField = (what: string, defaultValue: number) =>
@@ -996,7 +1002,7 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   'block-history': {
     usage: 'kmagent block-history <id> [--limit <n>]',
     description: 'One block\'s recorded changes, newest first, local and synced, with content before/after (cut past '
-      + '2,000 chars) — to review a change. A content ending in a cut marker is not whole.',
+      + '2,000 chars) — to review a change. A content ending in a cut marker is not whole, so do not write it back.',
     readOnly: true,
   },
   'resolve-block-id': {
