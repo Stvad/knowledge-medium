@@ -6,9 +6,11 @@ import {AGENT_VIEW_DEFAULTS, clip, neutralizeDisplayText} from './protocol.js'
 /** A block's first line, cut to the read views' line budget, and how many
  *  lines follow. */
 const preview = (content: string): string => {
-  const [first, ...rest] = content.split('\n')
-  const line = clip(first, AGENT_VIEW_DEFAULTS.lineChars).text
-  return rest.length > 0 ? `${line} …(+${rest.length} line${rest.length === 1 ? '' : 's'})` : line
+  const end = content.indexOf('\n')
+  const line = clip(end < 0 ? content : content.slice(0, end), AGENT_VIEW_DEFAULTS.lineChars).text
+  let more = 0
+  for (let at = end; at >= 0; at = content.indexOf('\n', at + 1)) more += 1
+  return more > 0 ? `${line} …(+${more} line${more === 1 ? '' : 's'})` : line
 }
 
 /** `Appended N blocks under "<target>" ^short (kind[, created]):` then the

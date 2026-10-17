@@ -749,6 +749,29 @@ describe('review round 5', () => {
     const after = await run({type: 'recent-changes'}) as {txs: Array<{changes: Array<{blockId: string}>}>}
     expect(after.txs[0].changes.map(change => change.blockId)).toEqual(['value'])
   })
+
+  it('spends the listing cap on real changes before property storage', async () => {
+    await seed([{id: 'defn', content: 'status'}, {id: NOTE, content: 'Owner'}])
+    await sharedDb.db.execute(
+      "INSERT OR IGNORE INTO block_types (block_id, workspace_id, type) VALUES ('defn', ?, 'property-schema')",
+      [WS],
+    )
+    // Storage written first, the owner's change last: by write order alone
+    // the storage rows would fill the cap and push the owner out.
+    await repo.tx(async tx => {
+      for (let i = 0; i <= MAX_LISTED_CHANGES; i++) {
+        await tx.create({
+          id: `field-${i}`, workspaceId: WS, parentId: NOTE, orderKey: `a${i}`,
+          content: '::((defn))', referenceTargetId: 'defn',
+        })
+      }
+      await tx.update(NOTE, {properties: {status: 'open'}})
+    }, agentTxOptions('update-block'))
+
+    const out = await run({type: 'recent-changes'}) as ChangesOut
+    expect(out.txs[0].changes.map(change => change.blockId)).toEqual([NOTE])
+    expect(out.txs[0].omitted).toBeUndefined()
+  })
 })
 
 describe('review round 6', () => {

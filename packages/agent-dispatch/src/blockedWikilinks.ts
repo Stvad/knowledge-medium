@@ -295,18 +295,21 @@ export const createBlockedWikilinkWriteGuard = (
       }
     }
 
-    /** The content an `edit_block` will produce, when its block is live and
-     *  contains `old` (the operation's `id` is the resolved full id); otherwise
-     *  the app refuses the edit itself, so only `new` needs checking. A
-     *  concurrent edit between this read and the write is accepted, as for the
+    /** The row an `edit_block` leaves — the spliced content, and the stored
+     *  properties it keeps — when its block is live and contains `old` (the
+     *  operation's `id` is the resolved full id); otherwise the app refuses
+     *  the edit itself, so only `new` needs checking. A concurrent edit
+     *  between this read and the write is accepted, as for the
      *  move/delete/restore reads: the policy stops accidental loops, not an
      *  adversary, so no compare-and-set is threaded through. */
-    const editResult = async (op: {id: string, old: string, new: string}): Promise<string | null> => {
-      const rows = await graph.sqlAll('SELECT content FROM blocks WHERE deleted = 0 AND id = ?', [op.id])
-      const content = refsFromSqlRow(rows[0]).content
+    const editResult = async (
+      op: {id: string, old: string, new: string},
+    ): Promise<{content: string, properties?: Record<string, unknown>} | null> => {
+      const rows = await graph.sqlAll('SELECT content, properties_json FROM blocks WHERE deleted = 0 AND id = ?', [op.id])
+      const {content, properties} = refsFromSqlRow(rows[0])
       const at = content?.indexOf(op.old) ?? -1
       return content !== undefined && op.old !== '' && at >= 0
-        ? content.slice(0, at) + op.new + content.slice(at + op.old.length)
+        ? {content: content.slice(0, at) + op.new + content.slice(at + op.old.length), properties}
         : null
     }
 
@@ -367,6 +370,8 @@ export const createBlockedWikilinkWriteGuard = (
           await assertNoBlockedRefs(operation.content, operation.properties)
           return
         case 'update_block':
+          // The values written, not the row they land in: a spawned agent
+          // completes its task by update_block on the task block itself.
           await assertNoBlockedRefs(operation.content, operation.properties)
           return
         case 'move_block': {
@@ -394,11 +399,16 @@ export const createBlockedWikilinkWriteGuard = (
             await assertNoBlockedRefs(row.content, row.properties)
           }
           return
-        case 'edit_block':
+        case 'edit_block': {
           await assertNoBlockedRefs(operation.new)
-          await assertNoBlockedRefs((await editResult(operation)) ?? undefined)
+          const edited = await editResult(operation)
+          if (edited) await assertNoBlockedRefs(edited.content, edited.properties)
           return
+        }
         case 'create_page':
+          // A date's note is got or created the way opening that day does,
+          // repairs included; its own row is not inspected (accepted — that
+          // needs the app's date grammar here).
           await assertNoBlockedRefs(await nameOfPageToCreate(
             operation.name === undefined ? undefined : createPageName(operation.name),
           ))

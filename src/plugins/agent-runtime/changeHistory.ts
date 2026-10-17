@@ -215,9 +215,8 @@ export interface RecentChangeTx {
   at: string
   description: string | null
   changes: BlockChange[]
-  /** Rows this tx wrote that {@link MAX_LISTED_CHANGES} left out, counted
-   *  before netting and before property-storage rows are hidden — so it can
-   *  exceed what `changes` would have shown. */
+  /** Blocks this tx wrote that {@link MAX_LISTED_CHANGES} left out, property
+   *  storage not counted. */
   omitted?: number
 }
 
@@ -233,16 +232,19 @@ export interface RecentChangesResult {
 
 const RECENT_CONTENT_LIMIT = 200
 
-/** Written rows one call reads, across all its txs, newest tx first: `limit`
- *  bounds txs, and one tx (a large append, a subtree delete) can write
- *  thousands of blocks. Whole blocks are cut, never a block's events, so each
- *  listed block's net change stays exact. Property-storage rows count against
- *  it although `changes` hides them; an exact cap would put that hiding rule
- *  in the ranking SQL. */
+/** Written blocks one call reads, across all its txs: `limit` bounds txs, and
+ *  one tx (a large append, a subtree delete) can write thousands of blocks.
+ *  Whole blocks are cut, never a block's events, so each listed block's net
+ *  change stays exact. */
 export const MAX_LISTED_CHANGES = 200
 
-/** Every block the page's txs wrote, numbered in page order, then first-write
- *  order — the order {@link MAX_LISTED_CHANGES} cuts in. */
+/** Every block the page's txs wrote, numbered in the order
+ *  {@link MAX_LISTED_CHANGES} cuts in: real changes before property storage
+ *  (recognized field rows and the value rows under them, which the owner's own
+ *  line usually covers), then page order, then first-write order. Storage
+ *  first would let a bulk property write fill the cap with rows the result
+ *  hides, pushing out the owners that name them. Binds the page's tx ids, then
+ *  the recognition params twice. */
 const RANKED_BLOCKS_CTE = `
   WITH page AS (SELECT key AS ord, value AS tx_id FROM json_each(?)),
   written AS (
@@ -250,7 +252,18 @@ const RANKED_BLOCKS_CTE = `
       FROM row_events r JOIN page ON page.tx_id = r.tx_id
      GROUP BY r.tx_id, r.block_id
   ),
-  ranked AS (SELECT tx_id, block_id, ROW_NUMBER() OVER (ORDER BY ord, first_id) AS n FROM written)
+  storage AS (
+    SELECT f.id FROM blocks f
+     WHERE f.id IN (SELECT block_id FROM written) AND ${recognizedFieldRowSql('f')}
+    UNION
+    SELECT v.id FROM blocks v JOIN blocks f ON f.id = v.parent_id
+     WHERE v.id IN (SELECT block_id FROM written) AND ${recognizedFieldRowSql('f')}
+  ),
+  ranked AS (
+    SELECT tx_id, block_id, block_id IN (SELECT id FROM storage) AS is_storage,
+           ROW_NUMBER() OVER (ORDER BY block_id IN (SELECT id FROM storage), ord, first_id) AS n
+      FROM written
+  )
 `
 
 export const recentChanges = async (repo: Repo, input: RecentChangesInput): Promise<RecentChangesResult> => {
@@ -273,13 +286,14 @@ export const recentChanges = async (repo: Repo, input: RecentChangesInput): Prom
   )
   const page = txs.slice(0, limit)
   const pageIds = JSON.stringify(page.map(tx => tx.tx_id))
+  const recognition = registryRecognitionParams(repo)
   const listed = await repo.db.getAll<{tx_id: string; block_id: string}>(
     `${RANKED_BLOCKS_CTE} SELECT tx_id, block_id FROM ranked WHERE n <= ?`,
-    [pageIds, MAX_LISTED_CHANGES],
+    [pageIds, ...recognition, ...recognition, MAX_LISTED_CHANGES],
   )
   const omittedRows = await repo.db.getAll<{tx_id: string; omitted: number}>(
-    `${RANKED_BLOCKS_CTE} SELECT tx_id, COUNT(*) AS omitted FROM ranked WHERE n > ? GROUP BY tx_id`,
-    [pageIds, MAX_LISTED_CHANGES],
+    `${RANKED_BLOCKS_CTE} SELECT tx_id, COUNT(*) AS omitted FROM ranked WHERE n > ? AND NOT is_storage GROUP BY tx_id`,
+    [pageIds, ...recognition, ...recognition, MAX_LISTED_CHANGES],
   )
   const omitted = new Map(omittedRows.map(row => [row.tx_id, row.omitted]))
   const rows = await repo.db.getAll<RowEventRow>(

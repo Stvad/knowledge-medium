@@ -379,6 +379,22 @@ describe('createBlockedWikilinkWriteGuard — markdown and edit writes', () => {
     expect(sqlAll.mock.calls.at(-1)?.[1]).toEqual(['block-1'])
   })
 
+  it('blocks edit_block on a row whose kept properties reference a blocked target — the edit rewrites the row', async () => {
+    const sqlAll = vi.fn<GuardGraph['sqlAll']>(async () => [
+      {content: 'a plain note', properties_json: JSON.stringify({related: '[[claude]]'})},
+    ])
+    const guard = createBlockedWikilinkWriteGuard(graphFrom({sqlAll}), ['claude'])
+    await expect(guard.beforeWrite({type: 'edit_block', id: 'block-1', old: 'plain', new: 'tidy'}))
+      .rejects.toThrow('references a blocked page')
+  })
+
+  it('lets update_block write a block that references a blocked target — a task is completed that way', async () => {
+    const sqlAll = vi.fn<GuardGraph['sqlAll']>(async () => [{content: 'ask [[claude]] to tidy up'}])
+    const guard = createBlockedWikilinkWriteGuard(graphFrom({sqlAll}), ['claude'])
+    await expect(guard.beforeWrite({type: 'update_block', id: 'task', properties: {'agent:status': 'done'}}))
+      .resolves.toBeUndefined()
+  })
+
   it('blocks a title that would carry a blocked wikilink when the write creates that page', async () => {
     // Only 'claude' (the blocked page) exists; every other name is missing.
     const guard = createBlockedWikilinkWriteGuard(graphFrom({
