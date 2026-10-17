@@ -1,1 +1,1 @@
-import{cu as e,du as t,fu as n,lu as r,uu as i}from"../../../chunks/app-Bg52g7Ny.js";export{e as appendMarkdown,r as contentEcho,i as createPage,t as editBlock,n as parseAgentMarkdown};
+import{cu as e,du as t,fu as n,lu as r,pu as i,uu as a}from"../../../chunks/app-CyccrE7R.js";export{e as appendMarkdown,r as contentEcho,a as createPage,t as editBlock,n as parseAgentMarkdown,i as renderAppendView};
