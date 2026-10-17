@@ -1,0 +1,1 @@
+import{XB as e,YB as t,ZB as n}from"../../../chunks/app-KxTcR3hR.js";export{t as charLimitProp,e as charProfileProp,n as charScopeProp};

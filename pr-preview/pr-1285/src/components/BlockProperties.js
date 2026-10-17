@@ -1,0 +1,1 @@
+import{tM as e}from"../../chunks/app-KxTcR3hR.js";export{e as BlockProperties};
