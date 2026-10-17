@@ -1,0 +1,1 @@
+import{Q3 as e}from"../../../chunks/app-DGET1k5x.js";export{e as defineQuery};

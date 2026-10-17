@@ -1,0 +1,1 @@
+import{J3 as e,K3 as t,q3 as n}from"../../../chunks/app-DGET1k5x.js";export{t as SYSTEM_AUTHOR_PREFIX,n as isSystemAuthor,e as systemAuthor};

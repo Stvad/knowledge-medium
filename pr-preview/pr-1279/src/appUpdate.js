@@ -1,0 +1,1 @@
+import{oE as e,sE as t}from"../chunks/app-DGET1k5x.js";export{e as appUpdate,t as useAppUpdateAvailable};

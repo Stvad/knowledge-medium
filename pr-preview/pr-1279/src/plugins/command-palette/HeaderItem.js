@@ -1,0 +1,1 @@
+import{DC as e}from"../../../chunks/app-DGET1k5x.js";export{e as CommandPaletteHeaderItem};

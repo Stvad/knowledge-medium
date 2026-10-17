@@ -1,0 +1,1 @@
+import{Xj as e,Zj as t}from"../../../chunks/app-DGET1k5x.js";export{e as declarationOnlyDefinitionForName,t as declarationOnlyStatusText};
