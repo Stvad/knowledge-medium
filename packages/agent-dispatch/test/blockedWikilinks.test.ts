@@ -1,3 +1,4 @@
+import {DatabaseSync} from 'node:sqlite'
 import {describe, expect, it, vi} from 'vitest'
 import type {BridgeGraph} from '@knowledge-medium/agent-cli/graph'
 import {
@@ -353,5 +354,154 @@ describe('createBlockedWikilinkWriteGuard', () => {
       type: 'restore_block',
       id: 'source-block',
     })).rejects.toThrow('references a blocked page')
+  })
+})
+
+describe('createBlockedWikilinkWriteGuard — markdown and edit writes', () => {
+  it('blocks append_markdown when the markdown references a blocked target', async () => {
+    const guard = createBlockedWikilinkWriteGuard(graphFrom(), ['claude'])
+    await expect(guard.beforeWrite({
+      type: 'append_markdown', target: 'today', markdown: '- ask [[claude]] about it',
+    })).rejects.toThrow('references a blocked page')
+  })
+
+  it('blocks edit_block when the replacement text references a blocked target', async () => {
+    const guard = createBlockedWikilinkWriteGuard(graphFrom(), ['claude'])
+    await expect(guard.beforeWrite({
+      type: 'edit_block', id: 'b', old: 'x', new: 'see [[claude]]',
+    })).rejects.toThrow('references a blocked page')
+  })
+
+  it('blocks edit_block when the edit completes a blocked ref out of the stored content', async () => {
+    const sqlAll = vi.fn<GuardGraph['sqlAll']>(async () => [{content: 'ping [[cla-ude]] later'}])
+    const guard = createBlockedWikilinkWriteGuard(graphFrom({sqlAll}), ['claude'])
+    await expect(guard.beforeWrite({type: 'edit_block', id: 'block-1', old: '-', new: ''}))
+      .rejects.toThrow('references a blocked page')
+    expect(sqlAll.mock.calls.at(-1)?.[1]).toEqual(['block-1'])
+  })
+
+  it('blocks edit_block on a row whose kept properties reference a blocked target — the edit rewrites the row', async () => {
+    const sqlAll = vi.fn<GuardGraph['sqlAll']>(async () => [
+      {content: 'a plain note', properties_json: JSON.stringify({related: '[[claude]]'})},
+    ])
+    const guard = createBlockedWikilinkWriteGuard(graphFrom({sqlAll}), ['claude'])
+    await expect(guard.beforeWrite({type: 'edit_block', id: 'block-1', old: 'plain', new: 'tidy'}))
+      .rejects.toThrow('references a blocked page')
+  })
+
+  it('lets update_block write a block that references a blocked target — a task is completed that way', async () => {
+    const sqlAll = vi.fn<GuardGraph['sqlAll']>(async () => [{content: 'ask [[claude]] to tidy up'}])
+    const guard = createBlockedWikilinkWriteGuard(graphFrom({sqlAll}), ['claude'])
+    await expect(guard.beforeWrite({type: 'update_block', id: 'task', properties: {'agent:status': 'done'}}))
+      .resolves.toBeUndefined()
+  })
+
+  it('blocks a title that would carry a blocked wikilink when the write creates that page', async () => {
+    // Only 'claude' (the blocked page) exists; every other name is missing.
+    const guard = createBlockedWikilinkWriteGuard(graphFrom({
+      resolvePageId: async name => {
+        if (name === 'claude') return 'page-id-123'
+        throw new Error(`Page "${name}" does not exist yet`)
+      },
+    }), ['claude'])
+    await expect(guard.beforeWrite({type: 'create_page', name: 'notes [[claude]]'}))
+      .rejects.toThrow('references a blocked page')
+    await expect(guard.beforeWrite({type: 'create_page', name: '[[notes [[claude]]]]'}))
+      .rejects.toThrow('references a blocked page')
+    await expect(guard.beforeWrite({type: 'append_markdown', target: '[[notes [[claude]]]]', markdown: '- x'}))
+      .rejects.toThrow('references a blocked page')
+    await expect(guard.beforeWrite({type: 'create_block', parentId: '[[notes [[claude]]]]', content: 'x'}))
+      .rejects.toThrow('references a blocked page')
+    // Naming the blocked page itself creates no reference to it — wrapped or not,
+    // since create-page strips one outer [[…]].
+    await expect(guard.beforeWrite({type: 'create_page', name: 'claude'})).resolves.toBeUndefined()
+    await expect(guard.beforeWrite({type: 'create_page', name: '[[claude]]'})).resolves.toBeUndefined()
+    await expect(guard.beforeWrite({type: 'append_markdown', target: '[[claude]]', markdown: '- x'})).resolves.toBeUndefined()
+  })
+
+  it('names the blocked ref in its refusal without letting it reorder or break the line', async () => {
+    const guard = createBlockedWikilinkWriteGuard(graphFrom({}), ['evil\u202Ename'])
+    const refusal = guard.beforeWrite({type: 'create_block', parentId: 'p', content: 'see [[evil\u202Ename]]'})
+    await expect(refusal).rejects.toThrow('references a blocked page')
+    await expect(refusal).rejects.not.toThrow(/\u202E/)
+  })
+
+  it('checks the name create_page will create — trimmed — not a padded alias that happens to exist', async () => {
+    const padded = ' notes [[claude]] '
+    const guard = createBlockedWikilinkWriteGuard(
+      graphFrom({resolvePageId: async (name: string) => {
+        if (name === padded) return 'padded-alias-page'
+        throw new Error(`no page ${name}`)
+      }}), ['claude'])
+    await expect(guard.beforeWrite({type: 'create_page', name: padded})).rejects.toThrow('references a blocked page')
+  })
+
+  it('lets a write into an EXISTING page through, whatever its title — nothing new is named', async () => {
+    const guard = createBlockedWikilinkWriteGuard(graphFrom({resolvePageId: async () => 'page-id-123'}), ['claude'])
+    await expect(guard.beforeWrite({type: 'create_block', parentId: '[[notes [[claude]]]]', content: 'x'}))
+      .resolves.toBeUndefined()
+    await expect(guard.beforeWrite({type: 'append_markdown', target: '[[notes [[claude]]]]', markdown: '- x'}))
+      .resolves.toBeUndefined()
+    await expect(guard.beforeWrite({type: 'create_page', name: 'notes [[claude]]'})).resolves.toBeUndefined()
+  })
+})
+
+describe('createBlockedWikilinkWriteGuard — anchored appends', () => {
+  // An anchored append re-keys siblings tied with the anchor, as a move does,
+  // so those rows are inspected the same way.
+  it('blocks an anchored append that would re-key a tied blocked sibling', async () => {
+    const guard = createBlockedWikilinkWriteGuard(graphFrom({
+      sqlAll: vi.fn(async (sql: string) => {
+        if (sql.includes('SELECT parent_id')) return [{parent_id: 'parent'}]
+        if (sql.includes('SELECT workspace_id')) return [{workspace_id: 'ws-1'}]
+        if (sql.includes('order_key')) {
+          return [
+            {id: 'anchor', content: 'anchor', properties_json: '{}', order_key: 'a0'},
+            {id: 'blocked-sibling', content: 'mentions [[claude]]', properties_json: '{}', order_key: 'a0'},
+            {id: 'later', content: 'later', properties_json: '{}', order_key: 'a1'},
+          ]
+        }
+        return []
+      }),
+    }), ['claude'])
+
+    await expect(guard.beforeWrite({
+      type: 'append_markdown', target: 'parent', markdown: '- safe', position: {kind: 'after', siblingId: 'anchor'},
+    })).rejects.toThrow('references a blocked page')
+  })
+
+  it('reads only the siblings tied with the anchor, however many the parent has', async () => {
+    const db = new DatabaseSync(':memory:')
+    db.exec(`CREATE TABLE blocks (id TEXT PRIMARY KEY, workspace_id TEXT, parent_id TEXT, order_key TEXT,
+      deleted INTEGER, content TEXT, properties_json TEXT)`)
+    const insert = db.prepare('INSERT INTO blocks VALUES (?, ?, ?, ?, 0, ?, ?)')
+    insert.run('parent', 'ws-1', null, 'a0', 'parent', '{}')
+    insert.run('anchor', 'ws-1', 'parent', 'a1', 'anchor', '{}')
+    insert.run('tied-blocked', 'ws-1', 'parent', 'a1', 'mentions [[claude]]', '{}')
+    insert.run('far-blocked', 'ws-1', 'parent', 'a5', 'also mentions [[claude]]', '{}')
+    const returned: unknown[] = []
+    const sqlAll = vi.fn<GuardGraph['sqlAll']>(async (sql, params = []) => {
+      const rows = db.prepare(sql).all(...(params as never[]))
+      returned.push(...rows)
+      return rows
+    })
+    const guard = createBlockedWikilinkWriteGuard(graphFrom({sqlAll}), ['claude'])
+
+    await expect(guard.beforeWrite({
+      type: 'append_markdown', target: 'parent', markdown: '- safe', position: {kind: 'after', siblingId: 'anchor'},
+    })).rejects.toThrow('references a blocked page')
+    expect(returned.map(row => (row as {id?: unknown}).id)).not.toContain('far-blocked')
+  })
+
+  it('lets an unanchored append through without reading siblings', async () => {
+    // Answers the lookups a sibling read would start with, so one would show.
+    const sqlAll = vi.fn<GuardGraph['sqlAll']>(async (sql: string) =>
+      sql.includes('SELECT workspace_id') ? [{workspace_id: 'ws-1'}]
+        : sql.includes('SELECT parent_id') ? [{parent_id: 'parent'}]
+          : [])
+    const guard = createBlockedWikilinkWriteGuard(graphFrom({sqlAll}), ['claude'])
+    await expect(guard.beforeWrite({type: 'append_markdown', target: 'parent', markdown: '- safe'}))
+      .resolves.toBeUndefined()
+    expect(sqlAll.mock.calls.filter(([sql]) => sql.includes('order_key'))).toEqual([])
   })
 })

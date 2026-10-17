@@ -8,19 +8,21 @@ import {z} from 'zod'
 import {isReadOnlySql, type KmMcpToolName} from './mcpShared.js'
 import {
   AGENT_VIEW_DEFAULTS,
+  blockHistoryCommandSchema,
   dailyNoteCommandSchema,
   dataModelCommandSchema,
   getCommandMeta,
   type KnownCommand,
   type KnownCommandType,
   pageCommandSchema,
+  toDisplayJson,
   viewBacklinksCommandSchema,
   viewBlockCommandSchema,
   viewGroupedBacklinksCommandSchema,
   viewOutlineCommandSchema,
   viewSearchCommandSchema,
 } from './protocol.js'
-import {workspaceAssertion} from './cliOptions.js'
+import {refuseNumberified, refuseRepeated, workspaceAssertion} from './cliOptions.js'
 
 type InputShape = Record<string, z.ZodType>
 export type ToolInput = Record<string, unknown>
@@ -95,7 +97,7 @@ const sqlQueryTool: GraphReadTool = {
   buildCommand: input => {
     const sql = input.sql as string
     if (!isReadOnlySql(sql)) {
-      throw new Error('sql_query only accepts a single read-only statement (SELECT, or WITH without mutating keywords). Use create_block / update_block / move_block / delete_block / restore_block for writes.')
+      throw new Error('sql_query only accepts a single read-only statement (SELECT, or WITH without mutating keywords). Use the write tools (append_markdown, edit_block, create_block, update_block, …) for writes.')
     }
     return {
       type: 'sql',
@@ -138,6 +140,9 @@ export const GRAPH_READ_TOOLS: readonly GraphReadTool[] = [
   wireTool('guide', 'data-model', dataModelCommandSchema, {
     cli: {verb: 'data-model', alias: 'guide', positional: {field: 'topic', variadic: true, optional: true}},
   }),
+  wireTool('block_history', 'block-history', blockHistoryCommandSchema, {
+    cli: {verb: 'block-history', positional: {field: 'id', variadic: false}},
+  }),
   sqlQueryTool,
 ]
 
@@ -145,7 +150,7 @@ export const GRAPH_READ_TOOLS: readonly GraphReadTool[] = [
 
 /** Views answer with a string in text mode and an object in json mode. */
 export const renderToolResult = (value: unknown): string =>
-  typeof value === 'string' ? value : JSON.stringify(value, null, 2)
+  typeof value === 'string' ? value : toDisplayJson(value)
 
 export const toolCommand = (tool: GraphReadTool, input: ToolInput): KnownCommand =>
   tool.buildCommand(input)
@@ -235,17 +240,6 @@ const cacKey = (key: string): string => key.replace(/-([a-z])/g, (_, c: string) 
 
 const EMPTY_VALUE_HINT = ' An empty value (a shell expanding an unset variable) arrives as 0.'
 
-/** cac numberifies every digits-only option value before this code sees it,
- *  so `00123` arrives as 123 and its text is gone: turning it back into a
- *  string would name something else (another id prefix, another type). */
-const refuseNumberified = (flag: string, value: unknown): void => {
-  if (typeof value !== 'number') return
-  throw new Error(
-    `${flag} got the number ${value}: the CLI reads a digits-only value as a number, which drops leading zeros. `
-    + `Send it as text with \`kmagent raw '<json>'\`; a block ref can also be written as its printed id prefix (^${value}).`,
-  )
-}
-
 const coerceOption = (spec: CliOptionSpec, value: unknown): unknown => {
   const flag = flagOf(spec.field)
   switch (spec.kind) {
@@ -263,9 +257,7 @@ const coerceOption = (spec: CliOptionSpec, value: unknown): unknown => {
     }
     case 'string': {
       if (spec.field === 'workspaceId') return workspaceAssertion(value).workspaceId
-      if (Array.isArray(value)) {
-        throw new Error(`${flag} expects a single value; got ${JSON.stringify(value)}.`)
-      }
+      refuseRepeated(flag, value)
       if (value === 0) return ''
       refuseNumberified(flag, value)
       return String(value)
@@ -278,9 +270,7 @@ const coerceOption = (spec: CliOptionSpec, value: unknown): unknown => {
       return items.map(item => String(item).trim()).filter(item => item !== '')
     }
     case 'spec': {
-      if (Array.isArray(value)) {
-        throw new Error(`${flag} expects a single value; got ${JSON.stringify(value)}.`)
-      }
+      refuseRepeated(flag, value)
       const text = String(value)
       if (spec.keywords.includes(text)) return text
       try {

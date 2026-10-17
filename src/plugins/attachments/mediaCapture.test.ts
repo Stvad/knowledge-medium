@@ -208,6 +208,7 @@ describe('captureMedia (Phase 5c — capture, plaintext)', () => {
     const WS2 = 'ws-2'
 
     const a = await captureMedia({ workspaceId: WS, source: { bytes, mime: 'image/png' } }, deps())
+    env.repo.setActiveWorkspaceId(WS2)
     const b = await captureMedia({ workspaceId: WS2, source: { bytes, mime: 'image/png' } }, deps())
 
     expect(a.ok && b.ok).toBe(true)

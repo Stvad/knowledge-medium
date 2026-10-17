@@ -27,10 +27,15 @@ import { runHealthCommand } from './healthCommand.ts'
 import { resolveBlockRef, runViewCommand } from './agentViews/index.ts'
 import { boundSqlRows, limitedSelectSql, MAX_SQL_ROWS } from './agentViews/sqlRows.ts'
 import { watchEventsRegistry } from './watchEvents.ts'
+import { agentTxOptions, runAgentMutator } from './agentWrites.ts'
+import { blockIdField, blockPositionField, resolveAgentTarget, resolveBlockId } from './targets.ts'
+import { appendMarkdown, contentEcho, createPage, editBlock, parseAgentMarkdown, renderAppendView } from './writeCommands.ts'
+import { blockHistory, recentChanges } from './changeHistory.ts'
 import { keyAtEnd, keyBetween } from '@/data/orderKey.js'
 import { deleteSubtreeInTx } from '@/data/subtreeDelete.js'
 import { syncedWriteTarget } from '@/data/syncedTableWriteGuard.js'
-import { parseMarkdownToBlocks, type ParsedBlock } from '@/utils/markdownParser.js'
+import type { ParsedBlock } from '@/utils/markdownParser.js'
+import { createChild, deleteBlock, move, restoreBlock } from '@/data/mutators.js'
 import {
   actionsFacet,
   appEffectsFacet,
@@ -170,6 +175,14 @@ const getPosition = (value: unknown): BlockPosition | undefined => {
   }
   return value
 }
+
+/** The verb's target block id as it acts on it (see `blockIdField`). */
+const commandBlockId = (
+  repo: Repo,
+  command: {blockId?: unknown; id?: unknown; exactIds?: unknown},
+  verb: string,
+): Promise<string> =>
+  blockIdField(repo, requireString(command.blockId ?? command.id, 'blockId'), verb, command.exactIds === true)
 
 const getMoveBlockPosition = (value: unknown): MoveBlockPosition => {
   if (!isRecord(value)) {
@@ -876,79 +889,17 @@ const withGrainWarnings = async (
   return warnings.length > 0 ? {...block, agentWarnings: warnings} : block
 }
 
-/** Refuse a bridge mutation aimed at a workspace this client does not have open.
- *
- *  Field-row recognition resolves the definition through
- *  `Repo.propertySchemaResolverFor`, which serves the active workspace and the
- *  retained previous one and fails CLOSED for any other — so a mutation run
- *  against a background workspace runs with recognition off, and a delete
- *  there rewrites `::((fieldId))` field rows to prose instead of leaving the
- *  dangling ref intact (#790).
- *
- *  Not in the kernel: `repo.tx` is workspace-agnostic on purpose — sync
- *  arrival writes background rows through a path that needs no recognition,
- *  and tests seed unopened workspaces directly — so a throw there would refuse
- *  both. The bridge is where a block ID can name a row outside the workspace
- *  its client is paired to. `eval` and raw `sql execute` reach `repo` directly
- *  and stay unguardable. */
-const assertActiveWorkspace = (repo: Repo, verb: string, workspaceId: string): void => {
+/** Install scans must stay on the workspace whose definitions and runtime
+ *  were captured together; otherwise the preset comparison can pin a source
+ *  against a different workspace's registry. */
+const assertInstallScanWorkspace = (repo: Repo, workspaceId: string): void => {
   if (workspaceId === repo.activeWorkspaceId) return
   throw new Error(
-    `${verb}: target is in workspace ${workspaceId}, which is not the active one `
-    + `(${repo.activeWorkspaceId ?? 'none'}) in the app tab serving this call. `
-    + 'This is not a permission check — the token reaches every workspace of its user, '
-    + "and reads can name any of them — but writes resolve through the open workspace's "
-    + 'property and alias registries, which resolve nothing for another workspace. '
-    + 'Switch the app tab to that workspace and re-run. If another tab already has it open, '
-    + `a call carrying workspaceId ${workspaceId}, or made with AGENT_RUNTIME_WORKSPACE=${workspaceId} `
-    + 'set, is routed to that tab.',
+    `install-extension: scan workspace ${workspaceId} is not the active one `
+    + `(${repo.activeWorkspaceId ?? 'none'}). The preset scan needs that workspace's runtime. `
+    + 'Open the target workspace and retry the install.',
   )
 }
-
-/** `assertActiveWorkspace` for every existing block a verb is about to touch.
- *
- *  Contract for callers:
- *    - MISSING blocks PASS, so each verb still reports its own not-found error.
- *    - The read is raw, not `repo.load`, so it sees tombstones —
- *      `restore-block`'s target always is one.
- *    - Pass the whole id set; it is deduplicated into one query.
- *    - ISSUE THE WRITE on the synchronous path immediately after this
- *      resolves. The lookup is async and the active workspace can move during
- *      it, so the pin re-check at the end is the last word — an await between
- *      it and the write reopens the window it closes.
- *
- *  Two residuals are accepted, both needing the check inside the writing
- *  transaction: an id absent here that sync delivers before the mutator's
- *  transaction opens, and a switch during a `run-action` handler. See the
- *  kernel-side follow-up issue. */
-const assertActiveWorkspaceBlocks = async (
-  repo: Repo,
-  verb: string,
-  blockIds: readonly (string | undefined)[],
-): Promise<void> => {
-  const unique = [...new Set(blockIds.filter((id): id is string => id !== undefined && id !== ''))]
-  if (unique.length === 0) return
-  const pinned = repo.activeWorkspaceId
-  const rows = await repo.db.getAll<{workspace_id: string}>(
-    'SELECT workspace_id FROM blocks WHERE id IN (SELECT value FROM json_each(?))',
-    [JSON.stringify(unique)],
-  )
-  for (const row of rows) assertActiveWorkspace(repo, verb, row.workspace_id)
-  if (repo.activeWorkspaceId !== pinned) {
-    throw new Error(
-      `${verb}: the active workspace changed from ${pinned ?? 'none'} to `
-      + `${repo.activeWorkspaceId ?? 'none'} while checking this command's targets. `
-      + 'Refusing rather than writing against a registry they were not checked '
-      + 'for — re-run against the workspace you want.',
-    )
-  }
-}
-
-const assertActiveWorkspaceBlock = (
-  repo: Repo,
-  verb: string,
-  blockId: string,
-): Promise<void> => assertActiveWorkspaceBlocks(repo, verb, [blockId])
 
 const createRuntimeBlock = async (
   repo: Repo,
@@ -968,18 +919,28 @@ const createRuntimeBlock = async (
   // write, instead of surfacing a `tx.create:` rejection from three layers
   // down mid-transaction. Deleting it loses that; it does not open the hole.
   if (explicitId !== undefined) assertCanonicalBlockId(explicitId, 'createBlock')
+  // Before the parent: a [[page]] parent is created when missing, and would
+  // stay behind if the create then failed on a taken id. `tx.create` still
+  // refuses it, should one be taken meanwhile.
+  if (explicitId !== undefined && await repo.db.getOptional('SELECT 1 AS one FROM blocks WHERE id = ?', [explicitId])) {
+    throw new Error(`create-block: block ${explicitId} already exists — nothing was created.`)
+  }
   const references = input.data?.references as BlockReference[] | undefined
 
-  if (input.parentId) {
-    await assertActiveWorkspaceBlock(repo, 'create-block', input.parentId)
-    const id = await repo.mutate.createChild({
-      parentId: input.parentId,
-      content,
-      properties,
-      references,
-      position: mapPosition(input.position),
-      id: explicitId,
-    }) as string
+  if (input.parentId !== undefined) {
+    const parentRef = input.parentId
+    // A [[page]] / date parent is created when missing; one undo entry for both.
+    const id = await repo.undoGroup(async repo => {
+      const parent = await resolveAgentTarget(repo, parentRef, 'create-block')
+      return runAgentMutator(repo, 'create-block', createChild, {
+        parentId: parent.id,
+        content,
+        properties,
+        references,
+        position: mapPosition(input.position),
+        id: explicitId,
+      })
+    })
     return withGrainWarnings(repo, await repo.load(id), properties)
   }
 
@@ -987,8 +948,6 @@ const createRuntimeBlock = async (
   if (!workspaceId) {
     throw new Error('createBlock with no parentId requires an active workspace')
   }
-  assertActiveWorkspace(repo, 'create-block', workspaceId)
-
   const id = explicitId ?? crypto.randomUUID()
   await repo.tx(async tx => {
     await tx.create({
@@ -1000,7 +959,7 @@ const createRuntimeBlock = async (
       properties,
       references,
     })
-  }, {scope: ChangeScope.BlockDefault, description: 'agent runtime create root block'})
+  }, agentTxOptions('create-block'))
   return withGrainWarnings(repo, await repo.load(id), properties)
 }
 
@@ -1039,18 +998,6 @@ const reconcileMarkdownSubtree = async (
   input: ReconcileMarkdownSubtreeInput,
 ): Promise<ReconcileMarkdownSubtreeResult> => {
   const {parentId, key, properties, shape, final} = input
-  // Before `parseMarkdownToBlocks`, not merely before the write: a doomed
-  // request should not pay the parser first. The in-tx assertion below stays —
-  // this one is the cheap refusal, that one is the atomic decision.
-  await assertActiveWorkspaceBlock(repo, 'reconcile-markdown-subtree', parentId)
-  // shape 'block' → the whole markdown is ONE root block (newlines kept);
-  // 'outline' (default) → split along the markdown outline.
-  const parsed: ParsedBlock[] = shape === 'block'
-    ? (input.markdown.length === 0
-        ? []
-        : [{id: 'block-root', orderKey: '', content: input.markdown}])
-    : parseMarkdownToBlocks(input.markdown)
-
   const ids: string[] = []
   const rootIds: string[] = []
 
@@ -1058,7 +1005,11 @@ const reconcileMarkdownSubtree = async (
     const parent = await tx.get(parentId)
     if (!parent) throw new Error(`reconcile-markdown-subtree: parent ${parentId} not found`)
     const {workspaceId} = parent
-    assertActiveWorkspace(repo, 'reconcile-markdown-subtree', workspaceId)
+    tx.assertWritableWorkspace(workspaceId)
+
+    // Parse only after admission so a closed workspace is refused before the
+    // potentially expensive markdown work begins.
+    const parsed: ParsedBlock[] = parseAgentMarkdown(input.markdown, shape)
 
     // This subtree's existing blocks, in pre-order (the target we reconcile
     // onto). Walk children depth-first following ONLY tagged blocks, so user
@@ -1200,7 +1151,7 @@ const reconcileMarkdownSubtree = async (
         await deleteSubtreeInTx(tx, doomed.id)
       }
     }
-  }, {scope: ChangeScope.BlockDefault, description: 'agent runtime reconcile markdown subtree'})
+  }, agentTxOptions('reconcile-markdown-subtree'))
 
   return {ids, rootIds}
 }
@@ -1221,8 +1172,14 @@ const updateRuntimeBlock = async (
   await repo.tx(async tx => {
     const before = await tx.get(input.id)
     if (!before || before.deleted) return
-    assertActiveWorkspace(repo, 'update-block', before.workspaceId)
     found = true
+    if (input.expectedContent !== undefined && before.content !== input.expectedContent) {
+      throw new Error(
+        `update-block: block ${input.id}'s content is not the expectedContent passed — nothing was written. `
+        + `Its current content is: ${contentEcho(before.content)}. `
+        + 'Re-plan against it, or use edit-block to change one passage.',
+      )
+    }
     const nextProperties = input.properties === undefined
       ? undefined
       : input.replaceProperties
@@ -1241,7 +1198,7 @@ const updateRuntimeBlock = async (
       ...(input.content !== undefined ? {content: input.content} : {}),
       ...(nextProperties !== undefined ? {properties: nextProperties} : {}),
     })
-  }, {scope: ChangeScope.BlockDefault, description: 'agent runtime block update'})
+  }, agentTxOptions('update-block'))
 
   if (!found) throw new Error(`updateBlock: block ${input.id} not found`)
   return withGrainWarnings(repo, await repo.load(input.id), input.properties)
@@ -1251,8 +1208,7 @@ const moveRuntimeBlock = async (
   repo: Repo,
   input: MoveBlockInput,
 ): Promise<BlockData | null> => {
-  await assertActiveWorkspaceBlock(repo, 'move-block', input.id)
-  await repo.mutate.move(input)
+  await runAgentMutator(repo, 'move-block', move, input)
   return repo.load(input.id)
 }
 
@@ -1260,9 +1216,9 @@ const deleteRuntimeBlock = async (
   repo: Repo,
   input: DeleteBlockInput,
 ): Promise<DeleteBlockResult> => {
-  await assertActiveWorkspaceBlock(repo, 'delete-block', input.id)
-  // eslint-disable-next-line no-restricted-syntax -- programmatic delete: agent bridge is not a UI gesture; UI-layer guards deliberately don't apply
-  await repo.mutate.delete(input)
+  // Programmatic delete: the agent bridge is not a UI gesture, so the UI-layer
+  // deletion guards deliberately don't apply.
+  await runAgentMutator(repo, 'delete-block', deleteBlock, input)
   return {id: input.id, deleted: true}
 }
 
@@ -1270,8 +1226,7 @@ const restoreRuntimeBlock = async (
   repo: Repo,
   input: RestoreBlockInput,
 ): Promise<BlockData | null> => {
-  await assertActiveWorkspaceBlock(repo, 'restore-block', input.id)
-  await repo.mutate.restore(input)
+  await runAgentMutator(repo, 'restore-block', restoreBlock, input)
   return repo.load(input.id)
 }
 
@@ -1417,7 +1372,7 @@ const installRuntimeExtension = async (
       // which skips the conflict. Re-checked in the writing tx too, where the
       // same switch would re-pin this workspace's extension off a scan that
       // never saw it.
-      assertActiveWorkspace(repo, 'install-extension', workspaceId)
+      assertInstallScanWorkspace(repo, workspaceId)
       presetScan = await findPresetIdentityConflicts(
         repo, workspaceId, presetRegistryAfter(context, resolution, targetId, workspaceId))
     }
@@ -1458,7 +1413,7 @@ const installRuntimeExtension = async (
   if (existing) {
     const typeSnapshot = repo.snapshotTypeRegistries()
     await repo.tx(async tx => {
-      assertActiveWorkspace(repo, 'install-extension', workspaceId)
+      assertInstallScanWorkspace(repo, workspaceId)
       const current = await tx.get(existing.id)
       if (!current) throw new Error(`Extension block ${existing.id} disappeared before update`)
       const properties = extensionBlockProperties(current.properties, label, description)
@@ -1510,7 +1465,7 @@ const installRuntimeExtension = async (
     // switch can land inside, which would leave `typeSnapshot` read from one
     // workspace while every `tx.create` below writes the extension root,
     // container and block into another. Refuse rather than write that tree.
-    assertActiveWorkspace(repo, 'install-extension', workspaceId)
+    assertInstallScanWorkspace(repo, workspaceId)
     let rootId = parentIdFromInput ?? defaultParent?.id ?? null
     if (!rootId) {
       const rootSiblings = await tx.childrenOf(null, workspaceId)
@@ -1733,17 +1688,6 @@ const runRuntimeAction = async (
   const scopeRootId = isString(dependencies.scopeRootId)
     ? dependencies.scopeRootId
     : realUiStateBlock?.peekProperty(topLevelBlockIdProp)
-
-  // `run-action` is the widest route to a kernel mutator: it turns
-  // caller-supplied ids into Block facades and hands them to a handler that
-  // may call `Block.delete()` (the `delete_block` action does). Guarding only
-  // the typed verbs would leave the same background-workspace corruption
-  // reachable through here — so every id that BECOMES a dependency is checked
-  // before dispatch, which is also the last point we can refuse: once
-  // `invokeAction` runs, the writes are inside a handler we don't control.
-  await assertActiveWorkspaceBlocks(context.repo, `run-action ${actionId}`, [
-    blockId, uiStateBlockId, anchorBlockId, scopeRootId, ...selectedBlockIds,
-  ])
 
   // Route imperative agent dispatch through the same `invokeAction` choke the
   // keyboard / pointer / runActionById paths use, so the action-dispatch
@@ -2371,7 +2315,7 @@ export const executeCommand = async (
 
     case 'create-block':
       return context.createBlock({
-        parentId: command.parentId === undefined
+        parentId: command.parentId === undefined || command.parentId === null
           ? undefined
           : requireString(command.parentId, 'parentId'),
         position: getPosition(command.position),
@@ -2418,34 +2362,80 @@ export const executeCommand = async (
       }
 
       return context.updateBlock({
-        id: requireString(command.blockId ?? command.id, 'blockId'),
+        id: await commandBlockId(context.repo, command, 'update-block'),
         content: command.content === undefined
           ? undefined
           : requireString(command.content, 'content'),
         properties,
         replaceProperties: Boolean(command.replaceProperties),
+        expectedContent: command.expectedContent === undefined
+          ? undefined
+          : requireString(command.expectedContent, 'expectedContent'),
       })
     }
 
     case 'move-block': {
       const parentId = command.parentId === null
         ? null
-        : requireString(command.parentId, 'parentId')
+        : await blockIdField(context.repo, requireString(command.parentId, 'parentId'), 'move-block', command.exactIds)
       return context.moveBlock({
-        id: requireString(command.blockId ?? command.id, 'blockId'),
+        id: await commandBlockId(context.repo, command, 'move-block'),
         parentId,
-        position: getMoveBlockPosition(command.position),
+        position: await blockPositionField(
+          context.repo, getMoveBlockPosition(command.position), 'move-block', command.exactIds,
+        ),
       })
     }
 
     case 'delete-block':
       return context.deleteBlock({
-        id: requireString(command.blockId ?? command.id, 'blockId'),
+        id: await commandBlockId(context.repo, command, 'delete-block'),
       })
 
     case 'restore-block':
       return context.restoreBlock({
-        id: requireString(command.blockId ?? command.id, 'blockId'),
+        id: await commandBlockId(context.repo, command, 'restore-block'),
+      })
+
+    case 'append-markdown': {
+      const view = await appendMarkdown(context.repo, {
+        target: requireString(command.target, 'target'),
+        markdown: requireString(command.markdown, 'markdown'),
+        position: command.position === undefined ? undefined : getMoveBlockPosition(command.position),
+        shape: command.shape === 'block' ? 'block' : command.shape === 'outline' ? 'outline' : undefined,
+        exactIds: command.exactIds,
+      })
+      return command.format === 'json' ? view : renderAppendView(view)
+    }
+
+    case 'edit-block':
+      return editBlock(context.repo, {
+        id: requireString(command.id, 'id'),
+        old: requireString(command.old, 'old'),
+        new: requireString(command.new, 'new'),
+        exactIds: command.exactIds,
+      })
+
+    case 'create-page':
+      return createPage(context.repo, {
+        name: command.name === undefined ? undefined : requireString(command.name, 'name'),
+        date: command.date === undefined ? undefined : requireString(command.date, 'date'),
+      })
+
+    case 'recent-changes':
+      return recentChanges(context.repo, {
+        since: command.since,
+        limit: command.limit,
+        includeUser: command.includeUser === true,
+      })
+
+    case 'resolve-block-id':
+      return {id: await resolveBlockId(context.repo, requireString(command.ref, 'ref'), 'resolve-block-id')}
+
+    case 'block-history':
+      return blockHistory(context.repo, {
+        id: await resolveBlockId(context.repo, requireString(command.id, 'id'), 'block-history'),
+        limit: command.limit,
       })
 
     case 'install-extension':

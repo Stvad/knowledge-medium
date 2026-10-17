@@ -216,7 +216,7 @@ describe('getOrCreateKernelPage', () => {
           id, workspaceId: 'other-workspace', parentId: null, orderKey: 'a0',
           content: 'someone else\'s page',
         }, {systemMint: true})
-      }, {scope: ChangeScope.BlockDefault})
+      }, {scope: ChangeScope.BlockDefault, allowUnloadedWorkspace: true})
 
       const repo = readOnlyRepo()
       await expect(getOrCreateKernelPage(repo, WS, {
@@ -262,7 +262,7 @@ describe('getOrCreateKernelPage', () => {
           content: 'someone else\'s page',
         })
         if (deleted) await tx.delete(id)
-      }, {scope: ChangeScope.BlockDefault})
+      }, {scope: ChangeScope.BlockDefault, allowUnloadedWorkspace: true})
       return id
     }
 
@@ -305,7 +305,7 @@ describe('getOrCreateKernelPage', () => {
         await tx.setProperty(id, aliasesProp, ['Foo'])
         await env.repo.addTypeInTx(tx, id, PAGE_TYPE, {}, snapshot)
         await env.repo.addTypeInTx(tx, id, FOO_PAGE_TYPE, {}, snapshot)
-      }, {scope: ChangeScope.BlockDefault})
+      }, {scope: ChangeScope.BlockDefault, allowUnloadedWorkspace: true})
 
       // A fully-shaped row makes `needsRepair` false, so the repair
       // transaction — and the recheck inside it — is never reached. The

@@ -243,8 +243,8 @@ describe('data-model command', () => {
     const byName = await guide('Page')
     expect(byName).toMatch(/^\(No topic "Page"; reading `pages`\.\)\n\n## Pages, aliases/)
     expect(await guide('property')).toMatch(/^\(No topic "property"; reading `properties`\.\)/)
-    const byText = await guide('done-status')
-    expect(byText).toMatch(/^\(No topic "done-status"; reading `block-kinds`\.\)\n\n## Other block kinds/)
+    const byText = await guide('spaced-repetition')
+    expect(byText).toMatch(/^\(No topic "spaced-repetition"; reading `block-kinds`\.\)\n\n## Other block kinds/)
 
     // Two headings name backlinks, and so does more than one section's text.
     const ambiguous = await guide('backlinks')

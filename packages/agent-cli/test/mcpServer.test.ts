@@ -66,6 +66,7 @@ describe('createGraphMcpServer', () => {
     const commands: KnownCommand[] = []
     const operations: GraphMcpWriteOperation[] = []
     const client = clientFrom(async command => {
+      if (command.type === 'resolve-block-id') return {id: `full-${command.ref}`}
       commands.push(command)
       switch (command.type) {
         case 'create-block':
@@ -78,6 +79,15 @@ describe('createGraphMcpServer', () => {
           return {id: command.id, deleted: true}
         case 'restore-block':
           return {id: command.id, content: 'restored'}
+        case 'append-markdown':
+          return {
+            target: {id: 'p', shortId: 'p', kind: 'block', created: false, content: 'Parent'},
+            blocks: [{id: 'n', shortId: 'n', parentId: 'p', depth: 0, content: 'note'}],
+          }
+        case 'edit-block':
+          return {id: command.id, shortId: 'b', excerpt: 'edited'}
+        case 'create-page':
+          return {id: 'page', kind: 'page', created: true}
         default:
           throw new Error(`Unexpected command: ${command.type}`)
       }
@@ -95,28 +105,53 @@ describe('createGraphMcpServer', () => {
 
     await tools.create_block.handler({parentId: 'p', content: 'hi', properties: {x: 1}}, {})
     await tools.update_block.handler({id: 'b', content: 'edited'}, {})
-    await tools.move_block.handler({id: 'b', parentId: null, position: {kind: 'last'}}, {})
+    await tools.move_block.handler({id: 'b', parentId: '^p', position: {kind: 'after', siblingId: 's'}}, {})
     await tools.delete_block.handler({id: 'b'}, {})
     await tools.restore_block.handler({id: 'b'}, {})
+    await tools.append_markdown.handler({
+      target: 'today', markdown: '- note', position: {kind: 'before', siblingId: 's'},
+    }, {})
+    await tools.edit_block.handler({id: 'b', old: 'a', new: 'b'}, {})
+    await tools.create_page.handler({name: 'Inbox'}, {})
 
     expect(operations).toEqual([
       {type: 'create_block', parentId: 'p', content: 'hi', properties: {x: 1}},
-      {type: 'update_block', id: 'b', content: 'edited', properties: undefined},
-      {type: 'move_block', id: 'b', parentId: null, position: {kind: 'last'}},
-      {type: 'delete_block', id: 'b'},
-      {type: 'restore_block', id: 'b'},
+      {type: 'update_block', id: 'full-b', content: 'edited', properties: undefined, expectedContent: undefined},
+      {type: 'move_block', id: 'full-b', parentId: 'full-^p', position: {kind: 'after', siblingId: 'full-s'}},
+      {type: 'delete_block', id: 'full-b'},
+      {type: 'restore_block', id: 'full-b'},
+      {
+        type: 'append_markdown', target: 'today', markdown: '- note',
+        position: {kind: 'before', siblingId: 'full-s'}, shape: undefined,
+      },
+      {type: 'edit_block', id: 'full-b', old: 'a', new: 'b'},
+      {type: 'create_page', name: 'Inbox', date: undefined},
     ])
+    // The write acts on the id the guard checked, marked so the runtime uses it
+    // exactly rather than reading it as a ref again.
+    expect(commands.filter(command => 'id' in command).map(command => (command as {id?: unknown}).id))
+      .toEqual(['full-b', 'full-b', 'full-b', 'full-b', 'full-b'])
+    expect(commands.filter(command => command.type !== 'create-block' && command.type !== 'create-page')
+      .map(command => [command.type, (command as {exactIds?: unknown}).exactIds]))
+      .toEqual([
+        ['update-block', true], ['move-block', true], ['delete-block', true],
+        ['restore-block', true], ['append-markdown', true], ['edit-block', true],
+      ])
     expect(commands.map(command => command.type)).toEqual([
       'create-block',
       'update-block',
       'move-block',
       'delete-block',
       'restore-block',
+      'append-markdown',
+      'edit-block',
+      'create-page',
     ])
   })
 
   it('does not call the bridge when the write guard rejects', async () => {
-    const runCommand = vi.fn<BridgeClient['runCommand']>()
+    const runCommand = vi.fn<BridgeClient['runCommand']>(async command =>
+      command.type === 'resolve-block-id' ? {id: command.ref} : undefined)
     const client = clientFrom(runCommand)
     const server = createGraphMcpServer({
       client,
@@ -131,7 +166,31 @@ describe('createGraphMcpServer', () => {
 
     await expect(tools.update_block.handler({id: 'b', content: 'edited'}, {}))
       .rejects.toThrow('blocked by caller policy')
-    expect(runCommand).not.toHaveBeenCalled()
+    // Only the id lookup the guard needed — no write.
+    expect(runCommand.mock.calls.map(([command]) => command.type)).toEqual(['resolve-block-id'])
+  })
+})
+
+describe('recent_changes', () => {
+  it('defaults to what changed since this MCP session started', async () => {
+    const commands: KnownCommand[] = []
+    const before = Date.now()
+    const server = createGraphMcpServer({
+      client: clientFrom(async command => {
+        commands.push(command)
+        return {txs: []}
+      }),
+      serverOptions: {capabilities: {tools: {}}},
+    })
+    const tools = (server as unknown as RegisteredToolHarness)._registeredTools
+
+    await tools.recent_changes.handler({}, {})
+    await tools.recent_changes.handler({since: 0}, {})
+
+    const [sessionDefault, explicit] = commands as Array<{since?: number}>
+    expect(sessionDefault.since).toBeGreaterThanOrEqual(before)
+    expect(sessionDefault.since).toBeLessThanOrEqual(Date.now())
+    expect(explicit.since).toBe(0)
   })
 
   it('registers exactly the advertised tool names', () => {
@@ -216,5 +275,38 @@ describe('createGraphMcpServer', () => {
 
     expect(commands.map(command => (command as {workspaceId?: string}).workspaceId))
       .toEqual(['ws-2', 'ws-2', 'ws-2', 'ws-2', 'ws-2', 'ws-2', 'ws-2', undefined])
+  })
+})
+
+describe('write tools without a guard', () => {
+  it('send ids as typed for the runtime to resolve — no resolve-block-id round trip', async () => {
+    const commands: KnownCommand[] = []
+    const server = createGraphMcpServer({
+      client: clientFrom(async command => {
+        commands.push(command)
+        return {id: 'x', content: 'c'}
+      }),
+      serverOptions: {capabilities: {tools: {}}},
+    })
+    const tools = (server as unknown as RegisteredToolHarness)._registeredTools
+    await tools.update_block.handler({id: '^a1b2c3d4', content: 'v'}, {})
+    await tools.move_block.handler({id: '^a1b2c3d4', parentId: '^p', position: {kind: 'after', siblingId: '^s'}}, {})
+    expect(commands.map(command => [command.type, (command as {id?: string}).id, (command as {exactIds?: boolean}).exactIds]))
+      .toEqual([['update-block', '^a1b2c3d4', false], ['move-block', '^a1b2c3d4', false]])
+  })
+})
+
+describe('read tool output', () => {
+  it('escapes display controls in JSON output, losslessly', async () => {
+    const server = createGraphMcpServer({
+      client: clientFrom(async command =>
+        command.type === 'resolve-block-id' ? {id: command.ref} : {content: 'a\u2028b\u202Ec'}),
+      serverOptions: {capabilities: {tools: {}}},
+    })
+    const tools = (server as unknown as RegisteredToolHarness)._registeredTools
+    const result = await tools.get_block.handler({id: 'x'}, {})
+    const out = (result.content[0] as {text: string}).text
+    expect(out).not.toMatch(/[\u2028\u202E]/)
+    expect(JSON.parse(out)).toMatchObject({content: 'a\u2028b\u202Ec'})
   })
 })

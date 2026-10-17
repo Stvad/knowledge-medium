@@ -4,15 +4,13 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import {
   ChangeScope,
-  codecs,
-  defineProperty,
-  seedType,
+  seedProperty,
 } from '@/data/api'
 import { useEffect } from 'react'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
-import { typeSeedsFacet } from '@/data/facets'
+import { definitionSeedsFacet } from '@/data/facets'
 import { usePropertyValue } from '@/hooks/block'
 import { aliasPageBulletContribution, aliasPageStylingContribution } from '@/plugins/alias/pageStyling'
 import { aliasDataExtension } from '@/plugins/alias/dataExtension'
@@ -88,8 +86,8 @@ vi.mock('@/paste/operations.ts', () => ({
   })),
 }))
 
-const statusProp = defineProperty<string>('test:status', {
-  codec: codecs.string,
+const statusProp = seedProperty({
+  seedKey: 'test/property/status', revision: 1, name: 'test:status', preset: 'string',
   defaultValue: 'open',
   changeScope: ChangeScope.BlockDefault,
 })
@@ -142,10 +140,7 @@ describe('DefaultBlockRenderer paste handling', () => {
       kernelPropertyUiExtension,
       kernelValuePresetsExtension,
       defaultEditorInteractionExtension,
-      typeSeedsFacet.of(
-        seedType({seedKey: 'test/type/test-status-prop', revision: 1, id: 'test:status-prop', label: 'Test Status Prop', properties: [statusProp]}),
-        {source: 'test'},
-      ),
+      definitionSeedsFacet.of(statusProp, {source: 'test'}),
       blockLayoutFacet.of(
         () => ({id: 'property-only', label: 'Property only', render: propertyOnlyLayout}),
         {source: 'test'},

@@ -204,7 +204,7 @@ describe('BlockProperties component', () => {
   const renderForeignWorkspacePanel = async () => {
     await repo.tx(async tx => {
       await tx.create({id: 'block-elsewhere', workspaceId: 'ws-2', parentId: null, orderKey: 'a0'})
-    }, {scope: ChangeScope.BlockDefault, description: 'create foreign-workspace block'})
+    }, {scope: ChangeScope.BlockDefault, description: 'create foreign-workspace block', allowUnloadedWorkspace: true})
     expect(repo.activeWorkspaceId).toBe('ws-1')
 
     render(
@@ -540,8 +540,7 @@ describe('BlockProperties component', () => {
   it('materialises a user schema and opens the side panel when the glyph is clicked on an unregistered property', async () => {
     const block = repo.block('block-1')
     // Simulate a degraded-fallback ad-hoc property (sync race / plugin
-    // not loaded). The panel surfaces it via the inferred primitive
-    // editor; clicking the glyph optimistically materialises a user
+    // not loaded). The panel shows its raw value; clicking the glyph materialises a user
     // schema and asks the panel layer to open the new schema's block.
     await block.set(degradedFallbackSchema('mood', 'string'), 'ok')
     expect(repo.userSchemas.getSchemaBlockId('mood')).toBeUndefined()
@@ -553,6 +552,11 @@ describe('BlockProperties component', () => {
         </ActiveContextsProvider>
       </AppRuntimeContextProvider>,
     )
+
+    const orphan = propertyRow('mood')
+    expect(within(orphan).getByText('"ok"')).toBeTruthy()
+    expect(within(orphan).queryByRole('textbox')).toBeNull()
+    expect(within(orphan).getByTitle('Delete mood')).toBeTruthy()
 
     await act(async () => {
       fireEvent.click(screen.getByRole('button', {name: /configure mood/i}))
