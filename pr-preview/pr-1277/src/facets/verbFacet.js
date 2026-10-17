@@ -1,1 +1,1 @@
-import{SP as e}from"../../chunks/app-Bxr8NvmF.js";export{e as defineVerbFacet};
+import{SP as e}from"../../chunks/app-ClgOQRQs.js";export{e as defineVerbFacet};
