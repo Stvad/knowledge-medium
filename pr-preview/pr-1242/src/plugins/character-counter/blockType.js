@@ -1,1 +1,1 @@
-import{BB as e,VB as t}from"../../../chunks/app-DNWfQc11.js";export{e as CHAR_COUNTER_TYPE,t as CHAR_COUNTER_TYPE_CONTRIBUTIONS};
+import{BB as e,VB as t}from"../../../chunks/app-Bg52g7Ny.js";export{e as CHAR_COUNTER_TYPE,t as CHAR_COUNTER_TYPE_CONTRIBUTIONS};

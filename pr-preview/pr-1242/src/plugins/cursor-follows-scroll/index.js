@@ -1,1 +1,1 @@
-import{f_ as e,n_ as t,u_ as n}from"../../../chunks/app-DNWfQc11.js";export{t as cursorFollowsScrollPlugin,n as isRowInViewport,e as resolveViewportAnchor};
+import{f_ as e,n_ as t,u_ as n}from"../../../chunks/app-Bg52g7Ny.js";export{t as cursorFollowsScrollPlugin,n as isRowInViewport,e as resolveViewportAnchor};

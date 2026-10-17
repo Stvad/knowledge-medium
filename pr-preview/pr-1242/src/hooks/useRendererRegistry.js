@@ -1,1 +1,1 @@
-import{GD as e,KD as t,WD as n}from"../../chunks/app-DNWfQc11.js";export{t as defaultRegistry,n as refreshRendererRegistry,e as useRenderer};
+import{GD as e,KD as t,WD as n}from"../../chunks/app-Bg52g7Ny.js";export{t as defaultRegistry,n as refreshRendererRegistry,e as useRenderer};

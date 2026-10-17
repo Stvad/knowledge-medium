@@ -1,1 +1,1 @@
-import{DL as e,EL as t}from"../../../chunks/app-DNWfQc11.js";export{t as REFERENCES_TARGET_INVALIDATION_CHANNEL,e as referencesInvalidationRule};
+import{DL as e,EL as t}from"../../../chunks/app-Bg52g7Ny.js";export{t as REFERENCES_TARGET_INVALIDATION_CHANNEL,e as referencesInvalidationRule};

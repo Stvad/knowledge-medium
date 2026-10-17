@@ -1,1 +1,1 @@
-import{BT as e,VT as t}from"../../chunks/app-DNWfQc11.js";export{e as BlockPasteShellDecorator,t as blockPasteShellDecorator};
+import{BT as e,VT as t}from"../../chunks/app-Bg52g7Ny.js";export{e as BlockPasteShellDecorator,t as blockPasteShellDecorator};

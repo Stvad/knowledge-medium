@@ -1,1 +1,1 @@
-import{IE as e,LE as t}from"../../chunks/app-DNWfQc11.js";export{e as gestureBindingDescriptor,t as matchesGestureEvent};
+import{IE as e,LE as t}from"../../chunks/app-Bg52g7Ny.js";export{e as gestureBindingDescriptor,t as matchesGestureEvent};
