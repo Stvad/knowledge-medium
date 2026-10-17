@@ -76,6 +76,16 @@ const registerClient = async (clientId: string, body: object, url = baseUrl) => 
   expect(response.ok).toBe(true)
 }
 
+/** How every bridge in this file is spawned. The stdin pipe, never written,
+ *  plus `--exit-on-stdin-close` ties the bridge's life to its spawner's: a
+ *  worker that dies before afterAll (a timeout, an interrupted gate) closes
+ *  the pipe as it goes, and the bridge exits instead of orphaning. */
+const bridgeSpawnSpec = (port: number, env: Record<string, string>) => ({
+  args: [serverScript, '--exit-on-stdin-close'],
+  env: {AGENT_RUNTIME_PORT: String(port), AGENT_RUNTIME_HOST: '127.0.0.1', ...env},
+  stdio: ['pipe', 'ignore', 'pipe'] as const,
+})
+
 /** Spawn the bridge server on a free port, wait for /health, and return a
  *  stop() to kill it. Backs both the shared per-file server (beforeAll
  *  above) and tests that need their own env — e.g. a TTL override the
@@ -84,10 +94,8 @@ const spawnBridgeServer = async (
   env: Record<string, string>,
 ): Promise<{baseUrl: string, stop: () => Promise<void>}> => {
   const port = await pickPort()
-  const proc = spawn('node', [serverScript], {
-    env: {...process.env, AGENT_RUNTIME_PORT: String(port), AGENT_RUNTIME_HOST: '127.0.0.1', ...env},
-    stdio: ['ignore', 'ignore', 'pipe'],
-  })
+  const spec = bridgeSpawnSpec(port, env)
+  const proc = spawn(process.execPath, spec.args, {env: {...process.env, ...spec.env}, stdio: [...spec.stdio]})
   await waitForReady(port)
   return {
     baseUrl: `http://127.0.0.1:${port}`,
@@ -904,4 +912,41 @@ describe('events channel', () => {
     const response = await fetch(`${baseUrl}/runtime/events/next`)
     expect(response.status).toBe(401)
   })
+})
+
+describe('agent runtime bridge process', () => {
+  // Stands in for a vitest worker: spawns a bridge exactly as this file does,
+  // prints its pid, and idles until it is killed.
+  const spawnerScript = `
+    const {spawn} = require('node:child_process')
+    const {args, env, stdio} = JSON.parse(process.argv[1])
+    const bridge = spawn(process.execPath, args, {env: {...process.env, ...env}, stdio})
+    console.log(bridge.pid)
+  `
+  const isAlive = (pid: number): boolean => {
+    try {
+      process.kill(pid, 0)
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  it('exits when the process that spawned it dies without stopping it', async () => {
+    const port = await pickPort()
+    const spawner = spawn(process.execPath, ['-e', spawnerScript, JSON.stringify(bridgeSpawnSpec(port, {AGENT_RUNTIME_BRIDGE_SECRET: bridgeSecret}))], {
+      stdio: ['ignore', 'pipe', 'inherit'],
+    })
+    const bridgePid = await new Promise<number>((resolve, reject) => {
+      spawner.stdout.once('data', chunk => resolve(Number(String(chunk).trim())))
+      spawner.once('exit', code => reject(new Error(`the spawner exited (${code}) before starting a bridge`)))
+    })
+    try {
+      await waitForReady(port)
+      spawner.kill('SIGKILL')
+      await vi.waitFor(() => expect(isAlive(bridgePid)).toBe(false), {timeout: 10_000, interval: 50})
+    } finally {
+      if (isAlive(bridgePid)) process.kill(bridgePid, 'SIGKILL')
+    }
+  }, 20_000)
 })
