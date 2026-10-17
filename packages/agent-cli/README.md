@@ -50,8 +50,13 @@ The CLI exposes both *local* commands (pairing, profile management) and *bridge*
 | `kmagent health` | Sync-health snapshot: block vs blocks_synced counts, upload queue, materialization backlog, and per-workspace `syncDivergence` — downloaded rows `blocks` does not hold with nothing in flight, including stranded ones no flag reports (remedy: `rematerialize-workspace --scope all`, unless the entry is already `rematerializing` or its `materializability` is `defer`). |
 | `kmagent describe-runtime` | Full or targeted runtime diagnostics (`--guide <id>`, `--storage`, …). |
 | `kmagent sql <mode> <sql> [paramsJson] [--allow-synced-write]` | Run SQL (mode: `all\|get\|optional\|execute`). Refuses a raw write to a synced table (`blocks`, `workspaces`, `workspace_members`) unless `--allow-synced-write` is passed — see note below. |
-| `kmagent get-block <id>` | Fetch a block. |
-| `kmagent subtree <rootId> [--json]` | Fetch a subtree as a depth-indented outline (`--json` for the raw flat array). |
+| `kmagent get-block <ref>` | Read one block: content, breadcrumb, types, decoded properties, child/backlink counts. |
+| `kmagent subtree <ref> [--depth <n>] [--limit <n>] [--offset <n>] [--properties brief\|none\|full] [--expand-collapsed]` | Read a block and its descendants as a bounded markdown outline. |
+| `kmagent backlinks <ref> [--limit <n>] [--offset <n>] [--filter …]` | Blocks that reference a block or page, a page at a time. |
+| `kmagent grouped-backlinks <ref> [--limit <n>] [--members-per-group <n>] [--filter …] [--grouping …]` | The grouped-references view of a block. |
+| `kmagent search <query> [--limit <n>] [--offset <n>] [--types <t>]… [--under <ref>] [--include-extensions]` | Full-text search with snippet, breadcrumb and types per hit. Repeat `--types` for several (a value is taken whole, commas included). |
+| `kmagent page <name>` / `kmagent daily-note <date>` | Resolve a page by name/alias, or a date to its daily note. |
+| `kmagent data-model [--topic <id>\|all]` (alias `guide`) | The agent-facing data-model guide: a short index of its topics by default, one section with `--topic <id>`, all of it with `--topic all`. |
 | `kmagent create-block <json>` | Create one block: `{parentId, content, properties?, position?}`. `parentId` is a write target (see Writing); absent or `null` makes a top-level block, which is not a page — use `create-page`. |
 | `kmagent update-block <json>` | Update a block from a JSON body. |
 | `kmagent move-block <json>` | Move a block to a parent/position from a JSON body. |
@@ -75,6 +80,8 @@ The CLI exposes both *local* commands (pairing, profile management) and *bridge*
 | `kmagent types [outDir]` | Write compiled declarations for Knowledge Medium `@/` modules; `--module <spec>` prints one declaration. |
 | `kmagent raw <json>` | Send an arbitrary JSON command envelope to the bridge. |
 
+`get-block`, `subtree`, `backlinks`, `grouped-backlinks` (and `search --under`) take a block `<ref>`: a full id, a unique id prefix as printed (`^3f2a9c1d`), a page name, or a date (`today`, `yesterday`, `2026-06-18`) for that day's daily note. The read verbs' output is bounded text by default (truncation is marked, and a cut-off list says where to continue). `--json` prints the same bounded view as structured JSON; `--raw` sends the stored, unbounded command instead (`get-block`, `subtree`, `backlinks`, `grouped-backlinks`) and prints its JSON; the stored `search` (whole rows) is `kmagent raw '{"type":"search",…}'`. Each takes `--workspace <id>` (see [Workspaces](#workspaces)).
+
 Run `kmagent <command> --help` for per-command details or `kmagent --help` for the full menu.
 
 **`kmagent sql` and synced tables:** a raw `INSERT`/`UPDATE`/`DELETE` against `blocks`, `workspaces`, or `workspace_members` bypasses `repo.tx` — it leaves `tx_context.source = NULL` (the row never uploads to the server or other clients) and skips the kernel's post-commit derivations (block_types, reference normalization, property projection), so derived state goes stale. `kmagent sql` refuses such writes by default and names the offending table in the error. Prefer `create-block` / `update-block` / `run-action` (all go through `repo.tx`) for a normal write. If you genuinely need a raw statement against one of these tables, pass `--allow-synced-write` (or `{allowSyncedWrite: true}` on a `kmagent raw` body) to opt in for that one call.
@@ -91,7 +98,7 @@ Writes are markdown-native and conflict-safe, so an agent can treat the graph li
 
 ## MCP Server
 
-`km-mcp` exposes the graph-safe subset of bridge operations as MCP tools: `get_block`, `subtree`, `backlinks`, `page`, `daily_note`, `search`, `sql_query`, `create_block`, `update_block`, `move_block`, `delete_block`, `restore_block`, `append_markdown`, `edit_block`, `create_page`, `recent_changes` (defaults to what changed since that MCP session started), and `block_history`. It deliberately excludes eval, SQL execute, and extension lifecycle commands.
+`km-mcp` exposes the graph-safe subset of bridge operations as MCP tools. Read tools: `get_block`, `subtree`, `backlinks`, `grouped_backlinks`, `search`, `page`, `daily_note`, `guide` (the data-model guide's index, or one `topic`) and `sql_query` (read-only, rows capped by `maxRows`). They are generated from the same table as the CLI verbs above, so their arguments match the flags and accept the same block refs. The views return bounded text (`format: "json"` for the structured view); `page` and `daily_note` are lookups that return the matched block whole. The server also sends usage instructions to the client. Write tools: `create_block`, `update_block`, `move_block`, `delete_block`, `restore_block`, `append_markdown`, `edit_block`, `create_page`, `recent_changes` (defaults to what changed since that MCP session started) and `block_history`; their id fields take a full id or a printed `^shortid`, and a write target also a `[[Page name]]` or a date (see [Writing](#writing)). It deliberately excludes eval, SQL execute, and extension lifecycle commands.
 
 ```json
 {
@@ -160,7 +167,7 @@ kmagent eval --data-json '{"x":1}' 'return data.x'
 
 A token acts as the user who minted it, in any of their workspaces, not only the one open when it was minted. Every open tab of the app in the browser profile and at the app address that minted it registers it, whichever workspace the tab has open, so switching workspace does not disconnect the agent.
 
-- **Reads take the workspace per call:** `--workspace <id>` on `page`, `search`, `daily-note`, `backlinks` and `grouped-backlinks`, and `workspaceId` on the `km-mcp` `page` / `daily_note` / `search` tools. Without it they use the workspace open in the app tab. `get-block` and `subtree` go by block id, and `sql` sees every workspace in the tab's local database.
+- **Reads take the workspace per call:** `--workspace <id>` on `get-block`, `subtree`, `backlinks`, `grouped-backlinks`, `search`, `page` and `daily-note`, and `workspaceId` on the same `km-mcp` tools. Without it they use the workspace open in the app tab. The views (`get-block`, `subtree`, `backlinks`, `grouped-backlinks`, `search`) decode values through the open workspace's registries, so they read only the workspace open in the tab serving the call: naming another one sends the call to a tab that has it open, and is refused when none does. `page`, `daily-note` and the `--raw` forms read any workspace, and `sql` sees every workspace in the tab's local database.
 - **A workspace the device cannot read is refused**, not answered with empty results: one this device has no row for, or one that is end-to-end encrypted without its key entered here, or that was never opened here.
 - **Writes go to the workspace open in the app tab only.** They resolve properties and aliases through that workspace's registries, so a write to a block in another workspace is refused; switch the tab to it and re-run. This is a correctness limit, not a permission boundary.
 - **Several tabs of the same user:** a call that names a workspace (its `workspaceId`, or a root `create-block`'s `data.workspaceId`) goes to a tab that has it open; otherwise it goes to the tab focused most recently.

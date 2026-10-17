@@ -9,22 +9,23 @@
  * (a timed-out run) output tokens come out low, because the per-message
  * `output_tokens` the stream carries are partial.
  *
- * A tool result over Claude Code's MCP output cap never reaches the model:
- * it is replaced by a short notice naming its size in characters. Such a
- * call is recorded as `capped`, with what the model saw and what the server
- * returned kept apart — otherwise a tool that shrinks its output below the
- * cap would read as a regression. Sizes are characters (string length), the
- * unit the notice reports.
+ * A tool result over Claude Code's output cap never reaches the model whole:
+ * an MCP result is replaced by a short notice naming its size, a shell
+ * result by a preview of the file Claude Code saved it to. Such a call is
+ * recorded as `capped`, with what the model saw and what the tool returned
+ * kept apart — otherwise a tool that shrinks its output below the cap would
+ * read as a regression. Sizes are characters (string length), the unit the
+ * MCP notice reports.
  */
 
 export interface ToolCallRecord {
   id: string
-  name: string
   /** Characters the model saw; null when the transcript ended before the tool returned. */
   seenChars: number | null
-  /** Replaced by Claude Code's over-the-cap notice. */
+  /** Over Claude Code's cap: replaced by its notice, or cut to a preview. */
   capped: boolean
-  /** Characters the server returned: the notice's count when capped, else `seenChars`. */
+  /** Characters the tool returned: `seenChars`, or for a capped call the
+   *  notice's count or the saved file's length; null when that is unknown. */
   returnedChars: number | null
   isError: boolean
 }
@@ -43,6 +44,9 @@ export interface TokenUsage {
 export interface TranscriptMetrics {
   model: string | null
   claudeCodeVersion: string | null
+  /** Where Claude Code keeps this working directory's memory; its project
+   *  directory, which also holds saved tool output, is the parent. */
+  memoryDir: string | null
   toolCalls: ToolCallRecord[]
   apiCalls: number
   tokens: TokenUsage
@@ -52,6 +56,9 @@ export interface TranscriptMetrics {
   resultText: string
   isError: boolean
   terminalReason: string | null
+  /** The API's error status when a call failed (a rate or usage limit, an
+   *  outage): the run measured that, not the task. */
+  apiErrorStatus: number | null
 }
 
 interface MessageUsage {
@@ -68,6 +75,7 @@ const contextOf = (usage: MessageUsage) =>
   num(usage.input_tokens) + num(usage.cache_creation_input_tokens) + num(usage.cache_read_input_tokens)
 
 const CAP_NOTICE = /^Error: result \(([\d,]+) characters across [\d,]+ lines\) exceeds maximum allowed tokens/
+const PERSISTED_PREVIEW = /^<persisted-output>\nOutput too large/
 
 const toolResultText = (content: unknown): string => {
   if (typeof content === 'string') return content
@@ -77,10 +85,15 @@ const toolResultText = (content: unknown): string => {
     .join('')
 }
 
-export const parseTranscript = (raw: string): TranscriptMetrics => {
+/** Reads the file Claude Code saved a capped shell result to, as characters;
+ *  null when it cannot. */
+export type SavedOutputChars = (path: string) => number | null
+
+export const parseTranscript = (raw: string, savedOutputChars: SavedOutputChars = () => null): TranscriptMetrics => {
   const metrics: TranscriptMetrics = {
     model: null,
     claudeCodeVersion: null,
+    memoryDir: null,
     toolCalls: [],
     apiCalls: 0,
     tokens: {input: 0, cacheCreation: 0, cacheRead: 0, output: 0, contextTotal: 0, peakContext: 0},
@@ -89,6 +102,7 @@ export const parseTranscript = (raw: string): TranscriptMetrics => {
     resultText: '',
     isError: false,
     terminalReason: null,
+    apiErrorStatus: null,
   }
   const usageByMessage = new Map<string, MessageUsage>()
   const callsById = new Map<string, ToolCallRecord>()
@@ -106,6 +120,8 @@ export const parseTranscript = (raw: string): TranscriptMetrics => {
     if (event.type === 'system' && event.subtype === 'init') {
       metrics.model = typeof event.model === 'string' ? event.model : null
       metrics.claudeCodeVersion = typeof event.claude_code_version === 'string' ? event.claude_code_version : null
+      const memory = (event.memory_paths as Json | undefined)?.auto
+      metrics.memoryDir = typeof memory === 'string' ? memory : null
     } else if (event.type === 'assistant') {
       const message = (event.message ?? {}) as Json
       if (typeof message.id === 'string' && message.usage) usageByMessage.set(message.id, message.usage as MessageUsage)
@@ -113,7 +129,6 @@ export const parseTranscript = (raw: string): TranscriptMetrics => {
         if (block?.type !== 'tool_use' || typeof block.id !== 'string' || callsById.has(block.id)) continue
         const call: ToolCallRecord = {
           id: block.id,
-          name: typeof block.name === 'string' ? block.name : '?',
           seenChars: null,
           capped: false,
           returnedChars: null,
@@ -130,9 +145,13 @@ export const parseTranscript = (raw: string): TranscriptMetrics => {
         if (!call) continue
         const text = toolResultText(block.content)
         const cap = CAP_NOTICE.exec(text)
+        const savedTo = (event.tool_use_result as Json | undefined)?.persistedOutputPath
+        const preview = PERSISTED_PREVIEW.test(text)
         call.seenChars = text.length
-        call.capped = cap !== null
-        call.returnedChars = cap ? Number(cap[1].replace(/,/g, '')) : call.seenChars
+        call.capped = cap !== null || preview
+        call.returnedChars = cap ? Number(cap[1].replace(/,/g, ''))
+          : preview ? (typeof savedTo === 'string' ? savedOutputChars(savedTo) : null)
+          : call.seenChars
         call.isError = block.is_error === true
       }
     } else if (event.type === 'result') {
@@ -141,6 +160,7 @@ export const parseTranscript = (raw: string): TranscriptMetrics => {
       metrics.numTurns = typeof event.num_turns === 'number' ? event.num_turns : null
       metrics.costUsd = typeof event.total_cost_usd === 'number' ? event.total_cost_usd : null
       metrics.terminalReason = typeof event.terminal_reason === 'string' ? event.terminal_reason : null
+      metrics.apiErrorStatus = typeof event.api_error_status === 'number' ? event.api_error_status : null
       resultUsage = (event.usage ?? null) as MessageUsage | null
     }
   }

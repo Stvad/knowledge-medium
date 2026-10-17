@@ -1,4 +1,5 @@
 import { neutralizeDisplayText } from '@knowledge-medium/agent-cli/protocol'
+import { tokenizeContentSearchQuery } from '@/data/internals/kernelQueries.js'
 
 /** One display line: hostile characters (line breaks included) collapsed, so
  *  a block can never render as two lines or reorder the id printed after it. */
@@ -24,6 +25,27 @@ const isHighSurrogate = (code: number): boolean => code >= 0xd800 && code <= 0xd
 export const charBoundary = (text: string, at: number): number =>
   at > 0 && at < text.length && isHighSurrogate(text.charCodeAt(at - 1)) ? at - 1 : at
 
+/** SQL for a bounded head of a text column, read where a whole value could
+ *  be megabytes (an importer's content). Leading whitespace is skipped first,
+ *  so a head that is all whitespace cannot read as empty. A cost bound. */
+export const textHeadSql = (column: string, chars: number): string =>
+  `substr(ltrim(${column}, ' ' || char(9, 10, 13)), 1, ${chars})`
+
+/** SQL for a block's first alias that says something (the one
+ *  `labelForBlockData` picks), cut to `chars`; null when it has none. For live
+ *  rows only: no `json_valid` guard, since the alias-index triggers parse a
+ *  live row's bag on every write, so `blocks` holds no malformed one. */
+export const firstAliasSql = (propertiesColumn: string, chars: number): string => `
+  CASE WHEN json_type(${propertiesColumn}, '$.alias') = 'array' THEN (
+    SELECT substr(a.value, 1, ${chars}) FROM json_each(${propertiesColumn}, '$.alias') a
+     WHERE a.type = 'text' AND trim(a.value) != '' LIMIT 1
+  ) END`
+
+/** Cut to at most `max` characters, ending in `…` when cut: for a label or an
+ *  id inside a line, where a char-count marker would crowd out the rest. */
+export const ellipsize = (text: string, max: number): string =>
+  text.length > max ? `${text.slice(0, charBoundary(text, max - 1))}…` : text
+
 /** Cut to at most `max` characters of the ORIGINAL text, marked. */
 export const clip = (text: string, max: number): Clipped => {
   if (text.length <= max) return {text, cut: 0}
@@ -32,19 +54,40 @@ export const clip = (text: string, max: number): Clipped => {
 }
 
 /** {@link oneLine} then {@link clip}: the form every list row uses. The
- *  reported cut counts characters of the neutralized line. */
+ *  whole text is normalized — one linear pass over text already in memory;
+ *  a prefix window was tried and rejected, since a prefix that normalizes
+ *  away (leading whitespace, control runs) left the line empty. */
 export const clipLine = (text: string, max: number): Clipped => clip(oneLine(text), max)
+
+/** A row's list of user-data names (type labels, property names), bounded
+ *  like the row's content: each one clipped, at most `max` kept, and the rest
+ *  counted in a last `+N more`. Every such list goes through here — one
+ *  unbounded list would make a single block's row arbitrarily large. */
+export const boundLabels = (
+  labels: readonly string[],
+  max: number,
+  chars: number,
+  total = labels.length,
+): string[] => {
+  const shown = labels.slice(0, max).map(label => clipLine(label, chars).text)
+  return total > shown.length ? [...shown, `+${formatCount(total - shown.length)} more`] : shown
+}
 
 const SNIPPET_CONTEXT = 70
 
-/** The words a snippet can anchor on: quoted phrases whole, operators and
- *  `-excluded` terms dropped — mirroring what the content search matches. */
+/** The words a snippet can anchor on: the positive terms of the query as the
+ *  content search itself tokenizes it (a `-"quoted phrase"` or a term after
+ *  NOT is excluded, not a match), longest first. */
 const snippetTerms = (query: string): string[] => {
   const terms: string[] = []
-  for (const match of query.matchAll(/"([^"]+)"|(\S+)/g)) {
-    const phrase = match[1] ?? match[2]
-    if (!phrase || phrase === 'OR' || phrase === 'NOT' || phrase.startsWith('-')) continue
-    terms.push(phrase.toLowerCase())
+  let negateNext = false
+  for (const token of tokenizeContentSearchQuery(query)) {
+    if (token.kind === 'operator') {
+      negateNext = token.op === 'NOT'
+      continue
+    }
+    if (!token.excluded && !negateNext) terms.push(token.text.toLowerCase())
+    negateNext = false
   }
   return terms.sort((a, b) => b.length - a.length)
 }

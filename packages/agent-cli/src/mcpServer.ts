@@ -2,7 +2,8 @@
  * km MCP server — live Knowledge Medium graph tools over the kmagent
  * bridge, for any MCP client.
  *
- * Deliberately narrower than the bridge: read tools + block-level
+ * Deliberately narrower than the bridge: read tools (generated from
+ * `GRAPH_READ_TOOLS`, shared with the CLI) + block-level
  * writes only. No eval, no sql execute, no extension lifecycle — a
  * spawned model gets graph access, not a JS interpreter in the app.
  *
@@ -13,10 +14,10 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { readFileSync } from 'node:fs'
 import { z } from 'zod'
 import { createBridgeClient, type BridgeClient } from './client.js'
-import { renderSubtreeOutline, type SubtreeOutlineRow } from './subtreeOutline.js'
 import { createBridgeGraph, type BridgeGraph } from './graph.js'
-import { isReadOnlySql, type KmMcpToolName, MCP_SERVER_NAME } from './mcpShared.js'
+import { type KmMcpToolName, MCP_SERVER_NAME } from './mcpShared.js'
 import { moveBlockPositionSchema, TODO_WRITE_HELP, toDisplayJson, WRITE_TARGET_HELP } from './protocol.js'
+import { GRAPH_READ_TOOLS, renderToolResult, toolCommand } from './readTools.js'
 import { renderAppendResult } from './writeTools.js'
 
 interface PackageJson {
@@ -31,6 +32,18 @@ const agentCliPackageVersion = (() => {
   }
   return pkg.version
 })()
+
+/** What every km-mcp client is told about the graph; a caller's own
+ *  `serverOptions.instructions` is appended after it. */
+export const KM_MCP_INSTRUCTIONS = `Knowledge Medium is an outliner: everything is a block (markdown content plus typed properties) nested under a parent. A page is a top-level block whose content is its title; [[Page name]] in content links to a page; a block's backlinks are the blocks that reference it. Daily notes are pages, one per date.
+
+Addressing: get_block, subtree, backlinks, grouped_backlinks and search's \`under\` take a block as a full id, a unique id prefix as printed (^3f2a9c1d), a page name, or a date (today, yesterday, 2026-06-18) for that day's daily note. The write tools' id fields take a full id or a printed ^shortid, never a name; a write target (append_markdown's target, create_block's parentId) also takes a [[Page name]] or a date, creating that page or daily note when missing.
+
+The views (get_block, subtree, backlinks, grouped_backlinks, search) and sql_query are bounded and say so (page and daily_note are lookups that return the matched block whole): an outline line is \`- content  key:: value  ^shortid\`, \`(+N children)\` marks children not expanded, \`…[+N chars]\` marks cut text (get_block reads it a page at a time: pass its nextContentOffset as contentOffset until that is null), and a cut-off list ends with the offset to continue from. Pass format: "json" for structured output.
+
+Start with subtree on a page name or "today" for an overview, search for text (filters: types, under, includeExtensions), backlinks / grouped_backlinks for what references something. guide indexes the data model (guide with a topic reads one section); sql_query is the escape hatch (read-only, rows capped).
+
+Writing: append_markdown writes an outline in one call; edit_block changes one passage of a block; pass update_block the content you read as expectedContent so a concurrent edit is refused rather than overwritten.`
 
 type MoveBlockPositionInput = z.infer<typeof moveBlockPositionSchema>
 
@@ -95,56 +108,23 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
   const text = (value: string) => ({
     content: [{type: 'text' as const, text: value}],
   })
-  const workspaceId = z.string().optional().describe(
-    "Workspace to read. Defaults to the one open in the app tab; the token reaches every workspace of its user.",
-  )
 
   const server = new McpServer(
     {name: MCP_SERVER_NAME, version: agentCliPackageVersion},
-    options.serverOptions,
+    {
+      ...options.serverOptions,
+      instructions: options.serverOptions?.instructions
+        ? `${KM_MCP_INSTRUCTIONS}\n\n${options.serverOptions.instructions}`
+        : KM_MCP_INSTRUCTIONS,
+    },
   )
 
-  server.registerTool('get_block' satisfies KmMcpToolName, {
-    description: 'Fetch a single block (content, properties, parentId) by id. For its children, use the subtree tool.',
-    inputSchema: {id: z.string()},
-  }, async ({id}) => json(await graph.getBlock(await blockId(id))))
-
-  server.registerTool('subtree' satisfies KmMcpToolName, {
-    description: 'Fetch the subtree under a block as a depth-indented outline (one line per block: `- [<id>] <content> <propsJSON>`). '
-    + "Each block's properties (e.g. status, type) are appended as compact JSON by default; pass includeProperties:false for the lean id+content form.",
-    inputSchema: {rootId: z.string(), includeProperties: z.boolean().optional().default(true)},
-  }, async ({rootId, includeProperties}) =>
-    text(renderSubtreeOutline(await graph.getSubtree(await blockId(rootId)) as SubtreeOutlineRow[], {includeProperties})))
-
-  server.registerTool('backlinks' satisfies KmMcpToolName, {
-    description: 'List blocks that reference the given block/page (hydrated: id, content, deepLink).',
-    inputSchema: {id: z.string()},
-  }, async ({id}) => json(await graph.backlinkSources(await blockId(id))))
-
-  server.registerTool('page' satisfies KmMcpToolName, {
-    description: 'Resolve a page by alias/title. Returns the exact match (if any) plus substring candidates.',
-    inputSchema: {name: z.string(), workspaceId},
-  }, async ({name, workspaceId}) => json(await client.runCommand({type: 'page', name, workspaceId})))
-
-  server.registerTool('daily_note' satisfies KmMcpToolName, {
-    description: 'Resolve a date expression (today | yesterday | ISO date | natural language) to its daily-note block.',
-    inputSchema: {date: z.string(), workspaceId},
-  }, async ({date, workspaceId}) => json(await client.runCommand({type: 'daily-note', date, workspaceId})))
-
-  server.registerTool('search' satisfies KmMcpToolName, {
-    description: 'Full-text search over block content.',
-    inputSchema: {query: z.string(), limit: z.number().int().positive().optional(), workspaceId},
-  }, async ({query, limit, workspaceId}) => json(await client.runCommand({type: 'search', query, limit, workspaceId})))
-
-  server.registerTool('sql_query' satisfies KmMcpToolName, {
-    description: 'Run a read-only SQL query (single SELECT/WITH statement) against the client database. Key tables: blocks(id, content, properties_json, parent_id, workspace_id).',
-    inputSchema: {sql: z.string(), params: z.array(z.unknown()).optional()},
-  }, async ({sql, params}) => {
-    if (!isReadOnlySql(sql)) {
-      throw new Error('sql_query only accepts a single read-only statement (SELECT, or WITH without mutating keywords). Use create_block / update_block / move_block / delete_block / restore_block for writes.')
-    }
-    return json(await graph.sqlAll(sql, params ?? []))
-  })
+  for (const tool of GRAPH_READ_TOOLS) {
+    server.registerTool(tool.name, {
+      description: tool.description,
+      inputSchema: tool.shape,
+    }, async input => text(renderToolResult(await client.runCommand(toolCommand(tool, input)))))
+  }
 
   server.registerTool('create_block' satisfies KmMcpToolName, {
     description: 'Create ONE block (content kept whole) under parentId, a target as described for append_markdown — '

@@ -707,9 +707,19 @@ const setCommandResult = async (
     if (client) client.lastSeen = now()
   }
 
+  // Read before the status moves: a poll landing while a large result is
+  // still arriving would otherwise see a completed command with no result.
+  // A second post for one command replaces the first; the app posts once.
+  let result: unknown
+  try {
+    result = await readBody(request)
+  } catch (error) {
+    failCommand(command, 'ResultUnreadable', `The app's result did not arrive whole: ${error instanceof Error ? error.message : String(error)}`)
+    throw error
+  }
   command.status = 'completed'
   command.completedAt = now()
-  command.result = await readBody(request)
+  command.result = result
   sendJson(response, 200, {ok: true})
 }
 

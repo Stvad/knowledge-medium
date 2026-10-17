@@ -11,7 +11,7 @@ import { createHash } from 'node:crypto'
 import { MCP_SERVER_NAME } from '../../packages/agent-cli/src/mcpShared'
 import type { TokenUsage } from './transcript'
 
-export const REPORT_SCHEMA_VERSION = 3
+export const REPORT_SCHEMA_VERSION = 5
 
 export interface TaskRunRecord {
   task: string
@@ -20,15 +20,18 @@ export interface TaskRunRecord {
   pass: boolean
   detail: string
   toolCalls: number
-  toolCallsByName: Record<string, number>
+  /** The wire commands the graph's host ran for the agent, by type, the
+   *  same on every surface. */
+  graphCommands: Record<string, number>
   toolErrors: number
   /** Characters of every tool result the agent saw. */
   seenChars: number
   maxSeenChars: number
-  /** Results over Claude Code's MCP output cap, which the agent never saw. */
+  /** Results over Claude Code's output cap, which reached the agent only as
+   *  a notice or a preview. */
   cappedCalls: number
   /** What the tools returned, capped results at their real size; null when
-   *  a call never returned, as in a run that timed out mid-call. */
+   *  any call's size is unknown, as in a run that timed out mid-call. */
   returnedChars: number | null
   apiCalls: number
   tokens: TokenUsage
@@ -39,8 +42,8 @@ export interface TaskRunRecord {
   terminalReason: string | null
   exitCode: number | null
   timedOut: boolean
-  /** Blocks the run created / changed, read from the graph afterwards. */
-  writes: {created: number, modified: number}
+  /** Blocks the run created / changed / removed, read from the graph afterwards. */
+  writes: {created: number, modified: number, removed: number}
   transcript: string
 }
 
@@ -52,19 +55,24 @@ export interface TaskRunRecord {
 export interface RunConditions {
   /** Of the generated export. */
   fixture: string
-  /** Of the fixture as this checkout's code stores it (`fixtureState`), which
-   *  the tab was checked against: an importer or data-layer change moves it
-   *  while the export stays the same. Null until the run has checked. */
-  importedFixture: string | null
-  /** Of every task's reset: all of them run before every run's one
-   *  snapshot, so each shapes every task's starting graph. */
-  setup: string
+  /** Of the fixture as this checkout's code stores it (`fixtureState` of the
+   *  run's template): an importer or data-layer change moves it while the
+   *  export stays the same. */
+  importedFixture: string
+  /** How the agent reaches the graph (surfaces.ts). */
+  surface: string
+  /** Of that surface's preamble and tool set. */
+  tools: string
   /** As the first run resolved it; null until then, or when no run got that far. */
   model: string | null
   effort: string
-  /** MAX_MCP_OUTPUT_TOKENS: it decides which results are capped. */
+  /** MAX_MCP_OUTPUT_TOKENS and BASH_MAX_OUTPUT_LENGTH: they decide which
+   *  results are cut short. */
   mcpOutputTokens: number
+  bashOutputChars: number
   timeoutMs: number
+  /** Tasks run at once: they share the machine and the account's rate limit. */
+  workers: number
 }
 
 export interface EvalReport {
@@ -77,12 +85,15 @@ export interface EvalReport {
   model: string
   conditions: RunConditions
   claudeCodeVersion: string | null
-  kmTools: string[]
-  /** Per task, a hash of its definition (prompt, check, reset, allowed
-   *  changes). Deltas are shown only for tasks whose hash matches. */
+  /** As offered to Claude Code; the km MCP server's list may grow between
+   *  comparable runs. */
+  allowedTools: string[]
+  /** Per task, a hash of its definition (prompt, check, allowed changes, the
+   *  scoring modules). Deltas are shown only for tasks whose hash matches. */
   taskHashes: Record<string, string>
-  /** Deterministic output sizes per probe, measured on the tab the agent queried. */
-  outputSizes: Record<string, number> | null
+  /** Deterministic output sizes per probe, through the km MCP tools, measured
+   *  on the run's template. */
+  outputSizes: Record<string, number>
   /** Per probe, a hash of its call; deltas only where it matches. */
   probeHashes: Record<string, string>
   runs: TaskRunRecord[]
@@ -103,7 +114,8 @@ export const parseReport = (json: string, source: string): EvalReport => {
 
 /** Every condition, by name; the type refuses a missing one. */
 const CONDITION_NAMES: Record<keyof RunConditions, true> = {
-  fixture: true, importedFixture: true, setup: true, model: true, effort: true, mcpOutputTokens: true, timeoutMs: true,
+  fixture: true, importedFixture: true, surface: true, tools: true, model: true, effort: true,
+  mcpOutputTokens: true, bashOutputChars: true, timeoutMs: true, workers: true,
 }
 export const RUN_CONDITIONS = Object.keys(CONDITION_NAMES) as Array<keyof RunConditions>
 
@@ -241,9 +253,10 @@ export const renderMarkdown = (report: EvalReport, compareWith?: EvalReport): st
   lines.push(`- commit \`${report.git.sha.slice(0, 10)}\` on \`${report.git.branch}\`${report.git.dirty ? ' (dirty tree)' : ''}`)
   const {conditions} = report
   lines.push(`- model \`${conditions.model ?? report.model}\`${conditions.effort === 'default' ? '' : `, effort ${conditions.effort}`}, Claude Code ${report.claudeCodeVersion ?? '?'}`)
-  lines.push(`- km tools: ${report.kmTools.map(tool => `\`${tool}\``).join(', ')}; MCP output cap ${conditions.mcpOutputTokens} tokens`)
-  lines.push('- sizes are characters; "capped": results over that cap, which Claude Code replaced with a short notice; "seen" is what reached the model, "returned" what the tools produced, n/a where a call never returned')
-  lines.push(`- fixture \`${conditions.fixture}\` (stored as \`${conditions.importedFixture ?? '?'}\`), ${reps} repetition(s) per task, ${conditions.timeoutMs / 60_000} min timeout each; per-task figures are medians; lower is better except pass`)
+  lines.push(`- surface \`${conditions.surface}\`, tools allowed: ${report.allowedTools.map(tool => `\`${tool.replace(`mcp__${MCP_SERVER_NAME}__`, '')}\``).join(', ')}; `
+    + `output caps ${conditions.mcpOutputTokens} tokens (MCP), ${conditions.bashOutputChars} characters (shell); ${conditions.workers} task(s) at a time`)
+  lines.push('- sizes are characters; "capped": results over their cap, which Claude Code cut short or replaced with a notice; "seen" is what reached the model, "returned" what the tools produced, n/a where that is unknown')
+  lines.push(`- fixture \`${conditions.fixture}\` (stored as \`${conditions.importedFixture}\`), ${reps} repetition(s) per task, ${conditions.timeoutMs / 60_000} min timeout each; per-task figures are medians; lower is better except pass`)
   lines.push('- list $ is the API list-price equivalent the CLI reports (a subscription run is not charged it); it weights input, cache and output tokens in one number; n/a where a run ended without reporting it')
   if (compareWith && !baseline) {
     lines.push(`- **not compared** with ${compareWith.label}: the runs differ in ${mismatches.join('; ')}`)
@@ -278,49 +291,53 @@ export const renderMarkdown = (report: EvalReport, compareWith?: EvalReport): st
   const failures = report.runs.filter(run => !run.pass)
   if (failures.length > 0) {
     lines.push('## Failures', '')
-    for (const run of failures) lines.push(`- ${run.task} #${run.rep}: ${run.detail}${run.timedOut ? ' (timed out)' : ''}`)
+    for (const run of failures) {
+      const ended = run.timedOut ? ' (timed out)'
+        : run.terminalReason && run.terminalReason !== 'completed' ? ` (ended: ${run.terminalReason})` : ''
+      lines.push(`- ${run.task} #${run.rep}: ${run.detail}${ended}`)
+    }
     lines.push('')
   }
 
-  const unexpectedWrites = report.runs.filter(run => run.kind === 'read' && run.writes.created + run.writes.modified > 0)
+  const unexpectedWrites = report.runs.filter(run => run.kind === 'read' && run.writes.created + run.writes.modified + run.writes.removed > 0)
   if (unexpectedWrites.length > 0) {
     lines.push('## Writes during read tasks', '')
-    for (const run of unexpectedWrites) lines.push(`- ${run.task} #${run.rep}: ${run.writes.created} created, ${run.writes.modified} modified`)
+    for (const run of unexpectedWrites) {
+      lines.push(`- ${run.task} #${run.rep}: ${run.writes.created} created, ${run.writes.modified} modified, ${run.writes.removed} removed`)
+    }
     lines.push('')
   }
 
-  lines.push('## Tool use', '')
-  lines.push('| task | calls by tool (all repetitions) | errors |')
+  lines.push('## Graph commands', '')
+  lines.push('| task | wire commands the graph ran, by type (all repetitions) | tool errors |')
   lines.push('|---|---|---|')
   for (const row of rows) {
     const counts: Record<string, number> = {}
     let errors = 0
     for (const run of report.runs.filter(item => item.task === row.task)) {
       errors += run.toolErrors
-      for (const [name, count] of Object.entries(run.toolCallsByName)) counts[name] = (counts[name] ?? 0) + count
+      for (const [type, count] of Object.entries(run.graphCommands)) counts[type] = (counts[type] ?? 0) + count
     }
     const rendered = Object.entries(counts)
       .sort((a, b) => b[1] - a[1])
-      .map(([name, count]) => `${name.replace(`mcp__${MCP_SERVER_NAME}__`, '')} ×${count}`)
+      .map(([type, count]) => `${type} ×${count}`)
       .join(', ')
     lines.push(`| ${row.task} | ${rendered || '—'} | ${errors} |`)
   }
   lines.push('')
 
-  if (report.outputSizes) {
-    // A probe whose call changed measures a different workload.
-    const baseSize = (probe: string) => {
-      const hash = report.probeHashes[probe]
-      return hash !== undefined && baseline?.probeHashes[probe] === hash ? baseline.outputSizes?.[probe] : undefined
-    }
-    lines.push('## Output sizes on the fixture (deterministic)', '')
-    lines.push('| probe | characters |')
-    lines.push('|---|---|')
-    for (const [probe, chars] of Object.entries(report.outputSizes)) {
-      lines.push(`| ${probe} | ${chars.toLocaleString('en-US')}${delta(chars, baseSize(probe))} |`)
-    }
-    lines.push('')
+  // A probe whose call changed measures a different workload.
+  const baseSize = (probe: string) => {
+    const hash = report.probeHashes[probe]
+    return hash !== undefined && baseline?.probeHashes[probe] === hash ? baseline.outputSizes[probe] : undefined
   }
+  lines.push('## Output sizes on the fixture, through the km MCP tools (deterministic)', '')
+  lines.push('| probe | characters |')
+  lines.push('|---|---|')
+  for (const [probe, chars] of Object.entries(report.outputSizes)) {
+    lines.push(`| ${probe} | ${chars.toLocaleString('en-US')}${delta(chars, baseSize(probe))} |`)
+  }
+  lines.push('')
 
   return `${lines.join('\n')}\n`
 }

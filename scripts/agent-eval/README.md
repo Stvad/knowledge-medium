@@ -1,52 +1,117 @@
 # Agent ergonomics eval
 
 Measures how much work an agent spends getting common jobs done on a Knowledge
-Medium graph through the `km` MCP tools, so a change to that surface is judged
-by numbers rather than by feel. Tracked by #1233 (epic #1237).
+Medium graph, through the agent CLI from a shell or through the `km` MCP tools, so a
+change to either surface is judged by numbers rather than by feel. Tracked by #1233
+and #1251 (epic #1237).
 
 It has two halves:
 
 | half | what | where it runs |
 |---|---|---|
-| **deterministic** | size of representative tool outputs on the fixture, with a budget each; every task's checker proven against the graph | `pnpm run check` (node, no browser, ~20s) — `fixtureGraph.test.ts` |
-| **model** | `claude -p` does 12 tasks with only the km tools; per task: pass/fail, tool calls, characters returned, tokens, time | on demand, `pnpm agent-eval run` — costs subscription usage |
+| **deterministic** | size of representative tool outputs on the fixture, with a budget each; every task's checker proven against the graph | `pnpm run check` (node, ~15s) — `fixtureGraph.test.ts` |
+| **model** | `claude -p` does 12 tasks with only one surface's tools; per task: pass/fail, tool calls, characters returned, tokens, time | on demand, `pnpm agent-eval run` — costs subscription usage |
 
 Sizes are characters (string length) throughout: the unit Claude Code's MCP output
 cap counts, and the only one its over-the-cap notice reports.
 
+No browser, dev server or pairing is involved. A run imports the fixture into a node
+copy of the app's data layer once, then gives every task a fresh copy of that database,
+served to the agent through the real bridge, CLI and MCP server.
+
+## How a run works
+
+1. `run` builds `packages/agent-cli` (incremental): the agent runs its built `kmagent`
+   and `dist/mcp.js`, and a stale build would measure old code.
+2. It starts a private bridge server on a free port with a fresh secret and its own
+   state directory, so nothing reaches your bridge, profiles or tabs (`hosting.ts`).
+3. It seeds the **template**: a host process (`host.ts`) imports the fixture with the
+   real Roam importer into a fresh node database, the way `fixtureGraph.test.ts` does,
+   and creates today's daily note. The runner reads the template's rows, its fixture
+   state and the output-size probes through the bridge, then stops the host.
+4. Each task becomes a job, and `--workers` jobs run at once. A job starts a host on a
+   copy of the template, under a token minted for it, then runs `claude -p` against it
+   from an empty scratch directory. The agent's CLI and MCP server get the private
+   bridge's URL, that token, and a config directory with no profiles
+   (`AGENT_RUNTIME_URL`, `AGENT_RUNTIME_TOKEN`, `AGENT_RUNTIME_CONFIG_DIR`).
+5. Once the agent exits, the job scores the task, diffs the copy against the template
+   (`taskChanges.ts`), and stops the host, which deletes the copy.
+
+A host serves its graph through the same bridge loop a tab runs
+(`src/plugins/agent-runtime/bridgeLoop.ts`) and the app's own `executeCommand`, over
+`@powersync/node` with the production schema, the app's data extensions and the app's
+id generators. What it does not have:
+
+- **No DOM.** `eval` code runs data code only, and `describe-runtime` lists no
+  importmap modules. `reload` and `navigate` have nothing to act on.
+- **No app pages beyond the fixture.** The tab's onboarding and system pages are
+  missing, so a raw SQL scan sees fewer rows than it would in a tab.
+- **Another SQLite build** than the browser's, with other optional functions on each
+  side.
+
+## Surfaces
+
+`--surface` picks how the agent reaches the graph (`surfaces.ts`):
+
+| surface | Claude Code tools | the prompt says |
+|---|---|---|
+| `mcp` (default) | the km MCP server's tools only (`KM_MCP_ALLOWED_TOOLS`), no built-ins | "through the km tools" |
+| `cli` | `Bash`, allowed only for `kmagent` and the filters `head`, `tail`, `grep`, `jq`, `wc`, `sort` | "through the `kmagent` command-line tool; `kmagent --help` lists its commands" |
+
+Any other tool or command is refused without a prompt. A `kmagent` shim on `PATH` runs
+the checkout's build. The "tool calls" column counts Claude Code tool calls (a shell
+call is one, however many commands it chains); the graph-commands table counts the wire
+commands the host ran for the agent, by type, the same way on both surfaces. A shell
+result over Claude Code's cap is saved to a file, and the model gets a preview with the
+path. The report counts it as capped, the preview as seen and the saved file's length
+as returned. The agent may read the saved file through the filters, as it would in a
+normal session. Claude Code keeps these files in a project directory per working
+directory under `~/.claude/projects/`; the runner removes each job's once it is scored.
+
+Every run gets no user or project settings (`--setting-sources ""`, an empty working
+directory, so no CLAUDE.md and no hooks), and no session is persisted. Every child of a
+run (the bridge, the hosts, `claude`) starts from an allowlist of the runner's
+environment: `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `TERM`, `LANG` and `TMPDIR`, plus
+what the run sets itself (`hosting.ts`). Claude Code takes behaviour from its
+environment (effort, thinking budget, the launching session's messaging socket), so
+nothing else of the shell reaches it, credentials included. Billing is the CLI's
+subscription login. A key stored by the CLI's own login or an `apiKeyHelper` is outside
+the env, so check your login if unsure.
+
 ## What it guards against
 
-The eval is a measuring tool for a dedicated local-only tab, not a defence against a
-hostile machine. It holds these, and a gap in any of them is a bug:
+It holds these, and a gap in any of them is a bug:
 
-- **The agent under test.** Whatever it does to the graph through the km tools, raw
-  SQL included, is scored and then undone, so it never reaches another task's
-  starting graph.
+- **Isolation.** A task's writes, raw SQL included, land on its own copy and reach no
+  other task, the template, or any graph outside the run.
 - **Scoring.** A correct answer passes and plausible wrong ones fail. A write task
   passes only when it made the requested change and nothing else.
 - **Comparability.** A delta is shown only between runs that held the same
   conditions (below), and only for tasks whose definitions match.
-- **Accidents around a run.**
-  - A run killed mid-task: the next run repairs the graph before using it.
-  - Two runs on one tab: the second is refused while the first holds the lock.
-  - The checkout or the built server changing during a run: the run stops.
-  - The profile being paired with another tab: the run stops.
-  - A tab that has synced, or whose fixture differs from this checkout's import: it is
-    refused before anything is spent.
+- **The code under test.** The run stops if the checkout or the built CLI changes
+  while a task runs, since hosts load the checkout as they start and every task
+  launches the build, and if a task resolves another model or Claude Code version than
+  the tasks before it.
+- **What the run measured.** A run that hit an API error (a rate or usage limit, an
+  outage) stops rather than scoring the task, and so does one whose host died. The
+  first failure stops the whole run, kills the agents running, and names the task.
+- **Cleanup.** Hosts exit when the runner does, however it ends; every database, the
+  template included, lives in the run's scratch directory, which is removed on exit.
 
 It does not try to hold these, and a finding about them is declined:
 
-- Someone working in the eval tab, its browser storage or the runner's state directory
-  while a run is going, including signing the tab in. Hand edits made between runs are
-  caught if they touch the fixture or what sits under it, not if they add new
-  top-level pages.
-- Two processes racing within the same instant, such as both taking over one stale lock.
-- A kill in the second between a run's setup and its journal's first write.
-- A run that crosses local midnight, which moves the daily-note task to another day.
 - An answer built to fool a check. The read checks reject plausible mistakes, not text
-  written to satisfy two predicates at once.
-- Recency timestamps of the seeded fixture, which the importer sets from the clock. The
-  start-of-run check compares everything else.
+  written to satisfy two predicates at once. On the `cli` surface the filters can read
+  files, and an agent that went looking could find the generator, which holds the
+  answers. Every command it ran is in its transcript.
+- An agent that sets out to leave its sandbox. On the `cli` surface `kmagent eval` runs
+  code in the node host with your user's privileges, not in a browser, so the Bash
+  allowlist bounds the shell, not what the agent can reach. A host's environment holds
+  the allowlist above and nothing the checkout's `.env` files add, so the shell's
+  secrets are not in it. Run the eval where you would run an agent with shell access.
+- A run that crosses local midnight: the template holds the note of the day it was
+  seeded, so a `daily-checkin` that starts after midnight finds no note for its day and
+  fails. A run takes minutes.
 
 ## The fixture
 
@@ -67,155 +132,82 @@ references with context through bare backlinks, open todos under a page, a needl
 `ANSWER: {json}` line. There are four write tasks: append a structured note to today's
 daily note, edit one phrase in a block, create a page and link it, and complete a todo.
 They are scored on graph state read back through raw wire commands and SQL, never
-through the MCP tools under test. A run passes only if the task's check passes, `claude`
-exits cleanly, and the agent changed nothing it wasn't asked to. Each write task
-declares which fields of which fixture blocks it may edit (the rollout block's content;
-the todo's status). Its check names the blocks it accepted as the ones it asked for,
-and the properties each may carry. Any other change fails the run: another property,
-a move, a deletion, or one more block beside the requested ones. A read task may change
-nothing.
+through the tools under test. A run passes only if the task's check passes, `claude`
+exits cleanly, and the agent changed nothing it wasn't asked to.
 
-Every task starts from the same graph. The runner snapshots every block row once,
-after each task's `reset` has cleared anything an interrupted earlier run left behind.
-The snapshot leaves out the app's own per-user state, which changes by itself: the
-state roots the app derives under each user page (ui-state, preferences) and what is
-under them. The user page itself is an ordinary page, so a note written on it is
-compared like any other block. Which rows are app state is fixed when the snapshot is
-taken, so a fixture block is compared wherever it ends up. After each task, the runner:
-
-1. waits until the graph is quiet, so late processor writes land first, and aborts if
-   it is still being written to after 20s;
-2. diffs the whole table against the snapshot by id, every column (derived ones
-   included) and deleted rows too, and never by timestamp, because some rows are
-   minted at `updated_at = 0`;
-3. undoes every difference: content, properties, deletions and moves, and purges the
-   rows the task created, so the agent's raw SQL finds no leftovers;
-4. waits until the graph is quiet again, so the processors the undo's own writes
-   started have landed;
-5. diffs again to prove the result, and aborts rather than score the next task on a
-   different graph;
-6. puts back the recency timestamps of every row whose timestamps moved, whoever
-   moved them, so recency ordering is unchanged.
-
-The run's snapshot is also journaled, beside the CLI's token store
-(`~/.config/knowledge-medium/agent-eval/`, one directory per tab, keyed by its user and
-workspace, so every checkout and every profile paired with it shares it). A run killed
-mid-task is undone by the next one, from any checkout, before it even reads which fixture the tab holds. What the resets themselves
-add (today's daily note, when it is missing) is recorded there too. It is removed when
-the run ends, or by the next run when this one stopped early, so runs on later days
-don't leave the graph a note longer each time. `seed` and `run` hold a lock per paired
-tab there, so two of them never write one graph at once; a lock left by a process that
-died is taken over. A run also stops if its profile is paired with another tab while
-it runs.
-
-Before the first task, `run` also checks that the tab holds the fixture as this
-checkout's code imports it, which is what the gate's checks are proven on. Every block
-the export defines, every daily page holding one, and every block that sits under
-either is read from the tab and from a fresh in-process import, in a form that does not
-depend on the workspace (`fixtureState.ts`). The two must be equal. This check runs
-before the resets write anything, so a refused run leaves nothing behind.
-A tab seeded by older code, or holding a change made by hand, is refused before
-anything is spent, and so is a run whose in-process import fails. The run also aborts if the checkout or the
-built MCP server changed while a task ran: the dev tab hot-reloads the app from the
-checkout, and every task launches the built server.
+Each write task declares which fields of which fixture blocks it may edit (the rollout
+block's content; the todo's status). Its check names the blocks it accepted as the ones
+it asked for, and the properties each may carry. Any other change fails the run:
+another property, a move, a deletion, or one more block beside the requested ones. A
+read task may change nothing. The changes are the copy's block rows diffed against the
+template's, by id, every column (derived ones included), deleted rows too and rows gone
+altogether (a raw-SQL delete), never by timestamp, because some rows are minted at
+`updated_at = 0`. Scoring first drains the graph's deferred work, so the processors the
+agent's writes started have landed before the diff and the check read it
+(`scoreTask` in `tasks.ts`, which `fixtureGraph.test.ts` scores with too).
 
 A task's definition is part of the measurement. A report stores a hash of each task's
-prompt, check, reset and allowed changes, plus the values the checks close over (the
-truth, its patterns, the target blocks). `--compare` shows deltas only for tasks whose
-hash matches, and aggregates cover those tasks only. Output-size probes carry a hash
-of their call the same way. When you change a helper the checks or resets share
-(`normalizeText`, `compareSets`, `strayChanges`, `purgeLike`), bump
-`SHARED_HELPERS_VERSION` in `tasks.ts`, which both the task hashes and the setup hash
-carry. Prefer adding a task to rewording one. A new task needs a reference solution
-and wrong ones in `fixtureGraph.test.ts`.
+prompt, check and allowed changes, the values the checks close over (the truth, its
+patterns, the target blocks), and the source of the modules every verdict runs
+through (`transcript.ts`, `graphQueries.ts`, `taskChanges.ts`). `--compare` shows
+deltas only for tasks whose hash matches, and aggregates cover those tasks only.
+Output-size probes carry a hash of their call the same way. When you change a helper in
+`tasks.ts` the checks share (`normalizeText`, `compareSets`), bump
+`SHARED_HELPERS_VERSION` there. Prefer
+adding a task to rewording one. A new task needs a reference solution and wrong ones in
+`fixtureGraph.test.ts`.
 
 So is what a run holds fixed, recorded together as the report's `conditions`: the
 fixture, the fixture as this checkout stores it (a digest of `fixtureState`, which moves
-when the importer or the data layer does), the setup (every task's reset, since all of
-them run before every run), the resolved model, the effort, the MCP output cap and the
-per-task timeout.
-A baseline that differs in any of them gets no deltas at all, since they
-would measure that difference rather than the tools. That includes a run whose model
-never resolved because no task got far enough. `run` refuses such a `--compare` before
-it starts, and stops after the first task when the resolved model differs, since the
-model is known only once a task has run. A run also stops if a later task resolves to
-another model than the first. Claude Code's version is shown, not required
-to match.
-
-## One-time setup
-
-1. Start a dev server on its own origin, so it has its own local database:
-
-   ```bash
-   pnpm dev --port 5291 --strictPort
-   ```
-
-   (In the desktop app, use the `agent-eval-dev` launch config.)
-2. Open `http://localhost:5291/` in a browser profile that is NOT your main account.
-   Choose local-only / enter any name. Nothing syncs from this origin.
-3. Pair a dedicated CLI profile with that tab, then seed it:
-
-   ```bash
-   AGENT_RUNTIME_APP_URL=http://localhost:5291/ pnpm agent connect --profile km-eval
-   pnpm agent-eval seed
-   ```
-
-`seed` and `run` refuse a tab that has ever synced (connected PowerSync, or holds any
-downloaded row), because both write thousands of blocks. `seed` also refuses a workspace
-that holds a different fixture version. Re-seeding the same fixture puts fixture blocks'
-content, position and deletion back, but not properties a run changed. The run's own
-undo handles those, so a re-seed is only a repair step.
+when the importer or the data layer does), the surface and a digest of its tool set and
+preamble, the resolved model, the effort, the MCP and shell output caps, the per-task
+timeout, and the number of tasks run at once, which share the machine and the
+account's rate limit. The km MCP server's own tool list is recorded beside them rather than among
+them, so a slice that adds a tool stays comparable with the run before it. A baseline
+that differs in any condition gets no deltas at all, since they would measure that
+difference rather than the tools. That includes a run whose model never resolved
+because no task got far enough. `run` refuses such a `--compare` before it starts any
+agent, and stops when the first task resolves another model than the baseline's.
+Claude Code's version is shown, not required to match a baseline's, but every task of a
+run must share it.
 
 ## Running
 
 ```bash
-pnpm agent reload --profile km-eval # the tab runs the working tree's src/
-pnpm agent-eval run --repeat 3 --compare scripts/agent-eval/results/baseline-2026-10-16-sonnet.json
+pnpm agent-eval run --surface cli --repeat 3 --compare scripts/agent-eval/results/baseline-2026-10-16-sonnet-cli.json
+pnpm agent-eval run --surface mcp --repeat 3 --compare scripts/agent-eval/results/baseline-2026-10-16-sonnet-mcp.json
 ```
 
-`run` builds `packages/agent-cli` first (incremental), because the runs launch its
-`dist/mcp.js` and a stale build would measure old code. It refuses a `--label` that
-already has a report or transcripts; the default label is the date and time, the commit
-and the model. The run directory is created first, as the label's reservation.
+Options: `--surface` (`mcp` or `cli`, default `mcp`), `--workers` (default 4),
+`--model` (default `sonnet`), `--effort`, `--repeat`, `--tasks id,id`, `--label`,
+`--timeout-min`, `--mcp-output-tokens` (default 25000) and `--bash-output-chars`
+(default 30000). The last two are passed to every run as `MAX_MCP_OUTPUT_TOKENS` and
+`BASH_MAX_OUTPUT_LENGTH` and recorded in the report, because they decide which results
+Claude Code cuts short. `run` refuses a `--label` that already has a report or
+transcripts; the default label is the date and time, the commit, the model and the
+surface. The run directory is created first, as the label's reservation.
 
-Options: `--model` (default `sonnet`), `--effort`, `--repeat`, `--tasks id,id`,
-`--label`, `--timeout-min`, `--profile` (default `km-eval`), and `--mcp-output-tokens`
-(default 25000). The last one is passed to every run as `MAX_MCP_OUTPUT_TOKENS` and
-recorded in the report, because it decides which tool results Claude Code caps.
 `pnpm agent-eval report <report.json> --compare <other.json>` re-renders a saved
-report. `pnpm agent-eval sizes` prints the deterministic output sizes only.
-
-Each `claude -p` run gets the km MCP server (`--strict-mcp-config`) and only its tools
-(`--allowedTools` from `KM_MCP_ALLOWED_TOOLS`, plus `--tools ""`, so there are no
-built-ins). It also gets no user or project settings (`--setting-sources ""`, an empty
-working directory, so no CLAUDE.md and no hooks). Billing is the CLI's subscription
-login. Credential env vars are scrubbed the way agent-dispatch does it
-(`BILLING_ENV_DENYLIST`). A key stored by the CLI's own login or an `apiKeyHelper` is
-outside the env and can't be scrubbed, so check your login if unsure.
+report. `pnpm agent-eval sizes` seeds a template and prints its output sizes only. The
+sizes are measured through the km MCP tools on both surfaces.
 
 Reports go to `results/<label>.{json,md}`; a report written by a runner with another
-`schemaVersion` is refused, so record it again. Transcripts go to
-`tmp/agent-eval/runs/<label>/` (gitignored). A result over the MCP output cap appears there only as
-Claude Code's notice, never as the full output; the report counts such calls as "capped" and records
-the size the tool returned.
-Per-task figures are medians across repetitions. Time is wall-clock, measured by the
-runner, so a run that timed out counts in full. "List $" is n/a for a task when any of
-its runs ended without reporting a cost. "Context tokens" is input plus
-cache-creation plus cache-read tokens, summed over the run's API calls. "Peak context"
-is the largest single call. Model runs are noisy, so compare medians of `--repeat 3`
-or more, and read the per-task table rather than a single total.
+`schemaVersion` is refused, so record it again. Transcripts and each host's log go to
+`tmp/agent-eval/runs/<label>/` (gitignored). Per-task figures are medians across
+repetitions. Time is wall-clock per agent, measured by the runner, so a run that timed
+out counts in full; with several workers it includes contention. "List $" is n/a for a
+task when any of its runs ended without reporting a cost. "Context tokens" is input
+plus cache-creation plus cache-read tokens, summed over the run's API calls. "Peak
+context" is the largest single call. Model runs are noisy, so compare medians of
+`--repeat 3` or more, and read the per-task table rather than a single total.
 
 ## After the read / write slices land (#1236, #1235)
 
-1. Reload the tab, as above, then `pnpm agent-eval run --repeat 3 --compare <baseline>.json` (the run rebuilds the packages itself).
+1. Run both surfaces with `--repeat 3 --compare` against their baselines (the run
+   rebuilds the packages itself).
 2. Lower the budgets in `outputBudgets.ts` to the new sizes (`pnpm agent-eval sizes`).
    The budgets are a ratchet. They stop a tool's output from growing back.
 3. If a tool's inputs changed, update its probe in `outputBudgets.ts` and the MCP
    reference solutions in `fixtureGraph.test.ts`. Don't delete the probe.
-4. A new tool is picked up automatically: runs allow everything in `KM_MCP_ALLOWED_TOOLS`.
-
-## Resetting the dev origin
-
-A changed fixture (its hash is on the `Agent Eval Fixture` page) needs a fresh
-database. Clear the site data for `localhost:5291` (DevTools → Application → Clear
-site data), log in local-only again, re-pair `km-eval`, and seed.
+4. A new MCP tool is picked up automatically: runs allow everything in
+   `KM_MCP_ALLOWED_TOOLS`. A new CLI verb needs nothing either.

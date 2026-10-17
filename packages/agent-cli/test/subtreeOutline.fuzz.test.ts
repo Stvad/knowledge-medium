@@ -6,12 +6,9 @@
  * `packages/agent-cli/test/readonlySql.fuzz.test.ts` for the in-package
  * house style and `docs/fuzzing.md` for tier mechanics.
  *
- * Note on the agent-cli "protocol resolves to dist" test gotcha: it doesn't
- * apply here — `subtreeOutline.ts` has ZERO imports (its module doc says
- * so explicitly, "unit-testable... importing cli.ts would run the CLI
- * entrypoint"), so there's no `protocol.ts`/dist dependency to compile
- * first. Confirmed by running the existing (non-fuzz)
- * `subtreeOutline.test.ts` straight from source with no build step.
+ * The agent-cli "protocol resolves to dist" test gotcha does not apply:
+ * `subtreeOutline.ts` imports only the relative `./protocol.js`, which
+ * resolves to source, so nothing needs compiling first.
  *
  * ──── Why this invariant matters ────
  *

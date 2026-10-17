@@ -41,7 +41,7 @@
     "agent:server": "node packages/agent-cli/dist/server.js",
     "agent": "node packages/agent-cli/dist/cli.js",
     "agent-dispatch": "node packages/agent-dispatch/dist/daemon.js",
-    "agent-eval": "vite-node scripts/agent-eval/cli.ts --"
+    "agent-eval": "vite-node --config vitest.config.ts scripts/agent-eval/cli.ts --"
   },
   "dependencies": {
     "@babel/standalone": "^7.29.2",

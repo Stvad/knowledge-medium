@@ -2,7 +2,7 @@ import type { Repo } from '@/data/repo'
 import type { BlockData } from '@/data/api'
 import { parseRelativeDate } from '@/utils/relativeDate.js'
 import { dailyNoteBlockId } from '@/plugins/daily-notes/dailyNotes.js'
-import { clipLine, oneLine } from './text.ts'
+import { clipLine, oneLine, textHeadSql } from './text.ts'
 
 /** How an agent names a block, in the order they are tried:
  *  - `((id))` / `^prefix` — explicitly an id or id prefix;
@@ -77,13 +77,14 @@ const prefixMatches = async (repo: Repo, prefix: string): Promise<string[]> => {
   const live = rows.filter(row => row.deleted === 0)
   // A soft-deleted block answers only when nothing live does, so a prefix
   // printed for a live block keeps meaning that block after a sibling with
-  // the same prefix is deleted — and `restore-block <prefix>` still works.
+  // the same prefix is deleted — and a deleted block's own prefix still
+  // resolves, so a view can say it is deleted and print its full id.
   return (live.length > 0 ? live : rows).map(row => row.id)
 }
 
 const describeCandidates = async (repo: Repo, ids: readonly string[]): Promise<string> => {
   const rows = await repo.db.getAll<{id: string, content: string | null}>(
-    'SELECT b.id AS id, b.content AS content FROM json_each(?) j JOIN blocks b ON b.id = j.value',
+    `SELECT b.id AS id, ${textHeadSql('b.content', 200)} AS content FROM json_each(?) j JOIN blocks b ON b.id = j.value`,
     [JSON.stringify(ids)],
   )
   const byId = new Map(rows.map(row => [row.id, row.content ?? '']))
@@ -158,6 +159,8 @@ export const resolveBlockRef = async (
   ref: string,
   {workspaceId, onMissing = 'error', accept = 'any'}: ResolveBlockRefOptions,
 ): Promise<BlockRefResolution> => {
+  // Unwrapped before any exact-id probe: a synced row planted with the id `[[Inbox]]`
+  // must not capture refs to the real page. Such an id is reached as `((id))`.
   const {text, forced} = unwrap(ref)
   if (!text) throw new BlockRefError('A block reference is required.')
 
