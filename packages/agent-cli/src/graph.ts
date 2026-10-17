@@ -75,6 +75,13 @@ export interface AppendMarkdownResult {
   blocks: AppendedBlock[]
 }
 
+export interface EditBlockResult {
+  id: string
+  shortId: string
+  /** The replacement with bounded context on each side, cuts marked. */
+  excerpt: string
+}
+
 export interface DeleteBlockResult {
   id: string
   deleted: true
@@ -194,10 +201,9 @@ export const createBridgeGraph = (client: BridgeClient) => {
     return asRecord(result, 'append-markdown') as unknown as AppendMarkdownResult
   }
 
-  const editBlock = async (input: {id: string, old: string, new: string} & ExactIds): Promise<BlockData | null> => {
+  const editBlock = async (input: {id: string, old: string, new: string} & ExactIds): Promise<EditBlockResult> => {
     const result = await client.runCommand({type: 'edit-block', ...input})
-    if (result === null || result === undefined) return null
-    return asRecord(result, 'edit-block') as unknown as BlockData
+    return asRecord(result, 'edit-block') as unknown as EditBlockResult
   }
 
   const createPage = async (input: {name?: string, date?: string}): Promise<unknown> =>
@@ -209,8 +215,8 @@ export const createBridgeGraph = (client: BridgeClient) => {
     includeUser?: boolean
   }): Promise<unknown> => client.runCommand({type: 'recent-changes', ...input})
 
-  /** The full id a write verb's id field resolves `ref` to; unchanged when it
-   *  matches nothing. */
+  /** The full id a write verb's id field resolves `ref` to. When it matches
+   *  nothing: the id its syntax names (`^x` / `((x))` → `x`), else `ref`. */
   const resolveBlockId = async (ref: string): Promise<string> => {
     const {id} = asRecord(await client.runCommand({type: 'resolve-block-id', ref}), 'resolve-block-id')
     if (typeof id !== 'string') throw new Error('Unexpected resolve-block-id result shape')

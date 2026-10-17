@@ -1,6 +1,6 @@
 /**
  * Read-only views over the local change log, so an agent session can report
- * what it changed and the user can review (and restore from) it.
+ * what it changed and the user can review it.
  *
  *   - `recent-changes` — `command_events` (one row per local `repo.tx`) joined
  *     to the `row_events` each wrote. Agent writes are told apart by their
@@ -8,7 +8,7 @@
  *   - `block-history` — one block's `row_events`, local and sync-applied.
  *
  * The first runtime READER of `row_events`: a change to its row format has to
- * update `snapshotOf` here.
+ * update `changeColumnsSql` and `snapshotOf` here.
  */
 import { ChangeScope } from '@/data/api'
 import { registryRecognitionParams } from '@/data/internals/kernelQueries.js'
@@ -16,22 +16,42 @@ import { recognizedFieldRowSql } from '@/data/internals/treeQueries.js'
 import type { Repo } from '@/data/repo'
 import { AGENT_TX_DESCRIPTION_PREFIX } from './agentWrites.ts'
 import { shortIds } from './agentViews/resolveRef.ts'
-import { clip } from './agentViews/text.ts'
+import { cutMarker } from './agentViews/text.ts'
 
-interface RowEventRow {
+/** A change as the views read it: the before / after snapshots without their
+ *  content, which comes as a bounded head with its full length, and whether
+ *  it changed — compared in SQL, so a megabyte content is never loaded only
+ *  to be cut. See {@link changeColumnsSql}. */
+interface ChangeRow {
   tx_id: string | null
   block_id: string
-  kind: string
-  before_json: string | null
-  after_json: string | null
   source: string
   created_at: number
+  before_meta: string | null
+  after_meta: string | null
+  before_head: string | null
+  before_len: number | null
+  after_head: string | null
+  after_len: number | null
+  content_changed: number
 }
+
+/** The SELECT columns of a {@link ChangeRow} whose before snapshot is row
+ *  `b`'s and after snapshot row `a`'s — one row_events row, or a block's
+ *  first and last write in a tx. Binds the content head length twice. */
+const changeColumnsSql = (b: string, a: string): string => `
+  ${a}.tx_id AS tx_id, ${a}.block_id AS block_id, ${a}.source AS source, ${a}.created_at AS created_at,
+  json_remove(${b}.before_json, '$.content') AS before_meta,
+  json_remove(${a}.after_json, '$.content') AS after_meta,
+  substr(json_extract(${b}.before_json, '$.content'), 1, ?) AS before_head,
+  length(json_extract(${b}.before_json, '$.content')) AS before_len,
+  substr(json_extract(${a}.after_json, '$.content'), 1, ?) AS after_head,
+  length(json_extract(${a}.after_json, '$.content')) AS after_len,
+  json_extract(${b}.before_json, '$.content') IS NOT json_extract(${a}.after_json, '$.content') AS content_changed`
 
 interface Snapshot {
   parentId: string | null
   orderKey: string
-  content: string
   properties: Record<string, unknown>
   references: unknown
   deleted: boolean
@@ -43,12 +63,16 @@ const snapshotOf = (json: string | null): Snapshot | null => {
   return {
     parentId: raw.parentId ?? null,
     orderKey: raw.orderKey ?? '',
-    content: raw.content ?? '',
     properties: raw.properties ?? {},
     references: raw.references ?? [],
     deleted: raw.deleted === true,
   }
 }
+
+/** A content head as shown: SQLite counted `length` and cut `head` in
+ *  characters, so a cut is exactly `length - limit` of them. */
+const shownContent = (head: string | null, length: number | null, limit: number): string =>
+  head === null ? '' : length !== null && length > limit ? `${head}${cutMarker(length - limit)}` : head
 
 export type ChangeKind = 'create' | 'update' | 'move' | 'soft-delete' | 'restore' | 'delete'
 export type ChangedField = 'content' | 'parent' | 'order' | 'properties' | 'references' | 'deleted'
@@ -73,12 +97,13 @@ const changedPropertyNames = (before: Snapshot, after: Snapshot): string[] =>
     .filter(name => !sameJson(before.properties[name], after.properties[name]))
     .sort()
 
-const clipped = (content: string, limit: number | undefined): string =>
-  limit === undefined ? content : clip(content, limit).text
-
-const describeRowEvent = (row: RowEventRow, contentLimit?: number): Omit<BlockChange, 'shortId'> => {
-  const before = snapshotOf(row.before_json)
-  const after = snapshotOf(row.after_json)
+const describeChange = (row: ChangeRow, contentLimit: number): Omit<BlockChange, 'shortId'> => {
+  const before = snapshotOf(row.before_meta)
+  const after = snapshotOf(row.after_meta)
+  const content = {
+    before: shownContent(row.before_head, row.before_len, contentLimit),
+    after: shownContent(row.after_head, row.after_len, contentLimit),
+  }
   if (!before || !after) {
     const only = (after ?? before)!
     const properties = Object.keys(only.properties).sort()
@@ -91,13 +116,13 @@ const describeRowEvent = (row: RowEventRow, contentLimit?: number): Omit<BlockCh
         ...(properties.length > 0 ? ['properties' as const] : []),
         ...(hasReferences ? ['references' as const] : []),
       ],
-      content: after ? {after: clipped(only.content, contentLimit)} : {before: clipped(only.content, contentLimit)},
+      content: after ? {after: content.after} : {before: content.before},
       parentId: after ? {before: null, after: only.parentId} : {before: only.parentId, after: null},
       ...(properties.length > 0 ? {properties} : {}),
     }
   }
   const changed: ChangedField[] = []
-  if (before.content !== after.content) changed.push('content')
+  if (row.content_changed) changed.push('content')
   if (before.parentId !== after.parentId) changed.push('parent')
   if (before.orderKey !== after.orderKey) changed.push('order')
   const properties = changedPropertyNames(before, after)
@@ -114,7 +139,7 @@ const describeRowEvent = (row: RowEventRow, contentLimit?: number): Omit<BlockCh
     kind,
     changed,
     ...(changed.includes('content') || kind === 'soft-delete' || kind === 'restore'
-      ? {content: {before: clipped(before.content, contentLimit), after: clipped(after.content, contentLimit)}}
+      ? {content}
       : {}),
     ...(changed.includes('parent') ? {parentId: {before: before.parentId, after: after.parentId}} : {}),
     ...(properties.length > 0 ? {properties} : {}),
@@ -128,9 +153,9 @@ const RECOGNIZED_FIELD_ROWS_SQL = `
 
 /** The owner of each property-storage row among `rows` — recognized field
  *  rows (the outline's own predicate) and the value rows under them. */
-const propertyStorageOwners = async (repo: Repo, rows: readonly RowEventRow[]): Promise<Map<string, string>> => {
+const propertyStorageOwners = async (repo: Repo, rows: readonly ChangeRow[]): Promise<Map<string, string>> => {
   const parentOf = new Map(rows.map(row =>
-    [row.block_id, snapshotOf(row.after_json ?? row.before_json)?.parentId ?? null]))
+    [row.block_id, snapshotOf(row.after_meta ?? row.before_meta)?.parentId ?? null]))
   const candidates = [...new Set([...parentOf.keys(), ...parentOf.values()])].filter(id => id !== null)
   const ownerOfField = new Map((await repo.db.getAll<{id: string, ownerId: string}>(
     RECOGNIZED_FIELD_ROWS_SQL,
@@ -147,7 +172,7 @@ const propertyStorageOwners = async (repo: Repo, rows: readonly RowEventRow[]): 
 /** Storage rows a same-tx processor wrote for a property change the owner's
  *  own line already names. One whose owner shows no property change in that
  *  tx is kept: nothing else would report it. */
-const withoutCoveredPropertyStorage = async <T extends {row: RowEventRow; change: Omit<BlockChange, 'shortId'>}>(
+const withoutCoveredPropertyStorage = async <T extends {row: ChangeRow; change: Omit<BlockChange, 'shortId'>}>(
   repo: Repo,
   described: readonly T[],
 ): Promise<T[]> => {
@@ -163,24 +188,6 @@ const withoutCoveredPropertyStorage = async <T extends {row: RowEventRow; change
     const owner = owners.get(row.block_id)
     return owner === undefined || !propertyOwnersByTx.get(row.tx_id!)?.has(owner)
   })
-}
-
-/** One row per block per tx — its net change, from the first write's before
- *  to the last write's after — in first-write order. A tx can write a block
- *  several times (a page is minted, then its alias and type are set); only the
- *  net change is what the tx did. A block created and hard-deleted in one tx
- *  changed nothing and is dropped. */
-const netRowsPerBlock = (rows: readonly RowEventRow[]): RowEventRow[] => {
-  const byKey = new Map<string, {first: RowEventRow; last: RowEventRow}>()
-  for (const row of rows) {
-    const key = `${row.tx_id}\u0000${row.block_id}`
-    const seen = byKey.get(key)
-    if (seen) seen.last = row
-    else byKey.set(key, {first: row, last: row})
-  }
-  return [...byKey.values()]
-    .map(({first, last}) => ({...last, before_json: first.before_json}))
-    .filter(row => row.before_json !== null || row.after_json !== null)
 }
 
 const parseSince = (value: unknown): number => {
@@ -248,7 +255,7 @@ export const MAX_LISTED_CHANGES = 200
 const RANKED_BLOCKS_CTE = `
   WITH page AS (SELECT key AS ord, value AS tx_id FROM json_each(?)),
   written AS (
-    SELECT r.tx_id, r.block_id, MIN(r.id) AS first_id, page.ord
+    SELECT r.tx_id, r.block_id, MIN(r.id) AS first_id, MAX(r.id) AS last_id, page.ord
       FROM row_events r JOIN page ON page.tx_id = r.tx_id
      GROUP BY r.tx_id, r.block_id
   ),
@@ -260,7 +267,7 @@ const RANKED_BLOCKS_CTE = `
      WHERE v.id IN (SELECT block_id FROM written) AND ${recognizedFieldRowSql('f')}
   ),
   ranked AS (
-    SELECT tx_id, block_id,
+    SELECT tx_id, block_id, first_id, last_id,
            ROW_NUMBER() OVER (ORDER BY block_id IN (SELECT id FROM storage), ord, first_id) AS n
       FROM written
   )
@@ -287,26 +294,23 @@ export const recentChanges = async (repo: Repo, input: RecentChangesInput): Prom
   const page = txs.slice(0, limit)
   const pageIds = JSON.stringify(page.map(tx => tx.tx_id))
   const recognition = registryRecognitionParams(repo)
-  const listed = await repo.db.getAll<{tx_id: string; block_id: string}>(
-    `${RANKED_BLOCKS_CTE} SELECT tx_id, block_id FROM ranked WHERE n <= ?`,
-    [pageIds, ...recognition, ...recognition, MAX_LISTED_CHANGES],
-  )
   const cut = new Set((await repo.db.getAll<{tx_id: string}>(
     `${RANKED_BLOCKS_CTE} SELECT DISTINCT tx_id FROM ranked WHERE n > ?`,
     [pageIds, ...recognition, ...recognition, MAX_LISTED_CHANGES],
   )).map(row => row.tx_id))
-  const rows = await repo.db.getAll<RowEventRow>(
-    `SELECT r.tx_id, r.block_id, r.kind, r.before_json, r.after_json, r.source, r.created_at
-       FROM row_events r
-       JOIN (SELECT json_extract(value, '$[0]') AS tx_id, json_extract(value, '$[1]') AS block_id
-               FROM json_each(?)) k
-         ON k.tx_id = r.tx_id AND k.block_id = r.block_id
-      ORDER BY r.id`,
-    [JSON.stringify(listed.map(block => [block.tx_id, block.block_id]))],
+  // A block's net change in a tx: its first write's before, its last write's
+  // after. One created and hard-deleted in the same tx changed nothing.
+  const rows = await repo.db.getAll<ChangeRow>(
+    `${RANKED_BLOCKS_CTE}
+     SELECT ${changeColumnsSql('f', 'l')}
+       FROM ranked k JOIN row_events f ON f.id = k.first_id JOIN row_events l ON l.id = k.last_id
+      WHERE k.n <= ? AND NOT (f.before_json IS NULL AND l.after_json IS NULL)
+      ORDER BY k.first_id`,
+    [pageIds, ...recognition, ...recognition, RECENT_CONTENT_LIMIT, RECENT_CONTENT_LIMIT, MAX_LISTED_CHANGES],
   )
   const visible = await withoutCoveredPropertyStorage(
     repo,
-    netRowsPerBlock(rows).map(row => ({row, change: describeRowEvent(row, RECENT_CONTENT_LIMIT)})),
+    rows.map(row => ({row, change: describeChange(row, RECENT_CONTENT_LIMIT)})),
   )
   const short = await shortIds(repo, visible.map(({row}) => row.block_id))
   const changesByTx = new Map<string, BlockChange[]>()
@@ -357,14 +361,13 @@ export const BLOCK_HISTORY_CONTENT_CHARS = 2000
 
 export const blockHistory = async (repo: Repo, input: BlockHistoryInput): Promise<BlockHistoryResult> => {
   const limit = parseLimit(input.limit, 20, 100)
-  const rows = await repo.db.getAll<RowEventRow & {description: string | null}>(
-    `SELECT r.tx_id, r.block_id, r.kind, r.before_json, r.after_json, r.source, r.created_at,
-            c.description
+  const rows = await repo.db.getAll<ChangeRow & {description: string | null}>(
+    `SELECT ${changeColumnsSql('r', 'r')}, c.description
        FROM row_events r LEFT JOIN command_events c ON c.tx_id = r.tx_id
       WHERE r.block_id = ?
       ORDER BY r.created_at DESC, r.id DESC
       LIMIT ?`,
-    [input.id, limit + 1],
+    [BLOCK_HISTORY_CONTENT_CHARS, BLOCK_HISTORY_CONTENT_CHARS, input.id, limit + 1],
   )
   if (rows.length === 0) throw new Error(`block-history: no recorded changes for block ${input.id}.`)
   const shortId = (await shortIds(repo, [input.id])).get(input.id)!
@@ -377,7 +380,7 @@ export const blockHistory = async (repo: Repo, input: BlockHistoryInput): Promis
       source: row.source === 'sync' ? 'sync' : 'local',
       txId: row.tx_id,
       description: row.description,
-      ...describeRowEvent(row, BLOCK_HISTORY_CONTENT_CHARS),
+      ...describeChange(row, BLOCK_HISTORY_CONTENT_CHARS),
       shortId,
     })),
   }

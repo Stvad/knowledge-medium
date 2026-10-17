@@ -279,6 +279,16 @@ describe('edit-block', () => {
     expect(await agentDescriptionsAfter(since)).toEqual(['agent runtime edit-block'])
   })
 
+  it('returns the edit with bounded context, not a long block whole', async () => {
+    await seed([{id: NOTE, content: `${'a'.repeat(1000)}OLD${'z'.repeat(1000)}`}])
+    const out = await run({type: 'edit-block', id: NOTE, old: 'OLD', new: 'NEW'}) as {id: string, shortId: string, excerpt: string}
+    expect(out).toEqual({
+      id: NOTE,
+      shortId: '3f2a9c1b',
+      excerpt: `…[+800 chars]${'a'.repeat(200)}NEW${'z'.repeat(200)}…[+800 chars]`,
+    })
+  })
+
   it('refuses when the old text is not in the block, showing the current content', async () => {
     await seed([{id: NOTE, content: 'buy milk'}])
     await expect(run({type: 'edit-block', id: NOTE, old: 'bread', new: 'x'}))
@@ -499,6 +509,23 @@ describe('block-history', () => {
     expect(out.events[0].content).toEqual({before: `${'w'.repeat(BLOCK_HISTORY_CONTENT_CHARS)}…[+30 chars]`, after: 'short'})
   })
 
+  it('never loads a long content whole — both history views read a bounded head from SQL', async () => {
+    const huge = 'h'.repeat(50_000)
+    await seed([{id: NOTE, content: huge}])
+    await run({type: 'update-block', id: NOTE, content: `${huge}!`})
+    const getAll = vi.spyOn(repo.db, 'getAll')
+    try {
+      await run({type: 'block-history', id: NOTE})
+      await run({type: 'recent-changes'})
+      const results = await Promise.all(getAll.mock.results.map(result => result.value as Promise<unknown[]>))
+      const longest = Math.max(0, ...results.flat().flatMap(row => Object.values(row as object))
+        .map(value => typeof value === 'string' ? value.length : 0))
+      expect(longest).toBeLessThan(BLOCK_HISTORY_CONTENT_CHARS + 100)
+    } finally {
+      getAll.mockRestore()
+    }
+  })
+
   it('lists one block\'s changes newest first with full content, local and sync-applied', async () => {
     await seed([{id: NOTE, content: 'v1'}, {id: LONE}])
     await run({type: 'update-block', id: NOTE, content: 'v2'})
@@ -672,6 +699,13 @@ describe('review round 2', () => {
         type: 'append-markdown', target: NOTE, markdown: '- a', position: {kind: 'after', siblingId},
       })).rejects.toThrow(/not a live child/)
     }
+    expect(parseMarkdownToBlocks).not.toHaveBeenCalled()
+  })
+
+  it('refuses a live target in another workspace before parsing the markdown', async () => {
+    await seed([{id: LONE, workspaceId: OTHER_WS}])
+    vi.mocked(parseMarkdownToBlocks).mockClear()
+    await expect(run({type: 'append-markdown', target: LONE, markdown: '- a\n- b'})).rejects.toThrow(/not the active one/)
     expect(parseMarkdownToBlocks).not.toHaveBeenCalled()
   })
 

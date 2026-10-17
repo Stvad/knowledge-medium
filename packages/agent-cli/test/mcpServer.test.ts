@@ -85,7 +85,7 @@ describe('createGraphMcpServer', () => {
             blocks: [{id: 'n', shortId: 'n', parentId: 'p', depth: 0, content: 'note'}],
           }
         case 'edit-block':
-          return {id: command.id, content: 'edited'}
+          return {id: command.id, shortId: 'b', excerpt: 'edited'}
         case 'create-page':
           return {id: 'page', kind: 'page', created: true}
         default:

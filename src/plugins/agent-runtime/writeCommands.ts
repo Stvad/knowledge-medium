@@ -4,7 +4,6 @@
  * against the rows current there, so an edit made on another device since the
  * agent read is never clobbered.
  */
-import type { BlockData } from '@/data/api'
 import { orderKeysForInsert, type InsertPosition } from '@/data/mutators.js'
 import type { Repo } from '@/data/repo'
 import { parseMarkdownToBlocks, type ParsedBlock } from '@/utils/markdownParser.js'
@@ -150,12 +149,30 @@ export const contentEcho = (content: string): string => {
   return end === content.length ? quoted : `${quoted}${cutMarker(content.length - end)}`
 }
 
-export const editBlock = async (repo: Repo, input: EditBlockInput): Promise<BlockData | null> => {
+export interface EditBlockResult {
+  id: string
+  shortId: string
+  /** The replacement with up to {@link EDIT_CONTEXT_CHARS} of context on each
+   *  side, cuts marked: the confirmation, without echoing a long block whole. */
+  excerpt: string
+}
+
+const EDIT_CONTEXT_CHARS = 200
+
+const editExcerpt = (content: string, at: number, length: number): string => {
+  const start = charBoundary(content, Math.max(0, at - EDIT_CONTEXT_CHARS))
+  const end = charBoundary(content, Math.min(content.length, at + length + EDIT_CONTEXT_CHARS))
+  return `${start > 0 ? cutMarker(start) : ''}${content.slice(start, end)}`
+    + `${end < content.length ? cutMarker(content.length - end) : ''}`
+}
+
+export const editBlock = async (repo: Repo, input: EditBlockInput): Promise<EditBlockResult> => {
   const verb = 'edit-block'
   if (input.old === '') {
     throw new Error(`${verb}: old must not be empty — use update-block to replace the whole content.`)
   }
   const id = await blockIdField(repo, input.id, verb, input.exactIds)
+  let excerpt = ''
   await repo.tx(async tx => {
     const block = await tx.get(id)
     if (!block || block.deleted) throw new Error(`${verb}: block ${id} not found.`)
@@ -175,8 +192,9 @@ export const editBlock = async (repo: Repo, input: EditBlockInput): Promise<Bloc
     // Spliced, not String.replace: a `$&` in the replacement stays literal.
     const content = block.content.slice(0, at) + input.new + block.content.slice(at + input.old.length)
     await tx.update(id, {content})
+    excerpt = editExcerpt(content, at, input.new.length)
   }, agentTxOptions(verb))
-  return repo.load(id)
+  return {id, shortId: (await shortIds(repo, [id])).get(id)!, excerpt}
 }
 
 export interface CreatePageInput {

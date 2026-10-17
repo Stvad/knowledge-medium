@@ -296,7 +296,8 @@ export const recentChangesCommandSchema = z.looseObject({
 
 /** The full id an id-typed field resolves to (`^short`, `((id))`, a unique
  *  prefix) — what a write verb would act on. A ref matching nothing comes back
- *  unchanged. Lets a caller check the same block the write will touch. */
+ *  as the id its syntax names (`^x` / `((x))` → `x`), else as given. Lets a
+ *  caller check the same block the write will touch. */
 export const resolveBlockIdCommandSchema = z.looseObject({
   type: z.literal('resolve-block-id'),
   ref: z.string(),
@@ -975,8 +976,8 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   'edit-block': {
     usage: "kmagent edit-block <id> <old> <new>   (or: kmagent edit-block <id> -- '<old>' '<new>' when either starts with -)",
     description: 'Replace the one occurrence of <old> in a block\'s content with <new> (literal text), against its '
-      + 'content at write time. Refused when <old> is empty or found more than once (add surrounding text), and when '
-      + 'it is not found, showing the current content. <id> may be a unique id prefix.',
+      + 'content at write time; prints the change in context. Refused when <old> is empty or found more than once '
+      + '(add surrounding text), and when it is not found, showing the current content. <id> may be a unique id prefix.',
     readOnly: false,
   },
   'create-page': {
@@ -995,12 +996,12 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   'block-history': {
     usage: 'kmagent block-history <id> [--limit <n>]',
     description: 'One block\'s recorded changes, newest first, local and synced, with content before/after (cut past '
-      + '2,000 chars) — to review, or to restore with update-block.',
+      + '2,000 chars) — to review a change. A content ending in a cut marker is not whole.',
     readOnly: true,
   },
   'resolve-block-id': {
     usage: 'kmagent raw \'{"type":"resolve-block-id","ref":"^3f2a9c1b"}\'',
-    description: 'The full block id an id-typed write field resolves to (^short, ((id)), unique prefix) — never a name or date. A ref that matches nothing comes back unchanged. km-mcp uses it so its write guard checks the block the write will touch.',
+    description: 'The full block id an id-typed write field resolves to (^short, ((id)), unique prefix) — never a name or date. A ref that matches nothing comes back as the id its syntax names (^x, ((x)) → x), else as given. km-mcp uses it so its write guard checks the block the write will touch.',
     readOnly: true,
   },
   'install-extension': {

@@ -172,14 +172,17 @@ const EXPLICIT_RELATIVE_DATE =
 const isExplicitDate = (text: string): boolean =>
   EXPLICIT_RELATIVE_DATE.test(text) || parseLiteralDailyPageTitle(text) !== null
 
-/** A block target must be a live block. A UUID-shaped ref resolves without a
- *  lookup, so this is where a missing one is caught — before the write pays
- *  for its payload. The writing tx checks again; this is the early refusal,
- *  not the authoritative one. */
+/** A block target must be a live block in the active workspace. A UUID-shaped
+ *  ref resolves without a lookup, so this is where a missing one is caught —
+ *  before the write pays for its payload. The writing tx checks again; this
+ *  is the early refusal, not the authoritative one. */
 const liveBlockTarget = async (repo: Repo, id: string, verb: string): Promise<ResolvedAgentTarget> => {
-  const row = await repo.db.getOptional<{deleted: number}>('SELECT deleted FROM blocks WHERE id = ?', [id])
+  const row = await repo.db.getOptional<{deleted: number, workspace_id: string}>(
+    'SELECT deleted, workspace_id FROM blocks WHERE id = ?', [id],
+  )
   if (!row) throw new Error(`${verb}: block ${id} not found.`)
   if (row.deleted) throw new Error(`${verb}: block ${id} is deleted — restore it first, or write elsewhere.`)
+  assertActiveWorkspace(repo, verb, row.workspace_id)
   return {id, kind: 'block', created: false}
 }
 

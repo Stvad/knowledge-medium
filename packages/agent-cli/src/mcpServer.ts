@@ -214,8 +214,8 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
 
   server.registerTool('edit_block' satisfies KmMcpToolName, {
     description: 'Replace the one occurrence of `old` in a block\'s content with `new` (literal text), against the '
-    + 'content current at write time. Refused when `old` is empty or found more than once (add surrounding text), '
-    + 'and when it is not found, showing the current content.',
+    + 'content current at write time; returns the change in context. Refused when `old` is empty or found more than '
+    + 'once (add surrounding text), and when it is not found, showing the current content.',
     inputSchema: {
       id: z.string(),
       old: z.string(),
@@ -258,8 +258,8 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
 
   server.registerTool('block_history' satisfies KmMcpToolName, {
     description: 'One block\'s recorded changes, newest first, with content before/after (cut past 2,000 chars) — '
-    + 'local edits and ones synced from other devices. Use it to review a change or to restore earlier content with '
-    + 'update_block.',
+    + 'local edits and ones synced from other devices — to review a change. A content ending in a cut marker is not '
+    + 'whole, so do not write it back.',
     inputSchema: {
       id: z.string(),
       limit: z.number().int().positive().optional(),
