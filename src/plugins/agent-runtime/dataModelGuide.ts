@@ -243,13 +243,14 @@ The convenience commands above wrap the starred ones (★) and add hydration.
 /** Agent-facing orientation to Knowledge Medium's data model, surfaced
  *  through the bridge CLI so a fresh agent can learn the model without
  *  reverse-engineering it from source. Reachable three ways:
- *    - `pnpm agent data-model`            (an index; `--topic` reads a section)
- *    - `pnpm agent describe-runtime --guide data-model`  (all of it)
+ *    - `pnpm agent data-model`   (an index; `--topic <id>` reads a section,
+ *                                 `--topic all` prints this verbatim)
+ *    - `pnpm agent describe-runtime --guide data-model`  (this, verbatim)
  *    - pointed at from `pnpm agent runtime-summary`
  *
  *  Keep this in sync with the real schema/queries if they change — it is
- *  the canonical agent-facing description of the model. Plain markdown so
- *  the dedicated verb can print it verbatim. */
+ *  the canonical agent-facing description of the model. Plain markdown, so
+ *  it prints as it is. */
 export const DATA_MODEL_GUIDE = [GUIDE_INTRO, ...GUIDE_SECTIONS.map(section => section.text)].join('\n')
 
 const GUIDE_TOPIC_ALL = 'all'

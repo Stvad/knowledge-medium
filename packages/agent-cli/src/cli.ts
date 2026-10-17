@@ -491,8 +491,7 @@ const runCommand = (command: KnownCommand): Promise<unknown> =>
   client().runCommand(command)
 
 /** Helper: connect to the bridge, run a wire-protocol command, and
- *  pretty-print the result. Used by the "thin" bridge-fronting commands
- *  (sql, get-block, runtime-summary, install-extension, …). */
+ *  pretty-print the result as JSON. */
 const runAndPrint = async (command: KnownCommand): Promise<void> => {
   await ensureBridgeRunning()
   const value = await runCommand(command)

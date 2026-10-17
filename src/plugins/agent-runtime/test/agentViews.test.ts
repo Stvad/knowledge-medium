@@ -649,6 +649,23 @@ describe('structural edge cases', () => {
     await expect(view({type: 'view-search', query: 'anything', under: foreign})).rejects.toThrow(/not the one open/)
   })
 
+  it('search scopes by an `under` block\'s id, never reading its whole row, and refuses a deleted one', async () => {
+    const scope = uuid('5d5d5d5d', 1)
+    await create({id: scope, content: `Archive ${'x'.repeat(5000)}`, properties: {'importer:payload': 'y'.repeat(100_000)}})
+    await create({id: uuid('5d5d5d5e', 2), parentId: scope, content: 'quince note'})
+
+    const getAll = vi.spyOn(repo.db, 'getAll')
+    const out = await view<SearchView>({type: 'view-search', query: 'quince', under: scope, limit: 1, format: 'json'})
+    const wholeRowReads = getAll.mock.calls.filter(([sql, params]) =>
+      /SELECT (b\.)?\*/.test(sql) && JSON.stringify(params ?? []).includes(scope))
+    getAll.mockRestore()
+    expect(out.hits.map(hit => hit.id)).toEqual([uuid('5d5d5d5e', 2)])
+    expect(wholeRowReads).toEqual([])
+
+    await repo.mutate.delete({id: scope})
+    await expect(view({type: 'view-search', query: 'quince', under: scope})).rejects.toThrow(/is deleted; restore-block/)
+  })
+
   it('search under a self-parented root never returns the root', async () => {
     const root = uuid('5c5c5c5c', 1)
     await create({id: root, content: 'loop topic'})

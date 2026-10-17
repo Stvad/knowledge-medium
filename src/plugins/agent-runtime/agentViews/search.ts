@@ -4,7 +4,7 @@ import { EXTENSION_TYPE } from '@/data/blockTypes'
 import type { BlockSearchFilter } from '@/data/searchFilter'
 import { AGENT_VIEW_DEFAULTS } from '@knowledge-medium/agent-cli/protocol'
 import { searchBlocksAcrossSources } from '@/utils/linkTargetAutocomplete.js'
-import { loadBlocks, loadCrumbs } from './context.ts'
+import { loadCrumbs } from './context.ts'
 import { createPropertyRenderer, formatPropertyPairs, type PropertyLine } from './properties.ts'
 import { displayIds } from './displayIds.ts'
 import { clampInt, crumbLine, joinDisplayLines, loadRoot } from './shared.ts'
@@ -97,6 +97,15 @@ const groupIdentical = (blocks: readonly BlockData[]): BlockData[][] => {
   return groups
 }
 
+/** A scope is used by id alone, so only its id and workspace are read. */
+const loadLiveScope = async (repo: Repo, id: string) => {
+  const [row] = await repo.db.getAll<{id: string, workspace_id: string}>(
+    'SELECT id, workspace_id FROM blocks WHERE id = ? AND deleted = 0',
+    [id],
+  )
+  return row && {id: row.id, workspaceId: row.workspace_id}
+}
+
 export const buildSearchView = async (
   repo: Repo,
   workspaceId: string,
@@ -107,7 +116,7 @@ export const buildSearchView = async (
   const includeExtensions = params.includeExtensions === true
   const underId = params.under === undefined
     ? undefined
-    : (await loadRoot(repo, params.under, workspaceId, async id => (await loadBlocks(repo, [id]))[0])).root.id
+    : (await loadRoot(repo, params.under, workspaceId, id => loadLiveScope(repo, id))).root.id
   const filter: BlockSearchFilter = {
     ...(params.types?.length ? {types: resolveTypeIds(repo, params.types)} : {}),
     ...(includeExtensions ? {} : {excludeTypes: [EXTENSION_TYPE]}),

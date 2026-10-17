@@ -77,15 +77,18 @@ export const viewWorkspace = (repo: Repo, named: string | undefined): string => 
   return open
 }
 
+/** As much of a view's root as resolving and refusing it reads. */
+type RootRow = Pick<BlockData, 'id' | 'workspaceId'>
+
 /** Resolve a view's root and load it, with a not-found message that says
  *  what the ref resolved to — a date names a daily note that may simply not
- *  have been created yet. */
-export const loadRoot = async (
+ *  have been created yet. `load` returns undefined for a deleted block. */
+export const loadRoot = async <Root extends RootRow>(
   repo: Repo,
   ref: string,
   workspaceId: string,
-  load: (id: string) => Promise<BlockData | undefined>,
-): Promise<{root: BlockData, resolution: BlockRefResolution}> => {
+  load: (id: string) => Promise<Root | undefined>,
+): Promise<{root: Root, resolution: BlockRefResolution}> => {
   const resolution = await resolveBlockRef(repo, ref, {workspaceId})
   const root = await load(resolution.id)
   if (!root) {

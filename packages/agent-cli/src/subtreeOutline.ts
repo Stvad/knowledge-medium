@@ -1,9 +1,8 @@
 /*
- * Renders the flat `get-subtree` result as a depth-indented outline for
- * the `kmagent subtree` CLI default.
- *
- * Its own module rather than inline in `cli.ts` so it is unit-testable —
- * importing `cli.ts` would run the CLI entrypoint.
+ * Renders the flat `get-subtree` result as a depth-indented outline.
+ * agent-dispatch renders its prompt subtree with it, through the package's
+ * `./subtreeOutline` export; the CLI and MCP `subtree` show the bounded
+ * outline view instead.
  *
  * INVARIANT: the subtree array arrives already in pre-order with siblings
  * in `(order_key, id)` order (the runtime's `SUBTREE_SQL` sorts by path),
@@ -157,11 +156,9 @@ export const decodeOutlineId = (encoded: string): string => {
  * Blanket-decoding at those boundaries was considered and rejected: a
  * legitimate id containing a literal `%` is indistinguishable from an
  * encoded token, so decoding unconditionally would CORRUPT real ids. The
- * CLI and MCP `subtree` no longer use this renderer (they show the bounded
- * outline view, whose `--json` / `format: "json"` carries ids exactly as
- * stored); agent-dispatch still renders its prompt subtree with it. Issue
- * #456 tracks the durable fix — rejecting hostile ids at block-creation
- * time.
+ * bounded outline view's `--json` / `format: "json"` carries ids exactly
+ * as stored. Issue #456 tracks the durable fix — rejecting hostile ids at
+ * block-creation time.
  */
 export const renderSubtreeOutline = (value: unknown, options: RenderSubtreeOptions = {}): string => {
   if (!Array.isArray(value)) {
