@@ -1,1 +1,0 @@
-import{Ag as e,Mg as t,jg as n}from"../../../chunks/app-DocQ5-I0.js";export{e as COLEMAK_KEYBINDINGS_PLUGIN_ID,n as colemakKeybindingsPlugin,t as colemakMovementKeybindingOverrides};

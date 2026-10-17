@@ -1,1 +1,0 @@
-import{cT as e,sT as t}from"../../chunks/app-DocQ5-I0.js";export{t as resolveStructuralEditPolicy,e as structuralEditPolicyForBlock};

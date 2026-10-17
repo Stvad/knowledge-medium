@@ -1,1 +1,0 @@
-import{Dr as e,jr as t}from"../../../chunks/app-DocQ5-I0.js";export{t as migratePropertiesToBlocksAction,e as propertiesMigrationPlugin};

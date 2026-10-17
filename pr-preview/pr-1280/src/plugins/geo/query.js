@@ -1,1 +1,0 @@
-import{XR as e,YR as t}from"../../../chunks/app-DocQ5-I0.js";export{t as PLACES_UNDER_BLOCK_QUERY,e as placesUnderBlockQuery};

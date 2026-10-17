@@ -1,1 +1,0 @@
-import{c2 as e,s2 as t}from"../../chunks/app-DocQ5-I0.js";export{t as getOrCreatePropertiesPage,e as propertiesPageBlockId};

@@ -1,1 +1,0 @@
-import{Xj as e,Zj as t}from"../../../chunks/app-DocQ5-I0.js";export{e as declarationOnlyDefinitionForName,t as declarationOnlyStatusText};

@@ -1,1 +1,0 @@
-import{OF as e,kF as t}from"../../../chunks/app-DocQ5-I0.js";export{e as floatingAnchorFromRect,t as useAnchoredFloating};
