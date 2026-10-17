@@ -1,1 +1,1 @@
-import{XT as e,ZT as t}from"../../../chunks/app-B2L25j-1.js";export{e as ExtensionPromptSurface,t as extensionPromptsExtension};
+import{XT as e,ZT as t}from"../../../chunks/app-BOiWosdn.js";export{e as ExtensionPromptSurface,t as extensionPromptsExtension};

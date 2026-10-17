@@ -1,1 +1,1 @@
-import{DH as e,EH as t,OH as n}from"../../chunks/app-B2L25j-1.js";export{t as SYNCED_TABLES,e as syncedWriteTarget,n as writeTargets};
+import{DH as e,EH as t,OH as n}from"../../chunks/app-BOiWosdn.js";export{t as SYNCED_TABLES,e as syncedWriteTarget,n as writeTargets};

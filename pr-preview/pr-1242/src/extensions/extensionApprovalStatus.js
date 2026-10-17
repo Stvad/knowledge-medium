@@ -1,1 +1,1 @@
-import{fE as e,hE as t,mE as n,pE as r}from"../../chunks/app-B2L25j-1.js";export{e as ExtensionApprovalStatusProvider,r as ExtensionApprovalStatusStore,n as useExtensionApprovalStatus,t as useExtensionApprovalStatuses};
+import{fE as e,hE as t,mE as n,pE as r}from"../../chunks/app-BOiWosdn.js";export{e as ExtensionApprovalStatusProvider,r as ExtensionApprovalStatusStore,n as useExtensionApprovalStatus,t as useExtensionApprovalStatuses};
