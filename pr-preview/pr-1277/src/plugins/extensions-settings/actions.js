@@ -1,0 +1,1 @@
+import{NT as e,PT as t}from"../../../chunks/app-Bxr8NvmF.js";export{e as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,t as openExtensionsSettingsAction};

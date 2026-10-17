@@ -1,0 +1,1 @@
+import{IE as e,LE as t}from"../../chunks/app-Bxr8NvmF.js";export{e as resolveAppRuntime,t as resolveAppRuntimeSync};
