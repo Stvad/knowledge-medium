@@ -1,1 +1,1 @@
-import{XT as e}from"../../chunks/app-CyccrE7R.js";export{e as editorAutocompleteExtension};
+import{XT as e}from"../../chunks/app-CyhWNqhZ.js";export{e as editorAutocompleteExtension};
