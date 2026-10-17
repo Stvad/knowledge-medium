@@ -229,6 +229,23 @@ kmagent types --module '@/data/api'
 
 Single-module output is not bundled with its transitive dependencies; use the directory form above for editor/typechecker setup.
 
+## Upgrading
+
+The bridge is a background process that keeps running after the CLI that started it is upgraded, and it reports no version, so the CLI cannot tell it is old ([#1247](https://github.com/Stvad/knowledge-medium/issues/1247)). When a release changes the bridge, stop it once; the next `kmagent` command, or the `agent-dispatch` daemon, starts the new one:
+
+```bash
+kill $(lsof -t -iTCP:8787 -sTCP:LISTEN)
+```
+
+Use the port from `AGENT_RUNTIME_URL` if you set one. Restart MCP clients that launch `km-mcp` too; an `npx` launch can reuse a cached copy, so name the version to be sure (`npx -y -p @knowledge-medium/agent-cli@0.7.0 km-mcp`).
+
+### 0.7.0
+
+- **Restart the bridge.** Tokens now belong to the user rather than the workspace they were minted in, and the bridge routes each call to a tab that has its workspace open. An old bridge keeps one tab per token, so with several tabs open in different workspaces, calls bounce between them; writes fail closed. Existing pairings keep working; no re-pairing is needed.
+- **Read output changed.** `get-block`, `subtree`, `backlinks`, `grouped-backlinks` and `search`, and the `km-mcp` tools of the same names, return a bounded text view. `--json` (MCP `format: "json"`) is that view as structured data; `--raw` is the old output for all but `search`. `subtree --props` is gone; use `--properties full`.
+- **MCP inputs and outputs changed.** `get_block` and `backlinks` take `ref` instead of `id`, and `subtree` takes `ref` instead of `rootId`. `sql_query` returns `{rows, truncated, truncatedCells}` instead of a bare row array, capped at 200 rows unless `maxRows` says otherwise.
+- **New write tools.** `append_markdown`, `edit_block` and `create_page` (`append-markdown`, `edit-block`, `create-page` on the CLI), `expectedContent` on `update_block`, and `recent_changes` / `block_history` to review writes. An embedding that passes `km-mcp` a custom `writeGuard` should handle the three new operations.
+
 ## Environment
 
 | Variable | Purpose |

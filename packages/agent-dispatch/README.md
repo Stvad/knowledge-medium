@@ -41,6 +41,15 @@ By default a watcher runs `claude`. Configure `"runner": {"executor": "codex"}` 
 - **Tools:** the km MCP server is injected into the codex run via `-c mcp_servers.*` config overrides (not a config file), alongside codex's own built-in tools. Claude's `runner.allowedTools` and the top-level `defaultAllowedTools` are **claude-only** and are ignored for a codex watcher — there's no equivalent allowlist gate at the codex CLI layer today.
 - **Sessions don't cross executors:** `agent:session` ids are executor-scoped — codex thread ids are stored as `codex:<id>`, claude session ids bare (matching every pre-executor session). A follow-up whose nearest thread session belongs to the *other* executor starts a **fresh** thread instead of forwarding the foreign id to `--resume`/`resume` (which would fail the run outright). Switching a watcher's `runner.executor` therefore drops thread continuity, never mixes histories, and never burns retries on doomed resumes.
 
+## Upgrade to 0.2.0
+
+0.2.0 requires `@knowledge-medium/agent-cli` 0.7, and a config that names its workspace. A config without `workspaceId` is now a config error: the daemon logs a `config error` saying `workspaceId is required` and exits cleanly, so launchd does not restart it and dispatch stops until the field is added.
+
+1. Add `"workspaceId"` to `~/.config/knowledge-medium/agent-dispatch.json` (step 2 of [Setup](#setup-from-a-repo-checkout)). List your workspaces with `kmagent --profile agent-dispatch sql all "SELECT id, name FROM workspaces"`.
+2. Upgrade both packages: `npm i -g @knowledge-medium/agent-dispatch @knowledge-medium/agent-cli`.
+3. Stop the old bridge, as the agent-cli README's [Upgrading](https://github.com/Stvad/knowledge-medium/tree/master/packages/agent-cli#upgrading) section says; the daemon starts the new one.
+4. Restart the daemon: `launchctl kickstart -k gui/$(id -u)/org.knowledge-medium.agent-dispatch`.
+
 ## Upgrade from claude-tasks
 
 This rename intentionally does **not** carry a permanent `claude:*` compatibility layer in app or daemon code. Do the migration once before loading the new LaunchAgent:
