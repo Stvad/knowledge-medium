@@ -1,1 +1,1 @@
-import{Xd as e,Zd as t}from"../../../chunks/app-B5aE3UNe.js";export{e as BacklinksViewSection,t as backlinksViewFooterContribution};
+import{Xd as e,Zd as t}from"../../../chunks/app-CcE3YYwc.js";export{e as BacklinksViewSection,t as backlinksViewFooterContribution};

@@ -1,1 +1,1 @@
-import{_B as e,gB as t,vB as n}from"../../../chunks/app-B5aE3UNe.js";export{t as charLimitProp,e as charProfileProp,n as charScopeProp};
+import{_B as e,gB as t,vB as n}from"../../../chunks/app-CcE3YYwc.js";export{t as charLimitProp,e as charProfileProp,n as charScopeProp};

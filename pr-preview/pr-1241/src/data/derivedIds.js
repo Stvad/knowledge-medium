@@ -1,1 +1,1 @@
-import{a2 as e,i2 as t,o2 as n,r2 as r}from"../../chunks/app-B5aE3UNe.js";export{r as classifyOccupant,t as derivedBlockId,e as stateChildBlockId,n as userStateRootBlockIds};
+import{a2 as e,i2 as t,o2 as n,s2 as r}from"../../chunks/app-CcE3YYwc.js";export{t as classifyOccupant,e as derivedBlockId,n as stateChildBlockId,r as userStateRootBlockIds};
