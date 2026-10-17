@@ -12,6 +12,7 @@ import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernel
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
 import type { TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
+import { releaseTestRepos } from '@/data/test/testRepoScope'
 import { staticDataExtensions } from '@/extensions/staticDataExtensions'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { createAgentRuntimeContext, executeCommand } from '@/plugins/agent-runtime/commands'
@@ -25,7 +26,7 @@ import { connectMcpClient } from './mcpClient'
 
 export interface FixtureRuntime {
   context: AgentRuntimeContext
-  close: () => void
+  close: () => Promise<void>
 }
 
 /** The app's runtime over `db`. With `seed`, imports the fixture first and
@@ -52,7 +53,7 @@ export const openFixtureRuntime = async (db: TestDb['db'], {seed}: {seed: boolea
   provideRuntimeGlobals()
   return {
     context: createAgentRuntimeContext({repo, runtime, safeMode: false}),
-    close: () => repo.stopSyncObserver(),
+    close: () => releaseTestRepos([repo]),
   }
 }
 
@@ -92,8 +93,11 @@ export const openFixtureTestGraph = async (db: TestDb['db'], options: {seed: boo
     callTool: mcp.callTool,
     command: command => bridge.runCommand(command),
     close: async () => {
-      await mcp.close()
-      runtime.close()
+      try {
+        await mcp.close()
+      } finally {
+        await runtime.close()
+      }
     },
   }
 }

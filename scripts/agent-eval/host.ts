@@ -78,8 +78,12 @@ const main = async () => {
     })
     .on('close', () => {
       loop.stop()
-      runtime.close()
-      void (values.from ? testDb.cleanup() : testDb.db.close()).finally(() => process.exit(0))
+      void runtime.close()
+        .finally(() => values.from ? testDb.cleanup() : testDb.db.close())
+        .then(() => process.exit(0), error => {
+          console.error(error)
+          process.exit(1)
+        })
     })
 
   await loop.register()
