@@ -1443,6 +1443,21 @@ describe('view-search', () => {
     expect(out.hits[0]).not.toHaveProperty('siblings')
   })
 
+  it('names a duplicate\'s place by the last two steps of its breadcrumb', async () => {
+    const page = uuid('6c500000', 0)
+    await create({id: page, content: 'Projects', properties: {alias: ['Projects']}})
+    for (const [index, section] of ['Alpha', 'Beta'].entries()) {
+      const heading = uuid(`6c50000${index + 1}`, index + 1)
+      await create({id: heading, parentId: page, content: section})
+      await create({id: uuid(`6c50001${index}`, 10 + index), parentId: heading, content: 'kickoff notes'})
+    }
+
+    const out = await view<SearchView>({type: 'view-search', query: 'kickoff', format: 'json'})
+    expect(out.hits[0].duplicates.map(duplicate => duplicate.place)).toEqual([
+      out.hits[0].breadcrumb.join(' › ') === 'Projects › Alpha' ? 'Projects › Beta' : 'Projects › Alpha',
+    ])
+  })
+
   it('gives a duplicate whose breadcrumb could not be read no place', async () => {
     const page = uuid('6c400000', 0)
     await create({id: page, content: 'Archive', properties: {alias: ['Archive']}})

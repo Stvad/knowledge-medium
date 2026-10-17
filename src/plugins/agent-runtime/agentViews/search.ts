@@ -23,8 +23,8 @@ export interface SearchParams {
 export interface SearchDuplicate {
   id: string
   shortId: string
-  /** The last step of its breadcrumb; null at the top level or where the
-   *  breadcrumb was cut. */
+  /** The last two steps of its breadcrumb; null at the top level, or when
+   *  the breadcrumb was cut before any step. */
   place: string | null
 }
 
@@ -109,10 +109,12 @@ const groupIdentical = (blocks: readonly BlockData[], records: ReadonlyMap<strin
   return groups
 }
 
-/** Where a block is: its breadcrumb's last step, unless it has none. */
+/** Where a block is: its breadcrumb's last two steps. One alone can be a
+ *  property's name (a value's crumb ends `Kestrel › status`) or a section
+ *  heading every page repeats. */
 const placeOf = (breadcrumb: readonly string[] | undefined): string | null => {
-  const last = breadcrumb?.at(-1)
-  return last === undefined || last === CRUMB_ELLIPSIS ? null : last
+  const steps = (breadcrumb ?? []).filter(step => step !== CRUMB_ELLIPSIS).slice(-2)
+  return steps.length > 0 ? steps.join(' › ') : null
 }
 
 /** A scope is used by id alone, so only its id and workspace are read. */
