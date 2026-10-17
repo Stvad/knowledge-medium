@@ -1,1 +1,1 @@
-import{_P as e,dP as t,fC as n,hC as r,mC as i,pC as a}from"../../../chunks/app-DVdHhsuz.js";export{n as chordFromEvent,a as formatChord,e as isMacPlatform,i as isModifierOnly,r as modifierPreview,t as normalizeChord};
+import{_P as e,dP as t,fC as n,hC as r,mC as i,pC as a}from"../../../chunks/app-BNw5Yt0h.js";export{n as chordFromEvent,a as formatChord,e as isMacPlatform,i as isModifierOnly,r as modifierPreview,t as normalizeChord};
