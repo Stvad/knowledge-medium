@@ -11,7 +11,7 @@ import { createHash } from 'node:crypto'
 import { MCP_SERVER_NAME } from '../../packages/agent-cli/src/mcpShared'
 import type { TokenUsage } from './transcript'
 
-export const REPORT_SCHEMA_VERSION = 4
+export const REPORT_SCHEMA_VERSION = 5
 
 export interface TaskRunRecord {
   task: string

@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
@@ -45,7 +45,7 @@ const reportOf = (
   overrides: Partial<EvalReport> = {},
   conditions: Partial<RunConditions> = {},
 ): EvalReport => ({
-  schemaVersion: 4,
+  schemaVersion: 5,
   label,
   startedAt: '2026-10-15T00:00:00Z',
   finishedAt: '2026-10-15T00:10:00Z',
@@ -189,7 +189,7 @@ describe('conditionMismatches', () => {
 })
 
 describe('the checked-in baselines', () => {
-  const files = readdirSync(RESULTS).filter(file => file.endsWith('.json')).map(file => path.join(RESULTS, file))
+  const files = existsSync(RESULTS) ? readdirSync(RESULTS).filter(file => file.endsWith('.json')).map(file => path.join(RESULTS, file)) : []
 
   it('exist', () => { expect(files.length).toBeGreaterThan(0) })
 
@@ -202,6 +202,6 @@ describe('the checked-in baselines', () => {
 describe('parseReport', () => {
   it('refuses a report written in another format', () => {
     expect(() => parseReport(JSON.stringify({...reportOf('old', []), schemaVersion: 1}), 'old.json'))
-      .toThrow('old.json is report format 1, not 4')
+      .toThrow('old.json is report format 1, not 5')
   })
 })
