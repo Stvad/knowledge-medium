@@ -1,1 +1,1 @@
-import{Tm as e,wm as t}from"../../../chunks/app-DjAw8XKT.js";export{t as attachmentObjectPath,e as authenticatedObjectUrl};
+import{Tm as e,wm as t}from"../../../chunks/app-DUrPIVVG.js";export{t as attachmentObjectPath,e as authenticatedObjectUrl};
