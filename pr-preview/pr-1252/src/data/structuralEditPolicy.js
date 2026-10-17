@@ -1,1 +1,0 @@
-import{ow as e,sw as t}from"../../chunks/app-BJCnBYsr.js";export{e as resolveStructuralEditPolicy,t as structuralEditPolicyForBlock};

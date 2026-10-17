@@ -1,1 +1,0 @@
-import{CA as e,wA as t}from"../../../chunks/app-BJCnBYsr.js";export{e as MetadataRow,t as PropertySectionLabel};

@@ -1,1 +1,0 @@
-import{GT as e,KT as t,UT as n,WT as r}from"../../chunks/app-BJCnBYsr.js";export{n as extensionDisplayName,r as extensionName,e as userExtensionShellToggle,t as userExtensionToggle};

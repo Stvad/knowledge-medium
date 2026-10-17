@@ -1,1 +1,0 @@
-import{Gj as e,Wj as t}from"../../chunks/app-BJCnBYsr.js";export{t as MOBILE_BREAKPOINT_QUERY,e as isMobileViewport};

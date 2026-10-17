@@ -1,1 +1,0 @@
-import{_ as e}from"../../chunks/app-BJCnBYsr.js";export{e as staticAppExtensions};

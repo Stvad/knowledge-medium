@@ -1,1 +1,0 @@
-import{_F as e,dF as t,fF as n,gF as r,hF as i,mF as a,pF as o,uF as s,vF as c}from"../../chunks/app-BJCnBYsr.js";export{s as getLastLongTaskEndMs,t as getStartupTimeline,n as hasStartupMark,o as longTasksSupported,a as markStartup,i as markStartupAt,r as onLongTask,e as resetStartupTimeline,c as startStartupObservers};

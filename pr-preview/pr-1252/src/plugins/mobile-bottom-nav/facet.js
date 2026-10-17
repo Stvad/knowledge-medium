@@ -1,1 +1,0 @@
-import{Xg as e}from"../../../chunks/app-BJCnBYsr.js";export{e as mobileBottomNavItemsFacet};

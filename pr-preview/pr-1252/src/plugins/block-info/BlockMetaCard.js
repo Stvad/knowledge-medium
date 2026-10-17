@@ -1,1 +1,0 @@
-import{Du as e}from"../../../chunks/app-BJCnBYsr.js";export{e as BlockMetaCard};

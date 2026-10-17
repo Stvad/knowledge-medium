@@ -1,1 +1,0 @@
-import{nU as e}from"../../chunks/app-BJCnBYsr.js";export{e as FacetBridge};

@@ -1,1 +1,0 @@
-import{DC as e}from"../../../chunks/app-BJCnBYsr.js";export{e as chipStyle};
