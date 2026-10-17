@@ -1,1 +1,0 @@
-import{FE as e,IE as t}from"../chunks/app-NS_9sZ1Z.js";export{e as checkForAppUpdate,t as registerServiceWorker};
