@@ -367,6 +367,8 @@ export interface RunTxParams<R> {
   ) => PropertyDefinitionRegistrySnapshot | null
   /** Active workspace captured with the registry factory at tx start. */
   propertySchemaWorkspaceId: string | null
+  /** False only before any workspace registry has been loaded (stage 0). */
+  propertyRegistryInitialized: boolean
   /** Original declaration-name multiplicity paired with the runtime snapshot. */
   propertySeedNameCounts: ReadonlyMap<string, number>
 }
@@ -417,6 +419,7 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
     typeDefinitionsForWorkspace,
     propertyDefinitionRegistryForWorkspace,
     propertySchemaWorkspaceId,
+    propertyRegistryInitialized,
     propertySeedNameCounts,
     isReplay = false,
     lockHooks,
@@ -502,6 +505,9 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
       propertySeedNameCounts,
       propertySchemaWorkspaceId === null || workspaceId === propertySchemaWorkspaceId,
     )
+  const writableWorkspace = !propertyRegistryInitialized || opts.allowUnloadedWorkspace
+    ? null
+    : {workspaceId: propertySchemaWorkspaceId}
   const resolvePropertySchemaName = (workspaceId: string, name: string) =>
     resolverFor(workspaceId).resolve(name)
   const resolvePropertySchemaField = (workspaceId: string, fieldId: string) =>
@@ -545,6 +551,8 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
       processors,
       contentReferencePrefill,
       propertySchemaResolverFor: resolverFor,
+      writableWorkspace,
+      propertyWritesAreSettled: () => settleWrites,
       sameTxEvents,
       now,
       newId,

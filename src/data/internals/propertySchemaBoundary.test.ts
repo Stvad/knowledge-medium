@@ -933,7 +933,7 @@ describe('typed property identity boundary', () => {
     })
     await expect(repo.tx(
       tx => tx.setProperty('retained-workspace-target', retained, 7),
-      {scope: ChangeScope.BlockDefault},
+      {scope: ChangeScope.BlockDefault, allowUnloadedWorkspace: true},
     )).rejects.toMatchObject({
       name: 'PropertySchemaIdentityError',
       reason: 'registry-not-workspace-keyed',
@@ -1019,7 +1019,7 @@ describe('typed property identity boundary', () => {
           [registeredLegacy.name]: 'before',
         },
       }),
-      {scope: ChangeScope.BlockDefault},
+      {scope: ChangeScope.BlockDefault, allowUnloadedWorkspace: true},
     )
 
     // The seed handle resolves: the read decodes the stored value (not the
@@ -1027,7 +1027,7 @@ describe('typed property identity boundary', () => {
     expect(repo.block('other-workspace-target').get(shadowed)).toBe('stored-seed')
     await repo.tx(
       tx => tx.setProperty('other-workspace-target', shadowed, 'changed'),
-      {scope: ChangeScope.BlockDefault},
+      {scope: ChangeScope.BlockDefault, allowUnloadedWorkspace: true},
     )
     expect(repo.block('other-workspace-target').get(shadowed)).toBe('changed')
 
@@ -1043,14 +1043,14 @@ describe('typed property identity boundary', () => {
     // branches pass silently.
     await expect(repo.tx(
       tx => tx.setProperty('other-workspace-target', legacyLookalike, 'changed'),
-      {scope: ChangeScope.BlockDefault},
+      {scope: ChangeScope.BlockDefault, allowUnloadedWorkspace: true},
     )).rejects.toMatchObject({
       name: 'PropertySchemaIdentityError',
       reason: 'shadowed',
     })
     await expect(repo.tx(
       tx => tx.setProperty('other-workspace-target', registeredLegacy, 'changed'),
-      {scope: ChangeScope.BlockDefault},
+      {scope: ChangeScope.BlockDefault, allowUnloadedWorkspace: true},
     )).rejects.toMatchObject({
       name: 'PropertySchemaIdentityError',
       reason: 'registry-not-workspace-keyed',
@@ -1074,7 +1074,7 @@ describe('typed property identity boundary', () => {
         orderKey: 'a0',
         properties: {[shadowed.name]: 42},
       }),
-      {scope: ChangeScope.BlockDefault},
+      {scope: ChangeScope.BlockDefault, allowUnloadedWorkspace: true},
     )
 
     // Read degrades to the seed default (render-safe).
@@ -1084,7 +1084,7 @@ describe('typed property identity boundary', () => {
     // than feeding the updater the default and clobbering the stored value.
     await expect(repo.tx(
       tx => tx.setProperty('foreign-incompatible-target', shadowed, current => `${current ?? ''}!`),
-      {scope: ChangeScope.BlockDefault},
+      {scope: ChangeScope.BlockDefault, allowUnloadedWorkspace: true},
     )).rejects.toThrow()
 
     // The incompatible stored value is preserved, not overwritten with a

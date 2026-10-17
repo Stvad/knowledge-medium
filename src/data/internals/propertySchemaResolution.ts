@@ -449,3 +449,25 @@ export const requireWritablePropertySchema = <T>(
   )
   return (strict as PropertySchema<T> | undefined) ?? resolution.schema
 }
+
+export type PropertyWriteTarget<T> =
+  | {readonly storage: 'cell'; readonly schema: PropertySchema<T>}
+  | {readonly storage: 'children'; readonly schema: ResolvedPropertySchema<T>}
+
+/** Readable behavior alone cannot authorize a children-backed write. */
+export const requirePropertyWriteTarget = <T>(
+  schema: PropertySchema<T>,
+  resolver: PropertySchemaResolver,
+  storage: 'cell' | 'children',
+): PropertyWriteTarget<T> => {
+  const writable = requireWritablePropertySchema(schema, resolver)
+  if (storage === 'cell') return {storage, schema: writable}
+  if (!isResolvedPropertySchema(writable)) {
+    const identity = resolver.resolve(schema.name)
+    throw new PropertySchemaIdentityError(
+      schema.name,
+      identity.status === 'identity-unavailable' ? identity.reason : 'definition-unavailable',
+    )
+  }
+  return {storage, schema: writable}
+}

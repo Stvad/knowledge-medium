@@ -50,7 +50,7 @@ import {
   ReadOnlyError,
   UndoHistoryDroppedError,
 } from './api/errors'
-import { runTx, type PowerSyncDb, type TxLockHooks } from './internals/commitPipeline'
+import { runTx, type PowerSyncDb, type RunTxParams, type TxLockHooks } from './internals/commitPipeline'
 import { STRANDED_CLAIM_RECOVERY } from './internals/graphBackfillClaim'
 import { onSyncSettled } from './internals/firstSync'
 import { devAssertionsEnabled } from './internals/devAssertions'
@@ -268,11 +268,24 @@ const NO_ACTIVE_WORKSPACE = '__no_active_workspace__'
  *  committing an audit row for a replay that never ran. */
 class NothingToReplay extends Error {}
 
+type TransactionRuntime = Pick<RunTxParams<unknown>,
+  | 'mutators' | 'processors' | 'sameTxProcessors' | 'propertySchemas' | 'valuePresets'
+  | 'contentReferencePrefill' | 'typeDefinitionsForWorkspace'
+  | 'propertyDefinitionRegistryForWorkspace' | 'propertySchemaWorkspaceId'
+  | 'propertyRegistryInitialized' | 'propertySeedNameCounts'
+> & {
+  queries: ReadonlyMap<string, AnyQuery>
+  types: ReadonlyMap<string, TypeContribution>
+  propertyDefinitions: PropertyDefinitionRegistrySnapshot | null
+  typeDefinitions: TypeDefinitionRegistrySnapshot | null
+}
+
 /** What `repo.tx` and `_replay` pass `runTx` beyond the public tx options. */
 interface RunAndDispatchInternals {
   /** An undo/redo replay — see `RunTxParams.isReplay`. */
   isReplay?: boolean
   lockHooks?: TxLockHooks
+  runtime?: TransactionRuntime
 }
 
 /** Max `ctx.run` composition depth before we assume a cycle (a query
@@ -1141,7 +1154,7 @@ export class Repo {
     // dispatch). The runner reads its registry per-tx from the snapshot
     // baked into TxResult — we don't sync a registry into the runner
     // here.
-    this.processorRunner = new ProcessorRunner(this, this.db)
+    this.processorRunner = new ProcessorRunner(this.db)
     // Type-tagging engine (audit D1(b)). Repo keeps spec-pinned
     // delegating methods over this single instance.
     this.typeTagger = new TypeTagger(this)
@@ -1817,6 +1830,14 @@ export class Repo {
     fn: (tx: Tx) => Promise<R>,
     opts: RepoTxOptions,
   ): Promise<R> {
+    return this.transact(fn, opts)
+  }
+
+  private async transact<R>(
+    fn: (tx: Tx) => Promise<R>,
+    opts: RepoTxOptions,
+    runtime?: TransactionRuntime,
+  ): Promise<R> {
     // Sampled once this transaction HOLDS the write lock — not when it was
     // called — and compared when the entry is recorded, still under that lock.
     //
@@ -1866,7 +1887,7 @@ export class Repo {
           sampleEpoch(this.undoManagerFor(tx.meta.workspaceId))
         }
         return value
-      }, opts, {lockHooks: {
+      }, opts, {runtime, lockHooks: {
         // Step 7 of the §10 pipeline — record the undo entry into the tx's
         // pinned workspace's manager, so a later cmd-Z only ever acts on
         // entries from the workspace the user is looking at (issue #186).
@@ -1990,33 +2011,24 @@ export class Repo {
 
   /** Build the group-injecting facade for {@link undoGroup}. */
   private groupedFacade(groupId: string): Repo {
+    return this.transactionFacade((fn, opts) => this.tx(fn, {...opts, groupId}))
+  }
+
+  /** Share the binding rules for transaction-scoped Repo hosts. */
+  private transactionFacade(tx: Repo['tx']): Repo {
     const facade = Object.create(this) as Repo
-    const tx = <R,>(fn: (tx: Tx) => Promise<R>, opts: RepoTxOptions): Promise<R> =>
-      this.tx(fn, {...opts, groupId})
     const run = ((name: string, args: unknown) =>
-      this.dispatchMutator(name, groupId)(args)) as Repo['run']
-    const mutate = nameDispatchProxy<MutateProxy>(name => this.dispatchMutator(name, groupId))
+      facade.dispatchMutator(name)(args)) as Repo['run']
+    const mutate = nameDispatchProxy<MutateProxy>(name => facade.dispatchMutator(name))
     // Async so a synchronously-throwing callback rejects like the outer
     // `undoGroup` does instead of throwing through the caller.
     const undoGroup = async <R,>(inner: (grouped: Repo) => Promise<R>): Promise<R> =>
       inner(facade)
-    // `block()` on a cache miss mints `new Block(this, id)` into the
-    // repo-wide `blockFacades` identity map. With the facade as `this`
-    // that would cache a facade-bound Block FOREVER — every later
-    // ordinary edit through it (`setContent`, `set`, `delete` route
-    // through `block.repo`) would carry this group's token and merge
-    // into the long-dead group's entry (one cmd-Z would then revert an
-    // unrelated edit plus the whole composite). Mint through the real
-    // repo so shared state only ever holds real-repo Blocks.
+    // Delegate identity to the parent host; never retain this transaction
+    // facade in the parent's Block map.
     const block = (id: string): Block => this.block(id)
-    // The TypeTagger convenience writes (`addType` & co.) open their own
-    // txs through the tagger's construction-captured host — the REAL
-    // repo — so on the facade they would silently escape the group and
-    // split it. A facade-hosted tagger (TypeTagger is a stateless
-    // wrapper; the facade satisfies TypeTaggerHost structurally, with
-    // grouped `tx`) keeps the documented "helpers join by being handed
-    // the facade" contract true for them. The `*InTx` variants write
-    // into a caller-provided tx and need no override.
+    // Constructor-bound helpers would escape through the parent's tx.
+    // Host the stateless tagger here so its writes use this facade.
     const groupedTagger = new TypeTagger(facade)
     const addType: Repo['addType'] = (blockId, typeId, initialValues = {}) =>
       groupedTagger.addType(blockId, typeId, initialValues)
@@ -2026,17 +2038,11 @@ export class Repo {
       groupedTagger.toggleType(blockId, typeId)
     const setBlockTypes: Repo['setBlockTypes'] = (blockId, typeIds) =>
       groupedTagger.setBlockTypes(blockId, typeIds)
-    // Shared-state minting, part 2: `runQuery` (the dynamic dispatch
-    // entry point — exactly helper-shaped) would store a LoaderHandle
-    // whose loader and QueryCtx capture the facade into the SHARED
-    // handle store, where every future invalidation-driven re-resolve
-    // would see `ctx.repo` = the long-dead facade. Query resolution is
-    // never group-bound; delegate.
+    // Queries outlive transaction contexts, so their shared handles retain
+    // the parent host rather than this facade.
     const runQuery: Repo['runQuery'] = (name, args) => this.runQuery(name, args)
-    // Deferred-job scheduling captures `this` into shared job queues
-    // that fire long after the group's lifetime — a facade-bound job
-    // would open GROUPED txs minutes later and merge system writes into
-    // the dead entry. Never group-bound; delegate.
+    // Deferred maintenance selects its own runtime when it runs; it must not
+    // inherit this transaction policy.
     const scheduleWorkspaceBackfills: Repo['scheduleWorkspaceBackfills'] = (ws) =>
       this.scheduleWorkspaceBackfills(ws)
     const scheduleWorkspaceRefBackfill: Repo['scheduleWorkspaceRefBackfill'] = (ws) =>
@@ -2047,17 +2053,8 @@ export class Repo {
       this.scheduleReconcileRescan(ws)
     const scheduleReferenceTargetDerivePass: Repo['scheduleReferenceTargetDerivePass'] = (ws) =>
       this.scheduleReferenceTargetDerivePass(ws)
-    // Field-assigning members: run with the facade as `this`, the
-    // assignment would create a shadow property on the facade and the
-    // real repo would never see it (silent state divergence). Delegate
-    // explicitly. `undo`/`redo` belong here because `_runAndDispatch`
-    // assigns `slowestTx` mid-flight; the sync-observer pair assigns
-    // `syncObserver` (a shadowed stop would strand the real repo with a
-    // disposed observer it believes is live). `setActiveWorkspaceId`
-    // still reassigns `seedMaterializationGeneration` on a switch.
-    // `setActiveLayoutSessionId`'s state moved onto the shared
-    // ClientContext (interior mutation — safe through the chain), but it
-    // stays delegated so the acting-as setter pair keeps one facade shape.
+    // Field-assigning methods run on the parent host, preserving shared state
+    // instead of shadowing it on this facade.
     const setActiveWorkspaceId: Repo['setActiveWorkspaceId'] = (id) =>
       this.setActiveWorkspaceId(id)
     const setActiveLayoutSessionId: Repo['setActiveLayoutSessionId'] = (id) =>
@@ -2078,6 +2075,39 @@ export class Repo {
       setActiveWorkspaceId, setActiveLayoutSessionId, setReadOnly, undo, redo,
       startSyncObserver, stopSyncObserver, resetMetrics,
     })
+  }
+
+  /** Follow-up transactions keep the runtime that scheduled the processor. */
+  private processorFacade(runtime: TransactionRuntime): Repo {
+    const facade = this.transactionFacade((fn, opts) => this.transact(fn, opts, runtime))
+    const blocks = new Map<string, Block>()
+    facade.mutators = new Map(runtime.mutators)
+    // Share invalidation, but never a loader bound to another runtime's host.
+    const querySnapshot = {registry: runtime.queries, cacheScope: `processor:${uuidv4()}`}
+    const query = nameDispatchProxy<QueryProxy>(name => facade.dispatchQuery(name, querySnapshot))
+    facade.runQuery = (name, args) => query[name](args).load()
+    Object.defineProperties(facade, {
+      query: {value: query},
+      types: {value: runtime.types},
+      propertySchemas: {value: runtime.propertySchemas},
+      propertyDefinitions: {value: runtime.propertyDefinitions},
+      typeDefinitions: {value: runtime.typeDefinitions},
+      valuePresetCores: {value: runtime.valuePresets},
+    })
+    facade.propertySchemaResolverFor = workspaceId => propertySchemaResolverForWorkspace(
+      runtime.propertyDefinitionRegistryForWorkspace(workspaceId), workspaceId,
+      runtime.propertySeedNameCounts,
+      runtime.propertySchemaWorkspaceId === null || workspaceId === runtime.propertySchemaWorkspaceId,
+    )
+    facade.snapshotTypeRegistries = () => ({types: runtime.types, propertySchemas: runtime.propertySchemas})
+    // Context-bound blocks stay local; the shared cache must never retain this host.
+    facade.block = id => {
+      let block = blocks.get(id)
+      if (!block) { block = new Block(facade, id); blocks.set(id, block) }
+      return block
+    }
+    facade.undoGroup = async fn => fn(facade.groupedFacade(this.newId()))
+    return facade
   }
 
   private requestedWrites = 0
@@ -2120,13 +2150,7 @@ export class Repo {
     }
   }
 
-  private async _runAndDispatchInner<R>(
-    fn: (tx: Tx) => Promise<R>,
-    opts: RepoTxOptions,
-    {isReplay = false, lockHooks}: RunAndDispatchInternals,
-  ) {
-    const txT0 = performance.now()
-    let result
+  private async captureTransactionRuntime(): Promise<TransactionRuntime> {
     // A workspace pin starts the definition projector asynchronously. Delay
     // active-workspace transactions at the one shared boundary so callers
     // cannot capture declaration-only seed winners during that short window.
@@ -2164,6 +2188,54 @@ export class Repo {
     const capturedTypeDefinitions = this._typeDefinitionRegistry
     const capturedActivePropertyDefinitions = this._propertyDefinitionRegistry
     const capturedPreviousPropertyDefinitions = this._previousPropertyDefinitionRegistry
+    return {
+      queries: this.queries,
+      mutators: this.mutators,
+      processors: this.processors,
+      sameTxProcessors: this.sameTxProcessors,
+      propertySchemas: this._propertySchemas,
+      valuePresets: this._valuePresetCores,
+      contentReferencePrefill: contentReferencePrefillFor(
+        this.facetRuntime?.read(contentReferencePrefillsFacet) ?? [],
+      ),
+      // Same tx-start boundary as `propertySchemas`; a merge needs it to ask
+      // whether the source/destination actually OWN the tokens they look like
+      // they own, which their rows alone cannot answer. Keyed by the TX's
+      // workspace (which `TxImpl` pins from the first write) rather than the
+      // active one — answering from another workspace's registry would report
+      // every local token as unknown and silently disable the ownership gate.
+      typeDefinitionsForWorkspace: workspaceId =>
+        capturedTypeDefinitions?.workspaceId === workspaceId
+          ? capturedTypeDefinitions
+          : null,
+      // Serve the tx's active-at-start workspace, or the retained previous one,
+      // from their frozen snapshots; any other workspace resolves null (fail
+      // closed). Frozen at tx-start so a mid-tx workspace switch can't re-scope
+      // resolution for the workspace the tx is operating on.
+      propertyDefinitionRegistryForWorkspace:
+        workspaceId => registryForWorkspace(
+          capturedActivePropertyDefinitions,
+          capturedPreviousPropertyDefinitions,
+          workspaceId,
+        ),
+      propertySchemaWorkspaceId: readinessWorkspaceId,
+      propertyRegistryInitialized: capturedActivePropertyDefinitions !== null
+        || capturedPreviousPropertyDefinitions !== null,
+      propertySeedNameCounts: this._propertySeedNameCounts,
+      types: this._types,
+      propertyDefinitions: capturedActivePropertyDefinitions,
+      typeDefinitions: capturedTypeDefinitions,
+    }
+  }
+
+  private async _runAndDispatchInner<R>(
+    fn: (tx: Tx) => Promise<R>,
+    opts: RepoTxOptions,
+    {isReplay = false, lockHooks, runtime: capturedRuntime}: RunAndDispatchInternals,
+  ) {
+    const txT0 = performance.now()
+    let result
+    const runtime = capturedRuntime ?? await this.captureTransactionRuntime()
     try {
       result = await runTx({
         db: this.db,
@@ -2181,36 +2253,7 @@ export class Repo {
         newId: this.newId,
         blockIdPolicy: this.blockIdPolicy,
         now: this.now,
-        mutators: this.mutators,
-        processors: this.processors,
-        sameTxProcessors: this.sameTxProcessors,
-        propertySchemas: this._propertySchemas,
-        valuePresets: this._valuePresetCores,
-        contentReferencePrefill: contentReferencePrefillFor(
-          this.facetRuntime?.read(contentReferencePrefillsFacet) ?? [],
-        ),
-        // Same tx-start boundary as `propertySchemas`; a merge needs it to ask
-        // whether the source/destination actually OWN the tokens they look like
-        // they own, which their rows alone cannot answer. Keyed by the TX's
-        // workspace (which `TxImpl` pins from the first write) rather than the
-        // active one — answering from another workspace's registry would report
-        // every local token as unknown and silently disable the ownership gate.
-        typeDefinitionsForWorkspace: workspaceId =>
-          capturedTypeDefinitions?.workspaceId === workspaceId
-            ? capturedTypeDefinitions
-            : null,
-        // Serve the tx's active-at-start workspace, or the retained previous one,
-        // from their frozen snapshots; any other workspace resolves null (fail
-        // closed). Frozen at tx-start so a mid-tx workspace switch can't re-scope
-        // resolution for the workspace the tx is operating on.
-        propertyDefinitionRegistryForWorkspace:
-          workspaceId => registryForWorkspace(
-            capturedActivePropertyDefinitions,
-            capturedPreviousPropertyDefinitions,
-            workspaceId,
-          ),
-        propertySchemaWorkspaceId: this.client.activeWorkspaceId,
-        propertySeedNameCounts: this._propertySeedNameCounts,
+        ...runtime,
         // Undo/redo replays skip the same-tx processor pass so a
         // value-deriving processor can't override `applyRaw`'s exact
         // restore (#187). Post-commit processors still dispatch below.
@@ -2299,6 +2342,7 @@ export class Repo {
       afterCommitJobs: result.afterCommitJobs,
       processors: result.processors,
       propertySchemas: result.propertySchemas,
+      repo: result.workspaceId === null ? this : this.processorFacade(runtime),
     })
     return result
   }
@@ -4932,7 +4976,10 @@ export class Repo {
    *  query's `resolve` with a `QueryCtx` that forwards `depend` to the
    *  handle's `ResolveContext` and exposes `db` / `repo` /
    *  `hydrateBlocks`. */
-  private dispatchQuery(name: string): (args: unknown) => LoaderHandle<unknown> {
+  private dispatchQuery(
+    name: string,
+    snapshot?: {registry: ReadonlyMap<string, AnyQuery>; cacheScope: string},
+  ): (args: unknown) => LoaderHandle<unknown> {
     return (args: unknown) => {
       // Capture the registry snapshot for this handle. The loader (and
       // every `ctx.run` beneath it) resolves against THIS map, so the
@@ -4941,7 +4988,7 @@ export class Repo {
       // the factory on first create, so an existing handle keeps the
       // registry captured at ITS creation — re-keying via the bumped epoch
       // is what binds the next lookup to a new snapshot.
-      const registry = this.queries
+      const registry = snapshot?.registry ?? this.queries
       const q = registry.get(name) ?? registry.get(`core.${name}`)
       if (!q) throw new QueryNotRegisteredError(name)
       const validated = q.argsSchema.parse(args) as never
@@ -4953,7 +5000,7 @@ export class Repo {
       // produces a distinct handle slot for the NEXT lookup of every
       // query — old handles keep serving their captured snapshot and GC
       // once subscribers detach; fresh lookups bind to the new registry.
-      const key = handleKey(`query:${fullName}@${this.queryEpoch}`, validated)
+      const key = handleKey(`query:${fullName}@${snapshot?.cacheScope ?? this.queryEpoch}`, validated)
       return this.handleStore.getOrCreate(key, () => new LoaderHandle({
         store: this.handleStore,
         key,
