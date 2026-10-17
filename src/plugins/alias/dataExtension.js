@@ -1,1 +1,1 @@
-import{NV as e}from"../../../chunks/app-6tjxaoIc.js";export{e as aliasDataExtension};
+import{MV as e}from"../../../chunks/app-CzwJouHi.js";export{e as aliasDataExtension};
