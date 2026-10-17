@@ -274,6 +274,7 @@ type TransactionRuntime = Pick<RunTxParams<unknown>,
   | 'propertyDefinitionRegistryForWorkspace' | 'propertySchemaWorkspaceId'
   | 'propertyRegistryInitialized' | 'propertySeedNameCounts'
 > & {
+  queries: ReadonlyMap<string, AnyQuery>
   types: ReadonlyMap<string, TypeContribution>
   propertyDefinitions: PropertyDefinitionRegistrySnapshot | null
   typeDefinitions: TypeDefinitionRegistrySnapshot | null
@@ -2081,7 +2082,12 @@ export class Repo {
     const facade = this.transactionFacade((fn, opts) => this.transact(fn, opts, runtime))
     const blocks = new Map<string, Block>()
     facade.mutators = new Map(runtime.mutators)
+    // Share invalidation, but never a loader bound to another runtime's host.
+    const querySnapshot = {registry: runtime.queries, cacheScope: `processor:${uuidv4()}`}
+    const query = nameDispatchProxy<QueryProxy>(name => facade.dispatchQuery(name, querySnapshot))
+    facade.runQuery = (name, args) => query[name](args).load()
     Object.defineProperties(facade, {
+      query: {value: query},
       types: {value: runtime.types},
       propertySchemas: {value: runtime.propertySchemas},
       propertyDefinitions: {value: runtime.propertyDefinitions},
@@ -2183,6 +2189,7 @@ export class Repo {
     const capturedActivePropertyDefinitions = this._propertyDefinitionRegistry
     const capturedPreviousPropertyDefinitions = this._previousPropertyDefinitionRegistry
     return {
+      queries: this.queries,
       mutators: this.mutators,
       processors: this.processors,
       sameTxProcessors: this.sameTxProcessors,
@@ -4969,7 +4976,10 @@ export class Repo {
    *  query's `resolve` with a `QueryCtx` that forwards `depend` to the
    *  handle's `ResolveContext` and exposes `db` / `repo` /
    *  `hydrateBlocks`. */
-  private dispatchQuery(name: string): (args: unknown) => LoaderHandle<unknown> {
+  private dispatchQuery(
+    name: string,
+    snapshot?: {registry: ReadonlyMap<string, AnyQuery>; cacheScope: string},
+  ): (args: unknown) => LoaderHandle<unknown> {
     return (args: unknown) => {
       // Capture the registry snapshot for this handle. The loader (and
       // every `ctx.run` beneath it) resolves against THIS map, so the
@@ -4978,7 +4988,7 @@ export class Repo {
       // the factory on first create, so an existing handle keeps the
       // registry captured at ITS creation — re-keying via the bumped epoch
       // is what binds the next lookup to a new snapshot.
-      const registry = this.queries
+      const registry = snapshot?.registry ?? this.queries
       const q = registry.get(name) ?? registry.get(`core.${name}`)
       if (!q) throw new QueryNotRegisteredError(name)
       const validated = q.argsSchema.parse(args) as never
@@ -4990,7 +5000,7 @@ export class Repo {
       // produces a distinct handle slot for the NEXT lookup of every
       // query — old handles keep serving their captured snapshot and GC
       // once subscribers detach; fresh lookups bind to the new registry.
-      const key = handleKey(`query:${fullName}@${this.queryEpoch}`, validated)
+      const key = handleKey(`query:${fullName}@${snapshot?.cacheScope ?? this.queryEpoch}`, validated)
       return this.handleStore.getOrCreate(key, () => new LoaderHandle({
         store: this.handleStore,
         key,

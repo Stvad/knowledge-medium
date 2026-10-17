@@ -105,7 +105,7 @@ export interface ProcessorCtx {
    *  `ctx.repo.tx(...)`. No writer is open at this surface unless the
    *  processor opens one itself, so reads don't queue behind a writer. */
   db: ProcessorReadDb
-  /** Repo host whose transactions and property/type resolution retain the
+  /** Repo host whose transactions, queries, and property/type resolution retain the
    *  originating transaction's runtime, including delayed jobs. Current client
    *  read-only mode still applies. Read queries observe current committed rows. */
   repo: Repo

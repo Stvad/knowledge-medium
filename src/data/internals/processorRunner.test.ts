@@ -24,16 +24,18 @@
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import {z} from 'zod'
 import {
   ChangeScope,
   type AnyPostCommitProcessor,
   seedProperty,
+  defineQuery,
 } from '@/data/api'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '../repo'
-import { definitionSeedsFacet, postCommitProcessorsFacet } from '../facets'
+import { definitionSeedsFacet, postCommitProcessorsFacet, queriesFacet } from '../facets'
 import {aliasesProp, hasBlockType} from '../properties'
 
 const WS = 'ws-1'
@@ -423,6 +425,90 @@ describe('ProcessorRunner — originating registry context', () => {
         .rejects.toThrow(/workspace registry.*not loaded/i)
     } finally {
       release()
+      errors.mockRestore()
+    }
+  })
+
+  it.each([
+    ['proxy', 'removed'], ['runQuery', 'removed'],
+    ['proxy', 'replaced'], ['runQuery', 'replaced'],
+    ['proxy', 'unchanged'], ['runQuery', 'unchanged'],
+  ] as const)('keeps %s queries on the originating runtime when live queries are %s', async (api, change) => {
+    const {repo} = env
+    repo.setActiveWorkspaceId(WS)
+    await repo.tx(tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'initial'}),
+      {scope: ChangeScope.BlockDefault})
+    const original = repo.propertySchemaResolverFor(WS).resolve(aliasesProp)
+    expect(original.status).toBe('resolved')
+    if (original.status !== 'resolved') throw new Error('missing original registry')
+    const fieldId = original.schema.fieldId
+    const leaf = defineQuery({
+      name: 'test.origin-leaf', argsSchema: z.void(), resultSchema: z.string(),
+      resolve: async (_, ctx) => {
+        ctx.depend({kind: 'row', id: 'src'})
+        const status = ctx.repo.propertySchemaResolverFor(WS).resolveField(fieldId).status
+        return `${status}:${(await ctx.repo.load('src'))?.content}`
+      },
+    })
+    const query = defineQuery({
+      name: 'test.origin-query', argsSchema: z.void(), resultSchema: z.string(),
+      resolve: async (_, ctx) => {
+        ctx.depend({kind: 'row', id: 'src'})
+        await ctx.run('core.children', {id: 'src'})
+        return ctx.repo.runQuery<string>(leaf.name, undefined)
+      },
+    })
+    const kernelQueries = [...repo.facetRuntime!.read(queriesFacet).values()]
+    repo.__setQueriesForTesting([...kernelQueries, leaf, query])
+    const sharedHandle = repo.query[query.name](undefined)
+    expect(await sharedHandle.load()).toBe('resolved:initial')
+    let entered!: () => void
+    let release!: () => void
+    const reading = new Promise<void>(resolve => { entered = resolve })
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    repo.__setProcessorsForTesting([{
+      name: 'test.origin-query-processor',
+      watches: {kind: 'field', table: 'blocks', fields: ['content']},
+      apply: async (event, ctx) => {
+        if (!event.changedRows.some(row => row.id === 'src' && row.after?.content === 'edit')) return
+        entered()
+        await gate
+        const result = await ctx.repo.undoGroup(grouped => api === 'proxy'
+          ? grouped.query[query.name](undefined).load()
+          : grouped.runQuery<string>(query.name, undefined))
+        await ctx.repo.block('src').set(aliasesProp, [result])
+      },
+    }])
+    try {
+      await repo.tx(async tx => {
+        await tx.update('src', {content: 'edit'})
+        if (change === 'replaced') {
+          repo.__setQueriesForTesting([...kernelQueries, leaf, {...query, resolve: async () => 'replacement'}])
+        }
+      }, {scope: ChangeScope.BlockDefault})
+      await reading
+      repo.setActiveWorkspaceId('ws-b')
+      await repo.whenPropertyDefinitionsReady('ws-b')
+      repo.setActiveWorkspaceId('ws-c')
+      await repo.whenPropertyDefinitionsReady('ws-c')
+      expect(repo.propertySchemaResolverFor(WS).resolveField(fieldId).status).toBe('identity-unavailable')
+      if (change === 'removed') {
+        repo.__setQueriesForTesting(kernelQueries)
+        await expect(repo.runQuery(query.name, undefined)).rejects.toThrow(/no query registered/)
+      } else if (change === 'replaced') {
+        expect(await repo.runQuery(query.name, undefined)).toBe('replacement')
+      } else {
+        sharedHandle.invalidate()
+        expect(await sharedHandle.load()).toBe('identity-unavailable:edit')
+      }
+      release()
+      await repo.awaitProcessors()
+      expect(errors).not.toHaveBeenCalled()
+      expect((await repo.load('src'))!.properties[aliasesProp.name]).toEqual(['resolved:edit'])
+    } finally {
+      release()
+      await repo.awaitProcessors()
       errors.mockRestore()
     }
   })
