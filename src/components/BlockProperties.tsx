@@ -28,7 +28,6 @@ import { AddPropertyForm } from './propertyPanel/AddPropertyForm'
 import {
   addProperty,
   deleteProperty,
-  renameProperty,
   writeProperty,
 } from './propertyPanel/actions'
 import {
@@ -258,14 +257,6 @@ export function BlockProperties({block}: BlockPropertiesProps) {
             )
           })
         }}
-        onRename={(newName) => void renameProperty({
-          block,
-          properties,
-          schemas,
-          uis,
-          oldName: row.name,
-          newName,
-        })}
         onDelete={() => void deleteProperty({
           block,
           properties,
