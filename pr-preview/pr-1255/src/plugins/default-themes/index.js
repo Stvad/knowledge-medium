@@ -1,1 +1,1 @@
-import{Dy as e,Oy as t,Uy as n,Wy as r}from"../../../chunks/app-Dg_NXHRF.js";export{n as DEFAULT_THEME_ID_DARK,r as DEFAULT_THEME_ID_LIGHT,t as defaultThemeContributions,e as defaultThemesPlugin};
+import{Fy as e,Iy as t,Qy as n,Zy as r}from"../../../chunks/app-DSk8vGZl.js";export{r as DEFAULT_THEME_ID_DARK,n as DEFAULT_THEME_ID_LIGHT,t as defaultThemeContributions,e as defaultThemesPlugin};

@@ -1,1 +1,1 @@
-import{Bu as e,Hu as t,Vu as n,zu as r}from"../../../../chunks/app-Dg_NXHRF.js";export{r as BlockRefError,e as MIN_ID_PREFIX,n as resolveBlockRef,t as shortIds};
+import{Gu as e,Ku as t,Wu as n,qu as r}from"../../../../chunks/app-DSk8vGZl.js";export{n as BlockRefError,e as MIN_ID_PREFIX,t as resolveBlockRef,r as shortIds};
