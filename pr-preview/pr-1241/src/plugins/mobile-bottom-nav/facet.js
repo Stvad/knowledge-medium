@@ -1,1 +1,1 @@
-import{J_ as e}from"../../../chunks/app-CcE3YYwc.js";export{e as mobileBottomNavItemsFacet};
+import{J_ as e}from"../../../chunks/app-DzzpbsOx.js";export{e as mobileBottomNavItemsFacet};

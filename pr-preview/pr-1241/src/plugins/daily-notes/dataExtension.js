@@ -1,1 +1,1 @@
-import{Jz as e}from"../../../chunks/app-CcE3YYwc.js";export{e as dailyNotesDataExtension};
+import{Jz as e}from"../../../chunks/app-DzzpbsOx.js";export{e as dailyNotesDataExtension};

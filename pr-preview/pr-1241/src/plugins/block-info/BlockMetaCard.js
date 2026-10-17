@@ -1,1 +1,1 @@
-import{Dd as e}from"../../../chunks/app-CcE3YYwc.js";export{e as BlockMetaCard};
+import{Dd as e}from"../../../chunks/app-DzzpbsOx.js";export{e as BlockMetaCard};
