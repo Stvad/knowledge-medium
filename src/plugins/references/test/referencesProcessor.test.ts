@@ -27,7 +27,7 @@ import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { EXTENSION_TYPE } from '@/data/blockTypes'
-import { aliasesProp } from '@/data/properties'
+import { aliasesProp, typesProp } from '@/data/properties'
 import { seedProperty } from '@/data/propertySeeds'
 import { Repo } from '@/data/repo'
 import { aliasSeatSeed, computeAliasSeatId } from '@/data/targets'
@@ -133,6 +133,69 @@ const flush = async (delayMs = 0) => {
 }
 
 describe('parseReferences — basic alias creation', () => {
+  it('finishes a children-backed alias write with its originating definitions after two workspace switches', async () => {
+    const {repo, h} = env
+    await h.db.execute(
+      `INSERT INTO workspaces (id, name, owner_user_id, create_time, update_time,
+        encryption_mode, properties_migration) VALUES (?, 'test', 'user-1', 1, 1, 'none', 'children')`,
+      [WS],
+    )
+    await repo.tx(tx => tx.create({id: 'late-src', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'plain'}),
+      {scope: ChangeScope.BlockDefault})
+    await flush()
+    const expected = [aliasesProp, typesProp].map(schema => {
+      const resolved = repo.propertySchemaResolverFor(WS).resolve(schema)
+      if (resolved.status !== 'resolved') throw new Error('missing originating definition')
+      return {fieldId: resolved.schema.fieldId, content: schema === aliasesProp ? 'LateOrigin' : 'page'}
+    })
+    let entered!: () => void
+    let release!: () => void
+    const reading = new Promise<void>(resolve => { entered = resolve })
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const realQuery = repo.query
+    ;(repo as {query: typeof realQuery}).query = new Proxy(realQuery, {
+      get(target, prop, receiver) {
+        if (prop !== 'aliasLookup') return Reflect.get(target, prop, receiver)
+        return (args: {workspaceId: string; alias: string}) => {
+          const handle = target.aliasLookup(args)
+          if (args.alias !== 'LateOrigin') return handle
+          return {...handle, load: async () => {
+            entered()
+            await gate
+            return handle.load()
+          }}
+        }
+      },
+    })
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      await repo.tx(tx => tx.update('late-src', {content: 'see [[LateOrigin]]'}),
+        {scope: ChangeScope.BlockDefault})
+      await reading
+      repo.setActiveWorkspaceId('ws-next')
+      await repo.whenPropertyDefinitionsReady('ws-next')
+      repo.setActiveWorkspaceId('ws-last')
+      await repo.whenPropertyDefinitionsReady('ws-last')
+      expect(repo.propertySchemaResolverFor(WS).resolve(aliasesProp).status).toBe('identity-unavailable')
+      release()
+      await flush()
+      expect(errors).not.toHaveBeenCalled()
+      const source = await env.read('late-src')
+      expect(JSON.parse(source!.references_json)).toContainEqual(expect.objectContaining({id: aliasId('LateOrigin')}))
+      const children = await h.db.getAll<{fieldId: string; content: string}>(
+        `SELECT f.reference_target_id AS fieldId, v.content FROM blocks f
+         JOIN blocks v ON v.parent_id = f.id
+         WHERE f.parent_id = ? AND f.is_field_form = 1 AND f.deleted = 0 AND v.deleted = 0`,
+        [aliasId('LateOrigin')],
+      )
+      for (const value of expected) expect(children).toContainEqual(value)
+    } finally {
+      release()
+      ;(repo as {query: typeof realQuery}).query = realQuery
+      errors.mockRestore()
+    }
+  })
+
   it('writes [[foo]] → creates alias target + source.references contains it', async () => {
     await env.repo.tx(
       tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'I link to [[foo]]'}),

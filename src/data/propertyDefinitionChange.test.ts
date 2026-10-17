@@ -33,6 +33,7 @@ import { valuePresetCoresFacet } from '@/data/facets'
 import { isGrammarShapedLabel, isRoundTrippableReferenceLabel } from '@/data/referenceBlock'
 import {
   presetConfigProp,
+  blockTypeLabelProp,
   presetIdProp,
   propertyChangeScopeProp,
   propertyNameProp,
@@ -186,6 +187,8 @@ const makeRepo = (extensions?: readonly AnyValuePresetCore[]): Repo => {
   const {repo} = createTestRepo({
     db: sharedDb.db,
     user: {id: 'user-1'},
+    // Reopening this DB must not restart the generated-id sequence.
+    newId: () => crypto.randomUUID(),
     ...(extensions
       ? {extensions: extensions.map(core => valuePresetCoresFacet.of(core, {source: 'test'}))}
       : {}),
@@ -1112,12 +1115,25 @@ describe('codec change', () => {
     await repo.tx(async tx => {
       const definition = await tx.get(FIELD_ID)
       await tx.update(FIELD_ID, {
-        properties: {...definition!.properties, 'test:unrelated': 'note'},
+        properties: {...definition!.properties, [blockTypeLabelProp.name]: 'note'},
       })
     }, {scope: ChangeScope.BlockDefault})
 
     expect((await cell(FIELD_ID))[presetIdProp.name]).toBe(UNLOADABLE_PRESET)
     expect(await cell('p')).toEqual({status: 'done'})
+  })
+
+  it('refuses a raw clear when a definition exists but its codec is unavailable', async () => {
+    await seedWorkspace('children')
+    const {repo, valueRowId} = await withPresetUnloaded()
+
+    await expect(repo.tx(tx => tx.update('p', {properties: {}}),
+      {scope: ChangeScope.BlockDefault})).rejects.toMatchObject({
+      name: 'PropertySchemaIdentityError', reason: 'behavior-unavailable',
+    })
+    expect(await cell('p')).toEqual({status: 'done'})
+    expect(await rowContent(valueRowId)).toBe('done')
+    expect(await isLive(valueRowId)).toBe(true)
   })
 
   it('refuses a rename when NEITHER row builds a codec and consumers exist', async () => {
@@ -2314,11 +2330,11 @@ describe('while the cell-to-children backfill holds this workspace\'s claim', ()
     await repo.tx(async tx => {
       const definition = await tx.get(FIELD_ID)
       await tx.update(FIELD_ID, {
-        properties: {...definition!.properties, 'test:unrelated': 'note'},
+        properties: {...definition!.properties, [blockTypeLabelProp.name]: 'note'},
       })
     }, {scope: ChangeScope.BlockDefault})
 
-    expect((await cell(FIELD_ID))['test:unrelated']).toBe('note')
+    expect((await cell(FIELD_ID))[blockTypeLabelProp.name]).toBe('note')
     expect(await cell('p')).toEqual({status: 'done'})
   })
 })
