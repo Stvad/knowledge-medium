@@ -11,6 +11,7 @@ import {
   CLIENT_SCHEMA_STATEMENTS,
 } from '@/data/internals/clientSchema'
 import { syncedWriteTarget } from '@/data/syncedTableWriteGuard'
+import { POWERSYNC_STUB_TABLES_SQL } from '@/data/test/powerSyncStubTables'
 import { staticDataExtensions } from '@/extensions/staticDataExtensions.js'
 import {
   resolveAnalyzeArmingProbes,
@@ -30,6 +31,7 @@ describe('resolveAnalyzeArmingProbes', () => {
 
   beforeAll(() => {
     db = new DatabaseSync(':memory:')
+    for (const statement of POWERSYNC_STUB_TABLES_SQL) db.exec(statement)
     // `blocks` first: contributed statements index and trigger off it.
     db.exec(CREATE_BLOCKS_TABLE_SQL)
     db.exec(CREATE_BLOCKS_SYNCED_TABLE_SQL)
