@@ -214,6 +214,8 @@ export interface RecentChangeTx {
   at: string
   description: string | null
   changes: BlockChange[]
+  /** Blocks this tx wrote that {@link MAX_LISTED_CHANGES} left out. */
+  omitted?: number
 }
 
 export interface RecentChangesResult {
@@ -227,6 +229,24 @@ export interface RecentChangesResult {
 }
 
 const RECENT_CONTENT_LIMIT = 200
+
+/** Changed blocks one call lists, across all its txs, newest tx first: `limit`
+ *  bounds txs, and one tx (a large append, a subtree delete) can write
+ *  thousands of blocks. Whole blocks are cut, never a block's events, so each
+ *  listed block's net change stays exact. */
+export const MAX_LISTED_CHANGES = 200
+
+/** Every block the page's txs wrote, numbered in page order, then first-write
+ *  order — the order {@link MAX_LISTED_CHANGES} cuts in. */
+const RANKED_BLOCKS_CTE = `
+  WITH page AS (SELECT key AS ord, value AS tx_id FROM json_each(?)),
+  written AS (
+    SELECT r.tx_id, r.block_id, MIN(r.id) AS first_id, page.ord
+      FROM row_events r JOIN page ON page.tx_id = r.tx_id
+     GROUP BY r.tx_id, r.block_id
+  ),
+  ranked AS (SELECT tx_id, block_id, ROW_NUMBER() OVER (ORDER BY ord, first_id) AS n FROM written)
+`
 
 export const recentChanges = async (repo: Repo, input: RecentChangesInput): Promise<RecentChangesResult> => {
   const workspaceId = repo.activeWorkspaceId
@@ -247,11 +267,24 @@ export const recentChanges = async (repo: Repo, input: RecentChangesInput): Prom
     ],
   )
   const page = txs.slice(0, limit)
+  const pageIds = JSON.stringify(page.map(tx => tx.tx_id))
+  const listed = await repo.db.getAll<{tx_id: string; block_id: string}>(
+    `${RANKED_BLOCKS_CTE} SELECT tx_id, block_id FROM ranked WHERE n <= ?`,
+    [pageIds, MAX_LISTED_CHANGES],
+  )
+  const omittedRows = await repo.db.getAll<{tx_id: string; omitted: number}>(
+    `${RANKED_BLOCKS_CTE} SELECT tx_id, COUNT(*) AS omitted FROM ranked WHERE n > ? GROUP BY tx_id`,
+    [pageIds, MAX_LISTED_CHANGES],
+  )
+  const omitted = new Map(omittedRows.map(row => [row.tx_id, row.omitted]))
   const rows = await repo.db.getAll<RowEventRow>(
-    `SELECT tx_id, block_id, kind, before_json, after_json, source, created_at FROM row_events
-      WHERE tx_id IN (SELECT value FROM json_each(?))
-      ORDER BY id`,
-    [JSON.stringify(page.map(tx => tx.tx_id))],
+    `SELECT r.tx_id, r.block_id, r.kind, r.before_json, r.after_json, r.source, r.created_at
+       FROM row_events r
+       JOIN (SELECT json_extract(value, '$[0]') AS tx_id, json_extract(value, '$[1]') AS block_id
+               FROM json_each(?)) k
+         ON k.tx_id = r.tx_id AND k.block_id = r.block_id
+      ORDER BY r.id`,
+    [JSON.stringify(listed.map(block => [block.tx_id, block.block_id]))],
   )
   const visible = await withoutCoveredPropertyStorage(
     repo,
@@ -274,6 +307,7 @@ export const recentChanges = async (repo: Repo, input: RecentChangesInput): Prom
       at: isoAt(tx.created_at),
       description: tx.description,
       changes: changesByTx.get(tx.tx_id) ?? [],
+      ...(omitted.has(tx.tx_id) ? {omitted: omitted.get(tx.tx_id)} : {}),
     })),
   }
 }

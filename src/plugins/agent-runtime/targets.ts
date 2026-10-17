@@ -170,7 +170,10 @@ const liveBlockTarget = async (repo: Repo, id: string, verb: string): Promise<Re
 
 /** Resolve any target, creating a missing page / daily note. That creation
  *  commits before the caller's own write; run both under one `repo.undoGroup`
- *  facade (pass it as `repo`) so they undo together. */
+ *  facade (pass it as `repo`) so they undo together. A ref is trimmed before
+ *  any lookup, so an id differing from another only by surrounding whitespace
+ *  (non-canonical; only sync can carry one) is not reachable as a target —
+ *  accepted rather than given a target syntax of its own. */
 export const resolveAgentTarget = async (
   repo: Repo,
   raw: string,

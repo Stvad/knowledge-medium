@@ -21,6 +21,7 @@ import { createAgentRuntimeContext, executeCommand } from '../commands'
 import type { AgentRuntimeContext } from '../protocol'
 import { resolveAgentTarget, resolveBlockId } from '../targets'
 import { agentTxOptions } from '../agentWrites'
+import { MAX_LISTED_CHANGES } from '../changeHistory'
 import { parseMarkdownToBlocks } from '@/utils/markdownParser.js'
 
 // Passthrough spy, so a test can tell whether a refusal beat the parse.
@@ -377,6 +378,7 @@ interface ChangesOut {
   truncated: boolean
   txs: Array<{
     description: string | null
+    omitted?: number
     changes: Array<{blockId: string, kind: string, changed: string[], content?: {before?: string, after?: string}}>
   }>
 }
@@ -405,6 +407,19 @@ describe('recent-changes', () => {
     expect(out.txs[1].changes.map(change => [change.blockId, change.kind])).toContainEqual(
       [appended.blocks[0].id, 'create'],
     )
+  })
+
+  it('lists at most MAX_LISTED_CHANGES blocks per call, newest tx first, and counts what each tx left out', async () => {
+    await seed([{id: NOTE, content: 'draft'}])
+    const bullets = Array.from({length: MAX_LISTED_CHANGES + 3}, (_, i) => `- item ${i}`).join('\n')
+    await run({type: 'append-markdown', target: NOTE, markdown: bullets})
+    await run({type: 'edit-block', id: NOTE, old: 'draft', new: 'final'})
+
+    const out = await run({type: 'recent-changes', limit: 2}) as ChangesOut
+    expect(out.txs.map(tx => [tx.description, tx.changes.length, tx.omitted])).toEqual([
+      ['agent runtime edit-block', 1, undefined],
+      ['agent runtime append-markdown', MAX_LISTED_CHANGES - 1, 4],
+    ])
   })
 
   it('includeUser adds the user\'s document edits but never UI-state writes', async () => {
