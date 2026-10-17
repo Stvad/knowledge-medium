@@ -34,9 +34,9 @@
  */
 
 import { execFileSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { resolve } from 'node:path'
+import { join, resolve } from 'node:path'
 import { isMainModule } from './is-main-module.mjs'
 import { shellSegmentsWithDepth } from './shell-segments.mjs'
 
@@ -46,6 +46,25 @@ const RESERVED = new Set(['{', '}', '!', 'if', 'then', 'elif', 'else', 'fi', 'wh
 const SUBCOMMANDS = new Set([
   'push', 'save', 'pop', 'apply', 'drop', 'clear', 'list', 'show', 'branch', 'create', 'store',
 ])
+
+/** The shell's tilde expansion of one word: `~` and `~/…` only. */
+const expandTilde = w => (w === '~' ? homedir() : w.startsWith('~/') ? join(homedir(), w.slice(2)) : w)
+
+const DIR_CHANGES = new Set(['cd', 'pushd', 'popd'])
+
+/**
+ * The directory after a cd, pushd or popd. Only a named path is followed; the
+ * forms that move to a directory a static reading cannot know come back as the
+ * shell variable holding it, which callers treat as unresolved.
+ */
+const moveDir = (cdPath, verb, args) => {
+  const [raw] = args.filter(a => !/^-[LPe@]+$/.test(a)) // cd -P / -L options
+  if (verb === 'popd' || (verb === 'pushd' && (raw === undefined || /^[+-]\d+$/.test(raw)))) return '$DIRSTACK'
+  if (raw === '-') return '$OLDPWD'
+  const target = expandTilde(raw ?? '~') // a bare cd goes home
+  // Concatenated, not joined: normalizing `$S/..` would erase the unknown part.
+  return cdPath && !target.startsWith('/') ? `${cdPath}/${target}` : target
+}
 
 /**
  * Walk a command string and yield each git invocation with its shell context:
@@ -85,8 +104,10 @@ export const gitInvocations = cmd => {
       if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) assigns.push(tokens[i])
       i++
     }
-    if (tokens[i] === 'cd' && tokens[i + 1] !== undefined) {
-      cdPath = tokens[i + 1] // same prefix skip as for git: `{ cd /x && …` counts
+    if (DIR_CHANGES.has(tokens[i])) {
+      // same prefix skip as for git: `{ cd /x && …` counts. A relative target
+      // moves from the previous cd, so `cd a && cd b` lands in a/b.
+      cdPath = moveDir(cdPath, tokens[i], tokens.slice(i + 1))
       continue
     }
     if ((tokens[i] || '').replace(/.*\//, '') !== 'git') continue
@@ -95,7 +116,7 @@ export const gitInvocations = cmd => {
     while (i < tokens.length && tokens[i].startsWith('-')) {
       const t = tokens[i]
       if ((t === '-C' || t === '--git-dir' || t === '--work-tree') && tokens[i + 1] !== undefined) {
-        cArgs.push(t, tokens[i + 1])
+        cArgs.push(t, expandTilde(tokens[i + 1]))
         i += 2
       } else if (t.startsWith('--git-dir=') || t.startsWith('--work-tree=')) {
         cArgs.push(t)
@@ -412,13 +433,22 @@ const amendState = (cwd, cArgs, all) => {
   }
 }
 
-const effectiveCwd = (payloadCwd, cdPath) => {
+/**
+ * Directory a git invocation runs in: the payload cwd, moved by an in-command
+ * `cd`. exact=false when the cd target holds an unexpanded variable, in which
+ * case the returned cwd is the payload's and says nothing about the target.
+ */
+export const effectiveCwd = (payloadCwd, cdPath) => {
   if (!cdPath) return { cwd: payloadCwd, exact: true }
   if (cdPath.includes('$')) return { cwd: payloadCwd, exact: false } // unexpanded variable
-  const p =
-    cdPath === '~' ? homedir() : cdPath.startsWith('~/') ? resolve(homedir(), cdPath.slice(2)) : cdPath
-  return { cwd: resolve(payloadCwd, p), exact: true }
+  const cwd = resolve(payloadCwd, cdPath)
+  // A cd that cannot enter its target leaves the shell where it was:
+  // `cd /x || git …` runs here, and `cd /x && git …` never runs at all.
+  return { cwd: existsSync(cwd) ? cwd : payloadCwd, exact: true }
 }
+
+/** The cd or -C/--git-dir/--work-tree value holding an unexpanded variable, or null. */
+export const unresolvedTarget = inv => [inv.cdPath, ...inv.cArgs].find(a => a?.includes('$')) ?? null
 
 const stateFor = (inv, payloadCwd, cache) => {
   const key = `${inv.cdPath ?? ''} ${inv.cArgs.join(' ')}`
@@ -490,8 +520,7 @@ const main = () => {
       // With -i/--include the index rides along, so the comparison still runs
       // (the named files themselves stay exempt below).
       if (inv.paths.length && !inv.include) continue
-      const { cwd, exact } = effectiveCwd(payloadCwd, inv.cdPath)
-      if (!exact || inv.cArgs.some(a => a.includes('$'))) {
+      if (unresolvedTarget(inv)) {
         process.stderr.write(
           `BLOCKED: the cd/-C target before this --amend is not a literal path, so the ` +
             `guard cannot check which worktree's index the amend would commit. AMEND_OK=1 ` +
@@ -499,7 +528,7 @@ const main = () => {
         )
         process.exit(2)
       }
-      const st = amendState(cwd, inv.cArgs, inv.all)
+      const st = amendState(effectiveCwd(payloadCwd, inv.cdPath).cwd, inv.cArgs, inv.all)
       if (!st) continue
       const grown = st.staged.filter(p => !st.prev.has(p) && !inv.paths.includes(p))
       if (grown.length) {
