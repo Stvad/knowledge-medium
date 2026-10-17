@@ -33,3 +33,10 @@ content_path = "./supabase/templates/magic_link.html"
 [storage.buckets.attachments]
 public = false
 file_size_limit = "50MiB"
+
+# The platform's JWT gate also admits the publishable key, so it doesn't
+# authenticate a user; the function checks the caller's session itself
+# (supabase/functions/cors-proxy/proxy.ts). Kept on to turn away anything
+# that isn't even a project credential before the function runs.
+[functions.cors-proxy]
+verify_jwt = true

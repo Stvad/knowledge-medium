@@ -16,6 +16,13 @@ export const supabase = hasSupabaseAuthConfig
     })
   : null
 
+/** Where to `fetch` an edge function directly, for a caller that needs the raw
+ *  response (`functions.invoke` reads the body itself). Null when auth isn't configured. */
+export const edgeFunctionEndpoint = (name: string): {url: string, apiKey: string} | null =>
+  supabaseUrl && supabaseAnonKey
+    ? {url: new URL(`functions/v1/${name}`, `${supabaseUrl.replace(/\/+$/, '')}/`).href, apiKey: supabaseAnonKey}
+    : null
+
 // supabase-js namespaces the persisted session under
 // `sb-<project-ref>-auth-token`, deriving the ref from the URL hostname's
 // first label (see SupabaseClient's `defaultStorageKey`). We recompute it
