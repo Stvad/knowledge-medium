@@ -113,12 +113,24 @@ describe('appendPositionOption', () => {
   it('refuses a digits-only anchor CAC turned into a number, rather than a different id prefix', () => {
     const options = parseAppend(['--after', '01234567'])
     expect(options.after).toBe(1234567)
-    expect(() => appendPositionOption(options)).toThrow(/--after got the number 1234567.*\^1234567/s)
+    let message = ''
+    try { appendPositionOption(options) } catch (error) { message = (error as Error).message }
+    expect(message).toMatch(/--after got the number 1234567/)
+    // The hint must not offer the numberified value back as an id prefix.
+    expect(message).not.toMatch(/\^1234567/)
   })
 
   it('passes a ^-prefixed anchor through as text', () => {
     expect(appendPositionOption(parseAppend(['--before', '^01234567'])))
       .toEqual({position: {kind: 'before', siblingId: '^01234567'}})
+  })
+
+  it.each([
+    [['--after', 'abc', '--after', 'def'], /--after expects a single value/],
+    [['--before', 'abc', '--before', 'def'], /--before expects a single value/],
+    [['--first', '--first'], /--first expects a single value/],
+  ])('refuses a repeated position flag %j rather than joining or dropping it', (argv, refusal) => {
+    expect(() => appendPositionOption(parseAppend(argv))).toThrow(refusal)
   })
 
   it('refuses more than one position flag', () => {

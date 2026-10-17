@@ -69,8 +69,15 @@ export const refuseNumberified = (flag: string, value: unknown): void => {
   if (typeof value !== 'number') return
   throw new Error(
     `${flag} got the number ${value}: the CLI reads a digits-only value as a number, which drops leading zeros. `
-    + `Send it as text with \`kmagent raw '<json>'\`; a block ref can also be written as its printed id prefix (^${value}).`,
+    + `Send it as text with \`kmagent raw '<json>'\`; a block ref can also be written as ^ followed by the id exactly as printed.`,
   )
+}
+
+/** CAC hands back an array for a flag given more than once; joining it would
+ *  send a value nobody typed, and picking one would drop the other. */
+export const refuseRepeated = (flag: string, value: unknown): void => {
+  if (!Array.isArray(value)) return
+  throw new Error(`${flag} expects a single value; got ${JSON.stringify(value)}.`)
 }
 
 /** `append-markdown`'s --first / --after <id> / --before <id> as its
@@ -78,6 +85,7 @@ export const refuseNumberified = (flag: string, value: unknown): void => {
 export const appendPositionOption = (
   options: {first?: unknown, after?: unknown, before?: unknown},
 ): {position?: {kind: 'first'} | {kind: 'after' | 'before', siblingId: string}} => {
+  for (const kind of ['first', 'after', 'before'] as const) refuseRepeated(`--${kind}`, options[kind])
   const given = [options.first === true, options.after !== undefined, options.before !== undefined]
   if (given.filter(Boolean).length > 1) {
     throw new Error('append-markdown takes at most one of --first, --after <id>, --before <id>')

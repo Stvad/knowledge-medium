@@ -913,6 +913,12 @@ const createRuntimeBlock = async (
   // write, instead of surfacing a `tx.create:` rejection from three layers
   // down mid-transaction. Deleting it loses that; it does not open the hole.
   if (explicitId !== undefined) assertCanonicalBlockId(explicitId, 'createBlock')
+  // Before the parent: a [[page]] parent is created when missing, and would
+  // stay behind if the create then failed on a taken id. `tx.create` still
+  // refuses it, should one be taken meanwhile.
+  if (explicitId !== undefined && await repo.db.getOptional('SELECT 1 AS one FROM blocks WHERE id = ?', [explicitId])) {
+    throw new Error(`create-block: block ${explicitId} already exists — nothing was created.`)
+  }
   const references = input.data?.references as BlockReference[] | undefined
 
   if (input.parentId !== undefined) {

@@ -63,7 +63,7 @@ describe('cliInputFrom', () => {
   it('refuses a string flag cac already turned into a number, rather than lose its leading zeros', () => {
     // `--under 00123456` reaches the action as the number 123456.
     expect(() => cliInputFrom(tool('search'), ['x'], {under: 123456}))
-      .toThrow(/--under got the number 123456.*\^123456/)
+      .toThrow(/--under got the number 123456.*\^ followed by the id exactly as printed/)
     expect(() => cliInputFrom(tool('search'), ['x'], {types: ['todo', 123]}))
       .toThrow(/--types got the number 123.*kmagent raw/)
   })

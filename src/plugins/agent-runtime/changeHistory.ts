@@ -248,7 +248,12 @@ const RECENT_CONTENT_LIMIT = 200
  *  change stays exact. */
 export const MAX_LISTED_CHANGES = 200
 
-/** Every block the page's txs wrote, numbered in the order
+/** A row_events snapshot without the stamps every write moves, so a block a
+ *  tx changed and changed back compares equal to where it started. */
+const withoutWriteStamps = (snapshot: string): string =>
+  `json_remove(${snapshot}, '$.updatedAt', '$.userUpdatedAt', '$.updatedBy')`
+
+/** Every block the page's txs changed, numbered in the order
  *  {@link MAX_LISTED_CHANGES} cuts in: real changes before property storage
  *  (recognized field rows and the value rows under them, which the owner's own
  *  line usually covers), then page order, then first-write order. Storage
@@ -262,17 +267,22 @@ const RANKED_BLOCKS_CTE = `
       FROM row_events r JOIN page ON page.tx_id = r.tx_id
      GROUP BY r.tx_id, r.block_id
   ),
+  changed AS (
+    SELECT w.* FROM written w
+      JOIN row_events f ON f.id = w.first_id JOIN row_events l ON l.id = w.last_id
+     WHERE ${withoutWriteStamps('f.before_json')} IS NOT ${withoutWriteStamps('l.after_json')}
+  ),
   storage AS (
     SELECT f.id FROM blocks f
-     WHERE f.id IN (SELECT block_id FROM written) AND ${recognizedFieldRowSql('f')}
+     WHERE f.id IN (SELECT block_id FROM changed) AND ${recognizedFieldRowSql('f')}
     UNION
     SELECT v.id FROM blocks v JOIN blocks f ON f.id = v.parent_id
-     WHERE v.id IN (SELECT block_id FROM written) AND ${recognizedFieldRowSql('f')}
+     WHERE v.id IN (SELECT block_id FROM changed) AND ${recognizedFieldRowSql('f')}
   ),
   ranked AS (
     SELECT tx_id, block_id, first_id, last_id,
            ROW_NUMBER() OVER (ORDER BY block_id IN (SELECT id FROM storage), ord, first_id) AS n
-      FROM written
+      FROM changed
   )
 `
 
@@ -300,13 +310,12 @@ export const recentChanges = async (repo: Repo, input: RecentChangesInput): Prom
     `${RANKED_BLOCKS_CTE} SELECT DISTINCT tx_id FROM ranked WHERE n > ?`,
     [pageIds, ...recognition, ...recognition, MAX_LISTED_CHANGES],
   )).map(row => row.tx_id))
-  // A block's net change in a tx: its first write's before, its last write's
-  // after. One created and hard-deleted in the same tx changed nothing.
+  // A block's net change in a tx: its first write's before, its last write's after.
   const rows = await repo.db.getAll<ChangeRow>(
     `${RANKED_BLOCKS_CTE}
      SELECT ${changeColumnsSql('f', 'l')}
        FROM ranked k JOIN row_events f ON f.id = k.first_id JOIN row_events l ON l.id = k.last_id
-      WHERE k.n <= ? AND NOT (f.before_json IS NULL AND l.after_json IS NULL)
+      WHERE k.n <= ?
       ORDER BY k.first_id`,
     [pageIds, ...recognition, ...recognition, RECENT_CONTENT_LIMIT, RECENT_CONTENT_LIMIT, MAX_LISTED_CHANGES],
   )

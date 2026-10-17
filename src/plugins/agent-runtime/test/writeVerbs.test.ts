@@ -460,6 +460,13 @@ describe('agent write attribution', () => {
     expect(created.parentId).toBe(computeAliasSeatId('Someday', WS, 0))
   })
 
+  it('create-block refuses an explicit id that exists before creating a [[page]] parent', async () => {
+    await seed([{id: NOTE, content: 'taken'}])
+    await expect(run({type: 'create-block', parentId: '[[Fresh]]', content: 'x', data: {id: NOTE}}))
+      .rejects.toThrow(/already exists/)
+    expect(await sharedDb.db.getAll('SELECT block_id FROM block_aliases WHERE alias = ?', ['Fresh'])).toEqual([])
+  })
+
   it('create-block refuses an empty parentId rather than writing a top-level block', async () => {
     await expect(run({type: 'create-block', parentId: '', content: 'loose'})).rejects.toThrow(/empty/)
     expect(await sharedDb.db.getAll('SELECT id FROM blocks WHERE content = ?', ['loose'])).toEqual([])
@@ -504,6 +511,19 @@ describe('recent-changes', () => {
     expect(out.txs[1].changes.map(change => [change.blockId, change.kind])).toContainEqual(
       [appended.blocks[0].id, 'create'],
     )
+  })
+
+  it('lists no change for a block a tx changed and changed back', async () => {
+    await seed([{id: NOTE, content: 'same'}, {id: LONE, content: 'before'}])
+    // Outside any tx, so not listed; the round trip below then moves the stamps.
+    await sharedDb.db.execute('UPDATE blocks SET updated_at = 1, user_updated_at = 1 WHERE id = ?', [NOTE])
+    await repo.tx(async tx => {
+      await tx.update(NOTE, {content: 'detour'})
+      await tx.update(NOTE, {content: 'same'})
+      await tx.update(LONE, {content: 'after'})
+    }, agentTxOptions('update-block'))
+    const out = await run({type: 'recent-changes'}) as ChangesOut
+    expect(out.txs[0].changes.map(change => change.blockId)).toEqual([LONE])
   })
 
   it('clips listed content with the read views\' cut marker', async () => {

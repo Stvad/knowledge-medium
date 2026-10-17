@@ -22,7 +22,7 @@ import {
   viewOutlineCommandSchema,
   viewSearchCommandSchema,
 } from './protocol.js'
-import {refuseNumberified, workspaceAssertion} from './cliOptions.js'
+import {refuseNumberified, refuseRepeated, workspaceAssertion} from './cliOptions.js'
 
 type InputShape = Record<string, z.ZodType>
 export type ToolInput = Record<string, unknown>
@@ -251,9 +251,7 @@ const coerceOption = (spec: CliOptionSpec, value: unknown): unknown => {
     }
     case 'string': {
       if (spec.field === 'workspaceId') return workspaceAssertion(value).workspaceId
-      if (Array.isArray(value)) {
-        throw new Error(`${flag} expects a single value; got ${JSON.stringify(value)}.`)
-      }
+      refuseRepeated(flag, value)
       if (value === 0) return ''
       refuseNumberified(flag, value)
       return String(value)
@@ -266,9 +264,7 @@ const coerceOption = (spec: CliOptionSpec, value: unknown): unknown => {
       return items.map(item => String(item).trim()).filter(item => item !== '')
     }
     case 'spec': {
-      if (Array.isArray(value)) {
-        throw new Error(`${flag} expects a single value; got ${JSON.stringify(value)}.`)
-      }
+      refuseRepeated(flag, value)
       const text = String(value)
       if (spec.keywords.includes(text)) return text
       try {
