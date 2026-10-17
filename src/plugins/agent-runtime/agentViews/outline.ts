@@ -33,7 +33,7 @@ export interface OutlineRow extends ViewRow {
   /** 1 for the root's children. */
   depth: number
   childCount: number
-  /** Children not shown: past `depth`, past the block budget, or collapsed. */
+  /** Children not shown: past `depth`, past either budget, or collapsed. */
   hiddenChildren: number
   collapsed: boolean
 }

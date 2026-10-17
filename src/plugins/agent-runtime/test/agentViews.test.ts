@@ -451,7 +451,7 @@ describe('view-outline', () => {
 
       const text = await view<string>(command)
       const rowLines = text.split('\n').slice(1, 1 + kept)
-      expect(rowLines.map(line => /\^(\w+)  \(\+1 child\)$/.exec(line)?.[1])).toEqual(out.rows.map(row => row.shortId))
+      expect(rowLines.map(line => /\^(\w+) {2}\(\+1 child\)$/.exec(line)?.[1])).toEqual(out.rows.map(row => row.shortId))
       // Counted as printed: the root's line, each row's with its hidden-children
       // note, and every line break; one more row would not have fit.
       const counted = countedChars(text, kept)
