@@ -1,1 +1,1 @@
-import{ix as e}from"../../../chunks/app-DUrPIVVG.js";export{e as todayDailyNoteLanding};
+import{ix as e}from"../../../chunks/app-BJCnBYsr.js";export{e as todayDailyNoteLanding};

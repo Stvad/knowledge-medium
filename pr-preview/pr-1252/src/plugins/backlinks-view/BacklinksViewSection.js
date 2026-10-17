@@ -1,1 +1,1 @@
-import{Xu as e,Zu as t}from"../../../chunks/app-DUrPIVVG.js";export{e as BacklinksViewSection,t as backlinksViewFooterContribution};
+import{Xu as e,Zu as t}from"../../../chunks/app-BJCnBYsr.js";export{e as BacklinksViewSection,t as backlinksViewFooterContribution};
