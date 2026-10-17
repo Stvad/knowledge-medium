@@ -1,1 +1,1 @@
-import{ok as e}from"../../chunks/app-D9XX4azo.js";export{e as ExtensionRenderBoundary};
+import{ak as e}from"../../chunks/app-BA0Uirts.js";export{e as ExtensionRenderBoundary};

@@ -1,1 +1,1 @@
-import{VS as e}from"../../../chunks/app-D9XX4azo.js";export{e as shortcutHelpToggle};
+import{BS as e}from"../../../chunks/app-BA0Uirts.js";export{e as shortcutHelpToggle};

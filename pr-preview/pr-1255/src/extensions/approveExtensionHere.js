@@ -1,1 +1,1 @@
-import{$T as e}from"../../chunks/app-D9XX4azo.js";export{e as approveExtensionHere};
+import{QT as e}from"../../chunks/app-BA0Uirts.js";export{e as approveExtensionHere};

@@ -1,1 +1,1 @@
-import{iM as e,nM as t,rM as n,tM as r}from"../../../chunks/app-D9XX4azo.js";export{r as addProperty,t as deleteProperty,n as renameProperty,e as writeProperty};
+import{eM as e,nM as t,rM as n,tM as r}from"../../../chunks/app-BA0Uirts.js";export{e as addProperty,r as deleteProperty,t as renameProperty,n as writeProperty};

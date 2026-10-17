@@ -1,1 +1,1 @@
-import{KL as e,qL as t}from"../../../chunks/app-D9XX4azo.js";export{e as mergeReferrers,t as wikilinkSourcesByContent};
+import{GL as e,KL as t}from"../../../chunks/app-BA0Uirts.js";export{e as mergeReferrers,t as wikilinkSourcesByContent};
