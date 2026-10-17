@@ -52,6 +52,25 @@ describe('kmagent help', () => {
   }, 20_000)
 })
 
+describe('kmagent arguments', () => {
+  /** Runs a verb against a bridge that is not there: parsing has run by the
+   *  time the call fails, so its refusals are what this shows. */
+  const run = async (...args: string[]): Promise<string> => {
+    const result = await execFileAsync(process.execPath, [cliScript, ...args], {
+      env: {...process.env, AGENT_RUNTIME_URL: 'http://127.0.0.1:9', AGENT_RUNTIME_TOKEN: 'x'},
+    }).catch((error: {stdout: string, stderr: string}) => error)
+    return `${result.stdout}${result.stderr}`
+  }
+
+  it('takes a topic of several words', async () => {
+    expect(await run('data-model', 'daily', 'notes')).not.toMatch(/Unused args/)
+  }, 20_000)
+
+  it('refuses a word a boolean flag swallowed, naming it', async () => {
+    expect(await run('search', '--include-extensions', 'foo', 'bar')).toMatch(/--include-extensions took "foo" as its value/)
+  }, 20_000)
+})
+
 describe('commandSummary', () => {
   it('takes the first sentence, not a dot inside a name or a parenthesis', () => {
     expect(commandSummary('Run SQL (mode: all|get|optional|execute). Refuses a raw write.'))

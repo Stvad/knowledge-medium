@@ -929,7 +929,7 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   },
   'data-model': {
     usage: 'kmagent data-model [<topic id>|all]',
-    description: `The agent-facing data-model guide; read it first when working with a user's data. A short index by default, one section with --topic <id> (${DATA_MODEL_TOPICS.join(', ')}), everything with --topic all.`,
+    description: `The agent-facing data-model guide; read it first when working with a user's data. A short index by default, one section by topic id (${DATA_MODEL_TOPICS.join(', ')}), everything with topic all.`,
     readOnly: true,
   },
   'page': {
@@ -949,9 +949,7 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
     description: 'Full-text search over block content; whole hydrated rows (the agent view is `view-search`).',
     readOnly: true,
   },
-  // The views read what the raw commands above read (the backlinks views
-  // carry the same one-time prefs-block caveat, an open question in #1037),
-  // so they classify the same.
+  // The views read what the raw commands above read, so they classify the same.
   'view-block': {
     usage: 'kmagent get-block <ref> [--max-chars <n>] [--content-offset <n>] [--json]',
     description: 'One block, for reading: its content (truncated past maxChars, with how to continue), breadcrumb, types, decoded properties, child and backlink counts.',

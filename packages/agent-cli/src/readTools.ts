@@ -136,7 +136,7 @@ export const GRAPH_READ_TOOLS: readonly GraphReadTool[] = [
     cli: {verb: 'daily-note', positional: {field: 'date', variadic: true}},
   }),
   wireTool('guide', 'data-model', dataModelCommandSchema, {
-    cli: {verb: 'data-model', alias: 'guide', positional: {field: 'topic', variadic: false, optional: true}},
+    cli: {verb: 'data-model', alias: 'guide', positional: {field: 'topic', variadic: true, optional: true}},
   }),
   sqlQueryTool,
 ]
@@ -250,7 +250,10 @@ const coerceOption = (spec: CliOptionSpec, value: unknown): unknown => {
   const flag = flagOf(spec.field)
   switch (spec.kind) {
     case 'boolean':
-      return typeof value === 'boolean' ? value : Boolean(value)
+      if (typeof value === 'boolean') return value
+      // cac lists a two-word boolean by its camelCased name and the parser
+      // looks it up by the dashed one, so the word after the flag is its value.
+      throw new Error(`${flag} took ${JSON.stringify(String(value))} as its value: put the flag after the arguments.`)
     case 'number': {
       const parsed = Number(value)
       if (!Number.isInteger(parsed)) {
@@ -308,6 +311,12 @@ export const cliInputFrom = (
   const verb = tool.cli?.verb ?? tool.name
   const spec = tool.cli?.positional
   if (spec) {
+    // A word right after a one-word boolean (--json, --raw) comes back as a
+    // number, its leading zeros already gone.
+    const numbered = (Array.isArray(positional) ? positional : [positional]).find(item => typeof item === 'number')
+    if (numbered !== undefined) {
+      throw new Error(`${verb} got ${numbered} as a number, the way the parser reads a word right after a flag: put the flags after the arguments.`)
+    }
     const text = (Array.isArray(positional) ? positional.map(String).join(' ') : String(positional ?? '')).trim()
     if (text) input[spec.field] = text
     else if (!spec.optional) throw new Error(`${verb} requires a <${spec.field}> (see \`kmagent ${verb} --help\`)`)

@@ -91,7 +91,18 @@ describe('cliInputFrom', () => {
     expect(() => cliInputFrom(tool('search'), [], {})).toThrow(/search requires a <query>/)
   })
 
+  it('refuses the words the parser swallows after a boolean flag', () => {
+    // After --json or --raw a word comes back as a number, its leading zeros gone.
+    expect(() => cliInputFrom(tool('search'), [2139], {json: true})).toThrow(/2139.*after the arguments/)
+    expect(() => cliInputFrom(tool('get_block'), 2139, {raw: true})).toThrow(/2139.*after the arguments/)
+    // A two-word boolean takes the next word as its value.
+    expect(() => cliInputFrom(tool('search'), ['bar'], {includeExtensions: 'foo'}))
+      .toThrow(/--include-extensions took "foo" as its value/)
+    expect(cliInputFrom(tool('search'), ['2026'], {includeExtensions: true})).toEqual({query: '2026', includeExtensions: true})
+  })
+
   it('takes an optional positional as the argument or as its option, once', () => {
+    expect(cliInputFrom(tool('guide'), ['daily', 'notes'], {})).toEqual({topic: 'daily notes'})
     expect(cliInputFrom(tool('guide'), 'properties', {})).toEqual({topic: 'properties'})
     expect(cliInputFrom(tool('guide'), undefined, {topic: 'pages'})).toEqual({topic: 'pages'})
     expect(cliInputFrom(tool('guide'), undefined, {})).toEqual({})
