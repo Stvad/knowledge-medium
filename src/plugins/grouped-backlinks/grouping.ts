@@ -31,11 +31,12 @@ export interface GroupedBacklinkGroup {
 const isBlockKind = (kind: GroupedBacklinkCandidate['kind']): boolean =>
   kind === 'ref' || kind === 'root' || kind === 'attribute'
 
-/** Group ids this result gives a synthetic group: every field and type
- *  group's, and the fallback's. A block whose id equals one (sync can deliver
- *  any id, `field:reviewer` included) is not offered as a group, so a
- *  `groupId` names one group and a synthetic group never takes a block's
- *  members or header. */
+/** Group ids a synthetic candidate claims: every field and type candidate's,
+ *  and the fallback's. A block whose id equals one (only sync can deliver an
+ *  id like `field:reviewer`) is not offered as a group, so a `groupId` names
+ *  one group and a synthetic group never takes a block's members or header.
+ *  Accepted: the claim holds even when that synthetic candidate is filtered
+ *  out later, and the block's sources then fall to other groups. */
 const reservedGroupIds = (candidates: readonly GroupedBacklinkCandidate[]): Set<string> => {
   const reserved = new Set([FALLBACK_GROUP_ID])
   for (const candidate of candidates) if (!isBlockKind(candidate.kind)) reserved.add(candidate.groupId)
