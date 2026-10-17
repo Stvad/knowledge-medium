@@ -1,1 +1,1 @@
-import{mT as e,pT as t}from"../../chunks/app-DSk8vGZl.js";export{t as exampleExtensions,e as insertExampleExtensionsUnder};
+import{mT as e,pT as t}from"../../chunks/app-DLiPEFsh.js";export{t as exampleExtensions,e as insertExampleExtensionsUnder};

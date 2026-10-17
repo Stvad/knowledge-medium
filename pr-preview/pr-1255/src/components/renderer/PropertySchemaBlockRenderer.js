@@ -1,1 +1,1 @@
-import{GD as e,WD as t}from"../../../chunks/app-DSk8vGZl.js";export{t as PropertySchemaBlockRenderer,e as PropertySchemaContentRenderer};
+import{GD as e,WD as t}from"../../../chunks/app-DLiPEFsh.js";export{t as PropertySchemaBlockRenderer,e as PropertySchemaContentRenderer};

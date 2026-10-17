@@ -1,1 +1,1 @@
-import{_H as e,gH as t,hH as n,mH as r}from"../../chunks/app-DSk8vGZl.js";export{n as SYNCED_TABLES,r as guardSyncedTableWrites,t as syncedWriteTarget,e as writeTargets};
+import{_H as e,gH as t,hH as n,mH as r}from"../../chunks/app-DLiPEFsh.js";export{n as SYNCED_TABLES,r as guardSyncedTableWrites,t as syncedWriteTarget,e as writeTargets};

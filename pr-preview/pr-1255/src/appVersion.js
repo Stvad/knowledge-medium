@@ -1,1 +1,1 @@
-import{Oa as e}from"../chunks/app-DSk8vGZl.js";export{e as appVersion};
+import{Oa as e}from"../chunks/app-DLiPEFsh.js";export{e as appVersion};

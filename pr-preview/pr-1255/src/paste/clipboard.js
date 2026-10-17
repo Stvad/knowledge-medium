@@ -1,1 +1,1 @@
-import{Vk as e}from"../../chunks/app-DSk8vGZl.js";export{e as readClipboardContent};
+import{Vk as e}from"../../chunks/app-DLiPEFsh.js";export{e as readClipboardContent};
