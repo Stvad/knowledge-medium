@@ -2023,23 +2023,11 @@ export class Repo {
     // `undoGroup` does instead of throwing through the caller.
     const undoGroup = async <R,>(inner: (grouped: Repo) => Promise<R>): Promise<R> =>
       inner(facade)
-    // `block()` on a cache miss mints `new Block(this, id)` into the
-    // repo-wide `blockFacades` identity map. With the facade as `this`
-    // that would cache a facade-bound Block FOREVER — every later
-    // ordinary edit through it (`setContent`, `set`, `delete` route
-    // through `block.repo`) would carry this group's token and merge
-    // into the long-dead group's entry (one cmd-Z would then revert an
-    // unrelated edit plus the whole composite). Mint through the real
-    // repo so shared state only ever holds real-repo Blocks.
+    // Delegate identity to the parent host; never retain this transaction
+    // facade in the parent's Block map.
     const block = (id: string): Block => this.block(id)
-    // The TypeTagger convenience writes (`addType` & co.) open their own
-    // txs through the tagger's construction-captured host — the REAL
-    // repo — so on the facade they would silently escape the group and
-    // split it. A facade-hosted tagger (TypeTagger is a stateless
-    // wrapper; the facade satisfies TypeTaggerHost structurally, with
-    // grouped `tx`) keeps the documented "helpers join by being handed
-    // the facade" contract true for them. The `*InTx` variants write
-    // into a caller-provided tx and need no override.
+    // Constructor-bound helpers would escape through the parent's tx.
+    // Host the stateless tagger here so its writes use this facade.
     const groupedTagger = new TypeTagger(facade)
     const addType: Repo['addType'] = (blockId, typeId, initialValues = {}) =>
       groupedTagger.addType(blockId, typeId, initialValues)
@@ -2049,17 +2037,11 @@ export class Repo {
       groupedTagger.toggleType(blockId, typeId)
     const setBlockTypes: Repo['setBlockTypes'] = (blockId, typeIds) =>
       groupedTagger.setBlockTypes(blockId, typeIds)
-    // Shared-state minting, part 2: `runQuery` (the dynamic dispatch
-    // entry point — exactly helper-shaped) would store a LoaderHandle
-    // whose loader and QueryCtx capture the facade into the SHARED
-    // handle store, where every future invalidation-driven re-resolve
-    // would see `ctx.repo` = the long-dead facade. Query resolution is
-    // never group-bound; delegate.
+    // Queries outlive transaction contexts, so their shared handles retain
+    // the parent host rather than this facade.
     const runQuery: Repo['runQuery'] = (name, args) => this.runQuery(name, args)
-    // Deferred-job scheduling captures `this` into shared job queues
-    // that fire long after the group's lifetime — a facade-bound job
-    // would open GROUPED txs minutes later and merge system writes into
-    // the dead entry. Never group-bound; delegate.
+    // Deferred maintenance selects its own runtime when it runs; it must not
+    // inherit this transaction policy.
     const scheduleWorkspaceBackfills: Repo['scheduleWorkspaceBackfills'] = (ws) =>
       this.scheduleWorkspaceBackfills(ws)
     const scheduleWorkspaceRefBackfill: Repo['scheduleWorkspaceRefBackfill'] = (ws) =>
@@ -2070,17 +2052,8 @@ export class Repo {
       this.scheduleReconcileRescan(ws)
     const scheduleReferenceTargetDerivePass: Repo['scheduleReferenceTargetDerivePass'] = (ws) =>
       this.scheduleReferenceTargetDerivePass(ws)
-    // Field-assigning members: run with the facade as `this`, the
-    // assignment would create a shadow property on the facade and the
-    // real repo would never see it (silent state divergence). Delegate
-    // explicitly. `undo`/`redo` belong here because `_runAndDispatch`
-    // assigns `slowestTx` mid-flight; the sync-observer pair assigns
-    // `syncObserver` (a shadowed stop would strand the real repo with a
-    // disposed observer it believes is live). `setActiveWorkspaceId`
-    // still reassigns `seedMaterializationGeneration` on a switch.
-    // `setActiveLayoutSessionId`'s state moved onto the shared
-    // ClientContext (interior mutation — safe through the chain), but it
-    // stays delegated so the acting-as setter pair keeps one facade shape.
+    // Field-assigning methods run on the parent host, preserving shared state
+    // instead of shadowing it on this facade.
     const setActiveWorkspaceId: Repo['setActiveWorkspaceId'] = (id) =>
       this.setActiveWorkspaceId(id)
     const setActiveLayoutSessionId: Repo['setActiveLayoutSessionId'] = (id) =>
