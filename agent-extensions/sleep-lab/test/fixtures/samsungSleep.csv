@@ -1,0 +1,5 @@
+#com.samsung.health.sleep,,,,com.samsung.health,1.0,,,,,
+com.samsung.health.sleep.start_time,com.samsung.health.sleep.end_time,com.samsung.health.sleep.time_offset,com.samsung.health.sleep.datauuid,efficiency,sleep_score,sleep_duration,sleep_latency,total_rem_duration,total_light_duration
+2026-09-07 08:59:00.000,2026-09-07 16:33:00.000,UTC-0700,ssn-main-1,90.0,87,454,420000,88,210,
+2026-09-07 21:00:00.000,2026-09-07 21:40:00.000,UTC-0700,ssn-nap-1,,,40,-1,,35
+,2026-09-08 06:00:00.000,UTC-0700,ssn-bad-1,90.0,80,400,,,,

@@ -83,3 +83,6 @@ jobs:
       # to the root node_modules/.bin.
       - name: Run Strength Tracker extension checks
         run: pnpm -C agent-extensions/strength-tracker run check
+
+      - name: Run Sleep Lab extension checks
+        run: pnpm -C agent-extensions/sleep-lab run check
