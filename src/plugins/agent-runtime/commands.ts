@@ -2088,6 +2088,14 @@ const resolveRawBlockRef = async (repo: Repo, ref: string, override: unknown): P
   return resolution.id
 }
 
+/** A raw read's target, from a ref; a named workspace must be readable and
+ *  hold the block, as for the raw backlink reads. */
+const resolveRawReadTarget = async (repo: Repo, ref: string, override: unknown): Promise<string> => {
+  const id = await resolveRawBlockRef(repo, ref, override)
+  if (override !== undefined) await resolveBlockWorkspaceId(repo, id, override)
+  return id
+}
+
 interface PageCommandResult {
   query: string
   workspaceId: string
@@ -2342,14 +2350,14 @@ export const executeCommand = async (
     }
 
     case 'get-block':
-      return context.getBlock(await resolveRawBlockRef(
+      return context.getBlock(await resolveRawReadTarget(
         context.repo,
         requireString(command.blockId ?? command.id, 'blockId'),
         command.workspaceId,
       ))
 
     case 'get-subtree':
-      return context.getSubtree(await resolveRawBlockRef(
+      return context.getSubtree(await resolveRawReadTarget(
         context.repo,
         requireString(command.rootId, 'rootId'),
         command.workspaceId,

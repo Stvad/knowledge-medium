@@ -83,7 +83,7 @@ Run `kmagent <command> --help` for per-command details or `kmagent --help` for t
 
 ## MCP Server
 
-`km-mcp` exposes the graph-safe subset of bridge operations as MCP tools. Read tools: `get_block`, `subtree`, `backlinks`, `grouped_backlinks`, `search`, `page`, `daily_note`, `guide` (the data-model guide) and `sql_query` (read-only, rows capped by `maxRows`). They are generated from the same table as the CLI verbs above, so their arguments match the flags, accept the same block refs, and return bounded text (`format: "json"` for the structured view). The server also sends usage instructions to the client. Write tools: `create_block`, `update_block`, `move_block`, `delete_block`, and `restore_block`. It deliberately excludes eval, SQL execute, and extension lifecycle commands.
+`km-mcp` exposes the graph-safe subset of bridge operations as MCP tools. Read tools: `get_block`, `subtree`, `backlinks`, `grouped_backlinks`, `search`, `page`, `daily_note`, `guide` (the data-model guide) and `sql_query` (read-only, rows capped by `maxRows`). They are generated from the same table as the CLI verbs above, so their arguments match the flags and accept the same block refs. The views return bounded text (`format: "json"` for the structured view); `page` and `daily_note` are lookups that return the matched block whole. The server also sends usage instructions to the client. Write tools: `create_block`, `update_block`, `move_block`, `delete_block`, and `restore_block`. It deliberately excludes eval, SQL execute, and extension lifecycle commands.
 
 ```json
 {

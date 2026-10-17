@@ -88,7 +88,8 @@ const sqlQueryTool: GraphReadTool = {
   wireType: 'sql',
   description: 'Run a read-only SQL query (single SELECT/WITH statement) against the client database. '
     + 'Key tables: blocks(id, content, properties_json, parent_id, workspace_id). '
-    + 'Rows are capped at maxRows and long string cells are cut (marked).',
+    + 'Rows are capped at maxRows and long string cells are cut (marked). '
+    + 'Duplicate column names come back suffixed (id, id:1); alias them to tell them apart.',
   shape: sqlQueryShape,
   buildCommand: input => {
     const sql = input.sql as string

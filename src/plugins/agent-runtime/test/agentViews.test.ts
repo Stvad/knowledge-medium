@@ -72,6 +72,14 @@ const create = async (args: {
   }, {scope: ChangeScope.BlockDefault})
 }
 
+/** A `workspaces` row, which a read naming a workspace requires on this device. */
+const knownWorkspace = (id: string) => sharedDb.db.execute(
+  `INSERT OR REPLACE INTO workspaces
+     (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary)
+   VALUES (?, ?, ?, 1, 1, 'none', NULL)`,
+  [id, id, USER.id],
+)
+
 const view = async <T,>(command: Record<string, unknown>): Promise<T> =>
   await executeCommand({commandId: 'v', ...command} as never, context) as T
 
@@ -1354,7 +1362,23 @@ describe('raw commands accept the same refs', () => {
     expect(await executeCommand({commandId: 'r2', type: 'get-block', id: 'not-a-block'}, context)).toBeNull()
   })
 
+  it('refuses a raw read of a block outside the workspace the call names', async () => {
+    await knownWorkspace(WS)
+    await create({id: uuid('e3e3e3e3', 2), content: 'here'})
+    const foreign = uuid('e3e3e3e3', 1)
+    await repo.tx(async tx => {
+      await tx.create({id: foreign, workspaceId: 'ws-2', parentId: null, orderKey: 'a0', content: 'elsewhere', references: []})
+    }, {scope: ChangeScope.BlockDefault})
+    await expect(executeCommand({commandId: 'r', type: 'get-block', id: foreign, workspaceId: WS}, context))
+      .rejects.toThrow(/is in workspace ws-2, not ws-1/)
+    await expect(executeCommand({commandId: 'r', type: 'get-subtree', rootId: foreign, workspaceId: WS}, context))
+      .rejects.toThrow(/is in workspace ws-2, not ws-1/)
+    // Naming no workspace, a raw read by id reaches any of the user's.
+    expect((await executeCommand({commandId: 'r', type: 'get-block', id: foreign}, context) as {id: string}).id).toBe(foreign)
+  })
+
   it('resolves a ref in the workspace the call names', async () => {
+    await knownWorkspace('ws-2')
     const here = uuid('e1e1e1e1', 1)
     const there = uuid('e2e2e2e2', 2)
     await create({id: here, content: 'Shared name', properties: {alias: ['Shared name']}})
