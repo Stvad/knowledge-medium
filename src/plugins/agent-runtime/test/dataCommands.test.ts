@@ -25,6 +25,7 @@ import { dailyNoteBlockId } from '@/plugins/daily-notes/dailyNotes'
 import { keyAtEnd } from '@/data/orderKey'
 import { createAgentRuntimeContext, executeCommand } from '../commands'
 import type { AgentRuntimeContext } from '../protocol'
+import { DATA_MODEL_TOPICS, knownCommandRegistry } from '@knowledge-medium/agent-cli/protocol'
 
 const WS = 'ws-1'
 const USER = {id: 'user-1', name: 'Alice'}
@@ -213,24 +214,43 @@ describe('grouped-backlinks command', () => {
 })
 
 describe('data-model command', () => {
+  const guide = async (topic?: string) =>
+    await executeCommand({commandId: 'dm', type: 'data-model', ...(topic === undefined ? {} : {topic})}, context) as string
+
   it('returns the whole guide markdown for topic all', async () => {
-    const guide = await executeCommand({commandId: 'dm-1', type: 'data-model', topic: 'all'}, context)
-    expect(typeof guide).toBe('string')
-    expect(guide).toContain('block_references')
-    expect(guide).toContain('grouped-backlinks')
-    expect(guide).toContain('source_field')
+    const all = await guide('all')
+    expect(all).toContain('block_references')
+    expect(all).toContain('grouped-backlinks')
+    expect(all).toContain('source_field')
   })
 
   it('answers with an index of its topics by default, and one section per topic', async () => {
-    const index = await executeCommand({commandId: 'dm-2', type: 'data-model'}, context) as string
-    const all = await executeCommand({commandId: 'dm-3', type: 'data-model', topic: 'all'}, context) as string
-    expect(index).toContain('`types-properties` — Types & properties')
-    expect(index.length).toBeLessThan(all.length / 5)
-    const section = await executeCommand({commandId: 'dm-4', type: 'data-model', topic: 'types-properties'}, context) as string
+    const index = await guide()
+    expect(index).toContain('`properties` — Types & properties')
+    expect(index.length).toBeLessThan((await guide('all')).length / 5)
+    const section = await guide('properties')
     expect(section.startsWith('## Types & properties')).toBe(true)
     expect(section).not.toContain('## Lower-level access')
-    await expect(executeCommand({commandId: 'dm-5', type: 'data-model', topic: 'nope'}, context))
-      .rejects.toThrow(/No guide topic "nope"\. Topics: everything-is-a-block/)
+  })
+
+  it('indexes exactly the topics the command registry lists', async () => {
+    const indexed = [...(await guide()).matchAll(/^- `([^`]+)` — /gm)].map(match => match[1])
+    expect(indexed).toEqual([...DATA_MODEL_TOPICS])
+    expect(knownCommandRegistry['data-model'].description).toContain(`(${indexed.join(', ')})`)
+  })
+
+  it('reads the section a guessed topic plainly means, and the index for any other guess', async () => {
+    const byName = await guide('Page')
+    expect(byName).toMatch(/^\(No topic "Page"; reading `pages`\.\)\n\n## Pages, aliases/)
+    expect(await guide('property')).toMatch(/^\(No topic "property"; reading `properties`\.\)/)
+    const byText = await guide('done-status')
+    expect(byText).toMatch(/^\(No topic "done-status"; reading `block-kinds`\.\)\n\n## Other block kinds/)
+
+    // Two headings name backlinks, and so does more than one section's text.
+    const ambiguous = await guide('backlinks')
+    expect(ambiguous.startsWith('No topic "backlinks".\n\n# Knowledge Medium')).toBe(true)
+    expect(ambiguous).toContain('`grouped-backlinks` — ')
+    expect((await guide('nope')).startsWith('No topic "nope".\n\n# Knowledge Medium')).toBe(true)
   })
 })
 

@@ -508,7 +508,7 @@ export const describeRuntimeSummary = async (
         command: 'pnpm agent search <query> --workspace <id>  # every read verb; the views (get-block, subtree, backlinks, search) need an app tab with it open, page / daily-note / --raw / sql do not',
       },
       {
-        need: "Understand the data model (blocks, references, pages vs daily-notes, backlinks vs grouped-backlinks, source_field, done-status, deep-links) before reading or writing a user's data",
+        need: "Understand the data model (blocks, pages, daily notes, references, backlinks, types and properties) before reading or writing a user's data",
         command: 'pnpm agent data-model  # an index of topics; --topic <id> reads one, --topic all everything',
       },
       {

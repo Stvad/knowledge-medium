@@ -380,6 +380,13 @@ export const groupedBacklinksCommandSchema = z.looseObject({
   ...commandIdField,
 })
 
+/** The data-model guide's topic ids in its reading order. The app's guide
+ *  tags each of its sections with one, and a test holds the two lists equal. */
+export const DATA_MODEL_TOPICS = [
+  'blocks', 'pages', 'daily-notes', 'references', 'grouped-backlinks', 'block-kinds', 'properties', 'queries', 'sql',
+] as const
+export type DataModelTopic = typeof DATA_MODEL_TOPICS[number]
+
 /** The agent-facing data-model guide: an index, one topic, or all of it. */
 export const dataModelCommandSchema = z.looseObject({
   type: z.literal('data-model'),
@@ -925,7 +932,7 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   },
   'data-model': {
     usage: 'kmagent data-model [--topic <id>|all]',
-    description: "The agent-facing data-model guide (blocks, references, pages/daily-notes, backlinks vs grouped-backlinks, source_field, done-status, deep-links): a short index by default, one section with --topic <id>, everything with --topic all. Read it first when working with a user's data.",
+    description: `The agent-facing data-model guide: a short index by default, one section with --topic <id> (${DATA_MODEL_TOPICS.join(', ')}), everything with --topic all. Read it first when working with a user's data.`,
     readOnly: true,
   },
   'page': {

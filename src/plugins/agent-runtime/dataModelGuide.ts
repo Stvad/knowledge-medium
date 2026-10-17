@@ -1,21 +1,24 @@
-/** Agent-facing orientation to Knowledge Medium's data model, surfaced
- *  through the bridge CLI so a fresh agent can learn the model without
- *  reverse-engineering it from source. Reachable three ways:
- *    - `pnpm agent data-model`            (prints this, rendered)
- *    - `pnpm agent describe-runtime --guide data-model`
- *    - pointed at from `pnpm agent runtime-summary`
- *
- *  Keep this in sync with the real schema/queries if they change — it is
- *  the canonical agent-facing description of the model. Plain markdown so
- *  the dedicated verb can print it verbatim. */
-export const DATA_MODEL_GUIDE = `# Knowledge Medium — data model (for agents)
+import type { DataModelTopic } from '@knowledge-medium/agent-cli/protocol'
+
+const GUIDE_INTRO = `# Knowledge Medium — data model (for agents)
 
 Mental model: this is broadly **Roam-like** — an outliner of blocks, where
 pages, daily notes, and "linked references" (backlinks) work about how you'd
 expect from Roam. That analogy is just a head start; the specifics below are
 what's actually true here.
+`
 
-## Everything is a block
+interface GuideSection {
+  topic: DataModelTopic
+  text: string
+}
+
+/** The guide's sections in reading order, each tagged with the topic id an
+ *  agent passes to read it alone. */
+const GUIDE_SECTIONS: GuideSection[] = [
+  {
+    topic: 'blocks',
+    text: `## Everything is a block
 
 There is one node type. \`blocks\` is the universal table:
 
@@ -50,8 +53,11 @@ re-order siblings with \`localeCompare\` (case-folds → inverts the order) or b
 numeric coercion (it is not a number). And you rarely need to: \`subtree\`,
 \`children\`, and the children-ordered queries already return rows in correct
 \`(order_key, id)\` order — **preserve the order you're given; don't re-sort.**
-
-## Pages, aliases, and finding them by name
+`,
+  },
+  {
+    topic: 'pages',
+    text: `## Pages, aliases, and finding them by name
 
 - A **page** is a block with type \`page\` (usually \`parent_id IS NULL\`); its
   title is its \`content\`.
@@ -65,8 +71,11 @@ numeric coercion (it is not a number). And you rarely need to: \`subtree\`,
 - To find a page by name use \`pnpm agent page <name>\` (exact alias hit +
   substring candidates) — don't scan \`content\`. Pages + aliases are the most
   common things in the graph.
-
-## Daily notes & dates
+`,
+  },
+  {
+    topic: 'daily-notes',
+    text: `## Daily notes & dates
 
 A **daily note** is a page with types \`daily-note, page\`, nested under a
 \`Journal\` page. Its title/\`content\` is the human date ("June 17th, 2026") and
@@ -77,8 +86,11 @@ typed page. Daily-note block ids are deterministic from workspace + ISO date.)
 - \`pnpm agent daily-note <date>\` resolves \`today\` | \`yesterday\` | an ISO date |
   the literal title | natural language ("next monday") to the daily-note
   block (and tells you whether it exists yet).
-
-## References, \`source_field\`, and backlinks
+`,
+  },
+  {
+    topic: 'references',
+    text: `## References, \`source_field\`, and backlinks
 
 When block S references block T, you get a \`block_references\` row with
 \`source_id = S\`, \`target_id = T\`. The **\`source_field\`** says *how*:
@@ -98,8 +110,11 @@ do **not** filter them by \`created_at\` — that gives the wrong set.
   and — for a block that is only a link — its parent's text and first child.
   \`--raw\` returns every backlink hydrated (id, content, types, \`sourceFields\`,
   deep-link).
-
-## Grouped backlinks (the grouped-references view)
+`,
+  },
+  {
+    topic: 'grouped-backlinks',
+    text: `## Grouped backlinks (the grouped-references view)
 
 The grouped view takes a **target**, finds its backlinks, then groups each
 backlink by the references of the backlink itself **and every ancestor up its
@@ -122,8 +137,11 @@ enrichment. ("What context is each reference in?")
 \`grouped-backlinks\` also takes \`--grouping user\` (default; the user's real
 config, matches the UI) | \`none\` (empty — generic groups dominate, can
 mislead) | \`'<json>'\`.
-
-## Other block kinds you'll meet
+`,
+  },
+  {
+    topic: 'block-kinds',
+    text: `## Other block kinds you'll meet
 
 The graph is more than pages. The common typed blocks (by frequency):
 
@@ -140,8 +158,11 @@ The graph is more than pages. The common typed blocks (by frequency):
   from those sources. **map**, **panel**/**panel-stack** (saved layouts).
 - **archived** is a property (\`archived: true\`), not a type — archived blocks
   still exist and are returned by queries unless you filter them out.
-
-## Types & properties
+`,
+  },
+  {
+    topic: 'properties',
+    text: `## Types & properties
 
 - **Types are multi-valued** (\`block_types\`, the \`types\` property). A block can
   be \`daily-note, page\` at once.
@@ -164,8 +185,11 @@ The graph is more than pages. The common typed blocks (by frequency):
   (\`data.types\` holds only kernel/plugin CODE types — user-created \`block-type\`
   blocks project into \`data.projected-type-definitions\`, so \`data.types\` alone
   will not show them).
-
-## Finding things — the named queries you can call
+`,
+  },
+  {
+    topic: 'queries',
+    text: `## Finding things — the named queries you can call
 
 These are reachable in \`pnpm agent eval\` via \`repo.query.<name>(args).load()\`.
 The convenience commands above wrap the starred ones (★) and add hydration.
@@ -184,8 +208,11 @@ The convenience commands above wrap the starred ones (★) and add hydration.
 - \`aliasesInWorkspace({workspaceId, filter?})\` → all alias strings.
 
 (Daily-note ids are derived, not queried: \`daily-note <date>\` resolves them.)
-
-## Lower-level access
+`,
+  },
+  {
+    topic: 'sql',
+    text: `## Lower-level access
 
 - \`pnpm agent get-block <ref>\` — one block: content (cut past \`--max-chars\`,
   continued with \`--content-offset\`), breadcrumb, types, decoded properties,
@@ -209,41 +236,65 @@ The convenience commands above wrap the starred ones (★) and add hydration.
 - \`pnpm agent eval <code>\` — run JS in the app; the named queries above are
   callable directly. The dedicated commands wrap them with config
   resolution + hydration, so prefer them unless you need something custom.
-`
+`,
+  },
+]
 
-/** A guide section's topic id: its heading, slugged. */
-const topicId = (heading: string): string =>
-  heading.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+/** Agent-facing orientation to Knowledge Medium's data model, surfaced
+ *  through the bridge CLI so a fresh agent can learn the model without
+ *  reverse-engineering it from source. Reachable three ways:
+ *    - `pnpm agent data-model`            (an index; `--topic` reads a section)
+ *    - `pnpm agent describe-runtime --guide data-model`  (all of it)
+ *    - pointed at from `pnpm agent runtime-summary`
+ *
+ *  Keep this in sync with the real schema/queries if they change — it is
+ *  the canonical agent-facing description of the model. Plain markdown so
+ *  the dedicated verb can print it verbatim. */
+export const DATA_MODEL_GUIDE = [GUIDE_INTRO, ...GUIDE_SECTIONS.map(section => section.text)].join('\n')
 
-interface GuideSection {
-  id: string
-  heading: string
-  text: string
+const GUIDE_TOPIC_ALL = 'all'
+
+const headingOf = (section: GuideSection): string =>
+  section.text.slice(3, section.text.indexOf('\n')).replace(/`/g, '').trim()
+
+/** Lowercased words with a plural ending dropped, so `page` meets `pages`
+ *  and `query` meets `queries`. */
+const wordsOf = (text: string): string[] =>
+  text.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean).map(word => word.replace(/ies$/, 'y').replace(/s$/, ''))
+
+const fits = (haystack: string, guess: string[]): boolean => {
+  const words = new Set(wordsOf(haystack))
+  return guess.every(word => words.has(word))
 }
 
-const [GUIDE_INTRO, ...SECTION_TEXTS] = DATA_MODEL_GUIDE.split(/\n(?=## )/)
-const GUIDE_SECTIONS: GuideSection[] = SECTION_TEXTS.map(text => {
-  const heading = text.slice(3, text.indexOf('\n')).trim()
-  return {id: topicId(heading), heading, text}
-})
+const only = <T>(matches: T[]): T | undefined => matches.length === 1 ? matches[0] : undefined
 
-export const GUIDE_TOPIC_ALL = 'all'
+/** The one section a guessed topic means: its id, else the only section
+ *  whose id and heading hold every word of the guess, else the only one
+ *  whose text does. */
+const guessSection = (guess: string): GuideSection | undefined => {
+  const words = wordsOf(guess)
+  return only(GUIDE_SECTIONS.filter(section => fits(`${section.topic} ${headingOf(section)}`, words)))
+    ?? only(GUIDE_SECTIONS.filter(section => fits(section.text, words)))
+}
+
+const guideIndex = (): string => {
+  const index = GUIDE_SECTIONS.map(section => `- \`${section.topic}\` — ${headingOf(section)}`)
+  return `${GUIDE_INTRO.trim()}\n\nTopics (read one with topic: <id>, or "${GUIDE_TOPIC_ALL}" for the whole guide):\n${index.join('\n')}\n`
+}
 
 /** The guide as an agent reads it: with no topic, the opening and an index
  *  of its sections, so the whole of it is never the first thing read; a
- *  topic id reads that section, and `all` the whole guide. */
+ *  topic reads that section, and `all` the whole guide. A guess that is no
+ *  id reads the section it plainly means, or the index — never an error,
+ *  since the index is the answer to a topic that does not exist. */
 export const dataModelGuide = (topic?: string): string => {
   const wanted = topic?.trim().toLowerCase()
-  if (!wanted) {
-    const index = GUIDE_SECTIONS.map(section => `- \`${section.id}\` — ${section.heading.replace(/`/g, '')}`)
-    return `${GUIDE_INTRO.trim()}\n\nTopics (read one with topic: <id>, or "${GUIDE_TOPIC_ALL}" for the whole guide):\n${index.join('\n')}\n`
-  }
+  if (!wanted) return guideIndex()
   if (wanted === GUIDE_TOPIC_ALL) return DATA_MODEL_GUIDE
-  const section = GUIDE_SECTIONS.find(candidate => candidate.id === wanted)
-  if (!section) {
-    throw new Error(
-      `No guide topic "${topic}". Topics: ${GUIDE_SECTIONS.map(candidate => candidate.id).join(', ')}, or "${GUIDE_TOPIC_ALL}".`,
-    )
-  }
-  return section.text
+  const exact = GUIDE_SECTIONS.find(section => section.topic === wanted)
+  if (exact) return exact.text
+  const guessed = guessSection(wanted)
+  if (guessed) return `(No topic "${topic}"; reading \`${guessed.topic}\`.)\n\n${guessed.text}`
+  return `No topic "${topic}".\n\n${guideIndex()}`
 }
