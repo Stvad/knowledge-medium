@@ -338,6 +338,28 @@ export const getPluginPrefsBlock = memoizeAsync(
     instanceKey(repo, workspaceId, user.id, 'plugin-prefs', type.id),
 )
 
+/** Deterministic id of a plugin's prefs block — the uuidv5 chain
+ *  `getPluginPrefsBlock` resolves to (user page → Preferences → `type.id`),
+ *  derived without loading or creating anything, for the reason
+ *  `pluginUIStateBlockId` gives. */
+export const pluginPrefsBlockId = (workspaceId: string, userId: string, typeId: string): string =>
+  stateChildBlockId(stateChildBlockId(userPageBlockId(workspaceId, userId), USER_PREFS_PATH_PART), typeId)
+
+/** One plugin preference, read without creating the prefs subtree: the
+ *  stored value, or the schema's default while the user has none. For read
+ *  paths; a settings surface that writes uses `getPluginPrefsBlock`. */
+export const readPluginPref = async <T>(
+  repo: Repo,
+  workspaceId: string,
+  user: User,
+  type: TypeContribution,
+  schema: PropertySchema<T>,
+): Promise<T> => {
+  const id = pluginPrefsBlockId(workspaceId, user.id, type.id)
+  const stored = (await repo.load(id)) ? repo.block(id).peekProperty(schema) : undefined
+  return stored ?? schema.defaultValue
+}
+
 /** Resolve the UI-state block scoped to the current panel context.
  *  In a panel context (`context.panelId`), returns the panel's own
  *  block — per-panel UI state lives directly on it. Outside a panel,

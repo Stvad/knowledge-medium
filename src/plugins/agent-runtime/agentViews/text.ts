@@ -1,5 +1,6 @@
 import { charBoundary, clip, formatCount, neutralizeDisplayText, type Clipped } from '@knowledge-medium/agent-cli/protocol'
 import { tokenizeContentSearchQuery } from '@/data/internals/kernelQueries.js'
+import { parseBlockRefs, parseOutermostReferences } from '@/plugins/references/referenceParser.js'
 
 export { charBoundary, clip, cutMarker, formatCount, type Clipped } from '@knowledge-medium/agent-cli/protocol'
 
@@ -92,8 +93,9 @@ export const snippet = (content: string, query: string, width = SNIPPET_CONTEXT 
   return `${start > 0 ? '…' : ''}${line.slice(start, end)}${end < line.length ? '…' : ''}`
 }
 
-/** Strip link syntax to see whether a block says anything beyond the links
- *  it carries — `[[Page]]`, `#tag`, `#[[Tag]]`, `((id))`. */
+/** Strip link-like syntax — `[[Page]]`, `#tag`, `#[[Tag]]`, `((id))` — to see
+ *  whether a block says anything beyond what it links. A noise heuristic,
+ *  so it is looser than the reference parser {@link isLabel} goes by. */
 export const textBeyondLinks = (content: string): string =>
   content
     .replace(/#?\[\[[^\]]*\]\]/g, ' ')
@@ -102,8 +104,41 @@ export const textBeyondLinks = (content: string): string =>
     .replace(/[\s,.;:—–-]+/g, ' ')
     .trim()
 
+/** What may sit between a label's references: spacing, punctuation, and the
+ *  `#` that makes a wikilink a tag link (`#[[Tag]]`). */
+const LABEL_FILLER = /[\s,.;:—–#-]/g
+
+/** How long a quoted neighbour's line is. */
+const CONTEXT_CHARS = 160
+/** How much of a neighbour's content a context line reads (a cost bound);
+ *  roomy, so collapsing its whitespace rarely leaves less than a line. */
+export const CONTEXT_HEAD_CHARS = CONTEXT_CHARS * 4
+
+/** A neighbour's text as context: one line, ellipsized. It says it is cut,
+ *  not by how much, since only a head was read. */
+export const contextPreview = (head: string): string => ellipsize(oneLine(head), CONTEXT_CHARS)
+
 /** A block that is nothing but references reads as noise on its own (a
  *  backlink list of `[[Page]]` rows says nothing), so views add its parent's
  *  text. */
 export const isReferenceOnly = (content: string): boolean =>
   textBeyondLinks(content).length < 3
+
+/** A label is a block of references and nothing else, at least one, as the
+ *  reference parser reads them (`[[Meeting]]`, `#[[Tag]]`, `((block id))`):
+ *  the head of a record whose lines are its children. A bare `#tag` is text
+ *  here, as it is to backlinks, and an embed (`!((id))`) shows its target's
+ *  content rather than linking to it. */
+export const isLabel = (content: string): boolean => {
+  const spans = [...parseOutermostReferences(content), ...parseBlockRefs(content).filter(ref => !ref.embed)]
+    .sort((a, b) => a.startIndex - b.startIndex)
+  if (spans.length === 0) return false
+  let rest = ''
+  let cursor = 0
+  for (const span of spans) {
+    if (span.startIndex > cursor) rest += content.slice(cursor, span.startIndex)
+    cursor = Math.max(cursor, span.endIndex)
+  }
+  rest += content.slice(cursor)
+  return rest.replace(LABEL_FILLER, '') === ''
+}

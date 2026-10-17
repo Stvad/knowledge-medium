@@ -912,7 +912,7 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   },
   'health': {
     usage: 'kmagent health',
-    description: 'Layout B sync-health snapshot: app-visible block count vs blocks_synced, distinct blocks queued for upload, the materialization backlog, and `syncDivergence` — per workspace, downloaded rows `blocks` does not hold with nothing in flight to deliver them: `unapplied` (still flagged for the drain) and `stranded` (the drain cleared the flag but the rows differ; nothing else reports these), by kind with an example id. Remedy for both: `rematerialize-workspace --scope all` with that workspace active — but not while `rematerializing` is true (a rescan is already repairing those rows; re-read when it finishes), not under `materializability: \'defer\'` (the rescan defers them again until the workspace key or mode resolves), and not for `local-newer`, usually an upload whose echo has not arrived, which the rescan would temporarily revert. Rows a rescan leaves unapplied are counted in its `deferred` / `quarantined` totals. Any `materializability` but `copy` means the workspace was checked on its clear columns only. One read to triage a stuck or unsynced client (healthy = both queues 0, blocks ≈ blocks_synced, syncDivergence empty).',
+    description: 'Sync-health snapshot, one read to triage a stuck or unsynced client. Layout B: app-visible block count vs blocks_synced, distinct blocks queued for upload, the materialization backlog, and `syncDivergence` — per workspace, downloaded rows `blocks` does not hold with nothing in flight to deliver them: `unapplied` (still flagged for the drain) and `stranded` (the drain cleared the flag but the rows differ; nothing else reports these), by kind with an example id. Remedy for both: `rematerialize-workspace --scope all` with that workspace active — but not while `rematerializing` is true (a rescan is already repairing those rows; re-read when it finishes), not under `materializability: \'defer\'` (the rescan defers them again until the workspace key or mode resolves), and not for `local-newer`, usually an upload whose echo has not arrived, which the rescan would temporarily revert. Rows a rescan leaves unapplied are counted in its `deferred` / `quarantined` totals. Any `materializability` but `copy` means the workspace was checked on its clear columns only. Healthy = both queues 0, blocks ≈ blocks_synced, syncDivergence empty.',
     readOnly: true,
   },
   'describe-runtime': {
@@ -994,7 +994,7 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   },
   'recent-changes': {
     usage: 'kmagent recent-changes [--since <ms|iso>] [--limit <n>] [--all]',
-    description: 'Recent agent-bridge writes in this workspace, newest first, with the blocks each changed (content '
+    description: 'Recent agent-bridge writes in this workspace, newest first. Each lists the blocks it changed (content '
       + 'before/after, clipped); --all adds the user\'s own edits here. eval, sql '
       + 'execute and run-action writes are not attributed.',
     readOnly: true,
@@ -1032,27 +1032,22 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   },
   'audit-extension': {
     usage: 'kmagent audit-extension <id|label>',
-    description: 'Audit the DATA an installed extension wrote, against the grain the app rewards: block ids parked in non-ref properties (invisible to backlinks), records buried in a JSON cell, properties written with no registered schema (the fingerprint of a write made while the extension was not running), and declared types no block carries. Complements the install-time source lint, which can only read declarations. Also reports whether the extension is approved / enabled / actually running here.',
-    // Reads only — EXCEPT that resolving the enabled intent goes through
-    // `getPluginPrefsBlock`, which bootstraps the per-user prefs row on a
-    // profile that has never had one. That is a write, so this verb is not
-    // classified read-only rather than quietly breaking a read-only token's
-    // contract.
-    readOnly: false,
+    description: 'Audit the DATA an installed extension wrote, against the grain the app rewards. It flags block ids parked in non-ref properties (invisible to backlinks), records buried in a JSON cell, properties written with no registered schema (the fingerprint of a write made while the extension was not running), and declared types no block carries. Complements the install-time source lint, which can only read declarations. Also reports whether the extension is approved / enabled / actually running here.',
+    readOnly: true,
   },
   'audit-properties': {
     usage: 'kmagent audit-properties [--workspace <id>]',
-    description: 'List every property key present in the workspace\'s live blocks that the registry does NOT resolve — the keys property migration skips silently (propertyChildrenProcessor: no schema → `continue`), so they are the only property data a child-backed workspace cannot carry. Per key: exact cell count, the resolver\'s own reason (nothing declares it, or a definition block exists but is broken), the fix in the order §9 requires, plus sampled blocks and the types they carry (which extension wrote it). Audits the ACTIVE workspace; it refuses one whose registry is not loaded rather than reporting every key as unregistered. Reports its own basis — `syncGap` (staged rows the drain would actually apply — narrower than `agent health`\'s raw staging count, which also counts this device\'s own upload echoes — or the sync layer not settled: downloading, disconnected, or a download error — so the counts are short) and `syncedThrough` (this device\'s last completed sync); an empty list under a non-null `syncGap` means nothing, and a null `syncGap` only rules out work outstanding LOCALLY. Does NOT detect shadowed definitions or seed-name collisions — those still resolve, so no key is listed. Workspace-wide counterpart to `audit-extension`, which only sees blocks carrying one extension\'s declared types.',
+    description: 'List every property key in the workspace\'s live blocks that the registry does NOT resolve. Property migration skips those keys silently (propertyChildrenProcessor: no schema → `continue`), so they are the only property data a child-backed workspace cannot carry. Per key: exact cell count, the resolver\'s own reason (nothing declares it, or a definition block exists but is broken), the fix in the order §9 requires, plus sampled blocks and the types they carry (which extension wrote it). Audits the ACTIVE workspace; it refuses one whose registry is not loaded rather than reporting every key as unregistered. Reports its own basis — `syncGap` (staged rows the drain would actually apply — narrower than `agent health`\'s raw staging count, which also counts this device\'s own upload echoes — or the sync layer not settled: downloading, disconnected, or a download error — so the counts are short) and `syncedThrough` (this device\'s last completed sync); an empty list under a non-null `syncGap` means nothing, and a null `syncGap` only rules out work outstanding LOCALLY. Does NOT detect shadowed definitions or seed-name collisions — those still resolve, so no key is listed. Workspace-wide counterpart to `audit-extension`, which only sees blocks carrying one extension\'s declared types.',
     readOnly: true,
   },
   'run-backfill': {
     usage: 'kmagent run-backfill <backfillId> [--workspace <id>] [--wait <seconds>]',
-    description: 'Run one operator-triggered workspace backfill (currently `properties:cell-to-children`, the properties-as-blocks migration: every registered property cell gains the field and value CHILD blocks it implies, cells untouched). Deliberately not scheduled — the pass uploads source-of-truth rows, so ONE device runs it and every other receives them; a completion claim in synced data records that. Returns `outcome` — the runner\'s own result code; see `OperatorBackfillResult` in src/data/repo.ts for the current set and what each means, rather than a copy here that can drift — plus `undoHistoryCleared`: the pass drops the workspace undo stack whenever it writes, because replaying an entry recorded before it would revert the migration. Refuses to write (outcome `deferred`) while this device is behind the server or still draining synced rows; retry once sync settles. Safe to re-run: it is idempotent per row and resumes from whatever is left to do, so an interrupted run needs no repair.',
+    description: 'Run one operator-triggered workspace backfill. Currently `properties:cell-to-children`, the properties-as-blocks migration: every registered property cell gains the field and value CHILD blocks it implies, cells untouched. Deliberately not scheduled — the pass uploads source-of-truth rows, so ONE device runs it and every other receives them; a completion claim in synced data records that. Returns `outcome` — the runner\'s own result code; see `OperatorBackfillResult` in src/data/repo.ts for the current set and what each means, rather than a copy here that can drift — plus `undoHistoryCleared`: the pass drops the workspace undo stack whenever it writes, because replaying an entry recorded before it would revert the migration. Refuses to write (outcome `deferred`) while this device is behind the server or still draining synced rows; retry once sync settles. Safe to re-run: it is idempotent per row and resumes from whatever is left to do, so an interrupted run needs no repair.',
     readOnly: false,
   },
   'rematerialize-workspace': {
     usage: 'kmagent rematerialize-workspace [--workspace <id>] [--scope unapplied|all] [--wait <seconds>]',
-    description: 'Re-run the sync drain over rows this device downloaded but never applied — the remedy for the durable materialization gap every one-way pass refuses on ("N synced row(s) of this workspace have not reached `blocks` on this device"). Those rows reached the drain, were not applied (workspace not unlocked, mode unresolved, a key-store read that failed, ciphertext that would not decode, or a speculative stamp-0 mint the seed could not vouch for), and had their queue entry consumed — so nothing re-delivers them and waiting never clears them. A DERIVATION pass over LOCAL state: it rebuilds this device\'s `blocks` from rows this device already downloaded, uploads nothing, needs no per-graph claim, does not clear the undo stack, and is safe to run on any device any number of times. `--scope unapplied` (default) re-delivers exactly the rows the refusal counts; `--scope all` re-judges every staged row of the workspace, which is what to use when the flag itself is suspect, at the cost of a full pass. Returns the exact `unappliedBefore`/`unappliedAfter` gap sizes plus the pass\'s own counts and `remainingGap` — the predicate re-asked. A pass that leaves rows unapplied has not failed: its `deferred` / `quarantined` counts say why. Neither is fixed by re-running ALONE — `deferred` needs the workspace materializable first (unlock it, or a key store that reads: a transient key-store failure defers too, and that one a re-run does fix), `quarantined` needs bytes that decode. `reflagged` is the count going the other way — at `--scope all`, a workspace that answers `defer` re-flags rows an earlier drain had cleared, so that scope CAN leave the gap larger (at `--scope unapplied` it is always 0, since every row in that set is flagged already). Two more things to know before running it: prefer a settled sync, because a re-pass can briefly write an older staged row over a local edit that is acked but not yet echoed back (the echo re-asserts it, so it self-heals unless the tab closes inside that window); and the pass occupies this device\'s materialization queue for its whole run, so no synced row reaches `blocks` until it finishes — seconds at `unapplied`, minutes at `all` on a large graph.',
+    description: 'Re-run the sync drain over rows this device downloaded but never applied. It is the remedy for the durable materialization gap every one-way pass refuses on ("N synced row(s) of this workspace have not reached `blocks` on this device"). Those rows reached the drain, were not applied (workspace not unlocked, mode unresolved, a key-store read that failed, ciphertext that would not decode, or a speculative stamp-0 mint the seed could not vouch for), and had their queue entry consumed — so nothing re-delivers them and waiting never clears them. A DERIVATION pass over LOCAL state: it rebuilds this device\'s `blocks` from rows this device already downloaded, uploads nothing, needs no per-graph claim, does not clear the undo stack, and is safe to run on any device any number of times. `--scope unapplied` (default) re-delivers exactly the rows the refusal counts; `--scope all` re-judges every staged row of the workspace, which is what to use when the flag itself is suspect, at the cost of a full pass. Returns the exact `unappliedBefore`/`unappliedAfter` gap sizes plus the pass\'s own counts and `remainingGap` — the predicate re-asked. A pass that leaves rows unapplied has not failed: its `deferred` / `quarantined` counts say why. Neither is fixed by re-running ALONE — `deferred` needs the workspace materializable first (unlock it, or a key store that reads: a transient key-store failure defers too, and that one a re-run does fix), `quarantined` needs bytes that decode. `reflagged` is the count going the other way — at `--scope all`, a workspace that answers `defer` re-flags rows an earlier drain had cleared, so that scope CAN leave the gap larger (at `--scope unapplied` it is always 0, since every row in that set is flagged already). Two more things to know before running it: prefer a settled sync, because a re-pass can briefly write an older staged row over a local edit that is acked but not yet echoed back (the echo re-asserts it, so it self-heals unless the tab closes inside that window); and the pass occupies this device\'s materialization queue for its whole run, so no synced row reaches `blocks` until it finishes — seconds at `unapplied`, minutes at `all` on a large graph.',
     // Writes the local `blocks` table (never `blocks_synced`, never an upload).
     readOnly: false,
   },
@@ -1068,11 +1063,8 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
     // Arbitrary code execution — never read-only.
     readOnly: false,
   },
-  // backlinks / grouped-backlinks resolve the user's backlinks prefs
-  // sub-block, which `pluginPrefsExtension` (src/data/pluginStateExtensions.ts)
-  // bootstraps at idle on every client — so on the live client the bridge
-  // talks to, the resolve path is a pure read. The only write either could
-  // make is that same one-time prefs-block creation, before the bootstrap.
+  // backlinks / grouped-backlinks read the user's prefs with `readPluginPref`,
+  // which creates nothing: both are pure reads.
   'backlinks': {
     usage: "kmagent backlinks <ref> --raw [--filter none|stored|effective|<json>]",
     description: 'Every backlink of a block (blocks whose references point at it), hydrated, unbounded — for programmatic use (the agent view is `view-backlinks`). --filter defaults to none. See `kmagent data-model`.',
@@ -1084,8 +1076,8 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
     readOnly: true,
   },
   'data-model': {
-    usage: 'kmagent data-model [--topic <id>|all]',
-    description: `The agent-facing data-model guide: a short index by default, one section with --topic <id> (${DATA_MODEL_TOPICS.join(', ')}), everything with --topic all. Read it first when working with a user's data.`,
+    usage: 'kmagent data-model [<topic id>|all]',
+    description: `The agent-facing data-model guide; read it first when working with a user's data. A short index by default, one section by topic id (${DATA_MODEL_TOPICS.join(', ')}), everything with topic all.`,
     readOnly: true,
   },
   'page': {
@@ -1105,9 +1097,7 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
     description: 'Full-text search over block content; whole hydrated rows (the agent view is `view-search`).',
     readOnly: true,
   },
-  // The views read what the raw commands above read (the backlinks views
-  // carry the same one-time prefs-block caveat, an open question in #1037),
-  // so they classify the same.
+  // The views read what the raw commands above read, so they classify the same.
   'view-block': {
     usage: 'kmagent get-block <ref> [--max-chars <n>] [--content-offset <n>] [--json]',
     description: 'One block, for reading: its content (truncated past maxChars, with how to continue), breadcrumb, types, decoded properties, child and backlink counts.',

@@ -4,10 +4,11 @@ import { EXTENSION_TYPE } from '@/data/blockTypes'
 import type { BlockSearchFilter } from '@/data/searchFilter'
 import { AGENT_VIEW_DEFAULTS } from '@knowledge-medium/agent-cli/protocol'
 import { searchBlocksAcrossSources } from '@/utils/linkTargetAutocomplete.js'
-import { loadCrumbs } from './context.ts'
+import { CRUMB_ELLIPSIS } from '@/utils/blockCrumbs.js'
+import { loadCrumbs, recordLabels, recordSiblings } from './context.ts'
 import { createPropertyRenderer, formatPropertyPairs, type PropertyLine } from './properties.ts'
 import { displayIds } from './displayIds.ts'
-import { clampInt, crumbLine, joinDisplayLines, loadRoot } from './shared.ts'
+import { clampInt, crumbLine, joinDisplayLines, loadRoot, siblingLines } from './shared.ts'
 import { formatCount, snippet } from './text.ts'
 
 export interface SearchParams {
@@ -17,6 +18,14 @@ export interface SearchParams {
   types?: string[]
   under?: string
   includeExtensions?: boolean
+}
+
+export interface SearchDuplicate {
+  id: string
+  shortId: string
+  /** The last two steps of its breadcrumb; null at the top level, or when
+   *  the breadcrumb was cut before any step. */
+  place: string | null
 }
 
 export interface SearchHit {
@@ -30,9 +39,10 @@ export interface SearchHit {
   /** The first few other blocks with the same text, folded into this hit;
    *  `duplicateCount` is all of them within the fetched window (complete only
    *  when the view's `duplicateCountsComplete` is set). */
-  duplicateIds: string[]
-  duplicateShortIds: string[]
+  duplicates: SearchDuplicate[]
   duplicateCount: number
+  /** Only for a hit under a label: its record's first other lines. */
+  siblings?: string[]
 }
 
 export interface SearchView {
@@ -79,13 +89,15 @@ const resolveTypeIds = (repo: Repo, types: readonly string[]): string[] => {
 }
 
 
-/** Blocks with the same text, in rank order, each group led by its best. */
-const groupIdentical = (blocks: readonly BlockData[]): BlockData[][] => {
+/** Blocks with the same text, in rank order, each group led by its best.
+ *  Lines of different records (blocks under different labels) never fold. */
+const groupIdentical = (blocks: readonly BlockData[], records: ReadonlyMap<string, string>): BlockData[][] => {
   const groups: BlockData[][] = []
   const byKey = new Map<string, BlockData[]>()
   for (const block of blocks) {
     // Exactly identical stored text only: case or spacing can carry meaning (code).
-    const key = block.content
+    const label = records.get(block.id)
+    const key = JSON.stringify(label === undefined ? [block.content] : [label, block.content])
     const group = byKey.get(key)
     if (group) group.push(block)
     else {
@@ -95,6 +107,17 @@ const groupIdentical = (blocks: readonly BlockData[]): BlockData[][] => {
     }
   }
   return groups
+}
+
+/** Where a block is: its breadcrumb's last two steps. One alone can be a
+ *  property's name (a value's crumb ends `Kestrel › status`) or a section
+ *  heading every page repeats. A cut chain's crumbs open with a `…` marker,
+ *  dropped here; a collapsed chain's marker never reaches the last two.
+ *  Accepted: a root block literally named `…` reads as that marker. */
+const placeOf = (breadcrumb: readonly string[] | undefined): string | null => {
+  const crumbs = breadcrumb ?? []
+  const steps = (crumbs[0] === CRUMB_ELLIPSIS ? crumbs.slice(1) : crumbs).slice(-2)
+  return steps.length > 0 ? steps.join(' › ') : null
 }
 
 /** A scope is used by id alone, so only its id and workspace are read. */
@@ -130,26 +153,29 @@ export const buildSearchView = async (
     // A contributed source can answer with a block that has left the
     // workspace; its values would decode with this workspace's registries.
     const inWorkspace = fetched.filter(block => block.workspaceId === workspaceId)
-    return {groups: groupIdentical(inWorkspace), exhausted: fetched.length < window}
+    const records = await recordLabels(repo, inWorkspace, workspaceId)
+    return {groups: groupIdentical(inWorkspace, records), records, exhausted: fetched.length < window}
   }
 
   // Folding identical blocks shrinks the window, so it grows until it holds
   // one distinct hit past this page — or the sources run dry, or the cap.
   const wanted = offset + limit + 1
   let window = Math.min(Math.max(SEARCH_WINDOW, wanted), MAX_WINDOW)
-  let {groups, exhausted} = await fetchWindow(window)
+  let {groups, records, exhausted} = await fetchWindow(window)
   while (groups.length < wanted && !exhausted && window < MAX_WINDOW) {
     window = Math.min(window * 4, MAX_WINDOW)
-    ;({groups, exhausted} = await fetchWindow(window))
+    ;({groups, records, exhausted} = await fetchWindow(window))
   }
 
   const page = groups.slice(offset, offset + limit)
   const shown = page.map(group => group[0])
+  const shownIds = shown.map(block => block.id)
   const duplicateIds = page.flatMap(group => group.slice(1, 1 + MAX_DUPLICATES_SHOWN).map(block => block.id))
-  const [renderer, shortIds, crumbs] = await Promise.all([
+  const [renderer, shortIds, crumbs, siblings] = await Promise.all([
     createPropertyRenderer(repo, shown, 'brief'),
-    displayIds(repo, [...shown.map(block => block.id), ...duplicateIds]),
-    loadCrumbs(repo, shown.map(block => block.id), workspaceId),
+    displayIds(repo, [...shownIds, ...duplicateIds]),
+    loadCrumbs(repo, [...shownIds, ...duplicateIds], workspaceId),
+    recordSiblings(repo, shownIds, records, workspaceId),
   ])
   const end = offset + page.length
   // The listing ends where the window does: no offset reaches past a capped
@@ -164,6 +190,7 @@ export const buildSearchView = async (
       const [block] = group
       const duplicates = group.slice(1, 1 + MAX_DUPLICATES_SHOWN)
       const properties = renderer.view(block)
+      const record = siblings.get(block.id)
       return {
         id: block.id,
         shortId: shortIds.get(block.id) ?? block.id,
@@ -172,9 +199,13 @@ export const buildSearchView = async (
         types: renderer.typeLabels(block),
         properties: properties.visible,
         omittedProperties: properties.omitted,
-        duplicateIds: duplicates.map(duplicate => duplicate.id),
-        duplicateShortIds: duplicates.map(duplicate => shortIds.get(duplicate.id) ?? duplicate.id),
+        duplicates: duplicates.map(duplicate => ({
+          id: duplicate.id,
+          shortId: shortIds.get(duplicate.id) ?? duplicate.id,
+          place: placeOf(crumbs.get(duplicate.id)),
+        })),
         duplicateCount: group.length - 1,
+        ...(record ? {siblings: record} : {}),
       }
     }),
     nextOffset: more ? end : null,
@@ -209,12 +240,15 @@ export const renderSearchView = (view: SearchView): string => {
         ? formatPropertyPairs(hit.properties, hit.omittedProperties)
         : null,
     ].filter(Boolean).join('  ')
-    const unlisted = hit.duplicateCount - hit.duplicateShortIds.length
+    const unlisted = hit.duplicateCount - hit.duplicates.length
+    // `;` between them: a place (a daily note's title) can hold a comma.
+    const listed = hit.duplicates.map(duplicate => `^${duplicate.shortId}${duplicate.place === null ? '' : ` in ${duplicate.place}`}`)
     const duplicates = hit.duplicateCount > 0
-      ? `  (+${formatCount(hit.duplicateCount)}${view.duplicateCountsComplete ? '' : ' or more'} identical: ${hit.duplicateShortIds.map(id => `^${id}`).join(', ')}${unlisted > 0 ? `, …+${formatCount(unlisted)} more` : ''})`
+      ? `  (+${formatCount(hit.duplicateCount)}${view.duplicateCountsComplete ? '' : ' or more'} identical: ${listed.join('; ')}${unlisted > 0 ? `; …+${formatCount(unlisted)} more` : ''})`
       : ''
     lines.push(`${view.offset + index + 1}. ^${hit.shortId}  ${crumbLine(hit.breadcrumb)}${duplicates}`)
     lines.push(`   ${hit.snippet}${meta ? `  ${meta}` : ''}`)
+    lines.push(...siblingLines(hit.siblings))
   })
   if (capNote) lines.push(capNote)
   return joinDisplayLines(lines)
