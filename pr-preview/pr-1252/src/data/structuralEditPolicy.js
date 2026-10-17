@@ -1,0 +1,1 @@
+import{aw as e,ow as t}from"../../chunks/app-CYF92UJi.js";export{e as resolveStructuralEditPolicy,t as structuralEditPolicyForBlock};

@@ -1,0 +1,1 @@
+import{Cm as e,wm as t}from"../../../chunks/app-CYF92UJi.js";export{e as attachmentObjectPath,t as authenticatedObjectUrl};

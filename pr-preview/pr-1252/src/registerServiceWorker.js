@@ -1,0 +1,1 @@
+import{nT as e,rT as t}from"../chunks/app-CYF92UJi.js";export{e as checkForAppUpdate,t as registerServiceWorker};

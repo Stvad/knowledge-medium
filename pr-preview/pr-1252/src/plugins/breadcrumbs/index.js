@@ -1,0 +1,1 @@
+import{$g as e,Qg as t,a_ as n,e_ as r,i_ as i,n_ as a,r_ as o,t_ as s}from"../../../chunks/app-CYF92UJi.js";export{n as BreadcrumbList,a as BreadcrumbRenderer,i as Breadcrumbs,s as PromotableBreadcrumbList,t as breadcrumbRendererContribution,e as breadcrumbsPlugin,o as getBreadcrumbContentPreview,r as usePromotableBreadcrumb};

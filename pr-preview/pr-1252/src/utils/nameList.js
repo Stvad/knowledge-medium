@@ -1,0 +1,1 @@
+import{Dq as e,Eq as t,Tq as n}from"../../chunks/app-CYF92UJi.js";export{n as NAMES_IN_A_SENTENCE,t as describeNames,e as firstFew};

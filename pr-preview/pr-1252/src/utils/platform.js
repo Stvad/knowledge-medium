@@ -1,0 +1,1 @@
+import{hN as e,mN as t}from"../../chunks/app-CYF92UJi.js";export{t as isIOS,e as isMacPlatform};

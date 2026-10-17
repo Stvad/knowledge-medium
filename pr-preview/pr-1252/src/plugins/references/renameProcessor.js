@@ -1,0 +1,1 @@
+import{AI as e,DI as t,MI as n,NI as r,OI as i,jI as a,kI as o}from"../../../chunks/app-CYF92UJi.js";export{t as RENAME_BACKLINKS_PRECEDENCE,i as RENAME_BACKLINKS_PROCESSOR,o as applyRefRewrites,e as renameBacklinksProcessor,a as renameSameTxProcessors,n as replacementFor,r as splitBySurvivingSpan};

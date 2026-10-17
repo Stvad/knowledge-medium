@@ -1,0 +1,1 @@
+import{aT as e,iT as t}from"../chunks/app-CYF92UJi.js";export{t as appUpdate,e as useAppUpdateAvailable};

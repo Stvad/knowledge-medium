@@ -1,0 +1,1 @@
+import{au as e,iu as t}from"../../../chunks/app-CYF92UJi.js";export{t as createWatchEventsRegistry,e as watchEventsRegistry};

@@ -1,0 +1,1 @@
+import{Mw as e,jw as t}from"../../../chunks/app-CYF92UJi.js";export{t as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,e as openExtensionsSettingsAction};

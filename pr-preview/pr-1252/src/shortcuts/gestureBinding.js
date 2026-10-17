@@ -1,0 +1,1 @@
+import{dT as e,fT as t}from"../../chunks/app-CYF92UJi.js";export{e as gestureBindingDescriptor,t as matchesGestureEvent};

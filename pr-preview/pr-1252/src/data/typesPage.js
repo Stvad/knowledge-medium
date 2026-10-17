@@ -1,0 +1,1 @@
+import{J1 as e,Y1 as t}from"../../chunks/app-CYF92UJi.js";export{e as getOrCreateTypesPage,t as typesPageBlockId};

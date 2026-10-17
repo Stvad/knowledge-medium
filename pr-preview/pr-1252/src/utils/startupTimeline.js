@@ -1,0 +1,1 @@
+import{_F as e,dF as t,fF as n,gF as r,hF as i,lF as a,mF as o,pF as s,uF as c}from"../../chunks/app-CYF92UJi.js";export{a as getLastLongTaskEndMs,c as getStartupTimeline,t as hasStartupMark,n as longTasksSupported,s as markStartup,o as markStartupAt,i as onLongTask,r as resetStartupTimeline,e as startStartupObservers};

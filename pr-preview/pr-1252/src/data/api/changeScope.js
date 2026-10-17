@@ -1,0 +1,1 @@
+import{F3 as e,I3 as t,L3 as n,M3 as r,N3 as i,P3 as a,R3 as o,j3 as s,z3 as c}from"../../../chunks/app-CYF92UJi.js";export{s as CHANGE_SCOPE_POLICIES,r as ChangeScope,i as isChangeScope,a as policyForScope,e as scopeAllowedInReadOnly,t as scopeIsUndoable,n as scopePoliciesEquivalent,o as scopeUploadsToServer,c as sourceForScope};
