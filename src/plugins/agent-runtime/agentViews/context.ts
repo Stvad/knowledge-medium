@@ -5,10 +5,15 @@ import { recognizedFieldRowSql } from '@/data/internals/treeQueries.js'
 import { registryRecognitionParams } from '@/data/internals/kernelQueries.js'
 import { aliasesProp } from '@/data/properties.js'
 import { crumbsFromAncestors, type CrumbAncestor } from '@/utils/blockCrumbs.js'
-import { firstAliasSql, textHeadSql } from './text.ts'
+import { CONTEXT_HEAD_CHARS, contextPreview, firstAliasSql, isLabel, textHeadSql } from './text.ts'
 import { propertyNameResolverFor } from '@/utils/propertyValueContext.js'
 
-/** Cost rule for every view: a block the view SHOWS is read whole, as the app
+/** An id-list lookup is written `json_each(?) j CROSS JOIN blocks b`: the
+ *  CROSS JOIN pins the id list as the outer loop. Without table stats the
+ *  planner can drive from a workspace index instead and rescan the list for
+ *  every block in the workspace.
+ *
+ *  Cost rule for every view: a block the view SHOWS is read whole, as the app
  *  reads it to render — the bound is on how many rows, not how big each is.
  *  What a view only quotes (crumbs, context lines, candidates) or counts is
  *  read bounded in SQL (`textHeadSql`, an aggregate), never as whole rows.
@@ -24,7 +29,7 @@ export const loadBlocks = async (
 ): Promise<BlockData[]> => {
   if (ids.length === 0) return []
   const rows = await repo.db.getAll<BlockRow>(
-    `SELECT b.* FROM json_each(?) j JOIN blocks b ON b.id = j.value
+    `SELECT b.* FROM json_each(?) j CROSS JOIN blocks b ON b.id = j.value
       WHERE b.deleted = 0${workspaceId === undefined ? '' : ' AND b.workspace_id = ?'} ORDER BY j.key`,
     workspaceId === undefined ? [JSON.stringify(ids)] : [JSON.stringify(ids), workspaceId],
   )
@@ -184,6 +189,84 @@ export const visibleChildrenLevel = async (
     [...child, JSON.stringify(parentIds), ...child, limit, offset],
   )
   return rows.map(row => ({block: parseBlockRow(row), childCount: row.child_count}))
+}
+
+/** A block's parent as context, or null: sync applies parent ids verbatim,
+ *  so a block can be its own parent, and that is no context of its own. */
+export const contextParentId = (block: Pick<BlockData, 'id' | 'parentId'>): string | null =>
+  block.parentId !== null && block.parentId !== block.id ? block.parentId : null
+
+/** A label longer than this is not judged one. */
+const LABEL_CHARS = 200
+/** What the label lookup reads of a parent at most: LABEL_CHARS of UTF-8.
+ *  Bytes, not characters, because SQLite's text length() stops at a NUL. */
+const LABEL_MAX_BYTES = LABEL_CHARS * 4
+
+/** Each of `blocks` that is a line of a record, mapped to the record's label:
+ *  a parent of links and nothing else, in this workspace (a sync-applied edge
+ *  can cross workspaces) and not a property field row, whose `::((id))` is
+ *  machinery. A line under a label need not say what the record is about. */
+export const recordLabels = async (
+  repo: Repo,
+  blocks: readonly Pick<BlockData, 'id' | 'parentId'>[],
+  workspaceId: string,
+): Promise<Map<string, string>> => {
+  const parentIds = [...new Set(blocks.flatMap(block => contextParentId(block) ?? []))]
+  if (parentIds.length === 0) return new Map()
+  const rows = await repo.db.getAll<{id: string, content: string}>(
+    `SELECT b.id AS id, b.content AS content
+       FROM json_each(?) j CROSS JOIN blocks b ON b.id = j.value
+      WHERE b.deleted = 0 AND b.workspace_id = ? AND b.is_field_form IS NOT 1
+        AND length(CAST(b.content AS BLOB)) <= ${LABEL_MAX_BYTES}`,
+    [JSON.stringify(parentIds), workspaceId],
+  )
+  const labels = new Set(rows
+    .filter(row => row.content.length <= LABEL_CHARS && isLabel(row.content))
+    .map(row => row.id))
+  return new Map(blocks.flatMap(block => {
+    const parentId = contextParentId(block)
+    return parentId !== null && labels.has(parentId) ? [[block.id, parentId] as const] : []
+  }))
+}
+
+/** How many of a record's other lines a row under a label shows. */
+const RECORD_SIBLINGS = 2
+
+/** For each of `ids` that is a line of a record (`records`, from
+ *  {@link recordLabels}), the record's first other lines as context lines in
+ *  sibling order; a block with none to show is absent. Accepted: a sibling of
+ *  only non-ASCII whitespace, which the SQL trim keeps, takes a slot and
+ *  shows nothing. */
+export const recordSiblings = async (
+  repo: Repo,
+  ids: readonly string[],
+  records: ReadonlyMap<string, string>,
+  workspaceId: string,
+): Promise<Map<string, string[]>> => {
+  const pairs = ids.flatMap(id => {
+    const label = records.get(id)
+    return label === undefined ? [] : [[id, label]]
+  })
+  if (pairs.length === 0) return new Map()
+  const chars = CONTEXT_HEAD_CHARS
+  const rows = await repo.db.getAll<{id: string, content: string}>(
+    `SELECT json_extract(pair.value, '$[0]') AS id, ${textHeadSql('c.content', chars)} AS content
+       FROM json_each(?) pair
+       JOIN blocks c ON c.id IN (
+         SELECT s.id FROM blocks s
+          WHERE ${visibleChildOfSql('s', "json_extract(pair.value, '$[1]')")}
+            AND s.id != json_extract(pair.value, '$[0]') AND ${textHeadSql('s.content', chars)} != ''
+          ORDER BY s.order_key, s.id LIMIT ?
+       )
+      ORDER BY pair.key, c.order_key, c.id`,
+    [JSON.stringify(pairs), ...visibleChildParams(repo, workspaceId), RECORD_SIBLINGS],
+  )
+  const siblings = new Map<string, string[]>()
+  for (const row of rows) {
+    const line = contextPreview(row.content)
+    if (line !== '') siblings.set(row.id, [...(siblings.get(row.id) ?? []), line])
+  }
+  return siblings
 }
 
 /** The first visible child of each block, for context on a block that is

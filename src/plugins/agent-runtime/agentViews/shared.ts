@@ -123,6 +123,9 @@ export const loadRoot = async <Root extends RootRow>(
 export const joinDisplayLines = (lines: readonly string[]): string =>
   lines.map(neutralizeDisplayText).join('\n')
 
+export const siblingLines = (siblings: readonly string[] | undefined): string[] =>
+  (siblings ?? []).map(sibling => `   ↳ sibling: ${sibling}`)
+
 /** An empty block still occupies a line; say so rather than print nothing. */
 export const EMPTY_CONTENT = '(empty)'
 

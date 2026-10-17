@@ -62,7 +62,7 @@ export type CrumbAncestor = Pick<
  *  cheap end win is the right trade. */
 export const CRUMB_MAX_SEGMENTS = 4
 
-const CRUMB_ELLIPSIS = '…'
+export const CRUMB_ELLIPSIS = '…'
 
 /** Whether this block has a real alias, i.e. whether `labelForBlockData`
  *  below will return a NAME rather than a line of body text. Mirrors that

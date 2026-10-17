@@ -1150,6 +1150,138 @@ describe('structural edge cases', () => {
 describe('view-backlinks', () => {
   const TARGET = uuid('7a7a7a7a', 1)
 
+  it('reads the user\'s grouping and filter preferences without creating them', async () => {
+    await create({id: TARGET, content: 'Target', properties: {alias: ['Target']}})
+    await create({id: uuid('6d000001', 1), content: 'mention of [[Target]]', references: [{id: TARGET, alias: 'Target'}]})
+    const blockCount = async () => (await sharedDb.db.getAll<{n: number}>('SELECT count(*) AS n FROM blocks'))[0].n
+    const before = await blockCount()
+
+    const grouped = await view<GroupedBacklinksView>({type: 'view-grouped-backlinks', ref: TARGET, format: 'json'})
+    const flat = await view<BacklinksView>({type: 'view-backlinks', ref: TARGET, filter: 'effective', format: 'json'})
+    expect(grouped.total).toBe(1)
+    expect(flat.total).toBe(1)
+    expect(await blockCount()).toBe(before)
+  })
+
+  it('quotes no self-parented label\'s own children as its siblings', async () => {
+    await create({id: TARGET, content: 'Target', properties: {alias: ['Target']}})
+    const label = uuid('6f100001', 1)
+    await create({id: label, content: '[[Target]]', references: [{id: TARGET, alias: 'Target'}]})
+    await create({id: uuid('6f100002', 2), parentId: label, content: 'with [[Target]] account', references: [{id: TARGET, alias: 'Target'}]})
+    await create({id: uuid('6f100003', 3), parentId: label, content: 'child line of the label'})
+    // Sync applies parent ids verbatim, so a block can be its own parent.
+    await sharedDb.db.execute('UPDATE blocks SET parent_id = id WHERE id = ?', [label])
+
+    const out = await view<BacklinksView>({type: 'view-backlinks', ref: TARGET, format: 'json'})
+    expect(out.rows.find(row => row.id === label)).not.toHaveProperty('siblings')
+  })
+
+  it('plans every lookup by an id list with the list as the outer loop', async () => {
+    await create({id: TARGET, content: 'Target', properties: {alias: ['Target']}})
+    const meeting = uuid('6f200001', 1)
+    await create({id: meeting, content: '[[Meeting]]'})
+    await create({id: uuid('6f200002', 2), parentId: meeting, content: 'with [[Target]]', references: [{id: TARGET, alias: 'Target'}]})
+    const lookups: Array<{sql: string, params: unknown[]}> = []
+    await duringReads({
+      before: async (sql, params) => {
+        if (/FROM json_each\(\?\) j\s+(CROSS )?JOIN blocks b/.test(sql)) lookups.push({sql, params: params as unknown[]})
+      },
+    }, async () => {
+      await view({type: 'view-backlinks', ref: TARGET})
+      await view({type: 'view-search', query: 'Target'})
+    })
+    expect(lookups.length).toBeGreaterThan(0)
+    for (const {sql, params} of lookups) {
+      // Without table stats the planner may drive from a workspace index and
+      // rescan the id list for every block in the workspace.
+      const plan = await sharedDb.db.getAll<{detail: string}>(`EXPLAIN QUERY PLAN ${sql}`, params)
+      const first = plan.find(step => /^(SCAN|SEARCH)/.test(step.detail))
+      expect(first?.detail, sql).toMatch(/json_each|\bj\b/)
+    }
+  })
+
+  it('prints no sibling line for a sibling that is only whitespace', async () => {
+    await create({id: TARGET, content: 'Target', properties: {alias: ['Target']}})
+    const meeting = uuid('6f000001', 1)
+    await create({id: meeting, content: '[[Meeting]]'})
+    const line = uuid('6f000002', 2)
+    await create({id: line, parentId: meeting, content: 'with [[Target]]', references: [{id: TARGET, alias: 'Target'}]})
+    await create({id: uuid('6f000003', 3), parentId: meeting, content: '\u00a0\u2003'})
+    await create({id: uuid('6f000004', 4), parentId: meeting, content: 'topic: renewal'})
+
+    const out = await view<BacklinksView>({type: 'view-backlinks', ref: TARGET, format: 'json'})
+    // Accepted: the blank sibling still takes one of the two slots the query reads.
+    expect(out.rows[0].siblings).toEqual(['topic: renewal'])
+  })
+
+  it('gives a source under a label the first other lines of its record', async () => {
+    await create({id: TARGET, content: 'Target', properties: {alias: ['Target']}})
+    const meeting = uuid('6a000001', 1)
+    await create({id: meeting, content: '[[Meeting]]'})
+    const line = uuid('6a000002', 2)
+    await create({id: line, parentId: meeting, content: 'with [[Target]] account team', references: [{id: TARGET, alias: 'Target'}]})
+    await create({id: uuid('6a000003', 3), parentId: meeting, content: '   '})
+    await create({id: uuid('6a000004', 4), parentId: meeting, content: 'topic: contract renewal terms'})
+    await create({id: uuid('6a000005', 5), parentId: meeting, content: `notes: ${'n'.repeat(100_000)}`})
+    await create({id: uuid('6a000006', 6), parentId: meeting, content: 'a third line'})
+    const prose = uuid('6a000007', 7)
+    await create({id: prose, content: 'Discussed the roadmap'})
+    await create({id: uuid('6a000008', 8), parentId: prose, content: 'mention of [[Target]] in prose', references: [{id: TARGET, alias: 'Target'}]})
+    await create({id: uuid('6a000009', 9), parentId: prose, content: 'a line beside it'})
+
+    const out = await view<BacklinksView>({type: 'view-backlinks', ref: TARGET, format: 'json'})
+    const row = out.rows.find(candidate => candidate.id === line)!
+    expect(row.siblings).toHaveLength(2)
+    expect(row.siblings![0]).toBe('topic: contract renewal terms')
+    expect(row.siblings![1]).toMatch(/^notes: n+…$/)
+    expect(row.siblings![1].length).toBeLessThanOrEqual(160)
+    expect(out.rows.find(candidate => candidate.id !== line)).not.toHaveProperty('siblings')
+
+    const text = await view<string>({type: 'view-backlinks', ref: TARGET})
+    expect(text).toContain('   ↳ sibling: topic: contract renewal terms')
+  })
+
+  it('judges a label by all of its text: no reference, words, or links past the length it reads make it a parent', async () => {
+    await create({id: TARGET, content: 'Target', properties: {alias: ['Target']}})
+    const parents = [
+      uuid('6b000001', 1),
+      uuid('6b000002', 2),
+      uuid('6b000003', 3),
+      uuid('6b000004', 4),
+      uuid('6b000005', 5),
+      uuid('6b000006', 6),
+      uuid('6b000007', 7),
+      uuid('6b000008', 8),
+      uuid('6b000009', 9),
+      uuid('6b00000a', 10),
+    ]
+    await create({id: parents[0], content: 'ok'})
+    // 200 characters of links, then words: a parent past that length is no label.
+    await create({id: parents[1], content: `${'[[tag]] '.repeat(25)}then the actual words`})
+    // No reference at all: bare punctuation, and a word.
+    await create({id: parents[2], content: '-'})
+    await create({id: parents[3], content: 'OK:'})
+    // A link plus a short title is a titled parent, not a bare label.
+    await create({id: parents[4], content: '[[Meeting]] Q1'})
+    // Link delimiters the reference parser does not read as references.
+    await create({id: parents[5], content: '[[]]'})
+    await create({id: parents[6], content: '((notes))'})
+    // A bare tag is text here: only wikilinks and block refs are references.
+    await create({id: parents[7], content: '#standup'})
+    // Links only, but 205 characters: past the length a label may have.
+    await create({id: parents[8], content: `${'[[tag]] '.repeat(25)}[[x]]`})
+    // A block embed shows its target's content: no bare link.
+    await create({id: parents[9], content: `!((${TARGET}))`})
+    for (const [index, parent] of parents.entries()) {
+      await create({id: uuid('6b00001' + index, 10 + index), parentId: parent, content: `line ${index} of [[Target]]`, references: [{id: TARGET, alias: 'Target'}]})
+      await create({id: uuid('6b00002' + index, 20 + index), parentId: parent, content: 'a line beside it'})
+    }
+
+    const out = await view<BacklinksView>({type: 'view-backlinks', ref: TARGET, format: 'json'})
+    expect(out.rows).toHaveLength(10)
+    expect(out.rows.filter(row => row.siblings)).toEqual([])
+  })
+
   it('quotes a link-only source\'s neighbours from a bounded head, never their whole rows', async () => {
     await create({id: TARGET, content: 'Target', properties: {alias: ['Target']}})
     const parent = uuid('9b9b9b9b', 1)
@@ -1271,6 +1403,166 @@ describe('view-backlinks', () => {
 })
 
 describe('view-search', () => {
+  it('says where each folded duplicate is', async () => {
+    const vendors = ['Kestrel', 'Copperline']
+    for (const [index, name] of vendors.entries()) {
+      const vendor = uuid(`6e00000${index}`, index)
+      await create({id: vendor, content: name, properties: {alias: [name]}})
+      await create({id: uuid(`6e00001${index}`, 10 + index), parentId: vendor, content: 'status: renewal due'})
+    }
+
+    const out = await view<SearchView>({type: 'view-search', query: 'renewal due', format: 'json'})
+    expect(out.hits).toHaveLength(1)
+    const [hit] = out.hits
+    expect([hit.breadcrumb.at(-1), hit.duplicates[0].place].sort()).toEqual(['Copperline', 'Kestrel'])
+    const text = await view<string>({type: 'view-search', query: 'renewal due'})
+    expect(text).toContain(`identical: ^${hit.duplicates[0].shortId} in ${hit.duplicates[0].place})`)
+  })
+
+  it('takes no label from another workspace, so a line under one folds and shows no siblings', async () => {
+    const foreign = uuid('6c100001', 1)
+    await repo.tx(async tx => {
+      await tx.create({id: foreign, workspaceId: 'ws-2', parentId: null, orderKey: 'a0', content: '[[Meeting]]', references: []})
+    }, {scope: ChangeScope.BlockDefault, allowUnloadedWorkspace: true})
+    const strayLine = uuid('6c100002', 2)
+    await create({id: strayLine, content: 'with the kestrel account team'})
+    await create({id: uuid('6c100003', 3), content: 'with the kestrel account team'})
+    const straySibling = uuid('6c100004', 4)
+    await create({id: straySibling, content: 'topic: renewal terms'})
+    // Sync applies parent ids verbatim, so a row can point at a parent in another workspace.
+    await sharedDb.db.execute('UPDATE blocks SET parent_id = ? WHERE id IN (?, ?)', [foreign, strayLine, straySibling])
+
+    const out = await view<SearchView>({type: 'view-search', query: 'kestrel account', format: 'json'})
+    expect(out.hits).toHaveLength(1)
+    expect(out.hits[0].duplicateCount).toBe(1)
+    expect(out.hits[0]).not.toHaveProperty('siblings')
+  })
+
+  it('takes no label from a property field row, so property values fold', async () => {
+    const definition = uuid('6c300000', 0)
+    for (const [index, owner] of ['Kestrel', 'Copperline'].entries()) {
+      const page = uuid(`6c30001${index}`, 10 + index)
+      await create({id: page, content: owner, properties: {alias: [owner]}})
+      const field = uuid(`6c30002${index}`, 20 + index)
+      await create({id: field, parentId: page, content: `::((${definition}))`})
+      await create({id: uuid(`6c30003${index}`, 30 + index), parentId: field, content: 'renewal due'})
+      await create({id: uuid(`6c30004${index}`, 40 + index), parentId: field, content: 'second value'})
+    }
+    // A raw write: the field-form bit is derived, and no processor runs here to stamp it.
+    await sharedDb.db.execute("UPDATE blocks SET is_field_form = 1 WHERE content LIKE '::((%'")
+
+    const out = await view<SearchView>({type: 'view-search', query: 'renewal due', format: 'json'})
+    expect(out.hits).toHaveLength(1)
+    expect(out.hits[0].duplicateCount).toBe(1)
+    expect(out.hits[0]).not.toHaveProperty('siblings')
+  })
+
+  it('reads no long parent\'s content to judge whether it is a label', async () => {
+    const parent = uuid('6c600000', 0)
+    await create({id: parent, content: `${'#tag '.repeat(10)}${'x'.repeat(100_000)}`})
+    await create({id: uuid('6c600001', 1), parentId: parent, content: 'needle line'})
+    // SQLite's text length() and substr() stop at a NUL; the rest still counts.
+    const nulTailed = uuid('6c600002', 2)
+    await create({id: nulTailed, content: `[[Meeting]]\u0000${'y'.repeat(100_000)}`})
+    await create({id: uuid('6c600003', 3), parentId: nulTailed, content: 'needle again'})
+
+    const getAll = vi.spyOn(repo.db, 'getAll')
+    await view({type: 'view-search', query: 'needle'})
+    const sizes = await Promise.all(getAll.mock.results.map(async result => JSON.stringify(await result.value).length))
+    getAll.mockRestore()
+    expect(Math.max(...sizes)).toBeLessThan(100_000)
+  })
+
+  it('reads a tag link or a block ref as a label', async () => {
+    const target = uuid('7b7b7b7b', 1)
+    await create({id: target, content: 'Target', properties: {alias: ['Target']}})
+    const labels = [uuid('6b100001', 1), uuid('6b100002', 2)]
+    await create({id: labels[0], content: '#[[Meeting]]'})
+    await create({id: labels[1], content: `((${target}))`})
+    for (const [index, label] of labels.entries()) {
+      await create({id: uuid(`6b10001${index}`, 10 + index), parentId: label, content: `line ${index} of [[Target]]`, references: [{id: target, alias: 'Target'}]})
+      await create({id: uuid(`6b10002${index}`, 20 + index), parentId: label, content: `topic ${index}`})
+    }
+
+    const out = await view<BacklinksView>({type: 'view-backlinks', ref: target, format: 'json'})
+    expect(out.rows.filter(row => row.content.startsWith('line ')).map(row => row.siblings).sort())
+      .toEqual([['topic 0'], ['topic 1']])
+  })
+
+  it('keeps a breadcrumb step that is literally named …', async () => {
+    const page = uuid('6c700000', 0)
+    await create({id: page, content: 'Projects', properties: {alias: ['Projects']}})
+    for (const index of [1, 2]) {
+      const section = uuid(`6c70000${index}`, index)
+      await create({id: section, parentId: page, content: '…'})
+      await create({id: uuid(`6c70001${index}`, 10 + index), parentId: section, content: 'ellipsis notes'})
+    }
+
+    const out = await view<SearchView>({type: 'view-search', query: 'ellipsis', format: 'json'})
+    expect(out.hits[0].duplicates.map(duplicate => duplicate.place)).toEqual(['Projects › …'])
+  })
+
+  it('names a duplicate\'s place by the last two steps of its breadcrumb', async () => {
+    const page = uuid('6c500000', 0)
+    await create({id: page, content: 'Projects', properties: {alias: ['Projects']}})
+    for (const [index, section] of ['Alpha', 'Beta'].entries()) {
+      const heading = uuid(`6c50000${index + 1}`, index + 1)
+      await create({id: heading, parentId: page, content: section})
+      await create({id: uuid(`6c50001${index}`, 10 + index), parentId: heading, content: 'kickoff notes'})
+    }
+
+    const out = await view<SearchView>({type: 'view-search', query: 'kickoff', format: 'json'})
+    expect(out.hits[0].duplicates.map(duplicate => duplicate.place)).toEqual([
+      out.hits[0].breadcrumb.join(' › ') === 'Projects › Alpha' ? 'Projects › Beta' : 'Projects › Alpha',
+    ])
+  })
+
+  it('gives a duplicate whose breadcrumb could not be read no place', async () => {
+    const page = uuid('6c400000', 0)
+    await create({id: page, content: 'Archive', properties: {alias: ['Archive']}})
+    for (const index of [1, 2]) {
+      const mid = uuid(`6c40000${index}`, index)
+      await create({id: mid, parentId: page, content: `section ${index}`})
+      await create({id: uuid(`6c40001${index}`, 10 + index), parentId: mid, content: 'zebra crossing'})
+    }
+    // Tombstoned with no cascade, as sync can leave a chain.
+    await sharedDb.db.execute('UPDATE blocks SET deleted = 1 WHERE id IN (?, ?)', [uuid('6c400001', 1), uuid('6c400002', 2)])
+
+    const out = await view<SearchView>({type: 'view-search', query: 'zebra', format: 'json'})
+    expect(out.hits[0].breadcrumb).toEqual(['…'])
+    expect(out.hits[0].duplicates.map(duplicate => duplicate.place)).toEqual([null])
+  })
+
+  it('folds a record line only with its own record, whatever the text holds', async () => {
+    const meeting = uuid('6c200001', 1)
+    await create({id: meeting, content: '[[Meeting]]'})
+    await create({id: uuid('6c200002', 2), parentId: meeting, content: 'kestrel line'})
+    // Content built to match a record line's grouping key, were it a joined string.
+    await create({id: uuid('6c200003', 3), content: `${meeting}\u0000kestrel line`})
+
+    const out = await view<SearchView>({type: 'view-search', query: 'kestrel', format: 'json'})
+    expect(out.hits).toHaveLength(2)
+    expect(out.hits.map(hit => hit.duplicateCount)).toEqual([0, 0])
+  })
+
+  it('keeps identical lines of different records apart, each with its record', async () => {
+    const days = [uuid('6c000001', 1), uuid('6c000002', 2)]
+    for (const [index, day] of days.entries()) {
+      await create({id: day, content: `June ${index + 4}th, 2026`})
+      const meeting = uuid(`6c00001${index}`, 10 + index)
+      await create({id: meeting, parentId: day, content: '[[Meeting]]'})
+      await create({id: uuid(`6c00002${index}`, 20 + index), parentId: meeting, content: 'with the kestrel account team'})
+      await create({id: uuid(`6c00003${index}`, 30 + index), parentId: meeting, content: index === 0 ? 'topic: renewal terms' : 'topic: pricing tiers'})
+    }
+
+    const out = await view<SearchView>({type: 'view-search', query: 'kestrel account', format: 'json'})
+    expect(out.hits).toHaveLength(2)
+    expect(out.hits.map(hit => hit.duplicateCount)).toEqual([0, 0])
+    expect(out.hits.map(hit => hit.siblings).sort()).toEqual([['topic: pricing tiers'], ['topic: renewal terms']])
+    const text = await view<string>({type: 'view-search', query: 'kestrel account'})
+    expect(text).toContain('   ↳ sibling: topic: pricing tiers')
+  })
+
   it('returns snippets with breadcrumbs, folds identical blocks, and pages honestly', async () => {
     const page = uuid('cccc0000', 1)
     await create({id: page, content: 'Recipes', properties: {alias: ['Recipes']}})
@@ -1284,7 +1576,7 @@ describe('view-search', () => {
     expect(bread.breadcrumb).toEqual(['Recipes'])
     expect(bread.snippet.startsWith('…')).toBe(true)
     const split = out.hits.find(hit => hit.snippet === 'banana split')!
-    expect(split.duplicateIds).toHaveLength(1)
+    expect(split.duplicates).toHaveLength(1)
     expect(out.nextOffset).toBeNull()
 
     const firstPage = await view<SearchView>({type: 'view-search', query: 'banana', limit: 1, format: 'json'})
@@ -1345,9 +1637,9 @@ describe('view-search', () => {
     const out = await view<SearchView>({type: 'view-search', query: 'banana', format: 'json'})
     expect(out.hits.map(hit => hit.snippet)).toEqual(['banana split', 'we also like banana'])
     expect(out.hits[0].duplicateCount).toBe(109)
-    expect(out.hits[0].duplicateIds).toHaveLength(5)
+    expect(out.hits[0].duplicates).toHaveLength(5)
     const text = await view<string>({type: 'view-search', query: 'banana'})
-    expect(text).toMatch(/\(\+109 identical: (\^[^,]+, ){5}…\+104 more\)/)
+    expect(text).toMatch(/\(\+109 identical: (\^[^;]+; ){5}…\+104 more\)/)
     expect(out.nextOffset).toBeNull()
   })
 

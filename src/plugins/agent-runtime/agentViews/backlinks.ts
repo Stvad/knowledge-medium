@@ -12,23 +12,35 @@ import {
   type GroupedBacklinksGroupingSpec,
 } from '@/plugins/grouped-backlinks/resolveConfig.js'
 import { labelForBlockData } from '@/utils/linkTargetAutocomplete.js'
-import { firstVisibleChildren, loadBlocks, loadContentHeads, loadCrumbs, visibleChildCounts } from './context.ts'
+import {
+  contextParentId,
+  firstVisibleChildren,
+  loadBlocks,
+  loadContentHeads,
+  loadCrumbs,
+  recordLabels,
+  recordSiblings,
+  visibleChildCounts,
+} from './context.ts'
 import { createPropertyRenderer, NAME_CHARS } from './properties.ts'
 import { displayIds } from './displayIds.ts'
-import { clampInt, CUT_LEGEND, crumbLine, joinDisplayLines, loadRoot, metaSuffix, plural, toViewRow, type ViewRow } from './shared.ts'
-import { boundLabels, clipLine, ellipsize, formatCount, isReferenceOnly, oneLine } from './text.ts'
+import {
+  clampInt,
+  CUT_LEGEND,
+  crumbLine,
+  joinDisplayLines,
+  loadRoot,
+  metaSuffix,
+  plural,
+  siblingLines,
+  toViewRow,
+  type ViewRow,
+} from './shared.ts'
+import { boundLabels, clipLine, CONTEXT_HEAD_CHARS, contextPreview, formatCount, isReferenceOnly } from './text.ts'
 
 const MAX_BACKLINKS = 500
 const MAX_GROUPS = 200
 const ROW_CHARS = 240
-const CONTEXT_CHARS = 160
-/** How much of a neighbour's content a context line reads (a cost bound);
- *  roomy, so collapsing its whitespace rarely leaves less than a line. */
-const CONTEXT_HEAD_CHARS = CONTEXT_CHARS * 4
-
-/** A neighbour's text as context: one line, ellipsized. It says it is cut,
- *  not by how much, since only a head was read. */
-const contextPreview = (head: string): string => ellipsize(oneLine(head), CONTEXT_CHARS)
 const TITLE_CHARS = 120
 const MAX_VIA = 5
 
@@ -51,6 +63,8 @@ export interface BacklinkRow extends ViewRow {
   /** Only for a block that is nothing but links. */
   parentContent?: string
   firstChildContent?: string
+  /** Only for a block under a label: its record's first other lines. */
+  siblings?: string[]
 }
 
 export interface BacklinksView {
@@ -111,8 +125,9 @@ const loadTarget = async (repo: Repo, ref: string, workspaceId: string): Promise
   }
 }
 
-/** Context rows for a page of backlink sources: breadcrumb, child count, and
- *  — for a block that only links — its parent's text and first child. */
+/** Context rows for a page of backlink sources: breadcrumb, child count;
+ *  for a block that only links, its parent's text and first child; for a
+ *  block under a label, its record's other lines. */
 const backlinkRows = async (
   repo: Repo,
   workspaceId: string,
@@ -122,11 +137,8 @@ const backlinkRows = async (
 ): Promise<BacklinkRow[]> => {
   const ids = sources.map(source => source.id)
   const linkOnly = sources.filter(source => isReferenceOnly(source.content))
-  // A self-parented source (sync applies parent ids verbatim) has no parent to quote.
-  const parentIds = [...new Set(linkOnly
-    .map(source => source.parentId)
-    .filter((id, index): id is string => id !== null && id !== linkOnly[index].id))]
-  const [renderer, shortIds, crumbs, childCounts, via, parents, firstChildren] = await Promise.all([
+  const parentIds = [...new Set(linkOnly.flatMap(source => contextParentId(source) ?? []))]
+  const [renderer, shortIds, crumbs, childCounts, via, parents, firstChildren, siblings] = await Promise.all([
     createPropertyRenderer(repo, sources, 'brief'),
     displayIds(repo, ids),
     loadCrumbs(repo, ids, workspaceId),
@@ -134,6 +146,7 @@ const backlinkRows = async (
     viaPropertiesBySource(repo, workspaceId, targetId, ids),
     loadContentHeads(repo, parentIds, CONTEXT_HEAD_CHARS),
     firstVisibleChildren(repo, linkOnly.map(source => source.id), workspaceId, CONTEXT_HEAD_CHARS),
+    recordLabels(repo, sources, workspaceId).then(records => recordSiblings(repo, ids, records, workspaceId)),
   ])
   return sources.map(source => {
     const row: BacklinkRow = {
@@ -153,6 +166,8 @@ const backlinkRows = async (
       const child = firstChildren.get(source.id)
       if (child?.trim()) row.firstChildContent = contextPreview(child)
     }
+    const record = siblings.get(source.id)
+    if (record) row.siblings = record
     return row
   })
 }
@@ -206,11 +221,12 @@ const renderBacklinkRow = (row: BacklinkRow, index: number, samePlace: boolean):
   const body = `${row.content}${metaSuffix(row)}${children}`
   const firstChild = row.firstChildContent ? `   ↳ first child: ${row.firstChildContent}` : null
   if (samePlace) {
-    return [`${index}. ^${row.shortId}  (same place as above)${via}  ${body}`, ...(firstChild ? [firstChild] : [])]
+    return [`${index}. ^${row.shortId}  (same place as above)${via}  ${body}`, ...(firstChild ? [firstChild] : []), ...siblingLines(row.siblings)]
   }
   const lines = [`${index}. ^${row.shortId}  ${crumbLine(row.breadcrumb)}${via}`, `   ${body}`]
   if (row.parentContent) lines.push(`   ↳ parent: ${row.parentContent}`)
   if (firstChild) lines.push(firstChild)
+  lines.push(...siblingLines(row.siblings))
   return lines
 }
 

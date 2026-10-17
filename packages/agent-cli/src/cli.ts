@@ -45,6 +45,7 @@ import {
   renderKernelTypesInstallSummary,
 } from './kernelDts.js'
 import {cliCommandFrom, cliOptionsFor, GRAPH_READ_TOOLS, hasJsonFormat, renderToolResult} from './readTools.js'
+import {helpSections} from './cliHelp.js'
 import {
   appendPositionOption,
   editArgumentsOption,
@@ -709,9 +710,11 @@ cli
 for (const tool of GRAPH_READ_TOOLS) {
   if (!tool.cli) continue
   const {verb, alias, positional} = tool.cli
-  const usage = positional
-    ? `${verb} ${positional.variadic ? `[...${positional.field}]` : `<${positional.field}>`}`
-    : verb
+  const usage = !positional
+    ? verb
+    : positional.variadic
+      ? `${verb} [...${positional.field}]`
+      : positional.optional ? `${verb} [${positional.field}]` : `${verb} <${positional.field}>`
   const command = cli.command(usage, tool.description)
   if (alias) command.alias(alias)
   for (const spec of cliOptionsFor(tool)) command.option(spec.flag, spec.description)
@@ -1078,7 +1081,7 @@ cli
   })
 
 cli.version(pkgVersion)
-cli.help()
+cli.help(sections => helpSections(sections, {bin: cli.name, commands: cli.commands, matched: cli.matchedCommand}))
 
 const main = async () => {
   // Two-phase parse so we can resolve `--profile` (a global option)

@@ -40,13 +40,13 @@ export const OUTPUT_PROBES: readonly OutputProbe[] = [
     id: 'search:pricing',
     standsFor: 'a topic search whose hits include one pasted-source block',
     run: ({callTool}) => callTool('search', {query: 'pricing', limit: 10}),
-    maxChars: 600,
+    maxChars: 700,
   },
   {
     id: 'search:kestrel',
     standsFor: 'a topic search over short daily-note blocks',
     run: ({callTool}) => callTool('search', {query: 'Kestrel', limit: 10}),
-    maxChars: 1_300,
+    maxChars: 1_700,
   },
   {
     id: 'backlinks:Meeting',
@@ -58,7 +58,7 @@ export const OUTPUT_PROBES: readonly OutputProbe[] = [
     id: 'backlinks:Kestrel',
     standsFor: 'backlinks of a page referenced from a few dozen places',
     run: async ({callTool, pageId}) => callTool('backlinks', {ref: await pageId('Kestrel')}),
-    maxChars: 1_500,
+    maxChars: 2_500,
   },
   {
     id: 'subtree:Reading Log',
