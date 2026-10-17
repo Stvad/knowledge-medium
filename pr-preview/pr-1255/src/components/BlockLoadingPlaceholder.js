@@ -1,1 +1,1 @@
-import{OD as e}from"../../chunks/app-Mkx8dX0c.js";export{e as BlockLoadingPlaceholder};
+import{ZD as e}from"../../chunks/app-DWMuJFlE.js";export{e as BlockLoadingPlaceholder};

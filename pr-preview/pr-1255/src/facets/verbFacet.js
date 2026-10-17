@@ -1,1 +1,1 @@
-import{kP as e}from"../../chunks/app-Mkx8dX0c.js";export{e as defineVerbFacet};
+import{QP as e}from"../../chunks/app-DWMuJFlE.js";export{e as defineVerbFacet};

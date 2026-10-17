@@ -1,1 +1,1 @@
-import{xW as e}from"../../chunks/app-Mkx8dX0c.js";export{e as TypeTagger};
+import{WW as e}from"../../chunks/app-DWMuJFlE.js";export{e as TypeTagger};

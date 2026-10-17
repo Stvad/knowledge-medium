@@ -1,1 +1,1 @@
-import{Zf as e}from"../../../../../chunks/app-Mkx8dX0c.js";export{e as remarkWikilinks};
+import{bp as e}from"../../../../../chunks/app-DWMuJFlE.js";export{e as remarkWikilinks};
