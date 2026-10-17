@@ -1,1 +1,1 @@
-import{JD as e,YD as t,qD as n}from"../../chunks/app-CyhWNqhZ.js";export{n as defaultRegistry,e as defaultRendererContributions,t as defaultRenderersExtension};
+import{JD as e,YD as t,qD as n}from"../../chunks/app-B0O1B-wD.js";export{n as defaultRegistry,e as defaultRendererContributions,t as defaultRenderersExtension};
