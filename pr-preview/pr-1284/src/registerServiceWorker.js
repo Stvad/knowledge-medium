@@ -1,1 +1,1 @@
-import{IE as e,LE as t}from"../chunks/app-vjj-fmH9.js";export{e as checkForAppUpdate,t as registerServiceWorker};
+import{IE as e,LE as t}from"../chunks/app-CNQ4h4zt.js";export{e as checkForAppUpdate,t as registerServiceWorker};

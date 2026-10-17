@@ -1,1 +1,1 @@
-import{c_ as e,l_ as t,s_ as n}from"../../../chunks/app-vjj-fmH9.js";export{n as COLEMAK_KEYBINDINGS_PLUGIN_ID,e as colemakKeybindingsPlugin,t as colemakMovementKeybindingOverrides};
+import{c_ as e,l_ as t,s_ as n}from"../../../chunks/app-CNQ4h4zt.js";export{n as COLEMAK_KEYBINDINGS_PLUGIN_ID,e as colemakKeybindingsPlugin,t as colemakMovementKeybindingOverrides};
