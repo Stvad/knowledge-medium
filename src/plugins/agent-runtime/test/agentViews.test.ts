@@ -1253,6 +1253,7 @@ describe('view-backlinks', () => {
       uuid('6b000007', 7),
       uuid('6b000008', 8),
       uuid('6b000009', 9),
+      uuid('6b00000a', 10),
     ]
     await create({id: parents[0], content: 'ok'})
     // 200 characters of links, then words: a parent past that length is no label.
@@ -1269,13 +1270,15 @@ describe('view-backlinks', () => {
     await create({id: parents[7], content: '#standup'})
     // Links only, but 205 characters: past the length a label may have.
     await create({id: parents[8], content: `${'[[tag]] '.repeat(25)}[[x]]`})
+    // A block embed shows its target's content: no bare link.
+    await create({id: parents[9], content: `!((${TARGET}))`})
     for (const [index, parent] of parents.entries()) {
       await create({id: uuid('6b00001' + index, 10 + index), parentId: parent, content: `line ${index} of [[Target]]`, references: [{id: TARGET, alias: 'Target'}]})
       await create({id: uuid('6b00002' + index, 20 + index), parentId: parent, content: 'a line beside it'})
     }
 
     const out = await view<BacklinksView>({type: 'view-backlinks', ref: TARGET, format: 'json'})
-    expect(out.rows).toHaveLength(9)
+    expect(out.rows).toHaveLength(10)
     expect(out.rows.filter(row => row.siblings)).toEqual([])
   })
 

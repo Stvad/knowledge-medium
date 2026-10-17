@@ -127,9 +127,10 @@ export const isReferenceOnly = (content: string): boolean =>
 /** A label is a block of references and nothing else, at least one, as the
  *  reference parser reads them (`[[Meeting]]`, `#[[Tag]]`, `((block id))`):
  *  the head of a record whose lines are its children. A bare `#tag` is text
- *  here, as it is to backlinks. */
+ *  here, as it is to backlinks, and an embed (`!((id))`) shows its target's
+ *  content rather than linking to it. */
 export const isLabel = (content: string): boolean => {
-  const spans = [...parseOutermostReferences(content), ...parseBlockRefs(content)]
+  const spans = [...parseOutermostReferences(content), ...parseBlockRefs(content).filter(ref => !ref.embed)]
     .sort((a, b) => a.startIndex - b.startIndex)
   if (spans.length === 0) return false
   let rest = ''
