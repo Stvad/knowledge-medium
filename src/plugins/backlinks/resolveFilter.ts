@@ -1,5 +1,5 @@
 import type { Repo } from '@/data/repo'
-import { getPluginPrefsBlock } from '@/data/stateBlocks.js'
+import { readPluginPref } from '@/data/stateBlocks.js'
 import {
   backlinksPrefsType,
   dailyNoteBacklinksDefaultsProp,
@@ -26,7 +26,7 @@ export type BacklinksFilterSpec = 'none' | 'stored' | 'effective' | BacklinksFil
 /** Resolve a `BacklinksFilter` (or `undefined` for "no filter") for
  *  `blockId`. Returns `undefined` whenever the resolved filter is empty
  *  so callers can skip passing it to the query. The `'effective'` branch
- *  bootstraps the backlinks user-prefs sub-block (same as the panel). */
+ *  reads the user's daily-note defaults, creating no prefs block. */
 export const resolveBacklinksFilter = async (
   repo: Repo,
   workspaceId: string,
@@ -48,8 +48,7 @@ export const resolveBacklinksFilter = async (
   // 'effective': mirror useBacklinkFilterState — merge the daily-note
   // defaults (only applied when the block is a daily note) with the
   // block's own stored filter.
-  const prefsBlock = await getPluginPrefsBlock(repo, workspaceId, repo.user, backlinksPrefsType)
-  const dailyNoteDefaults = prefsBlock.peekProperty(dailyNoteBacklinksDefaultsProp)
+  const dailyNoteDefaults = await readPluginPref(repo, workspaceId, repo.user, backlinksPrefsType, dailyNoteBacklinksDefaultsProp)
     ?? dailyNoteBacklinksDefaultsProp.defaultValue
   const effective = effectiveBacklinksFilterForBlock(blockData, stored, dailyNoteDefaults)
   return hasBacklinksFilter(effective) ? effective : undefined

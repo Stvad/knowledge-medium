@@ -59,6 +59,8 @@ import {
   getUserPrefsBlock,
   layoutSessionBlockIdForKey,
   layoutSessionsContainerBlockId,
+  pluginPrefsBlockId,
+  readPluginPref,
   resetBlockSelection,
 } from '@/data/stateBlocks'
 import type { FulfilledThenable } from '@/utils/resolvedThenable'
@@ -261,6 +263,25 @@ describe('getPluginPrefsBlock', () => {
       expect(block.peek()?.content).toBe('unlabeled-plugin-prefs')
     } finally {
       await otherEnv.h.cleanup()
+    }
+  })
+
+  it('has a derivable id, so a read finds a stored preference without creating the prefs blocks', async () => {
+    registerTypes(env.repo, [examplePrefsType])
+    const blockCount = async () =>
+      (await env.h.db.getAll<{n: number}>('SELECT count(*) AS n FROM blocks'))[0].n
+    const before = await blockCount()
+
+    expect(await readPluginPref(env.repo, WS, USER, examplePrefsType, showPropertiesProp)).toBeUndefined()
+    expect(await blockCount()).toBe(before)
+
+    const pluginPrefs = await getPluginPrefsBlock(env.repo, WS, USER, examplePrefsType)
+    expect(pluginPrefs.id).toBe(pluginPrefsBlockId(WS, USER.id, examplePrefsType.id))
+    const fresh = await setup([examplePrefsType])
+    try {
+      expect(await readPluginPref(fresh.repo, WS, USER, examplePrefsType, showPropertiesProp)).toBe(true)
+    } finally {
+      await fresh.h.cleanup()
     }
   })
 

@@ -1150,6 +1150,19 @@ describe('structural edge cases', () => {
 describe('view-backlinks', () => {
   const TARGET = uuid('7a7a7a7a', 1)
 
+  it('reads the user\'s grouping and filter preferences without creating them', async () => {
+    await create({id: TARGET, content: 'Target', properties: {alias: ['Target']}})
+    await create({id: uuid('6d000001', 1), content: 'mention of [[Target]]', references: [{id: TARGET, alias: 'Target'}]})
+    const blockCount = async () => (await sharedDb.db.getAll<{n: number}>('SELECT count(*) AS n FROM blocks'))[0].n
+    const before = await blockCount()
+
+    const grouped = await view<GroupedBacklinksView>({type: 'view-grouped-backlinks', ref: TARGET, format: 'json'})
+    const flat = await view<BacklinksView>({type: 'view-backlinks', ref: TARGET, filter: 'effective', format: 'json'})
+    expect(grouped.total).toBe(1)
+    expect(flat.total).toBe(1)
+    expect(await blockCount()).toBe(before)
+  })
+
   it('gives a source under a label the first other lines of its record', async () => {
     await create({id: TARGET, content: 'Target', properties: {alias: ['Target']}})
     const meeting = uuid('6a000001', 1)

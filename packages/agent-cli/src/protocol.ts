@@ -915,11 +915,8 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
     // Arbitrary code execution — never read-only.
     readOnly: false,
   },
-  // backlinks / grouped-backlinks resolve the user's backlinks prefs
-  // sub-block, which `pluginPrefsExtension` (src/data/pluginStateExtensions.ts)
-  // bootstraps at idle on every client — so on the live client the bridge
-  // talks to, the resolve path is a pure read. The only write either could
-  // make is that same one-time prefs-block creation, before the bootstrap.
+  // backlinks / grouped-backlinks read the user's prefs with `readPluginPref`,
+  // which creates nothing: both are pure reads.
   'backlinks': {
     usage: "kmagent backlinks <ref> --raw [--filter none|stored|effective|<json>]",
     description: 'Every backlink of a block (blocks whose references point at it), hydrated, unbounded — for programmatic use (the agent view is `view-backlinks`). --filter defaults to none. See `kmagent data-model`.',
