@@ -1,0 +1,1 @@
+import{j as e}from"../../../chunks/app-Dg_NXHRF.js";export{e as characterCountDecoratorContribution};

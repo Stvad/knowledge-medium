@@ -1,0 +1,1 @@
+import{mE as e,pE as t}from"../../chunks/app-Dg_NXHRF.js";export{t as gestureBindingDescriptor,e as matchesGestureEvent};

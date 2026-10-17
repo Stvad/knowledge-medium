@@ -1,0 +1,1 @@
+import{AJ as e,jJ as t,kJ as n}from"../../chunks/app-Dg_NXHRF.js";export{n as NAMES_IN_A_SENTENCE,e as describeNames,t as firstFew};

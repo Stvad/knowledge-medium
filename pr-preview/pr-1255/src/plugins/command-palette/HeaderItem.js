@@ -1,0 +1,1 @@
+import{DC as e}from"../../../chunks/app-Dg_NXHRF.js";export{e as CommandPaletteHeaderItem};

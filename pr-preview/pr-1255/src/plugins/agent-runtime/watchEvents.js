@@ -1,0 +1,1 @@
+import{au as e,iu as t}from"../../../chunks/app-Dg_NXHRF.js";export{t as createWatchEventsRegistry,e as watchEventsRegistry};

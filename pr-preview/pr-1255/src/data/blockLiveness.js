@@ -1,0 +1,1 @@
+import{aN as e,iN as t}from"../../chunks/app-Dg_NXHRF.js";export{t as anyBlockTombstoned,e as isBlockTombstoned};

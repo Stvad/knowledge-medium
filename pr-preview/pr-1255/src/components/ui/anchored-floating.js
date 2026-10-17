@@ -1,0 +1,1 @@
+import{OF as e,kF as t}from"../../../chunks/app-Dg_NXHRF.js";export{e as floatingAnchorFromRect,t as useAnchoredFloating};

@@ -1,0 +1,1 @@
+import{IT as e,LT as t,gt as n}from"../../../chunks/app-Dg_NXHRF.js";export{e as extensionsOverridesProp,t as extensionsPrefsType,n as extensionsSettingsPlugin};

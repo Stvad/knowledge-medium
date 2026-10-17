@@ -1,0 +1,1 @@
+import{DJ as e,OJ as t}from"../../chunks/app-Dg_NXHRF.js";export{e as agree,t as pluralize};

@@ -1,0 +1,1 @@
+import{K$ as e,q$ as t}from"../../chunks/app-Dg_NXHRF.js";export{e as InvalidBlockIdError,t as assertCanonicalBlockId};
