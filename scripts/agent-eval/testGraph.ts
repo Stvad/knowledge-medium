@@ -1,8 +1,9 @@
 /**
- * The eval fixture in a node test repo, reachable through the real km MCP
- * server with no browser: `createGraphMcpServer` runs against a BridgeClient
- * that hands each wire command to the tab's own `executeCommand`, validated
- * and serialized the way bridge.ts does it.
+ * The eval fixture in a node repo with the app's own data extensions, which
+ * is the graph every eval task runs on: the runner's hosts serve it to the
+ * agent bridge (host.ts), and the fixture test drives it in-process through
+ * the real km MCP server, over a BridgeClient that hands each wire command to
+ * the runtime's own `executeCommand` and returns what the bridge loop would.
  */
 import { provideRuntimeGlobals } from './nodeShims'
 import { knownAgentCommandSchema, type KnownCommand } from '@knowledge-medium/agent-cli/protocol'
@@ -15,27 +16,52 @@ import { staticDataExtensions } from '@/extensions/staticDataExtensions'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { createAgentRuntimeContext, executeCommand } from '@/plugins/agent-runtime/commands'
 import type { AgentRuntimeContext } from '@/plugins/agent-runtime/protocol'
-import { serializeError, serializeValue } from '@/plugins/agent-runtime/serialization'
+import { commandResult } from '@/plugins/agent-runtime/bridgeLoop'
+import { getOrCreateDailyNote, todayIso } from '@/plugins/daily-notes'
 import { importRoam } from '@/plugins/roam-import/import'
-import { buildFixture } from './fixture'
+import { buildFixture, TEST_USER, TEST_WORKSPACE_ID } from './fixture'
 import { connectMcpClient } from './mcpClient'
 
-/** UUID-shaped so ids and deep links have the byte length a live
- *  workspace gives them; output sizes here should match the dev tab's. */
-export const TEST_WORKSPACE_ID = '0e7a1000-0000-4000-8000-000000000001'
-const TEST_USER = {id: 'km-eval', name: 'km-eval'}
+
+export interface FixtureRuntime {
+  context: AgentRuntimeContext
+  close: () => void
+}
+
+/** The app's runtime over `db`. With `seed`, imports the fixture first and
+ *  sets up what every task starts from (today's daily note, which a write
+ *  task appends to), and returns once the processors those writes started
+ *  have landed; without it, `db` is a copy of a seeded one. */
+export const openFixtureRuntime = async (db: TestDb['db'], {seed}: {seed: boolean}): Promise<FixtureRuntime> => {
+  // The app's generators: task checks compare block timestamps with a
+  // task's start time, and a Repo opened on a copy must not mint an id the
+  // seeding Repo already used.
+  const {repo} = createTestRepo({db, user: TEST_USER, startSyncObserver: true, appGenerators: true})
+  repo.setActiveWorkspaceId(TEST_WORKSPACE_ID)
+  const runtime = resolveFacetRuntimeSync(
+    [kernelValuePresetsExtension, ...staticDataExtensions],
+    {repo, workspaceId: TEST_WORKSPACE_ID, safeMode: false},
+  )
+  repo.setFacetRuntime(runtime)
+  await getOrCreatePropertiesPage(repo, TEST_WORKSPACE_ID)
+  if (seed) {
+    await importRoam(buildFixture().pages, repo, {workspaceId: TEST_WORKSPACE_ID, currentUserId: TEST_USER.id})
+    await getOrCreateDailyNote(repo, TEST_WORKSPACE_ID, todayIso())
+    await repo.awaitDeferredWork()
+  }
+  provideRuntimeGlobals()
+  return {
+    context: createAgentRuntimeContext({repo, runtime, safeMode: false}),
+    close: () => repo.stopSyncObserver(),
+  }
+}
 
 export const createInProcessBridgeClient = (context: AgentRuntimeContext): BridgeClient => ({
   bridgeUrl: 'in-process://agent-eval',
   runCommand: async command => {
-    const parsed = knownAgentCommandSchema.parse(command)
-    let value: unknown
-    try {
-      value = serializeValue(await executeCommand(parsed, context))
-    } catch (error) {
-      throw new Error(serializeError(error).message, {cause: error})
-    }
-    return JSON.parse(JSON.stringify(value)) as unknown
+    const result = await commandResult(() => executeCommand(knownAgentCommandSchema.parse(command), context))
+    if (!result.ok) throw new Error(result.error.message)
+    return JSON.parse(JSON.stringify(result.value)) as unknown
   },
   nextEvents: async () => ({events: [], nextSeq: 0}),
   whoami: async () => ({
@@ -58,30 +84,16 @@ export interface FixtureTestGraph {
   close: () => Promise<void>
 }
 
-export const seedFixtureTestGraph = async (db: TestDb['db']): Promise<FixtureTestGraph> => {
-  // Wall-clock `now`, as in the app, so task checks can compare block
-  // timestamps with a start time the way the live runner does.
-  const {repo} = createTestRepo({db, user: TEST_USER, startSyncObserver: true, now: Date.now})
-  repo.setActiveWorkspaceId(TEST_WORKSPACE_ID)
-  const runtime = resolveFacetRuntimeSync(
-    [kernelValuePresetsExtension, ...staticDataExtensions],
-    {repo, workspaceId: TEST_WORKSPACE_ID, safeMode: false},
-  )
-  repo.setFacetRuntime(runtime)
-  await getOrCreatePropertiesPage(repo, TEST_WORKSPACE_ID)
-  await importRoam(buildFixture().pages, repo, {workspaceId: TEST_WORKSPACE_ID, currentUserId: TEST_USER.id})
-
-  provideRuntimeGlobals()
-  const context = createAgentRuntimeContext({repo, runtime, safeMode: false})
-  const bridge = createInProcessBridgeClient(context)
+export const openFixtureTestGraph = async (db: TestDb['db'], options: {seed: boolean}): Promise<FixtureTestGraph> => {
+  const runtime = await openFixtureRuntime(db, options)
+  const bridge = createInProcessBridgeClient(runtime.context)
   const mcp = await connectMcpClient(bridge)
-
   return {
     callTool: mcp.callTool,
     command: command => bridge.runCommand(command),
     close: async () => {
       await mcp.close()
-      repo.stopSyncObserver()
+      runtime.close()
     },
   }
 }

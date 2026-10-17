@@ -48,7 +48,8 @@
  * fresh `newId`/`newTxSeq` counters (both restart at `gen-1` / 1). Two Repos
  * sharing one db in the same test will therefore mint COLLIDING block ids and
  * tx-seqs. A two-device/convergence test must give at least one Repo distinct
- * generators, e.g. `newId: uuidv4` (see globalState.test.ts / mutators.test.ts).
+ * generators, e.g. `newId: uuidv4` (see globalState.test.ts / mutators.test.ts),
+ * or pass `appGenerators: true` for the app's own.
  * Tx ids are the exception: `Repo` mints those as uuids independently of
  * `newId` (#866), so no arrangement of Repos can collide on the
  * `command_events.tx_id` primary key.
@@ -88,6 +89,11 @@ export interface CreateTestRepoOptions {
   backfillCompletionClaim?: BackfillCompletionClaim
   /** Reject `BlockDefault` / `References` writes (read-only mode). Default false. */
   isReadOnly?: boolean
+  /** The app's generators and id contract instead of the test defaults:
+   *  wall-clock `now`, uuid ids, a clock-seeded tx seq, canonical ids. For a
+   *  harness that runs the app rather than asserting on ids. Wins over the
+   *  four options below. */
+  appGenerators?: boolean
   /** Override the deterministic generators. Defaults are monotonic counters so
    *  timestamps, ids, and tx-seqs are stable and ordered across a test. */
   now?: () => number
@@ -124,11 +130,13 @@ export const createTestRepo = (opts: CreateTestRepoOptions): TestRepo => {
     db: opts.db,
     cache,
     user: opts.user ?? { id: 'test-user' },
-    now: opts.now ?? (() => ++timeCursor),
-    newId: opts.newId ?? (() => `gen-${++idCursor}`),
-    // See the MNEMONIC IDS note in the module doc.
-    blockIdPolicy: opts.blockIdPolicy ?? 'any',
-    newTxSeq: opts.newTxSeq ?? (() => ++txSeqCursor),
+    ...(opts.appGenerators ? {} : {
+      now: opts.now ?? (() => ++timeCursor),
+      newId: opts.newId ?? (() => `gen-${++idCursor}`),
+      // See the MNEMONIC IDS note in the module doc.
+      blockIdPolicy: opts.blockIdPolicy ?? 'any',
+      newTxSeq: opts.newTxSeq ?? (() => ++txSeqCursor),
+    }),
     isReadOnly: opts.isReadOnly,
     startSyncObserver: opts.startSyncObserver ?? false,
     syncObserverDeps: opts.syncObserverDeps,

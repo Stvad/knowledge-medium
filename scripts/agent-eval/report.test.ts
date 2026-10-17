@@ -1,4 +1,5 @@
-import { readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   conditionMismatches,
@@ -11,7 +12,7 @@ import {
   type TaskRunRecord,
 } from './report'
 
-const BASELINE = 'scripts/agent-eval/results/baseline-2026-10-16-sonnet.json'
+const RESULTS = 'scripts/agent-eval/results'
 
 const runRecord = (task: string, rep: number, overrides: Partial<TaskRunRecord> = {}): TaskRunRecord => ({
   task,
@@ -20,7 +21,7 @@ const runRecord = (task: string, rep: number, overrides: Partial<TaskRunRecord> 
   pass: true,
   detail: 'ok',
   toolCalls: 4,
-  toolCallsByName: {mcp__km__search: 4},
+  graphCommands: {search: 4},
   toolErrors: 0,
   seenChars: 4096,
   maxSeenChars: 2048,
@@ -33,7 +34,7 @@ const runRecord = (task: string, rep: number, overrides: Partial<TaskRunRecord> 
   terminalReason: 'completed',
   exitCode: 0,
   timedOut: false,
-  writes: {created: 0, modified: 0},
+  writes: {created: 0, modified: 0, removed: 0},
   transcript: 't.jsonl',
   ...overrides,
 })
@@ -44,18 +45,19 @@ const reportOf = (
   overrides: Partial<EvalReport> = {},
   conditions: Partial<RunConditions> = {},
 ): EvalReport => ({
-  schemaVersion: 3,
+  schemaVersion: 5,
   label,
   startedAt: '2026-10-15T00:00:00Z',
   finishedAt: '2026-10-15T00:10:00Z',
   git: {sha: '0123456789abcdef', branch: 'master', dirty: false},
   model: 'sonnet',
   conditions: {
-    fixture: 'abc', importedFixture: 'state-1', setup: 'setup-1', model: 'claude-test', effort: 'default', mcpOutputTokens: 25_000, timeoutMs: 600_000,
+    fixture: 'abc', importedFixture: 'state-1', surface: 'mcp', tools: 'tools-1', model: 'claude-test', effort: 'default',
+    mcpOutputTokens: 25_000, bashOutputChars: 30_000, timeoutMs: 600_000, workers: 4,
     ...conditions,
   },
   claudeCodeVersion: '1.0.0',
-  kmTools: ['search'],
+  allowedTools: ['mcp__km__search'],
   taskHashes: Object.fromEntries(runs.map(run => [run.task, `${run.task}-v1`])),
   outputSizes: {'search:x': 1000},
   probeHashes: {'search:x': 'x-v1'},
@@ -133,7 +135,10 @@ describe('renderMarkdown', () => {
     ['timeout', {timeoutMs: 60_000}, 'timeoutMs 600000 → 60000'],
     ['fixture', {fixture: 'def'}, 'fixture abc → def'],
     ['stored fixture', {importedFixture: 'state-2'}, 'importedFixture state-1 → state-2'],
-    ['setup', {setup: 'setup-2'}, 'setup setup-1 → setup-2'],
+    ['surface', {surface: 'cli'}, 'surface mcp → cli'],
+    ['tool set', {tools: 'tools-2'}, 'tools tools-1 → tools-2'],
+    ['shell output cap', {bashOutputChars: 10_000}, 'bashOutputChars 30000 → 10000'],
+    ['worker count', {workers: 1}, 'workers 4 → 1'],
   ] as const)('compares nothing with a baseline run under another %s', (_name, conditions, named) => {
     const baseline = reportOf('before', [runRecord('a', 1, {toolCalls: 8})])
     const current = reportOf('after', [runRecord('a', 1, {toolCalls: 4})], {outputSizes: {'search:x': 250}}, conditions)
@@ -157,8 +162,8 @@ describe('renderMarkdown', () => {
   })
 
   it('flags writes made during a read task', () => {
-    const markdown = renderMarkdown(reportOf('r', [runRecord('a', 1, {writes: {created: 2, modified: 1}})]))
-    expect(markdown).toContain('- a #1: 2 created, 1 modified')
+    const markdown = renderMarkdown(reportOf('r', [runRecord('a', 1, {writes: {created: 2, modified: 1, removed: 1}})]))
+    expect(markdown).toContain('- a #1: 2 created, 1 modified, 1 removed')
   })
 })
 
@@ -183,9 +188,13 @@ describe('conditionMismatches', () => {
   })
 })
 
-describe('the checked-in baseline', () => {
-  it('reads in this format and records every run condition, or no run could compare with it', () => {
-    const baseline = parseReport(readFileSync(BASELINE, 'utf8'), BASELINE)
+describe('the checked-in baselines', () => {
+  const files = existsSync(RESULTS) ? readdirSync(RESULTS).filter(file => file.endsWith('.json')).map(file => path.join(RESULTS, file)) : []
+
+  it('exist', () => { expect(files.length).toBeGreaterThan(0) })
+
+  it.each(files)('%s reads in this format and records every run condition, or no run could compare with it', file => {
+    const baseline = parseReport(readFileSync(file, 'utf8'), file)
     expect(RUN_CONDITIONS.filter(name => baseline.conditions[name] === null || baseline.conditions[name] === undefined)).toEqual([])
   })
 })
@@ -193,6 +202,6 @@ describe('the checked-in baseline', () => {
 describe('parseReport', () => {
   it('refuses a report written in another format', () => {
     expect(() => parseReport(JSON.stringify({...reportOf('old', []), schemaVersion: 1}), 'old.json'))
-      .toThrow('old.json is report format 1, not 3')
+      .toThrow('old.json is report format 1, not 5')
   })
 })

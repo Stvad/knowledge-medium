@@ -33,7 +33,7 @@ export const pageIdByTitle = async (probe: GraphProbe, title: string): Promise<s
 
 export const requirePageId = async (probe: GraphProbe, title: string): Promise<string> => {
   const id = await pageIdByTitle(probe, title)
-  if (!id) throw new Error(`fixture page not found: "${title}" — is the fixture seeded? (pnpm agent-eval seed)`)
+  if (!id) throw new Error(`fixture page not found: "${title}" — was the fixture imported?`)
   return id
 }
 
@@ -56,39 +56,6 @@ export const descendantsOf = (probe: GraphProbe, rootId: string): Promise<BlockR
     )
     SELECT ${BLOCK_COLUMNS} FROM blocks WHERE id IN (SELECT id FROM tree)`,
   [rootId])
-
-/** Hard-deletes blocks and everything under them, deleted rows included, so
- *  nothing is left for an agent's raw SQL to find. Live ones are deleted
- *  through the app first, so its cached queries (alias lookups, search
- *  handles) drop them; a raw delete alone leaves those answering. The raw
- *  delete is a write to a synced table: the eval only ever runs on a tab that
- *  has never synced. */
-export const purgeBlocks = async (probe: GraphProbe, ids: readonly string[]): Promise<void> => {
-  const doomed = new Set(ids)
-  for (let start = 0; start < ids.length; start += 200) {
-    const chunk = ids.slice(start, start + 200)
-    const rows = await sqlAll<{id: string, parent_id: string | null, deleted: number}>(probe,
-      `SELECT id, parent_id, deleted FROM blocks WHERE id IN (${chunk.map(() => '?').join(', ')})`, chunk)
-    for (const row of rows) {
-      if (!row.deleted && !(row.parent_id !== null && doomed.has(row.parent_id))) await probe.command({type: 'delete-block', id: row.id})
-    }
-  }
-  for (let start = 0; start < ids.length; start += 200) {
-    const chunk = ids.slice(start, start + 200)
-    await probe.command({
-      type: 'sql',
-      mode: 'execute',
-      allowSyncedWrite: true,
-      params: [probe.workspaceId, ...chunk],
-      sql: `WITH RECURSIVE doomed(id) AS (
-          SELECT id FROM blocks WHERE workspace_id = ? AND id IN (${chunk.map(() => '?').join(', ')})
-          UNION ALL
-          SELECT b.id FROM blocks b JOIN doomed ON b.parent_id = doomed.id
-        )
-        DELETE FROM blocks WHERE id IN (SELECT id FROM doomed)`,
-    })
-  }
-}
 
 export const getBlock = async (probe: GraphProbe, id: string) =>
   await probe.command({type: 'get-block', id}) as {id: string, content: string, properties: Record<string, unknown>} | null
