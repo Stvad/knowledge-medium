@@ -540,10 +540,13 @@ export const AGENT_VIEW_DEFAULTS = {
   sqlMaxRows: 200,
   /** An outline line's content budget; longer content is cut with a marker. */
   lineChars: 200,
-  /** What an outline's root and rows print at most, in characters (the unit
-   *  Claude Code's MCP output cap counts): under that cap (25k tokens) and the
-   *  CLI's 30k-character shell cap, with room for the legend lines after the
-   *  rows, which are not counted. */
+  /** What an outline's root and rows print, in characters (the unit Claude
+   *  Code's over-the-cap notice reports): for ordinary text well under its MCP
+   *  cap (25k tokens), and under the CLI's 30k-character shell cap with room for
+   *  the legend lines, which are not counted. Accepted, not guaranteed: the
+   *  first row is kept past it, so a page always advances; `format: 'json'`
+   *  prints the same rows several times larger; and text dense in tokens per
+   *  character reaches the MCP cap sooner. */
   outlineChars: 24_000,
 } as const
 
