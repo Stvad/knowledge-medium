@@ -1,1 +1,1 @@
-import{_D as e}from"../../chunks/app-Cdl-VUk4.js";export{e as LazyBlockComponent};
+import{BD as e}from"../../chunks/app-dNv9PMwM.js";export{e as LazyBlockComponent};

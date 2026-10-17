@@ -1,1 +1,1 @@
-import{IB as e,LB as t}from"../../../../chunks/app-Cdl-VUk4.js";export{e as BACKLINKS_COUNT_FOR_BLOCK_QUERY,t as backlinksCountForBlockQuery};
+import{aV as e,oV as t}from"../../../../chunks/app-dNv9PMwM.js";export{e as BACKLINKS_COUNT_FOR_BLOCK_QUERY,t as backlinksCountForBlockQuery};

@@ -1,1 +1,1 @@
-import{nO as e,rO as t,tO as n}from"../../../chunks/app-Cdl-VUk4.js";export{n as BlockTypeBlockRenderer,e as BlockTypeContentRenderer,t as writeBlockTypeLabel};
+import{EO as e,TO as t,wO as n}from"../../../chunks/app-dNv9PMwM.js";export{n as BlockTypeBlockRenderer,t as BlockTypeContentRenderer,e as writeBlockTypeLabel};

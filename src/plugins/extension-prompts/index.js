@@ -1,1 +1,1 @@
-import{AT as e,kT as t}from"../../../chunks/app-Cdl-VUk4.js";export{t as ExtensionPromptSurface,e as extensionPromptsExtension};
+import{$T as e,QT as t}from"../../../chunks/app-dNv9PMwM.js";export{t as ExtensionPromptSurface,e as extensionPromptsExtension};

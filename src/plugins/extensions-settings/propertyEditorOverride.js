@@ -1,1 +1,1 @@
-import{vt as e}from"../../../chunks/app-Cdl-VUk4.js";export{e as extensionsOverridesUi};
+import{vt as e}from"../../../chunks/app-dNv9PMwM.js";export{e as extensionsOverridesUi};

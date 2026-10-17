@@ -1,1 +1,1 @@
-import{_g as e,bg as t,gg as n,vg as r,yg as i}from"../../../chunks/app-Cdl-VUk4.js";export{n as EXTENSIONS_PAGE_TITLE,e as TUTORIAL_DEFAULT_TITLE,r as TUTORIAL_VIM_TITLE,i as extensionsPageOutline,t as tutorialOutline};
+import{Bg as e,Hg as t,Ug as n,Vg as r,zg as i}from"../../../chunks/app-dNv9PMwM.js";export{i as EXTENSIONS_PAGE_TITLE,e as TUTORIAL_DEFAULT_TITLE,r as TUTORIAL_VIM_TITLE,t as extensionsPageOutline,n as tutorialOutline};

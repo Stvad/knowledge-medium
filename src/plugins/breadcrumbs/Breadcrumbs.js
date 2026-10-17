@@ -1,1 +1,1 @@
-import{ov as e}from"../../../chunks/app-Cdl-VUk4.js";export{e as Breadcrumbs};
+import{kv as e}from"../../../chunks/app-dNv9PMwM.js";export{e as Breadcrumbs};

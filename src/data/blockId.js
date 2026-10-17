@@ -1,1 +1,1 @@
-import{J$ as e,Y$ as t}from"../../chunks/app-Cdl-VUk4.js";export{e as InvalidBlockIdError,t as assertCanonicalBlockId};
+import{v1 as e,y1 as t}from"../../chunks/app-dNv9PMwM.js";export{e as InvalidBlockIdError,t as assertCanonicalBlockId};
