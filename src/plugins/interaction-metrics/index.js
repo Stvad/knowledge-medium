@@ -1,1 +1,1 @@
-import{Pn as e}from"../../../chunks/app-7qvMlh0c.js";export{e as interactionMetricsPlugin};
+import{Pn as e}from"../../../chunks/app-DJY9udxR.js";export{e as interactionMetricsPlugin};

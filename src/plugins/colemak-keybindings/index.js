@@ -1,1 +1,1 @@
-import{Ah as e,jh as t,kh as n}from"../../../chunks/app-7qvMlh0c.js";export{n as COLEMAK_KEYBINDINGS_PLUGIN_ID,e as colemakKeybindingsPlugin,t as colemakMovementKeybindingOverrides};
+import{Ag as e,Mg as t,jg as n}from"../../../chunks/app-DJY9udxR.js";export{e as COLEMAK_KEYBINDINGS_PLUGIN_ID,n as colemakKeybindingsPlugin,t as colemakMovementKeybindingOverrides};
