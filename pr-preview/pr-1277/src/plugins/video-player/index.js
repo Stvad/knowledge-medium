@@ -1,1 +1,1 @@
-import{Dh as e}from"../../../chunks/app-ClgOQRQs.js";export{e as videoPlayerPlugin};
+import{Dh as e}from"../../../chunks/app-35vbAQgT.js";export{e as videoPlayerPlugin};

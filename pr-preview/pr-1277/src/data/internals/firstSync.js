@@ -1,1 +1,1 @@
-import{oY as e,sY as t}from"../../../chunks/app-ClgOQRQs.js";export{e as onFirstSync,t as onSyncSettled};
+import{oY as e,sY as t}from"../../../chunks/app-35vbAQgT.js";export{e as onFirstSync,t as onSyncSettled};
