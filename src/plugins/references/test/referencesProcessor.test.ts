@@ -34,7 +34,7 @@ import { aliasSeatSeed, computeAliasSeatId } from '@/data/targets'
 import { propertyDefinitionBlockId } from '@/data/definitionSeeds'
 import { propertyFieldContent } from '@/data/propertyChildren'
 import { dailyNoteBlockId, dailyNotesDataExtension } from '@/plugins/daily-notes'
-import { definitionSeedsFacet, projectedPropertyDefinitionsFacet } from '@/data/facets.js'
+import { definitionSeedsFacet, projectedPropertyDefinitionsFacet, queriesFacet } from '@/data/facets.js'
 import { resolveFacetRuntimeSync, type AppExtension } from '@/facets/facet.js'
 import { kernelDataExtension } from '@/data/kernelDataExtension.js'
 import { referencesDataExtension } from '../dataExtension.ts'
@@ -152,21 +152,19 @@ describe('parseReferences — basic alias creation', () => {
     let release!: () => void
     const reading = new Promise<void>(resolve => { entered = resolve })
     const gate = new Promise<void>(resolve => { release = resolve })
-    const realQuery = repo.query
-    ;(repo as {query: typeof realQuery}).query = new Proxy(realQuery, {
-      get(target, prop, receiver) {
-        if (prop !== 'aliasLookup') return Reflect.get(target, prop, receiver)
-        return (args: {workspaceId: string; alias: string}) => {
-          const handle = target.aliasLookup(args)
-          if (args.alias !== 'LateOrigin') return handle
-          return {...handle, load: async () => {
-            entered()
-            await gate
-            return handle.load()
-          }}
+    const queries = repo.facetRuntime!.read(queriesFacet)
+    const lookup = queries.get('core.aliasLookup')
+    if (!lookup) throw new Error('missing alias lookup query')
+    repo.__setQueriesForTesting([...queries.values()].map(query => query !== lookup ? query : {
+      ...query,
+      resolve: async (args, ctx) => {
+        if (args.alias === 'LateOrigin') {
+          entered()
+          await gate
         }
+        return lookup.resolve(args, ctx)
       },
-    })
+    }))
     const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
     try {
       await repo.tx(tx => tx.update('late-src', {content: 'see [[LateOrigin]]'}),
@@ -191,7 +189,8 @@ describe('parseReferences — basic alias creation', () => {
       for (const value of expected) expect(children).toContainEqual(value)
     } finally {
       release()
-      ;(repo as {query: typeof realQuery}).query = realQuery
+      await repo.awaitProcessors()
+      repo.__setQueriesForTesting([...queries.values()])
       errors.mockRestore()
     }
   })
