@@ -1,1 +1,0 @@
-import{qj as e}from"../../chunks/app-dRzILUbD.js";export{e as BlockProperties};

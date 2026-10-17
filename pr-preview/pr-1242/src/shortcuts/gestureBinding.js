@@ -1,1 +1,0 @@
-import{IE as e,LE as t}from"../../chunks/app-dRzILUbD.js";export{e as gestureBindingDescriptor,t as matchesGestureEvent};

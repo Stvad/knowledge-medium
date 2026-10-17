@@ -1,1 +1,0 @@
-import{Gq as e,Hq as t,Jq as n,Kq as r,Uq as i,Wq as a,qq as o}from"../../chunks/app-dRzILUbD.js";export{t as USER_SCHEMAS_PROJECTOR_ID,i as UserSchemasService,a as decodePresetConfig,e as isRegistrablePropertyName,r as propertySchemaNameRejection,o as tryBuildSchema,n as userSchemasProjector};

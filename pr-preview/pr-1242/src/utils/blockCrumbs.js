@@ -1,1 +1,0 @@
-import{ax as e,ix as t,ox as n,rx as r}from"../../chunks/app-dRzILUbD.js";export{r as CRUMB_MAX_CHARS,t as CRUMB_MAX_SEGMENTS,e as collapseCrumbs,n as crumbsFromAncestors};

@@ -1,1 +1,0 @@
-import{Jh as e,Yh as t}from"../../../chunks/app-dRzILUbD.js";export{e as attachmentObjectPath,t as authenticatedObjectUrl};

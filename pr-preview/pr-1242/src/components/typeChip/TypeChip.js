@@ -1,1 +1,0 @@
-import{Xw as e}from"../../../chunks/app-dRzILUbD.js";export{e as TypeChip};

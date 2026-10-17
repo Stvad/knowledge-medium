@@ -1,1 +1,0 @@
-import{QF as e}from"../../chunks/app-dRzILUbD.js";export{e as usePropertySchemas};

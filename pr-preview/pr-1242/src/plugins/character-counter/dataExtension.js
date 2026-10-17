@@ -1,1 +1,0 @@
-import{RB as e}from"../../../chunks/app-dRzILUbD.js";export{e as characterCounterDataExtension};
