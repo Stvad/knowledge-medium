@@ -878,7 +878,8 @@ export class TxImpl implements Tx {
       ...(patch?.properties !== undefined ? {properties: patch.properties} : {}),
       ...this.metadataPatch(id, beforeData, opts?.skipMetadata),
     }
-    const propertyWrites = await this.preparePropertyBagWrite(beforeData, after)
+    // Revival reuses child tombstones; validate the patch here before changing liveness.
+    await this.preparePropertyBagWrite(beforeData, after)
     await this.ctx.txDb.execute(
       `UPDATE blocks SET deleted = 0, content = ?, reference_target_id = ?, is_field_form = ?, references_json = ?, properties_json = ?, updated_at = ?, user_updated_at = ?, updated_by = ? WHERE id = ?`,
       [
@@ -895,7 +896,6 @@ export class TxImpl implements Tx {
     )
     this.pinWorkspace(beforeData.workspaceId)
     this.record(id, beforeData, after)
-    await this.writePropertyBagChildren(after, propertyWrites)
   }
 
   // ──── Data-field updates ────

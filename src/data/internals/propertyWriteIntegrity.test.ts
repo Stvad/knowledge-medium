@@ -142,6 +142,26 @@ describe('property write integrity in the active workspace', () => {
     expect(await values()).toEqual([])
   })
 
+  it.each([
+    {[unknown.name]: 'value'},
+    {[status.name]: 42},
+  ])('rejects an invalid restore patch before reviving the owner: %j', async properties => {
+    const repo = await setup()
+    await repo.tx(async tx => {
+      await tx.create(blockData('target'))
+      await tx.delete('target')
+    }, opts)
+    await repo.tx(async tx => {
+      await expect(tx.restore('target', {properties})).rejects.toThrow()
+      await tx.create(blockData('survivor'))
+    }, opts)
+    const target = await db.db.get<{deleted: number; properties_json: string}>(
+      'SELECT deleted, properties_json FROM blocks WHERE id = ?', ['target'],
+    )
+    expect(target).toEqual({deleted: 1, properties_json: '{}'})
+    expect(await row('survivor')).not.toBeNull()
+  })
+
   it('rejects an invalid bag before inserting even when the caller handles the error', async () => {
     const repo = await setup()
     await repo.tx(async tx => {

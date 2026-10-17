@@ -1910,6 +1910,29 @@ describe('revival re-materializes property children (#778)', () => {
     expect(await liveValueContents('p')).toEqual(['done'])
   })
 
+  it('a patched restore updates the original property rows and reconnects nested content', async () => {
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    const [field] = await liveFieldRows('p')
+    const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+    await repo.tx(tx => tx.create({
+      id: 'comment', workspaceId: WS, parentId: value!.id, orderKey: 'm', content: 'a note',
+    }), {scope: ChangeScope.BlockDefault})
+    await repo.mutate.delete({id: 'p'})
+    expect(await liveFieldRows('p')).toEqual([])
+
+    await repo.tx(tx => tx.restore('p', {properties: {status: 'changed'}}),
+      {scope: ChangeScope.BlockDefault})
+
+    expect((await liveFieldRows('p')).map(row => row.id)).toEqual([field!.id])
+    const restoredValues = (await childrenRows(field!.id)).filter(row => row.deleted === 0)
+    expect(restoredValues.map(row => [row.id, row.content])).toEqual([[value!.id, 'changed']])
+    expect(await cellValue('p')).toBe('changed')
+    const comment = await sharedDb.db.get<{deleted: number; parent_id: string}>(
+      'SELECT deleted, parent_id FROM blocks WHERE id = ?', ['comment'])
+    expect(comment).toEqual({deleted: 1, parent_id: value!.id})
+  })
+
   it('stays dormant in an un-flipped workspace', async () => {
     await seedWorkspace('cell')
     const repo = setup()
