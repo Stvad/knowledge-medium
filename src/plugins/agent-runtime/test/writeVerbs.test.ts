@@ -597,6 +597,20 @@ describe('review round 2', () => {
       .rejects.toThrow(/No block matches/)
     expect(parseMarkdownToBlocks).not.toHaveBeenCalled()
   })
+
+  it('refuses a full id that names no block before parsing — a UUID resolves without a lookup', async () => {
+    vi.mocked(parseMarkdownToBlocks).mockClear()
+    await expect(run({type: 'append-markdown', target: LONE, markdown: '- a\n- b'})).rejects.toThrow(/not found/)
+    expect(parseMarkdownToBlocks).not.toHaveBeenCalled()
+  })
+
+  it('refuses a deleted target before parsing the markdown', async () => {
+    await seed([{id: NOTE}])
+    await repo.mutate.delete({id: NOTE})
+    vi.mocked(parseMarkdownToBlocks).mockClear()
+    await expect(run({type: 'append-markdown', target: NOTE, markdown: '- a\n- b'})).rejects.toThrow(/deleted/)
+    expect(parseMarkdownToBlocks).not.toHaveBeenCalled()
+  })
 })
 
 describe('review round 3', () => {
