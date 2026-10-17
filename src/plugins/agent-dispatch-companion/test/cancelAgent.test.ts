@@ -1,10 +1,11 @@
 // @vitest-environment node
 /**
- * cancelAgent's only job is writing agent:cancel on a still-running
- * block — the daemon owns aborting the process and parking the
- * terminal error:cancelled state. Everything else must be a no-op: a
- * stray cancel signal on a done/queued/status-less block has no
- * running process for the daemon to kill.
+ * cancelAgent's only job is writing agent:cancel on a block the daemon
+ * still has live work for — a `running` task (kill the child) or a
+ * `queued` one it deferred behind an outage (stop retrying it). The
+ * daemon owns aborting and parking the terminal error:cancelled state.
+ * Everything else must be a no-op: a stray cancel signal on a
+ * done/error/status-less block has nothing for the daemon to act on.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope } from '@/data/api'
@@ -35,6 +36,18 @@ const createBlock = async (id: string, properties: Record<string, unknown> = {})
 describe('cancelAgent', () => {
   it('writes agent:cancel on a running block', async () => {
     const block = await createBlock('running-task', {[AGENT_PROPS.status]: 'running'})
+
+    await cancelAgent(block)
+
+    const row = await block.load()
+    expect(typeof row!.properties[AGENT_PROPS.cancel]).toBe('number')
+  })
+
+  it('writes agent:cancel on a deferred block — the way out of an automatic retry loop', async () => {
+    const block = await createBlock('deferred-task', {
+      [AGENT_PROPS.status]: 'queued',
+      [AGENT_PROPS.retryAfter]: Date.now() + 60_000,
+    })
 
     await cancelAgent(block)
 
