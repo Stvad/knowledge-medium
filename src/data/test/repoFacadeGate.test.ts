@@ -84,6 +84,7 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   metricsSpan: 'read-only span identity (same fields as metrics(), no snapshot cost)',
   exists: 'read',
   countBlocksUsingProperty: 'read',
+  countPropertyDefinitionConsumers: 'read',
   snapshotTypeRegistries: 'read — returns existing registry maps, no minting',
   propertySchemaResolverFor: 'read — returns a resolver bound to an existing immutable snapshot',
   whenPropertyDefinitionsReady: 'waits on the constructor-bound projector service; assigns no Repo fields',
