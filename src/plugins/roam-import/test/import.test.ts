@@ -30,10 +30,10 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '../../../data/repo'
 import {
   dailyNoteBlockId,
-  dailyNotesDataExtension,
   journalBlockId,
   todayIso,
-} from '@/plugins/daily-notes'
+} from '@/plugins/daily-notes/dailyNotes'
+import { dailyNotesDataExtension } from '@/plugins/daily-notes/dataExtension'
 import { roamTodoStateProp, statusProp, TODO_TYPE } from '@/plugins/todo/schema'
 import { todoDataExtension } from '@/plugins/todo/dataExtension'
 import { srsReschedulingDataExtension } from '@/plugins/srs-rescheduling/dataExtension'
