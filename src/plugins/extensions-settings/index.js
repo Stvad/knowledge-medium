@@ -1,1 +1,1 @@
-import{IT as e,LT as t,gt as n}from"../../../chunks/app-ANK-rQ_M.js";export{e as extensionsOverridesProp,t as extensionsPrefsType,n as extensionsSettingsPlugin};
+import{IT as e,LT as t,gt as n}from"../../../chunks/app-6tjxaoIc.js";export{e as extensionsOverridesProp,t as extensionsPrefsType,n as extensionsSettingsPlugin};

@@ -1,1 +1,1 @@
-import{hd as e,md as t}from"../../../chunks/app-ANK-rQ_M.js";export{t as DATA_MODEL_GUIDE,e as dataModelGuide};
+import{hd as e,md as t}from"../../../chunks/app-6tjxaoIc.js";export{t as DATA_MODEL_GUIDE,e as dataModelGuide};
