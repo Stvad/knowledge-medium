@@ -1,0 +1,1457 @@
+{
+  "schemaVersion": 5,
+  "label": "baseline-2026-10-16-sonnet-cli",
+  "startedAt": "2026-10-17T01:54:20.470Z",
+  "finishedAt": "2026-10-17T01:56:54.432Z",
+  "git": {
+    "sha": "c6266cd32bd39c069d855633024fe3a2b9cf98c9",
+    "branch": "claude/agent-eval-node-host",
+    "dirty": false
+  },
+  "model": "sonnet",
+  "conditions": {
+    "fixture": "9d499d1fadc8",
+    "importedFixture": "b7fdfa24fe35",
+    "surface": "cli",
+    "tools": "a2b5c5fb0930",
+    "model": "claude-sonnet-5-5",
+    "effort": "default",
+    "mcpOutputTokens": 25000,
+    "bashOutputChars": 30000,
+    "timeoutMs": 600000,
+    "workers": 4
+  },
+  "claudeCodeVersion": "2.1.285",
+  "allowedTools": [
+    "Bash(kmagent:*)",
+    "Bash(head:*)",
+    "Bash(tail:*)",
+    "Bash(grep:*)",
+    "Bash(jq:*)",
+    "Bash(wc:*)",
+    "Bash(sort:*)"
+  ],
+  "taskHashes": {
+    "kestrel-june": "801be53ba1d1",
+    "summarize-design": "ad486e9489e9",
+    "standup-blockers": "a37b6a3be286",
+    "orchard-open-todos": "240d762d287e",
+    "reading-log-needle": "4506571f3e25",
+    "renewal-vendors": "845a44c39568",
+    "meetings-with-person": "c6e85447937d",
+    "reading-log-filter": "d4a79704f99f",
+    "daily-checkin": "6ccfc19a5a71",
+    "edit-rollout-phrase": "7bb3d3925a69",
+    "create-linked-page": "6aac0f171a33",
+    "complete-todo": "a391fdfafaba"
+  },
+  "outputSizes": {
+    "search:pricing": 122443,
+    "search:kestrel": 2435,
+    "backlinks:Meeting": 143764,
+    "backlinks:Kestrel": 3416,
+    "subtree:Reading Log": 644156,
+    "subtree:pasted source": 123563,
+    "subtree:daily note": 2828,
+    "subtree:project page": 4064,
+    "subtree:design doc": 3776,
+    "page:Project Orchard": 571
+  },
+  "probeHashes": {
+    "search:pricing": "31bb52c81619",
+    "search:kestrel": "f6ca516143cf",
+    "backlinks:Meeting": "844152b4a55a",
+    "backlinks:Kestrel": "53663d3a41e9",
+    "subtree:Reading Log": "bc7d6060b37e",
+    "subtree:pasted source": "aa63e61bfaf4",
+    "subtree:daily note": "76e5ac2dd5b7",
+    "subtree:project page": "d50f9bf86afe",
+    "subtree:design doc": "665403e63d0b",
+    "page:Project Orchard": "22e6163754c4"
+  },
+  "runs": [
+    {
+      "task": "kestrel-june",
+      "kind": "read",
+      "rep": 1,
+      "pass": false,
+      "detail": "dates: all 5 matched; wrong or missing summary for [2026-06-04, 2026-06-18]",
+      "toolCalls": 6,
+      "graphCommands": {
+        "data-model": 1,
+        "page": 1,
+        "backlinks": 1,
+        "sql": 4
+      },
+      "toolErrors": 0,
+      "seenChars": 25514,
+      "maxSeenChars": 14586,
+      "cappedCalls": 2,
+      "returnedChars": 273392,
+      "apiCalls": 7,
+      "tokens": {
+        "input": 14,
+        "cacheCreation": 13653,
+        "cacheRead": 70322,
+        "output": 1650,
+        "contextTotal": 83989,
+        "peakContext": 15585
+      },
+      "elapsedMs": 20079,
+      "costUsd": 0.08520439999999999,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0,
+        "removed": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/kestrel-june-1.jsonl"
+    },
+    {
+      "task": "summarize-design",
+      "kind": "read",
+      "rep": 1,
+      "pass": true,
+      "detail": "author, both approaches, count right",
+      "toolCalls": 3,
+      "graphCommands": {
+        "page": 1,
+        "get-subtree": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 17514,
+      "maxSeenChars": 14586,
+      "cappedCalls": 0,
+      "returnedChars": 17514,
+      "apiCalls": 4,
+      "tokens": {
+        "input": 8,
+        "cacheCreation": 9305,
+        "cacheRead": 25854,
+        "output": 519,
+        "contextTotal": 35167,
+        "peakContext": 11237
+      },
+      "elapsedMs": 7462,
+      "costUsd": 0.04759680000000001,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0,
+        "removed": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/summarize-design-1.jsonl"
+    },
+    {
+      "task": "standup-blockers",
+      "kind": "read",
+      "rep": 1,
+      "pass": true,
+      "detail": "all 5 matched",
+      "toolCalls": 5,
+      "graphCommands": {
+        "page": 1,
+        "search": 2,
+        "sql": 2
+      },
+      "toolErrors": 0,
+      "seenChars": 26834,
+      "maxSeenChars": 14586,
+      "cappedCalls": 2,
+      "returnedChars": 267924,
+      "apiCalls": 6,
+      "tokens": {
+        "input": 12,
+        "cacheCreation": 14518,
+        "cacheRead": 55724,
+        "output": 1123,
+        "contextTotal": 70254,
+        "peakContext": 16450
+      },
+      "elapsedMs": 14762,
+      "costUsd": 0.08047080000000001,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0,
+        "removed": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/standup-blockers-1.jsonl"
+    },
+    {
+      "task": "orchard-open-todos",
+      "kind": "read",
+      "rep": 1,
+      "pass": true,
+      "detail": "all 6 matched",
+      "toolCalls": 4,
+      "graphCommands": {
+        "data-model": 1,
+        "page": 1,
+        "get-subtree": 1,
+        "sql": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 41458,
+      "maxSeenChars": 14586,
+      "cappedCalls": 0,
+      "returnedChars": 41458,
+      "apiCalls": 5,
+      "tokens": {
+        "input": 10,
+        "cacheCreation": 20782,
+        "cacheRead": 45645,
+        "output": 949,
+        "contextTotal": 66437,
+        "peakContext": 22714
+      },
+      "elapsedMs": 11071,
+      "costUsd": 0.101767,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0,
+        "removed": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/orchard-open-todos-1.jsonl"
+    },
+    {
+      "task": "reading-log-needle",
+      "kind": "read",
+      "rep": 1,
+      "pass": true,
+      "detail": "rating and recommender right",
+      "toolCalls": 3,
+      "graphCommands": {
+        "search": 1,
+        "get-block": 1,
+        "page": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 16666,
+      "maxSeenChars": 14586,
+      "cappedCalls": 0,
+      "returnedChars": 16666,
+      "apiCalls": 4,
+      "tokens": {
+        "input": 8,
+        "cacheCreation": 8916,
+        "cacheRead": 25809,
+        "output": 405,
+        "contextTotal": 34733,
+        "peakContext": 10848
+      },
+      "elapsedMs": 7589,
+      "costUsd": 0.0448918,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0,
+        "removed": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/reading-log-needle-1.jsonl"
+    },
+    {
+      "task": "renewal-vendors",
+      "kind": "read",
+      "rep": 1,
+      "pass": true,
+      "detail": "all 3 matched",
+      "toolCalls": 4,
+      "graphCommands": {
+        "data-model": 1,
+        "page": 1,
+        "backlinks": 1,
+        "sql": 3
+      },
+      "toolErrors": 0,
+      "seenChars": 32821,
+      "maxSeenChars": 14586,
+      "cappedCalls": 0,
+      "returnedChars": 32821,
+      "apiCalls": 5,
+      "tokens": {
+        "input": 10,
+        "cacheCreation": 16098,
+        "cacheRead": 46514,
+        "output": 758,
+        "contextTotal": 62622,
+        "peakContext": 18030
+      },
+      "elapsedMs": 10839,
+      "costUsd": 0.0812948,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0,
+        "removed": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/renewal-vendors-1.jsonl"
+    },
+    {
+      "task": "meetings-with-person",
+      "kind": "read",
+      "rep": 1,
+      "pass": true,
+      "detail": "count right; dates: all 9 matched",
+      "toolCalls": 4,
+      "graphCommands": {
+        "data-model": 1,
+        "page": 1,
+        "sql": 2
+      },
+      "toolErrors": 0,
+      "seenChars": 30242,
+      "maxSeenChars": 14586,
+      "cappedCalls": 1,
+      "returnedChars": 83643,
+      "apiCalls": 5,
+      "tokens": {
+        "input": 10,
+        "cacheCreation": 15302,
+        "cacheRead": 45648,
+        "output": 1135,
+        "contextTotal": 60960,
+        "peakContext": 17234
+      },
+      "elapsedMs": 13633,
+      "costUsd": 0.0817076,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0,
+        "removed": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/meetings-with-person-1.jsonl"
+    },
+    {
+      "task": "reading-log-filter",
+      "kind": "read",
+      "rep": 1,
+      "pass": true,
+      "detail": "all 12 matched",
+      "toolCalls": 5,
+      "graphCommands": {
+        "page": 1,
+        "get-subtree": 1
+      },
+      "toolErrors": 1,
+      "seenChars": 19533,
+      "maxSeenChars": 14586,
+      "cappedCalls": 1,
+      "returnedChars": 245774,
+      "apiCalls": 6,
+      "tokens": {
+        "input": 12,
+        "cacheCreation": 11082,
+        "cacheRead": 49302,
+        "output": 1354,
+        "contextTotal": 60396,
+        "peakContext": 13014
+      },
+      "elapsedMs": 15389,
+      "costUsd": 0.0677524,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0,
+        "removed": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/reading-log-filter-1.jsonl"
+    },
+    {
+      "task": "daily-checkin",
+      "kind": "write",
+      "rep": 1,
+      "pass": true,
+      "detail": "structure matches",
+      "toolCalls": 8,
+      "graphCommands": {
+        "daily-note": 1,
+        "get-subtree": 1,
+        "create-block": 5
+      },
+      "toolErrors": 2,
+      "seenChars": 19364,
+      "maxSeenChars": 14586,
+      "cappedCalls": 0,
+      "returnedChars": 19364,
+      "apiCalls": 7,
+      "tokens": {
+        "input": 14,
+        "cacheCreation": 11273,
+        "cacheRead": 60337,
+        "output": 1274,
+        "contextTotal": 71624,
+        "peakContext": 13205
+      },
+      "elapsedMs": 16042,
+      "costUsd": 0.0699274,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 4,
+        "modified": 0,
+        "removed": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/daily-checkin-1.jsonl"
+    },
+    {
+      "task": "edit-rollout-phrase",
+      "kind": "write",
+      "rep": 1,
+      "pass": true,
+      "detail": "phrase replaced",
+      "toolCalls": 4,
+      "graphCommands": {
+        "page": 1,
+        "get-subtree": 1,
+        "update-block": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 31729,
+      "maxSeenChars": 15768,
+      "cappedCalls": 0,
+      "returnedChars": 31729,
+      "apiCalls": 5,
+      "tokens": {
+        "input": 10,
+        "cacheCreation": 16420,
+        "cacheRead": 43719,
+        "output": 439,
+        "contextTotal": 60149,
+        "peakContext": 18352
+      },
+      "elapsedMs": 8803,
+      "costUsd": 0.07883380000000001,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 1,
+        "removed": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/edit-rollout-phrase-1.jsonl"
+    },
+    {
+      "task": "create-linked-page",
+      "kind": "write",
+      "rep": 1,
+      "pass": true,
+      "detail": "first block ok; 1 link(s) under Vendors",
+      "toolCalls": 6,
+      "graphCommands": {
+        "data-model": 1,
+        "page": 2,
+        "get-subtree": 2,
+        "eval": 1,
+        "get-block": 1,
+        "create-block": 3,
+        "backlinks": 1
+      },
+      "toolErrors": 1,
+      "seenChars": 31253,
+      "maxSeenChars": 14586,
+      "cappedCalls": 0,
+      "returnedChars": 31253,
+      "apiCalls": 7,
+      "tokens": {
+        "input": 14,
+        "cacheCreation": 15849,
+        "cacheRead": 79038,
+        "output": 966,
+        "contextTotal": 94901,
+        "peakContext": 17781
+      },
+      "elapsedMs": 15754,
+      "costUsd": 0.0888916,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 3,
+        "modified": 0,
+        "removed": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/create-linked-page-1.jsonl"
+    },
+    {
+      "task": "complete-todo",
+      "kind": "write",
+      "rep": 1,
+      "pass": true,
+      "detail": "status is \"done\"; text unchanged",
+      "toolCalls": 4,
+      "graphCommands": {
+        "data-model": 1,
+        "page": 1,
+        "get-subtree": 1,
+        "update-block": 1,
+        "get-block": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 45877,
+      "maxSeenChars": 18617,
+      "cappedCalls": 0,
+      "returnedChars": 45877,
+      "apiCalls": 5,
+      "tokens": {
+        "input": 10,
+        "cacheCreation": 22312,
+        "cacheRead": 53109,
+        "output": 502,
+        "contextTotal": 75431,
+        "peakContext": 24244
+      },
+      "elapsedMs": 10224,
+      "costUsd": 0.1049098,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 1,
+        "removed": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/complete-todo-1.jsonl"
+    },
+    {
+      "task": "kestrel-june",
+      "kind": "read",
+      "rep": 2,
+      "pass": false,
+      "detail": "dates: all 5 matched; wrong or missing summary for [2026-06-04, 2026-06-18]",
+      "toolCalls": 4,
+      "graphCommands": {
+        "data-model": 1,
+        "page": 1,
+        "sql": 2
+      },
+      "toolErrors": 0,
+      "seenChars": 23530,
+      "maxSeenChars": 14586,
+      "cappedCalls": 0,
+      "returnedChars": 23530,
+      "apiCalls": 5,
+      "tokens": {
+        "input": 10,
+        "cacheCreation": 12519,
+        "cacheRead": 41294,
+        "output": 1342,
+        "contextTotal": 53823,
+        "peakContext": 14451
+      },
+      "elapsedMs": 15036,
+      "costUsd": 0.0717748,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0,
+        "removed": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/kestrel-june-2.jsonl"
+    },
+    {
+      "task": "summarize-design",
+      "kind": "read",
+      "rep": 2,
+      "pass": true,
+      "detail": "author, both approaches, count right",
+      "toolCalls": 3,
+      "graphCommands": {
+        "page": 1,
+        "get-subtree": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 17514,
+      "maxSeenChars": 14586,
+      "cappedCalls": 0,
+      "returnedChars": 17514,
+      "apiCalls": 4,
+      "tokens": {
+        "input": 8,
+        "cacheCreation": 9303,
+        "cacheRead": 25848,
+        "output": 521,
+        "contextTotal": 35159,
+        "peakContext": 11235
+      },
+      "elapsedMs": 7156,
+      "costUsd": 0.0476076,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0,
+        "removed": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/summarize-design-2.jsonl"
+    },
+    {
+      "task": "standup-blockers",
+      "kind": "read",
+      "rep": 2,
+      "pass": true,
+      "detail": "all 5 matched",
+      "toolCalls": 5,
+      "graphCommands": {
+        "page": 1,
+        "search": 1,
+        "sql": 3
+      },
+      "toolErrors": 0,
+      "seenChars": 31415,
+      "maxSeenChars": 14586,
+      "cappedCalls": 3,
+      "returnedChars": 394023,
+      "apiCalls": 6,
+      "tokens": {
+        "input": 12,
+        "cacheCreation": 16963,
+        "cacheRead": 52104,
+        "output": 1217,
+        "contextTotal": 69079,
+        "peakContext": 18895
+      },
+      "elapsedMs": 14613,
+      "costUsd": 0.0904668,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0,
+        "removed": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/standup-blockers-2.jsonl"
+    },
+    {
+      "task": "orchard-open-todos",
+      "kind": "read",
+      "rep": 2,
+      "pass": true,
+      "detail": "all 6 matched",
+      "toolCalls": 3,
+      "graphCommands": {
+        "data-model": 1,
+        "page": 1,
+        "sql": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 33772,
+      "maxSeenChars": 14586,
+      "cappedCalls": 0,
+      "returnedChars": 33772,
+      "apiCalls": 4,
+      "tokens": {
+        "input": 8,
+        "cacheCreation": 16746,
+        "cacheRead": 29850,
+        "output": 637,
+        "contextTotal": 46604,
+        "peakContext": 18678
+      },
+      "elapsedMs": 8592,
+      "costUsd": 0.07934,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0,
+        "removed": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/orchard-open-todos-2.jsonl"
+    },
+    {
+      "task": "reading-log-needle",
+      "kind": "read",
+      "rep": 2,
+      "pass": true,
+      "detail": "rating and recommender right",
+      "toolCalls": 2,
+      "graphCommands": {
+        "search": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 15244,
+      "maxSeenChars": 14586,
+      "cappedCalls": 0,
+      "returnedChars": 15244,
+      "apiCalls": 3,
+      "tokens": {
+        "input": 6,
+        "cacheCreation": 8000,
+        "cacheRead": 15873,
+        "output": 327,
+        "contextTotal": 23879,
+        "peakContext": 9932
+      },
+      "elapsedMs": 5911,
+      "costUsd": 0.0384566,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0,
+        "removed": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/reading-log-needle-2.jsonl"
+    },
+    {
+      "task": "renewal-vendors",
+      "kind": "read",
+      "rep": 2,
+      "pass": true,
+      "detail": "all 3 matched",
+      "toolCalls": 4,
+      "graphCommands": {
+        "data-model": 1,
+        "page": 1,
+        "backlinks": 2,
+        "sql": 2
+      },
+      "toolErrors": 0,
+      "seenChars": 31703,
+      "maxSeenChars": 14586,
+      "cappedCalls": 0,
+      "returnedChars": 31703,
+      "apiCalls": 5,
+      "tokens": {
+        "input": 10,
+        "cacheCreation": 15695,
+        "cacheRead": 46415,
+        "output": 735,
+        "contextTotal": 62120,
+        "peakContext": 17627
+      },
+      "elapsedMs": 10433,
+      "costUsd": 0.07943299999999999,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0,
+        "removed": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/renewal-vendors-2.jsonl"
+    },
+    {
+      "task": "meetings-with-person",
+      "kind": "read",
+      "rep": 2,
+      "pass": true,
+      "detail": "count right; dates: all 9 matched",
+      "toolCalls": 8,
+      "graphCommands": {
+        "data-model": 1,
+        "page": 1,
+        "backlinks": 1,
+        "sql": 3
+      },
+      "toolErrors": 1,
+      "seenChars": 50309,
+      "maxSeenChars": 14586,
+      "cappedCalls": 0,
+      "returnedChars": 50309,
+      "apiCalls": 9,
+      "tokens": {
+        "input": 18,
+        "cacheCreation": 28051,
+        "cacheRead": 136961,
+        "output": 2186,
+        "contextTotal": 165030,
+        "peakContext": 29983
+      },
+      "elapsedMs": 22139,
+      "costUsd": 0.1614922,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0,
+        "removed": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/meetings-with-person-2.jsonl"
+    },
+    {
+      "task": "reading-log-filter",
+      "kind": "read",
+      "rep": 2,
+      "pass": true,
+      "detail": "all 12 matched",
+      "toolCalls": 5,
+      "graphCommands": {
+        "page": 1,
+        "get-subtree": 1
+      },
+      "toolErrors": 1,
+      "seenChars": 19466,
+      "maxSeenChars": 14586,
+      "cappedCalls": 1,
+      "returnedChars": 245707,
+      "apiCalls": 6,
+      "tokens": {
+        "input": 12,
+        "cacheCreation": 11016,
+        "cacheRead": 49298,
+        "output": 1362,
+        "contextTotal": 60326,
+        "peakContext": 12948
+      },
+      "elapsedMs": 14924,
+      "costUsd": 0.0675676,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0,
+        "removed": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/reading-log-filter-2.jsonl"
+    },
+    {
+      "task": "daily-checkin",
+      "kind": "write",
+      "rep": 2,
+      "pass": true,
+      "detail": "structure matches",
+      "toolCalls": 9,
+      "graphCommands": {
+        "daily-note": 1,
+        "get-subtree": 2,
+        "create-block": 5
+      },
+      "toolErrors": 2,
+      "seenChars": 19523,
+      "maxSeenChars": 14586,
+      "cappedCalls": 0,
+      "returnedChars": 19523,
+      "apiCalls": 9,
+      "tokens": {
+        "input": 18,
+        "cacheCreation": 11523,
+        "cacheRead": 85724,
+        "output": 1291,
+        "contextTotal": 97265,
+        "peakContext": 13455
+      },
+      "elapsedMs": 17134,
+      "costUsd": 0.07618280000000001,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 4,
+        "modified": 0,
+        "removed": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/daily-checkin-2.jsonl"
+    },
+    {
+      "task": "edit-rollout-phrase",
+      "kind": "write",
+      "rep": 2,
+      "pass": true,
+      "detail": "phrase replaced",
+      "toolCalls": 4,
+      "graphCommands": {
+        "page": 1,
+        "get-subtree": 1,
+        "update-block": 1,
+        "get-block": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 18894,
+      "maxSeenChars": 14586,
+      "cappedCalls": 0,
+      "returnedChars": 18894,
+      "apiCalls": 5,
+      "tokens": {
+        "input": 10,
+        "cacheCreation": 10201,
+        "cacheRead": 37057,
+        "output": 485,
+        "contextTotal": 47268,
+        "peakContext": 12133
+      },
+      "elapsedMs": 8392,
+      "costUsd": 0.0530854,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 1,
+        "removed": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/edit-rollout-phrase-2.jsonl"
+    },
+    {
+      "task": "create-linked-page",
+      "kind": "write",
+      "rep": 2,
+      "pass": true,
+      "detail": "first block ok; 1 link(s) under Vendors",
+      "toolCalls": 6,
+      "graphCommands": {
+        "data-model": 1,
+        "page": 2,
+        "get-subtree": 2,
+        "get-block": 1,
+        "create-block": 3
+      },
+      "toolErrors": 1,
+      "seenChars": 30650,
+      "maxSeenChars": 14586,
+      "cappedCalls": 0,
+      "returnedChars": 30650,
+      "apiCalls": 7,
+      "tokens": {
+        "input": 14,
+        "cacheCreation": 15566,
+        "cacheRead": 78967,
+        "output": 1052,
+        "contextTotal": 94547,
+        "peakContext": 17498
+      },
+      "elapsedMs": 14447,
+      "costUsd": 0.0886054,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 3,
+        "modified": 0,
+        "removed": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/create-linked-page-2.jsonl"
+    },
+    {
+      "task": "complete-todo",
+      "kind": "write",
+      "rep": 2,
+      "pass": true,
+      "detail": "status is \"done\"; text unchanged",
+      "toolCalls": 4,
+      "graphCommands": {
+        "data-model": 1,
+        "page": 1,
+        "get-subtree": 1,
+        "update-block": 1,
+        "get-block": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 45877,
+      "maxSeenChars": 18617,
+      "cappedCalls": 0,
+      "returnedChars": 45877,
+      "apiCalls": 5,
+      "tokens": {
+        "input": 10,
+        "cacheCreation": 22341,
+        "cacheRead": 53101,
+        "output": 538,
+        "contextTotal": 75452,
+        "peakContext": 24273
+      },
+      "elapsedMs": 10299,
+      "costUsd": 0.10538420000000001,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 1,
+        "removed": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/complete-todo-2.jsonl"
+    },
+    {
+      "task": "kestrel-june",
+      "kind": "read",
+      "rep": 3,
+      "pass": false,
+      "detail": "dates: all 5 matched; wrong or missing summary for [2026-06-04, 2026-06-18]",
+      "toolCalls": 6,
+      "graphCommands": {
+        "data-model": 1,
+        "page": 1,
+        "sql": 3,
+        "backlinks": 1
+      },
+      "toolErrors": 1,
+      "seenChars": 24124,
+      "maxSeenChars": 14586,
+      "cappedCalls": 1,
+      "returnedChars": 152064,
+      "apiCalls": 7,
+      "tokens": {
+        "input": 14,
+        "cacheCreation": 12831,
+        "cacheRead": 68919,
+        "output": 1441,
+        "contextTotal": 81764,
+        "peakContext": 14763
+      },
+      "elapsedMs": 18172,
+      "costUsd": 0.0795458,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0,
+        "removed": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/kestrel-june-3.jsonl"
+    },
+    {
+      "task": "summarize-design",
+      "kind": "read",
+      "rep": 3,
+      "pass": true,
+      "detail": "author, both approaches, count right",
+      "toolCalls": 3,
+      "graphCommands": {
+        "page": 1,
+        "get-subtree": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 17514,
+      "maxSeenChars": 14586,
+      "cappedCalls": 0,
+      "returnedChars": 17514,
+      "apiCalls": 4,
+      "tokens": {
+        "input": 8,
+        "cacheCreation": 9305,
+        "cacheRead": 25854,
+        "output": 653,
+        "contextTotal": 35167,
+        "peakContext": 11237
+      },
+      "elapsedMs": 7667,
+      "costUsd": 0.0489368,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0,
+        "removed": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/summarize-design-3.jsonl"
+    },
+    {
+      "task": "standup-blockers",
+      "kind": "read",
+      "rep": 3,
+      "pass": true,
+      "detail": "all 5 matched",
+      "toolCalls": 5,
+      "graphCommands": {
+        "data-model": 1,
+        "page": 1,
+        "sql": 2
+      },
+      "toolErrors": 1,
+      "seenChars": 41758,
+      "maxSeenChars": 20814,
+      "cappedCalls": 0,
+      "returnedChars": 41758,
+      "apiCalls": 6,
+      "tokens": {
+        "input": 12,
+        "cacheCreation": 23108,
+        "cacheRead": 75592,
+        "output": 1396,
+        "contextTotal": 98712,
+        "peakContext": 25040
+      },
+      "elapsedMs": 15483,
+      "costUsd": 0.12153440000000001,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0,
+        "removed": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/standup-blockers-3.jsonl"
+    },
+    {
+      "task": "orchard-open-todos",
+      "kind": "read",
+      "rep": 3,
+      "pass": true,
+      "detail": "all 6 matched",
+      "toolCalls": 3,
+      "graphCommands": {
+        "data-model": 1,
+        "page": 1,
+        "get-subtree": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 20978,
+      "maxSeenChars": 14586,
+      "cappedCalls": 0,
+      "returnedChars": 20978,
+      "apiCalls": 4,
+      "tokens": {
+        "input": 8,
+        "cacheCreation": 11158,
+        "cacheRead": 26072,
+        "output": 556,
+        "contextTotal": 37238,
+        "peakContext": 13090
+      },
+      "elapsedMs": 8150,
+      "costUsd": 0.055422400000000004,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0,
+        "removed": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/orchard-open-todos-3.jsonl"
+    },
+    {
+      "task": "reading-log-needle",
+      "kind": "read",
+      "rep": 3,
+      "pass": true,
+      "detail": "rating and recommender right",
+      "toolCalls": 3,
+      "graphCommands": {
+        "search": 1,
+        "sql": 1,
+        "page": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 16204,
+      "maxSeenChars": 14586,
+      "cappedCalls": 0,
+      "returnedChars": 16204,
+      "apiCalls": 4,
+      "tokens": {
+        "input": 8,
+        "cacheCreation": 8752,
+        "cacheRead": 25803,
+        "output": 448,
+        "contextTotal": 34563,
+        "peakContext": 10684
+      },
+      "elapsedMs": 7348,
+      "costUsd": 0.0446646,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0,
+        "removed": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/reading-log-needle-3.jsonl"
+    },
+    {
+      "task": "renewal-vendors",
+      "kind": "read",
+      "rep": 3,
+      "pass": true,
+      "detail": "all 3 matched",
+      "toolCalls": 4,
+      "graphCommands": {
+        "data-model": 1,
+        "page": 1,
+        "backlinks": 2,
+        "search": 1,
+        "sql": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 32176,
+      "maxSeenChars": 14586,
+      "cappedCalls": 0,
+      "returnedChars": 32176,
+      "apiCalls": 5,
+      "tokens": {
+        "input": 10,
+        "cacheCreation": 15891,
+        "cacheRead": 45685,
+        "output": 860,
+        "contextTotal": 61586,
+        "peakContext": 17823
+      },
+      "elapsedMs": 11333,
+      "costUsd": 0.081321,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0,
+        "removed": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/renewal-vendors-3.jsonl"
+    },
+    {
+      "task": "meetings-with-person",
+      "kind": "read",
+      "rep": 3,
+      "pass": true,
+      "detail": "count right; dates: all 9 matched",
+      "toolCalls": 4,
+      "graphCommands": {
+        "data-model": 1,
+        "page": 1,
+        "sql": 2
+      },
+      "toolErrors": 0,
+      "seenChars": 30366,
+      "maxSeenChars": 14586,
+      "cappedCalls": 1,
+      "returnedChars": 94548,
+      "apiCalls": 5,
+      "tokens": {
+        "input": 10,
+        "cacheCreation": 15270,
+        "cacheRead": 45602,
+        "output": 1081,
+        "contextTotal": 60882,
+        "peakContext": 17202
+      },
+      "elapsedMs": 13433,
+      "costUsd": 0.0810304,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0,
+        "removed": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/meetings-with-person-3.jsonl"
+    },
+    {
+      "task": "reading-log-filter",
+      "kind": "read",
+      "rep": 3,
+      "pass": true,
+      "detail": "all 12 matched",
+      "toolCalls": 5,
+      "graphCommands": {
+        "page": 1,
+        "get-subtree": 1
+      },
+      "toolErrors": 1,
+      "seenChars": 19519,
+      "maxSeenChars": 14586,
+      "cappedCalls": 1,
+      "returnedChars": 245760,
+      "apiCalls": 6,
+      "tokens": {
+        "input": 12,
+        "cacheCreation": 11062,
+        "cacheRead": 49307,
+        "output": 1350,
+        "contextTotal": 60381,
+        "peakContext": 12994
+      },
+      "elapsedMs": 13502,
+      "costUsd": 0.06763340000000001,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0,
+        "removed": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/reading-log-filter-3.jsonl"
+    },
+    {
+      "task": "daily-checkin",
+      "kind": "write",
+      "rep": 3,
+      "pass": true,
+      "detail": "structure matches",
+      "toolCalls": 10,
+      "graphCommands": {
+        "daily-note": 1,
+        "get-subtree": 2,
+        "create-block": 5
+      },
+      "toolErrors": 2,
+      "seenChars": 19612,
+      "maxSeenChars": 14586,
+      "cappedCalls": 0,
+      "returnedChars": 19612,
+      "apiCalls": 10,
+      "tokens": {
+        "input": 20,
+        "cacheCreation": 11747,
+        "cacheRead": 99249,
+        "output": 1394,
+        "contextTotal": 111016,
+        "peakContext": 13679
+      },
+      "elapsedMs": 19019,
+      "costUsd": 0.0808178,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 4,
+        "modified": 0,
+        "removed": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/daily-checkin-3.jsonl"
+    },
+    {
+      "task": "edit-rollout-phrase",
+      "kind": "write",
+      "rep": 3,
+      "pass": true,
+      "detail": "phrase replaced",
+      "toolCalls": 5,
+      "graphCommands": {
+        "page": 1,
+        "get-subtree": 1,
+        "update-block": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 31728,
+      "maxSeenChars": 15768,
+      "cappedCalls": 0,
+      "returnedChars": 31728,
+      "apiCalls": 5,
+      "tokens": {
+        "input": 10,
+        "cacheCreation": 16512,
+        "cacheRead": 43903,
+        "output": 488,
+        "contextTotal": 60425,
+        "peakContext": 18444
+      },
+      "elapsedMs": 7989,
+      "costUsd": 0.0797286,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 1,
+        "removed": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/edit-rollout-phrase-3.jsonl"
+    },
+    {
+      "task": "create-linked-page",
+      "kind": "write",
+      "rep": 3,
+      "pass": false,
+      "detail": "first block is null; 0 link(s) under Vendors",
+      "toolCalls": 7,
+      "graphCommands": {
+        "data-model": 1,
+        "page": 2,
+        "get-subtree": 1,
+        "get-block": 2,
+        "create-block": 1
+      },
+      "toolErrors": 2,
+      "seenChars": 31234,
+      "maxSeenChars": 14586,
+      "cappedCalls": 0,
+      "returnedChars": 31234,
+      "apiCalls": 8,
+      "tokens": {
+        "input": 16,
+        "cacheCreation": 15766,
+        "cacheRead": 95772,
+        "output": 1335,
+        "contextTotal": 111554,
+        "peakContext": 17698
+      },
+      "elapsedMs": 18853,
+      "costUsd": 0.0956004,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 1,
+        "modified": 0,
+        "removed": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/create-linked-page-3.jsonl"
+    },
+    {
+      "task": "complete-todo",
+      "kind": "write",
+      "rep": 3,
+      "pass": true,
+      "detail": "status is \"done\"; text unchanged",
+      "toolCalls": 4,
+      "graphCommands": {
+        "data-model": 1,
+        "page": 1,
+        "get-subtree": 1,
+        "update-block": 1,
+        "get-block": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 45877,
+      "maxSeenChars": 18617,
+      "cappedCalls": 0,
+      "returnedChars": 45877,
+      "apiCalls": 5,
+      "tokens": {
+        "input": 10,
+        "cacheCreation": 22341,
+        "cacheRead": 53117,
+        "output": 528,
+        "contextTotal": 75468,
+        "peakContext": 24273
+      },
+      "elapsedMs": 9888,
+      "costUsd": 0.1052874,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 1,
+        "removed": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/complete-todo-3.jsonl"
+    }
+  ]
+}
