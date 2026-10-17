@@ -1,1 +1,0 @@
-import{_D as e}from"../../chunks/app-MNJGvpFI.js";export{e as LazyBlockComponent};

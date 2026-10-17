@@ -1,1 +1,0 @@
-import{Mv as e,Nv as t}from"../../../chunks/app-MNJGvpFI.js";export{e as isLeftSidebarSectionContribution,t as leftSidebarSectionsFacet};

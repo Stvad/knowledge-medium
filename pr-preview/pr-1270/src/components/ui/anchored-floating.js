@@ -1,1 +1,0 @@
-import{OF as e,kF as t}from"../../../chunks/app-MNJGvpFI.js";export{e as floatingAnchorFromRect,t as useAnchoredFloating};

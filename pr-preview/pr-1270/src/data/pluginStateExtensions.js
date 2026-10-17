@@ -1,1 +1,0 @@
-import{KB as e,qB as t}from"../../chunks/app-MNJGvpFI.js";export{e as pluginPrefsExtension,t as pluginUIStateExtension};

@@ -1,1 +1,0 @@
-import{G3 as e,K3 as t,q3 as n}from"../../../chunks/app-MNJGvpFI.js";export{e as SYSTEM_AUTHOR_PREFIX,t as isSystemAuthor,n as systemAuthor};
