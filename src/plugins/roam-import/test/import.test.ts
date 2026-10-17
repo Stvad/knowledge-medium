@@ -50,7 +50,7 @@ import {
 } from '@/plugins/srs-rescheduling/schema'
 import { computeAliasSeatId } from '../../../data/targets'
 import { importRoam } from '../import'
-import { roamBlockId } from '../ids'
+import { roamBlockId } from '../blockIds'
 import { ROAM_ISA_PROP, ROAM_PAGE_ALIAS_PROP } from '../properties'
 import type { RoamExport } from '../types'
 

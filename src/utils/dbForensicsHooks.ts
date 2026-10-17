@@ -8,6 +8,7 @@
 import { dbForensics, type DbForensics } from '@/utils/dbForensics.js'
 import { isLocalDbCorruptionError, isRuntimeDbCorruptionError } from '@/utils/localDbCorruption.js'
 import { reportRuntimeLocalDbCorruption } from '@/data/localDbCorruptionSignal.js'
+import { omnilinerNamespace } from '@/utils/omnilinerNamespace.js'
 
 // Structural PowerSync status surface (avoids importing PowerSync types; see
 // firstSync.ts for the same approach). `downloadError` lives under
@@ -153,17 +154,19 @@ export const installDbForensicsLifecycle = (forensics: DbForensics = dbForensics
   window.addEventListener('pageshow', () => void forensics.clearCleanShutdown())
   window.addEventListener('resume', () => void forensics.clearCleanShutdown())
 
-  // Retrieval hook, shared with the `__omniliner` namespace (see
-  // metricsConsoleHook). Available even in the bootstrap error fallback (no
-  // Repo), so a corrupt-DB session can still hand over its forensics.
-  const ns = (window.__omniliner ?? {}) as Record<string, unknown> & {
-    forensics?: OmnilinerForensicsApi
-  }
-  ns.forensics = {
+  // Retrieval hook on the shared `__omniliner` namespace. Available even in
+  // the bootstrap error fallback (no Repo), so a corrupt-DB session can still
+  // hand over its forensics.
+  omnilinerNamespace().forensics = {
     dump: () => forensics.exportAll(),
     download: async () => downloadJson('db-forensics.json', await forensics.exportAll()),
   }
-  window.__omniliner = ns as Window['__omniliner']
+}
+
+declare module '@/utils/omnilinerNamespace' {
+  interface OmnilinerNamespace {
+    forensics?: OmnilinerForensicsApi
+  }
 }
 
 interface OmnilinerForensicsApi {
