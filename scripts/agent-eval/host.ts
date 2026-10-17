@@ -23,18 +23,21 @@ import { executeCommand } from '@/plugins/agent-runtime/commands'
 import { READY_PREFIX } from './hosting'
 import { openFixtureRuntime, TEST_USER, TEST_WORKSPACE_ID } from './testGraph'
 
-const requireEnv = (name: string): string => {
+/** Read once and removed, so `eval` code the agent sends cannot read the
+ *  run's bridge secret. */
+const takeEnv = (name: string): string => {
   const value = process.env[name]?.trim()
   if (!value) throw new Error(`${name} is not set`)
+  delete process.env[name]
   return value
 }
 
 const main = async () => {
   const {values} = parseArgs({options: {seed: {type: 'boolean', default: false}, from: {type: 'string'}}})
   if (values.seed === Boolean(values.from)) throw new Error('pass exactly one of --seed and --from <dir>')
-  const bridgeUrl = requireEnv('AGENT_EVAL_BRIDGE_URL')
-  const secret = requireEnv('AGENT_EVAL_BRIDGE_SECRET')
-  const token = requireEnv('AGENT_EVAL_TOKEN')
+  const bridgeUrl = takeEnv('AGENT_EVAL_BRIDGE_URL')
+  const secret = takeEnv('AGENT_EVAL_BRIDGE_SECRET')
+  const token = takeEnv('AGENT_EVAL_TOKEN')
 
   const testDb = await createTestDb(values.from ? {from: values.from} : {})
   const runtime = await openFixtureRuntime(testDb.db, {seed: values.seed})

@@ -83,6 +83,11 @@ export interface HostOptions {
   log: string
 }
 
+/** All a host inherits. It runs whatever `eval` code the agent sends, with
+ *  this user's privileges and no browser around it, so it gets none of the
+ *  shell's secrets. */
+const HOST_ENV = ['PATH', 'HOME', 'TMPDIR', 'LANG']
+
 const live = new Set<ChildProcess>()
 // A run that fails exits at once; its hosts must not outlive it.
 process.on('exit', () => { for (const child of live) child.kill('SIGKILL') })
@@ -92,7 +97,7 @@ export const startHost = async (options: HostOptions): Promise<HostedGraph> => {
   const log = openSync(options.log, 'a')
   const child = spawn(options.command.bin, [...options.command.args, ...(options.from ? ['--from', options.from] : ['--seed'])], {
     env: {
-      ...envWithoutAgentRuntime(process.env),
+      ...Object.fromEntries(HOST_ENV.flatMap(key => (process.env[key] === undefined ? [] : [[key, process.env[key]]]))),
       // Node 25+ ships a `localStorage` global that the host's shim must replace.
       NODE_OPTIONS: '--no-experimental-webstorage',
       AGENT_EVAL_BRIDGE_URL: options.bridge.url,

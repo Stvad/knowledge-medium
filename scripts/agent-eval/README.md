@@ -98,6 +98,11 @@ It does not try to hold these, and a finding about them is declined:
   written to satisfy two predicates at once. On the `cli` surface the filters can read
   files, and an agent that went looking could find the generator, which holds the
   answers. Every command it ran is in its transcript.
+- An agent that sets out to leave its sandbox. On the `cli` surface `kmagent eval` runs
+  code in the node host with your user's privileges, not in a browser, so the Bash
+  allowlist bounds the shell, not what the agent can reach. A host inherits only `PATH`,
+  `HOME`, `TMPDIR` and `LANG`, so the shell's secrets are not in its environment. Run
+  the eval where you would run an agent with shell access.
 - A run that crosses local midnight, which moves the daily-note task to another day.
 
 ## The fixture
