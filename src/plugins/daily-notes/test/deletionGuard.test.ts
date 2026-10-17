@@ -10,11 +10,11 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { createTestRepo } from '@/data/test/createTestRepo'
 import type { Repo } from '@/data/repo'
 import {
-  dailyNotesDataExtension,
   getOrCreateDailyNote,
   getOrCreateJournalBlock,
   todayIso,
-} from '@/plugins/daily-notes'
+} from '@/plugins/daily-notes/dailyNotes'
+import { dailyNotesDataExtension } from '@/plugins/daily-notes/dataExtension'
 import { dailyNotesDeletionGuard } from '../deletionGuard.ts'
 
 const WS = 'ws-1'
