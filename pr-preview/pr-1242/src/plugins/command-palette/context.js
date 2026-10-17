@@ -1,1 +1,1 @@
-import{FC as e,IC as t,NC as n,PC as r}from"../../../chunks/app-DIytRu5z.js";export{n as COMMAND_PALETTE_ACTION_ID,r as COMMAND_PALETTE_CONTEXT,e as COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,t as commandPaletteActionContext};
+import{MC as e,NC as t,PC as n,jC as r}from"../../../chunks/app-dRzILUbD.js";export{r as COMMAND_PALETTE_ACTION_ID,e as COMMAND_PALETTE_CONTEXT,t as COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,n as commandPaletteActionContext};
