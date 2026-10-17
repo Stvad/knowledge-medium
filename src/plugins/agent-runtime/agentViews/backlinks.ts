@@ -13,11 +13,12 @@ import {
 } from '@/plugins/grouped-backlinks/resolveConfig.js'
 import { labelForBlockData } from '@/utils/linkTargetAutocomplete.js'
 import {
+  contextParentId,
   firstVisibleChildren,
-  labelParents,
   loadBlocks,
   loadContentHeads,
   loadCrumbs,
+  recordLabels,
   recordSiblings,
   visibleChildCounts,
 } from './context.ts'
@@ -25,21 +26,17 @@ import { createPropertyRenderer, NAME_CHARS } from './properties.ts'
 import { displayIds } from './displayIds.ts'
 import {
   clampInt,
-  CONTEXT_HEAD_CHARS,
-  contextPreview,
   CUT_LEGEND,
   crumbLine,
   joinDisplayLines,
   loadRoot,
   metaSuffix,
   plural,
-  RECORD_SIBLINGS,
   siblingLines,
-  siblingPreviews,
   toViewRow,
   type ViewRow,
 } from './shared.ts'
-import { boundLabels, clipLine, formatCount, isReferenceOnly } from './text.ts'
+import { boundLabels, clipLine, CONTEXT_HEAD_CHARS, contextPreview, formatCount, isReferenceOnly } from './text.ts'
 
 const MAX_BACKLINKS = 500
 const MAX_GROUPS = 200
@@ -140,10 +137,7 @@ const backlinkRows = async (
 ): Promise<BacklinkRow[]> => {
   const ids = sources.map(source => source.id)
   const linkOnly = sources.filter(source => isReferenceOnly(source.content))
-  // A self-parented source (sync applies parent ids verbatim) has no parent to quote.
-  const parentIds = [...new Set(linkOnly
-    .map(source => source.parentId)
-    .filter((id, index): id is string => id !== null && id !== linkOnly[index].id))]
+  const parentIds = [...new Set(linkOnly.flatMap(source => contextParentId(source) ?? []))]
   const [renderer, shortIds, crumbs, childCounts, via, parents, firstChildren, siblings] = await Promise.all([
     createPropertyRenderer(repo, sources, 'brief'),
     displayIds(repo, ids),
@@ -152,8 +146,7 @@ const backlinkRows = async (
     viaPropertiesBySource(repo, workspaceId, targetId, ids),
     loadContentHeads(repo, parentIds, CONTEXT_HEAD_CHARS),
     firstVisibleChildren(repo, linkOnly.map(source => source.id), workspaceId, CONTEXT_HEAD_CHARS),
-    labelParents(repo, sources, workspaceId).then(labels =>
-      recordSiblings(repo, sources, labels, workspaceId, {count: RECORD_SIBLINGS, chars: CONTEXT_HEAD_CHARS})),
+    recordLabels(repo, sources, workspaceId).then(records => recordSiblings(repo, ids, records, workspaceId)),
   ])
   return sources.map(source => {
     const row: BacklinkRow = {
@@ -173,8 +166,8 @@ const backlinkRows = async (
       const child = firstChildren.get(source.id)
       if (child?.trim()) row.firstChildContent = contextPreview(child)
     }
-    const record = siblingPreviews(siblings.get(source.id))
-    if (record.length > 0) row.siblings = record
+    const record = siblings.get(source.id)
+    if (record) row.siblings = record
     return row
   })
 }

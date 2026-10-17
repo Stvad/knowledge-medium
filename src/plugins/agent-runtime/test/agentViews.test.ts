@@ -1163,6 +1163,43 @@ describe('view-backlinks', () => {
     expect(await blockCount()).toBe(before)
   })
 
+  it('quotes no self-parented label\'s own children as its siblings', async () => {
+    await create({id: TARGET, content: 'Target', properties: {alias: ['Target']}})
+    const label = uuid('6f100001', 1)
+    await create({id: label, content: '[[Target]]', references: [{id: TARGET, alias: 'Target'}]})
+    await create({id: uuid('6f100002', 2), parentId: label, content: 'with [[Target]] account', references: [{id: TARGET, alias: 'Target'}]})
+    await create({id: uuid('6f100003', 3), parentId: label, content: 'child line of the label'})
+    // Sync applies parent ids verbatim, so a block can be its own parent.
+    await sharedDb.db.execute('UPDATE blocks SET parent_id = id WHERE id = ?', [label])
+
+    const out = await view<BacklinksView>({type: 'view-backlinks', ref: TARGET, format: 'json'})
+    expect(out.rows.find(row => row.id === label)).not.toHaveProperty('siblings')
+  })
+
+  it('plans every lookup by an id list with the list as the outer loop', async () => {
+    await create({id: TARGET, content: 'Target', properties: {alias: ['Target']}})
+    const meeting = uuid('6f200001', 1)
+    await create({id: meeting, content: '[[Meeting]]'})
+    await create({id: uuid('6f200002', 2), parentId: meeting, content: 'with [[Target]]', references: [{id: TARGET, alias: 'Target'}]})
+    const lookups: Array<{sql: string, params: unknown[]}> = []
+    await duringReads({
+      before: async (sql, params) => {
+        if (/FROM json_each\(\?\) j\s+(CROSS )?JOIN blocks b/.test(sql)) lookups.push({sql, params: params as unknown[]})
+      },
+    }, async () => {
+      await view({type: 'view-backlinks', ref: TARGET})
+      await view({type: 'view-search', query: 'Target'})
+    })
+    expect(lookups.length).toBeGreaterThan(0)
+    for (const {sql, params} of lookups) {
+      // Without table stats the planner may drive from a workspace index and
+      // rescan the id list for every block in the workspace.
+      const plan = await sharedDb.db.getAll<{detail: string}>(`EXPLAIN QUERY PLAN ${sql}`, params)
+      const first = plan.find(step => /^(SCAN|SEARCH)/.test(step.detail))
+      expect(first?.detail, sql).toMatch(/json_each|\bj\b/)
+    }
+  })
+
   it('prints no sibling line for a sibling that is only whitespace', async () => {
     await create({id: TARGET, content: 'Target', properties: {alias: ['Target']}})
     const meeting = uuid('6f000001', 1)
@@ -1385,6 +1422,41 @@ describe('view-search', () => {
     expect(out.hits).toHaveLength(1)
     expect(out.hits[0].duplicateCount).toBe(1)
     expect(out.hits[0]).not.toHaveProperty('siblings')
+  })
+
+  it('takes no label from a property field row, so property values fold', async () => {
+    const definition = uuid('6c300000', 0)
+    for (const [index, owner] of ['Kestrel', 'Copperline'].entries()) {
+      const page = uuid(`6c30001${index}`, 10 + index)
+      await create({id: page, content: owner, properties: {alias: [owner]}})
+      const field = uuid(`6c30002${index}`, 20 + index)
+      await create({id: field, parentId: page, content: `::((${definition}))`})
+      await create({id: uuid(`6c30003${index}`, 30 + index), parentId: field, content: 'renewal due'})
+      await create({id: uuid(`6c30004${index}`, 40 + index), parentId: field, content: 'second value'})
+    }
+    // A raw write: the field-form bit is derived, and no processor runs here to stamp it.
+    await sharedDb.db.execute("UPDATE blocks SET is_field_form = 1 WHERE content LIKE '::((%'")
+
+    const out = await view<SearchView>({type: 'view-search', query: 'renewal due', format: 'json'})
+    expect(out.hits).toHaveLength(1)
+    expect(out.hits[0].duplicateCount).toBe(1)
+    expect(out.hits[0]).not.toHaveProperty('siblings')
+  })
+
+  it('gives a duplicate whose breadcrumb could not be read no place', async () => {
+    const page = uuid('6c400000', 0)
+    await create({id: page, content: 'Archive', properties: {alias: ['Archive']}})
+    for (const index of [1, 2]) {
+      const mid = uuid(`6c40000${index}`, index)
+      await create({id: mid, parentId: page, content: `section ${index}`})
+      await create({id: uuid(`6c40001${index}`, 10 + index), parentId: mid, content: 'zebra crossing'})
+    }
+    // Tombstoned with no cascade, as sync can leave a chain.
+    await sharedDb.db.execute('UPDATE blocks SET deleted = 1 WHERE id IN (?, ?)', [uuid('6c400001', 1), uuid('6c400002', 2)])
+
+    const out = await view<SearchView>({type: 'view-search', query: 'zebra', format: 'json'})
+    expect(out.hits[0].breadcrumb).toEqual(['…'])
+    expect(out.hits[0].duplicates.map(duplicate => duplicate.place)).toEqual([null])
   })
 
   it('folds a record line only with its own record, whatever the text holds', async () => {

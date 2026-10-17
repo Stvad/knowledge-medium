@@ -4,19 +4,11 @@ import { EXTENSION_TYPE } from '@/data/blockTypes'
 import type { BlockSearchFilter } from '@/data/searchFilter'
 import { AGENT_VIEW_DEFAULTS } from '@knowledge-medium/agent-cli/protocol'
 import { searchBlocksAcrossSources } from '@/utils/linkTargetAutocomplete.js'
-import { labelParents, loadCrumbs, recordSiblings } from './context.ts'
+import { CRUMB_ELLIPSIS } from '@/utils/blockCrumbs.js'
+import { loadCrumbs, recordLabels, recordSiblings } from './context.ts'
 import { createPropertyRenderer, formatPropertyPairs, type PropertyLine } from './properties.ts'
 import { displayIds } from './displayIds.ts'
-import {
-  clampInt,
-  CONTEXT_HEAD_CHARS,
-  crumbLine,
-  joinDisplayLines,
-  loadRoot,
-  RECORD_SIBLINGS,
-  siblingLines,
-  siblingPreviews,
-} from './shared.ts'
+import { clampInt, crumbLine, joinDisplayLines, loadRoot, siblingLines } from './shared.ts'
 import { formatCount, snippet } from './text.ts'
 
 export interface SearchParams {
@@ -31,7 +23,8 @@ export interface SearchParams {
 export interface SearchDuplicate {
   id: string
   shortId: string
-  /** The last step of its breadcrumb; null at the top level. */
+  /** The last step of its breadcrumb; null at the top level or where the
+   *  breadcrumb was cut. */
   place: string | null
 }
 
@@ -98,12 +91,13 @@ const resolveTypeIds = (repo: Repo, types: readonly string[]): string[] => {
 
 /** Blocks with the same text, in rank order, each group led by its best.
  *  Lines of different records (blocks under different labels) never fold. */
-const groupIdentical = (blocks: readonly BlockData[], labels: ReadonlySet<string>): BlockData[][] => {
+const groupIdentical = (blocks: readonly BlockData[], records: ReadonlyMap<string, string>): BlockData[][] => {
   const groups: BlockData[][] = []
   const byKey = new Map<string, BlockData[]>()
   for (const block of blocks) {
     // Exactly identical stored text only: case or spacing can carry meaning (code).
-    const key = JSON.stringify(block.parentId !== null && labels.has(block.parentId) ? [block.parentId, block.content] : [block.content])
+    const label = records.get(block.id)
+    const key = JSON.stringify(label === undefined ? [block.content] : [label, block.content])
     const group = byKey.get(key)
     if (group) group.push(block)
     else {
@@ -113,6 +107,12 @@ const groupIdentical = (blocks: readonly BlockData[], labels: ReadonlySet<string
     }
   }
   return groups
+}
+
+/** Where a block is: its breadcrumb's last step, unless it has none. */
+const placeOf = (breadcrumb: readonly string[] | undefined): string | null => {
+  const last = breadcrumb?.at(-1)
+  return last === undefined || last === CRUMB_ELLIPSIS ? null : last
 }
 
 /** A scope is used by id alone, so only its id and workspace are read. */
@@ -148,18 +148,18 @@ export const buildSearchView = async (
     // A contributed source can answer with a block that has left the
     // workspace; its values would decode with this workspace's registries.
     const inWorkspace = fetched.filter(block => block.workspaceId === workspaceId)
-    const labels = await labelParents(repo, inWorkspace, workspaceId)
-    return {groups: groupIdentical(inWorkspace, labels), labels, exhausted: fetched.length < window}
+    const records = await recordLabels(repo, inWorkspace, workspaceId)
+    return {groups: groupIdentical(inWorkspace, records), records, exhausted: fetched.length < window}
   }
 
   // Folding identical blocks shrinks the window, so it grows until it holds
   // one distinct hit past this page — or the sources run dry, or the cap.
   const wanted = offset + limit + 1
   let window = Math.min(Math.max(SEARCH_WINDOW, wanted), MAX_WINDOW)
-  let {groups, labels, exhausted} = await fetchWindow(window)
+  let {groups, records, exhausted} = await fetchWindow(window)
   while (groups.length < wanted && !exhausted && window < MAX_WINDOW) {
     window = Math.min(window * 4, MAX_WINDOW)
-    ;({groups, labels, exhausted} = await fetchWindow(window))
+    ;({groups, records, exhausted} = await fetchWindow(window))
   }
 
   const page = groups.slice(offset, offset + limit)
@@ -169,7 +169,7 @@ export const buildSearchView = async (
     createPropertyRenderer(repo, shown, 'brief'),
     displayIds(repo, [...shown.map(block => block.id), ...duplicateIds]),
     loadCrumbs(repo, [...shown.map(block => block.id), ...duplicateIds], workspaceId),
-    recordSiblings(repo, shown, labels, workspaceId, {count: RECORD_SIBLINGS, chars: CONTEXT_HEAD_CHARS}),
+    recordSiblings(repo, shown.map(block => block.id), records, workspaceId),
   ])
   const end = offset + page.length
   // The listing ends where the window does: no offset reaches past a capped
@@ -184,7 +184,7 @@ export const buildSearchView = async (
       const [block] = group
       const duplicates = group.slice(1, 1 + MAX_DUPLICATES_SHOWN)
       const properties = renderer.view(block)
-      const record = siblingPreviews(siblings.get(block.id))
+      const record = siblings.get(block.id)
       return {
         id: block.id,
         shortId: shortIds.get(block.id) ?? block.id,
@@ -196,10 +196,10 @@ export const buildSearchView = async (
         duplicates: duplicates.map(duplicate => ({
           id: duplicate.id,
           shortId: shortIds.get(duplicate.id) ?? duplicate.id,
-          place: crumbs.get(duplicate.id)?.at(-1) ?? null,
+          place: placeOf(crumbs.get(duplicate.id)),
         })),
         duplicateCount: group.length - 1,
-        ...(record.length > 0 ? {siblings: record} : {}),
+        ...(record ? {siblings: record} : {}),
       }
     }),
     nextOffset: more ? end : null,

@@ -130,6 +130,16 @@ export const textBeyondLinks = (content: string): string =>
 // `search` ignores a global pattern's lastIndex, so the shared patterns stay reusable.
 const hasLink = (content: string): boolean => LINK_PATTERNS.some(pattern => content.search(pattern) >= 0)
 
+/** How long a quoted neighbour's line is. */
+const CONTEXT_CHARS = 160
+/** How much of a neighbour's content a context line reads (a cost bound);
+ *  roomy, so collapsing its whitespace rarely leaves less than a line. */
+export const CONTEXT_HEAD_CHARS = CONTEXT_CHARS * 4
+
+/** A neighbour's text as context: one line, ellipsized. It says it is cut,
+ *  not by how much, since only a head was read. */
+export const contextPreview = (head: string): string => ellipsize(oneLine(head), CONTEXT_CHARS)
+
 /** A block that is nothing but references reads as noise on its own (a
  *  backlink list of `[[Page]]` rows says nothing), so views add its parent's
  *  text. */
