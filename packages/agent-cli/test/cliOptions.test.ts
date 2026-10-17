@@ -1,6 +1,6 @@
 import { cac } from 'cac'
 import { describe, expect, it } from 'vitest'
-import { appendPositionOption, editArgumentsOption, limitOption, scopeAssertion, workspaceAssertion } from '../src/cliOptions.js'
+import { appendPositionOption, editArgumentsOption, limitOption, markdownText, scopeAssertion, workspaceAssertion } from '../src/cliOptions.js'
 
 /** Parse argv the way the real CLI does and hand back what the option
  *  actually became — so this pins CAC's behaviour too, not just our handling
@@ -135,6 +135,32 @@ describe('appendPositionOption', () => {
 
   it('refuses more than one position flag', () => {
     expect(() => appendPositionOption(parseAppend(['--first', '--after', 'abc']))).toThrow(/at most one/)
+  })
+})
+
+describe('markdownText', () => {
+  const parseAppend = (argv: string[]): {markdown: unknown, options: Record<string, unknown>} => {
+    const cli = cac('t')
+    let seen = {markdown: undefined as unknown, options: {} as Record<string, unknown>}
+    cli.command('append-markdown <target> [markdown]', 'x')
+      .action((_target, markdown, options) => { seen = {markdown, options} })
+    cli.parse(['node', 't', 'append-markdown', 'today', ...argv])
+    return seen
+  }
+  const textOf = (argv: string[]) => {
+    const {markdown, options} = parseAppend(argv)
+    return markdownText(markdown, options['--'])
+  }
+
+  it('reads stdin (undefined) with no text, or a lone -', () => {
+    expect(textOf([])).toBeUndefined()
+    expect(textOf(['-'])).toBeUndefined()
+  })
+
+  it('joins the texts before and after -- in order, never dropping one side', () => {
+    expect(textOf(['buy milk'])).toBe('buy milk')
+    expect(textOf(['--', '- a', 'b'])).toBe('- a b')
+    expect(textOf(['draft', '--', '- item'])).toBe('draft - item')
   })
 })
 

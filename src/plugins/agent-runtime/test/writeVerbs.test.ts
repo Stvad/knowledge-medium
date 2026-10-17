@@ -549,6 +549,18 @@ describe('recent-changes', () => {
     expect(out.txs[0].changes.map(change => change.blockId)).toEqual([LONE])
   })
 
+  it('leaves a tx with no net change out of the page, so it never displaces a real one', async () => {
+    await seed([{id: NOTE, content: 'same'}, {id: LONE, content: 'before'}])
+    await run({type: 'update-block', id: LONE, content: 'after'})
+    await repo.tx(async tx => {
+      await tx.update(NOTE, {content: 'detour'})
+      await tx.update(NOTE, {content: 'same'})
+    }, agentTxOptions('update-block'))
+    const out = await run({type: 'recent-changes', limit: 1}) as ChangesOut & {truncated: boolean}
+    expect(out.txs.map(tx => tx.changes.map(change => change.blockId))).toEqual([[LONE]])
+    expect(out.truncated).toBe(false)
+  })
+
   it('clips listed content with the read views\' cut marker', async () => {
     await seed([{id: NOTE, content: 'short'}])
     await run({type: 'update-block', id: NOTE, content: 'y'.repeat(250)})

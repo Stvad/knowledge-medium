@@ -49,7 +49,9 @@ import {
   appendPositionOption,
   editArgumentsOption,
   limitOption,
+  markdownText,
   scopeAssertion,
+  textArguments,
   toStringArray,
   workspaceAssertion,
 } from './cliOptions.js'
@@ -763,14 +765,6 @@ const readStdin = async (): Promise<string> => {
   return Buffer.concat(chunks).toString('utf8')
 }
 
-// Block text often starts with `-` (a bullet, a flag in a code sample), which
-// the option parser reads as an option — so text args are also taken verbatim
-// from after `--`, which cac hands over as `options['--']`.
-const markdownArgument = async (markdown: unknown, afterDashes: unknown): Promise<string> => {
-  const rest = toStringArray(afterDashes)
-  if (rest.length > 0) return rest.join(' ')
-  return markdown === undefined || String(markdown) === '-' ? readStdin() : String(markdown)
-}
 
 cli
   .command('append-markdown <target> [markdown]', wireDescription('append-markdown'))
@@ -787,7 +781,7 @@ cli
     const command: KnownCommand = {
       type: 'append-markdown',
       target: String(target),
-      markdown: await markdownArgument(markdown, options['--']),
+      markdown: markdownText(markdown, options['--']) ?? await readStdin(),
       ...appendPositionOption(options),
       ...(options.oneBlock ? {shape: 'block' as const} : {}),
       ...(options.json ? {format: 'json' as const} : {}),
@@ -806,8 +800,7 @@ cli
   .command('create-page [...name]', wireDescription('create-page'))
   .option('--date <expr>', "A daily note's date instead of a page name (today, 2026-10-15, next monday)")
   .action(async (name: unknown, options: {date?: unknown, '--'?: unknown}) => {
-    // A name starting with `-` reads as a flag; it is taken after `--` too.
-    const text = [...toStringArray(name), ...toStringArray(options['--'])].join(' ').trim()
+    const text = textArguments([name], options['--']).join(' ').trim()
     await runAndPrint({
       type: 'create-page',
       ...(text ? {name: text} : {}),

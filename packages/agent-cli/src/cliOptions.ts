@@ -107,6 +107,20 @@ export const toStringArray = (value: unknown): string[] => {
   return []
 }
 
+/** A verb's text operands as one list, in order: its positional texts, then
+ *  the texts after `--` (where a text starting with `-` goes, since it would
+ *  read as a flag). One list, so a text on one side of `--` is never dropped
+ *  for one on the other. */
+export const textArguments = (positionals: readonly unknown[], afterDashes: unknown): string[] =>
+  [...positionals.flatMap(toStringArray), ...toStringArray(afterDashes)]
+
+/** `append-markdown`'s markdown: its text operands joined, or undefined to
+ *  read stdin — no text at all, or a lone `-`. */
+export const markdownText = (markdown: unknown, afterDashes: unknown): string | undefined => {
+  const texts = textArguments([markdown], afterDashes)
+  return texts.length === 0 || (texts.length === 1 && markdown === '-') ? undefined : texts.join(' ')
+}
+
 /** `edit-block`'s <old> and <new>: positional, or after `--` when either
  *  starts with `-` (which would read as a flag). */
 export const editArgumentsOption = (
@@ -114,9 +128,8 @@ export const editArgumentsOption = (
   replacement: unknown,
   afterDashes: unknown,
 ): {old: string, new: string} => {
-  // One list, in order: `milk -- -oat` is two texts, and a pair on each side
-  // of `--` is four — refused, never one pair silently dropped.
-  const texts = [old, replacement].filter(text => text !== undefined).concat(toStringArray(afterDashes))
+  // `milk -- -oat` is two texts; a pair on each side of `--` is four, refused.
+  const texts = textArguments([old, replacement], afterDashes)
   if (texts.length !== 2) {
     throw new Error("edit-block takes exactly <old> and <new> — after `--` when either starts with '-'")
   }

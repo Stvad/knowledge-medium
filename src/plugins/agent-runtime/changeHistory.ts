@@ -259,10 +259,16 @@ const RECENT_CONTENT_LIMIT = 200
  *  change stays exact. */
 export const MAX_LISTED_CHANGES = 200
 
-/** A row_events snapshot without the stamps every write moves, so a block a
- *  tx changed and changed back compares equal to where it started. */
 const withoutWriteStamps = (snapshot: string): string =>
   `json_remove(${snapshot}, '$.updatedAt', '$.userUpdatedAt', '$.updatedBy')`
+
+/** A block's net change in a tx is its first write's before and its last
+ *  write's after (row_events rows `first` and `last`), compared without the
+ *  stamps every write moves — so a block a tx changed and changed back has
+ *  none. Both the tx page and the block ranking filter on it before their
+ *  LIMIT. */
+const netChangeSql = (first: string, last: string): string =>
+  `${withoutWriteStamps(`${first}.before_json`)} IS NOT ${withoutWriteStamps(`${last}.after_json`)}`
 
 /** Every block the page's txs changed, numbered in the order
  *  {@link MAX_LISTED_CHANGES} cuts in: real changes before property storage
@@ -281,7 +287,7 @@ const RANKED_BLOCKS_CTE = `
   changed AS (
     SELECT w.* FROM written w
       JOIN row_events f ON f.id = w.first_id JOIN row_events l ON l.id = w.last_id
-     WHERE ${withoutWriteStamps('f.before_json')} IS NOT ${withoutWriteStamps('l.after_json')}
+     WHERE ${netChangeSql('f', 'l')}
   ),
   storage AS (
     SELECT f.id FROM blocks f
@@ -303,10 +309,15 @@ export const recentChanges = async (repo: Repo, input: RecentChangesInput): Prom
   const limit = clampInt(input.limit, 20, 200)
   // Document edits only: UI-state and preference txs are not changes to review.
   const txs = await repo.db.getAll<{tx_id: string; description: string | null; created_at: number}>(
-    `SELECT tx_id, description, created_at FROM command_events
-      WHERE workspace_id = ? AND scope = ? AND created_at >= ?
-        ${input.includeUser ? '' : 'AND substr(description, 1, ?) = ?'}
-      ORDER BY created_at DESC, rowid DESC
+    `SELECT c.tx_id, c.description, c.created_at FROM command_events c
+      WHERE c.workspace_id = ? AND c.scope = ? AND c.created_at >= ?
+        ${input.includeUser ? '' : 'AND substr(c.description, 1, ?) = ?'}
+        AND EXISTS (
+          SELECT 1 FROM (
+            SELECT MIN(id) AS first_id, MAX(id) AS last_id FROM row_events WHERE tx_id = c.tx_id GROUP BY block_id
+          ) w JOIN row_events f ON f.id = w.first_id JOIN row_events l ON l.id = w.last_id
+           WHERE ${netChangeSql('f', 'l')})
+      ORDER BY c.created_at DESC, c.rowid DESC
       LIMIT ?`,
     [
       workspaceId, ChangeScope.BlockDefault, since,
