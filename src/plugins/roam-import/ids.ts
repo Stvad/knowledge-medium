@@ -1,4 +1,4 @@
-import { dailyNoteBlockId } from '@/plugins/daily-notes'
+import { dailyNoteBlockId } from '@/plugins/daily-notes/dailyNotes'
 import { parseLiteralDailyPageTitle } from '@/utils/relativeDate'
 import type { RoamPage } from './types'
 

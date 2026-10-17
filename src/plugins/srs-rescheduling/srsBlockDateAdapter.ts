@@ -7,7 +7,7 @@
 import type { Block } from '@/data/block'
 import { ChangeScope } from '@/data/api'
 import { aliasesProp, getBlockTypes } from '@/data/properties.js'
-import { getOrCreateDailyNote, isValidDateAlias } from '@/plugins/daily-notes'
+import { getOrCreateDailyNote, isValidDateAlias } from '@/plugins/daily-notes/dailyNotes'
 import type { BlockDateAdapter } from '@/plugins/daily-notes/blockDateAdapter.js'
 import { SRS_SM25_TYPE, srsNextReviewDateProp } from './schema.ts'
 
