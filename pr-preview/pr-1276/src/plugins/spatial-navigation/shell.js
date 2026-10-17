@@ -1,0 +1,1 @@
+import{Gg as e}from"../../../chunks/app-Bb6mLpUK.js";export{e as spatialNavigationShellDecorator};

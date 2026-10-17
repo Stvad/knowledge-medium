@@ -1,0 +1,1 @@
+import{Uf as e}from"../../../../../chunks/app-Bb6mLpUK.js";export{e as Wikilink};

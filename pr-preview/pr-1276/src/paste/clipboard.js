@@ -1,0 +1,1 @@
+import{Nk as e}from"../../chunks/app-Bb6mLpUK.js";export{e as readClipboardContent};
