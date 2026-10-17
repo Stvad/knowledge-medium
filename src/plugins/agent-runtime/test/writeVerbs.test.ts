@@ -327,6 +327,12 @@ describe('update-block compare-and-set', () => {
     expect(after.properties.flag).toBeUndefined()
   })
 
+  it('echoes a long current content cut, with the read views\' marker', async () => {
+    await seed([{id: NOTE, content: 'z'.repeat(1100)}])
+    await expect(run({type: 'update-block', id: NOTE, content: 'mine', expectedContent: 'what I read'}))
+      .rejects.toThrow(`"${'z'.repeat(1000)}"…[+100 chars]`)
+  })
+
   it('accepts a short id', async () => {
     await seed([{id: NOTE, content: 'v1'}])
     await run({type: 'update-block', id: '3f2a9c1b', content: 'v2'})

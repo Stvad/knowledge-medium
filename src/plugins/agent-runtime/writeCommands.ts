@@ -9,7 +9,7 @@ import { orderKeysForInsert, type InsertPosition } from '@/data/mutators.js'
 import type { Repo } from '@/data/repo'
 import { parseMarkdownToBlocks, type ParsedBlock } from '@/utils/markdownParser.js'
 import { parseRelativeDate } from '@/utils/relativeDate.js'
-import { createPageName, escapeJsonDisplayControls } from '@knowledge-medium/agent-cli/protocol'
+import { charBoundary, createPageName, cutMarker, toDisplayJson } from '@knowledge-medium/agent-cli/protocol'
 import { agentTxOptions } from './agentWrites.ts'
 import { shortIds } from './agentViews/resolveRef.ts'
 import {
@@ -137,15 +137,14 @@ const occurrences = (text: string, needle: string): number => {
 
 const CONTENT_ECHO_LIMIT = 1000
 
-/** The block's content as an error shows it: quoted losslessly, so the agent
- *  can re-plan from it exactly, and escaped, so stored text can neither fake a
- *  line of the diagnostic nor reorder it. */
+/** The block's content as an error shows it: its first CONTENT_ECHO_LIMIT
+ *  characters quoted losslessly, so the agent can re-plan from them exactly,
+ *  and escaped, so stored text can neither fake a line of the diagnostic nor
+ *  reorder it; a longer content ends in the read views' cut marker. */
 export const contentEcho = (content: string): string => {
-  const clipped = content.length > CONTENT_ECHO_LIMIT ? content.slice(0, CONTENT_ECHO_LIMIT) : content
-  const quoted = escapeJsonDisplayControls(JSON.stringify(clipped))
-  return clipped === content
-    ? quoted
-    : `${quoted}… (${content.length} chars; read the block for the rest)`
+  const end = charBoundary(content, Math.min(content.length, CONTENT_ECHO_LIMIT))
+  const quoted = toDisplayJson(content.slice(0, end))
+  return end === content.length ? quoted : `${quoted}${cutMarker(content.length - end)}`
 }
 
 export const editBlock = async (repo: Repo, input: EditBlockInput): Promise<BlockData | null> => {

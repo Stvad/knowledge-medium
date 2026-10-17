@@ -195,20 +195,17 @@ export const resolveAgentTarget = async (
 ): Promise<ResolvedAgentTarget> => {
   const target = parseAgentTarget(raw)
   const pinned = {...options, workspaceId: options.workspaceId ?? activeWorkspace(repo, verb)}
-  let found: BlockRefResolution | null = null
+  if (target.kind === 'page') return resolvePageTarget(repo, target.name, verb, pinned)
+  let found: BlockRefResolution
   try {
     found = await resolveBlockRef(repo, raw, {workspaceId: pinned.workspaceId})
   } catch (error) {
     if (!(error instanceof BlockRefError)) throw error
-    // A missing [[page]] is created below; any other miss is the caller's.
-    if (target.kind !== 'page') {
-      const hint = target.kind === 'bare' ? ` To create a page by that name, pass [[${target.text}]].` : ''
-      throw new Error(`${verb}: ${error.message}${hint}`, {cause: error})
-    }
+    const hint = target.kind === 'bare' ? ` To create a page by that name, pass [[${target.text}]].` : ''
+    throw new Error(`${verb}: ${error.message}${hint}`, {cause: error})
   }
-  if (found?.via === 'id' || found?.via === 'prefix') return liveBlockTarget(repo, found.id, verb)
-  if (target.kind === 'page') return resolvePageTarget(repo, target.name, verb, pinned)
-  if (found?.via === 'date') {
+  if (found.via === 'id' || found.via === 'prefix') return liveBlockTarget(repo, found.id, verb)
+  if (found.via === 'date') {
     // `resolveBlockRef` names the day's deterministic id; the note itself may
     // not exist yet.
     const text = raw.trim()

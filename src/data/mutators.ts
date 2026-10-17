@@ -412,22 +412,9 @@ export const insertChildren = defineMutator<InsertChildrenArgs, string[]>({
   apply: async (tx, args) => {
     if (args.items.length === 0) return []
     const parent = await requireBlock(tx, args.parentId)
-    const siblings = await tx.childrenOf(args.parentId)
-    const position = args.position ?? {kind: 'last'}
-
-    const n = args.items.length
-    const keys = await (async (): Promise<string[]> => {
-      if (position.kind === 'first') return keysBetween(null, siblings[0]?.orderKey ?? null, n)
-      if (position.kind === 'last')  return keysBetween(siblings.at(-1)?.orderKey ?? null, null, n)
-      const ix = siblings.findIndex(s => s.id === position.siblingId)
-      if (ix < 0) throw new Error(`sibling ${position.siblingId} not found under ${args.parentId}`)
-      // Place the whole run exactly adjacent to the anchor (between it and its
-      // neighbour on that side), breaking a tie by re-keying the run when one
-      // blocks the slot (A1).
-      return position.kind === 'after'
-        ? keysImmediatelyAfter(tx, args.parentId, siblings, ix, n)
-        : keysImmediatelyBefore(tx, args.parentId, siblings, ix, n)
-    })()
+    const keys = await orderKeysForInsert(
+      tx, args.parentId, parent.workspaceId, args.position ?? {kind: 'last'}, args.items.length,
+    )
     const ids: string[] = []
     for (let i = 0; i < args.items.length; i++) {
       const item = args.items[i]

@@ -1277,7 +1277,7 @@ const UNESCAPED_JSON_DISPLAY_CONTROL = /[\u007f-\u009f\u2028\u2029\p{Bidi_Contro
  *  Lossless — unlike {@link neutralizeDisplayText} — and only valid on JSON
  *  text, where these characters occur only inside string literals and the
  *  escape denotes the same string. */
-export const escapeJsonDisplayControls = (json: string): string =>
+const escapeJsonDisplayControls = (json: string): string =>
   json.replace(UNESCAPED_JSON_DISPLAY_CONTROL, char => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`)
 
 /** A value as agent-facing JSON: pretty-printed and display-safe, losslessly. */

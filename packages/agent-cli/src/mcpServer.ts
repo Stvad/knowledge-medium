@@ -93,10 +93,11 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
     await writeGuard?.beforeWrite(operation)
   }
 
-  // Resolved once, here, and sent with `exactIds` so the runtime does not read
-  // it as a ref a second time: the guard and the write act on one block. Also
-  // lets a `^short` id from append_markdown's output work in the read tools.
-  const blockId = (ref: string): Promise<string> => graph.resolveBlockId(ref)
+  // With a guard, an id field is resolved once, here, and sent with `exactIds`
+  // so the runtime does not read it as a ref a second time: the guard and the
+  // write act on one block. Without one, the write resolves it the same way.
+  const exactIds = writeGuard !== undefined
+  const blockId = (ref: string): Promise<string> => exactIds ? graph.resolveBlockId(ref) : Promise.resolve(ref)
   const resolvedPosition = async (position: MoveBlockPositionInput): Promise<MoveBlockPositionInput> =>
     position.kind === 'before' || position.kind === 'after'
       ? {kind: position.kind, siblingId: await blockId(position.siblingId)}
@@ -152,7 +153,7 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
   }, async ({id: ref, content, properties, expectedContent}) => {
     const id = await blockId(ref)
     await beforeWrite({type: 'update_block', id, content, properties, expectedContent})
-    return json(await graph.updateBlock(id, {content, properties, expectedContent, exactIds: true}))
+    return json(await graph.updateBlock(id, {content, properties, expectedContent, exactIds}))
   })
 
   server.registerTool('move_block' satisfies KmMcpToolName, {
@@ -163,11 +164,13 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
       position: moveBlockPositionSchema,
     },
   }, async input => {
-    const id = await blockId(input.id)
-    const parentId = input.parentId === null ? null : await blockId(input.parentId)
-    const position = await resolvedPosition(input.position)
+    const [id, parentId, position] = await Promise.all([
+      blockId(input.id),
+      input.parentId === null ? null : blockId(input.parentId),
+      resolvedPosition(input.position),
+    ])
     await beforeWrite({type: 'move_block', id, parentId, position})
-    return json(await graph.moveBlock({id, parentId, position, exactIds: true}))
+    return json(await graph.moveBlock({id, parentId, position, exactIds}))
   })
 
   server.registerTool('delete_block' satisfies KmMcpToolName, {
@@ -178,7 +181,7 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
   }, async ({id: ref}) => {
     const id = await blockId(ref)
     await beforeWrite({type: 'delete_block', id})
-    return json(await graph.deleteBlock(id, {exactIds: true}))
+    return json(await graph.deleteBlock(id, {exactIds}))
   })
 
   server.registerTool('restore_block' satisfies KmMcpToolName, {
@@ -189,7 +192,7 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
   }, async ({id: ref}) => {
     const id = await blockId(ref)
     await beforeWrite({type: 'restore_block', id})
-    return json(await graph.restoreBlock(id, {exactIds: true}))
+    return json(await graph.restoreBlock(id, {exactIds}))
   })
 
   server.registerTool('append_markdown' satisfies KmMcpToolName, {
@@ -206,7 +209,7 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
   }, async ({target, markdown, position: requested, shape}) => {
     const position = requested && await resolvedPosition(requested)
     await beforeWrite({type: 'append_markdown', target, markdown, position, shape})
-    return text(renderAppendResult(await graph.appendMarkdown({target, markdown, position, shape, exactIds: true})))
+    return text(renderAppendResult(await graph.appendMarkdown({target, markdown, position, shape, exactIds})))
   })
 
   server.registerTool('edit_block' satisfies KmMcpToolName, {
@@ -221,7 +224,7 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
   }, async input => {
     const edit = {...input, id: await blockId(input.id)}
     await beforeWrite({type: 'edit_block', ...edit})
-    return json(await graph.editBlock({...edit, exactIds: true}))
+    return json(await graph.editBlock({...edit, exactIds}))
   })
 
   server.registerTool('create_page' satisfies KmMcpToolName, {

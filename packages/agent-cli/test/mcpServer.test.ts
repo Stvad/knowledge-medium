@@ -278,6 +278,24 @@ describe('recent_changes', () => {
   })
 })
 
+describe('write tools without a guard', () => {
+  it('send ids as typed for the runtime to resolve — no resolve-block-id round trip', async () => {
+    const commands: KnownCommand[] = []
+    const server = createGraphMcpServer({
+      client: clientFrom(async command => {
+        commands.push(command)
+        return {id: 'x', content: 'c'}
+      }),
+      serverOptions: {capabilities: {tools: {}}},
+    })
+    const tools = (server as unknown as RegisteredToolHarness)._registeredTools
+    await tools.update_block.handler({id: '^a1b2c3d4', content: 'v'}, {})
+    await tools.move_block.handler({id: '^a1b2c3d4', parentId: '^p', position: {kind: 'after', siblingId: '^s'}}, {})
+    expect(commands.map(command => [command.type, (command as {id?: string}).id, (command as {exactIds?: boolean}).exactIds]))
+      .toEqual([['update-block', '^a1b2c3d4', false], ['move-block', '^a1b2c3d4', false]])
+  })
+})
+
 describe('read tool output', () => {
   it('escapes display controls in JSON output, losslessly', async () => {
     const server = createGraphMcpServer({
