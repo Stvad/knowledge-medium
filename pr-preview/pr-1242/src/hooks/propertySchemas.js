@@ -1,1 +1,1 @@
-import{oF as e}from"../../chunks/app-DNxqegs1.js";export{e as usePropertySchemas};
+import{XF as e}from"../../chunks/app-pbMA-h5x.js";export{e as usePropertySchemas};

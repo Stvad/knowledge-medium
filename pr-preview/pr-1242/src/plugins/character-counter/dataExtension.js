@@ -1,1 +1,1 @@
-import{Kz as e}from"../../../chunks/app-DNxqegs1.js";export{e as characterCounterDataExtension};
+import{IB as e}from"../../../chunks/app-pbMA-h5x.js";export{e as characterCounterDataExtension};

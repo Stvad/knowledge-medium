@@ -1,1 +1,1 @@
-import{FS as e}from"../../../chunks/app-DNxqegs1.js";export{e as useCommandPaletteActions};
+import{TC as e}from"../../../chunks/app-pbMA-h5x.js";export{e as useCommandPaletteActions};

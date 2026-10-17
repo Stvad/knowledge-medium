@@ -1,1 +1,1 @@
-import{Gh as e,Jh as t,Kh as n,Nh as r,qh as i}from"../../../chunks/app-DNxqegs1.js";export{n as EXTENSIONS_PAGE_TITLE,i as TUTORIAL_DEFAULT_TITLE,t as TUTORIAL_VIM_TITLE,r as onboardingPlugin,e as seedTutorial};
+import{Cg as e,Fg as t,Ig as n,Lg as r,Rg as i}from"../../../chunks/app-pbMA-h5x.js";export{n as EXTENSIONS_PAGE_TITLE,r as TUTORIAL_DEFAULT_TITLE,i as TUTORIAL_VIM_TITLE,e as onboardingPlugin,t as seedTutorial};

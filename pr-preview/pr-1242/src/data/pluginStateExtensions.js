@@ -1,1 +1,1 @@
-import{bB as e,xB as t}from"../../chunks/app-DNxqegs1.js";export{e as pluginPrefsExtension,t as pluginUIStateExtension};
+import{fV as e,pV as t}from"../../chunks/app-pbMA-h5x.js";export{e as pluginPrefsExtension,t as pluginUIStateExtension};
