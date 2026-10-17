@@ -595,6 +595,7 @@ export class TxImpl implements Tx {
   async create(data: NewBlockData, opts?: TxInsertOpts): Promise<string> {
     this.checkWorkspace(data.workspaceId)
     await this.requireParentInWorkspace(data.parentId, data.workspaceId)
+    this.assertWritableWorkspace(data.workspaceId)
     const id = data.id ?? this.ctx.newId()
     const row = this.buildNewBlockRow(id, data, opts, 'tx.create')
     try {
@@ -653,6 +654,7 @@ export class TxImpl implements Tx {
       else if (batchWorkspaceId !== data.workspaceId) {
         throw new WorkspaceMismatchError(batchWorkspaceId, data.workspaceId)
       }
+      this.assertWritableWorkspace(data.workspaceId)
       const id = data.id ?? this.ctx.newId()
       // Decided HERE, against the ids minted BEFORE this row, and carried on
       // the entry. Re-deriving it after the loop would ask a completed set,
@@ -739,6 +741,7 @@ export class TxImpl implements Tx {
 
     if (existing === null) {
       await this.requireParentInWorkspace(data.parentId, data.workspaceId)
+      this.assertWritableWorkspace(data.workspaceId)
       const row = this.buildNewBlockRow(data.id, data, opts, 'tx.createOrGet')
       await this.ctx.txDb.execute(INSERT_SQL, blockToRowParams(row))
       this.markSystemMint(data.id, opts)
@@ -776,6 +779,7 @@ export class TxImpl implements Tx {
     const before = await this.requireExisting(id)
     this.checkWorkspace(before.workspaceId)
     if (before.deleted) return  // already a tombstone — no-op, no second snapshot
+    this.assertWritableWorkspace(before.workspaceId)
     const after: BlockData = {
       ...before,
       deleted: true,
@@ -795,6 +799,7 @@ export class TxImpl implements Tx {
     if (before.deleted === 0) throw new NotDeletedError(id)
     const beforeData = parseBlockRow(before)
     this.checkWorkspace(beforeData.workspaceId)
+    this.assertWritableWorkspace(beforeData.workspaceId)
     const after: BlockData = {
       ...beforeData,
       deleted: false,
@@ -834,6 +839,7 @@ export class TxImpl implements Tx {
     const before = await this.requireExisting(id)
     this.checkWorkspace(before.workspaceId)
     if (!updatePatchChangesBlock(before, patch)) return
+    this.assertWritableWorkspace(before.workspaceId)
     const after: BlockData = {
       ...before,
       ...(patch.content !== undefined ? {content: patch.content} : {}),
@@ -882,6 +888,7 @@ export class TxImpl implements Tx {
       (before.referenceTargetId ?? null) === targetId
       && (before.isFieldForm ?? false) === isFieldForm
     ) return
+    this.assertWritableWorkspace(before.workspaceId)
     const after: BlockData = {...before, referenceTargetId: targetId, isFieldForm}
     await this.ctx.txDb.execute(
       `UPDATE blocks SET reference_target_id = ?, is_field_form = ? WHERE id = ?`,
@@ -940,6 +947,7 @@ export class TxImpl implements Tx {
       throw new CycleError(id, id)
     }
 
+    this.assertWritableWorkspace(before.workspaceId)
     const after: BlockData = {
       ...before,
       parentId: target.parentId,
@@ -995,6 +1003,7 @@ export class TxImpl implements Tx {
     // live row may be created.
     const unchanged = jsonValuesEqual(stored, encoded)
     if (unchanged && before.deleted) return
+    if (!unchanged) this.assertWritableWorkspace(before.workspaceId)
     if (isResolvedPropertySchema(resolvedSchema) && await this.isChildBackedRow(before)) {
       await this.writePropertyValueChild(before, resolvedSchema, encoded)
     }
@@ -1046,6 +1055,7 @@ export class TxImpl implements Tx {
     properties: Record<string, unknown>,
     opts: TxWriteOpts | undefined,
   ): Promise<void> {
+    this.assertWritableWorkspace(before.workspaceId)
     const after: BlockData = {
       ...before,
       properties,
@@ -1077,6 +1087,7 @@ export class TxImpl implements Tx {
     }
     const properties = {...before.properties}
     delete properties[resolvedSchema.name]
+    this.assertWritableWorkspace(before.workspaceId)
     await this.writePropertiesBag(id, before, properties, opts)
   }
 
@@ -1125,6 +1136,7 @@ export class TxImpl implements Tx {
     // no-op batch removed nothing the cell shows.
     const unchanged = jsonValuesEqual(before.properties, properties)
     if (unchanged && before.deleted) return
+    if (!unchanged) this.assertWritableWorkspace(before.workspaceId)
     const childBacked = await this.isChildBackedRow(before)
     if (childBacked) {
       for (const {schema} of sets) {
@@ -1484,11 +1496,19 @@ export class TxImpl implements Tx {
 
   // ──── Internal helpers ────
 
-  /** Both admission and schema resolution use the tx-start registry capture. */
+  /** Enforce the single-workspace transaction invariant without deciding
+   *  whether this workspace may be written by this transaction. */
   private checkWorkspace(workspaceId: string): void {
     if (this.workspacePinned && this.meta.workspaceId !== workspaceId) {
       throw new WorkspaceMismatchError(this.meta.workspaceId!, workspaceId)
     }
+  }
+
+  /** Assert write admission without pinning the transaction. Call after the
+   *  primitive has established that it will actually mutate, preserving
+   *  read-only and idempotent paths for retained workspace registries. */
+  assertWritableWorkspace(workspaceId: string): void {
+    this.checkWorkspace(workspaceId)
     const scope = this.ctx.writableWorkspace
     if (scope !== null && scope.workspaceId !== workspaceId) {
       throw new WorkspaceRegistryUnavailableError(scope.workspaceId, workspaceId)

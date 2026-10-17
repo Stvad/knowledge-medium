@@ -91,6 +91,10 @@ export interface Tx {
 
   // ──── Lifecycle ────
 
+  /** Assert that a workspace may be written by this transaction without
+   *  pinning it. Use before expensive preparation that will lead to writes. */
+  assertWritableWorkspace(workspaceId: string): void
+
   /** Insert a new block. Throws `DuplicateIdError` on PK conflict.
    *  The engine preflights non-null parents and throws
    *  `ParentNotFoundError` / `ParentWorkspaceMismatchError` before the
@@ -518,10 +522,12 @@ export interface RepoTxOptions {
   scope: ChangeScope
   description?: string
   /** Permit deliberate writes outside the captured open workspace. The caller
-   *  accepts unavailable or stale registry behavior. This changes only workspace
-   *  admission: it does not load definitions or relax property-schema validation,
-   *  read-only, or single-workspace checks. Intended for controlled background
-   *  seeding and repair tooling. */
+   *  accepts unavailable or stale registry behavior, must verify target write
+   *  access, and must account for this option not loading target membership.
+   *  This changes only workspace admission: it does not load definitions or
+   *  relax property-schema validation, the client's read-only mode, or
+   *  single-workspace checks. Intended for controlled background seeding and
+   *  repair tooling. */
   allowUnloadedWorkspace?: boolean
   /** Undo-group token (issue #306). Txs sharing a `groupId` merge into
    *  one undo entry at record time and stamp `group_id` into

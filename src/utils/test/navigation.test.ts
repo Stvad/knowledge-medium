@@ -537,7 +537,8 @@ describe('navigationVerb (intent seam)', () => {
     }
     expect(await env.h.db.getAll('SELECT id FROM blocks WHERE workspace_id = ?', [WS]))
       .toEqual([])
-  })})
+  })
+})
 
 describe('navigationIntentVerb (intent policy seam)', () => {
   it('resolves a navigator global command to the main panel on desktop by default', async () => {

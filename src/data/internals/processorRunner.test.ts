@@ -34,6 +34,7 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '../repo'
 import { definitionSeedsFacet, postCommitProcessorsFacet } from '../facets'
+import {aliasesProp, hasBlockType} from '../properties'
 
 const WS = 'ws-1'
 
@@ -365,5 +366,96 @@ describe('ProcessorRunner — awaitIdle wave', () => {
 
     expect(aCalls.events.length).toBeGreaterThanOrEqual(1)
     expect(bCalls.events).toHaveLength(1)
+  })
+})
+
+
+describe('ProcessorRunner — originating registry context', () => {
+  const writers: [string, (repo: Repo) => Promise<unknown>][] = [
+    ['tx', repo => repo.tx(tx => tx.setProperty('src', aliasesProp, ['derived']), {scope: ChangeScope.BlockDefault})],
+    ['Block', repo => repo.block('src').set(aliasesProp, ['derived'])],
+    ['mutator', repo => repo.mutate.setContent({id: 'src', content: 'derived'})],
+    ['type helper', repo => repo.addType('src', 'page')],
+  ]
+
+  it.each(writers)('keeps %s writes on the originating capture after the read phase crosses two switches', async (kind, write) => {
+    const {repo} = env
+    repo.setActiveWorkspaceId(WS)
+    await repo.tx(tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'initial'}),
+      {scope: ChangeScope.BlockDefault})
+    const original = repo.propertySchemaResolverFor(WS).resolve(aliasesProp)
+    expect(original.status).toBe('resolved')
+    if (original.status !== 'resolved') throw new Error('missing original registry')
+    const fieldId = original.schema.fieldId
+    let entered!: () => void
+    let release!: () => void
+    const reading = new Promise<void>(resolve => { entered = resolve })
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    repo.__setProcessorsForTesting([{
+      name: 'test.origin',
+      watches: {kind: 'field', table: 'blocks', fields: ['content']},
+      apply: async (event, ctx) => {
+        if (!event.changedRows.some(row => row.id === 'src' && row.after?.content === 'edit')) return
+        entered()
+        await gate
+        expect(ctx.repo.propertySchemaResolverFor(WS).resolveField(fieldId).status).toBe('resolved')
+        await write(ctx.repo)
+      },
+    }])
+    try {
+      await repo.tx(tx => tx.update('src', {content: 'edit'}), {scope: ChangeScope.BlockDefault})
+      await reading
+      repo.setActiveWorkspaceId('ws-b')
+      await repo.whenPropertyDefinitionsReady('ws-b')
+      repo.setActiveWorkspaceId('ws-c')
+      await repo.whenPropertyDefinitionsReady('ws-c')
+      expect(repo.propertySchemaResolverFor(WS).resolveField(fieldId).status).toBe('identity-unavailable')
+      if (kind === 'mutator') repo.__setMutatorsForTesting([])
+      release()
+      await repo.awaitProcessors()
+      expect(errors).not.toHaveBeenCalled()
+      const row = (await repo.load('src'))!
+      if (kind === 'mutator') expect(row.content).toBe('derived')
+      else if (kind === 'type helper') expect(hasBlockType(row, 'page')).toBe(true)
+      else expect(row.properties[aliasesProp.name]).toEqual(['derived'])
+      await expect(repo.tx(tx => tx.update('src', {content: 'fresh'}), {scope: ChangeScope.BlockDefault}))
+        .rejects.toThrow(/workspace registry.*not loaded/i)
+    } finally {
+      release()
+      errors.mockRestore()
+    }
+  })
+
+  it('keeps a delayed explicit processor on its originating registry', async () => {
+    const {repo} = env
+    repo.setActiveWorkspaceId(WS)
+    repo.__setProcessorsForTesting([{
+      name: 'test.delayed-origin',
+      watches: {kind: 'explicit'},
+      scheduledArgsSchema: {parse: value => value},
+      apply: async (_, ctx) => {
+        await ctx.repo.tx(tx => tx.setProperty('src', aliasesProp, ['delayed']), {scope: ChangeScope.BlockDefault})
+      },
+    }])
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.useFakeTimers({shouldAdvanceTime: true})
+    try {
+      await repo.tx(async tx => {
+        await tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0'})
+        tx.afterCommit('test.delayed-origin', undefined, {delayMs: 4000})
+      }, {scope: ChangeScope.BlockDefault})
+      repo.setActiveWorkspaceId('ws-b')
+      await repo.whenPropertyDefinitionsReady('ws-b')
+      repo.setActiveWorkspaceId('ws-c')
+      await repo.whenPropertyDefinitionsReady('ws-c')
+      await vi.advanceTimersByTimeAsync(4000)
+      await repo.awaitProcessors()
+      expect(errors).not.toHaveBeenCalled()
+      expect((await repo.load('src'))!.properties[aliasesProp.name]).toEqual(['delayed'])
+    } finally {
+      vi.useRealTimers()
+      errors.mockRestore()
+    }
   })
 })

@@ -1912,14 +1912,21 @@ describe('mutating bridge commands rely on the transaction workspace guard', () 
     expect(rows).toEqual([])
   })
 
-  it('reconcile-markdown-subtree refuses a parent in another workspace', async () => {
+  it('reconcile-markdown-subtree refuses a parent in another workspace before parsing', async () => {
     await seedBackground()
+    const parser = await import('@/utils/markdownParser.js')
+    const parse = vi.spyOn(parser, 'parseMarkdownToBlocks')
 
-    await expect(executeCommand({
-      commandId: 'c', type: 'reconcile-markdown-subtree',
-      parentId: BG_ROOT, markdown: '- injected', key: 'k1',
-    }, env.context)).rejects.toThrow(refusal)
+    try {
+      await expect(executeCommand({
+        commandId: 'c', type: 'reconcile-markdown-subtree',
+        parentId: BG_ROOT, markdown: '- injected', key: 'k1',
+      }, env.context)).rejects.toThrow(refusal)
 
+      expect(parse).not.toHaveBeenCalled()
+    } finally {
+      parse.mockRestore()
+    }
     const children = await env.h.db.getAll<{id: string}>(
       'SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0', [BG_ROOT])
     expect(children.map(r => r.id)).toEqual(['bg-child'])

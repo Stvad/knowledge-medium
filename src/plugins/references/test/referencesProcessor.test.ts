@@ -43,6 +43,7 @@ import {
   CLEANUP_ORPHAN_ALIASES_PROCESSOR,
   PARSE_REFERENCES_PROCESSOR,
   isExtensionSource,
+  parseReferencesProcessor,
 } from '../referencesProcessor.ts'
 
 interface Harness {
@@ -2311,14 +2312,15 @@ describe('parseReferences — property field rows reference their definition, ne
     // left implied by the active-workspace case above, because that is exactly
     // the difference a recognition-based suppression could not survive.
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-    // Deliberate background writes opt in per transaction, including follow-up
-    // processors. Keep this regression exercising their recognition logic.
-    const runTx = env.repo.tx.bind(env.repo)
-    const forceParse = vi.spyOn(env.repo, 'tx').mockImplementation((fn, opts) => runTx(fn, {
-      ...opts,
-      allowUnloadedWorkspace: opts.allowUnloadedWorkspace
-        || opts.description === `processor: ${PARSE_REFERENCES_PROCESSOR}`,
-    }))
+    // This fixture deliberately exercises parsing without the target registry.
+    env.repo.__setProcessorsForTesting([{
+      ...parseReferencesProcessor,
+      apply: async (event, ctx) => {
+        const backgroundRepo = Object.create(ctx.repo) as Repo
+        backgroundRepo.tx = (fn, opts) => ctx.repo.tx(fn, {...opts, allowUnloadedWorkspace: true})
+        await parseReferencesProcessor.apply(event, {...ctx, repo: backgroundRepo})
+      },
+    }])
     const BG_WS = 'ws-bg'
     await sharedDb.db.execute(
       `INSERT INTO workspaces
@@ -2349,7 +2351,6 @@ describe('parseReferences — property field rows reference their definition, ne
       await tx.create({id: 'bg-value', workspaceId: BG_WS, parentId: fieldRowId, orderKey: 'a0', content: 'done'})
     }, {scope: ChangeScope.BlockDefault, allowUnloadedWorkspace: true})
     await flush(4000)
-    forceParse.mockRestore()
 
     expect(errorSpy, `processor crashed: ${errorSpy.mock.calls.map(c => c.join(' ')).join('; ')}`)
       .not.toHaveBeenCalled()

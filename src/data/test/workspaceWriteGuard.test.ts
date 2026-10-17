@@ -1,8 +1,9 @@
 // @vitest-environment node
 
-import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'vitest'
+import {afterAll, beforeAll, beforeEach, describe, expect, it, vi} from 'vitest'
 import {
   ChangeScope,
+  DeterministicIdCrossWorkspaceError,
   WorkspaceMismatchError,
   propertyValue,
   type Tx,
@@ -18,6 +19,7 @@ const OPEN = 'ws-open'
 const CLOSED = 'ws-closed'
 const scope = ChangeScope.BlockDefault
 const refusal = /workspace registry.*not loaded/i
+const mintBlockId = vi.fn(() => crypto.randomUUID())
 let db: TestDb
 let repo: Repo
 
@@ -29,14 +31,17 @@ beforeAll(async () => { db = await createTestDb() })
 afterAll(async () => { await db.cleanup() })
 beforeEach(async () => {
   await resetTestDb(db.db)
-  repo = createTestRepo({db: db.db}).repo
+  repo = createTestRepo({db: db.db, newId: mintBlockId}).repo
   // Bootstrap before any workspace registry has been loaded.
   expect(repo.propertyDefinitions).toBeNull()
   await repo.tx(async tx => {
     await tx.create(newBlock('closed-root'))
     await tx.create(newBlock('closed-deleted'))
     await tx.delete('closed-deleted')
+    await tx.create(newBlock('closed-with-alias'))
+    await tx.setProperty('closed-with-alias', aliasesProp, ['present'])
   }, {scope})
+  await repo.tx(tx => tx.create(newBlock('open-occupant', OPEN)), {scope})
   repo.setActiveWorkspaceId(OPEN)
   await repo.whenPropertyDefinitionsReady(OPEN)
   expect(repo.propertyDefinitions?.workspaceId).toBe(OPEN)
@@ -51,7 +56,7 @@ describe('transaction workspace registry guard', () => {
     ['delete', tx => tx.delete('closed-root')],
     ['restore', tx => tx.restore('closed-deleted')],
     ['setProperty', tx => tx.setProperty('closed-root', aliasesProp, ['changed'])],
-    ['unsetProperty', tx => tx.unsetProperty('closed-root', aliasesProp)],
+    ['unsetProperty', tx => tx.unsetProperty('closed-with-alias', aliasesProp)],
     ['setProperties', tx => tx.setProperties('closed-root', {
       set: [propertyValue(aliasesProp, ['changed'])],
     })],
@@ -63,6 +68,48 @@ describe('transaction workspace registry guard', () => {
     const before = await db.db.getAll('SELECT * FROM blocks ORDER BY id')
     await expect(repo.tx(write, {scope})).rejects.toThrow(refusal)
     expect(await db.db.getAll('SELECT * FROM blocks ORDER BY id')).toEqual(before)
+  })
+
+  it('refuses a closed-workspace batch before minting block ids', async () => {
+    mintBlockId.mockClear()
+    await expect(repo.tx(tx => tx.createMany([{
+      workspaceId: CLOSED, parentId: null, orderKey: 'a0',
+    }]), {scope})).rejects.toThrow(refusal)
+    expect(mintBlockId).not.toHaveBeenCalled()
+  })
+
+  it('allows property schema resolution for a retained previous workspace', async () => {
+    repo.setActiveWorkspaceId(CLOSED)
+    await repo.whenPropertyDefinitionsReady(CLOSED)
+    repo.setActiveWorkspaceId(OPEN)
+    await repo.whenPropertyDefinitionsReady(OPEN)
+    const expected = repo.propertySchemaResolverFor(CLOSED).resolve(aliasesProp)
+    expect(expected.status).toBe('resolved')
+    if (expected.status !== 'resolved') throw new Error('missing retained registry')
+    const resolved = await repo.tx(tx => tx.resolvePropertySchema('closed-root', aliasesProp), {scope})
+    expect(resolved).toMatchObject({name: aliasesProp.name, fieldId: expected.schema.fieldId})
+  })
+
+  it('allows createOrGet live hits without admitting or pinning their workspace', async () => {
+    await repo.tx(async tx => {
+      await expect(tx.createOrGet(newBlock('closed-root')))
+        .resolves.toEqual({id: 'closed-root', inserted: false})
+      await tx.create(newBlock('after-live-hit', OPEN))
+    }, {scope})
+  })
+
+  it('allows idempotent writes in a closed workspace', async () => {
+    await repo.tx(async tx => {
+      await tx.delete('closed-deleted')
+      await tx.unsetProperty('closed-root', aliasesProp)
+      await tx.stampReferenceTarget('closed-root', null, false)
+    }, {scope})
+    expect((await repo.load('closed-root'))?.properties).toEqual({})
+  })
+
+  it('keeps deterministic occupant validation ahead of write admission', async () => {
+    await expect(repo.tx(tx => tx.createOrGet(newBlock('open-occupant')), {scope}))
+      .rejects.toBeInstanceOf(DeterministicIdCrossWorkspaceError)
   })
 
   it('covers Block.set and type tagging without bridge prechecks', async () => {
@@ -79,7 +126,7 @@ describe('transaction workspace registry guard', () => {
     await expect(createOrFindPlace(repo, CLOSED, {name: 'Test Place', lat: 1, lng: 2}))
       .rejects.toThrow(refusal)
     expect(await db.db.getAll('SELECT id FROM blocks WHERE workspace_id = ?', [CLOSED]))
-      .toHaveLength(2)
+      .toHaveLength(3)
   })
 
   it('does not gate the direct database path used by sync materialization', async () => {
@@ -119,6 +166,14 @@ describe('transaction workspace registry guard', () => {
     await expect(repo.tx(async tx => {
       await tx.create(newBlock('open-first', OPEN))
       await tx.create(newBlock('closed-second'))
+    }, {scope})).rejects.toBeInstanceOf(WorkspaceMismatchError)
+    expect(await repo.load('open-first')).toBeNull()
+  })
+
+  it('checks the transaction workspace before standalone write admission', async () => {
+    await expect(repo.tx(async tx => {
+      await tx.create(newBlock('open-first', OPEN))
+      tx.assertWritableWorkspace(CLOSED)
     }, {scope})).rejects.toBeInstanceOf(WorkspaceMismatchError)
     expect(await repo.load('open-first')).toBeNull()
   })

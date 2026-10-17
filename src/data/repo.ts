@@ -50,7 +50,7 @@ import {
   ReadOnlyError,
   UndoHistoryDroppedError,
 } from './api/errors'
-import { runTx, type PowerSyncDb, type TxLockHooks } from './internals/commitPipeline'
+import { runTx, type PowerSyncDb, type RunTxParams, type TxLockHooks } from './internals/commitPipeline'
 import { STRANDED_CLAIM_RECOVERY } from './internals/graphBackfillClaim'
 import { onSyncSettled } from './internals/firstSync'
 import { devAssertionsEnabled } from './internals/devAssertions'
@@ -268,11 +268,23 @@ const NO_ACTIVE_WORKSPACE = '__no_active_workspace__'
  *  committing an audit row for a replay that never ran. */
 class NothingToReplay extends Error {}
 
+type TransactionRuntime = Pick<RunTxParams<unknown>,
+  | 'mutators' | 'processors' | 'sameTxProcessors' | 'propertySchemas' | 'valuePresets'
+  | 'contentReferencePrefill' | 'typeDefinitionsForWorkspace'
+  | 'propertyDefinitionRegistryForWorkspace' | 'propertySchemaWorkspaceId'
+  | 'propertyRegistryInitialized' | 'propertySeedNameCounts'
+> & {
+  types: ReadonlyMap<string, TypeContribution>
+  propertyDefinitions: PropertyDefinitionRegistrySnapshot | null
+  typeDefinitions: TypeDefinitionRegistrySnapshot | null
+}
+
 /** What `repo.tx` and `_replay` pass `runTx` beyond the public tx options. */
 interface RunAndDispatchInternals {
   /** An undo/redo replay — see `RunTxParams.isReplay`. */
   isReplay?: boolean
   lockHooks?: TxLockHooks
+  runtime?: TransactionRuntime
 }
 
 /** Max `ctx.run` composition depth before we assume a cycle (a query
@@ -1141,7 +1153,7 @@ export class Repo {
     // dispatch). The runner reads its registry per-tx from the snapshot
     // baked into TxResult — we don't sync a registry into the runner
     // here.
-    this.processorRunner = new ProcessorRunner(this, this.db)
+    this.processorRunner = new ProcessorRunner(this.db)
     // Type-tagging engine (audit D1(b)). Repo keeps spec-pinned
     // delegating methods over this single instance.
     this.typeTagger = new TypeTagger(this)
@@ -1817,6 +1829,14 @@ export class Repo {
     fn: (tx: Tx) => Promise<R>,
     opts: RepoTxOptions,
   ): Promise<R> {
+    return this.transact(fn, opts)
+  }
+
+  private async transact<R>(
+    fn: (tx: Tx) => Promise<R>,
+    opts: RepoTxOptions,
+    runtime?: TransactionRuntime,
+  ): Promise<R> {
     // Sampled once this transaction HOLDS the write lock — not when it was
     // called — and compared when the entry is recorded, still under that lock.
     //
@@ -1866,7 +1886,7 @@ export class Repo {
           sampleEpoch(this.undoManagerFor(tx.meta.workspaceId))
         }
         return value
-      }, opts, {lockHooks: {
+      }, opts, {runtime, lockHooks: {
         // Step 7 of the §10 pipeline — record the undo entry into the tx's
         // pinned workspace's manager, so a later cmd-Z only ever acts on
         // entries from the workspace the user is looking at (issue #186).
@@ -1990,12 +2010,15 @@ export class Repo {
 
   /** Build the group-injecting facade for {@link undoGroup}. */
   private groupedFacade(groupId: string): Repo {
+    return this.transactionFacade((fn, opts) => this.tx(fn, {...opts, groupId}))
+  }
+
+  /** Share the binding rules for transaction-scoped Repo hosts. */
+  private transactionFacade(tx: Repo['tx']): Repo {
     const facade = Object.create(this) as Repo
-    const tx = <R,>(fn: (tx: Tx) => Promise<R>, opts: RepoTxOptions): Promise<R> =>
-      this.tx(fn, {...opts, groupId})
     const run = ((name: string, args: unknown) =>
-      this.dispatchMutator(name, groupId)(args)) as Repo['run']
-    const mutate = nameDispatchProxy<MutateProxy>(name => this.dispatchMutator(name, groupId))
+      facade.dispatchMutator(name)(args)) as Repo['run']
+    const mutate = nameDispatchProxy<MutateProxy>(name => facade.dispatchMutator(name))
     // Async so a synchronously-throwing callback rejects like the outer
     // `undoGroup` does instead of throwing through the caller.
     const undoGroup = async <R,>(inner: (grouped: Repo) => Promise<R>): Promise<R> =>
@@ -2080,6 +2103,34 @@ export class Repo {
     })
   }
 
+  /** Follow-up transactions keep the runtime that scheduled the processor. */
+  private processorFacade(runtime: TransactionRuntime): Repo {
+    const facade = this.transactionFacade((fn, opts) => this.transact(fn, opts, runtime))
+    const blocks = new Map<string, Block>()
+    facade.mutators = new Map(runtime.mutators)
+    Object.defineProperties(facade, {
+      types: {value: runtime.types},
+      propertySchemas: {value: runtime.propertySchemas},
+      propertyDefinitions: {value: runtime.propertyDefinitions},
+      typeDefinitions: {value: runtime.typeDefinitions},
+      valuePresetCores: {value: runtime.valuePresets},
+    })
+    facade.propertySchemaResolverFor = workspaceId => propertySchemaResolverForWorkspace(
+      runtime.propertyDefinitionRegistryForWorkspace(workspaceId), workspaceId,
+      runtime.propertySeedNameCounts,
+      runtime.propertySchemaWorkspaceId === null || workspaceId === runtime.propertySchemaWorkspaceId,
+    )
+    facade.snapshotTypeRegistries = () => ({types: runtime.types, propertySchemas: runtime.propertySchemas})
+    // Context-bound blocks stay local; the shared cache must never retain this host.
+    facade.block = id => {
+      let block = blocks.get(id)
+      if (!block) { block = new Block(facade, id); blocks.set(id, block) }
+      return block
+    }
+    facade.undoGroup = async fn => fn(facade.groupedFacade(this.newId()))
+    return facade
+  }
+
   private requestedWrites = 0
 
   /** A write on this repo's database has been requested and has not settled:
@@ -2120,13 +2171,7 @@ export class Repo {
     }
   }
 
-  private async _runAndDispatchInner<R>(
-    fn: (tx: Tx) => Promise<R>,
-    opts: RepoTxOptions,
-    {isReplay = false, lockHooks}: RunAndDispatchInternals,
-  ) {
-    const txT0 = performance.now()
-    let result
+  private async captureTransactionRuntime(): Promise<TransactionRuntime> {
     // A workspace pin starts the definition projector asynchronously. Delay
     // active-workspace transactions at the one shared boundary so callers
     // cannot capture declaration-only seed winners during that short window.
@@ -2164,6 +2209,53 @@ export class Repo {
     const capturedTypeDefinitions = this._typeDefinitionRegistry
     const capturedActivePropertyDefinitions = this._propertyDefinitionRegistry
     const capturedPreviousPropertyDefinitions = this._previousPropertyDefinitionRegistry
+    return {
+      mutators: this.mutators,
+      processors: this.processors,
+      sameTxProcessors: this.sameTxProcessors,
+      propertySchemas: this._propertySchemas,
+      valuePresets: this._valuePresetCores,
+      contentReferencePrefill: contentReferencePrefillFor(
+        this.facetRuntime?.read(contentReferencePrefillsFacet) ?? [],
+      ),
+      // Same tx-start boundary as `propertySchemas`; a merge needs it to ask
+      // whether the source/destination actually OWN the tokens they look like
+      // they own, which their rows alone cannot answer. Keyed by the TX's
+      // workspace (which `TxImpl` pins from the first write) rather than the
+      // active one — answering from another workspace's registry would report
+      // every local token as unknown and silently disable the ownership gate.
+      typeDefinitionsForWorkspace: workspaceId =>
+        capturedTypeDefinitions?.workspaceId === workspaceId
+          ? capturedTypeDefinitions
+          : null,
+      // Serve the tx's active-at-start workspace, or the retained previous one,
+      // from their frozen snapshots; any other workspace resolves null (fail
+      // closed). Frozen at tx-start so a mid-tx workspace switch can't re-scope
+      // resolution for the workspace the tx is operating on.
+      propertyDefinitionRegistryForWorkspace:
+        workspaceId => registryForWorkspace(
+          capturedActivePropertyDefinitions,
+          capturedPreviousPropertyDefinitions,
+          workspaceId,
+        ),
+      propertySchemaWorkspaceId: readinessWorkspaceId,
+      propertyRegistryInitialized: capturedActivePropertyDefinitions !== null
+        || capturedPreviousPropertyDefinitions !== null,
+      propertySeedNameCounts: this._propertySeedNameCounts,
+      types: this._types,
+      propertyDefinitions: capturedActivePropertyDefinitions,
+      typeDefinitions: capturedTypeDefinitions,
+    }
+  }
+
+  private async _runAndDispatchInner<R>(
+    fn: (tx: Tx) => Promise<R>,
+    opts: RepoTxOptions,
+    {isReplay = false, lockHooks, runtime: capturedRuntime}: RunAndDispatchInternals,
+  ) {
+    const txT0 = performance.now()
+    let result
+    const runtime = capturedRuntime ?? await this.captureTransactionRuntime()
     try {
       result = await runTx({
         db: this.db,
@@ -2181,38 +2273,7 @@ export class Repo {
         newId: this.newId,
         blockIdPolicy: this.blockIdPolicy,
         now: this.now,
-        mutators: this.mutators,
-        processors: this.processors,
-        sameTxProcessors: this.sameTxProcessors,
-        propertySchemas: this._propertySchemas,
-        valuePresets: this._valuePresetCores,
-        contentReferencePrefill: contentReferencePrefillFor(
-          this.facetRuntime?.read(contentReferencePrefillsFacet) ?? [],
-        ),
-        // Same tx-start boundary as `propertySchemas`; a merge needs it to ask
-        // whether the source/destination actually OWN the tokens they look like
-        // they own, which their rows alone cannot answer. Keyed by the TX's
-        // workspace (which `TxImpl` pins from the first write) rather than the
-        // active one — answering from another workspace's registry would report
-        // every local token as unknown and silently disable the ownership gate.
-        typeDefinitionsForWorkspace: workspaceId =>
-          capturedTypeDefinitions?.workspaceId === workspaceId
-            ? capturedTypeDefinitions
-            : null,
-        // Serve the tx's active-at-start workspace, or the retained previous one,
-        // from their frozen snapshots; any other workspace resolves null (fail
-        // closed). Frozen at tx-start so a mid-tx workspace switch can't re-scope
-        // resolution for the workspace the tx is operating on.
-        propertyDefinitionRegistryForWorkspace:
-          workspaceId => registryForWorkspace(
-            capturedActivePropertyDefinitions,
-            capturedPreviousPropertyDefinitions,
-            workspaceId,
-          ),
-        propertySchemaWorkspaceId: readinessWorkspaceId,
-        propertyRegistryInitialized: capturedActivePropertyDefinitions !== null
-          || capturedPreviousPropertyDefinitions !== null,
-        propertySeedNameCounts: this._propertySeedNameCounts,
+        ...runtime,
         // Undo/redo replays skip the same-tx processor pass so a
         // value-deriving processor can't override `applyRaw`'s exact
         // restore (#187). Post-commit processors still dispatch below.
@@ -2301,6 +2362,7 @@ export class Repo {
       afterCommitJobs: result.afterCommitJobs,
       processors: result.processors,
       propertySchemas: result.propertySchemas,
+      repo: result.workspaceId === null ? this : this.processorFacade(runtime),
     })
     return result
   }

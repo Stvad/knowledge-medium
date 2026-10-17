@@ -105,8 +105,9 @@ export interface ProcessorCtx {
    *  `ctx.repo.tx(...)`. No writer is open at this surface unless the
    *  processor opens one itself, so reads don't queue behind a writer. */
   db: ProcessorReadDb
-  /** Full `Repo` — open a write tx when needed, invoke mutators, run
-   *  kernel queries. */
+  /** Repo host whose transactions and property/type resolution retain the
+   *  originating transaction's runtime, including delayed jobs. Current client
+   *  read-only mode still applies. Read queries observe current committed rows. */
   repo: Repo
   /** Merged property-schema registry snapshotted with the processor
    *  registry at tx start. Processors use this for codec lookups

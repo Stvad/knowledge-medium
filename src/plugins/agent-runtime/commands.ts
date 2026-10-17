@@ -975,14 +975,6 @@ const reconcileMarkdownSubtree = async (
   input: ReconcileMarkdownSubtreeInput,
 ): Promise<ReconcileMarkdownSubtreeResult> => {
   const {parentId, key, properties, shape, final} = input
-  // shape 'block' → the whole markdown is ONE root block (newlines kept);
-  // 'outline' (default) → split along the markdown outline.
-  const parsed: ParsedBlock[] = shape === 'block'
-    ? (input.markdown.length === 0
-        ? []
-        : [{id: 'block-root', orderKey: '', content: input.markdown}])
-    : parseMarkdownToBlocks(input.markdown)
-
   const ids: string[] = []
   const rootIds: string[] = []
 
@@ -990,6 +982,15 @@ const reconcileMarkdownSubtree = async (
     const parent = await tx.get(parentId)
     if (!parent) throw new Error(`reconcile-markdown-subtree: parent ${parentId} not found`)
     const {workspaceId} = parent
+    tx.assertWritableWorkspace(workspaceId)
+
+    // Parse only after admission so a closed workspace is refused before the
+    // potentially expensive markdown work begins.
+    const parsed: ParsedBlock[] = shape === 'block'
+      ? (input.markdown.length === 0
+          ? []
+          : [{id: 'block-root', orderKey: '', content: input.markdown}])
+      : parseMarkdownToBlocks(input.markdown)
 
     // This subtree's existing blocks, in pre-order (the target we reconcile
     // onto). Walk children depth-first following ONLY tagged blocks, so user
