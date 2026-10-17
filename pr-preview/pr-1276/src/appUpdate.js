@@ -1,1 +1,0 @@
-import{oE as e,sE as t}from"../chunks/app-Bb6mLpUK.js";export{e as appUpdate,t as useAppUpdateAvailable};
