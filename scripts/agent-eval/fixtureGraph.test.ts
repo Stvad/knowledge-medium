@@ -19,7 +19,7 @@
  */
 import { rmSync } from 'node:fs'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
-import { createTestDb } from '@/data/test/createTestDb'
+import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import {
   buildFixture,
   DESIGN_PAGE,
@@ -51,6 +51,7 @@ import { type FixtureTestGraph, openFixtureRuntime, openFixtureTestGraph } from 
 const {truth} = buildFixture()
 
 interface Graph extends FixtureTestGraph {
+  db: TestDb['db']
   probe: GraphProbe
 }
 
@@ -66,6 +67,7 @@ const openGraph = async (): Promise<Graph> => {
   const graph = await openFixtureTestGraph(db.db, {seed: false})
   return {
     ...graph,
+    db: db.db,
     probe: {workspaceId: TEST_WORKSPACE_ID, command: graph.command},
     close: async () => {
       try {
@@ -110,16 +112,14 @@ const onFreshGraph = async <T>(body: (graph: Graph) => Promise<T>): Promise<T> =
 
 describe('imported fixture', () => {
   it('releases the fixture workspace before its caller closes the database', async () => {
-    const db = await createTestDb({from: template})
-    const runtime = await openFixtureRuntime(db.db, {seed: false})
+    const runtime = await openFixtureRuntime(graph.db, {seed: false})
     try {
       expect(runtime.context.repo.activeWorkspaceId).toBe(TEST_WORKSPACE_ID)
       await runtime.close()
       expect(runtime.context.repo.activeWorkspaceId).toBeNull()
-      expect(await db.db.get('SELECT 1 AS value')).toEqual({value: 1})
+      expect(await graph.db.get('SELECT 1 AS value')).toEqual({value: 1})
     } finally {
       await runtime.close()
-      await db.cleanup()
     }
   })
 
