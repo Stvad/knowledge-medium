@@ -166,12 +166,13 @@ export const buildSearchView = async (
 
   const page = groups.slice(offset, offset + limit)
   const shown = page.map(group => group[0])
+  const shownIds = shown.map(block => block.id)
   const duplicateIds = page.flatMap(group => group.slice(1, 1 + MAX_DUPLICATES_SHOWN).map(block => block.id))
   const [renderer, shortIds, crumbs, siblings] = await Promise.all([
     createPropertyRenderer(repo, shown, 'brief'),
-    displayIds(repo, [...shown.map(block => block.id), ...duplicateIds]),
-    loadCrumbs(repo, [...shown.map(block => block.id), ...duplicateIds], workspaceId),
-    recordSiblings(repo, shown.map(block => block.id), records, workspaceId),
+    displayIds(repo, [...shownIds, ...duplicateIds]),
+    loadCrumbs(repo, [...shownIds, ...duplicateIds], workspaceId),
+    recordSiblings(repo, shownIds, records, workspaceId),
   ])
   const end = offset + page.length
   // The listing ends where the window does: no offset reaches past a capped

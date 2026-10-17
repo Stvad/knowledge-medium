@@ -272,7 +272,7 @@ describe('getPluginPrefsBlock', () => {
       (await env.h.db.getAll<{n: number}>('SELECT count(*) AS n FROM blocks'))[0].n
     const before = await blockCount()
 
-    expect(await readPluginPref(env.repo, WS, USER, examplePrefsType, showPropertiesProp)).toBeUndefined()
+    expect(await readPluginPref(env.repo, WS, USER, examplePrefsType, showPropertiesProp)).toBe(showPropertiesProp.defaultValue)
     expect(await blockCount()).toBe(before)
 
     const pluginPrefs = await getPluginPrefsBlock(env.repo, WS, USER, examplePrefsType)

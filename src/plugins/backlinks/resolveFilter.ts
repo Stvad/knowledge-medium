@@ -49,7 +49,6 @@ export const resolveBacklinksFilter = async (
   // defaults (only applied when the block is a daily note) with the
   // block's own stored filter.
   const dailyNoteDefaults = await readPluginPref(repo, workspaceId, repo.user, backlinksPrefsType, dailyNoteBacklinksDefaultsProp)
-    ?? dailyNoteBacklinksDefaultsProp.defaultValue
   const effective = effectiveBacklinksFilterForBlock(blockData, stored, dailyNoteDefaults)
   return hasBacklinksFilter(effective) ? effective : undefined
 }

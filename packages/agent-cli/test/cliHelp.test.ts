@@ -4,7 +4,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { getCommandMeta } from '../src/protocol.js'
-import { commandSummary, SUMMARY_MAX_CHARS } from '../src/cliHelp.js'
+import { commandSummary } from '../src/cliHelp.js'
 
 const execFileAsync = promisify(execFile)
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -16,6 +16,8 @@ const help = async (...args: string[]): Promise<string> =>
 /** An agent reads the top-level help before anything else, so it is a ratchet
  *  like the eval's output budgets: it may shrink, never grow back. */
 const TOP_LEVEL_HELP_BUDGET = 5_500
+/** A summary longer than this crowds the top-level list. */
+const SUMMARY_MAX_CHARS = 160
 
 /** The `Commands:` section's lines: `  <rawName>  <summary>`. */
 const commandLines = (text: string): string[] => {

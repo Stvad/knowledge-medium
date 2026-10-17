@@ -4,7 +4,7 @@
 // description, and `<command> --help` opens with the whole description.
 
 /** cac's help section; cac does not export the type. */
-export interface HelpSection {
+interface HelpSection {
   title?: string
   body: string
 }
@@ -13,9 +13,6 @@ interface HelpCommand {
   rawName: string
   description: string
 }
-
-/** A summary longer than this crowds the top-level list. */
-export const SUMMARY_MAX_CHARS = 160
 
 /** A description's first sentence. It is the command's line in the
  *  top-level list, so it must read on its own. */

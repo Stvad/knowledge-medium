@@ -27,8 +27,7 @@ export type GroupedBacklinksGroupingSpec =
 
 /** Resolve the grouping config for `blockId` the way the grouped-backlinks
  *  view does, but outside React. The `'user'` branch reads the user's
- *  grouped-backlinks defaults without creating their prefs block; a user
- *  who has none gets the defaults' default. */
+ *  grouped-backlinks defaults without creating their prefs block. */
 export const resolveGroupedBacklinksConfig = async (
   repo: Repo,
   workspaceId: string,
@@ -41,7 +40,6 @@ export const resolveGroupedBacklinksConfig = async (
   if (spec === 'none') return EMPTY_GROUPED_BACKLINKS_CONFIG
 
   const defaults = await readPluginPref(repo, workspaceId, repo.user, groupedBacklinksPrefsType, groupedBacklinksDefaultsProp)
-    ?? groupedBacklinksDefaultsProp.defaultValue
   const blockData = await repo.load(blockId)
   const overrides = selectGroupedBacklinksOverrides(blockData)
   return mergeGroupedBacklinksConfig(defaults, overrides)

@@ -345,18 +345,19 @@ export const getPluginPrefsBlock = memoizeAsync(
 export const pluginPrefsBlockId = (workspaceId: string, userId: string, typeId: string): string =>
   stateChildBlockId(stateChildBlockId(userPageBlockId(workspaceId, userId), USER_PREFS_PATH_PART), typeId)
 
-/** One stored plugin preference, read without creating the prefs subtree:
- *  undefined while the user has none, so the caller's default applies. For
- *  read paths; a settings surface that writes uses `getPluginPrefsBlock`. */
+/** One plugin preference, read without creating the prefs subtree: the
+ *  stored value, or the schema's default while the user has none. For read
+ *  paths; a settings surface that writes uses `getPluginPrefsBlock`. */
 export const readPluginPref = async <T>(
   repo: Repo,
   workspaceId: string,
   user: User,
   type: TypeContribution,
   schema: PropertySchema<T>,
-): Promise<T | undefined> => {
+): Promise<T> => {
   const id = pluginPrefsBlockId(workspaceId, user.id, type.id)
-  return (await repo.load(id)) ? repo.block(id).peekProperty(schema) : undefined
+  const stored = (await repo.load(id)) ? repo.block(id).peekProperty(schema) : undefined
+  return stored ?? schema.defaultValue
 }
 
 /** Resolve the UI-state block scoped to the current panel context.
