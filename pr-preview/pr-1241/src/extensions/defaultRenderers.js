@@ -1,1 +1,1 @@
-import{SD as e,bD as t,xD as n}from"../../chunks/app-DzzpbsOx.js";export{t as defaultRegistry,n as defaultRendererContributions,e as defaultRenderersExtension};
+import{CD as e,SD as t,wD as n}from"../../chunks/app-CaxlGs0l.js";export{t as defaultRegistry,e as defaultRendererContributions,n as defaultRenderersExtension};

@@ -1,1 +1,1 @@
-import{zf as e}from"../../../../../chunks/app-DzzpbsOx.js";export{e as wikilinkMarkdownExtension};
+import{Vf as e}from"../../../../../chunks/app-CaxlGs0l.js";export{e as wikilinkMarkdownExtension};

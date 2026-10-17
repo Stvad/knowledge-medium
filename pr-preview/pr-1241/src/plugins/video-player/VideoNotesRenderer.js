@@ -1,1 +1,1 @@
-import{Ah as e,Mh as t,jh as n}from"../../../chunks/app-DzzpbsOx.js";export{e as VideoNotesLayout,n as VideoNotesRenderer,t as videoNotesLayoutContribution};
+import{Mh as e,Nh as t,Ph as n}from"../../../chunks/app-CaxlGs0l.js";export{e as VideoNotesLayout,t as VideoNotesRenderer,n as videoNotesLayoutContribution};
