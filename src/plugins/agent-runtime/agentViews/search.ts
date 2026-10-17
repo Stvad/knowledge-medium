@@ -28,6 +28,13 @@ export interface SearchParams {
   includeExtensions?: boolean
 }
 
+export interface SearchDuplicate {
+  id: string
+  shortId: string
+  /** The last step of its breadcrumb; null at the top level. */
+  place: string | null
+}
+
 export interface SearchHit {
   id: string
   shortId: string
@@ -39,8 +46,7 @@ export interface SearchHit {
   /** The first few other blocks with the same text, folded into this hit;
    *  `duplicateCount` is all of them within the fetched window (complete only
    *  when the view's `duplicateCountsComplete` is set). */
-  duplicateIds: string[]
-  duplicateShortIds: string[]
+  duplicates: SearchDuplicate[]
   duplicateCount: number
   /** Only for a hit under a label: its record's first other lines. */
   siblings?: string[]
@@ -162,7 +168,7 @@ export const buildSearchView = async (
   const [renderer, shortIds, crumbs, siblings] = await Promise.all([
     createPropertyRenderer(repo, shown, 'brief'),
     displayIds(repo, [...shown.map(block => block.id), ...duplicateIds]),
-    loadCrumbs(repo, shown.map(block => block.id), workspaceId),
+    loadCrumbs(repo, [...shown.map(block => block.id), ...duplicateIds], workspaceId),
     recordSiblings(repo, shown, labels, workspaceId, {count: RECORD_SIBLINGS, chars: CONTEXT_HEAD_CHARS}),
   ])
   const end = offset + page.length
@@ -187,8 +193,11 @@ export const buildSearchView = async (
         types: renderer.typeLabels(block),
         properties: properties.visible,
         omittedProperties: properties.omitted,
-        duplicateIds: duplicates.map(duplicate => duplicate.id),
-        duplicateShortIds: duplicates.map(duplicate => shortIds.get(duplicate.id) ?? duplicate.id),
+        duplicates: duplicates.map(duplicate => ({
+          id: duplicate.id,
+          shortId: shortIds.get(duplicate.id) ?? duplicate.id,
+          place: crumbs.get(duplicate.id)?.at(-1) ?? null,
+        })),
         duplicateCount: group.length - 1,
         ...(record ? {siblings: record.map(contextPreview)} : {}),
       }
@@ -225,9 +234,11 @@ export const renderSearchView = (view: SearchView): string => {
         ? formatPropertyPairs(hit.properties, hit.omittedProperties)
         : null,
     ].filter(Boolean).join('  ')
-    const unlisted = hit.duplicateCount - hit.duplicateShortIds.length
+    const unlisted = hit.duplicateCount - hit.duplicates.length
+    // `;` between them: a place (a daily note's title) can hold a comma.
+    const listed = hit.duplicates.map(duplicate => `^${duplicate.shortId}${duplicate.place === null ? '' : ` in ${duplicate.place}`}`)
     const duplicates = hit.duplicateCount > 0
-      ? `  (+${formatCount(hit.duplicateCount)}${view.duplicateCountsComplete ? '' : ' or more'} identical: ${hit.duplicateShortIds.map(id => `^${id}`).join(', ')}${unlisted > 0 ? `, …+${formatCount(unlisted)} more` : ''})`
+      ? `  (+${formatCount(hit.duplicateCount)}${view.duplicateCountsComplete ? '' : ' or more'} identical: ${listed.join('; ')}${unlisted > 0 ? `; …+${formatCount(unlisted)} more` : ''})`
       : ''
     lines.push(`${view.offset + index + 1}. ^${hit.shortId}  ${crumbLine(hit.breadcrumb)}${duplicates}`)
     lines.push(`   ${hit.snippet}${meta ? `  ${meta}` : ''}`)

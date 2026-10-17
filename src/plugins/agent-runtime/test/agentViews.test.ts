@@ -1330,6 +1330,22 @@ describe('view-backlinks', () => {
 })
 
 describe('view-search', () => {
+  it('says where each folded duplicate is', async () => {
+    const vendors = ['Kestrel', 'Copperline']
+    for (const [index, name] of vendors.entries()) {
+      const vendor = uuid(`6e00000${index}`, index)
+      await create({id: vendor, content: name, properties: {alias: [name]}})
+      await create({id: uuid(`6e00001${index}`, 10 + index), parentId: vendor, content: 'status: renewal due'})
+    }
+
+    const out = await view<SearchView>({type: 'view-search', query: 'renewal due', format: 'json'})
+    expect(out.hits).toHaveLength(1)
+    const [hit] = out.hits
+    expect([hit.breadcrumb.at(-1), hit.duplicates[0].place].sort()).toEqual(['Copperline', 'Kestrel'])
+    const text = await view<string>({type: 'view-search', query: 'renewal due'})
+    expect(text).toContain(`identical: ^${hit.duplicates[0].shortId} in ${hit.duplicates[0].place})`)
+  })
+
   it('keeps identical lines of different records apart, each with its record', async () => {
     const days = [uuid('6c000001', 1), uuid('6c000002', 2)]
     for (const [index, day] of days.entries()) {
@@ -1361,7 +1377,7 @@ describe('view-search', () => {
     expect(bread.breadcrumb).toEqual(['Recipes'])
     expect(bread.snippet.startsWith('…')).toBe(true)
     const split = out.hits.find(hit => hit.snippet === 'banana split')!
-    expect(split.duplicateIds).toHaveLength(1)
+    expect(split.duplicates).toHaveLength(1)
     expect(out.nextOffset).toBeNull()
 
     const firstPage = await view<SearchView>({type: 'view-search', query: 'banana', limit: 1, format: 'json'})
@@ -1422,9 +1438,9 @@ describe('view-search', () => {
     const out = await view<SearchView>({type: 'view-search', query: 'banana', format: 'json'})
     expect(out.hits.map(hit => hit.snippet)).toEqual(['banana split', 'we also like banana'])
     expect(out.hits[0].duplicateCount).toBe(109)
-    expect(out.hits[0].duplicateIds).toHaveLength(5)
+    expect(out.hits[0].duplicates).toHaveLength(5)
     const text = await view<string>({type: 'view-search', query: 'banana'})
-    expect(text).toMatch(/\(\+109 identical: (\^[^,]+, ){5}…\+104 more\)/)
+    expect(text).toMatch(/\(\+109 identical: (\^[^;]+; ){5}…\+104 more\)/)
     expect(out.nextOffset).toBeNull()
   })
 
