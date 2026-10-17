@@ -2278,7 +2278,7 @@ export const executeCommand = async (
 
     case 'create-block':
       return context.createBlock({
-        parentId: command.parentId === undefined
+        parentId: command.parentId === undefined || command.parentId === null
           ? undefined
           : requireString(command.parentId, 'parentId'),
         position: getPosition(command.position),

@@ -52,7 +52,7 @@ The CLI exposes both *local* commands (pairing, profile management) and *bridge*
 | `kmagent sql <mode> <sql> [paramsJson] [--allow-synced-write]` | Run SQL (mode: `all\|get\|optional\|execute`). Refuses a raw write to a synced table (`blocks`, `workspaces`, `workspace_members`) unless `--allow-synced-write` is passed — see note below. |
 | `kmagent get-block <id>` | Fetch a block. |
 | `kmagent subtree <rootId> [--json]` | Fetch a subtree as a depth-indented outline (`--json` for the raw flat array). |
-| `kmagent create-block <json>` | Create a block from a JSON body. |
+| `kmagent create-block <json>` | Create one block: `{parentId, content, properties?, position?}`. `parentId` is a write target (see Writing); absent or `null` makes a top-level block, which is not a page — use `create-page`. |
 | `kmagent update-block <json>` | Update a block from a JSON body. |
 | `kmagent move-block <json>` | Move a block to a parent/position from a JSON body. |
 | `kmagent delete-block <id>` | Soft-delete a block and its descendants. |

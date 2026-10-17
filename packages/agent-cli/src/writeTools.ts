@@ -1,21 +1,7 @@
-/* Shared by the km MCP write tools and the matching CLI verbs: the help text
- * both surfaces quote, and the rendering of an append result. Lives apart from
- * `cli.ts` because that module self-executes on import. */
+/* The rendering of an append result, shared by the km MCP tool and the CLI
+ * verb. Lives apart from `cli.ts` because that module self-executes on import. */
 import type {AppendMarkdownResult} from './graph.js'
 import {neutralizeDisplayText} from './protocol.js'
-
-/** How every write tool names where to write. */
-export const WRITE_TARGET_HELP =
-  'A target is a block id or a unique id prefix as printed (^3f2a9c1b); a [[Page name]] — found by alias, '
-  + 'and created when missing exactly as typing that wikilink would (a date-literal name such as '
-  + '[[2026-10-15]] is that daily note); or a date expression (today, yesterday, 2026-10-15, next monday) '
-  + 'for that day\'s daily note, created when missing. A bare name only finds an EXISTING page — to create '
-  + 'one, wrap it in [[…]].'
-
-/** How to write a todo — composed from the built-in `todo` type. */
-export const TODO_WRITE_HELP =
-  'A todo is a block with properties {"types": ["todo"], "status": "open"} (create_block); mark it done '
-  + 'with update_block properties {"status": "done"} — properties merge, so its other keys stay.'
 
 const preview = (content: string): string => {
   const [first, ...rest] = content.split('\n')

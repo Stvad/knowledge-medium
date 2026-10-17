@@ -366,6 +366,11 @@ describe('agent write attribution', () => {
     const created = await run({type: 'create-block', parentId: '[[Someday]]', content: 'idea'}) as {parentId: string}
     expect(created.parentId).toBe(computeAliasSeatId('Someday', WS, 0))
   })
+
+  it('create-block takes a null parentId as a top-level block, as move-block does', async () => {
+    const created = await run({type: 'create-block', parentId: null, content: 'loose'}) as {parentId: string | null, workspaceId: string}
+    expect(created).toMatchObject({parentId: null, workspaceId: WS})
+  })
 })
 
 interface ChangesOut {

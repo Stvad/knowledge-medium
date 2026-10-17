@@ -184,7 +184,8 @@ export const getSubtreeCommandSchema = z.looseObject({
 
 export const createBlockCommandSchema = z.looseObject({
   type: z.literal('create-block'),
-  parentId: z.string().optional(),
+  // Absent or null: a top-level block, as move-block takes it.
+  parentId: z.string().nullable().optional(),
   // position, content, properties forwarded verbatim (looseObject).
   ...commandIdField,
 })
@@ -718,6 +719,18 @@ export interface KnownCommandMeta {
   readOnly: boolean
 }
 
+/** How the write verbs name where to write: quoted by the CLI verbs and the
+ *  km MCP tools alike, so both surfaces say the same thing. */
+export const WRITE_TARGET_HELP =
+  'A target is a block id or a printed short id (^3f2a9c1b); a [[Page name]], created if missing as typing '
+  + 'that link would ([[2026-10-15]] is that daily note); or a date (today, next monday, 2026-10-15) for its '
+  + 'daily note, created if missing. A bare name only finds an existing page.'
+
+/** A todo composes the built-in `todo` type. */
+export const TODO_WRITE_HELP =
+  'A todo is a block with properties {"types": ["todo"], "status": "open"}; set "status" to "done" to complete '
+  + 'it (properties merge).'
+
 /** Schema-derived registry of every known wire command. Typed as
  *  `Record<KnownCommandType, …>` so adding a variant to
  *  `knownCommandSchema` without a registry entry is a TypeScript error —
@@ -764,7 +777,8 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   },
   'create-block': {
     usage: 'kmagent create-block <json>',
-    description: 'Create a block (body shape per <json>).',
+    description: 'Create one block. Body: {parentId, content, properties?, position?: first|last}; parentId is a target '
+      + `as for append-markdown, or null for a top-level block (not a page — use create-page). ${TODO_WRITE_HELP}`,
     readOnly: false,
   },
   'reconcile-markdown-subtree': {
@@ -774,7 +788,9 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   },
   'update-block': {
     usage: 'kmagent update-block <json>',
-    description: 'Update a block (body shape per <json>: {id, content?, properties?, replaceProperties?, expectedContent?}). Properties MERGE unless replaceProperties. expectedContent is a compare-and-set: the update is refused, with the current content in the error, unless the block still has exactly that content. id may be a unique id prefix.',
+    description: 'Update a block. Body: {id, content?, properties?, replaceProperties?, expectedContent?}. Properties merge '
+      + 'unless replaceProperties. With expectedContent the update is refused, showing the current content, if the '
+      + 'block changed since. id may be a unique id prefix.',
     readOnly: false,
   },
   'move-block': {
@@ -794,27 +810,35 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   },
   'append-markdown': {
     usage: "kmagent append-markdown <target> [--first | --after <id> | --before <id>] [--one-block] -- '<markdown>'   (or pipe it on stdin)",
-    description: 'Parse markdown with the app paste parser (the same split as "paste as markdown") and insert it under <target> in ONE transaction; prints the created blocks. <target>: a block id or unique id prefix (≥8 hex), a [[Page]] (created the way a wikilink creates it when missing — a date-literal name is that day\'s daily note), or a date expression (today | 2026-10-15 | next monday → that daily note, created if missing). A bare word that is none of these is refused — wrap page names in [[…]]. Default position is after the target\'s last child; with --after/--before the anchor must be a child of the target, and a missing target is then refused rather than created. Put the markdown after `--` (it usually starts with `- `, which would read as a flag), or omit it to read stdin.',
+    description: 'Insert markdown under <target> in ONE transaction, split into blocks as the app\'s paste does; '
+      + `prints the new blocks. ${WRITE_TARGET_HELP} With --after/--before the anchor must be a child of the target. `
+      + 'Markdown goes after `--` (it usually starts with "- ") or on stdin.',
     readOnly: false,
   },
   'edit-block': {
     usage: "kmagent edit-block <id> <old> <new>   (or: kmagent edit-block <id> -- '<old>' '<new>' when either starts with -)",
-    description: 'Replace the one occurrence of <old> in a block\'s content with <new> (literally — no regex, no $-patterns). Applied inside the writing transaction against the block\'s CURRENT content, so an edit made elsewhere since you read it survives. Refuses when <old> is empty, not found (the error shows the current content), or found more than once (include more surrounding text). <id> may be a unique id prefix.',
+    description: 'Replace the one occurrence of <old> in a block\'s content with <new> (literal text), against its '
+      + 'content at write time. Refused, showing the current content, when <old> is empty, missing or ambiguous. '
+      + '<id> may be a unique id prefix.',
     readOnly: false,
   },
   'create-page': {
     usage: "kmagent create-page <name> | --date <expr>   (a name starting with - goes after --: kmagent create-page -- '-Inbox')",
-    description: 'Get-or-create a page by name, exactly as typing [[name]] would (alias lookup first, else the deterministic alias seat; a date-literal name is that day\'s daily note), or a daily note by date expression (--date today). Reports whether it was created.',
+    description: 'Get-or-create a page by name, as typing [[name]] would, or a daily note with --date <expr>. Reports '
+      + 'whether it was created.',
     readOnly: false,
   },
   'recent-changes': {
     usage: 'kmagent recent-changes [--since <ms|iso>] [--limit <n>] [--all]',
-    description: 'Recent local transactions in the active workspace, newest first, each with the blocks it changed (content before/after, parent, deleted, property keys). Defaults to agent-bridge writes only (txs described `agent runtime …`); --all includes the user\'s own edits on this device. Sync-applied changes from other devices are not transactions here — use block-history for one block\'s full record. Not attributed to the agent: eval / sql execute / run-action writes.',
+    description: 'Recent agent-bridge writes in this workspace, newest first, with the blocks each changed (content '
+      + 'before/after); --all adds the user\'s own edits here. eval, sql execute and run-action writes are not '
+      + 'attributed.',
     readOnly: true,
   },
   'block-history': {
     usage: 'kmagent block-history <id> [--limit <n>]',
-    description: 'One block\'s recorded changes, newest first: kind (create/update/move/soft-delete/restore), source (local or sync), the transaction description, and content before/after — the full prior content, for review or to restore with update-block.',
+    description: 'One block\'s recorded changes, newest first, local and synced, with full content before/after — to '
+      + 'review, or to restore with update-block.',
     readOnly: true,
   },
   'resolve-block-id': {

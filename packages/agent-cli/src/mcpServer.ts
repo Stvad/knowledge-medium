@@ -16,8 +16,8 @@ import { createBridgeClient, type BridgeClient } from './client.js'
 import { renderSubtreeOutline, type SubtreeOutlineRow } from './subtreeOutline.js'
 import { createBridgeGraph, type BridgeGraph } from './graph.js'
 import { isReadOnlySql, type KmMcpToolName, MCP_SERVER_NAME } from './mcpShared.js'
-import { moveBlockPositionSchema, toDisplayJson } from './protocol.js'
-import { renderAppendResult, TODO_WRITE_HELP, WRITE_TARGET_HELP } from './writeTools.js'
+import { moveBlockPositionSchema, TODO_WRITE_HELP, toDisplayJson, WRITE_TARGET_HELP } from './protocol.js'
+import { renderAppendResult } from './writeTools.js'
 
 interface PackageJson {
   version?: unknown
@@ -147,9 +147,8 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
   })
 
   server.registerTool('create_block' satisfies KmMcpToolName, {
-    description: 'Create ONE block (content kept whole) under a parent, optionally with properties — the way to write a '
-    + `typed record. For several blocks or an outline, use append_markdown. ${TODO_WRITE_HELP} `
-    + `[[Page]] wikilinks in content create references. parentId is any target: ${WRITE_TARGET_HELP}`,
+    description: 'Create ONE block (content kept whole) under parentId, a target as described for append_markdown — '
+    + `the way to write a typed record; for several blocks, use append_markdown. ${TODO_WRITE_HELP}`,
     inputSchema: {
       parentId: z.string(),
       content: z.string(),
@@ -161,10 +160,9 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
   })
 
   server.registerTool('update_block' satisfies KmMcpToolName, {
-    description: 'Replace a block\'s whole content and/or merge properties (keys you omit are kept). To change one '
-    + 'passage, prefer edit_block. Pass expectedContent — the content you read — and the update is refused, with '
-    + 'the current content, if the block changed since (e.g. the user edited it on another device). '
-    + TODO_WRITE_HELP,
+    description: 'Replace a block\'s content and/or merge properties (omitted keys stay). To change one passage, use '
+    + 'edit_block. With expectedContent (the content you read), the update is refused, showing the current '
+    + 'content, if the block changed since.',
     inputSchema: {
       id: z.string(),
       content: z.string().optional(),
@@ -215,12 +213,10 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
   })
 
   server.registerTool('append_markdown' satisfies KmMcpToolName, {
-    description: 'Write markdown into the graph like appending to a file: it is split into blocks exactly as the app '
-    + '"paste as markdown" does (bullets and headings nest, a fenced code block or table stays one block) and '
-    + 'inserted under the target in ONE transaction. Returns the created blocks as a ^short-id outline. '
-    + `Position defaults to after the target's last child; a before/after anchor must be a child of the target, `
-    + `and then a missing target is refused rather than created. ${WRITE_TARGET_HELP} `
-    + 'shape "block" keeps the whole markdown as one block.',
+    description: 'Insert markdown under a target in ONE transaction, split into blocks as the app\'s paste does '
+    + '(bullets and headings nest; a code block or table stays one block; shape "block" keeps it all one block). '
+    + 'Returns the new blocks as a ^short-id outline. Default position: after the target\'s last child; a '
+    + `before/after siblingId must be a child of the target, which is then never created. ${WRITE_TARGET_HELP}`,
     inputSchema: {
       target: z.string(),
       markdown: z.string(),
@@ -234,10 +230,9 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
   })
 
   server.registerTool('edit_block' satisfies KmMcpToolName, {
-    description: 'Replace the one occurrence of `old` in a block\'s content with `new` — literal text, no regex. '
-    + 'Applied against the block\'s content at write time, so edits made elsewhere since you read it survive. '
-    + 'Refused when `old` is empty, not found (the error shows the current content) or found more than once '
-    + '(include more surrounding text).',
+    description: 'Replace the one occurrence of `old` in a block\'s content with `new` (literal text), against the '
+    + 'content current at write time. Refused, showing the current content, when `old` is empty, missing or '
+    + 'ambiguous (add surrounding text).',
     inputSchema: {
       id: z.string(),
       old: z.string(),
@@ -250,9 +245,9 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
   })
 
   server.registerTool('create_page' satisfies KmMcpToolName, {
-    description: 'Get-or-create a page by name — exactly what typing [[name]] creates (a date-literal name is that '
-    + 'daily note) — or a daily note by date expression (today, next monday, 2026-10-15). Pass exactly one of '
-    + 'name or date. Reports whether it was created. To also write content, append_markdown to [[name]] instead.',
+    description: 'Get-or-create a page by name, as typing [[name]] would (a date-literal name is that daily note), '
+    + 'or a daily note by date (today, next monday). Pass one of name or date. To also write content, '
+    + 'append_markdown to [[name]] instead.',
     inputSchema: {
       name: z.string().optional(),
       date: z.string().optional(),
@@ -266,10 +261,10 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
   const sessionStartedAt = Date.now()
 
   server.registerTool('recent_changes' satisfies KmMcpToolName, {
-    description: 'What changed: recent local transactions in the active workspace, newest first, each with the blocks '
-    + 'it changed (kind, content before/after, parent, property names). Defaults to agent writes (any agent session '
-    + 'on this device) since THIS session started — use it to report what you changed. since: epoch ms or ISO '
-    + 'timestamp (0 for all history); includeUser adds the user\'s own edits on this device.',
+    description: 'Recent local transactions in this workspace, newest first, with the blocks each changed (content '
+    + 'before/after, parent, property names). Defaults to agent writes (any agent on this device) since this '
+    + 'session started — use it to report what you changed. since: epoch ms or ISO (0 = all); includeUser adds '
+    + 'the user\'s own edits.',
     inputSchema: {
       since: z.union([z.number(), z.string()]).optional(),
       limit: z.number().int().positive().optional(),
