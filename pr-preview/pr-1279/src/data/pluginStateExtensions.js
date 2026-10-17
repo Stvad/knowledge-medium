@@ -1,1 +1,1 @@
-import{KB as e,qB as t}from"../../chunks/app-Bci7gMD9.js";export{e as pluginPrefsExtension,t as pluginUIStateExtension};
+import{GB as e,KB as t}from"../../chunks/app-ral88hdY.js";export{e as pluginPrefsExtension,t as pluginUIStateExtension};
