@@ -1184,7 +1184,8 @@ describe('view-backlinks', () => {
       uuid('6b000002', 2),
     ]
     await create({id: parents[0], content: 'ok'})
-    await create({id: parents[1], content: `${'[[Long label]] '.repeat(20)}then the actual words`})
+    // The head read is 200 characters: 40 whole tags, so the head alone reads as a label.
+    await create({id: parents[1], content: `${'#tag '.repeat(50)}then the actual words`})
     for (const [index, parent] of parents.entries()) {
       await create({id: uuid('6b00001' + index, 10 + index), parentId: parent, content: `line ${index} of [[Target]]`, references: [{id: TARGET, alias: 'Target'}]})
       await create({id: uuid('6b00002' + index, 20 + index), parentId: parent, content: 'a line beside it'})
