@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { extractAnswer, parseTranscript, toolName } from './transcript'
+import { extractAnswer, parseTranscript, toolUses } from './transcript'
 
 const usage = (input: number, created: number, read: number, output: number) => ({
   input_tokens: input,
@@ -40,9 +40,9 @@ describe('parseTranscript', () => {
 
   it('records each tool call once with the characters it returned', () => {
     expect(metrics.toolCalls).toEqual([
-      {id: 't1', name: 'mcp__km__page', seenChars: 10, capped: false, returnedChars: 10, isError: false},
-      {id: 't2', name: 'mcp__km__search', seenChars: capNotice.length, capped: true, returnedChars: 644_156, isError: false},
-      {id: 't3', name: 'mcp__km__backlinks', seenChars: 4, capped: false, returnedChars: 4, isError: true},
+      {id: 't1', name: 'mcp__km__page', uses: ['mcp__km__page'], seenChars: 10, capped: false, returnedChars: 10, isError: false},
+      {id: 't2', name: 'mcp__km__search', uses: ['mcp__km__search'], seenChars: capNotice.length, capped: true, returnedChars: 644_156, isError: false},
+      {id: 't3', name: 'mcp__km__backlinks', uses: ['mcp__km__backlinks'], seenChars: 4, capped: false, returnedChars: 4, isError: true},
     ])
   })
 
@@ -94,19 +94,24 @@ describe('extractAnswer', () => {
   })
 })
 
-describe('toolName', () => {
-  const bash = (command: string) => toolName({type: 'tool_use', name: 'Bash', input: {command}})
+describe('toolUses', () => {
+  const bash = (command: string) => toolUses({type: 'tool_use', name: 'Bash', input: {command}})
 
-  it('names a shell call by the CLI verbs it runs, piped or not', () => {
-    expect(bash('kmagent subtree abc')).toBe('kmagent subtree')
-    expect(bash('kmagent sql all "SELECT 1" | jq .')).toBe('kmagent sql')
-    expect(bash('kmagent data-model; kmagent page Project Orchard')).toBe('kmagent data-model + page')
-    expect(bash('kmagent --help')).toBe('kmagent --help')
-    expect(bash('ls -la')).toBe('bash ls')
+  it('counts a shell call once for each CLI verb it runs, piped or not', () => {
+    expect(bash('kmagent subtree abc')).toEqual(['kmagent subtree'])
+    expect(bash('kmagent sql all "SELECT 1" | jq .')).toEqual(['kmagent sql'])
+    expect(bash('kmagent data-model; kmagent page Project Orchard')).toEqual(['kmagent data-model', 'kmagent page'])
+    expect(bash('kmagent --help')).toEqual(['kmagent --help'])
+  })
+
+  it('names any other command by its program, never by an argument or a path', () => {
+    expect(bash('ls -la')).toEqual(['bash ls'])
+    expect(bash('f=/home/someone/.cache/out.txt; grep x $f')).toEqual(['bash grep'])
+    expect(bash('/usr/bin/env true')).toEqual(['bash'])
   })
 
   it('keeps any other tool\'s name', () => {
-    expect(toolName({type: 'tool_use', name: 'mcp__km__page', input: {name: 'x'}})).toBe('mcp__km__page')
+    expect(toolUses({type: 'tool_use', name: 'mcp__km__page', input: {name: 'x'}})).toEqual(['mcp__km__page'])
   })
 })
 
@@ -120,7 +125,7 @@ describe('a shell result over the cap', () => {
 
   it('is capped: the preview is what the model saw, the saved size what the tool returned', () => {
     expect(parseTranscript(shellCall(100_000)).toolCalls).toEqual([expect.objectContaining({
-      name: 'kmagent subtree', capped: true, seenChars: preview.length, returnedChars: 100_000,
+      uses: ['kmagent subtree'], capped: true, seenChars: preview.length, returnedChars: 100_000,
     })])
   })
 

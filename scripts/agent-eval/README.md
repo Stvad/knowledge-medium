@@ -63,9 +63,9 @@ same in node as in the dev tab the first baseline ran on.
 | `cli` | `Bash`, allowed only for `kmagent` and the filters `head`, `tail`, `grep`, `jq`, `wc`, `sort` | "through the `kmagent` command-line tool; `kmagent --help` lists its commands" |
 
 Any other tool or command is refused without a prompt. A `kmagent` shim on `PATH` runs
-the checkout's build. The report names a shell call by the CLI verbs it ran
-(`kmagent sql`, `kmagent data-model + page`), so its tool-use table reads like the MCP
-one. A shell result over Claude Code's cap is saved to a file, and the model gets a
+the checkout's build. The report's tool-use table counts a shell call once for each CLI
+verb it ran (`kmagent sql`, `kmagent page`), so it reads like the MCP one; the tool
+calls column counts shell calls. A shell result over Claude Code's cap is saved to a file, and the model gets a
 preview with the path. The report counts it as capped, the preview as seen and the
 saved size as returned. The agent may read the saved file through the filters, as it
 would in a normal session. Claude Code keeps these files under `~/.claude/projects/`,

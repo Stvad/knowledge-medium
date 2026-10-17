@@ -20,8 +20,9 @@
 
 export interface ToolCallRecord {
   id: string
-  /** The tool, or for a shell command the CLI verb it runs (`toolName`). */
   name: string
+  /** What the call used, as the report counts it (`toolUses`). */
+  uses: string[]
   /** Characters the model saw; null when the transcript ended before the tool returned. */
   seenChars: number | null
   /** Replaced by Claude Code's over-the-cap notice. */
@@ -69,16 +70,19 @@ const num = (value: unknown) => (typeof value === 'number' && Number.isFinite(va
 const contextOf = (usage: MessageUsage) =>
   num(usage.input_tokens) + num(usage.cache_creation_input_tokens) + num(usage.cache_read_input_tokens)
 
-/** A shell call is named by the agent CLI verbs it runs, `kmagent <verb>`,
- *  so the calls by tool read like the MCP surface's; a call that runs no
- *  verb by its flags (`--help`), and any other command by its first word. */
-export const toolName = (block: Json): string => {
+/** A tool call uses its tool; a shell call uses each agent CLI verb it runs,
+ *  `kmagent <verb>`, so the calls by tool read like the MCP surface's. A call
+ *  that runs no verb uses its flags (`kmagent --help`), and any other command
+ *  its command name, or `bash` when the first word is not one. */
+export const toolUses = (block: Json): string[] => {
   const name = typeof block.name === 'string' ? block.name : '?'
   const command = (block.input as Json | undefined)?.command
-  if (name !== 'Bash' || typeof command !== 'string') return name
+  if (name !== 'Bash' || typeof command !== 'string') return [name]
   const verbs = [...command.matchAll(/(?:^|[\s;|&(])kmagent((?:\s+-[\w-]+)*)(?:\s+([a-z][\w-]*))?/g)]
-    .map(([, flags, verb]) => verb ?? flags.trim())
-  return verbs.length > 0 ? `kmagent ${verbs.join(' + ')}` : `bash ${command.trim().split(/\s+/)[0]}`
+    .map(([, flags, verb]) => `kmagent ${verb ?? flags.trim()}`.trim())
+  if (verbs.length > 0) return verbs
+  const program = command.trim().split(/\s+/).find(word => !/^\w+=/.test(word)) ?? ''
+  return [/^[\w.+-]+$/.test(program) ? `bash ${program}` : 'bash']
 }
 
 const CAP_NOTICE = /^Error: result \(([\d,]+) characters across [\d,]+ lines\) exceeds maximum allowed tokens/
@@ -128,7 +132,8 @@ export const parseTranscript = (raw: string): TranscriptMetrics => {
         if (block?.type !== 'tool_use' || typeof block.id !== 'string' || callsById.has(block.id)) continue
         const call: ToolCallRecord = {
           id: block.id,
-          name: toolName(block),
+          name: typeof block.name === 'string' ? block.name : '?',
+          uses: toolUses(block),
           seenChars: null,
           capped: false,
           returnedChars: null,

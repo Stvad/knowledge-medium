@@ -343,8 +343,8 @@ const run = async (options: RunOptions) => {
         pass: outcome.pass && failures.length === 0,
         detail: [...failures, outcome.detail].join('; '),
         toolCalls: metrics.toolCalls.length,
-        toolCallsByName: metrics.toolCalls.reduce<Record<string, number>>((counts, call) =>
-          ({...counts, [call.name]: (counts[call.name] ?? 0) + 1}), {}),
+        toolCallsByName: metrics.toolCalls.flatMap(call => call.uses).reduce<Record<string, number>>((counts, use) =>
+          ({...counts, [use]: (counts[use] ?? 0) + 1}), {}),
         toolErrors: metrics.toolCalls.filter(call => call.isError).length,
         seenChars: seen.reduce((total, chars) => total + chars, 0),
         maxSeenChars: Math.max(0, ...seen),

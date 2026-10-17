@@ -20,6 +20,7 @@ export interface TaskRunRecord {
   pass: boolean
   detail: string
   toolCalls: number
+  /** A shell call counts once for each CLI verb it runs (`toolUses`). */
   toolCallsByName: Record<string, number>
   toolErrors: number
   /** Characters of every tool result the agent saw. */
