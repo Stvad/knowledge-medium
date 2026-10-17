@@ -1,32 +1,27 @@
 // @vitest-environment node
 /**
- * The deterministic half of the agent-ergonomics eval, on the fixture
- * imported into a node test repo (no browser):
+ * The deterministic half of the agent-ergonomics eval, on the graph every
+ * eval task runs on: the fixture imported into a node repo once, as the
+ * runner's template, and each case on a fresh copy of it, as each task gets
+ * one (no browser):
  *
  * - imported fixture: its stored state, and the size in characters of
  *   representative km MCP tool outputs, called through the real MCP server,
- *   each within a budget. `AGENT_EVAL_SIZES_OUT=<path>` writes both as JSON:
- *   the runner checks the live tab's state against it, and re-baselining
- *   reads the sizes.
+ *   each within a budget; and a copy differs from its template in nothing,
+ *   which is what scoring a task by its diff relies on.
  * - task checks: each task's ground truth agrees with the imported graph,
  *   a correct solution passes (write tasks solve through the MCP tools, so
  *   the task is doable on the current surface), and a wrong one fails —
  *   a write task on its check or on a change it was not asked to make.
- *
- * - isolation: the runner's snapshot restore undoes every kind of change.
- *
- * Every case starts from the imported fixture (see the afterEach below).
+ * - task changes and fixture state: the diff and the state see every kind of
+ *   change a task can make.
  */
-import { existsSync, mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import path from 'node:path'
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { rmSync } from 'node:fs'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { createTestDb } from '@/data/test/createTestDb'
 import {
   buildFixture,
   DESIGN_PAGE,
-  FIXTURE_HASH_PREFIX,
-  FIXTURE_MARKER_PAGE,
   FIXTURE_FIRST_DAY,
   FIXTURE_LAST_DAY,
   isoDays,
@@ -36,13 +31,10 @@ import {
   ROLLOUT_BLOCK_TEXT,
   TARGET_UIDS,
 } from './fixture'
-import { userStateRootBlockIds } from '@/data/derivedIds'
-import { childrenOf, dailyNoteId, descendantsOf, getBlock, type GraphProbe, pageIdByTitle, requirePageId, sqlAll } from './graphQueries'
-import { diffAgainst, restoreSnapshot, snapshotWorkspace, strayChanges, waitForQuiet, type WorkspaceSnapshot } from './isolation'
+import { childrenOf, dailyNoteId, descendantsOf, type GraphProbe, pageIdByTitle, requirePageId, sqlAll } from './graphQueries'
 import { differingBlocks, fixtureState } from './fixtureState'
 import { OUTPUT_PROBES, type ProbeContext } from './outputBudgets'
-import { createRunJournal } from './runJournal'
-import { beginRun, openWorkspace } from './workspace'
+import { diffAgainst, type Snapshot, snapshotWorkspace, strayChanges } from './taskChanges'
 import {
   allowedChanges,
   type CheckInput,
@@ -50,49 +42,68 @@ import {
   type EvalTask,
   targetId,
   TASKS,
-  type TaskEnv,
-  vendorReviewTitle,
+  VENDOR_REVIEW_TITLE,
 } from './tasks'
-import { seedFixtureTestGraph, TEST_WORKSPACE_ID, type FixtureTestGraph } from './testGraph'
+import { type FixtureTestGraph, openFixtureTestGraph, TEST_WORKSPACE_ID } from './testGraph'
 
-let db: TestDb
-let graph: FixtureTestGraph
+const {truth} = buildFixture()
+
+interface Graph extends FixtureTestGraph {
+  probe: GraphProbe
+}
+
+/** The closed database of the seeded fixture, and its rows. */
+let template: string
+let templateRows: Snapshot
+
+/** A fresh copy of the template, as the runner gives each task. */
+const openGraph = async (): Promise<Graph> => {
+  const db = await createTestDb({from: template})
+  const graph = await openFixtureTestGraph(db.db, {seed: false})
+  return {
+    ...graph,
+    probe: {workspaceId: TEST_WORKSPACE_ID, command: graph.command},
+    close: async () => {
+      await graph.close()
+      await db.cleanup()
+    },
+  }
+}
+
+/** Shared by the cases that only read. */
+let graph: Graph
 let probe: GraphProbe
-const {truth, hash: fixtureHash} = buildFixture()
-
-let fixtureSnapshot: WorkspaceSnapshot
-// In-process writes settle in milliseconds; the live runner waits longer.
-const QUIET = {quietMs: 50, maxMs: 2_000}
 
 // Seeding imports ~5.8k blocks: ~5s alone, budgeted for 6x under the gate.
 beforeAll(async () => {
-  db = await createTestDb()
-  graph = await seedFixtureTestGraph(db.db)
-  probe = {workspaceId: TEST_WORKSPACE_ID, command: graph.command}
-  fixtureSnapshot = await snapshotWorkspace(probe, QUIET)
+  const seeded = await createTestDb()
+  const seeding = await openFixtureTestGraph(seeded.db, {seed: true})
+  templateRows = await snapshotWorkspace({workspaceId: TEST_WORKSPACE_ID, command: seeding.command})
+  await seeding.close()
+  await seeded.db.close()
+  template = seeded.dir
+  graph = await openGraph()
+  probe = graph.probe
 }, 60_000)
-
-// One import is shared by every case, so each case's writes are undone
-// against the post-import snapshot — the runner's own restore — and no case
-// depends on another's leftovers or on declaration order.
-afterEach(async () => { await restoreSnapshot(probe, fixtureSnapshot, QUIET) })
 
 afterAll(async () => {
   await graph?.close()
-  await db?.cleanup()
+  if (template) rmSync(template, {recursive: true, force: true})
 })
 
-describe('imported fixture', () => {
-  const outputs: Record<string, number> = {}
-  let state: string[] = []
-  afterAll(() => {
-    const out = process.env.AGENT_EVAL_SIZES_OUT
-    if (out) writeFileSync(out, `${JSON.stringify({outputs, state})}\n`)
-  })
+/** Runs `body` on a fresh copy, so its writes reach no other case. */
+const onFreshGraph = async <T>(body: (graph: Graph) => Promise<T>): Promise<T> => {
+  const fresh = await openGraph()
+  try {
+    return await body(fresh)
+  } finally {
+    await fresh.close()
+  }
+}
 
+describe('imported fixture', () => {
   it('state', async () => {
-    state = await fixtureState(probe, buildFixture().pages)
-    expect(state.length).toBeGreaterThan(5_000)
+    expect((await fixtureState(probe, buildFixture().pages)).length).toBeGreaterThan(5_000)
   }, 20_000)
 
   it.each(OUTPUT_PROBES.map(outputProbe => [outputProbe.id, outputProbe] as const))('%s', async (_id, outputProbe) => {
@@ -102,9 +113,17 @@ describe('imported fixture', () => {
       dailyNoteId: iso => dailyNoteId(probe, iso),
     }
     const chars = (await outputProbe.run(context)).length
-    outputs[outputProbe.id] = chars
     expect(chars, `${outputProbe.id} (${outputProbe.standsFor}) returned ${chars} characters; budget ${outputProbe.maxChars}`)
       .toBeLessThanOrEqual(outputProbe.maxChars)
+  }, 20_000)
+
+  it('a copy differs from its template in nothing, opened and read from', async () => {
+    await onFreshGraph(async fresh => {
+      expect(await diffAgainst(fresh.probe, templateRows)).toEqual({created: [], modified: []})
+      await fresh.callTool('page', {name: PROJECT_PAGE})
+      await fresh.callTool('search', {query: 'Kestrel'})
+      expect(await diffAgainst(fresh.probe, templateRows)).toEqual({created: [], modified: []})
+    })
   }, 20_000)
 })
 
@@ -220,37 +239,37 @@ const resultIdOf = (text: string) => (JSON.parse(text) as {id: string}).id
 const fixtureId = (uid: keyof typeof TARGET_UIDS) => targetId(TEST_WORKSPACE_ID, TARGET_UIDS[uid])
 
 /** A correct solution for each write task, done through the km MCP tools. */
-const solveWithMcp: Record<string, (env: TaskEnv) => Promise<void>> = {
-  'daily-checkin': async () => {
+const solveWithMcp: Record<string, (graph: Graph) => Promise<void>> = {
+  'daily-checkin': async graph => {
     const today = (JSON.parse(await graph.callTool('daily_note', {date: 'today'})) as {blockId: string}).blockId
     const parentId = resultIdOf(await graph.callTool('create_block', {parentId: today, content: 'Eval check-in'}))
     for (const content of ['Done: drafted the sync rollout plan', 'Next: review the Kestrel renewal', 'Blockers: none']) {
       await graph.callTool('create_block', {parentId, content})
     }
   },
-  'edit-rollout-phrase': async () => {
+  'edit-rollout-phrase': async graph => {
     await graph.callTool('update_block', {id: fixtureId('rollout'), content: ROLLOUT_BLOCK_TEXT.replace('Q3 2026', 'Q4 2026')})
   },
-  'create-linked-page': async ({runTag}) => {
-    const title = vendorReviewTitle(runTag)
+  'create-linked-page': async graph => {
+    const title = VENDOR_REVIEW_TITLE
     await graph.callTool('create_block', {parentId: fixtureId('vendorsSection'), content: `[[${title}]]`})
     // The linked page is created by the references processor after commit.
     const pageId = await vi.waitFor(async () => {
-      const id = await pageIdByTitle(probe, title)
+      const id = await pageIdByTitle(graph.probe, title)
       if (!id) throw new Error('linked page not created yet')
       return id
     }, {timeout: 5_000})
     await graph.callTool('create_block', {parentId: pageId, content: 'Status: under review'})
   },
-  'complete-todo': async () => {
+  'complete-todo': async graph => {
     await graph.callTool('update_block', {id: fixtureId('pricingFaqTodo'), properties: {status: 'done'}})
   },
 }
 
 /** Plausible wrong solutions per write task: the edits an agent gets wrong. */
-const solveWrongly: Record<string, Array<(env: TaskEnv) => Promise<void>>> = {
+const solveWrongly: Record<string, Array<(graph: Graph) => Promise<void>>> = {
   'daily-checkin': [
-    async () => {
+    async graph => {
       const today = (JSON.parse(await graph.callTool('daily_note', {date: 'today'})) as {blockId: string}).blockId
       await graph.callTool('create_block', {
         parentId: today,
@@ -258,7 +277,7 @@ const solveWrongly: Record<string, Array<(env: TaskEnv) => Promise<void>>> = {
       })
     },
     // The check-in right, but carrying a property nobody asked for.
-    async () => {
+    async graph => {
       const today = (JSON.parse(await graph.callTool('daily_note', {date: 'today'})) as {blockId: string}).blockId
       const parentId = resultIdOf(await graph.callTool('create_block', {parentId: today, content: 'Eval check-in', properties: {'eval:mood': 'good'}}))
       for (const content of ['Done: drafted the sync rollout plan', 'Next: review the Kestrel renewal', 'Blockers: none']) {
@@ -266,18 +285,18 @@ const solveWrongly: Record<string, Array<(env: TaskEnv) => Promise<void>>> = {
       }
     },
     // The check-in right, plus a block nobody asked for beside it.
-    async env => {
-      await solveWithMcp['daily-checkin'](env)
+    async graph => {
+      await solveWithMcp['daily-checkin'](graph)
       const today = (JSON.parse(await graph.callTool('daily_note', {date: 'today'})) as {blockId: string}).blockId
       await graph.callTool('create_block', {parentId: today, content: 'Also: water the plants'})
     },
   ],
   'edit-rollout-phrase': [
-    async () => {
+    async graph => {
       await graph.callTool('update_block', {id: fixtureId('rollout'), content: 'Target: Q4 2026.'})
     },
     // The phrase right, but the block's properties touched too.
-    async () => {
+    async graph => {
       await graph.callTool('update_block', {
         id: fixtureId('rollout'),
         content: ROLLOUT_BLOCK_TEXT.replace('Q3 2026', 'Q4 2026'),
@@ -286,79 +305,76 @@ const solveWrongly: Record<string, Array<(env: TaskEnv) => Promise<void>>> = {
     },
   ],
   'create-linked-page': [
-    async ({runTag}) => {
+    async graph => {
       const today = (JSON.parse(await graph.callTool('daily_note', {date: 'today'})) as {blockId: string}).blockId
-      await graph.callTool('create_block', {parentId: today, content: `[[${vendorReviewTitle(runTag)}]]`})
+      await graph.callTool('create_block', {parentId: today, content: `[[${VENDOR_REVIEW_TITLE}]]`})
     },
     // The page and link right, plus another block under Vendors.
-    async env => {
-      await solveWithMcp['create-linked-page'](env)
+    async graph => {
+      await solveWithMcp['create-linked-page'](graph)
       await graph.callTool('create_block', {parentId: fixtureId('vendorsSection'), content: '[[Kestrel]] — renewal notes'})
     },
     // The page created right, then retitled while asking to keep the old name:
     // the app moves the name with the title, so the page is no longer found.
-    async env => {
-      await solveWithMcp['create-linked-page'](env)
-      const title = vendorReviewTitle(env.runTag)
-      await graph.callTool('update_block', {id: await requirePageId(probe, title), content: 'Kestrel review notes', properties: {alias: [title]}})
+    async graph => {
+      await solveWithMcp['create-linked-page'](graph)
+      const title = VENDOR_REVIEW_TITLE
+      await graph.callTool('update_block', {id: await requirePageId(graph.probe, title), content: 'Kestrel review notes', properties: {alias: [title]}})
     },
     // The page created right, then given another type as well.
-    async env => {
-      await solveWithMcp['create-linked-page'](env)
-      const pageId = await requirePageId(probe, vendorReviewTitle(env.runTag))
+    async graph => {
+      await solveWithMcp['create-linked-page'](graph)
+      const pageId = await requirePageId(graph.probe, VENDOR_REVIEW_TITLE)
       await graph.callTool('update_block', {id: pageId, properties: {types: ['page', 'todo']}})
     },
     // The page created right, then filed under a block instead of left a page.
-    async env => {
-      await solveWithMcp['create-linked-page'](env)
-      const pageId = await requirePageId(probe, vendorReviewTitle(env.runTag))
+    async graph => {
+      await solveWithMcp['create-linked-page'](graph)
+      const pageId = await requirePageId(graph.probe, VENDOR_REVIEW_TITLE)
       await graph.callTool('move_block', {id: pageId, parentId: fixtureId('vendorsSection'), position: {kind: 'last'}})
     },
     // The link added twice.
-    async env => {
-      await solveWithMcp['create-linked-page'](env)
-      await graph.callTool('create_block', {parentId: fixtureId('vendorsSection'), content: `[[${vendorReviewTitle(env.runTag)}]]`})
+    async graph => {
+      await solveWithMcp['create-linked-page'](graph)
+      await graph.callTool('create_block', {parentId: fixtureId('vendorsSection'), content: `[[${VENDOR_REVIEW_TITLE}]]`})
     },
   ],
   'complete-todo': [
     // Marked done in the text, not the status.
-    async () => {
+    async graph => {
       await graph.callTool('update_block', {id: fixtureId('pricingFaqTodo'), content: `{{[[DONE]]}} ${PRICING_FAQ_TODO}`})
     },
     // Status right, but the todo's text rewritten.
-    async () => {
+    async graph => {
       await graph.callTool('update_block', {id: fixtureId('pricingFaqTodo'), content: 'Draft FAQ', properties: {status: 'done'}})
     },
     // Status right, plus a property nobody asked for.
-    async () => {
+    async graph => {
       await graph.callTool('update_block', {id: fixtureId('pricingFaqTodo'), properties: {status: 'done', 'eval:note': 'done'}})
     },
     // Status right, but the importer's marker set to a value its enum does not have.
-    async () => {
+    async graph => {
       await graph.callTool('update_block', {id: fixtureId('pricingFaqTodo'), properties: {status: 'done', 'roam:todo-state': 'done'}})
     },
     // Status right, but the todo moved off its section.
-    async () => {
+    async graph => {
       await graph.callTool('update_block', {id: fixtureId('pricingFaqTodo'), properties: {status: 'done'}})
-      await graph.callTool('move_block', {id: fixtureId('pricingFaqTodo'), parentId: await requirePageId(probe, PROJECT_PAGE), position: {kind: 'last'}})
+      await graph.callTool('move_block', {id: fixtureId('pricingFaqTodo'), parentId: await requirePageId(graph.probe, PROJECT_PAGE), position: {kind: 'last'}})
     },
   ],
 }
 
 const expectOutcome = (outcome: CheckOutcome, pass: boolean) => expect(outcome.pass, outcome.detail).toBe(pass)
 
-/** One attempt at a write task, scored as the runner scores it: reset, then
- *  the state every attempt starts from, then the check and the changes the
- *  task was not asked to make. */
-const attempt = async (task: EvalTask, env: TaskEnv, solve: (env: TaskEnv) => Promise<void>): Promise<CheckOutcome> => {
-  await task.reset?.(env)
-  const before = await snapshotWorkspace(probe, QUIET)
+/** One attempt at a write task, scored as the runner scores it: on a fresh
+ *  copy, the check and then the changes the task was not asked to make. */
+const attempt = (task: EvalTask, solve: (graph: Graph) => Promise<void>): Promise<CheckOutcome> => onFreshGraph(async fresh => {
   const startedAt = Date.now()
-  await solve(env)
-  const outcome = await task.check({...env, answer: undefined, startedAt})
-  const stray = strayChanges(await diffAgainst(probe, before, QUIET), allowedChanges(task, TEST_WORKSPACE_ID, outcome))
+  await solve(fresh)
+  const outcome = await task.check({probe: fresh.probe, truth, answer: undefined, startedAt})
+  const stray = strayChanges(await diffAgainst(fresh.probe, templateRows), allowedChanges(task, TEST_WORKSPACE_ID, outcome))
   return {pass: outcome.pass && stray === 0, detail: `${outcome.detail}; ${stray} stray change(s)`}
-}
+})
 
 describe('task checks', () => {
   let derived: Record<string, unknown>
@@ -366,8 +382,7 @@ describe('task checks', () => {
 
   const readTasks = TASKS.filter(task => task.kind === 'read')
   const writeTasks = TASKS.filter(task => task.kind === 'write')
-  const input = (answer: unknown, startedAt = Date.now(), runTag = 't0'): CheckInput =>
-    ({probe, truth, runTag, answer, startedAt})
+  const input = (answer: unknown, startedAt = Date.now()): CheckInput => ({probe, truth, answer, startedAt})
 
   it('covers every task with a reference solution and a wrong one', () => {
     expect(Object.keys(wrongAnswers).sort()).toEqual(readTasks.map(task => task.id).sort())
@@ -381,344 +396,96 @@ describe('task checks', () => {
     expectOutcome(await task.check(input(undefined)), false)
   })
 
-  // Wrong attempts first, each reset on top of the last, then the right
-  // solution — which also proves reset undoes what a botched attempt broke.
-  it.each(writeTasks.map(task => [task.id, task] as const))('%s: wrong edits fail; reset then an MCP solution passes', async (_id, task) => {
-    for (const [index, solveWrong] of solveWrongly[task.id].entries()) {
-      expectOutcome(await attempt(task, {probe, truth, runTag: `w${index}`}, solveWrong), false)
-    }
-    expectOutcome(await attempt(task, {probe, truth, runTag: `r${task.id.length}`}, solveWithMcp[task.id]), true)
+  it.each(writeTasks.map(task => [task.id, task] as const))('%s: wrong edits fail; an MCP solution passes', async (_id, task) => {
+    for (const solveWrong of solveWrongly[task.id]) expectOutcome(await attempt(task, solveWrong), false)
+    expectOutcome(await attempt(task, solveWithMcp[task.id]), true)
   }, 30_000)
 })
 
-/** Snapshot rows whose recency stamps differ from the snapshot's; search and
- *  recents order by them. */
-const stampsMovedSince = async (snapshot: WorkspaceSnapshot) =>
-  (await sqlAll<{id: string, updated_at: number, user_updated_at: number | null}>(probe,
-    'SELECT id, updated_at, user_updated_at FROM blocks WHERE workspace_id = ?', [TEST_WORKSPACE_ID]))
-    .filter(row => {
-      const before = snapshot.rows.get(row.id)
-      return before !== undefined && (row.updated_at !== before.updated_at || row.user_updated_at !== before.user_updated_at)
+describe('task changes', () => {
+  it('sees every kind of change a task can make, and names the ones it was not asked for', async () => {
+    await onFreshGraph(async fresh => {
+      const design = await descendantsOf(fresh.probe, await requirePageId(fresh.probe, DESIGN_PAGE))
+      const byText = (prefix: string) => design.find(row => row.content.startsWith(prefix))!
+      const edited = byText('Devices stay offline')
+      const tagged = byText('Support sees roughly')
+      const removed = byText('The current protocol ships')
+      const moved = byText('Migration runs per workspace')
+      const rollout = fixtureId('rollout')
+
+      await fresh.callTool('update_block', {id: edited.id, content: 'rewritten'})
+      await fresh.callTool('update_block', {id: tagged.id, properties: {'eval:tag': 'x'}})
+      await fresh.callTool('delete_block', {id: removed.id})
+      await fresh.callTool('move_block', {id: moved.id, parentId: edited.parent_id, position: {kind: 'first'}})
+      await fresh.callTool('update_block', {id: rollout, content: 'Target: Q4 2026.'})
+      await fresh.callTool('create_block', {parentId: edited.id, content: 'a new child'})
+
+      const changes = await diffAgainst(fresh.probe, templateRows)
+      expect(changes.created).toHaveLength(1)
+      expect(changes.modified.map(change => change.id).sort())
+        .toEqual([edited.id, tagged.id, removed.id, moved.id, rollout].sort())
+      // The rollout edit is what edit-rollout-phrase is asked to make; the rest are stray.
+      const rolloutContent = new Map([[rollout, {content: true} as const]])
+      expect(strayChanges(changes, {edits: rolloutContent, creates: new Map()})).toBe(5)
+      expect(strayChanges(changes, {edits: rolloutContent, creates: new Map([[changes.created[0].id, {}]])})).toBe(4)
+      expect(strayChanges(changes, {edits: new Map(), creates: new Map()})).toBe(6)
     })
-    .map(row => row.id)
-
-describe('isolation', () => {
-  it('undoes every kind of change a task can make, and names the ones it was not asked for', async () => {
-    const snapshot = await snapshotWorkspace(probe, QUIET)
-    const design = await descendantsOf(probe, await requirePageId(probe, DESIGN_PAGE))
-    const byText = (prefix: string) => design.find(row => row.content.startsWith(prefix))!
-    const edited = byText('Devices stay offline')
-    const tagged = byText('Support sees roughly')
-    const removed = byText('The current protocol ships')
-    const moved = byText('Migration runs per workspace')
-    const movedToo = byText('Success metric')
-    const rollout = fixtureId('rollout')
-
-    await graph.callTool('update_block', {id: edited.id, content: 'rewritten'})
-    await graph.callTool('update_block', {id: tagged.id, properties: {'eval:tag': 'x'}})
-    await graph.callTool('delete_block', {id: removed.id})
-    // Two adjacent siblings: undoing the first must not anchor on the second
-    // while it is still elsewhere.
-    await graph.callTool('move_block', {id: moved.id, parentId: edited.parent_id, position: {kind: 'first'}})
-    await graph.callTool('move_block', {id: movedToo.id, parentId: edited.parent_id, position: {kind: 'first'}})
-    await graph.callTool('update_block', {id: rollout, content: 'Target: Q4 2026.'})
-    await graph.callTool('create_block', {parentId: edited.id, content: 'a new child'})
-
-    const changes = await restoreSnapshot(probe, snapshot, QUIET)
-    expect(changes.created).toHaveLength(1)
-    expect(changes.modified.map(change => change.id).sort())
-      .toEqual([edited.id, tagged.id, removed.id, moved.id, movedToo.id, rollout].sort())
-    // The rollout edit is what edit-rollout-phrase is asked to make; the rest are stray.
-    const rolloutContent = new Map([[rollout, {content: true} as const]])
-    expect(strayChanges(changes, {edits: rolloutContent, creates: new Map()})).toBe(6)
-    expect(strayChanges(changes, {edits: rolloutContent, creates: new Map([[changes.created[0].id, {}]])})).toBe(5)
-    expect(strayChanges(changes, {edits: new Map(), creates: new Map()})).toBe(7)
-
-    expect(await diffAgainst(probe, snapshot, QUIET)).toEqual({created: [], modified: [], appStateDeleted: []})
-    const restored = new Map((await descendantsOf(probe, await requirePageId(probe, DESIGN_PAGE))).map(row => [row.id, row]))
-    for (const block of [edited, tagged, removed, moved, movedToo]) {
-      expect({content: restored.get(block.id)?.content, properties: JSON.parse(restored.get(block.id)?.properties_json ?? 'null'), parent: restored.get(block.id)?.parent_id})
-        .toEqual({content: block.content, properties: JSON.parse(block.properties_json), parent: block.parent_id})
-    }
-    expect((await childrenOf(probe, moved.parent_id!)).map(row => row.id))
-      .toEqual(design.filter(row => row.parent_id === moved.parent_id)
-        .sort((a, b) => a.order_key.localeCompare(b.order_key)).map(row => row.id))
-    expect(await stampsMovedSince(snapshot)).toEqual([])
   }, 30_000)
 
-  // A post-commit processor the undo's own write starts: it lands a moment
-  // after the undo of the rollout block, on a block the task never touched.
-  const rollout = fixtureId('rollout')
-  const bystander = fixtureId('vendorsSection')
-  const withLateProcessor = (sql: string, params: unknown[]): GraphProbe => ({
-    ...probe,
-    command: async command => {
-      const result = await probe.command(command)
-      if (command.type === 'update-block' && command.id === rollout) {
-        setTimeout(() => { void probe.command({type: 'sql', mode: 'execute', sql, params, allowSyncedWrite: true}) }, 20)
-      }
-      return result
-    },
-  })
-
-  it('waits out the writes its own undo starts, and puts back the stamps they move', async () => {
-    const snapshot = await snapshotWorkspace(probe, QUIET)
-    await graph.callTool('update_block', {id: rollout, content: 'Target: Q4 2026.'})
-    // A re-derive that finds nothing to change still moves the recency stamp.
-    await restoreSnapshot(withLateProcessor('UPDATE blocks SET updated_at = ? WHERE id = ?', [Date.now() + 1, bystander]), snapshot, QUIET)
-    await waitForQuiet(probe, QUIET)
-    expect(await stampsMovedSince(snapshot)).toEqual([])
-  }, 20_000)
-
-  it('proves derived columns too: one a late processor leaves different fails the restore', async () => {
-    const snapshot = await snapshotWorkspace(probe, QUIET)
-    const stored = snapshot.rows.get(bystander)!.references_json
-    await graph.callTool('update_block', {id: rollout, content: 'Target: Q4 2026.'})
-    await expect(restoreSnapshot(withLateProcessor('UPDATE blocks SET references_json = ? WHERE id = ?', ['[{"stale":true}]', bystander]), snapshot, QUIET))
-      .rejects.toThrow(`could not restore 1 block(s) to the fixture state (${bystander})`)
-    await probe.command({type: 'sql', mode: 'execute', sql: 'UPDATE blocks SET references_json = ? WHERE id = ?', params: [stored, bystander], allowSyncedWrite: true})
+  it('sees a page a link minted, which is born with updated_at = 0', async () => {
+    await onFreshGraph(async fresh => {
+      await fresh.callTool('create_block', {parentId: fixtureId('vendorsSection'), content: '[[Minted Seat Probe]]'})
+      const minted = await vi.waitFor(async () => {
+        const id = await pageIdByTitle(fresh.probe, 'Minted Seat Probe')
+        if (!id) throw new Error('linked page not minted yet')
+        return id
+      }, {timeout: 5_000})
+      const changes = await diffAgainst(fresh.probe, templateRows)
+      expect(changes.created.map(row => row.id)).toContain(minted)
+    })
   }, 20_000)
 })
 
 describe('fixture state', () => {
   const pages = buildFixture().pages
+  let before: string[]
+  beforeAll(async () => { before = await fixtureState(probe, pages) }, 20_000)
+
+  /** What `change` moves in the fixture state of a fresh copy. */
+  const differenceMadeBy = (change: (graph: Graph) => Promise<unknown>) => onFreshGraph(async fresh => {
+    await change(fresh)
+    return differingBlocks(before, await fixtureState(fresh.probe, pages))
+  })
 
   it('names every block by uid, so a property change shows up on that block alone', async () => {
-    const before = await fixtureState(probe, pages)
-    const halyard = await requirePageId(probe, 'Halyard Security')
-    await graph.callTool('update_block', {id: halyard, properties: {'roam:Status': 'active'}})
-    expect(differingBlocks(before, await fixtureState(probe, pages))).toEqual(['vendor-halyard-security'])
+    expect(await differenceMadeBy(async fresh =>
+      fresh.callTool('update_block', {id: await requirePageId(fresh.probe, 'Halyard Security'), properties: {'roam:Status': 'active'}})))
+      .toEqual(['vendor-halyard-security'])
   }, 20_000)
 
   it('sees a block added under a fixture page or daily note, which no exported row records', async () => {
-    const before = await fixtureState(probe, pages)
-    await graph.callTool('create_block', {parentId: await requirePageId(probe, PROJECT_PAGE), content: '{{[[TODO]]}} hand-written'})
-    await graph.callTool('create_block', {parentId: await dailyNoteId(probe, '2026-06-03'), content: 'Blockers: staging database again'})
-    expect(differingBlocks(before, await fixtureState(probe, pages)))
-      .toEqual(expect.arrayContaining(['+{{[[TODO]]}} hand-written', '+Blockers: staging database again']))
+    expect(await differenceMadeBy(async fresh => {
+      await fresh.callTool('create_block', {parentId: await requirePageId(fresh.probe, PROJECT_PAGE), content: '{{[[TODO]]}} hand-written'})
+      await fresh.callTool('create_block', {parentId: await dailyNoteId(fresh.probe, '2026-06-03'), content: 'Blockers: staging database again'})
+    })).toEqual(expect.arrayContaining(['+{{[[TODO]]}} hand-written', '+Blockers: staging database again']))
   }, 20_000)
 
   it('sees a change to a daily page, whose id the import derives from its date rather than its uid', async () => {
-    const before = await fixtureState(probe, pages)
-    await graph.callTool('update_block', {id: await dailyNoteId(probe, '2026-06-04'), properties: {'eval:note': 'x'}})
-    expect(differingBlocks(before, await fixtureState(probe, pages))).toEqual(['=June 4th, 2026'])
+    expect(await differenceMadeBy(async fresh =>
+      fresh.callTool('update_block', {id: await dailyNoteId(fresh.probe, '2026-06-04'), properties: {'eval:note': 'x'}})))
+      .toEqual(['=June 4th, 2026'])
   }, 20_000)
 
   it('sees a change to a page a link minted, which the export does not define', async () => {
-    const before = await fixtureState(probe, pages)
-    await graph.callTool('update_block', {id: await requirePageId(probe, 'Vendor'), properties: {'eval:note': 'x'}})
-    expect(differingBlocks(before, await fixtureState(probe, pages))).toEqual(['=Vendor'])
+    expect(await differenceMadeBy(async fresh =>
+      fresh.callTool('update_block', {id: await requirePageId(fresh.probe, 'Vendor'), properties: {'eval:note': 'x'}})))
+      .toEqual(['=Vendor'])
   }, 20_000)
 
   it('ignores where a page sits at the top level, which differs from one import to the next', async () => {
-    const before = await fixtureState(probe, pages)
-    const halyard = await requirePageId(probe, 'Halyard Security')
-    const orderKey = fixtureSnapshot.rows.get(halyard)!.order_key
-    const setOrderKey = (key: string) => probe.command({
-      type: 'sql', mode: 'execute', sql: 'UPDATE blocks SET order_key = ? WHERE id = ?', params: [key, halyard], allowSyncedWrite: true,
-    })
-    await setOrderKey('zzzz')
-    expect(await fixtureState(probe, pages)).toEqual(before)
-    await setOrderKey(orderKey)
-  }, 20_000)
-
-  it('is unchanged by a move the runner undoes, which leaves the block a new order key', async () => {
-    const snapshot = await snapshotWorkspace(probe, QUIET)
-    const before = await fixtureState(probe, pages)
-    const rollout = fixtureId('rollout')
-    await graph.callTool('move_block', {id: rollout, parentId: snapshot.rows.get(rollout)!.parent_id, position: {kind: 'last'}})
-    await restoreSnapshot(probe, snapshot, QUIET)
-    expect(snapshot.rows.get(rollout)!.order_key).not.toBe(fixtureSnapshot.rows.get(rollout)!.order_key)
-    expect(await fixtureState(probe, pages)).toEqual(before)
-  }, 20_000)
-})
-
-describe('isolation edge cases', () => {
-  it('purges a page a link minted, which is born with updated_at = 0', async () => {
-    const snapshot = await snapshotWorkspace(probe, QUIET)
-    const host = fixtureId('vendorsSection')
-    await graph.callTool('create_block', {parentId: host, content: '[[Minted Seat Probe]]'})
-    await vi.waitFor(async () => { expect(await pageIdByTitle(probe, 'Minted Seat Probe')).not.toBeNull() }, {timeout: 5_000})
-
-    await restoreSnapshot(probe, snapshot, QUIET)
-    expect(await pageIdByTitle(probe, 'Minted Seat Probe')).toBeNull()
-    // Purged, not soft-deleted: raw SQL must not find a leftover either.
-    expect(await sqlAll(probe, "SELECT id FROM blocks WHERE content LIKE '%Minted Seat Probe%'")).toEqual([])
-  }, 20_000)
-
-  it('re-deletes a tombstone an agent revived and edited', async () => {
-    const tombstone = (await descendantsOf(probe, await requirePageId(probe, DESIGN_PAGE)))
-      .find(row => row.content.startsWith('Older clients will keep'))!
-    await graph.callTool('delete_block', {id: tombstone.id})
-    const snapshot = await snapshotWorkspace(probe, QUIET)
-    await graph.callTool('restore_block', {id: tombstone.id})
-    await graph.callTool('update_block', {id: tombstone.id, content: 'revived and edited'})
-
-    await restoreSnapshot(probe, snapshot, QUIET)
-    expect(await diffAgainst(probe, snapshot, QUIET)).toEqual({created: [], modified: [], appStateDeleted: []})
-    await graph.callTool('restore_block', {id: tombstone.id})
-    expect((await getBlock(probe, tombstone.id))?.content).toBe(tombstone.content)
-  }, 20_000)
-
-  it('restores a page\'s name after a page the task created took it over', async () => {
-    const snapshot = await snapshotWorkspace(probe, QUIET)
-    const lease = await requirePageId(probe, 'Office Lease')
-    await graph.callTool('update_block', {id: lease, content: 'Office Lease (old)'})
-    await vi.waitFor(async () => { expect(await pageIdByTitle(probe, 'Office Lease')).toBeNull() }, {timeout: 5_000})
-    await graph.callTool('create_block', {parentId: fixtureId('vendorsSection'), content: '[[Office Lease]]'})
-    await vi.waitFor(async () => { expect(await pageIdByTitle(probe, 'Office Lease')).not.toBe(lease) }, {timeout: 5_000})
-
-    await restoreSnapshot(probe, snapshot, QUIET)
-    expect(await diffAgainst(probe, snapshot, QUIET)).toEqual({created: [], modified: [], appStateDeleted: []})
-    expect(await pageIdByTitle(probe, 'Office Lease')).toBe(lease)
-  }, 20_000)
-
-  it('revives a deleted parent before the block an agent moved under it', async () => {
-    const snapshot = await snapshotWorkspace(probe, QUIET)
-    const rollout = fixtureId('rollout')
-    // A block imported after the rollout block, so it comes later in table order.
-    const [later] = await childrenOf(probe, await requirePageId(probe, 'Team Handbook'))
-    await graph.callTool('move_block', {id: rollout, parentId: later.id, position: {kind: 'first'}})
-    await graph.callTool('delete_block', {id: later.id})
-
-    await restoreSnapshot(probe, snapshot, QUIET)
-    expect(await diffAgainst(probe, snapshot, QUIET)).toEqual({created: [], modified: [], appStateDeleted: []})
-  }, 20_000)
-
-  it('brings back a fixture block an agent moved under a block it created', async () => {
-    const snapshot = await snapshotWorkspace(probe, QUIET)
-    const rollout = fixtureId('rollout')
-    const before = snapshot.rows.get(rollout)!
-    const parentId = resultIdOf(await graph.callTool('create_block', {parentId: before.parent_id, content: 'new container'}))
-    await graph.callTool('move_block', {id: rollout, parentId, position: {kind: 'first'}})
-
-    await restoreSnapshot(probe, snapshot, QUIET)
-    expect(await diffAgainst(probe, snapshot, QUIET)).toEqual({created: [], modified: [], appStateDeleted: []})
-    expect((await getBlock(probe, rollout))?.content).toBe(before.content)
-  }, 20_000)
-})
-
-describe('app state', () => {
-  it('leaves the app\'s own state alone, and compares everything else wherever it ends up', async () => {
-    // A user page as the app keeps one, with a state root at the id the app derives.
-    const userPage = (await probe.command({type: 'create-block', content: 'Eval User', properties: {types: ['user']}}) as {id: string}).id
-    const [stateRoot] = userStateRootBlockIds(userPage)
-    await probe.command({type: 'create-block', parentId: userPage, content: 'ui-state', data: {id: stateRoot}})
-    const snapshot = await snapshotWorkspace(probe, QUIET)
-    expect([snapshot.appState.has(stateRoot), snapshot.rows.has(userPage)]).toEqual([true, true])
-    const rollout = fixtureId('rollout')
-
-    await graph.callTool('move_block', {id: rollout, parentId: stateRoot, position: {kind: 'first'}})
-    const note = resultIdOf(await graph.callTool('create_block', {parentId: userPage, content: 'a note on my page'}))
-    const panelState = resultIdOf(await graph.callTool('create_block', {parentId: stateRoot, content: 'panel state'}))
-
-    const changes = await restoreSnapshot(probe, snapshot, QUIET)
-    expect(changes.modified.map(change => change.id)).toEqual([rollout])
-    expect(changes.created.map(row => row.id)).toEqual([note])
-    const [restored] = await sqlAll<{parent_id: string}>(probe, 'SELECT parent_id FROM blocks WHERE id = ?', [rollout])
-    expect(restored.parent_id).toBe(snapshot.rows.get(rollout)!.parent_id)
-    expect([await getBlock(probe, note), await getBlock(probe, panelState)].map(block => block !== null)).toEqual([false, true])
-  }, 20_000)
-})
-
-describe('app state cascades', () => {
-  it('revives the app\'s state that deleting its user page took along', async () => {
-    const userPage = (await probe.command({type: 'create-block', content: 'Eval User', properties: {types: ['user']}}) as {id: string}).id
-    const [stateRoot] = userStateRootBlockIds(userPage)
-    await probe.command({type: 'create-block', parentId: userPage, content: 'ui-state', data: {id: stateRoot}})
-    const panelState = resultIdOf(await graph.callTool('create_block', {parentId: stateRoot, content: 'panel state'}))
-    const snapshot = await snapshotWorkspace(probe, QUIET)
-    await graph.callTool('delete_block', {id: userPage})
-
-    const changes = await restoreSnapshot(probe, snapshot, QUIET)
-    expect(changes.appStateDeleted).toEqual([stateRoot, panelState])
-    const live = await sqlAll<{id: string}>(probe, 'SELECT id FROM blocks WHERE deleted = 0 AND id IN (?, ?, ?)', [userPage, stateRoot, panelState])
-    expect(live.map(row => row.id).sort()).toEqual([userPage, stateRoot, panelState].sort())
-  }, 20_000)
-})
-
-describe('run journal', () => {
-  it('undoes what a task left when its run was interrupted, on the next run', async () => {
-    const dir = path.join(mkdtempSync(path.join(tmpdir(), 'agent-eval-journal-')), 'journal')
-    const interrupted = createRunJournal(dir)
-    const userPage = (await probe.command({type: 'create-block', content: 'Eval User', properties: {types: ['user']}}) as {id: string}).id
-    const [stateRoot] = userStateRootBlockIds(userPage)
-    await probe.command({type: 'create-block', parentId: userPage, content: 'ui-state', data: {id: stateRoot}})
-    interrupted.begin(await snapshotWorkspace(probe, QUIET), [])
-    interrupted.taskStarted()
-    const rollout = fixtureId('rollout')
-    await graph.callTool('update_block', {id: rollout, content: 'left behind'})
-
-    const panelState = resultIdOf(await graph.callTool('create_block', {parentId: stateRoot, content: 'panel state'}))
-
-    expect(await createRunJournal(dir).recover(probe, QUIET)).toBe(1)
-    expect((await getBlock(probe, rollout))?.content).toBe(ROLLOUT_BLOCK_TEXT)
-    // The app's own state, as the interrupted run saw it, is left alone.
-    expect(await getBlock(probe, panelState)).not.toBeNull()
-    expect(existsSync(dir)).toBe(false)
-  }, 20_000)
-
-  it('recovers nothing after a task whose undo finished', async () => {
-    const dir = path.join(mkdtempSync(path.join(tmpdir(), 'agent-eval-journal-')), 'journal')
-    const clean = createRunJournal(dir)
-    clean.begin(await snapshotWorkspace(probe, QUIET), [])
-    clean.taskStarted()
-    clean.taskRestored()
-    expect(await createRunJournal(dir).recover(probe, QUIET)).toBe(0)
-  }, 20_000)
-
-  it('reads the fixture marker only after undoing what an interrupted task did to it', async () => {
-    const dir = path.join(mkdtempSync(path.join(tmpdir(), 'agent-eval-journal-')), 'journal')
-    const interrupted = createRunJournal(dir)
-    interrupted.begin(await snapshotWorkspace(probe, QUIET), [])
-    interrupted.taskStarted()
-    const hashLine = (await childrenOf(probe, await requirePageId(probe, FIXTURE_MARKER_PAGE)))
-      .find(row => row.content.startsWith(FIXTURE_HASH_PREFIX))!
-    await graph.callTool('update_block', {id: hashLine.id, content: `${FIXTURE_HASH_PREFIX}tampered`})
-
-    expect(await openWorkspace(probe, createRunJournal(dir), QUIET)).toEqual({recovered: 1, seeded: fixtureHash})
-  }, 20_000)
-
-  it('validates a run\'s graph before its setup writes anything, and journals what setup adds', async () => {
-    const dir = path.join(mkdtempSync(path.join(tmpdir(), 'agent-eval-journal-')), 'journal')
-    let setUpRan = false
-    await expect(beginRun(probe, createRunJournal(dir), {
-      validate: async () => { throw new Error('refused') },
-      setUp: async () => { setUpRan = true },
-    }, QUIET)).rejects.toThrow('refused')
-    expect(setUpRan).toBe(false)
-
-    let added = ''
-    const {setupCreated} = await beginRun(probe, createRunJournal(dir), {
-      validate: async () => {},
-      setUp: async () => { added = resultIdOf(await graph.callTool('create_block', {parentId: fixtureId('vendorsSection'), content: 'set up'})) },
-    }, QUIET)
-    expect(setupCreated).toEqual([added])
-    expect(await createRunJournal(dir).recover(probe, QUIET)).toBe(1)
-    expect(await getBlock(probe, added)).toBeNull()
-  }, 20_000)
-
-  // A block standing in for the daily note a reset creates when it is missing.
-  const setUp = async () => resultIdOf(await graph.callTool('create_block', {parentId: fixtureId('vendorsSection'), content: 'set up by the run'}))
-
-  it('removes what the run\'s setup added when the run ends', async () => {
-    const dir = path.join(mkdtempSync(path.join(tmpdir(), 'agent-eval-journal-')), 'journal')
-    const journal = createRunJournal(dir)
-    const added = await setUp()
-    journal.begin(await snapshotWorkspace(probe, QUIET), [added])
-    await journal.end(probe, [added])
-    expect(await getBlock(probe, added)).toBeNull()
-  }, 20_000)
-
-  it('removes what setup added on the next run, when a run stopped between tasks', async () => {
-    const dir = path.join(mkdtempSync(path.join(tmpdir(), 'agent-eval-journal-')), 'journal')
-    const stopped = createRunJournal(dir)
-    const added = await setUp()
-    stopped.begin(await snapshotWorkspace(probe, QUIET), [added])
-    stopped.taskStarted()
-    stopped.taskRestored()
-    expect(await createRunJournal(dir).recover(probe, QUIET)).toBe(1)
-    expect(await getBlock(probe, added)).toBeNull()
-    expect(existsSync(dir)).toBe(false)
+    expect(await differenceMadeBy(async fresh => fresh.probe.command({
+      type: 'sql', mode: 'execute', sql: 'UPDATE blocks SET order_key = ? WHERE id = ?',
+      params: ['zzzz', await requirePageId(fresh.probe, 'Halyard Security')], allowSyncedWrite: true,
+    }))).toEqual([])
   }, 20_000)
 })

@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { GraphProbe } from './graphQueries'
-import { type AllowedChanges, type AllowedEdit, type SnapshotRow, strayChanges, waitForQuiet } from './isolation'
+import { type AllowedChanges, type AllowedEdit, type SnapshotRow, strayChanges } from './taskChanges'
 
 const row = (id: string, overrides: Partial<SnapshotRow> = {}): SnapshotRow => ({
   id,
@@ -72,21 +71,5 @@ describe('strayChanges', () => {
     expect(strayChanges({created: [page({alias: ['Review'], types: ['page']})], modified: []}, allowing(undefined, expected))).toBe(0)
     expect(strayChanges({created: [page({types: ['page'], alias: ['Review'], note: 'x'})], modified: []}, allowing(undefined, expected))).toBe(1)
     expect(strayChanges({created: [page({types: ['page', 'todo'], alias: ['Review']})], modified: []}, allowing(undefined, expected))).toBe(1)
-  })
-})
-
-describe('waitForQuiet', () => {
-  /** A graph whose write fingerprint changes on every read while `busy`. */
-  const graphThat = (busy: boolean): GraphProbe => {
-    let writes = 0
-    return {workspaceId: 'w', command: async () => [{rows: busy ? writes++ : 0}]}
-  }
-
-  it('returns once nothing has been written for the quiet period', async () => {
-    await expect(waitForQuiet(graphThat(false), {quietMs: 30, maxMs: 500})).resolves.toBeUndefined()
-  })
-
-  it('throws, rather than reading a graph that never stops changing', async () => {
-    await expect(waitForQuiet(graphThat(true), {quietMs: 30, maxMs: 200})).rejects.toThrow('still being written to after 0.2s')
   })
 })

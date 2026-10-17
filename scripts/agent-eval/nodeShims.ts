@@ -21,9 +21,10 @@ class MemoryStorage {
 const globals = globalThis as Record<string, unknown>
 globals.localStorage ??= new MemoryStorage()
 
-/** The runtime context hands `window` / `document` to eval code; nothing
- *  the MCP tools call reads them, so they only need to exist. */
+/** The runtime context hands `window` / `document` to eval code, and
+ *  `describe-runtime` reads the page's importmap and module links from the
+ *  document: here, a page with no elements. */
 export const provideRuntimeGlobals = () => {
   globals.window ??= globalThis
-  globals.document ??= {}
+  globals.document ??= {querySelectorAll: () => [], baseURI: 'node:agent-eval'}
 }

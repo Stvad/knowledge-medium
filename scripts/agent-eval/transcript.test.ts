@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { extractAnswer, parseTranscript } from './transcript'
+import { extractAnswer, parseTranscript, toolName } from './transcript'
 
 const usage = (input: number, created: number, read: number, output: number) => ({
   input_tokens: input,
@@ -91,5 +91,40 @@ describe('extractAnswer', () => {
   it('is undefined when the line is missing or malformed', () => {
     expect(extractAnswer('no answer here')).toBeUndefined()
     expect(extractAnswer('ANSWER: {not json')).toBeUndefined()
+  })
+})
+
+describe('toolName', () => {
+  const bash = (command: string) => toolName({type: 'tool_use', name: 'Bash', input: {command}})
+
+  it('names a shell call by the CLI verbs it runs, piped or not', () => {
+    expect(bash('kmagent subtree abc')).toBe('kmagent subtree')
+    expect(bash('kmagent sql all "SELECT 1" | jq .')).toBe('kmagent sql')
+    expect(bash('kmagent data-model; kmagent page Project Orchard')).toBe('kmagent data-model + page')
+    expect(bash('kmagent --help')).toBe('kmagent --help')
+    expect(bash('ls -la')).toBe('bash ls')
+  })
+
+  it('keeps any other tool\'s name', () => {
+    expect(toolName({type: 'tool_use', name: 'mcp__km__page', input: {name: 'x'}})).toBe('mcp__km__page')
+  })
+})
+
+describe('a shell result over the cap', () => {
+  const preview = '<persisted-output>\nOutput too large (97.7KB). Full output saved to: /x.txt\n\nPreview (first 2KB):\nabc\n...\n</persisted-output>'
+  const shellCall = (size?: number) => [
+    assistant('m1', [{type: 'tool_use', id: 't1', name: 'Bash', input: {command: 'kmagent subtree x'}}], usage(1, 1, 1, 1)),
+    JSON.stringify({type: 'user', message: {role: 'user', content: [{type: 'tool_result', tool_use_id: 't1', content: preview}]},
+      tool_use_result: {stdout: 'abc', persistedOutputSize: size}}),
+  ].join('\n')
+
+  it('is capped: the preview is what the model saw, the saved size what the tool returned', () => {
+    expect(parseTranscript(shellCall(100_000)).toolCalls).toEqual([expect.objectContaining({
+      name: 'kmagent subtree', capped: true, seenChars: preview.length, returnedChars: 100_000,
+    })])
+  })
+
+  it('returned an unknown size when the stream does not carry one', () => {
+    expect(parseTranscript(shellCall()).toolCalls[0]).toEqual(expect.objectContaining({capped: true, returnedChars: null}))
   })
 })

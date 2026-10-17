@@ -9,16 +9,18 @@
  * (a timed-out run) output tokens come out low, because the per-message
  * `output_tokens` the stream carries are partial.
  *
- * A tool result over Claude Code's MCP output cap never reaches the model:
- * it is replaced by a short notice naming its size in characters. Such a
- * call is recorded as `capped`, with what the model saw and what the server
- * returned kept apart — otherwise a tool that shrinks its output below the
- * cap would read as a regression. Sizes are characters (string length), the
- * unit the notice reports.
+ * A tool result over Claude Code's output cap never reaches the model whole:
+ * an MCP result is replaced by a short notice naming its size, a shell
+ * result by a preview, with its size beside it in the stream. Such a call is
+ * recorded as `capped`, with what the model saw and what the tool returned
+ * kept apart — otherwise a tool that shrinks its output below the cap would
+ * read as a regression. Sizes are characters (string length), the unit the
+ * MCP notice reports.
  */
 
 export interface ToolCallRecord {
   id: string
+  /** The tool, or for a shell command the CLI verb it runs (`toolName`). */
   name: string
   /** Characters the model saw; null when the transcript ended before the tool returned. */
   seenChars: number | null
@@ -67,7 +69,20 @@ const num = (value: unknown) => (typeof value === 'number' && Number.isFinite(va
 const contextOf = (usage: MessageUsage) =>
   num(usage.input_tokens) + num(usage.cache_creation_input_tokens) + num(usage.cache_read_input_tokens)
 
+/** A shell call is named by the agent CLI verbs it runs, `kmagent <verb>`,
+ *  so the calls by tool read like the MCP surface's; a call that runs no
+ *  verb by its flags (`--help`), and any other command by its first word. */
+export const toolName = (block: Json): string => {
+  const name = typeof block.name === 'string' ? block.name : '?'
+  const command = (block.input as Json | undefined)?.command
+  if (name !== 'Bash' || typeof command !== 'string') return name
+  const verbs = [...command.matchAll(/(?:^|[\s;|&(])kmagent((?:\s+-[\w-]+)*)(?:\s+([a-z][\w-]*))?/g)]
+    .map(([, flags, verb]) => verb ?? flags.trim())
+  return verbs.length > 0 ? `kmagent ${verbs.join(' + ')}` : `bash ${command.trim().split(/\s+/)[0]}`
+}
+
 const CAP_NOTICE = /^Error: result \(([\d,]+) characters across [\d,]+ lines\) exceeds maximum allowed tokens/
+const PERSISTED_PREVIEW = /^<persisted-output>\nOutput too large/
 
 const toolResultText = (content: unknown): string => {
   if (typeof content === 'string') return content
@@ -113,7 +128,7 @@ export const parseTranscript = (raw: string): TranscriptMetrics => {
         if (block?.type !== 'tool_use' || typeof block.id !== 'string' || callsById.has(block.id)) continue
         const call: ToolCallRecord = {
           id: block.id,
-          name: typeof block.name === 'string' ? block.name : '?',
+          name: toolName(block),
           seenChars: null,
           capped: false,
           returnedChars: null,
@@ -130,9 +145,13 @@ export const parseTranscript = (raw: string): TranscriptMetrics => {
         if (!call) continue
         const text = toolResultText(block.content)
         const cap = CAP_NOTICE.exec(text)
+        const persistedSize = (event.tool_use_result as Json | undefined)?.persistedOutputSize
+        const preview = PERSISTED_PREVIEW.test(text)
         call.seenChars = text.length
-        call.capped = cap !== null
-        call.returnedChars = cap ? Number(cap[1].replace(/,/g, '')) : call.seenChars
+        call.capped = cap !== null || preview
+        call.returnedChars = cap ? Number(cap[1].replace(/,/g, ''))
+          : preview ? (typeof persistedSize === 'number' ? persistedSize : null)
+          : call.seenChars
         call.isError = block.is_error === true
       }
     } else if (event.type === 'result') {

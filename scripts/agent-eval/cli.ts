@@ -1,58 +1,57 @@
 /**
  * Agent-ergonomics eval runner. See README.md in this directory.
  *
- *   pnpm agent-eval seed   [--profile km-eval]
- *   pnpm agent-eval run    [--profile km-eval] [--model sonnet] [--effort <level>] [--repeat 1]
+ *   pnpm agent-eval run    [--surface mcp|cli] [--workers 4] [--model sonnet] [--effort <level>] [--repeat 1]
  *                          [--tasks id,id] [--label <name>] [--compare <report.json>] [--timeout-min 10]
  *   pnpm agent-eval report <report.json> [--compare <report.json>]
  *   pnpm agent-eval sizes
  *
- * `run` spawns `claude -p` once per task with ONLY the km MCP tools, billed
- * to the CLI's subscription login (credential env scrubbed as agent-dispatch
- * does), against a local-only dev tab seeded with the fixture.
+ * `run` hosts the fixture graph in node behind a private bridge (hosting.ts)
+ * and spawns `claude -p` once per task, each on a fresh copy of the graph and
+ * with only the surface's tools, billed to the CLI's subscription login
+ * (credential env scrubbed as agent-dispatch does).
  */
 import { spawnSync } from 'node:child_process'
-import { createHash, randomBytes } from 'node:crypto'
+import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
-import { type BridgeClient, createBridgeClient, resolveToken } from '../../packages/agent-cli/src/client'
-import { agentRuntimeConfigDir } from '../../packages/agent-cli/src/config'
-import { KM_MCP_ALLOWED_TOOLS, KM_MCP_TOOL_NAMES, MCP_SERVER_NAME } from '../../packages/agent-cli/src/mcpShared'
+import { createBridgeClient } from '../../packages/agent-cli/src/client'
+import { MCP_SERVER_NAME } from '../../packages/agent-cli/src/mcpShared'
 import { runJsonlProcess } from '../../packages/agent-dispatch/src/execProcess'
 import { BILLING_ENV_DENYLIST, envForBilling } from '../../packages/agent-dispatch/src/runner'
 import { buildFixture, type Fixture } from './fixture'
+import { fixtureState } from './fixtureState'
 import { dailyNoteId, type GraphProbe, requirePageId } from './graphQueries'
-import { restoreSnapshot, strayChanges } from './isolation'
+import { type Bridge, envWithoutAgentRuntime, startBridge, startHost } from './hosting'
 import { connectMcpClient } from './mcpClient'
-import { differingBlocks, fixtureState } from './fixtureState'
 import { measureProbes, OUTPUT_PROBES, outputProbeHash } from './outputBudgets'
-import { createRunJournal } from './runJournal'
 import {
   conditionMismatches,
+  definitionHash,
   type EvalReport,
   parseReport,
   renderMarkdown,
   REPORT_SCHEMA_VERSION,
-  definitionHash,
   type TaskRunRecord,
 } from './report'
-import { allowedChanges, type CheckOutcome, type EvalTask, setupHash, taskDefinitionHash, TASKS } from './tasks'
+import { allowedTools, SURFACE_NAMES, type SurfaceName, SURFACES, surfaceHash, toolArgs } from './surfaces'
+import { diffAgainst, type Snapshot, snapshotWorkspace, strayChanges } from './taskChanges'
+import { allowedChanges, type CheckOutcome, type EvalTask, taskDefinitionHash, TASKS } from './tasks'
 import { extractAnswer, parseTranscript } from './transcript'
-import { beginRun, openWorkspace } from './workspace'
-import { acquireWorkspaceLock } from './workspaceLock'
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const RESULTS_DIR = path.join(REPO_ROOT, 'scripts/agent-eval/results')
 const RUNS_DIR = path.join(REPO_ROOT, 'tmp/agent-eval/runs')
-// Beside the CLI's token store, so runs from every checkout on this machine
-// share one lock and one journal per paired tab.
-const EVAL_STATE_DIR = path.join(agentRuntimeConfigDir(), 'agent-eval')
-const MCP_DIST = path.join(REPO_ROOT, 'packages/agent-cli/dist')
-const MCP_ENTRY = path.join(MCP_DIST, 'mcp.js')
-const DEFAULT_PROFILE = 'km-eval'
+const AGENT_CLI_DIST = path.join(REPO_ROOT, 'packages/agent-cli/dist')
+/** vite-node with the test config, which resolves `@/` the way the fixture
+ *  test does. */
+const HOST_COMMAND = {
+  bin: path.join(REPO_ROOT, 'node_modules/.bin/vite-node'),
+  args: ['--config', path.join(REPO_ROOT, 'vitest.config.ts'), path.join(REPO_ROOT, 'scripts/agent-eval/host.ts'), '--'],
+}
 
 const fail = (message: string): never => {
   process.stderr.write(`agent-eval: ${message}\n`)
@@ -69,113 +68,24 @@ const loadReport = (file: string): EvalReport => {
   }
 }
 
-const tokenOf = async (profile: string): Promise<string> =>
-  await resolveToken(profile) ?? fail(`profile "${profile}" has no token; pair it first (README: "One-time setup")`)
-
-/** Which tab a token pairs with, without the secret: a profile's token
- *  changes when it is re-paired, and only then. */
-const pairingOf = (token: string): string => createHash('sha256').update(token).digest('hex').slice(0, 16)
-
-/** Keys the lock and the journal: a tab's audience (its user and workspace)
- *  is the same for every profile paired with it. Two tabs logged in under one
- *  name share an audience, and so a lock and a journal. */
-const tabOf = (audience: {userId: string | null, workspaceId: string | null}): string =>
-  createHash('sha256').update(`${audience.userId}\0${audience.workspaceId}`).digest('hex').slice(0, 16)
-
-/** The runner's own client keeps the token it started with, so its checks and
- *  restores reach that tab even if the profile is re-paired meanwhile. */
-const connect = async (profile: string): Promise<{probe: GraphProbe, client: BridgeClient, pairing: string, tab: string}> => {
-  const token = await tokenOf(profile)
-  const client = createBridgeClient({profile, token, timeoutMs: 120_000})
-  const who = await client.whoami().catch((error: unknown) =>
-    fail(`cannot reach the bridge with profile "${profile}": ${error instanceof Error ? error.message : String(error)}\n`
-      + 'Pair it against the local-only dev tab first (see scripts/agent-eval/README.md).'))
-  if (!who.connected || !who.audience.workspaceId) fail(`profile "${profile}" has no connected tab`)
-  if (who.scope !== 'read-write') fail(`profile "${profile}" is ${who.scope}; seeding and write tasks need read-write`)
-  await requireNeverSynced(client, profile)
-  return {
-    client,
-    pairing: pairingOf(token),
-    tab: tabOf(who.audience),
-    probe: {workspaceId: who.audience.workspaceId!, command: command => client.runCommand(command)},
-  }
-}
-
-/** Seeding and runs write thousands of blocks, so the tab must be one that
- *  has never synced: a local-only session holds no Supabase session, never
- *  connects PowerSync and never downloads a row. A signed-in tab — even
- *  offline, even before its first connect — shows at least one of these and
- *  is refused. Checked again before every task: a run can last hours. */
-const requireNeverSynced = async (client: BridgeClient, profile: string) => {
-  const status = await client.runCommand({
-    type: 'eval',
-    code: `const status = db.currentStatus
-const {count} = await sql('SELECT count(*) AS count FROM blocks_synced', [], 'get')
-return {signedIn: Object.keys(localStorage).some(key => /^sb-.+-auth-token$/.test(key)), connected: Boolean(status?.connected), connecting: Boolean(status?.connecting), hasSynced: Boolean(status?.hasSynced), lastSyncedAt: status?.lastSyncedAt ? String(status.lastSyncedAt) : null, syncedRows: count}`,
-  }) as {signedIn: boolean, connected: boolean, connecting: boolean, hasSynced: boolean, lastSyncedAt: string | null, syncedRows: number}
-  if (status.signedIn || status.connected || status.connecting || status.hasSynced || status.lastSyncedAt || status.syncedRows > 0) {
-    fail(`profile "${profile}" is paired to a tab that syncs (${JSON.stringify(status)}). The eval writes to its graph, `
-      + 'so it only runs against a local-only dev tab (README: "One-time setup").')
-  }
-}
-
-/** `seed` and `run` both write the graph: one at a time per workspace. */
-const lockWorkspace = (tab: string): (() => void) => {
-  try {
-    return acquireWorkspaceLock(path.join(EVAL_STATE_DIR, tab, 'run.lock'))
-  } catch (error) {
-    return fail(errorText(error))
-  }
-}
-
-/** Locks the workspace, then undoes what an earlier run left before the
- *  fixture marker is read (see `openWorkspace`). */
-const prepareWorkspace = async (probe: GraphProbe, tab: string) => {
-  const release = lockWorkspace(tab)
-  const journal = createRunJournal(path.join(EVAL_STATE_DIR, tab, 'journal'))
-  const {recovered, seeded} = await openWorkspace(probe, journal)
-    .catch((error: unknown) => fail(`could not undo what an earlier run left: ${errorText(error)}`))
-  if (recovered > 0) process.stdout.write(`undid ${recovered} change(s) an earlier run left\n`)
-  return {release, journal, seeded}
-}
-
-const seed = async (profile: string) => {
-  const {client, probe, tab} = await connect(profile)
-  const fixture = buildFixture()
-  const {release, seeded: existing} = await prepareWorkspace(probe, tab)
-  if (existing && existing !== fixture.hash) {
-    fail(`this workspace holds fixture ${existing}, not ${fixture.hash}. Re-importing a different fixture leaves the old `
-      + 'blocks behind; seed a fresh local-only dev origin instead (README: "Resetting").')
-  }
-  process.stdout.write(`${existing ? 'Re-importing' : 'Importing'} fixture ${fixture.hash}…\n`)
-  const summary = await client.runCommand({
-    type: 'eval',
-    data: fixture.pages,
-    code: `const summary = await window.__omniliner.roamImport.run(data, {onProgress: () => {}})
-return {blocksWritten: summary.blocksWritten, pagesDaily: summary.pagesDaily, durationMs: summary.durationMs, diagnostics: summary.diagnostics.length}`,
-  }, {timeoutMs: 600_000})
-  release()
-  process.stdout.write(`${JSON.stringify(summary)}\n`)
-}
-
 const gitInfo = () => {
   const git = (...args: string[]) => spawnSync('git', args, {cwd: REPO_ROOT, encoding: 'utf8'}).stdout.trim()
   return {sha: git('rev-parse', 'HEAD'), branch: git('rev-parse', '--abbrev-ref', 'HEAD'), dirty: git('status', '--porcelain') !== ''}
 }
 
-/** The runs launch the BUILT server, and a stale build silently measures old
- *  code, so every run builds first (incremental, a few seconds). */
+/** The agent runs the BUILT CLI and MCP server, and a stale build silently
+ *  measures old code, so every run builds first (incremental, a few seconds). */
 const buildPackages = () => {
   process.stdout.write('building packages/agent-cli…\n')
   const build = spawnSync('pnpm', ['run', 'compile:packages'], {cwd: REPO_ROOT, encoding: 'utf8'})
   if (build.status !== 0) fail(`pnpm run compile:packages failed:\n${`${build.stdout}${build.stderr}`.trim().split('\n').slice(-15).join('\n')}`)
 }
 
-/** Of the code both halves of the tools run: the checkout, which the dev
- *  tab serves the app from, hot-reloading edits, and the built MCP server,
- *  which a compile can change without leaving a source difference behind (an
- *  edit, a compile, a revert). A change while a task runs would hand it other
- *  code under this report's one git identity. */
+/** Of the code a task runs: the checkout, which each host loads as it
+ *  starts, and the built CLI and MCP server, which a compile can change
+ *  without leaving a source difference behind (an edit, a compile, a
+ *  revert). A change while tasks run would hand some of them other code
+ *  under this report's one git identity. */
 const codeDigest = (): string => {
   // A listing cut off at the output buffer would hash only its start.
   const git = (...args: string[]): Buffer => {
@@ -190,77 +100,64 @@ const codeDigest = (): string => {
     for (const entry of readdirSync(dir, {withFileTypes: true}).sort((a, b) => (a.name < b.name ? -1 : 1))) {
       const file = path.join(dir, entry.name)
       if (entry.isDirectory()) built(file)
-      else hash.update(path.relative(MCP_DIST, file)).update(readFileSync(file))
+      else hash.update(path.relative(AGENT_CLI_DIST, file)).update(readFileSync(file))
     }
   }
-  built(MCP_DIST)
+  built(AGENT_CLI_DIST)
   return hash.digest('hex')
 }
 
-interface ImportedFixture {
+/** The checker's view of one hosted graph: wire commands under its token. */
+const probeFor = (bridge: Bridge, token: string, workspaceId: string) => {
+  const client = createBridgeClient({bridgeUrl: bridge.url, token, timeoutMs: 120_000})
+  return {client, probe: {workspaceId, command: command => client.runCommand(command)} satisfies GraphProbe}
+}
+
+interface Template {
+  /** The closed database every task's graph is a copy of. */
+  dir: string
+  workspaceId: string
+  rows: Snapshot
+  /** `fixtureState`, hashed. */
+  state: string
   /** Probe output sizes, characters. */
   outputs: Record<string, number>
-  state: string[]
 }
 
-/** The fixture as this checkout imports it, from the fixture-graph test;
- *  null unless the test passed and measured every probe. */
-const importedFixture = (): ImportedFixture | null => {
-  const out = path.join(mkdtempSync(path.join(tmpdir(), 'agent-eval-sizes-')), 'sizes.json')
-  const test = spawnSync('pnpm', ['vitest', 'run', 'scripts/agent-eval/fixtureGraph.test.ts', '-t', 'imported fixture'], {
-    cwd: REPO_ROOT,
-    env: {...process.env, AGENT_EVAL_SIZES_OUT: out},
-    stdio: 'ignore',
-  })
-  if (test.status !== 0 || !existsSync(out)) return null
-  const imported = JSON.parse(readFileSync(out, 'utf8')) as ImportedFixture
-  return OUTPUT_PROBES.every(probe => imported.outputs[probe.id] !== undefined) && imported.state.length > 0 ? imported : null
-}
-
-/** The agent must query the graph this checkout's code imports, which the
- *  gate's checks are proven on, not one seeded by other code or left dirty.
- *  Returns the tab's probe output sizes. */
-const requireImportedGraph = async (client: BridgeClient, probe: GraphProbe, fixture: Fixture): Promise<{outputs: Record<string, number>, state: string}> => {
-  const expected = importedFixture()
-    ?? fail('the in-process import to check the tab against failed; see pnpm vitest run scripts/agent-eval/fixtureGraph.test.ts -t "imported fixture"')
-  const differing = differingBlocks(expected.state, await fixtureState(probe, fixture.pages))
-  if (differing.length > 0) {
-    fail(`the tab's fixture is not the one this checkout imports (${differing.length} block(s) differ, e.g. ${differing.slice(0, 5).join(', ')}); `
-      + 'it was seeded by other code, or holds changes an earlier run left. Seed a fresh origin (README: "Resetting the dev origin").')
+/** Seeds the graph every task starts from, and measures it: its rows, its
+ *  fixture state and the probes' output sizes. */
+const prepareTemplate = async (bridge: Bridge, fixture: Fixture, logDir: string): Promise<Template> => {
+  process.stdout.write('importing the fixture…\n')
+  const host = await startHost({command: HOST_COMMAND, bridge, log: path.join(logDir, 'template.log')})
+    .catch((error: unknown) => fail(errorText(error)))
+  try {
+    const whoami = await createBridgeClient({bridgeUrl: bridge.url, token: host.token}).whoami()
+    const workspaceId = whoami.audience.workspaceId ?? fail('the template host registered no workspace')
+    const {client, probe} = probeFor(bridge, host.token, workspaceId)
+    const rows = await snapshotWorkspace(probe)
+    const state = definitionHash(await fixtureState(probe, fixture.pages))
+    const mcp = await connectMcpClient(client)
+    const outputs = await measureProbes({
+      callTool: mcp.callTool,
+      pageId: title => requirePageId(probe, title),
+      dailyNoteId: iso => dailyNoteId(probe, iso),
+    }).finally(() => mcp.close())
+    return {dir: host.dir, workspaceId, rows, state, outputs}
+  } finally {
+    await host.stop()
   }
-  const mcp = await connectMcpClient(client)
-  const outputs = await measureProbes({
-    callTool: mcp.callTool,
-    pageId: title => requirePageId(probe, title),
-    dailyNoteId: iso => dailyNoteId(probe, iso),
-  }).finally(() => mcp.close())
-  return {outputs, state: definitionHash(expected.state)}
 }
 
-const writeMcpConfig = (dir: string, profile: string): string => {
-  const file = path.join(dir, 'mcp.json')
-  writeFileSync(file, JSON.stringify({
-    mcpServers: {[MCP_SERVER_NAME]: {command: process.execPath, args: [MCP_ENTRY], env: {AGENT_RUNTIME_PROFILE: profile}}},
-  }, null, 2))
-  return file
+/** Runs `kmagent` from the checkout's build, wherever the agent's shell is. */
+const writeCliShim = (binDir: string) => {
+  mkdirSync(binDir, {recursive: true})
+  const shim = path.join(binDir, 'kmagent')
+  writeFileSync(shim, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(path.join(AGENT_CLI_DIST, 'cli.js'))} "$@"\n`, {mode: 0o755})
 }
-
-const claudeArgs = (options: {model: string, effort: string | null, mcpConfig: string}) => [
-  '-p', '--output-format', 'stream-json', '--verbose',
-  '--model', options.model,
-  ...(options.effort ? ['--effort', options.effort] : []),
-  // Only our km server, only its tools, no built-in tools, and no user /
-  // project settings (hooks, CLAUDE.md) leaking in from this machine.
-  '--mcp-config', options.mcpConfig, '--strict-mcp-config',
-  '--tools', '',
-  '--allowedTools', KM_MCP_ALLOWED_TOOLS.join(','),
-  '--setting-sources', '',
-  '--no-session-persistence',
-  '--permission-prompts', 'none',
-]
 
 interface RunOptions {
-  profile: string
+  surface: SurfaceName
+  workers: number
   model: string
   effort: string | null
   repeat: number
@@ -269,6 +166,12 @@ interface RunOptions {
   baseline: EvalReport | undefined
   timeoutMs: number
   mcpOutputTokens: number
+  bashOutputChars: number
+}
+
+interface Job {
+  task: EvalTask
+  rep: number
 }
 
 const run = async (options: RunOptions) => {
@@ -294,24 +197,16 @@ const run = async (options: RunOptions) => {
   })
   buildPackages()
   const code = codeDigest()
-  const {probe, client, pairing, tab} = await connect(options.profile)
   const fixture = buildFixture()
-  const {release, journal, seeded} = await prepareWorkspace(probe, tab)
-  // Checked before each task and as soon as its agent exits, before the
-  // check or the restore writes anything: the tab must still be local-only,
-  // and the profile still paired with it, or the agent's MCP server (which
-  // reads the profile afresh) may have written to another tab.
-  const requireSameTab = async (when: string) => {
-    await requireNeverSynced(client, options.profile)
-    if (pairingOf(await tokenOf(options.profile)) !== pairing) {
-      fail(`profile "${options.profile}" was paired with another tab ${when}; start the run again`)
-    }
-  }
-  if (seeded !== fixture.hash) {
-    fail(seeded
-      ? `the tab holds fixture ${seeded} but this checkout generates ${fixture.hash}; seed a fresh dev origin`
-      : 'the tab has no fixture — run `pnpm agent-eval seed` first')
-  }
+  const surface = SURFACES[options.surface]
+  const scratch = mkdtempSync(path.join(tmpdir(), 'agent-eval-'))
+  process.on('exit', () => rmSync(scratch, {recursive: true, force: true}))
+  const bridge = await startBridge(path.join(AGENT_CLI_DIST, 'server.js'), path.join(scratch, 'bridge'))
+    .catch((error: unknown) => fail(errorText(error)))
+  process.on('exit', () => bridge.stop())
+  mkdirSync(path.join(runDir, 'hosts'), {recursive: true})
+  const template = await prepareTemplate(bridge, fixture, path.join(runDir, 'hosts'))
+  process.on('exit', () => rmSync(template.dir, {recursive: true, force: true}))
 
   const report: EvalReport = {
     schemaVersion: REPORT_SCHEMA_VERSION,
@@ -322,17 +217,20 @@ const run = async (options: RunOptions) => {
     model: options.model,
     conditions: {
       fixture: fixture.hash,
-      importedFixture: null,
-      setup: setupHash(),
+      importedFixture: template.state,
+      surface: options.surface,
+      tools: surfaceHash(surface),
       model: null,
       effort: options.effort ?? 'default',
       mcpOutputTokens: options.mcpOutputTokens,
+      bashOutputChars: options.bashOutputChars,
       timeoutMs: options.timeoutMs,
+      workers: options.workers,
     },
     claudeCodeVersion: null,
-    kmTools: [...KM_MCP_TOOL_NAMES],
+    allowedTools: allowedTools(surface),
     taskHashes: Object.fromEntries(options.tasks.map(task => [task.id, taskDefinitionHash(task, fixture.truth)])),
-    outputSizes: null,
+    outputSizes: template.outputs,
     probeHashes: Object.fromEntries(OUTPUT_PROBES.map(probe => [probe.id, outputProbeHash(probe)])),
     runs: [],
   }
@@ -340,68 +238,97 @@ const run = async (options: RunOptions) => {
   // resolved the model.
   const requireComparable = (planned: boolean) => {
     const mismatches = options.baseline ? conditionMismatches(report, options.baseline, {planned}) : []
-    if (mismatches.length > 0) fail(`this run cannot be compared with ${options.baseline!.label}: they differ in ${mismatches.join('; ')}`)
+    if (mismatches.length > 0) throw new Error(`this run cannot be compared with ${options.baseline!.label}: they differ in ${mismatches.join('; ')}`)
   }
-  requireComparable(true)
-
-  process.stdout.write('checking the tab against this checkout\'s import…\n')
-  const {snapshot, setupCreated} = await beginRun(probe, journal, {
-    validate: async () => {
-      const imported = await requireImportedGraph(client, probe, fixture)
-      report.outputSizes = imported.outputs
-      report.conditions.importedFixture = imported.state
-      requireComparable(true)
-    },
-    setUp: async () => { for (const task of TASKS) await task.reset?.({probe, truth: fixture.truth, runTag: ''}) },
-  })
+  try {
+    requireComparable(true)
+  } catch (error) {
+    fail(errorText(error))
+  }
 
   mkdirSync(path.join(runDir, 'transcripts'), {recursive: true})
-  const mcpConfig = writeMcpConfig(runDir, options.profile)
+  const binDir = path.join(scratch, 'bin')
+  writeCliShim(binDir)
   const scrubbed = BILLING_ENV_DENYLIST.filter(key => process.env[key])
   process.stdout.write(`billing: subscription login${scrubbed.length ? ` (scrubbed ${scrubbed.join(', ')})` : ''}\n`)
 
-  for (let rep = 1; rep <= options.repeat; rep++) {
-    for (const task of options.tasks) {
-      const env = {probe, truth: fixture.truth, runTag: randomBytes(2).toString('hex')}
-      const cwd = mkdtempSync(path.join(tmpdir(), 'agent-eval-cwd-'))
+  const jobs: Job[] = []
+  for (let rep = 1; rep <= options.repeat; rep++) for (const task of options.tasks) jobs.push({task, rep})
+  const records = new Map<Job, TaskRunRecord>()
+  const abort = new AbortController()
+
+  const runJob = async (job: Job): Promise<TaskRunRecord> => {
+    const {task, rep} = job
+    const jobDir = mkdtempSync(path.join(scratch, `${task.id}-${rep}-`))
+    const cwd = path.join(jobDir, 'work')
+    mkdirSync(cwd)
+    const graph = await startHost({command: HOST_COMMAND, bridge, from: template.dir, log: path.join(runDir, 'hosts', `${task.id}-${rep}.log`)})
+    try {
+      const {probe} = probeFor(bridge, graph.token, template.workspaceId)
+      // The agent's CLI and MCP server reach this graph and nothing else:
+      // the private bridge, this graph's token, and a config dir with no
+      // profiles in it.
+      const runtimeEnv = {
+        AGENT_RUNTIME_URL: bridge.url,
+        AGENT_RUNTIME_TOKEN: graph.token,
+        AGENT_RUNTIME_CONFIG_DIR: path.join(jobDir, 'agent-runtime'),
+      }
+      const mcpConfig = path.join(jobDir, 'mcp.json')
+      writeFileSync(mcpConfig, JSON.stringify({
+        mcpServers: surface.mcp
+          ? {[MCP_SERVER_NAME]: {command: process.execPath, args: [path.join(AGENT_CLI_DIST, 'mcp.js')], env: runtimeEnv}}
+          : {},
+      }, null, 2))
       const transcriptPath = path.join(runDir, 'transcripts', `${task.id}-${rep}.jsonl`)
       let stdout = ''
-      process.stdout.write(`[${rep}/${options.repeat}] ${task.id} … `)
 
-      await requireSameTab('before this task')
       const startedAt = Date.now()
-      journal.taskStarted()
       const proc = await runJsonlProcess({
         bin: 'claude',
-        args: claudeArgs({model: options.model, effort: options.effort, mcpConfig}),
-        prompt: task.prompt(env),
+        args: [
+          '-p', '--output-format', 'stream-json', '--verbose',
+          '--model', options.model,
+          ...(options.effort ? ['--effort', options.effort] : []),
+          // Only the surface's tools, and no user / project settings (hooks,
+          // CLAUDE.md) leaking in from this machine.
+          '--mcp-config', mcpConfig, '--strict-mcp-config',
+          ...toolArgs(surface),
+          '--setting-sources', '',
+          '--no-session-persistence',
+          '--permission-prompts', 'none',
+        ],
+        prompt: `${surface.preamble}\n\n${task.prompt}`,
         cwd,
-        env: {...envForBilling(process.env, 'subscription'), MAX_MCP_OUTPUT_TOKENS: String(report.conditions.mcpOutputTokens)},
+        env: {
+          ...envForBilling(envWithoutAgentRuntime(process.env), 'subscription'),
+          ...runtimeEnv,
+          PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ''}`,
+          MAX_MCP_OUTPUT_TOKENS: String(report.conditions.mcpOutputTokens),
+          BASH_MAX_OUTPUT_LENGTH: String(report.conditions.bashOutputChars),
+        },
         timeoutMs: report.conditions.timeoutMs,
         onStdoutText: text => { stdout += text },
+        signal: abort.signal,
       })
       const elapsedMs = Date.now() - startedAt
-      await requireSameTab(`while ${task.id} ran`)
+      if (abort.signal.aborted) throw new Error('aborted')
       writeFileSync(transcriptPath, stdout)
-      rmSync(cwd, {recursive: true, force: true})
 
       const metrics = parseTranscript(stdout)
       const modelResolved = report.conditions.model === null && metrics.model !== null
-      const modelChanged = !modelResolved && metrics.model !== null && metrics.model !== report.conditions.model
+      if (!modelResolved && metrics.model !== null && metrics.model !== report.conditions.model) {
+        throw new Error(`${task.id} ran on ${metrics.model}, not ${report.conditions.model} like the tasks before it; start the run again`)
+      }
       report.conditions.model ??= metrics.model
       report.claudeCodeVersion ??= metrics.claudeCodeVersion
-      const outcome: CheckOutcome = await task.check({...env, answer: extractAnswer(metrics.resultText), startedAt})
-        .catch((error: unknown) => ({pass: false, detail: `check threw: ${errorText(error)}`}))
-      const changes = await restoreSnapshot(probe, snapshot)
-        .catch((error: unknown) => fail(`aborting the run: ${errorText(error)}`))
-      // After the check and the restore, so a change while any of them ran, the
-      // last task's included, is caught before the task is accepted.
-      if (codeDigest() !== code) fail(`the checkout or the built MCP server changed while ${task.id} ran, so it may have run other code; start the run again`)
-      journal.taskRestored()
       if (modelResolved) requireComparable(false)
-      if (modelChanged) fail(`${task.id} ran on ${metrics.model}, not ${report.conditions.model} like the tasks before it; start the run again`)
-      const allowed = allowedChanges(task, probe.workspaceId, outcome)
-      const strayEdits = strayChanges(changes, allowed)
+      const outcome: CheckOutcome = await task.check({probe, truth: fixture.truth, answer: extractAnswer(metrics.resultText), startedAt})
+        .catch((error: unknown) => ({pass: false, detail: `check threw: ${errorText(error)}`}))
+      const changes = await diffAgainst(probe, template.rows)
+      // After the check, so a change while any part of this task ran is
+      // caught before the task is accepted.
+      if (codeDigest() !== code) throw new Error(`the checkout or the built agent CLI changed while ${task.id} ran, so it may have run other code; start the run again`)
+      const strayEdits = strayChanges(changes, allowedChanges(task, probe.workspaceId, outcome))
       const failures = [
         proc.timedOut ? 'timed out' : null,
         !proc.timedOut && (proc.exitCode !== 0 || metrics.isError) ? `claude exited ${proc.exitCode}${metrics.isError ? ' with an error result' : ''}` : null,
@@ -434,17 +361,42 @@ const run = async (options: RunOptions) => {
         writes: {created: changes.created.length, modified: changes.modified.length},
         transcript: path.relative(REPO_ROOT, transcriptPath),
       }
-      report.runs.push(record)
-      process.stdout.write(`${record.pass ? 'pass' : 'FAIL'} · ${record.toolCalls} calls · `
-        + `${Math.round(record.seenChars / 1000)}k chars read · ${Math.round(record.tokens.contextTotal / 1000)}k context tokens\n`)
-      if (proc.exitCode !== 0 && proc.stderr.trim()) process.stdout.write(`    stderr: ${proc.stderr.trim().split('\n').slice(-3).join(' | ')}\n`)
+      if (proc.exitCode !== 0 && proc.stderr.trim()) {
+        process.stdout.write(`    ${task.id} #${rep} stderr: ${proc.stderr.trim().split('\n').slice(-3).join(' | ')}\n`)
+      }
+      return record
+    } finally {
+      await graph.stop()
+      rmSync(jobDir, {recursive: true, force: true})
     }
   }
 
-  await journal.end(probe, setupCreated)
-  release()
+  // The first failure stops the run: the other workers take no new job, and
+  // the agents already running are killed.
+  let next = 0
+  let firstError: unknown = null
+  const worker = async () => {
+    while (!abort.signal.aborted && next < jobs.length) {
+      const job = jobs[next++]
+      try {
+        const record = await runJob(job)
+        records.set(job, record)
+        process.stdout.write(`[${records.size}/${jobs.length}] ${job.task.id} #${job.rep} ${record.pass ? 'pass' : 'FAIL'} · ${record.toolCalls} calls · `
+          + `${Math.round(record.seenChars / 1000)}k chars read · ${Math.round(record.tokens.contextTotal / 1000)}k context tokens · ${Math.round(record.elapsedMs / 1000)}s\n`)
+      } catch (error) {
+        firstError ??= error
+        abort.abort()
+      }
+    }
+  }
+  process.stdout.write(`running ${jobs.length} task(s) on the ${options.surface} surface, ${options.workers} at a time…\n`)
+  await Promise.all(Array.from({length: Math.min(options.workers, jobs.length)}, worker))
+  if (firstError !== null) fail(`aborting the run: ${errorText(firstError)}`)
+
+  report.runs = jobs.map(job => records.get(job)!)
   report.finishedAt = new Date().toISOString()
   writeReport(report, options.baseline)
+  process.exit(0)
 }
 
 /** A label names files in results/, so it must stay a plain file name. */
@@ -462,11 +414,31 @@ const writeReport = (report: EvalReport, baseline: EvalReport | undefined) => {
   process.stdout.write(`\n${markdown}\nwrote ${path.relative(REPO_ROOT, base)}.{json,md}\n`)
 }
 
+const sizes = async () => {
+  buildPackages()
+  const scratch = mkdtempSync(path.join(tmpdir(), 'agent-eval-'))
+  process.on('exit', () => rmSync(scratch, {recursive: true, force: true}))
+  const bridge = await startBridge(path.join(AGENT_CLI_DIST, 'server.js'), path.join(scratch, 'bridge'))
+    .catch((error: unknown) => fail(errorText(error)))
+  process.on('exit', () => bridge.stop())
+  const template = await prepareTemplate(bridge, buildFixture(), scratch)
+  rmSync(template.dir, {recursive: true, force: true})
+  process.stdout.write(`${JSON.stringify(template.outputs, null, 2)}\n`)
+  process.exit(0)
+}
+
+const positiveInteger = (flag: string, raw: string, max = Number.MAX_SAFE_INTEGER): number => {
+  const value = Number(raw)
+  if (!Number.isInteger(value) || value < 1 || value > max) fail(`--${flag} must be an integer from 1 to ${max}, got ${raw}`)
+  return value
+}
+
 const main = async () => {
   const {positionals, values} = parseArgs({
     allowPositionals: true,
     options: {
-      profile: {type: 'string', default: DEFAULT_PROFILE},
+      surface: {type: 'string', default: 'mcp'},
+      workers: {type: 'string', default: '4'},
       model: {type: 'string', default: 'sonnet'},
       effort: {type: 'string'},
       repeat: {type: 'string', default: '1'},
@@ -474,55 +446,51 @@ const main = async () => {
       label: {type: 'string'},
       compare: {type: 'string'},
       'timeout-min': {type: 'string', default: '10'},
-      // Pinned rather than inherited: it decides which results Claude Code
-      // caps, so it is part of what a report measured.
+      // Pinned rather than inherited: they decide which results Claude Code
+      // cuts short, so they are part of what a report measured.
       'mcp-output-tokens': {type: 'string', default: '25000'},
+      'bash-output-chars': {type: 'string', default: '30000'},
     },
   })
   const [command, ...rest] = positionals
 
   switch (command) {
-    case 'seed':
-      return seed(values.profile)
     case 'run': {
       const selected = values.tasks ? values.tasks.split(',').map(id => id.trim()) : null
       const tasks = selected ? TASKS.filter(task => selected.includes(task.id)) : TASKS
       if (selected && tasks.length !== selected.length) {
         fail(`unknown task id; known: ${TASKS.map(task => task.id).join(', ')}`)
       }
-      const repeat = Number(values.repeat)
+      const surface = values.surface as SurfaceName
+      if (!SURFACE_NAMES.includes(surface)) fail(`--surface must be one of ${SURFACE_NAMES.join(', ')}, got ${values.surface}`)
       const timeoutMin = Number(values['timeout-min'])
-      if (!Number.isInteger(repeat) || repeat < 1 || repeat > 50) fail(`--repeat must be an integer from 1 to 50, got ${values.repeat}`)
       if (!Number.isFinite(timeoutMin) || timeoutMin <= 0) fail(`--timeout-min must be a positive number, got ${values['timeout-min']}`)
-      const mcpOutputTokens = Number(values['mcp-output-tokens'])
-      if (!Number.isInteger(mcpOutputTokens) || mcpOutputTokens < 1) fail(`--mcp-output-tokens must be a positive integer, got ${values['mcp-output-tokens']}`)
       const now = new Date().toISOString()
       const label = values.label
-        ?? `${now.slice(0, 10)}T${now.slice(11, 16).replace(':', '')}-${gitInfo().sha.slice(0, 7)}-${values.model.replace(/[^\w.-]/g, '-')}`
+        ?? `${now.slice(0, 10)}T${now.slice(11, 16).replace(':', '')}-${gitInfo().sha.slice(0, 7)}-${values.model.replace(/[^\w.-]/g, '-')}-${surface}`
       requireSafeLabel(label)
       return run({
-        profile: values.profile,
+        surface,
+        workers: positiveInteger('workers', values.workers, 16),
         model: values.model,
         effort: values.effort ?? null,
-        repeat,
+        repeat: positiveInteger('repeat', values.repeat, 50),
         tasks,
         label,
         baseline: values.compare ? loadReport(values.compare) : undefined,
         timeoutMs: timeoutMin * 60_000,
-        mcpOutputTokens,
+        mcpOutputTokens: positiveInteger('mcp-output-tokens', values['mcp-output-tokens']),
+        bashOutputChars: positiveInteger('bash-output-chars', values['bash-output-chars']),
       })
     }
     case 'report': {
       if (!rest[0]) fail('usage: pnpm agent-eval report <report.json> [--compare <report.json>]')
       return writeReport(loadReport(rest[0]), values.compare ? loadReport(values.compare) : undefined)
     }
-    case 'sizes': {
-      const imported = importedFixture() ?? fail('the fixture-graph test failed; run it to see why')
-      process.stdout.write(`${JSON.stringify(imported.outputs, null, 2)}\n`)
-      return
-    }
+    case 'sizes':
+      return sizes()
     default:
-      fail('usage: pnpm agent-eval <seed|run|report|sizes> — see scripts/agent-eval/README.md')
+      fail('usage: pnpm agent-eval <run|report|sizes> — see scripts/agent-eval/README.md')
   }
 }
 

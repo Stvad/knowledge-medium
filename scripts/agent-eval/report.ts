@@ -11,7 +11,7 @@ import { createHash } from 'node:crypto'
 import { MCP_SERVER_NAME } from '../../packages/agent-cli/src/mcpShared'
 import type { TokenUsage } from './transcript'
 
-export const REPORT_SCHEMA_VERSION = 3
+export const REPORT_SCHEMA_VERSION = 4
 
 export interface TaskRunRecord {
   task: string
@@ -52,19 +52,24 @@ export interface TaskRunRecord {
 export interface RunConditions {
   /** Of the generated export. */
   fixture: string
-  /** Of the fixture as this checkout's code stores it (`fixtureState`), which
-   *  the tab was checked against: an importer or data-layer change moves it
-   *  while the export stays the same. Null until the run has checked. */
-  importedFixture: string | null
-  /** Of every task's reset: all of them run before every run's one
-   *  snapshot, so each shapes every task's starting graph. */
-  setup: string
+  /** Of the fixture as this checkout's code stores it (`fixtureState` of the
+   *  run's template): an importer or data-layer change moves it while the
+   *  export stays the same. */
+  importedFixture: string
+  /** How the agent reaches the graph (surfaces.ts). */
+  surface: string
+  /** Of that surface's preamble and tool set. */
+  tools: string
   /** As the first run resolved it; null until then, or when no run got that far. */
   model: string | null
   effort: string
-  /** MAX_MCP_OUTPUT_TOKENS: it decides which results are capped. */
+  /** MAX_MCP_OUTPUT_TOKENS and BASH_MAX_OUTPUT_LENGTH: they decide which
+   *  results are cut short. */
   mcpOutputTokens: number
+  bashOutputChars: number
   timeoutMs: number
+  /** Tasks run at once: they share the machine and the account's rate limit. */
+  workers: number
 }
 
 export interface EvalReport {
@@ -77,11 +82,13 @@ export interface EvalReport {
   model: string
   conditions: RunConditions
   claudeCodeVersion: string | null
-  kmTools: string[]
+  /** As offered to Claude Code; the km MCP server's list may grow between
+   *  comparable runs. */
+  allowedTools: string[]
   /** Per task, a hash of its definition (prompt, check, reset, allowed
    *  changes). Deltas are shown only for tasks whose hash matches. */
   taskHashes: Record<string, string>
-  /** Deterministic output sizes per probe, measured on the tab the agent queried. */
+  /** Deterministic output sizes per probe, measured on the run's template. */
   outputSizes: Record<string, number> | null
   /** Per probe, a hash of its call; deltas only where it matches. */
   probeHashes: Record<string, string>
@@ -103,7 +110,8 @@ export const parseReport = (json: string, source: string): EvalReport => {
 
 /** Every condition, by name; the type refuses a missing one. */
 const CONDITION_NAMES: Record<keyof RunConditions, true> = {
-  fixture: true, importedFixture: true, setup: true, model: true, effort: true, mcpOutputTokens: true, timeoutMs: true,
+  fixture: true, importedFixture: true, surface: true, tools: true, model: true, effort: true,
+  mcpOutputTokens: true, bashOutputChars: true, timeoutMs: true, workers: true,
 }
 export const RUN_CONDITIONS = Object.keys(CONDITION_NAMES) as Array<keyof RunConditions>
 
@@ -241,9 +249,10 @@ export const renderMarkdown = (report: EvalReport, compareWith?: EvalReport): st
   lines.push(`- commit \`${report.git.sha.slice(0, 10)}\` on \`${report.git.branch}\`${report.git.dirty ? ' (dirty tree)' : ''}`)
   const {conditions} = report
   lines.push(`- model \`${conditions.model ?? report.model}\`${conditions.effort === 'default' ? '' : `, effort ${conditions.effort}`}, Claude Code ${report.claudeCodeVersion ?? '?'}`)
-  lines.push(`- km tools: ${report.kmTools.map(tool => `\`${tool}\``).join(', ')}; MCP output cap ${conditions.mcpOutputTokens} tokens`)
-  lines.push('- sizes are characters; "capped": results over that cap, which Claude Code replaced with a short notice; "seen" is what reached the model, "returned" what the tools produced, n/a where a call never returned')
-  lines.push(`- fixture \`${conditions.fixture}\` (stored as \`${conditions.importedFixture ?? '?'}\`), ${reps} repetition(s) per task, ${conditions.timeoutMs / 60_000} min timeout each; per-task figures are medians; lower is better except pass`)
+  lines.push(`- surface \`${conditions.surface}\`, tools allowed: ${report.allowedTools.map(tool => `\`${tool.replace(`mcp__${MCP_SERVER_NAME}__`, '')}\``).join(', ')}; `
+    + `output caps ${conditions.mcpOutputTokens} tokens (MCP), ${conditions.bashOutputChars} characters (shell); ${conditions.workers} task(s) at a time`)
+  lines.push('- sizes are characters; "capped": results over their cap, which Claude Code cut short or replaced with a notice; "seen" is what reached the model, "returned" what the tools produced, n/a where a call never returned')
+  lines.push(`- fixture \`${conditions.fixture}\` (stored as \`${conditions.importedFixture}\`), ${reps} repetition(s) per task, ${conditions.timeoutMs / 60_000} min timeout each; per-task figures are medians; lower is better except pass`)
   lines.push('- list $ is the API list-price equivalent the CLI reports (a subscription run is not charged it); it weights input, cache and output tokens in one number; n/a where a run ended without reporting it')
   if (compareWith && !baseline) {
     lines.push(`- **not compared** with ${compareWith.label}: the runs differ in ${mismatches.join('; ')}`)
