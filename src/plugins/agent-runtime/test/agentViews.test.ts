@@ -463,7 +463,7 @@ describe('view-outline', () => {
 
       const next = await view<OutlineView>({...command, offset: kept, format: 'json'})
       expect(next.rows[0].content).toBe(`entry ${kept}`)
-    }, 20_000)
+    })
 
     it('drops the deepest selected blocks first, and counts each as its parent\'s hidden child', async () => {
       await create({id: ROOT, content: 'Root'})
@@ -483,7 +483,7 @@ describe('view-outline', () => {
       for (const [i, child] of children.entries()) {
         expect(out.rows.find(row => row.id === child.id)).toMatchObject({childCount: 1, hiddenChildren: i < shown ? 0 : 1})
       }
-    }, 20_000)
+    })
 
     it('keeps the first row whatever its length, so a continuation always moves forward', async () => {
       await create({id: ROOT, content: 'Root', properties: bigProperties()})
