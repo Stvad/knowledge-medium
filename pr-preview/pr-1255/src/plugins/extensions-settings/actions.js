@@ -1,1 +1,1 @@
-import{HT as e,VT as t}from"../../../chunks/app-C_UKYFBL.js";export{t as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,e as openExtensionsSettingsAction};
+import{HT as e,VT as t}from"../../../chunks/app-Mkx8dX0c.js";export{t as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,e as openExtensionsSettingsAction};

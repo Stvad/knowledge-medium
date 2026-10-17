@@ -1,1 +1,1 @@
-import{BT as e,zT as t}from"../../../chunks/app-C_UKYFBL.js";export{t as extensionPromptDiagnosticContribution,e as extensionPromptDiagnosticSource};
+import{BT as e,zT as t}from"../../../chunks/app-Mkx8dX0c.js";export{t as extensionPromptDiagnosticContribution,e as extensionPromptDiagnosticSource};

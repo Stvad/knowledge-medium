@@ -1,1 +1,1 @@
-import{Lw as e,Rw as t,zw as n}from"../../chunks/app-C_UKYFBL.js";export{e as DEFAULT_TYPE_COLORS,t as defaultTypeColor,n as pickLeastUsedTypeColor};
+import{Lw as e,Rw as t,zw as n}from"../../chunks/app-Mkx8dX0c.js";export{e as DEFAULT_TYPE_COLORS,t as defaultTypeColor,n as pickLeastUsedTypeColor};

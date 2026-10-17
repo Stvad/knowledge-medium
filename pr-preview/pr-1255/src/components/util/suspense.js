@@ -1,1 +1,1 @@
-import{vI as e}from"../../../chunks/app-C_UKYFBL.js";export{e as SuspenseFallback};
+import{_I as e}from"../../../chunks/app-Mkx8dX0c.js";export{e as SuspenseFallback};
