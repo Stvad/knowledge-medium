@@ -75,7 +75,7 @@ const seed = async (
         content: row.content ?? row.id,
       })
     }
-  }, {scope: ChangeScope.BlockDefault, description: 'seed'})
+  }, {scope: ChangeScope.BlockDefault, description: 'seed', allowUnloadedWorkspace: true})
 }
 
 const run = (command: Record<string, unknown>) =>
@@ -191,14 +191,24 @@ describe('target resolution', () => {
   // seat must not be minted after the user switched away (the type registry
   // the mint reads is the ACTIVE workspace's).
   it('refuses to mint a page when the active workspace moved since it was pinned', async () => {
-    let reads = 0
-    const spy = vi.spyOn(repo, 'activeWorkspaceId', 'get')
-      .mockImplementation(() => (reads++ === 0 ? WS : 'ws-elsewhere'))
+    // The switch lands in the page lookup, after the pin and before the mint.
+    const original = repo.query
+    const writable = repo as unknown as {query: unknown}
+    writable.query = new Proxy(original, {
+      get: (target, name) => name !== 'aliasLookup' ? Reflect.get(target, name) : (args: never) => ({
+        load: async () => {
+          const found = await original.aliasLookup(args).load()
+          repo.setActiveWorkspaceId('ws-elsewhere')
+          return found
+        },
+      }),
+    })
     try {
       await expect(resolveAgentTarget(repo, '[[Drifted]]', 'test'))
-        .rejects.toThrow(/not the active one/)
+        .rejects.toThrow(/workspace registry.*not loaded/i)
     } finally {
-      spy.mockRestore()
+      writable.query = original
+      repo.setActiveWorkspaceId(WS)
     }
     expect(await sharedDb.db.getAll('SELECT block_id FROM block_aliases WHERE alias = ?', ['Drifted'])).toEqual([])
   })
@@ -219,7 +229,7 @@ describe('target resolution', () => {
       }),
     })
     try {
-      await expect(resolvePageTarget(repo, 'Settled', 'test')).rejects.toThrow(/not the active one/)
+      await expect(resolvePageTarget(repo, 'Settled', 'test')).rejects.toThrow(/workspace registry.*not loaded/i)
     } finally {
       writable.query = original
       spy.mockRestore()
@@ -377,7 +387,7 @@ describe('append-markdown', () => {
 
   it('refuses a target in another workspace', async () => {
     await seed([{id: NOTE, workspaceId: OTHER_WS}])
-    await expect(run({type: 'append-markdown', target: NOTE, markdown: '- x'})).rejects.toThrow(/not the active one/)
+    await expect(run({type: 'append-markdown', target: NOTE, markdown: '- x'})).rejects.toThrow(/workspace registry.*not loaded/i)
     expect(await liveChildren(NOTE)).toEqual([])
   })
 })
@@ -427,7 +437,7 @@ describe('edit-block', () => {
 
   it('refuses a block in another workspace, even when named by prefix', async () => {
     await seed([{id: NOTE, content: 'x', workspaceId: OTHER_WS}])
-    await expect(run({type: 'edit-block', id: '3f2a9c1b', old: 'x', new: 'y'})).rejects.toThrow(/not the active one/)
+    await expect(run({type: 'edit-block', id: '3f2a9c1b', old: 'x', new: 'y'})).rejects.toThrow(/workspace registry.*not loaded/i)
     expect(await contentOf(NOTE)).toBe('x')
   })
 })
@@ -845,7 +855,7 @@ describe('review round 1', () => {
     const spy = vi.spyOn(repo, 'activeWorkspaceId', 'get')
       .mockImplementation(() => (reads++ === 0 ? WS : 'ws-elsewhere'))
     try {
-      await expect(run({type: 'create-page', date: '2026-10-15'})).rejects.toThrow(/not the active one/)
+      await expect(run({type: 'create-page', date: '2026-10-15'})).rejects.toThrow(/workspace registry.*not loaded/i)
     } finally {
       spy.mockRestore()
     }
@@ -942,7 +952,7 @@ describe('review round 2', () => {
   it('refuses a live target in another workspace before parsing the markdown', async () => {
     await seed([{id: LONE, workspaceId: OTHER_WS}])
     vi.mocked(parseMarkdownToBlocks).mockClear()
-    await expect(run({type: 'append-markdown', target: LONE, markdown: '- a\n- b'})).rejects.toThrow(/not the active one/)
+    await expect(run({type: 'append-markdown', target: LONE, markdown: '- a\n- b'})).rejects.toThrow(/workspace registry.*not loaded/i)
     expect(parseMarkdownToBlocks).not.toHaveBeenCalled()
   })
 

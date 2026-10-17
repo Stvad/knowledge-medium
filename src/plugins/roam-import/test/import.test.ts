@@ -30,10 +30,10 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '../../../data/repo'
 import {
   dailyNoteBlockId,
-  dailyNotesDataExtension,
   journalBlockId,
   todayIso,
-} from '@/plugins/daily-notes'
+} from '@/plugins/daily-notes/dailyNotes'
+import { dailyNotesDataExtension } from '@/plugins/daily-notes/dataExtension'
 import { roamTodoStateProp, statusProp, TODO_TYPE } from '@/plugins/todo/schema'
 import { todoDataExtension } from '@/plugins/todo/dataExtension'
 import { srsReschedulingDataExtension } from '@/plugins/srs-rescheduling/dataExtension'
@@ -1443,7 +1443,7 @@ describe('importRoam', {timeout: 30_000}, () => {
         content: 'wcs/plan',
         properties: {[aliasesProp.name]: aliasesProp.codec.encode(['wcs/plan'])},
       })
-    }, {scope: ChangeScope.BlockDefault})
+    }, {scope: ChangeScope.BlockDefault, allowUnloadedWorkspace: true})
 
     const summary = await importRoam(minimalExport, env.repo, {
       workspaceId: WORKSPACE,

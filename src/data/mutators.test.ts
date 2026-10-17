@@ -215,6 +215,7 @@ describe('core.setProperty', () => {
 
 describe('core.createChild', () => {
   it('appends to parent at position=last by default; uses parent workspace', async () => {
+    env.repo.setActiveWorkspaceId('ws-X')
     await env.repo.tx(
       tx => tx.create({id: 'p', workspaceId: 'ws-X', parentId: null, orderKey: 'a0'}),
       {scope: ChangeScope.BlockDefault},
@@ -319,7 +320,7 @@ describe('core.createSiblingAbove / createSiblingBelow', () => {
       // Block before r1 in lex order, but in a DIFFERENT workspace.
       await tx.create({id: 'ws2-root-a', workspaceId: 'ws-2', parentId: null, orderKey: 'a0'})
       await tx.create({id: 'ws2-root-b', workspaceId: 'ws-2', parentId: null, orderKey: 'a9'})
-    }, {scope: ChangeScope.BlockDefault})
+    }, {scope: ChangeScope.BlockDefault, allowUnloadedWorkspace: true})
     // createSiblingAbove({siblingId:'r1'}) should ONLY see ws-1's
     // siblings — meaning it positions the new row at start of ws-1's
     // root-sibling list (only r1 is there). It must not consider

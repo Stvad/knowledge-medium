@@ -488,8 +488,8 @@ const advancedSect = (
  * Each example is wrapped in a title bullet whose children are:
  *   1. a "how to use it" description (what to do after enabling), and
  *   2. the source block (typed `extension`, carries name/description
- *      properties) — and optionally a try-it block tagged with the
- *      gating property so a user can see the effect live.
+ *      properties) — and optionally a try-it block with instructions for
+ *      adding the gating property after enabling the extension.
  */
 export const extensionsPageOutline = (): TutorialNode[] => [
   { content: '**Anything** in this app is an extension — the default block renderer, the vim plugin, daily notes, find-and-replace. The host loads core ones at startup; the rest are blocks like the ones below.' },
@@ -504,7 +504,7 @@ export const extensionsPageOutline = (): TutorialNode[] => [
 /**
  * Wraps a single example extension in a title bullet. Children are:
  * (1) a `how to use` bullet, (2) the source block, and (optionally)
- * (3) a try-it demo block tagged with the relevant gating property.
+ * (3) a try-it demo block with instructions for setting its gating property.
  */
 const exampleSection = (example: (typeof exampleExtensions)[number]): TutorialNode => {
   const sourceBlock: TutorialNode = {
@@ -539,17 +539,14 @@ const HOW_TO_USE: Record<string, string> = {
   'default-renderer-placeholder': 'empty blocks show a muted "empty block" placeholder in read mode (it swaps the fallback renderer). Untick to revert. (Applies workspace-wide.)',
 }
 
-// Optional try-it demo block per example. Only examples gated by a
-// property carry a demo; renderer-override examples apply globally so
-// no per-block toggle exists.
+// Demo properties belong to disabled extensions; users set them after enabling
+// the owner so its definition exists before the first value is written.
 const TRY_IT_BLOCK: Record<string, TutorialNode | undefined> = {
   'hello-renderer': {
-    content: 'Try it: enable `hello-renderer` above, then this block renders with the custom variant (it carries `user:hello = true`).',
-    properties: { 'user:hello': true },
+    content: 'Try it: enable `hello-renderer` above, then add the property `user:hello = true` to this block to render its content with the custom variant.',
   },
   'split-layout': {
-    content: 'Try it: enable `split-layout` above, then this block renders content and children side by side (it carries `user:layout = split`). The bullet below me will appear to my right.',
-    properties: { 'user:layout': 'split' },
+    content: 'Try it: enable `split-layout` above, then add the property `user:layout = split` to this block to render its content and children side by side. The bullet below me will appear to my right.',
     children: [
       { content: 'I sit beside the content in split mode.' },
     ],

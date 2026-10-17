@@ -19,7 +19,7 @@
  */
 import { rmSync } from 'node:fs'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
-import { createTestDb } from '@/data/test/createTestDb'
+import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import {
   buildFixture,
   DESIGN_PAGE,
@@ -46,11 +46,12 @@ import {
   TASKS,
   VENDOR_REVIEW_TITLE,
 } from './tasks'
-import { type FixtureTestGraph, openFixtureTestGraph } from './testGraph'
+import { type FixtureTestGraph, openFixtureRuntime, openFixtureTestGraph } from './testGraph'
 
 const {truth} = buildFixture()
 
 interface Graph extends FixtureTestGraph {
+  db: TestDb['db']
   probe: GraphProbe
 }
 
@@ -66,10 +67,14 @@ const openGraph = async (): Promise<Graph> => {
   const graph = await openFixtureTestGraph(db.db, {seed: false})
   return {
     ...graph,
+    db: db.db,
     probe: {workspaceId: TEST_WORKSPACE_ID, command: graph.command},
     close: async () => {
-      await graph.close()
-      await db.cleanup()
+      try {
+        await graph.close()
+      } finally {
+        await db.cleanup()
+      }
     },
   }
 }
@@ -106,6 +111,18 @@ const onFreshGraph = async <T>(body: (graph: Graph) => Promise<T>): Promise<T> =
 }
 
 describe('imported fixture', () => {
+  it('releases the fixture workspace before its caller closes the database', async () => {
+    const runtime = await openFixtureRuntime(graph.db, {seed: false})
+    try {
+      expect(runtime.context.repo.activeWorkspaceId).toBe(TEST_WORKSPACE_ID)
+      await runtime.close()
+      expect(runtime.context.repo.activeWorkspaceId).toBeNull()
+      expect(await graph.db.get('SELECT 1 AS value')).toEqual({value: 1})
+    } finally {
+      await runtime.close()
+    }
+  })
+
   it('state', async () => {
     expect((await fixtureState(probe, buildFixture().pages)).length).toBeGreaterThan(5_000)
   }, 20_000)

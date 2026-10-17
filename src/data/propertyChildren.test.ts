@@ -985,12 +985,15 @@ describe('flipped workspace — ref-typed property values are editable `((id))` 
     expect(await liveFieldRows('p')).toEqual([])
   })
 
-  it('unknown cell keys are left alone (pending §9 orphan synthesis, never deleted)', async () => {
+  it('leaves pre-existing unknown cell keys alone during unrelated writes', async () => {
     await seedWorkspace('children')
     const repo = setup()
     await createBlock(repo, 'p')
-    await repo.tx(tx => tx.update('p', {properties: {'no-such-schema': 42}}),
-      {scope: ChangeScope.BlockDefault})
+    await sharedDb.db.writeTransaction(tx => tx.execute(
+      'UPDATE blocks SET properties_json = ? WHERE id = ?',
+      [JSON.stringify({'no-such-schema': 42}), 'p'],
+    ))
+    await repo.tx(tx => tx.update('p', {content: 'edited'}), {scope: ChangeScope.BlockDefault})
 
     expect(await childrenRows('p')).toEqual([])
     const row = await sharedDb.db.get<{properties_json: string}>(
@@ -1907,6 +1910,29 @@ describe('revival re-materializes property children (#778)', () => {
     expect(await liveValueContents('p')).toEqual(['done'])
   })
 
+  it('a patched restore updates the original property rows and reconnects nested content', async () => {
+    await seedWorkspace('children')
+    const repo = await seedMaterializedProperty()
+    const [field] = await liveFieldRows('p')
+    const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+    await repo.tx(tx => tx.create({
+      id: 'comment', workspaceId: WS, parentId: value!.id, orderKey: 'm', content: 'a note',
+    }), {scope: ChangeScope.BlockDefault})
+    await repo.mutate.delete({id: 'p'})
+    expect(await liveFieldRows('p')).toEqual([])
+
+    await repo.tx(tx => tx.restore('p', {properties: {status: 'changed'}}),
+      {scope: ChangeScope.BlockDefault})
+
+    expect((await liveFieldRows('p')).map(row => row.id)).toEqual([field!.id])
+    const restoredValues = (await childrenRows(field!.id)).filter(row => row.deleted === 0)
+    expect(restoredValues.map(row => [row.id, row.content])).toEqual([[value!.id, 'changed']])
+    expect(await cellValue('p')).toBe('changed')
+    const comment = await sharedDb.db.get<{deleted: number; parent_id: string}>(
+      'SELECT deleted, parent_id FROM blocks WHERE id = ?', ['comment'])
+    expect(comment).toEqual({deleted: 1, parent_id: value!.id})
+  })
+
   it('stays dormant in an un-flipped workspace', async () => {
     await seedWorkspace('cell')
     const repo = setup()
@@ -2185,6 +2211,9 @@ describe('revival re-materializes property children (#778)', () => {
     ]))
     repo.setActiveWorkspaceId(WS)
     registerDefinition(repo, 'test-status-definition', STATUS_FIELD_ID, statusSchema)
+    registerDefinition(repo, 'test-restore-trigger', 'field-restore-trigger', defineProperty('restore', {
+      codec: codecs.string, defaultValue: '', changeScope: ChangeScope.BlockDefault,
+    }))
     await createBlock(repo, 'p')
     await createBlock(repo, 'trigger')
     await repo.tx(tx => tx.setProperty('p', statusSchema, 'done'), {scope: ChangeScope.BlockDefault})

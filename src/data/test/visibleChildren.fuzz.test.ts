@@ -513,7 +513,7 @@ const openUniverse = async (): Promise<Universe> => {
     await repo.tx(t => t.create({
       id: FOREIGN_DEF, workspaceId: WS2, parentId: null, orderKey: 'a0', content: '',
       properties: definitionBag({name: 0, preset: 'string', validScope: true}),
-    }), {scope: ChangeScope.BlockDefault})
+    }), {scope: ChangeScope.BlockDefault, allowUnloadedWorkspace: true})
     await tx(u, async t => {
       await t.create({id: ROOT, workspaceId: WS, parentId: null, orderKey: 'a0', content: 'root'})
       await t.create({

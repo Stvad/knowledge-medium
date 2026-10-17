@@ -23,7 +23,6 @@ import {
   resolvePageTarget,
   type ResolvedAgentTarget,
 } from './targets.ts'
-import { assertActiveWorkspace } from './workspaceGuard.ts'
 
 type MarkdownShape = 'outline' | 'block'
 
@@ -118,7 +117,6 @@ export const appendMarkdown = async (
     await repo.tx(async tx => {
       const row = await tx.get(target.id)
       if (!row) throw new Error(`${verb}: block ${target.id} not found.`)
-      assertActiveWorkspace(repo, verb, row.workspaceId)
       targetContent = row.content
       // The roots' keys in one sibling read (a key per root would rescan the
       // growing list each time). A parsed child keeps the key the parser gave
@@ -211,7 +209,6 @@ export const editBlock = async (repo: Repo, input: EditBlockInput): Promise<Edit
   await repo.tx(async tx => {
     const block = await tx.get(id)
     if (!block || block.deleted) throw new Error(`${verb}: block ${id} not found.`)
-    assertActiveWorkspace(repo, verb, block.workspaceId)
     const at = block.content.indexOf(input.old)
     if (at < 0) {
       throw new Error(

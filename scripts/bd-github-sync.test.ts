@@ -1767,20 +1767,21 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(entry.spawns.map((s: { cmd: string }) => s.cmd)).toEqual(expect.arrayContaining(['gh api graphql (listing)', 'bd export']))
   })
 
-  // The listing and the first read run at once; when one fails, the run still
-  // waits for the other before it fails, so no child outlives the lock or the
-  // timing record. The record's duration shows the wait.
-  it('waits for the issue listing before failing on a tracker read that failed first', () => {
+  // A failed tracker read must not finalize the run record while listing children remain.
+  it('settles the issue listing before recording a tracker-read failure', () => {
     const { run, runLog } = makeSyncRepo({
       issues: [ghIssue(1, '2026-08-20T00:00:00Z')],
       reads: [[]],
       failReadCall: 1,
-      issueListDelay: 2,
     })
     const r = run()
     expect(r.status).toBe(1)
     expect(r.stderr).toContain('export exploded')
-    expect(runLog()[0].ms).toBeGreaterThanOrEqual(2000)
+    // The newest-number probe and both listing chunks must have exited.
+    expect(runLog()[0].spawns).toEqual(expect.arrayContaining([
+      expect.objectContaining({ cmd: 'bd export', calls: 1 }),
+      expect.objectContaining({ cmd: 'gh api graphql (listing)', calls: 3 }),
+    ]))
   })
 
   // The log only grows by appends, so the run holding the lock trims it.

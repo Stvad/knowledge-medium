@@ -136,7 +136,10 @@ const create = async (args: {
     orderKey: `k-${args.id}`,
     properties,
     references: args.references ?? [],
-  }), {scope: ChangeScope.BlockDefault})
+  }), {
+    scope: ChangeScope.BlockDefault,
+    ...(args.workspaceId !== undefined && args.workspaceId !== WS ? {allowUnloadedWorkspace: true} : {}),
+  })
 }
 
 const ids = (rows: readonly {id: string}[]) => rows.map(row => row.id)

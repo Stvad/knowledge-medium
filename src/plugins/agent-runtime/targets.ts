@@ -128,7 +128,7 @@ export const resolveDailyNoteTarget = async (
   if (!existed && !create) throw new Error(`${verb}: the daily note for ${iso} does not exist yet.`)
   // Its txs write through the ACTIVE workspace's registries. The residual — a
   // switch inside the call — is shared with every UI caller of it.
-  assertActiveWorkspace(repo, verb, workspaceId)
+  assertActiveWorkspace(repo, workspaceId)
   // Even for an existing row: get-or-create also promotes the seat a
   // `[[date]]` wikilink mints at workspace root into the Journal's note.
   const note = await getOrCreateDailyNote(repo, workspaceId, iso, agentTxOptions(verb))
@@ -155,7 +155,7 @@ export const resolvePageTarget = async (
   if (existing) {
     // Nothing after this re-checks a page that already exists (create-page
     // returns it as is), so a switch during the lookup is refused here.
-    assertActiveWorkspace(repo, verb, workspaceId)
+    assertActiveWorkspace(repo, workspaceId)
     return {id: existing.id, kind: 'page', created: false}
   }
   if (options.create === false) throw new Error(`${verb}: no page named [[${name}]].`)
@@ -163,8 +163,6 @@ export const resolvePageTarget = async (
   assertRoundTrippableReferenceLabel(name, `${verb}: page name`)
   let result: {id: string; inserted: boolean} | undefined
   await repo.tx(async tx => {
-    // The seat is minted through the ACTIVE workspace's type registry.
-    assertActiveWorkspace(repo, verb, workspaceId)
     result = await ensureAliasTarget(tx, repo, name, workspaceId)
   }, agentTxOptions(verb))
   return {id: result!.id, kind: 'page', created: result!.inserted}
@@ -196,7 +194,7 @@ const liveBlockTarget = async (
   )
   if (!row) throw new Error(`${verb}: block ${id} not found.`)
   if (row.deleted) throw new Error(`${verb}: block ${id} is deleted — restore it first, or write elsewhere.`)
-  assertActiveWorkspace(repo, verb, row.workspace_id)
+  assertActiveWorkspace(repo, row.workspace_id)
   if (row.workspace_id !== workspaceId) {
     throw new Error(
       `${verb}: the active workspace changed from ${workspaceId} to ${row.workspace_id} while resolving this `

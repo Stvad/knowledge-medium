@@ -2,6 +2,7 @@
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope, type BlockData } from '@/data/api'
+import {merge} from '@/data/mutators'
 import { foldBlocksInTx, mergeBlocksInTx } from '@/data/blockMerge'
 import { BLOCK_TYPE_TYPE, PAGE_TYPE } from '@/data/blockTypes'
 import { addBlockTypeToProperties, getBlockTypes, typesProp } from '@/data/properties'
@@ -556,7 +557,10 @@ describe('core.retargetMergedTypeMembership', () => {
     // registry was captured for it.
     env.repo.setActiveWorkspaceId(null)
 
-    await env.repo.mutate.merge({intoId: TYPE_B, fromId: TYPE_A, contentStrategy: 'keepTarget'})
+    await env.repo.tx(
+      tx => tx.run(merge, {intoId: TYPE_B, fromId: TYPE_A, contentStrategy: 'keepTarget'}),
+      {scope: ChangeScope.BlockDefault, allowUnloadedWorkspace: true},
+    )
 
     expect(env.read(TYPE_A)!.deleted).toBe(true)
     expect(getBlockTypes(env.read(MEMBER)!)).toEqual([TYPE_A])

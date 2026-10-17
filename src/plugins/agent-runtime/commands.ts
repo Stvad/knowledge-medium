@@ -27,11 +27,6 @@ import { runHealthCommand } from './healthCommand.ts'
 import { resolveBlockRef, runViewCommand } from './agentViews/index.ts'
 import { boundSqlRows, limitedSelectSql, MAX_SQL_ROWS } from './agentViews/sqlRows.ts'
 import { watchEventsRegistry } from './watchEvents.ts'
-import {
-  assertActiveWorkspace,
-  assertActiveWorkspaceBlock,
-  assertActiveWorkspaceBlocks,
-} from './workspaceGuard.ts'
 import { agentTxOptions, runAgentMutator } from './agentWrites.ts'
 import { blockIdField, blockPositionField, resolveAgentTarget, resolveBlockId } from './targets.ts'
 import { appendMarkdown, contentEcho, createPage, editBlock, parseAgentMarkdown, renderAppendView } from './writeCommands.ts'
@@ -895,6 +890,18 @@ const withGrainWarnings = async (
   return warnings.length > 0 ? {...block, agentWarnings: warnings} : block
 }
 
+/** Install scans must stay on the workspace whose definitions and runtime
+ *  were captured together; otherwise the preset comparison can pin a source
+ *  against a different workspace's registry. */
+const assertInstallScanWorkspace = (repo: Repo, workspaceId: string): void => {
+  if (workspaceId === repo.activeWorkspaceId) return
+  throw new Error(
+    `install-extension: scan workspace ${workspaceId} is not the active one `
+    + `(${repo.activeWorkspaceId ?? 'none'}). The preset scan needs that workspace's runtime. `
+    + 'Open the target workspace and retry the install.',
+  )
+}
+
 const createRuntimeBlock = async (
   repo: Repo,
   input: CreateBlockInput = {},
@@ -926,7 +933,6 @@ const createRuntimeBlock = async (
     // A [[page]] / date parent is created when missing; one undo entry for both.
     const id = await repo.undoGroup(async repo => {
       const parent = await resolveAgentTarget(repo, parentRef, 'create-block')
-      await assertActiveWorkspaceBlock(repo, 'create-block', parent.id)
       return runAgentMutator(repo, 'create-block', createChild, {
         parentId: parent.id,
         content,
@@ -943,8 +949,6 @@ const createRuntimeBlock = async (
   if (!workspaceId) {
     throw new Error('createBlock with no parentId requires an active workspace')
   }
-  assertActiveWorkspace(repo, 'create-block', workspaceId)
-
   const id = explicitId ?? crypto.randomUUID()
   await repo.tx(async tx => {
     await tx.create({
@@ -995,14 +999,6 @@ const reconcileMarkdownSubtree = async (
   input: ReconcileMarkdownSubtreeInput,
 ): Promise<ReconcileMarkdownSubtreeResult> => {
   const {parentId, key, properties, shape, final} = input
-  // Before `parseMarkdownToBlocks`, not merely before the write: a doomed
-  // request should not pay the parser first. The in-tx assertion below stays —
-  // this one is the cheap refusal, that one is the atomic decision.
-  await assertActiveWorkspaceBlock(repo, 'reconcile-markdown-subtree', parentId)
-  // shape 'block' → the whole markdown is ONE root block (newlines kept);
-  // 'outline' (default) → split along the markdown outline.
-  const parsed: ParsedBlock[] = parseAgentMarkdown(input.markdown, shape)
-
   const ids: string[] = []
   const rootIds: string[] = []
 
@@ -1010,7 +1006,11 @@ const reconcileMarkdownSubtree = async (
     const parent = await tx.get(parentId)
     if (!parent) throw new Error(`reconcile-markdown-subtree: parent ${parentId} not found`)
     const {workspaceId} = parent
-    assertActiveWorkspace(repo, 'reconcile-markdown-subtree', workspaceId)
+    tx.assertWritableWorkspace(workspaceId)
+
+    // Parse only after admission so a closed workspace is refused before the
+    // potentially expensive markdown work begins.
+    const parsed: ParsedBlock[] = parseAgentMarkdown(input.markdown, shape)
 
     // This subtree's existing blocks, in pre-order (the target we reconcile
     // onto). Walk children depth-first following ONLY tagged blocks, so user
@@ -1173,7 +1173,6 @@ const updateRuntimeBlock = async (
   await repo.tx(async tx => {
     const before = await tx.get(input.id)
     if (!before || before.deleted) return
-    assertActiveWorkspace(repo, 'update-block', before.workspaceId)
     found = true
     if (input.expectedContent !== undefined && before.content !== input.expectedContent) {
       throw new Error(
@@ -1210,7 +1209,6 @@ const moveRuntimeBlock = async (
   repo: Repo,
   input: MoveBlockInput,
 ): Promise<BlockData | null> => {
-  await assertActiveWorkspaceBlock(repo, 'move-block', input.id)
   await runAgentMutator(repo, 'move-block', move, input)
   return repo.load(input.id)
 }
@@ -1219,7 +1217,6 @@ const deleteRuntimeBlock = async (
   repo: Repo,
   input: DeleteBlockInput,
 ): Promise<DeleteBlockResult> => {
-  await assertActiveWorkspaceBlock(repo, 'delete-block', input.id)
   // Programmatic delete: the agent bridge is not a UI gesture, so the UI-layer
   // deletion guards deliberately don't apply.
   await runAgentMutator(repo, 'delete-block', deleteBlock, input)
@@ -1230,7 +1227,6 @@ const restoreRuntimeBlock = async (
   repo: Repo,
   input: RestoreBlockInput,
 ): Promise<BlockData | null> => {
-  await assertActiveWorkspaceBlock(repo, 'restore-block', input.id)
   await runAgentMutator(repo, 'restore-block', restoreBlock, input)
   return repo.load(input.id)
 }
@@ -1377,7 +1373,7 @@ const installRuntimeExtension = async (
       // which skips the conflict. Re-checked in the writing tx too, where the
       // same switch would re-pin this workspace's extension off a scan that
       // never saw it.
-      assertActiveWorkspace(repo, 'install-extension', workspaceId)
+      assertInstallScanWorkspace(repo, workspaceId)
       presetScan = await findPresetIdentityConflicts(
         repo, workspaceId, presetRegistryAfter(context, resolution, targetId, workspaceId))
     }
@@ -1418,7 +1414,7 @@ const installRuntimeExtension = async (
   if (existing) {
     const typeSnapshot = repo.snapshotTypeRegistries()
     await repo.tx(async tx => {
-      assertActiveWorkspace(repo, 'install-extension', workspaceId)
+      assertInstallScanWorkspace(repo, workspaceId)
       const current = await tx.get(existing.id)
       if (!current) throw new Error(`Extension block ${existing.id} disappeared before update`)
       const properties = extensionBlockProperties(current.properties, label, description)
@@ -1470,7 +1466,7 @@ const installRuntimeExtension = async (
     // switch can land inside, which would leave `typeSnapshot` read from one
     // workspace while every `tx.create` below writes the extension root,
     // container and block into another. Refuse rather than write that tree.
-    assertActiveWorkspace(repo, 'install-extension', workspaceId)
+    assertInstallScanWorkspace(repo, workspaceId)
     let rootId = parentIdFromInput ?? defaultParent?.id ?? null
     if (!rootId) {
       const rootSiblings = await tx.childrenOf(null, workspaceId)
@@ -1693,17 +1689,6 @@ const runRuntimeAction = async (
   const scopeRootId = isString(dependencies.scopeRootId)
     ? dependencies.scopeRootId
     : realUiStateBlock?.peekProperty(topLevelBlockIdProp)
-
-  // `run-action` is the widest route to a kernel mutator: it turns
-  // caller-supplied ids into Block facades and hands them to a handler that
-  // may call `Block.delete()` (the `delete_block` action does). Guarding only
-  // the typed verbs would leave the same background-workspace corruption
-  // reachable through here — so every id that BECOMES a dependency is checked
-  // before dispatch, which is also the last point we can refuse: once
-  // `invokeAction` runs, the writes are inside a handler we don't control.
-  await assertActiveWorkspaceBlocks(context.repo, `run-action ${actionId}`, [
-    blockId, uiStateBlockId, anchorBlockId, scopeRootId, ...selectedBlockIds,
-  ])
 
   // Route imperative agent dispatch through the same `invokeAction` choke the
   // keyboard / pointer / runActionById paths use, so the action-dispatch
