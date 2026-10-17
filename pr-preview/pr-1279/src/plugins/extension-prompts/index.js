@@ -1,1 +1,0 @@
-import{AT as e,kT as t}from"../../../chunks/app-ral88hdY.js";export{t as ExtensionPromptSurface,e as extensionPromptsExtension};
