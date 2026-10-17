@@ -1,1 +1,0 @@
-import{GB as e,KB as t}from"../../chunks/app-DToY_AXU.js";export{e as pluginPrefsExtension,t as pluginUIStateExtension};

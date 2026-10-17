@@ -1,1 +1,0 @@
-import{_I as e,dI as t,fI as n,gI as r,hI as i,mI as a,pI as o,uI as s,vI as c}from"../../chunks/app-DToY_AXU.js";export{s as getLastLongTaskEndMs,t as getStartupTimeline,n as hasStartupMark,o as longTasksSupported,a as markStartup,i as markStartupAt,r as onLongTask,e as resetStartupTimeline,c as startStartupObservers};

@@ -1,1 +1,0 @@
-import{G6 as e,J6 as t,K6 as n,U6 as r,W6 as i,X6 as a,Y6 as o,Z6 as s,q6 as c}from"../../../chunks/app-DToY_AXU.js";export{r as CHANGE_SCOPE_POLICIES,i as ChangeScope,e as isChangeScope,n as policyForScope,c as scopeAllowedInReadOnly,t as scopeIsUndoable,o as scopePoliciesEquivalent,a as scopeUploadsToServer,s as sourceForScope};

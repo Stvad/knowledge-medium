@@ -1,1 +1,0 @@
-import{AT as e,kT as t}from"../../../chunks/app-DToY_AXU.js";export{t as ExtensionPromptSurface,e as extensionPromptsExtension};

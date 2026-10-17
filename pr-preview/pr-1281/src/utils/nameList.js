@@ -1,1 +1,0 @@
-import{AJ as e,MJ as t,jJ as n}from"../../chunks/app-DToY_AXU.js";export{e as NAMES_IN_A_SENTENCE,n as describeNames,t as firstFew};
