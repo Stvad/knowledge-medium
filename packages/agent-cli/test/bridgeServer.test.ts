@@ -3,6 +3,7 @@
  *  token auth, per-client queues, and client-gone failure modes. */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { spawn } from 'node:child_process'
+import http from 'node:http'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import net from 'node:net'
@@ -321,6 +322,68 @@ describe('agent runtime bridge', () => {
     expect(body.status).toBe('completed')
     expect(body.result.value).toBe('pong')
     expect(body.targetClientId).toBe('alice-tab')
+  })
+
+  /** Submits a ping as TOKEN-A and delivers it to alice-tab; returns its id. */
+  const deliverPing = async (url = baseUrl) => {
+    const submission = await fetch(`${url}/runtime/commands`, {
+      method: 'POST',
+      headers: {'content-type': 'application/json', authorization: 'Bearer TOKEN-A'},
+      body: JSON.stringify({type: 'ping'}),
+    })
+    const {id} = await submission.json() as {id: string}
+    await fetch(`${url}/runtime/commands/next?clientId=alice-tab&timeoutMs=2000`, {headers: bridgeHeaders})
+    return id
+  }
+
+  const statusOf = async (id: string, url = baseUrl) =>
+    await (await fetch(`${url}/runtime/commands/${id}`, {headers: {authorization: 'Bearer TOKEN-A'}})).json() as {
+      status: string, result?: {ok: boolean, value?: unknown, error?: {message: string}},
+    }
+
+  it('reports a command completed only once its whole result has arrived', async () => {
+    await registerClient('alice-tab', {tokens: [{token: 'TOKEN-A', label: 'cli', userId: 'alice'}]})
+    const id = await deliverPing()
+
+    // A large result reaches the server over several reads; a poll between
+    // them must not see a completed command with no result yet.
+    const body = JSON.stringify({ok: true, value: 'pong'})
+    const post = http.request(`${baseUrl}/runtime/commands/${id}/result`, {
+      method: 'POST',
+      headers: {'content-type': 'application/json', ...bridgeHeaders, 'x-agent-runtime-client-id': 'alice-tab'},
+    })
+    const posted = new Promise(resolve => post.on('response', resolve))
+    post.write(body.slice(0, 5))
+    await new Promise(resolve => setTimeout(resolve, 100))
+    expect((await statusOf(id)).status).toBe('delivered')
+
+    post.end(body.slice(5))
+    await posted
+    expect(await statusOf(id)).toMatchObject({status: 'completed', result: {ok: true, value: 'pong'}})
+  })
+
+  it('fails a command whose result is over the size limit, saying why', async () => {
+    const server = await spawnBridgeServer({AGENT_RUNTIME_BRIDGE_SECRET: bridgeSecret, AGENT_RUNTIME_MAX_BODY_BYTES: '1000'})
+    try {
+      const register = await fetch(`${server.baseUrl}/runtime/clients/alice-tab`, {
+        method: 'POST',
+        headers: {'content-type': 'application/json', ...bridgeHeaders},
+        body: JSON.stringify({tokens: [{token: 'TOKEN-A', label: 'cli', userId: 'alice'}]}),
+      })
+      expect(register.ok).toBe(true)
+      const id = await deliverPing(server.baseUrl)
+      const posted = await fetch(`${server.baseUrl}/runtime/commands/${id}/result`, {
+        method: 'POST',
+        headers: {'content-type': 'application/json', ...bridgeHeaders, 'x-agent-runtime-client-id': 'alice-tab'},
+        body: JSON.stringify({ok: true, value: 'x'.repeat(2000)}),
+      })
+      expect(posted.status).toBe(413)
+      const status = await statusOf(id, server.baseUrl)
+      expect(status.status).toBe('failed')
+      expect(status.result?.error?.message).toContain('exceeds 1000 bytes')
+    } finally {
+      await server.stop()
+    }
   })
 
   // Regression test for a completed command being reaped ~commandTtlMs after
