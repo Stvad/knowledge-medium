@@ -1,1 +1,1 @@
-import{dO as e,lO as t,uO as n}from"../../../chunks/app-BA0Uirts.js";export{t as BlockTypeBlockRenderer,n as BlockTypeContentRenderer,e as writeBlockTypeLabel};
+import{dO as e,lO as t,uO as n}from"../../../chunks/app-C_UKYFBL.js";export{t as BlockTypeBlockRenderer,n as BlockTypeContentRenderer,e as writeBlockTypeLabel};

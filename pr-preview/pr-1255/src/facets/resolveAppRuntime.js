@@ -1,1 +1,1 @@
-import{GE as e,WE as t}from"../../chunks/app-BA0Uirts.js";export{t as resolveAppRuntime,e as resolveAppRuntimeSync};
+import{GE as e,WE as t}from"../../chunks/app-C_UKYFBL.js";export{t as resolveAppRuntime,e as resolveAppRuntimeSync};

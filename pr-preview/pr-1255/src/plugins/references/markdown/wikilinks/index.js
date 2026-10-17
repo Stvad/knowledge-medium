@@ -1,1 +1,1 @@
-import{Yf as e}from"../../../../../chunks/app-BA0Uirts.js";export{e as wikilinkMarkdownExtension};
+import{Yf as e}from"../../../../../chunks/app-C_UKYFBL.js";export{e as wikilinkMarkdownExtension};

@@ -1,1 +1,1 @@
-import{Gg as e,Hg as t,Ug as n,Wg as r}from"../../../chunks/app-BA0Uirts.js";export{t as consumeFollowOnDispatch,n as forgetFollow,r as keepFollowOnlyAt,e as rememberFollow};
+import{Gg as e,Hg as t,Ug as n,Wg as r}from"../../../chunks/app-C_UKYFBL.js";export{t as consumeFollowOnDispatch,n as forgetFollow,r as keepFollowOnlyAt,e as rememberFollow};

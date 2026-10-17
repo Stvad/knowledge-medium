@@ -1,1 +1,1 @@
-import{CB as e,SB as t,xB as n}from"../../chunks/app-BA0Uirts.js";export{n as dailyPageAliases,t as formatIsoDate,e as formatRoamDate};
+import{CB as e,SB as t,xB as n}from"../../chunks/app-C_UKYFBL.js";export{n as dailyPageAliases,t as formatIsoDate,e as formatRoamDate};

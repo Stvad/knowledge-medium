@@ -1,1 +1,1 @@
-import{IF as e,LF as t}from"../../../chunks/app-BA0Uirts.js";export{e as floatingAnchorFromRect,t as useAnchoredFloating};
+import{IF as e,LF as t}from"../../../chunks/app-C_UKYFBL.js";export{e as floatingAnchorFromRect,t as useAnchoredFloating};
