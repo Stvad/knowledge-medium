@@ -220,14 +220,15 @@ export const recordSiblings = async (
     block.parentId !== null && labels.has(block.parentId) ? [[block.id, block.parentId]] : [])
   if (pairs.length === 0) return new Map()
   const rows = await repo.db.getAll<{id: string, content: string}>(
-    `SELECT id, content FROM (
-       SELECT json_extract(pair.value, '$[0]') AS id, pair.key AS pair_key,
-              ${textHeadSql('c.content', chars)} AS content,
-              ROW_NUMBER() OVER (PARTITION BY pair.key ORDER BY c.order_key, c.id) AS rn
-         FROM json_each(?) pair
-         JOIN blocks c ON ${visibleChildOfSql('c', "json_extract(pair.value, '$[1]')")}
-        WHERE c.id != json_extract(pair.value, '$[0]') AND ${textHeadSql('c.content', chars)} != ''
-     ) WHERE rn <= ? ORDER BY pair_key, rn`,
+    `SELECT json_extract(pair.value, '$[0]') AS id, ${textHeadSql('c.content', chars)} AS content
+       FROM json_each(?) pair
+       JOIN blocks c ON c.id IN (
+         SELECT s.id FROM blocks s
+          WHERE ${visibleChildOfSql('s', "json_extract(pair.value, '$[1]')")}
+            AND s.id != json_extract(pair.value, '$[0]') AND ${textHeadSql('s.content', chars)} != ''
+          ORDER BY s.order_key, s.id LIMIT ?
+       )
+      ORDER BY pair.key, c.order_key, c.id`,
     [JSON.stringify(pairs), ...visibleChildParams(repo, workspaceId), count],
   )
   const siblings = new Map<string, string[]>()
