@@ -157,10 +157,11 @@ export const decodeOutlineId = (encoded: string): string => {
  * Blanket-decoding at those boundaries was considered and rejected: a
  * legitimate id containing a literal `%` is indistinguishable from an
  * encoded token, so decoding unconditionally would CORRUPT real ids. The
- * addressable path is `kmagent subtree --json`, which bypasses this
- * renderer and prints ids exactly as stored; the MCP `subtree` tool has no
- * equivalent. Issue #456 tracks the durable fix — rejecting hostile ids at
- * block-creation time.
+ * CLI and MCP `subtree` no longer use this renderer (they show the bounded
+ * outline view, whose `--json` / `format: "json"` carries ids exactly as
+ * stored); agent-dispatch still renders its prompt subtree with it. Issue
+ * #456 tracks the durable fix — rejecting hostile ids at block-creation
+ * time.
  */
 export const renderSubtreeOutline = (value: unknown, options: RenderSubtreeOptions = {}): string => {
   if (!Array.isArray(value)) {

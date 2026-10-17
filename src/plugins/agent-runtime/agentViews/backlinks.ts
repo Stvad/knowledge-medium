@@ -62,11 +62,16 @@ export interface BacklinksView {
   rows: BacklinkRow[]
 }
 
+/** How much of a property name the via list reads (it shows 80); a cost
+ *  bound, so a name past this cut counts only what was read. */
+const VIA_NAME_HEAD = 400
+
 /** The first few property names each source references the target through,
  *  plus how many there are — windowed in SQL, so a source with thousands
- *  of ref fields costs its shown few. */
+ *  of ref fields costs its shown few. Distinctness and order use whole names;
+ *  only a head of each is returned. */
 const SOURCE_FIELDS_FOR_SOURCES_SQL = `
-  SELECT source_id, source_field, n FROM (
+  SELECT source_id, substr(source_field, 1, ${VIA_NAME_HEAD}) AS source_field, n FROM (
     SELECT source_id, source_field,
            ROW_NUMBER() OVER (PARTITION BY source_id ORDER BY source_field) AS rn,
            COUNT(*) OVER (PARTITION BY source_id) AS n
