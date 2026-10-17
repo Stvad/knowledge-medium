@@ -22,6 +22,7 @@ import {
   moveBlockCommandSchema,
   sqlModeSchema,
   type WhoamiInfo,
+  toDisplayJson,
 } from './protocol.js'
 import {
   createBridgeClient,
@@ -44,7 +45,16 @@ import {
   renderKernelTypesInstallSummary,
 } from './kernelDts.js'
 import {cliCommandFrom, cliOptionsFor, GRAPH_READ_TOOLS, hasJsonFormat, renderToolResult} from './readTools.js'
-import {scopeAssertion, workspaceAssertion} from './cliOptions.js'
+import {
+  appendPositionOption,
+  editArgumentsOption,
+  limitOption,
+  markdownText,
+  scopeAssertion,
+  textArguments,
+  toStringArray,
+  workspaceAssertion,
+} from './cliOptions.js'
 import {extensionScaffold, slugify, titleize} from './scaffold.js'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -100,12 +110,6 @@ const parseJson = (value: string, label: string): unknown => {
 // but a single occurrence gives a bare string. Normalize to an array
 // so the wire payload is shaped consistently regardless of how the
 // user phrased it.
-const toStringArray = (value: unknown): string[] => {
-  if (Array.isArray(value)) return value.map(String)
-  if (typeof value === 'string') return [value]
-  return []
-}
-
 const evalReturnedUndefined = (value: unknown): boolean =>
   value !== null
   && typeof value === 'object'
@@ -119,11 +123,11 @@ const evalReturnedUndefined = (value: unknown): boolean =>
 // for the explicit string "undefined" some callers return from
 // `repo.db.execute(...)` etc.
 const formatEvalOutput = (value: unknown, raw: boolean): string => {
-  if (raw) return JSON.stringify(value, null, 2)
+  if (raw) return toDisplayJson(value)
   if (value === undefined || value === null || evalReturnedUndefined(value)) {
     return '<ok: eval completed, no return value (use `return ...` to print one; pass --raw for the wire format)>'
   }
-  return JSON.stringify(value, null, 2)
+  return toDisplayJson(value)
 }
 
 // Accept "<id>" (UUID) or "<label>" — extensions installed via the
@@ -330,12 +334,12 @@ const printPing = async () => {
     bridge.clients = status.clients.map(compactBridgeClient)
   }
 
-  process.stdout.write(`${JSON.stringify({
+  process.stdout.write(`${toDisplayJson({
     ok: runtime?.ok === true && bridge.ok,
     profile: selectedProfileName,
     runtime,
     bridge,
-  }, null, 2)}\n`)
+  })}\n`)
 }
 
 const whoamiWithToken = (token: string): Promise<WhoamiInfo> =>
@@ -495,7 +499,7 @@ const runCommand = (command: KnownCommand): Promise<unknown> =>
 const runAndPrint = async (command: KnownCommand): Promise<void> => {
   await ensureBridgeRunning()
   const value = await runCommand(command)
-  process.stdout.write(`${JSON.stringify(value, null, 2)}\n`)
+  process.stdout.write(`${toDisplayJson(value)}\n`)
 }
 
 const cli = cac('kmagent')
@@ -556,11 +560,11 @@ cli
   .command('profiles', 'List saved CLI token profiles')
   .action(async () => {
     const profiles = await listStoredProfiles()
-    process.stdout.write(`${JSON.stringify({
+    process.stdout.write(`${toDisplayJson({
       tokenStorePath,
       selectedProfile: selectedProfileName,
       profiles,
-    }, null, 2)}\n`)
+    })}\n`)
   })
 
 cli
@@ -586,7 +590,7 @@ cli
       throw new MissingTokenError(selectedProfileName)
     }
     const info = await whoamiWithToken(token)
-    process.stdout.write(`${JSON.stringify(info, null, 2)}\n`)
+    process.stdout.write(`${toDisplayJson(info)}\n`)
   })
 
 cli
@@ -600,7 +604,7 @@ cli
   .action(async () => {
     await ensureBridgeRunning()
     const status = await readBridgeStatus()
-    process.stdout.write(`${JSON.stringify(status, null, 2)}\n`)
+    process.stdout.write(`${toDisplayJson(status)}\n`)
   })
 
 cli
@@ -608,7 +612,7 @@ cli
   .action(async () => {
     await ensureBridgeRunning()
     const info = await reloadAppAndWait()
-    process.stdout.write(`${JSON.stringify({ok: true, reconnected: info}, null, 2)}\n`)
+    process.stdout.write(`${toDisplayJson({ok: true, reconnected: info})}\n`)
   })
 
 cli
@@ -616,10 +620,10 @@ cli
   .action(async (hash: string) => {
     await ensureBridgeRunning()
     await navigateAppHash(hash)
-    process.stdout.write(`${JSON.stringify({
+    process.stdout.write(`${toDisplayJson({
       ok: true,
       hash: hash.startsWith('#') ? hash : `#${hash}`,
-    }, null, 2)}\n`)
+    })}\n`)
   })
 
 // ----- Bridge-fronting commands -------------------------------------
@@ -718,7 +722,7 @@ for (const tool of GRAPH_READ_TOOLS) {
     const wire = cliCommandFrom(tool, positional ? args[0] : undefined, options)
     await ensureBridgeRunning()
     const value = await runCommand(wire)
-    process.stdout.write(`${options.raw ? JSON.stringify(value, null, 2) : renderToolResult(value)}\n`)
+    process.stdout.write(`${options.raw ? toDisplayJson(value) : renderToolResult(value)}\n`)
   })
 }
 
@@ -754,6 +758,70 @@ cli
   .action(async (id: string) => {
     await runAndPrint({type: 'restore-block', id})
   })
+
+const readStdin = async (): Promise<string> => {
+  const chunks: Buffer[] = []
+  for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk as Uint8Array))
+  return Buffer.concat(chunks).toString('utf8')
+}
+
+
+cli
+  .command('append-markdown <target> [markdown]', wireDescription('append-markdown'))
+  .option('--first', "Insert before the target's existing children (default: after them)")
+  .option('--after <id>', 'Insert right after this child of the target')
+  .option('--before <id>', 'Insert right before this child of the target')
+  .option('--one-block', 'Keep the whole markdown as ONE block instead of splitting it')
+  .option('--json', 'The same bounded result, structured, instead of the outline')
+  .action(async (
+    target: unknown,
+    markdown: unknown,
+    options: {first?: boolean, after?: unknown, before?: unknown, oneBlock?: boolean, json?: boolean, '--'?: unknown},
+  ) => {
+    const command: KnownCommand = {
+      type: 'append-markdown',
+      target: String(target),
+      markdown: markdownText(markdown, options['--']) ?? await readStdin(),
+      ...appendPositionOption(options),
+      ...(options.oneBlock ? {shape: 'block' as const} : {}),
+      ...(options.json ? {format: 'json' as const} : {}),
+    }
+    await ensureBridgeRunning()
+    process.stdout.write(`${renderToolResult(await runCommand(command))}\n`)
+  })
+
+cli
+  .command('edit-block <id> [old] [new]', wireDescription('edit-block'))
+  .action(async (id: unknown, old: unknown, replacement: unknown, options: {'--'?: unknown}) => {
+    await runAndPrint({type: 'edit-block', id: String(id), ...editArgumentsOption(old, replacement, options['--'])})
+  })
+
+cli
+  .command('create-page [...name]', wireDescription('create-page'))
+  .option('--date <expr>', "A daily note's date instead of a page name (today, 2026-10-15, next monday)")
+  .action(async (name: unknown, options: {date?: unknown, '--'?: unknown}) => {
+    const text = textArguments([name], options['--']).join(' ').trim()
+    await runAndPrint({
+      type: 'create-page',
+      ...(text ? {name: text} : {}),
+      ...(options.date !== undefined ? {date: String(options.date)} : {}),
+    })
+  })
+
+cli
+  .command('recent-changes', wireDescription('recent-changes'))
+  .option('--since <when>', 'Epoch ms or ISO timestamp (default: all history)')
+  .option('--limit <n>', 'Max transactions (default 20)')
+  .option('--all', "Include the user's own edits, not only agent writes")
+  .action(async (options: {since?: unknown, limit?: unknown, all?: boolean}) => {
+    await runAndPrint({
+      type: 'recent-changes',
+      ...(options.since !== undefined ? {since: String(options.since)} : {}),
+      ...limitOption(options.limit),
+      ...(options.all ? {includeUser: true} : {}),
+    })
+  })
+
 
 cli
   .command('install-extension <file> [...label]', wireDescription('install-extension'))
@@ -824,7 +892,7 @@ cli
     // lets the generated project typecheck standalone — most authors have
     // the CLI and no checkout of the app.
     const types = await writeKernelTypes(path.join(target, 'types'), {force: true})
-    process.stdout.write(`${JSON.stringify({
+    process.stdout.write(`${toDisplayJson({
       directory: target,
       name: title,
       files: [...files.map(file => file.path), `types/ (${types.fileCount} declarations)`],
@@ -833,7 +901,7 @@ cli
         `kmagent install-extension "dist/${title}.js"`,
         `kmagent enable-extension "${title}"`,
       ],
-    }, null, 2)}\n`)
+    })}\n`)
   })
 
 cli
@@ -887,7 +955,7 @@ cli
           'console, not here.',
         )
       })
-    process.stdout.write(`${JSON.stringify(value, null, 2)}\n`)
+    process.stdout.write(`${toDisplayJson(value)}\n`)
   })
 
 // A `--scope all` pass re-judges every staged row of the workspace, which on a
@@ -922,7 +990,7 @@ cli
           'the pass still running, so prefer waiting for that one to finish.',
         )
       })
-    process.stdout.write(`${JSON.stringify(value, null, 2)}\n`)
+    process.stdout.write(`${toDisplayJson(value)}\n`)
   })
 
 cli

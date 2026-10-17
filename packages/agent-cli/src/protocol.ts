@@ -109,6 +109,12 @@ export const namedWorkspaceId = (payload: object): string | null => {
 
 const commandIdField = {commandId: z.string().optional()}
 
+/** Write verbs' id fields (`id`, `parentId`, `position.siblingId`) are already
+ *  stored ids: used exactly, never read as a ref. km-mcp sends it after it has
+ *  resolved them for its write guard, so the two cannot diverge; it is also
+ *  the one lossless way to name an odd stored id. */
+const exactIdsField = {exactIds: z.boolean().optional()}
+
 // Variants are `looseObject` so the kernel's field-access fallbacks (e.g.
 // `command.id ?? command.actionId`) keep working through the narrowing:
 // declared fields are still type-checked, extras flow through as `unknown`.
@@ -183,7 +189,8 @@ export const getSubtreeCommandSchema = z.looseObject({
 
 export const createBlockCommandSchema = z.looseObject({
   type: z.literal('create-block'),
-  parentId: z.string().optional(),
+  // Absent or null: a top-level block, as move-block takes it.
+  parentId: z.string().nullable().optional(),
   // position, content, properties forwarded verbatim (looseObject).
   ...commandIdField,
 })
@@ -217,7 +224,11 @@ export const updateBlockCommandSchema = z.looseObject({
   blockId: z.string().optional(),
   content: z.string().optional(),
   replaceProperties: z.boolean().optional(),
+  /** Compare-and-set: refuse the whole update unless the block's content is
+   *  still exactly this — what the caller read before deciding to write. */
+  expectedContent: z.string().optional(),
   // properties forwarded verbatim (looseObject).
+  ...exactIdsField,
   ...commandIdField,
 })
 
@@ -234,6 +245,78 @@ export const moveBlockCommandSchema = z.looseObject({
   blockId: z.string().optional(),
   parentId: z.string().nullable(),
   position: moveBlockPositionSchema,
+  ...exactIdsField,
+  ...commandIdField,
+})
+
+/** How a bounded answer comes back: the read views and append-markdown. */
+const formatField = {
+  format: z.enum(['text', 'json']).optional().describe(
+    'text (default): compact markdown-ish rendering. json: the same bounded view, structured.',
+  ),
+}
+
+/** Parse markdown with the app paste parser and insert it under a target, in
+ *  one transaction. `target` is a block id / id prefix, a `[[Page]]` or a date
+ *  expression (a missing page or daily note is created). `position` places the
+ *  inserted run among the target's children (default last). */
+export const appendMarkdownCommandSchema = z.looseObject({
+  type: z.literal('append-markdown'),
+  target: z.string(),
+  markdown: z.string(),
+  position: moveBlockPositionSchema.optional(),
+  shape: z.enum(['outline', 'block']).optional(),
+  ...formatField,
+  ...exactIdsField,
+  ...commandIdField,
+})
+
+/** Replace the one occurrence of `old` in a block's content with `new`,
+ *  against the content current inside the writing transaction. */
+export const editBlockCommandSchema = z.looseObject({
+  type: z.literal('edit-block'),
+  id: z.string(),
+  old: z.string(),
+  new: z.string(),
+  ...exactIdsField,
+  ...commandIdField,
+})
+
+/** Get-or-create a page by `name` (as a `[[name]]` wikilink would), or a daily
+ *  note by `date` expression. Exactly one of the two. */
+export const createPageCommandSchema = z.looseObject({
+  type: z.literal('create-page'),
+  name: z.string().optional(),
+  date: z.string().optional(),
+  ...commandIdField,
+})
+
+/** Recent local transactions of the active workspace, newest first, with the
+ *  blocks each changed. Agent-bridge writes only unless `includeUser`.
+ *  `since` is epoch ms or an ISO timestamp. */
+export const recentChangesCommandSchema = z.looseObject({
+  type: z.literal('recent-changes'),
+  since: z.union([z.number(), z.string()]).optional(),
+  limit: z.number().int().positive().optional(),
+  includeUser: z.boolean().optional(),
+  ...commandIdField,
+})
+
+/** The full id an id-typed field resolves to (`^short`, `((id))`, a unique
+ *  prefix) — what a write verb would act on. A ref matching nothing comes back
+ *  as the id its syntax names (`^x` / `((x))` → `x`), else as given. Lets a
+ *  caller check the same block the write will touch. */
+export const resolveBlockIdCommandSchema = z.looseObject({
+  type: z.literal('resolve-block-id'),
+  ref: z.string(),
+  ...commandIdField,
+})
+
+/** One block's recorded changes, newest first — local and sync-applied. */
+export const blockHistoryCommandSchema = z.looseObject({
+  type: z.literal('block-history'),
+  id: z.string().describe('The block: a full id or a unique id prefix as printed (^3f2a9c1d)'),
+  limit: z.number().int().positive().optional().describe('Max events (default 20, at most 100)'),
   ...commandIdField,
 })
 
@@ -241,6 +324,7 @@ export const deleteBlockCommandSchema = z.looseObject({
   type: z.literal('delete-block'),
   id: z.string().optional(),
   blockId: z.string().optional(),
+  ...exactIdsField,
   ...commandIdField,
 })
 
@@ -248,6 +332,7 @@ export const restoreBlockCommandSchema = z.looseObject({
   type: z.literal('restore-block'),
   id: z.string().optional(),
   blockId: z.string().optional(),
+  ...exactIdsField,
   ...commandIdField,
 })
 
@@ -383,7 +468,8 @@ export const groupedBacklinksCommandSchema = z.looseObject({
 /** The data-model guide's topic ids in its reading order. The app's guide
  *  tags each of its sections with one, and a test holds the two lists equal. */
 export const DATA_MODEL_TOPICS = [
-  'blocks', 'pages', 'daily-notes', 'references', 'grouped-backlinks', 'block-kinds', 'properties', 'queries', 'sql',
+  'blocks', 'pages', 'daily-notes', 'references', 'grouped-backlinks', 'block-kinds', 'properties', 'queries', 'writing',
+  'sql',
 ] as const
 export type DataModelTopic = typeof DATA_MODEL_TOPICS[number]
 
@@ -452,6 +538,8 @@ export const AGENT_VIEW_DEFAULTS = {
   outlineDepth: 3,
   blockMaxChars: 4000,
   sqlMaxRows: 200,
+  /** An outline line's content budget; longer content is cut with a marker. */
+  lineChars: 200,
 } as const
 
 const viewRefField = z.string().describe(
@@ -466,9 +554,7 @@ const viewFields = {
     'Workspace to read. The call goes to an app tab that has it open (default: the most recently '
     + 'focused tab), and is refused when no connected tab does.',
   ),
-  format: z.enum(['text', 'json']).optional().describe(
-    'text (default): compact markdown-ish rendering. json: the same bounded view, structured.',
-  ),
+  ...formatField,
 }
 
 const viewLimitField = (what: string, defaultValue: number) =>
@@ -680,6 +766,12 @@ export const knownCommandSchema = z.discriminatedUnion('type', [
   moveBlockCommandSchema,
   deleteBlockCommandSchema,
   restoreBlockCommandSchema,
+  appendMarkdownCommandSchema,
+  editBlockCommandSchema,
+  createPageCommandSchema,
+  recentChangesCommandSchema,
+  blockHistoryCommandSchema,
+  resolveBlockIdCommandSchema,
   installExtensionCommandSchema,
   enableExtensionCommandSchema,
   disableExtensionCommandSchema,
@@ -729,6 +821,12 @@ export const knownAgentCommandSchema = z.discriminatedUnion('type', [
   moveBlockCommandSchema,
   deleteBlockCommandSchema,
   restoreBlockCommandSchema,
+  appendMarkdownCommandSchema,
+  editBlockCommandSchema,
+  createPageCommandSchema,
+  recentChangesCommandSchema,
+  blockHistoryCommandSchema,
+  resolveBlockIdCommandSchema,
   installExtensionCommandSchema,
   enableExtensionCommandSchema,
   disableExtensionCommandSchema,
@@ -783,6 +881,19 @@ export interface KnownCommandMeta {
   readOnly: boolean
 }
 
+/** How the write verbs name where to write: quoted by the CLI verbs and the
+ *  km MCP tools alike, so both surfaces say the same thing. */
+export const WRITE_TARGET_HELP =
+  'A target is a block id or a printed short id (^3f2a9c1b); a [[Page name]], created if missing as typing '
+  + 'that link would ([[2026-10-15]] is that daily note); or a date (today, next monday, 2026-10-15) for its '
+  + 'daily note, created if missing. Bare text is tried as an id prefix, an existing page, then a date — so '
+  + 'name a page as [[name]].'
+
+/** A todo composes the built-in `todo` type. */
+export const TODO_WRITE_HELP =
+  'A todo is a block with properties {"types": ["todo"], "status": "open"}; set "status" to "done" to complete '
+  + 'it (properties merge).'
+
 /** Schema-derived registry of every known wire command. Typed as
  *  `Record<KnownCommandType, …>` so adding a variant to
  *  `knownCommandSchema` without a registry entry is a TypeScript error —
@@ -829,7 +940,8 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   },
   'create-block': {
     usage: 'kmagent create-block <json>',
-    description: 'Create a block (body shape per <json>).',
+    description: 'Create one block. Body: {parentId, content, properties?, position?: first|last}; parentId is a target '
+      + `as for append-markdown, or null for a top-level block (not a page — use create-page). ${TODO_WRITE_HELP}`,
     readOnly: false,
   },
   'reconcile-markdown-subtree': {
@@ -839,7 +951,10 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   },
   'update-block': {
     usage: 'kmagent update-block <json>',
-    description: 'Update a block (body shape per <json>).',
+    description: 'Update a block. Body: {id, content?, properties?, replaceProperties?, expectedContent?}. Properties merge '
+      + 'unless replaceProperties. With expectedContent the update is refused, showing the current content, unless '
+      + 'the block\'s content is exactly that (read it whole with get-block, not from an outline line). id may be a '
+      + 'unique id prefix.',
     readOnly: false,
   },
   'move-block': {
@@ -856,6 +971,44 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
     usage: 'kmagent restore-block <id>',
     description: 'Restore one soft-deleted block via core.restore. Descendants remain deleted unless restored separately.',
     readOnly: false,
+  },
+  'append-markdown': {
+    usage: "kmagent append-markdown <target> [--first | --after <id> | --before <id>] [--one-block] -- '<markdown>'   (or pipe it on stdin)",
+    description: 'Insert markdown under <target> in ONE transaction, split into blocks as the app\'s paste does; '
+      + `prints the new blocks (the first ${AGENT_VIEW_DEFAULTS.outlineLimit}). ${WRITE_TARGET_HELP} With --after/--before the anchor must be a child of the target. `
+      + 'Markdown goes after `--` (it usually starts with "- ") or on stdin.',
+    readOnly: false,
+  },
+  'edit-block': {
+    usage: "kmagent edit-block <id> <old> <new>   (or: kmagent edit-block <id> -- '<old>' '<new>' when either starts with -)",
+    description: 'Replace the one occurrence of <old> in a block\'s content with <new> (literal text), against its '
+      + 'content at write time; prints the change in context. Refused when <old> is empty or found more than once '
+      + '(add surrounding text), and when it is not found, showing the current content. <id> may be a unique id prefix.',
+    readOnly: false,
+  },
+  'create-page': {
+    usage: "kmagent create-page <name> | --date <expr>   (a name starting with - goes after --: kmagent create-page -- '-Inbox')",
+    description: 'Get-or-create a page by name, as typing [[name]] would, or a daily note with --date <expr>. Reports '
+      + 'whether it was created.',
+    readOnly: false,
+  },
+  'recent-changes': {
+    usage: 'kmagent recent-changes [--since <ms|iso>] [--limit <n>] [--all]',
+    description: 'Recent agent-bridge writes in this workspace, newest first, with the blocks each changed (content '
+      + 'before/after, clipped); --all adds the user\'s own edits here. eval, sql '
+      + 'execute and run-action writes are not attributed.',
+    readOnly: true,
+  },
+  'block-history': {
+    usage: 'kmagent block-history <id> [--limit <n>]',
+    description: 'One block\'s recorded changes, newest first, local and synced, with content before/after (cut past '
+      + '2,000 chars) — to review a change. A content ending in a cut marker is not whole, so do not write it back.',
+    readOnly: true,
+  },
+  'resolve-block-id': {
+    usage: 'kmagent raw \'{"type":"resolve-block-id","ref":"^3f2a9c1b"}\'',
+    description: 'The full block id an id-typed write field resolves to (^short, ((id)), unique prefix) — never a name or date. A ref that matches nothing comes back as the id its syntax names (^x, ((x)) → x), else as given. km-mcp uses it so its write guard checks the block the write will touch.',
+    readOnly: true,
   },
   'install-extension': {
     usage: 'kmagent install-extension [--verify] [--allow-preset-change] [--description <text>] <file> [label]',
@@ -1122,3 +1275,61 @@ const CONTROL_CHAR_RUN_REGEX = /[\u0000-\u0008\u000a-\u001f\u007f-\u009f\u2028\u
  *  app's agent views. */
 export const neutralizeDisplayText = (text: string): string =>
   text.replace(CONTROL_CHAR_RUN_REGEX, ' ⏎ ')
+
+/** What `JSON.stringify` leaves raw of that class — DEL, C1 controls, the
+ *  line/paragraph separators, bidi controls (it escapes the rest of C0). */
+const UNESCAPED_JSON_DISPLAY_CONTROL = /[\u007f-\u009f\u2028\u2029\p{Bidi_Control}]/gu
+
+/** `\u`-escape what `JSON.stringify` leaves raw of the display-forging class.
+ *  Lossless — unlike {@link neutralizeDisplayText} — and only valid on JSON
+ *  text, where these characters occur only inside string literals and the
+ *  escape denotes the same string. */
+const escapeJsonDisplayControls = (json: string): string =>
+  json.replace(UNESCAPED_JSON_DISPLAY_CONTROL, char => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`)
+
+/** A value as agent-facing JSON: pretty-printed and display-safe, losslessly. */
+export const toDisplayJson = (value: unknown): string => {
+  const json = JSON.stringify(value, null, 2) as string | undefined
+  return json === undefined ? String(value) : escapeJsonDisplayControls(json)
+}
+
+/** The page name in a `[[Name]]` write target — what a missing page is created
+ *  under, and so its content — or null when `text` is not one. */
+export const pageNameInTarget = (text: string): string | null => {
+  const match = /^\s*\[\[([\s\S]*)\]\]\s*$/.exec(text)
+  return match ? match[1].trim() : null
+}
+
+/** The page `create-page <name>` gets or creates: one outer `[[…]]` is the
+ *  name's wrapper, and the name is trimmed. The runtime and the write guard
+ *  both read a name through this. */
+export const createPageName = (name: string): string => pageNameInTarget(name) ?? name.trim()
+
+/* Cutting agent-facing text to a budget, shared by the app's read views and
+ * the CLI/MCP renderers so every cut reads the same. */
+
+export const formatCount = (n: number): string => n.toLocaleString('en-US')
+
+/** The marker a cut leaves behind: how much is missing, so an agent can tell
+ *  a summary from the whole and knows a fuller read exists. */
+export const cutMarker = (cutChars: number): string => `…[+${formatCount(cutChars)} chars]`
+
+export interface Clipped {
+  text: string
+  /** Characters of the input not in `text` (0 when it fit). */
+  cut: number
+}
+
+const isHighSurrogate = (code: number): boolean => code >= 0xd800 && code <= 0xdbff
+
+/** `at` moved back by one when it would split a surrogate pair, so a slice
+ *  boundary there keeps an astral character (an emoji) whole on one side. */
+export const charBoundary = (text: string, at: number): number =>
+  at > 0 && at < text.length && isHighSurrogate(text.charCodeAt(at - 1)) ? at - 1 : at
+
+/** Cut to at most `max` characters of the ORIGINAL text, marked. */
+export const clip = (text: string, max: number): Clipped => {
+  if (text.length <= max) return {text, cut: 0}
+  const end = charBoundary(text, max)
+  return {text: `${text.slice(0, end)}${cutMarker(text.length - end)}`, cut: text.length - end}
+}

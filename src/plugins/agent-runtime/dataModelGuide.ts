@@ -1,4 +1,4 @@
-import type { DataModelTopic } from '@knowledge-medium/agent-cli/protocol'
+import { TODO_WRITE_HELP, WRITE_TARGET_HELP, type DataModelTopic } from '@knowledge-medium/agent-cli/protocol'
 
 const GUIDE_INTRO = `# Knowledge Medium — data model (for agents)
 
@@ -211,6 +211,35 @@ The convenience commands above wrap the starred ones (★) and add hydration.
 `,
   },
   {
+    topic: 'writing',
+    text: `## Writing
+
+Write the way you would edit files, and let the app do the outline:
+
+- \`append-markdown <target> -- <markdown>\` (or markdown on stdin; MCP
+  \`append_markdown\`) — markdown is split into blocks exactly as the app's
+  "paste as markdown" splits it (bullets and headings nest; a fenced code block,
+  table or quote stays one block) and inserted in ONE transaction. Default
+  position: after the target's last child. \`create-page <name> | --date <expr>\`
+  creates a page or daily note without writing content.
+- ${WRITE_TARGET_HELP}
+- \`edit-block <id> <old> <new>\` — replace the one occurrence of \`old\`,
+  applied against the content current at write time. Prefer it to rewriting a
+  whole block.
+- \`update-block\` replaces the whole content (properties merge). Pass
+  \`expectedContent\` — the block's exact content, read whole with
+  \`get-block\`, not from an outline line — and the update is refused if the
+  content is no longer that.
+- ${TODO_WRITE_HELP}
+- \`recent-changes\` lists the blocks agent writes changed (\`--all\`, MCP
+  \`includeUser\`, adds the user's own edits); \`block-history <id>\` shows one
+  block's changes with prior content (cut past 2,000 chars), to review them.
+  A bridge write is a transaction described \`agent runtime <verb>\` — except
+  \`eval\`, \`sql execute\` and \`run-action\`, and the follow-up transactions
+  the app runs after a write (such as a page a new [[link]] mints).
+`,
+  },
+  {
     topic: 'sql',
     text: `## Lower-level access
 
@@ -227,12 +256,12 @@ The convenience commands above wrap the starred ones (★) and add hydration.
   order — already sorted; read it top-to-bottom, don't re-sort (see "Sibling
   order").
 - \`pnpm agent sql <all|get|optional|execute> <sql> [paramsJson]\` — raw SQL.
-- \`pnpm agent move-block <json>\` — structural move via \`repo.mutate.move\`;
+- \`pnpm agent move-block <json>\` — structural move via the \`core.move\` mutator;
   body is \`{id, parentId:string|null, position:{kind:"first"|"last"|"before"|"after", siblingId?}}\`.
 - \`pnpm agent delete-block <id>\` — soft-delete a block and its descendants
-  via \`repo.mutate.delete\`.
-- \`pnpm agent restore-block <id>\` — restore one tombstoned block via
-  \`repo.mutate.restore\`; descendants stay deleted unless restored separately.
+  via the \`core.delete\` mutator.
+- \`pnpm agent restore-block <id>\` — restore one tombstoned block via the
+  \`core.restore\` mutator; descendants stay deleted unless restored separately.
 - \`pnpm agent eval <code>\` — run JS in the app; the named queries above are
   callable directly. The dedicated commands wrap them with config
   resolution + hydration, so prefer them unless you need something custom.

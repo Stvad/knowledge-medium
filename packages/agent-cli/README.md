@@ -57,11 +57,16 @@ The CLI exposes both *local* commands (pairing, profile management) and *bridge*
 | `kmagent search <query> [--limit <n>] [--offset <n>] [--types <t>]… [--under <ref>] [--include-extensions]` | Full-text search with snippet, breadcrumb and types per hit. Repeat `--types` for several (a value is taken whole, commas included). |
 | `kmagent page <name>` / `kmagent daily-note <date>` | Resolve a page by name/alias, or a date to its daily note. |
 | `kmagent data-model [--topic <id>\|all]` (alias `guide`) | The agent-facing data-model guide: a short index of its topics by default, one section with `--topic <id>`, all of it with `--topic all`. |
-| `kmagent create-block <json>` | Create a block from a JSON body. |
+| `kmagent create-block <json>` | Create one block: `{parentId, content, properties?, position?}`. `parentId` is a write target (see Writing); absent or `null` makes a top-level block, which is not a page — use `create-page`. |
 | `kmagent update-block <json>` | Update a block from a JSON body. |
 | `kmagent move-block <json>` | Move a block to a parent/position from a JSON body. |
 | `kmagent delete-block <id>` | Soft-delete a block and its descendants. |
 | `kmagent restore-block <id>` | Restore one soft-deleted block; descendants stay deleted unless restored separately. |
+| `kmagent append-markdown <target> -- '<markdown>'` (or markdown on stdin) | Split markdown into blocks the way "paste as markdown" does and insert them under a target in one transaction (`--first`, `--after <id>`, `--before <id>`, `--one-block`). See [Writing](#writing). |
+| `kmagent edit-block <id> <old> <new>` | Replace the one occurrence of `<old>` in a block, against its content at write time. |
+| `kmagent create-page <name> \| --date <expr>` | Get-or-create a page (as `[[name]]` would) or a daily note. |
+| `kmagent recent-changes [--since <t>] [--all]` | Recent agent-bridge transactions and the blocks each changed (`--all` adds your own edits). |
+| `kmagent block-history <id>` | One block's recorded changes with prior content (cut past 2,000 chars) — local and synced. |
 | `kmagent new-extension <name> [dir]` | Scaffold a standalone extension project (deps, gate, `@/` declarations included) in the shape the `record-grain` guide describes. |
 | `kmagent install-extension <file> [label]` | Install a JS extension; reports whether it is actually `running` here. `--verify` reports what it contributed, plus data-model lint warnings. |
 | `kmagent enable-extension <handle>` | Enable / `disable-extension`, `uninstall-extension`. |
@@ -81,9 +86,19 @@ Run `kmagent <command> --help` for per-command details or `kmagent --help` for t
 
 **`kmagent sql` and synced tables:** a raw `INSERT`/`UPDATE`/`DELETE` against `blocks`, `workspaces`, or `workspace_members` bypasses `repo.tx` — it leaves `tx_context.source = NULL` (the row never uploads to the server or other clients) and skips the kernel's post-commit derivations (block_types, reference normalization, property projection), so derived state goes stale. `kmagent sql` refuses such writes by default and names the offending table in the error. Prefer `create-block` / `update-block` / `run-action` (all go through `repo.tx`) for a normal write. If you genuinely need a raw statement against one of these tables, pass `--allow-synced-write` (or `{allowSyncedWrite: true}` on a `kmagent raw` body) to opt in for that one call.
 
+## Writing
+
+Writes are markdown-native and conflict-safe, so an agent can treat the graph like files:
+
+- **Targets.** Write verbs take a block id or unique id prefix (`^3f2a9c1b`), a `[[Page name]]` — created when missing, exactly as typing that wikilink would (a date-literal name is that daily note) — or a date expression (`today`, `2026-10-15`, `next monday`) for that day's daily note, created when missing. Bare text is tried as an id prefix, an existing page, then a date expression, so a page name belongs in `[[…]]` — and a typo never mints a page. Id fields (`update-block`, `move-block`, …) take an id or prefix only, never a name.
+- **Append.** `append-markdown` parses with the app's paste parser and inserts the whole outline in one transaction, printing the created blocks with their short ids.
+- **Edit.** `edit-block` replaces one exact occurrence inside the writing transaction; `update-block` takes `expectedContent` — the block's exact content, read whole with `get-block` — and refuses the overwrite when the content is no longer that.
+- **Todos.** A todo is a block with properties `{"types": ["todo"], "status": "open"}`; set `status` to `"done"` to complete it.
+- **Review.** Every bridge write is a transaction described `agent runtime <verb>`; `recent-changes` and `block-history` read them back from the local change log. Not attributed: `eval`, `sql execute` and `run-action`.
+
 ## MCP Server
 
-`km-mcp` exposes the graph-safe subset of bridge operations as MCP tools. Read tools: `get_block`, `subtree`, `backlinks`, `grouped_backlinks`, `search`, `page`, `daily_note`, `guide` (the data-model guide's index, or one `topic`) and `sql_query` (read-only, rows capped by `maxRows`). They are generated from the same table as the CLI verbs above, so their arguments match the flags and accept the same block refs. The views return bounded text (`format: "json"` for the structured view); `page` and `daily_note` are lookups that return the matched block whole. The server also sends usage instructions to the client. Write tools: `create_block`, `update_block`, `move_block`, `delete_block`, and `restore_block`. It deliberately excludes eval, SQL execute, and extension lifecycle commands.
+`km-mcp` exposes the graph-safe subset of bridge operations as MCP tools. Read tools: `get_block`, `subtree`, `backlinks`, `grouped_backlinks`, `search`, `page`, `daily_note`, `guide` (the data-model guide's index, or one `topic`) and `sql_query` (read-only, rows capped by `maxRows`). They are generated from the same table as the CLI verbs above, so their arguments match the flags and accept the same block refs. The views return bounded text (`format: "json"` for the structured view); `page` and `daily_note` are lookups that return the matched block whole. The server also sends usage instructions to the client. Write tools: `create_block`, `update_block`, `move_block`, `delete_block`, `restore_block`, `append_markdown`, `edit_block` and `create_page`, plus `recent_changes` (defaults to what changed since that MCP session started) and `block_history` to review them; their id fields take a full id or a printed `^shortid`, and a write target also a `[[Page name]]` or a date (see [Writing](#writing)). It deliberately excludes eval, SQL execute, and extension lifecycle commands.
 
 ```json
 {

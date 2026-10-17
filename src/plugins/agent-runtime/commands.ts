@@ -27,10 +27,15 @@ import { runHealthCommand } from './healthCommand.ts'
 import { resolveBlockRef, runViewCommand } from './agentViews/index.ts'
 import { boundSqlRows, limitedSelectSql, MAX_SQL_ROWS } from './agentViews/sqlRows.ts'
 import { watchEventsRegistry } from './watchEvents.ts'
+import { agentTxOptions, runAgentMutator } from './agentWrites.ts'
+import { blockIdField, blockPositionField, resolveAgentTarget, resolveBlockId } from './targets.ts'
+import { appendMarkdown, contentEcho, createPage, editBlock, parseAgentMarkdown, renderAppendView } from './writeCommands.ts'
+import { blockHistory, recentChanges } from './changeHistory.ts'
 import { keyAtEnd, keyBetween } from '@/data/orderKey.js'
 import { deleteSubtreeInTx } from '@/data/subtreeDelete.js'
 import { syncedWriteTarget } from '@/data/syncedTableWriteGuard.js'
-import { parseMarkdownToBlocks, type ParsedBlock } from '@/utils/markdownParser.js'
+import type { ParsedBlock } from '@/utils/markdownParser.js'
+import { createChild, deleteBlock, move, restoreBlock } from '@/data/mutators.js'
 import {
   actionsFacet,
   appEffectsFacet,
@@ -170,6 +175,14 @@ const getPosition = (value: unknown): BlockPosition | undefined => {
   }
   return value
 }
+
+/** The verb's target block id as it acts on it (see `blockIdField`). */
+const commandBlockId = (
+  repo: Repo,
+  command: {blockId?: unknown; id?: unknown; exactIds?: unknown},
+  verb: string,
+): Promise<string> =>
+  blockIdField(repo, requireString(command.blockId ?? command.id, 'blockId'), verb, command.exactIds === true)
 
 const getMoveBlockPosition = (value: unknown): MoveBlockPosition => {
   if (!isRecord(value)) {
@@ -907,17 +920,28 @@ const createRuntimeBlock = async (
   // write, instead of surfacing a `tx.create:` rejection from three layers
   // down mid-transaction. Deleting it loses that; it does not open the hole.
   if (explicitId !== undefined) assertCanonicalBlockId(explicitId, 'createBlock')
+  // Before the parent: a [[page]] parent is created when missing, and would
+  // stay behind if the create then failed on a taken id. `tx.create` still
+  // refuses it, should one be taken meanwhile.
+  if (explicitId !== undefined && await repo.db.getOptional('SELECT 1 AS one FROM blocks WHERE id = ?', [explicitId])) {
+    throw new Error(`create-block: block ${explicitId} already exists — nothing was created.`)
+  }
   const references = input.data?.references as BlockReference[] | undefined
 
-  if (input.parentId) {
-    const id = await repo.mutate.createChild({
-      parentId: input.parentId,
-      content,
-      properties,
-      references,
-      position: mapPosition(input.position),
-      id: explicitId,
-    }) as string
+  if (input.parentId !== undefined) {
+    const parentRef = input.parentId
+    // A [[page]] / date parent is created when missing; one undo entry for both.
+    const id = await repo.undoGroup(async repo => {
+      const parent = await resolveAgentTarget(repo, parentRef, 'create-block')
+      return runAgentMutator(repo, 'create-block', createChild, {
+        parentId: parent.id,
+        content,
+        properties,
+        references,
+        position: mapPosition(input.position),
+        id: explicitId,
+      })
+    })
     return withGrainWarnings(repo, await repo.load(id), properties)
   }
 
@@ -936,7 +960,7 @@ const createRuntimeBlock = async (
       properties,
       references,
     })
-  }, {scope: ChangeScope.BlockDefault, description: 'agent runtime create root block'})
+  }, agentTxOptions('create-block'))
   return withGrainWarnings(repo, await repo.load(id), properties)
 }
 
@@ -986,11 +1010,7 @@ const reconcileMarkdownSubtree = async (
 
     // Parse only after admission so a closed workspace is refused before the
     // potentially expensive markdown work begins.
-    const parsed: ParsedBlock[] = shape === 'block'
-      ? (input.markdown.length === 0
-          ? []
-          : [{id: 'block-root', orderKey: '', content: input.markdown}])
-      : parseMarkdownToBlocks(input.markdown)
+    const parsed: ParsedBlock[] = parseAgentMarkdown(input.markdown, shape)
 
     // This subtree's existing blocks, in pre-order (the target we reconcile
     // onto). Walk children depth-first following ONLY tagged blocks, so user
@@ -1132,7 +1152,7 @@ const reconcileMarkdownSubtree = async (
         await deleteSubtreeInTx(tx, doomed.id)
       }
     }
-  }, {scope: ChangeScope.BlockDefault, description: 'agent runtime reconcile markdown subtree'})
+  }, agentTxOptions('reconcile-markdown-subtree'))
 
   return {ids, rootIds}
 }
@@ -1154,6 +1174,13 @@ const updateRuntimeBlock = async (
     const before = await tx.get(input.id)
     if (!before || before.deleted) return
     found = true
+    if (input.expectedContent !== undefined && before.content !== input.expectedContent) {
+      throw new Error(
+        `update-block: block ${input.id}'s content is not the expectedContent passed — nothing was written. `
+        + `Its current content is: ${contentEcho(before.content)}. `
+        + 'Re-plan against it, or use edit-block to change one passage.',
+      )
+    }
     const nextProperties = input.properties === undefined
       ? undefined
       : input.replaceProperties
@@ -1172,7 +1199,7 @@ const updateRuntimeBlock = async (
       ...(input.content !== undefined ? {content: input.content} : {}),
       ...(nextProperties !== undefined ? {properties: nextProperties} : {}),
     })
-  }, {scope: ChangeScope.BlockDefault, description: 'agent runtime block update'})
+  }, agentTxOptions('update-block'))
 
   if (!found) throw new Error(`updateBlock: block ${input.id} not found`)
   return withGrainWarnings(repo, await repo.load(input.id), input.properties)
@@ -1182,7 +1209,7 @@ const moveRuntimeBlock = async (
   repo: Repo,
   input: MoveBlockInput,
 ): Promise<BlockData | null> => {
-  await repo.mutate.move(input)
+  await runAgentMutator(repo, 'move-block', move, input)
   return repo.load(input.id)
 }
 
@@ -1190,8 +1217,9 @@ const deleteRuntimeBlock = async (
   repo: Repo,
   input: DeleteBlockInput,
 ): Promise<DeleteBlockResult> => {
-  // eslint-disable-next-line no-restricted-syntax -- programmatic delete: agent bridge is not a UI gesture; UI-layer guards deliberately don't apply
-  await repo.mutate.delete(input)
+  // Programmatic delete: the agent bridge is not a UI gesture, so the UI-layer
+  // deletion guards deliberately don't apply.
+  await runAgentMutator(repo, 'delete-block', deleteBlock, input)
   return {id: input.id, deleted: true}
 }
 
@@ -1199,7 +1227,7 @@ const restoreRuntimeBlock = async (
   repo: Repo,
   input: RestoreBlockInput,
 ): Promise<BlockData | null> => {
-  await repo.mutate.restore(input)
+  await runAgentMutator(repo, 'restore-block', restoreBlock, input)
   return repo.load(input.id)
 }
 
@@ -2288,7 +2316,7 @@ export const executeCommand = async (
 
     case 'create-block':
       return context.createBlock({
-        parentId: command.parentId === undefined
+        parentId: command.parentId === undefined || command.parentId === null
           ? undefined
           : requireString(command.parentId, 'parentId'),
         position: getPosition(command.position),
@@ -2335,34 +2363,80 @@ export const executeCommand = async (
       }
 
       return context.updateBlock({
-        id: requireString(command.blockId ?? command.id, 'blockId'),
+        id: await commandBlockId(context.repo, command, 'update-block'),
         content: command.content === undefined
           ? undefined
           : requireString(command.content, 'content'),
         properties,
         replaceProperties: Boolean(command.replaceProperties),
+        expectedContent: command.expectedContent === undefined
+          ? undefined
+          : requireString(command.expectedContent, 'expectedContent'),
       })
     }
 
     case 'move-block': {
       const parentId = command.parentId === null
         ? null
-        : requireString(command.parentId, 'parentId')
+        : await blockIdField(context.repo, requireString(command.parentId, 'parentId'), 'move-block', command.exactIds)
       return context.moveBlock({
-        id: requireString(command.blockId ?? command.id, 'blockId'),
+        id: await commandBlockId(context.repo, command, 'move-block'),
         parentId,
-        position: getMoveBlockPosition(command.position),
+        position: await blockPositionField(
+          context.repo, getMoveBlockPosition(command.position), 'move-block', command.exactIds,
+        ),
       })
     }
 
     case 'delete-block':
       return context.deleteBlock({
-        id: requireString(command.blockId ?? command.id, 'blockId'),
+        id: await commandBlockId(context.repo, command, 'delete-block'),
       })
 
     case 'restore-block':
       return context.restoreBlock({
-        id: requireString(command.blockId ?? command.id, 'blockId'),
+        id: await commandBlockId(context.repo, command, 'restore-block'),
+      })
+
+    case 'append-markdown': {
+      const view = await appendMarkdown(context.repo, {
+        target: requireString(command.target, 'target'),
+        markdown: requireString(command.markdown, 'markdown'),
+        position: command.position === undefined ? undefined : getMoveBlockPosition(command.position),
+        shape: command.shape === 'block' ? 'block' : command.shape === 'outline' ? 'outline' : undefined,
+        exactIds: command.exactIds,
+      })
+      return command.format === 'json' ? view : renderAppendView(view)
+    }
+
+    case 'edit-block':
+      return editBlock(context.repo, {
+        id: requireString(command.id, 'id'),
+        old: requireString(command.old, 'old'),
+        new: requireString(command.new, 'new'),
+        exactIds: command.exactIds,
+      })
+
+    case 'create-page':
+      return createPage(context.repo, {
+        name: command.name === undefined ? undefined : requireString(command.name, 'name'),
+        date: command.date === undefined ? undefined : requireString(command.date, 'date'),
+      })
+
+    case 'recent-changes':
+      return recentChanges(context.repo, {
+        since: command.since,
+        limit: command.limit,
+        includeUser: command.includeUser === true,
+      })
+
+    case 'resolve-block-id':
+      return {id: await resolveBlockId(context.repo, requireString(command.ref, 'ref'), 'resolve-block-id')}
+
+    case 'block-history':
+      return blockHistory(context.repo, {
+        id: await resolveBlockId(context.repo, requireString(command.id, 'id'), 'block-history'),
+        limit: command.limit,
       })
 
     case 'install-extension':

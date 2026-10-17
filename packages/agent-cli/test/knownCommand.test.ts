@@ -23,6 +23,7 @@ describe('knownCommandSchema — branch acceptance', () => {
     ['get-block', {type: 'get-block', id: 'b-1'}],
     ['get-subtree', {type: 'get-subtree', rootId: 'r-1'}],
     ['create-block', {type: 'create-block', parentId: 'p-1', content: 'hi'}],
+    ['create-block (top level, as move-block spells it)', {type: 'create-block', parentId: null, content: 'hi'}],
     ['update-block', {type: 'update-block', id: 'b-1', content: 'hi'}],
     ['move-block', {type: 'move-block', id: 'b-1', parentId: 'p-1', position: {kind: 'last'}}],
     ['delete-block', {type: 'delete-block', id: 'b-1'}],

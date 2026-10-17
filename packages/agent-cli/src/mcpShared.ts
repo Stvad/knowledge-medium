@@ -18,6 +18,11 @@ export const KM_MCP_TOOL_NAMES = [
   'move_block',
   'delete_block',
   'restore_block',
+  'append_markdown',
+  'edit_block',
+  'create_page',
+  'recent_changes',
+  'block_history',
 ] as const
 
 export type KmMcpToolName = (typeof KM_MCP_TOOL_NAMES)[number]

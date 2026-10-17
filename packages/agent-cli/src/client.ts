@@ -25,6 +25,7 @@ import {
   namedWorkspaceId,
   UNKNOWN_TOKEN_MARKER,
   type WhoamiInfo,
+  neutralizeDisplayText,
 } from './protocol.js'
 
 export { UNKNOWN_TOKEN_MARKER } from './protocol.js'
@@ -471,7 +472,7 @@ export const createBridgeClient = (options: BridgeClientOptions = {}): BridgeCli
       }
       if (command.status === 'failed') {
         const error = command.result?.error
-        throw new Error(error?.message ?? `Runtime command ${id} failed`)
+        throw new Error(neutralizeDisplayText(error?.message ?? `Runtime command ${id} failed`))
       }
 
       await sleep(pollIntervalMs)
@@ -489,7 +490,9 @@ export const createBridgeClient = (options: BridgeClientOptions = {}): BridgeCli
 
     if (!result?.ok) {
       const error = result?.error
-      throw new Error(error?.message ?? 'Runtime command failed')
+      // App error text can echo stored ids and names: neutralize it here, the
+      // one place a bridge error becomes a CLI / MCP message.
+      throw new Error(neutralizeDisplayText(error?.message ?? 'Runtime command failed'))
     }
 
     return result.value

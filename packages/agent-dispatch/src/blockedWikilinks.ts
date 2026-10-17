@@ -1,5 +1,6 @@
 import type { BridgeGraph } from '@knowledge-medium/agent-cli/graph'
 import type { GraphMcpWriteGuard } from '@knowledge-medium/agent-cli/mcpServer'
+import { createPageName, neutralizeDisplayText, pageNameInTarget } from '@knowledge-medium/agent-cli/protocol'
 
 /** Dispatch-owned MCP policy: page aliases whose wikilinks the spawned
  *  agent write tools must refuse to create. JSON-array encoded; legacy
@@ -191,27 +192,17 @@ export const createBlockedWikilinkWriteGuard = (
 
     const workspaceId = await workspaceIdForMoveTarget(id, parentId)
     if (!workspaceId) return []
-    const rows = parentId === null
-      ? await graph.sqlAll(
-        `SELECT id, content, properties_json, order_key
-           FROM blocks
-          WHERE workspace_id = ?
-            AND parent_id IS NULL
-            AND deleted = 0
-            AND id <> ?
-          ORDER BY order_key, id`,
-        [workspaceId, id],
-      )
-      : await graph.sqlAll(
-        `SELECT id, content, properties_json, order_key
-           FROM blocks
-          WHERE workspace_id = ?
-            AND parent_id = ?
-            AND deleted = 0
-            AND id <> ?
-          ORDER BY order_key, id`,
-        [workspaceId, parentId, id],
-      )
+    // Only the siblings tied with the anchor: they are all a re-key can touch,
+    // and all the run below compares — a large sibling set is never read.
+    const liveSibling = 'workspace_id = ? AND parent_id IS ? AND deleted = 0 AND id <> ?'
+    const rows = await graph.sqlAll(
+      `SELECT id, content, properties_json, order_key
+         FROM blocks
+        WHERE ${liveSibling}
+          AND order_key = (SELECT order_key FROM blocks WHERE id = ? AND ${liveSibling})
+        ORDER BY order_key, id`,
+      [workspaceId, parentId, id, position.siblingId, workspaceId, parentId, id],
+    )
     const siblings = rows.flatMap(row => {
       const sibling = moveSiblingFromSqlRow(row)
       return sibling ? [sibling] : []
@@ -239,6 +230,33 @@ export const createBlockedWikilinkWriteGuard = (
     return siblings.slice(anchor + 1, runEnd + 1)
   }
 
+  /** `name` when the write would CREATE that page — only then is the name
+   *  written, as the new page's content, so only then can a wikilink nested
+   *  in it become a reference. A failed lookup counts as missing: scan. */
+  const nameOfPageToCreate = async (name: string | null | undefined): Promise<string | undefined> => {
+    if (!name) return undefined
+    try {
+      await graph.resolvePageId(name)
+      return undefined
+    } catch {
+      return name
+    }
+  }
+  const targetPageToCreate = (target: string) => nameOfPageToCreate(pageNameInTarget(target))
+
+  /** The tied siblings an append next to `position`'s anchor re-keys — the
+   *  same rows a move to that position rewrites, under the anchor's parent. */
+  const anchoredTiedRewriteRows = async (
+    position: {kind: 'first'} | {kind: 'last'} | {kind: 'before', siblingId: string} | {kind: 'after', siblingId: string} | undefined,
+  ): Promise<MoveSiblingRow[]> => {
+    if (position?.kind !== 'before' && position?.kind !== 'after') return []
+    const rows = await graph.sqlAll('SELECT parent_id FROM blocks WHERE id = ? LIMIT 1', [position.siblingId])
+    const parentId = (rows[0] as {parent_id?: unknown} | undefined)?.parent_id
+    if (typeof parentId !== 'string') return []
+    // No block is being moved: '' excludes nothing.
+    return moveTiedRewriteRowsForGuard({id: '', parentId, position})
+  }
+
   const createWriteAssertions = () => {
     let guardSetForWrite: Promise<RefGuardSet> | null = null
     const guardSet = async () => {
@@ -261,9 +279,28 @@ export const createBlockedWikilinkWriteGuard = (
         ?? findBlockedRefInProperties(properties, guard)
       if (blocked) {
         throw new Error(
-          `Refusing to write "${blocked}": it references a blocked page. Refer to the page without linking it.`,
+          `Refusing to write "${neutralizeDisplayText(blocked)}": it references a blocked page. `
+          + 'Refer to the page without linking it.',
         )
       }
+    }
+
+    /** The row an `edit_block` leaves — the spliced content, and the stored
+     *  properties it keeps — when its block is live and contains `old` (the
+     *  operation's `id` is the resolved full id); otherwise the app refuses
+     *  the edit itself, so only `new` needs checking. A concurrent edit
+     *  between this read and the write is accepted, as for the
+     *  move/delete/restore reads: the policy stops accidental loops, not an
+     *  adversary, so no compare-and-set is threaded through. */
+    const editResult = async (
+      op: {id: string, old: string, new: string},
+    ): Promise<{content: string, properties?: Record<string, unknown>} | null> => {
+      const rows = await graph.sqlAll('SELECT content, properties_json FROM blocks WHERE deleted = 0 AND id = ?', [op.id])
+      const {content, properties} = refsFromSqlRow(rows[0])
+      const at = content?.indexOf(op.old) ?? -1
+      return content !== undefined && op.old !== '' && at >= 0
+        ? {content: content.slice(0, at) + op.new + content.slice(at + op.old.length), properties}
+        : null
     }
 
     const assertNoBlockedRefsInStoredRow = async (id: string): Promise<void> => {
@@ -306,7 +343,7 @@ export const createBlockedWikilinkWriteGuard = (
       }
     }
 
-    return {assertNoBlockedRefs, assertNoBlockedRefsInStoredRow, assertNoBlockedRefsInLiveDescendants}
+    return {assertNoBlockedRefs, assertNoBlockedRefsInStoredRow, assertNoBlockedRefsInLiveDescendants, editResult}
   }
 
   return {
@@ -315,10 +352,16 @@ export const createBlockedWikilinkWriteGuard = (
         assertNoBlockedRefs,
         assertNoBlockedRefsInStoredRow,
         assertNoBlockedRefsInLiveDescendants,
+        editResult,
       } = createWriteAssertions()
       switch (operation.type) {
         case 'create_block':
+          await assertNoBlockedRefs(await targetPageToCreate(operation.parentId))
+          await assertNoBlockedRefs(operation.content, operation.properties)
+          return
         case 'update_block':
+          // The values written, not the row they land in: a spawned agent
+          // completes its task by update_block on the task block itself.
           await assertNoBlockedRefs(operation.content, operation.properties)
           return
         case 'move_block': {
@@ -338,6 +381,33 @@ export const createBlockedWikilinkWriteGuard = (
           await assertNoBlockedRefsInStoredRow(operation.id)
           await assertNoBlockedRefsInLiveDescendants(operation.id)
           return
+        case 'append_markdown':
+          await assertNoBlockedRefs(await targetPageToCreate(operation.target))
+          await assertNoBlockedRefs(operation.markdown)
+          // Anchored, it re-keys siblings tied with the anchor, as a move does.
+          for (const row of await anchoredTiedRewriteRows(operation.position)) {
+            await assertNoBlockedRefs(row.content, row.properties)
+          }
+          return
+        case 'edit_block': {
+          await assertNoBlockedRefs(operation.new)
+          const edited = await editResult(operation)
+          if (edited) await assertNoBlockedRefs(edited.content, edited.properties)
+          return
+        }
+        case 'create_page':
+          // A date's note is got or created the way opening that day does,
+          // repairs included; its own row is not inspected (accepted — that
+          // needs the app's date grammar here).
+          await assertNoBlockedRefs(await nameOfPageToCreate(
+            operation.name === undefined ? undefined : createPageName(operation.name),
+          ))
+          return
+        default: {
+          // A new write tool must say here what it can make reference.
+          const unhandled: never = operation
+          throw new Error(`No blocked-wikilink policy for write ${(unhandled as {type: string}).type}`)
+        }
       }
     },
   }
