@@ -232,14 +232,14 @@ const cacKey = (key: string): string => key.replace(/-([a-z])/g, (_, c: string) 
 
 const EMPTY_VALUE_HINT = ' An empty value (a shell expanding an unset variable) arrives as 0.'
 
-/** cac numberifies every digits-only option value, so `00123` arrives as 123
- *  and turning it back into a string names something else (another id
- *  prefix, another type). */
+/** cac numberifies every digits-only option value before this code sees it,
+ *  so `00123` arrives as 123 and its text is gone: turning it back into a
+ *  string would name something else (another id prefix, another type). */
 const refuseNumberified = (flag: string, value: unknown): void => {
   if (typeof value !== 'number') return
   throw new Error(
-    `${flag} got the number ${value}: a digits-only value loses its leading zeros. `
-    + `Prefix it so it stays text (an id prefix as printed: ^${value}).`,
+    `${flag} got the number ${value}: the CLI reads a digits-only value as a number, which drops leading zeros. `
+    + `Send it as text with \`kmagent raw '<json>'\`; a block ref can also be written as its printed id prefix (^${value}).`,
   )
 }
 
@@ -265,8 +265,8 @@ const coerceOption = (spec: CliOptionSpec, value: unknown): unknown => {
       return String(value)
     }
     case 'string-array': {
-      // Each occurrence is one value, verbatim (repeat the flag for more): a
-      // type label can contain a comma.
+      // Each occurrence is one value, never split on commas (repeat the flag
+      // for more): a type label can contain one.
       const items = Array.isArray(value) ? value : [value]
       for (const item of items) refuseNumberified(flag, item)
       return items.map(item => String(item).trim()).filter(item => item !== '')

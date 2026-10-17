@@ -60,9 +60,9 @@ const SEARCH_WINDOW = 100
 const MAX_DUPLICATES_SHOWN = 5
 const MAX_WINDOW = 2000
 
-/** A filter type is a type id or a type's label (`todo`, a user type's
- *  name), matched case-insensitively. An unknown one is kept as an id so the
- *  filter matches nothing rather than silently widening. */
+/** A filter type is a type id, matched exactly, or a type's label (`todo`,
+ *  a user type's name), matched case-insensitively. An unknown one is kept
+ *  as an id so the filter matches nothing rather than silently widening. */
 const resolveTypeIds = (repo: Repo, types: readonly string[]): string[] => {
   const ids = new Set<string>()
   for (const wanted of types) {

@@ -77,7 +77,8 @@ const prefixMatches = async (repo: Repo, prefix: string): Promise<string[]> => {
   const live = rows.filter(row => row.deleted === 0)
   // A soft-deleted block answers only when nothing live does, so a prefix
   // printed for a live block keeps meaning that block after a sibling with
-  // the same prefix is deleted — and `restore-block <prefix>` still works.
+  // the same prefix is deleted — and a deleted block's own prefix still
+  // resolves, so a view can say it is deleted and print its full id.
   return (live.length > 0 ? live : rows).map(row => row.id)
 }
 

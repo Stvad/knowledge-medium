@@ -65,7 +65,7 @@ describe('cliInputFrom', () => {
     expect(() => cliInputFrom(tool('search'), ['x'], {under: 123456}))
       .toThrow(/--under got the number 123456.*\^123456/)
     expect(() => cliInputFrom(tool('search'), ['x'], {types: ['todo', 123]}))
-      .toThrow(/--types got the number 123/)
+      .toThrow(/--types got the number 123.*kmagent raw/)
   })
 
   it('takes each string-array flag occurrence as one value, commas included', () => {
