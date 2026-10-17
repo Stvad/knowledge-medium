@@ -1,0 +1,1 @@
+import{Du as e,Ou as t}from"../../../chunks/app-Bq1dO1cV.js";export{e as createWatchEventsRegistry,t as watchEventsRegistry};

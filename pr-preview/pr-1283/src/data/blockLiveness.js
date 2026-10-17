@@ -1,0 +1,1 @@
+import{FN as e,PN as t}from"../../chunks/app-Bq1dO1cV.js";export{t as anyBlockTombstoned,e as isBlockTombstoned};
