@@ -552,6 +552,7 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
       contentReferencePrefill,
       propertySchemaResolverFor: resolverFor,
       writableWorkspace,
+      propertyWritesAreSettled: () => settleWrites,
       sameTxEvents,
       now,
       newId,

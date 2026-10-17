@@ -985,12 +985,15 @@ describe('flipped workspace — ref-typed property values are editable `((id))` 
     expect(await liveFieldRows('p')).toEqual([])
   })
 
-  it('unknown cell keys are left alone (pending §9 orphan synthesis, never deleted)', async () => {
+  it('leaves pre-existing unknown cell keys alone during unrelated writes', async () => {
     await seedWorkspace('children')
     const repo = setup()
     await createBlock(repo, 'p')
-    await repo.tx(tx => tx.update('p', {properties: {'no-such-schema': 42}}),
-      {scope: ChangeScope.BlockDefault})
+    await sharedDb.db.writeTransaction(tx => tx.execute(
+      'UPDATE blocks SET properties_json = ? WHERE id = ?',
+      [JSON.stringify({'no-such-schema': 42}), 'p'],
+    ))
+    await repo.tx(tx => tx.update('p', {content: 'edited'}), {scope: ChangeScope.BlockDefault})
 
     expect(await childrenRows('p')).toEqual([])
     const row = await sharedDb.db.get<{properties_json: string}>(
@@ -2185,6 +2188,9 @@ describe('revival re-materializes property children (#778)', () => {
     ]))
     repo.setActiveWorkspaceId(WS)
     registerDefinition(repo, 'test-status-definition', STATUS_FIELD_ID, statusSchema)
+    registerDefinition(repo, 'test-restore-trigger', 'field-restore-trigger', defineProperty('restore', {
+      codec: codecs.string, defaultValue: '', changeScope: ChangeScope.BlockDefault,
+    }))
     await createBlock(repo, 'p')
     await createBlock(repo, 'trigger')
     await repo.tx(tx => tx.setProperty('p', statusSchema, 'done'), {scope: ChangeScope.BlockDefault})
