@@ -1,1 +1,1 @@
-import{au as e,iu as t,ou as n}from"../../../chunks/app-eQp2rLZr.js";export{t as MAX_LISTED_CHANGES,e as blockHistory,n as recentChanges};
+import{au as e,iu as t,ou as n}from"../../../chunks/app-B2L25j-1.js";export{t as MAX_LISTED_CHANGES,e as blockHistory,n as recentChanges};
