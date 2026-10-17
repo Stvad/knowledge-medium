@@ -116,15 +116,19 @@ export const snippet = (content: string, query: string, width = SNIPPET_CONTEXT 
   return `${start > 0 ? '…' : ''}${line.slice(start, end)}${end < line.length ? '…' : ''}`
 }
 
+/** The link syntax a block's text can carry: `[[Page]]` / `#[[Tag]]`,
+ *  `((id))`, `#tag`. Stripped in this order, so a tag never eats a link. */
+const LINK_PATTERNS = [/#?\[\[[^\]]*\]\]/g, /\(\([^)]*\)\)/g, /(^|\s)#[^\s#]+/g]
+
 /** Strip link syntax to see whether a block says anything beyond the links
- *  it carries — `[[Page]]`, `#tag`, `#[[Tag]]`, `((id))`. */
+ *  it carries. */
 export const textBeyondLinks = (content: string): string =>
-  content
-    .replace(/#?\[\[[^\]]*\]\]/g, ' ')
-    .replace(/\(\([^)]*\)\)/g, ' ')
-    .replace(/(^|\s)#[^\s#]+/g, ' ')
+  LINK_PATTERNS.reduce((text, pattern) => text.replace(pattern, ' '), content)
     .replace(/[\s,.;:—–-]+/g, ' ')
     .trim()
+
+// `search` ignores a global pattern's lastIndex, so the shared patterns stay reusable.
+const hasLink = (content: string): boolean => LINK_PATTERNS.some(pattern => content.search(pattern) >= 0)
 
 /** A block that is nothing but references reads as noise on its own (a
  *  backlink list of `[[Page]]` rows says nothing), so views add its parent's
@@ -135,4 +139,4 @@ export const isReferenceOnly = (content: string): boolean =>
 /** A label is a block of references only, at least one (`[[Meeting]]`,
  *  `#standup`): the head of a record whose lines are its children. */
 export const isLabel = (content: string): boolean =>
-  isReferenceOnly(content) && textBeyondLinks(content) !== oneLine(content).trim()
+  isReferenceOnly(content) && hasLink(content)

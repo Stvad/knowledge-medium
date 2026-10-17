@@ -1190,22 +1190,27 @@ describe('view-backlinks', () => {
     expect(text).toContain('   ↳ sibling: topic: contract renewal terms')
   })
 
-  it('judges a label by all of its text: words, or links past the head it reads, make it a parent', async () => {
+  it('judges a label by all of its text: no link, words, or links past the head it reads make it a parent', async () => {
     await create({id: TARGET, content: 'Target', properties: {alias: ['Target']}})
     const parents = [
       uuid('6b000001', 1),
       uuid('6b000002', 2),
+      uuid('6b000003', 3),
+      uuid('6b000004', 4),
     ]
     await create({id: parents[0], content: 'ok'})
     // The head read is 200 characters: 40 whole tags, so the head alone reads as a label.
     await create({id: parents[1], content: `${'#tag '.repeat(50)}then the actual words`})
+    // Punctuation only: nothing beyond links, and no link either.
+    await create({id: parents[2], content: '-'})
+    await create({id: parents[3], content: 'OK:'})
     for (const [index, parent] of parents.entries()) {
       await create({id: uuid('6b00001' + index, 10 + index), parentId: parent, content: `line ${index} of [[Target]]`, references: [{id: TARGET, alias: 'Target'}]})
       await create({id: uuid('6b00002' + index, 20 + index), parentId: parent, content: 'a line beside it'})
     }
 
     const out = await view<BacklinksView>({type: 'view-backlinks', ref: TARGET, format: 'json'})
-    expect(out.rows).toHaveLength(2)
+    expect(out.rows).toHaveLength(4)
     expect(out.rows.filter(row => row.siblings)).toEqual([])
   })
 

@@ -26,9 +26,9 @@ export type GroupedBacklinksGroupingSpec =
   | Partial<GroupedBacklinksConfig>
 
 /** Resolve the grouping config for `blockId` the way the grouped-backlinks
- *  view does, but outside React. The `'user'` branch bootstraps the
- *  grouped-backlinks user-prefs sub-block on first access (same as
- *  opening the panel in-app does). */
+ *  view does, but outside React. The `'user'` branch reads the user's
+ *  grouped-backlinks defaults without creating their prefs block; a user
+ *  who has none gets the defaults' default. */
 export const resolveGroupedBacklinksConfig = async (
   repo: Repo,
   workspaceId: string,
