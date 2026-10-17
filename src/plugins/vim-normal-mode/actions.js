@@ -1,1 +1,1 @@
-import{Dg as e,Og as t,kg as n}from"../../../chunks/app-DJY9udxR.js";export{e as getVimNormalModeActions,t as jumpVisibleBlocks,n as vimNormalModeActionsExtension};
+import{Dg as e,Og as t,kg as n}from"../../../chunks/app-DVdHhsuz.js";export{e as getVimNormalModeActions,t as jumpVisibleBlocks,n as vimNormalModeActionsExtension};

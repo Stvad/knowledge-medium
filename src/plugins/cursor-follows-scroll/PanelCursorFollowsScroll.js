@@ -1,1 +1,1 @@
-import{Pg as e}from"../../../chunks/app-DJY9udxR.js";export{e as PanelCursorFollowsScroll};
+import{Pg as e}from"../../../chunks/app-DVdHhsuz.js";export{e as PanelCursorFollowsScroll};
