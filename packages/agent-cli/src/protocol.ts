@@ -540,6 +540,11 @@ export const AGENT_VIEW_DEFAULTS = {
   sqlMaxRows: 200,
   /** An outline line's content budget; longer content is cut with a marker. */
   lineChars: 200,
+  /** What an outline's root and rows print at most, in characters (the unit
+   *  Claude Code's MCP output cap counts): under that cap (25k tokens) and the
+   *  CLI's 30k-character shell cap, with room for the legend lines after the
+   *  rows, which are not counted. */
+  outlineChars: 24_000,
 } as const
 
 const viewRefField = z.string().describe(
@@ -1105,7 +1110,7 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   },
   'view-outline': {
     usage: 'kmagent subtree <ref> [--depth <n>] [--limit <n>] [--offset <n>] [--properties brief|none|full] [--expand-collapsed] [--json]',
-    description: 'A block and its descendants as a markdown outline: `- content  key:: value  ^shortid`, one line per block. Bounded: expands `depth` levels and at most `limit` blocks below the root, shallower levels first; unexpanded children show as `(+N children)`, long content as `…[+N chars]`, and a cut-off list of the root\'s children ends with the offset to continue from.',
+    description: `A block and its descendants as a markdown outline: \`- content  key:: value  ^shortid\`, one line per block. Bounded: expands \`depth\` levels and at most \`limit\` blocks below the root, shallower levels first, and stops early, saying how to narrow, at ${AGENT_VIEW_DEFAULTS.outlineChars} characters; unexpanded children show as \`(+N children)\`, long content as \`…[+N chars]\`, and a cut-off list of the root's children ends with the offset to continue from.`,
     readOnly: true,
   },
   'view-backlinks': {
