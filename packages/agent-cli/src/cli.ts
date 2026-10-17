@@ -45,7 +45,7 @@ import {
   renderKernelTypesInstallSummary,
 } from './kernelDts.js'
 import {cliCommandFrom, cliOptionsFor, GRAPH_READ_TOOLS, hasJsonFormat, renderToolResult} from './readTools.js'
-import {limitOption, scopeAssertion, workspaceAssertion} from './cliOptions.js'
+import {appendPositionOption, limitOption, scopeAssertion, workspaceAssertion} from './cliOptions.js'
 import type {AppendMarkdownResult} from './graph.js'
 import {renderAppendResult} from './writeTools.js'
 import {extensionScaffold, slugify, titleize} from './scaffold.js'
@@ -764,17 +764,6 @@ const readStdin = async (): Promise<string> => {
   return Buffer.concat(chunks).toString('utf8')
 }
 
-const appendPosition = (options: {first?: boolean, after?: unknown, before?: unknown}) => {
-  const given = [options.first === true, options.after !== undefined, options.before !== undefined]
-  if (given.filter(Boolean).length > 1) {
-    throw new Error('append-markdown takes at most one of --first, --after <id>, --before <id>')
-  }
-  if (options.first) return {position: {kind: 'first' as const}}
-  if (options.after !== undefined) return {position: {kind: 'after' as const, siblingId: String(options.after)}}
-  if (options.before !== undefined) return {position: {kind: 'before' as const, siblingId: String(options.before)}}
-  return {}
-}
-
 // Block text often starts with `-` (a bullet, a flag in a code sample), which
 // the option parser reads as an option — so text args are also taken verbatim
 // from after `--`, which cac hands over as `options['--']`.
@@ -809,7 +798,7 @@ cli
       type: 'append-markdown',
       target: String(target),
       markdown: await markdownArgument(markdown, options['--']),
-      ...appendPosition(options),
+      ...appendPositionOption(options),
       ...(options.oneBlock ? {shape: 'block' as const} : {}),
     }
     if (options.json) {

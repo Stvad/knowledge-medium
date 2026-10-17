@@ -1,11 +1,14 @@
 /* The rendering of an append result, shared by the km MCP tool and the CLI
  * verb. Lives apart from `cli.ts` because that module self-executes on import. */
 import type {AppendMarkdownResult} from './graph.js'
-import {neutralizeDisplayText} from './protocol.js'
+import {AGENT_VIEW_DEFAULTS, clip, neutralizeDisplayText} from './protocol.js'
 
+/** A block's first line, cut to the read views' line budget, and how many
+ *  lines follow. */
 const preview = (content: string): string => {
   const [first, ...rest] = content.split('\n')
-  return rest.length > 0 ? `${first} …(+${rest.length} line${rest.length === 1 ? '' : 's'})` : first
+  const line = clip(first, AGENT_VIEW_DEFAULTS.lineChars).text
+  return rest.length > 0 ? `${line} …(+${rest.length} line${rest.length === 1 ? '' : 's'})` : line
 }
 
 /** `Appended N blocks under "<target>" ^short (kind[, created]):` then the

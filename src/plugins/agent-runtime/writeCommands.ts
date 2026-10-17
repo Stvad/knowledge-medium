@@ -9,7 +9,7 @@ import { orderKeysForInsert, type InsertPosition } from '@/data/mutators.js'
 import type { Repo } from '@/data/repo'
 import { parseMarkdownToBlocks, type ParsedBlock } from '@/utils/markdownParser.js'
 import { parseRelativeDate } from '@/utils/relativeDate.js'
-import { escapeJsonDisplayControls, pageNameInTarget } from '@knowledge-medium/agent-cli/protocol'
+import { createPageName, escapeJsonDisplayControls } from '@knowledge-medium/agent-cli/protocol'
 import { agentTxOptions } from './agentWrites.ts'
 import { shortIds } from './agentViews/resolveRef.ts'
 import {
@@ -192,7 +192,7 @@ export const createPage = async (
   }
   let resolved: ResolvedAgentTarget
   if (input.name !== undefined) {
-    const name = pageNameInTarget(input.name) ?? input.name.trim()
+    const name = createPageName(input.name)
     if (name === '') throw new Error(`${verb}: name is empty.`)
     resolved = await resolvePageTarget(repo, name, verb)
   } else {

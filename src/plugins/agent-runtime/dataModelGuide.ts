@@ -1,4 +1,4 @@
-import type { DataModelTopic } from '@knowledge-medium/agent-cli/protocol'
+import { TODO_WRITE_HELP, WRITE_TARGET_HELP, type DataModelTopic } from '@knowledge-medium/agent-cli/protocol'
 
 const GUIDE_INTRO = `# Knowledge Medium — data model (for agents)
 
@@ -216,30 +216,27 @@ The convenience commands above wrap the starred ones (★) and add hydration.
 
 Write the way you would edit files, and let the app do the outline:
 
-- \`append-markdown <target> <markdown>\` (MCP \`append_markdown\`) — markdown is
-  split into blocks exactly as the app's "paste as markdown" splits it (bullets
-  and headings nest; a fenced code block, table or quote stays one block) and
-  inserted in ONE transaction. Default position: after the target's last child.
-- A **target** is a block id or unique id prefix (\`^3f2a9c1b\`), a
-  \`[[Page name]]\` (created when missing, exactly as typing the wikilink
-  would — a date-literal name is that daily note), or a date expression
-  (\`today\`, \`2026-10-15\`, \`next monday\` → that day's daily note, created
-  when missing). A bare name only finds an EXISTING page; creating one takes
-  the explicit \`[[…]]\`. \`create-page <name> | --date <expr>\` creates without
-  writing content.
+- \`append-markdown <target> -- <markdown>\` (or markdown on stdin; MCP
+  \`append_markdown\`) — markdown is split into blocks exactly as the app's
+  "paste as markdown" splits it (bullets and headings nest; a fenced code block,
+  table or quote stays one block) and inserted in ONE transaction. Default
+  position: after the target's last child. \`create-page <name> | --date <expr>\`
+  creates a page or daily note without writing content.
+- ${WRITE_TARGET_HELP}
 - \`edit-block <id> <old> <new>\` — replace the one occurrence of \`old\`,
-  applied against the content current at write time; refused when \`old\` is
-  missing or ambiguous. Prefer it to rewriting a whole block.
+  applied against the content current at write time. Prefer it to rewriting a
+  whole block.
 - \`update-block\` replaces the whole content (properties merge). Pass
-  \`expectedContent\` — what you read — and it is refused if the user changed
-  the block since.
-- **Todos** compose the built-in \`todo\` type: create a block with properties
-  \`{"types": ["todo"], "status": "open"}\`; complete it with
-  \`update-block {id, properties: {"status": "done"}}\`.
-- \`recent-changes\` lists what agent writes changed (\`--all\` adds the user's
-  own edits); \`block-history <id>\` shows one block's changes with full prior
-  content, to review or restore. Every bridge write is recorded as a
-  transaction described \`agent runtime <verb>\`.
+  \`expectedContent\` — the block's exact content, read whole with
+  \`get-block\`, not from an outline line — and the update is refused if the
+  content is no longer that.
+- ${TODO_WRITE_HELP}
+- \`recent-changes\` lists the blocks agent writes changed (\`--all\`, MCP
+  \`includeUser\`, adds the user's own edits); \`block-history <id>\` shows one
+  block's changes with full prior content, to review or restore. A bridge write
+  is a transaction described \`agent runtime <verb>\` — except \`eval\`,
+  \`sql execute\` and \`run-action\`, and the follow-up transactions the app
+  runs after a write (such as a page a new [[link]] mints).
 `,
   },
   {

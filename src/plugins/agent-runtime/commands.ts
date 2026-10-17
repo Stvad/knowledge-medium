@@ -915,7 +915,7 @@ const createRuntimeBlock = async (
   if (explicitId !== undefined) assertCanonicalBlockId(explicitId, 'createBlock')
   const references = input.data?.references as BlockReference[] | undefined
 
-  if (input.parentId) {
+  if (input.parentId !== undefined) {
     const parentRef = input.parentId
     // A [[page]] / date parent is created when missing; one undo entry for both.
     const id = await repo.undoGroup(async repo => {
@@ -1171,7 +1171,7 @@ const updateRuntimeBlock = async (
     found = true
     if (input.expectedContent !== undefined && before.content !== input.expectedContent) {
       throw new Error(
-        `update-block: block ${input.id} changed since it was read — nothing was written. `
+        `update-block: block ${input.id}'s content is not the expectedContent passed — nothing was written. `
         + `Its current content is: ${contentEcho(before.content)}. `
         + 'Re-plan against it, or use edit-block to change one passage.',
       )

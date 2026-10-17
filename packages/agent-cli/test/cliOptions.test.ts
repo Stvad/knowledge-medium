@@ -1,6 +1,6 @@
 import { cac } from 'cac'
 import { describe, expect, it } from 'vitest'
-import { limitOption, scopeAssertion, workspaceAssertion } from '../src/cliOptions.js'
+import { appendPositionOption, limitOption, scopeAssertion, workspaceAssertion } from '../src/cliOptions.js'
 
 /** Parse argv the way the real CLI does and hand back what the option
  *  actually became — so this pins CAC's behaviour too, not just our handling
@@ -94,5 +94,34 @@ describe('scopeAssertion', () => {
     expect(parsed).toEqual(['all', 'unapplied'])
 
     expect(() => scopeAssertion(parsed)).toThrow(/single value/)
+  })
+})
+
+describe('appendPositionOption', () => {
+  const parseAppend = (argv: string[]): Record<string, unknown> => {
+    const cli = cac('t')
+    let seen: Record<string, unknown> = {}
+    cli.command('append-markdown <target>', 'x')
+      .option('--first', 'f')
+      .option('--after <id>', 'a')
+      .option('--before <id>', 'b')
+      .action((_target, options) => { seen = options as Record<string, unknown> })
+    cli.parse(['node', 't', 'append-markdown', 'today', ...argv])
+    return seen
+  }
+
+  it('refuses a digits-only anchor CAC turned into a number, rather than a different id prefix', () => {
+    const options = parseAppend(['--after', '01234567'])
+    expect(options.after).toBe(1234567)
+    expect(() => appendPositionOption(options)).toThrow(/--after got the number 1234567.*\^1234567/s)
+  })
+
+  it('passes a ^-prefixed anchor through as text', () => {
+    expect(appendPositionOption(parseAppend(['--before', '^01234567'])))
+      .toEqual({position: {kind: 'before', siblingId: '^01234567'}})
+  })
+
+  it('refuses more than one position flag', () => {
+    expect(() => appendPositionOption(parseAppend(['--first', '--after', 'abc']))).toThrow(/at most one/)
   })
 })

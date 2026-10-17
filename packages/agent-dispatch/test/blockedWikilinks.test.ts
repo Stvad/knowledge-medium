@@ -402,6 +402,23 @@ describe('createBlockedWikilinkWriteGuard — markdown and edit writes', () => {
     await expect(guard.beforeWrite({type: 'append_markdown', target: '[[claude]]', markdown: '- x'})).resolves.toBeUndefined()
   })
 
+  it('names the blocked ref in its refusal without letting it reorder or break the line', async () => {
+    const guard = createBlockedWikilinkWriteGuard(graphFrom({}), ['evil\u202Ename'])
+    const refusal = guard.beforeWrite({type: 'create_block', parentId: 'p', content: 'see [[evil\u202Ename]]'})
+    await expect(refusal).rejects.toThrow('references a blocked page')
+    await expect(refusal).rejects.not.toThrow(/\u202E/)
+  })
+
+  it('checks the name create_page will create — trimmed — not a padded alias that happens to exist', async () => {
+    const padded = ' notes [[claude]] '
+    const guard = createBlockedWikilinkWriteGuard(
+      graphFrom({resolvePageId: async (name: string) => {
+        if (name === padded) return 'padded-alias-page'
+        throw new Error(`no page ${name}`)
+      }}), ['claude'])
+    await expect(guard.beforeWrite({type: 'create_page', name: padded})).rejects.toThrow('references a blocked page')
+  })
+
   it('lets a write into an EXISTING page through, whatever its title — nothing new is named', async () => {
     const guard = createBlockedWikilinkWriteGuard(graphFrom({resolvePageId: async () => 'page-id-123'}), ['claude'])
     await expect(guard.beforeWrite({type: 'create_block', parentId: '[[notes [[claude]]]]', content: 'x'}))

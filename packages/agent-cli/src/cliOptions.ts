@@ -61,3 +61,33 @@ export const scopeAssertion = (scope: unknown): {scope?: string} => {
   }
   return {scope}
 }
+
+/** cac numberifies every digits-only option value before this code sees it,
+ *  so `00123` arrives as 123 and its text is gone: turning it back into a
+ *  string would name something else (another id prefix, another type). */
+export const refuseNumberified = (flag: string, value: unknown): void => {
+  if (typeof value !== 'number') return
+  throw new Error(
+    `${flag} got the number ${value}: the CLI reads a digits-only value as a number, which drops leading zeros. `
+    + `Send it as text with \`kmagent raw '<json>'\`; a block ref can also be written as its printed id prefix (^${value}).`,
+  )
+}
+
+/** `append-markdown`'s --first / --after <id> / --before <id> as its
+ *  `position` field; an anchor CAC numberified is refused, not re-stringified. */
+export const appendPositionOption = (
+  options: {first?: unknown, after?: unknown, before?: unknown},
+): {position?: {kind: 'first'} | {kind: 'after' | 'before', siblingId: string}} => {
+  const given = [options.first === true, options.after !== undefined, options.before !== undefined]
+  if (given.filter(Boolean).length > 1) {
+    throw new Error('append-markdown takes at most one of --first, --after <id>, --before <id>')
+  }
+  if (options.first === true) return {position: {kind: 'first'}}
+  for (const kind of ['after', 'before'] as const) {
+    const value = options[kind]
+    if (value === undefined) continue
+    refuseNumberified(`--${kind}`, value)
+    return {position: {kind, siblingId: String(value)}}
+  }
+  return {}
+}

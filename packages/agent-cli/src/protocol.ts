@@ -529,6 +529,8 @@ export const AGENT_VIEW_DEFAULTS = {
   outlineDepth: 3,
   blockMaxChars: 4000,
   sqlMaxRows: 200,
+  /** An outline line's content budget; longer content is cut with a marker. */
+  lineChars: 200,
 } as const
 
 const viewRefField = z.string().describe(
@@ -877,7 +879,8 @@ export interface KnownCommandMeta {
 export const WRITE_TARGET_HELP =
   'A target is a block id or a printed short id (^3f2a9c1b); a [[Page name]], created if missing as typing '
   + 'that link would ([[2026-10-15]] is that daily note); or a date (today, next monday, 2026-10-15) for its '
-  + 'daily note, created if missing. A bare name only finds an existing page.'
+  + 'daily note, created if missing. Bare text is tried as an id prefix, an existing page, then a date — so '
+  + 'name a page as [[name]].'
 
 /** A todo composes the built-in `todo` type. */
 export const TODO_WRITE_HELP =
@@ -942,8 +945,9 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   'update-block': {
     usage: 'kmagent update-block <json>',
     description: 'Update a block. Body: {id, content?, properties?, replaceProperties?, expectedContent?}. Properties merge '
-      + 'unless replaceProperties. With expectedContent the update is refused, showing the current content, if the '
-      + 'block changed since. id may be a unique id prefix.',
+      + 'unless replaceProperties. With expectedContent the update is refused, showing the current content, unless '
+      + 'the block\'s content is exactly that (read it whole with get-block, not from an outline line). id may be a '
+      + 'unique id prefix.',
     readOnly: false,
   },
   'move-block': {
@@ -971,8 +975,8 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   'edit-block': {
     usage: "kmagent edit-block <id> <old> <new>   (or: kmagent edit-block <id> -- '<old>' '<new>' when either starts with -)",
     description: 'Replace the one occurrence of <old> in a block\'s content with <new> (literal text), against its '
-      + 'content at write time. Refused, showing the current content, when <old> is empty, missing or ambiguous. '
-      + '<id> may be a unique id prefix.',
+      + 'content at write time. Refused when <old> is empty or found more than once (add surrounding text), and when '
+      + 'it is not found, showing the current content. <id> may be a unique id prefix.',
     readOnly: false,
   },
   'create-page': {
@@ -984,8 +988,8 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   'recent-changes': {
     usage: 'kmagent recent-changes [--since <ms|iso>] [--limit <n>] [--all]',
     description: 'Recent agent-bridge writes in this workspace, newest first, with the blocks each changed (content '
-      + 'before/after); --all adds the user\'s own edits here. eval, sql execute and run-action writes are not '
-      + 'attributed.',
+      + 'before/after, clipped — block-history has it whole); --all adds the user\'s own edits here. eval, sql '
+      + 'execute and run-action writes are not attributed.',
     readOnly: true,
   },
   'block-history': {
@@ -1287,4 +1291,38 @@ export const toDisplayJson = (value: unknown): string => {
 export const pageNameInTarget = (text: string): string | null => {
   const match = /^\s*\[\[([\s\S]*)\]\]\s*$/.exec(text)
   return match ? match[1].trim() : null
+}
+
+/** The page `create-page <name>` gets or creates: one outer `[[…]]` is the
+ *  name's wrapper, and the name is trimmed. The runtime and the write guard
+ *  both read a name through this. */
+export const createPageName = (name: string): string => pageNameInTarget(name) ?? name.trim()
+
+/* Cutting agent-facing text to a budget, shared by the app's read views and
+ * the CLI/MCP renderers so every cut reads the same. */
+
+export const formatCount = (n: number): string => n.toLocaleString('en-US')
+
+/** The marker a cut leaves behind: how much is missing, so an agent can tell
+ *  a summary from the whole and knows a fuller read exists. */
+export const cutMarker = (cutChars: number): string => `…[+${formatCount(cutChars)} chars]`
+
+export interface Clipped {
+  text: string
+  /** Characters of the input not in `text` (0 when it fit). */
+  cut: number
+}
+
+const isHighSurrogate = (code: number): boolean => code >= 0xd800 && code <= 0xdbff
+
+/** `at` moved back by one when it would split a surrogate pair, so a slice
+ *  boundary there keeps an astral character (an emoji) whole on one side. */
+export const charBoundary = (text: string, at: number): number =>
+  at > 0 && at < text.length && isHighSurrogate(text.charCodeAt(at - 1)) ? at - 1 : at
+
+/** Cut to at most `max` characters of the ORIGINAL text, marked. */
+export const clip = (text: string, max: number): Clipped => {
+  if (text.length <= max) return {text, cut: 0}
+  const end = charBoundary(text, max)
+  return {text: `${text.slice(0, end)}${cutMarker(text.length - end)}`, cut: text.length - end}
 }

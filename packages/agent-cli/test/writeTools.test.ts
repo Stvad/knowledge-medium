@@ -1,4 +1,5 @@
 import {describe, expect, it} from 'vitest'
+import {AGENT_VIEW_DEFAULTS} from '../src/protocol'
 import {renderAppendResult} from '../src/writeTools'
 
 describe('renderAppendResult', () => {
@@ -32,5 +33,15 @@ describe('renderAppendResult', () => {
     })
     expect(text).not.toMatch(/\u202E/)
     expect(text.split('\n')).toHaveLength(1)
+  })
+
+  it('cuts a long line with the read views\' marker, so a long target paragraph is not echoed whole', () => {
+    const long = 'p'.repeat(AGENT_VIEW_DEFAULTS.lineChars + 40)
+    const text = renderAppendResult({
+      target: {id: 't', shortId: 't', kind: 'block', created: false, content: long},
+      blocks: [{id: 'b', shortId: 'b', parentId: 't', depth: 0, content: long}],
+    })
+    const kept = `${'p'.repeat(AGENT_VIEW_DEFAULTS.lineChars)}…[+40 chars]`
+    expect(text).toBe([`Appended 1 block under "${kept}" ^t (block):`, `- ${kept}  ^b`].join('\n'))
   })
 })

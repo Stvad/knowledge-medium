@@ -48,7 +48,7 @@ export interface OutlineView {
 
 const MAX_DEPTH = 20
 const MAX_BLOCKS = 2000
-const LINE_CHARS = 200
+const LINE_CHARS = AGENT_VIEW_DEFAULTS.lineChars
 const ROOT_CHARS = 300
 
 interface Node {

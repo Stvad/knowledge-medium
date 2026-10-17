@@ -6,13 +6,14 @@
  *     the way a wikilink creates it (a date-literal name is that day's daily
  *     note).
  *   - a date expression (`today`, `2026-10-15`, `next monday`) — that day's
- *     daily note, created if missing.
+ *     daily note, created if missing (see {@link isExplicitDate}).
  * A bare name that matches nothing is refused rather than created, so a typo'd
  * id or name never mints a page — creating one takes the explicit `[[…]]`.
  */
 import { pageNameInTarget } from '@knowledge-medium/agent-cli/protocol'
 import type { Repo } from '@/data/repo'
 import type { InsertPosition } from '@/data/mutators.js'
+import { assertRoundTrippableReferenceLabel } from '@/data/referenceBlock.js'
 import { ensureAliasTarget } from '@/data/targets.js'
 import { dailyNoteBlockId, getOrCreateDailyNote } from '@/plugins/daily-notes/dailyNotes.js'
 import { parseLiteralDailyPageTitle, parseRelativeDate } from '@/utils/relativeDate.js'
@@ -148,6 +149,8 @@ export const resolvePageTarget = async (
   }
   if (existing) return {id: existing.id, kind: 'page', created: false}
   if (options.create === false) throw new Error(`${verb}: no page named [[${name}]].`)
+  // Typing a link no parser reads as one creates nothing; neither does this.
+  assertRoundTrippableReferenceLabel(name, `${verb}: page name`)
   let result: {id: string; inserted: boolean} | undefined
   await repo.tx(async tx => {
     // The seat is minted through the ACTIVE workspace's type registry.
@@ -156,6 +159,16 @@ export const resolvePageTarget = async (
   }, agentTxOptions(verb))
   return {id: result!.id, kind: 'page', created: result!.inserted}
 }
+
+const EXPLICIT_RELATIVE_DATE =
+  /^(?:today|yesterday|tomorrow|(?:next|last|this) (?:mon|tues|wednes|thurs|fri|satur|sun)day)$/i
+
+/** A date a bare target may CREATE a daily note for: a literal one (2026-10-15,
+ *  "October 15th, 2026") or a plain relative day. Other text chrono reads as a
+ *  date ("May", "weekend", a page name in the wrong case) only finds an
+ *  existing note, so a typo never mints one. */
+const isExplicitDate = (text: string): boolean =>
+  EXPLICIT_RELATIVE_DATE.test(text) || parseLiteralDailyPageTitle(text) !== null
 
 /** A block target must be a live block. A UUID-shaped ref resolves without a
  *  lookup, so this is where a missing one is caught — before the write pays
@@ -198,7 +211,15 @@ export const resolveAgentTarget = async (
   if (found?.via === 'date') {
     // `resolveBlockRef` names the day's deterministic id; the note itself may
     // not exist yet.
-    return resolveDailyNoteTarget(repo, parseRelativeDate(raw)!.iso, verb, pinned)
+    const text = raw.trim()
+    const {iso} = parseRelativeDate(text)!
+    if (!isExplicitDate(text) && (await repo.load(dailyNoteBlockId(pinned.workspaceId, iso))) === null) {
+      throw new Error(
+        `${verb}: "${text}" reads as the date ${iso}, whose daily note does not exist — pass ${iso} to create it, `
+        + `or [[${text}]] for a page.`,
+      )
+    }
+    return resolveDailyNoteTarget(repo, iso, verb, pinned)
   }
   return resolvePageTarget(repo, raw.trim(), verb, pinned)
 }

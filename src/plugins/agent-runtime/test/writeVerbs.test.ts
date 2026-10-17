@@ -10,6 +10,7 @@ import { ChangeScope } from '@/data/api'
 import { PAGE_TYPE } from '@/data/blockTypes'
 import { aliasesProp, getBlockTypes } from '@/data/properties'
 import { computeAliasSeatId } from '@/data/targets'
+import { MAX_ALIAS_LENGTH } from '@/data/referenceBlock'
 import { ensureDailyNoteTarget } from '@/plugins/daily-notes/dailyNotes'
 import type { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -124,6 +125,17 @@ describe('target resolution', () => {
       .toEqual({id: LONE, kind: 'page', created: false})
     expect(await resolveAgentTarget(repo, 'Inbox', 'test'))
       .toEqual({id: LONE, kind: 'page', created: false})
+  })
+
+  it('creates a daily note only for an explicit date — a word that merely parses as one finds an existing note', async () => {
+    await expect(resolveAgentTarget(repo, 'weekend', 'test')).rejects.toThrow(/does not exist.*\[\[weekend\]\]/s)
+    await expect(resolveAgentTarget(repo, 'May', 'test')).rejects.toThrow(/does not exist/)
+    expect(await sharedDb.db.getAll(
+      `SELECT id FROM blocks WHERE json_extract(properties_json, '$."daily-note:date"') IS NOT NULL`,
+    )).toEqual([])
+    for (const explicit of ['today', '2026-03-04', 'next monday', 'March 4th, 2026']) {
+      expect(await resolveAgentTarget(repo, explicit, 'test')).toMatchObject({kind: 'daily'})
+    }
   })
 
   it('creates a missing page at the alias seat a wikilink would mint', async () => {
@@ -305,11 +317,11 @@ describe('update-block compare-and-set', () => {
     expect(await contentOf(NOTE)).toBe('v2')
   })
 
-  it('refuses — content AND properties — when the block changed since it was read', async () => {
+  it('refuses — content AND properties — when the content is not the expectedContent', async () => {
     await seed([{id: NOTE, content: 'edited elsewhere'}])
     await expect(run({
       type: 'update-block', id: NOTE, content: 'mine', properties: {flag: true}, expectedContent: 'what I read',
-    })).rejects.toThrow(/changed since.*edited elsewhere/s)
+    })).rejects.toThrow(/not the expectedContent.*edited elsewhere/s)
     const after = (await repo.load(NOTE))!
     expect(after.content).toBe('edited elsewhere')
     expect(after.properties.flag).toBeUndefined()
@@ -340,6 +352,13 @@ describe('create-page', () => {
     await expect(run({type: 'create-page', name: 'a', date: 'today'})).rejects.toThrow(/exactly one of name or date/)
   })
 
+  it('refuses a name no wikilink could reach, as typing that link would create nothing', async () => {
+    const name = 'a'.repeat(MAX_ALIAS_LENGTH + 1)
+    await expect(run({type: 'create-page', name})).rejects.toThrow()
+    await expect(run({type: 'append-markdown', target: `[[${name}]]`, markdown: '- x'})).rejects.toThrow()
+    expect(await sharedDb.db.getAll('SELECT block_id FROM block_aliases WHERE alias = ?', [name])).toEqual([])
+  })
+
   it('refuses a date that does not parse', async () => {
     await expect(run({type: 'create-page', date: 'someday maybe'})).rejects.toThrow(/Could not parse/)
   })
@@ -366,6 +385,11 @@ describe('agent write attribution', () => {
   it('create-block accepts a [[page]] parent, creating the page', async () => {
     const created = await run({type: 'create-block', parentId: '[[Someday]]', content: 'idea'}) as {parentId: string}
     expect(created.parentId).toBe(computeAliasSeatId('Someday', WS, 0))
+  })
+
+  it('create-block refuses an empty parentId rather than writing a top-level block', async () => {
+    await expect(run({type: 'create-block', parentId: '', content: 'loose'})).rejects.toThrow(/empty/)
+    expect(await sharedDb.db.getAll('SELECT id FROM blocks WHERE content = ?', ['loose'])).toEqual([])
   })
 
   it('create-block takes a null parentId as a top-level block, as move-block does', async () => {
@@ -407,6 +431,13 @@ describe('recent-changes', () => {
     expect(out.txs[1].changes.map(change => [change.blockId, change.kind])).toContainEqual(
       [appended.blocks[0].id, 'create'],
     )
+  })
+
+  it('clips listed content with the read views\' cut marker', async () => {
+    await seed([{id: NOTE, content: 'short'}])
+    await run({type: 'update-block', id: NOTE, content: 'y'.repeat(250)})
+    const out = await run({type: 'recent-changes'}) as ChangesOut
+    expect(out.txs[0].changes[0].content?.after).toBe(`${'y'.repeat(200)}…[+50 chars]`)
   })
 
   it('lists at most MAX_LISTED_CHANGES blocks per call, newest tx first, and counts what each tx left out', async () => {

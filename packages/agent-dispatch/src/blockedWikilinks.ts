@@ -1,6 +1,6 @@
 import type { BridgeGraph } from '@knowledge-medium/agent-cli/graph'
 import type { GraphMcpWriteGuard } from '@knowledge-medium/agent-cli/mcpServer'
-import { pageNameInTarget } from '@knowledge-medium/agent-cli/protocol'
+import { createPageName, neutralizeDisplayText, pageNameInTarget } from '@knowledge-medium/agent-cli/protocol'
 
 /** Dispatch-owned MCP policy: page aliases whose wikilinks the spawned
  *  agent write tools must refuse to create. JSON-array encoded; legacy
@@ -289,7 +289,8 @@ export const createBlockedWikilinkWriteGuard = (
         ?? findBlockedRefInProperties(properties, guard)
       if (blocked) {
         throw new Error(
-          `Refusing to write "${blocked}": it references a blocked page. Refer to the page without linking it.`,
+          `Refusing to write "${neutralizeDisplayText(blocked)}": it references a blocked page. `
+          + 'Refer to the page without linking it.',
         )
       }
     }
@@ -398,9 +399,8 @@ export const createBlockedWikilinkWriteGuard = (
           await assertNoBlockedRefs((await editResult(operation)) ?? undefined)
           return
         case 'create_page':
-          // As create-page reads it: one outer [[…]] is the name's wrapper.
           await assertNoBlockedRefs(await nameOfPageToCreate(
-            operation.name === undefined ? undefined : pageNameInTarget(operation.name) ?? operation.name,
+            operation.name === undefined ? undefined : createPageName(operation.name),
           ))
           return
         default: {

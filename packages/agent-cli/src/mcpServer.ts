@@ -43,7 +43,7 @@ The views (get_block, subtree, backlinks, grouped_backlinks, search) and sql_que
 
 Start with subtree on a page name or "today" for an overview, search for text (filters: types, under, includeExtensions), backlinks / grouped_backlinks for what references something. guide indexes the data model (guide with a topic reads one section); sql_query is the escape hatch (read-only, rows capped).
 
-Writing: append_markdown writes an outline in one call; edit_block changes one passage of a block; pass update_block the content you read as expectedContent so a concurrent edit is refused rather than overwritten.`
+Writing: append_markdown writes an outline in one call; edit_block changes one passage of a block; pass update_block the block's exact content as expectedContent so a concurrent edit of it is refused rather than overwritten.`
 
 type MoveBlockPositionInput = z.infer<typeof moveBlockPositionSchema>
 
@@ -141,8 +141,8 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
 
   server.registerTool('update_block' satisfies KmMcpToolName, {
     description: 'Replace a block\'s content and/or merge properties (omitted keys stay). To change one passage, use '
-    + 'edit_block. With expectedContent (the content you read), the update is refused, showing the current '
-    + 'content, if the block changed since.',
+    + 'edit_block. With expectedContent the update is refused, showing the current content, unless the block\'s '
+    + 'content is exactly that — read it whole with get_block, not from an outline line.',
     inputSchema: {
       id: z.string(),
       content: z.string().optional(),
@@ -211,8 +211,8 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
 
   server.registerTool('edit_block' satisfies KmMcpToolName, {
     description: 'Replace the one occurrence of `old` in a block\'s content with `new` (literal text), against the '
-    + 'content current at write time. Refused, showing the current content, when `old` is empty, missing or '
-    + 'ambiguous (add surrounding text).',
+    + 'content current at write time. Refused when `old` is empty or found more than once (add surrounding text), '
+    + 'and when it is not found, showing the current content.',
     inputSchema: {
       id: z.string(),
       old: z.string(),
@@ -242,7 +242,7 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
 
   server.registerTool('recent_changes' satisfies KmMcpToolName, {
     description: 'Recent local transactions in this workspace, newest first, with the blocks each changed (content '
-    + 'before/after, parent, property names). Defaults to agent writes (any agent on this device) since this '
+    + 'before/after, clipped — block_history has it whole; parent; property names). Defaults to agent writes (any agent on this device) since this '
     + 'session started — use it to report what you changed. since: epoch ms or ISO (0 = all); includeUser adds '
     + 'the user\'s own edits.',
     inputSchema: {

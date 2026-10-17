@@ -21,7 +21,7 @@ import {
   viewOutlineCommandSchema,
   viewSearchCommandSchema,
 } from './protocol.js'
-import {workspaceAssertion} from './cliOptions.js'
+import {refuseNumberified, workspaceAssertion} from './cliOptions.js'
 
 type InputShape = Record<string, z.ZodType>
 export type ToolInput = Record<string, unknown>
@@ -232,17 +232,6 @@ export const hasJsonFormat = (tool: GraphReadTool): boolean => 'format' in tool.
 const cacKey = (key: string): string => key.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase())
 
 const EMPTY_VALUE_HINT = ' An empty value (a shell expanding an unset variable) arrives as 0.'
-
-/** cac numberifies every digits-only option value before this code sees it,
- *  so `00123` arrives as 123 and its text is gone: turning it back into a
- *  string would name something else (another id prefix, another type). */
-const refuseNumberified = (flag: string, value: unknown): void => {
-  if (typeof value !== 'number') return
-  throw new Error(
-    `${flag} got the number ${value}: the CLI reads a digits-only value as a number, which drops leading zeros. `
-    + `Send it as text with \`kmagent raw '<json>'\`; a block ref can also be written as its printed id prefix (^${value}).`,
-  )
-}
 
 const coerceOption = (spec: CliOptionSpec, value: unknown): unknown => {
   const flag = flagOf(spec.field)

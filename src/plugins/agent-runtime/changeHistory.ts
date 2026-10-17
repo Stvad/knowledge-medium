@@ -16,6 +16,7 @@ import { recognizedFieldRowSql } from '@/data/internals/treeQueries.js'
 import type { Repo } from '@/data/repo'
 import { AGENT_TX_DESCRIPTION_PREFIX } from './agentWrites.ts'
 import { shortIds } from './agentViews/resolveRef.ts'
+import { clip } from './agentViews/text.ts'
 
 interface RowEventRow {
   tx_id: string | null
@@ -72,8 +73,8 @@ const changedPropertyNames = (before: Snapshot, after: Snapshot): string[] =>
     .filter(name => !sameJson(before.properties[name], after.properties[name]))
     .sort()
 
-const clip = (content: string, limit: number | undefined): string =>
-  limit !== undefined && content.length > limit ? `${content.slice(0, limit)}…` : content
+const clipped = (content: string, limit: number | undefined): string =>
+  limit === undefined ? content : clip(content, limit).text
 
 const describeRowEvent = (row: RowEventRow, contentLimit?: number): Omit<BlockChange, 'shortId'> => {
   const before = snapshotOf(row.before_json)
@@ -90,7 +91,7 @@ const describeRowEvent = (row: RowEventRow, contentLimit?: number): Omit<BlockCh
         ...(properties.length > 0 ? ['properties' as const] : []),
         ...(hasReferences ? ['references' as const] : []),
       ],
-      content: after ? {after: clip(only.content, contentLimit)} : {before: clip(only.content, contentLimit)},
+      content: after ? {after: clipped(only.content, contentLimit)} : {before: clipped(only.content, contentLimit)},
       parentId: after ? {before: null, after: only.parentId} : {before: only.parentId, after: null},
       ...(properties.length > 0 ? {properties} : {}),
     }
@@ -113,7 +114,7 @@ const describeRowEvent = (row: RowEventRow, contentLimit?: number): Omit<BlockCh
     kind,
     changed,
     ...(changed.includes('content') || kind === 'soft-delete' || kind === 'restore'
-      ? {content: {before: clip(before.content, contentLimit), after: clip(after.content, contentLimit)}}
+      ? {content: {before: clipped(before.content, contentLimit), after: clipped(after.content, contentLimit)}}
       : {}),
     ...(changed.includes('parent') ? {parentId: {before: before.parentId, after: after.parentId}} : {}),
     ...(properties.length > 0 ? {properties} : {}),
@@ -214,7 +215,9 @@ export interface RecentChangeTx {
   at: string
   description: string | null
   changes: BlockChange[]
-  /** Blocks this tx wrote that {@link MAX_LISTED_CHANGES} left out. */
+  /** Rows this tx wrote that {@link MAX_LISTED_CHANGES} left out, counted
+   *  before netting and before property-storage rows are hidden — so it can
+   *  exceed what `changes` would have shown. */
   omitted?: number
 }
 
@@ -230,10 +233,12 @@ export interface RecentChangesResult {
 
 const RECENT_CONTENT_LIMIT = 200
 
-/** Changed blocks one call lists, across all its txs, newest tx first: `limit`
+/** Written rows one call reads, across all its txs, newest tx first: `limit`
  *  bounds txs, and one tx (a large append, a subtree delete) can write
  *  thousands of blocks. Whole blocks are cut, never a block's events, so each
- *  listed block's net change stays exact. */
+ *  listed block's net change stays exact. Property-storage rows count against
+ *  it although `changes` hides them; an exact cap would put that hiding rule
+ *  in the ranking SQL. */
 export const MAX_LISTED_CHANGES = 200
 
 /** Every block the page's txs wrote, numbered in page order, then first-write
