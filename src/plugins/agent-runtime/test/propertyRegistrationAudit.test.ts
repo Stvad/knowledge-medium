@@ -97,7 +97,10 @@ const create = async (args: {id: string; workspaceId?: string; properties?: Bloc
       content: args.id,
       ...(args.properties ? {properties: args.properties} : {}),
     })
-  }, {scope: ChangeScope.BlockDefault})
+  }, {
+    scope: ChangeScope.BlockDefault,
+    ...(args.workspaceId !== undefined && args.workspaceId !== WS ? {allowUnloadedWorkspace: true} : {}),
+  })
 }
 
 const findEntry = (
@@ -536,7 +539,7 @@ describe('reads that name another workspace', () => {
     await knownWorkspace(OTHER)
     await repo.tx(async tx => {
       await tx.create({id: 'other-page', workspaceId: OTHER, parentId: null, orderKey: 'a0', content: 'Elsewhere'})
-    }, {scope: ChangeScope.BlockDefault, description: 'seed other workspace'})
+    }, {scope: ChangeScope.BlockDefault, description: 'seed other workspace', allowUnloadedWorkspace: true})
   }
 
   const readVerbs = [

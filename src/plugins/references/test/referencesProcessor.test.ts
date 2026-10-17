@@ -625,7 +625,7 @@ describe('parseReferences — schema-swap reprojection', () => {
         id: 'src-other', workspaceId: OTHER_WS, parentId: null, orderKey: 'a0',
         properties: {reviewer: 'target-b'},
       }),
-      {scope: ChangeScope.BlockDefault},
+      {scope: ChangeScope.BlockDefault, allowUnloadedWorkspace: true},
     )
     await flush()
 
@@ -2166,7 +2166,7 @@ describe('parseReferences — workspace-switch reprojection', () => {
         orderKey: 'a0',
         properties: {reviewer: 'target-a'},
       }),
-      {scope: ChangeScope.BlockDefault},
+      {scope: ChangeScope.BlockDefault, allowUnloadedWorkspace: true},
     )
     await flush()
     await env.h.db.execute(`UPDATE blocks SET references_json = '[]' WHERE id = ?`, ['srcB'])
@@ -2311,6 +2311,14 @@ describe('parseReferences — property field rows reference their definition, ne
     // left implied by the active-workspace case above, because that is exactly
     // the difference a recognition-based suppression could not survive.
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    // Deliberate background writes opt in per transaction, including follow-up
+    // processors. Keep this regression exercising their recognition logic.
+    const runTx = env.repo.tx.bind(env.repo)
+    const forceParse = vi.spyOn(env.repo, 'tx').mockImplementation((fn, opts) => runTx(fn, {
+      ...opts,
+      allowUnloadedWorkspace: opts.allowUnloadedWorkspace
+        || opts.description === `processor: ${PARSE_REFERENCES_PROCESSOR}`,
+    }))
     const BG_WS = 'ws-bg'
     await sharedDb.db.execute(
       `INSERT INTO workspaces
@@ -2339,8 +2347,9 @@ describe('parseReferences — property field rows reference their definition, ne
         content: propertyFieldContent(bgFieldId),
       })
       await tx.create({id: 'bg-value', workspaceId: BG_WS, parentId: fieldRowId, orderKey: 'a0', content: 'done'})
-    }, {scope: ChangeScope.BlockDefault})
+    }, {scope: ChangeScope.BlockDefault, allowUnloadedWorkspace: true})
     await flush(4000)
+    forceParse.mockRestore()
 
     expect(errorSpy, `processor crashed: ${errorSpy.mock.calls.map(c => c.join(' ')).join('; ')}`)
       .not.toHaveBeenCalled()

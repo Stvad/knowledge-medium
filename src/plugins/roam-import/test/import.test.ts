@@ -1443,7 +1443,7 @@ describe('importRoam', {timeout: 30_000}, () => {
         content: 'wcs/plan',
         properties: {[aliasesProp.name]: aliasesProp.codec.encode(['wcs/plan'])},
       })
-    }, {scope: ChangeScope.BlockDefault})
+    }, {scope: ChangeScope.BlockDefault, allowUnloadedWorkspace: true})
 
     const summary = await importRoam(minimalExport, env.repo, {
       workspaceId: WORKSPACE,

@@ -204,7 +204,7 @@ describe('BlockProperties component', () => {
   const renderForeignWorkspacePanel = async () => {
     await repo.tx(async tx => {
       await tx.create({id: 'block-elsewhere', workspaceId: 'ws-2', parentId: null, orderKey: 'a0'})
-    }, {scope: ChangeScope.BlockDefault, description: 'create foreign-workspace block'})
+    }, {scope: ChangeScope.BlockDefault, description: 'create foreign-workspace block', allowUnloadedWorkspace: true})
     expect(repo.activeWorkspaceId).toBe('ws-1')
 
     render(

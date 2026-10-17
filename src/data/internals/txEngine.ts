@@ -61,6 +61,7 @@ import {
   PropertySchemaScopeMismatchError,
   SeededDefinitionWriteError,
   WorkspaceMismatchError,
+  WorkspaceRegistryUnavailableError,
   WorkspaceNotPinnedError,
   normalizeReferences,
   scopePoliciesEquivalent,
@@ -246,6 +247,9 @@ export interface TxImplContext {
    *  property schemas against one registry snapshot per tx, without this
    *  context re-deriving that closure itself. */
   propertySchemaResolverFor: (workspaceId: string) => PropertySchemaResolver
+  /** Tx-start write scope; null permits stage-0 or explicitly forced writes.
+   *  A scope with workspaceId null has no open workspace and refuses writes. */
+  writableWorkspace: {readonly workspaceId: string | null} | null
   /** Content → the `references` it already implies, snapshotted at tx start
    *  from `contentReferencePrefillsFacet` — see `Tx.derivedReferencesFor`.
    *  Absent means no contributor, so nothing is prefilled and every row is
@@ -1480,11 +1484,14 @@ export class TxImpl implements Tx {
 
   // ──── Internal helpers ────
 
-  /** Validate that a write to `workspaceId` is allowed in this tx.
-   *  Pre-pin (no writes yet) anything goes. Post-pin, must match. */
+  /** Both admission and schema resolution use the tx-start registry capture. */
   private checkWorkspace(workspaceId: string): void {
     if (this.workspacePinned && this.meta.workspaceId !== workspaceId) {
       throw new WorkspaceMismatchError(this.meta.workspaceId!, workspaceId)
+    }
+    const scope = this.ctx.writableWorkspace
+    if (scope !== null && scope.workspaceId !== workspaceId) {
+      throw new WorkspaceRegistryUnavailableError(scope.workspaceId, workspaceId)
     }
   }
 

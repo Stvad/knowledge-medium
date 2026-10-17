@@ -399,7 +399,7 @@ describe('view-outline', () => {
     const foreign = uuid('0f0f0f0f', 1)
     await repo.tx(async tx => {
       await tx.create({id: foreign, workspaceId: 'ws-2', parentId: null, orderKey: 'a0', content: 'elsewhere', references: []})
-    }, {scope: ChangeScope.BlockDefault})
+    }, {scope: ChangeScope.BlockDefault, allowUnloadedWorkspace: true})
     await expect(view({type: 'view-block', ref: foreign})).rejects.toThrow(/not the one open.*workspaceId ws-2.*--raw/s)
   })
 
@@ -645,7 +645,7 @@ describe('structural edge cases', () => {
     const foreign = uuid('5e5e5e5f', 1)
     await repo.tx(async tx => {
       await tx.create({id: foreign, workspaceId: 'ws-2', parentId: null, orderKey: 'a0', content: 'elsewhere', references: []})
-    }, {scope: ChangeScope.BlockDefault})
+    }, {scope: ChangeScope.BlockDefault, allowUnloadedWorkspace: true})
     await expect(view({type: 'view-search', query: 'anything', under: foreign})).rejects.toThrow(/not the one open/)
   })
 
@@ -808,7 +808,7 @@ describe('structural edge cases', () => {
     const foreign = uuid('4c4c4c4c', 1)
     await repo.tx(async tx => {
       await tx.create({id: foreign, workspaceId: 'ws-2', parentId: null, orderKey: 'a0', content: 'Elsewhere', references: []})
-    }, {scope: ChangeScope.BlockDefault})
+    }, {scope: ChangeScope.BlockDefault, allowUnloadedWorkspace: true})
     const holder = uuid('4c4c4c4d', 2)
     await create({id: holder, content: 'holder', properties: {groupWith: [foreign]}})
     const out = await view<BlockView>({type: 'view-block', ref: holder, format: 'json'})
@@ -829,7 +829,7 @@ describe('structural edge cases', () => {
     await create({id: root, content: 'Root here'})
     await repo.tx(async tx => {
       await tx.create({id: foreign, workspaceId: 'ws-2', parentId: null, orderKey: 'a0', content: 'crossing', references: []})
-    }, {scope: ChangeScope.BlockDefault})
+    }, {scope: ChangeScope.BlockDefault, allowUnloadedWorkspace: true})
     await create({id: beyond, content: 'crossing again'})
     // Sync applies parent ids verbatim, so these edges can arrive.
     await sharedDb.db.execute('UPDATE blocks SET parent_id = ? WHERE id = ?', [root, foreign])
@@ -874,7 +874,7 @@ describe('structural edge cases', () => {
     await create({id: target, content: 'Target'})
     await repo.tx(async tx => {
       await tx.create({id: foreignParent, workspaceId: 'ws-2', parentId: null, orderKey: 'a0', content: 'private elsewhere', references: []})
-    }, {scope: ChangeScope.BlockDefault})
+    }, {scope: ChangeScope.BlockDefault, allowUnloadedWorkspace: true})
     await create({id: source, content: '[[Target]]', references: [{id: target, alias: 'Target'}]})
     await sharedDb.db.execute('UPDATE blocks SET parent_id = ? WHERE id = ?', [foreignParent, source])
     const out = await view<BacklinksView>({type: 'view-backlinks', ref: target, format: 'json'})
@@ -939,7 +939,7 @@ describe('structural edge cases', () => {
     await create({id: target, content: 'Target'})
     await repo.tx(async tx => {
       await tx.create({id: foreign, workspaceId: 'ws-2', parentId: null, orderKey: 'a0', content: 'Foreign topic', references: []})
-    }, {scope: ChangeScope.BlockDefault})
+    }, {scope: ChangeScope.BlockDefault, allowUnloadedWorkspace: true})
     for (let i = 0; i < 2; i++) {
       await create({id: uuid('9c1c1c1c', i), content: `src ${i}`, references: [{id: target, alias: 'T'}, {id: foreign, alias: 'F'}]})
     }
@@ -965,7 +965,7 @@ describe('structural edge cases', () => {
     await create({id: outerRoot, content: 'Outer root'})
     await repo.tx(async tx => {
       await tx.create({id: foreignParent, workspaceId: 'ws-2', parentId: null, orderKey: 'a0', content: 'bridge', references: []})
-    }, {scope: ChangeScope.BlockDefault})
+    }, {scope: ChangeScope.BlockDefault, allowUnloadedWorkspace: true})
     await sharedDb.db.execute('UPDATE blocks SET parent_id = ? WHERE id = ?', [outerRoot, foreignParent])
     for (let i = 0; i < 2; i++) {
       const source = uuid('a3a3a3a3', i)
@@ -1178,7 +1178,7 @@ describe('view-backlinks', () => {
     const foreignRoot = uuid('5200000c', 3)
     await repo.tx(async tx => {
       await tx.create({id: foreignRoot, workspaceId: 'ws-2', parentId: null, orderKey: 'a0', content: 'Foreign root', references: []})
-    }, {scope: ChangeScope.BlockDefault})
+    }, {scope: ChangeScope.BlockDefault, allowUnloadedWorkspace: true})
     let fired = false
     const out = await duringReads({
       before: async sql => {
@@ -1385,7 +1385,7 @@ describe('raw commands accept the same refs', () => {
     const foreign = uuid('e3e3e3e3', 1)
     await repo.tx(async tx => {
       await tx.create({id: foreign, workspaceId: 'ws-2', parentId: null, orderKey: 'a0', content: 'elsewhere', references: []})
-    }, {scope: ChangeScope.BlockDefault})
+    }, {scope: ChangeScope.BlockDefault, allowUnloadedWorkspace: true})
     await expect(executeCommand({commandId: 'r', type: 'get-block', id: foreign, workspaceId: WS}, context))
       .rejects.toThrow(/is in workspace ws-2, not ws-1/)
     await expect(executeCommand({commandId: 'r', type: 'get-subtree', rootId: foreign, workspaceId: WS}, context))
@@ -1404,7 +1404,7 @@ describe('raw commands accept the same refs', () => {
         id: there, workspaceId: 'ws-2', parentId: null, orderKey: 'a0',
         content: 'Shared name', properties: {alias: ['Shared name']}, references: [],
       })
-    }, {scope: ChangeScope.BlockDefault})
+    }, {scope: ChangeScope.BlockDefault, allowUnloadedWorkspace: true})
     const named = {commandId: 'r', id: 'Shared name', rootId: 'Shared name', workspaceId: 'ws-2'}
     expect((await executeCommand({...named, type: 'get-block'}, context) as {id: string}).id).toBe(there)
     expect((await executeCommand({...named, type: 'get-subtree'}, context) as Array<{id: string}>)[0].id).toBe(there)

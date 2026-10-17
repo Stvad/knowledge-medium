@@ -2209,7 +2209,9 @@ export class Repo {
             capturedPreviousPropertyDefinitions,
             workspaceId,
           ),
-        propertySchemaWorkspaceId: this.client.activeWorkspaceId,
+        propertySchemaWorkspaceId: readinessWorkspaceId,
+        propertyRegistryInitialized: capturedActivePropertyDefinitions !== null
+          || capturedPreviousPropertyDefinitions !== null,
         propertySeedNameCounts: this._propertySeedNameCounts,
         // Undo/redo replays skip the same-tx processor pass so a
         // value-deriving processor can't override `applyRaw`'s exact

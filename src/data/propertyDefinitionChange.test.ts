@@ -1246,7 +1246,10 @@ describe('a workspace this client cannot judge', () => {
         throw new Error('[test] the registry has not moved off the definition\'s workspace')
       }
     }, {timeout: 3000})
-    await expect(rename(repo, FIELD_ID, 'state')).rejects.toMatchObject({
+    await expect(repo.tx(
+      tx => tx.setProperty(FIELD_ID, propertyNameProp, 'state'),
+      {scope: ChangeScope.BlockDefault, allowUnloadedWorkspace: true},
+    )).rejects.toMatchObject({
       code: 'property.definition-change.unjudgeable',
     })
 
@@ -1276,7 +1279,10 @@ describe('a workspace this client cannot judge', () => {
         throw new Error('[test] the registry has not moved off the definition\'s workspace')
       }
     }, {timeout: 3000})
-    await expect(repo.tx(tx => tx.restore(FIELD_OLDER), {scope: ChangeScope.BlockDefault}))
+    await expect(repo.tx(tx => tx.restore(FIELD_OLDER), {
+      scope: ChangeScope.BlockDefault,
+      allowUnloadedWorkspace: true,
+    }))
       .rejects.toMatchObject({code: 'property.definition-change.unjudgeable'})
 
     expect(await isLive(FIELD_OLDER)).toBe(false)

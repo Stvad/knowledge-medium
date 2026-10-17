@@ -532,7 +532,7 @@ describe('UserTypesService subscription', () => {
       await tx.update(id, {
         properties: {...row.properties, [blockTypeLabelProp.name]: 'Renamed'},
       })
-    }, {scope: ChangeScope.BlockDefault})
+    }, {scope: ChangeScope.BlockDefault, allowUnloadedWorkspace: true})
     expect(env.repo.types.get(id)).toBeUndefined()
   })
 

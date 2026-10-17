@@ -517,6 +517,12 @@ export interface Tx {
 export interface RepoTxOptions {
   scope: ChangeScope
   description?: string
+  /** Permit deliberate writes outside the captured open workspace. The caller
+   *  accepts unavailable or stale registry behavior. This changes only workspace
+   *  admission: it does not load definitions or relax property-schema validation,
+   *  read-only, or single-workspace checks. Intended for controlled background
+   *  seeding and repair tooling. */
+  allowUnloadedWorkspace?: boolean
   /** Undo-group token (issue #306). Txs sharing a `groupId` merge into
    *  one undo entry at record time and stamp `group_id` into
    *  `tx_context` / `row_events`. Minted by `repo.undoGroup` and
