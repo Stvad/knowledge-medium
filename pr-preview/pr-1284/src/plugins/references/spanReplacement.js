@@ -1,0 +1,1 @@
+import{pR as e}from"../../../chunks/app-RJN3Iswn.js";export{e as preferredSpanReplacement};

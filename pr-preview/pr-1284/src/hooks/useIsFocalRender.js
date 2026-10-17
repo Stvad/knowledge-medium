@@ -1,0 +1,1 @@
+import{Jj as e,qj as t}from"../../chunks/app-RJN3Iswn.js";export{t as isFocalRender,e as useIsFocalRender};

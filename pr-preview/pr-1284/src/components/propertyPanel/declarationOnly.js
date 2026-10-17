@@ -1,0 +1,1 @@
+import{OM as e,kM as t}from"../../../chunks/app-RJN3Iswn.js";export{e as declarationOnlyDefinitionForName,t as declarationOnlyStatusText};

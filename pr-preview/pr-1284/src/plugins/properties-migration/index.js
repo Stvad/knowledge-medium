@@ -1,0 +1,1 @@
+import{Dr as e,jr as t}from"../../../chunks/app-RJN3Iswn.js";export{t as migratePropertiesToBlocksAction,e as propertiesMigrationPlugin};

@@ -1,0 +1,1 @@
+import{of as e}from"../../../chunks/app-RJN3Iswn.js";export{e as blockInfoPlugin};

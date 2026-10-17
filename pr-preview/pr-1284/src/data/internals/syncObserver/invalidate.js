@@ -1,0 +1,1 @@
+import{$K as e}from"../../../../chunks/app-RJN3Iswn.js";export{e as applySyncInvalidation};

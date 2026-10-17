@@ -1,0 +1,1 @@
+import{fD as e,pD as t}from"../../chunks/app-RJN3Iswn.js";export{e as ClientLocalSettings,t as clientLocalSettings};

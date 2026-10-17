@@ -1,0 +1,1 @@
+import{QB as e,XB as t,ZB as n}from"../../../chunks/app-RJN3Iswn.js";export{t as charLimitProp,n as charProfileProp,e as charScopeProp};
