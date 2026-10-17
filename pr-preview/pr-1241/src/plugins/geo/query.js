@@ -1,1 +1,0 @@
-import{JR as e,qR as t}from"../../../chunks/app-DSqIiWpy.js";export{t as PLACES_UNDER_BLOCK_QUERY,e as placesUnderBlockQuery};

@@ -1,1 +1,0 @@
-import{nE as e,rE as t}from"../chunks/app-DSqIiWpy.js";export{e as checkForAppUpdate,t as registerServiceWorker};

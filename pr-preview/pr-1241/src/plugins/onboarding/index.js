@@ -1,1 +1,0 @@
-import{gg as e,hg as t,mg as n,pg as r,tg as i}from"../../../chunks/app-DSqIiWpy.js";export{n as EXTENSIONS_PAGE_TITLE,t as TUTORIAL_DEFAULT_TITLE,e as TUTORIAL_VIM_TITLE,i as onboardingPlugin,r as seedTutorial};

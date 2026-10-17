@@ -1,1 +1,0 @@
-import{DT as e,OT as t}from"../../../chunks/app-DSqIiWpy.js";export{e as ExtensionPromptSurface,t as extensionPromptsExtension};

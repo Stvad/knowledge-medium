@@ -1,1 +1,0 @@
-import{MF as e}from"../../../chunks/app-DSqIiWpy.js";export{e as propertyShapeLabel};

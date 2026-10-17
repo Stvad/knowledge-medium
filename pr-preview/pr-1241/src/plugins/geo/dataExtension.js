@@ -1,1 +1,0 @@
-import{KR as e}from"../../../chunks/app-DSqIiWpy.js";export{e as geoDataExtension};

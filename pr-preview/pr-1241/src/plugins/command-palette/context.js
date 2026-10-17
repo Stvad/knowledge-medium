@@ -1,1 +1,0 @@
-import{cC as e,lC as t,oC as n,sC as r}from"../../../chunks/app-DSqIiWpy.js";export{n as COMMAND_PALETTE_ACTION_ID,r as COMMAND_PALETTE_CONTEXT,e as COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,t as commandPaletteActionContext};

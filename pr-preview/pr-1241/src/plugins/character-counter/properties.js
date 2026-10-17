@@ -1,1 +1,0 @@
-import{_B as e,vB as t,yB as n}from"../../../chunks/app-DSqIiWpy.js";export{e as charLimitProp,t as charProfileProp,n as charScopeProp};

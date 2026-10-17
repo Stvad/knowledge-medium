@@ -1,1 +1,0 @@
-import{CI as e,DI as t,EI as n,OI as r,SI as i,TI as a,bI as o,kI as s,wI as c,xI as l}from"../../chunks/app-DSqIiWpy.js";export{o as BATCH_SENTINEL_SQL,l as closePowerSyncDbIfOpen,i as ensurePowerSyncReady,e as getActiveSyncResolver,c as getActiveUserId,a as getPowerSyncDb,n as initializeClientSchema,t as isRemoteSyncActive,r as syncObserverDepsFor,s as syncResolverForUser};

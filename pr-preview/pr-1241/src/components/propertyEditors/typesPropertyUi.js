@@ -1,1 +1,0 @@
-import{Sw as e,bw as t,xw as n}from"../../../chunks/app-DSqIiWpy.js";export{t as kernelPropertyUiExtension,n as typesPropertyUi,e as typesPropertyUiExtension};

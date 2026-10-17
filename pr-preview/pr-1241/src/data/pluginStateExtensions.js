@@ -1,1 +1,0 @@
-import{GB as e,WB as t}from"../../chunks/app-DSqIiWpy.js";export{t as pluginPrefsExtension,e as pluginUIStateExtension};
