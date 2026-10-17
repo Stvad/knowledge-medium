@@ -1,1 +1,1 @@
-import{ay as e}from"../../../chunks/app-CYF92UJi.js";export{e as openRecentsPage};
+import{oy as e}from"../../../chunks/app-DjAw8XKT.js";export{e as openRecentsPage};

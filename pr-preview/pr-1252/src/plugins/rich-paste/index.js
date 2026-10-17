@@ -1,1 +1,1 @@
-import{Ef as e}from"../../../chunks/app-CYF92UJi.js";export{e as richPastePlugin};
+import{Df as e}from"../../../chunks/app-DjAw8XKT.js";export{e as richPastePlugin};

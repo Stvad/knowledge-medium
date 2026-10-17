@@ -1,1 +1,1 @@
-import{ek as e}from"../../chunks/app-CYF92UJi.js";export{e as useShortcutSurfaceActivations};
+import{tk as e}from"../../chunks/app-DjAw8XKT.js";export{e as useShortcutSurfaceActivations};
