@@ -1,0 +1,1 @@
+import{gP as e,hP as t}from"../../chunks/app-DToY_AXU.js";export{t as isIOS,e as isMacPlatform};

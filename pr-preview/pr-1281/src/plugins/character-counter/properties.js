@@ -1,0 +1,1 @@
+import{bB as e,vB as t,yB as n}from"../../../chunks/app-DToY_AXU.js";export{t as charLimitProp,n as charProfileProp,e as charScopeProp};

@@ -1,0 +1,1 @@
+import{aE as e,iE as t}from"../chunks/app-DToY_AXU.js";export{t as checkForAppUpdate,e as registerServiceWorker};

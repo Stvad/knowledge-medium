@@ -1,0 +1,1 @@
+import{BA as e,zA as t}from"../../../chunks/app-DToY_AXU.js";export{t as BLOCK_TITLE_TEXT_CLASS,e as useBlockTitleTextClass};

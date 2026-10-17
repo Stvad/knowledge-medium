@@ -1,0 +1,1 @@
+"use client";import{Sj as e,bj as t,xj as n}from"../../../chunks/app-DToY_AXU.js";export{t as Collapsible,n as CollapsibleContent,e as CollapsibleTrigger};

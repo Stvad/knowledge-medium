@@ -1,0 +1,1 @@
+import{JR as e,YR as t}from"../../../chunks/app-DToY_AXU.js";export{e as PLACES_UNDER_BLOCK_QUERY,t as placesUnderBlockQuery};

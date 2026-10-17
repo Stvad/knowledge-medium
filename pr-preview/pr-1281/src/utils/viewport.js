@@ -1,0 +1,1 @@
+import{GM as e,WM as t}from"../../chunks/app-DToY_AXU.js";export{t as MOBILE_BREAKPOINT_QUERY,e as isMobileViewport};

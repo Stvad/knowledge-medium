@@ -1,0 +1,1 @@
+import{Ag as e,Mg as t,jg as n}from"../../../chunks/app-DToY_AXU.js";export{e as COLEMAK_KEYBINDINGS_PLUGIN_ID,n as colemakKeybindingsPlugin,t as colemakMovementKeybindingOverrides};
