@@ -509,7 +509,7 @@ export const describeRuntimeSummary = async (
       },
       {
         need: "Understand the data model (blocks, references, pages vs daily-notes, backlinks vs grouped-backlinks, source_field, done-status, deep-links) before reading or writing a user's data",
-        command: 'pnpm agent data-model',
+        command: 'pnpm agent data-model  # an index of topics; --topic <id> reads one, --topic all everything',
       },
       {
         need: 'Full runtime diagnostic dump with action, facet, renderer, and API export details',

@@ -213,12 +213,24 @@ describe('grouped-backlinks command', () => {
 })
 
 describe('data-model command', () => {
-  it('returns the guide markdown', async () => {
-    const guide = await executeCommand({commandId: 'dm-1', type: 'data-model'}, context)
+  it('returns the whole guide markdown for topic all', async () => {
+    const guide = await executeCommand({commandId: 'dm-1', type: 'data-model', topic: 'all'}, context)
     expect(typeof guide).toBe('string')
     expect(guide).toContain('block_references')
     expect(guide).toContain('grouped-backlinks')
     expect(guide).toContain('source_field')
+  })
+
+  it('answers with an index of its topics by default, and one section per topic', async () => {
+    const index = await executeCommand({commandId: 'dm-2', type: 'data-model'}, context) as string
+    const all = await executeCommand({commandId: 'dm-3', type: 'data-model', topic: 'all'}, context) as string
+    expect(index).toContain('`types-properties` — Types & properties')
+    expect(index.length).toBeLessThan(all.length / 5)
+    const section = await executeCommand({commandId: 'dm-4', type: 'data-model', topic: 'types-properties'}, context) as string
+    expect(section.startsWith('## Types & properties')).toBe(true)
+    expect(section).not.toContain('## Lower-level access')
+    await expect(executeCommand({commandId: 'dm-5', type: 'data-model', topic: 'nope'}, context))
+      .rejects.toThrow(/No guide topic "nope"\. Topics: everything-is-a-block/)
   })
 })
 

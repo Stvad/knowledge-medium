@@ -210,3 +210,40 @@ The convenience commands above wrap the starred ones (★) and add hydration.
   callable directly. The dedicated commands wrap them with config
   resolution + hydration, so prefer them unless you need something custom.
 `
+
+/** A guide section's topic id: its heading, slugged. */
+const topicId = (heading: string): string =>
+  heading.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+
+interface GuideSection {
+  id: string
+  heading: string
+  text: string
+}
+
+const [GUIDE_INTRO, ...SECTION_TEXTS] = DATA_MODEL_GUIDE.split(/\n(?=## )/)
+const GUIDE_SECTIONS: GuideSection[] = SECTION_TEXTS.map(text => {
+  const heading = text.slice(3, text.indexOf('\n')).trim()
+  return {id: topicId(heading), heading, text}
+})
+
+export const GUIDE_TOPIC_ALL = 'all'
+
+/** The guide as an agent reads it: with no topic, the opening and an index
+ *  of its sections, so the whole of it is never the first thing read; a
+ *  topic id reads that section, and `all` the whole guide. */
+export const dataModelGuide = (topic?: string): string => {
+  const wanted = topic?.trim().toLowerCase()
+  if (!wanted) {
+    const index = GUIDE_SECTIONS.map(section => `- \`${section.id}\` — ${section.heading.replace(/`/g, '')}`)
+    return `${GUIDE_INTRO.trim()}\n\nTopics (read one with topic: <id>, or "${GUIDE_TOPIC_ALL}" for the whole guide):\n${index.join('\n')}\n`
+  }
+  if (wanted === GUIDE_TOPIC_ALL) return DATA_MODEL_GUIDE
+  const section = GUIDE_SECTIONS.find(candidate => candidate.id === wanted)
+  if (!section) {
+    throw new Error(
+      `No guide topic "${topic}". Topics: ${GUIDE_SECTIONS.map(candidate => candidate.id).join(', ')}, or "${GUIDE_TOPIC_ALL}".`,
+    )
+  }
+  return section.text
+}

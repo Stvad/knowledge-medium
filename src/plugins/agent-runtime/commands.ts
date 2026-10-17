@@ -22,7 +22,7 @@ import { formatRoamDate } from '@/utils/dailyPage.js'
 import { dailyNoteBlockId } from '@/plugins/daily-notes/dailyNotes.js'
 import { assertCanonicalBlockId } from '@/data/blockId.js'
 import { getLocalWorkspace } from '@/data/workspaces.js'
-import { DATA_MODEL_GUIDE } from './dataModelGuide.ts'
+import { dataModelGuide } from './dataModelGuide.ts'
 import { runHealthCommand } from './healthCommand.ts'
 import { resolveBlockRef, runViewCommand } from './agentViews/index.ts'
 import { boundSqlRows, limitedSelectSql, MAX_SQL_ROWS } from './agentViews/sqlRows.ts'
@@ -2539,7 +2539,7 @@ export const executeCommand = async (
       return runGroupedBacklinksCommand(context.repo, command)
 
     case 'data-model':
-      return DATA_MODEL_GUIDE
+      return dataModelGuide(typeof command.topic === 'string' ? command.topic : undefined)
 
     case 'page':
       return runPageCommand(context.repo, command)

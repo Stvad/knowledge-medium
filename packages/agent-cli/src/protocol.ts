@@ -380,9 +380,12 @@ export const groupedBacklinksCommandSchema = z.looseObject({
   ...commandIdField,
 })
 
-/** Print the agent-facing data-model guide. No body beyond the type. */
+/** The agent-facing data-model guide: an index, one topic, or all of it. */
 export const dataModelCommandSchema = z.looseObject({
   type: z.literal('data-model'),
+  topic: z.string().optional().describe(
+    'A topic id from the index to read that section, or "all" for the whole guide. Omit for the index.',
+  ),
   ...commandIdField,
 })
 
@@ -921,8 +924,8 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
     readOnly: true,
   },
   'data-model': {
-    usage: 'kmagent data-model',
-    description: "Print the agent-facing data-model guide (blocks, references, pages/daily-notes, backlinks vs grouped-backlinks, source_field, done-status, deep-links). Read this first when working with a user's data.",
+    usage: 'kmagent data-model [--topic <id>|all]',
+    description: "The agent-facing data-model guide (blocks, references, pages/daily-notes, backlinks vs grouped-backlinks, source_field, done-status, deep-links): a short index by default, one section with --topic <id>, everything with --topic all. Read it first when working with a user's data.",
     readOnly: true,
   },
   'page': {

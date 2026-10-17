@@ -56,7 +56,7 @@ The CLI exposes both *local* commands (pairing, profile management) and *bridge*
 | `kmagent grouped-backlinks <ref> [--limit <n>] [--members-per-group <n>] [--filter …] [--grouping …]` | The grouped-references view of a block. |
 | `kmagent search <query> [--limit <n>] [--offset <n>] [--types <t>]… [--under <ref>] [--include-extensions]` | Full-text search with snippet, breadcrumb and types per hit. Repeat `--types` for several (a value is taken whole, commas included). |
 | `kmagent page <name>` / `kmagent daily-note <date>` | Resolve a page by name/alias, or a date to its daily note. |
-| `kmagent data-model` (alias `guide`) | The agent-facing data-model guide. |
+| `kmagent data-model [--topic <id>\|all]` (alias `guide`) | The agent-facing data-model guide: a short index of its topics by default, one section with `--topic <id>`, all of it with `--topic all`. |
 | `kmagent create-block <json>` | Create a block from a JSON body. |
 | `kmagent update-block <json>` | Update a block from a JSON body. |
 | `kmagent move-block <json>` | Move a block to a parent/position from a JSON body. |
@@ -83,7 +83,7 @@ Run `kmagent <command> --help` for per-command details or `kmagent --help` for t
 
 ## MCP Server
 
-`km-mcp` exposes the graph-safe subset of bridge operations as MCP tools. Read tools: `get_block`, `subtree`, `backlinks`, `grouped_backlinks`, `search`, `page`, `daily_note`, `guide` (the data-model guide) and `sql_query` (read-only, rows capped by `maxRows`). They are generated from the same table as the CLI verbs above, so their arguments match the flags and accept the same block refs. The views return bounded text (`format: "json"` for the structured view); `page` and `daily_note` are lookups that return the matched block whole. The server also sends usage instructions to the client. Write tools: `create_block`, `update_block`, `move_block`, `delete_block`, and `restore_block`. It deliberately excludes eval, SQL execute, and extension lifecycle commands.
+`km-mcp` exposes the graph-safe subset of bridge operations as MCP tools. Read tools: `get_block`, `subtree`, `backlinks`, `grouped_backlinks`, `search`, `page`, `daily_note`, `guide` (the data-model guide's index, or one `topic`) and `sql_query` (read-only, rows capped by `maxRows`). They are generated from the same table as the CLI verbs above, so their arguments match the flags and accept the same block refs. The views return bounded text (`format: "json"` for the structured view); `page` and `daily_note` are lookups that return the matched block whole. The server also sends usage instructions to the client. Write tools: `create_block`, `update_block`, `move_block`, `delete_block`, and `restore_block`. It deliberately excludes eval, SQL execute, and extension lifecycle commands.
 
 ```json
 {

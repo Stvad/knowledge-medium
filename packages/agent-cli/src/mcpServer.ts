@@ -36,11 +36,11 @@ const agentCliPackageVersion = (() => {
  *  `serverOptions.instructions` is appended after it. */
 export const KM_MCP_INSTRUCTIONS = `Knowledge Medium is an outliner: everything is a block (markdown content plus typed properties) nested under a parent. A page is a top-level block whose content is its title; [[Page name]] in content links to a page; a block's backlinks are the blocks that reference it. Daily notes are pages, one per date.
 
-Addressing: get_block, subtree, backlinks, grouped_backlinks and search's \`under\` take a block as a full id, a unique id prefix as printed (^3f2a9c1d), a page name, or a date (today, yesterday, 2026-06-18) for that day's daily note. The write tools take full ids: format: "json" gives the exact id (text output clips an unusually long one).
+Addressing: get_block, subtree, backlinks, grouped_backlinks and search's \`under\` take a block as a full id, a unique id prefix as printed (^3f2a9c1d), a page name, or a date (today, yesterday, 2026-06-18) for that day's daily note. The write tools take full ids: get_block on a ^shortid prints its full id.
 
 The views (get_block, subtree, backlinks, grouped_backlinks, search) and sql_query are bounded and say so (page and daily_note are lookups that return the matched block whole): an outline line is \`- content  key:: value  ^shortid\`, \`(+N children)\` marks children not expanded, \`…[+N chars]\` marks cut text (get_block reads it a page at a time: pass its nextContentOffset as contentOffset until that is null), and a cut-off list ends with the offset to continue from. Pass format: "json" for structured output.
 
-Start with subtree on a page name or "today" for an overview, search for text (filters: types, under, includeExtensions), backlinks / grouped_backlinks for what references something. guide explains the data model; sql_query is the escape hatch (read-only, rows capped).`
+Start with subtree on a page name or "today" for an overview, search for text (filters: types, under, includeExtensions), backlinks / grouped_backlinks for what references something. guide indexes the data model (guide with a topic reads one section); sql_query is the escape hatch (read-only, rows capped).`
 
 type MoveBlockPositionInput = z.infer<typeof moveBlockPositionSchema>
 
