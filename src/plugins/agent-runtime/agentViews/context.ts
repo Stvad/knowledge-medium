@@ -5,7 +5,7 @@ import { recognizedFieldRowSql } from '@/data/internals/treeQueries.js'
 import { registryRecognitionParams } from '@/data/internals/kernelQueries.js'
 import { aliasesProp } from '@/data/properties.js'
 import { crumbsFromAncestors, type CrumbAncestor } from '@/utils/blockCrumbs.js'
-import { firstAliasSql, textHeadSql } from './text.ts'
+import { firstAliasSql, isLabel, textHeadSql } from './text.ts'
 import { propertyNameResolverFor } from '@/utils/propertyValueContext.js'
 
 /** Cost rule for every view: a block the view SHOWS is read whole, as the app
@@ -184,6 +184,55 @@ export const visibleChildrenLevel = async (
     [...child, JSON.stringify(parentIds), ...child, limit, offset],
   )
   return rows.map(row => ({block: parseBlockRow(row), childCount: row.child_count}))
+}
+
+/** A label longer than this is not judged one: only this head is read. */
+const LABEL_CHARS = 200
+
+/** The parents of `blocks` that are labels. A line under a label is one line
+ *  of a record, and alone it need not say what the record is about. */
+export const labelParents = async (
+  repo: Repo,
+  blocks: readonly Pick<BlockData, 'id' | 'parentId'>[],
+): Promise<Set<string>> => {
+  const parentIds = [...new Set(blocks.flatMap(block =>
+    block.parentId !== null && block.parentId !== block.id ? [block.parentId] : []))]
+  if (parentIds.length === 0) return new Set()
+  const rows = await repo.db.getAll<{id: string, content: string | null, whole: number}>(
+    `SELECT b.id AS id, ${textHeadSql('b.content', LABEL_CHARS)} AS content, length(b.content) <= ${LABEL_CHARS} AS whole
+       FROM json_each(?) j JOIN blocks b ON b.id = j.value
+      WHERE b.deleted = 0`,
+    [JSON.stringify(parentIds)],
+  )
+  return new Set(rows.filter(row => row.whole === 1 && isLabel(row.content ?? '')).map(row => row.id))
+}
+
+/** For each block under one of `labels`, the first `count` other non-empty
+ *  lines of its record, as bounded heads in sibling order. */
+export const recordSiblings = async (
+  repo: Repo,
+  blocks: readonly Pick<BlockData, 'id' | 'parentId'>[],
+  labels: ReadonlySet<string>,
+  workspaceId: string,
+  {count, chars}: {count: number, chars: number},
+): Promise<Map<string, string[]>> => {
+  const pairs = blocks.flatMap(block =>
+    block.parentId !== null && labels.has(block.parentId) ? [[block.id, block.parentId]] : [])
+  if (pairs.length === 0) return new Map()
+  const rows = await repo.db.getAll<{id: string, content: string}>(
+    `SELECT id, content FROM (
+       SELECT json_extract(pair.value, '$[0]') AS id, pair.key AS pair_key,
+              ${textHeadSql('c.content', chars)} AS content,
+              ROW_NUMBER() OVER (PARTITION BY pair.key ORDER BY c.order_key, c.id) AS rn
+         FROM json_each(?) pair
+         JOIN blocks c ON ${visibleChildOfSql('c', "json_extract(pair.value, '$[1]')")}
+        WHERE c.id != json_extract(pair.value, '$[0]') AND ${textHeadSql('c.content', chars)} != ''
+     ) WHERE rn <= ? ORDER BY pair_key, rn`,
+    [JSON.stringify(pairs), ...visibleChildParams(repo, workspaceId), count],
+  )
+  const siblings = new Map<string, string[]>()
+  for (const row of rows) siblings.set(row.id, [...(siblings.get(row.id) ?? []), row.content])
+  return siblings
 }
 
 /** The first visible child of each block, for context on a block that is

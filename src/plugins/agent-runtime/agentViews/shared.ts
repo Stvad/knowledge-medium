@@ -3,7 +3,7 @@ import type { Repo } from '@/data/repo'
 import { BlockRefError, resolveBlockRef, type BlockRefResolution } from './resolveRef.ts'
 import { formatPropertyPairs, type PropertyLine, type PropertyRenderer } from './properties.ts'
 import { neutralizeDisplayText } from '@knowledge-medium/agent-cli/protocol'
-import { clipLine, formatCount, oneLine } from './text.ts'
+import { clipLine, ellipsize, formatCount, oneLine } from './text.ts'
 
 /** One block as a view row: everything a line needs, already bounded. */
 export interface ViewRow {
@@ -122,6 +122,22 @@ export const loadRoot = async <Root extends RootRow>(
  *  changed and does not resolve back; `format: 'json'` prints it exactly. */
 export const joinDisplayLines = (lines: readonly string[]): string =>
   lines.map(neutralizeDisplayText).join('\n')
+
+/** How long a quoted neighbour's line is. */
+export const CONTEXT_CHARS = 160
+/** How much of a neighbour's content a context line reads (a cost bound);
+ *  roomy, so collapsing its whitespace rarely leaves less than a line. */
+export const CONTEXT_HEAD_CHARS = CONTEXT_CHARS * 4
+
+/** A neighbour's text as context: one line, ellipsized. It says it is cut,
+ *  not by how much, since only a head was read. */
+export const contextPreview = (head: string): string => ellipsize(oneLine(head), CONTEXT_CHARS)
+
+/** A row under a label shows this many of its record's other lines. */
+export const RECORD_SIBLINGS = 2
+
+export const siblingLines = (siblings: readonly string[] | undefined): string[] =>
+  (siblings ?? []).map(sibling => `   ↳ sibling: ${sibling}`)
 
 /** An empty block still occupies a line; say so rather than print nothing. */
 export const EMPTY_CONTENT = '(empty)'

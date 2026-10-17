@@ -4,10 +4,19 @@ import { EXTENSION_TYPE } from '@/data/blockTypes'
 import type { BlockSearchFilter } from '@/data/searchFilter'
 import { AGENT_VIEW_DEFAULTS } from '@knowledge-medium/agent-cli/protocol'
 import { searchBlocksAcrossSources } from '@/utils/linkTargetAutocomplete.js'
-import { loadCrumbs } from './context.ts'
+import { labelParents, loadCrumbs, recordSiblings } from './context.ts'
 import { createPropertyRenderer, formatPropertyPairs, type PropertyLine } from './properties.ts'
 import { displayIds } from './displayIds.ts'
-import { clampInt, crumbLine, joinDisplayLines, loadRoot } from './shared.ts'
+import {
+  clampInt,
+  CONTEXT_HEAD_CHARS,
+  contextPreview,
+  crumbLine,
+  joinDisplayLines,
+  loadRoot,
+  RECORD_SIBLINGS,
+  siblingLines,
+} from './shared.ts'
 import { formatCount, snippet } from './text.ts'
 
 export interface SearchParams {
@@ -33,6 +42,8 @@ export interface SearchHit {
   duplicateIds: string[]
   duplicateShortIds: string[]
   duplicateCount: number
+  /** Only for a hit under a label: its record's first other lines. */
+  siblings?: string[]
 }
 
 export interface SearchView {
@@ -79,13 +90,14 @@ const resolveTypeIds = (repo: Repo, types: readonly string[]): string[] => {
 }
 
 
-/** Blocks with the same text, in rank order, each group led by its best. */
-const groupIdentical = (blocks: readonly BlockData[]): BlockData[][] => {
+/** Blocks with the same text, in rank order, each group led by its best.
+ *  Lines of different records (blocks under different labels) never fold. */
+const groupIdentical = (blocks: readonly BlockData[], labels: ReadonlySet<string>): BlockData[][] => {
   const groups: BlockData[][] = []
   const byKey = new Map<string, BlockData[]>()
   for (const block of blocks) {
     // Exactly identical stored text only: case or spacing can carry meaning (code).
-    const key = block.content
+    const key = block.parentId !== null && labels.has(block.parentId) ? `${block.parentId}\u0000${block.content}` : block.content
     const group = byKey.get(key)
     if (group) group.push(block)
     else {
@@ -130,26 +142,28 @@ export const buildSearchView = async (
     // A contributed source can answer with a block that has left the
     // workspace; its values would decode with this workspace's registries.
     const inWorkspace = fetched.filter(block => block.workspaceId === workspaceId)
-    return {groups: groupIdentical(inWorkspace), exhausted: fetched.length < window}
+    const labels = await labelParents(repo, inWorkspace)
+    return {groups: groupIdentical(inWorkspace, labels), labels, exhausted: fetched.length < window}
   }
 
   // Folding identical blocks shrinks the window, so it grows until it holds
   // one distinct hit past this page — or the sources run dry, or the cap.
   const wanted = offset + limit + 1
   let window = Math.min(Math.max(SEARCH_WINDOW, wanted), MAX_WINDOW)
-  let {groups, exhausted} = await fetchWindow(window)
+  let {groups, labels, exhausted} = await fetchWindow(window)
   while (groups.length < wanted && !exhausted && window < MAX_WINDOW) {
     window = Math.min(window * 4, MAX_WINDOW)
-    ;({groups, exhausted} = await fetchWindow(window))
+    ;({groups, labels, exhausted} = await fetchWindow(window))
   }
 
   const page = groups.slice(offset, offset + limit)
   const shown = page.map(group => group[0])
   const duplicateIds = page.flatMap(group => group.slice(1, 1 + MAX_DUPLICATES_SHOWN).map(block => block.id))
-  const [renderer, shortIds, crumbs] = await Promise.all([
+  const [renderer, shortIds, crumbs, siblings] = await Promise.all([
     createPropertyRenderer(repo, shown, 'brief'),
     displayIds(repo, [...shown.map(block => block.id), ...duplicateIds]),
     loadCrumbs(repo, shown.map(block => block.id), workspaceId),
+    recordSiblings(repo, shown, labels, workspaceId, {count: RECORD_SIBLINGS, chars: CONTEXT_HEAD_CHARS}),
   ])
   const end = offset + page.length
   // The listing ends where the window does: no offset reaches past a capped
@@ -164,6 +178,7 @@ export const buildSearchView = async (
       const [block] = group
       const duplicates = group.slice(1, 1 + MAX_DUPLICATES_SHOWN)
       const properties = renderer.view(block)
+      const record = siblings.get(block.id)
       return {
         id: block.id,
         shortId: shortIds.get(block.id) ?? block.id,
@@ -175,6 +190,7 @@ export const buildSearchView = async (
         duplicateIds: duplicates.map(duplicate => duplicate.id),
         duplicateShortIds: duplicates.map(duplicate => shortIds.get(duplicate.id) ?? duplicate.id),
         duplicateCount: group.length - 1,
+        ...(record ? {siblings: record.map(contextPreview)} : {}),
       }
     }),
     nextOffset: more ? end : null,
@@ -215,6 +231,7 @@ export const renderSearchView = (view: SearchView): string => {
       : ''
     lines.push(`${view.offset + index + 1}. ^${hit.shortId}  ${crumbLine(hit.breadcrumb)}${duplicates}`)
     lines.push(`   ${hit.snippet}${meta ? `  ${meta}` : ''}`)
+    lines.push(...siblingLines(hit.siblings))
   })
   if (capNote) lines.push(capNote)
   return joinDisplayLines(lines)
