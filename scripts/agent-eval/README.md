@@ -109,7 +109,9 @@ It does not try to hold these, and a finding about them is declined:
   allowlist bounds the shell, not what the agent can reach. A host's environment holds
   the allowlist above and nothing the checkout's `.env` files add, so the shell's
   secrets are not in it. Run the eval where you would run an agent with shell access.
-- A run that crosses local midnight, which moves the daily-note task to another day.
+- A run that crosses local midnight: the template holds the note of the day it was
+  seeded, so a `daily-checkin` that starts after midnight finds no note for its day and
+  fails. A run takes minutes.
 
 ## The fixture
 

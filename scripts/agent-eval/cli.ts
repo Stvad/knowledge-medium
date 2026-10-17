@@ -141,14 +141,16 @@ const prepareTemplate = async (bridge: Bridge, fixture: Fixture, scratch: string
 
 /** What `run` and `sizes` both start from: a build, a scratch directory, a
  *  private bridge and a measured template, all removed when the process
- *  exits. */
+ *  exits. The code is fingerprinted as soon as it is built, so an edit while
+ *  the template is seeded is caught like one during a task. */
 const prepareRun = async (fixture: Fixture, logDir: string) => {
   buildPackages()
+  const code = codeDigest()
   const scratch = mkdtempSync(path.join(tmpdir(), 'agent-eval-'))
   process.on('exit', () => rmSync(scratch, {recursive: true, force: true}))
   const bridge = await startBridge(path.join(scratch, 'bridge')).catch((error: unknown) => fail(errorText(error)))
   process.on('exit', () => bridge.stop())
-  return {scratch, bridge, template: await prepareTemplate(bridge, fixture, scratch, logDir)}
+  return {code, scratch, bridge, template: await prepareTemplate(bridge, fixture, scratch, logDir)}
 }
 
 /** Claude Code's project directory for one job's working directory, which
@@ -216,8 +218,7 @@ const run = async (options: RunOptions) => {
   })
   mkdirSync(path.join(runDir, 'hosts'), {recursive: true})
   const fixture = buildFixture()
-  const {scratch, bridge, template} = await prepareRun(fixture, path.join(runDir, 'hosts'))
-  const code = codeDigest()
+  const {code, scratch, bridge, template} = await prepareRun(fixture, path.join(runDir, 'hosts'))
   const surface = SURFACES[options.surface]
   const jobs: Job[] = []
   for (let rep = 1; rep <= options.repeat; rep++) for (const task of options.tasks) jobs.push({task, rep})

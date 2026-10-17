@@ -122,6 +122,8 @@ const HOST_COMMAND = {
 }
 /** Generous: a copy is ready in about 3 s and a seed in about 10 s. */
 const READY_TIMEOUT_MS = 120_000
+/** A host answers counts at once unless agent `eval` code has blocked it. */
+const COUNTS_TIMEOUT_MS = 30_000
 
 export const startHost = async (options: HostOptions): Promise<HostedGraph> => {
   const token = `agent-eval-${randomBytes(24).toString('hex')}`
@@ -172,9 +174,17 @@ export const startHost = async (options: HostOptions): Promise<HostedGraph> => {
     running,
     commandCounts: () => {
       if (!running()) return Promise.reject(new Error(`the graph host exited; see ${options.log}`))
+      let timeout: ReturnType<typeof setTimeout> | undefined
       const counts = new Promise<Record<string, number>>(resolve => pendingCounts.push(resolve))
+      const stalled = new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => {
+          child.kill('SIGKILL')
+          reject(new Error(`the graph host did not answer for ${COUNTS_TIMEOUT_MS / 1000}s, its event loop blocked; see ${options.log}`))
+        }, COUNTS_TIMEOUT_MS)
+      })
       child.stdin!.write('counts\n')
-      return Promise.race([counts, exited.then(() => { throw new Error(`the graph host exited; see ${options.log}`) })])
+      return Promise.race([counts, stalled, exited.then(() => { throw new Error(`the graph host exited; see ${options.log}`) })])
+        .finally(() => clearTimeout(timeout))
     },
     stop: async () => {
       child.stdin!.end()
