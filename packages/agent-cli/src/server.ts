@@ -959,6 +959,18 @@ const handleRequest = async (
   }
 }
 
+// Opt-in for a spawner that holds a pipe on our stdin and never writes to it
+// (tests, the eval runner): however that spawner dies, the OS closes the pipe
+// and the bridge exits with it instead of orphaning. A flag, not an env var:
+// the real bridge is spawned detached with its spawner's environment.
+if (process.argv.includes('--exit-on-stdin-close')) {
+  const exit = () => {
+    console.log('stdin closed; exiting')
+    process.exit(0)
+  }
+  process.stdin.on('end', exit).on('error', exit).resume()
+}
+
 const server = http.createServer(handleRequest)
 
 server.listen(port, host, () => {

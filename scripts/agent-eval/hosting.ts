@@ -65,14 +65,16 @@ export const startBridge = async (stateDir: string): Promise<Bridge> => {
   const port = await freePort()
   const secret = randomBytes(32).toString('hex')
   const log = openSync(path.join(stateDir, 'bridge.log'), 'a')
-  const child = spawn(process.execPath, [path.join(AGENT_CLI_DIST, 'server.js')], {
+  const child = spawn(process.execPath, [path.join(AGENT_CLI_DIST, 'server.js'), '--exit-on-stdin-close'], {
     env: childEnv({
       AGENT_RUNTIME_HOST: '127.0.0.1',
       AGENT_RUNTIME_PORT: String(port),
       AGENT_RUNTIME_BRIDGE_SECRET: secret,
       AGENT_RUNTIME_CONFIG_DIR: stateDir,
     }),
-    stdio: ['ignore', log, log],
+    // The bridge exits when its stdin closes, which also happens when the
+    // runner dies.
+    stdio: ['pipe', log, log],
   })
   closeSync(log)
   void track(child)
