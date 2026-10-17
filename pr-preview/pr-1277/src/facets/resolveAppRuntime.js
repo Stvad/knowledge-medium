@@ -1,1 +1,1 @@
-import{IE as e,LE as t}from"../../chunks/app-CusHlWBh.js";export{e as resolveAppRuntime,t as resolveAppRuntimeSync};
+import{IE as e,LE as t}from"../../chunks/app-GVnlLAyl.js";export{e as resolveAppRuntime,t as resolveAppRuntimeSync};

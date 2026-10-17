@@ -1,1 +1,1 @@
-import{sv as e}from"../../../chunks/app-CusHlWBh.js";export{e as BreadcrumbList};
+import{sv as e}from"../../../chunks/app-GVnlLAyl.js";export{e as BreadcrumbList};

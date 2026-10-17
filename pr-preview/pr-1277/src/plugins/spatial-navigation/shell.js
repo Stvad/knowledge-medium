@@ -1,1 +1,1 @@
-import{Gg as e}from"../../../chunks/app-CusHlWBh.js";export{e as spatialNavigationShellDecorator};
+import{Gg as e}from"../../../chunks/app-GVnlLAyl.js";export{e as spatialNavigationShellDecorator};

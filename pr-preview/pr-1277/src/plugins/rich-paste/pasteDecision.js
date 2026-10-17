@@ -1,1 +1,1 @@
-import{kp as e}from"../../../chunks/app-CusHlWBh.js";export{e as richPasteDecisionContribution};
+import{kp as e}from"../../../chunks/app-GVnlLAyl.js";export{e as richPasteDecisionContribution};

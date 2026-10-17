@@ -1,1 +1,1 @@
-import{Yk as e}from"../../chunks/app-CusHlWBh.js";export{e as BlockEditor};
+import{Yk as e}from"../../chunks/app-GVnlLAyl.js";export{e as BlockEditor};

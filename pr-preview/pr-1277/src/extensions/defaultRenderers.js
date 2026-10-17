@@ -1,1 +1,1 @@
-import{CD as e,TD as t,wD as n}from"../../chunks/app-CusHlWBh.js";export{e as defaultRegistry,n as defaultRendererContributions,t as defaultRenderersExtension};
+import{CD as e,TD as t,wD as n}from"../../chunks/app-GVnlLAyl.js";export{e as defaultRegistry,n as defaultRendererContributions,t as defaultRenderersExtension};

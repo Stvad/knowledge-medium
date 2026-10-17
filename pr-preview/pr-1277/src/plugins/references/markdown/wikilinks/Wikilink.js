@@ -1,1 +1,1 @@
-import{Uf as e}from"../../../../../chunks/app-CusHlWBh.js";export{e as Wikilink};
+import{Uf as e}from"../../../../../chunks/app-GVnlLAyl.js";export{e as Wikilink};
