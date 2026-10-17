@@ -1,0 +1,1 @@
+import{sb as e}from"../../../chunks/app-MNJGvpFI.js";export{e as openRecentsPage};

@@ -1,0 +1,1 @@
+import{cT as e,sT as t}from"../../chunks/app-MNJGvpFI.js";export{t as resolveStructuralEditPolicy,e as structuralEditPolicyForBlock};

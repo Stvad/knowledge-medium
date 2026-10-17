@@ -1,0 +1,1 @@
+import{Mk as e,jk as t}from"../../chunks/app-MNJGvpFI.js";export{t as canConvertEmptyChildBlockToProperty,e as convertEmptyChildBlockToProperty};
