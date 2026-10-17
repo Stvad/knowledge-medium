@@ -136,7 +136,8 @@ const hasLink = (content: string): boolean => LINK_PATTERNS.some(pattern => cont
 export const isReferenceOnly = (content: string): boolean =>
   textBeyondLinks(content).length < 3
 
-/** A label is a block of references only, at least one (`[[Meeting]]`,
- *  `#standup`): the head of a record whose lines are its children. */
+/** A label is a block of links and nothing else, at least one (`[[Meeting]]`,
+ *  `#standup`): the head of a record whose lines are its children. Stricter
+ *  than {@link isReferenceOnly}, which lets a short title through. */
 export const isLabel = (content: string): boolean =>
-  isReferenceOnly(content) && hasLink(content)
+  textBeyondLinks(content) === '' && hasLink(content)

@@ -1163,6 +1163,20 @@ describe('view-backlinks', () => {
     expect(await blockCount()).toBe(before)
   })
 
+  it('prints no sibling line for a sibling that is only whitespace', async () => {
+    await create({id: TARGET, content: 'Target', properties: {alias: ['Target']}})
+    const meeting = uuid('6f000001', 1)
+    await create({id: meeting, content: '[[Meeting]]'})
+    const line = uuid('6f000002', 2)
+    await create({id: line, parentId: meeting, content: 'with [[Target]]', references: [{id: TARGET, alias: 'Target'}]})
+    await create({id: uuid('6f000003', 3), parentId: meeting, content: '\u00a0\u2003'})
+    await create({id: uuid('6f000004', 4), parentId: meeting, content: 'topic: renewal'})
+
+    const out = await view<BacklinksView>({type: 'view-backlinks', ref: TARGET, format: 'json'})
+    // Accepted: the blank sibling still takes one of the two slots the query reads.
+    expect(out.rows[0].siblings).toEqual(['topic: renewal'])
+  })
+
   it('gives a source under a label the first other lines of its record', async () => {
     await create({id: TARGET, content: 'Target', properties: {alias: ['Target']}})
     const meeting = uuid('6a000001', 1)
@@ -1197,6 +1211,7 @@ describe('view-backlinks', () => {
       uuid('6b000002', 2),
       uuid('6b000003', 3),
       uuid('6b000004', 4),
+      uuid('6b000005', 5),
     ]
     await create({id: parents[0], content: 'ok'})
     // The head read is 200 characters: 40 whole tags, so the head alone reads as a label.
@@ -1204,13 +1219,15 @@ describe('view-backlinks', () => {
     // Punctuation only: nothing beyond links, and no link either.
     await create({id: parents[2], content: '-'})
     await create({id: parents[3], content: 'OK:'})
+    // A link plus a short title is a titled parent, not a bare label.
+    await create({id: parents[4], content: '[[Meeting]] Q1'})
     for (const [index, parent] of parents.entries()) {
       await create({id: uuid('6b00001' + index, 10 + index), parentId: parent, content: `line ${index} of [[Target]]`, references: [{id: TARGET, alias: 'Target'}]})
       await create({id: uuid('6b00002' + index, 20 + index), parentId: parent, content: 'a line beside it'})
     }
 
     const out = await view<BacklinksView>({type: 'view-backlinks', ref: TARGET, format: 'json'})
-    expect(out.rows).toHaveLength(4)
+    expect(out.rows).toHaveLength(5)
     expect(out.rows.filter(row => row.siblings)).toEqual([])
   })
 
@@ -1349,6 +1366,37 @@ describe('view-search', () => {
     expect([hit.breadcrumb.at(-1), hit.duplicates[0].place].sort()).toEqual(['Copperline', 'Kestrel'])
     const text = await view<string>({type: 'view-search', query: 'renewal due'})
     expect(text).toContain(`identical: ^${hit.duplicates[0].shortId} in ${hit.duplicates[0].place})`)
+  })
+
+  it('takes no label from another workspace, so a line under one folds and shows no siblings', async () => {
+    const foreign = uuid('6c100001', 1)
+    await repo.tx(async tx => {
+      await tx.create({id: foreign, workspaceId: 'ws-2', parentId: null, orderKey: 'a0', content: '[[Meeting]]', references: []})
+    }, {scope: ChangeScope.BlockDefault})
+    const strayLine = uuid('6c100002', 2)
+    await create({id: strayLine, content: 'with the kestrel account team'})
+    await create({id: uuid('6c100003', 3), content: 'with the kestrel account team'})
+    const straySibling = uuid('6c100004', 4)
+    await create({id: straySibling, content: 'topic: renewal terms'})
+    // Sync applies parent ids verbatim, so a row can point at a parent in another workspace.
+    await sharedDb.db.execute('UPDATE blocks SET parent_id = ? WHERE id IN (?, ?)', [foreign, strayLine, straySibling])
+
+    const out = await view<SearchView>({type: 'view-search', query: 'kestrel account', format: 'json'})
+    expect(out.hits).toHaveLength(1)
+    expect(out.hits[0].duplicateCount).toBe(1)
+    expect(out.hits[0]).not.toHaveProperty('siblings')
+  })
+
+  it('folds a record line only with its own record, whatever the text holds', async () => {
+    const meeting = uuid('6c200001', 1)
+    await create({id: meeting, content: '[[Meeting]]'})
+    await create({id: uuid('6c200002', 2), parentId: meeting, content: 'kestrel line'})
+    // Content built to match a record line's grouping key, were it a joined string.
+    await create({id: uuid('6c200003', 3), content: `${meeting}\u0000kestrel line`})
+
+    const out = await view<SearchView>({type: 'view-search', query: 'kestrel', format: 'json'})
+    expect(out.hits).toHaveLength(2)
+    expect(out.hits.map(hit => hit.duplicateCount)).toEqual([0, 0])
   })
 
   it('keeps identical lines of different records apart, each with its record', async () => {

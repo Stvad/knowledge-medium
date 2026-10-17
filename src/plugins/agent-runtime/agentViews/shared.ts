@@ -136,6 +136,12 @@ export const contextPreview = (head: string): string => ellipsize(oneLine(head),
 /** A row under a label shows this many of its record's other lines. */
 export const RECORD_SIBLINGS = 2
 
+/** A record's sibling heads as context lines, dropping any that preview as
+ *  empty. Accepted: such a sibling (only non-ASCII whitespace, which the
+ *  query's trim keeps) still took one of the slots the query read. */
+export const siblingPreviews = (heads: readonly string[] | undefined): string[] =>
+  (heads ?? []).map(contextPreview).filter(line => line !== '')
+
 export const siblingLines = (siblings: readonly string[] | undefined): string[] =>
   (siblings ?? []).map(sibling => `   ↳ sibling: ${sibling}`)
 

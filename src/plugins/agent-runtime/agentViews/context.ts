@@ -194,6 +194,7 @@ const LABEL_CHARS = 200
 export const labelParents = async (
   repo: Repo,
   blocks: readonly Pick<BlockData, 'id' | 'parentId'>[],
+  workspaceId: string,
 ): Promise<Set<string>> => {
   const parentIds = [...new Set(blocks.flatMap(block =>
     block.parentId !== null && block.parentId !== block.id ? [block.parentId] : []))]
@@ -201,8 +202,9 @@ export const labelParents = async (
   const rows = await repo.db.getAll<{id: string, content: string | null, whole: number}>(
     `SELECT b.id AS id, ${textHeadSql('b.content', LABEL_CHARS)} AS content, length(b.content) <= ${LABEL_CHARS} AS whole
        FROM json_each(?) j JOIN blocks b ON b.id = j.value
-      WHERE b.deleted = 0`,
-    [JSON.stringify(parentIds)],
+      WHERE b.deleted = 0 AND b.workspace_id = ?`,
+    // A sync-applied parent edge can cross workspaces; that parent is no record of this one.
+    [JSON.stringify(parentIds), workspaceId],
   )
   return new Set(rows.filter(row => row.whole === 1 && isLabel(row.content ?? '')).map(row => row.id))
 }

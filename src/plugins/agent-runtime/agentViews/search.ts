@@ -10,12 +10,12 @@ import { displayIds } from './displayIds.ts'
 import {
   clampInt,
   CONTEXT_HEAD_CHARS,
-  contextPreview,
   crumbLine,
   joinDisplayLines,
   loadRoot,
   RECORD_SIBLINGS,
   siblingLines,
+  siblingPreviews,
 } from './shared.ts'
 import { formatCount, snippet } from './text.ts'
 
@@ -103,7 +103,7 @@ const groupIdentical = (blocks: readonly BlockData[], labels: ReadonlySet<string
   const byKey = new Map<string, BlockData[]>()
   for (const block of blocks) {
     // Exactly identical stored text only: case or spacing can carry meaning (code).
-    const key = block.parentId !== null && labels.has(block.parentId) ? `${block.parentId}\u0000${block.content}` : block.content
+    const key = JSON.stringify(block.parentId !== null && labels.has(block.parentId) ? [block.parentId, block.content] : [block.content])
     const group = byKey.get(key)
     if (group) group.push(block)
     else {
@@ -148,7 +148,7 @@ export const buildSearchView = async (
     // A contributed source can answer with a block that has left the
     // workspace; its values would decode with this workspace's registries.
     const inWorkspace = fetched.filter(block => block.workspaceId === workspaceId)
-    const labels = await labelParents(repo, inWorkspace)
+    const labels = await labelParents(repo, inWorkspace, workspaceId)
     return {groups: groupIdentical(inWorkspace, labels), labels, exhausted: fetched.length < window}
   }
 
@@ -184,7 +184,7 @@ export const buildSearchView = async (
       const [block] = group
       const duplicates = group.slice(1, 1 + MAX_DUPLICATES_SHOWN)
       const properties = renderer.view(block)
-      const record = siblings.get(block.id)
+      const record = siblingPreviews(siblings.get(block.id))
       return {
         id: block.id,
         shortId: shortIds.get(block.id) ?? block.id,
@@ -199,7 +199,7 @@ export const buildSearchView = async (
           place: crumbs.get(duplicate.id)?.at(-1) ?? null,
         })),
         duplicateCount: group.length - 1,
-        ...(record ? {siblings: record.map(contextPreview)} : {}),
+        ...(record.length > 0 ? {siblings: record} : {}),
       }
     }),
     nextOffset: more ? end : null,

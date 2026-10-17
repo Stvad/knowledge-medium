@@ -35,6 +35,7 @@ import {
   plural,
   RECORD_SIBLINGS,
   siblingLines,
+  siblingPreviews,
   toViewRow,
   type ViewRow,
 } from './shared.ts'
@@ -151,7 +152,7 @@ const backlinkRows = async (
     viaPropertiesBySource(repo, workspaceId, targetId, ids),
     loadContentHeads(repo, parentIds, CONTEXT_HEAD_CHARS),
     firstVisibleChildren(repo, linkOnly.map(source => source.id), workspaceId, CONTEXT_HEAD_CHARS),
-    labelParents(repo, sources).then(labels =>
+    labelParents(repo, sources, workspaceId).then(labels =>
       recordSiblings(repo, sources, labels, workspaceId, {count: RECORD_SIBLINGS, chars: CONTEXT_HEAD_CHARS})),
   ])
   return sources.map(source => {
@@ -172,8 +173,8 @@ const backlinkRows = async (
       const child = firstChildren.get(source.id)
       if (child?.trim()) row.firstChildContent = contextPreview(child)
     }
-    const record = siblings.get(source.id)
-    if (record) row.siblings = record.map(contextPreview)
+    const record = siblingPreviews(siblings.get(source.id))
+    if (record.length > 0) row.siblings = record
     return row
   })
 }
