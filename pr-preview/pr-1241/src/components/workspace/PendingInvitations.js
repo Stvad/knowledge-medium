@@ -1,1 +1,1 @@
-import{cy as e}from"../../../chunks/app-CaxlGs0l.js";export{e as PendingInvitations};
+import{cy as e}from"../../../chunks/app-CqgS7XHg.js";export{e as PendingInvitations};

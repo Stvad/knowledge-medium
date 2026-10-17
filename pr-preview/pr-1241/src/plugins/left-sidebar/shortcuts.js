@@ -1,1 +1,1 @@
-import{Av as e,Ov as t,kv as n}from"../../../chunks/app-CaxlGs0l.js";export{t as getOrCreateShortcutsBlock,n as journalShortcutBlockId,e as shortcutsBlockId};
+import{Av as e,Ov as t,kv as n}from"../../../chunks/app-CqgS7XHg.js";export{t as getOrCreateShortcutsBlock,n as journalShortcutBlockId,e as shortcutsBlockId};
