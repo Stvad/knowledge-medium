@@ -151,7 +151,12 @@ export const resolvePageTarget = async (
   if (date && (!existing || existing.id === dailyNoteBlockId(workspaceId, date.iso))) {
     return resolveDailyNoteTarget(repo, date.iso, verb, pinned)
   }
-  if (existing) return {id: existing.id, kind: 'page', created: false}
+  if (existing) {
+    // Nothing after this re-checks a page that already exists (create-page
+    // returns it as is), so a switch during the lookup is refused here.
+    assertActiveWorkspace(repo, verb, workspaceId)
+    return {id: existing.id, kind: 'page', created: false}
+  }
   if (options.create === false) throw new Error(`${verb}: no page named [[${name}]].`)
   // Typing a link no parser reads as one creates nothing; neither does this.
   assertRoundTrippableReferenceLabel(name, `${verb}: page name`)

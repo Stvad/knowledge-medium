@@ -114,10 +114,11 @@ export const editArgumentsOption = (
   replacement: unknown,
   afterDashes: unknown,
 ): {old: string, new: string} => {
-  const rest = toStringArray(afterDashes)
-  const [oldText, newText] = rest.length > 0 ? rest : [old, replacement]
-  if (rest.length > 2 || oldText === undefined || newText === undefined) {
+  // One list, in order: `milk -- -oat` is two texts, and a pair on each side
+  // of `--` is four — refused, never one pair silently dropped.
+  const texts = [old, replacement].filter(text => text !== undefined).concat(toStringArray(afterDashes))
+  if (texts.length !== 2) {
     throw new Error("edit-block takes exactly <old> and <new> — after `--` when either starts with '-'")
   }
-  return {old: String(oldText), new: String(newText)}
+  return {old: String(texts[0]), new: String(texts[1])}
 }

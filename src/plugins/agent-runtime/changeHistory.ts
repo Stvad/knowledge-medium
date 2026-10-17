@@ -20,9 +20,10 @@ import { clampInt, viewWorkspace } from './agentViews/shared.ts'
 import { cutMarker } from './agentViews/text.ts'
 
 /** A change as the views read it: the before / after snapshots without their
- *  content, which comes as a bounded head with its full length, and whether
- *  it changed — compared in SQL, so a megabyte content is never loaded only
- *  to be cut. See {@link changeColumnsSql}. */
+ *  content, properties or references; the content as a bounded head with its
+ *  full length; and what changed — compared in SQL, so a megabyte content or
+ *  property value is never loaded only to be cut or compared. See
+ *  {@link changeColumnsSql}. */
 interface ChangeRow {
   tx_id: string | null
   block_id: string
@@ -37,28 +38,49 @@ interface ChangeRow {
   before_nul: number | null
   after_nul: number | null
   content_changed: number
+  /** JSON array of the property names whose value differs — every name the
+   *  one snapshot has, for a create or delete. */
+  changed_properties: string
+  references_changed: number
+  /** The after snapshot (else the before) holds a reference. */
+  has_references: number
 }
+
+/** The names of the properties whose stored value differs between snapshot
+ *  JSON `before` and `after`; a NULL snapshot has none, so every name of the
+ *  other one differs. */
+const changedPropertiesSql = (before: string, after: string): string => `
+  (SELECT json_group_array(name.key) FROM (
+      SELECT key FROM json_each(${before}, '$.properties')
+      UNION SELECT key FROM json_each(${after}, '$.properties')
+    ) name
+    WHERE NOT EXISTS (
+      SELECT 1 FROM json_each(${before}, '$.properties') x
+        JOIN json_each(${after}, '$.properties') y ON y.key = x.key AND y.type = x.type AND y.value IS x.value
+       WHERE x.key = name.key))`
 
 /** The SELECT columns of a {@link ChangeRow} whose before snapshot is row
  *  `b`'s and after snapshot row `a`'s — one row_events row, or a block's
  *  first and last write in a tx. Binds the content head length twice. */
 const changeColumnsSql = (b: string, a: string): string => `
   ${a}.tx_id AS tx_id, ${a}.block_id AS block_id, ${a}.source AS source, ${a}.created_at AS created_at,
-  json_remove(${b}.before_json, '$.content') AS before_meta,
-  json_remove(${a}.after_json, '$.content') AS after_meta,
+  json_remove(${b}.before_json, '$.content', '$.properties', '$.references') AS before_meta,
+  json_remove(${a}.after_json, '$.content', '$.properties', '$.references') AS after_meta,
   substr(json_extract(${b}.before_json, '$.content'), 1, ?) AS before_head,
   length(json_extract(${b}.before_json, '$.content')) AS before_len,
   substr(json_extract(${a}.after_json, '$.content'), 1, ?) AS after_head,
   length(json_extract(${a}.after_json, '$.content')) AS after_len,
   instr(CAST(json_extract(${b}.before_json, '$.content') AS BLOB), x'00') > 0 AS before_nul,
   instr(CAST(json_extract(${a}.after_json, '$.content') AS BLOB), x'00') > 0 AS after_nul,
-  json_extract(${b}.before_json, '$.content') IS NOT json_extract(${a}.after_json, '$.content') AS content_changed`
+  json_extract(${b}.before_json, '$.content') IS NOT json_extract(${a}.after_json, '$.content') AS content_changed,
+  ${changedPropertiesSql(`${b}.before_json`, `${a}.after_json`)} AS changed_properties,
+  coalesce(json_extract(${b}.before_json, '$.references'), '[]')
+    IS NOT coalesce(json_extract(${a}.after_json, '$.references'), '[]') AS references_changed,
+  coalesce(json_array_length(coalesce(${a}.after_json, ${b}.before_json), '$.references'), 0) > 0 AS has_references`
 
 interface Snapshot {
   parentId: string | null
   orderKey: string
-  properties: Record<string, unknown>
-  references: unknown
   deleted: boolean
 }
 
@@ -68,8 +90,6 @@ const snapshotOf = (json: string | null): Snapshot | null => {
   return {
     parentId: raw.parentId ?? null,
     orderKey: raw.orderKey ?? '',
-    properties: raw.properties ?? {},
-    references: raw.references ?? [],
     deleted: raw.deleted === true,
   }
 }
@@ -99,13 +119,6 @@ interface BlockChange {
   properties?: string[]
 }
 
-const sameJson = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b)
-
-const changedPropertyNames = (before: Snapshot, after: Snapshot): string[] =>
-  [...new Set([...Object.keys(before.properties), ...Object.keys(after.properties)])]
-    .filter(name => !sameJson(before.properties[name], after.properties[name]))
-    .sort()
-
 const describeChange = (row: ChangeRow, contentLimit: number): Omit<BlockChange, 'shortId'> => {
   const before = snapshotOf(row.before_meta)
   const after = snapshotOf(row.after_meta)
@@ -113,17 +126,16 @@ const describeChange = (row: ChangeRow, contentLimit: number): Omit<BlockChange,
     before: shownContent(row.before_head, row.before_len, row.before_nul, contentLimit),
     after: shownContent(row.after_head, row.after_len, row.after_nul, contentLimit),
   }
+  const properties = (JSON.parse(row.changed_properties) as string[]).sort()
   if (!before || !after) {
     const only = (after ?? before)!
-    const properties = Object.keys(only.properties).sort()
-    const hasReferences = Array.isArray(only.references) && only.references.length > 0
     return {
       blockId: row.block_id,
       kind: after ? 'create' : 'delete',
       changed: [
         'content', 'parent',
         ...(properties.length > 0 ? ['properties' as const] : []),
-        ...(hasReferences ? ['references' as const] : []),
+        ...(row.has_references ? ['references' as const] : []),
       ],
       content: after ? {after: content.after} : {before: content.before},
       parentId: after ? {before: null, after: only.parentId} : {before: only.parentId, after: null},
@@ -134,9 +146,8 @@ const describeChange = (row: ChangeRow, contentLimit: number): Omit<BlockChange,
   if (row.content_changed) changed.push('content')
   if (before.parentId !== after.parentId) changed.push('parent')
   if (before.orderKey !== after.orderKey) changed.push('order')
-  const properties = changedPropertyNames(before, after)
   if (properties.length > 0) changed.push('properties')
-  if (!sameJson(before.references, after.references)) changed.push('references')
+  if (row.references_changed) changed.push('references')
   if (before.deleted !== after.deleted) changed.push('deleted')
 
   const kind: ChangeKind = before.deleted && !after.deleted ? 'restore'

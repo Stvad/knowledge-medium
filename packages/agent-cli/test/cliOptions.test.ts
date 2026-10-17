@@ -166,4 +166,9 @@ describe('editArgumentsOption', () => {
     expect(() => editOf(['only-old'])).toThrow(/exactly <old> and <new>/)
     expect(() => editOf(['--', 'a', 'b', 'c'])).toThrow(/exactly <old> and <new>/)
   })
+
+  it('reads texts before and after -- as one list, so a second pair is refused, not swapped in', () => {
+    expect(editOf(['milk', '--', '-oat'])).toEqual({old: 'milk', new: '-oat'})
+    expect(() => editOf(['milk', 'oat', '--', 'later-old', 'later-new'])).toThrow(/exactly <old> and <new>/)
+  })
 })

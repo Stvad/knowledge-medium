@@ -20,7 +20,7 @@ import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { dailyNoteBlockId, journalBlockId } from '@/plugins/daily-notes/dailyNotes'
 import { createAgentRuntimeContext, executeCommand } from '../commands'
 import type { AgentRuntimeContext } from '../protocol'
-import { resolveAgentTarget, resolveBlockId } from '../targets'
+import { resolveAgentTarget, resolveBlockId, resolvePageTarget } from '../targets'
 import { agentTxOptions } from '../agentWrites'
 import { BLOCK_HISTORY_CONTENT_CHARS, MAX_LISTED_CHANGES } from '../changeHistory'
 import { parseMarkdownToBlocks } from '@/utils/markdownParser.js'
@@ -195,6 +195,29 @@ describe('target resolution', () => {
       spy.mockRestore()
     }
     expect(await sharedDb.db.getAll('SELECT block_id FROM block_aliases WHERE alias = ?', ['Drifted'])).toEqual([])
+  })
+
+  it('refuses an existing page when the active workspace moved during its lookup', async () => {
+    await resolveAgentTarget(repo, '[[Settled]]', 'test')
+    let active = WS
+    const spy = vi.spyOn(repo, 'activeWorkspaceId', 'get').mockImplementation(() => active)
+    const original = repo.query
+    const writable = repo as unknown as {query: unknown}
+    writable.query = new Proxy(original, {
+      get: (target, name) => name !== 'aliasLookup' ? Reflect.get(target, name) : (args: never) => ({
+        load: async () => {
+          const found = await original.aliasLookup(args).load()
+          active = 'ws-elsewhere'
+          return found
+        },
+      }),
+    })
+    try {
+      await expect(resolvePageTarget(repo, 'Settled', 'test')).rejects.toThrow(/not the active one/)
+    } finally {
+      writable.query = original
+      spy.mockRestore()
+    }
   })
 
   it('never resolves an id field by page name — the page is not touched', async () => {
@@ -608,6 +631,45 @@ describe('block-history', () => {
     } finally {
       getAll.mockRestore()
     }
+  })
+
+  // A raw write fires no references processor, so the bags stay as written.
+  const writeBags = (id: string, properties: object, references: unknown[]) =>
+    sharedDb.db.writeTransaction(async db => {
+      await db.execute(
+        'UPDATE blocks SET properties_json = ?, references_json = ? WHERE id = ?',
+        [JSON.stringify(properties), JSON.stringify(references), id],
+      )
+    })
+
+  it('never loads a property bag or a reference list whole', async () => {
+    const huge = 'p'.repeat(50_000)
+    await seed([{id: NOTE, content: 'v1'}])
+    await writeBags(NOTE, {big: huge}, [{id: LONE, alias: huge}])
+    await run({type: 'update-block', id: NOTE, content: 'v2'})
+    const getAll = vi.spyOn(repo.db, 'getAll')
+    try {
+      await run({type: 'block-history', id: NOTE})
+      await run({type: 'recent-changes'})
+      const results = await Promise.all(getAll.mock.results.map(result => result.value as Promise<unknown[]>))
+      const longest = Math.max(0, ...results.flat().flatMap(row => Object.values(row as object))
+        .map(value => typeof value === 'string' ? value.length : 0))
+      expect(longest).toBeLessThan(BLOCK_HISTORY_CONTENT_CHARS + 100)
+    } finally {
+      getAll.mockRestore()
+    }
+  })
+
+  it('names exactly the properties an update changed, added or removed, and flags changed references', async () => {
+    await seed([{id: NOTE}])
+    await writeBags(NOTE, {keep: 'same', edit: 'old', gone: 1, flag: 1}, [])
+    await writeBags(NOTE, {keep: 'same', edit: 'new', added: {a: [1]}, flag: true}, [{id: LONE}])
+    const out = await run({type: 'block-history', id: NOTE}) as {
+      events: Array<{kind: string, changed: string[], properties?: string[]}>
+    }
+    expect(out.events[0]).toMatchObject({
+      kind: 'update', changed: ['properties', 'references'], properties: ['added', 'edit', 'flag', 'gone'],
+    })
   })
 
   it('lists one block\'s changes newest first with full content, local and sync-applied', async () => {
