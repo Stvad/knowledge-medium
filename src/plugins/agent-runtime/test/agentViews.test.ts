@@ -1251,9 +1251,9 @@ describe('view-backlinks', () => {
       uuid('6b000005', 5),
     ]
     await create({id: parents[0], content: 'ok'})
-    // The head read is 200 characters: 40 whole tags, so the head alone reads as a label.
+    // Its first 200 characters are whole tags: a parent past that length is no label.
     await create({id: parents[1], content: `${'#tag '.repeat(50)}then the actual words`})
-    // Punctuation only: nothing beyond links, and no link either.
+    // No link at all: bare punctuation, and a word.
     await create({id: parents[2], content: '-'})
     await create({id: parents[3], content: 'OK:'})
     // A link plus a short title is a titled parent, not a bare label.
@@ -1441,6 +1441,18 @@ describe('view-search', () => {
     expect(out.hits).toHaveLength(1)
     expect(out.hits[0].duplicateCount).toBe(1)
     expect(out.hits[0]).not.toHaveProperty('siblings')
+  })
+
+  it('reads no long parent\'s content to judge whether it is a label', async () => {
+    const parent = uuid('6c600000', 0)
+    await create({id: parent, content: `${'#tag '.repeat(10)}${'x'.repeat(100_000)}`})
+    await create({id: uuid('6c600001', 1), parentId: parent, content: 'needle line'})
+
+    const getAll = vi.spyOn(repo.db, 'getAll')
+    await view({type: 'view-search', query: 'needle'})
+    const sizes = await Promise.all(getAll.mock.results.map(async result => JSON.stringify(await result.value).length))
+    getAll.mockRestore()
+    expect(Math.max(...sizes)).toBeLessThan(100_000)
   })
 
   it('names a duplicate\'s place by the last two steps of its breadcrumb', async () => {
