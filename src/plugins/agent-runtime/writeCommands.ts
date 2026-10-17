@@ -93,6 +93,7 @@ export const appendMarkdown = async (
       const rootKeys = await orderKeysForInsert(
         tx, row.id, row.workspaceId, firstPosition, parsed.filter(node => !node.parentId).length,
       )
+      let nextRoot = 0
       const created = new Map<string, {id: string; depth: number}>()
       for (const node of parsed) {
         const parent = node.parentId ? created.get(node.parentId)! : null
@@ -102,7 +103,7 @@ export const appendMarkdown = async (
           id,
           workspaceId: row.workspaceId,
           parentId,
-          orderKey: parent ? node.orderKey : rootKeys.shift()!,
+          orderKey: parent ? node.orderKey : rootKeys[nextRoot++],
           content: node.content,
         })
         const depth = parent ? parent.depth + 1 : 0
