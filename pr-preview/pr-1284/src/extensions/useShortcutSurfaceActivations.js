@@ -1,1 +1,1 @@
-import{FA as e}from"../../chunks/app-RJN3Iswn.js";export{e as useShortcutSurfaceActivations};
+import{FA as e}from"../../chunks/app-vjj-fmH9.js";export{e as useShortcutSurfaceActivations};
