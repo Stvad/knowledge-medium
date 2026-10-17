@@ -192,27 +192,17 @@ export const createBlockedWikilinkWriteGuard = (
 
     const workspaceId = await workspaceIdForMoveTarget(id, parentId)
     if (!workspaceId) return []
-    const rows = parentId === null
-      ? await graph.sqlAll(
-        `SELECT id, content, properties_json, order_key
-           FROM blocks
-          WHERE workspace_id = ?
-            AND parent_id IS NULL
-            AND deleted = 0
-            AND id <> ?
-          ORDER BY order_key, id`,
-        [workspaceId, id],
-      )
-      : await graph.sqlAll(
-        `SELECT id, content, properties_json, order_key
-           FROM blocks
-          WHERE workspace_id = ?
-            AND parent_id = ?
-            AND deleted = 0
-            AND id <> ?
-          ORDER BY order_key, id`,
-        [workspaceId, parentId, id],
-      )
+    // Only the siblings tied with the anchor: they are all a re-key can touch,
+    // and all the run below compares — a large sibling set is never read.
+    const liveSibling = 'workspace_id = ? AND parent_id IS ? AND deleted = 0 AND id <> ?'
+    const rows = await graph.sqlAll(
+      `SELECT id, content, properties_json, order_key
+         FROM blocks
+        WHERE ${liveSibling}
+          AND order_key = (SELECT order_key FROM blocks WHERE id = ? AND ${liveSibling})
+        ORDER BY order_key, id`,
+      [workspaceId, parentId, id, position.siblingId, workspaceId, parentId, id],
+    )
     const siblings = rows.flatMap(row => {
       const sibling = moveSiblingFromSqlRow(row)
       return sibling ? [sibling] : []

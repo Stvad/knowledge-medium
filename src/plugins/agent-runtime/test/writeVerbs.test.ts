@@ -24,12 +24,18 @@ import { resolveAgentTarget, resolveBlockId, resolvePageTarget } from '../target
 import { agentTxOptions } from '../agentWrites'
 import { BLOCK_HISTORY_CONTENT_CHARS, LISTED_PROPERTY_NAMES, MAX_LISTED_CHANGES } from '../changeHistory'
 import { parseMarkdownToBlocks } from '@/utils/markdownParser.js'
+import { parseRelativeDate } from '@/utils/relativeDate.js'
 import { AGENT_VIEW_DEFAULTS } from '@knowledge-medium/agent-cli/protocol'
 
 // Passthrough spy, so a test can tell whether a refusal beat the parse.
 vi.mock('@/utils/markdownParser.js', async original => {
   const actual = await original<typeof import('@/utils/markdownParser.js')>()
   return {...actual, parseMarkdownToBlocks: vi.fn(actual.parseMarkdownToBlocks)}
+})
+// Passthrough spy, so a test can make a second parse of the same text disagree.
+vi.mock('@/utils/relativeDate.js', async original => {
+  const actual = await original<typeof import('@/utils/relativeDate.js')>()
+  return {...actual, parseRelativeDate: vi.fn(actual.parseRelativeDate)}
 })
 
 const WS = 'ws-1'
@@ -217,6 +223,23 @@ describe('target resolution', () => {
     } finally {
       writable.query = original
       spy.mockRestore()
+    }
+  })
+
+  it('hands a bare id that matches nothing back trimmed, as every ref is read', async () => {
+    expect(await resolveBlockId(repo, '  ghost  ', 'test')).toBe('ghost')
+  })
+
+  it('writes to the day a relative date resolved to, even if it reads differently a moment later', async () => {
+    const parse = vi.mocked(parseRelativeDate)
+    const real = parse.getMockImplementation()!
+    parse
+      .mockImplementationOnce(() => real('2026-10-15'))
+      .mockImplementationOnce(() => real('2026-10-16'))
+    try {
+      expect((await resolveAgentTarget(repo, 'tomorrow', 'test')).id).toBe(dailyNoteBlockId(WS, '2026-10-15'))
+    } finally {
+      parse.mockReset()
     }
   })
 
@@ -568,6 +591,19 @@ describe('recent-changes', () => {
     expect(out.txs[0].changes.map(change => change.blockId)).toEqual([LONE])
   })
 
+  it('lists no change for a property bag rewritten with its keys in another order', async () => {
+    await seed([{id: NOTE}, {id: LONE, content: 'before'}])
+    await repo.tx(async tx => { await tx.update(NOTE, {properties: {alpha: 'x', beta: 'y'}}) },
+      {scope: ChangeScope.BlockDefault, description: 'seed'})
+    await repo.tx(async tx => {
+      await tx.update(NOTE, {properties: {alpha: 'x', beta: 'detour'}})
+      await tx.update(NOTE, {properties: {beta: 'y', alpha: 'x'}})
+      await tx.update(LONE, {content: 'after'})
+    }, agentTxOptions('update-block'))
+    const out = await run({type: 'recent-changes'}) as ChangesOut
+    expect(out.txs[0].changes.map(change => change.blockId)).toEqual([LONE])
+  })
+
   it('leaves a tx with no net change out of the page, so it never displaces a real one', async () => {
     await seed([{id: NOTE, content: 'same'}, {id: LONE, content: 'before'}])
     await run({type: 'update-block', id: LONE, content: 'after'})
@@ -680,11 +716,18 @@ describe('block-history', () => {
     const bag = (v: string) => Object.fromEntries(Array.from({length: 5000}, (_, i) => [`k${String(i).padStart(4, '0')}`, `${v}${i}`]))
     await writeBags(NOTE, bag('a'), [])
     await writeBags(NOTE, bag('b'), [])
+    const getAll = vi.spyOn(repo.db, 'getAll')
     const started = performance.now()
     const out = await run({type: 'block-history', id: NOTE}) as {
       events: Array<{changed: string[], properties?: string[], propertiesOmitted?: number}>
     }
     expect(performance.now() - started).toBeLessThan(3000)
+    // SQL hands back the listed names and a count, never all 5000.
+    const results = await Promise.all(getAll.mock.results.map(result => result.value as Promise<unknown[]>))
+    getAll.mockRestore()
+    const longest = Math.max(0, ...results.flat().flatMap(row => Object.values(row as object))
+      .map(value => typeof value === 'string' ? value.length : 0))
+    expect(longest).toBeLessThan(1000)
     expect(out.events[0].changed).toEqual(['properties'])
     expect(out.events[0].properties).toEqual(Array.from({length: LISTED_PROPERTY_NAMES}, (_, i) => `k${String(i).padStart(4, '0')}`))
     expect(out.events[0].propertiesOmitted).toBe(5000 - LISTED_PROPERTY_NAMES)

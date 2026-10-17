@@ -152,9 +152,10 @@ describe('markdownText', () => {
     return markdownText(markdown, options['--'])
   }
 
-  it('reads stdin (undefined) with no text, or a lone -', () => {
+  it('reads stdin (undefined) with no text, or a lone - on either side of --', () => {
     expect(textOf([])).toBeUndefined()
     expect(textOf(['-'])).toBeUndefined()
+    expect(textOf(['--', '-'])).toBeUndefined()
   })
 
   it('joins the texts before and after -- in order, never dropping one side', () => {

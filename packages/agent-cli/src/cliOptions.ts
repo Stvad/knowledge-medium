@@ -115,10 +115,10 @@ export const textArguments = (positionals: readonly unknown[], afterDashes: unkn
   [...positionals.flatMap(toStringArray), ...toStringArray(afterDashes)]
 
 /** `append-markdown`'s markdown: its text operands joined, or undefined to
- *  read stdin — no text at all, or a lone `-`. */
+ *  read stdin — no text at all, or a lone `-` (`-- -` too, as for `cat`). */
 export const markdownText = (markdown: unknown, afterDashes: unknown): string | undefined => {
   const texts = textArguments([markdown], afterDashes)
-  return texts.length === 0 || (texts.length === 1 && markdown === '-') ? undefined : texts.join(' ')
+  return texts.length === 0 || (texts.length === 1 && texts[0] === '-') ? undefined : texts.join(' ')
 }
 
 /** `edit-block`'s <old> and <new>: positional, or after `--` when either

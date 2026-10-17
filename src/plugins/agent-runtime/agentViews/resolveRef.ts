@@ -15,10 +15,11 @@ import { clipLine, oneLine, textHeadSql } from './text.ts'
  *  the same answer `[[Today]]` gives in content. */
 export type BlockRefVia = 'id' | 'prefix' | 'alias' | 'date' | 'verbatim'
 
-export interface BlockRefResolution {
-  id: string
-  via: BlockRefVia
-}
+export type BlockRefResolution =
+  | {id: string; via: Exclude<BlockRefVia, 'date'>}
+  /** `iso` is the day the date expression read as — reuse it, never re-parse:
+   *  a relative one can read as another day a moment later. */
+  | {id: string; via: 'date'; iso: string}
 
 export interface ResolveBlockRefOptions {
   workspaceId: string | null
@@ -131,7 +132,7 @@ const resolveName = async (
 
 const resolveDate = (text: string, workspaceId: string): BlockRefResolution | null => {
   const parsed = parseRelativeDate(text)
-  return parsed ? {id: dailyNoteBlockId(workspaceId, parsed.iso), via: 'date'} : null
+  return parsed ? {id: dailyNoteBlockId(workspaceId, parsed.iso), via: 'date', iso: parsed.iso} : null
 }
 
 const notFound = async (

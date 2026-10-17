@@ -124,7 +124,7 @@ describe('resolveBlockRef', () => {
 
   it('names a daily note by date, whether or not it exists yet', async () => {
     expect(await resolveBlockRef(repo, '2026-06-18', {workspaceId: WS}))
-      .toEqual({id: dailyNoteBlockId(WS, '2026-06-18'), via: 'date'})
+      .toEqual({id: dailyNoteBlockId(WS, '2026-06-18'), via: 'date', iso: '2026-06-18'})
   })
 
   it('refuses an ambiguous prefix and lists the candidates', async () => {

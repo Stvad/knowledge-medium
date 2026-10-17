@@ -19,12 +19,41 @@ import { shortIds } from './agentViews/resolveRef.ts'
 import { clampInt, viewWorkspace } from './agentViews/shared.ts'
 import { cutMarker } from './agentViews/text.ts'
 
+type ChangedField = 'content' | 'parent' | 'order' | 'properties' | 'references' | 'deleted'
+
+const propertyEntriesSql = (snapshot: string): string =>
+  `SELECT key, type, value FROM json_each(${snapshot}, '$.properties')`
+
+/** The names of the properties whose stored value differs between snapshot
+ *  JSON `before` and `after` — set-wise, so each bag is read twice whatever
+ *  its size; a NULL snapshot has none, so every name of the other differs. */
+const changedPropertyNamesSql = (before: string, after: string): string => `
+  SELECT key FROM (${propertyEntriesSql(before)} EXCEPT ${propertyEntriesSql(after)})
+  UNION SELECT key FROM (${propertyEntriesSql(after)} EXCEPT ${propertyEntriesSql(before)})`
+
+/** Whether each field the views report differs between snapshot JSON
+ *  `before` and `after`. The one owner of "what changed": the views' `changed`
+ *  list and the net-change filter both read it, so nothing the views cannot
+ *  name (a write stamp, a property bag's key order) counts as a change. */
+const FIELD_CHANGES: Record<ChangedField, (before: string, after: string) => string> = {
+  content: (b, a) => `json_extract(${b}, '$.content') IS NOT json_extract(${a}, '$.content')`,
+  parent: (b, a) => `json_extract(${b}, '$.parentId') IS NOT json_extract(${a}, '$.parentId')`,
+  order: (b, a) => `json_extract(${b}, '$.orderKey') IS NOT json_extract(${a}, '$.orderKey')`,
+  properties: (b, a) => `EXISTS (${changedPropertyNamesSql(b, a)})`,
+  references: (b, a) =>
+    `coalesce(json_extract(${b}, '$.references'), '[]') IS NOT coalesce(json_extract(${a}, '$.references'), '[]')`,
+  deleted: (b, a) => `json_extract(${b}, '$.deleted') IS NOT json_extract(${a}, '$.deleted')`,
+}
+const CHANGED_FIELDS = Object.keys(FIELD_CHANGES) as ChangedField[]
+
+export const LISTED_PROPERTY_NAMES = 20
+
 /** A change as the views read it: the before / after snapshots without their
  *  content, properties or references; the content as a bounded head with its
- *  full length; and what changed — compared in SQL, so a megabyte content or
- *  property value is never loaded only to be cut or compared. See
- *  {@link changeColumnsSql}. */
-interface ChangeRow {
+ *  full length; which fields changed; and the first changed property names
+ *  with their count — all from SQL, so a megabyte content or property bag is
+ *  never loaded only to be cut or compared. See {@link changeColumnsSql}. */
+type ChangeRow = {
   tx_id: string | null
   block_id: string
   source: string
@@ -37,48 +66,45 @@ interface ChangeRow {
   after_len: number | null
   before_nul: number | null
   after_nul: number | null
-  content_changed: number
-  /** JSON array of the property names whose value differs — every name the
-   *  one snapshot has, for a create or delete. */
-  changed_properties: string
-  references_changed: number
-  /** The after snapshot (else the before) holds a reference. */
-  has_references: number
-}
-
-/** The names of the properties whose stored value differs between snapshot
- *  JSON `before` and `after`; a NULL snapshot has none, so every name of the
- *  other one differs. Set-based — each bag is read twice, whatever its size. */
-const changedPropertiesSql = (before: string, after: string): string => {
-  const entries = (json: string) => `SELECT key, type, value FROM json_each(${json}, '$.properties')`
-  return `
-  (SELECT json_group_array(key) FROM (
-      SELECT key FROM (${entries(before)} EXCEPT ${entries(after)})
-      UNION SELECT key FROM (${entries(after)} EXCEPT ${entries(before)})))`
-}
+  /** JSON array: the first {@link LISTED_PROPERTY_NAMES} changed property
+   *  names, by name — every name the one snapshot has, for a create or delete. */
+  property_names: string
+  property_count: number
+} & Record<`changed_${ChangedField}`, number>
 
 /** The SELECT columns of a {@link ChangeRow} whose before snapshot is row
  *  `b`'s and after snapshot row `a`'s — one row_events row, or a block's
  *  first and last write in a tx. Binds the content head length twice. */
-const changeColumnsSql = (b: string, a: string): string => `
+const changeColumnsSql = (b: string, a: string): string => {
+  const before = `${b}.before_json`
+  const after = `${a}.after_json`
+  return `
   ${a}.tx_id AS tx_id, ${a}.block_id AS block_id, ${a}.source AS source, ${a}.created_at AS created_at,
-  json_remove(${b}.before_json, '$.content', '$.properties', '$.references') AS before_meta,
-  json_remove(${a}.after_json, '$.content', '$.properties', '$.references') AS after_meta,
-  substr(json_extract(${b}.before_json, '$.content'), 1, ?) AS before_head,
-  length(json_extract(${b}.before_json, '$.content')) AS before_len,
-  substr(json_extract(${a}.after_json, '$.content'), 1, ?) AS after_head,
-  length(json_extract(${a}.after_json, '$.content')) AS after_len,
-  instr(CAST(json_extract(${b}.before_json, '$.content') AS BLOB), x'00') > 0 AS before_nul,
-  instr(CAST(json_extract(${a}.after_json, '$.content') AS BLOB), x'00') > 0 AS after_nul,
-  json_extract(${b}.before_json, '$.content') IS NOT json_extract(${a}.after_json, '$.content') AS content_changed,
-  ${changedPropertiesSql(`${b}.before_json`, `${a}.after_json`)} AS changed_properties,
-  coalesce(json_extract(${b}.before_json, '$.references'), '[]')
-    IS NOT coalesce(json_extract(${a}.after_json, '$.references'), '[]') AS references_changed,
-  coalesce(json_array_length(coalesce(${a}.after_json, ${b}.before_json), '$.references'), 0) > 0 AS has_references`
+  json_remove(${before}, '$.content', '$.properties', '$.references') AS before_meta,
+  json_remove(${after}, '$.content', '$.properties', '$.references') AS after_meta,
+  substr(json_extract(${before}, '$.content'), 1, ?) AS before_head,
+  length(json_extract(${before}, '$.content')) AS before_len,
+  substr(json_extract(${after}, '$.content'), 1, ?) AS after_head,
+  length(json_extract(${after}, '$.content')) AS after_len,
+  instr(CAST(json_extract(${before}, '$.content') AS BLOB), x'00') > 0 AS before_nul,
+  instr(CAST(json_extract(${after}, '$.content') AS BLOB), x'00') > 0 AS after_nul,
+  ${CHANGED_FIELDS.map(field => `${FIELD_CHANGES[field](before, after)} AS changed_${field}`).join(',\n  ')},
+  (SELECT json_group_array(key) FROM (
+    SELECT key FROM (${changedPropertyNamesSql(before, after)}) ORDER BY key LIMIT ${LISTED_PROPERTY_NAMES}
+  )) AS property_names,
+  (SELECT count(*) FROM (${changedPropertyNamesSql(before, after)})) AS property_count`
+}
+
+/** A block's net change in a tx is its first write's before and its last
+ *  write's after (row_events rows `first` and `last`), changed when a field
+ *  the views report differs — a create or delete always does, in content,
+ *  which no row lacks. Both the tx page and the block ranking filter on it
+ *  before their LIMIT. */
+const netChangeSql = (first: string, last: string): string =>
+  `(${CHANGED_FIELDS.map(field => FIELD_CHANGES[field](`${first}.before_json`, `${last}.after_json`)).join(' OR ')})`
 
 interface Snapshot {
   parentId: string | null
-  orderKey: string
   deleted: boolean
 }
 
@@ -87,7 +113,6 @@ const snapshotOf = (json: string | null): Snapshot | null => {
   const raw = JSON.parse(json) as Partial<Snapshot>
   return {
     parentId: raw.parentId ?? null,
-    orderKey: raw.orderKey ?? '',
     deleted: raw.deleted === true,
   }
 }
@@ -102,7 +127,6 @@ const shownContent = (head: string | null, length: number | null, nul: number | 
 }
 
 type ChangeKind = 'create' | 'update' | 'move' | 'soft-delete' | 'restore' | 'delete'
-type ChangedField = 'content' | 'parent' | 'order' | 'properties' | 'references' | 'deleted'
 
 interface BlockChange {
   blockId: string
@@ -120,12 +144,12 @@ interface BlockChange {
   propertiesOmitted?: number
 }
 
-export const LISTED_PROPERTY_NAMES = 20
-
-const propertyNameFields = (names: string[]): Pick<BlockChange, 'properties' | 'propertiesOmitted'> =>
-  names.length === 0 ? {} : {
-    properties: names.slice(0, LISTED_PROPERTY_NAMES),
-    ...(names.length > LISTED_PROPERTY_NAMES ? {propertiesOmitted: names.length - LISTED_PROPERTY_NAMES} : {}),
+const propertyNameFields = (row: ChangeRow): Pick<BlockChange, 'properties' | 'propertiesOmitted'> =>
+  row.property_count === 0 ? {} : {
+    properties: JSON.parse(row.property_names) as string[],
+    ...(row.property_count > LISTED_PROPERTY_NAMES
+      ? {propertiesOmitted: row.property_count - LISTED_PROPERTY_NAMES}
+      : {}),
   }
 
 const describeChange = (row: ChangeRow, contentLimit: number): Omit<BlockChange, 'shortId'> => {
@@ -135,29 +159,23 @@ const describeChange = (row: ChangeRow, contentLimit: number): Omit<BlockChange,
     before: shownContent(row.before_head, row.before_len, row.before_nul, contentLimit),
     after: shownContent(row.after_head, row.after_len, row.after_nul, contentLimit),
   }
-  const properties = (JSON.parse(row.changed_properties) as string[]).sort()
   if (!before || !after) {
     const only = (after ?? before)!
     return {
       blockId: row.block_id,
       kind: after ? 'create' : 'delete',
+      // Against nothing, a bag or a reference list changed when it is non-empty.
       changed: [
         'content', 'parent',
-        ...(properties.length > 0 ? ['properties' as const] : []),
-        ...(row.has_references ? ['references' as const] : []),
+        ...(row.changed_properties ? ['properties' as const] : []),
+        ...(row.changed_references ? ['references' as const] : []),
       ],
       content: after ? {after: content.after} : {before: content.before},
       parentId: after ? {before: null, after: only.parentId} : {before: only.parentId, after: null},
-      ...propertyNameFields(properties),
+      ...propertyNameFields(row),
     }
   }
-  const changed: ChangedField[] = []
-  if (row.content_changed) changed.push('content')
-  if (before.parentId !== after.parentId) changed.push('parent')
-  if (before.orderKey !== after.orderKey) changed.push('order')
-  if (properties.length > 0) changed.push('properties')
-  if (row.references_changed) changed.push('references')
-  if (before.deleted !== after.deleted) changed.push('deleted')
+  const changed = CHANGED_FIELDS.filter(field => row[`changed_${field}`])
 
   const kind: ChangeKind = before.deleted && !after.deleted ? 'restore'
     : !before.deleted && after.deleted ? 'soft-delete'
@@ -171,7 +189,7 @@ const describeChange = (row: ChangeRow, contentLimit: number): Omit<BlockChange,
       ? {content}
       : {}),
     ...(changed.includes('parent') ? {parentId: {before: before.parentId, after: after.parentId}} : {}),
-    ...propertyNameFields(properties),
+    ...propertyNameFields(row),
   }
 }
 
@@ -267,17 +285,6 @@ const RECENT_CONTENT_LIMIT = 200
  *  Whole blocks are cut, never a block's events, so each listed block's net
  *  change stays exact. */
 export const MAX_LISTED_CHANGES = 200
-
-const withoutWriteStamps = (snapshot: string): string =>
-  `json_remove(${snapshot}, '$.updatedAt', '$.userUpdatedAt', '$.updatedBy')`
-
-/** A block's net change in a tx is its first write's before and its last
- *  write's after (row_events rows `first` and `last`), compared without the
- *  stamps every write moves — so a block a tx changed and changed back has
- *  none. Both the tx page and the block ranking filter on it before their
- *  LIMIT. */
-const netChangeSql = (first: string, last: string): string =>
-  `${withoutWriteStamps(`${first}.before_json`)} IS NOT ${withoutWriteStamps(`${last}.after_json`)}`
 
 /** Every block the page's txs changed, numbered in the order
  *  {@link MAX_LISTED_CHANGES} cuts in: real changes before property storage

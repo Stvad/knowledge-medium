@@ -16,7 +16,7 @@ import type { InsertPosition } from '@/data/mutators.js'
 import { assertRoundTrippableReferenceLabel } from '@/data/referenceBlock.js'
 import { ensureAliasTarget } from '@/data/targets.js'
 import { dailyNoteBlockId, getOrCreateDailyNote } from '@/plugins/daily-notes/dailyNotes.js'
-import { parseLiteralDailyPageTitle, parseRelativeDate } from '@/utils/relativeDate.js'
+import { parseLiteralDailyPageTitle } from '@/utils/relativeDate.js'
 import { agentTxOptions } from './agentWrites.ts'
 import { BlockRefError, resolveBlockRef, type BlockRefResolution } from './agentViews/resolveRef.ts'
 import { assertActiveWorkspace } from './workspaceGuard.ts'
@@ -87,10 +87,11 @@ export const resolveBlockId = async (repo: Repo, raw: string, verb: string): Pro
   if (resolved.via !== 'verbatim') return resolved.id
   // Nothing matched. The ref's syntax still decides what it named, even beside
   // a synced row whose id is literally the wrapper (reached as `((…))`): a
-  // `[[x]]` is a page, never an id; `((x))` / `^x` name the missing id `x`.
+  // `[[x]]` is a page, never an id; `((x))`, `^x` and a bare `x` name the
+  // missing id `x`, trimmed as every ref is read.
   const target = parseAgentTarget(raw)
   if (target.kind === 'page') throw new Error(`${verb}: expected a block id, got the page target ${raw.trim()}.`)
-  return target.kind === 'block' ? target.ref : resolved.id
+  return target.kind === 'block' ? target.ref : target.text
 }
 
 /** An id field as the verb acts on it. `exact` is the caller saying the value
@@ -251,14 +252,13 @@ export const resolveAgentTarget = async (
     // `resolveBlockRef` names the day's deterministic id; the note itself may
     // not exist yet.
     const text = raw.trim()
-    const {iso} = parseRelativeDate(text)!
-    if (!isExplicitDate(text) && (await repo.load(dailyNoteBlockId(pinned.workspaceId, iso))) === null) {
+    if (!isExplicitDate(text) && (await repo.load(found.id)) === null) {
       throw new Error(
-        `${verb}: "${text}" reads as the date ${iso}, whose daily note does not exist — pass ${iso} to create it, `
-        + `or [[${text}]] for a page.`,
+        `${verb}: "${text}" reads as the date ${found.iso}, whose daily note does not exist — pass ${found.iso} `
+        + `to create it, or [[${text}]] for a page.`,
       )
     }
-    return resolveDailyNoteTarget(repo, iso, verb, pinned)
+    return resolveDailyNoteTarget(repo, found.iso, verb, pinned)
   }
   // A bare name that resolved through an alias: if the alias is gone by this
   // second lookup, bare text still creates nothing.
