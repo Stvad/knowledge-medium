@@ -988,14 +988,14 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   'recent-changes': {
     usage: 'kmagent recent-changes [--since <ms|iso>] [--limit <n>] [--all]',
     description: 'Recent agent-bridge writes in this workspace, newest first, with the blocks each changed (content '
-      + 'before/after, clipped — block-history has it whole); --all adds the user\'s own edits here. eval, sql '
+      + 'before/after, clipped); --all adds the user\'s own edits here. eval, sql '
       + 'execute and run-action writes are not attributed.',
     readOnly: true,
   },
   'block-history': {
     usage: 'kmagent block-history <id> [--limit <n>]',
-    description: 'One block\'s recorded changes, newest first, local and synced, with full content before/after — to '
-      + 'review, or to restore with update-block.',
+    description: 'One block\'s recorded changes, newest first, local and synced, with content before/after (cut past '
+      + '2,000 chars) — to review, or to restore with update-block.',
     readOnly: true,
   },
   'resolve-block-id': {

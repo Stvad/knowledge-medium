@@ -245,7 +245,7 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
 
   server.registerTool('recent_changes' satisfies KmMcpToolName, {
     description: 'Recent local transactions in this workspace, newest first, with the blocks each changed (content '
-    + 'before/after, clipped — block_history has it whole; parent; property names). Defaults to agent writes (any agent on this device) since this '
+    + 'before/after, clipped; parent; property names). Defaults to agent writes (any agent on this device) since this '
     + 'session started — use it to report what you changed. since: epoch ms or ISO (0 = all); includeUser adds '
     + 'the user\'s own edits.',
     inputSchema: {
@@ -257,8 +257,9 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
     json(await graph.recentChanges({since: since ?? sessionStartedAt, limit, includeUser})))
 
   server.registerTool('block_history' satisfies KmMcpToolName, {
-    description: 'One block\'s recorded changes, newest first, with full content before/after — local edits and '
-    + 'ones synced from other devices. Use it to review a change or to restore earlier content with update_block.',
+    description: 'One block\'s recorded changes, newest first, with content before/after (cut past 2,000 chars) — '
+    + 'local edits and ones synced from other devices. Use it to review a change or to restore earlier content with '
+    + 'update_block.',
     inputSchema: {
       id: z.string(),
       limit: z.number().int().positive().optional(),

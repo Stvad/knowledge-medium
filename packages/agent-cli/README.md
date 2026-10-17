@@ -66,7 +66,7 @@ The CLI exposes both *local* commands (pairing, profile management) and *bridge*
 | `kmagent edit-block <id> <old> <new>` | Replace the one occurrence of `<old>` in a block, against its content at write time. |
 | `kmagent create-page <name> \| --date <expr>` | Get-or-create a page (as `[[name]]` would) or a daily note. |
 | `kmagent recent-changes [--since <t>] [--all]` | Recent agent-bridge transactions and the blocks each changed (`--all` adds your own edits). |
-| `kmagent block-history <id>` | One block's recorded changes with full prior content — local and synced. |
+| `kmagent block-history <id>` | One block's recorded changes with prior content (cut past 2,000 chars) — local and synced. |
 | `kmagent new-extension <name> [dir]` | Scaffold a standalone extension project (deps, gate, `@/` declarations included) in the shape the `record-grain` guide describes. |
 | `kmagent install-extension <file> [label]` | Install a JS extension; reports whether it is actually `running` here. `--verify` reports what it contributed, plus data-model lint warnings. |
 | `kmagent enable-extension <handle>` | Enable / `disable-extension`, `uninstall-extension`. |

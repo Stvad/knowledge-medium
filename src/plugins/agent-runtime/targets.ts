@@ -75,7 +75,8 @@ const activeWorkspace = (repo: Repo, verb: string): string => {
 
 /** A block id for an id-typed field (`id`, `siblingId`): an id or a unique id
  *  prefix, never a name or a date — one typo from the wrong block. A ref that
- *  matches nothing comes back as given, so the verb reports its own not-found. */
+ *  matches nothing comes back as the id it names, so the verb reports its own
+ *  not-found. */
 export const resolveBlockId = async (repo: Repo, raw: string, verb: string): Promise<string> => {
   const resolved = await resolveBlockRef(repo, raw, {
     // Only names and dates are workspace-scoped, and `accept: 'id'` rules both out.
@@ -83,12 +84,13 @@ export const resolveBlockId = async (repo: Repo, raw: string, verb: string): Pro
     onMissing: 'verbatim',
     accept: 'id',
   })
-  // A `[[x]]` ref is a page, never an id — even beside a synced row whose id is
-  // literally `[[x]]` (that one is reached as `(([[x]]))`).
-  if (resolved.via === 'verbatim' && parseAgentTarget(raw).kind === 'page') {
-    throw new Error(`${verb}: expected a block id, got the page target ${raw.trim()}.`)
-  }
-  return resolved.id
+  if (resolved.via !== 'verbatim') return resolved.id
+  // Nothing matched. The ref's syntax still decides what it named, even beside
+  // a synced row whose id is literally the wrapper (reached as `((…))`): a
+  // `[[x]]` is a page, never an id; `((x))` / `^x` name the missing id `x`.
+  const target = parseAgentTarget(raw)
+  if (target.kind === 'page') throw new Error(`${verb}: expected a block id, got the page target ${raw.trim()}.`)
+  return target.kind === 'block' ? target.ref : resolved.id
 }
 
 /** An id field as the verb acts on it. `exact` is the caller saying the value
@@ -179,6 +181,24 @@ const liveBlockTarget = async (repo: Repo, id: string, verb: string): Promise<Re
   if (!row) throw new Error(`${verb}: block ${id} not found.`)
   if (row.deleted) throw new Error(`${verb}: block ${id} is deleted — restore it first, or write elsewhere.`)
   return {id, kind: 'block', created: false}
+}
+
+/** An insert anchor must be a live child of the target. The early refusal,
+ *  before a write pays for its payload; the writing tx places the run next to
+ *  the anchor and refuses again if it moved. */
+export const assertAnchorUnder = async (
+  repo: Repo,
+  position: InsertPosition,
+  parentId: string,
+  verb: string,
+): Promise<void> => {
+  if (position.kind !== 'before' && position.kind !== 'after') return
+  const row = await repo.db.getOptional<{parent_id: string | null; deleted: number}>(
+    'SELECT parent_id, deleted FROM blocks WHERE id = ?', [position.siblingId],
+  )
+  if (!row || row.deleted || row.parent_id !== parentId) {
+    throw new Error(`${verb}: the ${position.kind} anchor ${position.siblingId} is not a live child of block ${parentId}.`)
+  }
 }
 
 /** Resolve any target, creating a missing page / daily note. That creation

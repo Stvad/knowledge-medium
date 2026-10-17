@@ -233,8 +233,9 @@ Write the way you would edit files, and let the app do the outline:
 - ${TODO_WRITE_HELP}
 - \`recent-changes\` lists the blocks agent writes changed (\`--all\`, MCP
   \`includeUser\`, adds the user's own edits); \`block-history <id>\` shows one
-  block's changes with full prior content, to review or restore. A bridge write
-  is a transaction described \`agent runtime <verb>\` — except \`eval\`,
+  block's changes with prior content (cut past 2,000 chars), to review or
+  restore. A bridge write is a transaction described \`agent runtime <verb>\`
+  — except \`eval\`,
   \`sql execute\` and \`run-action\`, and the follow-up transactions the app
   runs after a write (such as a page a new [[link]] mints).
 `,

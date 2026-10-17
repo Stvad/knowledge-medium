@@ -215,9 +215,9 @@ export interface RecentChangeTx {
   at: string
   description: string | null
   changes: BlockChange[]
-  /** Blocks this tx wrote that {@link MAX_LISTED_CHANGES} left out, property
-   *  storage not counted. */
-  omitted?: number
+  /** The cap ({@link MAX_LISTED_CHANGES}) left some of this tx's rows out —
+   *  read a block's own record with block-history. */
+  incomplete?: true
 }
 
 export interface RecentChangesResult {
@@ -260,7 +260,7 @@ const RANKED_BLOCKS_CTE = `
      WHERE v.id IN (SELECT block_id FROM written) AND ${recognizedFieldRowSql('f')}
   ),
   ranked AS (
-    SELECT tx_id, block_id, block_id IN (SELECT id FROM storage) AS is_storage,
+    SELECT tx_id, block_id,
            ROW_NUMBER() OVER (ORDER BY block_id IN (SELECT id FROM storage), ord, first_id) AS n
       FROM written
   )
@@ -291,11 +291,10 @@ export const recentChanges = async (repo: Repo, input: RecentChangesInput): Prom
     `${RANKED_BLOCKS_CTE} SELECT tx_id, block_id FROM ranked WHERE n <= ?`,
     [pageIds, ...recognition, ...recognition, MAX_LISTED_CHANGES],
   )
-  const omittedRows = await repo.db.getAll<{tx_id: string; omitted: number}>(
-    `${RANKED_BLOCKS_CTE} SELECT tx_id, COUNT(*) AS omitted FROM ranked WHERE n > ? AND NOT is_storage GROUP BY tx_id`,
+  const cut = new Set((await repo.db.getAll<{tx_id: string}>(
+    `${RANKED_BLOCKS_CTE} SELECT DISTINCT tx_id FROM ranked WHERE n > ?`,
     [pageIds, ...recognition, ...recognition, MAX_LISTED_CHANGES],
-  )
-  const omitted = new Map(omittedRows.map(row => [row.tx_id, row.omitted]))
+  )).map(row => row.tx_id))
   const rows = await repo.db.getAll<RowEventRow>(
     `SELECT r.tx_id, r.block_id, r.kind, r.before_json, r.after_json, r.source, r.created_at
        FROM row_events r
@@ -326,7 +325,7 @@ export const recentChanges = async (repo: Repo, input: RecentChangesInput): Prom
       at: isoAt(tx.created_at),
       description: tx.description,
       changes: changesByTx.get(tx.tx_id) ?? [],
-      ...(omitted.has(tx.tx_id) ? {omitted: omitted.get(tx.tx_id)} : {}),
+      ...(cut.has(tx.tx_id) ? {incomplete: true as const} : {}),
     })),
   }
 }
@@ -347,13 +346,17 @@ export interface BlockHistoryEvent extends BlockChange {
 export interface BlockHistoryResult {
   blockId: string
   shortId: string
-  /** Newest first, full content. */
+  /** Newest first; content cut at {@link BLOCK_HISTORY_CONTENT_CHARS}. */
   events: BlockHistoryEvent[]
   truncated: boolean
 }
 
+/** Each before/after content a history event shows, cut and marked past this:
+ *  20 events of a long block would otherwise be megabytes in one reply. */
+export const BLOCK_HISTORY_CONTENT_CHARS = 2000
+
 export const blockHistory = async (repo: Repo, input: BlockHistoryInput): Promise<BlockHistoryResult> => {
-  const limit = parseLimit(input.limit, 20, 500)
+  const limit = parseLimit(input.limit, 20, 100)
   const rows = await repo.db.getAll<RowEventRow & {description: string | null}>(
     `SELECT r.tx_id, r.block_id, r.kind, r.before_json, r.after_json, r.source, r.created_at,
             c.description
@@ -374,7 +377,7 @@ export const blockHistory = async (repo: Repo, input: BlockHistoryInput): Promis
       source: row.source === 'sync' ? 'sync' : 'local',
       txId: row.tx_id,
       description: row.description,
-      ...describeRowEvent(row),
+      ...describeRowEvent(row, BLOCK_HISTORY_CONTENT_CHARS),
       shortId,
     })),
   }

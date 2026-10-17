@@ -22,7 +22,7 @@ import { createAgentRuntimeContext, executeCommand } from '../commands'
 import type { AgentRuntimeContext } from '../protocol'
 import { resolveAgentTarget, resolveBlockId } from '../targets'
 import { agentTxOptions } from '../agentWrites'
-import { MAX_LISTED_CHANGES } from '../changeHistory'
+import { BLOCK_HISTORY_CONTENT_CHARS, MAX_LISTED_CHANGES } from '../changeHistory'
 import { parseMarkdownToBlocks } from '@/utils/markdownParser.js'
 
 // Passthrough spy, so a test can tell whether a refusal beat the parse.
@@ -408,7 +408,7 @@ interface ChangesOut {
   truncated: boolean
   txs: Array<{
     description: string | null
-    omitted?: number
+    incomplete?: true
     changes: Array<{blockId: string, kind: string, changed: string[], content?: {before?: string, after?: string}}>
   }>
 }
@@ -446,16 +446,16 @@ describe('recent-changes', () => {
     expect(out.txs[0].changes[0].content?.after).toBe(`${'y'.repeat(200)}…[+50 chars]`)
   })
 
-  it('lists at most MAX_LISTED_CHANGES blocks per call, newest tx first, and counts what each tx left out', async () => {
+  it('lists at most MAX_LISTED_CHANGES blocks per call, newest tx first, and flags a tx it cut', async () => {
     await seed([{id: NOTE, content: 'draft'}])
     const bullets = Array.from({length: MAX_LISTED_CHANGES + 3}, (_, i) => `- item ${i}`).join('\n')
     await run({type: 'append-markdown', target: NOTE, markdown: bullets})
     await run({type: 'edit-block', id: NOTE, old: 'draft', new: 'final'})
 
     const out = await run({type: 'recent-changes', limit: 2}) as ChangesOut
-    expect(out.txs.map(tx => [tx.description, tx.changes.length, tx.omitted])).toEqual([
+    expect(out.txs.map(tx => [tx.description, tx.changes.length, tx.incomplete])).toEqual([
       ['agent runtime edit-block', 1, undefined],
-      ['agent runtime append-markdown', MAX_LISTED_CHANGES - 1, 4],
+      ['agent runtime append-markdown', MAX_LISTED_CHANGES - 1, true],
     ])
   })
 
@@ -491,6 +491,14 @@ describe('recent-changes', () => {
 })
 
 describe('block-history', () => {
+  it('cuts each snapshot\'s content at BLOCK_HISTORY_CONTENT_CHARS, marked', async () => {
+    const long = 'w'.repeat(BLOCK_HISTORY_CONTENT_CHARS + 30)
+    await seed([{id: NOTE, content: long}])
+    await run({type: 'update-block', id: NOTE, content: 'short'})
+    const out = await run({type: 'block-history', id: NOTE}) as {events: Array<{content?: {before?: string, after?: string}}>}
+    expect(out.events[0].content).toEqual({before: `${'w'.repeat(BLOCK_HISTORY_CONTENT_CHARS)}…[+30 chars]`, after: 'short'})
+  })
+
   it('lists one block\'s changes newest first with full content, local and sync-applied', async () => {
     await seed([{id: NOTE, content: 'v1'}, {id: LONE}])
     await run({type: 'update-block', id: NOTE, content: 'v2'})
@@ -596,7 +604,7 @@ describe('review round 1', () => {
     await seed([{id: NOTE}, {id: NOTE_TWIN}, {id: LONE, parentId: NOTE_TWIN}])
     await expect(run({
       type: 'append-markdown', target: NOTE, markdown: '- x', position: {kind: 'after', siblingId: LONE},
-    })).rejects.toThrow(/not found under/)
+    })).rejects.toThrow(/not a live child/)
     expect(await liveChildren(NOTE)).toEqual([])
   })
 
@@ -656,6 +664,17 @@ describe('review round 2', () => {
     expect(parseMarkdownToBlocks).not.toHaveBeenCalled()
   })
 
+  it('refuses an anchor that is missing or not a live child of the target before parsing', async () => {
+    await seed([{id: NOTE}, {id: LONE}, {id: 'kid', parentId: LONE}])
+    vi.mocked(parseMarkdownToBlocks).mockClear()
+    for (const siblingId of ['kid', '7d41e0aa-0000-4000-8000-0000000000ff']) {
+      await expect(run({
+        type: 'append-markdown', target: NOTE, markdown: '- a', position: {kind: 'after', siblingId},
+      })).rejects.toThrow(/not a live child/)
+    }
+    expect(parseMarkdownToBlocks).not.toHaveBeenCalled()
+  })
+
   it('refuses a deleted target before parsing the markdown', async () => {
     await seed([{id: NOTE}])
     await repo.mutate.delete({id: NOTE})
@@ -706,6 +725,16 @@ describe('review round 4', () => {
       target: {id: string, kind: string}
     }
     expect(appended.target).toMatchObject({id: computeAliasSeatId('Inbox', WS, 0), kind: 'page'})
+  })
+
+  it('keeps ((x)) and ^x meaning the id x when x is missing, beside a row literally named the wrapper', async () => {
+    await seed([{id: '((ghost))', content: 'planted'}, {id: '^ghost', content: 'planted'}])
+    for (const ref of ['((ghost))', '^ghost']) {
+      expect(await resolveBlockId(repo, ref, 'test')).toBe('ghost')
+      await expect(run({type: 'update-block', id: ref, content: 'hijacked'})).rejects.toThrow(/not found/)
+    }
+    expect(await contentOf('((ghost))')).toBe('planted')
+    expect(await contentOf('^ghost')).toBe('planted')
   })
 
   it('reaches an odd stored id when it is wrapped in ((…))', async () => {
@@ -770,7 +799,8 @@ describe('review round 5', () => {
 
     const out = await run({type: 'recent-changes'}) as ChangesOut
     expect(out.txs[0].changes.map(change => change.blockId)).toEqual([NOTE])
-    expect(out.txs[0].omitted).toBeUndefined()
+    // Only storage was cut, but a cut is never reported as a complete list.
+    expect(out.txs[0].incomplete).toBe(true)
   })
 })
 

@@ -13,6 +13,7 @@ import { charBoundary, createPageName, cutMarker, toDisplayJson } from '@knowled
 import { agentTxOptions } from './agentWrites.ts'
 import { shortIds } from './agentViews/resolveRef.ts'
 import {
+  assertAnchorUnder,
   resolveAgentTarget,
   blockIdField,
   blockPositionField,
@@ -68,13 +69,14 @@ export const appendMarkdown = async (
   return outerRepo.undoGroup(async repo => {
     const firstPosition = await blockPositionField(repo, input.position ?? {kind: 'last'}, verb, input.exactIds)
     // An anchor's parent exists already, so an anchored insert never creates
-    // its target; one that is not the anchor's parent is refused by
-    // `createChild` inside the tx below, before anything is written.
+    // its target; one that is not the anchor's parent is refused before the
+    // parse, and again inside the tx below if the anchor moved meanwhile.
     const anchored = firstPosition.kind === 'before' || firstPosition.kind === 'after'
     // Accepted, not made atomic: if the insert below then fails, a page or
     // daily note created here stays — what typing the wikilink or opening that
     // day leaves too; a daily note cannot be created inside the insert's tx.
     const target = await resolveAgentTarget(repo, input.target, verb, {create: !anchored})
+    await assertAnchorUnder(repo, firstPosition, target.id, verb)
     // After the target: a refused one should not pay for a large document's
     // parse. Parsing cannot fail, so nothing created above is left orphaned.
     const parsed = parseAgentMarkdown(input.markdown, input.shape)
