@@ -1,1 +1,0 @@
-import{D6 as e,E6 as t,T6 as n}from"../../../chunks/app-Bq1dO1cV.js";export{n as SYSTEM_AUTHOR_PREFIX,t as isSystemAuthor,e as systemAuthor};

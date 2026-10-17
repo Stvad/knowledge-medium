@@ -1,1 +1,0 @@
-import{Fw as e,Lw as t,hw as n,lw as r,mw as i}from"../../../chunks/app-Bq1dO1cV.js";export{n as SWIPE_QUICK_ACTIONS_GESTURE_ID,e as SWIPE_RIGHT_BLOCK_ACTION_ID,i as SwipeActionMenu,t as quickActionItemsFacet,r as swipeQuickActionsPlugin};
