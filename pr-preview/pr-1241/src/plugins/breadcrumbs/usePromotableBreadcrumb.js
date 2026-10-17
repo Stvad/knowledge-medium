@@ -1,1 +1,1 @@
-import{tv as e}from"../../../chunks/app-CqgS7XHg.js";export{e as usePromotableBreadcrumb};
+import{tv as e}from"../../../chunks/app-DsZyGZiu.js";export{e as usePromotableBreadcrumb};
