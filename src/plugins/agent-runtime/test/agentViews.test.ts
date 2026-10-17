@@ -1252,6 +1252,7 @@ describe('view-backlinks', () => {
       uuid('6b000006', 6),
       uuid('6b000007', 7),
       uuid('6b000008', 8),
+      uuid('6b000009', 9),
     ]
     await create({id: parents[0], content: 'ok'})
     // 200 characters of links, then words: a parent past that length is no label.
@@ -1266,13 +1267,15 @@ describe('view-backlinks', () => {
     await create({id: parents[6], content: '((notes))'})
     // A bare tag is text here: only wikilinks and block refs are references.
     await create({id: parents[7], content: '#standup'})
+    // Links only, but 205 characters: past the length a label may have.
+    await create({id: parents[8], content: `${'[[tag]] '.repeat(25)}[[x]]`})
     for (const [index, parent] of parents.entries()) {
       await create({id: uuid('6b00001' + index, 10 + index), parentId: parent, content: `line ${index} of [[Target]]`, references: [{id: TARGET, alias: 'Target'}]})
       await create({id: uuid('6b00002' + index, 20 + index), parentId: parent, content: 'a line beside it'})
     }
 
     const out = await view<BacklinksView>({type: 'view-backlinks', ref: TARGET, format: 'json'})
-    expect(out.rows).toHaveLength(8)
+    expect(out.rows).toHaveLength(9)
     expect(out.rows.filter(row => row.siblings)).toEqual([])
   })
 
@@ -1455,6 +1458,10 @@ describe('view-search', () => {
     const parent = uuid('6c600000', 0)
     await create({id: parent, content: `${'#tag '.repeat(10)}${'x'.repeat(100_000)}`})
     await create({id: uuid('6c600001', 1), parentId: parent, content: 'needle line'})
+    // SQLite's text length() and substr() stop at a NUL; the rest still counts.
+    const nulTailed = uuid('6c600002', 2)
+    await create({id: nulTailed, content: `[[Meeting]]\u0000${'y'.repeat(100_000)}`})
+    await create({id: uuid('6c600003', 3), parentId: nulTailed, content: 'needle again'})
 
     const getAll = vi.spyOn(repo.db, 'getAll')
     await view({type: 'view-search', query: 'needle'})
