@@ -1,1 +1,1 @@
-import{Xp as e}from"../../../chunks/app-BOiWosdn.js";export{e as richPasteDecisionContribution};
+import{Qp as e}from"../../../chunks/app-D_k6LC0H.js";export{e as richPasteDecisionContribution};

@@ -1,1 +1,1 @@
-import{VR as e}from"../../../chunks/app-BOiWosdn.js";export{e as groupedBacklinksDataExtension};
+import{UR as e}from"../../../chunks/app-D_k6LC0H.js";export{e as groupedBacklinksDataExtension};

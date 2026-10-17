@@ -1,1 +1,1 @@
-import{_C as e,ct as t,gC as n}from"../../../chunks/app-BOiWosdn.js";export{n as keybindingOverridesProp,e as keybindingsPrefsType,t as keybindingsSettingsPlugin};
+import{ct as e,vC as t,yC as n}from"../../../chunks/app-D_k6LC0H.js";export{t as keybindingOverridesProp,n as keybindingsPrefsType,e as keybindingsSettingsPlugin};
