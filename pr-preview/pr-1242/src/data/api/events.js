@@ -1,1 +1,1 @@
-import{D6 as e,O6 as t}from"../../../chunks/app-XTibIypG.js";export{e as CORE_BLOCK_DELETED_EVENT,t as CORE_BLOCK_MERGED_EVENT};
+import{D6 as e,O6 as t}from"../../../chunks/app-eQp2rLZr.js";export{e as CORE_BLOCK_DELETED_EVENT,t as CORE_BLOCK_MERGED_EVENT};

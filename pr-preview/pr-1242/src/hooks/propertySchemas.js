@@ -1,1 +1,1 @@
-import{ZF as e}from"../../chunks/app-XTibIypG.js";export{e as usePropertySchemas};
+import{ZF as e}from"../../chunks/app-eQp2rLZr.js";export{e as usePropertySchemas};
