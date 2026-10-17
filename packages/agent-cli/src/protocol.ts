@@ -157,6 +157,11 @@ export const sqlCommandSchema = z.looseObject({
    *  (or false) keeps the guard on; true is a deliberate, one-call opt-out
    *  (the CLI's `--allow-synced-write`). */
   allowSyncedWrite: z.boolean().optional(),
+  /** Bound an `all` read for an agent: return `{rows, truncated,
+   *  truncatedCells}` with at most this many rows (a SELECT stops at the
+   *  bound) and every string cell cut to a fixed length (marked). Unset
+   *  returns the bare row array. */
+  maxRows: z.number().int().positive().optional(),
   ...commandIdField,
 })
 
@@ -375,18 +380,32 @@ export const groupedBacklinksCommandSchema = z.looseObject({
   ...commandIdField,
 })
 
-/** Print the agent-facing data-model guide. No body beyond the type. */
+/** The data-model guide's topic ids in its reading order. The app's guide
+ *  tags each of its sections with one, and a test holds the two lists equal. */
+export const DATA_MODEL_TOPICS = [
+  'blocks', 'pages', 'daily-notes', 'references', 'grouped-backlinks', 'block-kinds', 'properties', 'queries', 'sql',
+] as const
+export type DataModelTopic = typeof DATA_MODEL_TOPICS[number]
+
+/** The agent-facing data-model guide: an index, one topic, or all of it. */
 export const dataModelCommandSchema = z.looseObject({
   type: z.literal('data-model'),
+  topic: z.string().optional().describe(
+    'A topic id from the index to read that section, or "all" for the whole guide. Omit for the index.',
+  ),
   ...commandIdField,
 })
+
+const readWorkspaceField = z.string().optional().describe(
+  'Workspace to read. Defaults to the one open in the app tab; the token reaches every workspace of its user.',
+)
 
 /** Resolve a page by alias/title — exact hit plus substring candidates. */
 export const pageCommandSchema = z.looseObject({
   type: z.literal('page'),
-  name: z.string(),
-  workspaceId: z.string().optional(),
-  limit: z.number().int().positive().optional(),
+  name: z.string().describe('Page name or alias to resolve'),
+  workspaceId: readWorkspaceField,
+  limit: z.number().int().positive().optional().describe('Max substring candidates (default 20)'),
   ...commandIdField,
 })
 
@@ -395,8 +414,8 @@ export const pageCommandSchema = z.looseObject({
  *  | natural-language ("next monday"). */
 export const dailyNoteCommandSchema = z.looseObject({
   type: z.literal('daily-note'),
-  date: z.string(),
-  workspaceId: z.string().optional(),
+  date: z.string().describe('today, yesterday, an ISO date (2026-06-18), or natural language (next monday)'),
+  workspaceId: readWorkspaceField,
   ...commandIdField,
 })
 
@@ -406,6 +425,129 @@ export const searchCommandSchema = z.looseObject({
   query: z.string(),
   workspaceId: z.string().optional(),
   limit: z.number().int().positive().optional(),
+  ...commandIdField,
+})
+
+// ---------- Agent views ----------
+//
+// `view-*` commands are the agent-facing reads: bounded (default limits,
+// truncated content with a char count, an explicit continuation), with
+// context per hit (breadcrumb, decoded properties, child counts), rendered
+// app-side where the property registry can decode values. The raw commands
+// above (`get-block`, `get-subtree`, `backlinks`, …) keep their stored,
+// unbounded shapes for programmatic consumers.
+//
+// These schemas double as the MCP tool input schemas and the CLI option
+// lists (packages/agent-cli/src/readTools.ts), so every `.describe()` here
+// is user-facing help text.
+
+/** Defaults the app applies when a view field is omitted. Named here so the
+ *  help text and the app agree on one number. */
+export const AGENT_VIEW_DEFAULTS = {
+  searchLimit: 10,
+  backlinksLimit: 20,
+  groupsLimit: 10,
+  membersPerGroup: 3,
+  outlineLimit: 100,
+  outlineDepth: 3,
+  blockMaxChars: 4000,
+  sqlMaxRows: 200,
+} as const
+
+const viewRefField = z.string().describe(
+  'The block: a full id, a unique id prefix as printed (^3f2a9c1d), a page name '
+  + '(or [[Page name]]), or a date for its daily note (today, yesterday, 2026-06-18).',
+)
+
+const viewFields = {
+  // A view decodes values through the open workspace's registries, so naming
+  // a workspace routes the call rather than widening what one tab reads.
+  workspaceId: z.string().optional().describe(
+    'Workspace to read. The call goes to an app tab that has it open (default: the most recently '
+    + 'focused tab), and is refused when no connected tab does.',
+  ),
+  format: z.enum(['text', 'json']).optional().describe(
+    'text (default): compact markdown-ish rendering. json: the same bounded view, structured.',
+  ),
+}
+
+const viewLimitField = (what: string, defaultValue: number) =>
+  z.number().int().positive().optional().describe(`Max ${what} (default ${defaultValue})`)
+
+const viewOffsetField = (what: string) =>
+  z.number().int().nonnegative().optional().describe(`Skip the first N ${what} (to continue a truncated listing)`)
+
+const backlinksFilterField = z
+  .union([z.enum(['none', 'stored', 'effective']), z.record(z.string(), z.unknown())])
+  .optional()
+  .describe("none (default) | stored (the block's saved filter) | effective (what the UI applies) | {include?, exclude?}")
+
+export const viewBlockCommandSchema = z.looseObject({
+  type: z.literal('view-block'),
+  ref: viewRefField,
+  maxChars: z.number().int().positive().optional().describe(
+    `Max content characters to return (default ${AGENT_VIEW_DEFAULTS.blockMaxChars})`,
+  ),
+  contentOffset: z.number().int().nonnegative().optional().describe(
+    'Start the content at this character (to read past a truncation)',
+  ),
+  ...viewFields,
+  ...commandIdField,
+})
+
+export const viewOutlineCommandSchema = z.looseObject({
+  type: z.literal('view-outline'),
+  ref: viewRefField,
+  depth: z.number().int().positive().optional().describe(
+    `Levels below the root to expand (default ${AGENT_VIEW_DEFAULTS.outlineDepth})`,
+  ),
+  limit: viewLimitField('blocks shown below the root; shallower levels are filled first', AGENT_VIEW_DEFAULTS.outlineLimit),
+  offset: viewOffsetField("of the root's children"),
+  properties: z.enum(['brief', 'none', 'full']).optional().describe(
+    'Properties per line: brief (default; the first few, compactly), none, or full',
+  ),
+  expandCollapsed: z.boolean().optional().describe(
+    'Expand blocks below the root that the user collapsed (default: summarized as +N children)',
+  ),
+  ...viewFields,
+  ...commandIdField,
+})
+
+export const viewBacklinksCommandSchema = z.looseObject({
+  type: z.literal('view-backlinks'),
+  ref: viewRefField,
+  limit: viewLimitField('backlinks', AGENT_VIEW_DEFAULTS.backlinksLimit),
+  offset: viewOffsetField('backlinks'),
+  filter: backlinksFilterField,
+  ...viewFields,
+  ...commandIdField,
+})
+
+export const viewGroupedBacklinksCommandSchema = z.looseObject({
+  type: z.literal('view-grouped-backlinks'),
+  ref: viewRefField,
+  limit: viewLimitField('groups', AGENT_VIEW_DEFAULTS.groupsLimit),
+  offset: viewOffsetField('groups'),
+  membersPerGroup: viewLimitField('members shown per group', AGENT_VIEW_DEFAULTS.membersPerGroup),
+  memberOffset: viewOffsetField('members of each group'),
+  filter: backlinksFilterField,
+  grouping: z
+    .union([z.enum(['user', 'none']), z.record(z.string(), z.unknown())])
+    .optional()
+    .describe("user (default; the user's grouping config, as the UI shows it) | none | a grouping-config object"),
+  ...viewFields,
+  ...commandIdField,
+})
+
+export const viewSearchCommandSchema = z.looseObject({
+  type: z.literal('view-search'),
+  query: z.string().describe('Text to find in block content. "quoted phrase", OR, and -term are supported'),
+  limit: viewLimitField('results', AGENT_VIEW_DEFAULTS.searchLimit),
+  offset: viewOffsetField('results'),
+  types: z.array(z.string()).optional().describe('Only blocks with any of these types (type id or label, e.g. todo)'),
+  under: z.string().optional().describe('Only blocks inside this block/page (same forms as a block ref)'),
+  includeExtensions: z.boolean().optional().describe('Include extension source blocks (excluded by default)'),
+  ...viewFields,
   ...commandIdField,
 })
 
@@ -554,6 +696,11 @@ export const knownCommandSchema = z.discriminatedUnion('type', [
   pageCommandSchema,
   dailyNoteCommandSchema,
   searchCommandSchema,
+  viewBlockCommandSchema,
+  viewOutlineCommandSchema,
+  viewBacklinksCommandSchema,
+  viewGroupedBacklinksCommandSchema,
+  viewSearchCommandSchema,
   watchEventsCommandSchema,
 ])
 
@@ -600,6 +747,11 @@ export const knownAgentCommandSchema = z.discriminatedUnion('type', [
   pageCommandSchema,
   dailyNoteCommandSchema,
   searchCommandSchema,
+  viewBlockCommandSchema,
+  viewOutlineCommandSchema,
+  viewBacklinksCommandSchema,
+  viewGroupedBacklinksCommandSchema,
+  viewSearchCommandSchema,
   watchEventsCommandSchema,
 ])
 export type KnownAgentCommand = z.infer<typeof knownAgentCommandSchema>
@@ -666,13 +818,13 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
     readOnly: false,
   },
   'get-block': {
-    usage: 'kmagent get-block <id>',
-    description: 'Fetch a block by id.',
+    usage: 'kmagent get-block <ref> --raw',
+    description: 'Fetch a block as stored (raw BlockData). The agent view is `view-block`.',
     readOnly: true,
   },
   'get-subtree': {
-    usage: 'kmagent subtree <rootId> [--json]',
-    description: 'Fetch the subtree rooted at <rootId> (root included). Prints a depth-indented `- [id] content` outline by default (one line per block, id first); --json returns the raw flat array (each row carries its depth from the root). Both are a pre-order traversal with siblings in (order_key, id) order — already sorted; read top-to-bottom, do not re-sort.',
+    usage: 'kmagent subtree <ref> --raw',
+    description: 'Fetch the WHOLE subtree rooted at <ref> (root included) as the raw flat array, each row carrying its depth from the root — unbounded, for programmatic use (the agent view is `view-outline`). A pre-order traversal with siblings in (order_key, id) order — already sorted; read top-to-bottom, do not re-sort.',
     readOnly: true,
   },
   'create-block': {
@@ -769,18 +921,18 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   // talks to, the resolve path is a pure read. The only write either could
   // make is that same one-time prefs-block creation, before the bootstrap.
   'backlinks': {
-    usage: "kmagent backlinks <blockId> [--filter none|stored|effective|<json>] [--workspace <id>]",
-    description: 'Hydrated backlinks of a block (blocks whose references point at it). --filter defaults to none. See `kmagent data-model`.',
+    usage: "kmagent backlinks <ref> --raw [--filter none|stored|effective|<json>]",
+    description: 'Every backlink of a block (blocks whose references point at it), hydrated, unbounded — for programmatic use (the agent view is `view-backlinks`). --filter defaults to none. See `kmagent data-model`.',
     readOnly: true,
   },
   'grouped-backlinks': {
-    usage: "kmagent grouped-backlinks <blockId> [--filter none|stored|effective|<json>] [--grouping user|none|<json>] [--workspace <id>]",
-    description: 'The grouped-references view for a block: hydrated groups (+ Other fallback). --grouping defaults to the user config (matches the UI); --filter defaults to none. See `kmagent data-model`.',
+    usage: "kmagent grouped-backlinks <ref> --raw [--filter none|stored|effective|<json>] [--grouping user|none|<json>]",
+    description: 'The grouped-references view for a block, every group and member hydrated (+ Other fallback) — unbounded (the agent view is `view-grouped-backlinks`). --grouping defaults to the user config (matches the UI); --filter defaults to none. See `kmagent data-model`.',
     readOnly: true,
   },
   'data-model': {
-    usage: 'kmagent data-model',
-    description: "Print the agent-facing data-model guide (blocks, references, pages/daily-notes, backlinks vs grouped-backlinks, source_field, done-status, deep-links). Read this first when working with a user's data.",
+    usage: 'kmagent data-model [--topic <id>|all]',
+    description: `The agent-facing data-model guide: a short index by default, one section with --topic <id> (${DATA_MODEL_TOPICS.join(', ')}), everything with --topic all. Read it first when working with a user's data.`,
     readOnly: true,
   },
   'page': {
@@ -796,8 +948,36 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
     readOnly: true,
   },
   'search': {
-    usage: 'kmagent search <query> [--limit <n>] [--workspace <id>]',
-    description: 'Full-text search over block content; hydrated results.',
+    usage: 'kmagent raw \'{"type":"search","query":"<query>","limit":<n>,"workspaceId":"<id>"}\'',
+    description: 'Full-text search over block content; whole hydrated rows (the agent view is `view-search`).',
+    readOnly: true,
+  },
+  // The views read what the raw commands above read (the backlinks views
+  // carry the same one-time prefs-block caveat, an open question in #1037),
+  // so they classify the same.
+  'view-block': {
+    usage: 'kmagent get-block <ref> [--max-chars <n>] [--content-offset <n>] [--json]',
+    description: 'One block, for reading: its content (truncated past maxChars, with how to continue), breadcrumb, types, decoded properties, child and backlink counts.',
+    readOnly: true,
+  },
+  'view-outline': {
+    usage: 'kmagent subtree <ref> [--depth <n>] [--limit <n>] [--offset <n>] [--properties brief|none|full] [--expand-collapsed] [--json]',
+    description: 'A block and its descendants as a markdown outline: `- content  key:: value  ^shortid`, one line per block. Bounded: expands `depth` levels and at most `limit` blocks below the root, shallower levels first; unexpanded children show as `(+N children)`, long content as `…[+N chars]`, and a cut-off list of the root\'s children ends with the offset to continue from.',
+    readOnly: true,
+  },
+  'view-backlinks': {
+    usage: 'kmagent backlinks <ref> [--limit <n>] [--offset <n>] [--filter none|stored|effective|<json>] [--json]',
+    description: 'Blocks that reference this block or page, a page at a time. Each comes with its breadcrumb (page › parent …) and how it references the target; a block that is only a link also shows its parent\'s text and first child.',
+    readOnly: true,
+  },
+  'view-grouped-backlinks': {
+    usage: 'kmagent grouped-backlinks <ref> [--limit <n>] [--offset <n>] [--members-per-group <n>] [--filter …] [--grouping user|none|<json>] [--json]',
+    description: 'Backlinks grouped by the pages/blocks they appear in context of (the grouped-references panel): each group with its size and its first few members.',
+    readOnly: true,
+  },
+  'view-search': {
+    usage: 'kmagent search <query> [--limit <n>] [--offset <n>] [--types <type>…] [--under <ref>] [--include-extensions] [--json]',
+    description: 'Full-text search over block content. Each hit: a snippet around the match, its breadcrumb and types; identical blocks are folded into one hit. Extension source is excluded unless asked for.',
     readOnly: true,
   },
   'watch-events': {
@@ -896,3 +1076,49 @@ export const registerClientMetadataSchema = z.looseObject({
   focusedAt: z.number().nullable().optional(),
 })
 export type RegisterClientMetadata = z.infer<typeof registerClientMetadataSchema>
+
+// ---------- Agent-facing display text ----------
+
+/**
+ * The characters treated as hostile in agent-facing DISPLAY text (outline
+ * content, rendered properties, view snippets): all of C0 except TAB, DEL,
+ * all of C1, U+2028/U+2029, and every codepoint the Unicode `Bidi_Control`
+ * property covers. Ids are not prose and get a different, lossless
+ * treatment where they are printed (subtreeOutline.ts `encodeOutlineId`).
+ *
+ * INVARIANT: no character that can forge a line break or REORDER displayed
+ * text reaches the terminal (or an LLM reading the raw text) through
+ * display text.
+ *
+ * The bidi class ("Trojan Source": an override or isolate inside content is
+ * rendered unchanged by a bidi-aware terminal, which can visually reorder
+ * an id token and its delimiter without a single byte moving) is
+ * matched as a Unicode PROPERTY rather than a hand-enumerated transcription
+ * of its members, because a transcription can silently omit a member
+ * exactly as reordering-capable as the rest. The C0/C1/DEL/line-separator
+ * half stays a hand-enumerated range only because no single Unicode
+ * property matches this TAB-excluded, Zl/Zp-inclusive boundary.
+ *
+ * TAB (U+0009) is the one deliberate exclusion: a terminal advances the
+ * cursor FORWARD on TAB, so unlike the rest it can never walk back over
+ * already-printed text, and no parser here reads it as a line break.
+ *
+ * ZERO WIDTH JOINER (U+200D) and ZERO WIDTH NON-JOINER (U+200C) are
+ * deliberately NOT neutralized, so do not broaden this to `\p{Cf}` or
+ * `\p{C}`: neither reorders anything (they shape adjacent characters in
+ * place) and both are required in real content — compound emoji are built
+ * with ZWJ, and ZWNJ is mandatory orthography in Persian, Hindi and other
+ * scripts. Accepted residual: an invisible but NON-reordering character can
+ * still reach rendered prose, which is display fidelity rather than the
+ * anti-forgery concern defended here.
+ */
+// eslint-disable-next-line no-control-regex -- intentional control-char match
+const CONTROL_CHAR_RUN_REGEX = /[\u0000-\u0008\u000a-\u001f\u007f-\u009f\u2028\u2029\p{Bidi_Control}]+/gu
+
+/** Collapse each run of hostile characters (see
+ *  {@link CONTROL_CHAR_RUN_REGEX}) to one ` ⏎ ` marker — lossy, which is
+ *  acceptable for prose and never for an identifier. Lives here because both
+ *  sides of the bridge render agent-facing text: the CLI's outline and the
+ *  app's agent views. */
+export const neutralizeDisplayText = (text: string): string =>
+  text.replace(CONTROL_CHAR_RUN_REGEX, ' ⏎ ')

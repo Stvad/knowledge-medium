@@ -34,6 +34,7 @@ import { userStateRootBlockIds } from '@/data/derivedIds'
 import { seedKeyProp } from '@/data/properties'
 import { propertyDefinitionBlockId } from '@/data/definitionSeeds'
 import type { Repo } from '@/data/repo'
+import { isActiveSearchFilter, type BlockSearchFilter } from '@/data/searchFilter'
 import { refCodecKind } from './refProjection'
 import { ancestorWalk, type AncestorWalk } from './ancestorBatch'
 import {
@@ -117,7 +118,7 @@ const stripOuterQuotePair = (query: string): string => {
     : trimmed
 }
 
-const tokenizeContentSearchQuery = (query: string): ContentSearchToken[] => {
+export const tokenizeContentSearchQuery = (query: string): ContentSearchToken[] => {
   const tokens: ContentSearchToken[] = []
   let i = 0
 
@@ -281,8 +282,34 @@ export const compileBlocksContentSearchQuery = (
 export const escapeLikePattern = (value: string): string =>
   value.replace(/[\\%_]/g, c => `\\${c}`)
 
-/** Content search — case-insensitive trigram FTS substring match. */
-export const SELECT_BLOCKS_BY_CONTENT_SQL = `
+const blockTypeInSql = `
+  SELECT 1 FROM block_types bt
+   WHERE bt.block_id = b.id AND bt.workspace_id = b.workspace_id
+     AND bt.type IN (SELECT value FROM json_each(?))
+`
+
+/** Content search — case-insensitive trigram FTS substring match, optionally
+ *  narrowed by a {@link BlockSearchFilter}. Every clause sits in the WHERE,
+ *  ahead of the LIMIT. The descendant walk has no depth cap: UNION (not
+ *  UNION ALL) drops a row already seen, so a parent cycle ends it, and the
+ *  root is excluded at every step, so a cycle through it cannot add it, and
+ *  every step stays in the searched workspace (a sync-applied parent edge
+ *  can cross one). The subtree is walked down once, not each match up: the
+ *  ancestry check must run on every match ahead of the LIMIT, and a common
+ *  word matches most of the graph. Binds, in order: `[underId]` when filtering by
+ *  ancestry, workspaceId (twice when filtering by ancestry), the MATCH query, `[typesJson]`, `[excludeTypesJson]`,
+ *  then the two rank parameters and the limit. */
+export const selectBlocksByContentSql = (filter: BlockSearchFilter = {}): string => `
+  ${filter.underId !== undefined ? `WITH RECURSIVE under_root(id, workspace_id) AS (SELECT ?, ?),
+  under_tree(id) AS (
+    SELECT c.id FROM blocks c, under_root
+     WHERE c.parent_id = under_root.id AND c.id != under_root.id AND c.deleted = 0
+       AND c.workspace_id = under_root.workspace_id
+    UNION
+    SELECT c.id FROM blocks c
+      JOIN under_tree ON c.parent_id = under_tree.id, under_root
+     WHERE c.deleted = 0 AND c.id != under_root.id AND c.workspace_id = under_root.workspace_id
+  )` : ''}
   SELECT ${buildQualifiedBlockColumnsSql('b')}
   FROM blocks_fts
   JOIN blocks b
@@ -292,6 +319,9 @@ export const SELECT_BLOCKS_BY_CONTENT_SQL = `
     AND blocks_fts MATCH ?
     AND b.deleted = 0
     AND b.content != ''
+    ${filter.types?.length ? `AND EXISTS (${blockTypeInSql})` : ''}
+    ${filter.excludeTypes?.length ? `AND NOT EXISTS (${blockTypeInSql})` : ''}
+    ${filter.underId !== undefined ? 'AND b.id IN (SELECT id FROM under_tree)' : ''}
   ORDER BY
     CASE
       WHEN LOWER(b.content) = LOWER(?) THEN 0
@@ -301,6 +331,8 @@ export const SELECT_BLOCKS_BY_CONTENT_SQL = `
     coalesce(b.user_updated_at, b.updated_at) DESC
   LIMIT ?
 `
+
+export const SELECT_BLOCKS_BY_CONTENT_SQL = selectBlocksByContentSql()
 
 /** Recent non-empty blocks in a workspace, used by empty-query pickers. */
 export const SELECT_RECENT_BLOCKS_SQL = `
@@ -519,6 +551,11 @@ export const buildFuzzyAliasMatchesSql = (tokenCount: number): string => {
   `
 }
 
+/** How much of a candidate's content an alias match returns: a preview. A
+ *  page whose content is a whole document would otherwise be read in full
+ *  for every candidate. A cost bound. */
+export const ALIAS_MATCH_CONTENT_CHARS = 500
+
 /** Alias substring match used by alias-search surfaces; one row per
  *  (alias, block) pair. Same index plan as the distinct-aliases query
  *  above: filter on alias_lower, JOIN blocks for content + ordering. */
@@ -526,7 +563,7 @@ export const SELECT_ALIAS_MATCHES_IN_WORKSPACE_SQL = `
   SELECT
     ba.alias AS alias,
     b.id AS blockId,
-    b.content AS content
+    substr(b.content, 1, ${ALIAS_MATCH_CONTENT_CHARS}) AS content
   FROM block_aliases ba
   JOIN blocks b ON b.id = ba.block_id
   WHERE ba.workspace_id = ?
@@ -1358,7 +1395,7 @@ export const typedBlockCountQuery = defineQuery<ResolvedTypedBlockQuery, number>
 
 /** Substring-match content search. Empty `query` returns []. */
 export const searchByContentQuery = defineQuery<
-  {workspaceId: string; query: string; limit?: number},
+  {workspaceId: string; query: string; limit?: number; filter?: BlockSearchFilter},
   BlockData[]
 >({
   name: 'core.searchByContent',
@@ -1366,9 +1403,14 @@ export const searchByContentQuery = defineQuery<
     workspaceId: z.string(),
     query: z.string(),
     limit: z.number().optional(),
+    filter: z.object({
+      types: z.array(z.string()).optional(),
+      excludeTypes: z.array(z.string()).optional(),
+      underId: z.string().optional(),
+    }).optional(),
   }),
   resultSchema: blockDataArraySchema,
-  resolve: async ({workspaceId, query, limit = 50}, ctx) => {
+  resolve: async ({workspaceId, query, limit = 50, filter}, ctx) => {
     const compiledQuery = compileBlocksContentSearchQuery(query)
     if (compiledQuery === null) return []
     // Narrow `kernel.content` channel — fires only when content
@@ -1384,11 +1426,18 @@ export const searchByContentQuery = defineQuery<
     // the query rank as literals); the exact `= LOWER(?)` rank takes the
     // raw rankQuery. The FTS MATCH itself is unaffected — LIKE is only a
     // tiebreaker over the already-matched rows.
+    // A filter reads types and ancestry, which the content channel does not
+    // announce — so a filtered handle depends on the whole workspace.
+    const active = isActiveSearchFilter(filter) ? filter : undefined
+    if (active) ctx.depend({kind: 'workspace', workspaceId})
     const rows = await ctx.db.getAll<BlockRow>(
-      SELECT_BLOCKS_BY_CONTENT_SQL,
+      active ? selectBlocksByContentSql(active) : SELECT_BLOCKS_BY_CONTENT_SQL,
       [
+        ...(active?.underId !== undefined ? [active.underId, workspaceId] : []),
         workspaceId,
         compiledQuery.matchQuery,
+        ...(active?.types?.length ? [JSON.stringify(active.types)] : []),
+        ...(active?.excludeTypes?.length ? [JSON.stringify(active.excludeTypes)] : []),
         compiledQuery.rankQuery,
         escapeLikePattern(compiledQuery.rankQuery),
         limit,

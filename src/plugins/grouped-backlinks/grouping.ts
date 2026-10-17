@@ -22,6 +22,25 @@ export interface GroupedBacklinkGroup {
   label: string
   sourceIds: string[]
   fallback: boolean
+  /** The block this group is, or null for a field, type or fallback group,
+   *  whose `groupId` is synthetic (`field:…`, `type:…`). */
+  blockId: string | null
+}
+
+/** Candidate kinds whose `groupId` is a block id. */
+const isBlockKind = (kind: GroupedBacklinkCandidate['kind']): boolean =>
+  kind === 'ref' || kind === 'root' || kind === 'attribute'
+
+/** Group ids a synthetic candidate claims: every field and type candidate's,
+ *  and the fallback's. A block whose id equals one (only sync can deliver an
+ *  id like `field:reviewer`) is not offered as a group, so a `groupId` names
+ *  one group and a synthetic group never takes a block's members or header.
+ *  Accepted: the claim holds even when that synthetic candidate is filtered
+ *  out later, and the block's sources then fall to other groups. */
+const reservedGroupIds = (candidates: readonly GroupedBacklinkCandidate[]): Set<string> => {
+  const reserved = new Set([FALLBACK_GROUP_ID])
+  for (const candidate of candidates) if (!isBlockKind(candidate.kind)) reserved.add(candidate.groupId)
+  return reserved
 }
 
 interface CandidateGroup {
@@ -130,10 +149,12 @@ export const buildGroupedBacklinks = ({
   const sourceSet = new Set(sourceOrder)
   const matcher = buildMatcher(normalizeGroupedBacklinksConfig(groupingConfig))
   const groups = new Map<string, CandidateGroup>()
+  const reserved = reservedGroupIds(candidates)
   for (const candidate of candidates) {
     if (
       candidate.groupId === targetId ||
       !sourceSet.has(candidate.sourceId) ||
+      (isBlockKind(candidate.kind) && reserved.has(candidate.groupId)) ||
       labelExcluded(candidate.groupLabel, matcher)
     ) {
       continue
@@ -186,6 +207,7 @@ export const buildGroupedBacklinks = ({
         label: picked.group.label,
         sourceIds: picked.members,
         fallback: false,
+        blockId: isBlockKind(picked.group.kind) ? picked.group.groupId : null,
       })
       for (const id of picked.members) consumed.add(id)
       const idx = priorityGroups.indexOf(picked.group)
@@ -201,6 +223,7 @@ export const buildGroupedBacklinks = ({
         label: group.label,
         sourceIds: members,
         fallback: false,
+        blockId: null,
       })
     }
   }
@@ -217,6 +240,7 @@ export const buildGroupedBacklinks = ({
       label: FALLBACK_GROUP_LABEL,
       sourceIds: fallbackIds,
       fallback: true,
+      blockId: null,
     })
   }
 

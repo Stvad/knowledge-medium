@@ -26,6 +26,9 @@ import type {ProjectedTypeDefinition} from '@/data/typeDefinitionRegistry'
 import type { AnyDefinitionBlockProjector } from './projectorRuntime.ts'
 import type { InvalidationRule } from './invalidation.ts'
 import type { Repo } from './repo.ts'
+import type { BlockSearchFilter } from './searchFilter.ts'
+
+export { isActiveSearchFilter, matchesTypeFilter, type BlockSearchFilter } from './searchFilter.ts'
 import {isPropertySeedDeclaration} from './propertySeeds.ts'
 import {isTypeSeedDeclaration, type TypeSeedDeclaration} from './typeSeeds.ts'
 
@@ -520,6 +523,9 @@ export interface SearchSourceArgs {
    *  participates in the cross-source sort at the merge point. */
   readonly limit: number
   readonly recentBlockIds?: ReadonlyArray<string>
+  /** Applied by the source itself when it declares `supportsFilter`;
+   *  otherwise see that flag. */
+  readonly filter?: BlockSearchFilter
 }
 
 /** A pluggable block-search backend. `search` is called alongside every
@@ -542,6 +548,13 @@ export interface SearchSourceArgs {
  *  rather than resolving to an empty result. */
 export interface SearchSourceContribution {
   readonly id: string
+  /** Applies `SearchSourceArgs.filter` in its own query, before its limit.
+   *  For a source without it the merge point drops candidates the filter's
+   *  type clauses exclude, and the source sits out a filter with `underId`.
+   *  Its share of a filtered result is therefore best effort (it limits
+   *  before the filter) — kept over sitting it out, so contributed sources
+   *  still take part in the agent's default, extension-excluding search. */
+  readonly supportsFilter?: boolean
   search: (repo: Repo, args: SearchSourceArgs) => Promise<readonly SearchSourceCandidate[]>
 }
 

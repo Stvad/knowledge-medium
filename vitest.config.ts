@@ -65,7 +65,10 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      '@': resolve(__dirname, './src')
+      '@': resolve(__dirname, './src'),
+      // Same as vite.config.ts: the app reads the wire protocol from the
+      // agent-cli SOURCE, not its last build in dist/.
+      '@knowledge-medium/agent-cli/protocol': resolve(__dirname, './packages/agent-cli/src/protocol.ts'),
     }
   }
 })
