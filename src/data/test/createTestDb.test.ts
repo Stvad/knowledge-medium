@@ -107,4 +107,35 @@ describe('createTestDb harness', () => {
 
     expect(await h.db.getOptional('SELECT id FROM blocks WHERE id = ?', ['t-rollback'])).toBeNull()
   })
+
+  it('reads the last committed value while a write is pending, then sees its commit', async () => {
+    const id = 't-read-isolation'
+    await h.db.execute(
+      `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json, references_json, created_at, updated_at, created_by, updated_by, deleted)
+       VALUES (?, 'ws', NULL, 'a0', 'committed', '{}', '[]', 0, 0, 'u', 'u', 0)`,
+      [id],
+    )
+
+    let markUpdated!: () => void
+    const updated = new Promise<void>(resolve => { markUpdated = resolve })
+    let allowCommit!: () => void
+    const commitAllowed = new Promise<void>(resolve => { allowCommit = resolve })
+    const writing = h.db.writeTransaction(async tx => {
+      await tx.execute('UPDATE blocks SET content = ? WHERE id = ?', ['pending', id])
+      markUpdated()
+      await commitAllowed
+    })
+
+    try {
+      await Promise.race([updated, writing])
+      expect(await h.db.get<{content: string}>('SELECT content FROM blocks WHERE id = ?', [id]))
+        .toEqual({content: 'committed'})
+    } finally {
+      allowCommit()
+      await writing
+    }
+
+    expect(await h.db.get<{content: string}>('SELECT content FROM blocks WHERE id = ?', [id]))
+      .toEqual({content: 'pending'})
+  })
 })
