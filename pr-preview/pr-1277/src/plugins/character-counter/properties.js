@@ -1,1 +1,0 @@
-import{bB as e,vB as t,yB as n}from"../../../chunks/app-GVnlLAyl.js";export{t as charLimitProp,n as charProfileProp,e as charScopeProp};

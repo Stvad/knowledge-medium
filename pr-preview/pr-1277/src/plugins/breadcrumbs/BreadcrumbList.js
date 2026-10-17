@@ -1,1 +1,0 @@
-import{sv as e}from"../../../chunks/app-GVnlLAyl.js";export{e as BreadcrumbList};

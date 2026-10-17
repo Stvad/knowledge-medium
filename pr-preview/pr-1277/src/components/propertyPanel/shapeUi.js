@@ -1,1 +1,0 @@
-import{MF as e,jF as t}from"../../../chunks/app-GVnlLAyl.js";export{t as PropertyShapeButton,e as PropertyShapeGlyph};

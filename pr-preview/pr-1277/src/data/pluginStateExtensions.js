@@ -1,1 +1,0 @@
-import{GB as e,KB as t}from"../../chunks/app-GVnlLAyl.js";export{e as pluginPrefsExtension,t as pluginUIStateExtension};

@@ -1,1 +1,0 @@
-import{nv as e}from"../../../chunks/app-GVnlLAyl.js";export{e as usePromotableBreadcrumb};

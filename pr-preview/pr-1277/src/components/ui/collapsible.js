@@ -1,1 +1,0 @@
-"use client";import{Sj as e,bj as t,xj as n}from"../../../chunks/app-GVnlLAyl.js";export{t as Collapsible,n as CollapsibleContent,e as CollapsibleTrigger};

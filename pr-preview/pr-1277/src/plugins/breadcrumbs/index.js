@@ -1,1 +1,0 @@
-import{av as e,ev as t,iv as n,nv as r,ov as i,rv as a,sv as o,tv as s}from"../../../chunks/app-GVnlLAyl.js";export{o as BreadcrumbList,n as BreadcrumbRenderer,i as Breadcrumbs,a as PromotableBreadcrumbList,t as breadcrumbRendererContribution,s as breadcrumbsPlugin,e as getBreadcrumbContentPreview,r as usePromotableBreadcrumb};
