@@ -1,18 +1,9 @@
 /**
  * PowerSync must not stage a server checkpoint that predates this device's own
- * acknowledged upload.
+ * acknowledged upload: the `$local` download hold in `clientSchema.ts`.
  *
  * Drives the real PowerSync core (`powersync_control`, the Rust sync client's
- * entry point) with protocol lines, so the gate under test is the core's own:
- * it publishes a checkpoint only when `ps_crud` is empty AND the `$local`
- * bucket's `target_op` does not exceed its `last_op`. The second half is what
- * holds a download back between "upload acknowledged" and "the server's
- * checkpoint includes it", and it only engages if every enqueue raises
- * `$local.target_op` — PowerSync's own crud path does, and so must every
- * writer of ours that inserts into `ps_crud` directly.
- *
- * Without it the drain receives the older version as a fresh delivery and,
- * with nothing pending, applies it over the newer local row (#1226).
+ * entry point) with protocol lines, so the gate under test is the core's own.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { BLOCK_STORAGE_COLUMNS, blockToSyncedRowParams } from '@/data/blockSchema'
@@ -66,16 +57,23 @@ const writeLocally = (sql: string, params: unknown[]) =>
     await tx.execute('UPDATE tx_context SET source = NULL, tx_seq = NULL WHERE id = 1')
   })
 
-/** The SDK's upload loop once the connector has sent everything: complete each
- *  crud transaction, ask for the write checkpoint covering them, and tell the
- *  core when it took one. */
-const acknowledgeUploads = async (writeCheckpoint: string) => {
+/** The SDK's upload loop once the connector has sent everything, in its two
+ *  steps: complete each crud transaction, then ask for the write checkpoint
+ *  covering them and tell the core when it took one. Checkpoints can arrive
+ *  between the two, while the request is in flight. */
+const completeUploads = async () => {
   for (let tx = await env.db.getNextCrudTransaction(); tx; tx = await env.db.getNextCrudTransaction()) {
     await tx.complete()
   }
+}
+const takeWriteCheckpoint = async (writeCheckpoint: string) => {
   if (await storage().updateLocalTarget(async () => writeCheckpoint)) {
     await storage().control('completed_upload', null)
   }
+}
+const acknowledgeUploads = async (writeCheckpoint: string) => {
+  await completeUploads()
+  await takeWriteCheckpoint(writeCheckpoint)
 }
 
 type Op = ReturnType<typeof putOp>
@@ -91,7 +89,8 @@ const putOp = (opId: number, block: BlockData) => {
 }
 
 /** The server's side of one bucket: each checkpoint covers every op so far and
- *  carries only the ones this client has not downloaded. */
+ *  carries only the ones this client has not downloaded. Resolves to the core's
+ *  answer to the checkpoint's completion. */
 const serverBucket = () => {
   const ops: Op[] = []
   const line = (value: unknown) => storage().control('line_text', JSON.stringify(value))
@@ -107,8 +106,15 @@ const serverBucket = () => {
       },
     })
     await line({data: {bucket: BUCKET, has_more: false, after, next_after: lastOpId, data: newOps}})
-    await line({checkpoint_complete: {last_op_id: lastOpId}})
+    return line({checkpoint_complete: {last_op_id: lastOpId}})
   }
+}
+
+/** Held by the hold rather than the queue: the core declined for local data
+ *  with `ps_crud` already empty. */
+const expectHeldByHold = async (completion: string) => {
+  expect(completion).toContain('Could not apply checkpoint due to local data')
+  expect(await env.db.getAll('SELECT 1 FROM ps_crud')).toEqual([])
 }
 
 const drain = () => drainStagingWindowOnce(env.db, {getMaterializability: constMat('copy'), getCek: noKey})
@@ -129,7 +135,7 @@ describe('download gating on this device\'s own uploads', () => {
     await acknowledgeUploads('2')
 
     // The server's checkpoint holds the create but not yet the edit.
-    await serverCheckpoint([putOp(1, created)], '1')
+    await expectHeldByHold(await serverCheckpoint([putOp(1, created)], '1'))
     expect(await stagedContent()).toBeUndefined()
     await drain()
     expect(await localContent()).toBe(edited.content)
@@ -156,7 +162,7 @@ describe('download gating on this device\'s own uploads', () => {
     await acknowledgeUploads('3')
 
     const foreign: BlockData = {...created, content: 'foreign', updatedAt: created.updatedAt + 100, updatedBy: 'user-2'}
-    await serverCheckpoint([putOp(2, foreign)], null)
+    await expectHeldByHold(await serverCheckpoint([putOp(2, foreign)], null))
     expect(await stagedContent()).toBe(created.content)
     await drain()
     expect(await localContent()).toBe(edited.content)
@@ -175,7 +181,26 @@ describe('download gating on this device\'s own uploads', () => {
     for (const stmt of CLIENT_SCHEMA_NON_TRIGGER_STATEMENTS) await env.db.execute(stmt)
     await acknowledgeUploads('2')
 
-    await serverCheckpoint([putOp(1, created)], '1')
+    await expectHeldByHold(await serverCheckpoint([putOp(1, created)], '1'))
     expect(await stagedContent()).toBeUndefined()
+  })
+
+  it('publishes a checkpoint that arrived while the write checkpoint was in flight, once it is taken', async () => {
+    const serverCheckpoint = serverBucket()
+    await writeLocally(INSERT_SQL, blockToSyncedRowParams(created))
+    await acknowledgeUploads('1')
+    await writeLocally(
+      'UPDATE blocks SET content = ?, updated_at = ?, user_updated_at = ? WHERE id = ?',
+      [edited.content, edited.updatedAt, edited.userUpdatedAt, edited.id],
+    )
+    await completeUploads()
+
+    await expectHeldByHold(await serverCheckpoint([putOp(1, created)], '1'))
+    // Even the checkpoint covering the edit waits for the client to know that.
+    await expectHeldByHold(await serverCheckpoint([putOp(2, edited)], '2'))
+    expect(await stagedContent()).toBeUndefined()
+
+    await takeWriteCheckpoint('2')
+    expect(await stagedContent()).toBe(edited.content)
   })
 })
