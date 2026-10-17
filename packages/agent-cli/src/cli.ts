@@ -44,6 +44,7 @@ import {
   renderKernelTypesInstallSummary,
 } from './kernelDts.js'
 import {cliCommandFrom, cliOptionsFor, GRAPH_READ_TOOLS, hasJsonFormat, renderToolResult} from './readTools.js'
+import {helpSections} from './cliHelp.js'
 import {scopeAssertion, workspaceAssertion} from './cliOptions.js'
 import {extensionScaffold, slugify, titleize} from './scaffold.js'
 
@@ -1010,7 +1011,7 @@ cli
   })
 
 cli.version(pkgVersion)
-cli.help()
+cli.help(sections => helpSections(sections, {bin: cli.name, commands: cli.commands, matched: cli.matchedCommand}))
 
 const main = async () => {
   // Two-phase parse so we can resolve `--profile` (a global option)
