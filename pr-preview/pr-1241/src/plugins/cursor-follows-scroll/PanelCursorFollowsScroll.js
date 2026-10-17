@@ -1,1 +1,1 @@
-import{Ng as e}from"../../../chunks/app-DsZyGZiu.js";export{e as PanelCursorFollowsScroll};
+import{Mg as e}from"../../../chunks/app-SrWq-9zR.js";export{e as PanelCursorFollowsScroll};

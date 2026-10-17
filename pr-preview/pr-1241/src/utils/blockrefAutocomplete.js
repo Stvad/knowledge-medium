@@ -1,1 +1,1 @@
-import{Jf as e}from"../../chunks/app-DsZyGZiu.js";export{e as blockrefCompletionSource};
+import{qf as e}from"../../chunks/app-SrWq-9zR.js";export{e as blockrefCompletionSource};

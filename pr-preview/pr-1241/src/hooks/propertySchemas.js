@@ -1,1 +1,1 @@
-import{kF as e}from"../../chunks/app-DsZyGZiu.js";export{e as usePropertySchemas};
+import{OF as e}from"../../chunks/app-SrWq-9zR.js";export{e as usePropertySchemas};

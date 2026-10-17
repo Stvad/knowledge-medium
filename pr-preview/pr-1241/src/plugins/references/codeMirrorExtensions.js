@@ -1,1 +1,1 @@
-import{Kf as e,qf as t}from"../../../chunks/app-DsZyGZiu.js";export{e as aliasCompletions,t as referencesCodeMirrorExtensions};
+import{Gf as e,Kf as t}from"../../../chunks/app-SrWq-9zR.js";export{e as aliasCompletions,t as referencesCodeMirrorExtensions};
