@@ -1,0 +1,1462 @@
+{
+  "schemaVersion": 4,
+  "label": "baseline-2026-10-16-sonnet-cli",
+  "startedAt": "2026-10-17T01:01:48.931Z",
+  "finishedAt": "2026-10-17T01:04:43.448Z",
+  "git": {
+    "sha": "41f754e7c1e24a60367b828394c14fd18e41f94b",
+    "branch": "claude/agent-eval-node-host",
+    "dirty": false
+  },
+  "model": "sonnet",
+  "conditions": {
+    "fixture": "9d499d1fadc8",
+    "importedFixture": "dda75dc2999a",
+    "surface": "cli",
+    "tools": "a2b5c5fb0930",
+    "model": "claude-sonnet-5-5",
+    "effort": "default",
+    "mcpOutputTokens": 25000,
+    "bashOutputChars": 30000,
+    "timeoutMs": 600000,
+    "workers": 4
+  },
+  "claudeCodeVersion": "2.1.285",
+  "allowedTools": [
+    "Bash(kmagent:*)",
+    "Bash(head:*)",
+    "Bash(tail:*)",
+    "Bash(grep:*)",
+    "Bash(jq:*)",
+    "Bash(wc:*)",
+    "Bash(sort:*)"
+  ],
+  "taskHashes": {
+    "kestrel-june": "b9d02aacfe84",
+    "summarize-design": "0f58a9b3f136",
+    "standup-blockers": "fd76f782bb3a",
+    "orchard-open-todos": "ec9ad9a8665e",
+    "reading-log-needle": "845eaae9cd8a",
+    "renewal-vendors": "7d48c3086b93",
+    "meetings-with-person": "ec3702f6f165",
+    "reading-log-filter": "2916ae3684c3",
+    "daily-checkin": "b543aef0354f",
+    "edit-rollout-phrase": "33b58fea485d",
+    "create-linked-page": "5f8d7bd5e12f",
+    "complete-todo": "da260d379886"
+  },
+  "outputSizes": {
+    "search:pricing": 122443,
+    "search:kestrel": 2435,
+    "backlinks:Meeting": 143764,
+    "backlinks:Kestrel": 3416,
+    "subtree:Reading Log": 644156,
+    "subtree:pasted source": 123563,
+    "subtree:daily note": 2828,
+    "subtree:project page": 4064,
+    "subtree:design doc": 3776,
+    "page:Project Orchard": 571
+  },
+  "probeHashes": {
+    "search:pricing": "31bb52c81619",
+    "search:kestrel": "f6ca516143cf",
+    "backlinks:Meeting": "844152b4a55a",
+    "backlinks:Kestrel": "53663d3a41e9",
+    "subtree:Reading Log": "bc7d6060b37e",
+    "subtree:pasted source": "aa63e61bfaf4",
+    "subtree:daily note": "76e5ac2dd5b7",
+    "subtree:project page": "d50f9bf86afe",
+    "subtree:design doc": "665403e63d0b",
+    "page:Project Orchard": "22e6163754c4"
+  },
+  "runs": [
+    {
+      "task": "kestrel-june",
+      "kind": "read",
+      "rep": 1,
+      "pass": false,
+      "detail": "dates: all 5 matched; wrong or missing summary for [2026-06-04, 2026-06-18]",
+      "toolCalls": 6,
+      "toolCallsByName": {
+        "kmagent --help": 1,
+        "kmagent data-model": 1,
+        "kmagent page": 1,
+        "kmagent backlinks": 1,
+        "kmagent sql": 5,
+        "kmagent daily-note": 1
+      },
+      "toolErrors": 1,
+      "seenChars": 27342,
+      "maxSeenChars": 14586,
+      "cappedCalls": 1,
+      "returnedChars": 154528,
+      "apiCalls": 7,
+      "tokens": {
+        "input": 14,
+        "cacheCreation": 15156,
+        "cacheRead": 74652,
+        "output": 1834,
+        "contextTotal": 89822,
+        "peakContext": 17088
+      },
+      "elapsedMs": 20471,
+      "costUsd": 0.0939224,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/kestrel-june-1.jsonl"
+    },
+    {
+      "task": "summarize-design",
+      "kind": "read",
+      "rep": 1,
+      "pass": true,
+      "detail": "author, both approaches, count right",
+      "toolCalls": 3,
+      "toolCallsByName": {
+        "kmagent --help": 1,
+        "kmagent page": 1,
+        "kmagent subtree": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 17514,
+      "maxSeenChars": 14586,
+      "cappedCalls": 0,
+      "returnedChars": 17514,
+      "apiCalls": 4,
+      "tokens": {
+        "input": 8,
+        "cacheCreation": 9525,
+        "cacheRead": 26514,
+        "output": 707,
+        "contextTotal": 36047,
+        "peakContext": 11457
+      },
+      "elapsedMs": 10719,
+      "costUsd": 0.0504888,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/summarize-design-1.jsonl"
+    },
+    {
+      "task": "standup-blockers",
+      "kind": "read",
+      "rep": 1,
+      "pass": true,
+      "detail": "all 5 matched",
+      "toolCalls": 7,
+      "toolCallsByName": {
+        "kmagent --help": 1,
+        "kmagent data-model": 1,
+        "kmagent page": 1,
+        "kmagent backlinks": 1,
+        "kmagent sql": 5,
+        "kmagent subtree": 1
+      },
+      "toolErrors": 1,
+      "seenChars": 39201,
+      "maxSeenChars": 14586,
+      "cappedCalls": 0,
+      "returnedChars": 39201,
+      "apiCalls": 8,
+      "tokens": {
+        "input": 16,
+        "cacheCreation": 20066,
+        "cacheRead": 110234,
+        "output": 1583,
+        "contextTotal": 130316,
+        "peakContext": 21998
+      },
+      "elapsedMs": 23969,
+      "costUsd": 0.11817280000000002,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/standup-blockers-1.jsonl"
+    },
+    {
+      "task": "orchard-open-todos",
+      "kind": "read",
+      "rep": 1,
+      "pass": true,
+      "detail": "all 6 matched",
+      "toolCalls": 4,
+      "toolCallsByName": {
+        "kmagent --help": 1,
+        "kmagent data-model": 1,
+        "kmagent page": 1,
+        "kmagent subtree": 3
+      },
+      "toolErrors": 0,
+      "seenChars": 32155,
+      "maxSeenChars": 14586,
+      "cappedCalls": 0,
+      "returnedChars": 32155,
+      "apiCalls": 5,
+      "tokens": {
+        "input": 10,
+        "cacheCreation": 16143,
+        "cacheRead": 46099,
+        "output": 748,
+        "contextTotal": 62252,
+        "peakContext": 18075
+      },
+      "elapsedMs": 14393,
+      "costUsd": 0.0812918,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/orchard-open-todos-1.jsonl"
+    },
+    {
+      "task": "reading-log-needle",
+      "kind": "read",
+      "rep": 1,
+      "pass": true,
+      "detail": "rating and recommender right",
+      "toolCalls": 3,
+      "toolCallsByName": {
+        "kmagent --help": 1,
+        "kmagent search": 1,
+        "kmagent sql": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 15648,
+      "maxSeenChars": 14586,
+      "cappedCalls": 0,
+      "returnedChars": 15648,
+      "apiCalls": 4,
+      "tokens": {
+        "input": 8,
+        "cacheCreation": 8631,
+        "cacheRead": 26451,
+        "output": 424,
+        "contextTotal": 35090,
+        "peakContext": 10563
+      },
+      "elapsedMs": 8880,
+      "costUsd": 0.04407019999999999,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/reading-log-needle-1.jsonl"
+    },
+    {
+      "task": "renewal-vendors",
+      "kind": "read",
+      "rep": 1,
+      "pass": true,
+      "detail": "all 3 matched",
+      "toolCalls": 3,
+      "toolCallsByName": {
+        "kmagent --help": 1,
+        "kmagent data-model": 1,
+        "kmagent page": 1,
+        "kmagent backlinks": 1,
+        "kmagent sql": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 31468,
+      "maxSeenChars": 14586,
+      "cappedCalls": 0,
+      "returnedChars": 31468,
+      "apiCalls": 4,
+      "tokens": {
+        "input": 8,
+        "cacheCreation": 15528,
+        "cacheRead": 30504,
+        "output": 536,
+        "contextTotal": 46040,
+        "peakContext": 17460
+      },
+      "elapsedMs": 9721,
+      "costUsd": 0.07358880000000001,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/renewal-vendors-1.jsonl"
+    },
+    {
+      "task": "meetings-with-person",
+      "kind": "read",
+      "rep": 1,
+      "pass": true,
+      "detail": "count right; dates: all 9 matched",
+      "toolCalls": 6,
+      "toolCallsByName": {
+        "kmagent --help": 1,
+        "kmagent data-model": 1,
+        "kmagent page": 1,
+        "kmagent sql": 3,
+        "kmagent subtree": 1
+      },
+      "toolErrors": 1,
+      "seenChars": 33036,
+      "maxSeenChars": 14586,
+      "cappedCalls": 1,
+      "returnedChars": 89814,
+      "apiCalls": 7,
+      "tokens": {
+        "input": 14,
+        "cacheCreation": 17812,
+        "cacheRead": 82968,
+        "output": 1813,
+        "contextTotal": 100794,
+        "peakContext": 19744
+      },
+      "elapsedMs": 21280,
+      "costUsd": 0.1059996,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/meetings-with-person-1.jsonl"
+    },
+    {
+      "task": "reading-log-filter",
+      "kind": "read",
+      "rep": 1,
+      "pass": true,
+      "detail": "all 12 matched",
+      "toolCalls": 4,
+      "toolCallsByName": {
+        "kmagent --help": 1,
+        "kmagent page": 1,
+        "kmagent subtree": 1,
+        "bash grep": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 18833,
+      "maxSeenChars": 14586,
+      "cappedCalls": 1,
+      "returnedChars": 253074,
+      "apiCalls": 5,
+      "tokens": {
+        "input": 10,
+        "cacheCreation": 10704,
+        "cacheRead": 37813,
+        "output": 1055,
+        "contextTotal": 48527,
+        "peakContext": 12636
+      },
+      "elapsedMs": 13718,
+      "costUsd": 0.0609486,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/reading-log-filter-1.jsonl"
+    },
+    {
+      "task": "daily-checkin",
+      "kind": "write",
+      "rep": 1,
+      "pass": true,
+      "detail": "structure matches",
+      "toolCalls": 10,
+      "toolCallsByName": {
+        "kmagent --help": 1,
+        "kmagent daily-note": 1,
+        "kmagent create-block": 7,
+        "kmagent subtree": 3
+      },
+      "toolErrors": 2,
+      "seenChars": 18317,
+      "maxSeenChars": 14586,
+      "cappedCalls": 0,
+      "returnedChars": 18317,
+      "apiCalls": 9,
+      "tokens": {
+        "input": 18,
+        "cacheCreation": 11097,
+        "cacheRead": 82876,
+        "output": 1367,
+        "contextTotal": 93991,
+        "peakContext": 13029
+      },
+      "elapsedMs": 16884,
+      "costUsd": 0.07466919999999999,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 4,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/daily-checkin-1.jsonl"
+    },
+    {
+      "task": "edit-rollout-phrase",
+      "kind": "write",
+      "rep": 1,
+      "pass": true,
+      "detail": "phrase replaced",
+      "toolCalls": 4,
+      "toolCallsByName": {
+        "kmagent --help": 1,
+        "kmagent page": 1,
+        "kmagent subtree": 1,
+        "kmagent update-block": 2,
+        "kmagent get-block": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 18894,
+      "maxSeenChars": 14586,
+      "cappedCalls": 0,
+      "returnedChars": 18894,
+      "apiCalls": 5,
+      "tokens": {
+        "input": 10,
+        "cacheCreation": 10432,
+        "cacheRead": 37981,
+        "output": 499,
+        "contextTotal": 48423,
+        "peakContext": 12364
+      },
+      "elapsedMs": 13723,
+      "costUsd": 0.0543342,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 1
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/edit-rollout-phrase-1.jsonl"
+    },
+    {
+      "task": "create-linked-page",
+      "kind": "write",
+      "rep": 1,
+      "pass": false,
+      "detail": "first block is null; 0 link(s) under Vendors",
+      "toolCalls": 7,
+      "toolCallsByName": {
+        "kmagent --help": 1,
+        "kmagent data-model": 1,
+        "kmagent create-block": 5,
+        "kmagent page": 2,
+        "kmagent subtree": 2,
+        "kmagent eval": 1,
+        "kmagent get-block": 1
+      },
+      "toolErrors": 2,
+      "seenChars": 30565,
+      "maxSeenChars": 14586,
+      "cappedCalls": 0,
+      "returnedChars": 30565,
+      "apiCalls": 8,
+      "tokens": {
+        "input": 16,
+        "cacheCreation": 15626,
+        "cacheRead": 96233,
+        "output": 1635,
+        "contextTotal": 111875,
+        "peakContext": 17558
+      },
+      "elapsedMs": 23989,
+      "costUsd": 0.0981326,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 1,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/create-linked-page-1.jsonl"
+    },
+    {
+      "task": "complete-todo",
+      "kind": "write",
+      "rep": 1,
+      "pass": true,
+      "detail": "status is \"done\"; text unchanged",
+      "toolCalls": 4,
+      "toolCallsByName": {
+        "kmagent --help": 1,
+        "kmagent data-model": 1,
+        "kmagent page": 1,
+        "kmagent subtree": 1,
+        "kmagent update-block": 2,
+        "kmagent get-block": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 45877,
+      "maxSeenChars": 18617,
+      "cappedCalls": 0,
+      "returnedChars": 45877,
+      "apiCalls": 5,
+      "tokens": {
+        "input": 10,
+        "cacheCreation": 22524,
+        "cacheRead": 53969,
+        "output": 485,
+        "contextTotal": 76503,
+        "peakContext": 24456
+      },
+      "elapsedMs": 10697,
+      "costUsd": 0.1057598,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 1
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/complete-todo-1.jsonl"
+    },
+    {
+      "task": "kestrel-june",
+      "kind": "read",
+      "rep": 2,
+      "pass": false,
+      "detail": "dates: all 5 matched; wrong or missing summary for [2026-06-04, 2026-06-18]",
+      "toolCalls": 6,
+      "toolCallsByName": {
+        "kmagent --help": 1,
+        "kmagent data-model": 1,
+        "kmagent page": 1,
+        "kmagent backlinks": 1,
+        "kmagent sql": 4
+      },
+      "toolErrors": 1,
+      "seenChars": 25619,
+      "maxSeenChars": 14586,
+      "cappedCalls": 2,
+      "returnedChars": 276412,
+      "apiCalls": 7,
+      "tokens": {
+        "input": 14,
+        "cacheCreation": 14134,
+        "cacheRead": 72032,
+        "output": 1896,
+        "contextTotal": 86180,
+        "peakContext": 16066
+      },
+      "elapsedMs": 21364,
+      "costUsd": 0.0899304,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/kestrel-june-2.jsonl"
+    },
+    {
+      "task": "summarize-design",
+      "kind": "read",
+      "rep": 2,
+      "pass": true,
+      "detail": "author, both approaches, count right",
+      "toolCalls": 3,
+      "toolCallsByName": {
+        "kmagent --help": 1,
+        "kmagent page": 1,
+        "kmagent subtree": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 17514,
+      "maxSeenChars": 14586,
+      "cappedCalls": 0,
+      "returnedChars": 17514,
+      "apiCalls": 4,
+      "tokens": {
+        "input": 8,
+        "cacheCreation": 9528,
+        "cacheRead": 26523,
+        "output": 727,
+        "contextTotal": 36059,
+        "peakContext": 11460
+      },
+      "elapsedMs": 10356,
+      "costUsd": 0.0507026,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/summarize-design-2.jsonl"
+    },
+    {
+      "task": "standup-blockers",
+      "kind": "read",
+      "rep": 2,
+      "pass": true,
+      "detail": "all 5 matched",
+      "toolCalls": 6,
+      "toolCallsByName": {
+        "kmagent --help": 1,
+        "kmagent data-model": 1,
+        "kmagent page": 1,
+        "kmagent backlinks": 1,
+        "kmagent sql": 3,
+        "kmagent subtree": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 28376,
+      "maxSeenChars": 14586,
+      "cappedCalls": 1,
+      "returnedChars": 147936,
+      "apiCalls": 7,
+      "tokens": {
+        "input": 14,
+        "cacheCreation": 14634,
+        "cacheRead": 70455,
+        "output": 1193,
+        "contextTotal": 85103,
+        "peakContext": 16566
+      },
+      "elapsedMs": 16345,
+      "costUsd": 0.084585,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/standup-blockers-2.jsonl"
+    },
+    {
+      "task": "orchard-open-todos",
+      "kind": "read",
+      "rep": 2,
+      "pass": true,
+      "detail": "all 6 matched",
+      "toolCalls": 3,
+      "toolCallsByName": {
+        "kmagent --help": 1,
+        "kmagent data-model": 1,
+        "kmagent page": 1,
+        "kmagent sql": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 32272,
+      "maxSeenChars": 14586,
+      "cappedCalls": 0,
+      "returnedChars": 32272,
+      "apiCalls": 4,
+      "tokens": {
+        "input": 8,
+        "cacheCreation": 16181,
+        "cacheRead": 30525,
+        "output": 596,
+        "contextTotal": 46714,
+        "peakContext": 18113
+      },
+      "elapsedMs": 9592,
+      "costUsd": 0.07680500000000001,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/orchard-open-todos-2.jsonl"
+    },
+    {
+      "task": "reading-log-needle",
+      "kind": "read",
+      "rep": 2,
+      "pass": true,
+      "detail": "rating and recommender right",
+      "toolCalls": 2,
+      "toolCallsByName": {
+        "kmagent --help": 1,
+        "kmagent search": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 15244,
+      "maxSeenChars": 14586,
+      "cappedCalls": 0,
+      "returnedChars": 15244,
+      "apiCalls": 3,
+      "tokens": {
+        "input": 6,
+        "cacheCreation": 8224,
+        "cacheRead": 16321,
+        "output": 352,
+        "contextTotal": 24551,
+        "peakContext": 10156
+      },
+      "elapsedMs": 7343,
+      "costUsd": 0.039692200000000004,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/reading-log-needle-2.jsonl"
+    },
+    {
+      "task": "renewal-vendors",
+      "kind": "read",
+      "rep": 2,
+      "pass": true,
+      "detail": "all 3 matched",
+      "toolCalls": 4,
+      "toolCallsByName": {
+        "kmagent --help": 1,
+        "kmagent data-model": 1,
+        "kmagent page": 1,
+        "kmagent backlinks": 2,
+        "kmagent sql": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 33478,
+      "maxSeenChars": 14586,
+      "cappedCalls": 0,
+      "returnedChars": 33478,
+      "apiCalls": 5,
+      "tokens": {
+        "input": 10,
+        "cacheCreation": 16976,
+        "cacheRead": 46331,
+        "output": 615,
+        "contextTotal": 63317,
+        "peakContext": 18908
+      },
+      "elapsedMs": 10685,
+      "costUsd": 0.0833402,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/renewal-vendors-2.jsonl"
+    },
+    {
+      "task": "meetings-with-person",
+      "kind": "read",
+      "rep": 2,
+      "pass": true,
+      "detail": "count right; dates: all 9 matched",
+      "toolCalls": 6,
+      "toolCallsByName": {
+        "kmagent --help": 1,
+        "kmagent data-model": 1,
+        "kmagent page": 1,
+        "kmagent sql": 4
+      },
+      "toolErrors": 2,
+      "seenChars": 47384,
+      "maxSeenChars": 18466,
+      "cappedCalls": 1,
+      "returnedChars": 95930,
+      "apiCalls": 7,
+      "tokens": {
+        "input": 14,
+        "cacheCreation": 26951,
+        "cacheRead": 79577,
+        "output": 2074,
+        "contextTotal": 106542,
+        "peakContext": 28883
+      },
+      "elapsedMs": 20562,
+      "costUsd": 0.1444874,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/meetings-with-person-2.jsonl"
+    },
+    {
+      "task": "reading-log-filter",
+      "kind": "read",
+      "rep": 2,
+      "pass": true,
+      "detail": "all 12 matched",
+      "toolCalls": 4,
+      "toolCallsByName": {
+        "kmagent --help": 1,
+        "kmagent page": 1,
+        "kmagent subtree": 1,
+        "bash grep": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 18833,
+      "maxSeenChars": 14586,
+      "cappedCalls": 1,
+      "returnedChars": 253074,
+      "apiCalls": 5,
+      "tokens": {
+        "input": 10,
+        "cacheCreation": 10697,
+        "cacheRead": 37787,
+        "output": 1074,
+        "contextTotal": 48494,
+        "peakContext": 12629
+      },
+      "elapsedMs": 12494,
+      "costUsd": 0.061105400000000004,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/reading-log-filter-2.jsonl"
+    },
+    {
+      "task": "daily-checkin",
+      "kind": "write",
+      "rep": 2,
+      "pass": true,
+      "detail": "structure matches",
+      "toolCalls": 9,
+      "toolCallsByName": {
+        "kmagent --help": 1,
+        "kmagent daily-note": 1,
+        "kmagent create-block": 7,
+        "kmagent subtree": 3
+      },
+      "toolErrors": 2,
+      "seenChars": 19591,
+      "maxSeenChars": 14586,
+      "cappedCalls": 0,
+      "returnedChars": 19591,
+      "apiCalls": 9,
+      "tokens": {
+        "input": 18,
+        "cacheCreation": 11836,
+        "cacheRead": 87297,
+        "output": 1329,
+        "contextTotal": 99151,
+        "peakContext": 13768
+      },
+      "elapsedMs": 17669,
+      "costUsd": 0.0781294,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 4,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/daily-checkin-2.jsonl"
+    },
+    {
+      "task": "edit-rollout-phrase",
+      "kind": "write",
+      "rep": 2,
+      "pass": true,
+      "detail": "phrase replaced",
+      "toolCalls": 4,
+      "toolCallsByName": {
+        "kmagent --help": 1,
+        "kmagent page": 1,
+        "kmagent subtree": 1,
+        "kmagent update-block": 2,
+        "kmagent get-block": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 18894,
+      "maxSeenChars": 14586,
+      "cappedCalls": 0,
+      "returnedChars": 18894,
+      "apiCalls": 5,
+      "tokens": {
+        "input": 10,
+        "cacheCreation": 10420,
+        "cacheRead": 37933,
+        "output": 490,
+        "contextTotal": 48363,
+        "peakContext": 12352
+      },
+      "elapsedMs": 9480,
+      "costUsd": 0.0541866,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 1
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/edit-rollout-phrase-2.jsonl"
+    },
+    {
+      "task": "create-linked-page",
+      "kind": "write",
+      "rep": 2,
+      "pass": true,
+      "detail": "first block ok; 1 link(s) under Vendors",
+      "toolCalls": 7,
+      "toolCallsByName": {
+        "kmagent --help": 1,
+        "kmagent data-model": 1,
+        "kmagent create-block": 5,
+        "kmagent page": 2,
+        "kmagent subtree": 3,
+        "kmagent get-block": 2
+      },
+      "toolErrors": 2,
+      "seenChars": 31191,
+      "maxSeenChars": 14586,
+      "cappedCalls": 0,
+      "returnedChars": 31191,
+      "apiCalls": 8,
+      "tokens": {
+        "input": 16,
+        "cacheCreation": 16110,
+        "cacheRead": 96250,
+        "output": 995,
+        "contextTotal": 112376,
+        "peakContext": 18042
+      },
+      "elapsedMs": 17633,
+      "costUsd": 0.093672,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 3,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/create-linked-page-2.jsonl"
+    },
+    {
+      "task": "complete-todo",
+      "kind": "write",
+      "rep": 2,
+      "pass": true,
+      "detail": "status is \"done\"; text unchanged",
+      "toolCalls": 4,
+      "toolCallsByName": {
+        "kmagent --help": 1,
+        "kmagent data-model": 1,
+        "kmagent page": 1,
+        "kmagent subtree": 1,
+        "kmagent update-block": 2,
+        "kmagent get-block": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 45877,
+      "maxSeenChars": 18617,
+      "cappedCalls": 0,
+      "returnedChars": 45877,
+      "apiCalls": 5,
+      "tokens": {
+        "input": 10,
+        "cacheCreation": 22548,
+        "cacheRead": 53993,
+        "output": 520,
+        "contextTotal": 76551,
+        "peakContext": 24480
+      },
+      "elapsedMs": 11571,
+      "costUsd": 0.1062106,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 1
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/complete-todo-2.jsonl"
+    },
+    {
+      "task": "kestrel-june",
+      "kind": "read",
+      "rep": 3,
+      "pass": false,
+      "detail": "dates: all 5 matched; wrong or missing summary for [2026-06-04, 2026-06-18]",
+      "toolCalls": 5,
+      "toolCallsByName": {
+        "kmagent --help": 1,
+        "kmagent search": 1,
+        "kmagent page": 1,
+        "kmagent sql": 3
+      },
+      "toolErrors": 0,
+      "seenChars": 27158,
+      "maxSeenChars": 14586,
+      "cappedCalls": 1,
+      "returnedChars": 149187,
+      "apiCalls": 6,
+      "tokens": {
+        "input": 12,
+        "cacheCreation": 15257,
+        "cacheRead": 57820,
+        "output": 1551,
+        "contextTotal": 73089,
+        "peakContext": 17189
+      },
+      "elapsedMs": 19980,
+      "costUsd": 0.08812600000000001,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/kestrel-june-3.jsonl"
+    },
+    {
+      "task": "summarize-design",
+      "kind": "read",
+      "rep": 3,
+      "pass": true,
+      "detail": "author, both approaches, count right",
+      "toolCalls": 3,
+      "toolCallsByName": {
+        "kmagent --help": 1,
+        "kmagent page": 1,
+        "kmagent subtree": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 17514,
+      "maxSeenChars": 14586,
+      "cappedCalls": 0,
+      "returnedChars": 17514,
+      "apiCalls": 4,
+      "tokens": {
+        "input": 8,
+        "cacheCreation": 9520,
+        "cacheRead": 26499,
+        "output": 720,
+        "contextTotal": 36027,
+        "peakContext": 11452
+      },
+      "elapsedMs": 11730,
+      "costUsd": 0.05059580000000001,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/summarize-design-3.jsonl"
+    },
+    {
+      "task": "standup-blockers",
+      "kind": "read",
+      "rep": 3,
+      "pass": true,
+      "detail": "all 5 matched",
+      "toolCalls": 5,
+      "toolCallsByName": {
+        "kmagent --help": 1,
+        "kmagent page": 1,
+        "kmagent search": 2,
+        "kmagent sql": 3
+      },
+      "toolErrors": 1,
+      "seenChars": 20590,
+      "maxSeenChars": 14586,
+      "cappedCalls": 2,
+      "returnedChars": 412368,
+      "apiCalls": 6,
+      "tokens": {
+        "input": 12,
+        "cacheCreation": 11677,
+        "cacheRead": 52312,
+        "output": 1263,
+        "contextTotal": 64001,
+        "peakContext": 13609
+      },
+      "elapsedMs": 15816,
+      "costUsd": 0.06982440000000001,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/standup-blockers-3.jsonl"
+    },
+    {
+      "task": "orchard-open-todos",
+      "kind": "read",
+      "rep": 3,
+      "pass": true,
+      "detail": "all 6 matched",
+      "toolCalls": 3,
+      "toolCallsByName": {
+        "kmagent --help": 1,
+        "kmagent data-model": 1,
+        "kmagent page": 1,
+        "kmagent sql": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 32324,
+      "maxSeenChars": 14586,
+      "cappedCalls": 0,
+      "returnedChars": 32324,
+      "apiCalls": 4,
+      "tokens": {
+        "input": 8,
+        "cacheCreation": 16041,
+        "cacheRead": 30525,
+        "output": 537,
+        "contextTotal": 46574,
+        "peakContext": 17973
+      },
+      "elapsedMs": 8778,
+      "costUsd": 0.075655,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/orchard-open-todos-3.jsonl"
+    },
+    {
+      "task": "reading-log-needle",
+      "kind": "read",
+      "rep": 3,
+      "pass": true,
+      "detail": "rating and recommender right",
+      "toolCalls": 2,
+      "toolCallsByName": {
+        "kmagent --help": 1,
+        "kmagent search": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 15244,
+      "maxSeenChars": 14586,
+      "cappedCalls": 0,
+      "returnedChars": 15244,
+      "apiCalls": 3,
+      "tokens": {
+        "input": 6,
+        "cacheCreation": 8219,
+        "cacheRead": 16311,
+        "output": 320,
+        "contextTotal": 24536,
+        "peakContext": 10151
+      },
+      "elapsedMs": 6827,
+      "costUsd": 0.039350199999999995,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/reading-log-needle-3.jsonl"
+    },
+    {
+      "task": "renewal-vendors",
+      "kind": "read",
+      "rep": 3,
+      "pass": true,
+      "detail": "all 3 matched",
+      "toolCalls": 4,
+      "toolCallsByName": {
+        "kmagent --help": 1,
+        "kmagent data-model": 1,
+        "kmagent page": 1,
+        "kmagent backlinks": 1,
+        "kmagent sql": 2
+      },
+      "toolErrors": 0,
+      "seenChars": 30079,
+      "maxSeenChars": 14586,
+      "cappedCalls": 0,
+      "returnedChars": 30079,
+      "apiCalls": 5,
+      "tokens": {
+        "input": 10,
+        "cacheCreation": 14974,
+        "cacheRead": 46988,
+        "output": 607,
+        "contextTotal": 61972,
+        "peakContext": 16906
+      },
+      "elapsedMs": 10790,
+      "costUsd": 0.07538360000000001,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/renewal-vendors-3.jsonl"
+    },
+    {
+      "task": "meetings-with-person",
+      "kind": "read",
+      "rep": 3,
+      "pass": true,
+      "detail": "count right; dates: all 9 matched",
+      "toolCalls": 4,
+      "toolCallsByName": {
+        "kmagent --help": 1,
+        "kmagent data-model": 1,
+        "kmagent page": 1,
+        "kmagent sql": 2
+      },
+      "toolErrors": 0,
+      "seenChars": 30220,
+      "maxSeenChars": 14586,
+      "cappedCalls": 1,
+      "returnedChars": 70224,
+      "apiCalls": 5,
+      "tokens": {
+        "input": 10,
+        "cacheCreation": 15531,
+        "cacheRead": 46540,
+        "output": 1097,
+        "contextTotal": 62081,
+        "peakContext": 17463
+      },
+      "elapsedMs": 14353,
+      "costUsd": 0.082422,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/meetings-with-person-3.jsonl"
+    },
+    {
+      "task": "reading-log-filter",
+      "kind": "read",
+      "rep": 3,
+      "pass": true,
+      "detail": "all 12 matched",
+      "toolCalls": 4,
+      "toolCallsByName": {
+        "kmagent --help": 1,
+        "kmagent page": 1,
+        "kmagent subtree": 1,
+        "bash grep": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 18833,
+      "maxSeenChars": 14586,
+      "cappedCalls": 1,
+      "returnedChars": 253074,
+      "apiCalls": 5,
+      "tokens": {
+        "input": 10,
+        "cacheCreation": 10687,
+        "cacheRead": 37783,
+        "output": 1034,
+        "contextTotal": 48480,
+        "peakContext": 12619
+      },
+      "elapsedMs": 12791,
+      "costUsd": 0.0606646,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/reading-log-filter-3.jsonl"
+    },
+    {
+      "task": "daily-checkin",
+      "kind": "write",
+      "rep": 3,
+      "pass": true,
+      "detail": "structure matches",
+      "toolCalls": 8,
+      "toolCallsByName": {
+        "kmagent --help": 1,
+        "kmagent daily-note": 1,
+        "kmagent create-block": 7,
+        "kmagent subtree": 1
+      },
+      "toolErrors": 2,
+      "seenChars": 17841,
+      "maxSeenChars": 14586,
+      "cappedCalls": 0,
+      "returnedChars": 17841,
+      "apiCalls": 8,
+      "tokens": {
+        "input": 16,
+        "cacheCreation": 10707,
+        "cacheRead": 70646,
+        "output": 1388,
+        "contextTotal": 81369,
+        "peakContext": 12639
+      },
+      "elapsedMs": 17409,
+      "costUsd": 0.0708692,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 4,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/daily-checkin-3.jsonl"
+    },
+    {
+      "task": "edit-rollout-phrase",
+      "kind": "write",
+      "rep": 3,
+      "pass": true,
+      "detail": "phrase replaced",
+      "toolCalls": 4,
+      "toolCallsByName": {
+        "kmagent --help": 1,
+        "kmagent page": 1,
+        "kmagent update-block": 2,
+        "kmagent subtree": 1,
+        "kmagent get-block": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 18894,
+      "maxSeenChars": 14586,
+      "cappedCalls": 0,
+      "returnedChars": 18894,
+      "apiCalls": 5,
+      "tokens": {
+        "input": 10,
+        "cacheCreation": 10428,
+        "cacheRead": 38045,
+        "output": 492,
+        "contextTotal": 48483,
+        "peakContext": 12360
+      },
+      "elapsedMs": 9866,
+      "costUsd": 0.054261000000000004,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 1
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/edit-rollout-phrase-3.jsonl"
+    },
+    {
+      "task": "create-linked-page",
+      "kind": "write",
+      "rep": 3,
+      "pass": true,
+      "detail": "first block ok; 1 link(s) under Vendors",
+      "toolCalls": 7,
+      "toolCallsByName": {
+        "kmagent --help": 1,
+        "kmagent data-model": 1,
+        "kmagent create-block": 5,
+        "kmagent page": 2,
+        "kmagent subtree": 1,
+        "kmagent get-block": 1,
+        "kmagent backlinks": 1
+      },
+      "toolErrors": 1,
+      "seenChars": 30808,
+      "maxSeenChars": 14586,
+      "cappedCalls": 0,
+      "returnedChars": 30808,
+      "apiCalls": 8,
+      "tokens": {
+        "input": 16,
+        "cacheCreation": 15947,
+        "cacheRead": 97730,
+        "output": 1123,
+        "contextTotal": 113693,
+        "peakContext": 17879
+      },
+      "elapsedMs": 18970,
+      "costUsd": 0.09459600000000001,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 3,
+        "modified": 0
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/create-linked-page-3.jsonl"
+    },
+    {
+      "task": "complete-todo",
+      "kind": "write",
+      "rep": 3,
+      "pass": true,
+      "detail": "status is \"done\"; text unchanged",
+      "toolCalls": 4,
+      "toolCallsByName": {
+        "kmagent --help": 1,
+        "kmagent data-model": 1,
+        "kmagent page": 1,
+        "kmagent subtree": 1,
+        "kmagent update-block": 2,
+        "kmagent get-block": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 45877,
+      "maxSeenChars": 18617,
+      "cappedCalls": 0,
+      "returnedChars": 45877,
+      "apiCalls": 5,
+      "tokens": {
+        "input": 10,
+        "cacheCreation": 22543,
+        "cacheRead": 53989,
+        "output": 507,
+        "contextTotal": 76542,
+        "peakContext": 24475
+      },
+      "elapsedMs": 9794,
+      "costUsd": 0.1060598,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 1
+      },
+      "transcript": "tmp/agent-eval/runs/baseline-2026-10-16-sonnet-cli/transcripts/complete-todo-3.jsonl"
+    }
+  ]
+}
