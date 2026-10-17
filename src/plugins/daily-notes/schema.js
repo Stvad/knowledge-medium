@@ -1,1 +1,1 @@
-import{AB as e,OB as t,kB as n}from"../../../chunks/app-CzwJouHi.js";export{t as DAILY_NOTE_TYPE,n as dailyNoteDateProp,e as dailyNoteType};
+import{AB as e,OB as t,kB as n}from"../../../chunks/app-Cdl-VUk4.js";export{t as DAILY_NOTE_TYPE,n as dailyNoteDateProp,e as dailyNoteType};
