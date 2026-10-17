@@ -1,1 +1,1 @@
-import{dd as e,fd as t,ld as n,ud as r}from"../../../../chunks/app-D2mUhz_g.js";export{n as BlockRefError,r as MIN_ID_PREFIX,e as resolveBlockRef,t as shortIds};
+import{dd as e,fd as t,ld as n,ud as r}from"../../../../chunks/app-BWp0cVXd.js";export{n as BlockRefError,r as MIN_ID_PREFIX,e as resolveBlockRef,t as shortIds};
