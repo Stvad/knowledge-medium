@@ -63,7 +63,9 @@ interface AppendedBlock extends AppendedLine {
  *  by {@link renderAppendView} unless the call asks for `format: 'json'`. */
 interface AppendMarkdownView {
   target: ResolvedAgentTarget & AppendedLine
-  /** Created blocks in pre-order. */
+  /** How many blocks the append created. */
+  appended: number
+  /** The first of them in pre-order, up to the outline view's limit. */
   blocks: AppendedBlock[]
 }
 
@@ -75,13 +77,15 @@ const appendedLine = (content: string, shortId: string): AppendedLine => {
 /** `Appended N blocks under <target>  ^short (kind[, created]):`, then the new
  *  blocks as an outline in the read views' line form. */
 export const renderAppendView = (view: AppendMarkdownView): string => {
-  const {target, blocks} = view
+  const {target, appended, blocks} = view
   const facts = target.created ? `${target.kind}, created` : target.kind
   const lines = [
-    `Appended ${plural(blocks.length, 'block')} under ${target.content}  ^${target.shortId} (${facts}):`,
+    `Appended ${plural(appended, 'block')} under ${target.content}  ^${target.shortId} (${facts}):`,
     ...blocks.map(block => `${'  '.repeat(block.depth)}- ${block.content}  ^${block.shortId}`),
   ]
   if ([target, ...blocks].some(line => line.cut > 0)) lines.push(CUT_LEGEND)
+  const rest = appended - blocks.length
+  if (rest > 0) lines.push(`… ${plural(rest, 'more block')} not shown — read them with subtree ^${target.shortId}`)
   return joinDisplayLines(lines)
 }
 
@@ -142,10 +146,12 @@ export const appendMarkdown = async (
       }
     }, agentTxOptions(verb))
 
-    const ids = await displayIds(repo, [target.id, ...blocks.map(block => block.id)])
+    const listed = blocks.slice(0, AGENT_VIEW_DEFAULTS.outlineLimit)
+    const ids = await displayIds(repo, [target.id, ...listed.map(block => block.id)])
     return {
       target: {...target, ...appendedLine(targetContent, ids.get(target.id)!)},
-      blocks: blocks.map(({content, ...block}) => ({...block, ...appendedLine(content, ids.get(block.id)!)})),
+      appended: blocks.length,
+      blocks: listed.map(({content, ...block}) => ({...block, ...appendedLine(content, ids.get(block.id)!)})),
     }
   })
 }

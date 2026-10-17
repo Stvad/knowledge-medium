@@ -48,16 +48,14 @@ interface ChangeRow {
 
 /** The names of the properties whose stored value differs between snapshot
  *  JSON `before` and `after`; a NULL snapshot has none, so every name of the
- *  other one differs. */
-const changedPropertiesSql = (before: string, after: string): string => `
-  (SELECT json_group_array(name.key) FROM (
-      SELECT key FROM json_each(${before}, '$.properties')
-      UNION SELECT key FROM json_each(${after}, '$.properties')
-    ) name
-    WHERE NOT EXISTS (
-      SELECT 1 FROM json_each(${before}, '$.properties') x
-        JOIN json_each(${after}, '$.properties') y ON y.key = x.key AND y.type = x.type AND y.value IS x.value
-       WHERE x.key = name.key))`
+ *  other one differs. Set-based — each bag is read twice, whatever its size. */
+const changedPropertiesSql = (before: string, after: string): string => {
+  const entries = (json: string) => `SELECT key, type, value FROM json_each(${json}, '$.properties')`
+  return `
+  (SELECT json_group_array(key) FROM (
+      SELECT key FROM (${entries(before)} EXCEPT ${entries(after)})
+      UNION SELECT key FROM (${entries(after)} EXCEPT ${entries(before)})))`
+}
 
 /** The SELECT columns of a {@link ChangeRow} whose before snapshot is row
  *  `b`'s and after snapshot row `a`'s — one row_events row, or a block's
@@ -115,9 +113,20 @@ interface BlockChange {
   changed: ChangedField[]
   content?: {before?: string; after?: string}
   parentId?: {before: string | null; after: string | null}
-  /** Property names whose stored value differs. */
+  /** Property names whose stored value differs, the first
+   *  {@link LISTED_PROPERTY_NAMES} of them by name. */
   properties?: string[]
+  /** Further property names that differ, not listed. */
+  propertiesOmitted?: number
 }
+
+export const LISTED_PROPERTY_NAMES = 20
+
+const propertyNameFields = (names: string[]): Pick<BlockChange, 'properties' | 'propertiesOmitted'> =>
+  names.length === 0 ? {} : {
+    properties: names.slice(0, LISTED_PROPERTY_NAMES),
+    ...(names.length > LISTED_PROPERTY_NAMES ? {propertiesOmitted: names.length - LISTED_PROPERTY_NAMES} : {}),
+  }
 
 const describeChange = (row: ChangeRow, contentLimit: number): Omit<BlockChange, 'shortId'> => {
   const before = snapshotOf(row.before_meta)
@@ -139,7 +148,7 @@ const describeChange = (row: ChangeRow, contentLimit: number): Omit<BlockChange,
       ],
       content: after ? {after: content.after} : {before: content.before},
       parentId: after ? {before: null, after: only.parentId} : {before: only.parentId, after: null},
-      ...(properties.length > 0 ? {properties} : {}),
+      ...propertyNameFields(properties),
     }
   }
   const changed: ChangedField[] = []
@@ -162,7 +171,7 @@ const describeChange = (row: ChangeRow, contentLimit: number): Omit<BlockChange,
       ? {content}
       : {}),
     ...(changed.includes('parent') ? {parentId: {before: before.parentId, after: after.parentId}} : {}),
-    ...(properties.length > 0 ? {properties} : {}),
+    ...propertyNameFields(properties),
   }
 }
 

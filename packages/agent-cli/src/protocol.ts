@@ -975,7 +975,7 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   'append-markdown': {
     usage: "kmagent append-markdown <target> [--first | --after <id> | --before <id>] [--one-block] -- '<markdown>'   (or pipe it on stdin)",
     description: 'Insert markdown under <target> in ONE transaction, split into blocks as the app\'s paste does; '
-      + `prints the new blocks. ${WRITE_TARGET_HELP} With --after/--before the anchor must be a child of the target. `
+      + `prints the new blocks (the first ${AGENT_VIEW_DEFAULTS.outlineLimit}). ${WRITE_TARGET_HELP} With --after/--before the anchor must be a child of the target. `
       + 'Markdown goes after `--` (it usually starts with "- ") or on stdin.',
     readOnly: false,
   },

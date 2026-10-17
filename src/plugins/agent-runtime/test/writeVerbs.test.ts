@@ -22,7 +22,7 @@ import { createAgentRuntimeContext, executeCommand } from '../commands'
 import type { AgentRuntimeContext } from '../protocol'
 import { resolveAgentTarget, resolveBlockId, resolvePageTarget } from '../targets'
 import { agentTxOptions } from '../agentWrites'
-import { BLOCK_HISTORY_CONTENT_CHARS, MAX_LISTED_CHANGES } from '../changeHistory'
+import { BLOCK_HISTORY_CONTENT_CHARS, LISTED_PROPERTY_NAMES, MAX_LISTED_CHANGES } from '../changeHistory'
 import { parseMarkdownToBlocks } from '@/utils/markdownParser.js'
 import { AGENT_VIEW_DEFAULTS } from '@knowledge-medium/agent-cli/protocol'
 
@@ -267,6 +267,25 @@ describe('append-markdown', () => {
       .toEqual([true, true, true])
     expect((await liveChildren(NOTE)).map(row => row.content)).toEqual(['existing', 'first', 'second'])
     expect(await agentDescriptionsAfter(since)).toEqual(['agent runtime append-markdown'])
+  })
+
+  it('lists at most the outline limit of the blocks it created, counting the rest', async () => {
+    await seed([{id: NOTE}])
+    const total = AGENT_VIEW_DEFAULTS.outlineLimit + 5
+    const markdown = Array.from({length: total}, (_, i) => `- b${i}`).join('\n')
+    const view = await run({type: 'append-markdown', format: 'json', target: NOTE, markdown}) as {
+      appended: number
+      blocks: Array<{content: string}>
+    }
+    expect(view.appended).toBe(total)
+    expect(view.blocks.map(block => block.content)).toEqual(
+      Array.from({length: AGENT_VIEW_DEFAULTS.outlineLimit}, (_, i) => `b${i}`),
+    )
+    expect((await liveChildren(NOTE))).toHaveLength(total)
+
+    const text = await run({type: 'append-markdown', target: NOTE, markdown}) as string
+    expect(text.split('\n')[0]).toMatch(new RegExp(`^Appended ${total} blocks under`))
+    expect(text.split('\n').at(-1)).toMatch(/^… 5 more blocks not shown — read them with subtree \^/)
   })
 
   it('answers as text in the read views\' line form, bounded and display-safe', async () => {
@@ -653,6 +672,23 @@ describe('block-history', () => {
         [JSON.stringify(properties), JSON.stringify(references), id],
       )
     })
+
+  // Measured ~16ms alone; a rescan of both bags per key took ~9s. The budget
+  // leaves the 6x a loaded gate adds, and fails only a per-key rescan.
+  it('diffs a large property bag set-wise, and lists a bounded number of its names', async () => {
+    await seed([{id: NOTE}])
+    const bag = (v: string) => Object.fromEntries(Array.from({length: 5000}, (_, i) => [`k${String(i).padStart(4, '0')}`, `${v}${i}`]))
+    await writeBags(NOTE, bag('a'), [])
+    await writeBags(NOTE, bag('b'), [])
+    const started = performance.now()
+    const out = await run({type: 'block-history', id: NOTE}) as {
+      events: Array<{changed: string[], properties?: string[], propertiesOmitted?: number}>
+    }
+    expect(performance.now() - started).toBeLessThan(3000)
+    expect(out.events[0].changed).toEqual(['properties'])
+    expect(out.events[0].properties).toEqual(Array.from({length: LISTED_PROPERTY_NAMES}, (_, i) => `k${String(i).padStart(4, '0')}`))
+    expect(out.events[0].propertiesOmitted).toBe(5000 - LISTED_PROPERTY_NAMES)
+  }, 30_000)
 
   it('never loads a property bag or a reference list whole', async () => {
     const huge = 'p'.repeat(50_000)
