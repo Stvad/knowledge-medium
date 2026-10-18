@@ -431,12 +431,20 @@ describe('view-outline', () => {
     /** A property bag that prints about 15k characters with properties: full. */
     const bigProperties = (): BlockProperties =>
       Object.fromEntries(Array.from({length: 50}, (_, i) => [`p${i.toString().padStart(2, '0')}`, 'v'.repeat(300)]))
-    /** The lines the budget counts: the header (one line here) and the rows. */
-    const countedChars = (text: string, rows: number): number =>
-      text.split('\n').slice(0, 1 + rows).reduce((sum, line) => sum + line.length + 1, 0)
+    /** What the first `lines` printed lines take of the output, line breaks
+     *  included: the budget counts the header's lines and the rows'. */
+    const printedChars = (text: string, lines: number): number =>
+      text.split('\n').slice(0, lines).reduce((sum, line) => sum + line.length + 1, 0)
+    const longestLine = (lines: readonly string[]): number => Math.max(...lines.map(line => line.length + 1))
 
     it('keeps the breadth-first prefix whose printed lines fit, and continues by offset from there', async () => {
-      await create({id: ROOT, content: 'Root', properties: bigProperties()})
+      // Ancestors whose titles the display neutralizing lengthens, so the
+      // breadcrumb line prints longer than it is built.
+      const ancestors = Array.from({length: 4}, (_, i) => seriesId('a1', i))
+      for (const [i, id] of ancestors.entries()) {
+        await create({id, parentId: ancestors[i - 1] ?? null, content: 'a\u202E'.repeat(12)})
+      }
+      await create({id: ROOT, parentId: ancestors.at(-1), content: 'Root', properties: bigProperties()})
       const children = Array.from({length: 400}, (_, i) => ({id: seriesId('b1', i), parentId: ROOT, content: `entry ${i}`}))
       await createAll(children.flatMap((child, i) => [child, {id: seriesId('b2', i), parentId: child.id, content: 'under'}]))
 
@@ -450,13 +458,15 @@ describe('view-outline', () => {
       expect(out.nextOffset).toBe(kept)
 
       const text = await view<string>(command)
-      const rowLines = text.split('\n').slice(1, 1 + kept)
+      expect(text.split('\n')[1]).toMatch(/^in: .* ⏎ /)
+      const rowLines = text.split('\n').slice(2, 2 + kept)
       expect(rowLines.map(line => /\^(\w+) {2}\(\+1 child\)$/.exec(line)?.[1])).toEqual(out.rows.map(row => row.shortId))
-      // Counted as printed: the root's line, each row's with its hidden-children
-      // note, and every line break; one more row would not have fit.
-      const counted = countedChars(text, kept)
+      // Counted as printed: the root's lines, breadcrumb included, each row's
+      // with its hidden-children note, and every line break; one more row
+      // would not have fit.
+      const counted = printedChars(text, 2 + kept)
       expect(counted).toBeLessThanOrEqual(AGENT_VIEW_DEFAULTS.outlineChars)
-      expect(counted + Math.max(...rowLines.map(line => line.length + 1))).toBeGreaterThan(AGENT_VIEW_DEFAULTS.outlineChars)
+      expect(counted + longestLine(rowLines)).toBeGreaterThan(AGENT_VIEW_DEFAULTS.outlineChars)
       expect(text).toContain(`continue with offset=${kept}`)
       expect(text).toMatch(new RegExp(`\\n… ${400 - kept} more selected blocks not shown, past the [\\d,]+-character output budget `
         + '— narrow with properties=none, a lower limit or depth, or search with under=\\^00000001\\n'))
@@ -468,21 +478,46 @@ describe('view-outline', () => {
     it('drops the deepest selected blocks first, and counts each as its parent\'s hidden child', async () => {
       await create({id: ROOT, content: 'Root'})
       const children = Array.from({length: 100}, (_, i) => ({id: seriesId('c1', i), parentId: ROOT, content: `c${i}`}))
-      const grandchildren = children.map((child, i) => ({id: seriesId('c2', i), parentId: child.id, content: 'x'.repeat(400)}))
+      const grandchildren = children.flatMap((child, i) =>
+        [0, 1].map(j => ({id: seriesId('c2', 2 * i + j), parentId: child.id, content: 'x'.repeat(400)})))
       await createAll([...children, ...grandchildren])
 
-      const out = await view<OutlineView>({type: 'view-outline', ref: ROOT, depth: 2, limit: 200, format: 'json'})
+      const out = await view<OutlineView>({type: 'view-outline', ref: ROOT, depth: 2, limit: 300, format: 'json'})
       const shown = out.rows.filter(row => row.depth === 2).length
       expect(shown).toBeGreaterThan(0)
-      expect(shown).toBeLessThan(100)
-      expect(out.budgetDropped).toBe(100 - shown)
+      expect(shown).toBeLessThan(200)
+      expect(out.budgetDropped).toBe(200 - shown)
       expect(out.nextOffset).toBeNull()
       expect(out.rows.filter(row => row.depth === 1)).toHaveLength(100)
-      expect(out.rows.map(row => row.id)).toEqual(children.flatMap((child, i) =>
-        i < shown ? [child.id, grandchildren[i].id] : [child.id]))
+      const keptUnder = (i: number) => grandchildren.slice(2 * i, 2 * i + 2).filter((_, j) => 2 * i + j < shown)
+      expect(out.rows.map(row => row.id)).toEqual(children.flatMap((child, i) => [child.id, ...keptUnder(i).map(kept => kept.id)]))
       for (const [i, child] of children.entries()) {
-        expect(out.rows.find(row => row.id === child.id)).toMatchObject({childCount: 1, hiddenChildren: i < shown ? 0 : 1})
+        expect(out.rows.find(row => row.id === child.id)).toMatchObject({childCount: 2, hiddenChildren: 2 - keptUnder(i).length})
       }
+
+      // A parent prints its hidden-children note for the children it keeps
+      // hidden, and is charged no more: one more row would not have fit.
+      const text = await view<string>({type: 'view-outline', ref: ROOT, depth: 2, limit: 300})
+      const counted = printedChars(text, 1 + out.rows.length)
+      expect(counted).toBeLessThanOrEqual(AGENT_VIEW_DEFAULTS.outlineChars)
+      expect(counted + longestLine(text.split('\n').slice(1, 1 + out.rows.length))).toBeGreaterThan(AGENT_VIEW_DEFAULTS.outlineChars)
+    })
+
+    it('counts a child sync adds after its parent was counted, even when the budget drops it', async () => {
+      await create({id: ROOT, content: 'Root'})
+      const children = Array.from({length: 100}, (_, i) => ({id: seriesId('f1', i), parentId: ROOT, content: `c${i}`}))
+      await createAll([...children, ...children.map((child, i) => ({id: seriesId('f2', i), parentId: child.id, content: 'x'.repeat(400)}))])
+      const last = children.at(-1)!.id
+      let added = false
+      const out = await duringReads({
+        after: async sql => {
+          if (added || !sql.includes('AS child_count')) return
+          added = true
+          await create({id: seriesId('f3', 0), parentId: last, content: 'arrived after its parent was counted'})
+        },
+      }, () => view<OutlineView>({type: 'view-outline', ref: ROOT, depth: 2, limit: 300, format: 'json'}))
+      expect(out.budgetDropped).toBeGreaterThan(0)
+      expect(out.rows.find(row => row.id === last)).toMatchObject({childCount: 2, hiddenChildren: 2})
     })
 
     it('keeps the first row whatever its length, so a continuation always moves forward', async () => {

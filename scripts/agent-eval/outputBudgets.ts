@@ -68,9 +68,9 @@ export const OUTPUT_PROBES: readonly OutputProbe[] = [
   },
   {
     id: 'subtree:Reading Log, full',
-    standsFor: 'the call MCP reading-log-filter runs open with: 300 entries with every property, past the outline budget',
+    standsFor: 'the call most MCP reading-log-filter runs open with: 300 entries with every property, past the outline budget',
     run: async ({callTool, pageId}) =>
-      callTool('subtree', {ref: await pageId(READING_LOG_PAGE), depth: 4, limit: 300, properties: 'full'}),
+      callTool('subtree', {ref: await pageId(READING_LOG_PAGE), depth: 5, limit: 300, properties: 'full'}),
     maxChars: 24_300,
   },
   {

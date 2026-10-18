@@ -73,6 +73,9 @@ interface Node {
 
 const isCollapsed = (block: BlockData): boolean => block.properties[isCollapsedProp.name] === true
 
+/** What a row's `(+N children)` counts once `kept` of its children are shown. */
+const hiddenChildCount = (node: Node, kept: number): number => node.childCount - kept - node.cycleChildren
+
 /** Pick what to show breadth-first, so a budget spent on one deep branch never
  *  hides the root's other children: level by level, each level ordered by its
  *  parents' position and then sibling order, until the block budget or the
@@ -112,15 +115,28 @@ const selectNodes = async (
 
 /** Keep the longest prefix of the selection, in its breadth-first order (so
  *  no block is kept without its parent), whose lines fit `budget`, and remove
- *  the rest from `nodes` and from their parents' children. The first is kept
- *  whatever its length, so a continuation always moves forward. Returns how
- *  many were removed. */
+ *  the rest from `nodes` and from their parents' children. `lineChars` leaves
+ *  out a line's `(+N children)` note, which is charged here as it will print:
+ *  in full when a block is kept, one child fewer each time a child of it is.
+ *  The note is plain text the display neutralizing leaves alone, so its length
+ *  adds to the line's. The first is kept whatever its length, so a
+ *  continuation always moves forward. Returns how many were removed. */
 const keepWithinBudget = (nodes: Map<string, Node>, budget: number, lineChars: (node: Node) => number): number => {
+  const hidden = new Map<string, number>()
+  const noteChars = (node: Node, count: number) =>
+    hiddenSuffix({hiddenChildren: count, collapsed: isCollapsed(node.block)}).length
   let left = budget
   let kept = 0
   for (const node of nodes.values()) {
-    left -= lineChars(node)
-    if (left < 0 && kept > 0) break
+    const ownHidden = hiddenChildCount(node, 0)
+    const parent = nodes.get(node.block.parentId ?? '')
+    const parentHidden = parent ? hidden.get(parent.block.id)! : 0
+    const cost = lineChars(node) + noteChars(node, ownHidden)
+      + (parent ? noteChars(parent, parentHidden - 1) - noteChars(parent, parentHidden) : 0)
+    if (cost > left && kept > 0) break
+    left -= cost
+    hidden.set(node.block.id, ownHidden)
+    if (parent) hidden.set(parent.block.id, parentHidden - 1)
     kept += 1
   }
   const dropped = [...nodes.keys()].slice(kept)
@@ -172,16 +188,14 @@ export const buildOutlineView = async (
     collapsed: isCollapsed(node.block),
   })
   const headerChars = headerLines({root: viewRoot, offset}).reduce((sum, line) => sum + displayLineChars(line), 0)
-  // A row is measured with all its children hidden, the longest it can print.
-  const budgetDropped = keepWithinBudget(nodes, OUTPUT_CHARS - headerChars,
-    node => displayLineChars(rowLine(rowFields(node, node.childCount))))
+  const budgetDropped = keepWithinBudget(nodes, OUTPUT_CHARS - headerChars, node => displayLineChars(rowLine(rowFields(node, 0))))
 
   const rootChildren = [...nodes.values()].filter(node => node.depth === 1).map(node => node.block.id)
   const rows: OutlineRow[] = []
   const visit = (parentId: string, childIds: readonly string[]) => {
     for (const id of childIds) {
       const node = nodes.get(id)!
-      rows.push({...rowFields(node, node.childCount - node.children.length - node.cycleChildren), parentId})
+      rows.push({...rowFields(node, hiddenChildCount(node, node.children.length)), parentId})
       visit(id, node.children)
     }
   }
