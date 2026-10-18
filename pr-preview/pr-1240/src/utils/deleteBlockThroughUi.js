@@ -1,1 +1,1 @@
-import{IO as e,LO as t,RO as n,zO as r}from"../../chunks/app-CANR5cgl.js";export{e as BULK_DELETE_CONFIRM_THRESHOLD,t as deleteBlockThroughUi,n as deleteBlocksThroughUi,r as ensureDeletableThroughUi};
+import{IO as e,LO as t,RO as n,zO as r}from"../../chunks/app-B9U5qC87.js";export{e as BULK_DELETE_CONFIRM_THRESHOLD,t as deleteBlockThroughUi,n as deleteBlocksThroughUi,r as ensureDeletableThroughUi};
