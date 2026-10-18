@@ -1,1 +1,1 @@
-import{_0 as e,v0 as t,y0 as n}from"../../chunks/app-B9U5qC87.js";export{e as MIGRATIONS_PAGE_ALIAS,t as getOrCreateMigrationsPage,n as migrationsPageBlockId};
+import{_0 as e,v0 as t,y0 as n}from"../../chunks/app-Dzz_PWEY.js";export{e as MIGRATIONS_PAGE_ALIAS,t as getOrCreateMigrationsPage,n as migrationsPageBlockId};

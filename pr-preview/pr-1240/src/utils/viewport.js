@@ -1,1 +1,1 @@
-import{SN as e,xN as t}from"../../chunks/app-B9U5qC87.js";export{t as MOBILE_BREAKPOINT_QUERY,e as isMobileViewport};
+import{SN as e,xN as t}from"../../chunks/app-Dzz_PWEY.js";export{t as MOBILE_BREAKPOINT_QUERY,e as isMobileViewport};
