@@ -1,1 +1,1 @@
-import{Gb as e,Kb as t,Wb as n}from"../../../../../chunks/app-CjQvmIeJ.js";export{n as isWikilinkDisplayParts,e as resolveWikilinkDisplay,t as wikilinkDisplayDecoratorFacet};
+import{DS as e,ES as t,TS as n}from"../../../../../chunks/app-CANR5cgl.js";export{n as isWikilinkDisplayParts,t as resolveWikilinkDisplay,e as wikilinkDisplayDecoratorFacet};
