@@ -8,7 +8,7 @@
 - **What an agent gets at connect.** The km MCP server adds a memory section to its `instructions`. The memories that apply to the whole workspace come first, in page order: in full while they fit, then one line each. Each scoped memory gets one line. `memory {at}` reads what applies under a block, and `subtree [[Agent memory]]` reads everything.
 - **Scope.** A memory can narrow itself to part of the graph with `agent-memory:applies-to` refs to pages. A memory with no refs applies to the whole workspace.
 - **Agents write memory with the ordinary tools.** `append_markdown` to `[[Agent memory]]` adds a memory, and `edit_block` or `delete_block` changes one. Nothing is reviewed first.
-- **Unattended agents can't write it.** That means dispatch runs and scheduled jobs. Each one pairs with an `unattended` token. The bridge refuses that token `eval` and the other code-running verbs. The app refuses any transaction from it that changes a row in the memory page's subtree, and that includes rows other processors rewrite.
+- **Unattended agents can't write it.** That means dispatch runs and scheduled jobs. Each one pairs with an `unattended` token. The bridge lets that token run only reads and block writes. The app refuses any transaction from it that changes a row in the memory page's subtree, and that includes rows other processors rewrite.
 - **Precedence.** Host files (CLAUDE.md, AGENTS.md) and the current task rank above graph memory, and graph memory ranks above the server's static guide. The memory section says so in words. It goes last in `instructions` and is sized to the client's cap, so the host never cuts into it.
 
 The sections below answer the issue's four questions in order. Each gives one recommendation, the rejected alternatives in a line each, and the facts it rests on.
@@ -170,7 +170,7 @@ Memories are documents. You want to edit, undo, link and read them like any page
 - **Memory goes last** because it is the only section whose size varies. Rank is stated in words in the memory header.
 - **The budget comes from the client.** At initialize, the server reads `clientInfo`. Claude Code below 2.1.296 gets 2,048 chars, and every other client gets 4,096. Memory gets what the fixed sections leave, and the renderer never emits more than that, so the host's silent cut never lands in our text.
 - **On a 2,048-char host** a spawned run has about 228 chars, enough for a one-line pointer such as *"Graph memory: 4 memories apply here. Read them: memory."* An ambient channel session has about 7, so it gets nothing. Upgrading Claude Code gives both the full section.
-- **One owner.** `createGraphMcpServer` becomes an async factory. It fetches the memory, reads `clientInfo`, and composes the sections, and the entrypoints just await it.
+- **One owner.** `createGraphMcpServer` becomes an async factory that fetches the memory before connecting. It composes the instructions in its own initialize handler. The SDK stores instructions in the `Server` constructor and records `clientInfo` only while handling initialize, so that handler is the only place the budget can be chosen.
 - **Dispatch's protocol rules** (the reply shape, never writing the watcher wikilink) live in the per-run prompt. They are part of the task, so they outrank memory.
 - **Unverified:** I don't know whether Codex surfaces `instructions`. If it doesn't, the Codex executor also gets the workspace rendering in its prompt.
 
@@ -187,8 +187,8 @@ Memories are documents. You want to edit, undo, link and read them like any page
 **Recommendation: attended agents write memory freely; unattended agents can't, and the app enforces it.**
 
 1. **Attended sessions write memory like any page,** with nothing gating them. This is the beads trade. A person is watching, the page is a normal page, the index shows each memory's age, and undo works.
-2. **An `unattended` token scope.** It's a third value beside `read-write` and `read-only`, chosen when pairing. Agent-dispatch's setup mints one for the daemon by default, and a scheduled job on the plain km server uses one too. The bridge server does two things with it:
-   - It refuses this scope `eval`, `sql execute`, `install-extension` and `run-action`, the same way it refuses read-only tokens their writes.
+2. **An `unattended` token scope.** It's a third value beside `read-write` and `read-only`, chosen when pairing. Agent-dispatch's setup mints one for the daemon by default, and a scheduled job on the plain km server uses one too. An existing daemon keeps the read-write token it was paired with. So the daemon refuses to start unless its token's scope is `unattended`, and the message says how to re-pair. The bridge server does three things with the scope:
+   - It lets this scope run only the read verbs and the block writes the MCP server exposes, and refuses everything else, the way it refuses read-only tokens their writes. It's an allowlist, so any other verb is refused by default. That includes a verb added later, and one that runs code indirectly, such as `enable-extension`, which approves an extension's current source and loads it.
    - It stamps each command it delivers with the sending token's scope. The server sets that stamp itself, so an agent can neither forge it nor strip it.
    - It delivers an unattended token's commands only to a tab that registers support for the scope. A tab running an app version from before this feature gets none, so it can never run them without the guard.
 3. **One check, after everything else in the transaction.** The app runs an unattended command's transactions with `actor: 'unattended'`. The executor hands its verbs a repo facade that sets this, the same way `repo.undoGroup` injects `groupId`. A new terminal commit-guard phase in core runs after the same-tx processors. The agent-runtime plugin's guard there refuses any unattended transaction that changed a row whose ancestry, before or after the transaction, includes the memory page, or the page itself. The message is: *"Unattended agents can't change graph memory. Suggest it in your reply instead."* Running last, over the rows actually written, closes three gaps at once:
@@ -199,7 +199,7 @@ Memories are documents. You want to edit, undo, link and read them like any page
 
 **The boundary, stated plainly.** The check bounds what an unattended token can do through the bridge. It doesn't bound a run that can execute code or write files on the machine. Such a run can read another profile's token from the token store, or edit the daemon's config or its hooks, so it carries the user's full authority. Today that means three kinds of run:
 - a Claude run granted `Bash`, `Write` or `Edit`, including through inherited settings (#1287);
-- a Codex run with `networkAccess: true`, because Codex always runs shell commands and its sandbox reads the whole disk;
+- a Codex run with `networkAccess: true`, or with `sandbox: "workspace-write"`. Codex always runs shell commands, and its sandbox reads the whole disk. A writable one can also replace the token the km MCP server reads before each command;
 - an ambient channel session, which is attended, so its token is the user's choice.
 
 **Accepted residual risks.**
@@ -246,15 +246,15 @@ What doesn't carry over: beads' private sync, since graph memory is readable by 
 
 1. **Seeds and the page.** The type and property seeds, the system page, and the tag-on-entry processor.
 2. **Reading.** The `agent-memory` verb and its renderer, the `memory` tool and CLI verb, and the `memory` guide topic.
-3. **Connect-time injection.** `createGraphMcpServer` becomes async, with the `clientInfo` budget and memory last.
+3. **Connect-time injection.** `createGraphMcpServer` becomes async and composes the instructions in an initialize handler, with the `clientInfo` budget and memory last.
 4. **The unattended scope and the gate.** The scope, the server's refusals and its scope stamp, the actor facade, the terminal commit-guard phase, and the memory guard. Each needs a test that fails when its clause is removed:
    - a rename cascade into memory;
    - an inlined-delete cascade;
    - each write verb, including a move onto the page and off it, and a restore;
-   - the scope's refusal of `eval` and the rest;
+   - the scope's refusal of every verb outside its allowlist, `enable-extension` included;
    - a forged scope field in a command payload being ignored;
    - an unattended command never reaching a tab that doesn't register the scope.
-5. **Dispatch.** The daemon pairs with an unattended token by default, `decidePending` skips mentions inside memory, the location appendix carries its suggestion line, and the Codex `instructions` check gets done.
+5. **Dispatch.** The daemon pairs with an unattended token by default and refuses to start with any other, `decidePending` skips mentions inside memory, the location appendix carries its suggestion line, and the Codex `instructions` check gets done.
 
 ## Decisions for Vlad
 
