@@ -4,7 +4,8 @@ import { PAGE_TYPE } from '@/data/blockTypes'
 import { srsNextReviewDateProp } from '@/plugins/srs-rescheduling/schema'
 import type { RoamTodoState } from '@/plugins/todo/schema'
 import { applyHeading, collectContentRefUids, rewriteRoamContent } from './content'
-import { resolveDailyPage, roamBlockId } from './ids'
+import { roamBlockId } from './blockIds'
+import { resolveDailyPage } from './ids'
 import { getExtraRoamProps, type RoamBlock, type RoamExport, type RoamPage, type RoamUidRef } from './types'
 import {
   collectAliasesFromPropertyValues,

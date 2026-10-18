@@ -27,14 +27,15 @@ import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { EXTENSION_TYPE } from '@/data/blockTypes'
-import { aliasesProp } from '@/data/properties'
+import { aliasesProp, typesProp } from '@/data/properties'
 import { seedProperty } from '@/data/propertySeeds'
 import { Repo } from '@/data/repo'
 import { aliasSeatSeed, computeAliasSeatId } from '@/data/targets'
 import { propertyDefinitionBlockId } from '@/data/definitionSeeds'
 import { propertyFieldContent } from '@/data/propertyChildren'
-import { dailyNoteBlockId, dailyNotesDataExtension } from '@/plugins/daily-notes'
-import { definitionSeedsFacet, projectedPropertyDefinitionsFacet } from '@/data/facets.js'
+import { dailyNoteBlockId } from '@/plugins/daily-notes/dailyNotes'
+import { dailyNotesDataExtension } from '@/plugins/daily-notes/dataExtension'
+import { definitionSeedsFacet, projectedPropertyDefinitionsFacet, queriesFacet } from '@/data/facets.js'
 import { resolveFacetRuntimeSync, type AppExtension } from '@/facets/facet.js'
 import { kernelDataExtension } from '@/data/kernelDataExtension.js'
 import { referencesDataExtension } from '../dataExtension.ts'
@@ -43,6 +44,7 @@ import {
   CLEANUP_ORPHAN_ALIASES_PROCESSOR,
   PARSE_REFERENCES_PROCESSOR,
   isExtensionSource,
+  parseReferencesProcessor,
 } from '../referencesProcessor.ts'
 
 interface Harness {
@@ -132,6 +134,68 @@ const flush = async (delayMs = 0) => {
 }
 
 describe('parseReferences — basic alias creation', () => {
+  it('finishes a children-backed alias write with its originating definitions after two workspace switches', async () => {
+    const {repo, h} = env
+    await h.db.execute(
+      `INSERT INTO workspaces (id, name, owner_user_id, create_time, update_time,
+        encryption_mode, properties_migration) VALUES (?, 'test', 'user-1', 1, 1, 'none', 'children')`,
+      [WS],
+    )
+    await repo.tx(tx => tx.create({id: 'late-src', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'plain'}),
+      {scope: ChangeScope.BlockDefault})
+    await flush()
+    const expected = [aliasesProp, typesProp].map(schema => {
+      const resolved = repo.propertySchemaResolverFor(WS).resolve(schema)
+      if (resolved.status !== 'resolved') throw new Error('missing originating definition')
+      return {fieldId: resolved.schema.fieldId, content: schema === aliasesProp ? 'LateOrigin' : 'page'}
+    })
+    let entered!: () => void
+    let release!: () => void
+    const reading = new Promise<void>(resolve => { entered = resolve })
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const queries = repo.facetRuntime!.read(queriesFacet)
+    const lookup = queries.get('core.aliasLookup')
+    if (!lookup) throw new Error('missing alias lookup query')
+    repo.__setQueriesForTesting([...queries.values()].map(query => query !== lookup ? query : {
+      ...query,
+      resolve: async (args, ctx) => {
+        if (args.alias === 'LateOrigin') {
+          entered()
+          await gate
+        }
+        return lookup.resolve(args, ctx)
+      },
+    }))
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      await repo.tx(tx => tx.update('late-src', {content: 'see [[LateOrigin]]'}),
+        {scope: ChangeScope.BlockDefault})
+      await reading
+      repo.setActiveWorkspaceId('ws-next')
+      await repo.whenPropertyDefinitionsReady('ws-next')
+      repo.setActiveWorkspaceId('ws-last')
+      await repo.whenPropertyDefinitionsReady('ws-last')
+      expect(repo.propertySchemaResolverFor(WS).resolve(aliasesProp).status).toBe('identity-unavailable')
+      release()
+      await flush()
+      expect(errors).not.toHaveBeenCalled()
+      const source = await env.read('late-src')
+      expect(JSON.parse(source!.references_json)).toContainEqual(expect.objectContaining({id: aliasId('LateOrigin')}))
+      const children = await h.db.getAll<{fieldId: string; content: string}>(
+        `SELECT f.reference_target_id AS fieldId, v.content FROM blocks f
+         JOIN blocks v ON v.parent_id = f.id
+         WHERE f.parent_id = ? AND f.is_field_form = 1 AND f.deleted = 0 AND v.deleted = 0`,
+        [aliasId('LateOrigin')],
+      )
+      for (const value of expected) expect(children).toContainEqual(value)
+    } finally {
+      release()
+      await repo.awaitProcessors()
+      repo.__setQueriesForTesting([...queries.values()])
+      errors.mockRestore()
+    }
+  })
+
   it('writes [[foo]] → creates alias target + source.references contains it', async () => {
     await env.repo.tx(
       tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'I link to [[foo]]'}),
@@ -625,7 +689,7 @@ describe('parseReferences — schema-swap reprojection', () => {
         id: 'src-other', workspaceId: OTHER_WS, parentId: null, orderKey: 'a0',
         properties: {reviewer: 'target-b'},
       }),
-      {scope: ChangeScope.BlockDefault},
+      {scope: ChangeScope.BlockDefault, allowUnloadedWorkspace: true},
     )
     await flush()
 
@@ -2166,7 +2230,7 @@ describe('parseReferences — workspace-switch reprojection', () => {
         orderKey: 'a0',
         properties: {reviewer: 'target-a'},
       }),
-      {scope: ChangeScope.BlockDefault},
+      {scope: ChangeScope.BlockDefault, allowUnloadedWorkspace: true},
     )
     await flush()
     await env.h.db.execute(`UPDATE blocks SET references_json = '[]' WHERE id = ?`, ['srcB'])
@@ -2311,6 +2375,15 @@ describe('parseReferences — property field rows reference their definition, ne
     // left implied by the active-workspace case above, because that is exactly
     // the difference a recognition-based suppression could not survive.
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    // This fixture deliberately exercises parsing without the target registry.
+    env.repo.__setProcessorsForTesting([{
+      ...parseReferencesProcessor,
+      apply: async (event, ctx) => {
+        const backgroundRepo = Object.create(ctx.repo) as Repo
+        backgroundRepo.tx = (fn, opts) => ctx.repo.tx(fn, {...opts, allowUnloadedWorkspace: true})
+        await parseReferencesProcessor.apply(event, {...ctx, repo: backgroundRepo})
+      },
+    }])
     const BG_WS = 'ws-bg'
     await sharedDb.db.execute(
       `INSERT INTO workspaces
@@ -2339,7 +2412,7 @@ describe('parseReferences — property field rows reference their definition, ne
         content: propertyFieldContent(bgFieldId),
       })
       await tx.create({id: 'bg-value', workspaceId: BG_WS, parentId: fieldRowId, orderKey: 'a0', content: 'done'})
-    }, {scope: ChangeScope.BlockDefault})
+    }, {scope: ChangeScope.BlockDefault, allowUnloadedWorkspace: true})
     await flush(4000)
 
     expect(errorSpy, `processor crashed: ${errorSpy.mock.calls.map(c => c.join(' ')).join('; ')}`)

@@ -151,6 +151,20 @@ export class WorkspaceMismatchError extends DataLayerError {
   }
 }
 
+/** A local write targeted a workspace outside the tx's captured registry. */
+export class WorkspaceRegistryUnavailableError extends DataLayerError {
+  constructor(
+    public readonly registryWorkspaceId: string | null,
+    public readonly attemptedWorkspaceId: string,
+  ) {
+    super(
+      `workspace registry for ${attemptedWorkspaceId} is not loaded for this transaction `
+      + `(captured open workspace: ${registryWorkspaceId ?? 'none'}). `
+      + 'Open the target workspace and retry, or use allowUnloadedWorkspace for a deliberate background write.',
+    )
+  }
+}
+
 /** `tx.afterCommit` was called before any write happened in the tx, so
  *  no workspace has been pinned. CommittedEvent.workspaceId would be
  *  null, which the type contract forbids. */
@@ -296,6 +310,7 @@ const ERROR_NAMES: ReadonlyArray<readonly [string, {prototype: object}]> = [
   ['ParentWorkspaceMismatchError', ParentWorkspaceMismatchError],
   ['ParentDeletedError', ParentDeletedError],
   ['WorkspaceMismatchError', WorkspaceMismatchError],
+  ['WorkspaceRegistryUnavailableError', WorkspaceRegistryUnavailableError],
   ['WorkspaceNotPinnedError', WorkspaceNotPinnedError],
   ['PropertySchemaIdentityError', PropertySchemaIdentityError],
   ['PropertySchemaScopeMismatchError', PropertySchemaScopeMismatchError],

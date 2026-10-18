@@ -1468,13 +1468,14 @@ describe('retagBlocks', () => {
     env = await setup()
     const typeId = await createTypeBlock(env.repo, {workspaceId: WS, label: 'Task', propertySchemaIds: []})
 
-    // Plant a real block in a foreign workspace by bootstrapping its
-    // Types page — that creates a kernel page row under `WS_OTHER`.
-    // The page id is a perfectly valid block id from retagBlocks's
-    // perspective, but its workspaceId is `WS_OTHER` (not `WS`).
+    // Plant the deterministic Types-page id as a foreign fixture row. It is
+    // a valid block id from retagBlocks's perspective, but its workspaceId
+    // is `WS_OTHER` (not `WS`).
     const WS_OTHER = 'ws-other'
-    await getOrCreateTypesPage(env.repo, WS_OTHER)
     const foreignBlockId = typesPageBlockId(WS_OTHER)
+    await env.repo.tx(async tx => {
+      await tx.create({id: foreignBlockId, workspaceId: WS_OTHER, parentId: null, orderKey: 'a0', content: 'Types'})
+    }, {scope: ChangeScope.BlockDefault, allowUnloadedWorkspace: true})
     const foreignRow = await env.repo.load(foreignBlockId)
     expect(foreignRow?.workspaceId).toBe(WS_OTHER)
 

@@ -22,8 +22,10 @@ import {
   type CommandStatusResponse,
   type EventsNextResponse,
   type KnownCommand,
+  namedWorkspaceId,
   UNKNOWN_TOKEN_MARKER,
   type WhoamiInfo,
+  neutralizeDisplayText,
 } from './protocol.js'
 
 export { UNKNOWN_TOKEN_MARKER } from './protocol.js'
@@ -370,6 +372,11 @@ export interface BridgeClientOptions {
   timeoutMs?: number
   /** Poll cadence while waiting for a command result. */
   pollIntervalMs?: number
+  /** Workspace to name on every command that names none. Unpinned, such a
+   *  command acts on whichever workspace the user's most recently focused app
+   *  tab has open, which moves as they navigate; an unattended consumer pins
+   *  to stay put. Defaults to AGENT_RUNTIME_WORKSPACE. */
+  workspaceId?: string
 }
 
 export interface BridgeClient {
@@ -394,6 +401,7 @@ export const createBridgeClient = (options: BridgeClientOptions = {}): BridgeCli
   // AGENT_RUNTIME_PROFILE is the documented shell default; non-CLI
   // consumers (daemon, MCP server) must honor it too, not just cli.ts.
   const profileName = normalizeProfileName(options.profile ?? process.env.AGENT_RUNTIME_PROFILE ?? '')
+  const pinnedWorkspaceId = (options.workspaceId ?? process.env.AGENT_RUNTIME_WORKSPACE ?? '').trim() || undefined
   const defaultTimeoutMs = options.timeoutMs ?? 30_000
   const pollIntervalMs = options.pollIntervalMs ?? 100
 
@@ -440,9 +448,12 @@ export const createBridgeClient = (options: BridgeClientOptions = {}): BridgeCli
   }
 
   const submitCommand = async (command: KnownCommand): Promise<string> => {
+    const pinned = pinnedWorkspaceId && namedWorkspaceId(command) === null
+      ? {...command, workspaceId: pinnedWorkspaceId}
+      : command
     const response = await authedRequest<{id: string}>(`${bridgeUrl}/runtime/commands`, {
       method: 'POST',
-      body: JSON.stringify(command),
+      body: JSON.stringify(pinned),
     })
 
     return response.id
@@ -461,7 +472,7 @@ export const createBridgeClient = (options: BridgeClientOptions = {}): BridgeCli
       }
       if (command.status === 'failed') {
         const error = command.result?.error
-        throw new Error(error?.message ?? `Runtime command ${id} failed`)
+        throw new Error(neutralizeDisplayText(error?.message ?? `Runtime command ${id} failed`))
       }
 
       await sleep(pollIntervalMs)
@@ -479,7 +490,9 @@ export const createBridgeClient = (options: BridgeClientOptions = {}): BridgeCli
 
     if (!result?.ok) {
       const error = result?.error
-      throw new Error(error?.message ?? 'Runtime command failed')
+      // App error text can echo stored ids and names: neutralize it here, the
+      // one place a bridge error becomes a CLI / MCP message.
+      throw new Error(neutralizeDisplayText(error?.message ?? 'Runtime command failed'))
     }
 
     return result.value

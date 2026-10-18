@@ -575,6 +575,7 @@ describe('references.retargetMergedBlockReferences', () => {
 
 
     it('retargets the value child itself, not just the owner cell', async () => {
+      env.repo.setActiveWorkspaceId(WS)
       await env.h.db.execute(
         `INSERT OR REPLACE INTO workspaces
            (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)

@@ -87,6 +87,7 @@ const runCase = async (
   const repo = createTestRepo({
     db: sharedDb.db, user: {id: 'user-1'}, newId: () => crypto.randomUUID(), startSyncObserver: false,
   }).repo
+  repo.setActiveWorkspaceId('ws-1')
 
   await repo.tx(async tx => {
     await tx.create({id: 'parent', workspaceId: 'ws-1', parentId: null, orderKey: 'a0', content: 'Parent'})
@@ -97,8 +98,11 @@ const runCase = async (
   //    suite) never grows structural children on its own — keeps the two
   //    dimensions independent regardless of flip state. ──
   if (cellState === 'orphanKey') {
-    await repo.tx(tx => tx.update('child', {properties: {'unregistered-note': noise}}),
-      {scope: ChangeScope.BlockDefault})
+    await sharedDb.db.writeTransaction(tx => tx.execute(
+      'UPDATE blocks SET properties_json = ?, updated_at = updated_at + 1 WHERE id = ?',
+      [JSON.stringify({'unregistered-note': noise}), 'child'],
+    ))
+    await repo.load('child')
   }
 
   // ── structural dimension, independent of the cell ──

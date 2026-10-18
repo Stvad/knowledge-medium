@@ -28,7 +28,7 @@ import {
   layoutSlotsFromRows,
   panelBlockIds,
 } from '@/utils/panelLayoutProjection'
-import { type User } from '@/data/api'
+import { WorkspaceRegistryUnavailableError, type User } from '@/data/api'
 import { activePanelIdProp, panelMaximizedProp, topLevelBlockIdProp } from '@/data/properties'
 
 const WS = 'ws-1'
@@ -523,23 +523,20 @@ describe('navigationVerb (intent seam)', () => {
     })
   })
 
-  it('lands in the workspace captured at call time even if the active workspace changes mid-flight', async () => {
-    // A before-observer flips the active workspace (simulating the user
-    // switching workspaces while an async observer/confirmation runs). The
-    // navigation must still land in the workspace that originated it (captured
-    // up front in navigate()), not the newly-active one.
+  it('refuses a navigation whose captured workspace closes before its write starts', async () => {
     env.repo.setRuntimeContributions(navigationVerb.beforeFacet, 'test-nav', [
       () => { env.repo.setActiveWorkspaceId('ws-other') },
     ])
-
-    // No workspaceId on the input → captured from repo.activeWorkspaceId (WS).
-    await navigate(env.repo, {blockId: 'b-captured', target: 'main'})
-
-    // currentPanelBlockIds resolves WS's layout session — so this passing proves
-    // the nav landed in WS, not the flipped 'ws-other'.
-    await vi.waitFor(async () => {
-      expect(await currentPanelBlockIds()).toEqual(['b-captured'])
-    })
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      expect(await navigate(env.repo, {blockId: 'b-captured', target: 'main'})).toBeNull()
+      expect(error).toHaveBeenCalledWith('[navigation] navigate failed',
+        expect.any(WorkspaceRegistryUnavailableError))
+    } finally {
+      error.mockRestore()
+    }
+    expect(await env.h.db.getAll('SELECT id FROM blocks WHERE workspace_id = ?', [WS]))
+      .toEqual([])
   })
 })
 
@@ -587,34 +584,33 @@ describe('navigationIntentVerb (intent policy seam)', () => {
       .toEqual(goTo({blockId: 'b-cmd', target: 'main'}))
   })
 
-  it('carries the gesture workspace into a navigate decision that omitted one (sync active switch)', async () => {
+  it('keeps the gesture workspace and refuses its write after a sync active switch', async () => {
     stubViewport(false)
-    // A policy impl that flips the active workspace synchronously during
-    // resolution and returns a navigate WITHOUT a workspaceId. The navigation
-    // must still land in the workspace the gesture captured (WS), not the
-    // flipped one — `resolveNavigationIntent` carries it.
     env.repo.setRuntimeContributions(navigationIntentVerb.implFacet, 'test-policy', [
       gesture => {
         env.repo.setActiveWorkspaceId('ws-other')
         return goTo({blockId: gesture.blockId, target: 'main'})
       },
     ])
-
-    await navigateFromGlobalCommand(env.repo, {blockId: 'b-ws'})
-
-    // currentPanelBlockIds resolves WS's layout session — passing proves the nav
-    // landed in WS despite the active flip and the omitted workspaceId.
-    await vi.waitFor(async () => {
-      expect(await currentPanelBlockIds()).toEqual(['b-ws'])
-    })
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      expect(await navigateFromGlobalCommand(env.repo, {blockId: 'b-ws'})).toBeNull()
+      expect(error).toHaveBeenCalledWith('[navigation] navigate failed',
+        expect.any(WorkspaceRegistryUnavailableError))
+    } finally {
+      error.mockRestore()
+    }
+    expect(await env.h.db.getAll('SELECT id FROM blocks WHERE workspace_id = ?', [WS]))
+      .toEqual([])
   })
-
   it('the read probe honors a policy-retargeted workspace (read/write aligned)', async () => {
     stubViewport(false)
     // Seed a main panel in each workspace via navigate (creates each layout
     // session properly). WS shows b-ws1; ws-2 shows b-ws2.
     await navigate(env.repo, {target: 'main', blockId: 'b-ws1', workspaceId: WS})
+    env.repo.setActiveWorkspaceId('ws-2')
     await navigate(env.repo, {target: 'main', blockId: 'b-ws2', workspaceId: 'ws-2'})
+    env.repo.setActiveWorkspaceId(WS)
 
     // Policy retargets navigator gestures to ws-2; the read-side probe must
     // anchor on that retargeted workspace, matching where the write would land

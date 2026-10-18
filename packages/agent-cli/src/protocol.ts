@@ -23,18 +23,43 @@ import {z} from 'zod'
  *  across versions (an older bridge may still be running). */
 export const UNKNOWN_TOKEN_MARKER = 'Agent token is not registered with the local bridge.'
 
-/** What the bridge returns for a token it has no client for. Lives here, not
- *  in the server, because the CLI appends the half only IT can know — which
- *  profiles are actually paired on this machine. */
-export const unknownTokenMessage = [
-  UNKNOWN_TOKEN_MARKER,
-  'Open or focus the app tab for the same workspace, then retry; if needed, run `kmagent connect` to pair a fresh token.',
-  'Common causes: the bridge restarted, the app tab disconnected or idled out, the token was revoked, or the CLI is using a token/profile from another workspace or browser profile.',
-].join(' ')
+/** What the bridge can see when no connected tab lists a token. Names no
+ *  user: the 401 it feeds needs no bridge secret, unlike /health's client
+ *  listing. */
+export interface UnknownTokenFacts {
+  connectedTabs: number
+  /** Where the user whose tab last listed this token stands: no tab has
+   *  listed it since the bridge started, or a connected tab is / no connected
+   *  tab is signed in as that user. */
+  tokenUser: 'unseen' | 'connected' | 'not-connected'
+}
+
+/** What the bridge returns for a token no connected tab lists. States what
+ *  the bridge can see rather than guessing at a cause. Built here, not in the
+ *  server, because the CLI appends the half only IT can know — which profiles
+ *  are actually paired on this machine. */
+export const unknownTokenMessage = ({connectedTabs, tokenUser}: UnknownTokenFacts): string => {
+  if (connectedTabs === 0) {
+    return `${UNKNOWN_TOKEN_MARKER} No app tab is connected to it: open the app in the browser profile and at the app address this token was minted in.`
+  }
+  const tabs = `${connectedTabs} app ${connectedTabs === 1 ? 'tab is' : 'tabs are'} connected.`
+  const user = {
+    unseen: 'No tab has listed this token since the bridge started.',
+    connected: "A connected tab is signed in as this token's user but does not list it. A tab lists the "
+      + 'tokens stored in its own browser profile at its own app address, minus revoked ones; a tab '
+      + "running an app version older than this bridge lists only its open workspace's (reload it).",
+    'not-connected': "No connected tab is signed in as this token's user.",
+  }[tokenUser]
+  return `${UNKNOWN_TOKEN_MARKER} ${tabs} ${user}`
+}
 
 export const tokenScopeSchema = z.enum(['read-write', 'read-only'])
 export type TokenScope = z.infer<typeof tokenScopeSchema>
 
+/** Who a tab is signed in as and which workspace it has open. On a token
+ *  (`TokenAudience`), `workspaceId` is the open workspace of the tab a call
+ *  naming no workspace goes to — the default, not a limit: a token reaches
+ *  every workspace of its user. */
 export const audienceSchema = z.object({
   userId: z.string().nullable(),
   workspaceId: z.string().nullable(),
@@ -60,6 +85,15 @@ export const commandPayloadSchema = z.looseObject({
 })
 export type CommandPayload = z.infer<typeof commandPayloadSchema>
 
+/** The workspace a command names — its `workspaceId`, or a root create-block's
+ *  `data.workspaceId` — which the bridge routes it to a tab for, and which a
+ *  pinned client leaves alone. */
+export const namedWorkspaceId = (payload: object): string | null => {
+  const named = (value: unknown) => typeof value === 'string' && value.trim() !== '' ? value.trim() : null
+  const {workspaceId, data} = payload as {workspaceId?: unknown, data?: {workspaceId?: unknown} | null}
+  return named(workspaceId) ?? named(data?.workspaceId)
+}
+
 // ---------- Known command discriminated union ----------
 //
 // Each branch below pins the body shape for a specific kernel handler, so
@@ -74,6 +108,12 @@ export type CommandPayload = z.infer<typeof commandPayloadSchema>
 // always sees it.
 
 const commandIdField = {commandId: z.string().optional()}
+
+/** Write verbs' id fields (`id`, `parentId`, `position.siblingId`) are already
+ *  stored ids: used exactly, never read as a ref. km-mcp sends it after it has
+ *  resolved them for its write guard, so the two cannot diverge; it is also
+ *  the one lossless way to name an odd stored id. */
+const exactIdsField = {exactIds: z.boolean().optional()}
 
 // Variants are `looseObject` so the kernel's field-access fallbacks (e.g.
 // `command.id ?? command.actionId`) keep working through the narrowing:
@@ -123,6 +163,11 @@ export const sqlCommandSchema = z.looseObject({
    *  (or false) keeps the guard on; true is a deliberate, one-call opt-out
    *  (the CLI's `--allow-synced-write`). */
   allowSyncedWrite: z.boolean().optional(),
+  /** Bound an `all` read for an agent: return `{rows, truncated,
+   *  truncatedCells}` with at most this many rows (a SELECT stops at the
+   *  bound) and every string cell cut to a fixed length (marked). Unset
+   *  returns the bare row array. */
+  maxRows: z.number().int().positive().optional(),
   ...commandIdField,
 })
 
@@ -144,7 +189,8 @@ export const getSubtreeCommandSchema = z.looseObject({
 
 export const createBlockCommandSchema = z.looseObject({
   type: z.literal('create-block'),
-  parentId: z.string().optional(),
+  // Absent or null: a top-level block, as move-block takes it.
+  parentId: z.string().nullable().optional(),
   // position, content, properties forwarded verbatim (looseObject).
   ...commandIdField,
 })
@@ -178,7 +224,11 @@ export const updateBlockCommandSchema = z.looseObject({
   blockId: z.string().optional(),
   content: z.string().optional(),
   replaceProperties: z.boolean().optional(),
+  /** Compare-and-set: refuse the whole update unless the block's content is
+   *  still exactly this — what the caller read before deciding to write. */
+  expectedContent: z.string().optional(),
   // properties forwarded verbatim (looseObject).
+  ...exactIdsField,
   ...commandIdField,
 })
 
@@ -195,6 +245,78 @@ export const moveBlockCommandSchema = z.looseObject({
   blockId: z.string().optional(),
   parentId: z.string().nullable(),
   position: moveBlockPositionSchema,
+  ...exactIdsField,
+  ...commandIdField,
+})
+
+/** How a bounded answer comes back: the read views and append-markdown. */
+const formatField = {
+  format: z.enum(['text', 'json']).optional().describe(
+    'text (default): compact markdown-ish rendering. json: the same bounded view, structured.',
+  ),
+}
+
+/** Parse markdown with the app paste parser and insert it under a target, in
+ *  one transaction. `target` is a block id / id prefix, a `[[Page]]` or a date
+ *  expression (a missing page or daily note is created). `position` places the
+ *  inserted run among the target's children (default last). */
+export const appendMarkdownCommandSchema = z.looseObject({
+  type: z.literal('append-markdown'),
+  target: z.string(),
+  markdown: z.string(),
+  position: moveBlockPositionSchema.optional(),
+  shape: z.enum(['outline', 'block']).optional(),
+  ...formatField,
+  ...exactIdsField,
+  ...commandIdField,
+})
+
+/** Replace the one occurrence of `old` in a block's content with `new`,
+ *  against the content current inside the writing transaction. */
+export const editBlockCommandSchema = z.looseObject({
+  type: z.literal('edit-block'),
+  id: z.string(),
+  old: z.string(),
+  new: z.string(),
+  ...exactIdsField,
+  ...commandIdField,
+})
+
+/** Get-or-create a page by `name` (as a `[[name]]` wikilink would), or a daily
+ *  note by `date` expression. Exactly one of the two. */
+export const createPageCommandSchema = z.looseObject({
+  type: z.literal('create-page'),
+  name: z.string().optional(),
+  date: z.string().optional(),
+  ...commandIdField,
+})
+
+/** Recent local transactions of the active workspace, newest first, with the
+ *  blocks each changed. Agent-bridge writes only unless `includeUser`.
+ *  `since` is epoch ms or an ISO timestamp. */
+export const recentChangesCommandSchema = z.looseObject({
+  type: z.literal('recent-changes'),
+  since: z.union([z.number(), z.string()]).optional(),
+  limit: z.number().int().positive().optional(),
+  includeUser: z.boolean().optional(),
+  ...commandIdField,
+})
+
+/** The full id an id-typed field resolves to (`^short`, `((id))`, a unique
+ *  prefix) — what a write verb would act on. A ref matching nothing comes back
+ *  as the id its syntax names (`^x` / `((x))` → `x`), else as given. Lets a
+ *  caller check the same block the write will touch. */
+export const resolveBlockIdCommandSchema = z.looseObject({
+  type: z.literal('resolve-block-id'),
+  ref: z.string(),
+  ...commandIdField,
+})
+
+/** One block's recorded changes, newest first — local and sync-applied. */
+export const blockHistoryCommandSchema = z.looseObject({
+  type: z.literal('block-history'),
+  id: z.string().describe('The block: a full id or a unique id prefix as printed (^3f2a9c1d)'),
+  limit: z.number().int().positive().optional().describe('Max events (default 20, at most 100)'),
   ...commandIdField,
 })
 
@@ -202,6 +324,7 @@ export const deleteBlockCommandSchema = z.looseObject({
   type: z.literal('delete-block'),
   id: z.string().optional(),
   blockId: z.string().optional(),
+  ...exactIdsField,
   ...commandIdField,
 })
 
@@ -209,6 +332,7 @@ export const restoreBlockCommandSchema = z.looseObject({
   type: z.literal('restore-block'),
   id: z.string().optional(),
   blockId: z.string().optional(),
+  ...exactIdsField,
   ...commandIdField,
 })
 
@@ -341,18 +465,33 @@ export const groupedBacklinksCommandSchema = z.looseObject({
   ...commandIdField,
 })
 
-/** Print the agent-facing data-model guide. No body beyond the type. */
+/** The data-model guide's topic ids in its reading order. The app's guide
+ *  tags each of its sections with one, and a test holds the two lists equal. */
+export const DATA_MODEL_TOPICS = [
+  'blocks', 'pages', 'daily-notes', 'references', 'grouped-backlinks', 'block-kinds', 'properties', 'queries', 'writing',
+  'sql',
+] as const
+export type DataModelTopic = typeof DATA_MODEL_TOPICS[number]
+
+/** The agent-facing data-model guide: an index, one topic, or all of it. */
 export const dataModelCommandSchema = z.looseObject({
   type: z.literal('data-model'),
+  topic: z.string().optional().describe(
+    'A topic id from the index to read that section, or "all" for the whole guide. Omit for the index.',
+  ),
   ...commandIdField,
 })
+
+const readWorkspaceField = z.string().optional().describe(
+  'Workspace to read. Defaults to the one open in the app tab; the token reaches every workspace of its user.',
+)
 
 /** Resolve a page by alias/title — exact hit plus substring candidates. */
 export const pageCommandSchema = z.looseObject({
   type: z.literal('page'),
-  name: z.string(),
-  workspaceId: z.string().optional(),
-  limit: z.number().int().positive().optional(),
+  name: z.string().describe('Page name or alias to resolve'),
+  workspaceId: readWorkspaceField,
+  limit: z.number().int().positive().optional().describe('Max substring candidates (default 20)'),
   ...commandIdField,
 })
 
@@ -361,8 +500,8 @@ export const pageCommandSchema = z.looseObject({
  *  | natural-language ("next monday"). */
 export const dailyNoteCommandSchema = z.looseObject({
   type: z.literal('daily-note'),
-  date: z.string(),
-  workspaceId: z.string().optional(),
+  date: z.string().describe('today, yesterday, an ISO date (2026-06-18), or natural language (next monday)'),
+  workspaceId: readWorkspaceField,
   ...commandIdField,
 })
 
@@ -372,6 +511,129 @@ export const searchCommandSchema = z.looseObject({
   query: z.string(),
   workspaceId: z.string().optional(),
   limit: z.number().int().positive().optional(),
+  ...commandIdField,
+})
+
+// ---------- Agent views ----------
+//
+// `view-*` commands are the agent-facing reads: bounded (default limits,
+// truncated content with a char count, an explicit continuation), with
+// context per hit (breadcrumb, decoded properties, child counts), rendered
+// app-side where the property registry can decode values. The raw commands
+// above (`get-block`, `get-subtree`, `backlinks`, …) keep their stored,
+// unbounded shapes for programmatic consumers.
+//
+// These schemas double as the MCP tool input schemas and the CLI option
+// lists (packages/agent-cli/src/readTools.ts), so every `.describe()` here
+// is user-facing help text.
+
+/** Defaults the app applies when a view field is omitted. Named here so the
+ *  help text and the app agree on one number. */
+export const AGENT_VIEW_DEFAULTS = {
+  searchLimit: 10,
+  backlinksLimit: 20,
+  groupsLimit: 10,
+  membersPerGroup: 3,
+  outlineLimit: 100,
+  outlineDepth: 3,
+  blockMaxChars: 4000,
+  sqlMaxRows: 200,
+  /** An outline line's content budget; longer content is cut with a marker. */
+  lineChars: 200,
+} as const
+
+const viewRefField = z.string().describe(
+  'The block: a full id, a unique id prefix as printed (^3f2a9c1d), a page name '
+  + '(or [[Page name]]), or a date for its daily note (today, yesterday, 2026-06-18).',
+)
+
+const viewFields = {
+  // A view decodes values through the open workspace's registries, so naming
+  // a workspace routes the call rather than widening what one tab reads.
+  workspaceId: z.string().optional().describe(
+    'Workspace to read. The call goes to an app tab that has it open (default: the most recently '
+    + 'focused tab), and is refused when no connected tab does.',
+  ),
+  ...formatField,
+}
+
+const viewLimitField = (what: string, defaultValue: number) =>
+  z.number().int().positive().optional().describe(`Max ${what} (default ${defaultValue})`)
+
+const viewOffsetField = (what: string) =>
+  z.number().int().nonnegative().optional().describe(`Skip the first N ${what} (to continue a truncated listing)`)
+
+const backlinksFilterField = z
+  .union([z.enum(['none', 'stored', 'effective']), z.record(z.string(), z.unknown())])
+  .optional()
+  .describe("none (default) | stored (the block's saved filter) | effective (what the UI applies) | {include?, exclude?}")
+
+export const viewBlockCommandSchema = z.looseObject({
+  type: z.literal('view-block'),
+  ref: viewRefField,
+  maxChars: z.number().int().positive().optional().describe(
+    `Max content characters to return (default ${AGENT_VIEW_DEFAULTS.blockMaxChars})`,
+  ),
+  contentOffset: z.number().int().nonnegative().optional().describe(
+    'Start the content at this character (to read past a truncation)',
+  ),
+  ...viewFields,
+  ...commandIdField,
+})
+
+export const viewOutlineCommandSchema = z.looseObject({
+  type: z.literal('view-outline'),
+  ref: viewRefField,
+  depth: z.number().int().positive().optional().describe(
+    `Levels below the root to expand (default ${AGENT_VIEW_DEFAULTS.outlineDepth})`,
+  ),
+  limit: viewLimitField('blocks shown below the root; shallower levels are filled first', AGENT_VIEW_DEFAULTS.outlineLimit),
+  offset: viewOffsetField("of the root's children"),
+  properties: z.enum(['brief', 'none', 'full']).optional().describe(
+    'Properties per line: brief (default; the first few, compactly), none, or full',
+  ),
+  expandCollapsed: z.boolean().optional().describe(
+    'Expand blocks below the root that the user collapsed (default: summarized as +N children)',
+  ),
+  ...viewFields,
+  ...commandIdField,
+})
+
+export const viewBacklinksCommandSchema = z.looseObject({
+  type: z.literal('view-backlinks'),
+  ref: viewRefField,
+  limit: viewLimitField('backlinks', AGENT_VIEW_DEFAULTS.backlinksLimit),
+  offset: viewOffsetField('backlinks'),
+  filter: backlinksFilterField,
+  ...viewFields,
+  ...commandIdField,
+})
+
+export const viewGroupedBacklinksCommandSchema = z.looseObject({
+  type: z.literal('view-grouped-backlinks'),
+  ref: viewRefField,
+  limit: viewLimitField('groups', AGENT_VIEW_DEFAULTS.groupsLimit),
+  offset: viewOffsetField('groups'),
+  membersPerGroup: viewLimitField('members shown per group', AGENT_VIEW_DEFAULTS.membersPerGroup),
+  memberOffset: viewOffsetField('members of each group'),
+  filter: backlinksFilterField,
+  grouping: z
+    .union([z.enum(['user', 'none']), z.record(z.string(), z.unknown())])
+    .optional()
+    .describe("user (default; the user's grouping config, as the UI shows it) | none | a grouping-config object"),
+  ...viewFields,
+  ...commandIdField,
+})
+
+export const viewSearchCommandSchema = z.looseObject({
+  type: z.literal('view-search'),
+  query: z.string().describe('Text to find in block content. "quoted phrase", OR, and -term are supported'),
+  limit: viewLimitField('results', AGENT_VIEW_DEFAULTS.searchLimit),
+  offset: viewOffsetField('results'),
+  types: z.array(z.string()).optional().describe('Only blocks with any of these types (type id or label, e.g. todo)'),
+  under: z.string().optional().describe('Only blocks inside this block/page (same forms as a block ref)'),
+  includeExtensions: z.boolean().optional().describe('Include extension source blocks (excluded by default)'),
+  ...viewFields,
   ...commandIdField,
 })
 
@@ -504,6 +766,12 @@ export const knownCommandSchema = z.discriminatedUnion('type', [
   moveBlockCommandSchema,
   deleteBlockCommandSchema,
   restoreBlockCommandSchema,
+  appendMarkdownCommandSchema,
+  editBlockCommandSchema,
+  createPageCommandSchema,
+  recentChangesCommandSchema,
+  blockHistoryCommandSchema,
+  resolveBlockIdCommandSchema,
   installExtensionCommandSchema,
   enableExtensionCommandSchema,
   disableExtensionCommandSchema,
@@ -520,6 +788,11 @@ export const knownCommandSchema = z.discriminatedUnion('type', [
   pageCommandSchema,
   dailyNoteCommandSchema,
   searchCommandSchema,
+  viewBlockCommandSchema,
+  viewOutlineCommandSchema,
+  viewBacklinksCommandSchema,
+  viewGroupedBacklinksCommandSchema,
+  viewSearchCommandSchema,
   watchEventsCommandSchema,
 ])
 
@@ -548,6 +821,12 @@ export const knownAgentCommandSchema = z.discriminatedUnion('type', [
   moveBlockCommandSchema,
   deleteBlockCommandSchema,
   restoreBlockCommandSchema,
+  appendMarkdownCommandSchema,
+  editBlockCommandSchema,
+  createPageCommandSchema,
+  recentChangesCommandSchema,
+  blockHistoryCommandSchema,
+  resolveBlockIdCommandSchema,
   installExtensionCommandSchema,
   enableExtensionCommandSchema,
   disableExtensionCommandSchema,
@@ -566,6 +845,11 @@ export const knownAgentCommandSchema = z.discriminatedUnion('type', [
   pageCommandSchema,
   dailyNoteCommandSchema,
   searchCommandSchema,
+  viewBlockCommandSchema,
+  viewOutlineCommandSchema,
+  viewBacklinksCommandSchema,
+  viewGroupedBacklinksCommandSchema,
+  viewSearchCommandSchema,
   watchEventsCommandSchema,
 ])
 export type KnownAgentCommand = z.infer<typeof knownAgentCommandSchema>
@@ -597,6 +881,19 @@ export interface KnownCommandMeta {
   readOnly: boolean
 }
 
+/** How the write verbs name where to write: quoted by the CLI verbs and the
+ *  km MCP tools alike, so both surfaces say the same thing. */
+export const WRITE_TARGET_HELP =
+  'A target is a block id or a printed short id (^3f2a9c1b); a [[Page name]], created if missing as typing '
+  + 'that link would ([[2026-10-15]] is that daily note); or a date (today, next monday, 2026-10-15) for its '
+  + 'daily note, created if missing. Bare text is tried as an id prefix, an existing page, then a date — so '
+  + 'name a page as [[name]].'
+
+/** A todo composes the built-in `todo` type. */
+export const TODO_WRITE_HELP =
+  'A todo is a block with properties {"types": ["todo"], "status": "open"}; set "status" to "done" to complete '
+  + 'it (properties merge).'
+
 /** Schema-derived registry of every known wire command. Typed as
  *  `Record<KnownCommandType, …>` so adding a variant to
  *  `knownCommandSchema` without a registry entry is a TypeScript error —
@@ -615,7 +912,7 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   },
   'health': {
     usage: 'kmagent health',
-    description: 'Layout B sync-health snapshot: app-visible block count vs blocks_synced, distinct blocks queued for upload, the materialization backlog, and `syncDivergence` — per workspace, downloaded rows `blocks` does not hold with nothing in flight to deliver them: `unapplied` (still flagged for the drain) and `stranded` (the drain cleared the flag but the rows differ; nothing else reports these), by kind with an example id. Remedy for both: `rematerialize-workspace --scope all` with that workspace active — but not while `rematerializing` is true (a rescan is already repairing those rows; re-read when it finishes), not under `materializability: \'defer\'` (the rescan defers them again until the workspace key or mode resolves), and not for `local-newer`, usually an upload whose echo has not arrived, which the rescan would temporarily revert. Rows a rescan leaves unapplied are counted in its `deferred` / `quarantined` totals. Any `materializability` but `copy` means the workspace was checked on its clear columns only. One read to triage a stuck or unsynced client (healthy = both queues 0, blocks ≈ blocks_synced, syncDivergence empty).',
+    description: 'Sync-health snapshot, one read to triage a stuck or unsynced client. Layout B: app-visible block count vs blocks_synced, distinct blocks queued for upload, the materialization backlog, and `syncDivergence` — per workspace, downloaded rows `blocks` does not hold with nothing in flight to deliver them: `unapplied` (still flagged for the drain) and `stranded` (the drain cleared the flag but the rows differ; nothing else reports these), by kind with an example id. Remedy for both: `rematerialize-workspace --scope all` with that workspace active — but not while `rematerializing` is true (a rescan is already repairing those rows; re-read when it finishes), not under `materializability: \'defer\'` (the rescan defers them again until the workspace key or mode resolves), and not for `local-newer`, usually an upload whose echo has not arrived, which the rescan would temporarily revert. Rows a rescan leaves unapplied are counted in its `deferred` / `quarantined` totals. Any `materializability` but `copy` means the workspace was checked on its clear columns only. Healthy = both queues 0, blocks ≈ blocks_synced, syncDivergence empty.',
     readOnly: true,
   },
   'describe-runtime': {
@@ -632,18 +929,19 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
     readOnly: false,
   },
   'get-block': {
-    usage: 'kmagent get-block <id>',
-    description: 'Fetch a block by id.',
+    usage: 'kmagent get-block <ref> --raw',
+    description: 'Fetch a block as stored (raw BlockData). The agent view is `view-block`.',
     readOnly: true,
   },
   'get-subtree': {
-    usage: 'kmagent subtree <rootId> [--json]',
-    description: 'Fetch the subtree rooted at <rootId> (root included). Prints a depth-indented `- [id] content` outline by default (one line per block, id first); --json returns the raw flat array (each row carries its depth from the root). Both are a pre-order traversal with siblings in (order_key, id) order — already sorted; read top-to-bottom, do not re-sort.',
+    usage: 'kmagent subtree <ref> --raw',
+    description: 'Fetch the WHOLE subtree rooted at <ref> (root included) as the raw flat array, each row carrying its depth from the root — unbounded, for programmatic use (the agent view is `view-outline`). A pre-order traversal with siblings in (order_key, id) order — already sorted; read top-to-bottom, do not re-sort.',
     readOnly: true,
   },
   'create-block': {
     usage: 'kmagent create-block <json>',
-    description: 'Create a block (body shape per <json>).',
+    description: 'Create one block. Body: {parentId, content, properties?, position?: first|last}; parentId is a target '
+      + `as for append-markdown, or null for a top-level block (not a page — use create-page). ${TODO_WRITE_HELP}`,
     readOnly: false,
   },
   'reconcile-markdown-subtree': {
@@ -653,7 +951,10 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   },
   'update-block': {
     usage: 'kmagent update-block <json>',
-    description: 'Update a block (body shape per <json>).',
+    description: 'Update a block. Body: {id, content?, properties?, replaceProperties?, expectedContent?}. Properties merge '
+      + 'unless replaceProperties. With expectedContent the update is refused, showing the current content, unless '
+      + 'the block\'s content is exactly that (read it whole with get-block, not from an outline line). id may be a '
+      + 'unique id prefix.',
     readOnly: false,
   },
   'move-block': {
@@ -670,6 +971,44 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
     usage: 'kmagent restore-block <id>',
     description: 'Restore one soft-deleted block via core.restore. Descendants remain deleted unless restored separately.',
     readOnly: false,
+  },
+  'append-markdown': {
+    usage: "kmagent append-markdown <target> [--first | --after <id> | --before <id>] [--one-block] -- '<markdown>'   (or pipe it on stdin)",
+    description: 'Insert markdown under <target> in ONE transaction, split into blocks as the app\'s paste does; '
+      + `prints the new blocks (the first ${AGENT_VIEW_DEFAULTS.outlineLimit}). ${WRITE_TARGET_HELP} With --after/--before the anchor must be a child of the target. `
+      + 'Markdown goes after `--` (it usually starts with "- ") or on stdin.',
+    readOnly: false,
+  },
+  'edit-block': {
+    usage: "kmagent edit-block <id> <old> <new>   (or: kmagent edit-block <id> -- '<old>' '<new>' when either starts with -)",
+    description: 'Replace the one occurrence of <old> in a block\'s content with <new> (literal text), against its '
+      + 'content at write time; prints the change in context. Refused when <old> is empty or found more than once '
+      + '(add surrounding text), and when it is not found, showing the current content. <id> may be a unique id prefix.',
+    readOnly: false,
+  },
+  'create-page': {
+    usage: "kmagent create-page <name> | --date <expr>   (a name starting with - goes after --: kmagent create-page -- '-Inbox')",
+    description: 'Get-or-create a page by name, as typing [[name]] would, or a daily note with --date <expr>. Reports '
+      + 'whether it was created.',
+    readOnly: false,
+  },
+  'recent-changes': {
+    usage: 'kmagent recent-changes [--since <ms|iso>] [--limit <n>] [--all]',
+    description: 'Recent agent-bridge writes in this workspace, newest first. Each lists the blocks it changed (content '
+      + 'before/after, clipped); --all adds the user\'s own edits here. eval, sql '
+      + 'execute and run-action writes are not attributed.',
+    readOnly: true,
+  },
+  'block-history': {
+    usage: 'kmagent block-history <id> [--limit <n>]',
+    description: 'One block\'s recorded changes, newest first, local and synced, with content before/after (cut past '
+      + '2,000 chars) — to review a change. A content ending in a cut marker is not whole, so do not write it back.',
+    readOnly: true,
+  },
+  'resolve-block-id': {
+    usage: 'kmagent raw \'{"type":"resolve-block-id","ref":"^3f2a9c1b"}\'',
+    description: 'The full block id an id-typed write field resolves to (^short, ((id)), unique prefix) — never a name or date. A ref that matches nothing comes back as the id its syntax names (^x, ((x)) → x), else as given. km-mcp uses it so its write guard checks the block the write will touch.',
+    readOnly: true,
   },
   'install-extension': {
     usage: 'kmagent install-extension [--verify] [--allow-preset-change] [--description <text>] <file> [label]',
@@ -693,27 +1032,22 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   },
   'audit-extension': {
     usage: 'kmagent audit-extension <id|label>',
-    description: 'Audit the DATA an installed extension wrote, against the grain the app rewards: block ids parked in non-ref properties (invisible to backlinks), records buried in a JSON cell, properties written with no registered schema (the fingerprint of a write made while the extension was not running), and declared types no block carries. Complements the install-time source lint, which can only read declarations. Also reports whether the extension is approved / enabled / actually running here.',
-    // Reads only — EXCEPT that resolving the enabled intent goes through
-    // `getPluginPrefsBlock`, which bootstraps the per-user prefs row on a
-    // profile that has never had one. That is a write, so this verb is not
-    // classified read-only rather than quietly breaking a read-only token's
-    // contract.
-    readOnly: false,
+    description: 'Audit the DATA an installed extension wrote, against the grain the app rewards. It flags block ids parked in non-ref properties (invisible to backlinks), records buried in a JSON cell, properties written with no registered schema (the fingerprint of a write made while the extension was not running), and declared types no block carries. Complements the install-time source lint, which can only read declarations. Also reports whether the extension is approved / enabled / actually running here.',
+    readOnly: true,
   },
   'audit-properties': {
     usage: 'kmagent audit-properties [--workspace <id>]',
-    description: 'List every property key present in the workspace\'s live blocks that the registry does NOT resolve — the keys property migration skips silently (propertyChildrenProcessor: no schema → `continue`), so they are the only property data a child-backed workspace cannot carry. Per key: exact cell count, the resolver\'s own reason (nothing declares it, or a definition block exists but is broken), the fix in the order §9 requires, plus sampled blocks and the types they carry (which extension wrote it). Audits the ACTIVE workspace; it refuses one whose registry is not loaded rather than reporting every key as unregistered. Reports its own basis — `syncGap` (staged rows the drain would actually apply — narrower than `agent health`\'s raw staging count, which also counts this device\'s own upload echoes — or the sync layer not settled: downloading, disconnected, or a download error — so the counts are short) and `syncedThrough` (this device\'s last completed sync); an empty list under a non-null `syncGap` means nothing, and a null `syncGap` only rules out work outstanding LOCALLY. Does NOT detect shadowed definitions or seed-name collisions — those still resolve, so no key is listed. Workspace-wide counterpart to `audit-extension`, which only sees blocks carrying one extension\'s declared types.',
+    description: 'List every property key in the workspace\'s live blocks that the registry does NOT resolve. Property migration skips those keys silently (propertyChildrenProcessor: no schema → `continue`), so they are the only property data a child-backed workspace cannot carry. Per key: exact cell count, the resolver\'s own reason (nothing declares it, or a definition block exists but is broken), the fix in the order §9 requires, plus sampled blocks and the types they carry (which extension wrote it). Audits the ACTIVE workspace; it refuses one whose registry is not loaded rather than reporting every key as unregistered. Reports its own basis — `syncGap` (staged rows the drain would actually apply — narrower than `agent health`\'s raw staging count, which also counts this device\'s own upload echoes — or the sync layer not settled: downloading, disconnected, or a download error — so the counts are short) and `syncedThrough` (this device\'s last completed sync); an empty list under a non-null `syncGap` means nothing, and a null `syncGap` only rules out work outstanding LOCALLY. Does NOT detect shadowed definitions or seed-name collisions — those still resolve, so no key is listed. Workspace-wide counterpart to `audit-extension`, which only sees blocks carrying one extension\'s declared types.',
     readOnly: true,
   },
   'run-backfill': {
     usage: 'kmagent run-backfill <backfillId> [--workspace <id>] [--wait <seconds>]',
-    description: 'Run one operator-triggered workspace backfill (currently `properties:cell-to-children`, the properties-as-blocks migration: every registered property cell gains the field and value CHILD blocks it implies, cells untouched). Deliberately not scheduled — the pass uploads source-of-truth rows, so ONE device runs it and every other receives them; a completion claim in synced data records that. Returns `outcome` — the runner\'s own result code; see `OperatorBackfillResult` in src/data/repo.ts for the current set and what each means, rather than a copy here that can drift — plus `undoHistoryCleared`: the pass drops the workspace undo stack whenever it writes, because replaying an entry recorded before it would revert the migration. Refuses to write (outcome `deferred`) while this device is behind the server or still draining synced rows; retry once sync settles. Safe to re-run: it is idempotent per row and resumes from whatever is left to do, so an interrupted run needs no repair.',
+    description: 'Run one operator-triggered workspace backfill. Currently `properties:cell-to-children`, the properties-as-blocks migration: every registered property cell gains the field and value CHILD blocks it implies, cells untouched. Deliberately not scheduled — the pass uploads source-of-truth rows, so ONE device runs it and every other receives them; a completion claim in synced data records that. Returns `outcome` — the runner\'s own result code; see `OperatorBackfillResult` in src/data/repo.ts for the current set and what each means, rather than a copy here that can drift — plus `undoHistoryCleared`: the pass drops the workspace undo stack whenever it writes, because replaying an entry recorded before it would revert the migration. Refuses to write (outcome `deferred`) while this device is behind the server or still draining synced rows; retry once sync settles. Safe to re-run: it is idempotent per row and resumes from whatever is left to do, so an interrupted run needs no repair.',
     readOnly: false,
   },
   'rematerialize-workspace': {
     usage: 'kmagent rematerialize-workspace [--workspace <id>] [--scope unapplied|all] [--wait <seconds>]',
-    description: 'Re-run the sync drain over rows this device downloaded but never applied — the remedy for the durable materialization gap every one-way pass refuses on ("N synced row(s) of this workspace have not reached `blocks` on this device"). Those rows reached the drain, were not applied (workspace not unlocked, mode unresolved, a key-store read that failed, ciphertext that would not decode, or a speculative stamp-0 mint the seed could not vouch for), and had their queue entry consumed — so nothing re-delivers them and waiting never clears them. A DERIVATION pass over LOCAL state: it rebuilds this device\'s `blocks` from rows this device already downloaded, uploads nothing, needs no per-graph claim, does not clear the undo stack, and is safe to run on any device any number of times. `--scope unapplied` (default) re-delivers exactly the rows the refusal counts; `--scope all` re-judges every staged row of the workspace, which is what to use when the flag itself is suspect, at the cost of a full pass. Returns the exact `unappliedBefore`/`unappliedAfter` gap sizes plus the pass\'s own counts and `remainingGap` — the predicate re-asked. A pass that leaves rows unapplied has not failed: its `deferred` / `quarantined` counts say why. Neither is fixed by re-running ALONE — `deferred` needs the workspace materializable first (unlock it, or a key store that reads: a transient key-store failure defers too, and that one a re-run does fix), `quarantined` needs bytes that decode. `reflagged` is the count going the other way — at `--scope all`, a workspace that answers `defer` re-flags rows an earlier drain had cleared, so that scope CAN leave the gap larger (at `--scope unapplied` it is always 0, since every row in that set is flagged already). Two more things to know before running it: prefer a settled sync, because a re-pass can briefly write an older staged row over a local edit that is acked but not yet echoed back (the echo re-asserts it, so it self-heals unless the tab closes inside that window); and the pass occupies this device\'s materialization queue for its whole run, so no synced row reaches `blocks` until it finishes — seconds at `unapplied`, minutes at `all` on a large graph.',
+    description: 'Re-run the sync drain over rows this device downloaded but never applied. It is the remedy for the durable materialization gap every one-way pass refuses on ("N synced row(s) of this workspace have not reached `blocks` on this device"). Those rows reached the drain, were not applied (workspace not unlocked, mode unresolved, a key-store read that failed, ciphertext that would not decode, or a speculative stamp-0 mint the seed could not vouch for), and had their queue entry consumed — so nothing re-delivers them and waiting never clears them. A DERIVATION pass over LOCAL state: it rebuilds this device\'s `blocks` from rows this device already downloaded, uploads nothing, needs no per-graph claim, does not clear the undo stack, and is safe to run on any device any number of times. `--scope unapplied` (default) re-delivers exactly the rows the refusal counts; `--scope all` re-judges every staged row of the workspace, which is what to use when the flag itself is suspect, at the cost of a full pass. Returns the exact `unappliedBefore`/`unappliedAfter` gap sizes plus the pass\'s own counts and `remainingGap` — the predicate re-asked. A pass that leaves rows unapplied has not failed: its `deferred` / `quarantined` counts say why. Neither is fixed by re-running ALONE — `deferred` needs the workspace materializable first (unlock it, or a key store that reads: a transient key-store failure defers too, and that one a re-run does fix), `quarantined` needs bytes that decode. `reflagged` is the count going the other way — at `--scope all`, a workspace that answers `defer` re-flags rows an earlier drain had cleared, so that scope CAN leave the gap larger (at `--scope unapplied` it is always 0, since every row in that set is flagged already). Two more things to know before running it: prefer a settled sync, because a re-pass can briefly write an older staged row over a local edit that is acked but not yet echoed back (the echo re-asserts it, so it self-heals unless the tab closes inside that window); and the pass occupies this device\'s materialization queue for its whole run, so no synced row reaches `blocks` until it finishes — seconds at `unapplied`, minutes at `all` on a large graph.',
     // Writes the local `blocks` table (never `blocks_synced`, never an upload).
     readOnly: false,
   },
@@ -729,24 +1063,21 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
     // Arbitrary code execution — never read-only.
     readOnly: false,
   },
-  // backlinks / grouped-backlinks resolve the user's backlinks prefs
-  // sub-block, which `pluginPrefsExtension` (src/data/pluginStateExtensions.ts)
-  // bootstraps at idle on every client — so on the live client the bridge
-  // talks to, the resolve path is a pure read. The only write either could
-  // make is that same one-time prefs-block creation, before the bootstrap.
+  // backlinks / grouped-backlinks read the user's prefs with `readPluginPref`,
+  // which creates nothing: both are pure reads.
   'backlinks': {
-    usage: "kmagent backlinks <blockId> [--filter none|stored|effective|<json>] [--workspace <id>]",
-    description: 'Hydrated backlinks of a block (blocks whose references point at it). --filter defaults to none. See `kmagent data-model`.',
+    usage: "kmagent backlinks <ref> --raw [--filter none|stored|effective|<json>]",
+    description: 'Every backlink of a block (blocks whose references point at it), hydrated, unbounded — for programmatic use (the agent view is `view-backlinks`). --filter defaults to none. See `kmagent data-model`.',
     readOnly: true,
   },
   'grouped-backlinks': {
-    usage: "kmagent grouped-backlinks <blockId> [--filter none|stored|effective|<json>] [--grouping user|none|<json>] [--workspace <id>]",
-    description: 'The grouped-references view for a block: hydrated groups (+ Other fallback). --grouping defaults to the user config (matches the UI); --filter defaults to none. See `kmagent data-model`.',
+    usage: "kmagent grouped-backlinks <ref> --raw [--filter none|stored|effective|<json>] [--grouping user|none|<json>]",
+    description: 'The grouped-references view for a block, every group and member hydrated (+ Other fallback) — unbounded (the agent view is `view-grouped-backlinks`). --grouping defaults to the user config (matches the UI); --filter defaults to none. See `kmagent data-model`.',
     readOnly: true,
   },
   'data-model': {
-    usage: 'kmagent data-model',
-    description: "Print the agent-facing data-model guide (blocks, references, pages/daily-notes, backlinks vs grouped-backlinks, source_field, done-status, deep-links). Read this first when working with a user's data.",
+    usage: 'kmagent data-model [<topic id>|all]',
+    description: `The agent-facing data-model guide; read it first when working with a user's data. A short index by default, one section by topic id (${DATA_MODEL_TOPICS.join(', ')}), everything with topic all.`,
     readOnly: true,
   },
   'page': {
@@ -762,8 +1093,34 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
     readOnly: true,
   },
   'search': {
-    usage: 'kmagent search <query> [--limit <n>] [--workspace <id>]',
-    description: 'Full-text search over block content; hydrated results.',
+    usage: 'kmagent raw \'{"type":"search","query":"<query>","limit":<n>,"workspaceId":"<id>"}\'',
+    description: 'Full-text search over block content; whole hydrated rows (the agent view is `view-search`).',
+    readOnly: true,
+  },
+  // The views read what the raw commands above read, so they classify the same.
+  'view-block': {
+    usage: 'kmagent get-block <ref> [--max-chars <n>] [--content-offset <n>] [--json]',
+    description: 'One block, for reading: its content (truncated past maxChars, with how to continue), breadcrumb, types, decoded properties, child and backlink counts.',
+    readOnly: true,
+  },
+  'view-outline': {
+    usage: 'kmagent subtree <ref> [--depth <n>] [--limit <n>] [--offset <n>] [--properties brief|none|full] [--expand-collapsed] [--json]',
+    description: 'A block and its descendants as a markdown outline: `- content  key:: value  ^shortid`, one line per block. Bounded: expands `depth` levels and at most `limit` blocks below the root, shallower levels first; unexpanded children show as `(+N children)`, long content as `…[+N chars]`, and a cut-off list of the root\'s children ends with the offset to continue from.',
+    readOnly: true,
+  },
+  'view-backlinks': {
+    usage: 'kmagent backlinks <ref> [--limit <n>] [--offset <n>] [--filter none|stored|effective|<json>] [--json]',
+    description: 'Blocks that reference this block or page, a page at a time. Each comes with its breadcrumb (page › parent …) and how it references the target; a block that is only a link also shows its parent\'s text and first child.',
+    readOnly: true,
+  },
+  'view-grouped-backlinks': {
+    usage: 'kmagent grouped-backlinks <ref> [--limit <n>] [--offset <n>] [--members-per-group <n>] [--filter …] [--grouping user|none|<json>] [--json]',
+    description: 'Backlinks grouped by the pages/blocks they appear in context of (the grouped-references panel): each group with its size and its first few members.',
+    readOnly: true,
+  },
+  'view-search': {
+    usage: 'kmagent search <query> [--limit <n>] [--offset <n>] [--types <type>…] [--under <ref>] [--include-extensions] [--json]',
+    description: 'Full-text search over block content. Each hit: a snippet around the match, its breadcrumb and types; identical blocks are folded into one hit. Extension source is excluded unless asked for.',
     readOnly: true,
   },
   'watch-events': {
@@ -841,7 +1198,6 @@ export const registerTokenSpecSchema = z
   .looseObject({
     token: z.string().min(1),
     userId: z.string().optional(),
-    workspaceId: z.string().optional(),
     label: z.string().optional(),
     scope: z.string().optional(),
   })
@@ -858,5 +1214,112 @@ export const registerClientMetadataSchema = z.looseObject({
       workspaceId: z.string().optional(),
     })
     .optional(),
+  /** When the tab last had focus (ms); a call naming no workspace goes to
+   *  the user's most recently focused tab. Null when it never has. */
+  focusedAt: z.number().nullable().optional(),
 })
 export type RegisterClientMetadata = z.infer<typeof registerClientMetadataSchema>
+
+// ---------- Agent-facing display text ----------
+
+/**
+ * The characters treated as hostile in agent-facing DISPLAY text (outline
+ * content, rendered properties, view snippets): all of C0 except TAB, DEL,
+ * all of C1, U+2028/U+2029, and every codepoint the Unicode `Bidi_Control`
+ * property covers. Ids are not prose and get a different, lossless
+ * treatment where they are printed (subtreeOutline.ts `encodeOutlineId`).
+ *
+ * INVARIANT: no character that can forge a line break or REORDER displayed
+ * text reaches the terminal (or an LLM reading the raw text) through
+ * display text.
+ *
+ * The bidi class ("Trojan Source": an override or isolate inside content is
+ * rendered unchanged by a bidi-aware terminal, which can visually reorder
+ * an id token and its delimiter without a single byte moving) is
+ * matched as a Unicode PROPERTY rather than a hand-enumerated transcription
+ * of its members, because a transcription can silently omit a member
+ * exactly as reordering-capable as the rest. The C0/C1/DEL/line-separator
+ * half stays a hand-enumerated range only because no single Unicode
+ * property matches this TAB-excluded, Zl/Zp-inclusive boundary.
+ *
+ * TAB (U+0009) is the one deliberate exclusion: a terminal advances the
+ * cursor FORWARD on TAB, so unlike the rest it can never walk back over
+ * already-printed text, and no parser here reads it as a line break.
+ *
+ * ZERO WIDTH JOINER (U+200D) and ZERO WIDTH NON-JOINER (U+200C) are
+ * deliberately NOT neutralized, so do not broaden this to `\p{Cf}` or
+ * `\p{C}`: neither reorders anything (they shape adjacent characters in
+ * place) and both are required in real content — compound emoji are built
+ * with ZWJ, and ZWNJ is mandatory orthography in Persian, Hindi and other
+ * scripts. Accepted residual: an invisible but NON-reordering character can
+ * still reach rendered prose, which is display fidelity rather than the
+ * anti-forgery concern defended here.
+ */
+// eslint-disable-next-line no-control-regex -- intentional control-char match
+const CONTROL_CHAR_RUN_REGEX = /[\u0000-\u0008\u000a-\u001f\u007f-\u009f\u2028\u2029\p{Bidi_Control}]+/gu
+
+/** Collapse each run of hostile characters (see
+ *  {@link CONTROL_CHAR_RUN_REGEX}) to one ` ⏎ ` marker — lossy, which is
+ *  acceptable for prose and never for an identifier. Lives here because both
+ *  sides of the bridge render agent-facing text: the CLI's outline and the
+ *  app's agent views. */
+export const neutralizeDisplayText = (text: string): string =>
+  text.replace(CONTROL_CHAR_RUN_REGEX, ' ⏎ ')
+
+/** What `JSON.stringify` leaves raw of that class — DEL, C1 controls, the
+ *  line/paragraph separators, bidi controls (it escapes the rest of C0). */
+const UNESCAPED_JSON_DISPLAY_CONTROL = /[\u007f-\u009f\u2028\u2029\p{Bidi_Control}]/gu
+
+/** `\u`-escape what `JSON.stringify` leaves raw of the display-forging class.
+ *  Lossless — unlike {@link neutralizeDisplayText} — and only valid on JSON
+ *  text, where these characters occur only inside string literals and the
+ *  escape denotes the same string. */
+const escapeJsonDisplayControls = (json: string): string =>
+  json.replace(UNESCAPED_JSON_DISPLAY_CONTROL, char => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`)
+
+/** A value as agent-facing JSON: pretty-printed and display-safe, losslessly. */
+export const toDisplayJson = (value: unknown): string => {
+  const json = JSON.stringify(value, null, 2) as string | undefined
+  return json === undefined ? String(value) : escapeJsonDisplayControls(json)
+}
+
+/** The page name in a `[[Name]]` write target — what a missing page is created
+ *  under, and so its content — or null when `text` is not one. */
+export const pageNameInTarget = (text: string): string | null => {
+  const match = /^\s*\[\[([\s\S]*)\]\]\s*$/.exec(text)
+  return match ? match[1].trim() : null
+}
+
+/** The page `create-page <name>` gets or creates: one outer `[[…]]` is the
+ *  name's wrapper, and the name is trimmed. The runtime and the write guard
+ *  both read a name through this. */
+export const createPageName = (name: string): string => pageNameInTarget(name) ?? name.trim()
+
+/* Cutting agent-facing text to a budget, shared by the app's read views and
+ * the CLI/MCP renderers so every cut reads the same. */
+
+export const formatCount = (n: number): string => n.toLocaleString('en-US')
+
+/** The marker a cut leaves behind: how much is missing, so an agent can tell
+ *  a summary from the whole and knows a fuller read exists. */
+export const cutMarker = (cutChars: number): string => `…[+${formatCount(cutChars)} chars]`
+
+export interface Clipped {
+  text: string
+  /** Characters of the input not in `text` (0 when it fit). */
+  cut: number
+}
+
+const isHighSurrogate = (code: number): boolean => code >= 0xd800 && code <= 0xdbff
+
+/** `at` moved back by one when it would split a surrogate pair, so a slice
+ *  boundary there keeps an astral character (an emoji) whole on one side. */
+export const charBoundary = (text: string, at: number): number =>
+  at > 0 && at < text.length && isHighSurrogate(text.charCodeAt(at - 1)) ? at - 1 : at
+
+/** Cut to at most `max` characters of the ORIGINAL text, marked. */
+export const clip = (text: string, max: number): Clipped => {
+  if (text.length <= max) return {text, cut: 0}
+  const end = charBoundary(text, max)
+  return {text: `${text.slice(0, end)}${cutMarker(text.length - end)}`, cut: text.length - end}
+}

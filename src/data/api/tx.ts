@@ -91,6 +91,10 @@ export interface Tx {
 
   // ──── Lifecycle ────
 
+  /** Assert that a workspace may be written by this transaction without
+   *  pinning it. Use before expensive preparation that will lead to writes. */
+  assertWritableWorkspace(workspaceId: string): void
+
   /** Insert a new block. Throws `DuplicateIdError` on PK conflict.
    *  The engine preflights non-null parents and throws
    *  `ParentNotFoundError` / `ParentWorkspaceMismatchError` before the
@@ -235,10 +239,9 @@ export interface Tx {
    *  miss a key set-then-unset in one tx); un-flipped it is a cell-only
    *  removal. No-op when the key is already absent.
    *
-   *  Identity is checked on the schema you PASS, not on whether the NAME
-   *  resolves: in the active workspace a cell under a name nothing claims is
-   *  reachable here through a plain schema, which is what a stale-cell cleanup
-   *  needs. `resolveBoundary` decides admission and states the full matrix. */
+   *  In children mode, the schema must resolve to the workspace's durable
+   *  definition. An orphan cell can be removed through a targeted bag update
+   *  without inventing a definition for it. */
   unsetProperty<T>(id: string, schema: PropertySchema<T>, opts?: TxWriteOpts): Promise<void>
 
   /** Atomically set and/or unset several properties in ONE bag rewrite. This
@@ -517,6 +520,14 @@ export interface Tx {
 export interface RepoTxOptions {
   scope: ChangeScope
   description?: string
+  /** Permit deliberate writes outside the captured open workspace. The caller
+   *  accepts unavailable or stale registry behavior, must verify target write
+   *  access, and must account for this option not loading target membership.
+   *  This changes only workspace admission: it does not load definitions or
+   *  relax property-schema validation, the client's read-only mode, or
+   *  single-workspace checks. Intended for controlled background seeding and
+   *  repair tooling. */
+  allowUnloadedWorkspace?: boolean
   /** Undo-group token (issue #306). Txs sharing a `groupId` merge into
    *  one undo entry at record time and stamp `group_id` into
    *  `tx_context` / `row_events`. Minted by `repo.undoGroup` and

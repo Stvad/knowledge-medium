@@ -6,6 +6,7 @@ import {configSchema, parseConfig} from '../src/config'
 describe('parseConfig', () => {
   it('applies defaults for a minimal mention-watcher config', () => {
     const config = parseConfig({
+      workspaceId: 'ws-test',
       watchers: [{kind: 'backlinks', name: 'claude-mentions', target: 'claude'}],
     })
 
@@ -27,35 +28,43 @@ describe('parseConfig', () => {
   })
 
   it('rejects unknown watcher kinds and missing fields', () => {
-    expect(() => parseConfig({watchers: [{kind: 'webhook', name: 'x'}]})).toThrow()
-    expect(() => parseConfig({watchers: [{kind: 'query', name: 'q'}]})).toThrow()
+    expect(() => parseConfig({workspaceId: 'ws-test', watchers: [{kind: 'webhook', name: 'x'}]})).toThrow()
+    expect(() => parseConfig({workspaceId: 'ws-test', watchers: [{kind: 'query', name: 'q'}]})).toThrow()
   })
 
   it('rejects query-watcher SQL that is not read-only (would execute on every poll)', () => {
-    const query = (sql: string) => ({watchers: [{kind: 'query', name: 'q', sql}]})
+    const query = (sql: string) => ({workspaceId: 'ws-test', watchers: [{kind: 'query', name: 'q', sql}]})
     expect(() => parseConfig(query('UPDATE blocks SET content = ? RETURNING id'))).toThrow(/read-only/)
     expect(() => parseConfig(query('WITH c AS (SELECT 1) UPDATE blocks SET content = ? RETURNING id'))).toThrow(/read-only/)
     expect(() => parseConfig(query('SELECT powersync_clear(1)'))).toThrow(/read-only/)
     expect(parseConfig(query('SELECT id FROM blocks')).watchers).toHaveLength(1)
   })
 
+  // Calls that name no workspace act on whichever one the user's focused app
+  // tab has open; an unattended daemon must not move with them.
+  it('requires the workspace the daemon acts on', () => {
+    expect(() => parseConfig({watchers: []})).toThrow(/workspaceId is required/)
+    expect(() => parseConfig({workspaceId: '  ', watchers: []})).toThrow(/workspaceId is required/)
+    expect(parseConfig({workspaceId: ' ws-1 ', watchers: []}).workspaceId).toBe('ws-1')
+  })
+
   it('rejects an invalid profile name at parse time (config error, not a launchd crash-loop)', () => {
-    expect(() => parseConfig({profile: 'bad name', watchers: []})).toThrow(/[Pp]rofile/)
+    expect(() => parseConfig({workspaceId: 'ws-test', profile: 'bad name', watchers: []})).toThrow(/[Pp]rofile/)
   })
 
   it('rejects duplicate watcher names (they would silently share cursor/baseline state)', () => {
-    expect(() => parseConfig({watchers: [
+    expect(() => parseConfig({workspaceId: 'ws-test', watchers: [
       {kind: 'query', name: 'inbox', sql: 'SELECT id FROM a'},
       {kind: 'query', name: 'inbox', sql: 'SELECT id FROM b'},
     ]})).toThrow(/duplicate/i)
-    expect(() => parseConfig({watchers: [
+    expect(() => parseConfig({workspaceId: 'ws-test', watchers: [
       {kind: 'backlinks', name: 'same', target: 'claude'},
       {kind: 'query', name: 'same', sql: 'SELECT id FROM blocks'},
     ]})).toThrow(/duplicate/i)
   })
 
   it('filters disabled watchers out of the active runtime config', () => {
-    const config = parseConfig({watchers: [
+    const config = parseConfig({workspaceId: 'ws-test', watchers: [
       {kind: 'backlinks', name: 'old-mentions', target: 'old', disabled: true, runner: {executor: 'codex'}},
       {kind: 'backlinks', name: 'new-mentions', target: 'new'},
     ]})
@@ -67,7 +76,7 @@ describe('parseConfig', () => {
   })
 
   it('exports configSchema as the same active runtime schema parseConfig uses', () => {
-    const config = configSchema.parse({watchers: [
+    const config = configSchema.parse({workspaceId: 'ws-test', watchers: [
       {kind: 'backlinks', name: 'old-mentions', target: 'old', disabled: true},
       {kind: 'backlinks', name: 'new-mentions', target: 'new'},
     ]})
@@ -79,12 +88,12 @@ describe('parseConfig', () => {
   })
 
   it('rejects duplicate watcher names even when one watcher is disabled', () => {
-    expect(() => parseConfig({watchers: [
+    expect(() => parseConfig({workspaceId: 'ws-test', watchers: [
       {kind: 'backlinks', name: 'mentions', target: 'parked', disabled: true},
       {kind: 'backlinks', name: 'mentions', target: 'live'},
     ]})).toThrow(/duplicate/i)
 
-    const directResult = configSchema.safeParse({watchers: [
+    const directResult = configSchema.safeParse({workspaceId: 'ws-test', watchers: [
       {kind: 'backlinks', name: 'mentions', target: 'parked', disabled: true},
       {kind: 'backlinks', name: 'mentions', target: 'live'},
     ]})
@@ -93,38 +102,43 @@ describe('parseConfig', () => {
   })
 
   it('still validates disabled watchers as real watchers before filtering them out', () => {
-    expect(() => parseConfig({watchers: [
+    expect(() => parseConfig({workspaceId: 'ws-test', watchers: [
       {kind: 'query', name: 'parked-query', disabled: true},
     ]})).toThrow()
-    expect(() => parseConfig({watchers: [
+    expect(() => parseConfig({workspaceId: 'ws-test', watchers: [
       {kind: 'query', name: 'parked-query', disabled: true, sql: 'UPDATE blocks SET content = ? RETURNING id'},
     ]})).toThrow(/read-only/)
   })
 
   it('rejects misspelled keys instead of silently dropping them', () => {
-    expect(() => parseConfig({maxconcurrent: 5, watchers: []})).toThrow()
+    expect(() => parseConfig({workspaceId: 'ws-test', maxconcurrent: 5, watchers: []})).toThrow()
     expect(() => parseConfig({
+      workspaceId: 'ws-test',
       watchers: [{kind: 'backlinks', name: 'm', target: 'claude', allowedtools: ['Bash']}],
     })).toThrow()
   })
 
   it('rejects old flat runner keys; runner-specific config must be nested', () => {
     expect(() => parseConfig({
+      workspaceId: 'ws-test',
       watchers: [{kind: 'backlinks', name: 'm', target: 'claude', executor: 'codex'}],
     })).toThrow()
     expect(() => parseConfig({
+      workspaceId: 'ws-test',
       watchers: [{kind: 'backlinks', name: 'm', target: 'claude', allowedTools: ['Bash']}],
     })).toThrow()
   })
 
   it('caps runner timeoutMs below the stale-running sweep window', () => {
     expect(() => parseConfig({
+      workspaceId: 'ws-test',
       watchers: [{kind: 'backlinks', name: 'm', target: 'claude', runner: {executor: 'claude', timeoutMs: 40 * 60_000}}],
     })).toThrow()
   })
 
   it('expands ~ in runner cwd, codex addDirs, and statePath', () => {
     const config = parseConfig({
+      workspaceId: 'ws-test',
       statePath: '~/state.json',
       watchers: [{
         kind: 'backlinks',
@@ -147,6 +161,7 @@ describe('parseConfig', () => {
 
   it('parses codex runner permissions explicitly', () => {
     const config = parseConfig({
+      workspaceId: 'ws-test',
       watchers: [{
         kind: 'backlinks',
         name: 'codex',
@@ -176,6 +191,7 @@ describe('parseConfig', () => {
 
   it('rejects codex permission combinations the CLI cannot honor', () => {
     expect(() => parseConfig({
+      workspaceId: 'ws-test',
       watchers: [{
         kind: 'backlinks',
         name: 'codex',
@@ -184,6 +200,7 @@ describe('parseConfig', () => {
       }],
     })).toThrow(/networkAccess/)
     expect(() => parseConfig({
+      workspaceId: 'ws-test',
       watchers: [{
         kind: 'backlinks',
         name: 'codex',
@@ -192,6 +209,7 @@ describe('parseConfig', () => {
       }],
     })).toThrow(/addDirs/)
     expect(() => parseConfig({
+      workspaceId: 'ws-test',
       watchers: [{
         kind: 'backlinks',
         name: 'codex',
@@ -200,6 +218,7 @@ describe('parseConfig', () => {
       }],
     })).toThrow(/approvalsReviewer/)
     expect(() => parseConfig({
+      workspaceId: 'ws-test',
       watchers: [{
         kind: 'backlinks',
         name: 'codex',
@@ -208,6 +227,7 @@ describe('parseConfig', () => {
       }],
     })).toThrow()
     expect(() => parseConfig({
+      workspaceId: 'ws-test',
       watchers: [{
         kind: 'backlinks',
         name: 'codex',
@@ -219,6 +239,7 @@ describe('parseConfig', () => {
 
   it('rejects channel delivery for codex runners', () => {
     expect(() => parseConfig({
+      workspaceId: 'ws-test',
       watchers: [{
         kind: 'backlinks',
         name: 'codex-channel',
@@ -229,6 +250,7 @@ describe('parseConfig', () => {
     })).toThrow(/Codex has no channel transport/)
 
     expect(() => parseConfig({
+      workspaceId: 'ws-test',
       watchers: [{
         kind: 'query',
         name: 'codex-query-channel',
@@ -239,6 +261,7 @@ describe('parseConfig', () => {
     })).toThrow(/Codex has no channel transport/)
 
     expect(parseConfig({
+      workspaceId: 'ws-test',
       watchers: [{
         kind: 'backlinks',
         name: 'claude-channel',
@@ -250,12 +273,13 @@ describe('parseConfig', () => {
   })
 
   it('accepts an explicit opt-in to usage-based billing', () => {
-    expect(parseConfig({billing: 'api', watchers: []}).billing).toBe('api')
-    expect(() => parseConfig({billing: 'wallet', watchers: []})).toThrow()
+    expect(parseConfig({workspaceId: 'ws-test', billing: 'api', watchers: []}).billing).toBe('api')
+    expect(() => parseConfig({workspaceId: 'ws-test', billing: 'wallet', watchers: []})).toThrow()
   })
 
   it('parses query watchers with params', () => {
     const config = parseConfig({
+      workspaceId: 'ws-test',
       watchers: [{
         kind: 'query',
         name: 'inbox-growth',

@@ -18,21 +18,20 @@ import { ChangeScope } from '@/data/api'
 import { DeterministicIdCrossWorkspaceError } from '@/data/api/errors'
 import { aliasesProp } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
-import { dailyNoteDateProp } from '@/plugins/daily-notes/schema.js'
+import { DAILY_NOTE_TYPE, dailyNoteDateProp } from '@/plugins/daily-notes/schema.js'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
 import { createTestRepo, isBlockDeleted } from '@/data/test/createTestRepo'
 import {
-  DAILY_NOTE_TYPE,
   addDaysIso,
   dailyNoteBlockId,
-  dailyNotesDataExtension,
   getOrCreateDailyNote,
   getOrCreateJournalBlock,
   journalBlockId,
   todayIso,
-} from '@/plugins/daily-notes'
+} from '@/plugins/daily-notes/dailyNotes'
+import { dailyNotesDataExtension } from '@/plugins/daily-notes/dataExtension'
 import { todayDailyNoteLanding } from '@/plugins/daily-notes/landing.js'
 import { compileTypedBlockQuery } from '@/data/internals/typedBlockQuery'
 

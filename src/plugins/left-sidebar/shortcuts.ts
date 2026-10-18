@@ -4,7 +4,7 @@ import { ChangeScope } from '@/data/api'
 import { derivedBlockId } from '@/data/derivedIds'
 import { createOrRestoreTargetBlock } from '@/data/targets.js'
 import { keyAtEnd } from '@/data/orderKey.js'
-import { getOrCreateJournalBlock } from '@/plugins/daily-notes'
+import { getOrCreateJournalBlock } from '@/plugins/daily-notes/dailyNotes'
 
 const SHORTCUTS_BLOCK_CONTENT = 'Shortcuts'
 const JOURNAL_SHORTCUT_CONTENT = '[[Journal]]'
