@@ -1,1 +1,1 @@
-import{sM as e}from"../../../chunks/app-XJidm9du.js";export{e as PropertyRow};
+import{cM as e}from"../../../chunks/app-Dj7-Mq7U.js";export{e as PropertyRow};
