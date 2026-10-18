@@ -164,9 +164,9 @@ export const buildOutlineView = async (
   // continuation; a count taken first could end a full page with none. A page
   // that read children is its floor, as for every row below; an empty one is
   // no evidence that the offset it skipped exists.
-  const rootChildrenRead = [...nodes.values()].filter(node => node.depth === 1).length
+  const rootChildrenRead = [...nodes.values()].filter(node => node.depth === 1).map(node => node.block.id)
   const counted = (await visibleChildCounts(repo, [root.id], workspaceId)).get(root.id) ?? 0
-  const rootChildCount = rootChildrenRead > 0 ? Math.max(counted, offset + rootChildrenRead) : counted
+  const rootChildCount = rootChildrenRead.length > 0 ? Math.max(counted, offset + rootChildrenRead.length) : counted
 
   const blocks = [root, ...[...nodes.values()].map(node => node.block)]
   const [renderer, shortIds] = await Promise.all([
@@ -190,7 +190,7 @@ export const buildOutlineView = async (
   const headerChars = headerLines({root: viewRoot, offset}).reduce((sum, line) => sum + displayLineChars(line), 0)
   const budgetDropped = keepWithinBudget(nodes, OUTPUT_CHARS - headerChars, node => displayLineChars(rowLine(rowFields(node, 0))))
 
-  const rootChildren = [...nodes.values()].filter(node => node.depth === 1).map(node => node.block.id)
+  const rootChildren = rootChildrenRead.filter(id => nodes.has(id))
   const rows: OutlineRow[] = []
   const visit = (parentId: string, childIds: readonly string[]) => {
     for (const id of childIds) {

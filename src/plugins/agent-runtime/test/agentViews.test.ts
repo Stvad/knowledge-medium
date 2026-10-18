@@ -522,7 +522,7 @@ describe('view-outline', () => {
 
     it('keeps the first row whatever its length, so a continuation always moves forward', async () => {
       await create({id: ROOT, content: 'Root', properties: bigProperties()})
-      for (let i = 0; i < 2; i++) await create({id: seriesId('d1', i), parentId: ROOT, content: `long ${i}`, properties: bigProperties()})
+      await createAll([0, 1].map(i => ({id: seriesId('d1', i), parentId: ROOT, content: `long ${i}`, properties: bigProperties()})))
       const out = await view<OutlineView>({type: 'view-outline', ref: ROOT, depth: 1, properties: 'full', format: 'json'})
       expect(out.rows.map(row => row.content)).toEqual(['long 0'])
       expect(out.nextOffset).toBe(1)
