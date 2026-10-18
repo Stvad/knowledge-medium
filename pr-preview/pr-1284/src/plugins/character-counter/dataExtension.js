@@ -1,1 +1,0 @@
-import{qB as e}from"../../../chunks/app-DjjhCuIo.js";export{e as characterCounterDataExtension};

@@ -1,1 +1,0 @@
-import{CD as e,SD as t,TD as n,wD as r}from"../../chunks/app-DjjhCuIo.js";export{t as extensionDisplayName,e as extensionName,r as userExtensionShellToggle,n as userExtensionToggle};
