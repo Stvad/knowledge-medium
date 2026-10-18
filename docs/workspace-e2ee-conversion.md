@@ -83,10 +83,15 @@ The server side (#1294) is a set of owner-only SECURITY DEFINER RPCs over a stag
    - A BEFORE trigger on `blocks` refuses every write to a frozen workspace unless the definer makes it.
    - The refusal raises **`PT429`**. PostgREST turns that into HTTP 429, which `classifyUploadError` retries forever (`src/services/uploadErrorClassifier.ts`).
    - So other devices' queued edits stall rather than being quarantined. That is the same trick `blocks_refuse_anon` plays with `PT401` (`20261013120000_refuse_anon_writes_to_blocks.sql`). A 22/23/42/P0002 code would quarantine them.
+   - **The freeze must be serialized against writes already in flight.** A write whose BEFORE trigger ran before the freeze row committed could otherwise commit after it, behind a stage check that already passed. So `begin` takes `LOCK TABLE public.blocks IN SHARE MODE` (with a `lock_timeout`, retried on timeout) before inserting the freeze row. SHARE conflicts with the ROW EXCLUSIVE lock every writer holds, so two things follow:
+     - `begin` waits until every in-flight block write has committed or rolled back.
+     - New writes wait until `begin` commits. When they resume, their trigger looks up the freeze in a fresh read-committed snapshot and refuses.
+
+     After `begin` commits, only the definer writes the workspace, and the stage check, the history archive and the apply all rely on that. The cost is a fleet-wide write pause for the length of `begin`'s transaction, once per conversion. A per-write advisory lock would close the same race at a cost on every write forever, and keeping the bases until the apply would keep plaintext fingerprints, so neither is used.
 2. **`stage_workspace_conversion(ws, rows)`** is chunked. Each row carries the sealed columns plus a **base**: `sha256` of each column's plaintext as the client read it.
    - The RPC compares each base with `sha256(convert_to(col, 'UTF8'))` of the current server row and refuses the chunk on any mismatch. All three columns are `text` on the server, so the bytes are the ones the client hashed.
    - **The base is checked and discarded. It is never stored.** An unkeyed plaintext hash left in staging, or in its dead tuples, would stay as a dictionary-testable fingerprint after the plaintext itself is gone.
-   - The freeze is what makes a check at stage time enough. Nothing but the definer writes the workspace between stage and apply.
+   - The freeze is what makes a check at stage time enough. Because `begin` serialized against in-flight writes, nothing but the definer writes the workspace between stage and apply.
 3. **`apply_workspace_conversion(ws, canary)`** runs as ONE transaction, with a raised `statement_timeout` (as `delete_workspace` has, `20260513205724_extend_delete_workspace_timeout.sql`):
    1. Check that the workspace has been frozen since staging began.
    2. Check completeness: the staged ids are exactly the workspace's block ids, **soft-deleted rows included**.
@@ -105,7 +110,7 @@ The server side (#1294) is a set of owner-only SECURITY DEFINER RPCs over a stag
 
 - The history trigger is SECURITY DEFINER, so `current_user` inside it can't tell the conversion apart from any other write.
 - A bypass on a trigger that sits on every write across the whole fleet is a larger permanent risk than one extra delete in a function that runs once per workspace.
-- The cost is transient: history rows are written and then deleted, leaving dead tuples. Step 8 of the runbook ([§7](#7-runbook)) vacuums them.
+- The cost is transient: history rows are written and then deleted, leaving dead tuples. Step 9 of the runbook ([§7](#7-runbook)) vacuums them.
 
 ### 5.2 Client: a plaintext-pinned device that sees e2ee
 
@@ -184,11 +189,13 @@ The keyed-path and sealing logic already exists, in `src/sync/crypto/contentKey.
 
 **Ordering.**
 
-1. Upload and verify every keyed object **before** the apply, so no media block ever points at missing bytes.
-2. Delete every non-envelope object under `<ws>/` only **after** the apply commits. That covers the known sha256 paths and any orphan found by listing the prefix.
-3. Then run the existing ciphertext audit (`src/plugins/attachments/audit/`). It lists every object of an e2ee workspace and flags any non-envelope one, so a clean audit proves the prefix holds no plaintext.
+1. **Before** the apply, upload every keyed object and verify it by authenticated decryption plus a hash check, so no media block ever points at missing bytes.
+2. **After** the apply commits, compute the **expected set**: the keyed path of every media block in the workspace. List `<ws>/` and delete every object outside that set, **whatever its header says**. That removes every raw sha256 path and any orphan. Report each deleted object that wasn't a known raw path, because it may be another device's capture from the window ([§5.2](#52-client-a-plaintext-pinned-device-that-sees-e2ee)). Its bytes are still in that device's local byte store.
+3. **The proof** that no plaintext remains is that the listed objects equal the expected set, each of them verified in step 1.
 
-The 6-hourly audit workflow will flag the workspace between the apply and the deletion. That's expected.
+The existing ciphertext audit (`src/plugins/attachments/audit/`) is only a secondary signal. It checks the `encb:v1:` magic and a minimum length (`supabaseAuditIO.ts`) without authenticating anything, so a plaintext file that happens to start with those bytes would pass it.
+
+The 6-hourly audit workflow will flag the workspace between the apply and step 2. That's expected.
 
 ### 5.5 History: archive, then purge
 
@@ -220,8 +227,8 @@ The orchestrator (#1290) refuses to start unless:
 | 6. Stage chunks | base mismatch | frozen, partly staged | the client read a pre-freeze state, so re-read and re-stage; or abort |
 | 7. Apply | refusal or timeout | the transaction rolls back; still frozen | fix the cause and re-apply, or abort |
 | 8. Upgrade the local pin | crash after the apply | server e2ee, pin still plaintext | automatic on restart: the stored key opens the canary ([§5.2](#52-client-a-plaintext-pinned-device-that-sees-e2ee)) |
-| 9. Delete every non-envelope object under `<ws>/` | partial | plaintext objects remain | resume; report |
-| 10. Verify: every row opens, the ciphertext audit is clean, zero history rows remain | a check fails | converted | investigate; nothing is lost while the key is held |
+| 9. Delete every object under `<ws>/` outside the expected keyed set | partial | plaintext objects remain | resume; report |
+| 10. Verify: every row opens, the listed objects equal the expected keyed set, zero history rows remain (the ciphertext audit as a secondary signal) | a check fails | converted | investigate; nothing is lost while the key is held |
 
 **Losing the key after the apply** makes the server copy unrecoverable. Devices that still hold plaintext `blocks` defer instead of copying, and receive no deletes ([§5.2](#52-client-a-plaintext-pinned-device-that-sees-e2ee)). Their local plaintext survives and can be exported, but that is a last line of defence, not a plan. Store the key in two independent places before step 2.
 
@@ -233,7 +240,7 @@ The design's accepted metadata (§15), unchanged here:
 - timestamps, including the original creation dates this conversion deliberately keeps;
 - edit timing, authorship and `deleted` flags;
 - ciphertext lengths;
-- `workspaces.name`, which should be renamed in the runbook if it is sensitive.
+- `workspaces.name`. The runbook renames it beforehand if it is sensitive ([§7](#7-runbook) step 3).
 
 **Derived ids stay as they are, and some of them remain guess oracles.** Anyone who knows or can enumerate a key can hash it under the public namespace and look for the row. The kinds known today:
 
@@ -265,22 +272,27 @@ The first production run is tracked in #1288.
 
 1. **#719 has shipped.** Otherwise every new page linked after the conversion mints another page-name oracle.
 2. **Key custody.** Store the workspace key in two independent places, for example a password manager and paper.
-3. **Backup.** Take a full local SQLite export with the raw-SQLite export action (`src/utils/exportSqliteDb.ts`). It is plaintext, so keep it encrypted offline. This export is the rollback.
-4. **Fleet.** Every device runs a build with #1293, or is wiped (the browser's "clear site data"). Every device's upload queue is drained, and editing on other devices pauses for the duration.
-5. **Ordering.** Leave the workspace on the `cell` properties model until afterwards.
+3. **Workspace name.** If the name is sensitive, rename the workspace now and let the rename sync. It stays plaintext through the conversion. The old name lingers in dead tuples (step 9 vacuums `workspaces`) and in backups until they age out ([§8](#8-platform-residue-and-when-it-is-safe-if-breached)).
+4. **Content-recovery snapshot (not a rollback).** Take two copies and keep both encrypted offline, because both are plaintext:
+   - a full local SQLite export with the raw-SQLite export action (`src/utils/exportSqliteDb.ts`), which holds the `.db` files only;
+   - the attachment bytes: download the workspace's Storage prefix, or the OPFS byte store from a device that holds every attachment.
+
+   **The rollback is `abort`, and it exists only before the apply.** After the apply, nothing reverts the workspace to plaintext: e2ee → none is refused by design. If the key is lost, these snapshots let the content be rebuilt into a *new* plaintext workspace, with the losses of today's import (#401). The snapshots are for content recovery, not for undoing the conversion.
+5. **Fleet.** Every device runs a build with #1293, or is wiped (the browser's "clear site data"). Every device's upload queue is drained, and editing on other devices pauses for the duration.
+6. **Ordering.** Leave the workspace on the `cell` properties model until afterwards.
    - Property-definition synthesis runs only during the properties-as-blocks switch (`src/plugins/properties-migration/action.ts`), and on an e2ee workspace it mints K_id-keyed ids (`resolveSynthesisNamespace` in `src/data/internals/propertyDefinitionSynthesis.ts`).
    - Switching first would mint public, name-derived definition ids.
-6. Run the flow from a desktop: the device with the most attachment bytes stored locally.
+7. Run the flow from a desktop: the device with the most attachment bytes stored locally.
 
 **After:**
 
-7. Verification passes ([§5.6](#56-flow-and-failure-paths) step 10). Other devices paste the key and upgrade.
-8. **Operator: `VACUUM FULL`.**
-   - Run it on `blocks`, `blocks_history`, `private.workspace_conversion_rows` and `storage.objects`.
-   - The apply and the purge leave plaintext in dead tuples, and Storage metadata rows held the old sha256 paths.
+8. Verification passes ([§5.6](#56-flow-and-failure-paths) step 10). Other devices paste the key and upgrade.
+9. **Operator: `VACUUM FULL`.**
+   - Run it on `blocks`, `blocks_history`, `private.workspace_conversion_rows`, `storage.objects` and `workspaces`.
+   - The apply and the purge leave plaintext in dead tuples, Storage metadata rows held the old sha256 paths, and the rename left the old name in `workspaces`.
    - It takes an exclusive lock, so expect a short write stall across the fleet.
-9. **Operator: drop leftover ad-hoc tables** from past scripts (`scripts/system-author-cleanup.sql`, `scripts/roam-ts-backfill/backfill.sql`) if they still exist. They hold ids and timestamps, not content.
-10. **Act on #1289's findings** and record the workspace's "safe from" date ([§8](#8-platform-residue-and-when-it-is-safe-if-breached)).
+10. **Operator: drop leftover ad-hoc tables** from past scripts (`scripts/system-author-cleanup.sql`, `scripts/roam-ts-backfill/backfill.sql`) if they still exist. They hold ids and timestamps, not content.
+11. **Act on #1289's findings** and record the workspace's "safe from" date ([§8](#8-platform-residue-and-when-it-is-safe-if-breached)). That covers the clean-up #1289 says is needed, such as forcing PowerSync compaction or a reprocess, and purging versioned Storage objects. Until it's done, the live-system claim in §8 does not hold.
 
 ## 8. Platform residue, and when it is "safe if breached"
 
@@ -293,8 +305,12 @@ These copies live outside the repo's reach, so none of them is verified here. #1
 
 So the honest claim has two parts:
 
-- **The live systems.** Once the conversion commits, deletes the old objects and vacuums, a breach of the **live** database, Storage or sync service exposes only ciphertext and the metadata in [§6](#6-what-stays-visible-afterwards).
-- **The backups.** A breach of a **backup** is safe only after the longest retention window above has passed since then. The runbook records that date.
+- **The live systems.** Two of them are clean once the conversion commits, deletes the old objects and vacuums:
+  - **the live database**;
+  - **live Storage**, unless #1289 finds deleted objects are versioned.
+
+  The sync service's storage is clean only after whatever #1289 prescribes for it, such as forced compaction or a reprocess. Until all three hold, a breach of the live systems may still expose superseded plaintext. Once they do, it exposes only ciphertext and the metadata in [§6](#6-what-stays-visible-afterwards).
+- **The backups.** A breach of a **backup** is safe only after the longest retention window above has passed since that clean-up. The runbook records that date.
 
 ## 9. What the workspace gives up
 
@@ -319,7 +335,7 @@ Plaintext → e2ee is that operation starting from "no key". So the freeze / sta
 
 ## 11. Alternatives considered
 
-- **Export → new e2ee workspace → import.** Rejected, see [§2](#2-decision-convert-in-place-not-by-copy). It would keep an untouched fallback workspace, but the runbook's full local export provides the same rollback.
+- **Export → new e2ee workspace → import.** Rejected, see [§2](#2-decision-convert-in-place-not-by-copy). It would leave an untouched fallback workspace, a real rollback that in-place lacks: here, `abort` before the apply is the only rollback, and the runbook's snapshots are for content recovery ([§7](#7-runbook) step 4). The trade is accepted for the ids and history in-place keeps.
 - **Re-iding user-text-derived ids during the conversion.** Moved to #1297, see [§6](#6-what-stays-visible-afterwards). It would save one pass over the affected rows, at the cost of delete/insert pairs, broken links, and a leftover nobody can count, all inside a migration that otherwise only updates.
 - **Gradual re-upload through the normal patch path, with no freeze.** Rejected:
   - The ciphertext trigger checks the whole new row, so once the mode flips, an ordinary content-only edit to a row that hasn't been re-sealed yet is rejected.
