@@ -123,6 +123,9 @@ export const loadRoot = async <Root extends RootRow>(
 export const joinDisplayLines = (lines: readonly string[]): string =>
   lines.map(neutralizeDisplayText).join('\n')
 
+/** A line's share of {@link joinDisplayLines}' output, its line break included. */
+export const displayLineChars = (line: string): number => neutralizeDisplayText(line).length + 1
+
 export const siblingLines = (siblings: readonly string[] | undefined): string[] =>
   (siblings ?? []).map(sibling => `   ↳ sibling: ${sibling}`)
 

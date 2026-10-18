@@ -17,6 +17,7 @@ import { groupedBacklinksDataExtension } from '@/plugins/grouped-backlinks/dataE
 import { dailyNoteBlockId } from '@/plugins/daily-notes/dailyNotes'
 import { searchSourcesFacet } from '@/data/facets'
 import { hasLoneSurrogate } from '@/utils/string'
+import { AGENT_VIEW_DEFAULTS } from '@knowledge-medium/agent-cli/protocol'
 import { createAgentRuntimeContext, executeCommand } from '../commands'
 import type { AgentRuntimeContext } from '../protocol'
 import { resolveBlockRef, shortIds } from '../agentViews/resolveRef'
@@ -51,26 +52,31 @@ beforeEach(async () => {
 })
 
 let orderCounter = 0
-const create = async (args: {
+interface NewBlock {
   id: string
   content?: string
   parentId?: string | null
   references?: BlockReference[]
   properties?: BlockProperties
-}) => {
-  orderCounter += 1
+}
+/** In one transaction, in order: for trees too big to create a tx per block. */
+const createAll = async (blocks: readonly NewBlock[]) => {
   await repo.tx(async tx => {
-    await tx.create({
-      id: args.id,
-      workspaceId: WS,
-      parentId: args.parentId ?? null,
-      orderKey: `k${orderCounter.toString().padStart(6, '0')}`,
-      content: args.content ?? args.id,
-      references: args.references ?? [],
-      ...(args.properties ? {properties: args.properties} : {}),
-    })
+    for (const args of blocks) {
+      orderCounter += 1
+      await tx.create({
+        id: args.id,
+        workspaceId: WS,
+        parentId: args.parentId ?? null,
+        orderKey: `k${orderCounter.toString().padStart(6, '0')}`,
+        content: args.content ?? args.id,
+        references: args.references ?? [],
+        ...(args.properties ? {properties: args.properties} : {}),
+      })
+    }
   }, {scope: ChangeScope.BlockDefault})
 }
+const create = (args: NewBlock) => createAll([args])
 
 /** A `workspaces` row, which a read naming a workspace requires on this device. */
 const knownWorkspace = (id: string) => sharedDb.db.execute(
@@ -417,6 +423,119 @@ describe('view-outline', () => {
 
   it('says a dated daily note that does not exist yet has not been created', async () => {
     await expect(view({type: 'view-outline', ref: '2026-06-18'})).rejects.toThrow(/has not been created yet/)
+  })
+
+  describe('the output budget', () => {
+    /** Ids whose first 8 hex chars differ, so each prints as an 8-char short id. */
+    const seriesId = (series: string, i: number): string => uuid(`${series}${i.toString(16).padStart(6, '0')}`, i)
+    /** A property bag that prints about 15k characters with properties: full. */
+    const bigProperties = (): BlockProperties =>
+      Object.fromEntries(Array.from({length: 50}, (_, i) => [`p${i.toString().padStart(2, '0')}`, 'v'.repeat(300)]))
+    /** What the first `lines` printed lines take of the output, line breaks
+     *  included: the budget counts the header's lines and the rows'. */
+    const printedChars = (text: string, lines: number): number =>
+      text.split('\n').slice(0, lines).reduce((sum, line) => sum + line.length + 1, 0)
+    const longestLine = (lines: readonly string[]): number => Math.max(...lines.map(line => line.length + 1))
+
+    it('keeps the breadth-first prefix whose printed lines fit, and continues by offset from there', async () => {
+      // Ancestors whose titles the display neutralizing lengthens, so the
+      // breadcrumb line prints longer than it is built.
+      const ancestors = Array.from({length: 4}, (_, i) => seriesId('a1', i))
+      for (const [i, id] of ancestors.entries()) {
+        await create({id, parentId: ancestors[i - 1] ?? null, content: 'a\u202E'.repeat(12)})
+      }
+      await create({id: ROOT, parentId: ancestors.at(-1), content: 'Root', properties: bigProperties()})
+      const children = Array.from({length: 400}, (_, i) => ({id: seriesId('b1', i), parentId: ROOT, content: `entry ${i}`}))
+      await createAll(children.flatMap((child, i) => [child, {id: seriesId('b2', i), parentId: child.id, content: 'under'}]))
+
+      const command = {type: 'view-outline', ref: ROOT, depth: 1, limit: 400, properties: 'full'}
+      const out = await view<OutlineView>({...command, format: 'json'})
+      const kept = out.rows.length
+      expect(kept).toBeGreaterThan(0)
+      expect(out.budgetDropped).toBe(400 - kept)
+      expect(out.rows.map(row => row.content)).toEqual(children.slice(0, kept).map(child => child.content))
+      expect(out.rows.every(row => row.hiddenChildren === 1)).toBe(true)
+      expect(out.nextOffset).toBe(kept)
+
+      const text = await view<string>(command)
+      expect(text.split('\n')[1]).toMatch(/^in: .* ⏎ /)
+      const rowLines = text.split('\n').slice(2, 2 + kept)
+      expect(rowLines.map(line => /\^(\w+) {2}\(\+1 child\)$/.exec(line)?.[1])).toEqual(out.rows.map(row => row.shortId))
+      // Counted as printed: the root's lines, breadcrumb included, each row's
+      // with its hidden-children note, and every line break; one more row
+      // would not have fit.
+      const counted = printedChars(text, 2 + kept)
+      expect(counted).toBeLessThanOrEqual(AGENT_VIEW_DEFAULTS.outlineChars)
+      expect(counted + longestLine(rowLines)).toBeGreaterThan(AGENT_VIEW_DEFAULTS.outlineChars)
+      expect(text).toContain(`continue with offset=${kept}`)
+      expect(text).toMatch(new RegExp(`\\n… ${400 - kept} more selected blocks not shown, past the [\\d,]+-character output budget `
+        + '— narrow with properties=none, a lower limit or depth, or search with under=\\^00000001\\n'))
+
+      const next = await view<OutlineView>({...command, offset: kept, format: 'json'})
+      expect(next.rows[0].content).toBe(`entry ${kept}`)
+    })
+
+    it('drops the deepest selected blocks first, and counts each as its parent\'s hidden child', async () => {
+      await create({id: ROOT, content: 'Root'})
+      const children = Array.from({length: 100}, (_, i) => ({id: seriesId('c1', i), parentId: ROOT, content: `c${i}`}))
+      const grandchildren = children.flatMap((child, i) =>
+        [0, 1].map(j => ({id: seriesId('c2', 2 * i + j), parentId: child.id, content: 'x'.repeat(400)})))
+      await createAll([...children, ...grandchildren])
+
+      const out = await view<OutlineView>({type: 'view-outline', ref: ROOT, depth: 2, limit: 300, format: 'json'})
+      const shown = out.rows.filter(row => row.depth === 2).length
+      expect(shown).toBeGreaterThan(0)
+      expect(shown).toBeLessThan(200)
+      expect(out.budgetDropped).toBe(200 - shown)
+      expect(out.nextOffset).toBeNull()
+      expect(out.rows.filter(row => row.depth === 1)).toHaveLength(100)
+      const keptUnder = (i: number) => grandchildren.slice(2 * i, 2 * i + 2).filter((_, j) => 2 * i + j < shown)
+      expect(out.rows.map(row => row.id)).toEqual(children.flatMap((child, i) => [child.id, ...keptUnder(i).map(kept => kept.id)]))
+      for (const [i, child] of children.entries()) {
+        expect(out.rows.find(row => row.id === child.id)).toMatchObject({childCount: 2, hiddenChildren: 2 - keptUnder(i).length})
+      }
+
+      // A parent prints its hidden-children note for the children it keeps
+      // hidden, and is charged no more: one more row would not have fit.
+      const text = await view<string>({type: 'view-outline', ref: ROOT, depth: 2, limit: 300})
+      const counted = printedChars(text, 1 + out.rows.length)
+      expect(counted).toBeLessThanOrEqual(AGENT_VIEW_DEFAULTS.outlineChars)
+      expect(counted + longestLine(text.split('\n').slice(1, 1 + out.rows.length))).toBeGreaterThan(AGENT_VIEW_DEFAULTS.outlineChars)
+    })
+
+    it('counts a child sync adds after its parent was counted, even when the budget drops it', async () => {
+      await create({id: ROOT, content: 'Root'})
+      const children = Array.from({length: 100}, (_, i) => ({id: seriesId('f1', i), parentId: ROOT, content: `c${i}`}))
+      await createAll([...children, ...children.map((child, i) => ({id: seriesId('f2', i), parentId: child.id, content: 'x'.repeat(400)}))])
+      const last = children.at(-1)!.id
+      let added = false
+      const out = await duringReads({
+        after: async sql => {
+          if (added || !sql.includes('AS child_count')) return
+          added = true
+          await create({id: seriesId('f3', 0), parentId: last, content: 'arrived after its parent was counted'})
+        },
+      }, () => view<OutlineView>({type: 'view-outline', ref: ROOT, depth: 2, limit: 300, format: 'json'}))
+      expect(out.budgetDropped).toBeGreaterThan(0)
+      expect(out.rows.find(row => row.id === last)).toMatchObject({childCount: 2, hiddenChildren: 2})
+    })
+
+    it('keeps the first row whatever its length, so a continuation always moves forward', async () => {
+      await create({id: ROOT, content: 'Root', properties: bigProperties()})
+      await createAll([0, 1].map(i => ({id: seriesId('d1', i), parentId: ROOT, content: `long ${i}`, properties: bigProperties()})))
+      const out = await view<OutlineView>({type: 'view-outline', ref: ROOT, depth: 1, properties: 'full', format: 'json'})
+      expect(out.rows.map(row => row.content)).toEqual(['long 0'])
+      expect(out.nextOffset).toBe(1)
+      expect(out.budgetDropped).toBe(1)
+    })
+
+    it('says nothing about the budget when everything fits', async () => {
+      await create({id: ROOT, content: 'Root'})
+      await create({id: seriesId('e1', 0), parentId: ROOT, content: 'only'})
+      const out = await view<OutlineView>({type: 'view-outline', ref: ROOT, format: 'json'})
+      expect(out.budgetDropped).toBe(0)
+      expect(await view<string>({type: 'view-outline', ref: ROOT})).not.toContain('output budget')
+    })
   })
 })
 
