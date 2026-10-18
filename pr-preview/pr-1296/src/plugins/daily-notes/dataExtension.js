@@ -1,1 +1,1 @@
-import{OB as e}from"../../../chunks/app-DtbcrKJp.js";export{e as dailyNotesDataExtension};
+import{OB as e}from"../../../chunks/app-k9fBkwTd.js";export{e as dailyNotesDataExtension};
