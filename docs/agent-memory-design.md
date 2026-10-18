@@ -190,6 +190,7 @@ Memories are documents. You want to edit, undo, link and read them like any page
 2. **An `unattended` token scope.** It's a third value beside `read-write` and `read-only`, chosen when pairing. Agent-dispatch's setup mints one for the daemon by default, and a scheduled job on the plain km server uses one too. The bridge server does two things with it:
    - It refuses this scope `eval`, `sql execute`, `install-extension` and `run-action`, the same way it refuses read-only tokens their writes.
    - It stamps each command it delivers with the sending token's scope. The server sets that stamp itself, so an agent can neither forge it nor strip it.
+   - It delivers an unattended token's commands only to a tab that registers support for the scope. A tab running an app version from before this feature gets none, so it can never run them without the guard.
 3. **One check, after everything else in the transaction.** The app runs an unattended command's transactions with `actor: 'unattended'`. The executor hands its verbs a repo facade that sets this, the same way `repo.undoGroup` injects `groupId`. A new terminal commit-guard phase in core runs after the same-tx processors. The agent-runtime plugin's guard there refuses any unattended transaction that changed a row whose ancestry, before or after the transaction, includes the memory page, or the page itself. The message is: *"Unattended agents can't change graph memory. Suggest it in your reply instead."* Running last, over the rows actually written, closes three gaps at once:
    - **Cascades.** A rename that rewrites a memory's `[[…]]` text is refused, and so is a delete whose block ref gets inlined into a memory. The same goes for any later processor that rewrites other blocks.
    - **Naming.** The guard sees resolved rows, so it doesn't matter whether the target was named by an id prefix, a page name or a date.
@@ -251,7 +252,8 @@ What doesn't carry over: beads' private sync, since graph memory is readable by 
    - an inlined-delete cascade;
    - each write verb, including a move onto the page and off it, and a restore;
    - the scope's refusal of `eval` and the rest;
-   - a forged scope field in a command payload being ignored.
+   - a forged scope field in a command payload being ignored;
+   - an unattended command never reaching a tab that doesn't register the scope.
 5. **Dispatch.** The daemon pairs with an unattended token by default, `decidePending` skips mentions inside memory, the location appendix carries its suggestion line, and the Codex `instructions` check gets done.
 
 ## Decisions for Vlad
