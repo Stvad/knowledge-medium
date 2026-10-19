@@ -13,8 +13,6 @@
 -- tell "the server said no" from a transport error. A flip that finds writes
 -- in flight raises 55P03 instead: it means "retry", not "no".
 
-begin;
-
 -- ── workspace_conversions ───────────────────────────────────────────────
 -- One row per conversion in progress; no row means none is.
 -- 'sealing': the server may still hold plaintext; no device may unlock.
@@ -134,14 +132,16 @@ revoke all on function private.refuse_conversion(text) from public, anon, authen
 -- LOCK TABLE blocks IN SHARE MODE conflicts with every block write's ROW
 -- EXCLUSIVE lock. Granted, it means no block write is in flight, so every
 -- write that began before the flip is in blocks and in blocks_history before
--- the mode changes; held, it keeps new writes back until this transaction
--- commits, so each of those sees e2ee in blocks_require_ciphertext_for_e2ee,
--- which reads the mode without a lock.
+-- the mode change commits; held, it keeps new writes back until then, so each
+-- of those sees e2ee in blocks_require_ciphertext_for_e2ee, which reads the
+-- mode without a lock. That holds for READ COMMITTED writers, which every API
+-- path is; a REPEATABLE READ snapshot taken before the flip would miss it.
 --
--- The flip never waits, since every block write in the database would queue
--- behind a waiting lock request: the workspace row and the table are both
--- taken NOWAIT, the row first so that holding the table never waits on it.
--- A refusal that needs neither lock is decided before them.
+-- Every block write in the database queues behind a waiting request for that
+-- lock, and behind a granted one while it is held. So it is taken NOWAIT and
+-- LAST, once nothing left in the transaction can wait; the workspace row,
+-- which a client can hold, is taken NOWAIT first. A refusal that needs
+-- neither lock is decided before them.
 create function public.convert_workspace_to_e2ee(p_workspace_id text, p_wk_canary text)
     returns void
     language plpgsql
@@ -169,20 +169,21 @@ begin
             perform private.refuse_conversion(
                 'convert_workspace_to_e2ee: the workspace is not plaintext');
         end if;
+
+        perform set_config('km.conversion', p_workspace_id, true);
+        update public.workspaces
+            set encryption_mode = 'e2ee',
+                wk_canary = p_wk_canary
+            where id = p_workspace_id;
+
+        insert into public.workspace_conversions (workspace_id, phase)
+            values (p_workspace_id, 'sealing');
+
         lock table public.blocks in share mode nowait;
     exception when lock_not_available then
         raise exception 'convert_workspace_to_e2ee: writes are in flight; retry'
             using errcode = 'lock_not_available';
     end;
-
-    perform set_config('km.conversion', p_workspace_id, true);
-    update public.workspaces
-        set encryption_mode = 'e2ee',
-            wk_canary = p_wk_canary
-        where id = p_workspace_id;
-
-    insert into public.workspace_conversions (workspace_id, phase)
-        values (p_workspace_id, 'sealing');
 end;
 $$;
 
@@ -344,12 +345,6 @@ alter function public.finish_conversion(text) owner to postgres;
 revoke all on function public.finish_conversion(text) from public, anon, service_role;
 grant execute on function public.finish_conversion(text) to authenticated;
 
--- ── export index ────────────────────────────────────────────────────────
--- The recovery-bundle export and the re-seal verify page a workspace's
--- history by event_id; the purge deletes by workspace_id.
-create index if not exists idx_blocks_history_ws_event
-    on public.blocks_history (workspace_id, event_id);
-
 -- ── attachments bucket ──────────────────────────────────────────────────
 -- A plaintext capture may be exactly 50 MiB (DEFAULT_MAX_CAPTURE_BYTES), and
 -- sealing it adds BINARY_ENVELOPE_OVERHEAD_BYTES (36), rounded up to 64.
@@ -367,4 +362,3 @@ begin
         where id = 'attachments';
 end $$;
 
-commit;

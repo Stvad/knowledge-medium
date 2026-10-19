@@ -17,7 +17,7 @@ BEGIN;
 CREATE EXTENSION IF NOT EXISTS pgtap WITH SCHEMA extensions;
 SET LOCAL search_path TO public, extensions;
 
-SELECT plan(60);
+SELECT plan(63);
 
 CREATE TEMP TABLE conv_ctx AS
 SELECT
@@ -456,6 +456,21 @@ SELECT is(
 );
 
 SELECT is(
+  pg_temp.probe('authenticated', pg_temp.owner_id(),
+    pg_temp.purge_sql(pg_temp.ws(), pg_temp.through(), pg_temp.archived()),
+    format('SELECT public.apply_block_patches(%L::jsonb)',
+      (SELECT jsonb_agg(jsonb_build_object(
+          'id', b.id,
+          'content', pg_temp.env(b.id || ':content'),
+          'properties_json', pg_temp.env(b.id || ':properties'),
+          'references_json', pg_temp.env(b.id || ':references'),
+          'base_updated_at', b.updated_at))
+       FROM public.blocks b WHERE b.workspace_id = pg_temp.ws() AND NOT b.deleted))),
+  'KMC01: purge_workspace_history: a block row of the workspace is not fully sealed',
+  'the purge refuses while a soft-deleted row alone is plaintext'
+);
+
+SELECT is(
   pg_temp.outcome_as('authenticated', pg_temp.owner_id(),
     format('SELECT public.apply_block_patches(%L::jsonb)',
       (SELECT jsonb_agg(jsonb_build_object(
@@ -589,6 +604,28 @@ SELECT is(
 -------------------------------------------------------------------------
 -- The purge succeeds, and finish_conversion completes the conversion.
 -------------------------------------------------------------------------
+-- A re-seal delivered twice: the replay changes nothing but the version,
+-- and is still a re-seal write.
+SELECT is(
+  pg_temp.outcome_as('authenticated', pg_temp.owner_id(),
+    format('SELECT public.apply_block_patches(%L::jsonb)',
+      jsonb_build_array(jsonb_build_object(
+        'id', pg_temp.ws() || '-block-1',
+        'content', pg_temp.env(pg_temp.ws() || '-block-1:content'),
+        'properties_json', pg_temp.env(pg_temp.ws() || '-block-1:properties'),
+        'references_json', pg_temp.env(pg_temp.ws() || '-block-1:references'),
+        'base_updated_at', 0)))),
+  'ok',
+  'a re-seal is replayed'
+);
+
+SELECT is(
+  (SELECT count(*) FROM public.blocks_history
+    WHERE workspace_id = pg_temp.ws() AND changed_columns = ARRAY['updated_at']),
+  1::bigint,
+  'fixture: the replay wrote a version-only history row'
+);
+
 SELECT is(
   pg_temp.outcome_as('authenticated', pg_temp.owner_id(),
     pg_temp.purge_sql(pg_temp.ws(), pg_temp.through(), pg_temp.archived())),

@@ -17,7 +17,7 @@ BEGIN;
 CREATE EXTENSION IF NOT EXISTS pgtap WITH SCHEMA extensions;
 SET LOCAL search_path TO public, extensions;
 
-SELECT plan(23);
+SELECT plan(27);
 
 SELECT rolsuper AS conv_lock_is_super FROM pg_roles WHERE rolname = current_user \gset
 
@@ -32,6 +32,8 @@ SELECT
   'test-ws-lock-c-' || extensions.gen_random_uuid()::text AS ws_c,
   'test-ws-lock-d-' || extensions.gen_random_uuid()::text AS ws_d,
   'test-ws-lock-e-' || extensions.gen_random_uuid()::text AS ws_e,
+  'test-ws-lock-f-' || extensions.gen_random_uuid()::text AS ws_f,
+  'test-ws-lock-g-' || extensions.gen_random_uuid()::text AS ws_g,
   extensions.gen_random_uuid()::text AS owner_id,
   extensions.gen_random_uuid()::text AS stranger_id,
   (extract(epoch from now()) * 1000)::bigint - 60000 AS then_ms,
@@ -118,6 +120,23 @@ $$;
 CREATE FUNCTION pg_temp.begin_as_owner(p_name text) RETURNS void LANGUAGE sql
 AS $$ SELECT pg_temp.begin_as(p_name, (pg_temp.ctx()).owner_id) $$;
 
+-- True once p_name's async query has finished; false if it is still running
+-- after p_limit.
+CREATE FUNCTION pg_temp.settles_within(p_name text, p_limit interval) RETURNS boolean LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_started timestamptz := clock_timestamp();
+BEGIN
+  WHILE dblink_is_busy(p_name) = 1 LOOP
+    IF clock_timestamp() - v_started > p_limit THEN
+      RETURN false;
+    END IF;
+    PERFORM pg_sleep(0.025);
+  END LOOP;
+  RETURN true;
+END;
+$$;
+
 -- True once p_waiter is blocked on a lock p_holder holds; false after ~5s.
 CREATE FUNCTION pg_temp.blocked_by(p_waiter int, p_holder int) RETURNS boolean LANGUAGE plpgsql
 AS $$
@@ -174,13 +193,14 @@ $$;
 CREATE FUNCTION pg_temp.content_of(p_ws text) RETURNS text LANGUAGE sql
 AS $$ SELECT content FROM public.blocks WHERE id = p_ws || '-block' $$;
 
--- Committed fixture: five plaintext workspaces of one owner, one block each.
+-- Committed fixture: seven plaintext workspaces of one owner, one block
+-- each, and a second block in ws_g.
 SELECT pg_temp.connect('conv_setup');
 SELECT pg_temp.connect('conv_writer');
 SELECT pg_temp.connect('conv_flipper');
 
 SELECT pg_temp.remote('conv_setup', format($q$
-  WITH w AS (SELECT unnest(ARRAY[%3$L, %4$L, %5$L, %6$L, %7$L]) AS id),
+  WITH w AS (SELECT unnest(ARRAY[%3$L, %4$L, %5$L, %6$L, %7$L, %8$L, %9$L]) AS id),
   ws AS (
     INSERT INTO public.workspaces (id, name, owner_user_id, create_time, update_time)
     SELECT id, 'test-lock', %1$L, %2$s, %2$s FROM w RETURNING id
@@ -192,17 +212,19 @@ SELECT pg_temp.remote('conv_setup', format($q$
   SELECT count(*) FROM ws
 $q$, (pg_temp.ctx()).owner_id, (pg_temp.ctx()).then_ms,
      (pg_temp.ctx()).ws_a, (pg_temp.ctx()).ws_b, (pg_temp.ctx()).ws_c,
-     (pg_temp.ctx()).ws_d, (pg_temp.ctx()).ws_e));
+     (pg_temp.ctx()).ws_d, (pg_temp.ctx()).ws_e, (pg_temp.ctx()).ws_f, (pg_temp.ctx()).ws_g));
 
 SELECT pg_temp.remote('conv_setup', format($q$
   INSERT INTO public.blocks (id, workspace_id, parent_id, order_key, content, properties_json,
                              references_json, created_at, updated_at, user_updated_at,
                              created_by, updated_by, deleted)
   SELECT w || '-block', w, NULL, 'a0', 'plaintext', '{}', '[]', %2$s, %2$s, %2$s, %1$L, %1$L, false
-  FROM unnest(ARRAY[%3$L, %4$L, %5$L, %6$L, %7$L]) AS w
+  FROM unnest(ARRAY[%3$L, %4$L, %5$L, %6$L, %7$L, %8$L, %9$L]) AS w
+  UNION ALL
+  SELECT %9$L || '-block-2', %9$L, NULL, 'a1', 'plaintext 2', '{}', '[]', %2$s, %2$s, %2$s, %1$L, %1$L, false
 $q$, (pg_temp.ctx()).owner_id, (pg_temp.ctx()).then_ms,
      (pg_temp.ctx()).ws_a, (pg_temp.ctx()).ws_b, (pg_temp.ctx()).ws_c,
-     (pg_temp.ctx()).ws_d, (pg_temp.ctx()).ws_e));
+     (pg_temp.ctx()).ws_d, (pg_temp.ctx()).ws_e, (pg_temp.ctx()).ws_f, (pg_temp.ctx()).ws_g));
 
 -------------------------------------------------------------------------
 -- While a block write is in flight the flip refuses at once, retryably, and
@@ -411,21 +433,95 @@ SELECT matches(pg_temp.async_outcome('conv_writer'),
   'and is refused once the first commits');
 SELECT pg_temp.remote('conv_writer', 'ROLLBACK');
 
+-------------------------------------------------------------------------
+-- The flip takes the blocks lock last, so whatever it still waits on, it
+-- waits on without holding back anyone's block writes.
+-------------------------------------------------------------------------
+SELECT pg_temp.remote('conv_setup', 'BEGIN');
+SELECT pg_temp.remote('conv_setup', 'LOCK TABLE public.workspace_conversions IN SHARE MODE');
+
+SELECT pg_temp.begin_as_owner('conv_flipper');
+SELECT dblink_send_query('conv_flipper', pg_temp.flip_sql((pg_temp.ctx()).ws_f));
+SELECT ok(
+  pg_temp.blocked_by(pg_temp.pid_of('conv_flipper'), pg_temp.pid_of('conv_setup')),
+  'a flip can wait on a lock it needs before the blocks lock'
+);
+
+SELECT pg_temp.begin_as_owner('conv_writer');
+SELECT is(
+  pg_temp.remote_outcome_within('conv_writer', pg_temp.patch_sql((pg_temp.ctx()).ws_c, 'written meanwhile'), '1 second'),
+  'OK',
+  'and another workspace''s block write is not held back meanwhile'
+);
+SELECT pg_temp.remote('conv_writer', 'ROLLBACK');
+
+SELECT pg_temp.remote('conv_setup', 'ROLLBACK');
+SELECT is(pg_temp.async_outcome('conv_flipper'), 'OK', 'the flip completes once the lock is free');
+SELECT pg_temp.remote('conv_flipper', 'COMMIT');
+
+-------------------------------------------------------------------------
+-- The purge checks every row sealed BEFORE it deletes: a re-seal that
+-- commits while the DELETE runs would otherwise leave its plaintext
+-- before_diff behind, past the DELETE's snapshot.
+-------------------------------------------------------------------------
+SELECT pg_temp.begin_as_owner('conv_setup');
+SELECT pg_temp.remote('conv_setup', pg_temp.flip_sql((pg_temp.ctx()).ws_g));
+SELECT pg_temp.remote('conv_setup', 'COMMIT');
+
+INSERT INTO conv_lock_bundle
+SELECT workspace_id, max(event_id), count(*)
+FROM public.blocks_history
+WHERE workspace_id = (pg_temp.ctx()).ws_g
+GROUP BY workspace_id;
+
+CREATE FUNCTION pg_temp.reseal_sql(p_block text) RETURNS text LANGUAGE sql
+AS $$
+  SELECT format('SELECT public.apply_block_patches(%L::jsonb)',
+    jsonb_build_array(jsonb_build_object(
+      'id', p_block,
+      'content', 'enc:v1:' || repeat('C', 40),
+      'properties_json', 'enc:v1:' || repeat('P', 40),
+      'references_json', 'enc:v1:' || repeat('R', 40),
+      'base_updated_at', (SELECT updated_at FROM public.blocks WHERE id = p_block))))
+$$;
+
+SELECT pg_temp.begin_as_owner('conv_writer');
+SELECT pg_temp.remote('conv_writer', pg_temp.reseal_sql((pg_temp.ctx()).ws_g || '-block'));
+SELECT pg_temp.remote('conv_writer', 'COMMIT');
+
+-- The last re-seal is in flight, holding one of the workspace's history rows
+-- so that a DELETE reaching it would wait.
+SELECT pg_temp.remote('conv_setup', 'BEGIN');
+SELECT pg_temp.remote('conv_setup', format(
+  'SELECT 1 FROM public.blocks_history WHERE workspace_id = %L ORDER BY event_id LIMIT 1 FOR UPDATE',
+  (pg_temp.ctx()).ws_g));
+SELECT pg_temp.remote('conv_setup', pg_temp.reseal_sql((pg_temp.ctx()).ws_g || '-block-2'));
+
+SELECT pg_temp.begin_as_owner('conv_flipper');
+SELECT dblink_send_query('conv_flipper', pg_temp.purge_sql((pg_temp.ctx()).ws_g));
+SELECT pg_temp.settles_within('conv_flipper', '1 second');
+SELECT pg_temp.remote('conv_setup', 'COMMIT');
+
+SELECT matches(pg_temp.async_outcome('conv_flipper'),
+  '^ERROR:  purge_workspace_history: a block row of the workspace is not fully sealed',
+  'a purge racing the last re-seal is refused, not left holding its plaintext');
+SELECT pg_temp.remote('conv_flipper', 'ROLLBACK');
+
 -- The fixture was committed: delete it.
 SELECT pg_temp.remote('conv_setup', format($q$
-  WITH ws AS (DELETE FROM public.workspaces WHERE id IN (%1$L, %2$L, %3$L, %4$L, %5$L) RETURNING id)
+  WITH ws AS (DELETE FROM public.workspaces WHERE id IN (%1$L, %2$L, %3$L, %4$L, %5$L, %6$L, %7$L) RETURNING id)
   SELECT count(*) FROM ws
 $q$, (pg_temp.ctx()).ws_a, (pg_temp.ctx()).ws_b, (pg_temp.ctx()).ws_c,
-     (pg_temp.ctx()).ws_d, (pg_temp.ctx()).ws_e));
+     (pg_temp.ctx()).ws_d, (pg_temp.ctx()).ws_e, (pg_temp.ctx()).ws_f, (pg_temp.ctx()).ws_g));
 SELECT pg_temp.remote('conv_setup', format($q$
-  DELETE FROM public.blocks_history WHERE workspace_id IN (%1$L, %2$L, %3$L, %4$L, %5$L)
+  DELETE FROM public.blocks_history WHERE workspace_id IN (%1$L, %2$L, %3$L, %4$L, %5$L, %6$L, %7$L)
 $q$, (pg_temp.ctx()).ws_a, (pg_temp.ctx()).ws_b, (pg_temp.ctx()).ws_c,
-     (pg_temp.ctx()).ws_d, (pg_temp.ctx()).ws_e));
+     (pg_temp.ctx()).ws_d, (pg_temp.ctx()).ws_e, (pg_temp.ctx()).ws_f, (pg_temp.ctx()).ws_g));
 SELECT dblink_disconnect(name) FROM conv_lock_pids;
 
 \else
 
-SELECT skip('dblink connects back only as a superuser; run with pnpm check:db', 23);
+SELECT skip('dblink connects back only as a superuser; run with pnpm check:db', 27);
 
 \endif
 
