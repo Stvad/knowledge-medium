@@ -1,1 +1,1 @@
-import{BO as e,VO as t}from"../../chunks/app-Bcc0LPwe.js";export{e as BlockChildren,t as BlockComponent};
+import{$O as e,QO as t}from"../../chunks/app-Bxxy0zGK.js";export{t as BlockChildren,e as BlockComponent};

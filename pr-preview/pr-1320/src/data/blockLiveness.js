@@ -1,1 +1,1 @@
-import{OP as e,kP as t}from"../../chunks/app-Bcc0LPwe.js";export{e as anyBlockTombstoned,t as isBlockTombstoned};
+import{BP as e,VP as t}from"../../chunks/app-Bxxy0zGK.js";export{e as anyBlockTombstoned,t as isBlockTombstoned};

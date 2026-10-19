@@ -1,1 +1,1 @@
-import{MC as e}from"../../../chunks/app-Bcc0LPwe.js";export{e as DailyNotePickerHeaderItem};
+import{WC as e}from"../../../chunks/app-Bxxy0zGK.js";export{e as DailyNotePickerHeaderItem};

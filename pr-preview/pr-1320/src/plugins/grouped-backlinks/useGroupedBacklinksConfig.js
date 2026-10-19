@@ -1,1 +1,1 @@
-import{rp as e}from"../../../chunks/app-Bcc0LPwe.js";export{e as useGroupedBacklinksConfig};
+import{ap as e}from"../../../chunks/app-Bxxy0zGK.js";export{e as useGroupedBacklinksConfig};

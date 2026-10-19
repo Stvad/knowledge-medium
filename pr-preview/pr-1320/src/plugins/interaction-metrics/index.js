@@ -1,1 +1,1 @@
-import{gr as e}from"../../../chunks/app-Bcc0LPwe.js";export{e as interactionMetricsPlugin};
+import{vr as e}from"../../../chunks/app-Bxxy0zGK.js";export{e as interactionMetricsPlugin};
