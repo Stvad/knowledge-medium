@@ -1,1 +1,1 @@
-import{GL as e,WL as t}from"../../../chunks/app-BUKIrPTl.js";export{t as REFERENCES_TARGET_INVALIDATION_CHANNEL,e as referencesInvalidationRule};
+import{GL as e,WL as t}from"../../../chunks/app-DQyrg95s.js";export{t as REFERENCES_TARGET_INVALIDATION_CHANNEL,e as referencesInvalidationRule};

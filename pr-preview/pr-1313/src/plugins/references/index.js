@@ -1,1 +1,1 @@
-import{wp as e}from"../../../chunks/app-BUKIrPTl.js";export{e as referencesPlugin};
+import{wp as e}from"../../../chunks/app-DQyrg95s.js";export{e as referencesPlugin};

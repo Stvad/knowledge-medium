@@ -1,1 +1,1 @@
-import{sU as e}from"../../chunks/app-BUKIrPTl.js";export{e as omnilinerNamespace};
+import{sU as e}from"../../chunks/app-DQyrg95s.js";export{e as omnilinerNamespace};

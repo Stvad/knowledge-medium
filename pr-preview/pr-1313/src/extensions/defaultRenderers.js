@@ -1,1 +1,1 @@
-import{dO as e,fO as t,pO as n}from"../../chunks/app-BUKIrPTl.js";export{e as defaultRegistry,t as defaultRendererContributions,n as defaultRenderersExtension};
+import{dO as e,fO as t,pO as n}from"../../chunks/app-DQyrg95s.js";export{e as defaultRegistry,t as defaultRendererContributions,n as defaultRenderersExtension};

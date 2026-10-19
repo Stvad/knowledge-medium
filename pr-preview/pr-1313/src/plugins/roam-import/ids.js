@@ -1,1 +1,1 @@
-import{Bc as e}from"../../../chunks/app-BUKIrPTl.js";export{e as resolveDailyPage};
+import{Bc as e}from"../../../chunks/app-DQyrg95s.js";export{e as resolveDailyPage};

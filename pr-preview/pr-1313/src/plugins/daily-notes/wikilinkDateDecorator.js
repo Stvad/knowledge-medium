@@ -1,1 +1,1 @@
-import{PS as e}from"../../../chunks/app-BUKIrPTl.js";export{e as dailyDateWikilinkDecorator};
+import{PS as e}from"../../../chunks/app-DQyrg95s.js";export{e as dailyDateWikilinkDecorator};

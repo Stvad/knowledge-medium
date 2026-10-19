@@ -1,1 +1,1 @@
-import{Aq as e}from"../../chunks/app-BUKIrPTl.js";export{e as kernelDataExtension};
+import{Aq as e}from"../../chunks/app-DQyrg95s.js";export{e as kernelDataExtension};
