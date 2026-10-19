@@ -1,0 +1,1 @@
+import{lP as e,uP as t}from"../../../chunks/app-BD_NJTtk.js";export{e as isPropertyPanelHiddenProperty,t as isPropertyPanelReadOnlyProperty};

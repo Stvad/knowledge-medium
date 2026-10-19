@@ -1,0 +1,1 @@
+import{dE as e,fE as t}from"../../../chunks/app-BD_NJTtk.js";export{e as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,t as openExtensionsSettingsAction};

@@ -1,0 +1,1 @@
+import{LT as e,RT as t}from"../../chunks/app-BD_NJTtk.js";export{e as exampleExtensions,t as insertExampleExtensionsUnder};

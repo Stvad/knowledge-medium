@@ -1,0 +1,1 @@
+import{hV as e,mV as t}from"../../../../chunks/app-BD_NJTtk.js";export{t as BACKLINKS_COUNT_FOR_BLOCK_QUERY,e as backlinksCountForBlockQuery};

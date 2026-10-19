@@ -1,0 +1,1 @@
+import{Jg as e,Kg as t,Pg as n,Yg as r,qg as i}from"../../../chunks/app-BD_NJTtk.js";export{i as EXTENSIONS_PAGE_TITLE,e as TUTORIAL_DEFAULT_TITLE,r as TUTORIAL_VIM_TITLE,n as onboardingPlugin,t as seedTutorial};

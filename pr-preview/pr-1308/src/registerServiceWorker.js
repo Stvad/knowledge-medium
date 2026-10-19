@@ -1,0 +1,1 @@
+import{IE as e,LE as t}from"../chunks/app-BD_NJTtk.js";export{e as checkForAppUpdate,t as registerServiceWorker};

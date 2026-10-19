@@ -1,0 +1,1 @@
+import{$P as e}from"../../chunks/app-BD_NJTtk.js";export{e as defineVerbFacet};

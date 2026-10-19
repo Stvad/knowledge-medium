@@ -1,0 +1,1 @@
+import{iM as e,rM as t}from"../../../chunks/app-BD_NJTtk.js";export{t as MetadataRow,e as PropertySectionLabel};

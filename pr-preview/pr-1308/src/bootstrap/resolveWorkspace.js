@@ -1,0 +1,1 @@
+import{l as e}from"../../chunks/app-BD_NJTtk.js";export{e as resolveWorkspace};

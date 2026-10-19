@@ -1,0 +1,1 @@
+import{wM as e}from"../../chunks/app-BD_NJTtk.js";export{e as buildPropertyPanelSections};
