@@ -62,6 +62,38 @@ export const normalizeKeyRecord = (stored: unknown): WorkspaceKeyRecord | null =
   return { wk: stored as CryptoKey, contentKeyHmac: null }
 }
 
+/**
+ * The stored record if it can open the workspace fully: a WK AND its K_id. A
+ * LEGACY record (no K_id) can decrypt text but not media, and K_id can't be
+ * re-derived from the stored non-extractable WK — only a re-paste repopulates
+ * it — so it counts as no key: the gate prompts the re-paste instead of opening
+ * into permanently-broken media. Throws when the store can't be read.
+ */
+export const getUsableKeyRecord = async (
+  keyStore: WorkspaceKeyStore,
+  userId: string,
+  workspaceId: string,
+): Promise<WorkspaceKeyRecord | null> => {
+  const record = await keyStore.get(userId, workspaceId)
+  return record?.contentKeyHmac ? record : null
+}
+
+/** {@link getUsableKeyRecord}, reading an unreadable store (IndexedDB
+ *  unavailable / corrupt / quota) as "no key" — for callers that fail closed on
+ *  absence and must not throw. */
+export const readUsableKeyRecord = async (
+  keyStore: WorkspaceKeyStore,
+  userId: string,
+  workspaceId: string,
+): Promise<WorkspaceKeyRecord | null> => {
+  try {
+    return await getUsableKeyRecord(keyStore, userId, workspaceId)
+  } catch (err) {
+    console.warn(`[keyStore] key read failed for ${workspaceId}; treating as absent`, err)
+    return null
+  }
+}
+
 export interface WorkspaceKeyStore {
   get(userId: string, workspaceId: string): Promise<WorkspaceKeyRecord | null>
   put(userId: string, workspaceId: string, record: WorkspaceKeyRecord): Promise<void>

@@ -1345,9 +1345,11 @@ export class Repo {
    *  a workspace whose FLAGS may be wrong — the deterministic-id shadow this
    *  predates the flag entirely — so trusting the flag to name the work is the
    *  one thing they must not do. Unpinned by any test (the two scopes agree on
-   *  every shape a test can build), which is why it is written here. */
-  async drainSyncWorkspace(workspaceId: string): Promise<void> {
-    if (this.syncObserver) await this.syncObserver.drainWorkspace(workspaceId, 'all')
+   *  every shape a test can build), which is why it is written here.
+   *
+   *  Returns the pass's report, or null when no observer is running. */
+  async drainSyncWorkspace(workspaceId: string): Promise<RematerializeReport | null> {
+    return this.syncObserver ? this.syncObserver.drainWorkspace(workspaceId, 'all') : null
   }
 
   /** Frozen snapshot of internal data-layer counters + timings
