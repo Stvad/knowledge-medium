@@ -142,7 +142,7 @@ The phase only moves forward, so a resume never falls back.
 - the upload queue is drained, attachment records included, and no rejected rows are pending;
 - `canPersistPins()` passes, and the key store is durable (not `createWorkspaceKeyStore`'s in-memory fallback);
 - the File System Access API is available (desktop Chromium), because the bundle has to be re-opened to verify it;
-- the user confirms the residue named in [§7](#7-what-stays-visible-afterwards), disk headroom ([§8](#8-runbook)), and free space for the bundle. Its size is shown: the database, the attachment bytes, the server history and `blocks.jsonl`. A dry run of step 3's paging measures the last two without writing anything. A bundle that can't be written after the flip leaves every device waiting until it is.
+- the user confirms the residue named in [§7](#7-what-stays-visible-afterwards), disk headroom ([§8](#8-runbook)), free space for the bundle, and any media block whose bytes exist nowhere, neither as a raw object nor locally, since no step can bring those back. Its size is shown: the database, the attachment bytes, the server history and `blocks.jsonl`. A dry run of step 3's paging measures the last two without writing anything. A bundle that can't be written after the flip leaves every device waiting until it is.
 
 **1. Key.**
 - If this device already holds a key record for the workspace, from an earlier attempt that didn't flip, the run reuses it. The user saved that key, and a late-committing flip would carry its canary.
@@ -183,7 +183,7 @@ Resuming just runs this again. It can take hours for a large workspace, so the f
 - **The other columns** need no check here, because the purge refuses any write after `through` that touched more than the content columns and `updated_at`.
 
 **6. Purge.**
-1. **Re-verify the bundle first.** Re-open the saved file, through the stored file handle or by asking the user to pick it, and check that its manifest hashes to the one in the bundle record and every part matches its manifest. The re-seal can take hours, and the file may have been moved or changed meanwhile.
+1. **Re-verify the bundle first.** Re-open the saved file, through the stored file handle or by asking the user to pick it, and check that its manifest hashes to the one in the bundle record, names this workspace, and every part matches it. The re-seal can take hours, and the file may have been moved or changed meanwhile.
    - If it can't be read, or doesn't match, the purge doesn't run.
    - The record is cleared, and the next run re-takes the bundle. History is still on the server, and `blocks.jsonl` takes rows already sealed from their re-seal records, so the new bundle is as complete as the first.
 2. **Then purge:** `purge_workspace_history(ws, through, count)`, from the bundle record. The server re-checks all four conditions ([§6.1](#61-server)).
@@ -212,7 +212,7 @@ Resuming just runs this again. It can take hours for a large workspace, so the f
   - no raw object remains;
   - every media block's keyed object, soft-deleted blocks included, is present **and** passes the shared verification helper (downloaded, opened, hash-checked). That costs one download of the attachment set, because Storage objects are untrusted.
 
-  A missing or failing object is rebuilt from the bundle's bytes or the local ones. One whose bytes exist nowhere is reported. It doesn't block done, since nothing could produce it.
+  A missing or failing object is rebuilt from the bundle's bytes or the local ones. A media block whose bytes exist nowhere (no raw object, no bundle entry, no local copy) can't be rebuilt, so the proof's result is **passed, with these blocks unrecoverable**. The flow lists them, and `finish_conversion` follows the user's confirmation. Preflight already lists the same blocks before the flip (step 0).
 - **Media block ids don't change.** The app derives an attachment's path from `media:hash`, the mode and `K_id`. Re-capturing a pre-conversion file mints a second block, which is accepted.
 
 **9. Done.** The flow calls `finish_conversion`, then reports the operator follow-ups ([§8](#8-runbook)) and the "safe from" date ([§9](#9-platform-residue-and-when-it-is-safe-if-breached)).
@@ -292,16 +292,19 @@ So the re-key RPC is admitted during `sealing` too.
 
 After the purge, recovery **re-keys the workspace in place** from the newest recovery point: a step-14 one, or the conversion's bundle. A device that still defers is no source: its `blocks` hold nothing the conversion's bundle lacks. **It's point-in-time, not lossless.** Everything written after that point is lost, because nothing else holds that plaintext. That's why the key lives in two places, and why step 14 exists.
 
-#1302 holds the design. It has to meet these requirements:
+**#1302 needs its own design doc and review before it's built.** What follows are the requirements that design has to meet, not the design.
 - **Nothing is deleted**, so no workspace or block id is ever free for another caller to claim. Old-`K_id` objects and key records are kept, in case the old key turns up.
 - **Attachments are rebuilt under the new key.** Each media block's plaintext from the recovery point is sealed under the new key, uploaded to its new keyed path, and verified with the shared helper. The old object stays.
 - **An owner-only canary replacement**, admitted like the flip ([§5](#5-the-invariant-we-relax)) and taking the same `SHARE … NOWAIT` lock on `blocks` first, retrying on lock-not-available. Otherwise an old-key write in flight could commit after the restore: the ciphertext trigger checks envelope shape, not which key sealed it.
-- **The recovery point is verified before it's used.** Its hashes must match, and its `blocks.jsonl` must hold its manifest's block count, since every row it lacks is tombstoned.
+- **The recovery point is verified before it's used, and bound to this workspace.** Its hashes must match, its `blocks.jsonl` must hold its manifest's block count, and the manifest's workspace id and every row's `workspace_id` must be the workspace being recovered. Every row a point lacks is tombstoned, and `apply_block_patches` addresses rows by their globally unique id, so another workspace's point would wreck both.
+- **A recovery in progress is a server fact, like a conversion,** from before the canary changes until rows and attachments are restored. Every device stays gated meanwhile; a reload resumes the recovery, never a workspace that looks ready. The candidate shape reuses the conversion's: the re-key RPC inserts a `workspace_conversions` row in a third phase that the gate treats like `sealing`, and a finish step clears it once the equality check and the attachment proof pass.
 - **A whole-row restore**: the content columns sealed under the new key, plus tree, order, `deleted`, `created_at`, `user_updated_at`, `created_by` and `updated_by`. Not `updated_at`: it's the row version, which the clamp keeps monotonic, and it has to advance so every device takes the restored value. Rows the recovery point's `blocks.jsonl` lacks were created after it. They're tombstoned: content sealed empty **under the new key**, and marked deleted. A device that still has such a row live can then open the tombstone and apply it. The equality check below covers that form too.
 - **A row counts as restored only when it opens under the new key and its whole row, `updated_at` aside, equals the chosen recovery point's.** Opening alone proves only which key sealed it. A resume, even with a different recovery point, compares every row again, so the result is never a mix of two points.
 - **Every device checks its key record against the canary**, on entry and whenever the synced canary changes. Today `resolveWorkspaceEntry` only checks that a record with `K_id` exists.
 - **The single-client contract** applies to recovery too.
-- **The ids a new `K_id` re-namespaces** are handled or accepted: synthesized definitions and media blocks (the rotation note in `src/sync/crypto/derivedIdNamespace.ts`).
+- **A concrete rule for the ids a new `K_id` re-namespaces** (the rotation note in `src/sync/crypto/derivedIdNamespace.ts`):
+  - **Synthesized definitions.** A deleted one must stay deleted: synthesis finds a deletion by its tombstone at the derived id, which moves with `K_id`. Re-iding isn't an option, because field rows point at definition ids. The candidate is that synthesis on a re-keyed workspace looks up existing definitions, tombstones included, by name before minting.
+  - **Media blocks.** A re-capture of a file from before the re-key mints a second block. That's accepted, as for files from before the conversion.
 
 ## 9. Platform residue, and when it is "safe if breached"
 
