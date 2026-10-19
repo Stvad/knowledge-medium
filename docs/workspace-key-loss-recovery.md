@@ -13,7 +13,7 @@ A workspace's key is lost: no device holds it and no saved copy survives. Recove
 
 **It's point-in-time, not lossless.** Everything written after the recovery point is lost, because nothing else holds that plaintext. The flow says so, with the point's time, before it starts. That includes records an extension could otherwise re-fetch: a post-point record's id holds a recovery tombstone, and an extension that refuses tombstones (`getOrCreateTypedChild`) won't re-create it (open question 3).
 
-It applies to **any** e2ee workspace with a recovery point, whether it was converted (`docs/workspace-e2ee-conversion.md`) or created e2ee. A recovery point is a folder holding `blocks.jsonl` (every block row, every column, plaintext), the plaintext of every media block, and a manifest. It is one of:
+It applies to **any** e2ee workspace with a recovery point, whether it was converted (`docs/workspace-e2ee-conversion.md`) or created e2ee. A recovery point is a folder holding `blocks.jsonl` (every block row, every column, plaintext except rows its manifest lists as unreadable), the plaintext of every media block, and a manifest. It is one of:
 
 - **a step-14 point** (conversion runbook step 14), taken on an unlocked device ([§9](#9-the-flow) specifies the gesture);
 - **the conversion's recovery bundle** (conversion §6.3 step 3), which has the same three parts plus some it doesn't need.
@@ -59,10 +59,11 @@ One migration, on top of #1294's.
 ### 3.1 State
 
 - **`workspaces.wk_generation integer not null default 0`.** Counts re-keys. `create_workspace` and the flip leave it at 0; only `rekey_workspace` changes it, by +1, in the same statement that replaces `wk_canary`.
-  - `workspaces_prevent_e2ee_field_change` guards it with the mode and the canary. Its early return must compare all three: today it passes any update that leaves the mode and canary alone, and editors can update `workspaces`, so an editor could otherwise bump the generation and stall every device's writes.
+  - `workspaces_prevent_e2ee_field_change` guards it with the mode, the canary and `restored_generation` (below). Its early return must compare all four. Today it passes any update that leaves the mode and canary alone, and editors can update `workspaces`, so an editor could otherwise move either generation and stall every device.
   - It's added to the synced `workspaces` columns (`scripts/gen-sync-config.ts`, `src/data/workspaceSchema.ts`), so a device always holds a canary and its generation from one checkpoint.
 - **`workspaces.restored_generation integer not null default 0`.** The last generation whose recovery finished. Only `finish_recovery` sets it, to `wk_generation`, and the same trigger guards it. It's synced too.
-  - `workspaces` and `blocks` ride one sync stream (`workspace_data` in `powersync/sync-config.yaml`). So a device whose synced row shows it holds every restored row ([§6.3](#63-entry-and-adoption) step 4).
+  - PowerSync applies a checkpoint across all of a user's buckets at once, and `workspaces` and `blocks` ride one stream (`workspace_data` in `powersync/sync-config.yaml`). So a device whose synced row shows `restored_generation` = *G* holds every row restored at *G* ([§6.3](#63-entry-and-adoption) step 4).
+  - Splitting those two tables across bucket priorities would break that, since a partial checkpoint could then land the `workspaces` row first.
 - **`workspace_conversions.phase` admits `recovering`.** The row means what it already means: a server fact that the workspace is mid-change, and that no device may treat it as ready.
 - **Two nullable columns on `workspace_conversions`:**
   - `recovery_attempt uuid`: the live attempt's token ([§3.2](#32-the-write-fence));
@@ -115,7 +116,7 @@ All three are owner-only SECURITY DEFINER functions granted to `authenticated`, 
 
 A refusal that needs no lock is decided before them.
 
-`55P03` means the table lock wasn't granted. The cause may be a write in flight in any workspace, or an autovacuum of `blocks`, which can last a while. The flow retries all three with unbounded backoff, as the conversion retries its flip, and the message doesn't claim a cause.
+`55P03` means a NOWAIT lock wasn't granted. The cause may be a client holding one of the rows, a write in flight in any workspace, or an autovacuum of `blocks`, which can last a while. The flow retries all three RPCs with unbounded backoff, as the conversion retries its flip, and the message doesn't claim a cause.
 
 **`rekey_workspace(ws, canary, expected_generation)`** replaces the key.
 
@@ -126,7 +127,7 @@ A refusal that needs no lock is decided before them.
   - `wk_generation = expected_generation`.
 
   The last check makes the re-key compare-and-set. Two owner devices can't both re-key and leave the first one's saved key silently dead.
-- It's admitted by the flip's mechanism: `current_user = 'postgres'` and a transaction-local `km.rekey = ws` that only it sets. `workspaces_prevent_e2ee_field_change` admits exactly `e2ee → e2ee`, with a new well-formed canary and `wk_generation = old + 1`.
+- It's admitted by the flip's mechanism: `current_user = 'postgres'` and a transaction-local `km.rekey = ws` that only it sets. `workspaces_prevent_e2ee_field_change` admits exactly `e2ee → e2ee`, with a new well-formed canary, `wk_generation = old + 1`, and `restored_generation` unchanged.
 - Its transition depends on the phase it finds:
 
   | Phase found | After |
@@ -149,7 +150,7 @@ A refusal that needs no lock is decided before them.
 
 - It refuses unless the phase is `recovering` and `attempt` is live.
 - It then moves the phase to `return_phase`, clearing both columns. A null `return_phase` deletes the row.
-- It sets `restored_generation = wk_generation`, admitted the way `rekey_workspace` is.
+- It sets `restored_generation = wk_generation`. That's admitted by its own transaction-local setting (`km.finish_recovery = ws`, set only here). The admitted shape is that column alone changing, to `wk_generation`.
 - The server runs no check of its own. Two things make the attempt's last check final:
   - while the attempt is live, only its own writes land, and it has awaited every write it sent;
   - the table lock means none of its writes is still in flight when the token dies.
@@ -224,7 +225,7 @@ A row is restored when **both** hold:
 
 A row still wrong when its page is read back goes on the unrestored list. Verify would refuse the run there (`unrepaired`). Recovery carries on, so the list is complete. The clamp could cause such a row by rewriting a `created_at` or `user_updated_at` later than server time, but a point's rows were clamped when they were written.
 
-While the attempt is live, only its own writes land. So one complete pass with no refusal finishes the restore. A crash, a refusal, a vanished row, or a count that doesn't match makes the next run start over.
+While the attempt is live, only its own writes land, so one complete pass finishes the restore. Ids taken by another workspace don't stop it; they go on the list below. A crash, any other refusal, a vanished row, or a count that doesn't match makes the next run start over.
 
 **Invariant at the end:** every row of the workspace is sealed under the new key, unrestored ones included. A row on the list still had its content re-sealed. Adoption relies on this ([§6.3](#63-entry-and-adoption)).
 
@@ -232,7 +233,8 @@ While the attempt is live, only its own writes land. So one complete pass with n
 
 - ids taken by another workspace;
 - rows made roots because their parent is one of those;
-- rows still wrong after their repair.
+- rows still wrong after their repair;
+- rows the point lists as unreadable, restored with empty content.
 
 The flow shows the list, and `finish_recovery` follows only the user's confirmation. Without this outcome, one stuck row would keep every device gated.
 
@@ -248,7 +250,7 @@ Switching points between runs is safe. Each run re-checks every row against its 
 
 Recovery runs #1291's cleaner under the new key, as a **standalone run**: with no bundle record, even on a device that holds one. Its inputs come from the point, not from this device:
 
-- **the media blocks to prove:** the point's media rows, which after the restore are exactly the server's. This device's database still holds the pre-recovery tree until it adopts ([§6.3](#63-entry-and-adoption)), so it can't be the source.
+- **the media blocks to prove:** the point's media rows, minus any whose id another workspace holds. After the restore that's exactly the server's set. This device's database still holds the pre-recovery tree until it adopts ([§6.3](#63-entry-and-adoption)), so it can't be the source.
 - **the bytes:** the point's `attachments/`. The point is verified to hold every media block's bytes or list it ([§4.1](#41-the-point-verified-and-bound)). The local byte store doesn't help here, because entries captured after the conversion are named by `HMAC(K_id_old, hash)`, which no lookup under the new `K_id` finds (`deriveObjectKey`).
 
 So #1291's cleaner has to take both as inputs, as #1292's engine takes its plaintext source.
@@ -281,7 +283,10 @@ Each tab holds, per workspace, the **generation it entered at**: the synced `wk_
 
 **Every write records it.**
 
-- **What carries it.** Right before each block statement, the engine writes the tab's generation for the row's workspace into the transaction's context (`tx_context`, which already carries `source` and `tx_seq`). That's where `checkWorkspace` already runs with the row's workspace. `pinWorkspace` runs only after the statement, too late for the statement's own upload trigger. A transaction touches one workspace, so the value never changes within it.
+- **What carries it.** Right before each mutating block statement, the engine writes the tab's generation for the row's workspace into the transaction's context (`tx_context`, which already carries `source` and `tx_seq`).
+  - It does that through one helper that every mutating primitive calls, `applyRaw` included, which undo and redo replay through and which skips `checkWorkspace`.
+  - `pinWorkspace` runs only after the first statement, which is too late for that statement's own upload trigger.
+  - A transaction touches one workspace, so the value never changes within it.
   - Both upload triggers copy it into the queued write: the insert trigger's create and the update trigger's patch.
   - The connector sends it as the write's stamp, and folding a patch into its create keeps it.
   - `tx_context` gains the column with the same upgrade path an earlier column took.
@@ -293,21 +298,27 @@ Each tab holds, per workspace, the **generation it entered at**: the synced `wk_
 **Moving to a new generation reloads the tab.**
 
 - **When.** A tab watches the synced `wk_generation` of each workspace it has entered. When it moves past the tab's, the tab acts. So does the adoption marker's `storage` event.
+  - Only a tab that entered the workspace reloads. A tab at a gate, the adopting one included, has no old generation to discard, so it re-resolves entry as #1293's gate does today.
 - **What it does, in order:**
-  1. It flushes pending edits and debounced commits.
-  2. It waits for its write queue to drain, so every one of them commits stamped with the old generation.
-  3. It reloads.
+  1. It blocks input.
+  2. It flushes every open editor, through a registry of flushers.
+  3. It fences with an empty write transaction, then waits for the post-commit processors to go idle. Everything it flushed then commits stamped with the old generation. A derived follow-up started after the fence is lost, and is re-derived after the reload.
+  4. It reloads.
 - **Why reload.** One boot discards everything the old generation could leak into the new one: editor buffers, the in-memory cache, handles, memoized state blocks, background passes, undo and redo stacks. That's once per tab per recovery.
 - **Why ids derived from `K_id` need nothing more.** Synthesis and media capture read `K_id` before their transaction, but no gesture survives a reload. So none can mint an old namespace's id under a new generation.
 
 **A stale write's local value doesn't outlive its refusal.**
 
-- **The rule.** Whenever a transaction moves to `ps_crud_rejected` because of `23K01`, its rows are re-applied from their staged copies in the same write transaction, as the drain applies a row. A row with no staged copy is dropped locally.
+- **The rule.** Whenever a transaction moves to `ps_crud_rejected` because of `23K01`, the same write transaction:
+  1. deletes that transaction's own `ps_crud` rows, so the later `complete()` deletes nothing;
+  2. queues each of its ids on `blocks_synced_changes`: an upsert with `needs_apply = 1` where a staged copy exists, a delete where none does.
+
+  The observer's normal drain then re-applies them, with its decryption, arrival processors and cache invalidation. Its removal path already drops a local row that has no staged copy. Calling the drain directly instead wouldn't work: it skips ids still queued, and it opens its own write transaction.
 - **Who uses it.** The uploader's refusal path does, and so does adoption's step 5.
 - **Why.** Without it, a refused stale write would leave its pre-recovery value in local `blocks` (the refusal path doesn't touch `blocks`). The next edit at the new generation would carry it to the server.
 - **What it costs.** The write stays in the quarantine, so **Retry** can still send it on purpose. Other refusals keep today's behaviour.
 
-**Retry** in the rejection dialog re-stamps a write with the retrying tab's current generation. That's the user saying "send this now". Retry today re-queues one row of a quarantined transaction at a time. Adoption quarantines whole backlogs, which makes multi-row transactions common, so #1322 tracks re-queuing them whole.
+**Retry** in the rejection dialog re-stamps a write with the retrying tab's current generation. That's the user saying "send this now". It's offered only for writes to a workspace the tab has entered. For any other, the dialog says to open that workspace first, since the tab has no generation to stamp. Retry today re-queues one row of a quarantined transaction at a time. Adoption quarantines whole backlogs, which makes multi-row transactions common, so #1322 tracks re-queuing them whole.
 
 ### 6.2 Key records
 
@@ -329,7 +340,7 @@ Each tab holds, per workspace, the **generation it entered at**: the synced `wk_
 - the key opens the **synced** canary;
 - the record's `adoptedGeneration` equals the synced generation.
 
-The tab then enters at that generation. Otherwise entry returns `server-e2ee`, the reason #1293 already gives a pin that doesn't match the server. Its gate (`ServerE2eeGate`) reads the live phase on mount:
+The tab then enters at that generation. Entry therefore always needs the synced row: `decideWorkspaceEntry`'s shortcut, which enters an e2ee pin with a key without it, goes, and entry waits for the row. Otherwise entry returns `server-e2ee`, the reason #1293 already gives a pin that doesn't match the server. Its gate (`ServerE2eeGate`) reads the live phase on mount:
 
 - **During `recovering`,** it shows the closed state. On the owner's devices it offers to resume the recovery.
 - **Otherwise,** it offers adoption: with the stored or pending key if one opens the server canary, without a prompt; else it asks for the key.
@@ -342,7 +353,9 @@ The tab then enters at that generation. Otherwise entry returns `server-e2ee`, t
 - the key-required gate (an e2ee pin whose record was evicted);
 - the recovering device itself, after `finish_recovery`.
 
-It holds `navigator.locks` per (user, workspace), so two tabs never run it at once. In order:
+It holds an adoption lock (`navigator.locks`, per user and workspace) so two tabs never run it at once. The lock's name is distinct from the recovery flow's, since Web Locks aren't reentrant and the flow adopts while holding its own.
+
+It's a no-op when the current record already has `adoptedGeneration` = *G*, the pin is e2ee, and no marker is set. In order:
 
 1. **Read the server, live.** The phase must be none or `cleaning`, and the key must open the server canary. Call its generation *G*.
    - If the server can't be read, adoption waits: the phase isn't synced, so offline adoption could open a workspace mid-recovery.
@@ -352,7 +365,7 @@ It holds `navigator.locks` per (user, workspace), so two tabs never run it at on
      - **A pin upgrade never takes this path.** It needs the live read at any generation, since a conversion still `sealing` is at generation 0 too, as #1293 already requires.
 2. **Write the marker** (#1293's pin-upgrade marker).
 3. **Store:** append the current record to the archive, put the new one with `adoptedGeneration = G` (clearing the pending slot), and set or upgrade the pin.
-4. **Wait until the device has synced past the recovery:** its synced row's `restored_generation` equals *G* ([§3.1](#31-state)). `finish_recovery` set it in the same transaction that ended the recovery, and `workspaces` and `blocks` ride one sync stream. So a checkpoint that carries it carries the whole restore. Until then the gate shows that the workspace is downloading.
+4. **Wait until the device has synced past the recovery:** its synced row's `restored_generation` is at least *G* ([§3.1](#31-state)). If the synced `wk_generation` passes *G* meanwhile, the key is already superseded: adoption drops back to the gate. `finish_recovery` set it in the same transaction that ended the recovery, and `workspaces` and `blocks` ride one sync stream. So a checkpoint that carries it carries the whole restore. Until then the gate shows that the workspace is downloading.
    - Storing the key first is what unsticks this. Any of the workspace's queued writes that couldn't be sealed now seal, carry their stale stamps, are refused, and leave `ps_crud`. A checkpoint is published only while `ps_crud` is empty (`ps_crud_hold_downloads`).
    - A write held for *another* workspace still stalls downloads, and so this step. That's the stall #1301 removes.
 5. **Quarantine what the fence would refuse.** Every queued transaction holding a write for the workspace with a stamp other than *G* (or none, once *G* is above 0) moves to `ps_crud_rejected`, with [§6.1](#61-the-tabs-generation)'s re-apply.
@@ -360,16 +373,22 @@ It holds `navigator.locks` per (user, workspace), so two tabs never run it at on
    - **How it moves.** Each transaction moves in one write transaction, keyed by `tx_id` as `recordRejectionToTable` keys it, so a concurrent refusal leaves one copy.
    - **At generation 0** nothing moves, so a conversion's held writes still upload after its pin upgrade, as #1293 designed.
 6. **Re-materialize once:** `drainWorkspace(ws, 'all')`.
-   - **When *G* is above 0,** it then drops the workspace's local rows that have no staged copy, or whose staged copy doesn't open, and no queued write. It reads `ps_crud` and `blocks_synced` in the same write transaction as the delete.
-     - **Why both kinds can go.** A row with no staged copy is a create the server never had; its write is in the quarantine, where **Retry** re-creates it. A row whose staged copy doesn't open holds a value from before the recovery: §4.4's invariant means a restored row opens, so only something written after can fail.
-     - **What they lose.** Neither holds a value the recovery kept, and both come back with the next copy that does open.
+   - **If the drain deferred any row,** for instance because the key store couldn't be read, nothing is dropped. The marker stays, as `drainAndClearMarker` keeps it today, and the step runs again.
+   - **Otherwise, when *G* is above 0,** it drops two kinds of local row, each only when it has no queued write. It reads `ps_crud` and `blocks_synced` in the same write transaction as the delete.
+     - **A row with no staged copy.** That's a create the server never had. Its write is in the quarantine, where **Retry** re-creates it.
+     - **A row the drain reported as failing to decrypt, with the key loaded.** It holds a value from before the recovery. §4.4's invariant means a restored row opens, so only something written after can fail.
+     - **What they lose.** Neither holds a value the recovery kept. A row that later gets a copy that opens comes back with it.
    - **On a workspace never re-keyed,** #1293's rule stands: a row that doesn't open stays as it is, and doesn't hold the marker.
-7. **Clear the marker**, and tell the user that the workspace's undo history from before the recovery is gone. Every tab of the device, this one included, reloads and enters at *G* ([§6.1](#61-the-tabs-generation)).
+7. **Clear the marker**, and tell the user that the workspace's undo history from before the recovery is gone. Then:
+   - **This tab** re-resolves entry and enters at *G*. It never entered at an older generation, so it doesn't reload, and a flow that adopted can carry on. The conversion's `cleaning` pass is one.
+   - **Every other tab of the device that had entered the workspace** reloads, on the marker's event ([§6.1](#61-the-tabs-generation)).
 
 **Crash and resume.** A crash before step 2 leaves the old key, or none, so the gate re-enters adoption. With the marker set, startup's `resumePinUpgrade` runs. It takes the same lock as adoption and re-reads the marker under it, since another tab may be mid-adoption. Then it checks the stored key against a live read of the canary:
 
-- **It opens:** re-run steps 3 to 7. Step 3 only re-appends a record the archive already holds, which is harmless. It also puts back a pin the crash may have left plaintext, which would otherwise hold the uploads step 4 waits on.
-- **It doesn't:** with the lock held, that means the crash came before step 3. So the marker is dropped and the gate appears, offering the pending key if there is one.
+- **It opens:** re-run steps 3 to 7.
+  - Step 3 skips the archive append when the current record already holds the key.
+  - It also puts back a pin the crash may have left plaintext, which would otherwise hold the uploads step 4 waits on.
+- **It doesn't:** either the crash came before step 3, or the server has been re-keyed since. Either way the stored key can't finish this adoption. The marker is dropped and the gate appears, offering the pending key if there is one. A record stored at an older *G* is fenced, and goes through adoption again from the gate.
 - **The server can't be read:** the device stays gated, with the marker kept, unless step 1's exception applies.
 
 **Changed invariants.** Two statements stop being true:
@@ -425,13 +444,13 @@ Re-keying before the first re-sealed row takes the same path. It's equivalent th
 - **Its query:** a tombstone-inclusive sibling of `tx.livePropertyDefinitionNames`.
 - **Why the name is still there:** a restored deletion keeps its content, because soft-deleted rows do. A recovery tombstone has empty content, so a definition created after the point never blocks a re-mint, and the point never had it anyway.
 
-Both comments in `propertyDefinitionSynthesis.ts` that call `K_id` "immutable until rotation exists" change to: it changes only through recovery, and a tab reloads before it would see a new one ([§6.1](#61-the-tabs-generation)).
+Both comments in `propertyDefinitionSynthesis.ts` that call `K_id` "immutable until rotation exists" change to: it changes only through recovery, and a tab reloads before it would see a new one ([§6.1](#61-the-tabs-generation)). So does the rotation note in `derivedIdNamespace.ts`, which says rotation is unbuilt.
 
 **Media blocks.** Their ids hash `${ws}:${contentKey}`, and in e2ee the content key is `HMAC(K_id, sha256)`. Existing ids don't change, and their paths derive at use time. Re-capturing a file after recovery mints a second block, which is accepted.
 
 ## 9. The flow
 
-One guarded in-app flow on the owner's device. It holds `navigator.locks` per (user, workspace), re-confirms the single-client contract on every run, and reads the server directly, as the conversion's flow does.
+One guarded in-app flow on the owner's device. It holds its own `navigator.locks` lock per (user, workspace), distinct from adoption's, re-confirms the single-client contract on every run, and reads the server directly, as the conversion's flow does.
 
 It runs from the gate, never inside an entered workspace, as the converting device resumes from `ServerE2eeGate`. No device holds the lost key, so no tab can have entered the workspace. And the generation watcher ([§6.1](#61-the-tabs-generation)) never reloads the flow when its own re-key reaches the synced row.
 
@@ -567,7 +586,7 @@ These are met differently from how the issue words them:
 | finishing → no row | → the phase recovery interrupted | [§11](#11-alternatives-considered) |
 | before the first re-sealed row: re-key and continue the conversion | the same restore path, equivalent there | [§7](#7-key-loss-during-sealing) |
 | during `sealing`, restore from the bundle exactly as after the purge | content only; anything else means the bundle is stale and is re-taken | [§7](#7-key-loss-during-sealing) |
-| clear undo before admitting edits | every tab reloads at the new generation; undo dies with the old one | [§6.1](#61-the-tabs-generation) |
+| clear undo before admitting edits | a tab that entered at the old generation reloads, and its undo goes with it; the adopting tab never entered at the old one | [§6.1](#61-the-tabs-generation) |
 | (from #1293) held writes upload after the pin upgrade | after a sealing re-key they're quarantined, retryable | [§7](#7-key-loss-during-sealing) |
 | fleet gate before the first conversion | not needed for safety; open question 1 | [§10](#10-fleet-gate) |
 
@@ -596,7 +615,7 @@ These are met differently from how the issue words them:
 
 - pgTAP pins:
   - the re-key refuses non-owners, a plaintext (`none`) workspace, calls outside the admit, and a stale `expected_generation`;
-  - a generation-only update is refused;
+  - an update that changes only `wk_generation`, or only `restored_generation`, is refused;
   - the fence refuses a stale or missing stamp once re-keyed, any write without the live attempt while `recovering`, and any attempt outside it, and admits a write made as `postgres`;
   - each recovery RPC refuses while a write is held open;
   - `begin_recovery_attempt` and `finish_recovery` refuse non-owners, the wrong phase, and a dead attempt;
