@@ -10,8 +10,8 @@
 --   finish_conversion           phase 'cleaning' -> no conversion row
 --
 -- Every refusal from the three RPCs raises SQLSTATE KMC01, so the client can
--- tell "the server said no" from a transport error. The flip's lock timeout
--- keeps its own SQLSTATE, 55P03: it means "retry", not "no".
+-- tell "the server said no" from a transport error. A flip that finds writes
+-- in flight raises 55P03 instead: it means "retry", not "no".
 
 begin;
 
@@ -106,8 +106,7 @@ begin
         select 1 from public.workspaces w
         where w.id = new.workspace_id and w.encryption_mode = 'e2ee'
     ) and not public.is_sealed_block(new.content, new.properties_json, new.references_json) then
-        -- 23514 is PERMANENT for the upload classifier: the offending write
-        -- is quarantined instead of jamming the queue.
+        -- 23514: permanent for the upload classifier.
         raise exception 'blocks in an e2ee workspace must carry a well-formed enc:v1: envelope in all content columns'
             using errcode = 'check_violation';
     end if;
@@ -133,21 +132,24 @@ revoke all on function private.refuse_conversion(text) from public, anon, authen
 
 -- ── the flip ────────────────────────────────────────────────────────────
 -- LOCK TABLE blocks IN SHARE MODE conflicts with every block write's ROW
--- EXCLUSIVE lock. It waits for every in-flight write to commit, so each is
--- in blocks and in blocks_history before the mode changes, and it holds new
--- writes back until this transaction commits, so each of those sees e2ee in
--- blocks_require_ciphertext_for_e2ee, which reads the mode without a lock.
+-- EXCLUSIVE lock. Granted, it means no block write is in flight, so every
+-- write that began before the flip is in blocks and in blocks_history before
+-- the mode changes; held, it keeps new writes back until this transaction
+-- commits, so each of those sees e2ee in blocks_require_ciphertext_for_e2ee,
+-- which reads the mode without a lock.
 --
--- While the LOCK waits, every block write in the database queues behind it,
--- so the wait is capped by a short lock_timeout, and every refusal that does
--- not need the lock is decided before it.
+-- The flip never waits, since every block write in the database would queue
+-- behind a waiting lock request: the workspace row and the table are both
+-- taken NOWAIT, the row first so that holding the table never waits on it.
+-- A refusal that needs neither lock is decided before them.
 create function public.convert_workspace_to_e2ee(p_workspace_id text, p_wk_canary text)
     returns void
     language plpgsql
     security definer
     set search_path = ''
-    set lock_timeout = '2s'
     as $$
+declare
+    v_mode text;
 begin
     if not private.is_workspace_owner(p_workspace_id, auth.uid()::text) then
         perform private.refuse_conversion(
@@ -157,32 +159,27 @@ begin
         perform private.refuse_conversion(
             'convert_workspace_to_e2ee: the canary is not an enc:v1: envelope');
     end if;
-    if not exists (
-        select 1 from public.workspaces
-        where id = p_workspace_id and encryption_mode = 'none'
-    ) then
-        perform private.refuse_conversion(
-            'convert_workspace_to_e2ee: the workspace is not plaintext');
-    end if;
 
     begin
-        lock table public.blocks in share mode;
+        select encryption_mode into v_mode
+            from public.workspaces
+            where id = p_workspace_id
+            for no key update nowait;
+        if v_mode is distinct from 'none' then
+            perform private.refuse_conversion(
+                'convert_workspace_to_e2ee: the workspace is not plaintext');
+        end if;
+        lock table public.blocks in share mode nowait;
     exception when lock_not_available then
-        raise exception 'convert_workspace_to_e2ee: block writes are still in flight; retry'
+        raise exception 'convert_workspace_to_e2ee: writes are in flight; retry'
             using errcode = 'lock_not_available';
     end;
 
     perform set_config('km.conversion', p_workspace_id, true);
-    -- The mode is re-read under the row lock this UPDATE takes: a concurrent
-    -- flip that won the race leaves nothing to match.
     update public.workspaces
         set encryption_mode = 'e2ee',
             wk_canary = p_wk_canary
-        where id = p_workspace_id and encryption_mode = 'none';
-    if not found then
-        perform private.refuse_conversion(
-            'convert_workspace_to_e2ee: the workspace is not plaintext');
-    end if;
+        where id = p_workspace_id;
 
     insert into public.workspace_conversions (workspace_id, phase)
         values (p_workspace_id, 'sealing');
@@ -275,14 +272,18 @@ begin
             'purge_workspace_history: a block row of the workspace is not fully sealed');
     end if;
 
+    -- RETURNING carries a flag, not the rows' diffs: the CTE's output is
+    -- buffered, and after_diff is the whole pre-conversion history.
     with deleted as (
         delete from public.blocks_history h
             where h.workspace_id = p_workspace_id
-            returning h.event_id, h.changed_columns, h.after_diff
+            returning h.event_id,
+                      h.event_id > p_through_event_id
+                          and not private.is_reseal_history_row(h.changed_columns, h.after_diff)
+                          as is_foreign
     )
     select count(*) filter (where event_id <= p_through_event_id),
-           count(*) filter (where event_id > p_through_event_id
-                              and not private.is_reseal_history_row(changed_columns, after_diff))
+           count(*) filter (where is_foreign)
         into v_archived, v_foreign
         from deleted;
 
