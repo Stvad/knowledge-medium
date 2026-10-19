@@ -279,21 +279,28 @@ The first production run is #1288.
 **After:**
 
 10. **PowerSync Defragment, then the other devices.**
-    - In the PowerSync Dashboard: the instance's **Settings**, "Compact operation history", **Defragment**. It rebuilds the sync data from the database, which by now holds only ciphertext. So the plaintext operations leave with the old data, rather than waiting on compaction ([§9.3](#93-powersync)).
-    - Every client downloads all its data again. Run it before opening the other devices, so each of them downloads once.
-    - While it runs, the hourly Supabase Health probe fails `replication_slots`, because the new stream has its own slot. It's done once the probe is back to one slot: terminating the old stream drops its slot and clears its storage.
-    - Then open other devices one at a time, and paste the key on each.
-11. **Operator: `VACUUM FULL`** on `blocks`, `blocks_history`, `storage.objects` and `workspaces`.
+    - In the PowerSync Dashboard, open the instance's **Settings**. Under "Compact operation history", run **Defragment** ([§9.3](#93-powersync) says why).
+    - Deploy no sync config until it's done, because a deploy stops the stream it's building.
+    - Every client of every user on the instance downloads all its data again. Running it before the other devices open means each of them downloads once. That only saves bandwidth; nothing else depends on it.
+    - **It's done when the instance logs show the new stream active and the old one terminated** ("Successfully terminated replication stream").
+      - The hourly Supabase Health probe fails `replication_slots` while two slots exist.
+      - Its slot count is no proof on its own: a Defragment that fails also ends with one slot, the old one.
+    - Then open the other devices one at a time, and paste the key on each.
+    - Once every device is back, the owner runs **Clean up attachments** ([§3](#3-the-single-client-contract)). Its report must list no object left in place; investigate any it does before going on.
+11. **Operator: `VACUUM FULL`** on `blocks`, `blocks_history`, `storage.objects` and `workspaces`, then on `pg_catalog.pg_statistic`.
     - It takes ACCESS EXCLUSIVE locks, which block reads **and** writes on each table for a time proportional to the table's **total** size across all workspaces. Schedule it.
-    - Run it after the Defragment, whose snapshot would otherwise queue behind those locks.
-    - Let it finish well clear of the daily backup, which starts at about 14:14 UTC ([§9.1](#91-supabase-postgres)), and record when it finished. The "safe from" date counts from that time.
-    - `pg_repack`, if available, is the non-blocking alternative.
-    - This step, and the next two, are platform operations a client can't do.
+    - Set a `lock_timeout` of a few seconds, and retry on a timeout. A lock request that waits queues every tenant behind it, which is also why the flip uses `NOWAIT` ([§6.1](#61-server)).
+    - Run it after the Defragment, whose snapshot would otherwise hold it off.
+    - **On each of the four tables, one at a time, run `VACUUM (FULL, ANALYZE, VERBOSE)`.** The `ANALYZE` replaces the planner's sampled values, which still hold plaintext ([§9.1](#91-supabase-postgres)). Then `VACUUM FULL pg_catalog.pg_statistic` drops the old samples.
+    - **Check each table:**
+      - **The output reports `0 dead row versions cannot be removed yet`.** A transaction older than the purge keeps alive the dead rows it can still see, and `VACUUM FULL` copies them into the new table. End that transaction, then run it again.
+      - **`pg_relation_filenode()` changed.** A table the role can't vacuum is skipped with a WARNING, not an error, and keeps its filenode ([§9.5](#95-open-items) V4).
+    - Record when it finished. The "safe from" date counts from that time.
+    - While it runs, the health probe fails `postgrest`, which reads `blocks`, and may fail `pgsql_tmp`.
+    - `pg_repack`, if available, is the non-blocking alternative to the rewrite; the `ANALYZE` and the `pg_statistic` step still apply.
+    - This step and the next, and step 10's Defragment, are platform operations a client can't do.
 12. **Operator:** drop leftover ad-hoc tables from past scripts (`scripts/system-author-cleanup.sql`, `scripts/roam-ts-backfill/backfill.sql`).
-13. **Record the "safe from" date** ([§9.4](#94-the-safe-from-rule)).
-    - It's the first day `npx supabase backups list` lists no backup taken before `VACUUM FULL` finished. If the plan's log retention after `finish_conversion` ends later, it's that.
-    - Until then, keep PITR off, and don't restore or duplicate the project from a backup.
-    - An answer to one of [§9.5](#95-open-items)'s open items can move the date later.
+13. **Record the "safe from" date** that [§9.4](#94-the-safe-from-rule) sets from step 11's finish time. It stays provisional until [§9.5](#95-open-items)'s S1, S2 and P3 are answered.
 14. **Take later recovery points.** From time to time, on an unlocked device, take a recovery point and keep it with the key. It's a folder, like step 3's, with:
     - `blocks.jsonl`: every block row read from the server, checked for consistency and against the server's block count exactly as in step 3. History has been purged by then, so each row's content columns are opened under the key. A write from any device during the paging, this one included, makes it re-read. Taking it while other devices are idle keeps that rare;
     - **the plaintext of every media block**, soft-deleted ones included. Each comes from the local byte store, or is downloaded and opened under the key, and each is hash-checked. The exception is a block the conversion recorded as unrecoverable: its manifest's list is carried into this one;
@@ -317,108 +324,138 @@ After the purge, recovery **re-keys the workspace in place** from the newest rec
 
 ## 9. Platform residue, and when it is "safe if breached"
 
-#1289 answered these on 2026-10-19 for the hosted project. Each answer says what it rests on:
-- **measured:** read from this project with `npx supabase backups list` (a Management API read);
-- **read:** stated by a primary source, the vendor's docs or its code at the version linked;
-- **inferred:** reasoned from those, and it says from what.
+#1289 answered these on 2026-10-19 for the hosted project. Each answer ends with what it rests on:
+- *(measured)*: read from this project with `npx supabase backups list`, a Management API read;
+- *(read: …)*: stated by a primary source, the vendor's docs or its code at the version linked;
+- *(inferred)*: reasoned, from what the label or the bullet names.
 
 ### 9.1 Supabase Postgres
 
 **Backups.**
-- The project takes one physical backup a day, at about 14:14 UTC, and lists the last 7 days of them. PITR is off. *Measured* on 2026-10-19: `pitr_enabled: false`, `walg_enabled: true`, and physical backups from 2026-10-12 to 2026-10-19.
-- Retention is the plan's: 7 days on Pro, 14 on Team, up to 30 on Enterprise. *Read:* [Backups](https://supabase.com/docs/guides/platform/backups). The 7-day listing matches Pro.
-- A physical backup is a snapshot of the database's directory (*read*, same page), so it holds dead tuples too. Every backup that started before `VACUUM FULL` finished holds plaintext. *Inferred* from how a file-level copy works.
-- Enabling PITR stops the daily backups and archives WAL instead, kept for 7, 14 or 28 days (*read*, same page). The conversion's WAL carries the re-seal's history rows, whose `before_diff` is plaintext. So PITR stays off until the "safe from" date, or its retention is added to it. *Inferred.*
-- Two things aren't documented ([§9.5](#95-open-items) S1, S2):
-  - whether WAL is archived while PITR is off. The template's [`custom_walg.conf`](https://github.com/supabase/postgres/blob/6939f8696270341c67822113aac64987171d1cb6/ansible/files/postgresql_config/custom_walg.conf) has archiving commented out, and the hosted config may differ;
-  - whether a backup that leaves the listing is deleted from Supabase's storage, and whether backups are encrypted at rest.
+- The project takes a physical backup every day at about 14:14 UTC, plus off-schedule ones, such as one on 2026-10-17 around a hosted Postgres upgrade, and lists the last 7 days of them. PITR is off: on 2026-10-19 the listing showed `pitr_enabled: false` and `walg_enabled: true`. *(measured)*
+- Retention is the plan's: 7 days on Pro, 14 on Team, up to 30 on Enterprise. The 7-day listing matches Pro. *(read: [Backups](https://supabase.com/docs/guides/platform/backups))*
+- **A physical backup snapshots the database's directory,** dead tuples included. So every backup that started before `VACUUM FULL` finished holds plaintext. *(read: same page; inferred: how a file-level copy works)*
+- **Enabling PITR stops the daily backups and archives WAL instead,** for the retention period chosen: 7, 14 or 28 days. *(read: same page)*
+  - The conversion's WAL carries the re-seal's history rows, whose `before_diff` is plaintext. *(inferred)*
+  - So PITR stays off until the "safe from" date, or its retention is added to it.
+- **Not documented** ([§9.5](#95-open-items) S1, S2):
+  - whether WAL is archived while PITR is off;
+  - whether a backup that leaves the listing is deleted.
 
 **Logs.**
-- API and database logs are kept 1 day on Free, 7 on Pro, 28 on Team and 90 on Enterprise. *Read:* the [pricing](https://supabase.com/pricing) table (`packages/shared-data/pricing.ts` in supabase/supabase).
-- **Postgres logs hold content only in error lines.** *Read:* Supabase's [`postgresql.conf.j2`](https://github.com/supabase/postgres/blob/6939f8696270341c67822113aac64987171d1cb6/ansible/files/postgresql_config/postgresql.conf.j2):
-  - `log_statement = 'ddl'`;
-  - slow-statement logging is off (`log_min_duration_statement` is left at -1);
-  - no bind parameters are logged on error (`log_parameter_max_length_on_error` is left at 0).
-
-  An error's `DETAIL` can still print the failing row. A `NOT NULL` violation on `blocks` prints the whole row, content included. *Inferred* from Postgres's error format.
-- **The app's statements carry no content.** Every content write is an RPC call (`apply_block_patches`, `apply_block_creates`), and every read filters by id or workspace id. *Read:* `src/services/powersync.ts`, `src/sync/conversion/conversionServer.ts`. PostgREST passes an RPC's arguments to Postgres as a bind parameter, so the logged `STATEMENT` holds none of them. *Inferred* from PostgREST's prepared statements. An ad-hoc operator query that failed would log its literals.
-- **These are the template's defaults.** A project can override them: `supautils.conf.j2` lets the privileged role set `log_statement`, `log_min_duration_statement` and `pgaudit.log`. This repo's migrations set none of them. The hosted values weren't read ([§9.5](#95-open-items) V2).
-- **API logs:** no request-body field is documented. *Inferred* that bodies aren't kept. The app sends content only in RPC bodies, and its URLs carry only ids (same files).
-- **Log Drains** copy logs out, on Pro and up, with the destination's retention. *Read:* [Log Drains](https://supabase.com/docs/guides/observability/log-drains). Whether this project has one is [§9.5](#95-open-items) V1.
+- API and database logs are kept 1 day on Free, 7 on Pro, 28 on Team and 90 on Enterprise. *(read: the [pricing](https://supabase.com/pricing) table, `packages/shared-data/pricing.ts` in supabase/supabase)*
+- **Postgres logs hold content only in error lines,** by Supabase's defaults. *(read: [`postgresql.conf.j2`](https://github.com/supabase/postgres/blob/6939f8696270341c67822113aac64987171d1cb6/ansible/files/postgresql_config/postgresql.conf.j2))*
+  - `log_statement = 'ddl'`.
+  - Slow-statement logging is off.
+  - No bind parameters are logged on error.
+  - An error's `DETAIL` can still print the failing row: a `NOT NULL` violation on `blocks` prints the whole row, content included. *(inferred: Postgres's error format)*
+- **The app's statements carry no content.**
+  - Every content write is an RPC call (`apply_block_patches`, `apply_block_creates`), and every read filters by id or workspace id. *(read: `src/services/powersync.ts`, `src/sync/conversion/conversionServer.ts`)*
+  - PostgREST passes an RPC's arguments as a bind parameter, so a logged `STATEMENT` holds none of them. *(inferred: PostgREST's prepared statements)*
+  - An ad-hoc operator query that failed would log its literals.
+- **Overrides.** A project, or a role through `ALTER ROLE … SET`, can override those defaults. `supautils.conf.j2` lets the privileged role set `log_statement`, `log_min_duration_statement` and `pgaudit.log`. This repo's migrations set none of them, and the hosted values weren't read ([§9.5](#95-open-items) V2).
+- **API logs** have no documented request-body field, so bodies aren't kept *(inferred)*. The app sends content only in RPC bodies, and its URLs carry only ids *(read: same files)*.
+- **Log Drains** copy logs out, on Pro and up, with the destination's retention. *(read: [Log Drains](https://supabase.com/docs/guides/observability/log-drains))* Whether this project has one is [§9.5](#95-open-items) V1.
 
 **Elsewhere on the server.**
-- `pg_wal` keeps the conversion's WAL until it's recycled, and the replication slot holds up to `max_slot_wal_keep_size` (512 MB in the template). It isn't readable through SQL. *Inferred.*
-- No plaintext:
-  - `pg_stat_statements` stores normalized statements, constants replaced by placeholders (*read*, upstream Postgres);
-  - this repo uses no `pg_net`, and publishes none of its tables to Realtime (*read*, `supabase/migrations/`);
-  - the hourly health probe prints only aggregates and hashed ids into its public Actions log (*read*, `scripts/supabase-health.mjs`).
+- **Planner statistics hold sampled values.**
+  - `pg_statistic` keeps each analyzed column's most common values and histogram bounds. *(read: [`pg_stats`](https://www.postgresql.org/docs/17/view-pg-stats.html))*
+  - Those include values of `blocks.content`, `properties_json`, `references_json`, `blocks_history`'s diffs and `workspaces.name`. *(inferred)*
+  - `VACUUM FULL` doesn't refresh them; only `ANALYZE` does. *(read: [`VACUUM`](https://www.postgresql.org/docs/17/sql-vacuum.html))*
+  - The old samples stay as dead tuples in `pg_statistic` until that table is vacuumed. Runbook step 11 does both.
+- **The host's own Postgres log file.** It rotates by size, 9 files of 50 MB, not by age. So on a quiet project it holds error lines for longer than the plan's log window. It isn't readable through SQL. *(read: `logrotate-postgres-csv.conf` in supabase/postgres at the commit above)*
+- **`pg_wal`** keeps the conversion's WAL until it's recycled, and it isn't readable through SQL. *(inferred)*
+- None of these hold plaintext:
+  - `pg_stat_statements` stores normalized statements. *(read: upstream Postgres)*
+  - This repo uses no `pg_net`, and its migrations publish none of its tables to Realtime. *(read: `supabase/migrations/`)*
+  - The hourly health probe prints only aggregates and hashed ids into its public Actions log. *(read: `scripts/supabase-health.mjs`)*
 
 ### 9.2 Supabase Storage
 
-- **A delete is final at the API.** It removes the `storage.objects` row and the backend object in one request: no trash, no deferred queue.
-  - *Read:* [`src/storage/object.ts`](https://github.com/supabase/storage/blob/v1.58.1/src/storage/object.ts) at v1.58.1, the version the CLI recorded when this project was linked (`supabase/.temp/storage-version`). At `master`, a bucket without versioning behaves the same;
-  - and the docs: deleted files are "permanently removed and not recoverable" ([Delete objects](https://supabase.com/docs/guides/storage/management/delete-objects)).
-- **Versioning.** Newer Storage versions add bucket versioning, off by default, and nothing here enables it (*read*, Storage `master` and this repo's migrations). Whether the S3 bucket behind Supabase Storage keeps object versions isn't documented ([§9.5](#95-open-items) S3).
-- **No overwrite.** The app uploads with `upsert: false`, and the bucket has no UPDATE policy, so an object is never replaced in place. *Read:* `src/plugins/attachments/blobStore.ts`.
-- **Backups don't hold objects,** only their `storage.objects` rows (*read*, [Backups](https://supabase.com/docs/guides/platform/backups)). Those rows name each raw object `hex(sha256(plaintext))`: a guess oracle, not content. They follow the database backups' window.
-- **CDN.** Smart CDN, on Pro and up, invalidates a deleted object within 60 seconds. *Read:* [Smart CDN](https://supabase.com/docs/guides/storage/cdn/smart-cdn). The app downloads from a private bucket with `.download()`. The docs don't say whether such authenticated downloads are cached at the edge at all. If they are, the invalidation applies. *Inferred.*
+- **A delete has no trash.** The docs say deleted files are "permanently removed and not recoverable". *(read: [Delete objects](https://supabase.com/docs/guides/storage/management/delete-objects))*
+- **The two delete routes differ.** *(read: [`src/storage/object.ts`](https://github.com/supabase/storage/blob/v1.58.1/src/storage/object.ts) and `src/storage/backend/s3/adapter.ts` at v1.58.1, the version the CLI recorded when this project was linked, in its local `supabase/.temp/storage-version`)*
+  - **The single-object route** (`DELETE /object/<bucket>/<path>`) deletes the S3 object inside the transaction that deletes the row. A backend failure rolls the row back.
+  - **The bulk route**, which supabase-js's `remove()` uses and the app calls, deletes the rows, then sends one S3 `DeleteObjects` request and never reads its per-key errors.
+  - S3 reports per-key failures inside a successful response *(inferred: S3's `DeleteObjects` contract)*. So a key it failed to delete stays in the backend with no row, invisible to every listing, the cleaner's included.
+  - **So the cleaner should delete raw objects through the single-object route.**
+- **Versioning.**
+  - Newer Storage versions add bucket versioning. It's off by default, and nothing here enables it. *(read: Storage `master`, this repo's migrations)*
+  - Whether the S3 bucket behind Supabase Storage keeps object versions isn't documented ([§9.5](#95-open-items) S3).
+- **No overwrite.** The app uploads with `upsert: false`, and the bucket has no UPDATE policy, so an object is never replaced in place. *(read: `src/plugins/attachments/blobStore.ts`, `supabase/migrations/`)*
+- **Backups don't hold objects,** only their `storage.objects` rows. *(read: [Backups](https://supabase.com/docs/guides/platform/backups))* Those rows name each raw object `hex(sha256(plaintext))`, a guess oracle but not content, and they follow the database backups' window.
+- **CDN.** Smart CDN is on for Pro and up. Deleting an object invalidates every cached entry for it within about a minute. *(read: [Smart CDN](https://supabase.com/docs/guides/storage/cdn/smart-cdn))* Private-bucket objects are cached per user. *(read: [CDN fundamentals](https://supabase.com/docs/guides/storage/cdn/fundamentals))*
 
 ### 9.3 PowerSync
 
 **Residue.**
-- Every replicated change appends an operation to its bucket. The re-seal's UPDATE appends a ciphertext PUT per row, and the row's old PUT, holding the plaintext, stays until compaction. *Read:* [Compacting buckets](https://docs.powersync.com/maintenance-ops/compacting-buckets).
-- **Compaction** turns a PUT that a later operation on the same row supersedes into a MOVE, and clears its data. *Read*, code at powersync-service [`aac9a360b9`](https://github.com/powersync-ja/powersync-service/tree/aac9a360b9ba4df7e1234b2ea2849087a2b9d186): `MongoCompactorV1.ts`, `v3/MongoCompactorV3.ts` and `PostgresCompactor.ts` each null the row's `data`.
-  - PowerSync Cloud compacts every bucket once a day. The Dashboard's **Compact** button and `powersync compact` run it on demand. *Read*, same docs page.
-  - **One run isn't a guaranteed scrub.** A run tracks the rows it has seen only up to a memory limit: 64 MB by default, at about 140 bytes plus the key per row. Older PUTs of rows past that limit stay as they are (*read*, the compactors). On storage version 4, a run may only merge newly added chunks (*read*, same docs page). The limit Cloud's daily run uses isn't documented ([§9.5](#95-open-items) P1).
-- **Defragment** rebuilds all sync data from the source database. It's a full reprocess, which creates a new replication stream, and every client downloads all its data again. *Read:* same docs page and [Storage version 4](https://docs.powersync.com/sync/advanced/storage-version-4). The new stream has its own Postgres slot, named after it (*read*, `WalStream.ts`).
-  - Once the new stream is active, the old one is terminated: its slot is dropped and its storage cleared. *Read:* `AbstractReplicator.ts`.
-  - Redeploying the sync config is not the tool. The docs say so, and under incremental reprocessing an unchanged stream keeps its history.
-- The service's current-row store holds each row's latest image, which the re-seal replaces with ciphertext. *Inferred* from its role.
-- **Below the bucket API, nothing is documented** ([§9.5](#95-open-items) P2–P4):
-  - what the storage engine keeps after a MOVE or a dropped stream;
-  - the S3 object storage Cloud is rolling out;
-  - PowerSync Cloud's backups of its storage;
-  - whether its logs hold row data.
+- **Every replicated change appends an operation to its bucket.** The re-seal's UPDATE appends a ciphertext PUT per row, and the row's old PUT, which holds the plaintext, stays until compaction. *(read: [Compacting buckets](https://docs.powersync.com/maintenance-ops/compacting-buckets))*
+- **Compaction** turns a PUT into a MOVE, and clears its data, once a later operation on the same row supersedes it. *(read: the three compactors in powersync-service [`aac9a360b9`](https://github.com/powersync-ja/powersync-service/tree/aac9a360b9ba4df7e1234b2ea2849087a2b9d186), `MongoCompactorV1.ts`, `v3/MongoCompactorV3.ts`, `PostgresCompactor.ts`)*
+  - PowerSync Cloud compacts every bucket once a day, and the Dashboard's **Compact** or `powersync compact` runs it on demand. *(read: same docs page)*
+  - **One run isn't a guaranteed scrub.**
+    - A run tracks the rows it has seen only up to a memory limit, 64 MB by default. A row past that limit keeps its older PUTs. *(read: the compactors)*
+    - On storage version 4, a run may only merge newly added chunks. *(read: same docs page)*
+    - The limit Cloud's daily run uses isn't documented ([§9.5](#95-open-items) P1).
+- **Defragment** rebuilds all sync data from the source database. It's a full reprocess, which creates a new replication stream. *(read: same docs page, [Storage version 4](https://docs.powersync.com/sync/advanced/storage-version-4))*
+  - The new stream gets its own Postgres slot, named after it. *(read: `WalStream.ts`)*
+  - Once it's active, the old stream is terminated, which drops its slot and clears its storage. *(read: `AbstractReplicator.ts`)*
+  - Redeploying the sync config is not the tool for this. The docs say so, and under incremental reprocessing an unchanged stream keeps its history.
+- **The service's current-row store** holds each row's latest image, which the re-seal replaces with ciphertext. *(inferred: its role)*
+- **Below the bucket API,** nothing is documented ([§9.5](#95-open-items) P2–P4).
 
 **Can compaction or a reprocess yield a checkpoint missing a row? No, by design.** That rests on reading the code, not on a test:
-- **Compaction** only rewrites an operation that a later one on the same row supersedes. A CLEAR replaces only a leading run of operations with no PUT among them, and carries their combined checksum. *Read:* the compactors above.
-- **Mid-download,** if compaction rewrites operations of a checkpoint a client is still downloading, the server withholds that checkpoint's `checkpoint_complete`. A new checkpoint follows. *Read:* `packages/service-core/src/sync/sync.ts`.
-- **The client** applies nothing until every bucket's checksum matches.
-  - On a mismatch, it drops that bucket's local operations and returns without touching any table.
-  - The deletions this queues apply only with a later checkpoint that passes, which is after the bucket was downloaded again.
-  - *Read:* `crates/core/src/sync/storage_adapter.rs` (`sync_local`, `delete_buckets`) at powersync-sqlite-core [`feb2fa5b1a`](https://github.com/powersync-ja/powersync-sqlite-core/tree/feb2fa5b1a432bc7189bfc15817e14ee464b129e).
-- **A reprocess's new stream** becomes active only once its snapshot is done. It stops the old stream in the same transaction, and until then clients keep syncing from the old one. *Read:* `autoActivate` in the MongoDB and Postgres storage batches.
-- **A device that defers** ([§6.2](#62-client-prerequisites)) downloads everything again after a Defragment. Its materialize still defers, and its `blocks` keep their plaintext. *Inferred* from §6.2.
+- **Compaction** only rewrites an operation that a later one on the same row supersedes. A CLEAR replaces only a leading run of operations with no PUT among them, and it carries their combined checksum. *(read: the compactors)*
+- **A checkpoint in flight.** If compaction rewrites operations of a checkpoint a client is still downloading, the server withholds that checkpoint's `checkpoint_complete`, and a new one follows. *(read: `packages/service-core/src/sync/sync.ts`)*
+- **The client** applies nothing until every bucket's checksum matches. On a mismatch, it drops that bucket's local operations and returns without touching any table. *(read: `sync_local` and `delete_buckets` in `crates/core/src/sync/storage_adapter.rs`, powersync-sqlite-core [`feb2fa5b1a`](https://github.com/powersync-ja/powersync-sqlite-core/tree/feb2fa5b1a432bc7189bfc15817e14ee464b129e))*
+  - The deletions this queues apply only once the bucket is downloaded again, because until then the emptied bucket fails the checksum check. *(inferred)*
+- **A reprocess's new stream** becomes active only once its snapshot is done. It stops the old stream in the same transaction, and until then clients keep syncing from the old one. *(read: the activation step of the MongoDB and Postgres storage batches)*
+- **A device that defers** ([§6.2](#62-client-prerequisites)) downloads everything again after a Defragment. Its materialize still defers, and its `blocks` keep their plaintext. *(inferred: §6.2)*
 
 ### 9.4 The "safe from" rule
 
-- **Live systems** are safe once `finish_conversion`, the Defragment (runbook step 10) and `VACUUM FULL` (step 11) are all done. A breach of them then exposes only ciphertext and the [§7](#7-what-stays-visible-afterwards) metadata.
-  - That holds at the level of SQL, the Storage API and the sync protocol.
-  - Below them, nothing is documented: freed disk blocks, recycled WAL segments, the storage engine and S3 questions above. That's accepted.
-- **Copies that age out** are safe from the latest of:
-  1. the first day `npx supabase backups list` lists no backup taken before `VACUUM FULL` finished. On the current plan that's about 7 days after it. Finishing `VACUUM FULL` well clear of the daily backup keeps "before" unambiguous;
-  2. the plan's log retention after `finish_conversion`, 7 days on Pro. It only binds on a plan whose logs outlive its backups, such as Team;
-  3. any longer window that a [§9.5](#95-open-items) answer turns up. A Log Drain, PITR, or a PowerSync storage backup each add their own retention.
-- **Until then, don't restore or duplicate the project from a backup.** That brings the plaintext back into a live database, and a backup from before the flip undoes the conversion.
+- **Live systems are safe once all of these are done:**
+  - `finish_conversion`;
+  - the Defragment, and the last **Clean up attachments** run, whose report lists nothing left in place (runbook step 10);
+  - the `VACUUM FULL` with `ANALYZE` and the `pg_statistic` rewrite, each checked (step 11).
+
+  A breach of them then exposes only ciphertext and the [§7](#7-what-stays-visible-afterwards) metadata. That holds for SQL, the Storage API and the sync protocol.
+
+  Below those, some residue is accepted:
+  - freed disk blocks;
+  - recycled WAL segments;
+  - the host's log file;
+  - what [§9.5](#95-open-items) asks the vendors.
+- **Copies that age out are safe from the later of:**
+  1. **the first day the oldest backup in `npx supabase backups list` was taken at least a day after `VACUUM FULL` finished.**
+     - The day's margin covers not knowing whether `inserted_at` marks a backup's start or its end.
+     - Reading the oldest backup covers off-schedule backups too.
+     - On the current plan, that's about 8 days after `VACUUM FULL`;
+  2. **the plan's log retention after `finish_conversion`**: 7 days on Pro. It only binds on a plan whose logs outlive its backups, such as Team.
+- **The date stays provisional until [§9.5](#95-open-items)'s S1, S2 and P3 are answered.** They cover the copies the vendors hold that no listing shows. A longer window from any answer moves the date, and so does a Log Drain or turning PITR on.
+- **Until the date, don't restore or duplicate the project from a backup.** That brings the plaintext back into a live database, and a backup from before the flip also undoes the conversion.
 - The date is recorded with the run (#1288), not here.
 
 ### 9.5 Open items
 
-None of these blocks the run. Each can only move the "safe from" date later, or lower confidence in the "live systems" line.
+None of these blocks the run. Each can only move the "safe from" date later, or lower the confidence of the "live systems" line.
 
-For Vlad, from the dashboard or a read-only query:
+**For Vlad**, from the dashboard or read-only queries:
 - **V1.** Does the project have a Log Drain (Project Settings, Log Drains)?
-- **V2.** The hosted values of `log_statement`, `log_min_duration_statement`, `log_min_error_statement`, `log_parameter_max_length_on_error`, `pgaudit.log` and `archive_mode`. They're one `select name, setting from pg_settings where name in (…)`.
-- **V3.** Is the plan Pro? It's inferred from the 7-day backup listing and the health probe's sizing.
+- **V2.** The hosted logging settings:
+  - `log_statement`, `log_min_duration_statement`, `log_min_error_statement`, `log_parameter_max_length`, `log_parameter_max_length_on_error`, `auto_explain.log_min_duration`, `pgaudit.log` and `archive_mode`, from `pg_settings`;
+  - any per-role or per-database override in `pg_db_role_setting`, for `authenticator`, `authenticated`, `anon` and `postgres`. `pg_settings` shows only the session's own values.
+- **V3.** Is the plan Pro? That's inferred from the 7-day backup listing and the health probe's sizing.
+- **V4.** Can `postgres` vacuum `pg_catalog.pg_statistic` and `storage.objects` on the hosted project?
+  - A plain `VACUUM` of each, which is cheap, either runs or warns that it's skipping the table.
+  - If it warns, step 11 needs Supabase support for that table.
 
-For Supabase support:
-- **S1.** Is WAL archived while PITR is off, and for how long?
-- **S2.** Is a backup deleted from storage when it leaves the listing? Are backups encrypted at rest?
-- **S3.** Does the S3 bucket behind Storage keep versions of deleted objects?
+**For Supabase support:**
+- **S1.** Is WAL archived while PITR is off, and for how long? The template's [`custom_walg.conf`](https://github.com/supabase/postgres/blob/6939f8696270341c67822113aac64987171d1cb6/ansible/files/postgresql_config/custom_walg.conf) has archiving commented out, and the hosted config may differ.
+- **S2.** Is a backup deleted from storage when it leaves the listing? Do off-schedule backups follow the same retention? Are backups encrypted at rest?
+- **S3.** Does the S3 bucket behind Storage keep versions of deleted objects? Are keys with no `storage.objects` row, left by a failed delete or a failed upload, ever swept?
 
-For PowerSync support:
-- **P1.** Which storage version and backend is this instance on? What memory limit does Cloud's daily compaction use, and when does a run do a full compaction rather than a chunk merge?
-- **P2.** After a MOVE, or a dropped stream, does the storage engine keep the old bytes? Is S3 object storage on for this instance?
+**For PowerSync support:**
+- **P1.** Which storage version and backend is this instance on? What memory limit does Cloud's daily compaction use? When does a run do a full compaction rather than a chunk merge?
+- **P2.** Does the storage engine keep the old bytes after a MOVE or a dropped stream? Is S3 object storage on for this instance?
 - **P3.** Does PowerSync Cloud back up bucket storage, and for how long?
 - **P4.** Do Cloud logs, diagnostics or traces ever hold row data?
 
