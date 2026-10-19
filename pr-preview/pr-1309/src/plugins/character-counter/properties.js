@@ -1,1 +1,0 @@
-import{cV as e,oV as t,sV as n}from"../../../chunks/app-D09pWP55.js";export{t as charLimitProp,n as charProfileProp,e as charScopeProp};
