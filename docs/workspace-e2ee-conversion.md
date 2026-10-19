@@ -300,7 +300,7 @@ The first production run is #1288.
     - `pg_repack`, if available, is the non-blocking alternative to the rewrite; the `ANALYZE` and the `pg_statistic` step still apply.
     - This step and the next, and step 10's Defragment, are platform operations a client can't do.
 12. **Operator:** drop leftover ad-hoc tables from past scripts (`scripts/system-author-cleanup.sql`, `scripts/roam-ts-backfill/backfill.sql`).
-13. **Record the "safe from" date** that [§9.4](#94-the-safe-from-rule) sets from step 11's finish time. It stays provisional until [§9.5](#95-open-items)'s S1, S2 and P3 are answered.
+13. **Record the "safe from" date** that [§9.4](#94-the-safe-from-rule) sets from step 11's finish time. It stays provisional while any [§9.5](#95-open-items) item marked *gates the date* is open.
 14. **Take later recovery points.** From time to time, on an unlocked device, take a recovery point and keep it with the key. It's a folder, like step 3's, with:
     - `blocks.jsonl`: every block row read from the server, checked for consistency and against the server's block count exactly as in step 3. History has been purged by then, so each row's content columns are opened under the key. A write from any device during the paging, this one included, makes it re-read. Taking it while other devices are idle keeps that rare;
     - **the plaintext of every media block**, soft-deleted ones included. Each comes from the local byte store, or is downloaded and opened under the key, and each is hash-checked. The exception is a block the conversion recorded as unrecoverable: its manifest's list is carried into this one;
@@ -414,7 +414,8 @@ After the purge, recovery **re-keys the workspace in place** from the newest rec
 
 - **Live systems are safe once all of these are done:**
   - `finish_conversion`;
-  - the Defragment, and the last **Clean up attachments** run, whose report lists nothing left in place (runbook step 10);
+  - the Defragment (runbook step 10);
+  - the last **Clean up attachments** run, whose report lists nothing left in place, and a minute after its last delete, for the CDN to drop what it cached ([§9.2](#92-supabase-storage); step 10);
   - the `VACUUM FULL` with `ANALYZE` and the `pg_statistic` rewrite, each checked (step 11).
 
   A breach of them then exposes only ciphertext and the [§7](#7-what-stays-visible-afterwards) metadata. That holds for SQL, the Storage API and the sync protocol.
@@ -430,36 +431,38 @@ After the purge, recovery **re-keys the workspace in place** from the newest rec
      - Reading the oldest backup covers off-schedule backups too.
      - On the current plan, that's about 8 days after `VACUUM FULL`;
   2. **the plan's log retention after `finish_conversion`**: 7 days on Pro. It only binds on a plan whose logs outlive its backups, such as Team.
-- **The date stays provisional until [§9.5](#95-open-items)'s S1, S2 and P3 are answered.** They cover the copies the vendors hold that no listing shows. A longer window from any answer moves the date, and so does a Log Drain or turning PITR on.
+- **The date stays provisional while any [§9.5](#95-open-items) item marked *gates the date* is open.** Those items cover the copies no listing shows, and the plan that sets the log window. A longer window from any answer moves the date, and so does turning PITR on.
 - **The date covers a breach through SQL, the Storage API, the sync protocol or a backup.** A breach of the provider's hosts or disks still finds the residue accepted above, past the date. That includes the host's log file, which rotates by size ([§9.5](#95-open-items) S4).
 - **Until the date, don't restore or duplicate the project from a backup.** That brings the plaintext back into a live database, and a backup from before the flip also undoes the conversion.
 - The date is recorded with the run (#1288), not here.
 
 ### 9.5 Open items
 
-None of these blocks the run. Each can only move the "safe from" date later, or lower the confidence of the "live systems" line.
+None of these blocks the run.
+- An item marked *gates the date* names a copy, or a retention window, that the date waits for. [§9.4](#94-the-safe-from-rule) keeps the date provisional while one is open.
+- The rest bear on the "live systems" line, or on what lies outside the date's boundary.
 
 **For Vlad**, from the dashboard or read-only queries:
-- **V1.** Does the project have a Log Drain (Project Settings, Log Drains)?
+- **V1.** *(gates the date)* Does the project have a Log Drain (Project Settings, Log Drains)? If it does, its destination's retention applies.
 - **V2.** The hosted logging settings:
   - `log_statement`, `log_min_duration_statement`, `log_min_error_statement`, `log_parameter_max_length`, `log_parameter_max_length_on_error`, `auto_explain.log_min_duration`, `pgaudit.log` and `archive_mode`, from `pg_settings`;
   - any per-role or per-database override in `pg_db_role_setting`, for `authenticator`, `authenticated`, `anon` and `postgres`. `pg_settings` shows only the session's own values.
-- **V3.** Is the plan Pro? That's inferred from the 7-day backup listing and the health probe's sizing.
+- **V3.** *(gates the date)* Is the plan Pro? That's inferred from the 7-day backup listing and the health probe's sizing.
 - **V4.** Can `postgres` vacuum `pg_catalog.pg_statistic` and `storage.objects` on the hosted project?
   - A plain `VACUUM` of each, which is cheap, either runs or warns that it's skipping the table.
   - If it warns, step 11 needs Supabase support for that table.
 
 **For Supabase support:**
-- **S1.** Is WAL archived while PITR is off, and for how long? The template's [`custom_walg.conf`](https://github.com/supabase/postgres/blob/6939f8696270341c67822113aac64987171d1cb6/ansible/files/postgresql_config/custom_walg.conf) has archiving commented out, and the hosted config may differ.
-- **S2.** Is a backup deleted from storage when it leaves the listing? Do off-schedule backups follow the same retention? Are backups encrypted at rest?
+- **S1.** *(gates the date)* Is WAL archived while PITR is off, and for how long? The template's [`custom_walg.conf`](https://github.com/supabase/postgres/blob/6939f8696270341c67822113aac64987171d1cb6/ansible/files/postgresql_config/custom_walg.conf) has archiving commented out, and the hosted config may differ.
+- **S2.** *(gates the date)* Is a backup deleted from storage when it leaves the listing? Do off-schedule backups follow the same retention? Are backups encrypted at rest?
 - **S3.** Does the S3 bucket behind Storage keep versions of deleted objects? Are keys with no `storage.objects` row, left by a failed delete or a failed upload, ever swept?
 - **S4.** Is the instance's own Postgres log file ever pruned by age, rather than only rotated by size? Who can read it?
 
 **For PowerSync support:**
 - **P1.** Which storage version and backend is this instance on? What memory limit does Cloud's daily compaction use? When does a run do a full compaction rather than a chunk merge?
 - **P2.** Does the storage engine keep the old bytes after a MOVE or a dropped stream? Is S3 object storage on for this instance?
-- **P3.** Does PowerSync Cloud back up bucket storage, and for how long?
-- **P4.** Do Cloud logs, diagnostics or traces ever hold row data?
+- **P3.** *(gates the date)* Does PowerSync Cloud back up bucket storage, and for how long?
+- **P4.** *(gates the date)* Do Cloud logs, diagnostics or traces ever hold row data, and for how long?
 
 ## 10. What the workspace gives up
 
