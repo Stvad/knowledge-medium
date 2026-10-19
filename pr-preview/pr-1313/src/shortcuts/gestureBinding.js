@@ -1,0 +1,1 @@
+import{eD as e,tD as t}from"../../chunks/app-41-tgTtr.js";export{e as gestureBindingDescriptor,t as matchesGestureEvent};

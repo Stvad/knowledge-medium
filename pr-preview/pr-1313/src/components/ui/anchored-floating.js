@@ -1,0 +1,1 @@
+import{hI as e,mI as t}from"../../../chunks/app-41-tgTtr.js";export{t as floatingAnchorFromRect,e as useAnchoredFloating};

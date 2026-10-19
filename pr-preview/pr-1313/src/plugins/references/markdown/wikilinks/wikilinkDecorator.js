@@ -1,0 +1,1 @@
+import{FS as e,IS as t,LS as n}from"../../../../../chunks/app-41-tgTtr.js";export{e as isWikilinkDisplayParts,t as resolveWikilinkDisplay,n as wikilinkDisplayDecoratorFacet};

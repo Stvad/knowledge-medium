@@ -1,0 +1,1 @@
+import{CE as e,Tt as t,wE as n}from"../../../chunks/app-41-tgTtr.js";export{e as extensionsOverridesProp,n as extensionsPrefsType,t as extensionsSettingsPlugin};

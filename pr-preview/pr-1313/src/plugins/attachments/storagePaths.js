@@ -1,0 +1,1 @@
+import{dg as e,fg as t}from"../../../chunks/app-41-tgTtr.js";export{e as attachmentObjectPath,t as authenticatedObjectUrl};

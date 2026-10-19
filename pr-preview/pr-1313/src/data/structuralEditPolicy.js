@@ -1,0 +1,1 @@
+import{JT as e,YT as t}from"../../chunks/app-41-tgTtr.js";export{e as resolveStructuralEditPolicy,t as structuralEditPolicyForBlock};

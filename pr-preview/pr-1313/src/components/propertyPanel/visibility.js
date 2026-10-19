@@ -1,0 +1,1 @@
+import{vP as e,yP as t}from"../../../chunks/app-41-tgTtr.js";export{e as isPropertyPanelHiddenProperty,t as isPropertyPanelReadOnlyProperty};

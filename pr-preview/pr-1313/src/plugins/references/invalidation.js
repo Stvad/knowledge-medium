@@ -1,0 +1,1 @@
+import{UL as e,WL as t}from"../../../chunks/app-41-tgTtr.js";export{e as REFERENCES_TARGET_INVALIDATION_CHANNEL,t as referencesInvalidationRule};

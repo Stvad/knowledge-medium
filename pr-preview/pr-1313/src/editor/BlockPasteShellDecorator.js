@@ -1,0 +1,1 @@
+import{aE as e,iE as t}from"../../chunks/app-41-tgTtr.js";export{t as BlockPasteShellDecorator,e as blockPasteShellDecorator};

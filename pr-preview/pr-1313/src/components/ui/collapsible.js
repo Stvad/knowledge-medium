@@ -1,0 +1,1 @@
+"use client";import{cM as e,lM as t,sM as n}from"../../../chunks/app-41-tgTtr.js";export{n as Collapsible,e as CollapsibleContent,t as CollapsibleTrigger};

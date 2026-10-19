@@ -1,0 +1,1 @@
+import{JE as e,qE as t}from"../chunks/app-41-tgTtr.js";export{t as appUpdate,e as useAppUpdateAvailable};

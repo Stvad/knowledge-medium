@@ -1,0 +1,1 @@
+import{Iu as e,Lu as t}from"../../../chunks/app-41-tgTtr.js";export{e as createWatchEventsRegistry,t as watchEventsRegistry};

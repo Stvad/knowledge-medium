@@ -1,0 +1,1 @@
+import{Dj as e,Ej as t}from"../../../chunks/app-41-tgTtr.js";export{t as BLOCK_TITLE_TEXT_CLASS,e as useBlockTitleTextClass};

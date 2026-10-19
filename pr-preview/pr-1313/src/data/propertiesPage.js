@@ -1,0 +1,1 @@
+import{i4 as e,r4 as t}from"../../chunks/app-41-tgTtr.js";export{t as getOrCreatePropertiesPage,e as propertiesPageBlockId};

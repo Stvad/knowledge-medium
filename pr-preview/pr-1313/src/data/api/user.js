@@ -1,0 +1,1 @@
+import{H6 as e,U6 as t,W6 as n}from"../../../chunks/app-41-tgTtr.js";export{e as SYSTEM_AUTHOR_PREFIX,t as isSystemAuthor,n as systemAuthor};

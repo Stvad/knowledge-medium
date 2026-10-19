@@ -1,0 +1,1 @@
+import{S0 as e,_0 as t,b0 as n,v0 as r,x0 as i,y0 as a}from"../../chunks/app-41-tgTtr.js";export{t as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,r as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,a as __resetLayoutSessionIdForTesting,n as getLayoutSessionId,i as isInstalledAppDisplayMode,e as readOrCreateLayoutSessionId};

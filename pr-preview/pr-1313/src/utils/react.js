@@ -1,0 +1,1 @@
+import{Mk as e,jk as t}from"../../chunks/app-41-tgTtr.js";export{t as useIsMobile,e as usePointerCoarse};
