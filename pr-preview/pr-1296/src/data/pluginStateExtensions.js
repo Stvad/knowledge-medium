@@ -1,1 +1,1 @@
-import{CV as e,wV as t}from"../../chunks/app-icqlrCV5.js";export{e as pluginPrefsExtension,t as pluginUIStateExtension};
+import{CV as e,wV as t}from"../../chunks/app-BEtuRIdu.js";export{e as pluginPrefsExtension,t as pluginUIStateExtension};

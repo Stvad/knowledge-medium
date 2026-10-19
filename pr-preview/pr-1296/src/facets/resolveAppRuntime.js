@@ -1,1 +1,1 @@
-import{hD as e,mD as t}from"../../chunks/app-icqlrCV5.js";export{t as resolveAppRuntime,e as resolveAppRuntimeSync};
+import{hD as e,mD as t}from"../../chunks/app-BEtuRIdu.js";export{t as resolveAppRuntime,e as resolveAppRuntimeSync};

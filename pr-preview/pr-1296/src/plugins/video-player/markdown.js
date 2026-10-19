@@ -1,1 +1,1 @@
-import{ag as e}from"../../../chunks/app-icqlrCV5.js";export{e as videoPlayerMarkdownExtension};
+import{ag as e}from"../../../chunks/app-BEtuRIdu.js";export{e as videoPlayerMarkdownExtension};

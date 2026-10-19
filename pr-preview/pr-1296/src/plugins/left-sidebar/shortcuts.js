@@ -1,1 +1,1 @@
-import{cy as e,oy as t,sy as n}from"../../../chunks/app-icqlrCV5.js";export{t as getOrCreateShortcutsBlock,n as journalShortcutBlockId,e as shortcutsBlockId};
+import{cy as e,oy as t,sy as n}from"../../../chunks/app-BEtuRIdu.js";export{t as getOrCreateShortcutsBlock,n as journalShortcutBlockId,e as shortcutsBlockId};
