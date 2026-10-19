@@ -1,1 +1,1 @@
-import{FC as e,IC as t,LC as n,PC as r,RC as i}from"../../../chunks/app-B7jmYqpN.js";export{r as keybindingOverridesCodec,e as keybindingOverridesPresetCore,t as keybindingOverridesProp,n as keybindingsPrefsType,i as overrideEntryKey};
+import{FC as e,IC as t,LC as n,PC as r,RC as i}from"../../../chunks/app-CLojg416.js";export{r as keybindingOverridesCodec,e as keybindingOverridesPresetCore,t as keybindingOverridesProp,n as keybindingsPrefsType,i as overrideEntryKey};
