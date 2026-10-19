@@ -1,0 +1,1 @@
+import{G1 as e,K1 as t}from"../../chunks/app-o596MNDT.js";export{e as InvalidBlockIdError,t as assertCanonicalBlockId};

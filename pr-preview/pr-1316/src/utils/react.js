@@ -1,0 +1,1 @@
+import{Mk as e,Nk as t}from"../../chunks/app-o596MNDT.js";export{e as useIsMobile,t as usePointerCoarse};

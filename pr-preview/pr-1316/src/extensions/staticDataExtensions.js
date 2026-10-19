@@ -1,0 +1,1 @@
+import{DL as e}from"../../chunks/app-o596MNDT.js";export{e as staticDataExtensions};

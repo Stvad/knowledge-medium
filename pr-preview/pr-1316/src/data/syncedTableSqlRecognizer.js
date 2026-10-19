@@ -1,0 +1,1 @@
+import{JH as e,XH as t,YH as n}from"../../chunks/app-o596MNDT.js";export{e as SYNCED_TABLES,n as syncedWriteTarget,t as writeTargets};
