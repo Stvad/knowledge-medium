@@ -125,20 +125,34 @@ describe('fetchWorkspaceConversionState', () => {
     expect(await fetchWorkspaceConversionState('ws')).toEqual({kind: 'not-visible'})
   })
 
-  it('a server with no conversions relationship (PGRST200) predates the migration: no conversion', async () => {
-    query.results.push(
-      {data: null, error: {code: 'PGRST200', message: "Could not find a relationship between 'workspaces' and 'workspace_conversions'"}},
-      {data: workspaceRow(), error: null},
-    )
+  const noRelationship = {data: null, error: {code: 'PGRST200', message: "Could not find a relationship between 'workspaces' and 'workspace_conversions'"}}
+  const noTable = {data: null, error: {code: 'PGRST205', message: "Could not find the table 'public.workspace_conversions'"}}
+
+  it('a server without the conversions table predates the migration: no conversion', async () => {
+    query.results.push(noRelationship, noTable, {data: workspaceRow(), error: null})
     expect(await fetchWorkspaceConversionState('ws')).toMatchObject({kind: 'read', state: {conversionPhase: null}})
-    expect(query.calls[1].columns).not.toContain('workspace_conversions')
+    expect(query.calls.map(call => call.table)).toEqual(['workspaces', 'workspace_conversions', 'workspaces'])
+    expect(query.calls[2].columns).not.toContain('workspace_conversions')
+  })
+
+  it('an unresolved relationship while the table EXISTS is unavailable, never "no conversion"', async () => {
+    // A stale schema cache or a missing foreign key: the phase can't be read in
+    // one statement, and the table may hold a `sealing` row.
+    query.results.push(noRelationship, {data: {phase: 'sealing'}, error: null})
+    expect(await fetchWorkspaceConversionState('ws')).toMatchObject({kind: 'unavailable'})
+    query.results.push(noRelationship, {data: null, error: null})
+    expect(await fetchWorkspaceConversionState('ws')).toMatchObject({kind: 'unavailable'})
+  })
+
+  it('a table probe that fails any other way is unavailable', async () => {
+    query.results.push(noRelationship, {data: null, error: {code: 'PGRST301', message: 'JWT expired'}})
+    expect(await fetchWorkspaceConversionState('ws')).toMatchObject({kind: 'unavailable'})
+    query.results.push(noRelationship, new TypeError('Failed to fetch'))
+    expect(await fetchWorkspaceConversionState('ws')).toMatchObject({kind: 'unavailable'})
   })
 
   it('the fallback read failing is unavailable too', async () => {
-    query.results.push(
-      {data: null, error: {code: 'PGRST200', message: 'no relationship'}},
-      new TypeError('Failed to fetch'),
-    )
+    query.results.push(noRelationship, noTable, new TypeError('Failed to fetch'))
     expect(await fetchWorkspaceConversionState('ws')).toMatchObject({kind: 'unavailable'})
   })
 })

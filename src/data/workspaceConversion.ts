@@ -23,11 +23,13 @@ export const parseConversionPhase = (raw: unknown): ConversionPhase | null => {
   return raw === 'cleaning' ? 'cleaning' : 'sealing'
 }
 
-/** PostgREST's "no relationship between `workspaces` and
- *  `workspace_conversions`": a server that predates the conversion migration, so
- *  no conversion can be running on it. Only this code: any other error (a broken
- *  policy naming a missing relation included) is unavailable, never "none". */
+/** PostgREST can't resolve `workspaces` → `workspace_conversions`. That is a
+ *  server without the table (no migration yet, so no conversion can be running)
+ *  only when the table itself is missing too — {@link NO_SUCH_TABLE}. A table
+ *  that exists behind an unresolved relationship (a stale schema cache, a
+ *  missing foreign key) may hold a `sealing` row, so it is unavailable. */
 const NO_CONVERSIONS_RELATIONSHIP = 'PGRST200'
+const NO_SUCH_TABLE = 'PGRST205'
 
 const DEFAULT_TIMEOUT_MS = 10_000
 
@@ -46,6 +48,9 @@ const requireSupabase = () => {
   if (!supabase) throw new Error('Supabase is not configured')
   return supabase
 }
+
+const errorCode = (error: unknown): string | undefined =>
+  (error as {code?: string} | null)?.code
 
 const embeddedPhase = (row: ServerWorkspaceRow): ConversionPhase | null => {
   const embedded = row.workspace_conversions
@@ -70,7 +75,16 @@ export const fetchWorkspaceConversionState = async (
     // post-flip "e2ee" with a pre-flip "no conversion".
     let result = await select(`${WORKSPACE_COLUMNS}, workspace_conversions(phase)`)
     let conversionsExist = true
-    if ((result.error as {code?: string} | null)?.code === NO_CONVERSIONS_RELATIONSHIP) {
+    if (errorCode(result.error) === NO_CONVERSIONS_RELATIONSHIP) {
+      const table = await requireSupabase()
+        .from('workspace_conversions')
+        .select('phase')
+        .eq('workspace_id', workspaceId)
+        .abortSignal(signal)
+        .maybeSingle()
+      if (errorCode(table.error) !== NO_SUCH_TABLE) {
+        return {kind: 'unavailable', error: table.error ?? result.error}
+      }
       conversionsExist = false
       result = await select(WORKSPACE_COLUMNS)
     }
