@@ -1,1 +1,1 @@
-import{Hd as e,Vd as t}from"../../../chunks/app-B2F-eDBv.js";export{t as DATA_MODEL_GUIDE,e as dataModelGuide};
+import{Xd as e,Zd as t}from"../../../chunks/app-DMKYo2vc.js";export{e as DATA_MODEL_GUIDE,t as dataModelGuide};

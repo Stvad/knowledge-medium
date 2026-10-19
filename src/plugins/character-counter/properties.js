@@ -1,1 +1,1 @@
-import{QB as e,XB as t,ZB as n}from"../../../chunks/app-B2F-eDBv.js";export{t as charLimitProp,n as charProfileProp,e as charScopeProp};
+import{aV as e,oV as t,sV as n}from"../../../chunks/app-DMKYo2vc.js";export{e as charLimitProp,t as charProfileProp,n as charScopeProp};

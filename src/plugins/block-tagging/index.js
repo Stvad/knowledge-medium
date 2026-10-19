@@ -1,1 +1,1 @@
-import{Es as e,_s as t,ds as n,fs as r,ps as i,vs as a}from"../../../chunks/app-B2F-eDBv.js";export{r as ADD_TAG_ACTION_ID,i as ADD_TAG_BLOCKS_ACTION_ID,t as appendTagToBlocks,a as appendTagToContent,n as blockTaggingPlugin,e as blockTagsConfigProp};
+import{Ds as e,Es as t,Fs as n,Ss as r,bs as i,xs as a}from"../../../chunks/app-DMKYo2vc.js";export{a as ADD_TAG_ACTION_ID,r as ADD_TAG_BLOCKS_ACTION_ID,t as appendTagToBlocks,e as appendTagToContent,i as blockTaggingPlugin,n as blockTagsConfigProp};

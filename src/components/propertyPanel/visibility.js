@@ -1,1 +1,1 @@
-import{lP as e,uP as t}from"../../../chunks/app-B2F-eDBv.js";export{e as isPropertyPanelHiddenProperty,t as isPropertyPanelReadOnlyProperty};
+import{vP as e,yP as t}from"../../../chunks/app-DMKYo2vc.js";export{e as isPropertyPanelHiddenProperty,t as isPropertyPanelReadOnlyProperty};

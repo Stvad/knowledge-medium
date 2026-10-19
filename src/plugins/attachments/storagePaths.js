@@ -1,1 +1,1 @@
-import{ng as e,rg as t}from"../../../chunks/app-B2F-eDBv.js";export{e as attachmentObjectPath,t as authenticatedObjectUrl};
+import{dg as e,fg as t}from"../../../chunks/app-DMKYo2vc.js";export{e as attachmentObjectPath,t as authenticatedObjectUrl};

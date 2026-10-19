@@ -1,1 +1,1 @@
-import{Ml as e,Nl as t}from"../../chunks/app-B2F-eDBv.js";export{e as extensionApiCatalog,t as extensionApiRuntimeExports};
+import{Hl as e,Vl as t}from"../../chunks/app-DMKYo2vc.js";export{t as extensionApiCatalog,e as extensionApiRuntimeExports};

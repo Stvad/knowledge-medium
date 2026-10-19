@@ -1,1 +1,1 @@
-import{FN as e,IN as t}from"../../chunks/app-B2F-eDBv.js";export{e as anyBlockTombstoned,t as isBlockTombstoned};
+import{GN as e,WN as t}from"../../chunks/app-DMKYo2vc.js";export{t as anyBlockTombstoned,e as isBlockTombstoned};

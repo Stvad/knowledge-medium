@@ -1,1 +1,1 @@
-import{BC as e,HC as t,UC as n,VC as r}from"../../../chunks/app-B2F-eDBv.js";export{e as COMMAND_PALETTE_ACTION_ID,r as COMMAND_PALETTE_CONTEXT,t as COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,n as commandPaletteActionContext};
+import{QC as e,XC as t,YC as n,ZC as r}from"../../../chunks/app-DMKYo2vc.js";export{n as COMMAND_PALETTE_ACTION_ID,t as COMMAND_PALETTE_CONTEXT,r as COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,e as commandPaletteActionContext};

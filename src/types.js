@@ -1,1 +1,1 @@
-import{M2 as e}from"../chunks/app-B2F-eDBv.js";export{e as isChildBackedPropertiesWorkspace};
+import{J2 as e}from"../chunks/app-DMKYo2vc.js";export{e as isChildBackedPropertiesWorkspace};

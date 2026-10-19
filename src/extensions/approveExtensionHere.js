@@ -1,1 +1,1 @@
-import{SE as e}from"../../chunks/app-B2F-eDBv.js";export{e as approveExtensionHere};
+import{jE as e}from"../../chunks/app-DMKYo2vc.js";export{e as approveExtensionHere};

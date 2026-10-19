@@ -1,1 +1,1 @@
-import{yp as e}from"../../../../../chunks/app-B2F-eDBv.js";export{e as wikilinkMarkdownExtension};
+import{Op as e}from"../../../../../chunks/app-DMKYo2vc.js";export{e as wikilinkMarkdownExtension};

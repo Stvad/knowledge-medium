@@ -1,1 +1,1 @@
-import{_s as e,vs as t}from"../../../chunks/app-B2F-eDBv.js";export{e as appendTagToBlocks,t as appendTagToContent};
+import{Ds as e,Es as t}from"../../../chunks/app-DMKYo2vc.js";export{t as appendTagToBlocks,e as appendTagToContent};

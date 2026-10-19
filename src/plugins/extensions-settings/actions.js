@@ -1,1 +1,1 @@
-import{dE as e,fE as t}from"../../../chunks/app-B2F-eDBv.js";export{e as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,t as openExtensionsSettingsAction};
+import{bE as e,xE as t}from"../../../chunks/app-DMKYo2vc.js";export{e as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,t as openExtensionsSettingsAction};

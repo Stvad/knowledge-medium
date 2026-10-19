@@ -1,1 +1,1 @@
-import{Jg as e,Kg as t,Pg as n,Yg as r,qg as i}from"../../../chunks/app-B2F-eDBv.js";export{i as EXTENSIONS_PAGE_TITLE,e as TUTORIAL_DEFAULT_TITLE,r as TUTORIAL_VIM_TITLE,n as onboardingPlugin,t as seedTutorial};
+import{Ug as e,i_ as t,n_ as n,r_ as r,t_ as i}from"../../../chunks/app-DMKYo2vc.js";export{n as EXTENSIONS_PAGE_TITLE,r as TUTORIAL_DEFAULT_TITLE,t as TUTORIAL_VIM_TITLE,e as onboardingPlugin,i as seedTutorial};

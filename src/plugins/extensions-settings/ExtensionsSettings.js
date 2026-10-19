@@ -1,1 +1,1 @@
-import{Ct as e}from"../../../chunks/app-B2F-eDBv.js";export{e as ExtensionsSettings};
+import{Mt as e}from"../../../chunks/app-DMKYo2vc.js";export{e as ExtensionsSettings};

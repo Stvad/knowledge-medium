@@ -1,1 +1,1 @@
-import{hw as e}from"../../../chunks/app-B2F-eDBv.js";export{e as SwipeActionMenu};
+import{ww as e}from"../../../chunks/app-DMKYo2vc.js";export{e as SwipeActionMenu};

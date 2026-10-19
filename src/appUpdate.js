@@ -1,1 +1,1 @@
-import{RE as e,zE as t}from"../chunks/app-B2F-eDBv.js";export{e as appUpdate,t as useAppUpdateAvailable};
+import{JE as e,qE as t}from"../chunks/app-DMKYo2vc.js";export{t as appUpdate,e as useAppUpdateAvailable};

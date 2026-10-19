@@ -1,1 +1,1 @@
-import{qB as e}from"../../../chunks/app-B2F-eDBv.js";export{e as characterCounterDataExtension};
+import{nV as e}from"../../../chunks/app-DMKYo2vc.js";export{e as characterCounterDataExtension};

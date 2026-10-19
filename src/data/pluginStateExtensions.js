@@ -1,1 +1,1 @@
-import{CV as e,wV as t}from"../../chunks/app-B2F-eDBv.js";export{e as pluginPrefsExtension,t as pluginUIStateExtension};
+import{MV as e,NV as t}from"../../chunks/app-DMKYo2vc.js";export{e as pluginPrefsExtension,t as pluginUIStateExtension};

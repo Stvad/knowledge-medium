@@ -1,1 +1,1 @@
-import{CD as e,SD as t,TD as n,wD as r}from"../../chunks/app-B2F-eDBv.js";export{t as extensionDisplayName,e as extensionName,r as userExtensionShellToggle,n as userExtensionToggle};
+import{MD as e,ND as t,PD as n,jD as r}from"../../chunks/app-DMKYo2vc.js";export{r as extensionDisplayName,e as extensionName,t as userExtensionShellToggle,n as userExtensionToggle};

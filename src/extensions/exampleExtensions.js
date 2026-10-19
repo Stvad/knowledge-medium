@@ -1,1 +1,1 @@
-import{LT as e,RT as t}from"../../chunks/app-B2F-eDBv.js";export{e as exampleExtensions,t as insertExampleExtensionsUnder};
+import{KT as e,qT as t}from"../../chunks/app-DMKYo2vc.js";export{e as exampleExtensions,t as insertExampleExtensionsUnder};

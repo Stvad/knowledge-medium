@@ -1,1 +1,1 @@
-import{Ls as e,Rs as t}from"../../../chunks/app-B2F-eDBv.js";export{e as linkRoamUidMentions,t as writeImportLog};
+import{Ks as e,qs as t}from"../../../chunks/app-DMKYo2vc.js";export{e as linkRoamUidMentions,t as writeImportLog};

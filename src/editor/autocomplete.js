@@ -1,1 +1,1 @@
-import{iE as e}from"../../chunks/app-B2F-eDBv.js";export{e as editorAutocompleteExtension};
+import{pE as e}from"../../chunks/app-DMKYo2vc.js";export{e as editorAutocompleteExtension};

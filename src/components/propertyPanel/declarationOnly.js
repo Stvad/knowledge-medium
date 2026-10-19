@@ -1,1 +1,1 @@
-import{OM as e,kM as t}from"../../../chunks/app-B2F-eDBv.js";export{e as declarationOnlyDefinitionForName,t as declarationOnlyStatusText};
+import{LM as e,RM as t}from"../../../chunks/app-DMKYo2vc.js";export{e as declarationOnlyDefinitionForName,t as declarationOnlyStatusText};
