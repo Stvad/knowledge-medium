@@ -220,10 +220,13 @@ The conversion only updates rows, so it sends locked peers no deletes. A deferre
 1. Mark every staged `blocks_synced` row of the workspace for re-apply. That repairs a device that ran an older build across the conversion and already copied ciphertext into `blocks`.
 2. **Re-key the local byte store.** The byte store and every pending upload record are keyed by the content key computed at capture (`rec.contentKey`, a raw sha256 for a plaintext capture), and the drain reads the bytes by that key (`src/plugins/attachments/byteStore.ts`).
    - A raw key and a keyed key are both 64 hex characters, so an entry's **name** can't say which it is. Classify each entry by its **content** instead: the store holds plaintext, so `h = sha256(bytes)` is always the true content hash.
-   - A key equal to `hex(h)` is raw: copy the entry to `hex(HMAC(K_id, h))`, point any pending record at the copy, then drop the raw entry.
+   - A key equal to `hex(h)` is raw. Handle it in this order:
+     1. Copy the entry to `hex(HMAC(K_id, h))`.
+     2. Point **every** upload record of the workspace that names the raw key at the copy, `pending` **and** `failed` alike. A record's `contentKey` is both its Storage path and its OPFS key, and `requeue` changes only the status, so a failed record left on the raw key would miss its bytes on the next drain.
+     3. Drop the raw entry.
    - A key equal to `hex(HMAC(K_id, h))` is already keyed: skip it. A retry therefore never re-keys a copy.
    - Anything else is corrupt: report it and leave it.
-   - Reset the workspace's **failed** upload records to pending. They're plaintext-mode PUTs that the insert-time check refused ([§5.1](#51-server-freeze-stage-apply-abort)), and once re-keyed they upload sealed.
+   - Then requeue the workspace's **failed** upload records, which by now point at keyed copies. They're plaintext-mode PUTs that the insert-time check refused ([§5.1](#51-server-freeze-stage-apply-abort)), and they now upload sealed.
    - Re-keying only the record would strand its bytes, and the drain would see a clean miss and fail the record.
    - Leaving it alone would upload ciphertext to a raw sha256 path.
    - Copy-then-switch plus content classification means a crash at any point leaves at worst a duplicate, and a retry finishes the job.
