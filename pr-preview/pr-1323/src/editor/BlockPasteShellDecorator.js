@@ -1,0 +1,1 @@
+import{CE as e,SE as t}from"../../chunks/app-J_AQTAp1.js";export{t as BlockPasteShellDecorator,e as blockPasteShellDecorator};

@@ -1,0 +1,1 @@
+import{BD as e,zD as t}from"../../chunks/app-J_AQTAp1.js";export{t as ClientLocalSettings,e as clientLocalSettings};

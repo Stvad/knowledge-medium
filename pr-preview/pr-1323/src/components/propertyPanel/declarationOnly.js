@@ -1,0 +1,1 @@
+import{nN as e,tN as t}from"../../../chunks/app-J_AQTAp1.js";export{t as declarationOnlyDefinitionForName,e as declarationOnlyStatusText};

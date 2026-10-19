@@ -1,0 +1,1 @@
+import{dm as e}from"../../../chunks/app-J_AQTAp1.js";export{e as richPastePlugin};

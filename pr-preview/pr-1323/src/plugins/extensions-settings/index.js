@@ -1,0 +1,1 @@
+import{HE as e,St as t,VE as n}from"../../../chunks/app-J_AQTAp1.js";export{n as extensionsOverridesProp,e as extensionsPrefsType,t as extensionsSettingsPlugin};

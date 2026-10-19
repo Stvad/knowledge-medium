@@ -1,0 +1,1 @@
+import{Gj as e,Wj as t}from"../../../chunks/app-J_AQTAp1.js";export{t as BLOCK_TITLE_TEXT_CLASS,e as useBlockTitleTextClass};

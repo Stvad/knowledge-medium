@@ -1,0 +1,1 @@
+import{ab as e,ib as t,nb as n,ob as r,rb as i,sb as a,tb as o}from"../../../chunks/app-J_AQTAp1.js";export{o as BINARY_ENVELOPE_MAGIC,n as BINARY_ENVELOPE_MIN_BYTES,i as BINARY_ENVELOPE_OVERHEAD_BYTES,t as BINARY_MAGIC_BYTES,e as decodeBinaryEnvelope,r as encodeBinaryEnvelope,a as hasBinaryEnvelopeMagic};

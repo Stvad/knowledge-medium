@@ -1,0 +1,1 @@
+import{dE as e,uE as t}from"../../chunks/app-J_AQTAp1.js";export{t as exampleExtensions,e as insertExampleExtensionsUnder};

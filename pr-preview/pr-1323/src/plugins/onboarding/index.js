@@ -1,0 +1,1 @@
+import{Kg as e,a_ as t,i_ as n,o_ as r,s_ as i}from"../../../chunks/app-J_AQTAp1.js";export{t as EXTENSIONS_PAGE_TITLE,r as TUTORIAL_DEFAULT_TITLE,i as TUTORIAL_VIM_TITLE,e as onboardingPlugin,n as seedTutorial};

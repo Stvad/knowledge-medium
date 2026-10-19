@@ -1,0 +1,1 @@
+import{c8 as e,o8 as t,s8 as n}from"../../../chunks/app-J_AQTAp1.js";export{t as SYSTEM_AUTHOR_PREFIX,n as isSystemAuthor,e as systemAuthor};

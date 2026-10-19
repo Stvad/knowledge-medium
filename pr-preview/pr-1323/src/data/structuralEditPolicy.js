@@ -1,0 +1,1 @@
+import{fE as e,pE as t}from"../../chunks/app-J_AQTAp1.js";export{e as resolveStructuralEditPolicy,t as structuralEditPolicyForBlock};

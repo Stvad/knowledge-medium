@@ -1,0 +1,1 @@
+import{ic as e,rc as t}from"../../../chunks/app-J_AQTAp1.js";export{t as computePromotedFromChildren,e as detectInlineAttribute};

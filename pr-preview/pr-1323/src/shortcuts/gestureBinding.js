@@ -1,0 +1,1 @@
+import{vD as e,yD as t}from"../../chunks/app-J_AQTAp1.js";export{e as gestureBindingDescriptor,t as matchesGestureEvent};

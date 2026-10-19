@@ -1,0 +1,1 @@
+import{Nu as e,Pu as t}from"../../../chunks/app-J_AQTAp1.js";export{e as createWatchEventsRegistry,t as watchEventsRegistry};

@@ -1,0 +1,1 @@
+import{Bx as e,Hx as t,Rx as n,Vx as r,zx as i}from"../../chunks/app-J_AQTAp1.js";export{n as CRUMB_ELLIPSIS,i as CRUMB_MAX_CHARS,e as CRUMB_MAX_SEGMENTS,r as collapseCrumbs,t as crumbsFromAncestors};
