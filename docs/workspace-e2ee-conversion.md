@@ -1,6 +1,6 @@
 # In-place plaintext → E2EE workspace conversion (single client)
 
-> **Status:** proposal — nothing here is built. Last verified against code: 2026-10-18 (master `13d3f0dc72`).
+> **Status:** design; implementation in progress. Epic #1295 and [§13](#13-tracking) show which pieces have landed. Last verified against code: 2026-10-19, against master `afc7fe5e09` and the open PRs for #1299, #1292, #1294 and #1293. Code wins where they differ.
 > Tracking: epic #1295. The pieces are listed in [§13](#13-tracking). A multi-client design is summarized in [§11](#11-appendix-the-multi-client-design); its full text is commit `5df16bfb8a` of this file.
 
 ## 1. Goal
