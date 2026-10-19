@@ -1,1 +1,1 @@
-import{Nc as e}from"../../../chunks/app-b9FEwgTK.js";export{e as getExtraRoamProps};
+import{Nc as e}from"../../../chunks/app-1ivqQEF4.js";export{e as getExtraRoamProps};

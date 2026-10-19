@@ -1,1 +1,1 @@
-import{$K as e}from"../../../../chunks/app-b9FEwgTK.js";export{e as applySyncInvalidation};
+import{$K as e}from"../../../../chunks/app-1ivqQEF4.js";export{e as applySyncInvalidation};
