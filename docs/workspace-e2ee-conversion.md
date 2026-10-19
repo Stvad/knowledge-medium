@@ -210,7 +210,7 @@ Resuming just runs this again. It can take hours for a large workspace, so the f
 
 - **One classification rule, by content**, written once next to `deriveContentKey`. For bytes `b` under name `n`:
   - **raw** iff `n == hex(sha256(b))`;
-  - **keyed** iff `b` opens under the workspace key to `p` and `n == hex(HMAC(K_id, sha256(p)))`;
+  - **keyed** iff `n == hex(HMAC(K_id, h))` for a hash `h` the pass already knows, and `b` opens under the workspace key to a `p` with `sha256(p) == h`. The asset AAD binds the content hash (`assetBytesAad`), so an envelope can only be opened under a candidate hash. The candidates are every media block's hash, soft-deleted ones included, plus the hash of each raw object this pass converts. A keyed object under any other hash, such as a converted orphan's copy on a later pass, is **neither**: it's kept and reported, never deleted, because the bundle record names only original paths;
   - otherwise **neither**.
 
   Both kinds of name are 64 hex characters, so the rule never reads a header or the name's shape. As a fast path, a name equal to the keyed name of any media block's hash, soft-deleted ones included, is kept without a download. The fast path only decides "don't delete"; the proof still verifies the object.
