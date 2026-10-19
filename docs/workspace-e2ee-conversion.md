@@ -93,7 +93,7 @@ This is #1294: one migration, three owner-only SECURITY DEFINER RPCs, and one sm
   - a write that commits before the delete's snapshot is counted by it, so a foreign row raises `KMC02`;
   - one that commits later can only be ciphertext, because the trigger refuses plaintext, so it survives as ciphertext history. That's accepted.
 - **`finish_conversion(ws)`.** It refuses unless the caller owns `ws` and the phase is `cleaning`, then deletes the row. The client calls it only after the attachment proof passes; the server can't check that proof itself.
-- **Bucket limit.** Raise `attachments.file_size_limit` by the binary envelope's overhead (`BINARY_ENVELOPE_OVERHEAD_BYTES`, 36 bytes; round up to 64). Supabase caps every bucket at the project-wide upload limit, so that must be raised too. It's `[storage] file_size_limit` locally (`supabase/config.toml`), and a project setting on the hosted project (runbook step 1).
+- **Bucket limit.** Raise `attachments.file_size_limit` by the binary envelope's overhead (`BINARY_ENVELOPE_OVERHEAD_BYTES`, 36 bytes; round up to 64). Supabase caps every bucket at the project-wide upload limit, so on the hosted project this raise only takes effect up to that setting. The conversion doesn't depend on it: preflight refuses any attachment too large to seal within 50 MiB (step 0), so the bucket's original limit is always enough. The raise is headroom only.
   - `captureMedia` caps a plaintext capture at exactly 50 MiB (`DEFAULT_MAX_CAPTURE_BYTES`). Sealing such a file adds the overhead, and Storage would return a permanent 413.
   - The capture cap itself stays where it is. It already accounts for the overhead in e2ee mode, so new uploads gain nothing from the raise.
 - **Export index.** Add `(workspace_id, event_id)` on `blocks_history` so the export and verify can page by id.
@@ -146,6 +146,7 @@ The phase only moves forward, so a resume never falls back.
 - the upload queue is drained, attachment records included, and no rejected rows are pending;
 - `canPersistPins()` passes, and the key store is durable (not `createWorkspaceKeyStore`'s in-memory fallback);
 - the File System Access API is available (desktop Chromium), because the bundle is a folder written through its directory picker and re-opened to verify it;
+- every media block's `media:size`, soft-deleted ones included, is at most the e2ee capture cap: `DEFAULT_MAX_CAPTURE_BYTES` (50 MiB) minus `BINARY_ENVELOPE_OVERHEAD_BYTES` (36). A plaintext capture can reach exactly 50 MiB, and sealing it adds 36 bytes, which the bucket would refuse with a permanent 413 during cleanup. A larger block is listed, and the conversion refuses until it's removed or replaced. That keeps the conversion independent of the hosted project's storage settings;
 - the user confirms the residue named in [§7](#7-what-stays-visible-afterwards), disk headroom ([§8](#8-runbook)), free space for the bundle, and any media block with no **hash-verified** source: no local copy, and no raw object whose bytes hash to the block's content hash. Storage objects are untrusted, so a remote-only object is downloaded and checked here, then **kept in this device's byte store**. Step 3 takes it from there, so an object that's deleted or replaced on the server after preflight can't break the bundle after the flip. Disk headroom counts these bytes. No step after the flip can bring those back. Its size is shown: the database, the attachment bytes, the server history and `blocks.jsonl`. A dry run of step 3's paging measures the last two without writing anything. A bundle that can't be written after the flip leaves every device waiting until it is.
 
 **1. Key.**
@@ -259,7 +260,7 @@ The first production run is #1288.
 **Before:**
 1. **Deploys:**
    - **every** device runs a build that includes #1293 and #1302's client half, as #1302 defines it: at least the canary check on entry, the upload fence with key-generation stamping, and the backlog quarantine. A device without them could, after a later key-loss recovery, upload stale or old-key writes over the restore. #1299 and #1300 merge before #1293, so such a build has them too. Boot reinstalls whichever local triggers the running build defines, so what matters is the build each device runs, not when it last updated;
-   - #1294's migration is applied, and the hosted project's project-wide Storage upload limit is raised to at least the attachments bucket's new limit;
+   - #1294's migration is applied. The project-wide Storage limit can stay as it is: preflight's size check (step 0) keeps every sealed attachment within 50 MiB;
    - #719 has shipped, so new `[[links]]` stop minting public ids;
    - #1302's recovery path exists, because the safety net has to exist before an irreversible step on the main workspace.
 2. **No wipe shortcut.**
