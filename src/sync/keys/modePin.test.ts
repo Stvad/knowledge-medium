@@ -1,6 +1,14 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { confirmPlaintextForSession, getModePin, setModePin } from './modePin.js'
+import {
+  clearPinUpgradeMarker,
+  confirmPlaintextForSession,
+  getModePin,
+  hasPinUpgradeMarker,
+  setModePin,
+  upgradeModePinToE2ee,
+  writePinUpgradeMarker,
+} from './modePin.js'
 
 const USER = 'user-1'
 const WS_A = 'ws-A'
@@ -62,5 +70,55 @@ describe('session plaintext fallback', () => {
     setModePin(USER, ws, 'e2ee')
     confirmPlaintextForSession(USER, ws)
     expect(getModePin(USER, ws)).toBe('e2ee')
+  })
+})
+
+describe('upgradeModePinToE2ee — the one transition the pin admits', () => {
+  it('moves a plaintext pin to e2ee', () => {
+    setModePin(USER, WS_A, 'plaintext')
+    upgradeModePinToE2ee(USER, WS_A)
+    expect(getModePin(USER, WS_A)).toBe('e2ee')
+  })
+
+  it('pins an unpinned workspace e2ee', () => {
+    upgradeModePinToE2ee(USER, WS_A)
+    expect(getModePin(USER, WS_A)).toBe('e2ee')
+  })
+
+  it('is a no-op on an e2ee pin', () => {
+    setModePin(USER, WS_A, 'e2ee')
+    upgradeModePinToE2ee(USER, WS_A)
+    expect(getModePin(USER, WS_A)).toBe('e2ee')
+  })
+
+  it('outranks a session-only plaintext confirmation', () => {
+    const ws = 'ws-session-upgrade'
+    confirmPlaintextForSession(USER, ws)
+    upgradeModePinToE2ee(USER, ws)
+    expect(getModePin(USER, ws)).toBe('e2ee')
+  })
+
+  it('refuses the downgrade afterwards: setModePin cannot take an upgraded pin back to plaintext', () => {
+    setModePin(USER, WS_A, 'plaintext')
+    upgradeModePinToE2ee(USER, WS_A)
+    expect(() => setModePin(USER, WS_A, 'plaintext')).toThrow(/immutable/)
+    expect(getModePin(USER, WS_A)).toBe('e2ee')
+  })
+})
+
+describe('pin upgrade marker', () => {
+  it('is per (user, workspace) and clears', () => {
+    expect(hasPinUpgradeMarker(USER, WS_A)).toBe(false)
+    writePinUpgradeMarker(USER, WS_A)
+    expect(hasPinUpgradeMarker(USER, WS_A)).toBe(true)
+    expect(hasPinUpgradeMarker(USER, WS_B)).toBe(false)
+    expect(hasPinUpgradeMarker('user-2', WS_A)).toBe(false)
+    clearPinUpgradeMarker(USER, WS_A)
+    expect(hasPinUpgradeMarker(USER, WS_A)).toBe(false)
+  })
+
+  it('does not read as a mode pin', () => {
+    writePinUpgradeMarker(USER, WS_A)
+    expect(getModePin(USER, WS_A)).toBeNull()
   })
 })

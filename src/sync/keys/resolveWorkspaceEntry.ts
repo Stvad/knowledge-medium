@@ -11,9 +11,9 @@
  * imported, keeping this module within `sync/keys`.
  */
 
-import { getModePin } from './modePin.js'
+import { getModePin, hasPinUpgradeMarker } from './modePin.js'
 import { getWorkspaceKeyStore } from './keyStore.js'
-import { decideWorkspaceEntry } from './workspaceAccess.js'
+import { decideWorkspaceEntry, type LockReason } from './workspaceAccess.js'
 
 /** The local `workspaces` row fields the gate reads. `encryptionMode` decides
  *  access (branch a/b); `name`/`wkCanary` populate the lock prompt. */
@@ -30,7 +30,9 @@ export type WorkspaceEntryResolution =
   | { readonly kind: 'waiting' }
   | {
       readonly kind: 'locked'
-      readonly reason: 'key-required' | 'quarantine'
+      /** `finishing-upgrade`: a pin upgrade was interrupted after its marker was
+       *  written; the gate finishes it (`resumePinUpgrade`) before anything else. */
+      readonly reason: LockReason | 'finishing-upgrade'
       readonly workspaceName: string | null
       readonly canary: string | null
     }
@@ -50,6 +52,9 @@ export const resolveWorkspaceEntry = async (
   workspaceId: string,
   loadWorkspace: (workspaceId: string) => Promise<GateWorkspace | null>,
 ): Promise<WorkspaceEntryResolution> => {
+  if (hasPinUpgradeMarker(userId, workspaceId)) {
+    return {kind: 'locked', reason: 'finishing-upgrade', workspaceName: null, canary: null}
+  }
   const pin = getModePin(userId, workspaceId)
   let hasKey = false
   if (pin === 'e2ee') {

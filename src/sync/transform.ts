@@ -30,6 +30,11 @@ import { open, seal } from './crypto/aead.js'
 
 export type SyncMode = 'none' | 'e2ee'
 
+/** The upload decision for a workspace: seal (`e2ee`), pass through (`none`), or
+ *  `hold` — keep the write queued, because the server says e2ee while this device
+ *  can't seal yet (its pin hasn't been upgraded). A held write is never sent. */
+export type UploadMode = SyncMode | 'hold'
+
 /** Resolve the workspace key for a workspace, or null if not available on
  *  this device (locked / never pasted / plaintext). Returns a usable
  *  CryptoKey handle, never raw bytes (§5). */

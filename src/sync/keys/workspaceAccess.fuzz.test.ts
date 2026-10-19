@@ -13,20 +13,21 @@
  * decision table for `resolveWorkspaceAccess(pin, serverEncryptionMode,
  * hasKey)`:
  *
- *   pin 'plaintext'            → ready
- *   pin 'e2ee' + hasKey         → ready
- *   pin 'e2ee' + !hasKey        → locked: key-required
- *   pin null  + server 'e2ee'   → locked: key-required (trust e2ee, fail closed)
- *   pin null  + server !== 'e2ee' → locked: quarantine (never trust a "none" claim)
+ *   pin 'e2ee' + hasKey                → ready
+ *   pin 'e2ee' + !hasKey               → locked: key-required
+ *   pin 'plaintext' + server 'e2ee'    → locked: server-e2ee (converted in place)
+ *   pin 'plaintext' + server !== 'e2ee' → ready
+ *   pin null  + server 'e2ee'          → locked: server-e2ee (trust e2ee, fail closed)
+ *   pin null  + server !== 'e2ee'      → locked: quarantine (never trust a "none" claim)
  *
- * The branch implementing this (workspaceAccess.ts:38-45) does a strict
- * `=== 'e2ee'` string comparison against `serverEncryptionMode`, which is
- * untrusted server input (§ line 8: "untrusted, but safe-in-one-direction").
- * That strict-equality comparison is exactly the fail-closed property this
- * suite is aimed at: every `serverEncryptionMode` value that ISN'T the exact
- * string `'e2ee'` — including near-miss casing, whitespace, unicode
- * homoglyphs, or empty/absent values — must quarantine, never silently
- * pass as plaintext-safe and never silently unlock. Hence the generator
+ * The branch implementing this does a strict `=== 'e2ee'` string comparison
+ * against `serverEncryptionMode`, which is untrusted server input ("untrusted,
+ * but safe-in-one-direction"). That strict-equality comparison is exactly the
+ * fail-closed property this suite is aimed at: every `serverEncryptionMode`
+ * value that ISN'T the exact string `'e2ee'` — including near-miss casing,
+ * whitespace, unicode homoglyphs, or empty/absent values — must quarantine an
+ * unpinned workspace, never silently pass it as plaintext-safe and never
+ * silently unlock; and only the exact string may make a pin stricter than it is. Hence the generator
  * below is weighted toward `fc.string({unit: 'binary'})` (arbitrary
  * unicode, including the empty string and long strings) rather than just
  * the two literals the existing example-based tests
@@ -94,16 +95,18 @@ describe('resolveWorkspaceAccess (workspaceAccess.ts:33-46)', () => {
     )
   })
 
-  it("pin 'plaintext' is always ready, regardless of server mode or key (workspaceAccess.ts:38)", () => {
+  it("pin 'plaintext' is ready unless the server says exactly 'e2ee', which gates it as server-e2ee — key irrelevant", () => {
     fc.assert(
       fc.property(serverEncryptionModeArb, hasKeyArb, (serverEncryptionMode, hasKey) => {
-        expect(resolveWorkspaceAccess('plaintext', serverEncryptionMode, hasKey)).toEqual({ kind: 'ready' })
+        expect(resolveWorkspaceAccess('plaintext', serverEncryptionMode, hasKey)).toEqual(
+          serverEncryptionMode === 'e2ee' ? { kind: 'locked', reason: 'server-e2ee' } : { kind: 'ready' },
+        )
       }),
       fuzzParams(200),
     )
   })
 
-  it("pin 'e2ee' is ready iff hasKey, and locked key-required otherwise — server mode never consulted (workspaceAccess.ts:39-41)", () => {
+  it("pin 'e2ee' is ready iff hasKey, and locked key-required otherwise — server mode never consulted", () => {
     fc.assert(
       fc.property(serverEncryptionModeArb, hasKeyArb, (serverEncryptionMode, hasKey) => {
         const result = resolveWorkspaceAccess('e2ee', serverEncryptionMode, hasKey)
@@ -117,13 +120,13 @@ describe('resolveWorkspaceAccess (workspaceAccess.ts:33-46)', () => {
     )
   })
 
-  it("pin null (unpinned) is NEVER ready; reason is 'key-required' iff serverEncryptionMode === 'e2ee' exactly, else 'quarantine' (workspaceAccess.ts:42-45)", () => {
+  it("pin null (unpinned) is NEVER ready; reason is 'server-e2ee' iff serverEncryptionMode === 'e2ee' exactly, else 'quarantine'", () => {
     fc.assert(
       fc.property(serverEncryptionModeArb, hasKeyArb, (serverEncryptionMode, hasKey) => {
         const result = resolveWorkspaceAccess(null, serverEncryptionMode, hasKey)
         expect(result.kind).toBe('locked')
         if (result.kind === 'locked') {
-          expect(result.reason).toBe(serverEncryptionMode === 'e2ee' ? 'key-required' : 'quarantine')
+          expect(result.reason).toBe(serverEncryptionMode === 'e2ee' ? 'server-e2ee' : 'quarantine')
         }
         // hasKey is irrelevant on the unpinned path (only pin/server decide it) —
         // pin null never trusts a locally-cached key it hasn't validated yet.

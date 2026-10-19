@@ -60,6 +60,7 @@ import {
   WORKSPACE_MEMBERS_RAW_TABLE,
   ensureWorkspaceE2eeColumns,
   ensureWorkspacePropertiesMigrationColumn,
+  readWorkspaceEncryptionMode,
 } from '@/data/workspaceSchema'
 import {
   CLIENT_SCHEMA_NON_TRIGGER_STATEMENTS,
@@ -129,7 +130,13 @@ const syncResolversByUser = new Map<string, SyncResolver>()
 const resolverForUser = (userId: string): SyncResolver => {
   let resolver = syncResolversByUser.get(userId)
   if (!resolver) {
-    resolver = createSyncResolver(() => userId, getWorkspaceKeyStore())
+    resolver = createSyncResolver(() => userId, getWorkspaceKeyStore(), workspaceId => {
+      // Defence in depth: nothing asks before the database opens. If something
+      // did, the resolver counts the throw as e2ee and fails closed.
+      const db = dbsByUser.get(userId)
+      if (!db) throw new Error(`no local database for ${userId}`)
+      return readWorkspaceEncryptionMode(db, workspaceId)
+    })
     syncResolversByUser.set(userId, resolver)
   }
   return resolver
@@ -400,12 +407,13 @@ export const ensurePowerSyncReady = async (
       }
       // Encrypt-on-upload (§9.2): bind the connector's mode/key lookups to this
       // user's mode pins + shared workspace-key store. Plaintext workspaces
-      // resolve mode 'none' (no-op); e2ee workspaces seal content columns. Same
-      // per-user resolver the observer deps draw from (`syncObserverDepsFor`).
+      // resolve mode 'none' (no-op); e2ee workspaces seal content columns; a
+      // workspace the server calls e2ee but this device can't seal yet holds.
+      // Same per-user resolver the observer deps draw from (`syncObserverDepsFor`).
       const resolver = resolverForUser(userId)
       await db.connect(createPowerSyncConnector({
         encryption: {
-          getWorkspaceMode: resolver.getMode,
+          getWorkspaceMode: resolver.getUploadMode,
           getCek: resolver.getCek,
         },
       }))

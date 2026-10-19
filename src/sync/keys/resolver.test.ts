@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { InMemoryWorkspaceKeyStore } from './keyStore.js'
-import { setModePin } from './modePin.js'
+import { setModePin, upgradeModePinToE2ee } from './modePin.js'
 import { createSyncResolver } from './resolver.js'
 
 const USER = 'user-1'
@@ -17,9 +17,17 @@ const record = (wk: CryptoKey, contentKeyHmac: CryptoKey | null = null) => ({ wk
 beforeEach(() => localStorage.clear())
 afterEach(() => localStorage.clear())
 
+// The synced `workspaces.encryption_mode` each test's server reports; absent
+// means no local row.
+let syncedMode: Map<string, string>
+const readSyncedEncryptionMode = async (workspaceId: string) => syncedMode.get(workspaceId) ?? null
+beforeEach(() => {
+  syncedMode = new Map()
+})
+
 const build = (userId: string | null = USER) => {
   const keyStore = new InMemoryWorkspaceKeyStore()
-  const resolver = createSyncResolver(() => userId, keyStore)
+  const resolver = createSyncResolver(() => userId, keyStore, readSyncedEncryptionMode)
   return { keyStore, resolver }
 }
 
@@ -64,7 +72,7 @@ describe('createSyncResolver — getMaterializability (§6 policy collapse)', ()
       delete: async () => {},
       clearForUser: async () => {},
     }
-    const resolver = createSyncResolver(() => USER, throwingStore)
+    const resolver = createSyncResolver(() => USER, throwingStore, readSyncedEncryptionMode)
     setModePin(USER, WS, 'e2ee')
     await expect(resolver.getMaterializability(WS)).resolves.toBe('defer')
   })
@@ -90,7 +98,7 @@ describe('createSyncResolver — getCek', () => {
   it('scopes the lookup to the current user', async () => {
     const keyStore = new InMemoryWorkspaceKeyStore()
     await keyStore.put('other-user', WS, record(FAKE_KEY))
-    const resolver = createSyncResolver(() => USER, keyStore)
+    const resolver = createSyncResolver(() => USER, keyStore, readSyncedEncryptionMode)
     expect(await resolver.getCek(WS)).toBeNull()
   })
 
@@ -103,7 +111,7 @@ describe('createSyncResolver — getCek', () => {
       delete: async () => {},
       clearForUser: async () => {},
     }
-    const resolver = createSyncResolver(() => USER, throwingStore)
+    const resolver = createSyncResolver(() => USER, throwingStore, readSyncedEncryptionMode)
     await expect(resolver.getCek(WS)).resolves.toBeNull()
   })
 })
@@ -143,31 +151,110 @@ describe('createSyncResolver — getContentKeyHmac (§10 asset path)', () => {
       delete: async () => {},
       clearForUser: async () => {},
     }
-    const resolver = createSyncResolver(() => USER, throwingStore)
+    const resolver = createSyncResolver(() => USER, throwingStore, readSyncedEncryptionMode)
     await expect(resolver.getContentKeyHmac(WS)).resolves.toBeNull()
   })
 })
 
-describe('createSyncResolver — getMode (encrypt-on-upload)', () => {
+describe('createSyncResolver — getUploadMode (encrypt-on-upload)', () => {
   it('e2ee pin → e2ee', async () => {
     const { resolver } = build()
     setModePin(USER, WS, 'e2ee')
-    expect(await resolver.getMode(WS)).toBe('e2ee')
+    expect(await resolver.getUploadMode(WS)).toBe('e2ee')
   })
 
   it('plaintext pin → none', async () => {
     const { resolver } = build()
     setModePin(USER, WS, 'plaintext')
-    expect(await resolver.getMode(WS)).toBe('none')
+    expect(await resolver.getUploadMode(WS)).toBe('none')
   })
 
   it('unpinned → none (never encrypts an unpinned workspace)', async () => {
     const { resolver } = build()
-    expect(await resolver.getMode(WS)).toBe('none')
+    expect(await resolver.getUploadMode(WS)).toBe('none')
   })
 
   it('signed-out → none', async () => {
     const { resolver } = build(null)
-    expect(await resolver.getMode(WS)).toBe('none')
+    expect(await resolver.getUploadMode(WS)).toBe('none')
+  })
+})
+
+// Conversion in place (docs/workspace-e2ee-conversion.md §6.2): the server can
+// say e2ee while this device's pin still says plaintext. The server's mode may
+// make the device defer or hold — never decrypt less, never send plaintext.
+describe('createSyncResolver — pin plaintext while the server says e2ee', () => {
+  it('materialization defers, so local blocks keep their plaintext', async () => {
+    const { resolver } = build()
+    setModePin(USER, WS, 'plaintext')
+    syncedMode.set(WS, 'e2ee')
+    expect(await resolver.getMaterializability(WS)).toBe('defer')
+  })
+
+  it('defers even when this device already holds the workspace key (the converting device)', async () => {
+    const { resolver, keyStore } = build()
+    setModePin(USER, WS, 'plaintext')
+    await keyStore.put(USER, WS, record(FAKE_KEY, FAKE_HMAC))
+    syncedMode.set(WS, 'e2ee')
+    expect(await resolver.getMaterializability(WS)).toBe('defer')
+    expect(await resolver.getUploadMode(WS)).toBe('hold')
+  })
+
+  it('uploads are held rather than sent plaintext', async () => {
+    const { resolver } = build()
+    setModePin(USER, WS, 'plaintext')
+    syncedMode.set(WS, 'e2ee')
+    expect(await resolver.getUploadMode(WS)).toBe('hold')
+  })
+
+  it('an unpinned workspace the server calls e2ee holds too', async () => {
+    const { resolver } = build()
+    syncedMode.set(WS, 'e2ee')
+    expect(await resolver.getUploadMode(WS)).toBe('hold')
+  })
+
+  it('a server that says none leaves a plaintext pin copying and uploading plaintext', async () => {
+    const { resolver } = build()
+    setModePin(USER, WS, 'plaintext')
+    syncedMode.set(WS, 'none')
+    expect(await resolver.getMaterializability(WS)).toBe('copy')
+    expect(await resolver.getUploadMode(WS)).toBe('none')
+  })
+
+  it('no local workspaces row leaves a plaintext pin as it was', async () => {
+    // The row rides the same checkpoint as the blocks, so a device with no row
+    // has no synced rows for that workspace to copy either.
+    const { resolver } = build()
+    setModePin(USER, WS, 'plaintext')
+    expect(await resolver.getMaterializability(WS)).toBe('copy')
+    expect(await resolver.getUploadMode(WS)).toBe('none')
+  })
+
+  it('an unreadable server mode fails closed: defer and hold', async () => {
+    setModePin(USER, WS, 'plaintext')
+    const resolver = createSyncResolver(() => USER, new InMemoryWorkspaceKeyStore(), async () => {
+      throw new Error('database is locked')
+    })
+    await expect(resolver.getMaterializability(WS)).resolves.toBe('defer')
+    await expect(resolver.getUploadMode(WS)).resolves.toBe('hold')
+  })
+
+  it('never makes an e2ee pin decrypt less: a server that says none still decrypts and seals', async () => {
+    const { resolver, keyStore } = build()
+    setModePin(USER, WS, 'e2ee')
+    await keyStore.put(USER, WS, record(FAKE_KEY))
+    syncedMode.set(WS, 'none')
+    expect(await resolver.getMaterializability(WS)).toBe('decrypt')
+    expect(await resolver.getUploadMode(WS)).toBe('e2ee')
+  })
+
+  it('after the pin upgrade the same workspace decrypts and seals', async () => {
+    const { resolver, keyStore } = build()
+    setModePin(USER, WS, 'plaintext')
+    syncedMode.set(WS, 'e2ee')
+    await keyStore.put(USER, WS, record(FAKE_KEY, FAKE_HMAC))
+    upgradeModePinToE2ee(USER, WS)
+    expect(await resolver.getMaterializability(WS)).toBe('decrypt')
+    expect(await resolver.getUploadMode(WS)).toBe('e2ee')
   })
 })

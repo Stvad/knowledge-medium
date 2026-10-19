@@ -8,13 +8,17 @@ import type { GateWorkspace } from './resolveWorkspaceEntry.js'
 // pure decideWorkspaceEntry can't see (key lookup, its failure handling, and
 // the name/canary enrichment for the lock prompt).
 const getModePin = vi.fn<(userId: string, workspaceId: string) => ModePin | null>()
+const hasPinUpgradeMarker = vi.fn<(userId: string, workspaceId: string) => boolean>()
 const keyGet = vi.fn<(userId: string, workspaceId: string) => Promise<WorkspaceKeyRecord | null>>()
 // A full (post-K_id) record — WK + content-key HMAC co-located.
 const aRecord = (): WorkspaceKeyRecord => ({ wk: {} as CryptoKey, contentKeyHmac: {} as CryptoKey })
 // A LEGACY record — bare WK, no K_id (pre-content-key feature).
 const legacyRecord = (): WorkspaceKeyRecord => ({ wk: {} as CryptoKey, contentKeyHmac: null })
 
-vi.mock('./modePin.js', () => ({getModePin: (u: string, w: string) => getModePin(u, w)}))
+vi.mock('./modePin.js', () => ({
+  getModePin: (u: string, w: string) => getModePin(u, w),
+  hasPinUpgradeMarker: (u: string, w: string) => hasPinUpgradeMarker(u, w),
+}))
 vi.mock('./keyStore.js', () => ({getWorkspaceKeyStore: () => ({get: keyGet})}))
 
 const { resolveWorkspaceEntry } = await import('./resolveWorkspaceEntry.js')
@@ -28,6 +32,8 @@ const workspace = (over: Partial<GateWorkspace> = {}): GateWorkspace => ({
 
 beforeEach(() => {
   getModePin.mockReset()
+  hasPinUpgradeMarker.mockReset()
+  hasPinUpgradeMarker.mockReturnValue(false)
   keyGet.mockReset()
   keyGet.mockResolvedValue(null)
 })
@@ -71,7 +77,7 @@ describe('resolveWorkspaceEntry (read-inputs half of the §6 gate)', () => {
     )
     expect(entry).toEqual({
       kind: 'locked',
-      reason: 'key-required',
+      reason: 'server-e2ee',
       workspaceName: 'Vault',
       canary: 'canary-1',
     })
@@ -80,5 +86,28 @@ describe('resolveWorkspaceEntry (read-inputs half of the §6 gate)', () => {
   it('waits when the row needed to decide has not synced yet', async () => {
     getModePin.mockReturnValue(null)
     expect(await resolveWorkspaceEntry('u', 'w', async () => null)).toEqual({kind: 'waiting'})
+  })
+
+  it('a pending pin upgrade resumes before anything else, without the row', async () => {
+    // The marker is written after the server check passed, and finishing it is
+    // local (pin + drain), so it needs neither the row nor the key read here.
+    getModePin.mockReturnValue('e2ee')
+    hasPinUpgradeMarker.mockReturnValue(true)
+    const loadWorkspace = vi.fn(async () => null)
+    expect(await resolveWorkspaceEntry('u', 'w', loadWorkspace)).toEqual({
+      kind: 'locked',
+      reason: 'finishing-upgrade',
+      workspaceName: null,
+      canary: null,
+    })
+    expect(keyGet).not.toHaveBeenCalled()
+  })
+
+  it('a plaintext pin the server converted is gated, carrying the canary', async () => {
+    getModePin.mockReturnValue('plaintext')
+    const entry = await resolveWorkspaceEntry('u', 'w', async () =>
+      workspace({encryptionMode: 'e2ee', wkCanary: 'canary-1'}),
+    )
+    expect(entry).toMatchObject({kind: 'locked', reason: 'server-e2ee', canary: 'canary-1'})
   })
 })
