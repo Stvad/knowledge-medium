@@ -269,6 +269,14 @@ describe('a crash during the upgrade', () => {
     expect(hasPinUpgradeMarker(USER, WS)).toBe(false)
   })
 
+  it('quarantined rows do not hold the marker: re-draining cannot open them', async () => {
+    // e.g. the pre-conversion plaintext versions still staged on a device whose
+    // checkpoints were held; the re-sealed versions arrive through the queue.
+    drainWorkspace.mockResolvedValueOnce({deferred: 0, quarantined: 4} as {deferred: number})
+    expect(await upgrade()).toEqual({ok: true})
+    expect(hasPinUpgradeMarker(USER, WS)).toBe(false)
+  })
+
   it('an upgraded pin whose key is gone drops the marker, back to the key prompt', async () => {
     // Unlocking with the pasted key then drains the whole workspace, which is
     // what the marker was waiting for.

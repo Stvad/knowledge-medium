@@ -120,7 +120,11 @@ const resolveKey = async (
  *  nothing deferred and the marker is cleared. A drain that throws, or that
  *  still deferred rows, leaves the marker for the next try. Under an e2ee pin
  *  with its key a row only defers when the key store can't be read, and nothing
- *  else would re-read it. */
+ *  else would re-read it.
+ *
+ *  Quarantined (undecryptable) rows don't hold the marker: re-draining can't
+ *  open them — they heal when new bytes arrive, through the observer's queue —
+ *  and one that never opens would keep the device behind the gate for good. */
 const drainAndClearMarker = async (
   userId: string,
   workspaceId: string,
