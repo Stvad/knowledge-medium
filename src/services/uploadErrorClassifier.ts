@@ -92,6 +92,12 @@ const PERMANENT_POSTGREST_CODES = new Set([
  *     schema cache, so it must be retried, not quarantined. */
 const RECOVERABLE_POSTGREST_CODES = new Set(['PGRST301', 'PGRST302', 'PGRST202'])
 
+/** Postgres SQLSTATEs that are RECOVERABLE — retry forever. `25006`
+ *  (read_only_sql_transaction) is what a full Supabase disk produces: the
+ *  project flips read-only until space frees up. PostgREST returns it as HTTP
+ *  405, a 4xx that would otherwise be `ambiguous` and quarantined. */
+const RECOVERABLE_SQLSTATES = new Set(['25006'])
+
 /** HTTP 4xx statuses that are RECOVERABLE (retry forever) rather than a
  *  suspected-permanent client error:
  *    - 408 (timeout) / 429 (rate limit): the server invites a later retry.
@@ -112,6 +118,7 @@ export const classifyUploadError = (err: unknown): UploadErrorClass => {
     if (isPermanentSqlState(err.code)) return 'permanent'
     if (PERMANENT_POSTGREST_CODES.has(err.code)) return 'permanent'
     if (RECOVERABLE_POSTGREST_CODES.has(err.code)) return 'transient'
+    if (RECOVERABLE_SQLSTATES.has(err.code)) return 'transient'
     // An unrecognised code falls through to the status buckets below. A 4xx
     // becomes `ambiguous` (retry-budget) — not an immediate drop (which would
     // lose a recoverable code we haven't catalogued yet, e.g. a new

@@ -38,6 +38,17 @@ describe('classifyUploadError', () => {
       expect(classifyUploadError(postgrestError('23514'))).toBe('permanent')
     })
 
+    it('classifies 25006 read_only_sql_transaction (a full Supabase disk) as transient whatever the status', () => {
+      // PostgREST maps 25006 to HTTP 405, a 4xx that would otherwise be
+      // `ambiguous` and quarantined after the retry budget. The disk frees up
+      // later and the same payload then succeeds, so it must retry forever.
+      const withStatus = (status: number): Error =>
+        Object.assign(postgrestError('25006'), {status})
+      expect(classifyUploadError(postgrestError('25006'))).toBe('transient')
+      expect(classifyUploadError(withStatus(405))).toBe('transient')
+      expect(classifyUploadError(withStatus(400))).toBe('transient')
+    })
+
     it('classifies 42xxx access/syntax errors as permanent', () => {
       // 42501 = insufficient_privilege — an RLS rejection, e.g. a workspace
       // un-shared out from under a pending write (revoked authorization);
