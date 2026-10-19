@@ -16,6 +16,9 @@ import { ChangeScope } from '@/data/api'
 import type { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
+import {
+  seedWorkspaceRow as seedWorkspaceRowIn, storeWorkspaceKey, stubLocalStorage,
+} from '@/data/test/e2eeFixtures'
 import { deriveContentKeyHmac } from '@/sync/crypto/contentKey'
 import { deriveWorkspaceIdNamespace } from '@/sync/crypto/derivedIdNamespace'
 import { getWorkspaceKeyStore } from '@/sync/keys/keyStore'
@@ -33,32 +36,9 @@ let repo: Repo
 let workspaceCounter = 0
 let WS = ''
 
-const stubLocalStorage = () => {
-  const entries = new Map<string, string>()
-  const storage = {
-    getItem: (key: string) => entries.get(key) ?? null,
-    setItem: (key: string, value: string) => { entries.set(key, String(value)) },
-    removeItem: (key: string) => { entries.delete(key) },
-  }
-  vi.stubGlobal('localStorage', storage)
-  vi.stubGlobal('window', {localStorage: storage})
-}
-
-const seedWorkspaceRow = async (encryptionMode: 'none' | 'e2ee') => {
-  await sharedDb.db.execute(
-    `INSERT OR REPLACE INTO workspaces
-       (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary,
-        properties_migration)
-     VALUES (?, 'ws', ?, 1, 1, ?, NULL, 'cell')`,
-    [WS, USER, encryptionMode])
-}
-
-const storeContentKey = async (fill = 7) => {
-  const contentKeyHmac = await deriveContentKeyHmac(new Uint8Array(32).fill(fill))
-  const wk = await crypto.subtle.generateKey(
-    {name: 'AES-GCM', length: 256}, false, ['encrypt', 'decrypt'])
-  await getWorkspaceKeyStore().put(USER, WS, {wk, contentKeyHmac})
-}
+const seedWorkspaceRow = (encryptionMode: 'none' | 'e2ee') =>
+  seedWorkspaceRowIn(sharedDb.db, WS, USER, encryptionMode)
+const storeContentKey = (fill = 7) => storeWorkspaceKey(USER, WS, fill)
 
 const derivedFor = async (fill = 7) => deriveWorkspaceIdNamespace(
   await deriveContentKeyHmac(new Uint8Array(32).fill(fill)), 'km/alias-seat-ns/v1')

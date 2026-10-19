@@ -50,7 +50,7 @@ import {
 } from '@/plugins/srs-rescheduling/schema'
 import { ALIAS_SEAT_PROBE_SLOTS, computeAliasSeatId } from '../../../data/targets'
 import { PLAINTEXT_ALIAS_SEATS } from '@/data/test/plaintextAliasSeats'
-import { deriveContentKeyHmac } from '@/sync/crypto/contentKey'
+import { seedWorkspaceRow, storeWorkspaceKey, stubLocalStorage } from '@/data/test/e2eeFixtures'
 import { getWorkspaceKeyStore } from '@/sync/keys/keyStore'
 import { setModePin } from '@/sync/keys/modePin'
 import { importRoam } from '../import'
@@ -2431,25 +2431,11 @@ describe('importRoam into an encrypted workspace', () => {
     // Its seat id would otherwise be a hash of the page name a server can
     // recompute (#719).
     const encrypted = 'ws-roam-e2ee'
-    const entries = new Map<string, string>()
-    const storage = {
-      getItem: (key: string) => entries.get(key) ?? null,
-      setItem: (key: string, value: string) => { entries.set(key, String(value)) },
-      removeItem: (key: string) => { entries.delete(key) },
-    }
-    vi.stubGlobal('localStorage', storage)
-    vi.stubGlobal('window', {localStorage: storage})
+    stubLocalStorage()
     try {
-      await env.h.db.execute(
-        `INSERT INTO workspaces (id, name, owner_user_id, create_time, update_time,
-          encryption_mode, properties_migration) VALUES (?, 'ws', ?, 1, 1, 'e2ee', 'cell')`,
-        [encrypted, USER_ID])
+      await seedWorkspaceRow(env.h.db, encrypted, USER_ID, 'e2ee')
       setModePin(USER_ID, encrypted, 'e2ee')
-      const wk = await crypto.subtle.generateKey(
-        {name: 'AES-GCM', length: 256}, false, ['encrypt', 'decrypt'])
-      await getWorkspaceKeyStore().put(USER_ID, encrypted, {
-        wk, contentKeyHmac: await deriveContentKeyHmac(new Uint8Array(32).fill(5)),
-      })
+      await storeWorkspaceKey(USER_ID, encrypted)
       env.repo.setActiveWorkspaceId(encrypted)
       await getOrCreatePropertiesPage(env.repo, encrypted)
 

@@ -20,7 +20,7 @@ import { dailyNotesDataExtension } from '@/plugins/daily-notes/dataExtension'
 import { ChangeScope } from '@/data/api'
 import { PLAINTEXT_ALIAS_SEATS } from '@/data/test/plaintextAliasSeats'
 import { ALIAS_SEAT_PROBE_SLOTS, computeAliasSeatId, ensureAliasTarget } from '@/data/targets'
-import { deriveContentKeyHmac } from '@/sync/crypto/contentKey'
+import { storeWorkspaceKey } from '@/data/test/e2eeFixtures'
 import { getWorkspaceKeyStore } from '@/sync/keys/keyStore'
 import { setModePin } from '@/sync/keys/modePin'
 import { bootstrapWorkspace } from './workspaceBootstrap.ts'
@@ -110,11 +110,7 @@ describe('bootstrapWorkspace', () => {
       [encrypted],
     )
     setModePin('user-1', encrypted, 'e2ee')
-    const wk = await crypto.subtle.generateKey(
-      {name: 'AES-GCM', length: 256}, false, ['encrypt', 'decrypt'])
-    await getWorkspaceKeyStore().put('user-1', encrypted, {
-      wk, contentKeyHmac: await deriveContentKeyHmac(new Uint8Array(32).fill(3)),
-    })
+    await storeWorkspaceKey('user-1', encrypted)
     try {
       await open(encrypted)
 

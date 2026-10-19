@@ -24,8 +24,10 @@ import {
 } from '@/data/targets'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
+import {
+  seedWorkspaceRow as seedWorkspaceRowIn, storeWorkspaceKey, stubLocalStorage,
+} from '@/data/test/e2eeFixtures'
 import { dailyNotesDataExtension } from '@/plugins/daily-notes/dataExtension'
-import { deriveContentKeyHmac } from '@/sync/crypto/contentKey'
 import { getWorkspaceKeyStore } from '@/sync/keys/keyStore'
 import { setModePin, upgradeModePinToE2ee } from '@/sync/keys/modePin'
 import { referencesDataExtension } from '../dataExtension.ts'
@@ -37,32 +39,9 @@ let repo: Repo
 let workspaceCounter = 0
 let WS = ''
 
-const stubLocalStorage = () => {
-  const entries = new Map<string, string>()
-  const storage = {
-    getItem: (key: string) => entries.get(key) ?? null,
-    setItem: (key: string, value: string) => { entries.set(key, String(value)) },
-    removeItem: (key: string) => { entries.delete(key) },
-  }
-  vi.stubGlobal('localStorage', storage)
-  vi.stubGlobal('window', {localStorage: storage})
-}
-
-const seedWorkspaceRow = async (encryptionMode: 'none' | 'e2ee') => {
-  await sharedDb.db.execute(
-    `INSERT OR REPLACE INTO workspaces
-       (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary,
-        properties_migration)
-     VALUES (?, 'ws', ?, 1, 1, ?, NULL, 'cell')`,
-    [WS, USER, encryptionMode])
-}
-
-const storeContentKey = async () => {
-  const contentKeyHmac = await deriveContentKeyHmac(new Uint8Array(32).fill(9))
-  const wk = await crypto.subtle.generateKey(
-    {name: 'AES-GCM', length: 256}, false, ['encrypt', 'decrypt'])
-  await getWorkspaceKeyStore().put(USER, WS, {wk, contentKeyHmac})
-}
+const seedWorkspaceRow = (encryptionMode: 'none' | 'e2ee') =>
+  seedWorkspaceRowIn(sharedDb.db, WS, USER, encryptionMode)
+const storeContentKey = () => storeWorkspaceKey(USER, WS)
 
 const openEncrypted = async () => {
   await seedWorkspaceRow('e2ee')
