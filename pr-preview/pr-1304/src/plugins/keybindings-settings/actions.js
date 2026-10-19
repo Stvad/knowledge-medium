@@ -1,1 +1,1 @@
-import{wC as e}from"../../../chunks/app-zJzKOghQ.js";export{e as openKeybindingsSettingsAction};
+import{wC as e}from"../../../chunks/app-C7WmCPz2.js";export{e as openKeybindingsSettingsAction};
