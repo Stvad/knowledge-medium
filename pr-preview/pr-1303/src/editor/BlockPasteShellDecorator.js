@@ -1,1 +1,0 @@
-import{XT as e,YT as t}from"../../chunks/app-vkjSBtl2.js";export{t as BlockPasteShellDecorator,e as blockPasteShellDecorator};

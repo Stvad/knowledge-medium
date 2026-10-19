@@ -1,1 +1,0 @@
-import{Ck as e,Sk as t}from"../../chunks/app-vkjSBtl2.js";export{t as useIsMobile,e as usePointerCoarse};

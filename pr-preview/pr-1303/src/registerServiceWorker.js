@@ -1,1 +1,0 @@
-import{IE as e,LE as t}from"../chunks/app-vkjSBtl2.js";export{e as checkForAppUpdate,t as registerServiceWorker};
