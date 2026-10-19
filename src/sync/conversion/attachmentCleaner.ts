@@ -116,6 +116,9 @@ export type LeftReason =
   /** A name only a write from outside the app makes, which a read and a delete
    *  would address differently; see {@link isAddressable}. */
   | 'unaddressable'
+  /** At a media block's keyed name, it neither opens to the block's bytes nor
+   *  holds them, and no copy exists to replace it with. */
+  | 'unverifiable'
 
 export type CleanerProof =
   | {
@@ -423,6 +426,21 @@ export const cleanAttachments = async (input: CleanAttachmentsInput): Promise<Cl
     return unreadable ? {kind: 'unreadable'} : {kind: 'none'}
   }
 
+  /**
+   * Seal the only copy of a block's plaintext, found unsealed at its keyed
+   * name. Replacing it there means deleting it first, so it is first written to
+   * its raw name and read back verified, and then converted like any raw object:
+   * a durable copy exists at every step.
+   */
+  const convertOccupant = async (contentHash: string, keyedName: string, plaintext: Uint8Array<ArrayBuffer>): Promise<MediaVerdict> => {
+    const rawName = await deriveContentKey({contentHash, mode: 'none', contentKeyHmac: null})
+    if ((await io.writeObject(rawName, plaintext)).kind === 'refused') return 'unverified'
+    const staged = await io.readObject(rawName)
+    if (!staged || !(await verifyContentHash(staged, contentHash))) return 'unverified'
+    await convertRaw(rawName, staged, contentHash, keyedName)
+    return settled.get(rawName)?.kind === 'removed' ? 'rebuilt' : 'unverified'
+  }
+
   const placedThisRun = (name: string): boolean => {
     const s = settled.get(name)
     return s?.kind === 'stays' && s.placed === true
@@ -431,16 +449,25 @@ export const cleanAttachments = async (input: CleanAttachmentsInput): Promise<Cl
   const proveMedia = async (contentHash: string): Promise<MediaVerdict> => {
     const name = mediaNameByHash.get(contentHash)
     if (name === undefined) return 'unrecoverable' // a malformed hash names no object
+    let occupant: Uint8Array<ArrayBuffer> | null = null
     if (listed.has(name)) {
       if (placedThisRun(name)) return 'kept' // verified after this run uploaded it
-      const stored = await io.readObject(name)
-      if (stored && (await verifyKeyed(stored, contentHash))) return 'kept'
+      occupant = await io.readObject(name)
+      if (occupant && (await verifyKeyed(occupant, contentHash))) return 'kept'
     }
     if (rawHashes.has(contentHash)) return 'unverified'
     const copy = await outsideCopy(contentHash, name)
-    if (copy.kind === 'none') return 'unrecoverable'
     if (copy.kind === 'unreadable') return 'unverified'
-    return (await placeKeyed(name, contentHash, copy.bytes)).kind === 'verified' ? 'rebuilt' : 'unverified'
+    // A durable copy outside Storage: replacing a failing occupant loses nothing.
+    if (copy.kind === 'copy') {
+      return (await placeKeyed(name, contentHash, copy.bytes)).kind === 'verified' ? 'rebuilt' : 'unverified'
+    }
+    // The block's own plaintext, unsealed at its keyed name, and its only copy.
+    if (occupant && (await verifyContentHash(occupant, contentHash))) return convertOccupant(contentHash, name, occupant)
+    // Nothing to replace it with. Like any neither object the bundle did not
+    // archive, it is kept and reported rather than deleted without a copy.
+    if (occupant) left.push({path: name, reason: 'unverifiable'})
+    return 'unrecoverable'
   }
 
   const blocksByHash = new Map<string, string[]>()

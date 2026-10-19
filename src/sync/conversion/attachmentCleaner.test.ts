@@ -293,6 +293,68 @@ describe('cleanAttachments: the proof', () => {
     expect(await holdsKeyed(store, photo)).toBe(true)
   })
 
+  it('the block\'s own plaintext, unsealed at its keyed name and nowhere else, is sealed in its place', async () => {
+    const store = createFakeAttachmentStorage()
+    const photo = utf8('a photo')
+    store.media.push({blockId: 'block-1', contentHash: await hashOf(photo)})
+    store.objects.set(await keyedName(photo), photo)
+    const report = await clean(store)
+    expect(report.rebuilt).toEqual([await hashOf(photo)])
+    expect(await holdsKeyed(store, photo)).toBe(true)
+    expect(store.objects.has(await rawName(photo))).toBe(false) // the staged copy is converted away
+    expect(report.proof).toEqual({kind: 'passed', unrecoverable: []})
+  })
+
+  it('an only copy at the keyed name is written to its raw name before anything deletes it', async () => {
+    const store = createFakeAttachmentStorage()
+    const photo = utf8('a photo')
+    store.media.push({blockId: 'block-1', contentHash: await hashOf(photo)})
+    store.objects.set(await keyedName(photo), photo)
+    // The sealed upload fails once the occupant is gone (tab closed, network).
+    const write = store.io.writeObject
+    vi.spyOn(store.io, 'writeObject').mockImplementation(async (path, bytes) => {
+      if (path === (await keyedName(photo)) && !store.objects.has(path)) throw new Error('network')
+      return write(path, bytes)
+    })
+    const report = await clean(store)
+    expect(report.proof).toMatchObject({kind: 'not-passed', unverified: [await hashOf(photo)]})
+    expect(store.objects.get(await rawName(photo))).toEqual(photo) // the bytes survive
+  })
+
+  it('an only copy is never deleted when its raw name already holds other bytes', async () => {
+    const store = createFakeAttachmentStorage()
+    const photo = utf8('a photo')
+    store.media.push({blockId: 'block-1', contentHash: await hashOf(photo)})
+    store.objects.set(await keyedName(photo), photo)
+    store.objects.set(await rawName(photo), utf8('a corrupt upload at the raw name'))
+    const report = await clean(store)
+    expect(store.objects.get(await keyedName(photo))).toEqual(photo)
+    expect(report.proof).toMatchObject({kind: 'not-passed', unverified: [await hashOf(photo)]})
+  })
+
+  it('with a copy outside Storage, a plaintext occupant is replaced from that copy', async () => {
+    const store = createFakeAttachmentStorage()
+    const photo = utf8('a photo')
+    store.media.push({blockId: 'block-1', contentHash: await hashOf(photo)})
+    store.objects.set(await keyedName(photo), photo)
+    store.local.set(await rawName(photo), photo)
+    const write = vi.spyOn(store.io, 'writeObject')
+    const report = await clean(store)
+    expect(report.rebuilt).toEqual([await hashOf(photo)])
+    expect(write.mock.calls.map(([path]) => path)).not.toContain(await rawName(photo))
+  })
+
+  it('an unverifiable object at a keyed name with no copy anywhere is kept and reported, never silently passed over', async () => {
+    const store = createFakeAttachmentStorage()
+    const lost = utf8('lost')
+    store.media.push({blockId: 'block-1', contentHash: await hashOf(lost)})
+    store.objects.set(await keyedName(lost), utf8('not this block\'s bytes, sealed or not'))
+    const report = await clean(store)
+    expect(store.deletes).toEqual([])
+    expect(report.left).toEqual([{path: await keyedName(lost), reason: 'unverifiable'}])
+    expect(report.proof).toEqual({kind: 'passed', unrecoverable: [{contentHash: await hashOf(lost), blockIds: ['block-1']}]})
+  })
+
   it('rebuilds a missing keyed object from the bundle', async () => {
     const store = createFakeAttachmentStorage()
     const photo = utf8('a photo')
