@@ -156,7 +156,19 @@ describe('verifyReseal', () => {
     expect((await openRow(wk, server.row('b03'))).content).toBe('edited elsewhere')
   })
 
-  it('takes the record from the write into the current sealed state, not an earlier one', async () => {
+  it('refuses a row sealed under another key before the flip, even after a later edit', async () => {
+    const otherKey = await keyOf(2)
+    server.write('b02', await sealFor(otherKey, seeded[2], contentColumnsOf(seeded[2])))
+    server.write('b02', await sealFor(otherKey, seeded[2], {...contentColumnsOf(seeded[2]), content: 'edited later'}))
+    await flip()
+    await reseal()
+    const sentBefore = patchCalls()
+
+    await expect(verify()).rejects.toEqual(new ConversionRefusal('no-record', ['b02']))
+    expect(patchCalls()).toBe(sentBefore)
+  })
+
+  it('ignores an earlier seal under another key that was undone before the flip', async () => {
     const otherKey = await keyOf(2)
     server.write('b01', await sealFor(otherKey, seeded[1], contentColumnsOf(seeded[1])))
     server.write('b01', {content: 'plaintext again', properties_json: '{}', references_json: '[]'})
@@ -193,30 +205,42 @@ describe('verifyReseal', () => {
 })
 
 describe('sealRecordOf', () => {
-  const ENVELOPE = `enc:v1:${'A'.repeat(38)}`
-  const resealWrite = {
+  const plaintext = {content: 'c', properties_json: '{}', references_json: '[]'}
+  const LOOKS_SEALED = `enc:v1:${'A'.repeat(38)}`
+  const resealWrite = async (key: CryptoKey) => ({
     event_id: 1,
     block_id: 'b',
-    before_diff: {content: 'c', properties_json: '{}', references_json: '[]', updated_at: 1},
-    after_diff: {content: ENVELOPE, properties_json: ENVELOPE, references_json: ENVELOPE, updated_at: 2},
-  }
+    before_diff: {...plaintext, updated_at: 1},
+    after_diff: {...await sealFor(key, {id: 'b', workspace_id: WS}, plaintext), updated_at: 2},
+  })
+  type ResealWrite = Awaited<ReturnType<typeof resealWrite>>
 
-  it('reads the plaintext of a re-seal write', () => {
-    expect(sealRecordOf(resealWrite)).toEqual({content: 'c', properties_json: '{}', references_json: '[]'})
+  it('reads the plaintext of a re-seal write', async () => {
+    expect(await sealRecordOf(await resealWrite(wk), WS, wk)).toEqual(plaintext)
   })
 
-  it('reads a value that only looked sealed as plaintext', () => {
-    const write = {...resealWrite, before_diff: {...resealWrite.before_diff, content: ENVELOPE}}
-    expect(sealRecordOf(write)).toEqual({content: ENVELOPE, properties_json: '{}', references_json: '[]'})
+  it('reads a value that only looked sealed as plaintext', async () => {
+    const write = await resealWrite(wk)
+    const looksSealed = {...write, before_diff: {...write.before_diff, content: LOOKS_SEALED}}
+    expect(await sealRecordOf(looksSealed, WS, wk)).toEqual({...plaintext, content: LOOKS_SEALED})
   })
 
-  it.each([
-    ['an insert', {before_diff: null}],
-    ['a write that also changed another column', {after_diff: {...resealWrite.after_diff, user_updated_at: 2}}],
-    ['a write from one envelope to another', {before_diff: {...resealWrite.after_diff, updated_at: 1}}],
-    ['a write that left a column plaintext', {after_diff: {...resealWrite.after_diff, references_json: '[]'}}],
-    ['a write that left a column out', {after_diff: {content: ENVELOPE, properties_json: ENVELOPE, updated_at: 2}}],
-  ])('reads no record from %s', (_, overrides) => {
-    expect(sealRecordOf({...resealWrite, ...overrides})).toBeNull()
+  it('reads no record from a write sealed under another key', async () => {
+    expect(await sealRecordOf(await resealWrite(await keyOf(2)), WS, wk)).toBeNull()
+  })
+
+  it.each<[string, (write: ResealWrite) => Partial<ResealWrite> | {before_diff: null}]>([
+    ['an insert', () => ({before_diff: null})],
+    ['a write that also changed another column', write => ({after_diff: {...write.after_diff, user_updated_at: 2} as ResealWrite['after_diff']})],
+    ['a write from one envelope to another', write => ({before_diff: {...write.after_diff, updated_at: 1}})],
+    ['a write that left a column plaintext', write => ({after_diff: {...write.after_diff, references_json: '[]'}})],
+  ])('reads no record from %s', async (_, overridesFor) => {
+    const write = await resealWrite(wk)
+    expect(await sealRecordOf({...write, ...overridesFor(write)}, WS, wk)).toBeNull()
+  })
+
+  it('reads no record from a write that left a column out', async () => {
+    const {after_diff: {content, properties_json}, ...write} = await resealWrite(wk)
+    expect(await sealRecordOf({...write, after_diff: {content, properties_json, updated_at: 2}}, WS, wk)).toBeNull()
   })
 })

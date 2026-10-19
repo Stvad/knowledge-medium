@@ -12,6 +12,7 @@ import {
   idsOf,
   isSealedRow,
   opensTo,
+  openSealed,
   RESEAL_PAGE_SIZE,
   requireWorkspaceKey,
   sealAndSend,
@@ -30,31 +31,41 @@ const contentOf = (diff: Readonly<Record<string, unknown>> | null): ContentColum
   return {content, properties_json, references_json}
 }
 
-/** The plaintext a history row sealed, if it has the shape of a re-seal write:
- *  an UPDATE that changed only the re-seal's columns and took the row from
- *  short of sealed (the re-seal's own test, so a value that merely looks
- *  sealed still counts as plaintext) to sealed. Matching the columns as well
- *  as the values makes a sealing write from any other path read as no record,
- *  so the run refuses rather than re-sending over it. */
-export const sealRecordOf = (history: ServerHistoryRow): ContentColumns | null => {
-  const {before_diff, after_diff} = history
+/** The plaintext a history row sealed, if it is a re-seal write: an UPDATE
+ *  that changed only the re-seal's columns and took the row from short of
+ *  sealed (the re-seal's own test, so a value that merely looks sealed still
+ *  counts as plaintext) to sealed under `wk`. Until the conversion finishes
+ *  only the re-seal seals under the workspace key, so a row sealed by any
+ *  other writer, before the flip or after it, has no record and the run
+ *  refuses rather than re-sending over it. */
+export const sealRecordOf = async (
+  history: ServerHistoryRow,
+  workspaceId: string,
+  wk: CryptoKey,
+): Promise<ContentColumns | null> => {
+  const {block_id: id, before_diff, after_diff} = history
   if (!after_diff || !Object.keys(after_diff).every(column => RESEAL_WRITE_COLUMNS.has(column))) return null
   const before = contentOf(before_diff)
   const after = contentOf(after_diff)
-  if (!before || !after) return null
-  return !isSealedRow(before) && isSealedRow(after) ? before : null
+  if (!before || !after || isSealedRow(before)) return null
+  return (await openSealed(wk, {id, workspace_id: workspaceId}, after)) ? before : null
 }
 
-/** Each block's record: its last history row shaped like a re-seal write,
- *  found by content rather than by position in the history. Last, not first: once the flip refuses plaintext writes a row can be
- *  sealed from plaintext only once, so an earlier such row predates the flip
- *  and was written by something else. */
-const sealRecords = (history: readonly ServerHistoryRow[]): Map<string, ContentColumns> => {
+/** Each block's record, found by content rather than by position in the
+ *  history. Sorted so that a row with more than one, which no reachable history
+ *  has, resolves to the latest. */
+const sealRecords = async (
+  history: readonly ServerHistoryRow[],
+  workspaceId: string,
+  wk: CryptoKey,
+): Promise<Map<string, ContentColumns>> => {
+  const sorted = [...history].sort((a, b) => a.event_id - b.event_id)
+  const plaintexts = await Promise.all(sorted.map(row => sealRecordOf(row, workspaceId, wk)))
   const records = new Map<string, ContentColumns>()
-  for (const row of [...history].sort((a, b) => a.event_id - b.event_id)) {
-    const plaintext = sealRecordOf(row)
+  sorted.forEach((row, i) => {
+    const plaintext = plaintexts[i]
     if (plaintext) records.set(row.block_id, plaintext)
-  }
+  })
   return records
 }
 
@@ -89,7 +100,7 @@ export const verifyReseal = async ({
     const unsealed = page.filter(row => !isSealedRow(row))
     if (unsealed.length > 0) throw new ConversionRefusal('unsealed', idsOf(unsealed))
 
-    const records = sealRecords(await server.readContentSealHistory(workspaceId, idsOf(page)))
+    const records = await sealRecords(await server.readContentSealHistory(workspaceId, idsOf(page)), workspaceId, wk)
     const unrecorded = page.filter(row => !records.has(row.id))
     if (unrecorded.length > 0) throw new ConversionRefusal('no-record', idsOf(unrecorded))
 

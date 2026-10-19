@@ -11,8 +11,13 @@ import { ENVELOPE_PREFIX, GCM_TAG_BYTES, NONCE_BYTES } from '../crypto/envelope.
 import { encodeForWire, SEALED_COLUMNS, type GetCek, type WireBlockColumns } from '../transform.js'
 import type { ContentColumns, ConversionServer, ResealPatch, ServerBlockRow } from './conversionServer.js'
 
+/** Patches per `apply_block_patches` call, whatever the page size: the call
+ *  runs one UPDATE per patch in a single statement, and the upload path caps
+ *  it at 500 (`MAX_PATCHES_PER_SUPABASE_RPC`) to stay under the timeout. */
+const MAX_PATCHES_PER_CALL = 200
+
 /** Rows per page: one read, then the page's patches. */
-export const RESEAL_PAGE_SIZE = 200
+export const RESEAL_PAGE_SIZE = MAX_PATCHES_PER_CALL
 
 /** What the re-seal and the verify both take. */
 export interface ConversionPassOptions<Progress> {
@@ -88,6 +93,23 @@ export const contentColumnsOf = (row: ContentColumns): ContentColumns => ({
   references_json: row.references_json,
 })
 
+/** Every sealed column opened under `wk` and the AAD of the row it was sealed
+ *  for, or null when any of them doesn't open. */
+export const openSealed = async (
+  wk: CryptoKey,
+  row: Pick<WireBlockColumns, 'id' | 'workspace_id'>,
+  sealed: ContentColumns,
+): Promise<ContentColumns | null> => {
+  try {
+    const [content, properties_json, references_json] = await Promise.all(
+      SEALED_COLUMNS.map(column => open(wk, sealed[column], contentAad(row.id, row.workspace_id, column))),
+    )
+    return {content, properties_json, references_json}
+  } catch {
+    return null
+  }
+}
+
 /** Whether every sealed column opens, under `wk` and the AAD of the row it is
  *  sent to or read from, to exactly `expected`. */
 export const opensTo = async (
@@ -96,15 +118,8 @@ export const opensTo = async (
   sealed: ContentColumns,
   expected: ContentColumns,
 ): Promise<boolean> => {
-  for (const column of SEALED_COLUMNS) {
-    try {
-      const opened = await open(wk, sealed[column], contentAad(row.id, row.workspace_id, column))
-      if (opened !== expected[column]) return false
-    } catch {
-      return false
-    }
-  }
-  return true
+  const opened = await openSealed(wk, row, sealed)
+  return opened !== null && SEALED_COLUMNS.every(column => opened[column] === expected[column])
 }
 
 export const idsOf = (rows: readonly {readonly id: string}[]): string[] => rows.map(row => row.id)
@@ -157,7 +172,8 @@ const callsOf = (patches: readonly ResealPatch[]): ResealPatch[][] => {
   let size = 0
   for (const patch of patches) {
     const chars = sealedChars(patch)
-    if (calls.length === 0 || size + chars > MAX_SEALED_CHARS_PER_CALL) {
+    const last = calls[calls.length - 1]
+    if (!last || last.length === MAX_PATCHES_PER_CALL || size + chars > MAX_SEALED_CHARS_PER_CALL) {
       calls.push([])
       size = 0
     }

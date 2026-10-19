@@ -107,6 +107,16 @@ describe('resealWorkspace', () => {
     for (const row of seeded) expect(await openRow(wk, server.row(row.id))).toEqual(contentColumnsOf(row))
   })
 
+  it('sends at most 200 patches per call, whatever the page size', async () => {
+    seedPlaintext(server, 250)
+    await flip()
+
+    await resealWorkspace({server, workspaceId: WS, wk, pageSize: 250})
+
+    expect(server.calls.filter(call => call.method === 'applyBlockPatches').map(call => call.count)).toEqual([200, 50])
+    expect(plaintextIds()).toEqual([])
+  })
+
   it('resumes past a sealed value of several megabytes', async () => {
     server.insert({id: 'b00', workspace_id: WS, content: 'x'.repeat(2_700_000)})
     await flip()
