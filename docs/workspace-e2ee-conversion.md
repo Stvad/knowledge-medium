@@ -141,7 +141,7 @@ The phase only moves forward, so a resume never falls back.
 - the upload queue is drained, attachment records included, and no rejected rows are pending;
 - `canPersistPins()` passes, and the key store is durable (not `createWorkspaceKeyStore`'s in-memory fallback);
 - the File System Access API is available (desktop Chromium), because the bundle has to be re-opened to verify it;
-- the user confirms the residue named in [§7](#7-what-stays-visible-afterwards), disk headroom ([§8](#8-runbook)), and free space for the bundle. Its size is shown: the database, the attachment bytes, and the server history, which a dry run of step 3's history paging measures without writing anything. A bundle that can't be written after the flip leaves every device waiting until it is.
+- the user confirms the residue named in [§7](#7-what-stays-visible-afterwards), disk headroom ([§8](#8-runbook)), and free space for the bundle. Its size is shown: the database, the attachment bytes, the server history and `blocks.jsonl`. A dry run of step 3's paging measures the last two without writing anything. A bundle that can't be written after the flip leaves every device waiting until it is.
 
 **1. Key.**
 - If this device already holds a key record for the workspace, from an earlier attempt that didn't flip, the run reuses it. The user saved that key, and a late-committing flip would carry its canary.
@@ -153,6 +153,7 @@ The phase only moves forward, so a resume never falls back.
 - **Writing it** needs a zip save type and a writer that holds the database lock while it copies. `chooseRawSqliteExportFile` offers only `.db`, and the existing zip builder (`getRawSqliteDbBackup`) is the corruption path's, which runs without the lock.
 - **`blocks.jsonl`.** Every block row of the workspace, soft-deleted ones included, read from the server: PostgREST pages by id, every column verbatim, except that **a sealed content column is opened under the workspace key**. So the file is always plaintext, even when it's re-taken after some rows were sealed. It's what key-loss recovery restores from ([§8](#8-runbook)). Reading the server rather than this device's database means no download gap or reconnect window can make it stale.
   - **It's a consistent snapshot** only if the workspace's history count is the same before and after the paging, since every write to `blocks` adds a history row. Otherwise it's re-read. Right after the flip nothing else writes, so the first read passes.
+  - **Its row count is recorded.** The workspace's block count is read inside that same window and goes in the manifest. Key-loss recovery tombstones every row the file lacks, so a truncated file must never verify.
 - **`local.db`.** The raw SQLite export, for the device-local history (`row_events`, `command_events`). It isn't a restore source.
 - **`server-history.jsonl`.** The workspace's `blocks_history`, which members can read under RLS (`blocks_history_read`).
   1. Read `through` = `coalesce(max(event_id), 0)`.
@@ -161,9 +162,9 @@ The phase only moves forward, so a resume never falls back.
 - **`attachments/`.**
   - Every object in the workspace's Storage listing, byte for byte under its name.
   - Every local byte-store entry of a media block, soft-deleted ones included.
-- **`manifest.json`.** The workspace id, `through`, the line count, a sha256 of each part, and the export time.
+- **`manifest.json`.** The workspace id, `through`, the line count of each `.jsonl` part, the server's block count, a sha256 of each part, and the export time.
 
-The flow **re-opens the file and verifies it**: the hashes match, and `server-history.jsonl`'s `event_id`s strictly increase and end at `through`, or it's empty and `through` is `0`. A workspace whose rows predate the history trigger can have no history at all. It then keeps `through`, the line count and the names of the Storage objects it holds on this device as the **bundle record**. The re-seal never starts without that record. It's cleared once the conversion finishes; the attachment cleaner needs it after the purge.
+The flow **re-opens the file and verifies it**: the hashes match; `blocks.jsonl` has exactly the server's block count of lines, with no id repeated; and `server-history.jsonl`'s `event_id`s strictly increase and end at `through`, or it's empty and `through` is `0`. A workspace whose rows predate the history trigger can have no history at all. It then keeps `through`, the line count and the names of the Storage objects it holds on this device as the **bundle record**. The re-seal never starts without that record. It's cleared once the conversion finishes; the attachment cleaner needs it after the purge.
 
 The bundle is plaintext, as sensitive as the database. Store it on an encrypted volume or as a password-manager attachment. It isn't sealed under the workspace key, because then it would be unreadable exactly when it's needed: after the key is lost. **It's a point-in-time content snapshot, not a rollback.** There's no going back after the flip.
 
@@ -274,7 +275,7 @@ The first production run is #1288.
 12. **Operator:** drop leftover ad-hoc tables from past scripts (`scripts/system-author-cleanup.sql`, `scripts/roam-ts-backfill/backfill.sql`).
 13. **Act on #1289's findings** and record the "safe from" date.
 14. **Take later recovery points.** From time to time, on an unlocked device, take a recovery point and keep it with the key. It's a zip with:
-    - `blocks.jsonl`: every block row read from the server, opened under the key, and checked for consistency exactly as in step 3. A write from any device during the paging, this one included, makes it re-read. Taking it while other devices are idle keeps that rare;
+    - `blocks.jsonl`: every block row read from the server, opened under the key, and checked for consistency and against the server's block count exactly as in step 3. A write from any device during the paging, this one included, makes it re-read. Taking it while other devices are idle keeps that rare;
     - **the plaintext of every media block**, soft-deleted ones included. Each comes from the local byte store, or is downloaded and opened under the key, and each is hash-checked;
     - a manifest.
 
@@ -285,7 +286,8 @@ The first production run is #1288.
 #1302 holds the design. It has to meet these requirements:
 - **Nothing is deleted**, so no workspace or block id is ever free for another caller to claim. Old-`K_id` objects and key records are kept, in case the old key turns up.
 - **Attachments are rebuilt under the new key.** Each media block's plaintext from the recovery point is sealed under the new key, uploaded to its new keyed path, and verified with the shared helper. The old object stays.
-- **An owner-only canary replacement**, admitted like the flip ([§5](#5-the-invariant-we-relax)).
+- **An owner-only canary replacement**, admitted like the flip ([§5](#5-the-invariant-we-relax)) and taking the same `SHARE` lock on `blocks` first. Otherwise an old-key write in flight could commit after the restore: the ciphertext trigger checks envelope shape, not which key sealed it.
+- **The recovery point is verified before it's used.** Its hashes must match, and its `blocks.jsonl` must hold its manifest's block count, since every row it lacks is tombstoned.
 - **A whole-row restore**: the content columns sealed under the new key, plus tree, order, `deleted`, `created_at`, `user_updated_at`, `created_by` and `updated_by`. Not `updated_at`: it's the row version, which the clamp keeps monotonic, and it has to advance so every device takes the restored value. Rows the recovery point's `blocks.jsonl` lacks were created after it. They're tombstoned: content sealed empty **under the new key**, and marked deleted. A device that still has such a row live can then open the tombstone and apply it. The equality check below covers that form too.
 - **A row counts as restored only when it opens under the new key and its whole row, `updated_at` aside, equals the chosen recovery point's.** Opening alone proves only which key sealed it. A resume, even with a different recovery point, compares every row again, so the result is never a mix of two points.
 - **Every device checks its key record against the canary**, on entry and whenever the synced canary changes. Today `resolveWorkspaceEntry` only checks that a record with `K_id` exists.
