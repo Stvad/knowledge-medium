@@ -1,1 +1,1 @@
-import{Sy as e}from"../../../chunks/app-BxdkEvyN.js";export{e as WorkspaceSettingsDialog};
+import{Sy as e}from"../../../chunks/app-B7jmYqpN.js";export{e as WorkspaceSettingsDialog};

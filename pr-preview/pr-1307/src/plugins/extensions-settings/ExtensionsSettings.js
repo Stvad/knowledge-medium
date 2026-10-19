@@ -1,1 +1,1 @@
-import{Mt as e}from"../../../chunks/app-BxdkEvyN.js";export{e as ExtensionsSettings};
+import{Mt as e}from"../../../chunks/app-B7jmYqpN.js";export{e as ExtensionsSettings};

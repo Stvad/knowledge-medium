@@ -1,1 +1,1 @@
-import{vt as e}from"../../../chunks/app-BxdkEvyN.js";export{e as keybindingsSettingsDataExtension};
+import{vt as e}from"../../../chunks/app-B7jmYqpN.js";export{e as keybindingsSettingsDataExtension};

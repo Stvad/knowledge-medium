@@ -1,2 +1,2 @@
-import{o8 as e}from"../../../chunks/app-BxdkEvyN.js";var t=e.optionalRef;export{t as optionalRefCodec};
+import{o8 as e}from"../../../chunks/app-B7jmYqpN.js";var t=e.optionalRef;export{t as optionalRefCodec};
 //# sourceMappingURL=codecs.js.map
