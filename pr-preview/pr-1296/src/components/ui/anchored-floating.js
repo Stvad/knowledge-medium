@@ -1,1 +1,1 @@
-import{aI as e,oI as t}from"../../../chunks/app-Cob_WPyC.js";export{e as floatingAnchorFromRect,t as useAnchoredFloating};
+import{aI as e,oI as t}from"../../../chunks/app-Bn_X2xGK.js";export{e as floatingAnchorFromRect,t as useAnchoredFloating};

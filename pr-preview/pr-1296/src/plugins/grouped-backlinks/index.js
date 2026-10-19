@@ -1,1 +1,1 @@
-import{gf as e}from"../../../chunks/app-Cob_WPyC.js";export{e as groupedBacklinksPlugin};
+import{gf as e}from"../../../chunks/app-Bn_X2xGK.js";export{e as groupedBacklinksPlugin};

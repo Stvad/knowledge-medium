@@ -1,1 +1,1 @@
-import{_s as e,vs as t}from"../../../chunks/app-Cob_WPyC.js";export{e as appendTagToBlocks,t as appendTagToContent};
+import{_s as e,vs as t}from"../../../chunks/app-Bn_X2xGK.js";export{e as appendTagToBlocks,t as appendTagToContent};

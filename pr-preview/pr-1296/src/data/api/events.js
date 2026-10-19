@@ -1,1 +1,1 @@
-import{H6 as e,U6 as t}from"../../../chunks/app-Cob_WPyC.js";export{e as CORE_BLOCK_DELETED_EVENT,t as CORE_BLOCK_MERGED_EVENT};
+import{H6 as e,U6 as t}from"../../../chunks/app-Bn_X2xGK.js";export{e as CORE_BLOCK_DELETED_EVENT,t as CORE_BLOCK_MERGED_EVENT};

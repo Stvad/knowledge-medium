@@ -1,1 +1,1 @@
-import{_t as e}from"../../../chunks/app-Cob_WPyC.js";export{e as extensionsDataExtension};
+import{_t as e}from"../../../chunks/app-Bn_X2xGK.js";export{e as extensionsDataExtension};

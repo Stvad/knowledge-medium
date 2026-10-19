@@ -1,1 +1,1 @@
-import{$B as e}from"../../../chunks/app-Cob_WPyC.js";export{e as backlinksDataExtension};
+import{$B as e}from"../../../chunks/app-Bn_X2xGK.js";export{e as backlinksDataExtension};

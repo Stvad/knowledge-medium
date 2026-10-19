@@ -1,1 +1,1 @@
-import{Kl as e}from"../../../chunks/app-Cob_WPyC.js";export{e as deriveWorkspaceIdNamespace};
+import{Kl as e}from"../../../chunks/app-Bn_X2xGK.js";export{e as deriveWorkspaceIdNamespace};

@@ -1,1 +1,1 @@
-import{lE as e,uE as t}from"../../../chunks/app-Cob_WPyC.js";export{e as extensionPromptDiagnosticContribution,t as extensionPromptDiagnosticSource};
+import{lE as e,uE as t}from"../../../chunks/app-Bn_X2xGK.js";export{e as extensionPromptDiagnosticContribution,t as extensionPromptDiagnosticSource};

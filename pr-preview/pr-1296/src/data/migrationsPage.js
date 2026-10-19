@@ -1,1 +1,1 @@
-import{b0 as e,v0 as t,y0 as n}from"../../chunks/app-Cob_WPyC.js";export{t as MIGRATIONS_PAGE_ALIAS,n as getOrCreateMigrationsPage,e as migrationsPageBlockId};
+import{b0 as e,v0 as t,y0 as n}from"../../chunks/app-Bn_X2xGK.js";export{t as MIGRATIONS_PAGE_ALIAS,n as getOrCreateMigrationsPage,e as migrationsPageBlockId};

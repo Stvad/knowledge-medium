@@ -1,1 +1,1 @@
-import{lm as e}from"../../../chunks/app-Cob_WPyC.js";export{e as attachmentsPlugin};
+import{lm as e}from"../../../chunks/app-Bn_X2xGK.js";export{e as attachmentsPlugin};
