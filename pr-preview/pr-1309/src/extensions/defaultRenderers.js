@@ -1,1 +1,1 @@
-import{dO as e,fO as t,pO as n}from"../../chunks/app-CxGQA_YX.js";export{e as defaultRegistry,t as defaultRendererContributions,n as defaultRenderersExtension};
+import{dO as e,fO as t,pO as n}from"../../chunks/app-D09pWP55.js";export{e as defaultRegistry,t as defaultRendererContributions,n as defaultRenderersExtension};
