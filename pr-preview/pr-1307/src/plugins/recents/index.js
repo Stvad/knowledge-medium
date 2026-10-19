@@ -1,1 +1,1 @@
-import{Fb as e,Mb as t,Nb as n,Pb as r}from"../../../chunks/app-2U_zLjSk.js";export{t as OPEN_RECENTS_ACTION_ID,n as openRecentsAction,r as recentsHeaderItem,e as recentsPlugin};
+import{Fb as e,Mb as t,Nb as n,Pb as r}from"../../../chunks/app-Do6Lv3Xd.js";export{t as OPEN_RECENTS_ACTION_ID,n as openRecentsAction,r as recentsHeaderItem,e as recentsPlugin};
