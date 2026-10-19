@@ -4,6 +4,10 @@
  * engine against in-memory servers; this one shows how PostgREST reads the
  * adapter's filters and pages, and what `apply_block_patches` leaves in
  * `blocks_history` for the verify to find before the purge deletes it.
+ *
+ * `pnpm test` skips it. Against a stack that is already up, run it with the
+ * CHECK_DB_* addresses `stack()` reads and
+ * `vitest run --config vitest.supabase.config.ts`.
  */
 
 import { randomBytes, randomUUID } from 'node:crypto'
@@ -35,6 +39,11 @@ const BLOCK_COLUMNS =
   'id, workspace_id, parent_id, order_key, content, properties_json, references_json, ' +
   'created_at, updated_at, user_updated_at, created_by, updated_by, deleted'
 const WIRE_COLUMNS = 'id, workspace_id, content, properties_json, references_json'
+
+/** Text JSON has to escape, outside the BMP, or line-ending-sensitive. The
+ *  re-seal and the verify both read it through PostgREST, so only the final
+ *  check, which reads through pg, would see it mangled in transit. */
+const AWKWARD_TEXT = ' · ünïcödé ✓ \\ " \t \u0001 😀 \r\n'
 
 /** A value that passes the re-seal's sealed test without being sealed. */
 const lookalike = () => ENVELOPE_PREFIX + randomBytes(32).toString('base64url')
@@ -80,7 +89,7 @@ const int8AsNumber = {
     oid === pg.types.builtins.INT8 ? Number : pg.types.getTypeParser(oid, format),
 }
 
-// The test takes about 5 s against a fresh stack.
+// The test takes 1–5 s against a fresh stack.
 describe('the re-seal and verify through PostgREST', {timeout: 60_000}, () => {
   const {databaseUrl, authUrl, restUrl} = stack()
   let db: pg.Client
@@ -109,10 +118,10 @@ describe('the re-seal and verify through PostgREST', {timeout: 60_000}, () => {
   const insertRows = (workspaceId: string, ownerId: string, at: number, count: number) =>
     query(
       `insert into public.blocks (${BLOCK_COLUMNS})
-       select gen_random_uuid()::text, $1, null, 'a' || n, 'note ' || n || ' · ünïcödé ✓',
+       select gen_random_uuid()::text, $1, null, 'a' || n, 'note ' || n || $5,
               json_build_object('n', n)::text, json_build_array('ref-' || n)::text, $3, $3, $3, $2, $2, false
        from generate_series(1, $4::int) as n`,
-      [workspaceId, ownerId, at, count],
+      [workspaceId, ownerId, at, count, AWKWARD_TEXT],
     )
 
   /** Each row's content columns by id, in id order: the order PostgREST pages in. */
@@ -214,6 +223,10 @@ describe('the re-seal and verify through PostgREST', {timeout: 60_000}, () => {
       [ws],
     )
     expect(unsealed).toBe(0)
+
+    // Store the history out of event order, as a table with reused space is,
+    // so a history read that pages by event_id has to order by it too.
+    await query('cluster public.blocks_history using idx_blocks_history_block_time')
 
     // One write per row, each recording the row's whole plaintext in before_diff.
     const resealWrites = await query<{block_id: string; before_diff: ContentColumns}>(

@@ -110,6 +110,7 @@ export const createSupabaseConversionServer = (client: SupabaseClient): Conversi
       const {data, error, status} = await client
         .from('blocks')
         .select(BLOCK_COLUMNS)
+        // Defence in depth: a block id is unique across workspaces.
         .eq('workspace_id', workspaceId)
         .in('id', idChunk)
       if (error) throw failed('reading blocks', error, status)
@@ -125,6 +126,7 @@ export const createSupabaseConversionServer = (client: SupabaseClient): Conversi
         const {data, error, status} = await client
           .from('blocks_history')
           .select(HISTORY_COLUMNS)
+          // Defence in depth: a block id is unique across workspaces.
           .eq('workspace_id', workspaceId)
           .in('block_id', idChunk)
           // Defence in depth: INSERT and DELETE rows leave changed_columns

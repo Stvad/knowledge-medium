@@ -244,12 +244,13 @@ async function startPostgrest(port, postgresHost) {
   await runContainer(postgrestContainerName, [
     '-p',
     `127.0.0.1:${port}:3000`,
-    // The supabase CLI's settings for its PostgREST, which supabase/config.toml doesn't override.
+    // The supabase CLI's settings for its PostgREST, which supabase/config.toml doesn't override, except max_rows:
+    // capped below the conversion adapter's page sizes, so its reads must page past short responses.
     ...envArgs({
       PGRST_DB_URI: `postgresql://authenticator:${postgresPassword}@${postgresHost}:5432/postgres`,
       PGRST_DB_SCHEMAS: 'public,graphql_public',
       PGRST_DB_EXTRA_SEARCH_PATH: 'public,extensions',
-      PGRST_DB_MAX_ROWS: '1000',
+      PGRST_DB_MAX_ROWS: '150',
       PGRST_DB_ANON_ROLE: 'anon',
       PGRST_JWT_SECRET: jwtSecret,
     }),
@@ -336,10 +337,46 @@ async function cleanUp(command, args) {
   }
 }
 
+// Each started container's state and the end of its log, which `docker rm` takes with it: a readiness timeout
+// otherwise reads the same whether the machine was slow or the server never came up.
+async function reportContainers() {
+  for (const name of containersToRemove) {
+    await runCommand('docker', ['inspect', '-f', `${name}: {{.State.Status}} (exit {{.State.ExitCode}})`, name], {
+      allowFailure: true,
+    })
+    await runCommand('docker', ['logs', '--tail', '40', name], { allowFailure: true })
+  }
+}
+
+let cleaningUp = null
+/** Runs once, whether the run ends or a signal stops it. */
+function cleanUpOnce() {
+  cleaningUp ??= (async () => {
+    if (containersToRemove.length > 0) {
+      await cleanUp('docker', ['rm', '-f', ...containersToRemove])
+    }
+    if (networkMayExist) {
+      await cleanUp('docker', ['network', 'rm', networkName])
+    }
+    await runtime?.stop()
+  })()
+  return cleaningUp
+}
+
 let exitCode = 0
 let runtime = null
 let networkMayExist = false
+let stopping = false
 const containersToRemove = []
+
+for (const [signal, code] of [['SIGHUP', 129], ['SIGINT', 130], ['SIGTERM', 143]]) {
+  process.once(signal, async () => {
+    stopping = true
+    console.error(`[check:db] ${signal}: removing the test containers`)
+    await cleanUpOnce()
+    process.exit(code)
+  })
+}
 
 try {
   runtime = await prepareContainerRuntime({ env })
@@ -358,15 +395,12 @@ try {
   await runStackTests({ port, gotruePort, postgrestPort })
 } catch (error) {
   exitCode = error.exitCode ?? 1
+  if (!stopping) {
+    await reportContainers()
+  }
   console.error(`[check:db] ${error.message}`)
 } finally {
-  if (containersToRemove.length > 0) {
-    await cleanUp('docker', ['rm', '-f', ...containersToRemove])
-  }
-  if (networkMayExist) {
-    await cleanUp('docker', ['network', 'rm', networkName])
-  }
-  await runtime?.stop()
+  await cleanUpOnce()
 }
 
 process.exit(exitCode)
