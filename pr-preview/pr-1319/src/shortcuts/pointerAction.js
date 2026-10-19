@@ -1,0 +1,1 @@
+import{iD as e,rD as t}from"../../chunks/app--CyIQZMV.js";export{t as dispatchPointerAction,e as setPointerActionDispatcher};
