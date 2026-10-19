@@ -1,9 +1,9 @@
 /**
  * The seam the conversion flow reaches the attachment cleaner's Storage through
  * ({@link AttachmentCleanerIO}). Core declares it; the attachments plugin, which
- * owns Storage access, the byte store and the media type, supplies the impl. With
- * the plugin off it yields null, and the flow can't prove the folder clean, so it
- * must not finish the conversion.
+ * owns Storage access, the byte store and the media type, supplies the impl.
+ * Whenever it is unavailable the flow can't prove the folder clean, so it must
+ * not finish the conversion; the reason says what to fix.
  */
 
 import type { Repo } from '@/data/repo.js'
@@ -15,7 +15,11 @@ export interface AttachmentCleanerIOInput {
   readonly workspaceId: string
 }
 
-export const attachmentCleanerIOVerb = defineVerbFacet<AttachmentCleanerIOInput, AttachmentCleanerIO | null>({
+export type AttachmentCleanerIOResult =
+  | {readonly kind: 'ready'; readonly io: AttachmentCleanerIO}
+  | {readonly kind: 'unavailable'; readonly reason: string}
+
+export const attachmentCleanerIOVerb = defineVerbFacet<AttachmentCleanerIOInput, AttachmentCleanerIOResult>({
   id: 'conversion.attachment-cleaner-io',
-  defaultImpl: () => null,
+  defaultImpl: () => ({kind: 'unavailable', reason: 'the attachments plugin is off'}),
 })

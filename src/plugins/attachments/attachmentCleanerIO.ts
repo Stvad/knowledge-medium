@@ -2,43 +2,72 @@
  * The attachment cleaner's view of one workspace ({@link AttachmentCleanerIO}),
  * over this plugin's Storage, byte store and media blocks. The pass itself is
  * core (`src/sync/conversion/attachmentCleaner.ts`); the conversion flow reaches
- * this through {@link attachmentCleanerIOVerb}, the owner gesture directly.
+ * this through `attachmentCleanerIOVerb`, the owner gesture directly.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Repo } from '@/data/repo.js'
-import type { AttachmentCleanerIO, ObjectPath } from '@/sync/conversion/attachmentCleaner.js'
-import { verifyContentHash } from '@/sync/crypto/contentHash.js'
+import type { AttachmentCleanerIO, MediaRef, ObjectPath } from '@/sync/conversion/attachmentCleaner.js'
+import { collectPaged } from './audit/paginate.js'
 import { ATTACHMENTS_BUCKET, BlobPutError, type BlobStore } from './blobStore.js'
 import type { ByteStore } from './byteStore.js'
 import { MEDIA_TYPE, mediaHashOf } from './mediaBlock.js'
-import { deriveObjectKey } from './storagePaths.js'
 
 const LIST_PAGE = 1000
 
-/** Every object under `<workspaceId>/`, relative to it. Storage's list returns
- *  the entries directly under a prefix, a nested folder as an entry with no id,
- *  so each folder is listed in turn. The pass acts only after this returns, so
- *  offset paging sees a folder no one is writing. */
-export const listWorkspaceObjects = async (client: SupabaseClient, workspaceId: string): Promise<ObjectPath[]> => {
+export interface ListWorkspaceObjectsInput {
+  readonly client: SupabaseClient
+  readonly userId: string
+  readonly workspaceId: string
+  readonly isRemoteSyncActive: () => boolean
+  readonly signal?: AbortSignal
+}
+
+/**
+ * Every object under `<workspaceId>/`, relative to it. Storage's list returns
+ * the entries directly under a prefix, a nested folder as an entry with no id,
+ * so each folder is listed in turn. The pass acts only after this returns, so
+ * offset paging sees a folder no one is writing.
+ *
+ * RLS filters a listing rather than refusing it: under the anon key (no
+ * session) or another user's session the folder reads as empty, which would
+ * pass for clean. So the listing runs only under `userId`'s own session, with
+ * its token pinned on the request.
+ */
+export const listWorkspaceObjects = async ({
+  client,
+  userId,
+  workspaceId,
+  isRemoteSyncActive,
+  signal,
+}: ListWorkspaceObjectsInput): Promise<ObjectPath[]> => {
+  if (!isRemoteSyncActive()) throw new Error('attachments: remote sync is off')
+  const {session} = (await client.auth.getSession()).data
+  if (!session || session.user.id !== userId) {
+    throw new Error("attachments: the signed-in session is not this account's; sign in again")
+  }
+  const files = client.storage.from(ATTACHMENTS_BUCKET).setHeader('Authorization', `Bearer ${session.access_token}`)
   const out: ObjectPath[] = []
   const folders: string[] = ['']
   for (let folder = folders.pop(); folder !== undefined; folder = folders.pop()) {
-    for (let offset = 0; ; offset += LIST_PAGE) {
-      const {data, error} = await client.storage
-        .from(ATTACHMENTS_BUCKET)
-        .list(folder ? `${workspaceId}/${folder}` : workspaceId, {
-          limit: LIST_PAGE,
-          offset,
-          sortBy: {column: 'name', order: 'asc'},
-        })
+    const prefix = folder ? `${workspaceId}/${folder}` : workspaceId
+    const entries = await collectPaged(async offset => {
+      signal?.throwIfAborted()
+      const {data, error} = await files.list(
+        prefix,
+        {limit: LIST_PAGE, offset, sortBy: {column: 'name', order: 'asc'}},
+        {signal},
+      )
       if (error) throw error
-      for (const entry of data) {
-        const path = folder ? `${folder}/${entry.name}` : entry.name
-        if (entry.id === null) folders.push(path)
-        else out.push(path)
-      }
-      if (data.length < LIST_PAGE) break
+      return data
+    })
+    for (const entry of entries) {
+      // Only a write from outside the app makes one, and an empty folder name
+      // would list this folder again forever.
+      if (entry.name === '') throw new Error(`attachments: an object under ${prefix}/ has an empty name segment`)
+      const path = folder ? `${folder}/${entry.name}` : entry.name
+      if (entry.id === null) folders.push(path)
+      else out.push(path)
     }
   }
   return out.sort()
@@ -47,10 +76,7 @@ export const listWorkspaceObjects = async (client: SupabaseClient, workspaceId: 
 /** Every media block of the workspace, soft-deleted ones included: the typed
  *  query skips deleted rows, and a deleted block's attachment must still be
  *  converted and kept. */
-export const listMediaBlocks = async (
-  repo: Repo,
-  workspaceId: string,
-): Promise<{blockId: string; contentHash: string}[]> => {
+export const listMediaBlocks = async (repo: Repo, workspaceId: string): Promise<MediaRef[]> => {
   const rows = await repo.db.getAll<{id: string; properties_json: string}>(
     `SELECT b.id, b.properties_json FROM blocks b
      WHERE b.workspace_id = ?
@@ -58,13 +84,7 @@ export const listMediaBlocks = async (
     [workspaceId, MEDIA_TYPE],
   )
   return rows.flatMap(row => {
-    let properties: Record<string, unknown>
-    try {
-      properties = JSON.parse(row.properties_json) as Record<string, unknown>
-    } catch {
-      return []
-    }
-    const contentHash = mediaHashOf(properties)
+    const contentHash = mediaHashOf(JSON.parse(row.properties_json) as Record<string, unknown>)
     return contentHash ? [{blockId: row.id, contentHash}] : []
   })
 }
@@ -76,13 +96,13 @@ export interface AttachmentCleanerIODeps {
   readonly repo: Repo
   readonly userId: string
   readonly workspaceId: string
-  readonly getContentKeyHmac: () => Promise<CryptoKey | null>
+  readonly isRemoteSyncActive: () => boolean
 }
 
 export const createAttachmentCleanerIO = (deps: AttachmentCleanerIODeps): AttachmentCleanerIO => {
-  const {blobStore, byteStore, userId, workspaceId} = deps
+  const {blobStore, byteStore, repo, userId, workspaceId} = deps
   return {
-    listObjects: () => listWorkspaceObjects(deps.client, workspaceId),
+    listObjects: signal => listWorkspaceObjects({...deps, signal}),
     readObject: path => blobStore.probe(workspaceId, path),
     async writeObject(path, bytes) {
       try {
@@ -93,17 +113,13 @@ export const createAttachmentCleanerIO = (deps: AttachmentCleanerIODeps): Attach
       }
     },
     deleteObject: path => blobStore.delete(workspaceId, path),
-    mediaBlocks: () => listMediaBlocks(deps.repo, workspaceId),
-    async localBytes(contentHash) {
-      const key = await deriveObjectKey(contentHash, 'e2ee', deps.getContentKeyHmac)
-      if (!key.ok) return null
-      // Every name, not the first present: a damaged copy under the keyed name
-      // must not hide a good one under the raw name.
-      for (const name of key.localKeys) {
-        const bytes = await byteStore.get(userId, workspaceId, name)
-        if (bytes && (await verifyContentHash(bytes, contentHash))) return bytes
-      }
-      return null
+    async mediaBlocks() {
+      // A row this device downloaded but has not applied is missing from
+      // `blocks`, and its attachment would be missing from the proof.
+      const gap = await repo.workspaceViewGap(workspaceId)
+      if (gap) throw new Error(`attachments: this device's copy of the workspace is incomplete: ${gap.reason}`)
+      return listMediaBlocks(repo, workspaceId)
     },
+    readLocal: name => byteStore.get(userId, workspaceId, name),
   }
 }

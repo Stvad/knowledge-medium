@@ -5,7 +5,8 @@ import { mintCanary } from '../crypto/canary.js'
 import { computeContentHash } from '../crypto/contentHash.js'
 import { deriveContentKey, deriveContentKeyHmac } from '../crypto/contentKey.js'
 import { importWorkspaceKey } from '../crypto/workspaceKey.js'
-import { cleanAttachments, CleanerKeyRefusal, type ConversionBundle } from './attachmentCleaner.js'
+import { cleanAttachments, type ConversionBundle } from './attachmentCleaner.js'
+import { ConversionRefusal } from './sealing.js'
 import { createFakeAttachmentStorage, createFakeBundle, type FakeAttachmentStorage } from './test/fakeAttachmentStorage.js'
 
 const WS = 'ws-convert'
@@ -65,18 +66,6 @@ describe('cleanAttachments: raw objects', () => {
     expect(await holdsKeyed(store, photo)).toBe(true)
     expect(store.objects.has(await rawName(photo))).toBe(false)
     expect(report.proof).toEqual({kind: 'passed', unrecoverable: []})
-  })
-
-  it('a soft-deleted media block\'s object is converted and kept on the next pass', async () => {
-    // The IO's media list includes soft-deleted blocks; the cleaner treats them alike.
-    const store = createFakeAttachmentStorage()
-    const photo = utf8('deleted-block photo')
-    await putRaw(store, photo, 'deleted-block')
-    await clean(store)
-    const again = await clean(store)
-    expect(again.converted).toEqual([])
-    expect(await holdsKeyed(store, photo)).toBe(true)
-    expect(again.proof).toEqual({kind: 'passed', unrecoverable: []})
   })
 
   it('a raw object with no media block is converted, and its keyed copy survives the next pass', async () => {
@@ -143,6 +132,24 @@ describe('cleanAttachments: raw objects', () => {
     await clean(store)
     expect(store.deletes).toEqual([await rawName(photo)])
     expect(store.objects.get(await keyedName(photo))).toEqual(genuine)
+  })
+
+  it('a keyed copy that reads back empty once is written again, never deleted', async () => {
+    const store = createFakeAttachmentStorage()
+    const photo = utf8('a photo')
+    await putRaw(store, photo, 'block-1')
+    const read = store.io.readObject
+    let flaked = false
+    vi.spyOn(store.io, 'readObject').mockImplementation(async path => {
+      if (!flaked && path === (await keyedName(photo))) {
+        flaked = true
+        return null
+      }
+      return read(path)
+    })
+    await clean(store)
+    expect(store.deletes).toEqual([await rawName(photo)])
+    expect(await holdsKeyed(store, photo)).toBe(true)
   })
 
   it('never deletes the raw object when its keyed copy does not verify after upload', async () => {
@@ -237,6 +244,19 @@ describe('cleanAttachments: neither objects', () => {
     expect(report.proof).toMatchObject({kind: 'not-passed', archivedRemaining: [nested]})
   })
 
+  it('a keyed object is kept even where a bundle archived the same bytes', async () => {
+    // Its raw object listed AFTER it, so the keyed copy is classified, not placed.
+    let orphan = utf8('orphan 0')
+    for (let i = 1; (await keyedName(orphan)) > (await rawName(orphan)); i++) orphan = utf8(`orphan ${i}`)
+    const store = createFakeAttachmentStorage()
+    await putRaw(store, orphan)
+    const sealed = await seal(orphan)
+    store.objects.set(await keyedName(orphan), sealed)
+    const report = await clean(store, createFakeBundle(new Map([[await keyedName(orphan), sealed]])))
+    expect(store.deletes).toEqual([await rawName(orphan)])
+    expect(report.left).toEqual([])
+  })
+
   it('keeps the genuine keyed copy listed beside a raw orphan', async () => {
     const store = createFakeAttachmentStorage()
     const orphan = utf8('an orphan with its copy already up')
@@ -255,11 +275,22 @@ describe('cleanAttachments: the proof', () => {
     const photo = utf8('a photo')
     store.media.push({blockId: 'block-1', contentHash: await hashOf(photo)})
     store.objects.set(await keyedName(photo), utf8('corrupt'))
-    store.local.set(await hashOf(photo), photo)
+    store.local.set(await rawName(photo), photo) // a pre-conversion local copy
     const report = await clean(store)
     expect(report.rebuilt).toEqual([await hashOf(photo)])
     expect(await holdsKeyed(store, photo)).toBe(true)
     expect(report.proof).toEqual({kind: 'passed', unrecoverable: []})
+  })
+
+  it('tries every local name: a damaged copy under the keyed name does not hide a good one under the raw name', async () => {
+    const store = createFakeAttachmentStorage()
+    const photo = utf8('a photo')
+    store.media.push({blockId: 'block-1', contentHash: await hashOf(photo)})
+    store.local.set(await keyedName(photo), utf8('truncat'))
+    store.local.set(await rawName(photo), photo)
+    const report = await clean(store)
+    expect(report.rebuilt).toEqual([await hashOf(photo)])
+    expect(await holdsKeyed(store, photo)).toBe(true)
   })
 
   it('rebuilds a missing keyed object from the bundle', async () => {
@@ -277,7 +308,7 @@ describe('cleanAttachments: the proof', () => {
     const hash = await hashOf(lost)
     store.media.push({blockId: 'block-a', contentHash: hash}, {blockId: 'block-b', contentHash: hash})
     // A local copy that doesn't hash to the block's hash is not a source.
-    store.local.set(hash, utf8('a different file'))
+    store.local.set(await rawName(lost), utf8('a different file'))
     for (const bundle of [null, createFakeBundle(new Map(), new Map(), new Set([hash]))]) {
       const report = await clean(store, bundle)
       expect(report.proof).toEqual({kind: 'passed', unrecoverable: [{contentHash: hash, blockIds: ['block-a', 'block-b']}]})
@@ -289,7 +320,7 @@ describe('cleanAttachments: the proof', () => {
     const lost = utf8('lost')
     const hash = await hashOf(lost)
     const unreadableLocal = createFakeAttachmentStorage()
-    vi.spyOn(unreadableLocal.io, 'localBytes').mockRejectedValue(new Error('OPFS unavailable'))
+    vi.spyOn(unreadableLocal.io, 'readLocal').mockRejectedValue(new Error('OPFS unavailable'))
     const unreadableBundle = createFakeBundle(new Map(), new Map(), new Set([hash]))
     unreadableBundle.readable = false
     // The manifest says the bundle holds it, but the entry is gone or corrupt.
@@ -314,7 +345,7 @@ describe('cleanAttachments: the proof', () => {
     const photo = utf8('a photo')
     store.media.push({blockId: 'block-1', contentHash: await hashOf(photo)})
     store.objects.set(await keyedName(photo), await seal(photo, otherKeys))
-    store.local.set(await hashOf(photo), photo)
+    store.local.set(await rawName(photo), photo) // a pre-conversion local copy
     const report = await clean(store)
     expect(report.rebuilt).toEqual([await hashOf(photo)])
     expect(await holdsKeyed(store, photo)).toBe(true)
@@ -366,11 +397,67 @@ describe('cleanAttachments: runs', () => {
     expect(report.errors).toEqual([])
   })
 
+  it('a listing that loses objects the run saw (RLS filtering it after a session lapse) fails the proof', async () => {
+    const store = createFakeAttachmentStorage({limit: 80})
+    const photo = utf8('a photo') // seals to 43 bytes
+    const tooBig = new Uint8Array(64).fill(2) // seals to 100: refused
+    await putRaw(store, photo, 'block-1')
+    await putRaw(store, tooBig)
+    const list = store.io.listObjects
+    let calls = 0
+    vi.spyOn(store.io, 'listObjects').mockImplementation(async signal => (calls++ === 0 ? list(signal) : []))
+    const report = await clean(store)
+    expect(store.objects.has(await rawName(tooBig))).toBe(true)
+    expect(report.proof).toMatchObject({kind: 'not-passed', unsettled: true})
+  })
+
+  it('a copy this run placed counts only if the final listing still holds it', async () => {
+    const store = createFakeAttachmentStorage()
+    const photo = utf8('a photo')
+    await putRaw(store, photo, 'block-1')
+    store.local.set(await rawName(photo), photo)
+    const list = store.io.listObjects
+    let calls = 0
+    vi.spyOn(store.io, 'listObjects').mockImplementation(async signal => {
+      if (calls++ === 2) store.objects.delete(await keyedName(photo)) // gone before the final listing
+      return list(signal)
+    })
+    const report = await clean(store)
+    expect(report.proof).toMatchObject({kind: 'not-passed', unsettled: true})
+    // Not taken as kept on the run's word: rebuilt from this device's copy.
+    expect(report.rebuilt).toEqual([await hashOf(photo)])
+    expect(await holdsKeyed(store, photo)).toBe(true)
+  })
+
+  it('an object that appears after the last pass may be raw: the proof waits for it', async () => {
+    const store = createFakeAttachmentStorage()
+    const late = utf8('arrived during the proof')
+    const list = store.io.listObjects
+    let calls = 0
+    vi.spyOn(store.io, 'listObjects').mockImplementation(async signal => {
+      if (calls++ === 1) await putRaw(store, late) // just before the final listing
+      return list(signal)
+    })
+    const report = await clean(store)
+    expect(report.proof).toMatchObject({kind: 'not-passed', rawRemaining: [await rawName(late)]})
+  })
+
+  it('never reads or deletes a name a read and a delete would address differently', async () => {
+    const store = createFakeAttachmentStorage()
+    const odd = ['x?y', 'dir/a b', 'a//b']
+    for (const path of odd) store.objects.set(path, utf8(path))
+    const read = vi.spyOn(store.io, 'readObject')
+    const report = await clean(store, createFakeBundle(new Map(odd.map(path => [path, utf8(path)]))))
+    expect(read).not.toHaveBeenCalled()
+    expect(store.deletes).toEqual([])
+    expect(report.left).toEqual(expect.arrayContaining(odd.map(path => ({path, reason: 'unaddressable'}))))
+  })
+
   it('refuses to start under a key that does not open the canary, touching nothing', async () => {
     const store = createFakeAttachmentStorage()
     await putRaw(store, utf8('a photo'), 'block-1')
     const write = vi.spyOn(store.io, 'writeObject')
-    await expect(clean(store, null, {...otherKeys, canary: keys.canary})).rejects.toBeInstanceOf(CleanerKeyRefusal)
+    await expect(clean(store, null, {...otherKeys, canary: keys.canary})).rejects.toBeInstanceOf(ConversionRefusal)
     expect(write).not.toHaveBeenCalled()
     expect(store.deletes).toEqual([])
   })

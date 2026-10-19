@@ -15,8 +15,11 @@ vi.mock('@/data/workspaceConversion.js', () => ({fetchWorkspaceConversionState: 
 vi.mock('@/sync/keys/keyStore.js', () => ({getWorkspaceKeyStore: () => ({get: async () => h.record})}))
 vi.mock('@/services/supabase.js', () => ({supabase: {}}))
 vi.mock('./assetUpload.js', () => ({getBlobStore: () => ({})}))
-vi.mock('@/data/repoProvider.js', () => ({syncResolverForUser: () => null}))
-vi.mock('@/sync/conversion/attachmentCleaner.js', () => ({cleanAttachments: h.clean}))
+vi.mock('@/data/repoProvider.js', () => ({isRemoteSyncActive: () => true}))
+vi.mock('@/sync/conversion/attachmentCleaner.js', async orig => ({
+  ...(await orig<typeof import('@/sync/conversion/attachmentCleaner.js')>()),
+  cleanAttachments: h.clean,
+}))
 
 const {prepareCleanup} = await import('./cleanupAttachments.js')
 const {CleanupAttachmentsDialog} = await import('./CleanupAttachmentsDialog.js')
@@ -25,7 +28,9 @@ const USER = 'owner-1'
 const WS = 'ws-1'
 const repo = {user: {id: USER}} as unknown as Repo
 const key = {} as CryptoKey
-const e2ee = (over: Partial<{encryptionMode: string; ownerUserId: string; wkCanary: string | null}> = {}) =>
+const e2ee = (
+  over: Partial<{encryptionMode: string; ownerUserId: string; wkCanary: string | null; conversionPhase: 'sealing' | 'cleaning' | null}> = {},
+) =>
   ({
     kind: 'read',
     state: {encryptionMode: 'e2ee', conversionPhase: null, wkCanary: 'enc:v1:canary', ownerUserId: USER, ...over},
@@ -68,6 +73,8 @@ describe('prepareCleanup', () => {
       [() => (h.record = null), /Unlock/],
       [() => (h.record = {wk: key, contentKeyHmac: null}), /Unlock/],
       [() => (h.read = {kind: 'unavailable', error: new Error('offline')}), /server/],
+      [() => (h.read = e2ee({conversionPhase: 'sealing'})), /being converted/],
+      [() => (h.read = e2ee({conversionPhase: 'cleaning'})), /being converted/],
     ]
     for (const [arrange, message] of cases) {
       h.read = e2ee()
@@ -76,6 +83,20 @@ describe('prepareCleanup', () => {
       expect(await prepareCleanup(repo, WS)).toMatch(message)
     }
     expect(h.clean).not.toHaveBeenCalled()
+  })
+})
+
+describe('prepareCleanup, inside the lock', () => {
+  it('reads the server and the key again when the run starts: a re-key or a conversion while the dialog was open stops it', async () => {
+    const run = await prepareCleanup(repo, WS)
+    if (typeof run === 'string') throw new Error(run)
+    h.read = e2ee({conversionPhase: 'sealing'})
+    await expect(run(() => {}, new AbortController().signal)).rejects.toThrow(/being converted/)
+    h.read = e2ee({wkCanary: 'enc:v1:a-new-canary'})
+    h.clean.mockResolvedValue(report())
+    await run(() => {}, new AbortController().signal)
+    expect(h.clean).toHaveBeenCalledTimes(1)
+    expect(h.clean).toHaveBeenCalledWith(expect.objectContaining({canary: 'enc:v1:a-new-canary'}))
   })
 })
 

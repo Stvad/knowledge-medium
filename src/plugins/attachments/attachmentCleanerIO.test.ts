@@ -9,8 +9,6 @@ import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { trackTestRepo } from '@/data/test/testRepoScope'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
-import { computeContentHash } from '@/sync/crypto/contentHash'
-import { deriveContentKey, deriveContentKeyHmac } from '@/sync/crypto/contentKey'
 import type { BlobStore } from './blobStore.js'
 import { InMemoryByteStore } from './byteStore.js'
 import { createAttachmentCleanerIO, listMediaBlocks, listWorkspaceObjects } from './attachmentCleanerIO.js'
@@ -78,9 +76,10 @@ describe('listMediaBlocks', () => {
 
 describe('listWorkspaceObjects', () => {
   /** A Storage list over `objects`: the entries directly under a prefix, a
-   *  nested folder as an entry with a null id, `limit`/`offset` by name. */
-  const fakeClient = (objects: readonly string[]) => {
+   *  nested folder as an entry with a null id, by name; at most `cap` a page. */
+  const fakeClient = (objects: readonly string[], {cap = Infinity, sessionUser = 'user-1' as string | null} = {}) => {
     const calls: {prefix: string; offset: number}[] = []
+    const headers: Record<string, string>[] = []
     const list = async (prefix: string, {limit, offset}: {limit: number; offset: number}) => {
       calls.push({prefix, offset})
       const under = objects.filter(o => o.startsWith(`${prefix}/`)).map(o => o.slice(prefix.length + 1))
@@ -88,51 +87,83 @@ describe('listWorkspaceObjects', () => {
         name,
         id: under.includes(name) ? `id-${name}` : null,
       }))
-      return {data: entries.slice(offset, offset + limit), error: null}
+      return {data: entries.slice(offset, offset + Math.min(limit, cap)), error: null}
     }
-    return {client: {storage: {from: () => ({list})}} as unknown as SupabaseClient, calls}
+    const from = () => {
+      const api = {
+        list,
+        setHeader: (name: string, value: string) => {
+          headers.push({[name]: value})
+          return api
+        },
+      }
+      return api
+    }
+    const session = sessionUser === null ? null : {user: {id: sessionUser}, access_token: `token-of-${sessionUser}`}
+    const client = {
+      auth: {getSession: async () => ({data: {session}})},
+      storage: {from},
+    } as unknown as SupabaseClient
+    return {client, calls, headers}
   }
+  const list = (client: SupabaseClient, over: {isRemoteSyncActive?: () => boolean} = {}) =>
+    listWorkspaceObjects({client, userId: 'user-1', workspaceId: WS, isRemoteSyncActive: () => true, ...over})
 
   it('lists every object, recursing into nested folders, relative to the workspace folder', async () => {
-    const {client} = fakeClient([`${WS}/aa`, `${WS}/dir/bb`, `${WS}/dir/deeper/cc`, 'other-ws/dd'])
-    expect(await listWorkspaceObjects(client, WS)).toEqual(['aa', 'dir/bb', 'dir/deeper/cc'])
+    const {client, headers} = fakeClient([`${WS}/aa`, `${WS}/dir/bb`, `${WS}/dir/deeper/cc`, 'other-ws/dd'])
+    expect(await list(client)).toEqual(['aa', 'dir/bb', 'dir/deeper/cc'])
+    // The session's own token rides the request, so it can't fall back to the anon key.
+    expect(headers).toEqual([{Authorization: 'Bearer token-of-user-1'}])
   })
 
-  it('pages a folder until a short page', async () => {
-    const names = Array.from({length: 2500}, (_, i) => `${WS}/${String(i).padStart(6, '0')}`)
-    const {client, calls} = fakeClient(names)
-    expect(await listWorkspaceObjects(client, WS)).toHaveLength(2500)
-    expect(calls.map(c => c.offset)).toEqual([0, 1000, 2000])
+  it('pages by the length each page actually had, until an empty page', async () => {
+    const names = Array.from({length: 1200}, (_, i) => `${WS}/${String(i).padStart(6, '0')}`)
+    const {client, calls} = fakeClient(names, {cap: 500}) // a server capping pages below the 1000 asked for
+    expect(await list(client)).toHaveLength(1200)
+    expect(calls.map(c => c.offset)).toEqual([0, 500, 1000, 1200])
+  })
+
+  it('refuses rather than list under no session or another account: RLS would show an empty folder', async () => {
+    for (const sessionUser of [null, 'someone-else']) {
+      const {client, calls} = fakeClient([`${WS}/aa`], {sessionUser})
+      await expect(list(client)).rejects.toThrow(/session/)
+      expect(calls).toEqual([])
+    }
+  })
+
+  it('refuses while remote sync is off', async () => {
+    const {client, calls} = fakeClient([`${WS}/aa`])
+    await expect(list(client, {isRemoteSyncActive: () => false})).rejects.toThrow(/remote sync/)
+    expect(calls).toEqual([])
+  })
+
+  it('refuses an empty name segment, which would list its folder again forever', async () => {
+    const {client} = fakeClient([`${WS}//x`])
+    await expect(list(client)).rejects.toThrow(/empty name/)
   })
 
   it('throws on a failed page rather than acting on a partial listing', async () => {
+    const failing = {list: async () => ({data: null, error: new Error('503')})}
     const client = {
-      storage: {from: () => ({list: async () => ({data: null, error: new Error('503')})})},
+      auth: {getSession: async () => ({data: {session: {user: {id: 'user-1'}, access_token: 't'}}})},
+      storage: {from: () => ({...failing, setHeader: () => failing})},
     } as unknown as SupabaseClient
-    await expect(listWorkspaceObjects(client, WS)).rejects.toThrow('503')
+    await expect(list(client)).rejects.toThrow('503')
   })
 })
 
-describe('createAttachmentCleanerIO localBytes', () => {
-  it('tries every local name until one hash-verifies: a damaged keyed copy does not hide a good raw one', async () => {
-    const plain = new TextEncoder().encode('a photo') as Uint8Array<ArrayBuffer>
-    const contentHash = await computeContentHash(plain)
-    const kid = await deriveContentKeyHmac(new Uint8Array(32).fill(7))
-    const keyedName = await deriveContentKey({contentHash, mode: 'e2ee', contentKeyHmac: kid})
-    const rawName = await deriveContentKey({contentHash, mode: 'none', contentKeyHmac: null})
-    const byteStore = new InMemoryByteStore()
-    await byteStore.put('user-1', WS, keyedName, new TextEncoder().encode('truncat') as Uint8Array<ArrayBuffer>)
+describe('createAttachmentCleanerIO mediaBlocks', () => {
+  it('refuses while this device has synced rows not yet applied to blocks', async () => {
+    const repo = {workspaceViewGap: async () => ({reason: 'synced rows are still draining into `blocks`', transient: true})}
     const io = createAttachmentCleanerIO({
       client: {} as SupabaseClient,
       blobStore: {} as BlobStore,
-      byteStore,
-      repo: {} as Repo,
+      byteStore: new InMemoryByteStore(),
+      repo: repo as unknown as Repo,
       userId: 'user-1',
       workspaceId: WS,
-      getContentKeyHmac: async () => kid,
+      isRemoteSyncActive: () => true,
     })
-    expect(await io.localBytes(contentHash)).toBeNull()
-    await byteStore.put('user-1', WS, rawName, plain)
-    expect(await io.localBytes(contentHash)).toEqual(plain)
+    await expect(io.mediaBlocks()).rejects.toThrow(/incomplete: synced rows are still draining/)
   })
 })

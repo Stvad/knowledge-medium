@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import type { CleanerProgress, CleanerReport } from '@/sync/conversion/attachmentCleaner.js'
+import { ConversionRefusal } from '@/sync/conversion/sealing.js'
 import type { DialogContextProps } from '@/utils/dialogs.js'
 import type { CleanupRun } from './cleanupAttachments.js'
 
@@ -58,17 +59,22 @@ const ReportSummary = ({report}: {readonly report: CleanerReport}) => {
             anywhere and can&apos;t be restored.
           </li>
         )}
-        {proof.kind === 'not-passed' && proof.unsettled && <li>The workspace&apos;s files kept changing: close other tabs and devices.</li>}
+        {proof.kind === 'not-passed' && proof.unsettled && <li>The workspace&apos;s files changed while this ran: close other tabs and devices, then run this again.</li>}
       </ul>
     </div>
   )
 }
 
+const failureMessage = (error: unknown, aborted: boolean): string => {
+  if (aborted) return 'Stopped.'
+  if (error instanceof ConversionRefusal) return 'The key on this device does not open this workspace.'
+  return error instanceof Error ? error.message : String(error)
+}
+
 export const CleanupAttachmentsDialog = ({
   run,
-  resolve,
   cancel,
-}: CleanupAttachmentsDialogProps & DialogContextProps<CleanerReport | null>) => {
+}: CleanupAttachmentsDialogProps & DialogContextProps<never>) => {
   const [state, setState] = useState<State>({kind: 'idle'})
   const abort = useRef<AbortController | null>(null)
   useEffect(() => () => abort.current?.abort(), [])
@@ -84,18 +90,16 @@ export const CleanupAttachmentsDialog = ({
             ? {kind: 'failed', message: 'A cleanup of this workspace is already running in another tab.'}
             : {kind: 'done', report},
         ),
-      (error: unknown) =>
-        setState({kind: 'failed', message: controller.signal.aborted ? 'Stopped.' : error instanceof Error ? error.message : String(error)}),
+      (error: unknown) => setState({kind: 'failed', message: failureMessage(error, controller.signal.aborted)}),
     )
   }
 
-  const close = () => (state.kind === 'done' ? resolve(state.report) : cancel())
 
   return (
     <Dialog
       open
       onOpenChange={next => {
-        if (!next && state.kind !== 'running') close()
+        if (!next && state.kind !== 'running') cancel()
       }}
     >
       <DialogContent className="max-w-md">
@@ -118,7 +122,7 @@ export const CleanupAttachmentsDialog = ({
             </Button>
           )}
           {state.kind !== 'running' && (
-            <Button variant={state.kind === 'idle' ? 'outline' : 'default'} onClick={close}>
+            <Button variant={state.kind === 'idle' ? 'outline' : 'default'} onClick={cancel}>
               Close
             </Button>
           )}

@@ -8,18 +8,19 @@
  */
 
 import { Sparkles } from 'lucide-react'
-import { attachmentCleanerIOVerb } from '@/data/attachmentCleanerIOVerb.js'
-import { syncResolverForUser } from '@/data/repoProvider.js'
+import { attachmentCleanerIOVerb, type AttachmentCleanerIOResult } from '@/data/attachmentCleanerIOVerb.js'
+import { isRemoteSyncActive } from '@/data/repoProvider.js'
 import type { Repo } from '@/data/repo.js'
 import { fetchWorkspaceConversionState } from '@/data/workspaceConversion.js'
 import { supabase } from '@/services/supabase.js'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.js'
 import {
+  attachmentCleanerLockName,
   cleanAttachments,
-  type AttachmentCleanerIO,
   type CleanerProgress,
   type CleanerReport,
 } from '@/sync/conversion/attachmentCleaner.js'
+import type { WorkspaceObjectKeys } from '@/sync/crypto/contentKey.js'
 import { getWorkspaceKeyStore } from '@/sync/keys/keyStore.js'
 import { openDialog } from '@/utils/dialogs.js'
 import { showError } from '@/utils/toast.js'
@@ -31,20 +32,23 @@ import { runSingleOwner } from './laneLock.js'
 
 export const CLEANUP_ATTACHMENTS_ACTION_ID = 'attachments.cleanup'
 
-const cleanerIOFor = (repo: Repo, workspaceId: string): AttachmentCleanerIO | null => {
+const cleanerIOFor = (repo: Repo, workspaceId: string): AttachmentCleanerIOResult => {
   const userId = repo.user.id
+  if (!userId) return {kind: 'unavailable', reason: 'no one is signed in'}
   const blobStore = getBlobStore()
-  if (!userId || !supabase || !blobStore) return null
-  const resolver = syncResolverForUser(userId)
-  return createAttachmentCleanerIO({
-    client: supabase,
-    blobStore,
-    byteStore: getByteStore(),
-    repo,
-    userId,
-    workspaceId,
-    getContentKeyHmac: () => resolver?.getContentKeyHmac(workspaceId) ?? Promise.resolve(null),
-  })
+  if (!supabase || !blobStore) return {kind: 'unavailable', reason: 'remote sync is off'}
+  return {
+    kind: 'ready',
+    io: createAttachmentCleanerIO({
+      client: supabase,
+      blobStore,
+      byteStore: getByteStore(),
+      repo,
+      userId,
+      workspaceId,
+      isRemoteSyncActive,
+    }),
+  }
 }
 
 export const attachmentCleanerIOContribution = attachmentCleanerIOVerb.impl(
@@ -52,34 +56,46 @@ export const attachmentCleanerIOContribution = attachmentCleanerIOVerb.impl(
   {source: 'attachments'},
 )
 
-/** One run per (user, workspace) across tabs. */
-const cleanerLockName = (userId: string, workspaceId: string) => `km-attachment-cleaner:${userId}:${workspaceId}`
+interface CleanupContext {
+  readonly keys: WorkspaceObjectKeys
+  readonly canary: string
+}
+
+/** Everything the gesture needs, read now, or why it can't run. Read once
+ *  before offering the dialog and again inside the lock, since the dialog can
+ *  stay open across a re-key or the start of a conversion. */
+const readCleanupContext = async (userId: string, workspaceId: string): Promise<CleanupContext | string> => {
+  const read = await fetchWorkspaceConversionState(workspaceId)
+  if (read.kind !== 'read') return 'Could not read the workspace from the server. Try again when online.'
+  const {state} = read
+  if (state.ownerUserId !== userId) return 'Only the workspace owner can clean up its attachments.'
+  if (state.encryptionMode !== 'e2ee' || !state.wkCanary) return 'Only an end-to-end encrypted workspace has attachments to clean up.'
+  if (state.conversionPhase !== null) return 'This workspace is being converted; the conversion cleans up its attachments itself.'
+  // One read, so the key and K_id come from the same record.
+  const record = await getWorkspaceKeyStore().get(userId, workspaceId)
+  if (!record?.contentKeyHmac) return 'Unlock the workspace with its key first.'
+  return {keys: {cek: record.wk, contentKeyHmac: record.contentKeyHmac}, canary: state.wkCanary}
+}
 
 export type CleanupRun = (
   onProgress: (progress: CleanerProgress) => void,
   signal: AbortSignal,
 ) => Promise<CleanerReport | 'busy'>
 
-/** Everything the gesture checks before it offers to run, or why it can't. */
+/** The gesture's run, or why it can't be offered. */
 export const prepareCleanup = async (repo: Repo, workspaceId: string): Promise<CleanupRun | string> => {
   const userId = repo.user.id
   if (!userId) return 'Sign in to clean up attachments.'
-  const read = await fetchWorkspaceConversionState(workspaceId)
-  if (read.kind !== 'read') return 'Could not read the workspace from the server. Try again when online.'
-  const {state} = read
-  if (state.ownerUserId !== userId) return 'Only the workspace owner can clean up its attachments.'
-  if (state.encryptionMode !== 'e2ee' || !state.wkCanary) return 'Only an end-to-end encrypted workspace has attachments to clean up.'
-  const canary = state.wkCanary
-  // One read, so the key and K_id come from the same record.
-  const record = await getWorkspaceKeyStore().get(userId, workspaceId)
-  if (!record?.contentKeyHmac) return 'Unlock the workspace with its key first.'
-  const keys = {cek: record.wk, contentKeyHmac: record.contentKeyHmac}
+  const first = await readCleanupContext(userId, workspaceId)
+  if (typeof first === 'string') return first
   const io = cleanerIOFor(repo, workspaceId)
-  if (!io) return 'Attachments need remote sync.'
+  if (io.kind === 'unavailable') return `Attachments can't be cleaned up: ${io.reason}.`
   return async (onProgress, signal) => {
     let report: CleanerReport | undefined
-    const ran = await runSingleOwner(cleanerLockName(userId, workspaceId), async () => {
-      report = await cleanAttachments({workspaceId, io, keys, canary, bundle: null, signal, onProgress})
+    const ran = await runSingleOwner(attachmentCleanerLockName(userId, workspaceId), async () => {
+      const context = await readCleanupContext(userId, workspaceId)
+      if (typeof context === 'string') throw new Error(context)
+      report = await cleanAttachments({workspaceId, io: io.io, ...context, bundle: null, signal, onProgress})
     })
     return ran && report ? report : 'busy'
   }

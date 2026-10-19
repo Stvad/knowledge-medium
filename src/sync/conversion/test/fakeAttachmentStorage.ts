@@ -6,12 +6,13 @@
  */
 
 import { MAX_OBJECT_BYTES } from '../../byteTransform.js'
-import type { AttachmentCleanerIO, ConversionBundle, ObjectPath } from '../attachmentCleaner.js'
+import type { AttachmentCleanerIO, ConversionBundle, MediaRef, ObjectPath } from '../attachmentCleaner.js'
 
 export interface FakeAttachmentStorage {
   readonly io: AttachmentCleanerIO
   readonly objects: Map<ObjectPath, Uint8Array<ArrayBuffer>>
-  readonly media: {blockId: string; contentHash: string}[]
+  readonly media: MediaRef[]
+  /** This device's byte store, by local name. */
   readonly local: Map<string, Uint8Array<ArrayBuffer>>
   /** Every delete, in order. */
   readonly deletes: ObjectPath[]
@@ -19,7 +20,7 @@ export interface FakeAttachmentStorage {
 
 export const createFakeAttachmentStorage = ({limit = MAX_OBJECT_BYTES}: {limit?: number} = {}): FakeAttachmentStorage => {
   const objects = new Map<ObjectPath, Uint8Array<ArrayBuffer>>()
-  const media: {blockId: string; contentHash: string}[] = []
+  const media: MediaRef[] = []
   const local = new Map<string, Uint8Array<ArrayBuffer>>()
   const deletes: ObjectPath[] = []
   const io: AttachmentCleanerIO = {
@@ -36,7 +37,7 @@ export const createFakeAttachmentStorage = ({limit = MAX_OBJECT_BYTES}: {limit?:
       objects.delete(path)
     },
     mediaBlocks: async () => media,
-    localBytes: async contentHash => local.get(contentHash)?.slice() ?? null,
+    readLocal: async name => local.get(name)?.slice() ?? null,
   }
   return {io, objects, media, local, deletes}
 }

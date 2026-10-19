@@ -27,7 +27,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { attachmentObjectPath } from './storagePaths.js'
+import { attachmentObjectPath, storageObjectUrl } from './storagePaths.js'
 
 export const ATTACHMENTS_BUCKET = 'attachments'
 
@@ -255,12 +255,12 @@ export const createSupabaseBlobStore = (deps: SupabaseBlobStoreDeps): BlobStore 
       // route deletes the backend object inside the row's transaction. storage-js
       // has no call for it, so it rides the bucket API's own url and authed fetch.
       const files = client.storage.from(ATTACHMENTS_BUCKET) as unknown as StorageFileApiInternals
-      const path = objectPath(workspaceId, contentKey).split('/').map(encodeURIComponent).join('/')
-      const res = await files.fetch(`${files.url}/object/${ATTACHMENTS_BUCKET}/${path}`, {
+      const path = objectPath(workspaceId, contentKey)
+      const res = await files.fetch(storageObjectUrl(files.url, ATTACHMENTS_BUCKET, path), {
         method: 'DELETE',
         headers: files.headers,
       })
-      if (!res.ok) throw new Error(`blob delete failed (${res.status}) for ${objectPath(workspaceId, contentKey)}`)
+      if (!res.ok) throw new Error(`blob delete failed (${res.status}) for ${path}`)
     },
   }
 }
