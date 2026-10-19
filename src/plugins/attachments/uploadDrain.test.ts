@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { decodeBytes } from '@/sync/byteTransform.js'
 import { computeContentHash } from '@/sync/crypto/contentHash.js'
 import { deriveContentKey, deriveContentKeyHmac } from '@/sync/crypto/contentKey.js'
+import type { WorkspaceConversionRead } from '@/sync/keys/conversionState.js'
 import type { GetCek, GetMaterializability, Materializability } from '@/sync/transform.js'
 import { BlobPutError, type BlobStore } from './blobStore.js'
 import { InMemoryByteStore } from './byteStore.js'
@@ -54,6 +55,12 @@ class FakeBlobStore implements BlobStore {
   async delete(): Promise<void> {}
 }
 
+const live = (encryptionMode: string) => async (): Promise<WorkspaceConversionRead> => ({
+  kind: 'read',
+  state: { encryptionMode, conversionPhase: null, wkCanary: null, ownerUserId: 'owner' },
+})
+const unavailable = async (): Promise<WorkspaceConversionRead> => ({ kind: 'unavailable', error: new Error('offline') })
+
 const kid = await deriveContentKeyHmac(new Uint8Array(32).fill(5) as Uint8Array<ArrayBuffer>)
 
 const aesKey = () =>
@@ -85,7 +92,7 @@ describe('drainUploads (Phase 5b — the up-lane)', () => {
     getMaterializability: matCopy,
     getCek: noCek,
     getContentKeyHmac: async () => null,
-    readLiveEncryptionMode: async () => 'none',
+    readLiveWorkspace: live('none'),
     now: () => clock,
     ...over,
   })
@@ -394,7 +401,7 @@ describe('drainUploads (Phase 5b — the up-lane)', () => {
 
     it('a server that now says e2ee defers the upload, with no attempt burn', async () => {
       await pending()
-      const summary = await drainUploads(USER, deps({ readLiveEncryptionMode: async () => 'e2ee' }))
+      const summary = await drainUploads(USER, deps({ readLiveWorkspace: live('e2ee') }))
       expect(summary).toMatchObject({ deferred: 1, uploaded: 0 })
       expect(blobStore.puts).toHaveLength(0)
       expect(await store.get(USER, BLOCK)).toMatchObject({ status: 'pending', attempts: 0 })
@@ -402,15 +409,24 @@ describe('drainUploads (Phase 5b — the up-lane)', () => {
 
     it('an unreadable server mode defers too', async () => {
       await pending()
-      expect(await drainUploads(USER, deps({ readLiveEncryptionMode: async () => null })))
+      expect(await drainUploads(USER, deps({ readLiveWorkspace: unavailable })))
         .toMatchObject({ deferred: 1 })
       expect(blobStore.puts).toHaveLength(0)
+    })
+
+    it('a workspace this session can no longer see goes to the PUT, which fails it at once as before', async () => {
+      // The same membership gates the row and the PUT, so the upload is refused
+      // (403, permanent) rather than stored — not deferred out of sight for days.
+      await pending()
+      blobStore.fail = () => { throw new BlobPutError('forbidden', true) }
+      expect(await drainUploads(USER, deps({ readLiveWorkspace: async () => ({ kind: 'not-visible' as const }) })))
+        .toMatchObject({ failed: 1 })
     })
 
     it('an unreadable mode still ages out like any transient failure', async () => {
       await pending()
       clock += 8 * 24 * 60 * 60 * 1000
-      expect(await drainUploads(USER, deps({ readLiveEncryptionMode: async () => null })))
+      expect(await drainUploads(USER, deps({ readLiveWorkspace: unavailable })))
         .toMatchObject({ failed: 1 })
     })
 
@@ -421,7 +437,7 @@ describe('drainUploads (Phase 5b — the up-lane)', () => {
         getMaterializability: mat('decrypt'),
         getCek: async () => aesKey(),
         getContentKeyHmac: async () => kid,
-        readLiveEncryptionMode: async () => { asked += 1; return 'none' },
+        readLiveWorkspace: async () => { asked += 1; return live('none')() },
       }))
       expect(asked).toBe(0)
       expect(blobStore.puts).toHaveLength(1)

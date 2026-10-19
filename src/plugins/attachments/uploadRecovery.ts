@@ -128,6 +128,9 @@ const recoverOne = async (
 
   // (1a) The address, derived now — a record that failed before an in-place
   //      conversion probes the keyed one. No K_id (or a malformed hash): defer.
+  //      Under a stale plaintext mode this probes the raw path, which is safe:
+  //      recovery never uploads (a requeue goes through the drain's live-mode
+  //      check), and a raw object it verifies is one the cleaner seals.
   const objectKey = await deriveObjectKey(rec.contentHash, mode, () => ctx.getContentKeyHmac(rec.workspaceId))
   if (!objectKey.ok) return 'deferred'
 

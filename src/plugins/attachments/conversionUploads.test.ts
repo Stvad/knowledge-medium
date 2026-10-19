@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { decodeBytes } from '@/sync/byteTransform.js'
 import { computeContentHash } from '@/sync/crypto/contentHash.js'
 import { deriveContentKey, deriveContentKeyHmac } from '@/sync/crypto/contentKey.js'
+import type { WorkspaceConversionRead } from '@/sync/keys/conversionState.js'
 import type { GetCek, Materializability } from '@/sync/transform.js'
 import type { BlobStore } from './blobStore.js'
 import { InMemoryByteStore } from './byteStore.js'
@@ -66,7 +67,10 @@ const laneDeps = (materializability: Materializability, liveMode: string) => ({
   getMaterializability: async () => materializability,
   getCek,
   getContentKeyHmac: async () => kid,
-  readLiveEncryptionMode: async () => liveMode,
+  readLiveWorkspace: async (): Promise<WorkspaceConversionRead> => ({
+    kind: 'read',
+    state: {encryptionMode: liveMode, conversionPhase: null, wkCanary: null, ownerUserId: 'owner'},
+  }),
 })
 
 beforeEach(() => {

@@ -1,7 +1,7 @@
 /*
  * Single source of truth for WHERE an attachment object lives in Supabase Storage
- * and HOW to address it (design §10). Every consumer derives from here so they can't
- * drift apart:
+ * and HOW to address it (design §10). Every remote address derives from here so they
+ * can't drift apart (capture derives only the local byte-store name and block id):
  *   - {@link deriveObjectKey}: the object's key, derived when it's used;
  *   - the up-lane / resolver go through storage-js (`from(bucket).upload/download`),
  *     which builds the object path internally — they pass it attachmentObjectPath;

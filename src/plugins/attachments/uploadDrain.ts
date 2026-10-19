@@ -60,6 +60,7 @@
 
 import { decodeBytes, encodeBytes } from '@/sync/byteTransform.js'
 import { verifyContentHash } from '@/sync/crypto/contentHash.js'
+import type { WorkspaceConversionRead } from '@/sync/keys/conversionState.js'
 import { materializabilityToMode, type GetCek, type GetMaterializability, type SyncMode } from '@/sync/transform.js'
 import { BlobPutError, type BlobStore } from './blobStore.js'
 import type { ByteStore } from './byteStore.js'
@@ -82,8 +83,8 @@ export interface UploadDrainDeps {
   readonly getCek: GetCek
   /** The workspace's K_id (§10), which keys an e2ee object's address. */
   readonly getContentKeyHmac: (workspaceId: string) => Promise<CryptoKey | null>
-  /** The server's `encryption_mode` read NOW, or null when it can't be read. */
-  readonly readLiveEncryptionMode: (workspaceId: string) => Promise<string | null>
+  /** The server's workspace row read NOW (`fetchWorkspaceConversionState`). */
+  readonly readLiveWorkspace: (workspaceId: string) => Promise<WorkspaceConversionRead>
   /** Is `userId` (the QUEUED user whose records we're draining) still the active
    *  account? The mode/key deps and the BlobStore session resolve against the
    *  ACTIVE user, so if an account switch lands between the drain being armed and
@@ -114,7 +115,7 @@ interface DrainOneCtx {
   readonly getMaterializability: GetMaterializability
   readonly getCek: GetCek
   readonly getContentKeyHmac: (workspaceId: string) => Promise<CryptoKey | null>
-  readonly readLiveEncryptionMode: (workspaceId: string) => Promise<string | null>
+  readonly readLiveWorkspace: (workspaceId: string) => Promise<WorkspaceConversionRead>
   readonly isActiveUser: () => boolean
   readonly now: () => number
   readonly maxAttempts: number
@@ -205,9 +206,16 @@ const drainOne = async (
       workspaceId: rec.workspaceId,
     })
     if (mode === 'none') {
-      const live = await ctx.readLiveEncryptionMode(rec.workspaceId)
-      if (live === null) return deferTransientOrFail(userId, rec, ctx)
-      if (live !== 'none') return 'deferred' // converted: it uploads sealed once the pin is upgraded
+      // Accepted: a flip landing between this read and the PUT still leaves a
+      // raw object — the conversion's cleaner seals raw objects it lists, and
+      // the ciphertext audit flags any it missed.
+      const live = await ctx.readLiveWorkspace(rec.workspaceId)
+      if (live.kind === 'unavailable') return deferTransientOrFail(userId, rec, ctx)
+      // `not-visible` goes on: the same membership gates the PUT, which refuses
+      // it (403, permanent) as it always did, rather than parking it unseen.
+      if (live.kind === 'read' && live.state.encryptionMode !== 'none') {
+        return 'deferred' // converted: it uploads sealed once the pin is upgraded
+      }
     }
     const result = await ctx.blobStore.put(rec.workspaceId, objectKey.objectKey, sealed)
     if (result === 'exists') return verifyExistingOrQuarantine(userId, rec, mode, objectKey.objectKey, ctx)
@@ -280,7 +288,7 @@ export const drainUploads = async (userId: string, deps: UploadDrainDeps): Promi
     getMaterializability: deps.getMaterializability,
     getCek: deps.getCek,
     getContentKeyHmac: deps.getContentKeyHmac,
-    readLiveEncryptionMode: deps.readLiveEncryptionMode,
+    readLiveWorkspace: deps.readLiveWorkspace,
     isActiveUser: deps.isActiveUser ?? (() => true),
     now: deps.now ?? (() => Date.now()),
     maxAttempts: deps.maxAttempts ?? DEFAULT_MAX_ATTEMPTS,
