@@ -152,7 +152,7 @@ The phase only moves forward, so a resume never falls back.
 
 **3. Recovery bundle.** One zip, taken right after the flip. The flip changes no row, so the bundle still holds the pre-conversion content. And since every earlier write committed before the flip, nothing but the re-seal can add history after its snapshot ([§6.1](#61-server)).
 - **Writing it** needs a zip save type and a writer that holds the database lock while it copies. `chooseRawSqliteExportFile` offers only `.db`, and the existing zip builder (`getRawSqliteDbBackup`) is the corruption path's, which runs without the lock.
-- **`blocks.jsonl`.** Every block row of the workspace, soft-deleted ones included, read from the server: PostgREST pages by id, every column verbatim, except that **a row the re-seal counts as sealed has its content columns opened under the workspace key**. The test is the re-seal's own: all three columns envelope-shaped, which preflight guarantees no plaintext row meets. A row that passes it and doesn't open stops the bundle. So the file is always plaintext, even when it's re-taken after some rows were sealed. It's what key-loss recovery restores from ([§8](#8-runbook)). Reading the server rather than this device's database means no download gap or reconnect window can make it stale.
+- **`blocks.jsonl`.** Every block row of the workspace, soft-deleted ones included, read from the server: PostgREST pages by id, every column verbatim, except that **a row the re-seal counts as sealed takes its content columns from its re-seal record** instead: the `before_diff` of its first plaintext-to-envelope history row, the same record verify uses (step 5). The "sealed" test is the re-seal's own, all three columns envelope-shaped, which preflight guarantees no plaintext row meets. A sealed row with no record stops the bundle. So the file is always plaintext, and taking it never needs the key: until the purge, the server alone can rebuild it. It's what key-loss recovery restores from ([§8](#8-runbook)). Reading the server rather than this device's database means no download gap or reconnect window can make it stale.
   - **It's a consistent snapshot** only if the workspace's history count is the same before and after the paging, since every write to `blocks` adds a history row. Otherwise it's re-read. Right after the flip nothing else writes, so the first read passes.
   - **Its row count is recorded.** The workspace's block count is read inside that same window and goes in the manifest. Key-loss recovery tombstones every row the file lacks, so a truncated file must never verify.
 - **`local.db`.** The raw SQLite export, for the device-local history (`row_events`, `command_events`). It isn't a restore source.
@@ -185,7 +185,7 @@ Resuming just runs this again. It can take hours for a large workspace, so the f
 **6. Purge.**
 1. **Re-verify the bundle first.** Re-open the saved file, through the stored file handle or by asking the user to pick it, and check that its manifest hashes to the one in the bundle record and every part matches its manifest. The re-seal can take hours, and the file may have been moved or changed meanwhile.
    - If it can't be read, or doesn't match, the purge doesn't run.
-   - The record is cleared, and the next run re-takes the bundle. History is still on the server, and `blocks.jsonl` opens rows that are already sealed, so the new bundle is as complete as the first.
+   - The record is cleared, and the next run re-takes the bundle. History is still on the server, and `blocks.jsonl` takes rows already sealed from their re-seal records, so the new bundle is as complete as the first.
 2. **Then purge:** `purge_workspace_history(ws, through, count)`, from the bundle record. The server re-checks all four conditions ([§6.1](#61-server)).
    - **`KMC01`, a row isn't sealed.** The record stays: the next run re-seals what's left, verifies and tries again.
    - **`KMC02`, the bundle is stale.** Something outside the re-seal wrote history, such as a hard delete by an operator or another client. The flow says so, clears the record, re-takes the bundle so that history is archived too, and tries again.
@@ -207,7 +207,7 @@ Resuming just runs this again. It can take hours for a large workspace, so the f
   1. List `<ws>/` **completely before acting**. Page by name, and recurse into the folder entries Storage returns for nested paths.
   2. **Raw:** seal it, upload it to its keyed name, verify the upload (a 409 on an occupied path goes through the same check), then delete the raw object.
   3. **Keyed:** keep it.
-  4. **Neither:** delete it if the bundle record names it. Otherwise stop and report it. A standalone run has no bundle record, so it only converts raw objects and reports everything else.
+  4. **Neither:** delete it if the bundle record names it. Otherwise leave it and report it; it never stops the pass, so every raw object is still reached. A standalone run has no bundle record, so it converts raw objects and only reports the rest, such as objects kept from an old key after a key-loss recovery.
 - **The proof:**
   - no raw object remains;
   - every media block's keyed object, soft-deleted blocks included, is present **and** passes the shared verification helper (downloaded, opened, hash-checked). That costs one download of the attachment set, because Storage objects are untrusted.
@@ -278,7 +278,7 @@ The first production run is #1288.
 12. **Operator:** drop leftover ad-hoc tables from past scripts (`scripts/system-author-cleanup.sql`, `scripts/roam-ts-backfill/backfill.sql`).
 13. **Act on #1289's findings** and record the "safe from" date.
 14. **Take later recovery points.** From time to time, on an unlocked device, take a recovery point and keep it with the key. It's a zip with:
-    - `blocks.jsonl`: every block row read from the server, opened under the key, and checked for consistency and against the server's block count exactly as in step 3. A write from any device during the paging, this one included, makes it re-read. Taking it while other devices are idle keeps that rare;
+    - `blocks.jsonl`: every block row read from the server, checked for consistency and against the server's block count exactly as in step 3. History has been purged by then, so each row's content columns are opened under the key. A write from any device during the paging, this one included, makes it re-read. Taking it while other devices are idle keeps that rare;
     - **the plaintext of every media block**, soft-deleted ones included. Each comes from the local byte store, or is downloaded and opened under the key, and each is hash-checked;
     - a manifest.
 
@@ -286,7 +286,7 @@ The first production run is #1288.
 
 **Key-loss recovery** (#1302). Before the purge, nothing is lost, but a key lost during `sealing` still needs a way forward:
 - **Before the first re-sealed row,** no row is sealed. Re-key, take the bundle if it wasn't taken yet, and carry on.
-- **After it,** the conversion's bundle is a complete plaintext copy of every row, because nothing but the re-seal writes during `sealing`. Recovery runs exactly as below, from that bundle. Its equality check stands in for verify, and then the conversion's purge runs as usual, with `through` and the counts taken from the bundle's own verified manifest.
+- **After it,** the conversion's bundle is a complete plaintext copy of every row, because nothing but the re-seal writes during `sealing`. If it's lost too, re-take it: step 3 needs no key before the purge. Recovery then runs exactly as below, from that bundle. Its equality check stands in for verify, and then the conversion's purge runs as usual, with `through` and the counts taken from the bundle's own verified manifest.
 
 So the re-key RPC is admitted during `sealing` too.
 
