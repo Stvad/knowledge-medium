@@ -431,6 +431,7 @@ After the purge, recovery **re-keys the workspace in place** from the newest rec
      - On the current plan, that's about 8 days after `VACUUM FULL`;
   2. **the plan's log retention after `finish_conversion`**: 7 days on Pro. It only binds on a plan whose logs outlive its backups, such as Team.
 - **The date stays provisional until [§9.5](#95-open-items)'s S1, S2 and P3 are answered.** They cover the copies the vendors hold that no listing shows. A longer window from any answer moves the date, and so does a Log Drain or turning PITR on.
+- **The date covers a breach through SQL, the Storage API, the sync protocol or a backup.** A breach of the provider's hosts or disks still finds the residue accepted above, past the date. That includes the host's log file, which rotates by size ([§9.5](#95-open-items) S4).
 - **Until the date, don't restore or duplicate the project from a backup.** That brings the plaintext back into a live database, and a backup from before the flip also undoes the conversion.
 - The date is recorded with the run (#1288), not here.
 
@@ -452,6 +453,7 @@ None of these blocks the run. Each can only move the "safe from" date later, or 
 - **S1.** Is WAL archived while PITR is off, and for how long? The template's [`custom_walg.conf`](https://github.com/supabase/postgres/blob/6939f8696270341c67822113aac64987171d1cb6/ansible/files/postgresql_config/custom_walg.conf) has archiving commented out, and the hosted config may differ.
 - **S2.** Is a backup deleted from storage when it leaves the listing? Do off-schedule backups follow the same retention? Are backups encrypted at rest?
 - **S3.** Does the S3 bucket behind Storage keep versions of deleted objects? Are keys with no `storage.objects` row, left by a failed delete or a failed upload, ever swept?
+- **S4.** Is the instance's own Postgres log file ever pruned by age, rather than only rotated by size? Who can read it?
 
 **For PowerSync support:**
 - **P1.** Which storage version and backend is this instance on? What memory limit does Cloud's daily compaction use? When does a run do a full compaction rather than a chunk merge?
