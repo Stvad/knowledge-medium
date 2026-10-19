@@ -1,1 +1,1 @@
-import{Am as e,Om as t,km as n}from"../../../chunks/app-C_yLw3Sq.js";export{t as insertImageAction,n as insertImageNormalModeAction,e as insertImageToolbarItem};
+import{Am as e,Om as t,km as n}from"../../../chunks/app-BH1ZCk5K.js";export{t as insertImageAction,n as insertImageNormalModeAction,e as insertImageToolbarItem};

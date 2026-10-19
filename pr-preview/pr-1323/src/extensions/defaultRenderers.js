@@ -1,1 +1,1 @@
-import{AO as e,OO as t,kO as n}from"../../chunks/app-C_yLw3Sq.js";export{t as defaultRegistry,n as defaultRendererContributions,e as defaultRenderersExtension};
+import{AO as e,OO as t,kO as n}from"../../chunks/app-BH1ZCk5K.js";export{t as defaultRegistry,n as defaultRendererContributions,e as defaultRenderersExtension};
