@@ -1,1 +1,1 @@
-import{ux as e}from"../../chunks/app-CVUaOTbH.js";export{e as useAncestorCrumbs};
+import{ux as e}from"../../chunks/app-Cob_WPyC.js";export{e as useAncestorCrumbs};

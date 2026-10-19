@@ -1,1 +1,1 @@
-import{Ak as e}from"../../chunks/app-CVUaOTbH.js";export{e as ExtensionRenderBoundary};
+import{Ak as e}from"../../chunks/app-Cob_WPyC.js";export{e as ExtensionRenderBoundary};

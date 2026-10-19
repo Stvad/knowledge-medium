@@ -1,1 +1,1 @@
-import{oT as e}from"../../../chunks/app-CVUaOTbH.js";export{e as chipStyle};
+import{oT as e}from"../../../chunks/app-Cob_WPyC.js";export{e as chipStyle};

@@ -1,1 +1,1 @@
-import{am as e}from"../../../chunks/app-CVUaOTbH.js";export{e as richPastePlugin};
+import{am as e}from"../../../chunks/app-Cob_WPyC.js";export{e as richPastePlugin};

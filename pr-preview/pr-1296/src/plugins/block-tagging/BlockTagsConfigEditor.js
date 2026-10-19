@@ -1,1 +1,1 @@
-import{xs as e}from"../../../chunks/app-CVUaOTbH.js";export{e as BlockTagsConfigEditor};
+import{xs as e}from"../../../chunks/app-Cob_WPyC.js";export{e as BlockTagsConfigEditor};

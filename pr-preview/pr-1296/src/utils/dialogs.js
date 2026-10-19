@@ -1,1 +1,1 @@
-import{Dk as e,Ek as t,Ok as n,Tk as r,wk as i}from"../../chunks/app-CVUaOTbH.js";export{i as __resetDialogsForTests,r as getDialogQueue,t as isDialogOpenForWorkspace,e as openDialog,n as subscribeDialogs};
+import{Dk as e,Ek as t,Ok as n,Tk as r,wk as i}from"../../chunks/app-Cob_WPyC.js";export{i as __resetDialogsForTests,r as getDialogQueue,t as isDialogOpenForWorkspace,e as openDialog,n as subscribeDialogs};

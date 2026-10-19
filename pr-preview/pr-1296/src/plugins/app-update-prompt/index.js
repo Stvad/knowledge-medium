@@ -1,1 +1,1 @@
-import{DE as e}from"../../../chunks/app-CVUaOTbH.js";export{e as appUpdatePromptExtension};
+import{DE as e}from"../../../chunks/app-Cob_WPyC.js";export{e as appUpdatePromptExtension};

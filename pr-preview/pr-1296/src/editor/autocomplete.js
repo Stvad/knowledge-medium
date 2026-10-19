@@ -1,1 +1,1 @@
-import{iE as e}from"../../chunks/app-CVUaOTbH.js";export{e as editorAutocompleteExtension};
+import{iE as e}from"../../chunks/app-Cob_WPyC.js";export{e as editorAutocompleteExtension};

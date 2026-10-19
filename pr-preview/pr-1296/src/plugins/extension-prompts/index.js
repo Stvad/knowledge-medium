@@ -1,1 +1,1 @@
-import{cE as e,sE as t}from"../../../chunks/app-CVUaOTbH.js";export{t as ExtensionPromptSurface,e as extensionPromptsExtension};
+import{cE as e,sE as t}from"../../../chunks/app-Cob_WPyC.js";export{t as ExtensionPromptSurface,e as extensionPromptsExtension};

@@ -1,1 +1,1 @@
-import{wC as e}from"../../../chunks/app-CVUaOTbH.js";export{e as openKeybindingsSettingsAction};
+import{wC as e}from"../../../chunks/app-Cob_WPyC.js";export{e as openKeybindingsSettingsAction};

@@ -1,1 +1,1 @@
-import{_ as e}from"../../chunks/app-CVUaOTbH.js";export{e as staticAppExtensions};
+import{_ as e}from"../../chunks/app-Cob_WPyC.js";export{e as staticAppExtensions};

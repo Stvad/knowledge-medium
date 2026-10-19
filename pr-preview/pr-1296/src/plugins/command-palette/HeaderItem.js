@@ -1,1 +1,1 @@
-import{aw as e}from"../../../chunks/app-CVUaOTbH.js";export{e as CommandPaletteHeaderItem};
+import{aw as e}from"../../../chunks/app-Cob_WPyC.js";export{e as CommandPaletteHeaderItem};

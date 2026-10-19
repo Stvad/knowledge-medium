@@ -1,1 +1,1 @@
-import{N2 as e}from"../chunks/app-CVUaOTbH.js";export{e as isChildBackedPropertiesWorkspace};
+import{N2 as e}from"../chunks/app-Cob_WPyC.js";export{e as isChildBackedPropertiesWorkspace};

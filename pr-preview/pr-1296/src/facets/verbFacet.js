@@ -1,1 +1,1 @@
-import{$P as e}from"../../chunks/app-CVUaOTbH.js";export{e as defineVerbFacet};
+import{$P as e}from"../../chunks/app-Cob_WPyC.js";export{e as defineVerbFacet};

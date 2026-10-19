@@ -1,1 +1,1 @@
-import{lx as e}from"../../chunks/app-CVUaOTbH.js";export{e as BlockCrumbs};
+import{lx as e}from"../../chunks/app-Cob_WPyC.js";export{e as BlockCrumbs};

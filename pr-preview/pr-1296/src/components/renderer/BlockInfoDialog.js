@@ -1,1 +1,1 @@
-import{kk as e}from"../../../chunks/app-CVUaOTbH.js";export{e as BlockInfoDialog};
+import{kk as e}from"../../../chunks/app-Cob_WPyC.js";export{e as BlockInfoDialog};

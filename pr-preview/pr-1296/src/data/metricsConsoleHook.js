@@ -1,1 +1,1 @@
-import{CT as e}from"../../chunks/app-CVUaOTbH.js";export{e as ensureMetricsConsoleHook};
+import{CT as e}from"../../chunks/app-Cob_WPyC.js";export{e as ensureMetricsConsoleHook};

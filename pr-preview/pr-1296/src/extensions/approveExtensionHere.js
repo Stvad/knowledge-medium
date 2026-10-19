@@ -1,1 +1,1 @@
-import{SE as e}from"../../chunks/app-CVUaOTbH.js";export{e as approveExtensionHere};
+import{SE as e}from"../../chunks/app-Cob_WPyC.js";export{e as approveExtensionHere};
