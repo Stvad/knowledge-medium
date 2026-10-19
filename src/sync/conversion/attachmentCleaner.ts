@@ -7,7 +7,8 @@
  *
  * Every object is classified by content ({@link classifyStoredObject}):
  *   - raw     → seal, upload to its keyed name, verify that upload, and only then
- *               delete the raw object, which is often the server's only copy;
+ *               delete the raw object, which is often the server's only copy. A
+ *               refused upload leaves it in place;
  *   - keyed   → keep;
  *   - neither → delete only when the bundle archived it and its archived entry,
  *               re-read just before the delete, holds the same bytes. Otherwise
@@ -19,7 +20,8 @@
  * again. It assumes the single-client contract: nothing else writes the folder.
  */
 
-import { encodeBytes, fitsObjectLimit, verifyObjectBytes } from '../byteTransform.js'
+import { encodeBytes, verifyObjectBytes } from '../byteTransform.js'
+import { BINARY_ENVELOPE_OVERHEAD_BYTES } from '../crypto/binaryEnvelope.js'
 import { validateCanary } from '../crypto/canary.js'
 import { CONTENT_HASH_PREFIX, verifyContentHash } from '../crypto/contentHash.js'
 import {
@@ -36,7 +38,7 @@ export type ObjectPath = string
 
 export type ObjectWrite =
   | {readonly kind: 'written' | 'exists'}
-  /** A permanent refusal, such as a 413 for an object over the upload limit. */
+  /** A permanent refusal, such as a 413 for an object over an upload limit. */
   | {readonly kind: 'refused'; readonly status?: number}
 
 /** The workspace's Storage folder and this device's copies, as the cleaner
@@ -49,11 +51,12 @@ export interface AttachmentCleanerIO {
   readObject(path: ObjectPath): Promise<Uint8Array<ArrayBuffer> | null>
   /** Upload without overwriting: `exists` when the name is occupied. */
   writeObject(path: ObjectPath, bytes: Uint8Array<ArrayBuffer>): Promise<ObjectWrite>
+  /** Resolves only once Storage confirms the object is deleted. */
   deleteObject(path: ObjectPath): Promise<void>
   /** Every media block of the workspace, soft-deleted ones included. */
   mediaBlocks(): Promise<readonly {readonly blockId: string; readonly contentHash: string}[]>
-  /** This device's local plaintext for `contentHash`, or null. Hash-checked
-   *  again before use. */
+  /** This device's local plaintext of `contentHash`, or null when it holds
+   *  none that hashes to it. */
   localBytes(contentHash: string): Promise<Uint8Array<ArrayBuffer> | null>
 }
 
@@ -66,6 +69,9 @@ export interface AttachmentCleanerIO {
 export interface ConversionBundle {
   /** The paths the bundle archived under `other-objects/`, from the bundle record. */
   readonly archivedPaths: ReadonlySet<ObjectPath>
+  /** The content hashes the manifest lists as having no verified source: the
+   *  only ones with no `attachments/` entry. */
+  readonly noVerifiedSource: ReadonlySet<string>
   /** The `other-objects/` entry archived for `path`. */
   readArchivedObject(path: ObjectPath): Promise<Uint8Array<ArrayBuffer> | null>
   /** The `attachments/<hex>` entry for `contentHash`. */
@@ -116,9 +122,12 @@ export type CleanerProof =
   | {
       readonly kind: 'not-passed'
       /** Raw objects still in the folder, and objects this run could not
-       *  finish reading or handling, which may be raw. `finish_conversion`
-       *  waits for them. */
+       *  finish reading or handling, which may be raw. */
       readonly rawRemaining: readonly ObjectPath[]
+      /** Objects the bundle archived that are still in the folder: left
+       *  because the bundle couldn't be read or didn't match, or a delete that
+       *  did not take. The flow asks for the bundle folder again. */
+      readonly archivedRemaining: readonly ObjectPath[]
       /** Media hashes whose keyed object is missing or fails verification, and
        *  could not be rebuilt this run. */
       readonly unverified: readonly string[]
@@ -130,13 +139,13 @@ export interface CleanerReport {
   /** Raw objects sealed, uploaded, verified and then deleted, and gone from
    *  the last listing. */
   readonly converted: readonly ObjectPath[]
-  /** Raw objects whose sealed upload Storage refused; still in place. */
+  /** Raw objects whose sealed upload Storage refused; still in place. For a 413
+   *  the remedy is to raise the project-wide upload limit, and the bucket's own
+   *  limit if it is lower, to at least `sealedBytes`, then run again. */
   readonly refused: readonly {
     readonly path: ObjectPath
     readonly status?: number
-    /** Too large to seal within the bucket's original limit: the remedy is to
-     *  raise the project's upload limit and run again. */
-    readonly oversized: boolean
+    readonly sealedBytes: number
   }[]
   /** Neither objects deleted because the bundle archived them byte for byte,
    *  and gone from the last listing. */
@@ -171,6 +180,13 @@ const MAYBE_RAW = new Set<Settled['kind']>(['converted', 'refused', 'error'])
 
 type Placement = {readonly kind: 'verified'} | {readonly kind: 'refused'; readonly status?: number} | {readonly kind: 'unverified'}
 
+/** A copy of an attachment from outside Storage. `unreadable`: a source failed
+ *  to read, so absence is not established. */
+type OutsideCopy =
+  | {readonly kind: 'copy'; readonly bytes: Uint8Array<ArrayBuffer>}
+  | {readonly kind: 'none'}
+  | {readonly kind: 'unreadable'}
+
 const bytesEqual = (a: Uint8Array, b: Uint8Array): boolean => {
   if (a.length !== b.length) return false
   for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false
@@ -186,7 +202,8 @@ export class CleanerKeyRefusal extends Error {
   }
 }
 
-/** The candidate hash a path's last segment would be, were it a raw name. */
+/** The hash a path's last segment names, were it a raw name: a candidate for
+ *  the keyed copy of each raw object this pass converts. */
 const hashNamedBy = (path: ObjectPath): string => CONTENT_HASH_PREFIX + path.slice(path.lastIndexOf('/') + 1)
 
 export const cleanAttachments = async (input: CleanAttachmentsInput): Promise<CleanerReport> => {
@@ -231,12 +248,15 @@ export const cleanAttachments = async (input: CleanAttachmentsInput): Promise<Cl
   const convertRaw = async (path: ObjectPath, plaintext: Uint8Array<ArrayBuffer>, contentHash: string) => {
     const placement = await placeKeyed(contentHash, plaintext)
     if (placement.kind === 'refused') {
-      refused.push({path, status: placement.status, oversized: !fitsObjectLimit(plaintext.length, 'e2ee')})
-      return settled.set(path, {kind: 'refused', contentHash})
+      const sealedBytes = plaintext.length + BINARY_ENVELOPE_OVERHEAD_BYTES
+      refused.push({path, status: placement.status, sealedBytes})
+      settled.set(path, {kind: 'refused', contentHash})
+      return
     }
     if (placement.kind === 'unverified') {
       errors.push({path, message: 'its keyed copy did not verify after upload'})
-      return settled.set(path, {kind: 'error', contentHash})
+      settled.set(path, {kind: 'error', contentHash})
+      return
     }
     settled.set(path, {kind: 'error', contentHash}) // until the delete returns
     await io.deleteObject(path)
@@ -279,7 +299,6 @@ export const cleanAttachments = async (input: CleanAttachmentsInput): Promise<Cl
   // ── Repeat until a complete listing needs no action ──────────────────────
   let listing: readonly ObjectPath[] = []
   let media: Awaited<ReturnType<AttachmentCleanerIO['mediaBlocks']>> = []
-  let mediaNames = new Set<string>()
   let unsettled = true
   for (let pass = 1; pass <= MAX_PASSES; pass++) {
     signal?.throwIfAborted()
@@ -287,13 +306,8 @@ export const cleanAttachments = async (input: CleanAttachmentsInput): Promise<Cl
     listing = await io.listObjects()
     media = await io.mediaBlocks()
     const mediaHashes = new Set(media.map(m => m.contentHash))
-    mediaNames = new Set((await indexKeyedNames(mediaHashes, keys)).hashByName.keys())
-    const candidates = new Set([
-      ...mediaHashes,
-      ...listing.map(hashNamedBy),
-      ...[...(bundle?.archivedPaths ?? [])].map(hashNamedBy),
-    ])
-    const keyed = await indexKeyedNames(candidates, keys)
+    const mediaNames = (await indexKeyedNames(mediaHashes, keys)).hashByName
+    const keyed = await indexKeyedNames(new Set([...mediaHashes, ...listing.map(hashNamedBy)]), keys)
 
     const todo = listing.filter(path => !mediaNames.has(path) && !settled.has(path))
     const before = converted.length + deleted.length
@@ -317,10 +331,12 @@ export const cleanAttachments = async (input: CleanAttachmentsInput): Promise<Cl
   }
 
   // ── The proof, over the last listing, which needed no action ────────────
+  // An unsettled run's last listing predates its own deletes; list again so the
+  // report is not stale, though the proof cannot pass.
+  if (unsettled) listing = await io.listObjects()
   const listed = new Set(listing)
-  const rawRemaining = unsettled
-    ? []
-    : listing.filter(path => MAYBE_RAW.has(settled.get(path)?.kind ?? 'kept'))
+  const rawRemaining = listing.filter(path => MAYBE_RAW.has(settled.get(path)?.kind ?? 'kept'))
+  const archivedRemaining = listing.filter(path => bundle?.archivedPaths.has(path))
   /** Hashes whose raw object is still listed: their bytes exist, so they are
    *  never unrecoverable, and a later run converts them. */
   const rawHashes = new Set(
@@ -336,18 +352,29 @@ export const cleanAttachments = async (input: CleanAttachmentsInput): Promise<Cl
   const unrecoverable: UnrecoverableMedia[] = []
   const unverified: string[] = []
 
-  /** A verified plaintext for `contentHash` from outside Storage, or null. */
-  const outsideCopy = async (contentHash: string): Promise<Uint8Array<ArrayBuffer> | null> => {
-    const sources = [() => io.localBytes(contentHash), () => bundle?.readAttachment(contentHash) ?? null]
-    for (const source of sources) {
+  /** A verified plaintext for `contentHash` from outside Storage. Absence is
+   *  established only by sources that read cleanly; a bundle that should hold
+   *  the hash but returns nothing has changed since it was verified. */
+  const outsideCopy = async (contentHash: string): Promise<OutsideCopy> => {
+    let unreadable = false
+    try {
+      const local = await io.localBytes(contentHash)
+      if (local && (await verifyContentHash(local, contentHash))) return {kind: 'copy', bytes: local}
+    } catch (err) {
+      errors.push({path: contentHash, message: `local copy unreadable: ${messageOf(err)}`})
+      unreadable = true
+    }
+    if (bundle) {
       try {
-        const bytes = await source()
-        if (bytes && (await verifyContentHash(bytes, contentHash))) return bytes
-      } catch {
-        // an unreadable source is one fewer source
+        const entry = await bundle.readAttachment(contentHash)
+        if (entry && (await verifyContentHash(entry, contentHash))) return {kind: 'copy', bytes: entry}
+        if (!bundle.noVerifiedSource.has(contentHash)) unreadable = true
+      } catch (err) {
+        errors.push({path: contentHash, message: `bundle entry unreadable: ${messageOf(err)}`})
+        unreadable = true
       }
     }
-    return null
+    return unreadable ? {kind: 'unreadable'} : {kind: 'none'}
   }
 
   const hashes = [...blocksByHash.keys()]
@@ -371,12 +398,12 @@ export const cleanAttachments = async (input: CleanAttachmentsInput): Promise<Cl
         continue
       }
       const copy = await outsideCopy(contentHash)
-      if (!copy) {
+      if (copy.kind === 'none') {
         unrecoverable.push({contentHash, blockIds: blocksByHash.get(contentHash) ?? []})
         continue
       }
-      const placement = await placeKeyed(contentHash, copy)
-      if (placement.kind === 'verified') rebuilt.push(contentHash)
+      const placement = copy.kind === 'copy' ? await placeKeyed(contentHash, copy.bytes) : null
+      if (placement?.kind === 'verified') rebuilt.push(contentHash)
       else unverified.push(contentHash)
     } catch (err) {
       errors.push({path: contentHash, message: messageOf(err)})
@@ -384,13 +411,13 @@ export const cleanAttachments = async (input: CleanAttachmentsInput): Promise<Cl
     }
   }
 
-  const proof: CleanerProof =
-    !unsettled && rawRemaining.length === 0 && unverified.length === 0
-      ? {kind: 'passed', unrecoverable}
-      : {kind: 'not-passed', rawRemaining, unverified, unsettled}
   for (const path of [...converted, ...deleted]) {
     if (listed.has(path)) errors.push({path, message: 'deleted, but still listed'})
   }
+  const proof: CleanerProof =
+    !unsettled && rawRemaining.length === 0 && archivedRemaining.length === 0 && unverified.length === 0
+      ? {kind: 'passed', unrecoverable}
+      : {kind: 'not-passed', rawRemaining, archivedRemaining, unverified, unsettled}
   return {
     converted: converted.filter(path => !listed.has(path)),
     refused,

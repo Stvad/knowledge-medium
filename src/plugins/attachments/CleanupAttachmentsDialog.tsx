@@ -31,6 +31,8 @@ const count = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? on
 
 const ReportSummary = ({report}: {readonly report: CleanerReport}) => {
   const {proof} = report
+  /** The sealed size the upload limits must reach for every refused-as-too-large file. */
+  const tooLarge = Math.max(0, ...report.refused.filter(r => r.status === 413).map(r => r.sealedBytes))
   return (
     <div className="space-y-2 text-sm">
       <p>
@@ -43,9 +45,9 @@ const ReportSummary = ({report}: {readonly report: CleanerReport}) => {
         {report.rebuilt.length > 0 && <li>Re-uploaded {count(report.rebuilt.length, 'missing or damaged file')}.</li>}
         {report.refused.length > 0 && (
           <li>
-            The server refused {count(report.refused.length, 'file')}.
-            {report.refused.some(r => r.oversized) &&
-              ' Files within 36 bytes of the 50 MiB limit grow past it once encrypted: raise the project’s Storage upload limit, then run this again.'}
+            The server refused {count(report.refused.length, 'file')}, which stay unencrypted for now.
+            {tooLarge > 0 &&
+              ` Raise the project’s Storage upload limit, and the attachments bucket’s limit if it is lower, to at least ${tooLarge.toLocaleString()} bytes, then run this again.`}
           </li>
         )}
         {report.left.length > 0 && <li>Left {count(report.left.length, 'file')} it could not identify in place.</li>}

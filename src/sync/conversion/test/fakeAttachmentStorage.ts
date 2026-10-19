@@ -44,10 +44,12 @@ export const createFakeAttachmentStorage = ({limit = MAX_OBJECT_BYTES}: {limit?:
 export const createFakeBundle = (
   archived: ReadonlyMap<ObjectPath, Uint8Array<ArrayBuffer>> = new Map(),
   attachments: ReadonlyMap<string, Uint8Array<ArrayBuffer>> = new Map(),
+  noVerifiedSource: ReadonlySet<string> = new Set(),
 ): ConversionBundle & {readable: boolean} => {
   const bundle = {
     readable: true,
     archivedPaths: new Set(archived.keys()),
+    noVerifiedSource,
     readArchivedObject: async (path: ObjectPath) => {
       if (!bundle.readable) throw new Error('the bundle folder is not readable')
       return archived.get(path)?.slice() ?? null

@@ -9,7 +9,11 @@ import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { trackTestRepo } from '@/data/test/testRepoScope'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
-import { listMediaBlocks, listWorkspaceObjects } from './attachmentCleanerIO.js'
+import { computeContentHash } from '@/sync/crypto/contentHash'
+import { deriveContentKey, deriveContentKeyHmac } from '@/sync/crypto/contentKey'
+import type { BlobStore } from './blobStore.js'
+import { InMemoryByteStore } from './byteStore.js'
+import { createAttachmentCleanerIO, listMediaBlocks, listWorkspaceObjects } from './attachmentCleanerIO.js'
 import { ASSETS_TYPE_CONTRIBUTION, MEDIA_PROPERTY_SCHEMAS, MEDIA_TYPE, MEDIA_TYPE_CONTRIBUTION, mediaHashProp } from './mediaBlock.js'
 
 const WS = 'ws-1'
@@ -106,5 +110,29 @@ describe('listWorkspaceObjects', () => {
       storage: {from: () => ({list: async () => ({data: null, error: new Error('503')})})},
     } as unknown as SupabaseClient
     await expect(listWorkspaceObjects(client, WS)).rejects.toThrow('503')
+  })
+})
+
+describe('createAttachmentCleanerIO localBytes', () => {
+  it('tries every local name until one hash-verifies: a damaged keyed copy does not hide a good raw one', async () => {
+    const plain = new TextEncoder().encode('a photo') as Uint8Array<ArrayBuffer>
+    const contentHash = await computeContentHash(plain)
+    const kid = await deriveContentKeyHmac(new Uint8Array(32).fill(7))
+    const keyedName = await deriveContentKey({contentHash, mode: 'e2ee', contentKeyHmac: kid})
+    const rawName = await deriveContentKey({contentHash, mode: 'none', contentKeyHmac: null})
+    const byteStore = new InMemoryByteStore()
+    await byteStore.put('user-1', WS, keyedName, new TextEncoder().encode('truncat') as Uint8Array<ArrayBuffer>)
+    const io = createAttachmentCleanerIO({
+      client: {} as SupabaseClient,
+      blobStore: {} as BlobStore,
+      byteStore,
+      repo: {} as Repo,
+      userId: 'user-1',
+      workspaceId: WS,
+      getContentKeyHmac: async () => kid,
+    })
+    expect(await io.localBytes(contentHash)).toBeNull()
+    await byteStore.put('user-1', WS, rawName, plain)
+    expect(await io.localBytes(contentHash)).toEqual(plain)
   })
 })

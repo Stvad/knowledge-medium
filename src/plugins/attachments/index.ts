@@ -12,6 +12,7 @@
 
 import { definitionSeedsFacet, typeSeedsFacet } from '@/data/facets.js'
 import { actionsFacet, appMountsFacet, blockRenderersFacet } from '@/extensions/core.js'
+import { dialogAppMountExtension } from '@/extensions/dialogAppMount.js'
 import type { AppExtension } from '@/facets/facet.js'
 import { systemToggle } from '@/facets/togglable.js'
 import { diagnosticsFacet } from '@/plugins/diagnostics/facet.js'
@@ -70,6 +71,7 @@ export const attachmentsPlugin: AppExtension = systemToggle({
   // standalone Clean up attachments gesture.
   attachmentCleanerIOContribution,
   actionsFacet.of(cleanupAttachmentsAction, { source: 'attachments' }),
+  dialogAppMountExtension, // the gesture's dialog
   // Boot recovery for crashed captures (§9) — gated on initial-sync settle.
   appMountsFacet.of({ id: 'attachments.upload-reconciler', component: MediaUploadReconciler }, { source: 'attachments' }),
   // Background replication of the active workspace's bytes to the local store (§8/§9).

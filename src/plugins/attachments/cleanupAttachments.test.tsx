@@ -84,8 +84,8 @@ describe('CleanupAttachmentsDialog', () => {
     const run = vi.fn().mockResolvedValue(
       report({
         converted: ['aa'],
-        refused: [{path: 'bb', status: 413, oversized: true}],
-        proof: {kind: 'not-passed', rawRemaining: ['bb'], unverified: [], unsettled: false},
+        refused: [{path: 'bb', status: 413, sealedBytes: 52_428_837}],
+        proof: {kind: 'not-passed', rawRemaining: ['bb'], archivedRemaining: [], unverified: [], unsettled: false},
       }),
     )
     render(<CleanupAttachmentsDialog run={run} resolve={() => {}} cancel={() => {}} />)
@@ -93,7 +93,7 @@ describe('CleanupAttachmentsDialog', () => {
     fireEvent.click(screen.getByRole('button', {name: 'Clean up'}))
     expect(await screen.findByText(/not stored encrypted yet/)).toBeTruthy()
     expect(screen.getByText(/Encrypted 1 plaintext file\./)).toBeTruthy()
-    expect(screen.getByText(/raise the project.s Storage upload limit/)).toBeTruthy()
+    expect(screen.getByText(/Raise the project.s Storage upload limit.*at least 52,428,837 bytes/)).toBeTruthy()
   })
 
   it('says when another tab is already running it', async () => {

@@ -144,20 +144,16 @@ describe('SupabaseBlobStore.put', () => {
 })
 
 type DownloadResult = { data: { arrayBuffer(): Promise<ArrayBuffer> } | null; error: unknown }
-type RemoveResult = { data: unknown; error: unknown }
-
-/** A client exposing `storage.from(bucket).{download,remove}` — get()/delete()
- *  ride the client session directly (no token probe), so getAccessToken is moot. */
+/** A client exposing `storage.from(bucket).download` — get()/probe() ride the
+ *  client session directly (no token probe), so getAccessToken is moot. */
 const makeRwStore = (impl: {
   download?: (path: string) => Promise<DownloadResult>
-  remove?: (paths: string[]) => Promise<RemoveResult>
 }) => {
   const download = vi.fn(impl.download ?? (async () => ({ data: null, error: null })))
-  const remove = vi.fn(impl.remove ?? (async () => ({ data: [], error: null })))
-  const from = vi.fn(() => ({ download, remove }))
+  const from = vi.fn(() => ({ download }))
   const client = { storage: { from } } as unknown as SupabaseClient
   const store = createSupabaseBlobStore({ client, getAccessToken: async () => 'tok' })
-  return { store, from, download, remove }
+  return { store, from, download }
 }
 
 describe('SupabaseBlobStore.get', () => {
@@ -224,24 +220,29 @@ describe('SupabaseBlobStore.probe (the §9 recovery presence probe)', () => {
 })
 
 describe('SupabaseBlobStore.delete', () => {
-  it('removes <ws>/<key> from the attachments bucket', async () => {
-    const { store, from, remove } = makeRwStore({ remove: async () => ({ data: [{}], error: null }) })
-    await expect(store.delete('ws-A', 'deadbeef')).resolves.toBeUndefined()
-    expect(from).toHaveBeenCalledWith(ATTACHMENTS_BUCKET)
-    expect(remove).toHaveBeenCalledWith(['ws-A/deadbeef'])
+  /** The bucket API's own url and authed fetch, which delete() rides. */
+  const makeDeleteStore = (status: number) => {
+    const fetch = vi.fn<(url: string, init: RequestInit) => Promise<Response>>(async () => new Response(null, {status}))
+    const remove = vi.fn()
+    const from = vi.fn(() => ({url: 'https://x.supabase.co/storage/v1', headers: {'X-Client-Info': 't'}, fetch, remove}))
+    const client = {storage: {from}} as unknown as SupabaseClient
+    return {store: createSupabaseBlobStore({client, getAccessToken: async () => 'tok'}), fetch, remove}
+  }
+
+  it('deletes one object through the single-object route, never the bulk remove', async () => {
+    const {store, fetch, remove} = makeDeleteStore(200)
+    await expect(store.delete('ws-A', 'dir/dead beef')).resolves.toBeUndefined()
+    expect(fetch).toHaveBeenCalledWith('https://x.supabase.co/storage/v1/object/attachments/ws-A/dir/dead%20beef', {
+      method: 'DELETE',
+      headers: {'X-Client-Info': 't'},
+    })
+    expect(remove).not.toHaveBeenCalled()
   })
 
-  it('resolves on a no-op (remove returns an empty list, no error — RLS-denied or absent)', async () => {
-    // The documented contract: supabase-js `remove` 200s with an EMPTY list (no
-    // error) when the object is absent or RLS-denied. delete() must NOT throw —
-    // §16 GC is best-effort; the §10.1 poison-correction GET-verifies separately.
-    const { store } = makeRwStore({ remove: async () => ({ data: [], error: null }) })
-    await expect(store.delete('ws', 'k')).resolves.toBeUndefined()
-  })
-
-  it('throws when remove returns an error', async () => {
-    const boom = new Error('storage down')
-    const { store } = makeRwStore({ remove: async () => ({ data: null, error: boom }) })
-    await expect(store.delete('ws', 'k')).rejects.toBe(boom)
+  it('throws unless Storage confirms the delete, a 404 included (absent, or not permitted)', async () => {
+    for (const status of [404, 403, 500]) {
+      const {store} = makeDeleteStore(status)
+      await expect(store.delete('ws', 'k')).rejects.toThrow(String(status))
+    }
   })
 })

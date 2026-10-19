@@ -8,6 +8,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Repo } from '@/data/repo.js'
 import type { AttachmentCleanerIO, ObjectPath } from '@/sync/conversion/attachmentCleaner.js'
+import { verifyContentHash } from '@/sync/crypto/contentHash.js'
 import { ATTACHMENTS_BUCKET, BlobPutError, type BlobStore } from './blobStore.js'
 import type { ByteStore } from './byteStore.js'
 import { MEDIA_TYPE, mediaHashOf } from './mediaBlock.js'
@@ -96,9 +97,11 @@ export const createAttachmentCleanerIO = (deps: AttachmentCleanerIODeps): Attach
     async localBytes(contentHash) {
       const key = await deriveObjectKey(contentHash, 'e2ee', deps.getContentKeyHmac)
       if (!key.ok) return null
+      // Every name, not the first present: a damaged copy under the keyed name
+      // must not hide a good one under the raw name.
       for (const name of key.localKeys) {
         const bytes = await byteStore.get(userId, workspaceId, name)
-        if (bytes) return bytes
+        if (bytes && (await verifyContentHash(bytes, contentHash))) return bytes
       }
       return null
     },
