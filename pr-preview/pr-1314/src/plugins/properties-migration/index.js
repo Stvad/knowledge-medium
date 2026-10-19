@@ -1,1 +1,1 @@
-import{Lr as e,Nr as t}from"../../../chunks/app-G3vkSqca.js";export{e as migratePropertiesToBlocksAction,t as propertiesMigrationPlugin};
+import{Lr as e,Nr as t}from"../../../chunks/app-CZjDM-Cg.js";export{e as migratePropertiesToBlocksAction,t as propertiesMigrationPlugin};

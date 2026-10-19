@@ -1,1 +1,1 @@
-import{If as e,Lf as t}from"../../../chunks/app-G3vkSqca.js";export{e as BacklinksViewSection,t as backlinksViewFooterContribution};
+import{If as e,Lf as t}from"../../../chunks/app-CZjDM-Cg.js";export{e as BacklinksViewSection,t as backlinksViewFooterContribution};
