@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { decodeBytes, encodeBytes } from './byteTransform.js'
-import { hasBinaryEnvelopeMagic } from './crypto/binaryEnvelope.js'
+import { decodeBytes, encodeBytes, fitsObjectLimit, MAX_OBJECT_BYTES, verifyObjectBytes } from './byteTransform.js'
+import { BINARY_ENVELOPE_OVERHEAD_BYTES, hasBinaryEnvelopeMagic } from './crypto/binaryEnvelope.js'
 import { computeContentHash, verifyContentHash } from './crypto/contentHash.js'
 import { importWorkspaceKey } from './crypto/workspaceKey.js'
 import type { GetCek } from './transform.js'
@@ -124,4 +124,46 @@ describe('byte transform (encodeBytes / decodeBytes)', () => {
       expect(await verifyContentHash(decoded, expectedHash)).toBe(false)
     })
   })
+})
+
+describe('verifyObjectBytes (the one acceptance check for an object read from Storage)', () => {
+  it('passes the genuine object and hands back its plaintext, in either mode', async () => {
+    const bytes = sampleBytes()
+    const ref = { contentHash: await computeContentHash(bytes), workspaceId: 'ws-A' }
+    const plain = await verifyObjectBytes(bytes, 'none', noKey, ref)
+    expect(plain.ok && Uint8Array.from(plain.plaintext)).toEqual(bytes)
+    const sealed = await encodeBytes(bytes, 'e2ee', cekFrom(0x01), ref)
+    const opened = await verifyObjectBytes(sealed, 'e2ee', cekFrom(0x01), ref)
+    expect(opened.ok && Uint8Array.from(opened.plaintext)).toEqual(bytes)
+  })
+
+  it('an object that does not open is decode-failed: wrong key, no key, or not an envelope', async () => {
+    const bytes = sampleBytes()
+    const ref = { contentHash: await computeContentHash(bytes), workspaceId: 'ws-A' }
+    const sealed = await encodeBytes(bytes, 'e2ee', cekFrom(0x01), ref)
+    expect(await verifyObjectBytes(sealed, 'e2ee', cekFrom(0x02), ref)).toEqual({ ok: false, reason: 'decode-failed' })
+    expect(await verifyObjectBytes(sealed, 'e2ee', noKey, ref)).toEqual({ ok: false, reason: 'decode-failed' })
+    expect(await verifyObjectBytes(bytes, 'e2ee', cekFrom(0x01), ref)).toEqual({ ok: false, reason: 'decode-failed' })
+  })
+
+  it('an object that opens to other bytes is hash-mismatch, in either mode', async () => {
+    const ref = { contentHash: await computeContentHash(sampleBytes()), workspaceId: 'ws-A' }
+    const garbage = new Uint8Array(64).fill(0xab)
+    const poisoned = await encodeBytes(garbage, 'e2ee', cekFrom(0x01), ref)
+    expect(await verifyObjectBytes(poisoned, 'e2ee', cekFrom(0x01), ref)).toEqual({ ok: false, reason: 'hash-mismatch' })
+    expect(await verifyObjectBytes(garbage, 'none', noKey, ref)).toEqual({ ok: false, reason: 'hash-mismatch' })
+  })
+})
+
+describe('fitsObjectLimit', () => {
+  it('a plaintext of exactly the limit less the envelope overhead seals to exactly the limit; one byte more does not fit', async () => {
+    const bytes = new Uint8Array(MAX_OBJECT_BYTES - BINARY_ENVELOPE_OVERHEAD_BYTES)
+    const ref = { contentHash: await computeContentHash(bytes), workspaceId: 'ws-A' }
+    const sealed = await encodeBytes(bytes, 'e2ee', cekFrom(0x01), ref)
+    expect(sealed.length).toBe(MAX_OBJECT_BYTES)
+    expect(fitsObjectLimit(bytes.length, 'e2ee')).toBe(true)
+    expect(fitsObjectLimit(bytes.length + 1, 'e2ee')).toBe(false)
+    // The same bytes stored raw fit up to the limit itself.
+    expect(fitsObjectLimit(MAX_OBJECT_BYTES, 'none')).toBe(true)
+  }, 30_000)
 })

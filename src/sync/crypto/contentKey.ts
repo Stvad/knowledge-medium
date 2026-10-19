@@ -23,9 +23,10 @@
  * key, exactly as aad.ts domain-separates the canary from content columns.
  */
 
-import { digestFromContentHash } from './contentHash.js'
+import { verifyObjectBytes } from '../byteTransform.js'
+import type { GetCek, SyncMode } from '../transform.js'
+import { CONTENT_HASH_PREFIX, digestFromContentHash, sha256 } from './contentHash.js'
 import { bytesToHex } from './hex.js'
-import type { SyncMode } from '../transform.js'
 
 /** HKDF `info` label binding K_id to this purpose + version (§10). NOT optional:
  *  it domain-separates the content-key subkey from any future WK-derived key
@@ -102,4 +103,69 @@ export const deriveContentKey = async (ref: ContentKeyRef): Promise<string> => {
   }
   const mac = await crypto.subtle.sign('HMAC', ref.contentKeyHmac, digest)
   return bytesToHex(new Uint8Array(mac))
+}
+
+/** The keyed names of a set of content hashes under one workspace's `K_id`,
+ *  each mapped back to its hash. Only {@link indexKeyedNames} builds one. */
+export interface KeyedNameIndex {
+  readonly hashByName: ReadonlyMap<string, string>
+}
+
+/** Index the keyed name of each content hash. A malformed hash names no object,
+ *  so it is skipped rather than thrown. */
+export const indexKeyedNames = async (
+  contentHashes: Iterable<string>,
+  contentKeyHmac: CryptoKey,
+): Promise<KeyedNameIndex> => {
+  const hashByName = new Map<string, string>()
+  for (const contentHash of contentHashes) {
+    try {
+      hashByName.set(await deriveContentKey({contentHash, mode: 'e2ee', contentKeyHmac}), contentHash)
+    } catch {
+      // not a content hash: nothing is stored under it
+    }
+  }
+  return {hashByName}
+}
+
+export type StoredObjectClass =
+  /** The plaintext bytes of `contentHash`, at their pre-conversion name. */
+  | {readonly kind: 'raw'; readonly contentHash: string}
+  /** `contentHash`'s plaintext, sealed, at its keyed name. */
+  | {readonly kind: 'keyed'; readonly contentHash: string}
+  | {readonly kind: 'neither'}
+
+/**
+ * What the object under `<workspaceId>/<name>` holds, decided by its bytes
+ * (docs/workspace-e2ee-conversion.md §6.3 step 8). For bytes b under name n:
+ *   - raw iff n == hex(sha256(b));
+ *   - keyed iff b opens under the workspace key to p, and n == hex(HMAC(K_id, sha256(p)));
+ *   - otherwise neither.
+ * Never by a header or the name's shape: both names are 64 hex characters, and
+ * a plaintext file may begin with `encb:v1:`.
+ *
+ * The asset AAD binds the content hash, so b can only be opened with p's hash
+ * in hand: an object is keyed only under a name `keyed.names` maps, and any
+ * other is neither. `keyed` is null when nothing can be keyed: a plaintext
+ * workspace, or a caller without the key.
+ */
+export const classifyStoredObject = async ({
+  workspaceId,
+  name,
+  bytes,
+  keyed,
+}: {
+  readonly workspaceId: string
+  readonly name: string
+  readonly bytes: Uint8Array<ArrayBuffer>
+  readonly keyed: {readonly names: KeyedNameIndex; readonly getCek: GetCek} | null
+}): Promise<StoredObjectClass> => {
+  const rawName = bytesToHex(await sha256(bytes))
+  if (name === rawName) return {kind: 'raw', contentHash: CONTENT_HASH_PREFIX + rawName}
+  const contentHash = keyed?.names.hashByName.get(name)
+  if (keyed && contentHash !== undefined) {
+    const verified = await verifyObjectBytes(bytes, 'e2ee', keyed.getCek, {contentHash, workspaceId})
+    if (verified.ok) return {kind: 'keyed', contentHash}
+  }
+  return {kind: 'neither'}
 }
