@@ -1,1 +1,1 @@
-import{Ef as e,Tf as t}from"../../../chunks/app-Bxxy0zGK.js";export{t as DATA_MODEL_GUIDE,e as dataModelGuide};
+import{Df as e,Ef as t}from"../../../chunks/app-BCPznZzz.js";export{t as DATA_MODEL_GUIDE,e as dataModelGuide};

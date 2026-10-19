@@ -1,1 +1,1 @@
-import{vr as e}from"../../../chunks/app-Bxxy0zGK.js";export{e as interactionMetricsPlugin};
+import{yr as e}from"../../../chunks/app-BCPznZzz.js";export{e as interactionMetricsPlugin};

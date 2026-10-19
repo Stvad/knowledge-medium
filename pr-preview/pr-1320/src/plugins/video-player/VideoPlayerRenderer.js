@@ -1,1 +1,1 @@
-import{a_ as e,i_ as t,o_ as n}from"../../../chunks/app-Bxxy0zGK.js";export{t as VideoPlayerContentRenderer,e as VideoPlayerRenderer,n as isPlayableVideoBlock};
+import{a_ as e,o_ as t,s_ as n}from"../../../chunks/app-BCPznZzz.js";export{e as VideoPlayerContentRenderer,t as VideoPlayerRenderer,n as isPlayableVideoBlock};

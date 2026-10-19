@@ -1,1 +1,1 @@
-import{Am as e,Dm as t,Om as n,km as r}from"../../../chunks/app-Bxxy0zGK.js";export{n as MERGE_INTO_ACTION_ID,e as MergePicker,t as mergeBlocksPlugin,r as mergeIntoAction};
+import{Am as e,Om as t,jm as n,km as r}from"../../../chunks/app-BCPznZzz.js";export{r as MERGE_INTO_ACTION_ID,n as MergePicker,t as mergeBlocksPlugin,e as mergeIntoAction};

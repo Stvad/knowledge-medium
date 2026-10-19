@@ -1,1 +1,1 @@
-import{lk as e,uk as t}from"../../chunks/app-Bxxy0zGK.js";export{e as gfmMarkdownExtension,t as isExternalHref};
+import{dk as e,uk as t}from"../../chunks/app-BCPznZzz.js";export{t as gfmMarkdownExtension,e as isExternalHref};

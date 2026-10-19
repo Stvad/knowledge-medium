@@ -1,1 +1,1 @@
-import{vk as e}from"../../chunks/app-Bxxy0zGK.js";export{e as Header};
+import{yk as e}from"../../chunks/app-BCPznZzz.js";export{e as Header};

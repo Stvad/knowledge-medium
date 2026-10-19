@@ -1,1 +1,1 @@
-import{_n as e,gn as t,vn as n,yn as r}from"../../../chunks/app-Bxxy0zGK.js";export{t as nextAnalysisDelayMs,e as perfAnalysisEffect,n as perfAnalysisEffectContribution,r as runPerfAnalysisNow};
+import{_n as e,bn as t,vn as n,yn as r}from"../../../chunks/app-BCPznZzz.js";export{e as nextAnalysisDelayMs,n as perfAnalysisEffect,r as perfAnalysisEffectContribution,t as runPerfAnalysisNow};

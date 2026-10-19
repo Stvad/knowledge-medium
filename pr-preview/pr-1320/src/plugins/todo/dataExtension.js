@@ -1,1 +1,1 @@
-import{CR as e}from"../../../chunks/app-Bxxy0zGK.js";export{e as todoDataExtension};
+import{wR as e}from"../../../chunks/app-BCPznZzz.js";export{e as todoDataExtension};
