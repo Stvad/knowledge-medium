@@ -39,7 +39,7 @@ import {
   ensureAliasTarget,
 } from '@/data/targets'
 
-import { PLAINTEXT_ALIAS_SEATS } from '@/data/aliasSeatNamespace'
+import { PLAINTEXT_ALIAS_SEATS } from '@/data/test/plaintextAliasSeats'
 const WS = 'ws-1'
 
 interface Harness {

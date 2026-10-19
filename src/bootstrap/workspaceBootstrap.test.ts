@@ -18,7 +18,7 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
 import { dailyNotesDataExtension } from '@/plugins/daily-notes/dataExtension'
 import { ChangeScope } from '@/data/api'
-import { PLAINTEXT_ALIAS_SEATS } from '@/data/aliasSeatNamespace'
+import { PLAINTEXT_ALIAS_SEATS } from '@/data/test/plaintextAliasSeats'
 import { ALIAS_SEAT_PROBE_SLOTS, computeAliasSeatId, ensureAliasTarget } from '@/data/targets'
 import { deriveContentKeyHmac } from '@/sync/crypto/contentKey'
 import { getWorkspaceKeyStore } from '@/sync/keys/keyStore'
@@ -118,16 +118,37 @@ describe('bootstrapWorkspace', () => {
     try {
       await open(encrypted)
 
+      // The resolve is not awaited by `open`, so the first attempt can beat it.
       let minted = ''
-      await repo.tx(async tx => {
+      await vi.waitFor(() => repo.tx(async tx => {
         minted = (await ensureAliasTarget(tx, repo, 'Private page', encrypted)).id
-      }, {scope: ChangeScope.BlockDefault, description: 'create page'})
+      }, {scope: ChangeScope.BlockDefault, description: 'create page'}))
       const publicSlots = Array.from({length: ALIAS_SEAT_PROBE_SLOTS},
         (_, index) => computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'Private page', encrypted, index))
       expect(publicSlots).not.toContain(minted)
     } finally {
       localStorage.clear()
       await getWorkspaceKeyStore().delete('user-1', encrypted)
+    }
+  })
+
+  it('opens an encrypted workspace even when its key store never answers', async () => {
+    // IndexedDB can hang rather than fail, and the alias-seat namespace is
+    // the one key read on this path.
+    const encrypted = 'ws-bootstrap-e2ee-hung'
+    repo.setActiveWorkspaceId(encrypted)
+    await sharedDb.db.execute(
+      `INSERT INTO workspaces (id, name, owner_user_id, create_time, update_time,
+        encryption_mode, properties_migration) VALUES (?, 'test', 'user-1', 1, 1, 'e2ee', 'cell')`,
+      [encrypted],
+    )
+    setModePin('user-1', encrypted, 'e2ee')
+    const hung = vi.spyOn(getWorkspaceKeyStore(), 'get').mockReturnValue(new Promise(() => {}))
+    try {
+      expect((await open(encrypted)).id).toBeTruthy()
+      expect(hung).toHaveBeenCalled()
+    } finally {
+      localStorage.clear()
     }
   })
 })

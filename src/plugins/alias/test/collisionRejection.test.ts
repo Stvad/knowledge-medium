@@ -27,7 +27,7 @@ import { aliasesProp } from '@/data/properties'
 import { dailyNotesDataExtension } from '@/plugins/daily-notes/dataExtension'
 import { referencesDataExtension } from '@/plugins/references/dataExtension.js'
 import { computeAliasSeatId } from '@/data/targets'
-import { PLAINTEXT_ALIAS_SEATS } from '@/data/aliasSeatNamespace'
+import { PLAINTEXT_ALIAS_SEATS } from '@/data/test/plaintextAliasSeats'
 import { aliasDataExtension } from '../dataExtension.ts'
 
 const WS = 'ws-1'

@@ -30,7 +30,7 @@ import { BLOCK_TYPE_TYPE, PAGE_TYPE } from '@/data/blockTypes'
 import { dailyNotesDataExtension } from '@/plugins/daily-notes/dataExtension'
 import { aliasDataExtension } from '@/plugins/alias/dataExtension.js'
 import { computeAliasSeatId, ensureAliasTarget } from '@/data/targets'
-import { PLAINTEXT_ALIAS_SEATS } from '@/data/aliasSeatNamespace'
+import { PLAINTEXT_ALIAS_SEATS } from '@/data/test/plaintextAliasSeats'
 import { referencesDataExtension } from '../dataExtension.ts'
 import {
   applyRefRewrites,

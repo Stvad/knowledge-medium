@@ -76,6 +76,7 @@ import {
   resolveAliasSeatId,
 } from '@/data/targets'
 import {
+  AliasSeatNamespaceUnavailableError,
   aliasSeatNamespacesInTx,
   resolveAliasSeatNamespaces,
   type AliasSeatNamespaces,
@@ -195,6 +196,14 @@ interface SourcePlan {
   referencesChanged: boolean
 }
 
+/** A new-page mark whose seat cannot be minted without the public namespace
+ *  stays underived (`null`); any other failure is rethrown. */
+const leaveSeatOut = (err: unknown, sourceId: string): null => {
+  if (!(err instanceof AliasSeatNamespaceUnavailableError)) throw err
+  console.warn(`[references] left a new page unminted for ${sourceId}: ${err.message}`)
+  return null
+}
+
 /** Read phase: parse refs, resolve existing alias targets via committed-
  *  state lookup, and produce a SourcePlan describing what the write
  *  phase needs to do. No tx opened here — `ctx.repo.query.aliasLookup`
@@ -237,9 +246,12 @@ const buildSourcePlan = async (
   const aliasesToEnsure: Array<{alias: string; id: string}> = []
   const datesToEnsure: Array<{iso: string; alias: string}> = []
   const seenAliases = new Set<string>()
-  // Resolved on the first lookup miss: it is the read that needs `K_id`, which
-  // the write phase cannot read under the lock (`@/data/aliasSeatNamespace`).
-  let seats: AliasSeatNamespaces | undefined
+  // Resolved on the first lookup miss, before the lock: the write phase's
+  // `ensureAliasTarget` reads it from the cache this fills, since `K_id` cannot
+  // be read under the lock (`@/data/aliasSeatNamespace`). `null`: unavailable,
+  // so this source's new-page marks stay underived rather than failing the
+  // whole event.
+  let seats: AliasSeatNamespaces | null | undefined
 
   for (const mark of aliasMarks) {
     if (seenAliases.has(mark.alias)) continue
@@ -282,7 +294,11 @@ const buildSourcePlan = async (
     // tombstoned. We probe here (read-phase, committed state) so the
     // predicted id matches what ensureAliasTarget will pick in the
     // write phase. Convergence: same world-state → same probe answer.
-    seats ??= await resolveAliasSeatNamespaces(ctx.repo, source.workspaceId)
+    if (seats === undefined) {
+      seats = await resolveAliasSeatNamespaces(ctx.repo, source.workspaceId)
+        .catch(err => leaveSeatOut(err, source.id))
+    }
+    if (seats === null) continue
     const id = await resolveAliasSeatId(
       seats,
       aliasSeatReaderFromDb(ctx.db),
@@ -527,7 +543,18 @@ const applySourcePlan = async (
     await claimLiteralDateAliases(tx, ensured.id, iso, aliases)
   }
   for (const {alias, id: predicted} of plan.aliasesToEnsure) {
+    // The mode can turn sealed between the read phase and this lock. The
+    // throw precedes every write in the ensure, so dropping just this
+    // reference leaves the rest of the transaction sound.
     const ensured = await ensureAliasTarget(tx, ctx.repo, alias, plan.workspaceId, typeSnapshot)
+      .catch(err => leaveSeatOut(err, plan.sourceId))
+    if (ensured === null) {
+      // DEFENCE IN DEPTH: left in, this dangling reference re-fires the
+      // processor, whose next read phase mints the page or leaves it out.
+      references = references.filter(ref =>
+        !(ref.sourceField === undefined && ref.id === predicted && ref.alias === alias))
+      continue
+    }
     if (ensured.inserted) newlyInserted.push(ensured.id)
     retarget(predicted, ensured.id, alias)
     // The §9 arrival-order repair (late-binding rederive of NULL-stamped

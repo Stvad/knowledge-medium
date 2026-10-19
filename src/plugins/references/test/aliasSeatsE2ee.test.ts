@@ -13,10 +13,9 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
-import {
-  PLAINTEXT_ALIAS_SEATS,
-  resolveAliasSeatNamespaces,
-} from '@/data/aliasSeatNamespace'
+import { aliasesProp } from '@/data/properties'
+import { resolveAliasSeatNamespaces } from '@/data/aliasSeatNamespace'
+import { PLAINTEXT_ALIAS_SEATS } from '@/data/test/plaintextAliasSeats'
 import type { Repo } from '@/data/repo'
 import {
   ALIAS_SEAT_PROBE_SLOTS,
@@ -82,6 +81,15 @@ const convertInPlace = async () => {
   await seedWorkspaceRow('e2ee')
   await storeContentKey()
   upgradeModePinToE2ee(USER, WS)
+}
+
+/** A page that claims `alias` at an id no seat probe produces. */
+const createPage = async (id: string, alias: string) => {
+  await repo.tx(async tx => {
+    await tx.create({id, workspaceId: WS, parentId: null, orderKey: `p-${id}`, content: alias})
+    await tx.setProperty(id, aliasesProp, [alias])
+  }, {scope: ChangeScope.BlockDefault, description: 'create page'})
+  await repo.awaitProcessors()
 }
 
 const write = async (id: string, content: string) => {
@@ -155,15 +163,42 @@ describe('alias seats on an encrypted workspace', () => {
     expect((await row(seat))?.deleted).toBe(1)
   })
 
-  it('mints nothing when this device holds no key for the workspace', async () => {
-    await seedWorkspaceRow('e2ee')
-    setModePin(USER, WS, 'e2ee')
-    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+  it('mints nothing without a key, and still derives the links that need no new page',
+    async () => {
+      await seedWorkspaceRow('e2ee')
+      setModePin(USER, WS, 'e2ee')
+      await createPage('known', 'Known')
+      const warnings = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
-    await write('src', 'see [[Secret plans]]')
+      await write('src', '[[Known]] and [[Secret plans]]')
 
-    expect(await liveClaimants('Secret plans')).toEqual([])
-    expect(errors.mock.calls.flat().join(' ')).toMatch(/no content key/)
+      expect(await liveClaimants('Secret plans')).toEqual([])
+      expect(warnings.mock.calls.flat().join(' ')).toMatch(/no content key/)
+      expect(await targetOf('src', 'Known')).toBe('known')
+    })
+
+  it('keeps the rest of the write when the workspace turns sealed under the lock', async () => {
+    // The read phase planned under plaintext; by the time the write phase
+    // holds the lock, the row has flipped and nothing has resolved the
+    // derived namespace yet.
+    await openPlaintext()
+    await createPage('known', 'Known')
+    // Every write, the processor's included, funnels through `transact`.
+    type Transact = (fn: unknown, options: {description?: string}, runtime?: unknown) => Promise<unknown>
+    const internals = repo as unknown as {transact: Transact}
+    const transact = internals.transact.bind(repo)
+    vi.spyOn(internals, 'transact').mockImplementation(async (fn, options, runtime) => {
+      if (options.description?.includes('parseReferences')) await seedWorkspaceRow('e2ee')
+      return transact(fn, options, runtime)
+    })
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await write('src', '[[Known]] and [[Racing]]')
+
+    expect(await targetOf('src', 'Known')).toBe('known')
+    expect(await liveClaimants('Racing')).toEqual([])
+    // Not a reference to a page that was never minted.
+    await expect(targetOf('src', 'Racing')).rejects.toThrow(/no reference/)
   })
 
   it('refuses an in-transaction mint nothing resolved before the lock, writing nothing', async () => {

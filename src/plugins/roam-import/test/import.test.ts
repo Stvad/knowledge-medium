@@ -49,7 +49,7 @@ import {
   srsSnapshotHistoryProp,
 } from '@/plugins/srs-rescheduling/schema'
 import { ALIAS_SEAT_PROBE_SLOTS, computeAliasSeatId } from '../../../data/targets'
-import { PLAINTEXT_ALIAS_SEATS } from '@/data/aliasSeatNamespace'
+import { PLAINTEXT_ALIAS_SEATS } from '@/data/test/plaintextAliasSeats'
 import { deriveContentKeyHmac } from '@/sync/crypto/contentKey'
 import { getWorkspaceKeyStore } from '@/sync/keys/keyStore'
 import { setModePin } from '@/sync/keys/modePin'

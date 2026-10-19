@@ -20,11 +20,8 @@ import { deriveContentKeyHmac } from '@/sync/crypto/contentKey'
 import { deriveWorkspaceIdNamespace } from '@/sync/crypto/derivedIdNamespace'
 import { getWorkspaceKeyStore } from '@/sync/keys/keyStore'
 import { setModePin } from '@/sync/keys/modePin'
-import {
-  aliasSeatNamespacesInTx,
-  PLAINTEXT_ALIAS_SEATS,
-  resolveAliasSeatNamespaces,
-} from './aliasSeatNamespace'
+import { PLAINTEXT_ALIAS_SEATS } from '@/data/test/plaintextAliasSeats'
+import { aliasSeatNamespacesInTx, resolveAliasSeatNamespaces } from './aliasSeatNamespace'
 
 const USER = 'user-alias-ns'
 /** Spelled out, because the central assertions are that a sealed workspace's
@@ -93,9 +90,10 @@ describe('resolveAliasSeatNamespaces', () => {
     await seedWorkspaceRow('none')
     setModePin(USER, WS, 'plaintext')
 
-    expect(await resolveAliasSeatNamespaces(repo, WS))
-      .toEqual({mint: PUBLIC_NS, recognized: [PUBLIC_NS]})
-    expect(PLAINTEXT_ALIAS_SEATS).toEqual({mint: PUBLIC_NS, recognized: [PUBLIC_NS]})
+    // Also what every plaintext suite's `PLAINTEXT_ALIAS_SEATS` spells out.
+    const seats = await resolveAliasSeatNamespaces(repo, WS)
+    expect(seats).toEqual(PLAINTEXT_ALIAS_SEATS)
+    expect(seats.mint).toBe(PUBLIC_NS)
   })
 
   // Recomputed from the key bytes and the label spelled out here, not taken
@@ -118,6 +116,15 @@ describe('resolveAliasSeatNamespaces', () => {
 
     expect((await resolveAliasSeatNamespaces(repo, WS)).recognized)
       .toEqual([await derivedFor(), PUBLIC_NS])
+  })
+
+  it('keeps an e2ee pin sealed when the synced row claims plaintext', async () => {
+    // The pin is the authority; the server's column can only make this stricter.
+    await seedWorkspaceRow('none')
+    setModePin(USER, WS, 'e2ee')
+    await storeContentKey()
+
+    expect((await resolveAliasSeatNamespaces(repo, WS)).mint).toBe(await derivedFor())
   })
 
   it('refuses, rather than falling back to the public namespace, without K_id', async () => {

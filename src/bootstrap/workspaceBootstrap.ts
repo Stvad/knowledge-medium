@@ -121,11 +121,11 @@ export const bootstrapWorkspace = async ({
   await repo.whenPropertyDefinitionsReady(workspaceId)
 
   // An encrypted workspace's alias-seat namespace needs `K_id`, which a seat
-  // written inside a transaction cannot read, so it is resolved here, once,
-  // for every in-transaction writer of the open workspace. A failure leaves
-  // those writers refusing, never minting public ids — so it must not stop
-  // the workspace opening.
-  await resolveAliasSeatNamespaces(repo, workspaceId).catch(err => {
+  // written inside a transaction cannot read, so it is resolved here for
+  // every in-transaction writer of the open workspace. NOT awaited: it opens
+  // IndexedDB, which can hang rather than fail, and a writer that runs before
+  // it lands refuses rather than minting a public id.
+  void resolveAliasSeatNamespaces(repo, workspaceId).catch(err => {
     console.warn(`[bootstrap] alias-seat namespace for ${workspaceId} is unresolved`, err)
   })
 

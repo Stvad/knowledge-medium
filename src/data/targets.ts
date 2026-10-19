@@ -403,7 +403,8 @@ export const isAliasSeatSlotId = (
  *
  *  A pristine tombstone under another recognized namespace stays dead and
  *  the probe mints afresh: restoring it would write at an id that names the
- *  alias, and by the predicate it holds nothing to keep.
+ *  alias, and by the predicate it holds nothing to keep. Restoring that
+ *  tombstone later by other means meets the fresh seat holding its alias.
  *
  *  Two clients with the same observed world-state probe the same way
  *  and land on the same slot — that's the deterministic-id convergence
