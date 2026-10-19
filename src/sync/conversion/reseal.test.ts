@@ -65,6 +65,8 @@ describe('resealWorkspace', () => {
       {method: 'readBlockPage', count: 1},
       {method: 'applyBlockPatches', count: 1},
       {method: 'readBlockPage', count: 0},
+      {method: 'countBlocks', count: 1},
+      {method: 'readWorkspace', count: 1},
     ])
   })
 
@@ -132,6 +134,22 @@ describe('resealWorkspace', () => {
 
     await expect(resealWorkspace({server, workspaceId: WS, wk: await keyOf(2)})).rejects.toEqual(new ConversionRefusal('wrong-key'))
     expect(server.calls.map(call => call.method)).toEqual(['readWorkspace'])
+  })
+
+  it('does not report success over the rows a lost session hid', async () => {
+    seedPlaintext(server, 5)
+    await flip()
+    server.afterPatch = () => {
+      server.afterPatch = undefined
+      server.signedOut = true
+    }
+    const countBlocks = server.countBlocks.bind(server)
+    server.countBlocks = async workspaceId => {
+      server.signedOut = false
+      return countBlocks(workspaceId)
+    }
+
+    await expect(resealWorkspace({server, workspaceId: WS, wk, pageSize: 2})).rejects.toThrow('the pass saw 2 of the workspace\'s 5 rows')
   })
 
   it('stops on a workspace this session cannot see', async () => {

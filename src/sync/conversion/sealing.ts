@@ -43,6 +43,7 @@ export type ConversionRefusalReason =
   | 'unsealed'
   | 'no-record'
   | 'unrepaired'
+  | 'written-since-seal'
 
 const REFUSALS: Record<ConversionRefusalReason, string> = {
   'not-e2ee': 'the server does not hold this workspace as e2ee',
@@ -51,6 +52,7 @@ const REFUSALS: Record<ConversionRefusalReason, string> = {
   'unsealed': 'rows are not sealed yet',
   'no-record': 'rows have no re-seal record: something other than the re-seal sealed them',
   'unrepaired': 'rows still differ from their re-seal record after being re-sent',
+  'written-since-seal': 'rows differ from their re-seal record and were written after it, so re-sending would overwrite that write',
 }
 
 /** The server's data, not the transport or the session, is why the run
@@ -95,7 +97,7 @@ export const contentColumnsOf = (row: ContentColumns): ContentColumns => ({
 
 /** Every sealed column opened under `wk` and the AAD of the row it was sealed
  *  for, or null when any of them doesn't open. */
-export const openSealed = async (
+const openSealed = async (
   wk: CryptoKey,
   row: Pick<WireBlockColumns, 'id' | 'workspace_id'>,
   sealed: ContentColumns,
@@ -108,6 +110,29 @@ export const openSealed = async (
   } catch {
     return null
   }
+}
+
+/** Whether every value opens under `wk` with the AAD of one of this row's
+ *  content columns: sealed for this row by the key's holder, though perhaps
+ *  stored in the wrong column. */
+export const sealedForRow = async (
+  wk: CryptoKey,
+  row: Pick<WireBlockColumns, 'id' | 'workspace_id'>,
+  sealed: ContentColumns,
+): Promise<boolean> => {
+  const opensForSomeColumn = async (value: string): Promise<boolean> => {
+    for (const column of SEALED_COLUMNS) {
+      try {
+        await open(wk, value, contentAad(row.id, row.workspace_id, column))
+        return true
+      } catch {
+        // Sealed for another column, perhaps; try its AAD next.
+      }
+    }
+    return false
+  }
+  const opens = await Promise.all(SEALED_COLUMNS.map(column => opensForSomeColumn(sealed[column])))
+  return opens.every(Boolean)
 }
 
 /** Whether every sealed column opens, under `wk` and the AAD of the row it is
@@ -138,6 +163,20 @@ export const requireWorkspaceKey = async (
   if (!workspace) throw new Error(`conversion: workspace ${workspaceId} is not visible to this session`)
   if (workspace.encryption_mode !== 'e2ee' || workspace.wk_canary === null) throw new ConversionRefusal('not-e2ee')
   if (!(await validateCanary(wk, workspace.wk_canary, workspaceId))) throw new ConversionRefusal('wrong-key')
+}
+
+/** A lost session reads as an empty table rather than as an error, so each pass
+ *  ends by proving it saw every row: as many as the workspace holds, counted
+ *  while it is still visible to this session. */
+export const requireWholeWorkspace = async (
+  server: ConversionServer,
+  workspaceId: string,
+  wk: CryptoKey,
+  seen: number,
+): Promise<void> => {
+  const total = await server.countBlocks(workspaceId)
+  await requireWorkspaceKey(server, workspaceId, wk)
+  if (total !== seen) throw new Error(`conversion: the pass saw ${seen} of the workspace's ${total} rows; run it again`)
 }
 
 /** The workspace's rows, a page at a time, read only once the previous page has

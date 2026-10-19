@@ -10,6 +10,7 @@ import {
   contentColumnsOf,
   isSealedRow,
   RESEAL_PAGE_SIZE,
+  requireWholeWorkspace,
   requireWorkspaceKey,
   sealAndSend,
   serverPages,
@@ -59,5 +60,6 @@ export const resealWorkspace = async ({
     sealed += targets.length
     onProgress?.({scanned, sealed})
   }
+  await requireWholeWorkspace(server, workspaceId, wk, scanned)
   return {scanned, sealed}
 }
