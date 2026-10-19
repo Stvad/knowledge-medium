@@ -20,6 +20,7 @@
 
 import { getActiveUserId, isRemoteSyncActive, syncResolverForUser } from '@/data/repoProvider.js'
 import type { Repo } from '@/data/repo.js'
+import { fetchWorkspaceConversionState } from '@/data/workspaceConversion.js'
 import type { SyncResolver } from '@/sync/keys/resolver.js'
 import { supabase } from '@/services/supabase.js'
 import { showError } from '@/utils/toast.js'
@@ -91,11 +92,19 @@ interface LaneContext {
   readonly resolver: SyncResolver | null
 }
 
+/** The server's `encryption_mode` now, or null when it can't be read — the
+ *  drain's check before a plaintext upload. */
+const readLiveEncryptionMode = async (workspaceId: string): Promise<string | null> => {
+  const read = await fetchWorkspaceConversionState(workspaceId)
+  return read.kind === 'read' ? read.state.encryptionMode : null
+}
+
 const drainDepsFor = (blobStore: BlobStore, resolver: SyncResolver | null) => ({
   store: getByteUploadStore(),
   byteStore: getByteStore(),
   blobStore,
   ...laneKeyDeps(resolver),
+  readLiveEncryptionMode,
 })
 
 // One per-user lock: the LANE lock makes the SLOW drain (uploads) single-owner

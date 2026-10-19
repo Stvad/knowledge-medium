@@ -1,11 +1,18 @@
 /**
  * The up-lane drain (design §9/§11) — uploads `pending` byte records to Storage.
  *
- * For each pending record: read the PLAINTEXT bytes from the OPFS byte store,
- * encode them AT DRAIN TIME (passthrough for plaintext, AES-GCM seal for e2ee —
- * the key is only needed here, not at capture), and upload the result directly to
- * `<ws>/<contentKey>` (§10.1, RLS-gated, first-write-wins). A confirmed upload
- * DELETES the record; the bytes stay in OPFS as the local render replica.
+ * For each pending record: read the PLAINTEXT bytes from the OPFS byte store
+ * (under the record's `contentKey`, the name capture wrote them under), encode
+ * them AT DRAIN TIME (passthrough for plaintext, AES-GCM seal for e2ee — the key
+ * is only needed here, not at capture), and upload the result directly to the
+ * object key derived NOW from the content hash and the live mode
+ * ({@link deriveObjectKey}, §10.1, RLS-gated, first-write-wins). A confirmed
+ * upload DELETES the record; the bytes stay in OPFS as the local render replica.
+ *
+ * A plaintext upload first confirms with the server that the workspace is still
+ * plaintext: the synced mode the resolver reads stops advancing while any write
+ * is queued, and a workspace converted in place must never receive a plaintext
+ * object (docs/workspace-e2ee-conversion.md §6.2).
  *
  * A 200 write clears the record. A 409 (the content-addressed path was already
  * occupied) is NOT taken as success blind: Storage is untrusted + immutable, so the
@@ -16,8 +23,10 @@
  * silently clearing the only entry that could ever fix the path.
  *
  * Failure handling (the §9/§17 bounded-correction rule):
- *   - `defer` materializability (locked / unpinned / signed out) → leave `pending`,
- *     no attempt burn; the next sweep retries once the workspace is materializable.
+ *   - `defer` materializability (locked / unpinned / signed out, or the server says
+ *     e2ee while the pin doesn't) → leave `pending`, no attempt burn; the next sweep
+ *     retries once the workspace is materializable. Likewise an e2ee key record
+ *     without K_id, and a plaintext upload the server's live mode no longer allows.
  *   - PERMANENT BlobPutError (403/404/413, the advisory hint) → `failed` at once.
  *   - TRANSIENT BlobPutError (offline / no-session / 401 / 5xx / network — EVERY
  *     non-permanent upload error) → leave `pending`, NO attempt burn; it clears on
@@ -54,6 +63,7 @@ import { verifyContentHash } from '@/sync/crypto/contentHash.js'
 import { materializabilityToMode, type GetCek, type GetMaterializability, type SyncMode } from '@/sync/transform.js'
 import { BlobPutError, type BlobStore } from './blobStore.js'
 import type { ByteStore } from './byteStore.js'
+import { deriveObjectKey } from './storagePaths.js'
 import type { ByteUploadRecord, ByteUploadStore } from './uploadStore.js'
 
 /** Default retry bounds. Generous enough to ride out a long offline stretch, but
@@ -70,6 +80,10 @@ export interface UploadDrainDeps {
   readonly getMaterializability: GetMaterializability
   /** The workspace key for the e2ee seal. */
   readonly getCek: GetCek
+  /** The workspace's K_id (§10), which keys an e2ee object's address. */
+  readonly getContentKeyHmac: (workspaceId: string) => Promise<CryptoKey | null>
+  /** The server's `encryption_mode` read NOW, or null when it can't be read. */
+  readonly readLiveEncryptionMode: (workspaceId: string) => Promise<string | null>
   /** Is `userId` (the QUEUED user whose records we're draining) still the active
    *  account? The mode/key deps and the BlobStore session resolve against the
    *  ACTIVE user, so if an account switch lands between the drain being armed and
@@ -99,6 +113,8 @@ interface DrainOneCtx {
   readonly blobStore: BlobStore
   readonly getMaterializability: GetMaterializability
   readonly getCek: GetCek
+  readonly getContentKeyHmac: (workspaceId: string) => Promise<CryptoKey | null>
+  readonly readLiveEncryptionMode: (workspaceId: string) => Promise<string | null>
   readonly isActiveUser: () => boolean
   readonly now: () => number
   readonly maxAttempts: number
@@ -156,6 +172,15 @@ const drainOne = async (
   const mode = materializabilityToMode(await ctx.getMaterializability(rec.workspaceId))
   if (mode === null) return 'deferred' // defer / unexpected — leave pending, never an attempt burn
 
+  // (1b) Where it goes, derived now: a record captured before an in-place
+  //      conversion goes to the keyed address.
+  const objectKey = await deriveObjectKey(rec.contentHash, mode, () => ctx.getContentKeyHmac(rec.workspaceId))
+  if (!objectKey.ok) {
+    if (objectKey.reason === 'no-content-key') return 'deferred' // a re-paste derives K_id
+    await ctx.store.markFailed(userId, rec.assetBlockId, rec.stagedAt) // a malformed hash never uploads
+    return 'failed'
+  }
+
   // (2) The plaintext bytes (capture wrote them before staging). A read THROW is
   //     transient (retry); a clean MISS means the bytes were evicted → quarantine.
   let plaintext: Uint8Array<ArrayBuffer> | null
@@ -179,8 +204,13 @@ const drainOne = async (
       contentHash: rec.contentHash,
       workspaceId: rec.workspaceId,
     })
-    const result = await ctx.blobStore.put(rec.workspaceId, rec.contentKey, sealed)
-    if (result === 'exists') return verifyExistingOrQuarantine(userId, rec, mode, ctx)
+    if (mode === 'none') {
+      const live = await ctx.readLiveEncryptionMode(rec.workspaceId)
+      if (live === null) return deferTransientOrFail(userId, rec, ctx)
+      if (live !== 'none') return 'deferred' // converted: it uploads sealed once the pin is upgraded
+    }
+    const result = await ctx.blobStore.put(rec.workspaceId, objectKey.objectKey, sealed)
+    if (result === 'exists') return verifyExistingOrQuarantine(userId, rec, mode, objectKey.objectKey, ctx)
     await ctx.store.delete(userId, rec.assetBlockId)
     return 'uploaded'
   } catch (err) {
@@ -213,11 +243,12 @@ const verifyExistingOrQuarantine = async (
   userId: string,
   rec: ByteUploadRecord,
   mode: SyncMode,
+  objectKey: string,
   ctx: DrainOneCtx,
 ): Promise<DrainOutcome> => {
   let stored: Uint8Array<ArrayBuffer>
   try {
-    stored = await ctx.blobStore.get(rec.workspaceId, rec.contentKey)
+    stored = await ctx.blobStore.get(rec.workspaceId, objectKey)
   } catch {
     return retryOrFail(userId, rec, ctx) // exists, but the verify read failed — transient
   }
@@ -248,6 +279,8 @@ export const drainUploads = async (userId: string, deps: UploadDrainDeps): Promi
     blobStore: deps.blobStore,
     getMaterializability: deps.getMaterializability,
     getCek: deps.getCek,
+    getContentKeyHmac: deps.getContentKeyHmac,
+    readLiveEncryptionMode: deps.readLiveEncryptionMode,
     isActiveUser: deps.isActiveUser ?? (() => true),
     now: deps.now ?? (() => Date.now()),
     maxAttempts: deps.maxAttempts ?? DEFAULT_MAX_ATTEMPTS,
