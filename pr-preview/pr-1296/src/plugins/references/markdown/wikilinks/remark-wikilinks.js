@@ -1,1 +1,1 @@
-import{xp as e}from"../../../../../chunks/app-DWoxeUDv.js";export{e as remarkWikilinks};
+import{xp as e}from"../../../../../chunks/app-CNJwPQGo.js";export{e as remarkWikilinks};

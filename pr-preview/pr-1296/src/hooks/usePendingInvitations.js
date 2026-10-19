@@ -1,1 +1,1 @@
-import{Vy as e}from"../../chunks/app-DWoxeUDv.js";export{e as usePendingInvitations};
+import{Vy as e}from"../../chunks/app-CNJwPQGo.js";export{e as usePendingInvitations};
