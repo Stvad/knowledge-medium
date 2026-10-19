@@ -1,1 +1,1 @@
-import{Kv as e}from"../../../chunks/app-kaQRKUfn.js";export{e as getBreadcrumbContentPreview};
+import{Kv as e}from"../../../chunks/app-CnyBTnbt.js";export{e as getBreadcrumbContentPreview};
