@@ -1,1 +1,1 @@
-import{SA as e,xA as t}from"../../chunks/app-k9fBkwTd.js";export{t as defaultPasteDecision,e as pasteDecisionVerb};
+import{SA as e,xA as t}from"../../chunks/app-CZ8g8ZMD.js";export{t as defaultPasteDecision,e as pasteDecisionVerb};
