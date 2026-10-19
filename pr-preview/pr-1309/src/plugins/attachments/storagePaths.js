@@ -1,1 +1,1 @@
-import{dg as e,fg as t,pg as n}from"../../../chunks/app-C2NsAZTb.js";export{e as attachmentObjectPath,t as authenticatedObjectUrl,n as deriveObjectKey};
+import{dg as e,fg as t,pg as n}from"../../../chunks/app-BmHWFL2X.js";export{e as attachmentObjectPath,t as authenticatedObjectUrl,n as deriveObjectKey};
