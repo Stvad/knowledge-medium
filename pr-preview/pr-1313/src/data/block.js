@@ -1,1 +1,1 @@
-import{Dq as e,Oq as t}from"../../chunks/app-CmvfgDk2.js";export{e as Block,t as requireLoadedBlock};
+import{Dq as e,Oq as t}from"../../chunks/app-B_7-T1tv.js";export{e as Block,t as requireLoadedBlock};

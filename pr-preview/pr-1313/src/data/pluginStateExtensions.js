@@ -1,1 +1,1 @@
-import{NV as e,PV as t}from"../../chunks/app-CmvfgDk2.js";export{e as pluginPrefsExtension,t as pluginUIStateExtension};
+import{NV as e,PV as t}from"../../chunks/app-B_7-T1tv.js";export{e as pluginPrefsExtension,t as pluginUIStateExtension};

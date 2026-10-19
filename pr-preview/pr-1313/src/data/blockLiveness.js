@@ -1,1 +1,1 @@
-import{GN as e,KN as t}from"../../chunks/app-CmvfgDk2.js";export{e as anyBlockTombstoned,t as isBlockTombstoned};
+import{GN as e,KN as t}from"../../chunks/app-B_7-T1tv.js";export{e as anyBlockTombstoned,t as isBlockTombstoned};
