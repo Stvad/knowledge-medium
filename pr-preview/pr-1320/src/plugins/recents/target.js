@@ -1,0 +1,1 @@
+import{jx as e}from"../../../chunks/app-Bcc0LPwe.js";export{e as openRecentsPage};

@@ -1,0 +1,1 @@
+import{DR as e,OR as t}from"../../../chunks/app-Bcc0LPwe.js";export{e as REFERENCES_TARGET_INVALIDATION_CHANNEL,t as referencesInvalidationRule};

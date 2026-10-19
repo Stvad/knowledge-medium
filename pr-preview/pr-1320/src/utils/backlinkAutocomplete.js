@@ -1,0 +1,1 @@
+import{dm as e,lm as t,um as n}from"../../chunks/app-Bcc0LPwe.js";export{t as backlinkCompletionSource,n as createBacklinkAutocomplete,e as isInsideBacklinkBrackets};

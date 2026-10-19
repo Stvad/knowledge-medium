@@ -1,0 +1,1 @@
+import{H8 as e,U8 as t}from"../../../chunks/app-Bcc0LPwe.js";export{e as CORE_BLOCK_DELETED_EVENT,t as CORE_BLOCK_MERGED_EVENT};

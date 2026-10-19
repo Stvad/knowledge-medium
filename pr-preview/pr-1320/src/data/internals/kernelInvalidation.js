@@ -1,0 +1,1 @@
+import{UJ as e,WJ as t}from"../../../chunks/app-Bcc0LPwe.js";export{e as emitKernelInvalidations,t as kernelInvalidationRule};

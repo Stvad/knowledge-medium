@@ -1,0 +1,1 @@
+import{B8 as e}from"../../../chunks/app-Bcc0LPwe.js";export{e as definePostCommitProcessor};

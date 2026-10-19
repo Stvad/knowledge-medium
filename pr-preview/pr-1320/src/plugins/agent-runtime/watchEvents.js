@@ -1,0 +1,1 @@
+import{ld as e,ud as t}from"../../../chunks/app-Bcc0LPwe.js";export{e as createWatchEventsRegistry,t as watchEventsRegistry};

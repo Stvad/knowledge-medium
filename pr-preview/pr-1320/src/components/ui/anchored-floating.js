@@ -1,0 +1,1 @@
+import{$I as e,QI as t}from"../../../chunks/app-Bcc0LPwe.js";export{t as floatingAnchorFromRect,e as useAnchoredFloating};

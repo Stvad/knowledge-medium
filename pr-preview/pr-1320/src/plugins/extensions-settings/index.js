@@ -1,0 +1,1 @@
+import{Qt as e,cD as t,sD as n}from"../../../chunks/app-Bcc0LPwe.js";export{n as extensionsOverridesProp,t as extensionsPrefsType,e as extensionsSettingsPlugin};

@@ -1,0 +1,1 @@
+import{H4 as e,U4 as t}from"../../chunks/app-Bcc0LPwe.js";export{e as getOrCreatePropertiesPage,t as propertiesPageBlockId};

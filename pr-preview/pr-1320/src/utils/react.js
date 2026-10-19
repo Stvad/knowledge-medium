@@ -1,0 +1,1 @@
+import{gA as e,hA as t}from"../../chunks/app-Bcc0LPwe.js";export{t as useIsMobile,e as usePointerCoarse};

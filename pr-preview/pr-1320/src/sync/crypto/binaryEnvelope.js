@@ -1,0 +1,1 @@
+import{Ag as e,Dg as t,Eg as n,Og as r,Tg as i,kg as a,wg as o}from"../../../chunks/app-Bcc0LPwe.js";export{o as BINARY_ENVELOPE_MAGIC,i as BINARY_ENVELOPE_MIN_BYTES,n as BINARY_ENVELOPE_OVERHEAD_BYTES,t as BINARY_MAGIC_BYTES,r as decodeBinaryEnvelope,a as encodeBinaryEnvelope,e as hasBinaryEnvelopeMagic};

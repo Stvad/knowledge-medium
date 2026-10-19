@@ -1,0 +1,1 @@
+import{GV as e,UV as t,WV as n}from"../../../chunks/app-Bcc0LPwe.js";export{t as charLimitProp,n as charProfileProp,e as charScopeProp};

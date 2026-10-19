@@ -1,0 +1,1 @@
+import{A5 as e,D5 as t,E5 as n,M5 as r,O5 as i,T5 as a,j5 as o,k5 as s,w5 as c}from"../../../chunks/app-Bcc0LPwe.js";export{c as CHANGE_SCOPE_POLICIES,a as ChangeScope,n as isChangeScope,t as policyForScope,i as scopeAllowedInReadOnly,s as scopeIsUndoable,e as scopePoliciesEquivalent,o as scopeUploadsToServer,r as sourceForScope};

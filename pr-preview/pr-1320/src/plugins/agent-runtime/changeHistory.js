@@ -1,0 +1,1 @@
+import{Bu as e,Hu as t,Uu as n,Vu as r,Wu as i}from"../../../chunks/app-Bcc0LPwe.js";export{e as BLOCK_HISTORY_CONTENT_CHARS,r as LISTED_PROPERTY_NAMES,t as MAX_LISTED_CHANGES,n as blockHistory,i as recentChanges};

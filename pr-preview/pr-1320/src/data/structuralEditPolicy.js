@@ -1,0 +1,1 @@
+import{ME as e,NE as t}from"../../chunks/app-Bcc0LPwe.js";export{e as resolveStructuralEditPolicy,t as structuralEditPolicyForBlock};

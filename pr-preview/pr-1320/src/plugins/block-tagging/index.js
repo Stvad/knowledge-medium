@@ -1,0 +1,1 @@
+import{$s as e,Js as t,Ys as n,cc as r,ec as i,qs as a}from"../../../chunks/app-Bcc0LPwe.js";export{t as ADD_TAG_ACTION_ID,n as ADD_TAG_BLOCKS_ACTION_ID,e as appendTagToBlocks,i as appendTagToContent,a as blockTaggingPlugin,r as blockTagsConfigProp};

@@ -1,0 +1,1 @@
+import{Sp as e}from"../../../chunks/app-Bcc0LPwe.js";export{e as LazyBlockEntry};

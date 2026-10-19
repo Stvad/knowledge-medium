@@ -1,0 +1,1 @@
+import{bh as e,xh as t,yh as n}from"../../../chunks/app-Bcc0LPwe.js";export{n as DEFAULT_MAX_CAPTURE_BYTES,e as captureMedia,t as mediaBlockId};

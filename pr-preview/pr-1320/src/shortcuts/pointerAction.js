@@ -1,0 +1,1 @@
+import{BD as e,VD as t}from"../../chunks/app-Bcc0LPwe.js";export{e as dispatchPointerAction,t as setPointerActionDispatcher};

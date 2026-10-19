@@ -1,0 +1,1 @@
+import{Nc as e,Pc as t}from"../../../chunks/app-Bcc0LPwe.js";export{e as computePromotedFromChildren,t as detectInlineAttribute};

@@ -1,0 +1,1 @@
+"use client";import{GM as e,KM as t,qM as n}from"../../../chunks/app-Bcc0LPwe.js";export{e as Collapsible,t as CollapsibleContent,n as CollapsibleTrigger};

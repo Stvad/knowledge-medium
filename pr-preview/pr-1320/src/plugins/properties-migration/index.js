@@ -1,0 +1,1 @@
+import{li as e,pi as t}from"../../../chunks/app-Bcc0LPwe.js";export{t as migratePropertiesToBlocksAction,e as propertiesMigrationPlugin};
