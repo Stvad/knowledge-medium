@@ -85,7 +85,7 @@ The workspace is **frozen** while an attempt row exists ([§5.2](#52-the-freeze)
 Tables:
 
 - **`private.workspace_conversions(workspace_id pk, attempt_id, canary, state, started_by, started_at)`.** `canary` is the new key's canary. The client mints it before `begin`, and storing it here binds the attempt to exactly one key.
-- **`private.workspace_conversion_rows(workspace_id, attempt_id, block_id, content, properties_json, references_json)`.** Sealed columns only. The conversion only updates rows, so there's no op column.
+- **`private.workspace_conversion_rows(workspace_id, attempt_id, block_id, content, properties_json, references_json, verify_record)`.** The sealed columns, plus a sealed per-row verification record ([§5.3](#53-sealing-apply-verification)). The conversion only updates rows, so there's no op column. The purge clears it.
 - **`private.workspace_conversion_objects(workspace_id, attempt_id, keyed_path, verified)`.** Every attachment object the cleanup writes, recorded **before** it is written ([§5.5](#55-attachments)). The names are keyed HMACs, so storing them adds no fingerprint.
 
 Rules that apply to every RPC:
@@ -172,18 +172,23 @@ For a large workspace with many attachments that can take **hours**, not minutes
 History is **not** purged here. The plaintext's last server copy goes only after verification.
 
 **Verification before anything irreversible.**
-- **What it compares against.** As each page is staged, the converting device keeps a local per-row record of what it sealed:
+- **What it compares against.** As each page is staged, the converting device writes a per-row **verification record** of what it sealed:
   - the base of each sealed column;
   - the invariant columns: `parent_id`, `order_key`, `deleted`, `created_at`, `user_updated_at`, `created_by`, `updated_by`;
   - `updated_at`.
 
-  It's kept locally only, never sent, and local plaintext is outside the threat model anyway. Comparing against live local `blocks` rows wouldn't be sound: `setReadOnly` still lets UI-state and preference writes through ([§5.8](#58-flow-resume-failure-paths)), and a sync gap can leave a local row stale.
+  - **It's sealed under the workspace key and staged with the row** as `verify_record`, with AAD binding block id, workspace id and the label `verify`.
+    - So any key holder can verify, including a device that takes over an `applied` attempt after the converting device crashed.
+    - The server can't read it, so the plaintext hashes inside are no fingerprint.
+    - The purge deletes it along with the staging rows.
+  - **Why not compare against live local `blocks` rows:** `setReadOnly` still lets UI-state and preference writes through ([§5.8](#58-flow-resume-failure-paths)), a sync gap can leave a local row stale, and a takeover device may not hold the plaintext at all.
 - **The comparison.** The device keeps its pin plaintext, so the resolver defers instead of copying ([§5.6](#56-clients)). It waits for a checkpoint that covers the apply, then decrypts every row of the workspace straight out of `blocks_synced`, without going through materialization. For each row it checks:
-  - `sha256` of each decrypted column equals the kept base;
-  - every invariant column equals the kept value;
-  - `updated_at` is **greater** than the kept one, since the clamp's bump is expected.
+  - `sha256` of each decrypted column equals the record's base;
+  - every invariant column equals the record's value;
+  - `updated_at` is **greater** than the record's, since the clamp's bump is expected.
 - **Repair.** A row that fails to open or doesn't match is repaired while the attempt is still `applied`: re-stage it, with the base over its current ciphertext, then re-run `apply`.
-  - The plaintext comes from the local `blocks` row if its current hashes still equal the kept bases. Otherwise it comes from the content-recovery snapshot, taken at the same point.
+  - The plaintext comes from this device's local `blocks` row, if that row's hashes equal the record's bases. Otherwise it comes from the content-recovery snapshot, which was taken at the same point.
+  - A takeover device without either stays in `applied` and says so. The verification gate is never weakened.
   - A repaired row bumps `updated_at` again, which the "greater than" check allows, so verification can converge.
 - Only a clean pass proceeds to the purge. This catches the bugs a client-side seal check can't: a row or column mapping error in the stage RPC, its upsert, or the apply's `UPDATE … FROM`. The AAD binds the column, so a swapped column would pass the envelope trigger and then fail to open everywhere.
 
@@ -233,9 +238,10 @@ Extract it once as `verifyStoredObject → match | mismatch | undecodable`. The 
 **The cleanup**, repeated until a complete listing needs no action:
 1. **List completely before acting**, through `list_workspace_objects`. It's a keyset scan of `storage.objects` (`name > after_name`, ordered by name), so a delete anywhere can never shift a later object out of the scan. It returns nested names (`<ws>/sub/file`) as real objects, not as virtual folder entries. And it runs in the owner's session, through an owner-only RPC.
    - The audit's lister (`AuditIO.listObjects` in `src/plugins/attachments/audit/supabaseAuditIO.ts`) doesn't fit, for three reasons. It is a server-only adapter on a secret-tier key that bypasses RLS across every workspace, so it must never reach a browser. It pages by offset. And it returns folders as virtual entries.
-2. **Build K**: the keyed path of every media block in the workspace, plus every recorded path. A recorded path whose object is absent is re-uploaded from its source; one that's present but unverified gets verified.
+2. **Build K, after the listing completes**: the keyed path of every media block in the workspace, plus every recorded path. Reading it afterwards is load-bearing (see below). A recorded path whose object is absent is re-uploaded from its source; one that's present but unverified gets verified.
 3. **Handle every listed object outside K:**
    - **Raw:** record the keyed path, seal, upload, verify, mark it verified, and only then delete the raw object. A crash leaves the raw source plus the record, and resume finishes the job. This also covers a raw object no block names yet, such as a capture whose block is still parked behind the freeze. When that block arrives, its keyed bytes are already there.
+   - **The keyed name of a listed raw object: keep it.** It's that raw object's conversion destination, which another cleaner may be recording and verifying right now.
    - **Anything else: delete it by its full path.** That includes a nested object, which can never be raw, because content-addressed uploads are flat.
      - It isn't ours, because every cleanup upload is recorded before it starts.
      - No media block names it, so nothing the app shows depends on it.
@@ -250,7 +256,12 @@ Extract it once as `verifyStoredObject → match | mismatch | undecodable`. The 
 That last case means no raw object and no local bytes on this device. It's computed at proof time rather than stored, and reported to the user before `finish`.
 
 **Concurrent cleaners are safe, with no lease.**
-- **The deletes.** They only remove a raw object whose keyed copy has been verified, or an object that is both unrecorded and unnamed. A keyed upload is always recorded before it starts, so neither kind of delete can catch another cleaner's work.
+- **The deletes.**
+  - A cleaner only deletes a raw object after its keyed copy is verified. Otherwise it deletes an object that is unrecorded, unnamed, and not the destination of any listed raw object.
+  - The order rules out the race where one cleaner deletes a destination as unexplained while another is converting its raw source into it. A cleaner records a destination before uploading to it and before deleting the source, and K is read only after the listing. So for any raw object R with destination P:
+    - **R is still in the listing:** P is spared as R's destination.
+    - **R had already gone before the scan reached it:** its cleaner had recorded P before deleting R, so P is in the K read afterwards.
+  - Either way, P never reaches the delete branch.
 - **The listing.** It's a keyset scan, so nobody's delete can hide an object from it. Raw objects only ever disappear during `cleanup_pending`: the fence refuses new ones ([§5.2](#52-the-freeze)). So a complete scan that finds no raw object proves none is left, however many cleaners ran and whatever any of them still has in flight.
 
 **Media block ids don't change.** The app derives an attachment's Storage path from the block's `media:hash`, the workspace mode and `K_id`; it doesn't store the path. So after the conversion an existing media block reads the keyed path. Re-capturing a file that predates the conversion mints a second block, at the keyed id; that's accepted (§6).
@@ -360,7 +371,7 @@ The orchestrator (#1290) refuses to start unless all of these hold:
 
 **Resume.** On load, an owner device reads `get_workspace_conversion` for each workspace it owns. Abort and abandon are never automatic.
 - **`staging`:** if this device's durable key opens the stored canary, continue, redoing the archive unless its own verifies. Without that key, show "a conversion is in progress" with two choices: paste its key to take over, or abort explicitly.
-- **`applied` or `cleanup_pending`:** with the key, continue from that state. Without it, prompt for the key. Abandon is offered only when the user confirms the key is lost, and leads into the recovery procedure ([§7](#7-runbook)).
+- **`applied` or `cleanup_pending`:** with the key, continue from that state. A takeover in `applied` verifies from the staged `verify_record`s ([§5.3](#53-sealing-apply-verification)). Without the key, prompt for it. Abandon is offered only when the user confirms the key is lost, and leads into the recovery procedure ([§7](#7-runbook)).
 
 ## 6. What stays visible afterwards
 
