@@ -1,1 +1,1 @@
-import{$g as e,Qg as t}from"../../../chunks/app-BsXivvXx.js";export{t as vimNormalModeInteractionExtension,e as vimNormalModePlugin};
+import{$g as e,Qg as t}from"../../../chunks/app-Bcg9TN_0.js";export{t as vimNormalModeInteractionExtension,e as vimNormalModePlugin};
