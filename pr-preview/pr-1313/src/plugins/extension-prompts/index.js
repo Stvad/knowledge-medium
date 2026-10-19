@@ -1,1 +1,1 @@
-import{_E as e,vE as t}from"../../../chunks/app-BYK4uPFn.js";export{e as ExtensionPromptSurface,t as extensionPromptsExtension};
+import{_E as e,vE as t}from"../../../chunks/app-CmvfgDk2.js";export{e as ExtensionPromptSurface,t as extensionPromptsExtension};

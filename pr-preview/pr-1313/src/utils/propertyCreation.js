@@ -1,1 +1,1 @@
-import{bA as e,xA as t}from"../../chunks/app-BYK4uPFn.js";export{e as canConvertEmptyChildBlockToProperty,t as convertEmptyChildBlockToProperty};
+import{bA as e,xA as t}from"../../chunks/app-CmvfgDk2.js";export{e as canConvertEmptyChildBlockToProperty,t as convertEmptyChildBlockToProperty};
