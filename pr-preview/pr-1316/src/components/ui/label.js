@@ -1,1 +1,1 @@
-import{Zx as e}from"../../../chunks/app-krG_djNP.js";export{e as Label};
+import{Zx as e}from"../../../chunks/app-D508nSKw.js";export{e as Label};

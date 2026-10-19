@@ -1,1 +1,1 @@
-import{Uf as e}from"../../../chunks/app-krG_djNP.js";export{e as dailyNoteBacklinksDefaultsUi};
+import{Uf as e}from"../../../chunks/app-D508nSKw.js";export{e as dailyNoteBacklinksDefaultsUi};
