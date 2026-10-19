@@ -1,1 +1,1 @@
-import{Uv as e}from"../../../chunks/app-C8EYZFel.js";export{e as usePromotableBreadcrumb};
+import{Uv as e}from"../../../chunks/app-C-J6jE3O.js";export{e as usePromotableBreadcrumb};
