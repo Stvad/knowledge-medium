@@ -76,14 +76,17 @@ The server side (#1294) is owner-only SECURITY DEFINER RPCs over a staging area 
 
 **One conversion attempt is the unit of everything.** The server row is that attempt's durable state. Every client step is idempotent and keyed by the attempt, so a crash anywhere resumes from what the server says rather than from what the crashed tab remembered.
 
-- `private.workspace_conversions(workspace_id pk, attempt_id, canary, state, started_by, started_at, cleanup_holder, cleanup_lease_until)`.
-  - `state` is `staging` or `cleanup_pending`. **The workspace is frozen for as long as an attempt row exists**, from `begin` to `finish` or `abort`.
+- `private.workspace_conversions(workspace_id pk, attempt_id, canary, state, started_by, started_at, lease_holder, lease_until)`.
+  - `state` is `staging`, `aborting` or `cleanup_pending`. **The workspace is frozen for as long as an attempt row exists**, from `begin` until `finish`, or until an abort completes.
   - `canary` is the new key's canary. The client mints it before `begin` and it's stored here, so the attempt is bound to exactly one workspace key.
-  - The lease columns serialize the attachment cleanup ([§5.4](#54-attachments)).
+  - The lease columns allow one worker per attempt for everything that writes or deletes attachment objects: the pre-apply uploads, the cleanup and an abort ([§5.4](#54-attachments)).
 - `private.workspace_conversion_rows(workspace_id, attempt_id, block_id, content, properties_json, references_json)` holds only the sealed columns. The conversion only updates rows, so staging needs no op column, inserts or deletes.
-- `private.workspace_conversion_objects(workspace_id, attempt_id, keyed_path, status)` records attachment objects the cleanup has handled ([§5.4](#54-attachments)):
-  - `converted`: a keyed object made from a raw object that no media block references yet. Its path can't be recomputed from server blocks, so it has to survive a crash.
+- `private.workspace_conversion_objects(workspace_id, attempt_id, keyed_path, status)` records **every attachment object the conversion writes, before it writes it** ([§5.4](#54-attachments)):
+  - `intended`: recorded, upload not yet verified;
+  - `verified`;
   - `missing`: a media block whose bytes no source still holds.
+
+  Recording before uploading means a crash can never leave an object of ours that nothing records. It also means an abort can find every object to delete without the key, and a resume gets back the paths of converted orphans that no server block names.
 
   The names are keyed HMACs, so storing them adds no fingerprint.
 
@@ -154,8 +157,13 @@ If any of them fails, the fallback is a separate bucket for e2ee-mode objects. T
 
    The attempt row also stays, because it's the only durable record that plaintext Storage objects still need converting.
 4. **`finish_workspace_conversion(ws, attempt_id)`** deletes the attempt row, which **ends the freeze**. The client calls it only after the cleanup and its proof ([§5.4](#54-attachments)) pass.
-5. **`abort_workspace_conversion(ws, attempt_id)`** works only while `staging`. It clears the freeze, the staging rows and the attempt; nothing else has changed. There's no abort after the apply ([§7](#7-runbook) step 5).
-6. **`claim_conversion_cleanup(ws, attempt_id, holder)`** grants or renews a time-limited lease, so only one device runs the cleanup at a time. **`record_converted_object(ws, attempt_id, holder, keyed_path, status)`** requires that lease ([§5.4](#54-attachments)).
+5. **Abort is two-phase, and works only from `staging`.**
+   - `abort_workspace_conversion(ws, attempt_id)` moves the attempt to `aborting`. From then on `record_conversion_object` refuses, so no new conversion upload can start.
+   - The aborting device takes the lease and deletes every recorded path. It needs no key, because the paths are stored. It then relists to confirm they are gone.
+   - Only then does `finish_abort_workspace_conversion(ws, attempt_id)` clear the staging rows, the recorded objects and the attempt, which ends the freeze.
+   - Blocks never changed. An upload already in flight on another device that lands after the deletes is a ciphertext orphan: harmless, and reported by any later cleanup.
+   - There's no abort after the apply ([§7](#7-runbook) step 5).
+6. **`claim_conversion_lease(ws, attempt_id, holder)`** grants or renews a time-limited lease, so one device at a time works the attempt's attachment objects. **`record_conversion_object(ws, attempt_id, holder, keyed_path, status)`** requires that lease and refuses while `aborting` ([§5.4](#54-attachments)).
 7. **`get_workspace_conversion(ws)`** is the owner-only read that resume starts from. It returns `attempt_id`, `canary` and `state`.
 8. **`workspace_upload_mode(ws)`** is readable by any member. It returns `frozen` while an attempt exists, otherwise `none` or `e2ee`.
 
@@ -222,7 +230,7 @@ The conversion only updates rows, so it sends locked peers no deletes. A deferre
    - A raw key and a keyed key are both 64 hex characters, so an entry's **name** can't say which it is. Classify each entry by its **content** instead: the store holds plaintext, so `h = sha256(bytes)` is always the true content hash.
    - A key equal to `hex(h)` is raw. Handle it in this order:
      1. Copy the entry to `hex(HMAC(K_id, h))`.
-     2. Point **every** upload record of the workspace that names the raw key at the copy, `pending` **and** `failed` alike. A record's `contentKey` is both its Storage path and its OPFS key, and `requeue` changes only the status, so a failed record left on the raw key would miss its bytes on the next drain.
+     2. Point **every** upload record of the workspace that names the raw key at the copy, whatever its status: `staged`, `pending` or `failed` (`ByteUploadStatus` in `src/plugins/attachments/uploadStore.ts`). A `staged` record matters too, because the boot reconciler can still promote it later. A record's `contentKey` is both its Storage path and its OPFS key, and `requeue` changes only the status, so a failed record left on the raw key would miss its bytes on the next drain.
      3. Drop the raw entry.
    - A key equal to `hex(HMAC(K_id, h))` is already keyed: skip it. A retry therefore never re-keys a copy.
    - Anything else is corrupt: report it and leave it.
@@ -287,19 +295,19 @@ The keyed-path and sealing logic already exists, in `src/sync/crypto/contentKey.
 
 **Ordering:**
 
-1. **Before** the apply, upload every keyed object and verify it by authenticated decryption plus a hash check, so no media block ever points at missing bytes.
-2. **After** the apply commits, with the attempt in `cleanup_pending` and the workspace still frozen, the device takes the **cleanup lease** (`claim_conversion_cleanup`) and renews it while it works.
-   - Two key-holding devices cleaning at once would interleave their conversions. The lease coordinates honest devices, which is all of them: Storage deletes aren't server-gated by it.
+1. **Before** the apply, under the lease, handle each media block's keyed object in this order: record it `intended`, upload it, verify it by authenticated decryption plus a hash check, then mark it `verified`. That way no media block ever points at missing bytes.
+2. **After** the apply commits, with the attempt in `cleanup_pending` and the workspace still frozen, the device takes the **lease** (`claim_conversion_lease`) and renews it while it works.
+   - Two key-holding devices working at once would interleave their conversions. The lease coordinates honest devices, which is all of them: Storage deletes aren't server-gated by it.
    - Then it takes a **complete** listing of `<ws>/`: paged, with an explicit `limit`/`offset` and a stable name order, through `collectPaged` as the audit does (`src/plugins/attachments/audit/`). A single unpaginated page could hold only valid objects and hide raw ones behind it.
    - The listing is completed before anything is acted on, because deleting while paging by offset would skip objects.
 
-   Let **K** be the keyed paths of every media block in the workspace (recomputed from the server blocks), plus the paths recorded in `private.workspace_conversion_objects`. So a resumed cleanup rebuilds the same K. Every listed object outside K is classified by its **content**, never its header:
-   - **A raw object** is one whose name equals `hex(sha256(bytes))`, the content-addressed shape every plaintext-mode upload has. Its keyed path is derivable from the name alone: `hex(HMAC(K_id, sha256))`, per `deriveContentKey` in `src/sync/crypto/contentKey.ts`. So convert it in this order: seal the bytes, upload them to the keyed path, verify, **record the path** (`record_converted_object`), and only then delete the raw object. A crash at any point either leaves the raw object, which gets reconverted (the occupied-path check makes that idempotent), or leaves it already recorded.
+   Let **K** be the keyed paths of every media block in the workspace (recomputed from the server blocks), plus every path recorded in `private.workspace_conversion_objects`. So a resumed cleanup rebuilds the same K. A recorded path whose object is absent is re-uploaded from its source, and one that is present but not yet `verified` is verified. Every listed object outside K is classified by its **content**, never its header:
+   - **A raw object** is one whose name equals `hex(sha256(bytes))`, the content-addressed shape every plaintext-mode upload has. Its keyed path is derivable from the name alone: `hex(HMAC(K_id, sha256))`, per `deriveContentKey` in `src/sync/crypto/contentKey.ts`. So convert it in this order: **record** the keyed path `intended`, seal the bytes, upload them, verify, mark the path `verified`, and only then delete the raw object. A crash at any point leaves the raw object as the source, and the recorded path tells the resume what to finish.
      - This covers objects with no media block on the server yet: a capture whose block is still held behind the freeze, or one that never synced. When such a block arrives, its keyed bytes are already there.
    - **Anything else is reported, never deleted.**
      - It can't be a plaintext-mode upload, because every one of those is content-addressed and so lands in the raw branch.
-     - What it most likely is: one of this conversion's own keyed uploads whose record a crash cut short. Deleting it could destroy the only server copy, if its raw source was processed first in the same pass.
-     - The next pass usually explains it: the raw source records it, or a held media block arrives. Whatever is still unexplained at the end is shown to the user.
+     - It isn't ours either, because every conversion upload is recorded before it starts.
+     - So it is foreign: an aborted attempt's in-flight orphan, or something written outside the app. Deleting what we can't explain is a call for a human, so whatever is unexplained at the end is shown to the user.
 
    A media block with no bytes anywhere (not local, and neither raw nor keyed on the server) is recorded `missing` and shown to the user before `finish`.
 
@@ -353,7 +361,8 @@ The orchestrator (#1290) refuses to start unless:
 
 - **`staging`, and this device holds a key that opens the attempt's stored canary:** continue staging.
 - **`staging` without that key:** do **not** abort. Another device is probably mid-conversion. Show "a conversion is in progress", with two choices: paste its key to take over, or abort it explicitly.
-- **`cleanup_pending`:** with the key, claim the cleanup lease, then run [§5.4](#54-attachments) step 2 and the verification, then call `finish`. If another device holds a live lease, wait for it to finish or for the lease to expire. Without the key, prompt for it; there is no abort after the apply.
+- **`aborting`:** any owner device, key or not, takes the lease, deletes the recorded paths, relists, and calls `finish_abort`.
+- **`cleanup_pending`:** with the key, claim the lease, then run [§5.4](#54-attachments) step 2 and the verification, then call `finish`. If another device holds a live lease, wait for it to finish or for the lease to expire. Without the key, prompt for it; there is no abort after the apply.
 
 Abort is never automatic.
 
@@ -363,10 +372,10 @@ Abort is never automatic.
 | 2. `begin(ws, canary)` | refused: an attempt exists | another device or tab is converting | resume that attempt with its key, or abort it explicitly |
 | 3. Export the sealed history archive (event_id cursor), counting the events | download error | frozen; other devices' edits held | retry, or abort |
 | 4. Wait for `blocks_synced` to reach a checkpoint taken after the freeze. Take the content-recovery snapshot ([§7](#7-runbook) step 5), which now covers exactly what will be converted. Then page through: seal → verify → stage | crash, or base mismatch | frozen, partly staged | resume (re-staging is idempotent per block); a mismatch means a pre-freeze read, so re-read that page |
-| 5. Upload and verify keyed attachment objects | partial, or a verification mismatch | extra ciphertext objects (harmless) | resume (the occupied-path check makes it idempotent); investigate any mismatch |
+| 5. Under the lease, record → upload → verify each keyed attachment object | partial, or a verification mismatch | recorded ciphertext objects, which an abort deletes | resume from the recorded paths (the occupied-path check makes it idempotent); investigate any mismatch |
 | 6. Apply, passing the archived count | refusal (an archive-count mismatch included) or timeout | the transaction rolls back; still frozen | fix the cause and re-apply, or abort |
 | 7. Upgrade the local pin | crash after the apply | server e2ee, attempt `cleanup_pending` (still frozen), pin still plaintext | automatic on restart: the stored key opens the canary ([§5.2](#52-client-a-plaintext-pinned-device-that-sees-e2ee)); resume then finds `cleanup_pending` |
-| 8. Under the cleanup lease: take a complete paged listing, convert every raw object outside K (recording each), report anything else, and repeat until a complete listing needs no action | partial, or lease lost | `cleanup_pending`, still frozen; some raw objects remain | resume from `cleanup_pending`: re-claim the lease and rebuild K from blocks plus recorded paths; conversion is idempotent per object |
+| 8. Under the lease: take a complete paged listing, convert every raw object outside K (recording each first), report anything else, and repeat until a complete listing needs no action | partial, or lease lost | `cleanup_pending`, still frozen; some raw objects remain | resume from `cleanup_pending`: re-claim the lease and rebuild K from blocks plus recorded paths, finishing each `intended` one; conversion is idempotent per object |
 | 9. Verify: every row opens; no raw object remains; every K path except `missing` is present; other objects are confirmed by the user; zero history rows remain (the ciphertext audit as a detector only) | a check fails | `cleanup_pending` | investigate; nothing is lost while the key is held |
 | 10. `finish`, which ends the freeze | RPC error | `cleanup_pending`, still frozen | retry |
 
@@ -491,8 +500,7 @@ Plaintext → e2ee is that operation starting from "no key". The stage base is c
   - **Old-key objects whose hash is known**, from the workspace's media blocks, can be recognized. Rotation converts them (decrypt under the old key, seal under the new one) and deletes the old copy once the replacement is verified.
   - **Old-key orphans whose hash isn't known** can't be recognized. Their AAD needs `h`, so they can't be authenticated either.
 - Leaving those orphans is not acceptable under rotation, because whoever holds the retired key can read them.
-  - So rotation must record each intended new-key path **before** uploading it. Then a crash can never leave an unrecorded upload of its own.
-  - After that, it can delete every object outside the new K, which the conversion deliberately doesn't do ([§11](#11-alternatives-considered)).
+  - Rotation keeps the conversion's record-before-upload rule, so an unexplained object is never its own. That lets it delete every object outside the new K, which the conversion leaves to a human ([§11](#11-alternatives-considered)).
 
 ## 11. Alternatives considered
 
@@ -502,7 +510,7 @@ Plaintext → e2ee is that operation starting from "no key". The stage base is c
   - The ciphertext trigger checks the whole new row, so once the mode flips, an ordinary content-only edit to a row that hasn't been re-sealed yet is rejected.
   - Without the flip, plaintext-pinned peers keep uploading plaintext.
   - Either way, every device sees mixed states.
-- **Deleting unexplained attachment objects ("junk") during cleanup.** Rejected. They can't be plaintext-mode uploads, since those are always content-addressed, and the likeliest one is this conversion's own crash-interrupted keyed upload. Deleting it risks the only server copy ([§5.4](#54-attachments)).
+- **Deleting unexplained attachment objects ("junk") during cleanup.** Rejected. Record-before-upload means one can't be ours, and content-addressing means it can't be a plaintext-mode upload. So it is foreign, and deleting it is a human's call ([§5.4](#54-attachments)).
 - **Persisting the bases and re-checking them at apply time.** Rejected. The freeze already guarantees nothing changes between stage and apply, and stored unkeyed plaintext hashes would outlive the plaintext ([§5.1](#51-server-freeze-stage-apply-abort)).
 - **Writing the apply's own history rows and deleting them in the same transaction**, instead of suppressing them. This was preferred while `current_user` was the only way to identify the conversion. It was dropped once the attempt-scoped setting existed, because it writes and then strands a full plaintext-plus-ciphertext copy until a vacuum ([§5.1](#51-server-freeze-stage-apply-abort)).
 - **Wiping every other device instead of the pin upgrade.** Still available per device in the runbook. It doesn't replace #1293, because an old or offline device must never treat ciphertext as content.
