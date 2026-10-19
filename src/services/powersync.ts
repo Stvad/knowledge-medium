@@ -136,6 +136,8 @@ const encryptUploadOps = async (
 
   const out: CompactedBlockOperation[] = []
   for (const op of ops) {
+    // Never held, because never queued: blocks have no DELETE upload trigger (a
+    // soft delete is a PATCH, which carries workspace_id and is held like any).
     if (op.kind === 'delete') {
       out.push(op)
       continue

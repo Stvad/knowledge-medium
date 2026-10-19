@@ -27,7 +27,7 @@ const makeDeferred = () => {
 }
 
 const idleDeps: WorkspaceGateDeps = {
-  drainWorkspace: async () => {},
+  drainWorkspace: async () => ({deferred: 0}),
   fetchConversionState: async () => ({kind: 'unavailable', error: new Error('not used')}),
   hasCopiedCiphertext: async () => false,
 }
@@ -103,7 +103,7 @@ describe('WorkspaceKeyGate — drains before handing back', () => {
 
   const renderWithDrain = (reason: 'key-required' | 'quarantine', canary: string | null) => {
     const order: string[] = []
-    const deps = {...idleDeps, drainWorkspace: vi.fn(async () => { order.push('drain') })}
+    const deps = {...idleDeps, drainWorkspace: vi.fn(async () => { order.push('drain'); return {deferred: 0} })}
     const onResolved = vi.fn(async () => { order.push('resolved') })
     render(
       <WorkspaceKeyGate userId="u1" workspaceId="w1" reason={reason} canary={canary} deps={deps} onResolved={onResolved}/>,
@@ -138,7 +138,7 @@ describe('WorkspaceKeyGate — server-e2ee', () => {
   let wkString: string
   let canary: string
   let state: WorkspaceConversionState
-  let deps: WorkspaceGateDeps & {drainWorkspace: ReturnType<typeof vi.fn<() => Promise<void>>>}
+  let deps: WorkspaceGateDeps & {drainWorkspace: ReturnType<typeof vi.fn<WorkspaceGateDeps['drainWorkspace']>>}
   let copied: boolean
 
   beforeEach(async () => {
@@ -150,7 +150,7 @@ describe('WorkspaceKeyGate — server-e2ee', () => {
     state = {encryptionMode: 'e2ee', conversionPhase: 'cleaning', wkCanary: canary, ownerUserId: USER}
     copied = false
     deps = {
-      drainWorkspace: vi.fn(async () => {}),
+      drainWorkspace: vi.fn<WorkspaceGateDeps['drainWorkspace']>(async () => ({deferred: 0})),
       fetchConversionState: vi.fn(async () => ({kind: 'read' as const, state})),
       hasCopiedCiphertext: async () => copied,
     }
@@ -209,7 +209,10 @@ describe('WorkspaceKeyGate — server-e2ee', () => {
 
   it('a pasted key upgrades the pin, drains, then hands back to the host', async () => {
     const order: string[] = []
-    deps.drainWorkspace.mockImplementation(async () => { order.push(`drain pin=${getModePin(USER, WS)}`) })
+    deps.drainWorkspace.mockImplementation(async () => {
+      order.push(`drain pin=${getModePin(USER, WS)}`)
+      return {deferred: 0}
+    })
     const onResolved = renderGate(vi.fn(async () => { order.push('resolved') }))
 
     fireEvent.change(await screen.findByLabelText(/workspace key/i), {target: {value: wkString}})
@@ -267,7 +270,8 @@ describe('WorkspaceKeyGate — finishing-upgrade', () => {
     window.localStorage.clear()
     setModePin(USER, WS, 'e2ee')
     writePinUpgradeMarker(USER, WS)
-    const drainWorkspace = vi.fn(async () => {})
+    await getWorkspaceKeyStore().put(USER, WS, {wk: {} as CryptoKey, contentKeyHmac: {} as CryptoKey})
+    const drainWorkspace = vi.fn(async () => ({deferred: 0}))
     const onResolved = vi.fn(async () => {})
     render(
       <WorkspaceKeyGate
@@ -281,6 +285,34 @@ describe('WorkspaceKeyGate — finishing-upgrade', () => {
     )
     await vi.waitFor(() => expect(onResolved).toHaveBeenCalledTimes(1))
     expect(drainWorkspace).toHaveBeenCalledTimes(1)
+    expect(hasPinUpgradeMarker(USER, WS)).toBe(false)
+  })
+
+  it('a drain that left rows deferred says so and offers a retry, rather than re-resolving into itself', async () => {
+    window.localStorage.clear()
+    setModePin(USER, WS, 'e2ee')
+    writePinUpgradeMarker(USER, WS)
+    await getWorkspaceKeyStore().put(USER, WS, {wk: {} as CryptoKey, contentKeyHmac: {} as CryptoKey})
+    const drainWorkspace = vi.fn<WorkspaceGateDeps['drainWorkspace']>()
+      .mockResolvedValueOnce({deferred: 2})
+      .mockResolvedValueOnce({deferred: 0})
+    const onResolved = vi.fn(async () => {})
+    render(
+      <WorkspaceKeyGate
+        userId={USER}
+        workspaceId={WS}
+        reason="finishing-upgrade"
+        canary={null}
+        deps={{...idleDeps, drainWorkspace}}
+        onResolved={onResolved}
+      />,
+    )
+    expect(await screen.findByText(/couldn't be decrypted/i)).toBeInTheDocument()
+    expect(onResolved).not.toHaveBeenCalled()
+    expect(hasPinUpgradeMarker(USER, WS)).toBe(true)
+
+    fireEvent.click(screen.getByRole('button', {name: /try again/i}))
+    await vi.waitFor(() => expect(onResolved).toHaveBeenCalledTimes(1))
     expect(hasPinUpgradeMarker(USER, WS)).toBe(false)
   })
 })

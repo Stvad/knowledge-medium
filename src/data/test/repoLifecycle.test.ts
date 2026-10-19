@@ -640,7 +640,7 @@ describe('repo.scheduleReconcileRescan — one-time shadow recovery', () => {
   it('re-scans a workspace once, marks it done, and no-ops on the next open', async () => {
     // The rescan re-reads blocks_synced directly via drainSyncWorkspace; the
     // server-monotonic gate heals shadows without a separate mode.
-    const spy = vi.spyOn(env.repo, 'drainSyncWorkspace').mockResolvedValue()
+    const spy = vi.spyOn(env.repo, 'drainSyncWorkspace').mockResolvedValue(null)
 
     env.repo.scheduleReconcileRescan('ws-1')
     await settle(env.repo)
@@ -654,7 +654,7 @@ describe('repo.scheduleReconcileRescan — one-time shadow recovery', () => {
   })
 
   it('re-scans each workspace independently (per-workspace marker)', async () => {
-    const spy = vi.spyOn(env.repo, 'drainSyncWorkspace').mockResolvedValue()
+    const spy = vi.spyOn(env.repo, 'drainSyncWorkspace').mockResolvedValue(null)
 
     env.repo.scheduleReconcileRescan('ws-1')
     await settle(env.repo)
@@ -667,7 +667,7 @@ describe('repo.scheduleReconcileRescan — one-time shadow recovery', () => {
   it('leaves the marker unset on failure so the next open retries', async () => {
     const spy = vi.spyOn(env.repo, 'drainSyncWorkspace')
       .mockRejectedValueOnce(new Error('drain failed'))
-      .mockResolvedValue()
+      .mockResolvedValue(null)
     vi.spyOn(console, 'error').mockImplementation(() => {})
 
     env.repo.scheduleReconcileRescan('ws-1')

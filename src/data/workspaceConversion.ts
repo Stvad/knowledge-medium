@@ -3,9 +3,9 @@
  * (docs/workspace-e2ee-conversion.md §6.1–§6.2); the vocabulary is in
  * `sync/keys/conversionState.ts`.
  *
- * `conversion_phase` is not synced, so it is read from the server over
- * PostgREST, together with the mode, canary and owner from the same row, so a
- * gate decides from one consistent read.
+ * Neither read is synced: the mode, canary and owner come from `workspaces`
+ * over PostgREST, and the phase from `workspace_conversions`, which holds a row
+ * only while a conversion is in progress.
  */
 
 import { supabase } from '@/services/supabase'
@@ -22,24 +22,22 @@ export const parseConversionPhase = (raw: unknown): ConversionPhase | null => {
   return raw === 'cleaning' ? 'cleaning' : 'sealing'
 }
 
-const UNDEFINED_COLUMN = '42703'
+/** PostgREST's "no such table in the schema cache", and Postgres's own. A server
+ *  without `workspace_conversions` predates the conversion migration, so no
+ *  conversion can be running on it. */
+const MISSING_TABLE_CODES: ReadonlySet<string> = new Set(['PGRST205', '42P01'])
+
 const DEFAULT_TIMEOUT_MS = 10_000
 
 interface ServerWorkspaceRow {
   encryption_mode: string
   wk_canary: string | null
-  conversion_phase?: unknown
   owner_user_id: string
 }
 
-const selectWorkspaceRow = (workspaceId: string, columns: string, signal: AbortSignal) => {
+const requireSupabase = () => {
   if (!supabase) throw new Error('Supabase is not configured')
   return supabase
-    .from('workspaces')
-    .select(columns)
-    .eq('id', workspaceId)
-    .abortSignal(signal)
-    .maybeSingle<ServerWorkspaceRow>()
 }
 
 export const fetchWorkspaceConversionState = async (
@@ -48,22 +46,34 @@ export const fetchWorkspaceConversionState = async (
 ): Promise<WorkspaceConversionRead> => {
   const signal = AbortSignal.timeout(timeoutMs)
   try {
-    let result = await selectWorkspaceRow(
-      workspaceId, 'encryption_mode, wk_canary, conversion_phase, owner_user_id', signal,
-    )
-    // A server without the column predates the conversion migration, so no
-    // conversion can be running on it.
-    if ((result.error as {code?: string} | null)?.code === UNDEFINED_COLUMN) {
-      result = await selectWorkspaceRow(workspaceId, 'encryption_mode, wk_canary, owner_user_id', signal)
-    }
-    if (result.error) return {kind: 'unavailable', error: result.error}
-    if (!result.data) return {kind: 'unavailable', error: new Error(`workspace ${workspaceId} not visible`)}
-    const row = result.data
+    const client = requireSupabase()
+    // The workspace row FIRST: the phase only moves forward, so a phase read
+    // after the mode can only be later than it. The other order could pair a
+    // pre-flip "no row" with a post-flip "e2ee" and open a sealing workspace.
+    const workspace = await client
+      .from('workspaces')
+      .select('encryption_mode, wk_canary, owner_user_id')
+      .eq('id', workspaceId)
+      .abortSignal(signal)
+      .maybeSingle<ServerWorkspaceRow>()
+    if (workspace.error) return {kind: 'unavailable', error: workspace.error}
+    if (!workspace.data) return {kind: 'unavailable', error: new Error(`workspace ${workspaceId} not visible`)}
+
+    const conversion = await client
+      .from('workspace_conversions')
+      .select('phase')
+      .eq('workspace_id', workspaceId)
+      .abortSignal(signal)
+      .maybeSingle<{phase: unknown}>()
+    const tableMissing = MISSING_TABLE_CODES.has((conversion.error as {code?: string} | null)?.code ?? '')
+    if (conversion.error && !tableMissing) return {kind: 'unavailable', error: conversion.error}
+
+    const row = workspace.data
     return {
       kind: 'read',
       state: {
         encryptionMode: row.encryption_mode,
-        conversionPhase: parseConversionPhase(row.conversion_phase),
+        conversionPhase: tableMissing ? null : parseConversionPhase(conversion.data?.phase),
         wkCanary: row.wk_canary,
         ownerUserId: row.owner_user_id,
       },

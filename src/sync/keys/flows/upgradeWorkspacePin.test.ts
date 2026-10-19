@@ -21,6 +21,7 @@ import {
   resumePinUpgrade,
   upgradeWorkspacePin,
   type ServerE2eeEntryDeps,
+  type WorkspaceDrain,
 } from './upgradeWorkspacePin.js'
 
 const USER = 'owner-1'
@@ -33,7 +34,7 @@ let storedRecord: WorkspaceKeyRecord
 let serverState: WorkspaceConversionState
 let read: WorkspaceConversionRead | null
 let copied: boolean
-let drainWorkspace: ReturnType<typeof vi.fn<() => Promise<void>>>
+let drainWorkspace: ReturnType<typeof vi.fn<WorkspaceDrain>>
 
 beforeEach(async () => {
   localStorage.clear()
@@ -46,7 +47,7 @@ beforeEach(async () => {
   serverState = {encryptionMode: 'e2ee', conversionPhase: 'cleaning', wkCanary: canary, ownerUserId: USER}
   read = null
   copied = false
-  drainWorkspace = vi.fn(async () => {})
+  drainWorkspace = vi.fn<WorkspaceDrain>(async () => ({deferred: 0}))
   setModePin(USER, WS, 'plaintext')
 })
 
@@ -105,6 +106,7 @@ describe('upgradeWorkspacePin', () => {
     const order: string[] = []
     drainWorkspace.mockImplementation(async () => {
       order.push(`drain: pin=${getModePin(USER, WS)} marker=${hasPinUpgradeMarker(USER, WS)}`)
+      return {deferred: 0}
     })
 
     expect(await upgrade()).toEqual({ok: true})
@@ -244,6 +246,33 @@ describe('a crash during the upgrade', () => {
     expect(await resume()).toEqual({kind: 'resumed'})
     expect(drainWorkspace).toHaveBeenCalledTimes(1)
     expect(hasPinUpgradeMarker(USER, WS)).toBe(false)
+  })
+
+  it('a drain that left rows deferred keeps the marker, so the next start drains again', async () => {
+    // With an e2ee pin and a key, a row only defers when the key store can't be
+    // read; clearing the marker then would open the workspace with them staged.
+    drainWorkspace.mockResolvedValueOnce({deferred: 3})
+    expect(await upgrade()).toEqual({ok: true})
+    expect(getModePin(USER, WS)).toBe('e2ee')
+    expect(hasPinUpgradeMarker(USER, WS)).toBe(true)
+
+    drainWorkspace.mockResolvedValueOnce({deferred: 1})
+    expect(await resume()).toEqual({kind: 'incomplete'})
+    expect(hasPinUpgradeMarker(USER, WS)).toBe(true)
+
+    expect(await resume()).toEqual({kind: 'resumed'})
+    expect(hasPinUpgradeMarker(USER, WS)).toBe(false)
+  })
+
+  it('an upgraded pin whose key is gone drops the marker, back to the key prompt', async () => {
+    // Unlocking with the pasted key then drains the whole workspace, which is
+    // what the marker was waiting for.
+    writePinUpgradeMarker(USER, WS)
+    upgradeModePinToE2ee(USER, WS)
+
+    expect(await resume()).toEqual({kind: 'key-missing'})
+    expect(hasPinUpgradeMarker(USER, WS)).toBe(false)
+    expect(drainWorkspace).not.toHaveBeenCalled()
   })
 
   it('a marker whose key was evicted before the pin moved is dropped, back to the gate', async () => {

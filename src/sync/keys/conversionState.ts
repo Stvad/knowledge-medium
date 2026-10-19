@@ -4,16 +4,17 @@
  * layer's (`fetchWorkspaceConversionState`); the decisions that consume it live
  * here with the pin and the key store.
  *
- * The phase only moves forward — `sealing` → `cleaning` → null — and the flip
- * sets the mode and `sealing` together, so a read that shows an e2ee workspace
- * past `sealing` stays true for good.
+ * The phase only moves forward — `sealing` → `cleaning` → no
+ * `workspace_conversions` row — and the flip sets the mode and inserts the
+ * `sealing` row together, so a read that shows an e2ee workspace past `sealing`
+ * stays true for good.
  */
 
 export type ConversionPhase = 'sealing' | 'cleaning'
 
 export interface WorkspaceConversionState {
   readonly encryptionMode: string
-  /** null: no conversion is running (never converted, or finished). */
+  /** null: no `workspace_conversions` row — none is running (never converted, or finished). */
   readonly conversionPhase: ConversionPhase | null
   readonly wkCanary: string | null
   readonly ownerUserId: string

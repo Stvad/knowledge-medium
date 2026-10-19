@@ -16,6 +16,7 @@ import {
   type PinUpgradeKey,
   type ServerE2eeEntry,
   type UpgradeWorkspacePinResult,
+  type WorkspaceDrain,
 } from '@/sync/keys/flows/upgradeWorkspacePin'
 
 export type GateReason = Extract<WorkspaceEntryResolution, {kind: 'locked'}>['reason']
@@ -23,8 +24,8 @@ export type GateReason = Extract<WorkspaceEntryResolution, {kind: 'locked'}>['re
 /** What the gate needs from outside the key layer. */
 export interface WorkspaceGateDeps {
   /** Re-materialize the workspace's staged rows (`repo.drainSyncWorkspace`). */
-  readonly drainWorkspace: () => Promise<void>
-  /** The server's workspace row, read now — `conversion_phase` isn't synced. */
+  readonly drainWorkspace: WorkspaceDrain
+  /** The server's mode, canary, owner and conversion phase, read now — the phase isn't synced. */
   readonly fetchConversionState: () => Promise<WorkspaceConversionRead>
   readonly hasCopiedCiphertext: () => Promise<boolean>
 }
@@ -410,7 +411,14 @@ function FinishingUpgradeGate({userId, workspaceId, workspaceName, deps, onResol
       keyStore: getWorkspaceKeyStore(),
       drainWorkspace: deps.drainWorkspace,
     })
-      .then(() => onResolved())
+      .then(result => {
+        // Re-resolving now would land on this gate again and loop the drain.
+        if (result.kind === 'incomplete') {
+          setError("Some of this workspace's content couldn't be decrypted on this device yet.")
+          return
+        }
+        return onResolved()
+      })
       .catch((err: unknown) => setError(errorMessage(err, 'Could not finish unlocking this workspace.')))
   }, [userId, workspaceId, deps, onResolved, attempt])
 

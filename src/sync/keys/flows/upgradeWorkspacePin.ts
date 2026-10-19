@@ -29,7 +29,6 @@ import type { WorkspaceConversionRead } from '../conversionState.js'
 import type { WorkspaceKeyRecord, WorkspaceKeyStore } from '../keyStore.js'
 import {
   clearPinUpgradeMarker,
-  getModePin,
   hasPinUpgradeMarker,
   upgradeModePinToE2ee,
   writePinUpgradeMarker,
@@ -79,14 +78,19 @@ export type PinUpgradeKey =
   | {readonly kind: 'pasted'; readonly text: string}
   | {readonly kind: 'stored'}
 
+/** Re-materialize every staged row of the workspace (`repo.drainSyncWorkspace`),
+ *  reporting how many it still had to defer; null when nothing is draining. */
+export type WorkspaceDrain = () => Promise<{readonly deferred: number} | null>
+
 export interface UpgradeWorkspacePinArgs extends ServerE2eeEntryDeps {
   readonly key: PinUpgradeKey
   readonly keyStore: WorkspaceKeyStore
-  /** Re-materialize every staged row of the workspace (`repo.drainSyncWorkspace`). */
-  readonly drainWorkspace: () => Promise<void>
+  readonly drainWorkspace: WorkspaceDrain
 }
 
 export type UpgradeWorkspacePinResult =
+  /** The pin moved. If the drain still deferred rows, the marker stays and the
+   *  gate's finishing-upgrade state drains again. */
   | {readonly ok: true}
   /** `refused`: the server state doesn't allow it now (see `entry`).
    *  `format` / `invalid-key`: the pasted text isn't a key, or not this one.
@@ -103,26 +107,41 @@ const resolveKey = async (
     const imported = await importPastedWorkspaceKey(args.key.text)
     return imported ? {record: imported, pasted: true} : 'format'
   }
-  let stored: WorkspaceKeyRecord | null = null
-  try {
-    stored = await args.keyStore.get(args.userId, args.workspaceId)
-  } catch (err) {
-    console.warn(`upgradeWorkspacePin: key read failed for ${args.workspaceId}`, err)
-  }
-  // K_id can't be re-derived from a stored WK, and an e2ee pin without it opens
-  // into broken media — the same rule as the entry gate.
-  return stored?.contentKeyHmac ? {record: stored, pasted: false} : 'no-stored-key'
+  const stored = await readUsableKey(args.keyStore, args.userId, args.workspaceId)
+  return stored ? {record: stored, pasted: false} : 'no-stored-key'
 }
 
-/** Steps 4–5, shared with {@link resumePinUpgrade}. A drain that throws leaves
- *  the marker for the next start. */
+/** Steps 4–5, shared with {@link resumePinUpgrade}: true when the drain left
+ *  nothing deferred and the marker is cleared. A drain that throws, or that
+ *  still deferred rows, leaves the marker for the next try. Under an e2ee pin
+ *  with its key a row only defers when the key store can't be read, and nothing
+ *  else would re-read it. */
 const drainAndClearMarker = async (
   userId: string,
   workspaceId: string,
-  drainWorkspace: () => Promise<void>,
-): Promise<void> => {
-  await drainWorkspace()
+  drainWorkspace: WorkspaceDrain,
+): Promise<boolean> => {
+  const report = await drainWorkspace()
+  if (report && report.deferred > 0) return false
   clearPinUpgradeMarker(userId, workspaceId)
+  return true
+}
+
+/** The stored key with K_id, or null — unreadable counts as absent. */
+const readUsableKey = async (
+  keyStore: WorkspaceKeyStore,
+  userId: string,
+  workspaceId: string,
+): Promise<WorkspaceKeyRecord | null> => {
+  let stored: WorkspaceKeyRecord | null = null
+  try {
+    stored = await keyStore.get(userId, workspaceId)
+  } catch (err) {
+    console.warn(`upgradeWorkspacePin: key read failed for ${workspaceId}`, err)
+  }
+  // K_id can't be re-derived from a stored WK, and an e2ee pin without it opens
+  // into broken media — the same rule as the entry gate.
+  return stored?.contentKeyHmac ? stored : null
 }
 
 export const upgradeWorkspacePin = async (args: UpgradeWorkspacePinArgs): Promise<UpgradeWorkspacePinResult> => {
@@ -157,14 +176,16 @@ export interface ResumePinUpgradeArgs {
   readonly userId: string
   readonly workspaceId: string
   readonly keyStore: WorkspaceKeyStore
-  readonly drainWorkspace: () => Promise<void>
+  readonly drainWorkspace: WorkspaceDrain
 }
 
 export type ResumePinUpgradeResult =
   | {readonly kind: 'nothing-pending'}
   | {readonly kind: 'resumed'}
-  /** The pin hadn't moved and the stored key is gone (evicted): the marker is
-   *  dropped, and the workspace goes back to the gate for a paste. */
+  /** The drain still deferred rows; the marker stays for another try. */
+  | {readonly kind: 'incomplete'}
+  /** The stored key is gone (evicted, or unreadable now): the marker is dropped,
+   *  and the workspace goes back to a key prompt, whose unlock drains it all. */
   | {readonly kind: 'key-missing'}
 
 /** Startup's half: finish an upgrade a crash interrupted, from the current pin.
@@ -173,19 +194,11 @@ export type ResumePinUpgradeResult =
 export const resumePinUpgrade = async (args: ResumePinUpgradeArgs): Promise<ResumePinUpgradeResult> => {
   const {userId, workspaceId} = args
   if (!hasPinUpgradeMarker(userId, workspaceId)) return {kind: 'nothing-pending'}
-  if (getModePin(userId, workspaceId) !== 'e2ee') {
-    let stored: WorkspaceKeyRecord | null = null
-    try {
-      stored = await args.keyStore.get(userId, workspaceId)
-    } catch (err) {
-      console.warn(`resumePinUpgrade: key read failed for ${workspaceId}`, err)
-    }
-    if (!stored?.contentKeyHmac) {
-      clearPinUpgradeMarker(userId, workspaceId)
-      return {kind: 'key-missing'}
-    }
-    upgradeModePinToE2ee(userId, workspaceId)
+  if (!(await readUsableKey(args.keyStore, userId, workspaceId))) {
+    clearPinUpgradeMarker(userId, workspaceId)
+    return {kind: 'key-missing'}
   }
-  await drainAndClearMarker(userId, workspaceId, args.drainWorkspace)
-  return {kind: 'resumed'}
+  upgradeModePinToE2ee(userId, workspaceId)
+  const complete = await drainAndClearMarker(userId, workspaceId, args.drainWorkspace)
+  return {kind: complete ? 'resumed' : 'incomplete'}
 }
