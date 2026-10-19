@@ -1,1 +1,1 @@
-import{gE as e,hE as t}from"../../chunks/app-BE3f4JIs.js";export{t as completionKeymapWithEscapeFallthrough,e as completionQueryEnd};
+import{gE as e,hE as t}from"../../chunks/app-C8EYZFel.js";export{t as completionKeymapWithEscapeFallthrough,e as completionQueryEnd};
