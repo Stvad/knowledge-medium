@@ -1,1 +1,1 @@
-import{cf as e}from"../../../chunks/app-BZp04RRc.js";export{e as updateIndicatorPlugin};
+import{cf as e}from"../../../chunks/app-CkfFgjGZ.js";export{e as updateIndicatorPlugin};
