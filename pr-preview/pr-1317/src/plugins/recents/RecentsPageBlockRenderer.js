@@ -1,1 +1,1 @@
-import{Lb as e,Rb as t}from"../../../chunks/app-F2yZzvL9.js";export{e as RecentsList,t as RecentsPageBlockRenderer};
+import{Lb as e,Rb as t}from"../../../chunks/app-BUwD2cUX.js";export{e as RecentsList,t as RecentsPageBlockRenderer};
