@@ -294,7 +294,8 @@ Each tab holds, per workspace, the **generation it entered at**: the synced `wk_
 
 `WorkspaceKeyStore` keeps one record per (user, workspace), and `put` overwrites it. Recovery adds one field and two slots:
 
-- **`adoptedGeneration`** on the record: the generation at which adoption stored it. A record without it reads as 0. Entry is `ready` only when this matches the synced generation ([§6.3](#63-entry-and-adoption)).
+- **`adoptedGeneration`** on the record: the generation at which adoption stored it. Entry is `ready` only when this matches the synced generation ([§6.3](#63-entry-and-adoption)).
+  - A record without it reads as 0, not as unknown. Every path that stored one ran a drain: #1293's pin upgrade, or the unlock gate. At generation 0, adoption's own extra steps (5 and 6) do nothing, so re-adopting such a record would only drain again, on every e2ee workspace of every device.
   - This catches a key stored by an older build. That build validates against the synced canary, with no phase check and no drain, so it may have stored the new key mid-recovery, or over local rows the restore later replaced. Such a record goes through adoption once, with no prompt.
   - It's provenance only: stamps come from the synced row ([§6.1](#61-the-tabs-generation)).
 - **A pending slot** per (user, workspace). It holds a key the recovery flow minted, revealed, had retyped, and stored after a probe write, all **before** `rekey_workspace`. That's the conversion's key step, aimed at a slot nothing seals with.
@@ -326,7 +327,10 @@ It holds `navigator.locks` per (user, workspace), so two tabs never run it at on
 
 1. **Read the server, live.** The phase must be none or `cleaning`, and the key must open the server canary. Call its generation *G*.
    - If the server can't be read, adoption waits: the phase isn't synced, so offline adoption could open a workspace mid-recovery.
-   - **The exception is a synced generation of 0.** A device that has seen no re-key may adopt offline from the synced row, skipping step 4, as unlocking works offline today. If a re-key did happen, this device can't hold that key's canary, so its pasted key won't open the synced one. A key that does open it is the old one, and the fence refuses its writes.
+   - **The one exception:** a device whose pin is already e2ee, when the synced generation is 0. It may adopt offline from the synced row, skipping step 4, as unlocking a key-required workspace works offline today.
+     - **Why the phase can't be wrong there.** An e2ee pin was set past `sealing`, or the workspace was created e2ee. At generation 0 the phase can't be `sealing` again, and can't be `recovering`, since both need a re-key.
+     - **If this device missed a re-key,** its synced canary is the old key's. A pasted new key won't open it, and the old key that does is fenced.
+     - **A pin upgrade never takes this path.** It needs the live read at any generation, since a conversion still `sealing` is at generation 0 too, as #1293 already requires.
 2. **Write the marker** (#1293's pin-upgrade marker).
 3. **Store:** append the current record to the archive, put the new one with `adoptedGeneration = G` (clearing the pending slot), and set or upgrade the pin.
 4. **Wait for a checkpoint newer than step 1's read:** a PowerSync write checkpoint requested after step 1. That's the mechanism `ps_crud_hold_downloads` already waits on. Once it's applied, the device's synced image holds everything the server held at step 1, which after a recovery is the whole restore. Until then the gate shows that the workspace is downloading.
