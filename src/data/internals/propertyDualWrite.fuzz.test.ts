@@ -108,6 +108,7 @@ import {
 } from '@/data/api'
 import { kernelValuePresetCoresById } from '@/data/kernelValuePresetCores'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { blockWrites, installBlockWriteCounter } from '@/data/test/blockWriteCounter'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { releaseTestRepos } from '@/data/test/testRepoScope'
 import { assertLegalKernelRejection, drain } from '@/data/test/fuzzKernelHarness'
@@ -415,7 +416,10 @@ const caseArb = fc.record({
 // ──── shared db ────
 
 let sharedDb: TestDb
-beforeAll(async () => { sharedDb = await createTestDb() })
+beforeAll(async () => {
+  sharedDb = await createTestDb()
+  await installBlockWriteCounter(sharedDb.db)
+})
 const guard = statefulFuzzGuard()
 afterAll(async () => {
   await guard.barrier()
@@ -526,6 +530,8 @@ type SnapRow = Record<string, unknown> & {id: string; deleted: number}
 
 const lastRowEvent = async (): Promise<number> =>
   (await sharedDb.db.get<{n: number}>('SELECT COALESCE(MAX(id), 0) AS n FROM row_events')).n
+
+const writeCount = (): Promise<number> => blockWrites(sharedDb.db)
 
 // ──── content + selection helpers ────
 
@@ -1242,7 +1248,7 @@ const checkState = async (
     }
   }
 
-  const writesBefore = await lastRowEvent()
+  const writesBefore = await writeCount()
   await repo.tx(async tx => {
     for (const [ownerId, names] of rematerialize) {
       const owner = await tx.get(ownerId)
@@ -1252,9 +1258,9 @@ const checkState = async (
     }
     await reprojectOwnersForRowStates(tx, projectRows, lookups, 'full')
   }, {scope: ChangeScope.BlockDefault})
-  // Every write to `blocks` logs a row event, so "writes nothing" is literal:
-  // an identical rewrite fails it as surely as a changed one.
-  expect(await lastRowEvent(), `${label}: Q — re-running MATERIALIZE/PROJECT must write nothing`).toBe(writesBefore)
+  // "Writes nothing" is literal: an identical rewrite counts as surely as a
+  // changed one.
+  expect(await writeCount(), `${label}: Q — re-running MATERIALIZE/PROJECT must write nothing`).toBe(writesBefore)
 }
 
 /** I — the cell ends where the tx's cell writes put it. */

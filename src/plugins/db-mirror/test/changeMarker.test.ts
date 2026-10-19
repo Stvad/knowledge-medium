@@ -114,8 +114,8 @@ describe('readDatabaseIncarnation', () => {
   })
 
   it('calls an empty log EMPTY, which is a fact about the database', async () => {
-    // The `row_events` triggers fire on every `blocks` write, so an empty log
-    // means no local writes — and therefore nothing in the upload queue. That
+    // Every `blocks` insert is logged to `row_events`, so an empty log means
+    // no local writes — and therefore nothing in the upload queue. That
     // is the whole of what this feature protects, so there is nothing to copy.
     expect(await readDatabaseIncarnation(source({born: [{born: null}]}))).toEqual({kind: 'empty'})
   })
