@@ -1,1 +1,1 @@
-import{oT as e}from"../../../chunks/app-vQSajdeU.js";export{e as chipStyle};
+import{oT as e}from"../../../chunks/app-B2F-eDBv.js";export{e as chipStyle};

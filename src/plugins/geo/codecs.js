@@ -1,2 +1,2 @@
-import{G6 as e}from"../../../chunks/app-vQSajdeU.js";var t=e.optionalRef;export{t as optionalRefCodec};
+import{K6 as e}from"../../../chunks/app-B2F-eDBv.js";var t=e.optionalRef;export{t as optionalRefCodec};
 //# sourceMappingURL=codecs.js.map

@@ -1,1 +1,1 @@
-import{cT as e,lT as t,sT as n}from"../../chunks/app-vQSajdeU.js";export{n as DEFAULT_TYPE_COLORS,e as defaultTypeColor,t as pickLeastUsedTypeColor};
+import{cT as e,lT as t,sT as n}from"../../chunks/app-B2F-eDBv.js";export{n as DEFAULT_TYPE_COLORS,e as defaultTypeColor,t as pickLeastUsedTypeColor};
