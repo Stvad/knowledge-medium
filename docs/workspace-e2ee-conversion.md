@@ -39,9 +39,9 @@ The user converts from **one device, in one tab**, and confirms that every other
 
 | If another client is active and… | What happens |
 |---|---|
-| …writes blocks before the flip | Included: the bundle's history snapshot is taken after the flip, and the re-seal reads the server. A write still in flight at the flip makes the purge refuse once ([§6.3](#63-the-flow) step 6). |
+| …writes blocks before the flip | Included. The flip waits for every in-flight write to commit ([§6.1](#61-server)), the bundle's history snapshot is taken after it, and the re-seal reads the server. |
 | …writes blocks after the flip | The ciphertext trigger refuses the plaintext write ([§6.1](#61-server)). That device quarantines it, recoverable with **Retry** once it unlocks. Nothing leaks. |
-| …tries to unlock the workspace mid-conversion | Refused: no device unlocks or upgrades its pin while `conversion_pending` is set ([§6.2](#62-client-prerequisites)). |
+| …tries to unlock the workspace mid-conversion | Refused: no device unlocks or upgrades its pin while `conversion_phase` is `sealing` ([§6.2](#62-client-prerequisites)). |
 | …uploads an attachment | #1293 builds defer: the drain checks the live mode. An older build could still leave a plaintext object behind. The 6-hourly ciphertext audit flags it, and re-running the attachment phase converts it. **This is the one accepted gap.** |
 | …runs the properties-as-blocks switch | Not fenced on another device. See [§7](#7-what-stays-visible-afterwards) and runbook step 7. |
 
@@ -75,26 +75,26 @@ The conversion admits **exactly one transition**, `none → e2ee` with a well-fo
 
 ### 6.1 Server
 
-This is #1294: one migration, two owner-only SECURITY DEFINER RPCs, and one server fact.
+This is #1294: one migration, three owner-only SECURITY DEFINER RPCs, and one server fact.
 
-- **`workspaces.conversion_pending`**, a boolean that members can read. It is set by the flip and cleared by the purge, each in its own transaction, and nothing else can change it: the same trigger admit as the mode guards it ([§5](#5-the-invariant-we-relax)).
-  - While it's set, the server may still hold plaintext. The flow reads its phase from it ([§6.3](#63-the-flow)), and #1293 gates unlocking on it ([§6.2](#62-client-prerequisites)).
-  - It can't be set again: the flip refuses any workspace whose mode isn't `none`.
-  - It isn't synced; clients read it over PostgREST.
-- **`convert_workspace_to_e2ee(ws, canary)`.** It refuses unless the caller owns `ws` and its mode is `none`, both checked in this transaction. It then sets `encryption_mode = 'e2ee'`, `wk_canary` and `conversion_pending`, and nothing else. Rows stay plaintext until the client re-seals them, and their prior values are still in `blocks_history`.
+- **`workspaces.conversion_phase`**: `sealing`, `cleaning`, or null. Members can read it; it isn't synced, so clients read it over PostgREST.
+  - **Who changes it.** Only the three RPCs below, each in its own transaction, under the same trigger admit as the mode ([§5](#5-the-invariant-we-relax)). It only moves forward, `sealing` → `cleaning` → null, and the flip refuses any workspace whose mode isn't `none`, so it can't start again.
+  - **What it means.** While it's `sealing`, the server may still hold plaintext, and #1293 refuses every unlock ([§6.2](#62-client-prerequisites)). While it's `cleaning`, only attachment cleanup is left. The flow reads its phase from it ([§6.3](#63-the-flow)).
+- **`convert_workspace_to_e2ee(ws, canary)`.** It refuses unless the caller owns `ws` and its mode is `none`. It first takes `LOCK TABLE blocks IN SHARE MODE` with a short `lock_timeout`, refusing on a timeout. That waits for every in-flight block write to commit and holds new ones back for the flip's few milliseconds. So every write that began before the flip is committed, and in history, before the mode changes, and every later write sees `e2ee`. It then sets `encryption_mode = 'e2ee'`, `wk_canary` and `conversion_phase = 'sealing'`, and nothing else. Rows stay plaintext until the client re-seals them, and their prior values are still in `blocks_history`.
 - **`purge_workspace_history(ws, through_event_id, archived_count)`** runs with a raised `statement_timeout`, as `delete_workspace` has. A refusal raises a dedicated SQLSTATE, so the client can tell it from a transport error. It refuses unless all of these hold:
-  - the caller owns `ws`, its mode is `e2ee`, `conversion_pending` is set, and `through_event_id` isn't null (an empty history archives through `0`);
+  - the caller owns `ws`, its mode is `e2ee`, `conversion_phase` is `sealing`, and `through_event_id` isn't null (an empty history archives through `0`);
   - **every** block row of `ws` has all three content columns as `enc:v1:` envelopes, which the server checks itself;
   - `count(*)` of `ws`'s history rows with `event_id ≤ through_event_id` equals `archived_count`. This catches a row that committed late with an id below the boundary;
   - **every** history row of `ws` after `through_event_id` is a re-seal write: `op = 'U'`, `changed_columns ⊆ {content, properties_json, references_json, updated_at}`, and the new values are envelopes. So no plaintext entered history after the archive point.
 
-  It then deletes every history row of `ws`, the re-seal writes included (their `before_diff` holds the old plaintext), and clears `conversion_pending`.
+  It then deletes every history row of `ws`, the re-seal writes included (their `before_diff` holds the old plaintext), and sets `conversion_phase = 'cleaning'`.
+- **`finish_conversion(ws)`.** It refuses unless the caller owns `ws` and the phase is `cleaning`, then clears it. The client calls it only after the attachment proof passes; the server can't check that proof itself.
 - **Bucket limit.** Raise `attachments.file_size_limit` by the binary envelope's overhead (`BINARY_ENVELOPE_OVERHEAD_BYTES`, 36 bytes; round up to 64).
   - `captureMedia` caps a plaintext capture at exactly 50 MiB (`DEFAULT_MAX_CAPTURE_BYTES`). Sealing such a file adds the overhead, and Storage would return a permanent 413.
   - The capture cap itself stays where it is. It already accounts for the overhead in e2ee mode, so new uploads gain nothing from the raise.
 - **Export index.** Add `(workspace_id, event_id)` on `blocks_history` so the export and verify can page by id.
 
-**After the flip, the server refuses every plaintext write**: `blocks_require_ciphertext_for_e2ee` refuses any write to an e2ee workspace whose new row isn't fully sealed. It reads the mode without a lock, so a write already in flight at the flip can still commit; the purge's checks catch that. pgTAP pins every refusal above.
+**After the flip, the server refuses every plaintext write**: `blocks_require_ciphertext_for_e2ee` refuses any write to an e2ee workspace whose new row isn't fully sealed. It reads the mode without a lock, which is why the flip takes the table lock. pgTAP pins every refusal above, plus a write held open across the flip.
 
 ### 6.2 Client prerequisites
 
@@ -105,7 +105,10 @@ These ship to **every** device before any conversion runs. Each of them is also 
   - **Materialize defers.** Local `blocks` keep their plaintext.
   - **Block uploads are held**, so nothing plaintext is sent. A held entry stays in `ps_crud`, and the core publishes no checkpoint until `ps_crud` is empty (`ps_crud_hold_downloads` in `src/data/internals/clientSchema.ts`). So a held write also stops that device's downloads, for every workspace, until it unlocks. The gate below keeps such writes rare; #1301 would remove the stall.
   - **The attachment drain defers**, and confirms the live mode before every upload.
-  - **The gate (`WorkspaceKeyGate`) waits on `conversion_pending`.** While it's set, no device unlocks or upgrades its pin. The gate shows that a conversion is in progress, and on the converting device that's where the flow resumes. Once it clears, the gate prompts for the key.
+  - **The gate (`WorkspaceKeyGate`) reads `conversion_phase`.**
+    - While it's `sealing`, no device unlocks or upgrades its pin. The gate shows that a conversion is in progress, and on the converting device that's where the flow resumes.
+    - Once it isn't, the gate prompts for the key.
+    - While it's `cleaning`, the owner's devices also offer to finish the conversion, so a crash during cleanup resumes from the server's state, not from a local marker.
   - **A one-way pin upgrade.** It's separate from `unlockWorkspaceWithKey`, which pins first and reports a plaintext pin as a storage failure without storing the key. The steps:
     1. Validate the canary and store the key.
     2. Write a durable marker.
@@ -125,10 +128,11 @@ The flow is one guarded, in-app flow on the converting device (#1290). It reads 
 | Server shows | Phase |
 |---|---|
 | mode `none` | preflight → key → flip |
-| mode `e2ee`, `conversion_pending` | recovery bundle (unless this device holds a verified one) → re-seal → verify → purge |
-| mode `e2ee`, not pending | pin upgrade → attachments → done. Every step is idempotent, the phase re-runs in full each time, and done means this run's proof passed |
+| `conversion_phase` = `sealing` | recovery bundle (unless this device holds a verified one) → re-seal → verify → purge |
+| `conversion_phase` = `cleaning` | pin upgrade → attachments → `finish_conversion`. Every step is idempotent, and the phase re-runs in full each time |
+| mode `e2ee`, no phase | nothing left to do |
 
-Only the purge clears `conversion_pending`, so the last phase can't fall back.
+The phase only moves forward, so a resume never falls back.
 
 **Every run**, resumed ones included, holds a `navigator.locks` lock per (user, workspace) and re-confirms the single-client contract ([§3](#3-the-single-client-contract)). Once the mode is e2ee, it also opens the server canary with this device's stored key before sealing anything. If this device holds no key, it asks for the saved one.
 
@@ -144,9 +148,9 @@ Only the purge clears `conversion_pending`, so the last phase can't fall back.
 - If this device already holds a key record for the workspace, from an earlier attempt that didn't flip, the run reuses it. The user saved that key, and a late-committing flip would carry its canary.
 - Otherwise, a new key is minted: generated, imported, `K_id` derived, the canary minted, then the **displayed** string re-parsed and checked against the canary. It is revealed once, retyped by the user, and stored durably after a probe write.
 
-**2. Flip.** `convert_workspace_to_e2ee(ws, canary)`. No row changes. This device keeps its plaintext pin, so #1293's gate closes the workspace here too: it shows the flow, and holds any write made for the workspace until the purge is done.
+**2. Flip.** `convert_workspace_to_e2ee(ws, canary)`. No row changes, and every earlier write has committed. This device keeps its plaintext pin, so #1293's gate closes the workspace here too: it shows the flow, and holds any write made for the workspace until the purge is done.
 
-**3. Recovery bundle.** One zip, taken right after the flip. The flip changes no row, so the bundle still holds the pre-conversion content, and nothing but the re-seal can add history after its snapshot ([§6.1](#61-server)).
+**3. Recovery bundle.** One zip, taken right after the flip. The flip changes no row, so the bundle still holds the pre-conversion content. And since every earlier write committed before the flip, nothing but the re-seal can add history after its snapshot ([§6.1](#61-server)).
 - **Writing it** needs a zip save type and a writer that holds the database lock while it copies. `chooseRawSqliteExportFile` offers only `.db`, and the existing zip builder (`getRawSqliteDbBackup`) is the corruption path's, which runs without the lock.
 - **`local.db`.** The raw SQLite export. It includes the device-local history (`row_events`, `command_events`).
 - **`server-history.jsonl`.** The workspace's `blocks_history`, which members can read under RLS (`blocks_history_read`).
@@ -158,7 +162,7 @@ Only the purge clears `conversion_pending`, so the last phase can't fall back.
   - Every local byte-store entry of a media block, soft-deleted ones included.
 - **`manifest.json`.** The workspace id, `through`, the line count, a sha256 of each part, and the export time.
 
-The flow **re-opens the file and verifies it**: `event_id`s are strictly increasing and end at `through`, and the hashes match. It then keeps `through` and the line count on this device as the **bundle record**. The re-seal never starts without that record. It's cleared when the purge succeeds or refuses.
+The flow **re-opens the file and verifies it**: `event_id`s are strictly increasing and end at `through`, and the hashes match. It then keeps `through`, the line count and the names of the Storage objects it holds on this device as the **bundle record**. The re-seal never starts without that record. It's cleared when the purge refuses, or once the conversion finishes; the attachment cleaner needs it after the purge.
 
 The bundle is plaintext, as sensitive as the database. Store it on an encrypted volume or as a password-manager attachment. It isn't sealed under the workspace key, because then it would be unreadable exactly when it's needed: after the key is lost. **It's a point-in-time content snapshot, not a rollback.** There's no going back after the flip.
 
@@ -171,12 +175,12 @@ Resuming just runs this again. It can take hours for a large workspace, so the f
 
 **5. Verify.** Each row's **record** is its re-seal write: its first history row whose content columns go from plaintext in `before_diff` to envelopes in `after_diff`. The record is identified by its content, not by its position, so a re-taken bundle doesn't move it, and it stays durable on the server until the purge.
 - **The check.** Page that history as the export does. Decrypt each current server row, and require every content column to equal the record's `before_diff` value.
-- **A mismatch** is re-sent from that value and checked again. This catches a wrong value that still opens: another row's value, or a stale read that overwrote a write in flight at the flip.
+- **A mismatch** is re-sent from that value and checked again. This catches a wrong value that still opens, such as another row's value.
 - **A row with no record refuses the run.** Something other than the re-seal sealed it.
 - **The other columns** need no check here, because the purge refuses any write after `through` that touched more than the content columns and `updated_at`.
 
 **6. Purge.** `purge_workspace_history(ws, through, count)`, from the bundle record. The server re-checks all four conditions ([§6.1](#61-server)).
-- **A refusal** clears the record, so the next run re-takes the bundle at a later `through`. A write in flight at the flip therefore refuses only once. A refusal that survives a re-take means a row isn't sealed or the contract was broken. Nothing is lost.
+- **A refusal** means a row isn't sealed or the contract was broken. Nothing is lost. It clears the record, so the next run re-takes the bundle at a later `through`.
 - **A transport error** retries and keeps the record.
 
 **7. Pin upgrade on this device** (#1293). Every row is drained into `blocks`, decrypted. Each update is version-only, so #1299 keeps `row_events` clean. Held writes now upload, sealed.
@@ -194,7 +198,7 @@ Resuming just runs this again. It can take hours for a large workspace, so the f
   1. List `<ws>/` **completely before acting**. Page by name, and recurse into the folder entries Storage returns for nested paths.
   2. **Raw:** seal it, upload it to its keyed name, verify the upload (a 409 on an occupied path goes through the same check), then delete the raw object.
   3. **Keyed:** keep it.
-  4. **Neither:** delete it if the bundle holds its bytes. Otherwise stop and report it.
+  4. **Neither:** delete it if the bundle record names it. Otherwise stop and report it.
 - **The proof:**
   - no raw object remains;
   - every media block's keyed object, soft-deleted blocks included, is present **and** passes the shared verification helper (downloaded, opened, hash-checked). That costs one download of the attachment set, because Storage objects are untrusted.
@@ -202,11 +206,11 @@ Resuming just runs this again. It can take hours for a large workspace, so the f
   A missing or failing object is rebuilt from the bundle's bytes or the local ones. One whose bytes exist nowhere is reported. It doesn't block done, since nothing could produce it.
 - **Media block ids don't change.** The app derives an attachment's path from `media:hash`, the mode and `K_id`. Re-capturing a pre-conversion file mints a second block, which is accepted.
 
-**9. Done.** The flow reports the operator follow-ups ([§8](#8-runbook)) and the "safe from" date ([§9](#9-platform-residue-and-when-it-is-safe-if-breached)).
+**9. Done.** The flow calls `finish_conversion`, then reports the operator follow-ups ([§8](#8-runbook)) and the "safe from" date ([§9](#9-platform-residue-and-when-it-is-safe-if-breached)).
 
 ### 6.4 Other devices
 
-Once `conversion_pending` clears, each device that opens the workspace sees the mismatch (#1293). It defers, prompts for the key, upgrades its pin one way, and drains. Its local `row_events` survive, and #1299 keeps the drain from adding noise to them.
+Once the phase leaves `sealing`, each device that opens the workspace sees the mismatch (#1293). It defers, prompts for the key, upgrades its pin one way, and drains. Its local `row_events` survive, and #1299 keeps the drain from adding noise to them.
 
 ## 7. What stays visible afterwards
 
@@ -264,15 +268,20 @@ The first production run is #1288.
     - This step, and the next two, are platform operations a client can't do.
 12. **Operator:** drop leftover ad-hoc tables from past scripts (`scripts/system-author-cleanup.sql`, `scripts/roam-ts-backfill/backfill.sql`).
 13. **Act on #1289's findings** and record the "safe from" date.
-14. **Take later recovery points.** From time to time, on an unlocked device, take step 3's bundle again without its server history, which is ciphertext by then. Take it only when `repo.workspaceViewGap` reports no gap, after a drain and a re-materialization, exactly as step 0 requires. Keep it with the key. A raw SQLite export alone isn't a recovery point: attachment bytes live outside the database (`src/plugins/attachments/byteStore.ts`), and their remote copies are sealed under the key.
+14. **Take later recovery points.** From time to time, on an unlocked device, take a recovery point and keep it with the key. It's a zip with:
+    - `local.db`;
+    - **the plaintext of every media block**, soft-deleted ones included. Each comes from the local byte store, or is downloaded and opened under the key, and each is hash-checked;
+    - a manifest.
 
-**Key-loss recovery** (#1302). This applies after the purge; before it, nothing is lost. It **re-keys the workspace in place** from the newest recovery point: a step-14 one, the conversion's bundle, or one taken from a device that still defers. **It's point-in-time, not lossless.** Everything written after that point is lost, because nothing else holds that plaintext. That's why the key lives in two places, and why step 14 exists.
+    It leaves out the server history and the Storage objects themselves, which are ciphertext by then and useless once the key is lost. Take it only when `repo.workspaceViewGap` reports no gap, after a drain and a re-materialization, exactly as step 0 requires. A raw SQLite export alone isn't a recovery point: attachment bytes live outside the database (`src/plugins/attachments/byteStore.ts`).
+
+**Key-loss recovery** (#1302). This applies after the purge; before it, nothing is lost. It **re-keys the workspace in place** from the newest recovery point: a step-14 one, or the conversion's bundle. A device that still defers is no source: its `blocks` hold nothing the conversion's bundle lacks, and without the key it can't close its own view gap. **It's point-in-time, not lossless.** Everything written after that point is lost, because nothing else holds that plaintext. That's why the key lives in two places, and why step 14 exists.
 
 #1302 holds the design. It has to meet these requirements:
 - **Nothing is deleted**, so no workspace or block id is ever free for another caller to claim. Old-`K_id` objects and key records are kept, in case the old key turns up.
 - **An owner-only canary replacement**, admitted like the flip ([§5](#5-the-invariant-we-relax)).
 - **A whole-row restore**: the content columns sealed under the new key, plus tree, order, `deleted` and the stamps. Rows the recovery point lacks are tombstoned, which is safe only because every recovery point is taken with no view gap ([§6.3](#63-the-flow) step 0, runbook step 14).
-- **Progress read by trial decryption** under the new key, since an envelope doesn't say which key sealed it.
+- **A row counts as restored only when it opens under the new key and its whole row equals the chosen recovery point's.** Opening alone proves only which key sealed it. A resume, even with a different recovery point, compares every row again, so the result is never a mix of two points.
 - **Every device checks its key record against the canary**, on entry and whenever the synced canary changes. Today `resolveWorkspaceEntry` only checks that a record with `K_id` exists.
 - **The single-client contract** applies to recovery too.
 - **The ids a new `K_id` re-namespaces** are handled or accepted: synthesized definitions and media blocks (the rotation note in `src/sync/crypto/derivedIdNamespace.ts`).
@@ -323,7 +332,7 @@ What it adds is safety against concurrent actors. What it keeps from this design
 - **An operator-run conversion with service-role scripts.** Smaller still, but it needs privileged access and gives other users no in-app path.
 - **Re-sealing before the flip.** Rejected: a plaintext-pinned device would copy the ciphertext straight into `blocks`.
 - **Reading the conversion's data from this device's PowerSync image.** Rejected: any held write keeps `ps_crud` non-empty, and the core publishes no checkpoint until it empties, so the image stops advancing for the whole run.
-- **Inferring the phase from history** ("no history left" means purged). Rejected: sealed writes after the purge add history again. `conversion_pending` is a fact that only the flip and the purge change.
+- **Inferring the phase from history** ("no history left" means purged). Rejected: sealed writes after the purge add history again. `conversion_phase` is a fact that only the conversion's RPCs change.
 - **`repo.setReadOnly` as the run's write barrier.** Not needed, and not owned by the flow: it's repo-wide and re-set on every workspace resolve (`src/App.tsx`). After the flip, #1293's gate closes the workspace and holds any write made for it until the purge is done.
 - **A local verification record per re-sealed row.** Rejected: it has to survive a crash between a row's commit and the verify. The server's history already holds each row's pre-seal plaintext durably until the purge.
 - **Taking the bundle before the flip.** Rejected: UI-state, preference and automation writes keep uploading until then (`CHANGE_SCOPE_POLICIES` in `src/data/api/changeScope.ts`), so the history snapshot could be raced right up to the flip. After it, the server refuses plaintext writes ([§6.1](#61-server)).
@@ -336,8 +345,8 @@ What it adds is safety against concurrent actors. What it keeps from this design
 | Piece | Issue | Waits on |
 |---|---|---|
 | Epic | #1295 | — |
-| Server: flip RPC, guarded purge RPC, `conversion_pending`, mode admit, bucket limit, export index | #1294 | — |
-| Clients: mismatch defer/hold, a gate that waits on `conversion_pending`, use-time path derivation, one-way pin upgrade | #1293 | — |
+| Server: flip RPC (with its table lock), guarded purge RPC, `finish_conversion`, `conversion_phase`, mode admit, bucket limit, export index | #1294 | — |
+| Clients: mismatch defer/hold, a gate that reads `conversion_phase`, use-time path derivation, one-way pin upgrade | #1293 | — |
 | `row_events`: skip version-only updates | #1299 | — |
 | Upload classifier: 25006 is transient | #1300 | — |
 | Sealing pages | #1292 | — |
