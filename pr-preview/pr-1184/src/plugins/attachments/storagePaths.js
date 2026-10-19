@@ -1,1 +1,1 @@
-import{_m as e,vm as t}from"../../../chunks/app-CNMu0aZT.js";export{e as attachmentObjectPath,t as authenticatedObjectUrl};
+import{ng as e,rg as t}from"../../../chunks/app-Dx7VSAvW.js";export{e as attachmentObjectPath,t as authenticatedObjectUrl};
