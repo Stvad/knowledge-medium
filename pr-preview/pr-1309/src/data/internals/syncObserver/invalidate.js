@@ -1,0 +1,1 @@
+import{mq as e}from"../../../../chunks/app-CvofEJq2.js";export{e as applySyncInvalidation};

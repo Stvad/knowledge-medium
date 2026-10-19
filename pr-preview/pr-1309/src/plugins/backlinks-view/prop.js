@@ -1,0 +1,1 @@
+import{Bf as e,Hf as t,Rf as n,Vf as r,zf as i}from"../../../chunks/app-CvofEJq2.js";export{n as DEFAULT_BACKLINKS_VIEW_ID,i as FLAT_BACKLINKS_VIEW_ID,e as GROUPED_BACKLINKS_VIEW_ID,r as backlinksViewProp,t as defaultBacklinksViewIdForBlock};

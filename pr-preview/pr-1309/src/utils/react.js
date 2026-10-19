@@ -1,0 +1,1 @@
+import{Mk as e,Nk as t}from"../../chunks/app-CvofEJq2.js";export{e as useIsMobile,t as usePointerCoarse};

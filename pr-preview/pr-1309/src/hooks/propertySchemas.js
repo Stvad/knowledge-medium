@@ -1,0 +1,1 @@
+import{_I as e}from"../../chunks/app-CvofEJq2.js";export{e as usePropertySchemas};

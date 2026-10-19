@@ -1,0 +1,1 @@
+import{RM as e,zM as t}from"../../../chunks/app-CvofEJq2.js";export{e as declarationOnlyDefinitionForName,t as declarationOnlyStatusText};

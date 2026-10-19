@@ -1,0 +1,1 @@
+import{Fr as e}from"../../../chunks/app-CvofEJq2.js";export{e as MigrationGateDialog};

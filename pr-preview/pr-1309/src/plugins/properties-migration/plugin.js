@@ -1,0 +1,1 @@
+import{Nr as e}from"../../../chunks/app-CvofEJq2.js";export{e as propertiesMigrationPlugin};
