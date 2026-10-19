@@ -247,7 +247,7 @@ The first production run is #1288.
 
 **Before:**
 1. **Deploys:**
-   - #1299, #1293 and #1300 reach **every** device;
+   - **every** device runs a build that includes #1293. #1299 and #1300 merge before it, so such a build has them too. Boot reinstalls whichever local triggers the running build defines, so what matters is the build each device runs, not when it last updated;
    - #1294's migration is applied;
    - #719 has shipped, so new `[[links]]` stop minting public ids;
    - #1302's recovery path exists, because the safety net has to exist before an irreversible step on the main workspace.
