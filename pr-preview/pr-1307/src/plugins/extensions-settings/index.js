@@ -1,1 +1,1 @@
-import{CE as e,Tt as t,wE as n}from"../../../chunks/app-CLojg416.js";export{e as extensionsOverridesProp,n as extensionsPrefsType,t as extensionsSettingsPlugin};
+import{CE as e,Tt as t,wE as n}from"../../../chunks/app-zj5vD1JV.js";export{e as extensionsOverridesProp,n as extensionsPrefsType,t as extensionsSettingsPlugin};
