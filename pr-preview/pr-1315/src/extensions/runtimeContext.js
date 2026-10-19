@@ -1,1 +1,1 @@
-import{DI as e,OI as t}from"../../chunks/app-BslrxI7o.js";export{e as AppRuntimeContextProvider,t as useAppRuntime};
+import{DI as e,EI as t}from"../../chunks/app-DWxFI21J.js";export{t as AppRuntimeContextProvider,e as useAppRuntime};

@@ -1,1 +1,1 @@
-import{Ju as e,Yu as t}from"../../../../chunks/app-BslrxI7o.js";export{e as buildBlockView,t as renderBlockView};
+import{Ju as e,Yu as t}from"../../../../chunks/app-DWxFI21J.js";export{e as buildBlockView,t as renderBlockView};

@@ -1,1 +1,1 @@
-import{Fb as e,Ib as t,bb as n,yb as r}from"../../../chunks/app-BslrxI7o.js";export{e as DEFAULT_THEME_ID_DARK,t as DEFAULT_THEME_ID_LIGHT,n as defaultThemeContributions,r as defaultThemesPlugin};
+import{Fb as e,Pb as t,vb as n,yb as r}from"../../../chunks/app-DWxFI21J.js";export{t as DEFAULT_THEME_ID_DARK,e as DEFAULT_THEME_ID_LIGHT,r as defaultThemeContributions,n as defaultThemesPlugin};
