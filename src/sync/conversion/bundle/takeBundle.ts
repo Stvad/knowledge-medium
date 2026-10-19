@@ -14,7 +14,6 @@ import {
   BUNDLE_FORMAT_VERSION,
   BUNDLE_PARTS,
   type BundleManifest,
-  type NoServerCopyEntry,
 } from './manifest.js'
 
 export type BundleProgress =
@@ -49,8 +48,8 @@ export interface TakeBundleOptions {
   /** Write this device's database, copied under its lock, into `folder` as
    *  {@link BUNDLE_PARTS.localDb}. */
   readonly writeLocalDb: (folder: BundleFolder) => Promise<void>
-  /** Confirmed in preflight; carried into the manifest. */
-  readonly noServerCopy?: readonly NoServerCopyEntry[]
+  /** Media hashes the user confirmed in preflight have no verified source. */
+  readonly noVerifiedSource?: readonly string[]
   readonly now?: () => Date
   readonly pageSize?: number
   readonly onProgress?: (progress: BundleProgress) => void
@@ -164,7 +163,7 @@ export const takeBundle = async (options: TakeBundleOptions): Promise<TakenBundl
       [BUNDLE_PARTS.history]: snapshot.history,
       [BUNDLE_PARTS.localDb]: localDb,
     },
-    noServerCopy: options.noServerCopy ?? [],
+    noVerifiedSource: options.noVerifiedSource ?? [],
   }
   await writeBytesPart(options.folder, BUNDLE_PARTS.manifest, new TextEncoder().encode(`${JSON.stringify(manifest, null, 2)}\n`))
   return {manifest}

@@ -20,15 +20,6 @@ export const BUNDLE_PARTS = {
   localDb: 'local.db',
 } as const
 
-/** A content hash the user confirmed, before the flip, will have no server copy. */
-export interface NoServerCopyEntry {
-  /** `sha256:<hex>`, as `media:hash` stores it. */
-  readonly hash: string
-  /** archived: too large to seal, its plaintext is in `attachments/`.
-   *  absent: no hash-verified source anywhere. */
-  readonly kind: 'archived' | 'absent'
-}
-
 export interface BundleManifest {
   readonly format: typeof BUNDLE_FORMAT
   readonly version: typeof BUNDLE_FORMAT_VERSION
@@ -44,5 +35,8 @@ export interface BundleManifest {
     readonly [BUNDLE_PARTS.history]: JsonlDigest
     readonly [BUNDLE_PARTS.localDb]: PartDigest
   }
-  readonly noServerCopy: readonly NoServerCopyEntry[]
+  /** Media content hashes (`sha256:<hex>`, as `media:hash` stores them) the
+   *  user confirmed before the flip have no hash-verified source: the only
+   *  media blocks `attachments/` may lack. */
+  readonly noVerifiedSource: readonly string[]
 }
