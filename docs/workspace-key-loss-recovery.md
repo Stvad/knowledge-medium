@@ -35,14 +35,15 @@ Recovery is the conversion's machinery run again, with a recovery point as the p
 | `workspace_conversions` and its phase (#1294) | adds a third phase, `recovering` |
 | the flip's admit and lock order | the re-key RPC takes both unchanged |
 | the gate that reads the phase (#1293) | treats `recovering` like `sealing` |
-| verify's check, repair and read-back loop (#1292) | runs it against the point, widened to whole rows |
+| the re-seal engine's `PlaintextSource` seam (#1292) | supplies the point, widened to whole rows, with verify's read-back |
+| the bundle's folder writer and verifier (#1290) | verify every point; write step-14 points |
 | the attachment cleaner (#1291) | runs it under the new key, with the point as its input |
 | the one-way pin upgrade (#1293) | becomes **adoption**, the one place a device makes a key current for an existing workspace |
 
 Two things are new, because no conversion piece covers them:
 
 - **a fence on every block write.** Each write carries the key generation its writer was looking at when it made the write. The server refuses a stale one, and a restore write from a superseded attempt ([§3.2](#32-the-write-fence));
-- **adoption's wait.** A device doesn't admit edits under the new key until its own copy of the workspace is past the re-key ([§6.3](#63-entry-and-adoption)).
+- **adoption's wait.** A device doesn't admit edits under the new key until it has synced past the recovery ([§6.3](#63-entry-and-adoption)).
 
 The run, on the owner's device:
 
@@ -78,14 +79,16 @@ One migration, on top of #1294's.
 
 Each RPC publishes them to transaction-local settings (`km.write_wk_generation`, `km.write_recovery_attempt`) right before the statement for that element, and clears them right after, as `apply_block_patches` does today for `km.patch_base_updated_at` (`20260803000000_add_patch_base_version_drift_bump.sql`). A value that isn't well-formed reads as absent. A create's insert-or-touch is one statement, so its touch carries the same stamp.
 
-**What the server checks.** `blocks_require_ciphertext_for_e2ee` stays the one owner of the e2ee write rule. The workspace's conversion row is read through a SECURITY DEFINER helper, so the check never depends on the writer's RLS. On top of "every content column is sealed", it refuses with SQLSTATE `23K01`, giving a message that says which rule failed:
+**What the server checks.** `blocks_require_ciphertext_for_e2ee` stays the one owner of the e2ee write rule. On top of "every content column is sealed", it refuses with SQLSTATE `23K01`, giving a message that says which rule failed:
 
 - **a stale generation**, for a row in an e2ee workspace: a stamp that differs from `wk_generation`, or no stamp once `wk_generation > 0`. A missing stamp passes while the generation is 0, so builds that don't stamp keep working in every workspace that was never re-keyed;
 - **the wrong attempt.**
   - While the workspace's phase is `recovering`, only a write carrying its live `recovery_attempt` lands, and none lands while no attempt is live.
   - Outside `recovering`, a write carrying any attempt is refused. A workspace that isn't e2ee is never `recovering`, so that also keeps a delayed restore write, or one aimed at another workspace's row, from landing.
 
-  The conversion row is read only for a row in an e2ee workspace, or for a write that carries an attempt.
+**How it reads its inputs.** The conversion row is read through a SECURITY DEFINER helper, so the check never depends on the writer's RLS. It's read only for a row in an e2ee workspace, or for a write that carries an attempt.
+
+**Who it skips.** Writes made as `postgres` are exempt: migrations and their backfills. Every client write runs as `authenticated`, both write RPCs are SECURITY INVOKER, and no SECURITY DEFINER function writes `blocks`. A `service_role` maintenance script must publish the stamp.
 
 `23K01` is class 23, which `classifyUploadError` treats as permanent. A refused device write therefore goes to the rejection quarantine (`ps_crud_rejected`), user-visible and retryable, through the path refusals already take.
 
@@ -93,7 +96,7 @@ Each RPC publishes them to transaction-local settings (`km.write_wk_generation`,
 
 **What it doesn't cover.**
 
-- **A `DELETE` on `blocks`** doesn't fire the trigger. Clients never delete (there's no delete upload trigger in `clientSchema.ts`). The restore's last check counts the workspace's rows ([§4.4](#44-completion)), so a delete during the restore fails that check and the run resumes. One after the restore is out of scope, as any operator delete is.
+- **A `DELETE` on `blocks`** doesn't fire the trigger. Clients never delete (there's no delete upload trigger in `clientSchema.ts`). The restore ends by counting the workspace's rows ([§4.3](#43-order-of-work)), so a delete during the restore fails that count and the run resumes. One after the restore is out of scope, as any operator delete is.
 - **Storage uploads** aren't fenced. An old-key object lands at an old-`K_id` path that no block's address derives to any more ([§5](#5-attachments)).
 
 ### 3.3 RPCs
@@ -140,29 +143,41 @@ A refusal that needs no lock is decided before them.
 
 - It refuses unless the phase is `recovering` and `attempt` is live.
 - It then moves the phase to `return_phase`, clearing both columns. A null `return_phase` deletes the row.
-- Its table lock means no restore write is in flight when the token dies.
+- The server runs no check of its own. Two things make the attempt's last check final:
+  - while the attempt is live, only its own writes land, and it has awaited every write it sent;
+  - the table lock means none of its writes is still in flight when the token dies.
 
 `purge_workspace_history` and `finish_conversion` already refuse any phase but their own. So neither can run during `recovering`, a delayed purge from before a sealing re-key included.
 
 ## 4. The restore
 
-Recovery's check of every row is #1292's `verifyReseal` loop. Per page of server rows, by id, it finds the rows that differ from what they should be, re-sends them through `sealAndSend`, reads them back, and refuses any still wrong. It ends with `requireWholeWorkspace`'s count. In verify, "what they should be" comes from the server's re-seal records. In recovery it comes from the point, and the comparison covers whole rows.
+The restore is #1292's `resealWorkspace`, given the `PlaintextSource` that #1292 left for recovery (`src/sync/conversion/reseal.ts`). A test there already seals over rows sealed under another key. For each page of server rows, by id, the recovery source returns only the rows that differ from their **expected row** ([§4.2](#42-the-expected-row)), with that expected row's values.
+
+`resealWorkspace` already checks the key against the canary first, which is now the new key's, and counts the workspace's rows last. Recovery adds three things to it:
+
+- a target carries the expected metadata columns into its patch, not only content;
+- every sent page is read back and compared, as verify does with `readBlocks`;
+- every call carries the generation and attempt stamps.
 
 ### 4.1 The point, verified and bound
 
-Before anything irreversible, and again on every resume (since the folder may have changed), the flow checks all of the following:
+The point is verified by #1290's bundle verifier (conversion §6.3 step 3), before anything irreversible and again on every resume, since the folder may have changed:
 
-- every part's sha256 matches its manifest entry;
-- `blocks.jsonl` has exactly the manifest's block count, with no id repeated. Every row the point lacks is tombstoned, so a truncated file must never pass;
-- **binding:** the manifest's workspace id, and every row's `workspace_id`, equal the target. A point from another workspace would otherwise tombstone every target row, and try to recreate that workspace's ids here. The attempt fence would refuse those creates' touches on the server as well ([§3.2](#32-the-write-fence));
-- the manifest's `properties_migration` equals the workspace's current state. The switch is forward-only, so rows from an earlier stage would read wrong in a workspace that has moved past it (open question 2);
-- every media block has an `attachments/` entry whose bytes hash to its name, or its hash is on the manifest's list of hashes with no verified source ([§5](#5-attachments)).
+- the part hashes;
+- no repeated id;
+- **binding**: the manifest's workspace id, and every row's `workspace_id`, equal the target. A point from another workspace would otherwise tombstone every target row, and try to recreate that workspace's ids here, which the attempt fence also refuses on the server;
+- every media block has its `attachments/` entry, or its hash is on the manifest's list of hashes with no verified source.
+
+Two checks differ from the bundle's:
+
+- **The row count** is checked against the manifest's block count, not the server's, since the server has moved on. Every row the point lacks is tombstoned, so a truncated file must never pass.
+- **The manifest's `properties_migration`** must equal the workspace's current state. The switch is forward-only, so rows from an earlier stage would read wrong (open question 2). The bundle records it at the flip, and the conversion and the switch never overlap (conversion runbook step 7), so it can't move during `sealing`.
 
 The point is then indexed once, mapping each id to its line offset in `blocks.jsonl`. Rows are read by offset through the folder handle, so the order of the server's `ORDER BY id` never has to match the file's.
 
 ### 4.2 The expected row
 
-For each server row, the **expected row** is one of two things:
+For each server row, the expected row is one of two things:
 
 - **The point's row, if it has one.** That means its three content columns as plaintext, plus `parent_id`, `order_key`, `deleted`, `created_at`, `user_updated_at`, `created_by` and `updated_by`. So moves, reorders, deletes and undeletes since the point are undone too.
   - **Never `updated_at`.** It's the row version: the clamp floors it at the old value and bumps it on a content change, so a restored row's version always advances.
@@ -174,23 +189,19 @@ Each attempt runs three steps, all stamped with the new generation and the attem
 
 1. **Recreate.** Page the server's ids only. Any point id the server lacks was hard-deleted after the point; that only happens outside the app, and the history trigger records it.
    - Recreate them through `apply_block_creates`, with the point's row sealed under the new key. `updated_at` is the flow's clock, which the clamp caps.
-   - **One row per call.** Recreates are rare, and a call is one transaction, so a refused row in a shared call would roll back its siblings without saying which one failed.
-   - Parents go before children, since `blocks_workspace_id_parent_id_fkey` is checked at each call's commit. Recreates go before any patch, so a patch that moves a row back under a hard-deleted parent finds the parent present.
-   - An id that already exists in another workspace can't be recreated, and neither can its point descendants. The create's touch is refused by RLS, or by the attempt fence. Those ids go on the **unrestored** list ([§4.4](#44-completion)).
-2. **Check and repair**, verify's loop. A differing row is sent as one `apply_block_patches` element:
+   - **One row per call, parents first.** Recreates are rare, and a call is one transaction, so a refused row in a shared call would roll back its siblings without saying which one failed. Parents go first because `blocks_workspace_id_parent_id_fkey` is checked at each call's commit.
+   - **A parent cycle** among the recreates has no parents-first order, so its rows go in one call. The key is checked at commit.
+   - **An id that exists in another workspace** can't be recreated. The create's touch is refused, by RLS (`42501`) or by the other workspace's attempt rule (`23K01`). That id and its point descendants go on the **unrestored** list ([§4.4](#44-completion)).
+   - **A `23K01` naming this workspace's attempt** means another run took over, so this run stops.
+2. **Check and repair:** the source's pass ([§4](#4-the-restore)). A differing row is sent as one `apply_block_patches` element:
    - its expected content, sealed under the new key and opened back before sending, as today;
    - its expected metadata columns;
    - `base_updated_at` from the server row just read.
 
-   It never carries `updated_at` or `workspace_id`. A `P0002` (the row vanished between read and patch) fails the run, which resumes.
-3. **Count.** The pass must have seen as many rows as the server counts (`requireWholeWorkspace`). Recreates happened before it, so they're counted.
-
-**Engine changes**, in `src/sync/conversion/`:
-
-1. `readBlockPage` and `readBlocks` select every column.
-2. A `SealTarget` may carry metadata columns into its patch.
-3. `ConversionServer` gains `applyBlockCreates` and an id-only page read.
-4. Every call takes the stamps.
+   It never carries `updated_at` or `workspace_id`.
+   - **A row whose expected parent is on the unrestored list** keeps the server's `parent_id`. Moving it under a parent this workspace lacks would fail the key at commit and roll back its page. It's restored in every other column, and goes on the list too.
+   - **A `P0002`** (the row vanished between read and patch) fails the run, which resumes.
+3. **Count.** The pass must have seen as many rows as the server counts, which `resealWorkspace` already checks. Recreates happened before it, so they're counted.
 
 The conversion's own re-seal still sends no stamp. At generation 0 that's admitted, and after a re-key it must not be ([§7](#7-key-loss-during-sealing)).
 
@@ -201,16 +212,19 @@ A row is restored when **both** hold:
 - its content columns open under the new key to the expected plaintext (`opensTo`, which compares values, since a value that opens only proves which key sealed it);
 - every expected metadata column is equal.
 
-A row still wrong when its repair is read back goes on the unrestored list below. Verify refuses the run at that point (`unrepaired`); recovery carries on, so the list is complete. The clamp could cause such a row by rewriting a `created_at` or `user_updated_at` later than server time, but a point's rows were clamped when they were written.
+A row still wrong when its page is read back goes on the unrestored list. Verify would refuse the run there (`unrepaired`). Recovery carries on, so the list is complete. The clamp could cause such a row by rewriting a `created_at` or `user_updated_at` later than server time, but a point's rows were clamped when they were written.
 
-The attempt fence means only this attempt writes while it is live, so one complete pass with no refusal finishes the restore. A crash, a refusal, a vanished row, or a count that doesn't match makes the next run start over.
+While the attempt is live, only its own writes land. So one complete pass with no refusal finishes the restore. A crash, a refusal, a vanished row, or a count that doesn't match makes the next run start over.
 
-**The restore's terminal outcome** mirrors the attachments': **passed, with these rows unrestored**. The list holds:
+**Invariant at the end:** every row of the workspace is sealed under the new key, unrestored ones included. A row on the list still had its content re-sealed. Adoption relies on this ([§6.3](#63-entry-and-adoption)).
+
+**The terminal outcome** mirrors the attachments': **passed, with these rows unrestored**. The list holds:
 
 - ids taken by another workspace, and their point descendants;
+- rows kept under their server parent;
 - rows still wrong after their repair.
 
-The flow shows the list, and `finish_recovery` follows only the user's confirmation. Without this outcome, the only way out of `recovering` would be a run with nothing to list, so one stuck row would keep every device gated.
+The flow shows the list, and `finish_recovery` follows only the user's confirmation. Without this outcome, one stuck row would keep every device gated.
 
 ### 4.5 Resume
 
@@ -228,6 +242,12 @@ Recovery runs #1291's cleaner under the new key, as a **standalone run**: with n
 - **the bytes:** the point's `attachments/`. The point is verified to hold every media block's bytes or list it ([§4.1](#41-the-point-verified-and-bound)). The local byte store doesn't help here, because entries captured after the conversion are named by `HMAC(K_id_old, hash)`, which no lookup under the new `K_id` finds (`deriveObjectKey`).
 
 So #1291's cleaner has to take both as inputs, as #1292's engine takes its plaintext source.
+
+**Not after a sealing re-key.** When `return_phase` is `sealing`, this step is skipped:
+
+- no keyed object exists yet;
+- the conversion's own cleaner runs under the new key after the purge;
+- a standalone run would delete raw objects that a key-free re-take of the bundle may still need as its byte source.
 
 Under the new key, the classification rule (unchanged) gives:
 
@@ -247,100 +267,121 @@ Under the new key, the classification rule (unchanged) gives:
 
 ### 6.1 The tab's generation
 
-Each tab holds, per workspace, the **generation it entered at**. That's the `wk_generation` of the synced `workspaces` row whose canary its key opened at entry ([§6.3](#63-entry-and-adoption)). That number has two jobs:
+Each tab holds, per workspace, the **generation it entered at**: the synced `wk_generation` when entry let it in ([§6.3](#63-entry-and-adoption)). Everything a tab writes is fenced by that number. The rule that keeps it honest: **a tab never takes a new generation in place.**
 
-- **Every local write records it.** The engine puts it in the transaction's context, which already carries `source` and `tx_seq` (`tx_context`). The upload triggers copy the row's workspace's value into the queued write, beside `base_updated_at`, and the connector sends it as the write's stamp. A write therefore says which workspace its writer was looking at, however late it's sealed or sent. A tab that never pinned the workspace e2ee records none.
-  - **Compaction keeps the oldest stamp.** When the connector merges one block's patches from several transactions (`compactBlockCrudEntries`), the merged write carries the oldest stamp, with an absent one counting as oldest. That's the rule it already applies to `base_updated_at`. Otherwise a current patch could carry a stale patch's columns past the fence.
-- **Taking a new one resets the tab's view.** Before a tab takes a new generation for a workspace, it empties that workspace's undo and redo stacks and evicts its rows from its in-memory cache. Its next reads then hydrate from disk.
+**Writes record it.**
 
-Together these make every pre-recovery write refusable, in every tab, with no cross-tab coordination:
+- **What carries it.** The engine records the tab's generations in the transaction's context (`tx_context`, which already carries `source` and `tx_seq`). That context is written when the transaction starts, before its workspace is pinned (`checkWorkspace` pins a transaction to one workspace). So it holds a small map by workspace id, and the upload triggers pick the row's workspace's entry.
+  - Both upload triggers copy it into the queued write: the insert trigger's create and the update trigger's patch.
+  - The connector sends it as the write's stamp, and folding a patch into its create keeps it.
+- **What it means.** A write says which workspace its writer was looking at, however late it's sealed or sent. A tab that never pinned the workspace e2ee records none.
+- **Compaction keeps the lowest.** When the connector merges one block's patches across transactions (`compactBlockCrudEntries`), the merged write carries the lowest stamp among them, with an absent one lowest of all. That isn't positional, unlike `base_updated_at` in `mergePatchPayloads`. A locked tab still writes UI state, so an old stamp can arrive after a new one. Merged by position, a stale patch's columns would pass the fence under the new stamp.
+- **What it covers.** The fence refuses every write a tab made at an old generation ([§3.2](#32-the-write-fence)), whenever it's sent: a backlog, an edit, an undo replay, a debounced commit. It then lands in the quarantine.
 
-- A backlog, an edit or an undo replay from a tab still at the old generation carries the old stamp. The fence refuses it ([§3.2](#32-the-write-fence)), and it lands in the quarantine.
-- A tab at the new generation has no pre-recovery undo history to replay.
+**Undo entries record it.** An undo entry records its transaction's generation, and replay refuses an entry from another generation. That holds even for a transaction that started at the old generation and recorded its entry after the stacks were emptied.
+
+**Ids derived from `K_id` check it.** Synthesis and media capture read `K_id` before their transaction. Such a transaction checks, inside itself, that the tab's generation is still the one `K_id` was read under, and refuses otherwise. Without that, a gesture that straddled a generation change would mint old-namespace ids stamped with the new generation.
+
+**Taking a new one tears the workspace down.**
+
+- **When.** A tab watches the synced `wk_generation` of each workspace it has open. When it differs from the tab's, the tab tears the workspace view down, as switching workspaces does. The adoption marker's `storage` event triggers the same.
+- **What teardown does.** It flushes pending edits and debounced commits, which carry the old stamp. It drops the workspace's undo and redo stacks and evicts its rows from the in-memory cache.
+- **After.** The tab then re-resolves entry, and mounts again at whatever generation entry gives it. No editor buffer, cached row or undo entry from the old generation survives into the new one.
 
 **Retry** in the rejection dialog re-stamps a write with the retrying tab's current generation. That's the user saying "send this now". Retry today re-queues one row of a quarantined transaction at a time. Adoption quarantines whole backlogs, which makes multi-row transactions common, so #1322 tracks re-queuing them whole.
 
 ### 6.2 Key records
 
-`WorkspaceKeyStore` keeps one record per (user, workspace), and `put` overwrites it. Recovery adds two slots and nothing to the record itself, which carries no generation:
+`WorkspaceKeyStore` keeps one record per (user, workspace), and `put` overwrites it. Recovery adds one field and two slots:
 
+- **`adoptedGeneration`** on the record: the generation at which adoption stored it. A record without it reads as 0. Entry is `ready` only when this matches the synced generation ([§6.3](#63-entry-and-adoption)).
+  - This catches a key stored by an older build. That build validates against the synced canary, with no phase check and no drain, so it may have stored the new key mid-recovery, or over local rows the restore later replaced. Such a record goes through adoption once, with no prompt.
+  - It's provenance only: stamps come from the synced row ([§6.1](#61-the-tabs-generation)).
 - **A pending slot** per (user, workspace). It holds a key the recovery flow minted, revealed, had retyped, and stored after a probe write, all **before** `rekey_workspace`. That's the conversion's key step, aimed at a slot nothing seals with.
   - Only adoption moves it to current, and adoption clears it.
-  - The key gates offer a pending key that opens the server canary before prompting for one.
+  - The key gate offers a pending key that opens the server canary before prompting for one.
 - **An archive** per (user, workspace). Adoption never overwrites a record: it appends the current one to the archive first. The app never reads the archive back; it only keeps it, in case the old key turns up.
 
 ### 6.3 Entry and adoption
 
-**Entry** stays local. For an e2ee pin with a key, today's `resolveWorkspaceEntry` returns `ready` with no network read. It now also opens the **synced** canary with the key:
+**Entry** stays local. For an e2ee pin with a key, today's `resolveWorkspaceEntry` returns `ready` with no network read. Now it returns `ready` only when both hold:
 
-- **It opens:** `ready`, and the tab enters at the synced generation.
-- **It doesn't:** locked, `key-replaced`. That gate reads the live phase on mount, as `ServerE2eeGate` does:
-  - during `recovering`, it shows the closed state, and on the owner's devices offers to resume the recovery;
-  - otherwise, it offers to adopt the new key.
+- the key opens the **synced** canary;
+- the record's `adoptedGeneration` equals the synced generation.
 
-A tab watches the synced `wk_canary` of each workspace it has open, and re-resolves entry when it changes. #1293's gate for non-e2ee pins gains one phase: `parseConversionPhase` parses `recovering`, and `checkServerE2eeEntry` returns its closed state for it. An older build reads the unknown value as `sealing`, which is also closed.
+The tab then enters at that generation. Otherwise entry returns `server-e2ee`, the reason #1293 already gives a pin that doesn't match the server. Its gate (`ServerE2eeGate`) reads the live phase on mount:
 
-Entry doesn't need the server. Its job is to stop a device decrypting or writing with a key that isn't the workspace's. The fence makes a device that's merely behind on sync harmless: its writes carry its old generation and are refused, and its restored rows fail to decrypt until it adopts.
+- **During `recovering`,** it shows the closed state. On the owner's devices it offers to resume the recovery.
+- **Otherwise,** it offers adoption: with the stored or pending key if one opens the server canary, without a prompt; else it asks for the key.
 
-**Adoption** is #1293's one-way pin upgrade, generalized. It's the one place a device makes a key current for an existing workspace. Four paths reach it:
+`parseConversionPhase` parses `recovering`, and `checkServerE2eeEntry` returns its closed state for it. An older build reads the unknown value as `sealing`, which is also closed.
 
-- the `key-replaced` gate;
+**Adoption** is #1293's one-way pin upgrade, generalized. It's the one place a device makes a key current for an existing workspace. Three paths reach it:
+
+- the `server-e2ee` gate, for any pin;
 - the key-required gate (an e2ee pin whose record was evicted);
-- #1293's pin upgrade, on a device that deferred through a conversion or is meeting the workspace for the first time;
 - the recovering device itself, after `finish_recovery`.
 
-In order:
+It holds `navigator.locks` per (user, workspace), so two tabs never run it at once. In order:
 
-1. **Read the server, live.** Unavailable means wait: the phase isn't synced, so offline adoption could open a workspace mid-recovery or mid-sealing. The phase must be none or `cleaning`, and the key must open the server canary. Call its generation *G*.
+1. **Read the server, live.** The phase must be none or `cleaning`, and the key must open the server canary. Call its generation *G*.
+   - If the server can't be read, adoption waits: the phase isn't synced, so offline adoption could open a workspace mid-recovery.
+   - **The exception is a synced generation of 0.** A device that has seen no re-key may adopt offline from the synced row, skipping step 4, as unlocking works offline today. If a re-key did happen, this device can't hold that key's canary, so its pasted key won't open the synced one. A key that does open it is the old one, and the fence refuses its writes.
 2. **Write the marker** (#1293's pin-upgrade marker).
-3. **Store:** append the current record to the archive, put the new one (clearing the pending slot), and set or upgrade the pin.
-4. **Wait for the image.** The device's synced canary must open under the key, meaning the checkpoint holding the re-key has arrived. Until then the gate shows that the workspace is downloading.
-   - Storing the key first is what unsticks this. Any of the workspace's queued writes that couldn't be sealed now seal, carry their stale stamps, are refused, and leave `ps_crud`. While `ps_crud` is non-empty, `ps_crud_hold_downloads` publishes no checkpoint.
-   - A write held for *another* workspace still stalls downloads. That's the stall #1301 removes.
-5. **Quarantine the stale backlog.** Every queued transaction holding a write for the workspace that the fence would refuse moves to `ps_crud_rejected`: a stamp other than *G*, or none once *G* is above 0. At generation 0 that's nothing, so a conversion's held writes still upload after its pin upgrade, as #1293 designed. Each one moves in one write transaction, keyed by `tx_id` as `recordRejectionToTable` keys it, so a concurrent refusal of the same transaction leaves one copy. This matters only for writes the uploader can't reach, behind a write held for another workspace, because the next step skips any row with a queued write.
-6. **Re-materialize:** `drainWorkspace(ws, 'all')`. If a staged row still doesn't open under the key, rows are still arriving: wait, then repeat from step 5.
-   - After a recovery every server row opens under the new key, which the restore proved, and the fence refuses any other key. So this ends once the device has caught up.
-   - On a workspace never re-keyed, #1293's rule stands: a row that doesn't open doesn't hold the marker.
-7. **Clear the marker.** The tab, and the device's other tabs on their next entry, then enter at *G* ([§6.1](#61-the-tabs-generation)).
+3. **Store:** append the current record to the archive, put the new one with `adoptedGeneration = G` (clearing the pending slot), and set or upgrade the pin.
+4. **Wait for a checkpoint newer than step 1's read:** a PowerSync write checkpoint requested after step 1. That's the mechanism `ps_crud_hold_downloads` already waits on. Once it's applied, the device's synced image holds everything the server held at step 1, which after a recovery is the whole restore. Until then the gate shows that the workspace is downloading.
+   - Storing the key first is what unsticks this. Any of the workspace's queued writes that couldn't be sealed now seal, carry their stale stamps, are refused, and leave `ps_crud`.
+   - A write held for *another* workspace still stalls downloads. That's the stall #1301 removes, and step 6 waits on it too.
+5. **Quarantine what the fence would refuse.** Every queued transaction holding a write for the workspace with a stamp other than *G* (or none, once *G* is above 0) moves to `ps_crud_rejected`.
+   - **Why it's needed.** A checkpoint is published only while `ps_crud` is empty, so whatever is left was queued after step 4's checkpoint, by a tab that hadn't torn down yet. The next step skips any row with a queued write, so these would otherwise keep their local values once refused.
+   - **How it moves.** Each transaction moves in one write transaction, keyed by `tx_id` as `recordRejectionToTable` keys it, so a concurrent refusal leaves one copy.
+   - **At generation 0** nothing moves, so a conversion's held writes still upload after its pin upgrade, as #1293 designed.
+6. **Re-materialize once:** `drainWorkspace(ws, 'all')`.
+   - When *G* is above 0, it then drops the workspace's local rows that have no staged row and no queued write. Those are creates the server never had: their writes are in the quarantine, where **Retry** re-creates them.
+   - A row that still doesn't open stays staged, as #1293's rule has it, and doesn't hold the marker. That can't be a restored row (§4.4's invariant), only garbage a member wrote, which today's quarantine already covers.
+7. **Clear the marker**, and tell the user that the workspace's undo history from before the recovery is gone. Every tab, this one included, tears down and re-enters at *G* ([§6.1](#61-the-tabs-generation)).
 
 **Crash and resume.** A crash before step 2 leaves the old key, or none, so the gate re-enters adoption. With the marker set, startup's `resumePinUpgrade` runs. It now first checks the stored key against a live read of the canary:
 
-- **It opens:** resume from step 4.
-- **It doesn't:** the crash came before step 3, so the marker is dropped and the key gate appears. It offers the pending key, if there is one.
-- **The server can't be read:** the device stays gated, with the marker kept.
+- **It opens:** re-run steps 3 to 7. Step 3 is idempotent, and it puts back a pin the crash may have left plaintext, which would otherwise hold the uploads step 4 waits on.
+- **It doesn't:** the crash came before step 3, so the marker is dropped and the gate appears. It offers the pending key, if there is one.
+- **The server can't be read:** the device stays gated, with the marker kept, unless step 1's exception applies.
 
-Every other tab of the device sees the marker through entry, which checks it first, and stays gated until it clears.
+**Changed invariants.** Two statements stop being true:
 
-**Changed invariant.** "The phase only moves forward" no longer holds: a recovery can begin after the conversion has finished. The comments that state it change with this:
+- **"The phase only moves forward."** A recovery can now begin after the conversion has finished.
+- **"A row means a conversion is in progress."**
+
+The comments that state either one change with this:
 
 - `conversionState.ts`'s header;
 - `upgradeWorkspacePin.ts`'s resume ("the phase never moves back");
-- conversion §6.3.
+- `workspaceConversion.ts`'s header;
+- the migration's table comment;
+- conversion §6.1 and §6.3.
 
-`resumePinUpgrade` can stay local only because step 1 and the resume check above read the server.
+`resumePinUpgrade` can stay free of a phase read because step 1 checks the phase before the marker exists.
 
 ## 7. Key loss during sealing
 
 A re-key during `sealing` goes through `recovering`, with `return_phase = 'sealing'`, like any other recovery. The point is the conversion's bundle.
 
-- **The bundle is a complete plaintext copy.** Nothing but the re-seal writes during `sealing`. If it's lost too, it's re-taken without a key, as conversion §6.3 step 3 already provides.
+- **The bundle is a complete plaintext copy.** Nothing but the re-seal writes during `sealing`. If it's lost, the recovery flow re-takes it with #1290's taker, without a key, as conversion §6.3 step 3 provides.
   - Unsealed rows are read verbatim.
   - Sealed rows come from the `before_diff` of their latest plaintext-to-envelope history row.
   - A restore write over a row the re-seal had sealed goes from envelope to envelope, so it never counts as that record. One over a row still plaintext does count, and its `before_diff` is that same plaintext.
-- **Content only.** With the bundle current, the restore has nothing to recreate or tombstone, and no metadata to change. If it finds any of those, the bundle is stale, and the attempt stops **before writing**. It re-takes the bundle, then starts a new attempt. That keeps every restore write a content-only `U` row writing envelopes, which `is_reseal_history_row` accepts. It also keeps a stale bundle's values from ever being written, and then archived as the truth.
-- **Back to the conversion.** `finish_recovery` returns the phase to `sealing`. The bundle the restore used is the conversion's bundle record. The conversion's flow (#1290) then sees `sealing` with `wk_generation > 0` and skips re-seal and verify:
+- **Content only.** While `return_phase` is `sealing`, the restore never sends a create, a tombstone, or a non-content column. Needing one means the bundle is stale: the attempt stops, re-takes the bundle, and starts a new attempt.
+  - Content writes sent before the stop are harmless, since a re-take reproduces the same plaintext.
+  - So every restore write is a content-only `U` row writing envelopes, which `is_reseal_history_row` accepts. A stale bundle's values are never written, and so never archived as the truth.
+- **Attachments wait** for the conversion's own cleaner ([§5](#5-attachments)).
+- **Back to the conversion.** `finish_recovery` returns the phase to `sealing`, and the bundle the restore used is the conversion's bundle record. The conversion's flow (#1290) then sees `sealing` with `wk_generation > 0` and skips re-seal and verify:
   - every row is sealed already;
   - verify's records for rows re-sealed before the key loss open only under the lost key;
   - the restore's check stood in for verify.
 
   It purges with `through` and the count from the bundle's verified manifest.
-
-`recovering` also closes two holes that `sealing` alone would leave:
-
-- **A purge sent before the re-key can't land in the middle,** since the purge refuses any phase but `sealing`.
-- **The attempt token fences restore writes** from an abandoned run.
-
-The old key's re-seal batches still in flight carry no stamp, and the generation is now above 0, so the fence refuses them. #1292's engine needs no change for that.
+- **The converting device keeps the new key pending until its step-7 pin upgrade**, which is adoption, since adoption refuses during `sealing`. Until then the conversion's flow finds the key in the pending slot.
+- **Held writes are quarantined.** Every device that deferred through the conversion has its held writes quarantined at its pin upgrade, since they carry no stamp and *G* is above 0. #1293 meant them to upload. They were made against the pre-flip workspace that the bundle restores, so they're retryable, but they no longer go out on their own.
 
 Re-keying before the first re-sealed row takes the same path. It's equivalent there, since every row still equals the bundle.
 
@@ -359,7 +400,7 @@ Re-keying before the first re-sealed row takes the same path. It's equivalent th
 - **Its query:** a tombstone-inclusive sibling of `tx.livePropertyDefinitionNames`.
 - **Why the name is still there:** a restored deletion keeps its content, because soft-deleted rows do. A recovery tombstone has empty content, so a definition created after the point never blocks a re-mint, and the point never had it anyway.
 
-Both comments in `propertyDefinitionSynthesis.ts` that call `K_id` "immutable until rotation exists" change to: it changes only through recovery, behind the gate. A synthesis pass that a canary change interrupts writes under its tab's old generation, so the fence refuses it.
+Both comments in `propertyDefinitionSynthesis.ts` that call `K_id` "immutable until rotation exists" change to: it changes only through recovery, and a mint checks the generation it read `K_id` under ([§6.1](#61-the-tabs-generation)).
 
 **Media blocks.** Their ids hash `${ws}:${contentKey}`, and in e2ee the content key is `HMAC(K_id, sha256)`. Existing ids don't change, and their paths derive at use time. Re-capturing a file after recovery mints a second block, which is accepted.
 
@@ -374,7 +415,7 @@ One guarded in-app flow on the owner's device. It holds `navigator.locks` per (u
 - the key store is durable;
 - the File System Access API is available.
 
-The user picks a point. It's verified ([§4.1](#41-the-point-verified-and-bound)), its export time is shown with "everything after this is lost", and the user confirms.
+The user picks a point. In `sealing`, if the bundle is gone or stale, the flow re-takes it ([§7](#7-key-loss-during-sealing)). The point is verified ([§4.1](#41-the-point-verified-and-bound)), its export time is shown with "everything after this is lost", and the user confirms.
 
 **1. Key.** If the pending slot holds a key, the run reuses it. Otherwise it mints one: generate, derive `K_id`, mint the canary, re-parse the **displayed** string, reveal it once, have it retyped, probe-write, store as pending.
 
@@ -384,15 +425,16 @@ The user picks a point. It's verified ([§4.1](#41-the-point-verified-and-bound)
 
 **4. Restore** ([§4](#4-the-restore)), with a progress view and a wake lock.
 
-**5. Attachments** ([§5](#5-attachments)).
+**5. Attachments** ([§5](#5-attachments)), unless `return_phase` is `sealing`.
 
 **6. Finish.** Confirm any unrestored rows and unrecoverable blocks, then call `finish_recovery(ws, token)`.
 
-**7. Adopt** on this device ([§6.3](#63-entry-and-adoption)). After a `sealing` return, adoption refuses until the purge. So the conversion's own step 7, its pin upgrade, is this adoption, and until then the conversion's flow finds the key in the pending slot.
+**7. Adopt** on this device ([§6.3](#63-entry-and-adoption)). After a `sealing` return, it happens at the conversion's step 7 instead ([§7](#7-key-loss-during-sealing)).
 
 **8. Done.** The report says:
 
 - old key records and old-`K_id` objects were kept;
+- undo history from before the recovery is gone;
 - other devices will ask for the new key, and their pre-recovery writes will land in the rejection quarantine;
 - **take a new step-14 point now**, since every older point predates the new key.
 
@@ -404,11 +446,12 @@ A failed RPC with `55P03` retries; any other failure stops the run, and the next
 | `recovering`, canary opens under no key here (owner) | ask for the new key, store it as pending, then step 3. If that key is lost too, step 1: re-keying again is admitted |
 | `recovering` (not the owner) | the gate's closed state |
 | no `recovering` row, canary opens under the pending key | step 7, or the conversion's flow if the phase is `sealing` |
-| no `recovering` row, canary doesn't | step 0. The pending key is kept: the user saved it |
+| no `recovering` row, canary opens under the current key | nothing; a marker left behind resumes adoption |
+| no `recovering` row, canary opens under neither | step 0. The pending key is kept: the user saved it |
 
 **The step-14 gesture** ("take a recovery point") is #1302's. It reuses #1290's folder writer and verifier, and follows conversion runbook step 14:
 
-- **Rows** come from server pages opened under the key. The paging is bracketed by the same consistency check as the bundle's: the workspace's history count must be the same before and after, or the rows are re-read. Every block write adds a history row, so a file that passes is one instant.
+- **Rows** come from server pages opened under the key. The paging is bracketed by the bundle's consistency check: the workspace's history count must be the same before and after, or the rows are re-read. Every block write adds a history row, so a file that passes is one instant.
 - **Media bytes** come from whichever source verifies.
 - **The no-verified-source list** is re-derived when the point is taken.
 
@@ -419,17 +462,16 @@ It refuses to take a point while any row doesn't open, and lists those rows, sin
 - each part's hash;
 - the export time;
 - `properties_migration`;
-- the hashes with no verified source ([§5](#5-attachments)).
-
-**Who builds what:**
-
-- **#1302:** the steps above and the gesture.
-- **#1290:** the conversion-side pieces of [§7](#7-key-loss-during-sealing): skipping re-seal and verify, treating the restore's bundle as its record, and looking for the key in the pending slot first.
-- **#1290:** the "offer to finish" on an e2ee-pinned owner device in `cleaning`, which the #1293 hand-over already gives to #1290. A recovery that returns to `cleaning` relies on it.
+- the hashes with no verified source.
 
 ## 10. Fleet gate
 
-Conversion runbook step 1 requires #1302's client half on **every** device before the first production conversion. With the server fence, **that's no longer needed for safety**. A build without the client half fails closed in a re-keyed workspace: its writes carry no stamp, so they're refused and quarantined, whatever key it holds and however it got it. Its restored rows fail to decrypt until it updates. Updating then puts it through entry and adoption, as any other device. What remains is the safety net itself: #1302's server half and flow must exist before the first conversion (runbook step 1's last bullet). Relaxing runbook step 1 is open question 1.
+Conversion runbook step 1 requires #1302's client half on **every** device before the first production conversion. With the server fence, **that's no longer needed for safety**. A build without the client half fails closed in a re-keyed workspace:
+
+- its writes carry no stamp, so they're refused and quarantined, whatever key it holds and however it got it;
+- its restored rows fail to decrypt.
+
+After updating, its record has no `adoptedGeneration`, so entry sends it through adoption once ([§6.2](#62-key-records)). What remains is the safety net itself: #1302's server half and flow must exist before the first conversion (runbook step 1's last bullet). Relaxing runbook step 1 is open question 1.
 
 ## 11. Alternatives considered
 
@@ -439,6 +481,7 @@ Conversion runbook step 1 requires #1302's client half on **every** device befor
   - a record stored by an older build, with no generation, would stamp 0 forever.
 
   Write-time stamping makes "pre-recovery" a property of the write itself.
+- **Waiting, in adoption, until every staged row opens under the new key.** One garbage envelope from any member would keep every device gated for good. Waiting for a checkpoint is a sync position, and always ends.
 - **A client-side pre-send fence in the connector** (in the requirements). It isn't atomic with the write, so the server fence is needed anyway, and its `hold` would cost more than a refusal: while anything sits in `ps_crud`, `ps_crud_hold_downloads` stops the device's downloads for **every** workspace.
 - **A key generation stored on each block row.** Rejected: `apply_block_patches` keeps any column a patch omits, so an old client's patch would inherit the row's current value and pass.
 - **Re-keying during `sealing` without leaving `sealing`** (in the requirements). Rejected: a purge sent before the re-key could land mid-restore and move the workspace on with rows sealed under the lost key. Restore writes would also have no attempt fence. Going through `recovering` keeps both of the reasons `sealing` was kept: every device stays gated, and the purge still runs, after the recovery.
@@ -458,10 +501,10 @@ Every requirement in #1302 has a home:
 | whole-row restore, tombstones under the new key, completion by equality | [§4.2](#42-the-expected-row)–[§4.4](#44-completion) |
 | recreate hard-deleted rows; refuse a foreign id | [§4.3](#43-order-of-work) |
 | bind and verify the point; restore only from its `blocks.jsonl` | [§4.1](#41-the-point-verified-and-bound) |
-| attachments rebuilt; old objects and key records kept; the list of bytes no source verifies carried | [§5](#5-attachments), [§6.2](#62-key-records) |
-| entry checks the key against the canary, and again when it changes | [§6.3](#63-entry-and-adoption) |
-| server fence on old-key writes; per-attempt token invalidated by finish | [§3.2](#32-the-write-fence), [§3.3](#33-rpcs) |
-| quarantine the pre-recovery backlog; undo clear; rematerialize before admitting edits | [§6.1](#61-the-tabs-generation), [§6.3](#63-entry-and-adoption) |
+| attachments rebuilt; old objects and key records kept | [§5](#5-attachments), [§6.2](#62-key-records) |
+| entry checks the key against the canary, and again when it changes | [§6.1](#61-the-tabs-generation), [§6.3](#63-entry-and-adoption) |
+| server fence on old-key writes; per-attempt token | [§3.2](#32-the-write-fence), [§3.3](#33-rpcs) |
+| quarantine the pre-recovery backlog; clear undo and tell the user; rematerialize before admitting edits | [§6.1](#61-the-tabs-generation), [§6.3](#63-entry-and-adoption) |
 | gate every device for the whole recovery | [§3.3](#33-rpcs), [§6.3](#63-entry-and-adoption) |
 | synthesized-definition tombstones survive | [§8](#8-derived-ids-across-a-k_id-change) |
 | key loss during `sealing` | [§7](#7-key-loss-during-sealing) |
@@ -470,12 +513,18 @@ These are met differently from how the issue words them:
 
 | The issue says | This design | Why |
 |---|---|---|
+| each write carries the key generation it was sealed under | the generation its tab entered at when it **made** the write | [§11](#11-alternatives-considered) |
 | fence uploads at the connector | no connector fence | [§11](#11-alternatives-considered) |
-| entry reads the server canary, never the synced row alone | entry reads the synced canary; adoption reads the server | [§11](#11-alternatives-considered) |
+| entry reads the server canary, never the synced row alone | entry reads the synced row; adoption reads the server | [§11](#11-alternatives-considered) |
 | quarantine the backlog before storing the key | stale writes are identified by their write-time stamp, so the order no longer matters, and the move comes after storing (it unsticks the queue) | [§6.3](#63-entry-and-adoption) |
+| finish invalidates the token in the same transaction as the final check | the server runs no check; the attempt fence and the table lock make the last client check final | [§3.3](#33-rpcs) |
+| refuse a foreign id; the gate stays until the equality check passes | a confirmed outcome, "passed, with these rows unrestored" | [§4.4](#44-completion) |
+| a resume is never a mix of two points | true for every column but a tombstone's metadata, which no device shows | [§4.5](#45-resume) |
+| the approved-missing set is copied into every later point; *archived* and *absent* kinds | one list, re-derived when each point is taken, as #1313 revised the conversion | [§5](#5-attachments) |
 | `sealing` stays `sealing` | `sealing` → `recovering` → `sealing` | [§11](#11-alternatives-considered) |
 | finishing → no row | → the phase recovery interrupted | [§11](#11-alternatives-considered) |
 | before the first re-sealed row: re-key and continue the conversion | the same restore path, equivalent there | [§7](#7-key-loss-during-sealing) |
+| (from #1293) held writes upload after the pin upgrade | after a sealing re-key they're quarantined, retryable | [§7](#7-key-loss-during-sealing) |
 | fleet gate before the first conversion | not needed for safety; open question 1 | [§10](#10-fleet-gate) |
 
 ## 13. Open questions
@@ -490,29 +539,28 @@ These are met differently from how the issue words them:
 | Piece | Where |
 |---|---|
 | Migration: `wk_generation` (synced), the `recovering` phase and its two columns, the fence, the stamp keys in both write RPCs, the three RPCs, pgTAP | #1302 |
-| Engine: whole-row targets, wide and id-only reads, creates, stamps, the restore on verify's loop | #1302, on #1292's module |
-| Write-time stamp: tab generation, `tx_context`, upload triggers, connector, Retry re-stamp | #1302 |
-| Key store: pending slot and archive | #1302 |
-| Entry check, canary watcher, `key-replaced` and `recovering` gate states | #1302, on #1293's gate |
-| Adoption: live read, wait for the image, backlog quarantine, drain | #1302, generalizing #1293's pin upgrade |
+| Restore: the recovery `PlaintextSource`, metadata in targets, read-back, recreates, stamps | #1302, on #1292's module |
+| Tab generation: `tx_context` map, both upload triggers, compaction, undo entries, the `K_id` check, teardown on change, Retry re-stamp | #1302 |
+| Key store: `adoptedGeneration`, pending slot, archive | #1302 |
+| Entry check, `recovering` gate state, adoption | #1302, generalizing #1293's gate and pin upgrade |
 | Synthesis rule | #1302 |
 | The cleaner takes its media set and bytes as inputs | #1291 |
-| Sealing return; offer to finish on e2ee-pinned owner devices; folder writer and verifier | #1290 |
+| Bundle manifest records `properties_migration`; the bundle taker callable by recovery; skip re-seal and verify at `wk_generation > 0`; pending-slot lookup; offer to finish on e2ee-pinned owner devices | #1290 |
 | The recovery flow, and the step-14 gesture | #1302 |
 
 **Done when** (from #1302, plus the fence):
 
 - pgTAP pins:
-  - the re-key refuses non-owners, plaintext rows, calls outside the admit, and a stale `expected_generation`;
+  - the re-key refuses non-owners, a plaintext (`none`) workspace, calls outside the admit, and a stale `expected_generation`;
   - a generation-only update is refused;
-  - the fence refuses a stale or missing stamp once re-keyed, any write without the live attempt while `recovering`, and any attempt outside it;
+  - the fence refuses a stale or missing stamp once re-keyed, any write without the live attempt while `recovering`, and any attempt outside it, and admits a write made as `postgres`;
   - each recovery RPC refuses while a write is held open;
 - the recovery runs end to end on a scratch workspace:
   - every block id is kept, and every derived id resolves;
   - moved, deleted and undeleted rows return to the point's state;
   - a hard-deleted row is recreated, including one whose child was moved away;
 - a crash between the canary change and the first restored row resumes and completes;
-- a device holding the old key prompts instead of quarantining rows. Its pre-recovery backlog, and an undo replay from a second tab, land in the quarantine, not on the server;
-- a device whose key was stored by an older build writes normally after updating;
+- a device holding the old key prompts instead of quarantining rows. Its pre-recovery backlog lands in the quarantine, not on the server, and so does a debounced edit or an undo replay from a second tab open across the adoption;
+- a device whose key an older build stored goes through adoption once after updating, and its stale local rows are replaced;
 - rows absent from the point end up tombstoned, and decrypt cleanly under the new key on every device;
 - a deleted synthesized definition is not re-minted after the re-key.
