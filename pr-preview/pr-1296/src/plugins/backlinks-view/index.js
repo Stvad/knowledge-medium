@@ -1,1 +1,1 @@
-import{hf as e}from"../../../chunks/app-EbnEklKw.js";export{e as backlinksViewPlugin};
+import{hf as e}from"../../../chunks/app-Dpgyplgt.js";export{e as backlinksViewPlugin};
