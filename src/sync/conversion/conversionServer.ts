@@ -63,8 +63,8 @@ const BLOCK_COLUMNS = 'id,workspace_id,content,properties_json,references_json,u
 const HISTORY_COLUMNS = 'event_id,block_id,before_diff,after_diff'
 /** Ids per `in.(…)` filter. They ride in the request line, which the API
  *  gateway caps at about 8 KB. */
-const IDS_PER_FILTER = 100
-const HISTORY_PAGE = 500
+export const IDS_PER_FILTER = 100
+export const HISTORY_PAGE = 500
 
 /** Carries the PostgREST `code` and the HTTP `status` (a sibling of the error in
  *  the response, never on it), which are what tell a permanent failure from a
