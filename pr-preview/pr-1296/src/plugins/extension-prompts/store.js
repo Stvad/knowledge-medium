@@ -1,1 +1,1 @@
-import{_E as e,vE as t}from"../../../chunks/app-BEtuRIdu.js";export{e as extensionPromptStore,t as pendingExtensionPrompts};
+import{_E as e,vE as t}from"../../../chunks/app--z7v__lU.js";export{e as extensionPromptStore,t as pendingExtensionPrompts};

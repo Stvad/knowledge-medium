@@ -1,1 +1,1 @@
-import{cE as e,sE as t}from"../../../chunks/app-BEtuRIdu.js";export{t as ExtensionPromptSurface,e as extensionPromptsExtension};
+import{cE as e,sE as t}from"../../../chunks/app--z7v__lU.js";export{t as ExtensionPromptSurface,e as extensionPromptsExtension};

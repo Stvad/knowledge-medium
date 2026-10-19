@@ -1,1 +1,1 @@
-import{QD as e}from"../../chunks/app-BEtuRIdu.js";export{e as BlockLoadingPlaceholder};
+import{QD as e}from"../../chunks/app--z7v__lU.js";export{e as BlockLoadingPlaceholder};
