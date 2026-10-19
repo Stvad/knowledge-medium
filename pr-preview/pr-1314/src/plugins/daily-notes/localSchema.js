@@ -1,0 +1,1 @@
+import{zB as e}from"../../../chunks/app-G3vkSqca.js";export{e as dailyNotesLocalSchema};
