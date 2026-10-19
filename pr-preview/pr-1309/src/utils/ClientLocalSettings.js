@@ -1,1 +1,1 @@
-import{CD as e,SD as t}from"../../chunks/app-CyjUj78i.js";export{t as ClientLocalSettings,e as clientLocalSettings};
+import{CD as e,SD as t}from"../../chunks/app-CxGQA_YX.js";export{t as ClientLocalSettings,e as clientLocalSettings};
