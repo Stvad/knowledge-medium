@@ -1,1 +1,1 @@
-import{of as e}from"../../../chunks/app-CkfFgjGZ.js";export{e as blockInfoPlugin};
+import{of as e}from"../../../chunks/app-vQSajdeU.js";export{e as blockInfoPlugin};
