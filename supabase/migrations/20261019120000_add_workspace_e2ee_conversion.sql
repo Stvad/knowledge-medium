@@ -5,9 +5,9 @@
 -- transition, none -> e2ee, and walks a per-workspace phase forward through
 -- three owner-only RPCs, each in its own transaction:
 --
---   convert_workspace_to_e2ee   mode none -> e2ee, canary set, phase -> sealing
---   purge_workspace_history     phase sealing -> cleaning, history deleted
---   finish_conversion           phase cleaning -> NULL
+--   convert_workspace_to_e2ee   mode none -> e2ee, canary set, phase 'sealing'
+--   purge_workspace_history     phase 'sealing' -> 'cleaning', history deleted
+--   finish_conversion           phase 'cleaning' -> no conversion row
 --
 -- Every refusal from the three RPCs raises SQLSTATE KMC01, so the client can
 -- tell "the server said no" from a transport error. The flip's lock timeout
@@ -15,27 +15,38 @@
 
 begin;
 
--- ── conversion_phase ────────────────────────────────────────────────────
+-- ── workspace_conversions ───────────────────────────────────────────────
+-- One row per conversion in progress; no row means none is.
 -- 'sealing': the server may still hold plaintext; no device may unlock.
--- 'cleaning': only attachment cleanup is left. NULL: no conversion running.
--- Members read it over PostgREST (workspaces_read already covers every
--- column). It is deliberately absent from the PowerSync sync config.
-alter table public.workspaces
-    add column conversion_phase text
-        constraint workspaces_conversion_phase_valid
-        check (
-            conversion_phase is null
-            or (conversion_phase in ('sealing', 'cleaning') and encryption_mode = 'e2ee')
-        );
+-- 'cleaning': only attachment cleanup is left.
+-- Members read it over PostgREST. Only the three RPCs below write it: RLS
+-- has no write policy and the client roles hold no write grant. It is not
+-- in the PowerSync sync config.
+create table public.workspace_conversions (
+    workspace_id text primary key
+        references public.workspaces (id) on delete cascade,
+    phase text not null
+        constraint workspace_conversions_phase_valid check (phase in ('sealing', 'cleaning')),
+    updated_at timestamptz not null default now()
+);
+
+alter table public.workspace_conversions owner to postgres;
+alter table public.workspace_conversions enable row level security;
+
+create policy workspace_conversions_read on public.workspace_conversions
+    for select to authenticated
+    using (private.is_workspace_member(workspace_id, (auth.uid())::text));
+
+revoke all on table public.workspace_conversions from anon, authenticated;
+grant select on table public.workspace_conversions to authenticated;
 
 -- ── the admit ───────────────────────────────────────────────────────────
--- encryption_mode, wk_canary and conversion_phase change only along the
--- three steps below, and only inside a conversion RPC. An RPC is recognized
--- by both halves of the admit: it runs as its owner (current_user =
--- 'postgres', which no PostgREST role is) AND it has named this workspace in
--- the transaction-local km.conversion, which only those RPCs set
--- (PostgREST callers cannot call set_config). Anything else, service role
--- included, is refused.
+-- encryption_mode and wk_canary change only by the flip, none -> e2ee with a
+-- canary, and only inside convert_workspace_to_e2ee. It is recognized by both
+-- halves of the admit: it runs as its owner (current_user = 'postgres', which
+-- no PostgREST role is) AND it has named this workspace in the
+-- transaction-local km.conversion, which only it sets (PostgREST callers
+-- cannot call set_config). Anything else, service role included, is refused.
 --
 -- e2ee -> none, and any canary change on an e2ee row, stay refused for
 -- everyone.
@@ -44,45 +55,24 @@ create or replace function public.workspaces_prevent_e2ee_field_change()
     language plpgsql
     set search_path = ''
     as $$
-declare
-    v_step text;
 begin
     if old.encryption_mode is not distinct from new.encryption_mode
-       and old.wk_canary is not distinct from new.wk_canary
-       and old.conversion_phase is not distinct from new.conversion_phase then
+       and old.wk_canary is not distinct from new.wk_canary then
         return new;
     end if;
 
-    -- The steps as phase transitions. workspaces_conversion_phase_valid and
-    -- workspaces_wk_canary_matches_mode settle the rest: a phase means e2ee
-    -- with a well-formed canary, and e2ee with an unchanged canary cannot
-    -- become none.
-    v_step := case
-        when old.encryption_mode = 'none' and new.conversion_phase = 'sealing'
-            then 'flip'
-        when old.conversion_phase = 'sealing' and new.conversion_phase = 'cleaning'
-             and old.wk_canary is not distinct from new.wk_canary
-            then 'purge'
-        when old.conversion_phase = 'cleaning' and new.conversion_phase is null
-             and old.wk_canary is not distinct from new.wk_canary
-            then 'finish'
-    end;
-
-    if v_step is not null
+    -- workspaces_wk_canary_matches_mode makes the new canary well-formed.
+    if old.encryption_mode = 'none' and new.encryption_mode = 'e2ee'
        and current_user = 'postgres'
        and current_setting('km.conversion', true) = old.id then
-        -- The admit is single-use: consumed by the row it admits, so no later
-        -- statement in the transaction inherits it.
-        perform set_config('km.conversion', '', true);
         return new;
     end if;
 
     -- 23514 (check_violation) is PERMANENT for the upload classifier, so a
     -- stale or buggy client PATCH of these columns is quarantined, not
     -- retried forever.
-    raise exception 'workspaces.encryption_mode, wk_canary and conversion_phase change only through the conversion RPCs (mode % -> %, phase % -> %)',
-        old.encryption_mode, new.encryption_mode,
-        coalesce(old.conversion_phase, 'null'), coalesce(new.conversion_phase, 'null')
+    raise exception 'workspaces.encryption_mode and wk_canary change only through convert_workspace_to_e2ee (mode % -> %)',
+        old.encryption_mode, new.encryption_mode
         using errcode = 'check_violation';
 end;
 $$;
@@ -187,13 +177,15 @@ begin
     -- flip that won the race leaves nothing to match.
     update public.workspaces
         set encryption_mode = 'e2ee',
-            wk_canary = p_wk_canary,
-            conversion_phase = 'sealing'
+            wk_canary = p_wk_canary
         where id = p_workspace_id and encryption_mode = 'none';
     if not found then
         perform private.refuse_conversion(
             'convert_workspace_to_e2ee: the workspace is not plaintext');
     end if;
+
+    insert into public.workspace_conversions (workspace_id, phase)
+        values (p_workspace_id, 'sealing');
 end;
 $$;
 
@@ -260,14 +252,14 @@ begin
             'purge_workspace_history: only the workspace owner can purge its history');
     end if;
 
-    select conversion_phase into v_phase
-        from public.workspaces
-        where id = p_workspace_id
-        for no key update;
+    select phase into v_phase
+        from public.workspace_conversions
+        where workspace_id = p_workspace_id
+        for update;
     if v_phase is distinct from 'sealing' then
         perform private.refuse_conversion(format(
             'purge_workspace_history: the conversion phase is %s, not sealing',
-            coalesce(v_phase, 'null')));
+            coalesce(v_phase, 'none')));
     end if;
     if p_through_event_id is null then
         perform private.refuse_conversion(
@@ -305,10 +297,9 @@ begin
             v_foreign, p_through_event_id));
     end if;
 
-    perform set_config('km.conversion', p_workspace_id, true);
-    update public.workspaces
-        set conversion_phase = 'cleaning'
-        where id = p_workspace_id;
+    update public.workspace_conversions
+        set phase = 'cleaning', updated_at = now()
+        where workspace_id = p_workspace_id;
 end;
 $$;
 
@@ -333,20 +324,18 @@ begin
             'finish_conversion: only the workspace owner can finish its conversion');
     end if;
 
-    select conversion_phase into v_phase
-        from public.workspaces
-        where id = p_workspace_id
-        for no key update;
+    select phase into v_phase
+        from public.workspace_conversions
+        where workspace_id = p_workspace_id
+        for update;
     if v_phase is distinct from 'cleaning' then
         perform private.refuse_conversion(format(
             'finish_conversion: the conversion phase is %s, not cleaning',
-            coalesce(v_phase, 'null')));
+            coalesce(v_phase, 'none')));
     end if;
 
-    perform set_config('km.conversion', p_workspace_id, true);
-    update public.workspaces
-        set conversion_phase = null
-        where id = p_workspace_id;
+    delete from public.workspace_conversions
+        where workspace_id = p_workspace_id;
 end;
 $$;
 

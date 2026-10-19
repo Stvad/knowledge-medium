@@ -1,5 +1,5 @@
--- The in-place E2EE conversion's server half: conversion_phase, the trigger
--- admit, and the three owner-only RPCs. Run with:
+-- The in-place E2EE conversion's server half: workspace_conversions, the
+-- trigger admit, and the three owner-only RPCs. Run with:
 --
 --   pnpm check:db
 --
@@ -17,7 +17,7 @@ BEGIN;
 CREATE EXTENSION IF NOT EXISTS pgtap WITH SCHEMA extensions;
 SET LOCAL search_path TO public, extensions;
 
-SELECT plan(64);
+SELECT plan(59);
 
 CREATE TEMP TABLE conv_ctx AS
 SELECT
@@ -92,7 +92,7 @@ BEGIN
 END;
 $$;
 
--- conversion_phase of p_ws as the member p_sub sees it through RLS.
+-- The conversion phase of p_ws as the member p_sub sees it through RLS.
 CREATE FUNCTION pg_temp.phase_seen_by(p_sub text, p_ws text)
 RETURNS text
 LANGUAGE plpgsql
@@ -104,17 +104,20 @@ BEGIN
   PERFORM set_config('request.jwt.claims',
     json_build_object('sub', p_sub, 'role', 'authenticated')::text, true);
   SET LOCAL ROLE authenticated;
-  SELECT coalesce(conversion_phase, 'null') INTO v_phase
-    FROM public.workspaces WHERE id = p_ws;
+  SELECT phase INTO v_phase FROM public.workspace_conversions WHERE workspace_id = p_ws;
   RESET ROLE;
   RETURN coalesce(v_phase, '(no row)');
 END;
 $$;
 
--- The trigger's refusal. Matched by message, not only SQLSTATE: the
--- conversion_phase CHECK raises 23514 too.
+-- The conversion phase of p_ws, as the server holds it.
+CREATE FUNCTION pg_temp.phase(p_ws text) RETURNS text LANGUAGE sql
+AS $$ SELECT coalesce((SELECT phase FROM public.workspace_conversions WHERE workspace_id = p_ws), '(no row)') $$;
+
+-- The trigger's refusal. Matched by message, not only SQLSTATE:
+-- workspaces_wk_canary_matches_mode raises 23514 too.
 CREATE FUNCTION pg_temp.admit_refusal() RETURNS text LANGUAGE sql
-AS $$ SELECT '^23514: workspaces\.encryption_mode, wk_canary and conversion_phase change only through the conversion RPCs ' $$;
+AS $$ SELECT '^23514: workspaces\.encryption_mode and wk_canary change only through convert_workspace_to_e2ee ' $$;
 
 CREATE FUNCTION pg_temp.flip_sql(p_ws text, p_canary text)
 RETURNS text LANGUAGE sql
@@ -132,7 +135,7 @@ RETURNS text LANGUAGE sql
 AS $$ SELECT format('SELECT public.finish_conversion(%L)', p_ws) $$;
 
 -- An UPDATE of the guarded columns with km.conversion naming p_admit_ws:
--- run as postgres, it is what a conversion RPC's own UPDATE looks like to the
+-- run as postgres, it is what the flip's own UPDATE looks like to the
 -- trigger.
 CREATE FUNCTION pg_temp.admitted_update_sql(p_admit_ws text, p_ws text, p_set text)
 RETURNS text LANGUAGE sql
@@ -196,7 +199,7 @@ SELECT is(pg_temp.archived(), 5::bigint,
   'fixture: the workspace history holds four inserts and one edit');
 
 -------------------------------------------------------------------------
--- The flip.
+-- workspace_conversions: members read it, and no client writes it.
 -------------------------------------------------------------------------
 SELECT ok(
   NOT has_function_privilege('anon', 'public.convert_workspace_to_e2ee(text, text)', 'execute')
@@ -208,6 +211,31 @@ SELECT ok(
   'the three RPCs are callable by authenticated and not by anon'
 );
 
+SELECT is(
+  pg_temp.probe('authenticated', pg_temp.owner_id(),
+    format($$INSERT INTO public.workspace_conversions (workspace_id, phase) VALUES (%L, 'sealing')$$,
+           pg_temp.plain_ws())),
+  '42501: permission denied for table workspace_conversions',
+  'the owner cannot insert a conversion row'
+);
+
+SELECT matches(
+  pg_temp.probe('anon', NULL, 'SELECT 1 FROM public.workspace_conversions'),
+  '^42501: permission denied for table workspace_conversions',
+  'anon cannot read conversion rows'
+);
+
+SELECT matches(
+  pg_temp.probe('postgres', NULL,
+    format($$INSERT INTO public.workspace_conversions (workspace_id, phase) VALUES (%L, 'done')$$,
+           pg_temp.plain_ws())),
+  '^23514: new row for relation "workspace_conversions" violates check constraint "workspace_conversions_phase_valid"',
+  'a phase outside sealing and cleaning violates the check'
+);
+
+-------------------------------------------------------------------------
+-- The flip.
+-------------------------------------------------------------------------
 SELECT is(
   pg_temp.probe('authenticated', pg_temp.editor_id(), pg_temp.flip_sql(pg_temp.ws(), pg_temp.env('canary'))),
   'KMC01: convert_workspace_to_e2ee: only the workspace owner can convert it',
@@ -234,13 +262,13 @@ SELECT is(
 
 SELECT is(
   pg_temp.probe('authenticated', pg_temp.owner_id(), pg_temp.finish_sql(pg_temp.ws())),
-  'KMC01: finish_conversion: the conversion phase is null, not cleaning',
+  'KMC01: finish_conversion: the conversion phase is none, not cleaning',
   'finish_conversion refuses a workspace that is not converting'
 );
 
 SELECT is(
   pg_temp.probe('authenticated', pg_temp.owner_id(), pg_temp.purge_sql(pg_temp.ws(), 0, 0)),
-  'KMC01: purge_workspace_history: the conversion phase is null, not sealing',
+  'KMC01: purge_workspace_history: the conversion phase is none, not sealing',
   'the purge refuses a workspace that is not converting'
 );
 
@@ -251,9 +279,9 @@ SELECT is(
 );
 
 SELECT results_eq(
-  $$SELECT encryption_mode, wk_canary, conversion_phase FROM public.workspaces WHERE id = pg_temp.ws()$$,
+  $$SELECT encryption_mode, wk_canary, pg_temp.phase(id) FROM public.workspaces WHERE id = pg_temp.ws()$$,
   $$SELECT 'e2ee'::text, pg_temp.env('canary'), 'sealing'::text$$,
-  'the flip sets the mode, the canary and conversion_phase = sealing'
+  'the flip sets the mode and the canary, and starts the conversion in sealing'
 );
 
 SELECT is(
@@ -269,31 +297,36 @@ SELECT is(
 );
 
 SELECT is(pg_temp.phase_seen_by(pg_temp.editor_id(), pg_temp.ws()), 'sealing',
-  'a member reads conversion_phase');
+  'a member reads the conversion phase');
 
 SELECT is(pg_temp.phase_seen_by(pg_temp.stranger_id(), pg_temp.ws()), '(no row)',
   'a non-member does not');
 
--------------------------------------------------------------------------
--- The admit: nothing outside the three RPCs changes the phase, the mode or
--- the canary, and the phase never moves backward.
--------------------------------------------------------------------------
-SELECT matches(
+SELECT is(
   pg_temp.probe('authenticated', pg_temp.owner_id(),
-    format($$UPDATE public.workspaces SET conversion_phase = 'cleaning' WHERE id = %L$$, pg_temp.ws())),
-  pg_temp.admit_refusal(),
-  'the owner cannot advance the phase with a direct UPDATE'
+    format($$UPDATE public.workspace_conversions SET phase = 'cleaning' WHERE workspace_id = %L$$, pg_temp.ws())),
+  '42501: permission denied for table workspace_conversions',
+  'the owner cannot advance the phase directly'
 );
 
-SELECT matches(
+SELECT is(
   pg_temp.probe('authenticated', pg_temp.owner_id(),
-    format($$UPDATE public.workspaces SET encryption_mode = 'e2ee', wk_canary = %L,
-               conversion_phase = 'sealing' WHERE id = %L$$,
-           pg_temp.env('canary'), pg_temp.plain_ws())),
-  pg_temp.admit_refusal(),
-  'the owner cannot flip a workspace with a direct UPDATE'
+    format('DELETE FROM public.workspace_conversions WHERE workspace_id = %L', pg_temp.ws())),
+  '42501: permission denied for table workspace_conversions',
+  'the owner cannot end the conversion directly'
 );
 
+SELECT is(
+  pg_temp.probe('postgres', NULL,
+    format('DELETE FROM public.workspaces WHERE id = %L; SELECT 1 / (SELECT count(*) FROM public.workspace_conversions WHERE workspace_id = %L)::int',
+           pg_temp.ws(), pg_temp.ws())),
+  '22012: division by zero',
+  'deleting a converting workspace deletes its conversion row (the division sees zero rows)'
+);
+
+-------------------------------------------------------------------------
+-- The admit: nothing but the flip changes the mode or the canary.
+-------------------------------------------------------------------------
 SELECT is(
   pg_temp.probe('authenticated', pg_temp.owner_id(),
     format($$UPDATE public.workspaces SET name = 'renamed' WHERE id = %L$$, pg_temp.ws())),
@@ -302,21 +335,11 @@ SELECT is(
 );
 
 SELECT matches(
-  pg_temp.probe('postgres', NULL,
-    format($$INSERT INTO public.workspaces (id, name, owner_user_id, create_time, update_time, conversion_phase)
-             VALUES (%L, 'x', %L, 0, 0, 'sealing')$$, pg_temp.ws() || '-x', pg_temp.owner_id())),
-  '^23514: new row for relation "workspaces" violates check constraint "workspaces_conversion_phase_valid"',
-  'a phase on a plaintext row violates the check'
-);
-
-SELECT matches(
-  pg_temp.probe('postgres', NULL,
-    format($$INSERT INTO public.workspaces
-               (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, conversion_phase)
-             VALUES (%L, 'x', %L, 0, 0, 'e2ee', %L, 'done')$$,
-           pg_temp.ws() || '-x', pg_temp.owner_id(), pg_temp.env('canary'))),
-  '^23514: new row for relation "workspaces" violates check constraint "workspaces_conversion_phase_valid"',
-  'a phase outside sealing and cleaning violates the check'
+  pg_temp.probe('authenticated', pg_temp.owner_id(),
+    format($$UPDATE public.workspaces SET encryption_mode = 'e2ee', wk_canary = %L WHERE id = %L$$,
+           pg_temp.env('canary'), pg_temp.plain_ws())),
+  pg_temp.admit_refusal(),
+  'the owner cannot flip a workspace with a direct UPDATE'
 );
 
 SELECT matches(
@@ -326,56 +349,61 @@ SELECT matches(
   'the mode alone cannot change'
 );
 
+SELECT matches(
+  pg_temp.probe('authenticated', pg_temp.owner_id(),
+    format('UPDATE public.workspaces SET wk_canary = %L WHERE id = %L', pg_temp.env('canary-2'), pg_temp.ws())),
+  pg_temp.admit_refusal(),
+  'the canary alone cannot change'
+);
+
 -- Each half of the admit, with the other half satisfied.
 SELECT matches(
   pg_temp.probe('authenticated', pg_temp.owner_id(),
-    pg_temp.admitted_update_sql(pg_temp.ws(), pg_temp.ws(), $$conversion_phase = 'cleaning'$$)),
+    pg_temp.admitted_update_sql(pg_temp.plain_ws(), pg_temp.plain_ws(),
+      format($$encryption_mode = 'e2ee', wk_canary = %L$$, pg_temp.env('canary')))),
   pg_temp.admit_refusal(),
   'km.conversion does not admit authenticated'
 );
 
 SELECT matches(
   pg_temp.probe('service_role', NULL,
-    pg_temp.admitted_update_sql(pg_temp.ws(), pg_temp.ws(), $$conversion_phase = 'cleaning'$$)),
+    pg_temp.admitted_update_sql(pg_temp.plain_ws(), pg_temp.plain_ws(),
+      format($$encryption_mode = 'e2ee', wk_canary = %L$$, pg_temp.env('canary')))),
   pg_temp.admit_refusal(),
   'km.conversion does not admit service_role'
 );
 
 SELECT matches(
   pg_temp.probe('postgres', NULL,
-    format($$UPDATE public.workspaces SET conversion_phase = 'cleaning' WHERE id = %L$$, pg_temp.ws())),
+    format($$UPDATE public.workspaces SET encryption_mode = 'e2ee', wk_canary = %L WHERE id = %L$$,
+           pg_temp.env('canary'), pg_temp.plain_ws())),
   pg_temp.admit_refusal(),
   'postgres without km.conversion is not admitted'
 );
 
 SELECT matches(
   pg_temp.probe('postgres', NULL,
-    pg_temp.admitted_update_sql(pg_temp.plain_ws(), pg_temp.ws(), $$conversion_phase = 'cleaning'$$)),
+    pg_temp.admitted_update_sql(pg_temp.ws(), pg_temp.plain_ws(),
+      format($$encryption_mode = 'e2ee', wk_canary = %L$$, pg_temp.env('canary')))),
   pg_temp.admit_refusal(),
   'km.conversion naming another workspace does not admit'
 );
 
 SELECT is(
   pg_temp.probe('postgres', NULL,
-    pg_temp.admitted_update_sql(pg_temp.ws(), pg_temp.ws(), $$conversion_phase = 'cleaning'$$)),
+    pg_temp.admitted_update_sql(pg_temp.plain_ws(), pg_temp.plain_ws(),
+      format($$encryption_mode = 'e2ee', wk_canary = %L$$, pg_temp.env('canary')))),
   'ok',
-  'control: postgres naming the workspace in km.conversion is admitted for the next step'
+  'control: postgres naming the workspace in km.conversion is admitted for the flip'
 );
 
-SELECT matches(
-  pg_temp.probe('postgres', pg_temp.owner_id(),
-    pg_temp.flip_sql(pg_temp.plain_ws(), pg_temp.env('canary')) || '; '
-    || format($$UPDATE public.workspaces SET conversion_phase = 'cleaning' WHERE id = %L$$, pg_temp.plain_ws())),
-  pg_temp.admit_refusal(),
-  'the admit is consumed by the row it admits: a later UPDATE in the same transaction is refused'
-);
-
--- Under the admit, only the three steps pass.
+-- Under the admit, only none -> e2ee passes.
 SELECT matches(
   pg_temp.probe('postgres', NULL,
-    pg_temp.admitted_update_sql(pg_temp.ws(), pg_temp.ws(), 'conversion_phase = NULL')),
+    pg_temp.admitted_update_sql(pg_temp.ws(), pg_temp.ws(),
+      $$encryption_mode = 'none', wk_canary = NULL$$)),
   pg_temp.admit_refusal(),
-  'the phase cannot skip from sealing to done'
+  'e2ee -> none is refused'
 );
 
 SELECT matches(
@@ -383,31 +411,15 @@ SELECT matches(
     pg_temp.admitted_update_sql(pg_temp.ws(), pg_temp.ws(),
       format('wk_canary = %L', pg_temp.env('canary-2')))),
   pg_temp.admit_refusal(),
-  'the canary of a sealing workspace cannot change'
-);
-
-SELECT matches(
-  pg_temp.probe('postgres', NULL,
-    pg_temp.admitted_update_sql(pg_temp.ws(), pg_temp.ws(),
-      format($$conversion_phase = 'cleaning', wk_canary = %L$$, pg_temp.env('canary-2')))),
-  pg_temp.admit_refusal(),
-  'the canary cannot change on the step to cleaning'
-);
-
-SELECT matches(
-  pg_temp.probe('postgres', NULL,
-    pg_temp.admitted_update_sql(pg_temp.ws(), pg_temp.ws(),
-      $$encryption_mode = 'none', wk_canary = NULL, conversion_phase = NULL$$)),
-  pg_temp.admit_refusal(),
-  'a sealing workspace cannot go back to none'
+  'the canary of an e2ee workspace cannot change'
 );
 
 SELECT matches(
   pg_temp.probe('postgres', NULL,
     pg_temp.admitted_update_sql(pg_temp.plain_ws(), pg_temp.plain_ws(),
-      format($$encryption_mode = 'e2ee', wk_canary = %L$$, pg_temp.env('canary')))),
+      format('wk_canary = %L', pg_temp.env('canary')))),
   pg_temp.admit_refusal(),
-  'a flip that does not enter sealing is refused'
+  'a canary cannot land on a plaintext workspace'
 );
 
 -------------------------------------------------------------------------
@@ -579,7 +591,7 @@ SELECT is(
 
 SELECT results_eq(
   $$SELECT (SELECT count(*) FROM public.blocks_history WHERE workspace_id = pg_temp.ws()),
-           (SELECT conversion_phase FROM public.workspaces WHERE id = pg_temp.ws())$$,
+           pg_temp.phase(pg_temp.ws())$$,
   $$VALUES (0::bigint, 'cleaning'::text)$$,
   'a successful purge leaves zero history rows and the phase cleaning'
 );
@@ -596,29 +608,6 @@ SELECT is(
   'the purge refuses once the phase is cleaning'
 );
 
-SELECT matches(
-  pg_temp.probe('postgres', NULL,
-    pg_temp.admitted_update_sql(pg_temp.ws(), pg_temp.ws(), $$conversion_phase = 'sealing'$$)),
-  pg_temp.admit_refusal(),
-  'the phase cannot move back from cleaning to sealing'
-);
-
-SELECT matches(
-  pg_temp.probe('postgres', NULL,
-    pg_temp.admitted_update_sql(pg_temp.ws(), pg_temp.ws(),
-      format('conversion_phase = NULL, wk_canary = %L', pg_temp.env('canary-2')))),
-  pg_temp.admit_refusal(),
-  'the canary cannot change on the step to done'
-);
-
-SELECT matches(
-  pg_temp.probe('postgres', NULL,
-    pg_temp.admitted_update_sql(pg_temp.ws(), pg_temp.ws(),
-      $$encryption_mode = 'none', wk_canary = NULL, conversion_phase = NULL$$)),
-  pg_temp.admit_refusal(),
-  'a cleaning workspace cannot go back to none'
-);
-
 SELECT is(
   pg_temp.probe('authenticated', pg_temp.editor_id(), pg_temp.finish_sql(pg_temp.ws())),
   'KMC01: finish_conversion: only the workspace owner can finish its conversion',
@@ -632,39 +621,15 @@ SELECT is(
 );
 
 SELECT results_eq(
-  $$SELECT encryption_mode, wk_canary, conversion_phase FROM public.workspaces WHERE id = pg_temp.ws()$$,
-  $$SELECT 'e2ee'::text, pg_temp.env('canary'), NULL::text$$,
-  'finish_conversion clears the phase and keeps the mode and the canary'
+  $$SELECT encryption_mode, wk_canary, pg_temp.phase(id) FROM public.workspaces WHERE id = pg_temp.ws()$$,
+  $$SELECT 'e2ee'::text, pg_temp.env('canary'), '(no row)'::text$$,
+  'finish_conversion ends the conversion and keeps the mode and the canary'
 );
 
-SELECT matches(
-  pg_temp.probe('postgres', NULL,
-    pg_temp.admitted_update_sql(pg_temp.ws(), pg_temp.ws(), $$conversion_phase = 'sealing'$$)),
-  pg_temp.admit_refusal(),
-  'a finished conversion cannot re-enter sealing'
-);
-
-SELECT matches(
-  pg_temp.probe('postgres', NULL,
-    pg_temp.admitted_update_sql(pg_temp.ws(), pg_temp.ws(), $$conversion_phase = 'cleaning'$$)),
-  pg_temp.admit_refusal(),
-  'a finished conversion cannot re-enter cleaning'
-);
-
-SELECT matches(
-  pg_temp.probe('postgres', NULL,
-    pg_temp.admitted_update_sql(pg_temp.ws(), pg_temp.ws(),
-      $$encryption_mode = 'none', wk_canary = NULL$$)),
-  pg_temp.admit_refusal(),
-  'a converted workspace cannot go back to none'
-);
-
-SELECT matches(
-  pg_temp.probe('postgres', NULL,
-    pg_temp.admitted_update_sql(pg_temp.ws(), pg_temp.ws(),
-      format('wk_canary = %L', pg_temp.env('canary-2')))),
-  pg_temp.admit_refusal(),
-  'the canary of a converted workspace cannot change'
+SELECT is(
+  pg_temp.probe('authenticated', pg_temp.owner_id(), pg_temp.finish_sql(pg_temp.ws())),
+  'KMC01: finish_conversion: the conversion phase is none, not cleaning',
+  'a finished conversion cannot be finished again'
 );
 
 SELECT is(
@@ -674,8 +639,8 @@ SELECT is(
 );
 
 -------------------------------------------------------------------------
--- Only the conversion RPCs, and the trigger that reads it, name
--- km.conversion: a new function that sets it widens the admit.
+-- Only the flip, and the trigger that reads it, name km.conversion: a new
+-- function that sets it widens the admit.
 -------------------------------------------------------------------------
 SELECT is(
   (SELECT array_agg(p.oid::regprocedure::text ORDER BY p.oid::regprocedure::text)
@@ -683,11 +648,9 @@ SELECT is(
     WHERE p.prosrc LIKE '%km.conversion%' AND n.nspname NOT LIKE 'pg_temp%'),
   ARRAY[
     'convert_workspace_to_e2ee(text,text)',
-    'finish_conversion(text)',
-    'purge_workspace_history(text,bigint,bigint)',
     'workspaces_prevent_e2ee_field_change()'
   ],
-  'only the conversion RPCs set km.conversion'
+  'only the flip sets km.conversion'
 );
 
 SELECT * FROM finish();

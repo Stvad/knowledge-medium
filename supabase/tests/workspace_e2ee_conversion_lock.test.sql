@@ -155,8 +155,9 @@ AS $$ SELECT format('SELECT public.finish_conversion(%L)', p_ws) $$;
 
 CREATE FUNCTION pg_temp.mode_of(p_ws text) RETURNS text LANGUAGE sql
 AS $$
-  SELECT encryption_mode || '/' || coalesce(conversion_phase, 'null')
-  FROM public.workspaces WHERE id = p_ws
+  SELECT w.encryption_mode || '/' || coalesce(c.phase, 'none')
+  FROM public.workspaces w LEFT JOIN public.workspace_conversions c ON c.workspace_id = w.id
+  WHERE w.id = p_ws
 $$;
 
 CREATE FUNCTION pg_temp.content_of(p_ws text) RETURNS text LANGUAGE sql
@@ -207,7 +208,7 @@ SELECT ok(
   'the flip waits for a block write that is in flight'
 );
 
-SELECT is(pg_temp.mode_of((pg_temp.ctx()).ws_a), 'none/null',
+SELECT is(pg_temp.mode_of((pg_temp.ctx()).ws_a), 'none/none',
   'the mode does not change while the write is open');
 
 SELECT pg_temp.remote('conv_writer', 'COMMIT');
@@ -299,11 +300,11 @@ SELECT matches(
 SELECT pg_temp.remote('conv_flipper', 'ROLLBACK');
 SELECT pg_temp.remote('conv_writer', 'ROLLBACK');
 
-SELECT is(pg_temp.mode_of((pg_temp.ctx()).ws_c), 'none/null',
+SELECT is(pg_temp.mode_of((pg_temp.ctx()).ws_c), 'none/none',
   'a refused flip leaves the workspace plaintext');
 
 -------------------------------------------------------------------------
--- Concurrent calls of one RPC serialize on the workspace row; the later one
+-- Concurrent calls of one RPC serialize on a row lock; the later one
 -- is refused, never silently accepted.
 -------------------------------------------------------------------------
 SELECT pg_temp.begin_as_owner('conv_flipper');
@@ -376,7 +377,7 @@ SELECT ok(
 );
 SELECT pg_temp.remote('conv_flipper', 'COMMIT');
 SELECT matches(pg_temp.async_outcome('conv_writer'),
-  '^ERROR:  finish_conversion: the conversion phase is null, not cleaning',
+  '^ERROR:  finish_conversion: the conversion phase is none, not cleaning',
   'and is refused once the first commits');
 SELECT pg_temp.remote('conv_writer', 'ROLLBACK');
 

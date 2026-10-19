@@ -36,9 +36,7 @@ ${columns.map(c => `    ${c.definition}`).join(',\n')}
 // workspaces
 // ---------------------------------------------------------------------------
 
-// conversion_phase is never synced: the conversion flow and the key gate read
-// it over PostgREST.
-// @projects: workspaces - conversion_phase
+// @projects: workspaces
 export interface WorkspaceRow {
   id: string
   name: string
