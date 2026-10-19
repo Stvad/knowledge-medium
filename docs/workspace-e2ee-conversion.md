@@ -139,7 +139,6 @@ The phase only moves forward, so a resume never falls back.
 **0. Preflight.** It refuses unless all of these hold:
 - the user owns the workspace, and it's plaintext. This is an early-out; the flip re-checks both;
 - the upload queue is drained, attachment records included, and no rejected rows are pending;
-- **this device's view of the workspace has no gap.** After a drain and a re-materialization (`repo.drainSyncWorkspace`), `repo.workspaceViewGap` must report nothing: no download in flight, and every downloaded row in `blocks`. This is the predicate the properties migration gates on. It matters because `local.db` is the plaintext a key-loss recovery restores from ([§8](#8-runbook));
 - `canPersistPins()` passes, and the key store is durable (not `createWorkspaceKeyStore`'s in-memory fallback);
 - the File System Access API is available (desktop Chromium), because the bundle has to be re-opened to verify it;
 - the user confirms the residue named in [§7](#7-what-stays-visible-afterwards), disk headroom ([§8](#8-runbook)), and free space for the bundle. Its size is shown: the database, the attachment bytes, and the server history, which a dry run of step 3's history paging measures without writing anything. A bundle that can't be written after the flip leaves every device waiting until it is.
@@ -152,7 +151,8 @@ The phase only moves forward, so a resume never falls back.
 
 **3. Recovery bundle.** One zip, taken right after the flip. The flip changes no row, so the bundle still holds the pre-conversion content. And since every earlier write committed before the flip, nothing but the re-seal can add history after its snapshot ([§6.1](#61-server)).
 - **Writing it** needs a zip save type and a writer that holds the database lock while it copies. `chooseRawSqliteExportFile` offers only `.db`, and the existing zip builder (`getRawSqliteDbBackup`) is the corruption path's, which runs without the lock.
-- **`local.db`.** The raw SQLite export. It includes the device-local history (`row_events`, `command_events`).
+- **`blocks.jsonl`.** Every block row of the workspace, soft-deleted ones included, read from the server: PostgREST pages by id, every column verbatim. The flip has committed every earlier write and nothing else writes now, so this is a complete point-in-time copy. It's what key-loss recovery restores from ([§8](#8-runbook)). Reading the server rather than this device's database means no download gap or reconnect window can make it stale.
+- **`local.db`.** The raw SQLite export, for the device-local history (`row_events`, `command_events`). It isn't a restore source.
 - **`server-history.jsonl`.** The workspace's `blocks_history`, which members can read under RLS (`blocks_history_read`).
   1. Read `through` = `coalesce(max(event_id), 0)`.
   2. Page by `event_id` (`> cursor`, `≤ through`, ordered), never by offset.
@@ -162,7 +162,7 @@ The phase only moves forward, so a resume never falls back.
   - Every local byte-store entry of a media block, soft-deleted ones included.
 - **`manifest.json`.** The workspace id, `through`, the line count, a sha256 of each part, and the export time.
 
-The flow **re-opens the file and verifies it**: `event_id`s are strictly increasing and end at `through`, and the hashes match. It then keeps `through`, the line count and the names of the Storage objects it holds on this device as the **bundle record**. The re-seal never starts without that record. It's cleared when the purge refuses, or once the conversion finishes; the attachment cleaner needs it after the purge.
+The flow **re-opens the file and verifies it**: the hashes match, and `server-history.jsonl`'s `event_id`s strictly increase and end at `through`, or it's empty and `through` is `0`. A workspace whose rows predate the history trigger can have no history at all. It then keeps `through`, the line count and the names of the Storage objects it holds on this device as the **bundle record**. The re-seal never starts without that record. It's cleared when the purge refuses, or once the conversion finishes; the attachment cleaner needs it after the purge.
 
 The bundle is plaintext, as sensitive as the database. Store it on an encrypted volume or as a password-manager attachment. It isn't sealed under the workspace key, because then it would be unreadable exactly when it's needed: after the key is lost. **It's a point-in-time content snapshot, not a rollback.** There's no going back after the flip.
 
@@ -269,18 +269,19 @@ The first production run is #1288.
 12. **Operator:** drop leftover ad-hoc tables from past scripts (`scripts/system-author-cleanup.sql`, `scripts/roam-ts-backfill/backfill.sql`).
 13. **Act on #1289's findings** and record the "safe from" date.
 14. **Take later recovery points.** From time to time, on an unlocked device, take a recovery point and keep it with the key. It's a zip with:
-    - `local.db`;
+    - `blocks.jsonl`: every block row read from the server, as in step 3, with its content columns opened under the key. Take it while other devices are idle: paging isn't a transaction, so concurrent edits would make it a mix of moments;
     - **the plaintext of every media block**, soft-deleted ones included. Each comes from the local byte store, or is downloaded and opened under the key, and each is hash-checked;
     - a manifest.
 
-    It leaves out the server history and the Storage objects themselves, which are ciphertext by then and useless once the key is lost. Take it only when `repo.workspaceViewGap` reports no gap, after a drain and a re-materialization, exactly as step 0 requires. A raw SQLite export alone isn't a recovery point: attachment bytes live outside the database (`src/plugins/attachments/byteStore.ts`).
+    It leaves out the server history and the Storage objects themselves, which are ciphertext by then and useless once the key is lost. A raw SQLite export isn't a recovery point. It holds only what this device has downloaded and applied, and attachment bytes live outside it (`src/plugins/attachments/byteStore.ts`).
 
-**Key-loss recovery** (#1302). This applies after the purge; before it, nothing is lost. It **re-keys the workspace in place** from the newest recovery point: a step-14 one, or the conversion's bundle. A device that still defers is no source: its `blocks` hold nothing the conversion's bundle lacks, and without the key it can't close its own view gap. **It's point-in-time, not lossless.** Everything written after that point is lost, because nothing else holds that plaintext. That's why the key lives in two places, and why step 14 exists.
+**Key-loss recovery** (#1302). This applies after the purge; before it, nothing is lost. It **re-keys the workspace in place** from the newest recovery point: a step-14 one, or the conversion's bundle. A device that still defers is no source: its `blocks` hold nothing the conversion's bundle lacks. **It's point-in-time, not lossless.** Everything written after that point is lost, because nothing else holds that plaintext. That's why the key lives in two places, and why step 14 exists.
 
 #1302 holds the design. It has to meet these requirements:
 - **Nothing is deleted**, so no workspace or block id is ever free for another caller to claim. Old-`K_id` objects and key records are kept, in case the old key turns up.
+- **Attachments are rebuilt under the new key.** Each media block's plaintext from the recovery point is sealed under the new key, uploaded to its new keyed path, and verified with the shared helper. The old object stays.
 - **An owner-only canary replacement**, admitted like the flip ([§5](#5-the-invariant-we-relax)).
-- **A whole-row restore**: the content columns sealed under the new key, plus tree, order, `deleted`, `created_at`, `user_updated_at`, `created_by` and `updated_by`. Not `updated_at`: it's the row version, which the clamp keeps monotonic, and it has to advance so every device takes the restored value. Rows the recovery point lacks are tombstoned, which is safe only because every recovery point is taken with no view gap ([§6.3](#63-the-flow) step 0, runbook step 14).
+- **A whole-row restore**: the content columns sealed under the new key, plus tree, order, `deleted`, `created_at`, `user_updated_at`, `created_by` and `updated_by`. Not `updated_at`: it's the row version, which the clamp keeps monotonic, and it has to advance so every device takes the restored value. Rows the recovery point's `blocks.jsonl` lacks were created after it. They're tombstoned: content sealed empty **under the new key**, and marked deleted. A device that still has such a row live can then open the tombstone and apply it. The equality check below covers that form too.
 - **A row counts as restored only when it opens under the new key and its whole row, `updated_at` aside, equals the chosen recovery point's.** Opening alone proves only which key sealed it. A resume, even with a different recovery point, compares every row again, so the result is never a mix of two points.
 - **Every device checks its key record against the canary**, on entry and whenever the synced canary changes. Today `resolveWorkspaceEntry` only checks that a record with `K_id` exists.
 - **The single-client contract** applies to recovery too.
@@ -334,6 +335,7 @@ What it adds is safety against concurrent actors. What it keeps from this design
 - **Reading the conversion's data from this device's PowerSync image.** Rejected: any held write keeps `ps_crud` non-empty, and the core publishes no checkpoint until it empties, so the image stops advancing for the whole run.
 - **Inferring the phase from history** ("no history left" means purged). Rejected: sealed writes after the purge add history again. `conversion_phase` is a fact that only the conversion's RPCs change.
 - **`repo.setReadOnly` as the run's write barrier.** Not needed, and not owned by the flow: it's repo-wide and re-set on every workspace resolve (`src/App.tsx`). After the flip, #1293's gate closes the workspace and holds any write made for it until the purge is done.
+- **Restoring from a device's own database.** Rejected: it holds only what that device downloaded and applied, and `repo.workspaceViewGap` can't close the gap, because it reads clear in the window after a reconnect, before the catch-up download starts (`src/data/internals/firstSync.ts`). Recovery points read the server instead.
 - **A local verification record per re-sealed row.** Rejected: it has to survive a crash between a row's commit and the verify. The server's history already holds each row's pre-seal plaintext durably until the purge.
 - **Taking the bundle before the flip.** Rejected: UI-state, preference and automation writes keep uploading until then (`CHANGE_SCOPE_POLICIES` in `src/data/api/changeScope.ts`), so the history snapshot could be raced right up to the flip. After it, the server refuses plaintext writes ([§6.1](#61-server)).
 - **Key-loss recovery by delete and same-id restore.** Rejected. Every globally unique id, the workspace's and each block's, would have to be reserved across the gap. It also needed a restore RPC, a same-id importer and a pin-retirement gesture. Re-keying in place leaves no gap, and reuses the conversion's own steps.
