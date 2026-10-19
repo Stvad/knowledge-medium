@@ -1,1 +1,1 @@
-import{iM as e,rM as t}from"../../chunks/app-DQyrg95s.js";export{t as isFocalRender,e as useIsFocalRender};
+import{iM as e,rM as t}from"../../chunks/app-kaQRKUfn.js";export{t as isFocalRender,e as useIsFocalRender};
