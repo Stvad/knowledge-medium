@@ -1,1 +1,1 @@
-import{Tp as e,wp as t}from"../../../chunks/app-B-aPeGpi.js";export{t as aliasCompletions,e as referencesCodeMirrorExtensions};
+import{Tp as e,wp as t}from"../../../chunks/app-icqlrCV5.js";export{t as aliasCompletions,e as referencesCodeMirrorExtensions};

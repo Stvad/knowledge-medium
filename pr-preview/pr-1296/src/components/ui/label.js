@@ -1,1 +1,1 @@
-import{Vx as e}from"../../../chunks/app-B-aPeGpi.js";export{e as Label};
+import{Vx as e}from"../../../chunks/app-icqlrCV5.js";export{e as Label};

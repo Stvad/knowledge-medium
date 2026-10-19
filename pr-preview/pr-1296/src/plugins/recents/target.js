@@ -1,1 +1,1 @@
-import{Rb as e}from"../../../chunks/app-B-aPeGpi.js";export{e as openRecentsPage};
+import{Rb as e}from"../../../chunks/app-icqlrCV5.js";export{e as openRecentsPage};

@@ -1,1 +1,1 @@
-import{dA as e,uA as t}from"../../chunks/app-B-aPeGpi.js";export{t as canConvertEmptyChildBlockToProperty,e as convertEmptyChildBlockToProperty};
+import{dA as e,uA as t}from"../../chunks/app-icqlrCV5.js";export{t as canConvertEmptyChildBlockToProperty,e as convertEmptyChildBlockToProperty};

@@ -1,1 +1,1 @@
-import{Dz as e,Ez as t}from"../../../chunks/app-B-aPeGpi.js";export{t as PLACES_UNDER_BLOCK_QUERY,e as placesUnderBlockQuery};
+import{Dz as e,Ez as t}from"../../../chunks/app-icqlrCV5.js";export{t as PLACES_UNDER_BLOCK_QUERY,e as placesUnderBlockQuery};

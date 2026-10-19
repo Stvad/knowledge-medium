@@ -1,1 +1,1 @@
-import{gD as e}from"../../chunks/app-B-aPeGpi.js";export{e as dynamicExtensionsExtension};
+import{gD as e}from"../../chunks/app-icqlrCV5.js";export{e as dynamicExtensionsExtension};

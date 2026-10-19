@@ -1,1 +1,1 @@
-import{Ot as e}from"../../../chunks/app-B-aPeGpi.js";export{e as perfMonitorPlugin};
+import{Ot as e}from"../../../chunks/app-icqlrCV5.js";export{e as perfMonitorPlugin};

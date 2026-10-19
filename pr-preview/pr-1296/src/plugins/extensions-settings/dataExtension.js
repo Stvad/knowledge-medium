@@ -1,1 +1,1 @@
-import{_t as e}from"../../../chunks/app-B-aPeGpi.js";export{e as extensionsDataExtension};
+import{_t as e}from"../../../chunks/app-icqlrCV5.js";export{e as extensionsDataExtension};

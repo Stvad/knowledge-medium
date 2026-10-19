@@ -1,1 +1,1 @@
-import{OM as e,kM as t}from"../../../chunks/app-B-aPeGpi.js";export{e as declarationOnlyDefinitionForName,t as declarationOnlyStatusText};
+import{OM as e,kM as t}from"../../../chunks/app-icqlrCV5.js";export{e as declarationOnlyDefinitionForName,t as declarationOnlyStatusText};

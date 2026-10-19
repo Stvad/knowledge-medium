@@ -1,1 +1,1 @@
-import{hO as e,mO as t}from"../../../chunks/app-B-aPeGpi.js";export{t as PropertySchemaBlockRenderer,e as PropertySchemaContentRenderer};
+import{hO as e,mO as t}from"../../../chunks/app-icqlrCV5.js";export{t as PropertySchemaBlockRenderer,e as PropertySchemaContentRenderer};
