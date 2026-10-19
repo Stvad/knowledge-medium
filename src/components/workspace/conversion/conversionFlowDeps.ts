@@ -1,15 +1,25 @@
+import { workspaceGateDeps } from '@/components/workspace/WorkspaceKeyGate'
+import { notifyWorkspaceUnlocked } from '@/components/workspace/workspaceUnlocked'
+import { dbFilenameForUser } from '@/data/localDbStorage'
 import type { Repo } from '@/data/repo'
 import { fetchWorkspaceConversionState } from '@/data/workspaceConversion'
 import { markLocalWorkspaceConverted } from '@/data/workspaces'
 import { supabase } from '@/services/supabase'
+import type { BundleFolder } from '@/sync/conversion/bundle/bundleParts'
+import { IndexedDbBundleRecordStore } from '@/sync/conversion/bundle/bundleRecord'
+import { BUNDLE_PARTS } from '@/sync/conversion/bundle/manifest'
 import { createSupabaseConversionServer } from '@/sync/conversion/conversionServer'
 import { localFlipAttempts } from '@/sync/conversion/flipAttempts'
 import type { PreflightEnvironment } from '@/sync/conversion/preflight'
 import { webConversionLock } from '@/sync/conversion/runLock'
 import type { ConversionFlowDeps, ConversionUi } from '@/sync/conversion/runConversion'
 import { getWorkspaceKeyStore, IndexedDbWorkspaceKeyStore } from '@/sync/keys/keyStore'
+import { upgradeWorkspacePin } from '@/sync/keys/flows/upgradeWorkspacePin'
 import { canPersistPins } from '@/sync/keys/modePin'
 import { abortableSleep } from '@/utils/abortableSleep'
+import { exportRawSqliteDbToFile } from '@/utils/exportSqliteDb'
+import { queryDirectoryPermission, supportsDirectoryPicker } from '@/utils/fileSystemAccess'
+import { holdScreenWakeLock } from '@/utils/screenWakeLock'
 
 /** UI-state and preference writes upload continuously, so a queue that is
  *  momentarily non-empty gets this long to drain before it counts. */
@@ -27,14 +37,15 @@ const uploadQueue = (repo: Repo) => async (signal?: AbortSignal): Promise<{pendi
   }
 }
 
-const supportsDirectoryPicker = (): boolean =>
-  typeof (globalThis as {showDirectoryPicker?: unknown}).showDirectoryPicker === 'function'
-
 const preflightEnvironment = (repo: Repo): PreflightEnvironment => ({
   canPersistPins,
   keyStoreIsDurable: getWorkspaceKeyStore() instanceof IndexedDbWorkspaceKeyStore,
   supportsDirectoryPicker: supportsDirectoryPicker(),
   uploadQueue: uploadQueue(repo),
+  localDbBytes: async () => {
+    const root = await navigator.storage.getDirectory()
+    return (await (await root.getFileHandle(dbFilenameForUser(repo.user.id))).getFile()).size
+  },
 })
 
 export type ConversionUnavailable =
@@ -48,6 +59,11 @@ export const conversionUnavailable = (localOnly: boolean): ConversionUnavailable
   if (!webConversionLock()) return 'no-web-locks'
   return null
 }
+
+let bundleRecords: IndexedDbBundleRecordStore | null = null
+
+/** In the browser every bundle folder is a `FileSystemDirectoryHandle`. */
+const directoryOf = (folder: BundleFolder): FileSystemDirectoryHandle => folder as unknown as FileSystemDirectoryHandle
 
 /** Call only once {@link conversionUnavailable} has returned null. */
 export const conversionFlowDeps = (
@@ -68,6 +84,24 @@ export const conversionFlowDeps = (
     lock,
     preflight: preflightEnvironment(repo),
     markLocalConverted: canary => markLocalWorkspaceConverted(repo.db, workspaceId, canary),
+    bundles: (bundleRecords ??= new IndexedDbBundleRecordStore()),
+    canReadFolder: async folder => (await queryDirectoryPermission(directoryOf(folder), 'read')) === 'granted',
+    writeLocalDb: async folder => {
+      const file = await folder.getFileHandle(BUNDLE_PARTS.localDb, {create: true})
+      await exportRawSqliteDbToFile(repo, file as unknown as FileSystemFileHandle)
+    },
+    keepAwake: holdScreenWakeLock,
+    upgradePin: async () => {
+      const result = await upgradeWorkspacePin({
+        userId: repo.user.id,
+        workspaceId,
+        ...workspaceGateDeps(repo, workspaceId),
+        key: {kind: 'stored'},
+        keyStore: getWorkspaceKeyStore(),
+      })
+      if (result.ok) notifyWorkspaceUnlocked(workspaceId)
+      return result
+    },
     ui,
     signal,
   }

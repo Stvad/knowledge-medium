@@ -16,6 +16,9 @@ import {
 import { keyOf, sealFor, seedPlaintext, WS } from './test/conversionFixtures.js'
 import { FakeConversionServer } from './test/fakeConversionServer.js'
 import { flowDeps, passingEnvironment, USER } from './test/flowFixtures.js'
+import { MemoryBundleFolder } from './test/memoryBundleFolder.js'
+import type { BundleFolder } from './bundle/bundleParts.js'
+import type { BundleRetakeReason } from './sealingStage.js'
 
 /** A user who answers every prompt as told, and remembers what they were asked. */
 class ScriptedUi implements ConversionUi {
@@ -29,6 +32,18 @@ class ScriptedUi implements ConversionUi {
   /** What the user pastes when asked for the saved key, in order; null starts over. */
   pastes: Array<string | null> = []
   cancelContract = false
+  /** Where the user puts each new bundle. */
+  readonly bundleParent = new MemoryBundleFolder('picked')
+  readonly bundleReasons: Array<BundleRetakeReason | null> = []
+
+  async chooseBundleFolder({reason}: {reason: BundleRetakeReason | null}) {
+    this.bundleReasons.push(reason)
+    return this.bundleParent
+  }
+
+  async reopenBundleFolder({recorded}: {recorded: BundleFolder}) {
+    return recorded
+  }
 
   async confirmContract(stage: ActiveStage) {
     this.contracts.push(stage.kind)
@@ -107,9 +122,23 @@ describe('runConversion: preflight → key → flip', () => {
   it('flips under a key the user typed back, stores it, and marks the local row', async () => {
     const result = await run()
 
-    expect(result).toEqual({kind: 'stopped', stage: {kind: 'sealing', canary: await serverCanary()}})
+    // Past the flip the stage runs on through the bundle, re-seal and purge.
+    expect(result).toEqual({kind: 'stopped', stage: {kind: 'cleaning', canary: await serverCanary()}})
     expect(ui.contracts).toEqual(['plaintext'])
-    expect(ui.preflights).toEqual([{blockers: []}])
+    // The dry run measures what the bundle then writes.
+    const [bundle] = [...ui.bundleParent.folders.values()]
+    const manifest = JSON.parse(bundle.text('manifest.json'))
+    expect(ui.preflights).toEqual([{
+      blockers: [],
+      sizes: {
+        blockRows: 3,
+        blocksBytes: manifest.parts['blocks.jsonl'].bytes,
+        historyRows: 3,
+        historyBytes: manifest.parts['server-history.jsonl'].bytes,
+        localDbBytes: 16,
+        contentBytes: expect.any(Number),
+      },
+    }])
     expect(ui.keyPrompts).toHaveLength(1)
     expect(await validateCanary((await storedKey()).wk, await serverCanary(), WS)).toBe(true)
     expect(localCanaries[0]).toBe(await serverCanary())
@@ -182,11 +211,11 @@ describe('runConversion: preflight → key → flip', () => {
   it('carries on past a flip that committed after its response was lost', async () => {
     server.loseNextFlipResponse = true
 
-    expect(await run()).toMatchObject({kind: 'stopped', stage: {kind: 'sealing'}})
+    expect(await run()).toMatchObject({kind: 'stopped', stage: {kind: 'cleaning'}})
     expect(flips()).toBe(1)
     expect(await validateCanary((await storedKey()).wk, await serverCanary(), WS)).toBe(true)
-    // Marked from the server's canary as the sealing stage begins.
-    expect(localCanaries).toEqual([await serverCanary()])
+    // Marked from the server's canary as each stage past the flip begins.
+    expect(new Set(localCanaries)).toEqual(new Set([await serverCanary()]))
   })
 
   it('treats a not-plaintext refusal as a late flip when the server has moved on', async () => {
@@ -199,7 +228,7 @@ describe('runConversion: preflight → key → flip', () => {
       return flip(workspaceId, canary)
     }
 
-    expect(await run()).toMatchObject({kind: 'stopped', stage: {kind: 'sealing', canary: earlier.canary}})
+    expect(await run()).toMatchObject({kind: 'stopped', stage: {kind: 'cleaning', canary: earlier.canary}})
   })
 
   it('reports a refusal it can\'t follow up as blocked, not as refused', async () => {
@@ -418,14 +447,14 @@ describe('runConversion: the canary check past the flip', () => {
   it('asks for the saved key when this device holds none, and stores it', async () => {
     ui.pastes = ['not a key', (await mintWorkspaceKey(WS)).displayed, saved.displayed]
 
-    expect(await run()).toMatchObject({kind: 'stopped', stage: {kind: 'sealing'}})
+    expect(await run()).toMatchObject({kind: 'stopped', stage: {kind: 'cleaning'}})
     expect(ui.savedKeyPrompts).toEqual([
       {context: 'converting', problem: null, canStartOver: false},
       {context: 'converting', problem: 'format', canStartOver: false},
       {context: 'converting', problem: 'invalid-key', canStartOver: false},
     ])
     expect(await validateCanary((await storedKey()).wk, saved.canary, WS)).toBe(true)
-    expect(localCanaries).toEqual([saved.canary])
+    expect(new Set(localCanaries)).toEqual(new Set([saved.canary]))
   })
 
   it('says so when the key this device holds does not open the canary', async () => {

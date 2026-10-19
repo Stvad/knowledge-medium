@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Explanation, GateCard, PASTED_KEY_PROBLEM, WorkspaceKeyField } from '@/components/workspace/keyUi'
 import { openConversionFlow } from '@/components/workspace/conversion/conversionFlowStore'
+import { useOnWorkspaceUnlocked } from '@/components/workspace/workspaceUnlocked'
 import type { Repo } from '@/data/repo'
 import { fetchWorkspaceConversionState, hasCopiedCiphertext } from '@/data/workspaceConversion'
 import type { WorkspaceConversionRead } from '@/sync/keys/conversionState'
@@ -64,6 +65,8 @@ interface Props {
  * the workspace really is plaintext.
  */
 export function WorkspaceKeyGate(props: Props) {
+  const {workspaceId, onResolved} = props
+  useOnWorkspaceUnlocked(workspaceId, useCallback(() => void onResolved(), [onResolved]))
   if (props.reason === 'server-e2ee') return <ServerE2eeGate {...props}/>
   if (props.reason === 'finishing-upgrade') return <FinishingUpgradeGate {...props}/>
   return <KeyPromptGate {...props} reason={props.reason}/>

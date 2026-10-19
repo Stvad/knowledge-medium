@@ -4,8 +4,9 @@
  * plaintext mode are the run's stage read; the flip re-checks both.
  */
 
+import { SEALED_COLUMNS } from '../transform.js'
 import type { ConversionServer } from './conversionServer.js'
-import { idsOf, isSealedRow, RESEAL_PAGE_SIZE, serverPages } from './sealing.js'
+import { idsOf, isSealedRow, RESEAL_PAGE_SIZE } from './sealing.js'
 
 export interface PreflightEnvironment {
   /** Mode pins persist (`canPersistPins`): the pin upgrade writes one. */
@@ -18,6 +19,8 @@ export interface PreflightEnvironment {
    *  and uploads the server rejected that wait for Retry. A write held for any
    *  workspace stops this device's downloads, which the pin upgrade needs. */
   readonly uploadQueue: (signal?: AbortSignal) => Promise<{readonly pending: number; readonly rejected: number}>
+  /** The size of this device's database, which the bundle copies whole. */
+  readonly localDbBytes: () => Promise<number>
 }
 
 export type PreflightBlocker =
@@ -30,27 +33,70 @@ export type PreflightBlocker =
   | {readonly kind: 'key-store-not-durable'}
   | {readonly kind: 'no-directory-picker'}
 
-export interface PreflightReport {
-  readonly blockers: readonly PreflightBlocker[]
+/** What the recovery bundle and the conversion will take, measured by a dry
+ *  run of the bundle's own paging. A bundle that can't be written after the
+ *  flip leaves every device waiting until it is. */
+export interface ConversionSizes {
+  readonly blockRows: number
+  /** `blocks.jsonl`, as the bundle writes it. */
+  readonly blocksBytes: number
+  readonly historyRows: number
+  /** `server-history.jsonl`. */
+  readonly historyBytes: number
+  readonly localDbBytes: number
+  /** The content columns' total: the server needs several times this free
+   *  while it re-seals and keeps history of both versions (runbook step 6). */
+  readonly contentBytes: number
 }
 
-/** Enough to show the user; the scan stops once it has this many. */
+export interface PreflightReport {
+  readonly blockers: readonly PreflightBlocker[]
+  readonly sizes: ConversionSizes
+}
+
+/** Enough to show the user. */
 const SEALED_LOOKING_SAMPLE = 20
 
-/** Pages every row by id, as the re-seal does: each read is one bounded index
- *  scan, where a server-side filter would walk the whole workspace in one
- *  statement and hit the statement timeout on a large one. */
-const sealedLookingRows = async (
-  server: ConversionServer,
-  workspaceId: string,
-  signal?: AbortSignal,
-): Promise<string[]> => {
-  const found: string[] = []
-  for await (const page of serverPages(server, workspaceId, RESEAL_PAGE_SIZE, signal)) {
-    found.push(...idsOf(page.filter(isSealedRow)))
-    if (found.length >= SEALED_LOOKING_SAMPLE) break
+const encoder = new TextEncoder()
+/** One `.jsonl` line, as the bundle writes it. */
+const lineBytes = (row: unknown): number => encoder.encode(JSON.stringify(row)).length + 1
+
+/** The dry run, which also finds sealed-looking rows. Every read is one
+ *  bounded index scan by id, where a server-side filter over the whole
+ *  workspace would hit the statement timeout on a large one. */
+const scanServer = async (server: ConversionServer, workspaceId: string, signal?: AbortSignal) => {
+  const sealedLooking: string[] = []
+  let blockRows = 0
+  let blocksBytes = 0
+  let contentBytes = 0
+  for (let afterId: string | null = null; ;) {
+    signal?.throwIfAborted()
+    const page = await server.readFullBlockPage(workspaceId, afterId, RESEAL_PAGE_SIZE)
+    if (page.length === 0) break
+    for (const row of page) {
+      blocksBytes += lineBytes(row)
+      for (const column of SEALED_COLUMNS) contentBytes += encoder.encode(row[column]).length
+    }
+    if (sealedLooking.length < SEALED_LOOKING_SAMPLE) sealedLooking.push(...idsOf(page.filter(isSealedRow)))
+    blockRows += page.length
+    afterId = page[page.length - 1].id
   }
-  return found.slice(0, SEALED_LOOKING_SAMPLE)
+
+  const {maxEventId} = await server.historyBounds(workspaceId)
+  let historyRows = 0
+  let historyBytes = 0
+  for (let afterEventId = 0; afterEventId < maxEventId;) {
+    signal?.throwIfAborted()
+    const page = await server.readHistoryPage(workspaceId, afterEventId, maxEventId, RESEAL_PAGE_SIZE)
+    if (page.length === 0) break
+    for (const row of page) historyBytes += lineBytes(row)
+    historyRows += page.length
+    afterEventId = page[page.length - 1].event_id
+  }
+  return {
+    sealedLooking: sealedLooking.slice(0, SEALED_LOOKING_SAMPLE),
+    sizes: {blockRows, blocksBytes, historyRows, historyBytes, contentBytes},
+  }
 }
 
 export const runPreflight = async ({
@@ -73,8 +119,8 @@ export const runPreflight = async ({
   if (queue.pending > 0) blockers.push({kind: 'pending-uploads', count: queue.pending})
   if (queue.rejected > 0) blockers.push({kind: 'rejected-uploads', count: queue.rejected})
 
-  const sealedLooking = await sealedLookingRows(server, workspaceId, signal)
-  if (sealedLooking.length > 0) blockers.push({kind: 'sealed-looking-rows', blockIds: sealedLooking})
+  const scan = await scanServer(server, workspaceId, signal)
+  if (scan.sealedLooking.length > 0) blockers.push({kind: 'sealed-looking-rows', blockIds: scan.sealedLooking})
 
-  return {blockers}
+  return {blockers, sizes: {...scan.sizes, localDbBytes: await environment.localDbBytes()}}
 }

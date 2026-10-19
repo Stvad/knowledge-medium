@@ -4,7 +4,11 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Label } from '@/components/ui/label'
 import type { SavedKeyPrompt, SavedKeyProblem, SaveKeyPrompt } from '@/sync/conversion/conversionKey'
 import { FLIP_SETTLED_MS } from '@/sync/conversion/flipAttempts'
-import type { PreflightBlocker } from '@/sync/conversion/preflight'
+import type { BundleFolder } from '@/sync/conversion/bundle/bundleParts'
+import type { ConversionSizes, PreflightBlocker } from '@/sync/conversion/preflight'
+import type { BundleRetakeReason, SealingPass } from '@/sync/conversion/sealingStage'
+import type { UpgradeWorkspacePinResult } from '@/sync/keys/flows/upgradeWorkspacePin'
+import { isPickerDismissal, pickDirectory, requestDirectoryPermission } from '@/utils/fileSystemAccess'
 import {
   runConversion,
   type ActiveStage,
@@ -58,14 +62,20 @@ const conversionUi = (channel: PromptChannel): ConversionUi => ({
   confirmContract: stage => channel.ask<void>((answer, cancel) => (
     <ContractPrompt stage={stage} answer={() => answer()} cancel={cancel}/>
   )),
-  confirmPreflight: () => channel.ask<void>((answer, cancel) => (
-    <PreflightPrompt answer={() => answer()} cancel={cancel}/>
+  confirmPreflight: report => channel.ask<void>((answer, cancel) => (
+    <PreflightPrompt sizes={report.sizes} answer={() => answer()} cancel={cancel}/>
   )),
   saveKey: prompt => channel.ask<string>((answer, cancel) => (
     <SaveKeyPromptView prompt={prompt} answer={answer} cancel={cancel}/>
   )),
   enterSavedKey: prompt => channel.ask<string | null>((answer, cancel) => (
     <SavedKeyPromptView prompt={prompt} answer={answer} cancel={cancel}/>
+  )),
+  chooseBundleFolder: ({reason}) => channel.ask<BundleFolder>((answer, cancel) => (
+    <ChooseBundleFolderPrompt reason={reason} answer={answer} cancel={cancel}/>
+  )),
+  reopenBundleFolder: ({recorded}) => channel.ask<BundleFolder | null>((answer, cancel) => (
+    <ReopenBundleFolderPrompt recorded={recorded} answer={answer} cancel={cancel}/>
   )),
   status: status => channel.status(status),
 })
@@ -192,8 +202,19 @@ function ContractPrompt({stage, answer, cancel}: {stage: ActiveStage; answer: ()
   )
 }
 
-function PreflightPrompt({answer, cancel}: {answer: () => void; cancel: () => void}) {
+const formatBytes = (bytes: number): string => {
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`
+  if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(1)} MB`
+  return `${(bytes / 1024 ** 3).toFixed(2)} GB`
+}
+
+/** The server re-seals every row and keeps history of both versions, plus WAL
+ *  (runbook step 6). */
+const SERVER_HEADROOM_FACTOR = 6
+
+function PreflightPrompt({sizes, answer, cancel}: {sizes: ConversionSizes; answer: () => void; cancel: () => void}) {
   const [understood, setUnderstood] = useState(false)
+  const bundleBytes = sizes.blocksBytes + sizes.historyBytes + sizes.localDbBytes
   return (
     <>
       <Explanation>Ready to convert. What stays readable on the server afterwards:</Explanation>
@@ -207,8 +228,14 @@ function PreflightPrompt({answer, cancel}: {answer: () => void; cancel: () => vo
         Server backups keep the old plaintext until they age out. Without the workspace key nobody,
         including you, can read the content again.
       </Explanation>
+      <Explanation>
+        The recovery bundle will take about {formatBytes(bundleBytes)}: {sizes.blockRows} blocks
+        ({formatBytes(sizes.blocksBytes)}), {sizes.historyRows} history rows ({formatBytes(sizes.historyBytes)}) and
+        this device's database ({formatBytes(sizes.localDbBytes)}). Pick a folder with room for it.
+        The server needs about {formatBytes(sizes.contentBytes * SERVER_HEADROOM_FACTOR)} of free disk while it converts.
+      </Explanation>
       <ConfirmCheck id="conversion-residue" checked={understood} onChange={setUnderstood}>
-        I understand, and this can't be undone.
+        I understand, there is room for both, and this can't be undone.
       </ConfirmCheck>
       <Actions primary={{label: 'Continue', onClick: answer, disabled: !understood}} secondary={{label: 'Cancel', onClick: cancel}}/>
     </>
@@ -296,6 +323,100 @@ function SavedKeyPromptView({prompt, answer, cancel}: {
   )
 }
 
+/** The picked folder, as the bundle sees it. A FileSystemDirectoryHandle is
+ *  one; the picker only exists in the browser that renders this prompt. */
+const asBundleFolder = (directory: FileSystemDirectoryHandle): BundleFolder => directory as unknown as BundleFolder
+
+/** Runs a picker or permission prompt, which must start inside the click:
+ *  a dismissal is no error, anything else is shown. */
+const usePickerAction = () => {
+  const [error, setError] = useState<string | null>(null)
+  const act = (pick: () => Promise<void>) => {
+    setError(null)
+    pick().catch((err: unknown) => {
+      if (!isPickerDismissal(err)) setError(errorMessage(err))
+    })
+  }
+  return {error, act}
+}
+
+const RETAKE_REASON: Record<BundleRetakeReason, string> = {
+  stale: 'The server holds changes the earlier bundle lacks, so it no longer counts. Take a new one; the old folder can go.',
+  changed: "The earlier bundle can't be read, or no longer matches what this device recorded, so it no longer counts. Take a new one.",
+}
+
+function ChooseBundleFolderPrompt({reason, answer, cancel}: {
+  reason: BundleRetakeReason | null
+  answer: (folder: BundleFolder) => void
+  cancel: () => void
+}) {
+  const {error, act} = usePickerAction()
+  return (
+    <>
+      {reason && <p className="text-sm text-destructive">{RETAKE_REASON[reason]}</p>}
+      <Explanation>
+        Next, a recovery bundle: a folder holding a plain copy of every block, the server's history
+        and this device's database. Together with the key, it's what the workspace can be restored
+        from if the key is ever lost. It's as sensitive as the workspace itself, so pick a folder on
+        an encrypted disk, and keep it with the key.
+      </Explanation>
+      <Explanation>The bundle goes in a new folder inside the one you pick.</Explanation>
+      {error && <p className="text-sm text-destructive">{error}</p>}
+      <Actions
+        primary={{
+          label: 'Choose a folder',
+          onClick: () => act(async () => {
+            const directory = await pickDirectory({id: 'km-e2ee-recovery', mode: 'readwrite'})
+            if (directory) answer(asBundleFolder(directory))
+          }),
+        }}
+        secondary={{label: 'Cancel', onClick: cancel}}
+      />
+    </>
+  )
+}
+
+function ReopenBundleFolderPrompt({recorded, answer, cancel}: {
+  recorded: BundleFolder
+  answer: (folder: BundleFolder | null) => void
+  cancel: () => void
+}) {
+  const {error, act} = usePickerAction()
+  const directory = recorded as unknown as FileSystemDirectoryHandle
+  return (
+    <>
+      <Explanation>
+        Before the server's history is deleted, this device reads the recovery bundle once more, to
+        make sure it is still complete. Allow access to its folder, "{recorded.name}", or pick it if
+        it has moved.
+      </Explanation>
+      {error && <p className="text-sm text-destructive">{error}</p>}
+      <div className="flex flex-wrap justify-end gap-2">
+        <Button type="button" variant="secondary" onClick={cancel}>Cancel</Button>
+        <Button type="button" variant="secondary" onClick={() => answer(null)}>Take a new bundle</Button>
+        <Button
+          type="button"
+          variant="secondary"
+          onClick={() => act(async () => {
+            const picked = await pickDirectory({id: 'km-e2ee-recovery', mode: 'read'})
+            if (picked) answer(asBundleFolder(picked))
+          })}
+        >
+          Choose the folder
+        </Button>
+        <Button
+          type="button"
+          onClick={() => act(async () => {
+            if ((await requestDirectoryPermission(directory, 'read')) === 'granted') answer(recorded)
+          })}
+        >
+          Allow access
+        </Button>
+      </div>
+    </>
+  )
+}
+
 const statusText = (status: ConversionStatus | null): string => {
   switch (status?.kind) {
     case undefined:
@@ -309,6 +430,20 @@ const statusText = (status: ConversionStatus | null): string => {
         : 'Switching the server to encrypted mode…'
     case 'checking-key':
       return 'Checking the workspace key…'
+    case 'taking-bundle':
+      return status.progress?.part === 'local-db'
+        ? "Copying this device's database into the bundle…"
+        : `Writing the recovery bundle (${status.progress?.rows ?? 0} ${status.progress?.part === 'history' ? 'history rows' : 'blocks'})…`
+    case 'resealing':
+      return `Encrypting blocks on the server: ${status.progress?.scanned ?? 0} checked, ${status.progress?.sealed ?? 0} encrypted. Keep this tab open.`
+    case 'verifying':
+      return `Checking every encrypted block: ${status.progress?.checked ?? 0} checked${status.progress?.repaired ? `, ${status.progress.repaired} repaired` : ''}.`
+    case 'checking-bundle':
+      return 'Checking the recovery bundle once more…'
+    case 'purging':
+      return "Deleting the server's plaintext history…"
+    case 'upgrading-pin':
+      return 'Decrypting the workspace on this device…'
   }
 }
 
@@ -330,6 +465,24 @@ const BLOCKER_TEXT = (blocker: PreflightBlocker): string => {
       return "This browser can't keep the workspace key between visits (storage is blocked or in private mode)."
     case 'no-directory-picker':
       return 'Converting writes a recovery folder, which needs desktop Chrome or Edge.'
+  }
+}
+
+const SEALING_STUCK: Record<Exclude<SealingPass, {kind: 'purged'}>['kind'], string> = {
+  'purge-refused': 'the server still finds a block that isn\'t encrypted.',
+  retake: 'the recovery bundle kept going out of date.',
+}
+
+const pinUpgradeFailure = (result: Exclude<UpgradeWorkspacePinResult, {ok: true}>): string => {
+  switch (result.reason) {
+    case 'refused':
+      return "The server isn't ready for this device to open the workspace yet. Try again in a moment."
+    case 'storage':
+      return "This device couldn't save the change (storage may be full or blocked). Try again."
+    case 'format':
+    case 'invalid-key':
+    case 'no-stored-key':
+      return "The key on this device doesn't open the workspace. Paste the key you saved on the next run."
   }
 }
 
@@ -383,12 +536,30 @@ function ResultView({result, retry, onClose}: {result: ConversionRunResult; retr
           <Actions primary={again} secondary={close}/>
         </>
       )
+    case 'sealing-stuck':
+      return (
+        <>
+          <p className="text-sm text-destructive">
+            The server's history could not be deleted: {SEALING_STUCK[result.pass.kind]}
+            {result.pass.kind === 'purge-refused' && ` (${result.pass.message})`}
+          </p>
+          <Explanation>Nothing is lost. The next run carries on; if this keeps happening, it needs looking into.</Explanation>
+          <Actions primary={again} secondary={close}/>
+        </>
+      )
+    case 'pin-upgrade-failed':
+      return (
+        <>
+          <p className="text-sm text-destructive">{pinUpgradeFailure(result.result)}</p>
+          <Actions primary={again} secondary={close}/>
+        </>
+      )
     case 'stopped':
       return (
         <>
           <Explanation>
-            The server is in encrypted mode and this device holds the key. The remaining steps aren't
-            available in this version of the app yet; the workspace stays closed until they run.
+            The workspace's content is encrypted on the server, and open again on this device. Its
+            attachments still need converting, which this version of the app can't do yet.
           </Explanation>
           <Actions secondary={close}/>
         </>

@@ -137,6 +137,15 @@ describe('takeBundle', () => {
     await expect(take()).rejects.toEqual(new BundleRefusal('unstable'))
   })
 
+  it('refuses a read that saw fewer rows than the workspace holds', async () => {
+    const read = server.readFullBlockPage.bind(server)
+    let pages = 0
+    // A page that comes back empty early, as a filter or paging bug would.
+    server.readFullBlockPage = async (...args) => (++pages > 1 ? [] : read(...args))
+
+    await expect(take()).rejects.toThrow(/read 2 of the workspace's 5 rows/)
+  })
+
   it('treats a session that sees no rows as an error, not an empty workspace', async () => {
     server.signedOut = true
     await expect(take()).rejects.toThrow(/not visible to this session/)
@@ -152,6 +161,11 @@ describe('verifyBundle', () => {
   it('refuses a part edited after the bundle was taken', async () => {
     const edited = folder.text(BUNDLE_PARTS.blocks).replace('text 2', 'text X')
     folder.setText(BUNDLE_PARTS.blocks, edited)
+    expect(await problemOf(verify())).toBe('part-mismatch')
+  })
+
+  it('refuses a local database changed after the bundle was taken', async () => {
+    folder.setText(BUNDLE_PARTS.localDb, 'SQLite format 3\0 something else')
     expect(await problemOf(verify())).toBe('part-mismatch')
   })
 

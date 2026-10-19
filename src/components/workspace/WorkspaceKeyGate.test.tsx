@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { WorkspaceKeyGate, type WorkspaceGateDeps } from './WorkspaceKeyGate.tsx'
 import { closeConversionFlow, conversionFlowTarget as conversionTarget } from './conversion/conversionFlowStore'
+import { notifyWorkspaceUnlocked } from './workspaceUnlocked'
 import { getWorkspaceKeyStore } from '@/sync/keys/keyStore'
 import { getModePin, hasPinUpgradeMarker, setModePin, writePinUpgradeMarker } from '@/sync/keys/modePin'
 import type { WorkspaceConversionState } from '@/sync/keys/conversionState'
@@ -204,6 +205,17 @@ describe('WorkspaceKeyGate — server-e2ee', () => {
     renderGate()
     expect(await screen.findByText(/its owner is converting/i)).toBeInTheDocument()
     expect(screen.queryByRole('button', {name: /continue the conversion/i})).toBeNull()
+  })
+
+  it('resolves when the conversion flow unlocks the workspace from outside the gate', async () => {
+    state = {...state, conversionPhase: 'sealing'}
+    const onResolved = renderGate()
+    await screen.findByText(/is being encrypted/i)
+
+    notifyWorkspaceUnlocked('another-workspace')
+    expect(onResolved).not.toHaveBeenCalled()
+    notifyWorkspaceUnlocked(WS)
+    expect(onResolved).toHaveBeenCalledTimes(1)
   })
 
   it('a check that cannot reach the server offers no unlock, and checks again on request', async () => {

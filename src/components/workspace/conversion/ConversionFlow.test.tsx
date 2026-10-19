@@ -1,24 +1,31 @@
 // @vitest-environment happy-dom
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { InMemoryWorkspaceKeyStore } from '@/sync/keys/keyStore'
 import { mintWorkspaceKey } from '@/sync/keys/mintWorkspaceKey'
 import type { ConversionUi } from '@/sync/conversion/runConversion'
 import { seedPlaintext, WS } from '@/sync/conversion/test/conversionFixtures'
 import { FakeConversionServer } from '@/sync/conversion/test/fakeConversionServer'
 import { flowDeps, USER } from '@/sync/conversion/test/flowFixtures'
+import { MemoryBundleFolder } from '@/sync/conversion/test/memoryBundleFolder'
 import { ConversionFlow } from './ConversionFlow'
 import type { ConversionUnavailable } from './conversionFlowDeps'
 
 let server: FakeConversionServer
 let keyStore: InMemoryWorkspaceKeyStore
+let picked: MemoryBundleFolder
 
 beforeEach(() => {
   server = new FakeConversionServer()
   seedPlaintext(server, 2)
   keyStore = new InMemoryWorkspaceKeyStore()
+  picked = new MemoryBundleFolder('picked')
+  vi.stubGlobal('showDirectoryPicker', async () => picked)
 })
-afterEach(() => cleanup())
+afterEach(() => {
+  cleanup()
+  vi.unstubAllGlobals()
+})
 
 const makeDeps = (ui: ConversionUi, signal: AbortSignal) => flowDeps(server, ui, {keyStore, signal})
 
@@ -29,6 +36,8 @@ const flipped = async () => {
   const read = await server.conversionState(WS)
   return read.kind === 'read' && read.state.encryptionMode === 'e2ee'
 }
+
+const DONE = /attachments still need converting/i
 
 /** Start, confirm the contract and the residue. */
 const startToKeyStep = async () => {
@@ -57,9 +66,12 @@ describe('ConversionFlow', () => {
     fireEvent.change(screen.getByLabelText(/workspace key/i), {target: {value: key}})
     click(/^confirm$/i)
 
-    expect(await screen.findByText(/aren't available in this version/i)).toBeInTheDocument()
+    // Past the flip: the bundle goes into a new folder inside the picked one.
+    fireEvent.click(await screen.findByRole('button', {name: /choose a folder/i}))
+    expect(await screen.findByText(DONE)).toBeInTheDocument()
     expect(await flipped()).toBe(true)
     expect(await keyStore.get(USER, WS)).not.toBeNull()
+    expect(picked.folders.size).toBe(1)
   })
 
   it('offers no Stop while the flip request is out', async () => {
@@ -77,7 +89,7 @@ describe('ConversionFlow', () => {
     expect(await screen.findByText(/switching the server to encrypted mode/i)).toBeInTheDocument()
     expect(screen.queryByRole('button', {name: /stop/i})).toBeNull()
     commit()
-    expect(await screen.findByText(/aren't available in this version/i)).toBeInTheDocument()
+    expect(await screen.findByRole('button', {name: /choose a folder/i})).toBeInTheDocument()
   })
 
   it('asks for the earlier attempt\'s key, and makes a new one only on request', async () => {
