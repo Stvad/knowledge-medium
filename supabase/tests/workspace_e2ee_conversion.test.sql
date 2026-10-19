@@ -18,7 +18,7 @@ BEGIN;
 CREATE EXTENSION IF NOT EXISTS pgtap WITH SCHEMA extensions;
 SET LOCAL search_path TO public, extensions;
 
-SELECT plan(65);
+SELECT plan(67);
 
 CREATE TEMP TABLE conv_ctx AS
 SELECT
@@ -211,6 +211,14 @@ SELECT ok(
   AND has_function_privilege('authenticated', 'public.finish_conversion(text)', 'execute'),
   'the three RPCs are callable by authenticated and not by anon'
 );
+
+-- Clients read the phase by embedding workspace_conversions in a workspaces
+-- select (PostgREST). The embed follows this foreign key, and the key being
+-- the primary key makes it one-to-one: an object, or null when no row.
+SELECT fk_ok('public', 'workspace_conversions', 'workspace_id', 'public', 'workspaces', 'id',
+  'workspace_conversions.workspace_id references workspaces.id, which the clients embed through');
+SELECT col_is_pk('public', 'workspace_conversions', 'workspace_id',
+  'workspace_conversions.workspace_id is the primary key, so the embed is one-to-one');
 
 SELECT is(
   pg_temp.probe('authenticated', pg_temp.owner_id(),
