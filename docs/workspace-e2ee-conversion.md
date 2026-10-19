@@ -142,7 +142,7 @@ The phase only moves forward, so a resume never falls back.
 - the upload queue is drained, attachment records included, and no rejected rows are pending;
 - `canPersistPins()` passes, and the key store is durable (not `createWorkspaceKeyStore`'s in-memory fallback);
 - the File System Access API is available (desktop Chromium), because the bundle has to be re-opened to verify it;
-- the user confirms the residue named in [§7](#7-what-stays-visible-afterwards), disk headroom ([§8](#8-runbook)), free space for the bundle, and any media block whose bytes exist nowhere, neither as a raw object nor locally, since no step can bring those back. Its size is shown: the database, the attachment bytes, the server history and `blocks.jsonl`. A dry run of step 3's paging measures the last two without writing anything. A bundle that can't be written after the flip leaves every device waiting until it is.
+- the user confirms the residue named in [§7](#7-what-stays-visible-afterwards), disk headroom ([§8](#8-runbook)), free space for the bundle, and any media block with no **hash-verified** source: no local copy, and no raw object whose bytes hash to the block's content hash. Storage objects are untrusted, so a remote-only object is downloaded and checked here. No step after the flip can bring those back. Its size is shown: the database, the attachment bytes, the server history and `blocks.jsonl`. A dry run of step 3's paging measures the last two without writing anything. A bundle that can't be written after the flip leaves every device waiting until it is.
 
 **1. Key.**
 - If this device already holds a key record for the workspace, from an earlier attempt that didn't flip, the run reuses it. The user saved that key, and a late-committing flip would carry its canary.
@@ -160,12 +160,11 @@ The phase only moves forward, so a resume never falls back.
   1. Read `through` = `coalesce(max(event_id), 0)`.
   2. Page by `event_id` (`> cursor`, `≤ through`, ordered), never by offset.
   3. Stream one row per line, with every column verbatim, `workspace_id` included.
-- **`attachments/`.**
-  - Every object in the workspace's Storage listing, byte for byte under its name.
-  - Every local byte-store entry of a media block, soft-deleted ones included.
+- **`attachments/<content hash>`.** Exactly one entry per media block content hash, soft-deleted blocks included. Each entry is plaintext whose sha256 is that hash, taken from the local byte store or the raw Storage object, whichever verifies. One entry per hash means no duplicate paths, so every zip reader resolves the same bytes.
+- **`other-objects/<object name>`.** Every other object in the workspace's Storage listing, byte for byte, so the cleaner may later delete it.
 - **`manifest.json`.** The workspace id, `through`, the line count of each `.jsonl` part, the server's block count, a sha256 of each part, and the export time.
 
-The flow **re-opens the file and verifies it**: the hashes match; `blocks.jsonl` has exactly the server's block count of lines, with no id repeated; every media block in `blocks.jsonl`, soft-deleted ones included, has an `attachments/` entry whose bytes hash to its content hash, unless preflight listed it as having no bytes anywhere; and `server-history.jsonl`'s `event_id`s strictly increase and end at `through`, or it's empty and `through` is `0`. A workspace whose rows predate the history trigger can have no history at all. It then keeps `through`, the line counts, the names of the Storage objects it holds, and the sha256 of the verified `manifest.json` on this device as the **bundle record**. The manifest's hash pins every part's hash, so a different file with matching counts can't pass step 6. The re-seal never starts without that record. It's cleared once the conversion finishes; the attachment cleaner needs it after the purge.
+The flow **re-opens the file and verifies it**: the hashes match; `blocks.jsonl` has exactly the server's block count of lines, with no id repeated; every row of `blocks.jsonl` carries the manifest's workspace id, which is the workspace being converted; every media block in it, soft-deleted ones included, has its `attachments/` entry, and the entry's bytes hash to its name, unless preflight listed the block as having no verified source; no archive path appears twice; and `server-history.jsonl`'s `event_id`s strictly increase and end at `through`, or it's empty and `through` is `0`. A workspace whose rows predate the history trigger can have no history at all. It then keeps `through`, the line counts, the names under `other-objects/`, and the sha256 of the verified `manifest.json` on this device as the **bundle record**. The manifest's hash pins every part's hash, so a different file with matching counts can't pass step 6. The re-seal never starts without that record. It's cleared once the conversion finishes; the attachment cleaner needs it after the purge.
 
 The bundle is plaintext, as sensitive as the database. Store it on an encrypted volume or as a password-manager attachment. It isn't sealed under the workspace key, because then it would be unreadable exactly when it's needed: after the key is lost. **It's a point-in-time content snapshot, not a rollback.** There's no going back after the flip.
 
@@ -207,7 +206,7 @@ Resuming just runs this again. It can take hours for a large workspace, so the f
   1. List `<ws>/` **completely before acting**. Page by name, and recurse into the folder entries Storage returns for nested paths.
   2. **Raw:** seal it, upload it to its keyed name, verify the upload (a 409 on an occupied path goes through the same check), then delete the raw object.
   3. **Keyed:** keep it.
-  4. **Neither:** delete it if the bundle record names it. Otherwise leave it and report it; it never stops the pass, so every raw object is still reached. A standalone run has no bundle record, so it converts raw objects and only reports the rest, such as objects kept from an old key after a key-loss recovery.
+  4. **Neither:** delete it if the bundle record names it (it was archived under `other-objects/`). Otherwise leave it and report it; it never stops the pass, so every raw object is still reached. A standalone run has no bundle record, so it converts raw objects and only reports the rest, such as objects kept from an old key after a key-loss recovery.
 - **The proof:**
   - no raw object remains;
   - every media block's keyed object, soft-deleted blocks included, is present **and** passes the shared verification helper (downloaded, opened, hash-checked). That costs one download of the attachment set, because Storage objects are untrusted.
