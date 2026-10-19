@@ -1,1 +1,1 @@
-import{sB as e}from"../../chunks/app-zj5vD1JV.js";export{e as matchCharTrigger};
+import{sB as e}from"../../chunks/app-C4wDgibz.js";export{e as matchCharTrigger};

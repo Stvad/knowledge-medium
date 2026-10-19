@@ -1,1 +1,1 @@
-import{Cg as e,Sg as t,wg as n}from"../../../chunks/app-zj5vD1JV.js";export{t as VideoPlayerContentRenderer,e as VideoPlayerRenderer,n as isPlayableVideoBlock};
+import{Cg as e,Sg as t,wg as n}from"../../../chunks/app-C4wDgibz.js";export{t as VideoPlayerContentRenderer,e as VideoPlayerRenderer,n as isPlayableVideoBlock};
