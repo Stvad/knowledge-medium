@@ -280,8 +280,8 @@ The first production run is #1288.
 #1302 holds the design. It has to meet these requirements:
 - **Nothing is deleted**, so no workspace or block id is ever free for another caller to claim. Old-`K_id` objects and key records are kept, in case the old key turns up.
 - **An owner-only canary replacement**, admitted like the flip ([§5](#5-the-invariant-we-relax)).
-- **A whole-row restore**: the content columns sealed under the new key, plus tree, order, `deleted` and the stamps. Rows the recovery point lacks are tombstoned, which is safe only because every recovery point is taken with no view gap ([§6.3](#63-the-flow) step 0, runbook step 14).
-- **A row counts as restored only when it opens under the new key and its whole row equals the chosen recovery point's.** Opening alone proves only which key sealed it. A resume, even with a different recovery point, compares every row again, so the result is never a mix of two points.
+- **A whole-row restore**: the content columns sealed under the new key, plus tree, order, `deleted`, `created_at`, `user_updated_at`, `created_by` and `updated_by`. Not `updated_at`: it's the row version, which the clamp keeps monotonic, and it has to advance so every device takes the restored value. Rows the recovery point lacks are tombstoned, which is safe only because every recovery point is taken with no view gap ([§6.3](#63-the-flow) step 0, runbook step 14).
+- **A row counts as restored only when it opens under the new key and its whole row, `updated_at` aside, equals the chosen recovery point's.** Opening alone proves only which key sealed it. A resume, even with a different recovery point, compares every row again, so the result is never a mix of two points.
 - **Every device checks its key record against the canary**, on entry and whenever the synced canary changes. Today `resolveWorkspaceEntry` only checks that a record with `K_id` exists.
 - **The single-client contract** applies to recovery too.
 - **The ids a new `K_id` re-namespaces** are handled or accepted: synthesized definitions and media blocks (the rotation note in `src/sync/crypto/derivedIdNamespace.ts`).
