@@ -1,0 +1,1 @@
+import{dA as e,uA as t}from"../../chunks/app-vkjSBtl2.js";export{t as canConvertEmptyChildBlockToProperty,e as convertEmptyChildBlockToProperty};

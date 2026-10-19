@@ -1,0 +1,1 @@
+import{fD as e,pD as t}from"../../chunks/app-vkjSBtl2.js";export{e as ClientLocalSettings,t as clientLocalSettings};

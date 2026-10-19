@@ -1,0 +1,1 @@
+import{cE as e,sE as t}from"../../../chunks/app-vkjSBtl2.js";export{t as ExtensionPromptSurface,e as extensionPromptsExtension};

@@ -1,0 +1,1 @@
+import{dd as e,fd as t,pd as n,ud as r}from"../../../../chunks/app-vkjSBtl2.js";export{r as BlockRefError,e as MIN_ID_PREFIX,t as resolveBlockRef,n as shortIds};
