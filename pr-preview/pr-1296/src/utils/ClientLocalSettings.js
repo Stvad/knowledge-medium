@@ -1,1 +1,1 @@
-import{fD as e,pD as t}from"../../chunks/app-CWvnQh7-.js";export{e as ClientLocalSettings,t as clientLocalSettings};
+import{fD as e,pD as t}from"../../chunks/app-BoE09gf1.js";export{e as ClientLocalSettings,t as clientLocalSettings};

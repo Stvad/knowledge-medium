@@ -1,1 +1,1 @@
-import{CV as e,wV as t}from"../../chunks/app-CWvnQh7-.js";export{e as pluginPrefsExtension,t as pluginUIStateExtension};
+import{CV as e,wV as t}from"../../chunks/app-BoE09gf1.js";export{e as pluginPrefsExtension,t as pluginUIStateExtension};
