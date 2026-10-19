@@ -32,7 +32,9 @@ const toNumber = (value: number | string): number =>
 // RPC payload parsing — Postgres returns numeric bigints as strings via PostgREST.
 // ---------------------------------------------------------------------------
 
-// @projects: workspaces
+// create_workspace returns conversion_phase too; nothing reads it from this
+// payload.
+// @projects: workspaces - conversion_phase
 type RpcWorkspaceRow = {
   id: string
   name: string
