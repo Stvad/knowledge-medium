@@ -1,1 +1,1 @@
-import{aM as e,iM as t}from"../../chunks/app-C4wDgibz.js";export{t as markdownExtensionsFacet,e as resolveMarkdownRenderConfig};
+import{aM as e,iM as t}from"../../chunks/app-2U_zLjSk.js";export{t as markdownExtensionsFacet,e as resolveMarkdownRenderConfig};

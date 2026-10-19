@@ -1,1 +1,1 @@
-import{CR as e,wR as t}from"../../../chunks/app-C4wDgibz.js";export{e as mergeReferrers,t as wikilinkSourcesByContent};
+import{CR as e,wR as t}from"../../../chunks/app-2U_zLjSk.js";export{e as mergeReferrers,t as wikilinkSourcesByContent};

@@ -1,1 +1,1 @@
-import{nO as e,rO as t}from"../../chunks/app-C4wDgibz.js";export{e as BlockChildren,t as BlockComponent};
+import{nO as e,rO as t}from"../../chunks/app-2U_zLjSk.js";export{e as BlockChildren,t as BlockComponent};

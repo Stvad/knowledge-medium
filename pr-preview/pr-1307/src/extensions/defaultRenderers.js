@@ -1,1 +1,1 @@
-import{dO as e,fO as t,uO as n}from"../../chunks/app-C4wDgibz.js";export{n as defaultRegistry,e as defaultRendererContributions,t as defaultRenderersExtension};
+import{dO as e,fO as t,uO as n}from"../../chunks/app-2U_zLjSk.js";export{n as defaultRegistry,e as defaultRendererContributions,t as defaultRenderersExtension};
