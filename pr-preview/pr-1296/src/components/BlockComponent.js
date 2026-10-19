@@ -1,1 +1,1 @@
-import{JD as e,qD as t}from"../../chunks/app-Bn_X2xGK.js";export{t as BlockChildren,e as BlockComponent};
+import{JD as e,qD as t}from"../../chunks/app-CLvJwEOW.js";export{t as BlockChildren,e as BlockComponent};

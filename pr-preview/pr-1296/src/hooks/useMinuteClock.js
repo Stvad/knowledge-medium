@@ -1,1 +1,1 @@
-import{Ib as e}from"../../chunks/app-Bn_X2xGK.js";export{e as useMinuteClock};
+import{Ib as e}from"../../chunks/app-CLvJwEOW.js";export{e as useMinuteClock};
