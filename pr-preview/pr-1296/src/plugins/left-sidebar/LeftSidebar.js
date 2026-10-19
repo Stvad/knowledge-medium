@@ -1,1 +1,1 @@
-import{ay as e,iy as t,ry as n}from"../../../chunks/app-BoE09gf1.js";export{n as LeftSidebar,t as LeftSidebarCoreSection,e as LeftSidebarShortcutsSection};
+import{ay as e,iy as t,ry as n}from"../../../chunks/app-BjbXQ2G9.js";export{n as LeftSidebar,t as LeftSidebarCoreSection,e as LeftSidebarShortcutsSection};

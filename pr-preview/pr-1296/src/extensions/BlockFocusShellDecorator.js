@@ -1,1 +1,1 @@
-import{$T as e,QT as t,ZT as n}from"../../chunks/app-BoE09gf1.js";export{n as BlockFocusShellDecorator,t as blockFocusShellDecorator,e as shouldScrollFocusedBlockIntoView};
+import{$T as e,QT as t,ZT as n}from"../../chunks/app-BjbXQ2G9.js";export{n as BlockFocusShellDecorator,t as blockFocusShellDecorator,e as shouldScrollFocusedBlockIntoView};
