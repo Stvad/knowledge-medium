@@ -1,1 +1,1 @@
-import{Qc as e}from"../../../chunks/app-CE3vxKij.js";export{e as agentDispatchCompanionPlugin};
+import{Qc as e}from"../../../chunks/app-BygAccxp.js";export{e as agentDispatchCompanionPlugin};

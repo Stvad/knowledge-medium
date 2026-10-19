@@ -1,1 +1,1 @@
-import{wm as e}from"../../../../chunks/app-CE3vxKij.js";export{e as collectPaged};
+import{wm as e}from"../../../../chunks/app-BygAccxp.js";export{e as collectPaged};

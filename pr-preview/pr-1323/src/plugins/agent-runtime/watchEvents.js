@@ -1,1 +1,1 @@
-import{Nu as e,Pu as t}from"../../../chunks/app-CE3vxKij.js";export{e as createWatchEventsRegistry,t as watchEventsRegistry};
+import{Nu as e,Pu as t}from"../../../chunks/app-BygAccxp.js";export{e as createWatchEventsRegistry,t as watchEventsRegistry};

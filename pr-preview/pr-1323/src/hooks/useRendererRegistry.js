@@ -1,1 +1,1 @@
-import{HO as e,UO as t,VO as n}from"../../chunks/app-CE3vxKij.js";export{t as defaultRegistry,n as refreshRendererRegistry,e as useRenderer};
+import{HO as e,UO as t,VO as n}from"../../chunks/app-BygAccxp.js";export{t as defaultRegistry,n as refreshRendererRegistry,e as useRenderer};

@@ -1,1 +1,1 @@
-import{cJ as e}from"../../chunks/app-CE3vxKij.js";export{e as kernelDataExtension};
+import{cJ as e}from"../../chunks/app-BygAccxp.js";export{e as kernelDataExtension};

@@ -1,1 +1,1 @@
-import{FD as e,ID as t}from"../../chunks/app-CE3vxKij.js";export{e as dispatchPointerAction,t as setPointerActionDispatcher};
+import{FD as e,ID as t}from"../../chunks/app-BygAccxp.js";export{e as dispatchPointerAction,t as setPointerActionDispatcher};

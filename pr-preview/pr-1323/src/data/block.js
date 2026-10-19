@@ -1,1 +1,1 @@
-import{aJ as e,oJ as t}from"../../chunks/app-CE3vxKij.js";export{e as Block,t as requireLoadedBlock};
+import{aJ as e,oJ as t}from"../../chunks/app-BygAccxp.js";export{e as Block,t as requireLoadedBlock};

@@ -1,1 +1,1 @@
-import{CR as e,SR as t}from"../../../chunks/app-CE3vxKij.js";export{t as REFERENCES_TARGET_INVALIDATION_CHANNEL,e as referencesInvalidationRule};
+import{CR as e,SR as t}from"../../../chunks/app-BygAccxp.js";export{t as REFERENCES_TARGET_INVALIDATION_CHANNEL,e as referencesInvalidationRule};

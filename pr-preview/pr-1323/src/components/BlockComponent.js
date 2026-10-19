@@ -1,1 +1,1 @@
-import{FO as e,IO as t}from"../../chunks/app-CE3vxKij.js";export{e as BlockChildren,t as BlockComponent};
+import{FO as e,IO as t}from"../../chunks/app-BygAccxp.js";export{e as BlockChildren,t as BlockComponent};

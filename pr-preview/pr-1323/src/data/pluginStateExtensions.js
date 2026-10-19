@@ -1,1 +1,1 @@
-import{dH as e,fH as t}from"../../chunks/app-CE3vxKij.js";export{e as pluginPrefsExtension,t as pluginUIStateExtension};
+import{dH as e,fH as t}from"../../chunks/app-BygAccxp.js";export{e as pluginPrefsExtension,t as pluginUIStateExtension};

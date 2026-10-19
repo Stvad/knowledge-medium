@@ -1,1 +1,1 @@
-import{fN as e}from"../../chunks/app-CE3vxKij.js";export{e as buildPropertyPanelSections};
+import{fN as e}from"../../chunks/app-BygAccxp.js";export{e as buildPropertyPanelSections};
