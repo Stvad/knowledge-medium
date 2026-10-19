@@ -1,1 +1,1 @@
-import{C_ as e,S_ as t,T_ as n,w_ as r}from"../../../chunks/app-CvofEJq2.js";export{t as consumeFollowOnDispatch,e as forgetFollow,r as keepFollowOnlyAt,n as rememberFollow};
+import{C_ as e,S_ as t,T_ as n,w_ as r}from"../../../chunks/app-CGm8zVv3.js";export{t as consumeFollowOnDispatch,e as forgetFollow,r as keepFollowOnlyAt,n as rememberFollow};
