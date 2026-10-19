@@ -1,1 +1,1 @@
-import{qn as e}from"../../../chunks/app-DujFYwh9.js";export{e as startupMetricsPlugin};
+import{qn as e}from"../../../chunks/app-DMAgOaEH.js";export{e as startupMetricsPlugin};
