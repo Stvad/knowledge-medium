@@ -1,1 +1,0 @@
-import{cE as e,sE as t}from"../../../chunks/app-SPb3RV8R.js";export{t as ExtensionPromptSurface,e as extensionPromptsExtension};

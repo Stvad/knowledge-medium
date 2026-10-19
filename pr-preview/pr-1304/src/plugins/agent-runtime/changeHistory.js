@@ -1,1 +1,0 @@
-import{au as e,cu as t,iu as n,ou as r,su as i}from"../../../chunks/app-SPb3RV8R.js";export{n as BLOCK_HISTORY_CONTENT_CHARS,e as LISTED_PROPERTY_NAMES,r as MAX_LISTED_CHANGES,i as blockHistory,t as recentChanges};
