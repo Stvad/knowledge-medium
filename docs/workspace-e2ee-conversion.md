@@ -84,7 +84,10 @@ The workspace is **frozen** while an attempt row exists ([§5.2](#52-the-freeze)
 
 Tables:
 
-- **`private.workspace_conversions(workspace_id pk, attempt_id, canary, state, started_by, started_at)`.** `canary` is the new key's canary. The client mints it before `begin`, and storing it here binds the attempt to exactly one key.
+- **`private.workspace_conversions(workspace_id pk, attempt_id, canary, state, started_by, started_at, apply_generation, verified_generation)`.**
+  - `canary` is the new key's canary. The client mints it before `begin`, and storing it here binds the attempt to exactly one key.
+  - The two generation counters tie the purge to a verification of the latest apply ([§5.3](#53-sealing-apply-verification)).
+- **`private.workspace_property_migration_claims(workspace_id pk, claimed_by, claimed_at)`.** A short-lived claim the properties-migration gesture takes before synthesis. `begin` refuses while one is live ([§5.1](#51-the-attempt)).
 - **`private.workspace_conversion_rows(workspace_id, attempt_id, block_id, content, properties_json, references_json, verify_record)`.** The sealed columns, plus a sealed per-row verification record ([§5.3](#53-sealing-apply-verification)). The conversion only updates rows, so there's no op column. The purge clears it.
 - **`private.workspace_conversion_objects(workspace_id, attempt_id, keyed_path, verified)`.** Every attachment object the cleanup writes, recorded **before** it is written ([§5.5](#55-attachments)). The names are keyed HMACs, so storing them adds no fingerprint.
 
@@ -96,22 +99,27 @@ Rules that apply to every RPC:
 
 | RPC | From state | To state | Effect | Refuses when |
 |---|---|---|---|---|
-| `begin_workspace_conversion(ws, canary) → attempt_id` | no attempt | `staging` | takes the serialization locks of [§5.2](#52-the-freeze), including `FOR UPDATE` on the `workspaces` row so a `properties_migration` flip can't straddle it, then inserts the attempt (freezing the workspace) | an attempt exists; `encryption_mode ≠ 'none'` (checked in this transaction); caller isn't the owner |
-| `stage_workspace_conversion(ws, attempt_id, rows)` | `staging`, `applied` | same | checks each row's per-column base against the current row, then **discards** the base and upserts the sealed columns ([§5.3](#53-sealing-apply-verification)) | foreign or missing `block_id`; base mismatch |
-| `apply_workspace_conversion(ws, attempt_id)` | `staging`, `applied` | `applied` | flips the mode and re-seals in one transaction ([§5.3](#53-sealing-apply-verification)); re-running it in `applied` re-applies re-staged rows | incomplete image; a non-envelope column |
-| `purge_workspace_history(ws, attempt_id, archived_count)` | `applied` | `cleanup_pending` | deletes the workspace's `blocks_history`, and clears staging ([§5.4](#54-history-archive-verify-purge)) | `archived_count` ≠ the frozen server count |
+| `begin_workspace_conversion(ws, canary) → attempt_id` | no attempt | `staging` | takes the serialization locks of [§5.2](#52-the-freeze), including `FOR UPDATE` on the `workspaces` row so a `properties_migration` flip can't straddle it, then inserts the attempt (freezing the workspace) | an attempt exists; a live property-migration claim; `encryption_mode ≠ 'none'` (checked in this transaction); caller isn't the owner |
+| `stage_workspace_conversion(ws, attempt_id, rows)` | `staging`, `applied` | same | checks each row's per-column **CAS base** against the current row, then **discards** it and upserts the sealed columns. A row's `verify_record` is written on its first stage and is **immutable** after that ([§5.3](#53-sealing-apply-verification)) | foreign or missing `block_id`; base mismatch |
+| `apply_workspace_conversion(ws, attempt_id)` | `staging`, `applied` | `applied` | flips the mode and re-seals in one transaction, then increments `apply_generation` ([§5.3](#53-sealing-apply-verification)). Re-running it in `applied` re-applies re-staged rows | incomplete image; a non-envelope column |
+| `read_staged_verification(ws, attempt_id, after_block_id, limit)` | `applied` | same | keyset page of `(block_id, verify_record)`, sealed, so any key holder, a takeover included, can verify | — |
+| `mark_conversion_verified(ws, attempt_id, generation)` | `applied` | same | records that a clean verification pass covered `generation` | `generation` ≠ the current `apply_generation` |
+| `purge_workspace_history(ws, attempt_id, archived_count)` | `applied` | `cleanup_pending` | deletes the workspace's `blocks_history` and clears staging ([§5.4](#54-history-archive-verify-purge)) | `archived_count` ≠ the frozen server count; `verified_generation` ≠ `apply_generation` (a later re-apply that no one verified) |
 | `list_workspace_objects(ws, attempt_id, after_name, limit)` | `cleanup_pending` | same | keyset page of `storage.objects` (bucket `attachments`, name under `<ws>/`, nested names included, `name > after_name` ordered by name) ([§5.5](#55-attachments)) | — |
 | `record_conversion_object(ws, attempt_id, keyed_path, verified)` | `cleanup_pending` | same | records an object before it's written; never downgrades `verified` | — |
 | `finish_workspace_conversion(ws, attempt_id)` | `cleanup_pending` | done | deletes the attempt and its recorded objects, ending the freeze | — |
 | `abort_workspace_conversion(ws, attempt_id)` | `staging` | gone | deletes the attempt and staging, ending the freeze. Nothing has been written to blocks or Storage yet. | — |
 | `abandon_workspace_conversion(ws, attempt_id)` | `applied`, `cleanup_pending` | gone | key-loss exit only: ends the freeze without finishing, so the recovery procedure ([§7](#7-runbook)) can run | — |
+| `claim_property_migration(ws)` / `release_property_migration(ws)` | no attempt | — | the properties-migration gesture's claim, taken **before** synthesis and released after its flip; it expires on its own | an attempt exists |
 | `get_workspace_conversion(ws)` | any | — | owner read: `attempt_id`, `canary`, `state` | — |
 | `workspace_upload_mode(ws)` | any | — | member read: `frozen` while an attempt exists, otherwise `none` or `e2ee` | — |
 
 While an attempt exists, two other server paths refuse:
 
 - `delete_workspace` says "finish, abort or abandon the conversion first". It runs as `postgres` (SECURITY DEFINER), so without this check its cascade would also slip past the freeze.
-- The `properties_migration` flip trigger refuses, and the properties-migration gesture refuses before synthesis. Otherwise a mid-conversion switch would mint public, name-derived definition ids ([§6](#6-what-stays-visible-afterwards)).
+- The `properties_migration` flip trigger refuses. The properties-migration gesture also takes `claim_property_migration` **before** synthesis (`src/plugins/properties-migration/action.ts` synthesizes, then flips separately), and `begin` refuses while a claim is live.
+  - Otherwise a gesture that passed its check just before `begin` could commit public, name-derived definition blocks locally. The freeze would park them, the post-freeze residue scan couldn't see them, and they would upload after `finish` without ever being re-confirmed ([§6](#6-what-stays-visible-afterwards)).
+  - The claim expires, so a crashed gesture can't block conversion forever.
 
 ### 5.2 The freeze
 
@@ -177,7 +185,7 @@ History is **not** purged here. The plaintext's last server copy goes only after
   - the invariant columns: `parent_id`, `order_key`, `deleted`, `created_at`, `user_updated_at`, `created_by`, `updated_by`;
   - `updated_at`.
 
-  - **It's sealed under the workspace key and staged with the row** as `verify_record`, with AAD binding block id, workspace id and the label `verify`.
+  - **It's sealed under the workspace key and staged with the row** as `verify_record`, with AAD binding block id, workspace id and the label `verify`. It's written on the row's first stage and **never replaced**: it records the plaintext expectation. A repair's ciphertext CAS base is passed separately and never stored.
     - So any key holder can verify, including a device that takes over an `applied` attempt after the converting device crashed.
     - The server can't read it, so the plaintext hashes inside are no fingerprint.
     - The purge deletes it along with the staging rows.
@@ -190,6 +198,9 @@ History is **not** purged here. The plaintext's last server copy goes only after
   - The plaintext comes from this device's local `blocks` row, if that row's hashes equal the record's bases. Otherwise it comes from the content-recovery snapshot, which was taken at the same point.
   - A takeover device without either stays in `applied` and says so. The verification gate is never weakened.
   - A repaired row bumps `updated_at` again, which the "greater than" check allows, so verification can converge.
+- **Binding the purge to what was verified.** Each `apply`, a repair re-apply included, increments `apply_generation`. A clean pass calls `mark_conversion_verified` with the generation it read at its start, and the purge refuses unless that generation is still the current one.
+  - Otherwise, with two owner devices, one could finish a clean pass, the other could re-stage and re-apply, and the first could then purge history over ciphertext no device had verified.
+  - The attempt-row lock serializes these RPCs, and the generation is what ties them together.
 - Only a clean pass proceeds to the purge. This catches the bugs a client-side seal check can't: a row or column mapping error in the stage RPC, its upsert, or the apply's `UPDATE … FROM`. The AAD binds the column, so a swapped column would pass the envelope trigger and then fail to open everywhere.
 
 **Timestamps.** The re-seal changes every row's content columns, so the clamp raises `updated_at` to at least `OLD.updated_at + 1` (`20260803000000_add_patch_base_version_drift_bump.sql`). That's intended: `updated_at` is the row version, and the bump makes peers re-download. Display reads `user_updated_at`, which the apply leaves untouched, as it does `created_at`, `created_by` and `updated_by`. The local-history side of the bump is in [§5.6](#56-clients).
@@ -371,7 +382,7 @@ The orchestrator (#1290) refuses to start unless all of these hold:
 
 **Resume.** On load, an owner device reads `get_workspace_conversion` for each workspace it owns. Abort and abandon are never automatic.
 - **`staging`:** if this device's durable key opens the stored canary, continue, redoing the archive unless its own verifies. Without that key, show "a conversion is in progress" with two choices: paste its key to take over, or abort explicitly.
-- **`applied` or `cleanup_pending`:** with the key, continue from that state. A takeover in `applied` verifies from the staged `verify_record`s ([§5.3](#53-sealing-apply-verification)). Without the key, prompt for it. Abandon is offered only when the user confirms the key is lost, and leads into the recovery procedure ([§7](#7-runbook)).
+- **`applied` or `cleanup_pending`:** with the key, continue from that state. A takeover in `applied` reads the sealed `verify_record`s through `read_staged_verification`, verifies, and marks the current generation ([§5.3](#53-sealing-apply-verification)). Without the key, prompt for it. Abandon is offered only when the user confirms the key is lost, and leads into the recovery procedure ([§7](#7-runbook)).
 
 ## 6. What stays visible afterwards
 
@@ -448,7 +459,12 @@ The first production run is #1288.
 3. **Delete the dead workspace.** This hard-deletes on every deferring device too, which is why step 1 comes first. The operator then deletes its remaining `blocks_history` rows and its Storage prefix.
 4. **Restore under the same workspace id** (#1302). Create a plaintext workspace with the dead workspace's id (`create_workspace` takes `p_workspace_id`), then import the snapshot with the same block ids. Both are possible only after step 3, because ids are a global primary key.
    - A new workspace id would make every workspace-derived deterministic id disagree with what the runtime derives: daily notes, alias seats, kernel and user pages, media and plugin ids. The app would then mint duplicates.
-   - The import is lossless only once #401 carries properties and timestamps.
+   - **The importer has to be built** (#1302). `importRawSqliteDb` only replaces this device's OPFS database and reloads it. It enqueues nothing for upload. `importState` takes a parsed JSON tree, not a database, and restores no attachments. The snapshot importer must:
+     - read the exported database;
+     - write every preserved row through the sync path under the same workspace id, with ids, properties and timestamps kept;
+     - stage the bundled attachment bytes for upload.
+
+     The import is lossless only once #401 carries properties and timestamps.
 5. **Retire the pin on each device**, as a deliberate user gesture (#1302, [§5.7](#57-key-custody)). Every upgraded device holds an `e2ee` pin for that id, which refuses the restored plaintext workspace. That refusal is exactly the downgrade protection, so it is lifted only by an explicit per-device confirmation, never automatically.
 
 ## 8. Platform residue, and when it is "safe if breached"
