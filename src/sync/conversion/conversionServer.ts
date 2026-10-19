@@ -127,6 +127,8 @@ export const createSupabaseConversionServer = (client: SupabaseClient): Conversi
           .select(HISTORY_COLUMNS)
           .eq('workspace_id', workspaceId)
           .in('block_id', idChunk)
+          // Defence in depth: INSERT and DELETE rows leave changed_columns
+          // NULL, which the containment below already excludes.
           .eq('op', 'U')
           .contains('changed_columns', [...SEALED_COLUMNS])
           .like('after_diff->>content', `${ENVELOPE_PREFIX}%`)

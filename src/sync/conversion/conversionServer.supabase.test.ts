@@ -60,6 +60,7 @@ const signedInClient = (restUrl: string, accessToken: string): SupabaseClient =>
     global: {fetch: (input, init) => fetch(String(input).replace(`${restUrl}/rest/v1/`, `${restUrl}/`), init)},
   })
 
+// The test takes about 5 s against a fresh stack.
 describe('the re-seal and verify through PostgREST', {timeout: 60_000}, () => {
   let db: pg.Client
 
