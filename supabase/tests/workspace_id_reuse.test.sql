@@ -1,29 +1,31 @@
--- Deleted workspace ids are retired, and delete_workspace takes the
--- workspace's history with it. Run with:
+-- A workspace id is used once, and deleting a workspace deletes its history.
+-- Run with:
 --
 --   pnpm check:db
 --
 -- This file is pgTAP so `supabase test db` reports named TAP failures.
 -- It also wraps itself in BEGIN/ROLLBACK, so manual psql runs leave no
--- residue. An insert racing the delete of its id needs two connections and is
--- tested in workspace_id_reuse_race.test.sql.
+-- residue. The history delete is deferred to commit, which this file never
+-- reaches: pg_temp.at_commit() fires it in the deleting role, as COMMIT
+-- would, and defers it again for the next delete.
 
 BEGIN;
 
 CREATE EXTENSION IF NOT EXISTS pgtap WITH SCHEMA extensions;
 SET LOCAL search_path TO public, extensions;
 
-SELECT plan(13);
+SELECT plan(12);
 
 CREATE TEMP TABLE reuse_ctx AS
 SELECT
-  -- Created through create_workspace, given history, deleted through delete_workspace.
+  -- Created through create_workspace, deleted through delete_workspace.
   'test-ws-' || extensions.gen_random_uuid()::text        AS ws,
   -- Keeps its history throughout.
   'test-ws-other-' || extensions.gen_random_uuid()::text  AS other_ws,
   -- Deleted directly by service_role.
   'test-ws-direct-' || extensions.gen_random_uuid()::text AS direct_ws,
-  extensions.gen_random_uuid()::text AS e2ee_ws,
+  -- No members and no blocks, so no foreign key holds its id in place.
+  'test-ws-bare-' || extensions.gen_random_uuid()::text   AS bare_ws,
   extensions.gen_random_uuid()::text AS owner_id,
   extensions.gen_random_uuid()::text AS stranger_id,
   -- One minute in the past so `blocks_clamp_updated_at` never clamps.
@@ -76,52 +78,49 @@ BEGIN
 END;
 $$;
 
--- p_sql that raises 22012 (division by zero) unless p_ws is visible.
-CREATE FUNCTION pg_temp.then_expect_visible(p_sql text, p_ws text) RETURNS text LANGUAGE sql
-AS $$ SELECT p_sql || format('; SELECT 1 / (SELECT count(*) FROM public.workspaces WHERE id = %L)::int', p_ws) $$;
-
 CREATE FUNCTION pg_temp.create_sql(p_ws text) RETURNS text LANGUAGE sql
 AS $$ SELECT format($q$SELECT public.create_workspace('test', 'none', %L)$q$, p_ws) $$;
+
+CREATE FUNCTION pg_temp.insert_sql(p_ws text) RETURNS text LANGUAGE sql
+AS $$
+  SELECT format($q$INSERT INTO public.workspaces (id, name, owner_user_id, create_time, update_time)
+                   VALUES (%L, 'test', %L, 0, 0)$q$, p_ws, (pg_temp.ctx()).owner_id)
+$$;
+
+CREATE FUNCTION pg_temp.at_commit() RETURNS text LANGUAGE sql
+AS $$
+  SELECT '; SET CONSTRAINTS workspaces_delete_history_trg IMMEDIATE'
+      || '; SET CONSTRAINTS workspaces_delete_history_trg DEFERRED'
+$$;
 
 CREATE FUNCTION pg_temp.history_count(p_ws text) RETURNS bigint LANGUAGE sql
 AS $$ SELECT count(*) FROM public.blocks_history WHERE workspace_id = p_ws $$;
 
-CREATE FUNCTION pg_temp.retired(p_ws text) RETURNS text LANGUAGE sql
-AS $$ SELECT format('23505: workspace id %s belonged to a deleted workspace and cannot be reused', p_ws) $$;
+CREATE FUNCTION pg_temp.used() RETURNS text LANGUAGE sql
+AS $$ SELECT '23505: duplicate key value violates unique constraint "used_workspace_ids_pkey"' $$;
 
 -------------------------------------------------------------------------
--- A fresh client-chosen id is accepted, in either mode.
+-- A fresh id is accepted.
 -------------------------------------------------------------------------
 
 SELECT is(
   pg_temp.outcome_as('authenticated', (pg_temp.ctx()).owner_id,
-    pg_temp.then_expect_visible(pg_temp.create_sql((pg_temp.ctx()).ws), (pg_temp.ctx()).ws)),
+    pg_temp.create_sql((pg_temp.ctx()).ws)
+      || format('; SELECT 1 / (SELECT count(*) FROM public.workspaces WHERE id = %L)::int', (pg_temp.ctx()).ws)),
   'ok',
-  'create_workspace creates a plaintext workspace under a fresh client-chosen id'
-);
-
-SELECT is(
-  pg_temp.probe('authenticated', (pg_temp.ctx()).owner_id,
-    pg_temp.then_expect_visible(
-      format($q$SELECT public.create_workspace('test', 'e2ee', %L, %L)$q$,
-             (pg_temp.ctx()).e2ee_ws, 'enc:v1:' || repeat('A', 40)),
-      (pg_temp.ctx()).e2ee_ws)),
-  'ok',
-  'create_workspace creates an e2ee workspace under a fresh client-chosen id'
+  'create_workspace creates a workspace under a fresh client-chosen id'
 );
 
 SELECT is(
   pg_temp.probe('service_role', NULL,
-    format($q$INSERT INTO public.workspaces (id, name, owner_user_id, create_time, update_time)
-              VALUES (%L, 'test', %L, 0, 0)$q$,
-           'test-ws-admin-' || extensions.gen_random_uuid()::text, (pg_temp.ctx()).owner_id)),
+    pg_temp.insert_sql('test-ws-admin-' || extensions.gen_random_uuid()::text)),
   'ok',
-  'service_role still inserts a workspace under a fresh id'
+  'service_role inserts a workspace under a fresh id'
 );
 
 -------------------------------------------------------------------------
--- Fixture: history in ws (create, update, hard delete) and in other_ws;
--- direct_ws has its owner only.
+-- Fixture: history in ws (create, update, hard delete), other_ws and
+-- direct_ws.
 -------------------------------------------------------------------------
 
 INSERT INTO public.workspaces (id, name, owner_user_id, create_time, update_time)
@@ -142,7 +141,8 @@ SELECT b.id, b.ws, NULL, b.order_key, 'plaintext',
 FROM reuse_ctx,
      LATERAL (VALUES (ws || '-a', ws, 'a0'),
                      (ws || '-b', ws, 'a1'),
-                     (other_ws || '-a', other_ws, 'a0')) AS b(id, ws, order_key);
+                     (other_ws || '-a', other_ws, 'a0'),
+                     (direct_ws || '-a', direct_ws, 'a0')) AS b(id, ws, order_key);
 
 UPDATE public.blocks SET content = 'edited', updated_at = (pg_temp.ctx()).then_ms + 1
 WHERE id = (pg_temp.ctx()).ws || '-a';
@@ -157,12 +157,12 @@ SELECT is(
 );
 
 -------------------------------------------------------------------------
--- delete_workspace takes the workspace's history with it.
+-- Deleting a workspace deletes its history, on every delete path.
 -------------------------------------------------------------------------
 
 SELECT is(
   pg_temp.outcome_as('authenticated', (pg_temp.ctx()).owner_id,
-    format('SELECT public.delete_workspace(%L)', (pg_temp.ctx()).ws)),
+    format('SELECT public.delete_workspace(%L)', (pg_temp.ctx()).ws) || pg_temp.at_commit()),
   'ok',
   'the owner deletes the workspace'
 );
@@ -174,62 +174,53 @@ SELECT is(
 );
 
 SELECT is(
-  pg_temp.history_count((pg_temp.ctx()).other_ws),
-  1::bigint,
-  'delete_workspace leaves other workspaces'' history alone'
-);
-
--------------------------------------------------------------------------
--- A deleted id cannot be created again.
--------------------------------------------------------------------------
-
-SELECT is(
-  pg_temp.probe('authenticated', (pg_temp.ctx()).stranger_id, pg_temp.create_sql((pg_temp.ctx()).ws)),
-  pg_temp.retired((pg_temp.ctx()).ws),
-  'create_workspace refuses the id of a deleted workspace'
-);
-
-SELECT is(
-  pg_temp.probe('authenticated', (pg_temp.ctx()).stranger_id,
-    format($q$SELECT public.create_workspace('test', 'e2ee', %L, %L)$q$,
-           (pg_temp.ctx()).ws, 'enc:v1:' || repeat('A', 40))),
-  pg_temp.retired((pg_temp.ctx()).ws),
-  'create_workspace refuses the id of a deleted workspace in e2ee mode too'
-);
-
--------------------------------------------------------------------------
--- Every delete path retires the id; clients have only delete_workspace.
--------------------------------------------------------------------------
-
-SELECT is(
-  pg_temp.probe('authenticated', (pg_temp.ctx()).owner_id,
-    pg_temp.then_expect_visible(
-      format('DELETE FROM public.workspaces WHERE id = %L', (pg_temp.ctx()).other_ws),
-      (pg_temp.ctx()).other_ws)),
-  'ok',
-  'the owner cannot delete the workspace row directly (the delete matches no row)'
-);
-
-SELECT is(
   pg_temp.outcome_as('service_role', NULL,
-    format('DELETE FROM public.workspaces WHERE id = %L', (pg_temp.ctx()).direct_ws)),
+    format('DELETE FROM public.workspaces WHERE id = %L', (pg_temp.ctx()).direct_ws) || pg_temp.at_commit()),
   'ok',
   'service_role deletes a workspace row directly'
 );
 
 SELECT is(
-  pg_temp.probe('authenticated', (pg_temp.ctx()).stranger_id, pg_temp.create_sql((pg_temp.ctx()).direct_ws)),
-  pg_temp.retired((pg_temp.ctx()).direct_ws),
-  'create_workspace refuses the id of a workspace deleted outside delete_workspace'
+  pg_temp.history_count((pg_temp.ctx()).direct_ws),
+  0::bigint,
+  'a direct delete leaves no history rows either'
+);
+
+SELECT is(
+  pg_temp.history_count((pg_temp.ctx()).other_ws),
+  1::bigint,
+  'deleting a workspace leaves other workspaces'' history alone'
+);
+
+-------------------------------------------------------------------------
+-- A used id cannot be used again.
+-------------------------------------------------------------------------
+
+SELECT is(
+  pg_temp.probe('authenticated', (pg_temp.ctx()).stranger_id, pg_temp.create_sql((pg_temp.ctx()).ws)),
+  pg_temp.used(),
+  'create_workspace refuses the id of a deleted workspace'
+);
+
+SELECT is(
+  pg_temp.probe('service_role', NULL, pg_temp.insert_sql((pg_temp.ctx()).ws)),
+  pg_temp.used(),
+  'a direct service_role insert of a deleted id is refused too'
 );
 
 SELECT is(
   pg_temp.probe('service_role', NULL,
-    format($q$INSERT INTO public.workspaces (id, name, owner_user_id, create_time, update_time)
-              VALUES (%L, 'test', %L, 0, 0)$q$,
-           (pg_temp.ctx()).direct_ws, (pg_temp.ctx()).owner_id)),
-  pg_temp.retired((pg_temp.ctx()).direct_ws),
-  'a direct service_role insert of a deleted id is refused too'
+    pg_temp.insert_sql((pg_temp.ctx()).bare_ws)
+      || format('; UPDATE public.workspaces SET id = %L WHERE id = %L', (pg_temp.ctx()).ws, (pg_temp.ctx()).bare_ws)),
+  pg_temp.used(),
+  'a workspace cannot move to the id of a deleted workspace'
+);
+
+SELECT is(
+  pg_temp.probe('service_role', NULL,
+    format('UPDATE public.workspaces SET id = id WHERE id = %L', (pg_temp.ctx()).other_ws)),
+  'ok',
+  'an update naming an unchanged id still succeeds'
 );
 
 SELECT * FROM finish();
