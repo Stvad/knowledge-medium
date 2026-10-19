@@ -20,6 +20,23 @@ export interface ServerBlockRow extends WireBlockColumns {
   readonly updated_at: number
 }
 
+/** A `blocks` row with every column the server holds, as the recovery bundle
+ *  archives it. */
+export type FullServerBlockRow = ServerBlockRow & Readonly<Record<string, unknown>>
+
+/** A `blocks_history` row with every column, as the recovery bundle archives it. */
+export type FullServerHistoryRow = Readonly<Record<string, unknown>> & {
+  readonly event_id: number
+  readonly workspace_id: string
+}
+
+export interface HistoryBounds {
+  /** How many history rows the workspace has. Every write to a block adds one. */
+  readonly count: number
+  /** The workspace's highest `event_id`, or 0 when it has no history. */
+  readonly maxEventId: number
+}
+
 /** A `blocks_history` row, as much of it as the verify reads. Each diff holds
  *  only the columns that UPDATE changed. */
 export interface ServerHistoryRow {
@@ -81,6 +98,20 @@ export interface ConversionServer {
   /** `convert_workspace_to_e2ee`: the mode becomes e2ee with this canary and
    *  the `sealing` phase begins, in one transaction; no row changes. */
   convertWorkspaceToE2ee(workspaceId: string, canary: string): Promise<void>
+  /** {@link readBlockPage}, with every column. */
+  readFullBlockPage(workspaceId: string, afterId: string | null, limit: number): Promise<readonly FullServerBlockRow[]>
+  historyBounds(workspaceId: string): Promise<HistoryBounds>
+  /** The workspace's history rows with `afterEventId < event_id ≤ throughEventId`,
+   *  in `event_id` order, every column. Paged like {@link readBlockPage}. */
+  readHistoryPage(
+    workspaceId: string,
+    afterEventId: number,
+    throughEventId: number,
+    limit: number,
+  ): Promise<readonly FullServerHistoryRow[]>
+  /** `purge_workspace_history`: delete the workspace's history and move the
+   *  phase to `cleaning`, if the server's checks against the bundle pass. */
+  purgeWorkspaceHistory(workspaceId: string, throughEventId: number, archivedCount: number): Promise<void>
 }
 
 const BLOCK_COLUMNS = 'id,workspace_id,content,properties_json,references_json,updated_at'
@@ -178,6 +209,53 @@ export const createSupabaseConversionServer = (client: SupabaseClient): Conversi
     const {data, error, status} = await query.order('id', {ascending: true}).limit(limit)
     if (error) throw failed('reading envelope-shaped blocks', error, status)
     return data
+  },
+
+  async readFullBlockPage(workspaceId, afterId, limit) {
+    let query = client.from('blocks').select('*').eq('workspace_id', workspaceId)
+    if (afterId !== null) query = query.gt('id', afterId)
+    const {data, error, status} = await query.order('id', {ascending: true}).limit(limit)
+    if (error) throw failed('reading blocks', error, status)
+    return data as FullServerBlockRow[]
+  },
+
+  async historyBounds(workspaceId) {
+    const counted = await client
+      .from('blocks_history')
+      .select('event_id', {count: 'exact', head: true})
+      .eq('workspace_id', workspaceId)
+    if (counted.error) throw failed('counting block history', counted.error, counted.status)
+    if (counted.count === null) throw new Error('conversion: counting block history returned no count')
+    const latest = await client
+      .from('blocks_history')
+      .select('event_id')
+      .eq('workspace_id', workspaceId)
+      .order('event_id', {ascending: false})
+      .limit(1)
+    if (latest.error) throw failed('reading block history', latest.error, latest.status)
+    return {count: counted.count, maxEventId: latest.data[0]?.event_id ?? 0}
+  },
+
+  async readHistoryPage(workspaceId, afterEventId, throughEventId, limit) {
+    const {data, error, status} = await client
+      .from('blocks_history')
+      .select('*')
+      .eq('workspace_id', workspaceId)
+      .gt('event_id', afterEventId)
+      .lte('event_id', throughEventId)
+      .order('event_id', {ascending: true})
+      .limit(limit)
+    if (error) throw failed('reading block history', error, status)
+    return data as FullServerHistoryRow[]
+  },
+
+  async purgeWorkspaceHistory(workspaceId, throughEventId, archivedCount) {
+    const {error, status} = await client.rpc('purge_workspace_history', {
+      p_workspace_id: workspaceId,
+      p_through_event_id: throughEventId,
+      p_archived_count: archivedCount,
+    })
+    if (error) throw failed('purge_workspace_history', error, status)
   },
 
   async convertWorkspaceToE2ee(workspaceId, canary) {
