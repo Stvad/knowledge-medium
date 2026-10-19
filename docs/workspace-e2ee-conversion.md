@@ -76,40 +76,49 @@ The server side (#1294) is owner-only SECURITY DEFINER RPCs over a staging area 
 
 **One conversion attempt is the unit of everything.** The server row is that attempt's durable state. Every client step is idempotent and keyed by the attempt, so a crash anywhere resumes from what the server says rather than from what the crashed tab remembered.
 
-- `private.workspace_conversions(workspace_id pk, attempt_id, canary, state, started_by, started_at)`. `state` is `frozen` or `cleanup_pending`. `canary` is the new key's canary, minted by the client before `begin` and stored here, so the attempt is bound to exactly one workspace key.
+- `private.workspace_conversions(workspace_id pk, attempt_id, canary, state, started_by, started_at)`. `state` is `staging` or `cleanup_pending`. **The workspace is frozen for as long as an attempt row exists**, from `begin` to `finish` or `abort`. `canary` is the new key's canary, minted by the client before `begin` and stored here, so the attempt is bound to exactly one workspace key.
 - `private.workspace_conversion_rows(workspace_id, attempt_id, block_id, content, properties_json, references_json)` holds only the sealed columns. The conversion only updates rows, so staging needs no op column, inserts or deletes.
 
 **Every id is scoped to the workspace being converted.** These functions run with the definer's privileges and bypass RLS. So a staged `block_id` whose server row is in any other workspace, or doesn't exist, is refused at stage time, and the apply's UPDATE is restricted to `workspace_id = ws`. Without that, a caller who owns workspace A could overwrite a block in workspace B by guessing its id.
 
-1. **`begin_workspace_conversion(ws, canary) → attempt_id`** freezes the workspace.
+1. **`begin_workspace_conversion(ws, canary) → attempt_id`** inserts the attempt in `staging`, which freezes the workspace.
    - **One attempt at a time.** It refuses if any attempt row exists for `ws`. A second device, or a second tab with a different key, cannot start one alongside.
    - **Block writes stall instead of being quarantined.** A BEFORE trigger on `blocks` refuses every write to a frozen workspace that the definer doesn't make, raising **`PT429`**. PostgREST turns that into HTTP 429, which `classifyUploadError` retries forever (`src/services/uploadErrorClassifier.ts`). That's the trick `blocks_refuse_anon` plays with `PT401` (`20261013120000_refuse_anon_writes_to_blocks.sql`); a 22/23/42/P0002 code would quarantine the edits.
-   - **Attachment writes are frozen too.** The Storage INSERT policy for `attachments` (`20260625000000_add_attachments_storage.sql`) additionally refuses a path under a frozen workspace. That denial is a 403, which the upload drain treats as permanent, so it is a fail-closed backstop for old builds only. Builds with #1293 never attempt that upload ([§5.2](#52-client-a-plaintext-pinned-device-that-sees-e2ee)).
+   - **Attachment uploads are frozen on the client.** A build with #1293 checks `workspace_upload_mode` before every upload and defers while the workspace is frozen ([§5.2](#52-client-a-plaintext-pinned-device-that-sees-e2ee)). Old builds are excluded by the runbook.
+
+     A Storage-policy freeze was considered and dropped. It would also refuse the conversion's own keyed uploads, and the drain treats its 403 as permanent.
    - **The freeze is serialized against block writes already in flight.** Otherwise a write whose trigger ran before the freeze row committed could commit after it, behind a stage check that had already passed.
-     - `begin` takes `LOCK TABLE public.blocks IN SHARE MODE` (with a `lock_timeout`, retried) before inserting the freeze row.
+     - `begin` takes `LOCK TABLE public.blocks IN SHARE MODE` (with a `lock_timeout`, retried) before inserting the attempt row.
      - SHARE conflicts with the ROW EXCLUSIVE lock every writer holds, so `begin` waits for in-flight writes to finish, and new writes wait for `begin`.
      - When they resume, their trigger reads the freeze in a fresh read-committed snapshot and refuses.
 
      After `begin` commits, only the definer writes the workspace's blocks. The cost is a fleet-wide write pause lasting as long as `begin`'s transaction, once per conversion. Two alternatives were rejected: a per-write advisory lock costs every write forever, and keeping the bases until apply would keep plaintext fingerprints.
 2. **`stage_workspace_conversion(ws, attempt_id, rows)`** is chunked, and refuses any `attempt_id` that isn't the live one.
-   - Each row carries the sealed columns plus a **base**: `sha256` of each column's plaintext as the client read it.
+   - Each row carries the sealed columns plus a **base**: `sha256` of each column's **wire value** as the client read it from `blocks_synced`.
+   - For this conversion the wire value is the plaintext. Under rotation it would be the old-key ciphertext, so the same RPC serves both ([§10](#10-relation-to-workspace-key-rotation)).
    - It compares each base with `sha256(convert_to(col, 'UTF8'))` of the current server row and refuses the chunk on any mismatch. All three columns are `text` on the server, so the bytes are the ones the client hashed.
-   - **The base is checked, then discarded, never stored.** An unkeyed plaintext hash left in staging, or in its dead tuples, would remain a dictionary-testable fingerprint after the plaintext is gone.
+   - **The base is checked, then discarded, never stored.** Here it is an unkeyed plaintext hash. Left in staging, or in its dead tuples, it would remain a dictionary-testable fingerprint after the plaintext is gone.
    - A check at stage time is enough because of the freeze: `begin` serialized against in-flight writes, so nothing but the definer writes the workspace between stage and apply.
    - Re-staging a block within the same attempt replaces its earlier row.
 3. **`apply_workspace_conversion(ws, attempt_id)`** runs as ONE transaction, with a raised `statement_timeout` (as `delete_workspace` has, `20260513205724_extend_delete_workspace_timeout.sql`):
-   1. Check that the attempt is live and still `frozen`.
+   1. Check that the attempt is live and still `staging`.
    2. Check completeness: the staged ids are exactly the workspace's block ids, **soft-deleted rows included**.
    3. Set `encryption_mode = 'e2ee'` and `wk_canary` from the **attempt's stored canary** (never a parameter) **first**, so `blocks_require_ciphertext_for_e2ee` validates every row the next step writes.
    4. Update the three sealed columns from staging, `WHERE workspace_id = ws`, and check that the row count equals step 2's.
    5. `DELETE FROM blocks_history WHERE workspace_id = ws`. That includes the rows step 4 just wrote, whose `before_diff` holds the old plaintext.
-   6. Clear the staging rows and set `state = 'cleanup_pending'`. The freeze ends here: block writes resume, now guarded by the ciphertext trigger, and keyed-path uploads resume.
+   6. Clear the staging rows and set `state = 'cleanup_pending'`. **The freeze stays.** The attachment cleanup of [§5.4](#54-attachments) has to run while nothing can upload, or it could delete an object captured after its snapshot.
 
-   The attempt row stays, because it is the only durable record that the plaintext Storage objects still need deleting ([§5.4](#54-attachments)).
-4. **`finish_workspace_conversion(ws, attempt_id)`** deletes the attempt row. The client calls it only after the expected-set check of [§5.4](#54-attachments) passes.
-5. **`abort_workspace_conversion(ws, attempt_id)`** works only while `frozen`. It clears the freeze, the staging rows and the attempt; nothing else has changed. There is no abort after the apply ([§7](#7-runbook) step 4).
+   The attempt row also stays, because it is the only durable record that the plaintext Storage objects still need deleting.
+4. **`finish_workspace_conversion(ws, attempt_id)`** deletes the attempt row, which **ends the freeze**. The client calls it only after the cleanup and the expected-set check of [§5.4](#54-attachments) pass.
+5. **`abort_workspace_conversion(ws, attempt_id)`** works only while `staging`. It clears the freeze, the staging rows and the attempt; nothing else has changed. There is no abort after the apply ([§7](#7-runbook) step 4).
 6. **`get_workspace_conversion(ws)`** is the owner-only read that resume starts from. It returns `attempt_id`, `canary` and `state`.
-7. **`workspace_upload_mode(ws)`** is readable by any member. It returns `none`, `e2ee` or `frozen`, and it's the live check the attachment drain makes before a plaintext-mode upload ([§5.2](#52-client-a-plaintext-pinned-device-that-sees-e2ee)).
+7. **`workspace_upload_mode(ws)`** is readable by any member. It returns `frozen` while an attempt exists, otherwise `none` or `e2ee`. The attachment drain makes this live check before every upload ([§5.2](#52-client-a-plaintext-pinned-device-that-sees-e2ee)).
+
+**The cost of the freeze.**
+
+- It lasts from `begin` to `finish`: staging, the apply, and the attachment listing and deletes. For a large workspace that is minutes.
+- A crash during it leaves the workspace frozen until an owner device holding the key resumes the attempt ([§5.6](#56-flow-and-failure-paths)).
+- That cost is accepted: the freeze is what makes the archive, the stage check and the cleanup sound.
 
 **What happens to timestamps.** The re-seal changes every row's content columns. So the clamp trigger raises `updated_at` to at least `OLD.updated_at + 1` on every row (`20260803000000_add_patch_base_version_drift_bump.sql`). That's intended:
 
@@ -139,10 +148,14 @@ The change (#1293) applies when the synced `workspaces` row says `e2ee` but the 
 | Attachment drain | uploads in plaintext mode | `defer`: the drain already leaves a record pending on `defer` materializability (`src/plugins/attachments/uploadDrain.ts`) |
 | UI | — | unlock prompt (paste the workspace key) |
 
-**The attachment drain also confirms the live mode.** The synced `workspaces` row can lag: the mode change arrives in the same large checkpoint as every resealed block. So before uploading in **plaintext** mode, the drain calls `workspace_upload_mode` ([§5.1](#51-server-freeze-stage-apply-abort)) and defers on `e2ee` or `frozen`.
+**The attachment drain also confirms the live mode.** The synced `workspaces` row can lag, because the mode change arrives in the same large checkpoint as every resealed block. So before **every** upload, the drain calls `workspace_upload_mode` ([§5.1](#51-server-freeze-stage-apply-abort)):
 
-- After the apply the mode never goes back, so a fresh `none` before the upload is still true when the upload lands. A conversion that began in between is caught by the frozen-workspace Storage policy ([§5.1](#51-server-freeze-stage-apply-abort)).
-- The cost is one extra read per plaintext-mode attachment upload, fleet-wide.
+- it defers on `frozen`;
+- when it is about to upload in plaintext mode, it also defers on `e2ee`.
+
+- After the apply, the mode never goes back. So a fresh `e2ee` answer stays true.
+- The race left is a check that answered `none` just before `begin`, followed by an upload that lands just after it. That object lands in plaintext mode at a raw path. The cleanup deletes it with every other object outside the expected set and reports it; it has to be re-captured.
+- The cost is one extra read per attachment upload, fleet-wide.
 - Block uploads don't get this check. The ciphertext trigger already fails them closed (see the known gap below). Attachments have no such backstop, and the read is what stands in for one.
 
 The conversion only updates rows, so it sends locked peers no deletes. A deferred peer therefore keeps every block it had, unchanged, until it unlocks.
@@ -150,7 +163,11 @@ The conversion only updates rows, so it sends locked peers no deletes. A deferre
 **Upgrading the pin.** Once a key opens the server canary, the existing `unlockWorkspaceWithKey` checks run. Then `upgradeModePinToE2ee` runs, in this order, so that a crash between steps is harmless:
 
 1. Mark every staged `blocks_synced` row of the workspace for re-apply. That repairs a device that ran an older build across the conversion and already copied ciphertext into `blocks`.
-2. **Re-key pending attachment records.** A record keeps the content key computed at capture (`rec.contentKey`, a raw sha256 for a plaintext capture). Left alone, it would upload ciphertext to a raw sha256 path.
+2. **Re-key the local byte store.** The byte store and every pending upload record are keyed by the content key computed at capture (`rec.contentKey`, a raw sha256 for a plaintext capture), and the drain reads the bytes by that key (`src/plugins/attachments/byteStore.ts`).
+   - For each entry: copy it to its keyed content key, point any pending record at the copy, then drop the old entry.
+   - Re-keying only the record would strand its bytes, and the drain would see a clean miss and fail the record.
+   - Leaving it alone would upload ciphertext to a raw sha256 path.
+   - Copy-then-switch means a crash at any point leaves at worst a duplicate entry.
 3. **Then** write the pin.
 
 The pin lives in localStorage and the flags in SQLite, so nothing makes the steps atomic; the ordering is what makes them recoverable. If the device crashes before step 3, the pin is still plaintext and the server still says e2ee. So the device still defers, and the next upgrade simply redoes steps 1 and 2, which are idempotent. If it crashes after step 3, steps 1 and 2 are already done.
@@ -167,7 +184,7 @@ This must reach every device **before** any conversion runs.
 **Known gap: a block edit made during the window.**
 
 - During the freeze, another device's plaintext edit gets `PT429` and retries.
-- If that retry lands after the apply, before the device has learned the new mode, the ciphertext trigger refuses the edit with a permanent code. The edit is quarantined in `ps_crud_rejected`, still on that device.
+- If that retry lands after `finish` ends the freeze, but before the device has learned the new mode, the ciphertext trigger refuses the edit with a permanent code. The edit is quarantined in `ps_crud_rejected`, still on that device.
 - **Recovery:** after the device upgrades, **Retry** in the System Status rejection dialog re-queues the edit, and the upload path seals it.
 - The runbook's "drain every queue, pause editing elsewhere" ([§7](#7-runbook)) keeps this off the normal path.
 
@@ -181,7 +198,7 @@ The orchestrator pages through this device's `blocks_synced`, which is the serve
 
 1. **Seal** each row's three content columns with the existing envelope and AAD (`encodeForWire`). Ids, `parent_id`, ordering and timestamps are untouched.
 2. **Verify** by opening every sealed column under the attempt's key before staging the page. A page sealed under any other key never reaches the server.
-3. **Compute the bases** for [§5.1](#51-server-freeze-stage-apply-abort): `sha256` of each column's plaintext. They go out with the staged page and are never persisted on the client either.
+3. **Compute the bases** for [§5.1](#51-server-freeze-stage-apply-abort): `sha256` of each column's wire value as read, which here is the plaintext. They go out with the staged page and are never persisted on the client either.
 
 **Correctness oracle** (property test): open every row of a staged chunk under the key and compare it with the input. The two must be exactly equal.
 
@@ -203,20 +220,21 @@ The keyed-path and sealing logic already exists, in `src/sync/crypto/contentKey.
 
 **Media block ids don't change.** The app derives an attachment's Storage path from the block's `media:hash` plus the workspace mode and `K_id`; it doesn't store it. So after the conversion, an existing media block reads its bytes from the keyed path. Two consequences:
 
-- Each device's local byte store is keyed by the old sha256 content key. It needs re-keying, or a re-download, before the converting device can render from cache.
+- Each device's local byte store is keyed by the old sha256 content key. The pin upgrade re-keys it ([§5.2](#52-client-a-plaintext-pinned-device-that-sees-e2ee)), so cached bytes keep rendering.
 - Re-capturing a file that was captured before the conversion mints a second media block, at the keyed id. That's accepted. The sha256-derived ids that stay are listed in [§6](#6-what-stays-visible-afterwards).
 
 **Ordering:**
 
 1. **Before** the apply, upload every keyed object and verify it by authenticated decryption plus a hash check, so no media block ever points at missing bytes.
-2. **After** the apply commits, while the attempt is `cleanup_pending`, compute the **expected set**: the keyed path of every media block in the workspace. List `<ws>/` and delete every object outside that set, **whatever its header says**. That removes every raw sha256 path and any orphan. Report each deleted object that wasn't a known raw path.
+2. **After** the apply commits, while the attempt is `cleanup_pending` and the workspace is still frozen, compute the **expected set**: the keyed path of every media block in the workspace. List `<ws>/` and delete every object outside that set, **whatever its header says**. That removes every raw sha256 path and any orphan. Report each deleted object that wasn't a known raw path.
 3. **The proof** that no plaintext remains: the listed objects equal the expected set, and each was verified in step 1. Only then does the client call `finish_workspace_conversion`.
 
 **Why the proof stays true afterwards.**
 
-- During the freeze, the Storage policy refuses any new object under `<ws>/`.
-- After the apply, a build with #1293 confirms the live mode before any plaintext-mode upload ([§5.2](#52-client-a-plaintext-pinned-device-that-sees-e2ee)), and an old build is excluded by the runbook.
-- What's left is a device on an old build that the runbook missed. The periodic ciphertext audit is the detector for that case.
+- Until `finish`, no build with #1293 uploads anything to the workspace.
+- After `finish`, such a build refuses to upload in plaintext mode, because the live check answers `e2ee`.
+- Keyed uploads after `finish` are ciphertext by construction.
+- An old build is excluded by the runbook. If one is missed, the periodic ciphertext audit is the detector.
 
 **The existing ciphertext audit** (`src/plugins/attachments/audit/`) checks the `encb:v1:` magic and a minimum length (`supabaseAuditIO.ts`) without authenticating anything. So it's a detector and not the proof: a plaintext file that happens to start with those bytes would pass it. The 6-hourly audit workflow will flag the workspace between the apply and step 2; that's expected.
 
@@ -239,27 +257,34 @@ The orchestrator (#1290) refuses to start unless:
 
 - the user owns the workspace;
 - the workspace is still plaintext and has no live attempt; if it has one, resume that instead;
-- the key store holds no record for the workspace. Step 1 must never overwrite one (`keyStore.put` replaces the record outright), because overwriting the key of an attempt that has already been applied would lose the only key that opens the workspace;
+- **the pin can be persisted**: `canPersistPins()`, the same preflight the create flow runs (`src/sync/keys/flows/createEncryptedWorkspace.ts`). Otherwise step 7 could never write the upgraded pin;
+- **no live key record would be overwritten.**
+  - `keyStore.put` replaces a record outright, and overwriting an applied attempt's key would lose the only key that opens the workspace. So step 1 never runs while an attempt exists.
+  - A record found for a plaintext workspace with no attempt is a leftover from a crash before `begin`, because nothing on the server references it. The flow deletes it and starts over with a fresh key and a fresh reveal.
+  - It doesn't reuse the leftover: the stored key is non-extractable, so it can't be shown again, and the user may never have saved it;
 - the local upload queue is drained, including pending attachment records;
 - no rejected rows are pending for the workspace.
 
 **Resume.** On load, an owner device calls `get_workspace_conversion` for each workspace it owns and resumes any live attempt from its state:
 
-- **`frozen`:** if this device holds a key that opens the attempt's stored canary, continue staging. Otherwise, abort.
-- **`cleanup_pending`:** run [§5.4](#54-attachments) step 2 and the verification, then call `finish`.
+- **`staging`, and this device holds a key that opens the attempt's stored canary:** continue staging.
+- **`staging` without that key:** do **not** abort. Another device is probably mid-conversion. Show "a conversion is in progress", with two choices: paste its key to take over, or abort it explicitly.
+- **`cleanup_pending`:** with the key, run [§5.4](#54-attachments) step 2 and the verification, then call `finish`. Without the key, prompt for it; there is no abort after the apply.
+
+Abort is never automatic.
 
 | Step | If it fails | State left behind | Recovery |
 |---|---|---|---|
 | 1. Generate the workspace key, reveal it once, require a retype, and mint its canary. Store the key in the key store **before** any server change | before anything else | nothing changed | retry |
-| 2. `begin(ws, canary)` | refused: an attempt exists | another device or tab is converting | resume that attempt with its key, or abort it |
+| 2. `begin(ws, canary)` | refused: an attempt exists | another device or tab is converting | resume that attempt with its key, or abort it explicitly |
 | 3. Export the sealed history archive | download error | frozen; other devices' edits held | retry, or abort |
 | 4. Wait for `blocks_synced` to reach a checkpoint taken after the freeze, then page through: seal → verify → stage | crash, or base mismatch | frozen, partly staged | resume (re-staging is idempotent per block); a mismatch means a pre-freeze read, so re-read that page |
 | 5. Upload and verify keyed attachment objects | partial, or a verification mismatch | extra ciphertext objects (harmless) | resume (the occupied-path check makes it idempotent); investigate any mismatch |
 | 6. Apply | refusal or timeout | the transaction rolls back; still frozen | fix the cause and re-apply, or abort |
-| 7. Upgrade the local pin | crash after the apply | server e2ee, attempt `cleanup_pending`, pin still plaintext | automatic on restart: the stored key opens the canary ([§5.2](#52-client-a-plaintext-pinned-device-that-sees-e2ee)); resume then finds `cleanup_pending` |
-| 8. Delete every object under `<ws>/` outside the expected keyed set | partial | `cleanup_pending`; plaintext objects remain | resume from `cleanup_pending` |
+| 7. Upgrade the local pin | crash after the apply | server e2ee, attempt `cleanup_pending` (still frozen), pin still plaintext | automatic on restart: the stored key opens the canary ([§5.2](#52-client-a-plaintext-pinned-device-that-sees-e2ee)); resume then finds `cleanup_pending` |
+| 8. Delete every object under `<ws>/` outside the expected keyed set | partial | `cleanup_pending`, still frozen; plaintext objects remain | resume from `cleanup_pending` |
 | 9. Verify: every row opens, the listed objects equal the expected keyed set, zero history rows remain (the ciphertext audit as a detector only) | a check fails | `cleanup_pending` | investigate; nothing is lost while the key is held |
-| 10. `finish` | RPC error | `cleanup_pending` | retry |
+| 10. `finish`, which ends the freeze | RPC error | `cleanup_pending`, still frozen | retry |
 
 **Losing the key after the apply** makes the server copy unrecoverable. Devices that still hold plaintext `blocks` defer instead of copying, and receive no deletes ([§5.2](#52-client-a-plaintext-pinned-device-that-sees-e2ee)). Their local plaintext survives and can be exported. That's a last line of defence, not a plan: store the key in two independent places before step 2.
 
@@ -362,7 +387,7 @@ Rotation (`docs/e2ee-design.html` §14, unbuilt) needs four of this conversion's
 
 It also needs the re-id migration of [§6](#6-what-stays-visible-afterwards) (#1297), because K_id-derived ids (synthesized definitions, keyed media ids, and alias seats once #719 lands) all change with K_id.
 
-Plaintext → e2ee is that operation starting from "no key". So the freeze / stage / apply RPCs, the sealed-image builder and the attachment pass should be written over a *source* key that may be absent, not with "plaintext" hard-coded. Rotation then adds one admitted transition (`e2ee → e2ee` with a new canary) and a decrypt step, instead of a second machine. Rotation itself is deliberately not built here.
+Plaintext → e2ee is that operation starting from "no key". The stage base is computed over the wire value, so it works unchanged when the source is old-key ciphertext. So the freeze / stage / apply RPCs, the sealed-image builder and the attachment pass should be written over a *source* key that may be absent, not with "plaintext" hard-coded. Rotation then adds one admitted transition (`e2ee → e2ee` with a new canary) and a decrypt step, instead of a second machine. Rotation itself is deliberately not built here.
 
 ## 11. Alternatives considered
 
