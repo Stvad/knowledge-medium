@@ -59,7 +59,7 @@ export function WorkspaceSettingsDialog({workspace, open, onOpenChange, onDelete
           <RenameSection key={workspace.id} workspace={workspace} disabled={!isOwner} />
           <MembersSection key={workspace.id} workspace={workspace} canManage={isOwner} />
           {isOwner && CONVERSION_START_ENABLED && workspace.encryptionMode === 'none' && (
-            <EncryptionSection workspace={workspace} onStart={() => onOpenChange(false)} />
+            <EncryptionSection workspace={workspace} userId={repo.user.id} onStart={() => onOpenChange(false)} />
           )}
           {isOwner && <DangerSection workspace={workspace} onDeleted={() => { onOpenChange(false); onDeleted() }} />}
           {!isOwner && isViewer && (
@@ -286,7 +286,7 @@ function MembersSection({workspace, canManage}: {workspace: Workspace, canManage
   )
 }
 
-function EncryptionSection({workspace, onStart}: {workspace: Workspace, onStart: () => void}) {
+function EncryptionSection({workspace, userId, onStart}: {workspace: Workspace, userId: string, onStart: () => void}) {
   return (
     <div className="space-y-2 rounded-md border p-3">
       <Label>End-to-end encryption</Label>
@@ -298,7 +298,7 @@ function EncryptionSection({workspace, onStart}: {workspace: Workspace, onStart:
         variant="outline"
         onClick={() => {
           onStart()
-          openConversionFlow({workspaceId: workspace.id, workspaceName: workspace.name})
+          openConversionFlow({userId, workspaceId: workspace.id, workspaceName: workspace.name})
         }}
       >
         Encrypt this workspace…

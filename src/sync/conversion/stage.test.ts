@@ -15,7 +15,7 @@ describe('stageOf', () => {
       .toEqual({kind: 'stage', stage: {kind: 'sealing', canary: 'c'}})
     expect(stageOf(read({encryptionMode: 'e2ee', wkCanary: 'c', conversionPhase: 'cleaning'}), USER))
       .toEqual({kind: 'stage', stage: {kind: 'cleaning', canary: 'c'}})
-    expect(stageOf(read({encryptionMode: 'e2ee', wkCanary: 'c'}), USER)).toEqual({kind: 'stage', stage: {kind: 'done'}})
+    expect(stageOf(read({encryptionMode: 'e2ee', wkCanary: 'c'}), USER)).toEqual({kind: 'stage', stage: {kind: 'done', canary: 'c'}})
   })
 
   it('runs nothing for a member who is not the owner', () => {
@@ -40,6 +40,6 @@ describe('stageMovedBack', () => {
     expect(stageMovedBack('sealing', {kind: 'plaintext'})).toBe(true)
     expect(stageMovedBack('cleaning', {kind: 'sealing', canary: 'c'})).toBe(true)
     expect(stageMovedBack('sealing', {kind: 'sealing', canary: 'c'})).toBe(false)
-    expect(stageMovedBack('plaintext', {kind: 'done'})).toBe(false)
+    expect(stageMovedBack('plaintext', {kind: 'done', canary: 'c'})).toBe(false)
   })
 })

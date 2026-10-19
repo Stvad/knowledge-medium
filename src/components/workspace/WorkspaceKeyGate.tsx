@@ -322,7 +322,7 @@ function ServerE2eeGate({userId, workspaceId, workspaceName, deps, onResolved}: 
           <Button
             type="button"
             className="w-full"
-            onClick={() => openConversionFlow({workspaceId, workspaceName: workspaceName ?? null})}
+            onClick={() => openConversionFlow({userId, workspaceId, workspaceName: workspaceName ?? null})}
           >
             Continue the conversion
           </Button>
