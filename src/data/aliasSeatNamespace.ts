@@ -17,8 +17,10 @@
  *
  * Seats minted under the public namespace earlier keep their ids (#1297) and
  * stay recognized as seats; nothing mints or restores at them. A `[[name]]`
- * binds to one this device holds, by alias lookup; one it has not downloaded
- * yet gets a second page at the derived id.
+ * binds to one this device holds, by alias lookup. ACCEPTED: one it has not
+ * downloaded yet gets a second page at the derived id — the old page is not on
+ * this device to find — and #1297's re-id onto the derived slot ids converges
+ * the two.
  */
 
 import type { Tx } from '@/data/api'
