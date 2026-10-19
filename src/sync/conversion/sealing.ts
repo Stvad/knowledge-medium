@@ -9,12 +9,21 @@ import { open } from '../crypto/aead.js'
 import { validateCanary } from '../crypto/canary.js'
 import { ENVELOPE_PREFIX, GCM_TAG_BYTES, NONCE_BYTES } from '../crypto/envelope.js'
 import { encodeForWire, SEALED_COLUMNS, type GetCek, type WireBlockColumns } from '../transform.js'
-import type { ConversionServer, ResealPatch, ServerBlockRow } from './conversionServer.js'
-
-export type ContentColumns = Pick<WireBlockColumns, (typeof SEALED_COLUMNS)[number]>
+import type { ContentColumns, ConversionServer, ResealPatch, ServerBlockRow } from './conversionServer.js'
 
 /** Rows per page: one read, then the page's patches. */
 export const RESEAL_PAGE_SIZE = 200
+
+/** What the re-seal and the verify both take. */
+export interface ConversionPassOptions<Progress> {
+  readonly server: ConversionServer
+  readonly workspaceId: string
+  /** The workspace key: the run refuses one that doesn't open the server canary. */
+  readonly wk: CryptoKey
+  readonly pageSize?: number
+  readonly onProgress?: (progress: Progress) => void
+  readonly signal?: AbortSignal
+}
 
 /** Sealed characters per `apply_block_patches` call. Every patch carries all
  *  three content columns and the call also writes their history, so a page of

@@ -1,8 +1,8 @@
 import { mintCanary } from '../../crypto/canary.js'
 import { importWorkspaceKey } from '../../crypto/workspaceKey.js'
 import { decodeFromWire, encodeForWire } from '../../transform.js'
-import type { ServerBlockRow } from '../conversionServer.js'
-import { contentColumnsOf, type ContentColumns } from '../sealing.js'
+import type { ContentColumns, ServerBlockRow } from '../conversionServer.js'
+import { contentColumnsOf } from '../sealing.js'
 import type { FakeBlockRow, FakeConversionServer } from './fakeConversionServer.js'
 
 export const WS = 'ws-1'

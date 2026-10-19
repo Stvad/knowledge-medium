@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { encodeForWire } from '../transform.js'
-import type { ConversionServer, ResealPatch } from './conversionServer.js'
+import type { ContentColumns, ResealPatch } from './conversionServer.js'
 import { resealWorkspace, type PlaintextSource } from './reseal.js'
 import { ConversionRefusal, contentColumnsOf, isSealedRow } from './sealing.js'
 import { flipUnder, keyOf, openRow, seedPlaintext, sealFor, WS } from './test/conversionFixtures.js'
@@ -143,17 +143,11 @@ describe('resealWorkspace', () => {
     seedPlaintext(server, 1)
     await flip()
     server.insert({id: 'x00', workspace_id: 'ws-other', content: 'not ours'})
-    const leaky: ConversionServer = {
-      readWorkspace: workspaceId => server.readWorkspace(workspaceId),
-      countBlocks: workspaceId => server.countBlocks(workspaceId),
-      readBlockPage: async (workspaceId, afterId, limit) =>
-        afterId === null ? [...await server.readBlockPage(workspaceId, null, limit), server.row('x00')] : [],
-      readBlocks: (workspaceId, ids) => server.readBlocks(workspaceId, ids),
-      readContentSealHistory: (workspaceId, ids) => server.readContentSealHistory(workspaceId, ids),
-      applyBlockPatches: patches => server.applyBlockPatches(patches),
-    }
+    const readBlockPage = server.readBlockPage.bind(server)
+    server.readBlockPage = async (workspaceId, afterId, limit) =>
+      afterId === null ? [...await readBlockPage(workspaceId, null, limit), server.row('x00')] : []
 
-    await expect(resealWorkspace({server: leaky, workspaceId: WS, wk})).rejects.toThrow('no workspace key available for ws-other')
+    await expect(resealWorkspace({server, workspaceId: WS, wk})).rejects.toThrow('no workspace key available for ws-other')
     expect(server.row('x00').content).toBe('not ours')
     expect(plaintextIds()).toEqual(['b00'])
   })
@@ -161,7 +155,7 @@ describe('resealWorkspace', () => {
   it('seals what the source supplies, over rows already sealed under another key', async () => {
     const oldKey = await keyOf(3)
     await flip()
-    const recoveryPoint = new Map<string, ReturnType<typeof contentColumnsOf>>()
+    const recoveryPoint = new Map<string, ContentColumns>()
     for (let i = 0; i < 3; i++) {
       const identity = {id: `b0${i}`, workspace_id: WS}
       server.insert({...identity, ...await sealFor(oldKey, identity, {content: `lost ${i}`, properties_json: '{}', references_json: '[]'})})

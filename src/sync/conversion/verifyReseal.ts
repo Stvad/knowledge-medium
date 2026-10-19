@@ -6,7 +6,7 @@
  */
 
 import { SEALED_COLUMNS } from '../transform.js'
-import type { ConversionServer, ServerBlockRow, ServerHistoryRow } from './conversionServer.js'
+import type { ContentColumns, ServerBlockRow, ServerHistoryRow } from './conversionServer.js'
 import {
   ConversionRefusal,
   idsOf,
@@ -16,7 +16,7 @@ import {
   requireWorkspaceKey,
   sealAndSend,
   serverPages,
-  type ContentColumns,
+  type ConversionPassOptions,
 } from './sealing.js'
 
 /** Every column a re-seal write changes: the three it sends, and the version
@@ -45,9 +45,8 @@ export const sealRecordOf = (history: ServerHistoryRow): ContentColumns | null =
   return !isSealedRow(before) && isSealedRow(after) ? before : null
 }
 
-/** Each block's record: its last history row shaped like a re-seal write. It is
- *  found by content rather than by position, so a re-taken bundle doesn't move
- *  it. Last, not first: once the flip refuses plaintext writes a row can be
+/** Each block's record: its last history row shaped like a re-seal write,
+ *  found by content rather than by position in the history. Last, not first: once the flip refuses plaintext writes a row can be
  *  sealed from plaintext only once, so an earlier such row predates the flip
  *  and was written by something else. */
 const sealRecords = (history: readonly ServerHistoryRow[]): Map<string, ContentColumns> => {
@@ -73,15 +72,7 @@ export interface VerifyProgress {
   readonly repaired: number
 }
 
-export interface VerifyOptions {
-  readonly server: ConversionServer
-  readonly workspaceId: string
-  /** The workspace key: the run refuses one that doesn't open the server canary. */
-  readonly wk: CryptoKey
-  readonly pageSize?: number
-  readonly onProgress?: (progress: VerifyProgress) => void
-  readonly signal?: AbortSignal
-}
+export type VerifyOptions = ConversionPassOptions<VerifyProgress>
 
 export const verifyReseal = async ({
   server,

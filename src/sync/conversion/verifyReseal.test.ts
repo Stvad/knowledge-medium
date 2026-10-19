@@ -197,7 +197,6 @@ describe('sealRecordOf', () => {
   const resealWrite = {
     event_id: 1,
     block_id: 'b',
-    op: 'U' as const,
     before_diff: {content: 'c', properties_json: '{}', references_json: '[]', updated_at: 1},
     after_diff: {content: ENVELOPE, properties_json: ENVELOPE, references_json: ENVELOPE, updated_at: 2},
   }
@@ -212,7 +211,7 @@ describe('sealRecordOf', () => {
   })
 
   it.each([
-    ['an insert', {op: 'I' as const, before_diff: null, after_diff: resealWrite.after_diff}],
+    ['an insert', {before_diff: null}],
     ['a write that also changed another column', {after_diff: {...resealWrite.after_diff, user_updated_at: 2}}],
     ['a write from one envelope to another', {before_diff: {...resealWrite.after_diff, updated_at: 1}}],
     ['a write that left a column plaintext', {after_diff: {...resealWrite.after_diff, references_json: '[]'}}],

@@ -12,6 +12,7 @@
  *   only takes rows whose three content columns are all sealed.
  */
 
+import { ENVELOPE_PREFIX } from '../../crypto/envelope.js'
 import { SEALED_COLUMNS } from '../../transform.js'
 import type { ConversionServer, ResealPatch, ServerBlockRow, ServerHistoryRow, ServerWorkspace } from '../conversionServer.js'
 import { isSealedRow } from '../sealing.js'
@@ -21,12 +22,13 @@ export interface FakeBlockRow extends ServerBlockRow {
   readonly deleted: boolean
 }
 
-export interface FakeHistoryRow extends ServerHistoryRow {
+interface FakeHistoryRow extends ServerHistoryRow {
   readonly workspace_id: string
+  readonly op: 'I' | 'U'
   readonly changed_columns: readonly string[] | null
 }
 
-export class FakeServerError extends Error {
+class FakeServerError extends Error {
   constructor(readonly code: string, message: string) {
     super(message)
   }
@@ -95,10 +97,6 @@ export class FakeConversionServer implements ConversionServer {
     return this.sorted().filter(row => row.workspace_id === workspaceId)
   }
 
-  get history(): readonly FakeHistoryRow[] {
-    return this.historyRows
-  }
-
   async readWorkspace(workspaceId: string): Promise<ServerWorkspace | null> {
     this.calls.push({method: 'readWorkspace', count: 1})
     if (this.signedOut) return null
@@ -136,7 +134,9 @@ export class FakeConversionServer implements ConversionServer {
       blockIds.includes(row.block_id) &&
       row.op === 'U' &&
       SEALED_COLUMNS.every(column => row.changed_columns?.includes(column)) &&
-      String(row.after_diff?.content).startsWith('enc:v1:'))
+      String(row.after_diff?.content).startsWith(ENVELOPE_PREFIX))
+      // The port promises no order, so the fake doesn't keep one.
+      .reverse()
     this.calls.push({method: 'readContentSealHistory', count: rows.length})
     return rows
   }

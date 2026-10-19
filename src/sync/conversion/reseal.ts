@@ -5,7 +5,7 @@
  * It keeps no state between runs: resuming just runs it again.
  */
 
-import type { ConversionServer, ServerBlockRow } from './conversionServer.js'
+import type { ContentColumns, ServerBlockRow } from './conversionServer.js'
 import {
   contentColumnsOf,
   isSealedRow,
@@ -13,7 +13,7 @@ import {
   requireWorkspaceKey,
   sealAndSend,
   serverPages,
-  type ContentColumns,
+  type ConversionPassOptions,
   type SealTarget,
 } from './sealing.js'
 
@@ -32,15 +32,8 @@ export interface ResealProgress {
   readonly sealed: number
 }
 
-export interface ResealOptions {
-  readonly server: ConversionServer
-  readonly workspaceId: string
-  /** The workspace key: the run refuses one that doesn't open the server canary. */
-  readonly wk: CryptoKey
+export interface ResealOptions extends ConversionPassOptions<ResealProgress> {
   readonly source?: PlaintextSource
-  readonly pageSize?: number
-  readonly onProgress?: (progress: ResealProgress) => void
-  readonly signal?: AbortSignal
 }
 
 export const resealWorkspace = async ({

@@ -120,15 +120,6 @@ describe('createSupabaseConversionServer', () => {
     expect((await server.readBlockPage(WS, blockId(1), 9)).map(row => row.id)).toEqual([blockId(2), blockId(3), blockId(4)])
   })
 
-  it('sends patches to apply_block_patches as one call', async () => {
-    const {client, rpcs} = fakeClient({})
-    const patches = [{id: 'b', content: ENVELOPE, properties_json: ENVELOPE, references_json: ENVELOPE, base_updated_at: 7}]
-
-    await createSupabaseConversionServer(client).applyBlockPatches(patches)
-
-    expect(rpcs).toEqual([{fn: 'apply_block_patches', args: {patches}}])
-  })
-
   it('reads a workspace this session cannot see as null', async () => {
     const {client} = fakeClient({workspaces: [{id: 'ws-other', encryption_mode: 'e2ee', wk_canary: ENVELOPE}]})
 

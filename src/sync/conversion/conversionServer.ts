@@ -9,7 +9,11 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { chunk } from 'lodash-es'
+import { ENVELOPE_PREFIX } from '../crypto/envelope.js'
 import { SEALED_COLUMNS, type WireBlockColumns } from '../transform.js'
+
+export type ContentColumns = Pick<WireBlockColumns, (typeof SEALED_COLUMNS)[number]>
 
 /** The columns the conversion reads from a server `blocks` row. */
 export interface ServerBlockRow extends WireBlockColumns {
@@ -21,18 +25,14 @@ export interface ServerBlockRow extends WireBlockColumns {
 export interface ServerHistoryRow {
   readonly event_id: number
   readonly block_id: string
-  readonly op: 'I' | 'U' | 'D'
   readonly before_diff: Readonly<Record<string, unknown>> | null
   readonly after_diff: Readonly<Record<string, unknown>> | null
 }
 
 /** One `apply_block_patches` element: the three content columns, sealed, and
  *  the row version they were sealed against. */
-export interface ResealPatch {
+export interface ResealPatch extends ContentColumns {
   readonly id: string
-  readonly content: string
-  readonly properties_json: string
-  readonly references_json: string
   readonly base_updated_at: number
 }
 
@@ -52,25 +52,19 @@ export interface ConversionServer {
   readBlockPage(workspaceId: string, afterId: string | null, limit: number): Promise<readonly ServerBlockRow[]>
   readBlocks(workspaceId: string, ids: readonly string[]): Promise<readonly ServerBlockRow[]>
   /** The UPDATE history of these blocks that wrote an envelope into `content`
-   *  and changed all three content columns, each block's rows in `event_id`
-   *  order. A superset of the re-seal records; the caller picks them out. */
+   *  and changed all three content columns, in any order. A superset of the
+   *  re-seal records; the caller picks them out. */
   readContentSealHistory(workspaceId: string, blockIds: readonly string[]): Promise<readonly ServerHistoryRow[]>
   /** One `apply_block_patches` call: one transaction, all or nothing. */
   applyBlockPatches(patches: readonly ResealPatch[]): Promise<void>
 }
 
 const BLOCK_COLUMNS = 'id,workspace_id,content,properties_json,references_json,updated_at'
-const HISTORY_COLUMNS = 'event_id,block_id,op,before_diff,after_diff'
+const HISTORY_COLUMNS = 'event_id,block_id,before_diff,after_diff'
 /** Ids per `in.(…)` filter. They ride in the request line, which the API
  *  gateway caps at about 8 KB. */
 const IDS_PER_FILTER = 100
 const HISTORY_PAGE = 500
-
-const chunk = <T>(items: readonly T[], size: number): T[][] => {
-  const chunks: T[][] = []
-  for (let i = 0; i < items.length; i += size) chunks.push(items.slice(i, i + size))
-  return chunks
-}
 
 /** Carries the PostgREST `code` and the HTTP `status` (a sibling of the error in
  *  the response, never on it), which are what tell a permanent failure from a
@@ -135,7 +129,7 @@ export const createSupabaseConversionServer = (client: SupabaseClient): Conversi
           .in('block_id', idChunk)
           .eq('op', 'U')
           .contains('changed_columns', [...SEALED_COLUMNS])
-          .like('after_diff->>content', 'enc:v1:%')
+          .like('after_diff->>content', `${ENVELOPE_PREFIX}%`)
           .gt('event_id', afterEventId)
           .order('event_id', {ascending: true})
           .limit(HISTORY_PAGE)
