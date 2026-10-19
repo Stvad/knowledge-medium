@@ -14,8 +14,12 @@
  *   - apply (copy)     — plaintext workspace: write the row through unchanged.
  *   - defer            — not materializable yet (locked/key-required e2ee, or
  *     encryption-uncertain): leave it in staging for a later drain.
- *   - skip-stale       — materializable, but a newer/pending local edit must
- *     not be clobbered; let the upload echo reconcile.
+ *   - skip-stale       — materializable, but a pending local edit must not be
+ *     clobbered; let the upload echo reconcile.
+ *
+ * and, for a row it would apply, writes nothing when `blocks` already holds
+ * exactly that row ({@link localHoldsStagedRow}) — the echo of this device's
+ * own write, typically.
  *
  * And for ids that left the synced set (`removed`) it hard-deletes the local
  * `blocks` row (membership revoke / workspace delete / true stream-exit).
@@ -41,6 +45,9 @@ import type { ReferenceTargetLookups } from '@/data/internals/referenceTargetPro
 import {
   blocksAlreadyReflects,
   decideStagingRow,
+  localHoldsStagedRow,
+  PENDING_UPLOAD_IDS_SQL,
+  syncedColumnsEqual,
 } from './reconcile.js'
 import {
   ARRIVAL_PROCESSORS,
@@ -64,8 +71,8 @@ const UPDATE_ASSIGNMENTS = COLUMN_NAMES
 
 // ON CONFLICT DO UPDATE (not INSERT OR REPLACE): an UPDATE keeps the FTS
 // rowid stable in the derived-index triggers, whereas DELETE+INSERT would
-// reallocate `blocks_fts_rowids`. No WHERE-diff guard — `decideStagingRow`
-// skips equal-stamp snapshots (the only no-op re-delivery), so a row that
+// reallocate `blocks_fts_rowids`. No WHERE-diff guard — Phase 2 checks
+// `localHoldsStagedRow` against the row it is about to overwrite, so a row that
 // reaches this write always differs from the local row.
 const UPSERT_BLOCK_SQL = `
   INSERT INTO blocks (${COLUMN_NAMES.join(', ')})
@@ -81,30 +88,20 @@ const setNeedsApplySql = (value: 0 | 1, count: number): string =>
 
 /** What the drain decided about ONE staged version, and which version it was.
  *
- *  The stamp is load-bearing, not bookkeeping: Phase 1 reads the staging rows
+ *  The row is load-bearing, not bookkeeping: Phase 1 reads the staging rows
  *  OUTSIDE the write lock, so a newer delivery can replace one before Phase 2
  *  commits — and that delivery has already reset the flag, correctly, for a
  *  version nobody has judged yet. Writing by id alone would wipe that reset and
  *  leave the newer row reading as applied while `blocks` holds the older
- *  content. */
+ *  content. The whole row, not its stamp: a replacement can carry the same
+ *  `updated_at` (#1163). */
 interface FlagDecision {
   readonly id: string
-  readonly stagedUpdatedAt: number
+  /** The staged row as Phase 1 read it — raw, not decoded. */
+  readonly staged: BlockRow
   /** The drain's answer: does `blocks` still need this row applied? */
   readonly needsApply: boolean
 }
-
-// All block ids with an unsent local edit queued for upload. A pending edit
-// always wins over an incoming snapshot (the echo reconciles), so the gate
-// needs this set. `ps_crud.data` is the upload envelope the blocks_upload_*
-// triggers write: `{op, type, id, data}`. DISTINCT ids only — an editing burst
-// fans out to many crud rows for one block. Read once per pass instead of a
-// per-row probe: the queue holds only local, not-yet-synced edits (tiny in
-// steady state, empty during a large initial download).
-const PENDING_UPLOAD_IDS_SQL = `
-  SELECT DISTINCT json_extract(data, '$.id') AS id FROM ps_crud
-   WHERE json_extract(data, '$.type') = 'blocks'
-`
 
 const blockRowParams = (row: BlockRow): unknown[] =>
   COLUMN_NAMES.map(name => row[name])
@@ -169,7 +166,8 @@ export interface MaterializeOutcome {
   readonly applied: readonly string[]
   /** Ids left in staging (workspace not materializable yet). */
   readonly deferred: readonly string[]
-  /** Ids skipped because a newer/pending local edit wins. */
+  /** Ids not written: a pending local edit wins, or `blocks` already holds
+   *  exactly the staged row. */
   readonly skippedStale: readonly string[]
   /** Ids whose ciphertext could not be decrypted (corrupt / tampered /
    *  well-formed-but-invalid). Left staged; deliberately do NOT wedge the
@@ -178,9 +176,10 @@ export interface MaterializeOutcome {
   /** Ids hard-deleted from `blocks`. */
   readonly deleted: readonly string[]
   /** Ids whose `needs_apply` flag this pass CLEARED — rows that arrived flagged
-   *  and that it decided leave `blocks` correct: applied, skip-staled (the local
-   *  row wins by the gate's own rule), or already reflected by `blocks` even
-   *  though the drain could not apply it (`blocksAlreadyReflects`). The rows it
+   *  and that it decided leave `blocks` correct: applied, skip-staled (a pending
+   *  local edit wins, or `blocks` already holds the row), or already reflected
+   *  by `blocks` even though the drain could not apply it
+   *  (`blocksAlreadyReflects`). The rows it
    *  did NOT clear are the durable gap `WORKSPACE_UNAPPLIED_SQL` reports.
    *
    *  A row that was ALREADY clear is not here, however the pass decided it. The
@@ -197,7 +196,8 @@ export interface MaterializeOutcome {
 
 interface ApplyCandidate {
   readonly plaintext: BlockRow
-  readonly stagingUpdatedAt: number
+  /** The staged row `plaintext` was decoded from, as Phase 1 read it. */
+  readonly staged: BlockRow
   readonly materializability: Exclude<Materializability, 'defer'>
 }
 
@@ -229,40 +229,10 @@ const readStagingRows = async (
   return out
 }
 
-/** The local gate input for one id: the `blocks` row's `updated_at` (the
- *  row-version the gate compares) and whether it is tombstoned (which decides
- *  whether a row the drain cannot apply is visible to anyone). */
-interface LocalGateRow {
-  readonly updatedAt: number
-  readonly deleted: boolean
-}
-
-/** Local gate inputs for the `ids` the app already has a `blocks` row for,
- *  keyed by id. Chunked so the IN-clause never exceeds SQLite's bound-parameter
- *  limit. Absent ids = no local row. This is the Phase-1 slim read (id +
- *  updated_at) — Phase 2 re-derives the same field from the full before-rows
- *  it already loads. */
-const readLocalGateRows = async (
-  db: RowsReader, ids: readonly string[], chunkSize: number,
-): Promise<Map<string, LocalGateRow>> => {
-  const out = new Map<string, LocalGateRow>()
-  for (let i = 0; i < ids.length; i += chunkSize) {
-    const chunk = ids.slice(i, i + chunkSize)
-    const rows = await db.getAll<{ id: string; updated_at: number; deleted: number }>(
-      `SELECT id, updated_at, deleted FROM blocks WHERE id IN (${buildInClause(chunk.length)})`,
-      chunk,
-    )
-    for (const row of rows) {
-      out.set(row.id, { updatedAt: row.updated_at, deleted: row.deleted === 1 })
-    }
-  }
-  return out
-}
-
-/** Full pre-write `blocks` rows for `ids`, keyed by id — serves both the LWW
- *  gate's local stamp and the invalidation `before` snapshot (parent-edge /
- *  plugin channels need the prior parent_id, content, properties, etc.).
- *  Chunked like the staging read. */
+/** Full `blocks` rows for `ids`, keyed by id — what the no-op check compares
+ *  against in both phases, and in Phase 2 also the invalidation `before`
+ *  snapshot (parent-edge / plugin channels need the prior parent_id, content,
+ *  properties, etc.). Absent ids = no local row. Chunked like the staging read. */
 const readBlocksByIds = async (
   db: RowsReader, ids: readonly string[], chunkSize: number,
 ): Promise<Map<string, BlockRow>> => {
@@ -281,30 +251,31 @@ const readBlocksByIds = async (
   return out
 }
 
-/** Block ids with an unsent local edit queued for upload (a single read of the
- *  whole upload queue, not a per-row probe). */
+/** Block ids with an unsent local edit queued for upload. A pending edit always
+ *  wins over an incoming snapshot (the echo reconciles), so the gate needs this
+ *  set. One read of the whole upload queue rather than a per-row probe: it holds
+ *  only local, not-yet-synced edits (tiny in steady state, empty during a large
+ *  initial download). */
 const readPendingUploadIds = async (db: RowsReader): Promise<Set<string>> => {
   const rows = await db.getAll<{ id: string }>(PENDING_UPLOAD_IDS_SQL)
   return new Set(rows.map(row => row.id))
 }
 
-/** Current staged version + flag for `ids`, read INSIDE the write tx so the
+/** Current staged row + flag for `ids`, read INSIDE the write tx so the
  *  decision and its record commit together. Chunked like the other id-keyed
  *  reads. Absent ids left the staging table since Phase 1. */
-const readStagingFlagState = async (
+const readStagedNow = async (
   db: RowsReader, ids: readonly string[], chunkSize: number,
-): Promise<Map<string, { updatedAt: number; needsApply: boolean }>> => {
-  const out = new Map<string, { updatedAt: number; needsApply: boolean }>()
+): Promise<Map<string, { row: BlockRow; needsApply: boolean }>> => {
+  const out = new Map<string, { row: BlockRow; needsApply: boolean }>()
   for (let i = 0; i < ids.length; i += chunkSize) {
     const chunk = ids.slice(i, i + chunkSize)
-    const rows = await db.getAll<{ id: string; updated_at: number; needs_apply: number }>(
-      `SELECT id, updated_at, needs_apply FROM blocks_synced
+    const rows = await db.getAll<BlockRow & { needs_apply: number }>(
+      `SELECT ${COLUMN_NAMES.join(', ')}, needs_apply FROM blocks_synced
         WHERE id IN (${buildInClause(chunk.length)})`,
       chunk,
     )
-    for (const row of rows) {
-      out.set(row.id, { updatedAt: row.updated_at, needsApply: row.needs_apply === 1 })
-    }
+    for (const row of rows) out.set(row.id, { row, needsApply: row.needs_apply === 1 })
   }
   return out
 }
@@ -371,7 +342,9 @@ export const materializeStagingRows = async (
   // two awaited probes per row. On a large backlog those per-row probes — a
   // `blocks` lookup plus a `ps_crud` json_extract scan, each a serialized
   // round-trip to the SQLite worker — were the dominant cost, not the copy.
-  const localGateRowById = await readLocalGateRows(
+  // Full rows, outside the lock: the no-op check below compares them, so an
+  // own-write echo is settled here and Phase 2 only records its flag.
+  const localRowById = await readBlocksByIds(
     db, stagingRows.map(row => row.id), readChunkSize,
   )
   const pendingUploadIds = await readPendingUploadIds(db)
@@ -389,33 +362,28 @@ export const materializeStagingRows = async (
   const candidates: ApplyCandidate[] = []
   for (const row of stagingRows) {
     const materializability = await resolveMaterializability(row.workspace_id)
-    const localRow = localGateRowById.get(row.id)
+    const localRow = localRowById.get(row.id)
     const decide = (needsApply: boolean) =>
-      decisions.push({id: row.id, stagedUpdatedAt: row.updated_at, needsApply})
+      decisions.push({id: row.id, staged: row, needsApply})
     // Asked before the branch that depends on materializability, because this
     // does not: `defer` is not only the locked-workspace case — a failed
     // key-store read lands there too — so an unchanged re-delivery arriving in
     // that window would otherwise be recorded as a durable gap with nothing in
     // flight, on a device whose one-time reconcile rescan has long since run.
-    const alreadyReflected = blocksAlreadyReflects(
-      { updatedAt: row.updated_at, deleted: row.deleted === 1 }, localRow,
-    )
+    const alreadyReflected = blocksAlreadyReflects(row, localRow)
     if (materializability === 'defer') {
       deferred.push(row.id)
       decide(!alreadyReflected)
       continue
     }
-    const action = decideStagingRow(materializability, row.updated_at, {
-      localUpdatedAt: localRow?.updatedAt ?? null,
+    const action = decideStagingRow(materializability, {
       hasPendingUpload: pendingUploadIds.has(row.id),
     })
     if (action.kind !== 'apply') {
       // Skip-stale BEFORE decrypt: a stale ciphertext never gets decoded.
       skippedStale.push(row.id)
-      // RESOLVED, not a gap: the gate has ruled the local row correct — either
-      // it holds an unsent edit whose echo reconciles, or I1's equal nonzero
-      // stamps prove the content identical. Both re-deliver, which resets the
-      // flag, so nothing is lost by clearing it now.
+      // RESOLVED, not a gap: the local row holds an unsent edit, whose echo
+      // re-delivers and resets the flag, so nothing is lost by clearing it now.
       decide(false)
       continue
     }
@@ -434,12 +402,19 @@ export const materializeStagingRows = async (
       // copy-through never reaches here (decodeFromWire is identity for 'none').
       console.warn(`[materializeStagingRows] quarantined undecryptable block ${row.id}:`, err)
       quarantined.push(row.id)
-      // Same answer as the defer branch, though only its tombstone half can be
-      // true here: an equal-stamp row skip-stales above, before it reaches decrypt.
+      // Same answer as the defer branch: this row could not be opened either.
       decide(!alreadyReflected)
       continue
     }
-    candidates.push({ plaintext, stagingUpdatedAt: row.updated_at, materializability })
+    if (localHoldsStagedRow(localRow, plaintext)) {
+      // Nothing to write. A PRE-FILTER only, kept for lock time: Phase 2 asks
+      // the same of the row it would overwrite, so deleting this changes no
+      // outcome, only how much of an echo-heavy window is read under the lock.
+      skippedStale.push(row.id)
+      decide(false)
+      continue
+    }
+    candidates.push({ plaintext, staged: row, materializability })
   }
 
   const snapshots = new Map<string, SyncSnapshot>()
@@ -472,15 +447,33 @@ export const materializeStagingRows = async (
       tx, candidates.map(candidate => candidate.plaintext.id), readChunkSize,
     )
     const pendingNow = await readPendingUploadIds(tx)
+    // Ids are disjoint between the two lists: a row is either decided in
+    // Phase 1 or carried here as a candidate.
+    const stagedNow = await readStagedNow(
+      tx,
+      [...decisions.map(decision => decision.id), ...candidates.map(candidate => candidate.plaintext.id)],
+      readChunkSize,
+    )
+    const stillStaged = (id: string, judged: BlockRow): boolean => {
+      const now = stagedNow.get(id)
+      return now !== undefined && syncedColumnsEqual(now.row, judged)
+    }
 
     for (const candidate of candidates) {
-      const { plaintext, stagingUpdatedAt, materializability } = candidate
+      const { plaintext, staged, materializability } = candidate
+      if (!stillStaged(plaintext.id, staged)) {
+        // Replaced since Phase 1, so `plaintext` is no longer the staged
+        // version. Writing it would show an older row, and judging it would
+        // clear the replacement's flag; the replacement's own delivery is
+        // queued and re-drives it.
+        skippedStale.push(plaintext.id)
+        continue
+      }
       const beforeRow = beforeRowById.get(plaintext.id) ?? null
-      const action = decideStagingRow(materializability, stagingUpdatedAt, {
-        localUpdatedAt: beforeRow?.updated_at ?? null,
+      const action = decideStagingRow(materializability, {
         hasPendingUpload: pendingNow.has(plaintext.id),
       })
-      if (action.kind === 'apply') {
+      if (action.kind === 'apply' && !localHoldsStagedRow(beforeRow, plaintext)) {
         await tx.execute(UPSERT_BLOCK_SQL, blockRowParams(plaintext))
         applied.push(plaintext.id)
         const after = parseBlockRow(plaintext)
@@ -506,11 +499,12 @@ export const materializeStagingRows = async (
           after,
         })
       } else {
-        // A local edit landed between Phase 1 and the lock — it wins.
+        // The row changed between Phase 1 and the lock: a local edit landed,
+        // and wins, or the row became the staged one.
         skippedStale.push(plaintext.id)
       }
       // Decided either way — written, or ruled against by the gate.
-      decisions.push({id: plaintext.id, stagedUpdatedAt: stagingUpdatedAt, needsApply: false})
+      decisions.push({id: plaintext.id, staged, needsApply: false})
     }
 
     // ── Arrival-processor pass (`arrivalProcessors.ts`): runs AFTER every
@@ -558,13 +552,11 @@ export const materializeStagingRows = async (
     // re-derives. A pass that reads the flag inside its own write transaction
     // is excluded from this one by the write lock, so it never sees a decision
     // half-made. Only for the version actually judged: a row replaced since
-    // Phase 1 belongs to whoever judges THAT version.
-    const stagedNow = await readStagingFlagState(
-      tx, decisions.map(decision => decision.id), readChunkSize,
-    )
+    // Phase 1 belongs to whoever judges THAT version. `stagedNow` is still
+    // current here — nothing in this transaction writes `blocks_synced`.
     for (const decision of decisions) {
-      const now = stagedNow.get(decision.id)
-      if (now === undefined || now.updatedAt !== decision.stagedUpdatedAt) continue
+      if (!stillStaged(decision.id, decision.staged)) continue
+      const now = stagedNow.get(decision.id)!
       // Only rows whose flag actually MOVES — see `resolved` / `reflagged` on
       // MaterializeOutcome. The write is a no-op either way; the report is not.
       if (decision.needsApply === now.needsApply) continue

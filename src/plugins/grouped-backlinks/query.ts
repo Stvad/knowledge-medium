@@ -23,7 +23,7 @@ import {
   typedBlocksStructureKey,
 } from '@/data/invalidation'
 import { typesProp } from '@/data/properties.js'
-import { registrySeedParams } from '@/data/internals/kernelQueries'
+import { dependOnRecognitionParams } from '@/data/internals/kernelQueries'
 import {
   buildGroupedBacklinks,
   type GroupedBacklinkCandidate,
@@ -143,7 +143,7 @@ const resolveBacklinkSourceIds = async (
   // undeclared-ancestry-dependency residual too (km-nc46).
   if (ids.length === 0) return ids
   if (!(await workspaceHasPropertyMachinery(ctx.db, workspaceId))) return ids
-  const machinery = await propertyMachinerySourceIds(ctx.db, ids, registrySeedParams(ctx.repo))
+  const machinery = await propertyMachinerySourceIds(ctx.db, ids, dependOnRecognitionParams(ctx))
   return machinery.size === 0 ? ids : ids.filter(sourceId => !machinery.has(sourceId))
 }
 
@@ -204,8 +204,8 @@ export const SELECT_GROUPED_BACKLINK_MEMBER_ROWS_SQL = `
 export const SELECT_GROUPED_BACKLINK_CANDIDATES_SQL = `
   WITH RECURSIVE
     ${SOURCE_IDS_CTE},
-    ancestor_chain(source_id, anc_id, anc_parent_id, depth, path) AS (
-      SELECT s.id, b.id, b.parent_id, 0, '!' || hex(b.id) || '/'
+    ancestor_chain(source_id, anc_id, anc_parent_id, depth, path, ws) AS (
+      SELECT s.id, b.id, b.parent_id, 0, '!' || hex(b.id) || '/', b.workspace_id
       FROM source_ids s
       JOIN blocks b ON b.id = s.id
       WHERE b.deleted = 0
@@ -215,10 +215,14 @@ export const SELECT_GROUPED_BACKLINK_CANDIDATES_SQL = `
         parent.id,
         parent.parent_id,
         ancestor_chain.depth + 1,
-        ancestor_chain.path || '!' || hex(parent.id) || '/'
+        ancestor_chain.path || '!' || hex(parent.id) || '/',
+        ancestor_chain.ws
       FROM ancestor_chain
       JOIN blocks parent ON parent.id = ancestor_chain.anc_parent_id
       WHERE parent.deleted = 0
+        -- A sync-applied parent edge can leave the source's workspace; the
+        -- context walk stops there, so nothing past it becomes a group.
+        AND parent.workspace_id = ancestor_chain.ws
         AND ancestor_chain.depth < 100
         AND INSTR(ancestor_chain.path, '!' || hex(parent.id) || '/') = 0
     ),
@@ -255,6 +259,11 @@ export const SELECT_GROUPED_BACKLINK_CANDIDATES_SQL = `
   FROM group_context_refs cr
   JOIN blocks group_block ON group_block.id = cr.context_id
   WHERE group_block.deleted = 0
+    -- A sync-applied edge (a parent or a reference) can reach another
+    -- workspace's block; it is not a group of this one. The requested
+    -- workspace is bound, not read off the source: sync rewrites a row's
+    -- workspace_id in place, so the source may have moved since it was listed.
+    AND group_block.workspace_id = ?
   ORDER BY cr.source_id, coalesce(group_block.user_updated_at, group_block.updated_at) DESC, group_block.id
 `
 
@@ -291,6 +300,10 @@ export const SELECT_GROUPED_BACKLINK_ATTRIBUTE_CANDIDATES_SQL = `
     AND refs.source_field = ?
     AND refs.target_id != ?
     AND group_block.deleted = 0
+    -- The main statement's workspace rule, here as defence in depth: no
+    -- test reaches a groupWith target that its source's direct context
+    -- does not already outrank.
+    AND group_block.workspace_id = refs.workspace_id
   ORDER BY refs.source_id, coalesce(group_block.user_updated_at, group_block.updated_at) DESC, group_block.id
 `
 
@@ -405,7 +418,7 @@ export const groupedBacklinksForBlockQuery = defineQuery<
 
     const candidateRows = await ctx.db.getAll<CandidateRow>(
       SELECT_GROUPED_BACKLINK_CANDIDATES_SQL,
-      [sourceIdsJson, workspaceId, id],
+      [sourceIdsJson, workspaceId, id, workspaceId],
     )
     const fieldCandidateRows = await ctx.db.getAll<FieldCandidateRow>(
       SELECT_GROUPED_BACKLINK_FIELD_CANDIDATES_SQL,

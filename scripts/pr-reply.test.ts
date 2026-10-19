@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process'
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { SIGNATURE, signedBody } from './pr-reply.mjs'
 
@@ -123,25 +123,38 @@ describe('pr-reply process behavior', { timeout: 20_000 }, () => {
     expect(r.stdout).toContain('#78 → NO SUCH ISSUE OR PR')
   })
 
+  const many = Array.from({ length: 20 }, (_, i) => `#${100 + i}`).join(' ')
+  const manyAnswer = JSON.stringify({ id: 42, html_url: 'https://github.com/Stvad/knowledge-medium/pull/652#discussion_r42', body: many })
+
   // The reply is already posted, so the echo must not run long enough to
   // look like a failed post: it looks up only as many references as its
   // budget fits full lookups of, and counts the rest.
   it('bounds the reference echo by a cap and a time budget', () => {
-    const many = Array.from({ length: 20 }, (_, i) => `#${100 + i}`).join(' ')
-    const answer = JSON.stringify({ id: 42, html_url: 'https://github.com/Stvad/knowledge-medium/pull/652#discussion_r42', body: many })
-    const capped = setup({ ghAnswer: answer })
+    const capped = setup({ ghAnswer: manyAnswer })
     writeFileSync(join(capped.dir, 'body.md'), many)
     const r = capped.run('652', '41', 'body.md')
     expect(r.status).toBe(0)
     // the default budget fits five lookups of the full lookup timeout
     expect(capped.ghCalls().match(/\/issues\//g)).toHaveLength(5)
     expect(r.stdout).toContain('…and 15 more references not echoed')
-    const broke = setup({ ghAnswer: answer })
+    const broke = setup({ ghAnswer: manyAnswer })
     writeFileSync(join(broke.dir, 'body.md'), many)
     const none = broke.runWith({ KM_PR_REPLY_ECHO_BUDGET_MS: '0' }, '652', '41', 'body.md')
     expect(none.status).toBe(0)
     expect(broke.ghCalls()).not.toContain('/issues/')
     expect(none.stdout).toContain('20 issue references in the reply not echoed (out of time budget)')
+  })
+
+  // On a loaded runner the clock moves between any two reads of it. The cap
+  // is the budget divided into lookups, so it must not move with the clock.
+  it('sizes the echo from the budget alone, however the clock moves meanwhile', () => {
+    const { dir, runWith, ghCalls } = setup({ ghAnswer: manyAnswer })
+    writeFileSync(join(dir, 'body.md'), many)
+    const clock = join(dir, 'ticking-clock.mjs')
+    writeFileSync(clock, 'let t = Date.now()\nDate.now = () => ++t\n')
+    const r = runWith({ NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ''} --import=${pathToFileURL(clock).href}` }, '652', '41', 'body.md')
+    expect(r.status).toBe(0)
+    expect(ghCalls().match(/\/issues\//g)).toHaveLength(5)
   })
 
   // The URL is what the read-back needs; a kill during the lookups that

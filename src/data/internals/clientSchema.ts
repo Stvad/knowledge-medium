@@ -17,7 +17,11 @@ import {
   PARENT_DELETED_RAISE_PREFIX,
   RAISE_FIELD_SEP_SQL,
 } from './raiseProtocol'
-import { STAGING_LOCAL_COLUMNS } from '@/data/blockSchema.js'
+import {
+  BLOCKS_TABLE_COLUMN_NAMES,
+  STAGING_LOCAL_COLUMNS,
+  buildBlockSnapshotJsonSql,
+} from '@/data/blockSchema.js'
 import { SEED_STAGING_NEEDS_APPLY_SQL } from './syncObserver/reconcile.js'
 
 // ============================================================================
@@ -54,17 +58,18 @@ export const SEED_TX_CONTEXT_ROW_SQL = `
   INSERT OR IGNORE INTO tx_context (id) VALUES (1)
 `
 
-/** Per-row audit / change-history log. Trigger-written on every write to
+/** Per-row audit / change-history log. Trigger-written on every change to
  *  `blocks` — local (`repo.tx`) and sync-applied (observer materialize) alike
- *  — capturing the full before/after row state of each change. `tx_id` = NULL
+ *  — capturing the full before/after row state; an update that moves only the
+ *  row version (`updated_at`) is not a change. `tx_id` = NULL
  *  for sync-applied writes (see the COALESCE / CASE in the row_events triggers
  *  below); `source` distinguishes 'user' from 'sync'.
  *
  *  This is the substrate for local change history / time-travel, and the ONLY
  *  place an INCOMING sync change is durably recorded — `command_events` covers
  *  local `repo.tx` operations only (mutator-grain), never sync apply. Nothing
- *  reads `row_events` at runtime: the Layout B observer owns invalidation, so
- *  this is a write-only history log.
+ *  reads `row_events` for invalidation (the Layout B observer owns that); its
+ *  readers are the agent-runtime history views and db-mirror's change marker.
  *
  *  Intentionally unbounded — full history is kept and never auto-trimmed. Any
  *  retention policy is a future opt-in, never a silent drop (preserving user
@@ -316,6 +321,40 @@ export const CREATE_PS_CRUD_REJECTED_TX_ID_INDEX_SQL = `
   ON ps_crud_rejected (tx_id)
 `
 
+/** Hold downloads until the server's checkpoint includes every queued upload.
+ *
+ *  The core publishes a checkpoint only when `ps_crud` is empty AND the
+ *  `$local` bucket's `target_op` does not exceed its `last_op`. Raising
+ *  `target_op` to the max op id keeps that shut after the upload empties
+ *  `ps_crud`, until the SDK swaps in the upload's write checkpoint and a
+ *  checkpoint carrying it arrives. Without it, a checkpoint cut before the
+ *  upload landed is published, and the drain applies that older version over
+ *  the newer local row (#1226). The row PowerSync's own crud path writes,
+ *  which our writers bypass by inserting into `ps_crud` directly. */
+const LOCAL_HOLD_ROW_SQL = "'$local', 0, 9223372036854775807"
+
+/** On the queue rather than on its writers, so every enqueue holds: the block
+ *  upload triggers and a direct insert (the rejected-upload retry) alike.
+ *
+ *  A DELETE then a plain INSERT, not PowerSync's `INSERT OR REPLACE`, for the
+ *  same row: a trigger's own conflict clause yields to the one on the statement
+ *  that fired it, so a `blocks` write carrying `OR IGNORE` would skip the hold
+ *  and one carrying `OR ABORT` would fail on it. */
+export const CREATE_PS_CRUD_HOLD_DOWNLOADS_TRIGGER_SQL = `
+  CREATE TRIGGER IF NOT EXISTS ps_crud_hold_downloads
+  AFTER INSERT ON ps_crud
+  BEGIN
+    DELETE FROM ps_buckets WHERE name = '$local';
+    INSERT INTO ps_buckets(name, last_op, target_op) VALUES(${LOCAL_HOLD_ROW_SQL});
+  END
+`
+
+/** Uploads queued before the trigger existed hold too. Runs every boot; with
+ *  nothing queued it writes nothing, and with something queued the hold is
+ *  already the state PowerSync keeps. */
+export const HOLD_DOWNLOADS_FOR_QUEUED_UPLOADS_SQL =
+  `INSERT OR REPLACE INTO ps_buckets(name, last_op, target_op) SELECT ${LOCAL_HOLD_ROW_SQL} WHERE EXISTS (SELECT 1 FROM ps_crud)`
+
 // ============================================================================
 // blocks_synced change-capture queue (Layout B, design doc §9.2) — the
 // observer's O(delta) detection signal, replacing an O(N) re-scan of the whole
@@ -392,37 +431,15 @@ export const CREATE_BLOCKS_SYNCED_CHANGES_DELETE_TRIGGER_SQL = `
 // row_events triggers (3) — the per-row audit / change-history log. Fire for
 // BOTH local (`repo.tx`) and sync-applied (observer materialize) writes to
 // `blocks`; the COALESCE-to-'sync' tag distinguishes them. Nothing reads
-// row_events at runtime — the Layout B observer owns invalidation — so this is
-// a write-only history substrate (local change-history / time-travel; the only
-// durable record of incoming sync changes).
+// row_events for invalidation — the Layout B observer owns that — so this is a
+// history substrate (local change-history / time-travel; the only durable
+// record of incoming sync changes), read by the agent-runtime history views and
+// db-mirror's change marker.
 //
 // Soft-delete semantics (§4.3): tx.delete sets deleted = 1 (UPDATE), so it
 // fires the UPDATE trigger. The body inspects whether `deleted` transitioned
 // from 0 to 1 and writes kind = 'soft-delete' instead of 'update'.
 // ============================================================================
-
-/** Serializes a blocks row (NEW or OLD) to the JSON snapshot stored in
- *  `row_events.{before,after}_json`. NEW / OLD references resolve at
- *  trigger time. */
-const blockJsonObjectSql = (rowRef: 'NEW' | 'OLD') => `
-      json_object(
-        'id', ${rowRef}.id,
-        'workspaceId', ${rowRef}.workspace_id,
-        'parentId', ${rowRef}.parent_id,
-        'referenceTargetId', ${rowRef}.reference_target_id,
-        'isFieldForm', json(CASE WHEN ${rowRef}.is_field_form = 1 THEN 'true' ELSE 'false' END),
-        'orderKey', ${rowRef}.order_key,
-        'content', ${rowRef}.content,
-        'properties', json(${rowRef}.properties_json),
-        'references', json(${rowRef}.references_json),
-        'createdAt', ${rowRef}.created_at,
-        'updatedAt', ${rowRef}.updated_at,
-        'userUpdatedAt', coalesce(${rowRef}.user_updated_at, ${rowRef}.updated_at),
-        'createdBy', ${rowRef}.created_by,
-        'updatedBy', ${rowRef}.updated_by,
-        'deleted', json(CASE WHEN ${rowRef}.deleted THEN 'true' ELSE 'false' END)
-      )
-`.trim()
 
 /** Belt-and-suspenders source gate for tx_context projections: the column
  *  is the active local tx's value only when source IS NOT NULL. Sync-applied
@@ -458,7 +475,7 @@ export const CREATE_BLOCKS_INSERT_ROW_EVENT_TRIGGER_SQL = `
       NEW.id,
       'create',
       NULL,
-      ${blockJsonObjectSql('NEW')},
+      ${buildBlockSnapshotJsonSql('NEW')},
       ${triggerSourceSql},
       CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
       ${triggerGroupIdSql}
@@ -466,9 +483,21 @@ export const CREATE_BLOCKS_INSERT_ROW_EVENT_TRIGGER_SQL = `
   END
 `
 
+/** An update that moves only the row version is not logged (#1299): it would
+ *  store two full snapshots of a row whose data did not change — for every row,
+ *  on every device, when a workspace is re-sealed. Raw columns, not the
+ *  snapshot: the snapshot normalizes some stored changes away (`json()`, the
+ *  boolean CASEs, `userUpdatedAt`'s fallback to `updated_at`), and a column it
+ *  lacks would otherwise go unlogged. */
+const blockRowChangedBesidesVersionSql = BLOCKS_TABLE_COLUMN_NAMES
+  .filter(name => name !== 'updated_at')
+  .map(name => `OLD.${name} IS NOT NEW.${name}`)
+  .join('\n    OR ')
+
 export const CREATE_BLOCKS_UPDATE_ROW_EVENT_TRIGGER_SQL = `
   CREATE TRIGGER IF NOT EXISTS blocks_row_event_update
   AFTER UPDATE ON blocks
+  WHEN ${blockRowChangedBesidesVersionSql}
   BEGIN
     INSERT INTO row_events (
       tx_id, block_id, kind, before_json, after_json, source, created_at, group_id
@@ -479,8 +508,8 @@ export const CREATE_BLOCKS_UPDATE_ROW_EVENT_TRIGGER_SQL = `
         WHEN OLD.deleted = 0 AND NEW.deleted = 1 THEN 'soft-delete'
         ELSE 'update'
       END,
-      ${blockJsonObjectSql('OLD')},
-      ${blockJsonObjectSql('NEW')},
+      ${buildBlockSnapshotJsonSql('OLD')},
+      ${buildBlockSnapshotJsonSql('NEW')},
       ${triggerSourceSql},
       CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
       ${triggerGroupIdSql}
@@ -501,7 +530,7 @@ export const CREATE_BLOCKS_DELETE_ROW_EVENT_TRIGGER_SQL = `
       ${triggerTxIdSql},
       OLD.id,
       'delete',
-      ${blockJsonObjectSql('OLD')},
+      ${buildBlockSnapshotJsonSql('OLD')},
       NULL,
       ${triggerSourceSql},
       CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
@@ -524,10 +553,13 @@ export const CREATE_BLOCKS_DELETE_ROW_EVENT_TRIGGER_SQL = `
 // through tx.delete → UPDATE deleted = 1 → fires the UPDATE upload trigger
 // below, which forwards correctly. See §4.5.
 //
-// The upload SQL writes through PowerSync's standard powersync_crud queue:
+// The upload SQL writes PowerSync's upload queue directly:
 //   ps_crud (tx_id INTEGER, data TEXT)
 // where data is a JSON envelope { op, type, id, data }. PowerSync picks
 // rows out of ps_crud and uploads them via the configured connector.
+// Writing it directly bypasses PowerSync's own crud path. The part of that
+// path these writes need, the download hold, is the queue's own trigger:
+// {@link CREATE_PS_CRUD_HOLD_DOWNLOADS_TRIGGER_SQL}.
 // ============================================================================
 
 interface UploadColumnSpec {
@@ -1266,7 +1298,7 @@ const withTriggerRecreate = (statements: readonly string[]): string[] =>
 
 /** Run `fn` with `triggerName` temporarily dropped, then recreate it from
  *  `createSql` (its canonical definition) — even if `fn` throws. For a bulk
- *  maintenance write that must NOT fan out through an unconditional per-row
+ *  maintenance write that must NOT fan out through a per-row
  *  side-effect trigger (e.g. a column backfill that would otherwise write one
  *  `row_events` row per block — hundreds of thousands of them). SQLite has no
  *  `DISABLE TRIGGER`, so drop+recreate is the equivalent; pass the same
@@ -1311,6 +1343,7 @@ const CLIENT_SCHEMA_BASE_STATEMENTS: readonly string[] = [
   CREATE_PS_CRUD_REJECTED_TABLE_SQL,
   CREATE_PS_CRUD_REJECTED_REJECTED_AT_INDEX_SQL,
   CREATE_PS_CRUD_REJECTED_TX_ID_INDEX_SQL,
+  HOLD_DOWNLOADS_FOR_QUEUED_UPLOADS_SQL,
   CREATE_BLOCKS_SYNCED_CHANGES_TABLE_SQL,
   CREATE_BLOCKS_SYNCED_CHANGES_ID_OP_INDEX_SQL,
   DROP_BLOCKS_WORKSPACE_TYPE_INDEX_SQL,
@@ -1320,9 +1353,10 @@ const CLIENT_SCHEMA_BASE_STATEMENTS: readonly string[] = [
   CREATE_BLOCKS_INSERT_ROW_EVENT_TRIGGER_SQL,
   CREATE_BLOCKS_UPDATE_ROW_EVENT_TRIGGER_SQL,
   CREATE_BLOCKS_DELETE_ROW_EVENT_TRIGGER_SQL,
-  // 2 upload-routing triggers
+  // 2 upload-routing triggers, and the upload queue's download hold
   CREATE_BLOCKS_UPLOAD_INSERT_TRIGGER_SQL,
   CREATE_BLOCKS_UPLOAD_UPDATE_TRIGGER_SQL,
+  CREATE_PS_CRUD_HOLD_DOWNLOADS_TRIGGER_SQL,
   // 2 workspace-invariant triggers
   CREATE_BLOCKS_WORKSPACE_INVARIANT_INSERT_TRIGGER_SQL,
   CREATE_BLOCKS_WORKSPACE_INVARIANT_UPDATE_TRIGGER_SQL,

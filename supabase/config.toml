@@ -24,15 +24,23 @@ otp_expiry = 3600
 subject = "Your sign-in code"
 content_path = "./supabase/templates/magic_link.html"
 
+# The project-wide upload ceiling caps every bucket, so it must admit the
+# attachments bucket's limit below.
+[storage]
+file_size_limit = "51MiB"
+
 # Media attachments bucket (design §10). Declared here so a local `supabase start`
 # provisions it on boot — the migration that creates it on the hosted project is
 # guarded out locally because the Storage tables don't exist at migration time
 # (see supabase/migrations/20260625000000_add_attachments_storage.sql). config.toml
 # can't declare storage.objects RLS policies; apply the migration's policies
 # against the local stack once Storage is up when exercising RLS locally.
+#
+# A sealed 50 MiB capture is 50 MiB + 36 bytes (the migration raises the hosted
+# bucket to 50 MiB + 64); this file takes whole units, hence 51MiB.
 [storage.buckets.attachments]
 public = false
-file_size_limit = "50MiB"
+file_size_limit = "51MiB"
 
 # The platform's JWT gate also admits the publishable key, so it doesn't
 # authenticate a user; the function checks the caller's session itself

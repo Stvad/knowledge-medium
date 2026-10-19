@@ -19,7 +19,7 @@ export declare const beadIdDenial: (ids: string[]) => string
 export declare const fetchIssueInfo: (
   number: number,
 ) => { title: string; state: string; isPr: boolean } | 'not-found' | null
-export declare const refsCap: (deadline: number) => number
+export declare const refsCap: (msLeft: number) => number
 export declare const moreRefsNote: (total: number, cap: number) => string
 export declare const issueRefsTable: (text: string, refs: number[], mode?: 'pre' | 'post') => string
 export declare const allowsBeadIds: (cmd: string) => boolean
@@ -86,7 +86,7 @@ export declare const coveredMs: (intervals: [number, number][]) => number
 export declare const spawnAsync: (
   file: string,
   args: readonly string[],
-  opts?: { maxBuffer?: number; env?: NodeJS.ProcessEnv },
+  opts?: { maxBuffer?: number; env?: NodeJS.ProcessEnv; verb?: string },
 ) => Promise<{ stdout: string; stderr: string; status?: number | null; error?: Error }>
 export declare const settleAll: <T extends readonly unknown[]>(promises: T) => Promise<{ -readonly [K in keyof T]: Awaited<T[K]> }>
 export declare const inPool: <T>(items: T[], width: number, fn: (item: T) => Promise<unknown>) => Promise<void>

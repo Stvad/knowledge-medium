@@ -97,6 +97,8 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   syncViewGap: 'read — one query, an observer sample and a gate sample; assigns no Repo fields',
   workspaceViewGap: 'read — syncViewGap plus one query; assigns no Repo fields',
   backfillViewGap: 'read — polls workspaceViewGap with call-local timers; assigns no Repo fields',
+  syncDivergence: 'read — two queries and the injected materializability policy; assigns no Repo fields',
+  materializationPolicy: 'getter read (the injected observer deps, or a call-local plaintext stub)',
   lastSyncedAt: 'getter read (delegates to the PowerSync status)',
 
   // ── writes into a caller-provided tx (grouping follows the caller) ──
@@ -144,7 +146,11 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   buildAliasCollisionRejection: 'private',
   dispatchMutator: 'private (overridden run/mutate pass groupId explicitly)',
   dispatchQuery: 'private',
-  groupedFacade: 'private (the facade factory itself)',
+  groupedFacade: 'private (the undo-group facade factory)',
+  transactionFacade: 'private (the shared transaction-host binding factory)',
+  processorFacade: 'private (the processor runtime host factory)',
+  transact: 'private (reached through the tx override with real-repo this)',
+  captureTransactionRuntime: 'private (readiness plus immutable runtime capture; reached on the real repo)',
   hydrateChildren: 'private read',
   hydrateRows: 'private read + shared-cache mutation',
   makeQueryCtx: 'private (reached via delegated runQuery / real-repo query proxy)',

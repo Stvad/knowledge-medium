@@ -43,9 +43,15 @@ export interface ResolvedPropertySchema<T> extends PropertySchemaEntry<T> {
   readonly [resolvedPropertySchemaBrand]: true
 }
 
+/** `behavior-unavailable`: the winning definition exists and is readable, but
+ *  this device cannot build its codec (its preset is not loaded here, or its
+ *  stored config does not decode). Distinct from `definition-unavailable` —
+ *  no definition at all — because §9 recognition classifies the first and not
+ *  the second. */
 export type PropertySchemaIdentityUnavailableReason =
   | 'registry-not-workspace-keyed'
   | 'definition-unavailable'
+  | 'behavior-unavailable'
   | 'shadowed'
   | 'ambiguous'
 

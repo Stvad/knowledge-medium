@@ -39,6 +39,7 @@ import {
   CREATE_WORKSPACE_MEMBERS_INDEX_SQL,
   CREATE_WORKSPACE_MEMBERS_TABLE_SQL,
 } from '@/data/workspaceSchema'
+import { POWERSYNC_STUB_TABLES_SQL } from '@/data/test/powerSyncStubTables'
 import {
   CREATE_BLOCK_REFERENCES_TABLE_SQL,
   CREATE_BLOCK_REFERENCES_TARGET_INDEX_SQL,
@@ -144,19 +145,11 @@ const blockValues = (row: BlockInsert): Array<string | number | null> =>
 const setupDb = (): TestDb => {
   const db = new DatabaseSync(':memory:')
 
-  // PowerSync's outgoing queue table. Real schema is
-  // `(id INTEGER PK AUTOINCREMENT, data TEXT, tx_id INTEGER)`; the
-  // upload-routing triggers populate (tx_id, data). PowerSync's
+  // The upload-routing triggers populate ps_crud (tx_id, data). PowerSync's
   // `getNextCrudTransaction()` groups CRUD entries by tx_id, so a
   // multi-row repo.tx must stamp every row with the same non-null
   // tx_id or atomicity intent is lost on the server.
-  db.exec(`
-    CREATE TABLE ps_crud (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      data TEXT NOT NULL,
-      tx_id INTEGER
-    )
-  `)
+  for (const stmt of POWERSYNC_STUB_TABLES_SQL) db.exec(stmt)
 
   // The blocks table (built from the same column list as production).
   db.exec(CREATE_BLOCKS_TABLE_SQL)
@@ -449,6 +442,53 @@ describe('row_events trigger — DELETE', () => {
   })
 })
 
+// A re-sealed workspace drains back into `blocks` with identical content and a
+// new `updated_at` on every row; logging those would store two full snapshots
+// of the whole workspace on every device (#1299).
+describe('row_events trigger — version-only UPDATE', () => {
+  const BUMPED = defaultBlock.updated_at + 1000
+
+  it('writes nothing for a sync-applied update that moves only updated_at', () => {
+    h.insertBlock({id: 'b1', content: 'same'})
+    h.updateBlock('b1', {updated_at: BUMPED})
+    expect(h.rowEvents().map(e => e.kind)).toEqual(['create'])
+  })
+
+  it('writes nothing for a version bump on a row whose user_updated_at is NULL', () => {
+    // Its snapshot's `userUpdatedAt` falls back to `updated_at`, so it moves
+    // with the bump even though the row's user_updated_at did not.
+    h.insertBlock({id: 'b1', user_updated_at: null})
+    h.updateBlock('b1', {updated_at: BUMPED})
+    expect(h.rowEvents().map(e => e.kind)).toEqual(['create'])
+  })
+
+  it('still logs user_updated_at going from NULL to the instant its snapshot already showed', () => {
+    h.insertBlock({id: 'b1', user_updated_at: null})
+    h.updateBlock('b1', {user_updated_at: defaultBlock.updated_at, updated_at: BUMPED})
+    expect(h.rowEvents()).toHaveLength(2)
+  })
+
+  it.each<[string, Record<string, unknown>]>([
+    ['content', {content: 'edited'}],
+    ['properties', {properties_json: '{"status":"done"}'}],
+    ['references', {references_json: '[{"id":"b2","alias":"b2"}]'}],
+    ['parent', {parent_id: 'p1'}],
+    ['order', {order_key: 'a1'}],
+    ['deleted', {deleted: 1}],
+    ['user_updated_at', {user_updated_at: BUMPED}],
+    ['updated_by', {updated_by: 'user-2'}],
+    ['workspace', {workspace_id: 'ws2'}],
+    ['reference target', {reference_target_id: 'b2'}],
+    ['field form', {is_field_form: 1}],
+  ])('still logs a version bump that also changes %s', (_field, set) => {
+    h.insertBlock({id: 'b1'})
+    h.updateBlock('b1', {...set, updated_at: BUMPED})
+    const events = h.rowEvents()
+    expect(events).toHaveLength(2)
+    expect(JSON.parse(events[1].after_json!).updatedAt).toBe(BUMPED)
+  })
+})
+
 describe('upload-routing triggers', () => {
   it("forwards INSERT to ps_crud when source='user' and stamps tx_id from tx_seq", () => {
     h.setTxContext({txId: 'tx-1', txSeq: 4242, userId: 'user-1', scope: 'block-default', source: 'user'})
@@ -613,6 +653,23 @@ describe('upload-routing triggers', () => {
     h.clearTxContext()
     // The DELETE row_event still fires; ps_crud stays empty.
     expect(h.psCrud()).toHaveLength(0)
+  })
+})
+
+describe('upload queue download hold', () => {
+  const localHold = () =>
+    h.db.prepare("SELECT last_op, CAST(target_op AS TEXT) AS target_op FROM ps_buckets WHERE name = '$local'").get()
+  const columns = BLOCK_STORAGE_COLUMNS.map(c => c.name)
+
+  // Released: the last upload's write checkpoint has arrived.
+  beforeEach(() => { h.db.exec("INSERT INTO ps_buckets(name, last_op, target_op) VALUES ('$local', 5, 5)") })
+
+  it.each(['OR IGNORE', 'OR ABORT'])('raises it under a write carrying %s', clause => {
+    h.setTxContext({txId: 'tx-1', txSeq: 1, userId: 'user-1', scope: 'block-default', source: 'user'})
+    h.db.prepare(`INSERT ${clause} INTO blocks (${columns.join(',')}) VALUES (${columns.map(() => '?').join(',')})`)
+      .run(...blockValues(defaultBlock))
+    h.clearTxContext()
+    expect(localHold()).toEqual({last_op: 0, target_op: '9223372036854775807'})
   })
 })
 
@@ -1561,7 +1618,7 @@ describe('ensureUndoGroupIdColumns — local migration (issue #306)', () => {
     // The rest of the schema the statements/triggers need.
     old.exec(CREATE_BLOCKS_TABLE_SQL)
     old.exec(CREATE_BLOCKS_SYNCED_TABLE_SQL)
-    old.exec('CREATE TABLE ps_crud (id INTEGER PRIMARY KEY AUTOINCREMENT, data TEXT NOT NULL, tx_id INTEGER)')
+    for (const stmt of POWERSYNC_STUB_TABLES_SQL) old.exec(stmt)
     old.exec(CREATE_WORKSPACE_MEMBERS_TABLE_SQL)
 
     // App startup on the upgraded build: ensure columns FIRST (the

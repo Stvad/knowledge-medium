@@ -48,6 +48,32 @@ const open = () => bootstrapWorkspace({
 })
 
 describe('bootstrapWorkspace', () => {
+  it('opens a children-backed workspace with definition readiness before its writes', async () => {
+    await sharedDb.db.execute(
+      `INSERT INTO workspaces (id, name, owner_user_id, create_time, update_time,
+        encryption_mode, properties_migration) VALUES (?, 'test', 'user-1', 1, 1, 'none', 'children')`,
+      [WS],
+    )
+
+    const session = await open()
+
+    expect(await repo.load(session.id)).toBeTruthy()
+    const propertiesPage = await repo.load(propertiesPageBlockId(WS))
+    expect(propertiesPage?.content).toBe('Properties')
+    const fields = await sharedDb.db.getAll<{reference_target_id: string}>(
+      'SELECT reference_target_id FROM blocks WHERE parent_id = ? AND is_field_form = 1 AND deleted = 0',
+      [propertiesPage!.id],
+    )
+    const names = Object.keys(propertiesPage!.properties)
+    expect(names.length).toBeGreaterThan(0)
+    for (const name of names) {
+      const definition = repo.propertySchemaResolverFor(WS).resolve(name)
+      expect(definition.status).toBe('resolved')
+      if (definition.status !== 'resolved') throw new Error(`missing definition for ${name}`)
+      expect(fields).toContainEqual({reference_target_id: definition.schema.fieldId})
+    }
+  })
+
   it('opens the workspace even when a system page cannot be materialized', async () => {
     // What still reaches here now that a contested alias is yielded rather than
     // thrown: a foreign row at the derived id, or an ordinary bug in a

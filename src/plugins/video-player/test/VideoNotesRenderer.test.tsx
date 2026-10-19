@@ -6,6 +6,7 @@ import type { Block } from '@/data/block'
 import type { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
+import { definitionSeedsFacet } from '@/data/facets.js'
 import { makeBlockData } from '@/data/test/factories.js'
 import { BlockContextProvider, useBlockContext } from '@/context/block'
 import type { BlockLayoutSlots } from '@/extensions/blockInteraction.js'
@@ -56,7 +57,7 @@ vi.mock('@/data/globalState.ts', async () => {
 
 import { VideoNotesLayout, VideoNotesRenderer, videoNotesLayoutContribution } from '../VideoNotesRenderer.tsx'
 import { VideoPlayerContentRenderer, VideoPlayerRenderer } from '../VideoPlayerRenderer.tsx'
-import { VIDEO_NOTES_VIEW_MODE } from '../view.ts'
+import { VIDEO_NOTES_VIEW_MODE, videoNotesPaneRatioProp } from '../view.ts'
 import { editorFocusRequestProp, focusedBlockLocationProp, panelViewModeProp, topLevelBlockIdProp } from '@/data/properties'
 import { panelRenderScopeId } from '@/utils/renderScope'
 
@@ -74,7 +75,11 @@ afterAll(async () => { await sharedDb.cleanup() })
 
 const setup = async ({videoChildren = [] as string[]} = {}) => {
   await resetTestDb(sharedDb.db)
-  repo = createTestRepo({db: sharedDb.db, user: USER}).repo
+  repo = createTestRepo({
+    db: sharedDb.db,
+    user: USER,
+    extensions: [definitionSeedsFacet.of(videoNotesPaneRatioProp, {source: 'test'})],
+  }).repo
   repo.setActiveWorkspaceId(WS)
   await repo.tx(async tx => {
     await tx.create({
@@ -320,6 +325,75 @@ describe('VideoNotesLayout', () => {
 })
 
 const videoBlockChildCount = async () => (await repo.block(VIDEO).childIds.load()).length
+
+describe('pane resize drag', () => {
+  const columnSeparator = () => screen.getAllByRole('separator')
+    .find(separator => separator.getAttribute('aria-orientation') === 'vertical')!
+  const shownRatio = () => columnSeparator().getAttribute('aria-valuenow')
+  const storedRatio = () => repo.block(VIDEO).peekProperty(videoNotesPaneRatioProp)
+  const DRAG_POINTER = 1
+  const OTHER_POINTER = 2
+  const movePointer = (clientX: number, buttons: number, pointerId = DRAG_POINTER) =>
+    fireEvent.pointerMove(window, {clientX, buttons, pointerId})
+  const releasePointer = (clientX: number, pointerId = DRAG_POINTER) =>
+    fireEvent.pointerUp(window, {clientX, buttons: 0, pointerId})
+  const RATIO_WRITE_WAIT = 5_000
+
+  const startColumnDrag = async (clientX: number) => {
+    await setup({videoChildren: ['note-1']})
+    renderLayout()
+    vi.spyOn(screen.getByTestId('video-notes-root'), 'getBoundingClientRect')
+      .mockReturnValue(DOMRect.fromRect({x: 0, y: 0, width: 1000, height: 600}))
+    fireEvent.pointerDown(columnSeparator(), {button: 0, buttons: 1, clientX, pointerId: DRAG_POINTER})
+  }
+
+  it('a release the window never received (let go outside it) ends the drag at the next move', async () => {
+    await startColumnDrag(500)
+    movePointer(600, 1)
+    expect(shownRatio()).toBe('60')
+
+    movePointer(800, 0) // button already up: the drag is over, not resizing to 80%
+    await vi.waitFor(() => expect(storedRatio()).toBeCloseTo(0.6), {timeout: RATIO_WRITE_WAIT})
+    movePointer(700, 0)
+    expect(shownRatio()).toBe('60')
+  }, 15_000)
+
+  it('shields the page for the length of a drag, so an iframe under the pointer cannot swallow it', async () => {
+    await startColumnDrag(500)
+    expect(screen.getByTestId('video-notes-resize-shield')).toBeTruthy()
+
+    releasePointer(500)
+    expect(screen.queryByTestId('video-notes-resize-shield')).toBeNull()
+    await vi.waitFor(() => expect(storedRatio()).toBeCloseTo(0.5), {timeout: RATIO_WRITE_WAIT})
+  }, 15_000)
+
+  it('a resize key pressed mid-drag leaves the drag, and its shield, in charge', async () => {
+    await startColumnDrag(500)
+    const writeRatio = vi.spyOn(repo.block(VIDEO), 'set')
+    const notPrevented = fireEvent.keyDown(columnSeparator(), {key: 'ArrowDown'})
+    expect(notPrevented).toBe(false) // a resize key never scrolls the column out from under the drag
+    expect(writeRatio).not.toHaveBeenCalled() // the release writes the drag's ratio; nothing before it
+    expect(screen.getByTestId('video-notes-resize-shield')).toBeTruthy()
+    expect(shownRatio()).toBe('50')
+
+    releasePointer(500)
+    await vi.waitFor(() => expect(storedRatio()).toBeCloseTo(0.5), {timeout: RATIO_WRITE_WAIT})
+  }, 15_000)
+
+  it('only the pointer that started the drag moves or ends it', async () => {
+    await startColumnDrag(500)
+    movePointer(800, 0, OTHER_POINTER) // e.g. a mouse hovering while a finger drags
+    movePointer(700, 1, OTHER_POINTER)
+    releasePointer(700, OTHER_POINTER)
+    fireEvent.pointerCancel(window, {pointerId: OTHER_POINTER})
+    expect(screen.getByTestId('video-notes-resize-shield')).toBeTruthy()
+    expect(shownRatio()).toBe('50')
+
+    movePointer(600, 1)
+    releasePointer(600)
+    await vi.waitFor(() => expect(storedRatio()).toBeCloseTo(0.6), {timeout: RATIO_WRITE_WAIT})
+  }, 15_000)
+})
 
 describe('enter affordance gating', () => {
   const renderContent = () => render(

@@ -148,9 +148,9 @@ export const extensionApiCatalog: ApiModuleGroup[] = [
   {
     category: 'paste',
     importPath: '@/paste/decision.js',
-    description: 'Paste decision seam — override how clipboard content lands (outline vs single block).',
+    description: 'Paste decision seam — override how clipboard content lands (outline vs single block, or a block tree built from e.g. the clipboard HTML).',
     exports: ['pasteDecisionVerb', 'defaultPasteDecision'],
-    types: ['PasteDecision', 'PasteRequest', 'PasteSurface'],
+    types: ['PasteDecision', 'PasteRequest', 'PasteSurface', 'OutlineNode'],
   },
 
   // --- Navigation seams -----------------------------------------------------
@@ -236,6 +236,7 @@ export const extensionApiCatalog: ApiModuleGroup[] = [
     exports: [
       'getLayoutSessionBlock', 'getPluginPrefsBlock', 'getPluginUIStateBlock', 'getUIStateBlock',
       'getUserBlock', 'getUserPrefsBlock', 'layoutSessionBlockIdForKey', 'layoutSessionsContainerBlockId',
+      'readPluginPref',
     ],
     types: [],
   },

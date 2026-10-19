@@ -13,9 +13,10 @@ const deepFreeze = <T>(value: T): T => {
 }
 
 /** Caller classification for `applyIfNewer` — separates PowerSync
- *  sync-tail arrivals from query-path / `repo.load` re-reads. The LWW
- *  gate is identical in both cases; the split is purely telemetry so
- *  a rejection-rate snapshot tells you which path it came from. */
+ *  sync-tail arrivals from query-path / `repo.load` re-reads. The two
+ *  gates differ only at an EQUAL stamp (see `applyIfNewer`); the split also
+ *  routes the counters, so a rejection-rate snapshot tells you which path it
+ *  came from. */
 export type ApplyIfNewerSource = 'sync' | 'hydrate'
 
 /** Counter object for BlockCache write/notify activity (perf-baseline
@@ -34,7 +35,7 @@ export class BlockCacheMetrics {
   /** `applyIfNewer(_, 'sync')` calls — rows delivered through the
    *  PowerSync row_events tail. */
   applyIfNewerSyncCalls = 0
-  /** `applyIfNewer(_, 'sync')` rejections (incoming `updatedAt <=`
+  /** `applyIfNewer(_, 'sync')` rejections (incoming `updatedAt <`
    *  cached). High counts indicate echoes of local writes returning
    *  via the sync stream or other LWW losers. */
   applyIfNewerSyncRejected = 0
@@ -147,40 +148,44 @@ export class BlockCache {
     return true
   }
 
-  /** LWW-gated snapshot write. Used by:
+  /** LWW-gated snapshot write, for a row read back from SQLite rather than
+   *  committed locally. Used by:
    *
-   *    - the row_events tail (`source: 'sync'`) for PowerSync-applied
-   *      writes that bypass the local commit pipeline, and
+   *    - the sync observer (`source: 'sync'`) for rows the drain just
+   *      materialized, and
    *    - `Repo.hydrateRows` / `repo.load` (`source: 'hydrate'`) for
    *      kernel queries re-reading rows from SQL.
    *
-   *  Both paths need the same guard: PowerSync can deliver an older
-   *  row state during the upload window while the local commit
-   *  pipeline has already advanced the cache, and re-reading the
-   *  SQLite row after a sync-clobber would otherwise reintroduce the
-   *  stale state. Rejects an incoming snapshot whose `updatedAt` is
-   *  NOT STRICTLY NEWER than what's already cached.
+   *  Both reject a STRICTLY OLDER `updatedAt` than the cached one: PowerSync
+   *  can deliver an older row state during the upload window while the local
+   *  commit pipeline has already advanced the cache, and a query that read SQL
+   *  before a commit can land after it.
    *
-   *  Why `<=` not `<`: under rapid local typing, two writes can share
-   *  `Date.now()` ms (and processor writes with `skipMetadata: true`
-   *  preserve the prior `updatedAt`, multiplying the collision
-   *  surface). An in-flight query that reads SQL between two such
-   *  same-ms writes can fire `applyIfNewer` LATER with the
-   *  earlier-but-equal-ms content — `<` would accept it and clobber
-   *  the cache with stale content. `<=` rejects equal-ms snapshots;
-   *  same-`updatedAt`-same-content rounds to a no-op anyway via
-   *  the deep-equal dedup in `setSnapshot`, so this only blocks the
-   *  harmful clobber.
+   *  They differ at an EQUAL stamp. 'sync' accepts it: the drain writes a row
+   *  only when it differs from the one on disk, so an equal-stamp delivery is a
+   *  peer's write that landed on a stamp this device already held (#1163).
+   *  Rejecting it would leave every open view on the pre-merge row until
+   *  reload, and a read-modify-write from that view would ship the stale value
+   *  back to the server. 'hydrate' rejects it: a read that started before the
+   *  drain rewrote a row at an unchanged stamp carries the pre-rewrite row, and
+   *  accepting it would undo the rewrite in memory. An identical snapshot
+   *  dedups to a no-op in `setSnapshot` either way.
    *
-   *  The `source` argument is telemetry-only — it routes the call/
-   *  reject counts into separate metric buckets so a rejection-rate
-   *  snapshot tells you which path drove it. The gate itself is
-   *  identical for both sources. */
+   *  Accepted, not guarded: a STALE peer version can also sit at an equal stamp
+   *  — staged before a local edit that lands in the same millisecond, and
+   *  drained after that edit's ack but before its echo — and is shown until
+   *  the echo arrives. Telling it from #1163 needs per-row delivery order that
+   *  nothing records. */
   applyIfNewer(snapshot: BlockData, source: ApplyIfNewerSource): boolean {
     if (source === 'sync') this.metrics.applyIfNewerSyncCalls++
     else this.metrics.applyIfNewerHydrateCalls++
     const existing = this.snapshots.get(snapshot.id)
-    if (existing && snapshot.updatedAt <= existing.updatedAt) {
+    const stale = existing !== undefined && (
+      source === 'sync'
+        ? snapshot.updatedAt < existing.updatedAt
+        : snapshot.updatedAt <= existing.updatedAt
+    )
+    if (stale) {
       if (source === 'sync') this.metrics.applyIfNewerSyncRejected++
       else this.metrics.applyIfNewerHydrateRejected++
       return false

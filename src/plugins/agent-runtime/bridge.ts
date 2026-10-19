@@ -1,6 +1,6 @@
 import type { AppEffectCleanup } from '@/extensions/core.js'
 import { openDialog } from '@/utils/dialogs.js'
-import { agentTokenStore, agentTokensChangedEvent } from './tokens.ts'
+import { agentTokenStore, agentTokensChangedEvent, isAgentTokensStorageKey } from './tokens.ts'
 // Pairing via the hash URL surfaces the tokens dialog. We open it
 // imperatively rather than over a CustomEvent (audit B3). This pulls a
 // UI component into the transport module, but it's bundle-safe: nothing
@@ -8,21 +8,16 @@ import { agentTokenStore, agentTokensChangedEvent } from './tokens.ts'
 // reaches the node bundle.
 import { AgentTokensDialog, type AgentTokensDialogProps } from './AgentTokensDialog.tsx'
 import { BridgePairingDialog, type BridgePairingDialogProps } from './BridgePairingDialog.tsx'
+import { startBridgeLoop } from './bridgeLoop.ts'
 import { createAgentRuntimeContext, executeCommand } from './commands.ts'
 import { watchEventsRegistry } from './watchEvents.ts'
 import { blockEditResumed, blockEditSettled } from '@/editor/editSettleSignal.js'
-import { serializeError, serializeValue } from './serialization.ts'
 import type { AgentRuntimeBridgeOptions } from './protocol.ts'
-import { knownAgentCommandSchema, type KnownAgentCommand } from '@knowledge-medium/agent-cli/protocol'
 
 const defaultBridgeUrl = 'http://127.0.0.1:8787'
 const bridgeUrlStorageKey = 'agent-runtime:bridge-url'
 const bridgeSecretStorageKey = 'agent-runtime:bridge-secret'
-const longPollMs = 25_000
-const retryBaseMs = 1_000
-const retryMaxMs = 30_000
-const maxFastAttemptsBeforeQuiet = 6
-const quietRetryMs = 60_000
+const focusedAtStorageKey = 'agent-runtime:focused-at'
 
 export const agentRuntimeBridgeRestartEvent = 'agent-runtime-bridge:restart'
 
@@ -181,6 +176,28 @@ const readTrustedStoredBridgeUrl = (): string | null => {
   return null
 }
 
+/** When this tab last had the user's attention. Every tab of the user holds
+ *  every token, and the bridge sends a call that names no workspace to the
+ *  most recently focused one. In sessionStorage so it is per tab yet survives
+ *  the reloads `kmagent reload` drives. Best effort: storage that throws
+ *  costs the stamp, never the registration. */
+const readFocusedAt = (): number | null => {
+  try {
+    const stored = Number(window.sessionStorage.getItem(focusedAtStorageKey))
+    return Number.isFinite(stored) && stored > 0 ? stored : null
+  } catch {
+    return null
+  }
+}
+
+const stampFocusedAt = () => {
+  try {
+    window.sessionStorage.setItem(focusedAtStorageKey, String(Date.now()))
+  } catch {
+    // See readFocusedAt.
+  }
+}
+
 const getStoredBridgeSecret = () =>
   window.localStorage.getItem(bridgeSecretStorageKey)?.trim()
   || import.meta.env.VITE_AGENT_RUNTIME_BRIDGE_SECRET?.trim()
@@ -201,144 +218,83 @@ const bridgeHeaders = () => {
   return {'x-agent-runtime-secret': secret}
 }
 
-const postJson = async (
-  url: string,
-  body: unknown,
-  signal?: AbortSignal,
-  clientId?: string,
-) => {
-  const response = await window.fetch(url, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      ...bridgeHeaders(),
-      ...(clientId ? {'x-agent-runtime-client-id': clientId} : {}),
-    },
-    body: JSON.stringify(body),
-    signal,
-  })
-
-  if (!response.ok) {
-    throw new Error(`Agent runtime bridge request failed: ${response.status}`)
-  }
-
-  return response
-}
-
 export const startAgentRuntimeBridge = (
   options: AgentRuntimeBridgeOptions,
 ): AppEffectCleanup => {
-  const abortController = new AbortController()
-  const clientId = getBridgeClientId()
-  // NB: the bridge URL is read live each iteration (see the `poll` loop)
-  // rather than captured once. A link-supplied pairing only takes effect
-  // after the user confirms it, which can land after the loop has already
-  // started — so the loop must re-read the approved endpoint, not a stale
-  // snapshot.
-
   // Process any pairing params already present in the hash at startup.
   // Gated by user confirmation + a loopback check; nothing is persisted
   // or used here directly.
   processBridgePairingFromHash()
-  let retryMs = retryBaseMs
-  let attempts = 0
-  let wakeResolve: (() => void) | null = null
-  let bridgeUnavailableLogged = false
-  let tokensDirty = false
+  if (document.hasFocus()) stampFocusedAt()
 
-  const waitForWakeOrTimeout = (ms: number) => new Promise<void>(resolve => {
-    let settled = false
-    let timeout: number | null = null
-    const finish = () => {
-      if (settled) return
-      settled = true
-      if (timeout !== null) window.clearTimeout(timeout)
-      if (wakeResolve === finish) wakeResolve = null
-      resolve()
-    }
-
-    timeout = window.setTimeout(finish, ms)
-    wakeResolve = finish
+  // The bridge URL and secret are read live (see BridgeLoopOptions): a
+  // link-supplied pairing only takes effect once the user confirms it, which
+  // can land after the loop has started.
+  const loop = startBridgeLoop({
+    clientId: getBridgeClientId(),
+    baseUrl: bridgeUrl,
+    headers: bridgeHeaders,
+    // Every token of the signed-in user, whichever workspace is open: the
+    // workspace a call acts on is the call's parameter, not the token's.
+    registration: () => {
+      const {repo, safeMode} = options
+      const userId = repo.user.id
+      const workspaceId = repo.activeWorkspaceId
+      return {
+        activeWorkspaceId: workspaceId,
+        currentUser: repo.user,
+        safeMode,
+        href: window.location.href,
+        userAgent: window.navigator.userAgent,
+        audience: {userId, workspaceId},
+        focusedAt: readFocusedAt(),
+        tokens: userId
+          ? agentTokenStore.list(userId).map(t => ({
+              token: t.token,
+              label: t.label,
+              scope: t.scope ?? 'read-write',
+              userId,
+            }))
+          : [],
+      }
+    },
+    execute: command => executeCommand(command, createAgentRuntimeContext(options)),
+    // Looked up per call rather than captured, so a test's spy on it applies.
+    fetch: (input, init) => window.fetch(input, init),
   })
 
-  const wakeBridgeLoop = (markTokensDirty = false) => {
-    attempts = 0
-    retryMs = retryBaseMs
-    if (markTokensDirty) tokensDirty = true
-    if (wakeResolve) {
-      wakeResolve()
-      wakeResolve = null
-    }
+  const reRegister = () => {
+    loop.wake()
+    loop.register().catch(() => { /* loop will retry */ })
   }
 
-  const register = (baseUrl = bridgeUrl()) => {
-    const {repo, safeMode} = options
-    const userId = repo.user.id
-    const workspaceId = repo.activeWorkspaceId
-    const tokens = userId && workspaceId
-      ? agentTokenStore.list(userId, workspaceId).map(t => ({
-          token: t.token,
-          label: t.label,
-          scope: t.scope ?? 'read-write',
-          userId,
-          workspaceId,
-        }))
-      : []
-
-    tokensDirty = false
-
-    return postJson(`${baseUrl}/runtime/clients/${clientId}`, {
-      activeWorkspaceId: workspaceId,
-      currentUser: repo.user,
-      safeMode,
-      href: window.location.href,
-      userAgent: window.navigator.userAgent,
-      audience: { userId, workspaceId },
-      tokens,
-    }, abortController.signal)
+  // Every tab of the user registers every token, so a revoke made in another
+  // tab must reach this one now, not at its next loop turn. A null key is a
+  // storage clear.
+  const handleStorageChanged = (event: StorageEvent) => {
+    if (event.key === null || isAgentTokensStorageKey(event.key)) reRegister()
   }
 
-  const reportResult = async (
-    commandId: string,
-    payload: unknown,
-    baseUrl = bridgeUrl(),
-  ) => {
-    await postJson(
-      `${baseUrl}/runtime/commands/${commandId}/result`,
-      payload,
-      abortController.signal,
-      clientId,
-    )
-  }
-
-  const handleRestart = () => {
-    wakeBridgeLoop(true)
-  }
-
-  const handleTokensChanged = () => {
-    tokensDirty = true
-    wakeBridgeLoop()
-    register().catch(() => { /* loop will retry */ })
+  // Re-registers at once rather than at the next loop turn, so a call made
+  // right after the user switches tabs already goes to the one in front.
+  const handleFocused = () => {
+    stampFocusedAt()
+    reRegister()
   }
 
   const handleVisibilityChanged = () => {
-    if (document.visibilityState === 'visible') wakeBridgeLoop()
-  }
-
-  const handleWakeEvent = () => {
-    wakeBridgeLoop()
+    if (document.visibilityState === 'visible') handleFocused()
   }
 
   const handleHashChanged = () => {
     processBridgePairingFromHash()
-    wakeBridgeLoop(true)
+    loop.wake()
   }
 
   // watch-events emissions ride this bridge connection (same secret +
-  // clientId as result posts). The live-read of bridgeUrl() matters for
-  // the same reason as in the poll loop: pairings can change mid-flight.
+  // clientId as result posts).
   watchEventsRegistry.setTransport(async event => {
-    await postJson(`${bridgeUrl()}/runtime/events`, event, abortController.signal, clientId)
+    await loop.post('/runtime/events', event)
   })
   // Editor blur short-circuits the settle window for that block —
   // typed mentions fire the moment the user leaves them. Re-entering
@@ -349,163 +305,28 @@ export const startAgentRuntimeBridge = (
   const offEditResumed = blockEditResumed.add(blockId =>
     watchEventsRegistry.notifyBlockEditing(blockId))
 
-  window.addEventListener(agentRuntimeBridgeRestartEvent, handleRestart)
-  window.addEventListener(agentTokensChangedEvent, handleTokensChanged)
-  window.addEventListener('focus', handleWakeEvent)
+  window.addEventListener(agentRuntimeBridgeRestartEvent, loop.wake)
+  window.addEventListener(agentTokensChangedEvent, reRegister)
+  window.addEventListener('storage', handleStorageChanged)
+  window.addEventListener('focus', handleFocused)
   window.addEventListener('hashchange', handleHashChanged)
-  window.addEventListener('online', handleWakeEvent)
+  window.addEventListener('online', loop.wake)
   document.addEventListener('visibilitychange', handleVisibilityChanged)
 
-  // Commands run DETACHED from the poll loop: a slow command (a hung
-  // eval, a long SQL) must not stall delivery of everything queued
-  // behind it — the daemon's polls, other CLI calls. Bounded so a
-  // command flood can't pile up unboundedly; the loop parks on a free
-  // slot instead of on completion of the command it just delivered.
-  const maxConcurrentCommands = 4
-  // Must sit comfortably BELOW the bridge server's 60s client TTL: a
-  // fully-parked tab neither registers nor polls, and parking right up
-  // to the TTL gets the client dropped (tokens gone, commands failed
-  // ClientGone) at exactly the park boundary.
-  const saturatedParkMs = 45_000
-  const inFlightCommands = new Set<Promise<void>>()
-
-  const runCommand = async (command: KnownAgentCommand, baseUrl: string) => {
-    let payload: unknown
-    try {
-      const value = await executeCommand(command, createAgentRuntimeContext(options))
-      payload = {ok: true, value: serializeValue(value)}
-    } catch (error) {
-      payload = {ok: false, error: serializeError(error)}
-    }
-    try {
-      await reportResult(command.commandId!, payload, baseUrl)
-    } catch (reportError) {
-      // No result channel left (bridge restarted / page going away). The
-      // submitter's own request times out; the poll loop's fetches carry
-      // the reconnect/backoff, so just surface it for debugging.
-      if (!abortController.signal.aborted) {
-        console.warn('Agent runtime: failed to report a command result.', reportError)
-      }
-    }
-  }
-
-  const poll = async () => {
-    while (!abortController.signal.aborted) {
-      // Read the endpoint live each iteration so a pairing the user
-      // approves mid-flight (which wakes this loop) is picked up.
-      const baseUrl = bridgeUrl()
-      try {
-        if (tokensDirty) tokensDirty = false
-        await register(baseUrl)
-
-        if (bridgeUnavailableLogged) {
-          console.info(`Agent runtime bridge reconnected at ${baseUrl}.`)
-          bridgeUnavailableLogged = false
-        }
-
-        const nextUrl = new URL(`${baseUrl}/runtime/commands/next`)
-        nextUrl.searchParams.set('clientId', clientId)
-        nextUrl.searchParams.set('timeoutMs', String(longPollMs))
-
-        const response = await window.fetch(nextUrl, {
-          headers: bridgeHeaders(),
-          signal: abortController.signal,
-        })
-        if (!response.ok) {
-          throw new Error(`Agent runtime bridge poll failed: ${response.status}`)
-        }
-
-        const rawCommand = await response.json() as unknown
-        retryMs = retryBaseMs
-        attempts = 0
-
-        if (!rawCommand) continue
-
-        // Validate at the bridge boundary so an unknown command type
-        // gets a clean, structured error before the kernel switch ever
-        // runs. The schema also gives `executeCommand` a strict
-        // discriminated-union argument — its switch then narrows on
-        // each case.
-        const parsed = knownAgentCommandSchema.safeParse(rawCommand)
-        const commandIdForResult = (rawCommand as {commandId?: string})?.commandId
-
-        if (!parsed.success) {
-          if (commandIdForResult) {
-            await reportResult(commandIdForResult, {
-              ok: false,
-              error: serializeError(
-                new Error(`Invalid command body: ${parsed.error.issues.map(i => i.message).join('; ')}`),
-              ),
-            }, baseUrl)
-          }
-          continue
-        }
-
-        const command = parsed.data
-        const execution = runCommand(command, baseUrl).finally(() => {
-          inFlightCommands.delete(execution)
-        })
-        inFlightCommands.add(execution)
-        if (inFlightCommands.size >= maxConcurrentCommands) {
-          // Saturated: wait for A slot, not for THIS command. The park
-          // also resolves on teardown (cleanup fires the wake) and after
-          // a generous cap — commands have no tab-side execution timeout,
-          // so a fleet of hung evals must degrade to a SOFT concurrency
-          // bound rather than stalling command delivery until reload.
-          // Re-register FIRST: the long-poll that delivered this command
-          // may have been held up to 25s server-side, and lastSeen + 25s
-          // + the park would breach the server's 60s client TTL (client
-          // dropped, tokens revoked). Registering caps the quiet gap at
-          // exactly the park duration.
-          await register(baseUrl)
-          await Promise.race([...inFlightCommands, waitForWakeOrTimeout(saturatedParkMs)])
-          if (inFlightCommands.size >= maxConcurrentCommands) {
-            console.warn(`Agent runtime: ${inFlightCommands.size} commands in flight past the saturation park — delivering anyway.`)
-          }
-        }
-      } catch {
-        if (abortController.signal.aborted) return
-
-        attempts += 1
-        if (attempts >= maxFastAttemptsBeforeQuiet) {
-          if (!bridgeUnavailableLogged) {
-            console.info(
-              `Agent runtime bridge unavailable at ${baseUrl}; ` +
-              `retrying quietly every ${quietRetryMs / 1000} seconds.`,
-            )
-            bridgeUnavailableLogged = true
-          }
-          await waitForWakeOrTimeout(quietRetryMs)
-          if (abortController.signal.aborted) return
-          continue
-        }
-
-        await waitForWakeOrTimeout(retryMs)
-        if (abortController.signal.aborted) return
-        retryMs = Math.min(retryMs * 2, retryMaxMs)
-      }
-    }
-  }
-
-  void poll()
-
   return () => {
-    abortController.abort()
+    loop.stop()
     // Registrations are useless without a transport — drop them so dead
     // watchers don't keep re-running queries against a stopped bridge.
     watchEventsRegistry.setTransport(null)
     watchEventsRegistry.disposeAll()
     offEditSettled()
     offEditResumed()
-    window.removeEventListener(agentRuntimeBridgeRestartEvent, handleRestart)
-    window.removeEventListener(agentTokensChangedEvent, handleTokensChanged)
-    window.removeEventListener('focus', handleWakeEvent)
+    window.removeEventListener(agentRuntimeBridgeRestartEvent, loop.wake)
+    window.removeEventListener(agentTokensChangedEvent, reRegister)
+    window.removeEventListener('storage', handleStorageChanged)
+    window.removeEventListener('focus', handleFocused)
     window.removeEventListener('hashchange', handleHashChanged)
-    window.removeEventListener('online', handleWakeEvent)
+    window.removeEventListener('online', loop.wake)
     document.removeEventListener('visibilitychange', handleVisibilityChanged)
-    if (wakeResolve) {
-      wakeResolve()
-      wakeResolve = null
-    }
   }
 }

@@ -86,8 +86,9 @@ export interface WireBlockColumns {
   readonly references_json: string
 }
 
-/** The three columns sealed independently in E2EE mode (§9.1). */
-const CONTENT_COLUMNS = ['content', 'properties_json', 'references_json'] as const
+/** The three columns sealed independently in E2EE mode (§9.1). Every other
+ *  synced column travels in the clear in both modes. */
+export const SEALED_COLUMNS = ['content', 'properties_json', 'references_json'] as const
 
 /** Resolve the workspace CryptoKey or throw — the shared fail-closed guard for
  *  every seam that seals/opens under the WK (the text content columns here, the
@@ -117,8 +118,8 @@ const transformContentColumns = async <T extends WireBlockColumns>(
 ): Promise<T> => {
   if (mode === 'none') return row
   const key = await requireCek(getCek, row.workspace_id)
-  const transformed: Partial<Record<(typeof CONTENT_COLUMNS)[number], string>> = {}
-  for (const column of CONTENT_COLUMNS) {
+  const transformed: Partial<Record<(typeof SEALED_COLUMNS)[number], string>> = {}
+  for (const column of SEALED_COLUMNS) {
     transformed[column] = await xform(key, row[column], contentAad(row.id, row.workspace_id, column))
   }
   return { ...row, ...transformed }
@@ -161,7 +162,7 @@ export const encryptUploadColumns = async (
   if (mode === 'none') return payload
   const key = await requireCek(getCek, workspaceId)
   const out: Record<string, unknown> = { ...payload }
-  for (const column of CONTENT_COLUMNS) {
+  for (const column of SEALED_COLUMNS) {
     const value = out[column]
     if (typeof value === 'string') {
       out[column] = await seal(key, value, contentAad(id, workspaceId, column))

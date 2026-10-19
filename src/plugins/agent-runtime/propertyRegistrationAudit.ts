@@ -157,8 +157,9 @@ const hopelessKeyFix = (reason: string): string =>
 
 /** Reason → what to do.
  *
- *  Only `definition-unavailable` is reachable through this module: it asks the
- *  resolver by NAME, and `resolveName`
+ *  Only `definition-unavailable` and `behavior-unavailable` are reachable
+ *  through this module, and both fall through to the definition-count split
+ *  at the end: it asks the resolver by NAME, and `resolveName`
  *  (`src/data/internals/propertySchemaResolution.ts`) cannot return the other
  *  two. `shadowed` requires resolving a non-winner's own fieldId directly —
  *  a name always routes to its group head, so the head trivially matches

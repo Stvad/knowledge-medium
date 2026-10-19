@@ -127,7 +127,7 @@ const main = async () => {
   const nap = (ms: number) => sleep(ms)
   const napOrTick = (ms: number) => sleep(ms, {wakeOnTick: true})
 
-  const client = createBridgeClient({profile: config.profile, timeoutMs: 60_000})
+  const client = createBridgeClient({profile: config.profile, timeoutMs: 60_000, workspaceId: config.workspaceId})
 
   if (config.watchers.length === 0) {
     log('no active watchers (all configured watchers are disabled) — clearing push registration and stopping')
@@ -147,7 +147,7 @@ const main = async () => {
   while (!stopping) {
     try {
       const whoami = await client.whoami()
-      log(`paired as user=${whoami.audience?.userId ?? '?'} workspace=${whoami.audience?.workspaceId ?? '?'} tab-connected=${whoami.connected}`)
+      log(`paired as user=${whoami.audience?.userId ?? '?'} acting-on-workspace=${config.workspaceId} focused-tab-workspace=${whoami.audience?.workspaceId ?? '?'} tab-connected=${whoami.connected}`)
       if (!whoami.connected) log('WARNING: no app tab connected — watchers idle until one appears')
       break
     } catch (error) {

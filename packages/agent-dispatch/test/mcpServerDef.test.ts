@@ -8,6 +8,7 @@ describe('buildMcpServerDef', () => {
   it('uses the dispatch MCP wrapper and blocks active backlink watcher targets', () => {
     const config = parseConfig({
       profile: 'agent-dispatch',
+      workspaceId: 'ws-dispatch',
       watchers: [
         {name: 'claude mentions', kind: 'backlinks', target: 'claude'},
         {name: 'codex mentions', kind: 'backlinks', target: 'codex'},
@@ -21,7 +22,8 @@ describe('buildMcpServerDef', () => {
     expect(serverDef).toMatchObject({
       name: 'km',
       command: process.execPath,
-      env: {AGENT_RUNTIME_PROFILE: 'agent-dispatch'},
+      // The spawned run's graph calls act on the daemon's workspace too.
+      env: {AGENT_RUNTIME_PROFILE: 'agent-dispatch', AGENT_RUNTIME_WORKSPACE: 'ws-dispatch'},
     })
     expect(serverDef.args).toHaveLength(1)
     expect(path.basename(serverDef.args[0])).toBe('mcp.js')

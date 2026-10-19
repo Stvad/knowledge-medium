@@ -47,10 +47,22 @@ export type MoveBlockPosition =
   | {kind: 'before', siblingId: string}
   | {kind: 'after', siblingId: string}
 
-export interface MoveBlockInput {
+/** The wire `exactIds` flag, for verbs whose id fields the caller resolved. */
+export interface ExactIds {
+  exactIds?: boolean
+}
+
+export interface MoveBlockInput extends ExactIds {
   id: string
   parentId: string | null
   position: MoveBlockPosition
+}
+
+export interface EditBlockResult {
+  id: string
+  shortId: string
+  /** The replacement with bounded context on each side, cuts marked. */
+  excerpt: string
 }
 
 export interface DeleteBlockResult {
@@ -153,12 +165,45 @@ export const createBridgeGraph = (client: BridgeClient) => {
     return asRecord(result, 'create-block') as unknown as BlockData
   }
 
+  /** `expectedContent` makes it a compare-and-set: the app refuses the whole
+   *  update unless the block still has exactly that content. */
   const updateBlock = async (
     id: string,
-    patch: {content?: string, properties?: Record<string, unknown>},
+    patch: {content?: string, properties?: Record<string, unknown>, expectedContent?: string} & ExactIds,
   ): Promise<unknown> => {
     return client.runCommand({type: 'update-block', id, ...patch})
   }
+
+  const appendMarkdown = async (input: {
+    target: string
+    markdown: string
+    position?: MoveBlockPosition
+    shape?: 'outline' | 'block'
+    format?: 'text' | 'json'
+  } & ExactIds): Promise<unknown> => client.runCommand({type: 'append-markdown', ...input})
+
+  const editBlock = async (input: {id: string, old: string, new: string} & ExactIds): Promise<EditBlockResult> => {
+    const result = await client.runCommand({type: 'edit-block', ...input})
+    return asRecord(result, 'edit-block') as unknown as EditBlockResult
+  }
+
+  const createPage = async (input: {name?: string, date?: string}): Promise<unknown> =>
+    client.runCommand({type: 'create-page', ...input})
+
+  const recentChanges = async (input: {
+    since?: number | string
+    limit?: number
+    includeUser?: boolean
+  }): Promise<unknown> => client.runCommand({type: 'recent-changes', ...input})
+
+  /** The full id a write verb's id field resolves `ref` to. When it matches
+   *  nothing: the id its syntax names (`^x` / `((x))` → `x`), else `ref`. */
+  const resolveBlockId = async (ref: string): Promise<string> => {
+    const {id} = asRecord(await client.runCommand({type: 'resolve-block-id', ref}), 'resolve-block-id')
+    if (typeof id !== 'string') throw new Error('Unexpected resolve-block-id result shape')
+    return id
+  }
+
 
   const moveBlock = async (input: MoveBlockInput): Promise<BlockData | null> => {
     const result = await client.runCommand({type: 'move-block', ...input})
@@ -166,13 +211,13 @@ export const createBridgeGraph = (client: BridgeClient) => {
     return asRecord(result, 'move-block') as unknown as BlockData
   }
 
-  const deleteBlock = async (id: string): Promise<DeleteBlockResult> => {
-    const result = await client.runCommand({type: 'delete-block', id})
+  const deleteBlock = async (id: string, options: ExactIds = {}): Promise<DeleteBlockResult> => {
+    const result = await client.runCommand({type: 'delete-block', id, ...options})
     return asRecord(result, 'delete-block') as unknown as DeleteBlockResult
   }
 
-  const restoreBlock = async (id: string): Promise<BlockData | null> => {
-    const result = await client.runCommand({type: 'restore-block', id})
+  const restoreBlock = async (id: string, options: ExactIds = {}): Promise<BlockData | null> => {
+    const result = await client.runCommand({type: 'restore-block', id, ...options})
     if (result === null || result === undefined) return null
     return asRecord(result, 'restore-block') as unknown as BlockData
   }
@@ -242,6 +287,11 @@ export const createBridgeGraph = (client: BridgeClient) => {
     getSubtree,
     createBlock,
     updateBlock,
+    appendMarkdown,
+    editBlock,
+    createPage,
+    recentChanges,
+    resolveBlockId,
     moveBlock,
     deleteBlock,
     restoreBlock,

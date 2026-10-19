@@ -344,7 +344,9 @@
   SCALAR-only rule as the whole rule. A sixth, &ldquo;Codec / preset changes are
   migrations, not edits&rdquo;, carries an as-shipped correction: the
   &ldquo;N values can't convert&rdquo; outcome is a REFUSAL (#1024), and its
-  conversion carries the VALUE before re-reading the TEXT (#1055).</strong>
+  conversion carries the VALUE before re-reading the TEXT (#1055).
+  §9's recognition condition (4), the flip gate, is likewise REVERSED in place
+  (PR #628; verified against code 2026-10-15).</strong>
   <strong>Last verified against code: 2026-09-18 for the codec-change outcome;
   2026-09-16 for the multi-value shape; 2026-08-21 for the rest, branch
   <code>claude/e2ee-synthesis-namespace</code>.</strong>
@@ -2503,7 +2505,14 @@ supabase skill if it's kept.
     as machinery — and hidden outright for hidden-tier
     definitions — breaking the
     "machinery lands dormant" claim; the workspace column is synced and
-    server-visible, so the gate is fleet-consistent). <strong>No positional
+    server-visible, so the gate is fleet-consistent). <strong>As shipped
+    (PR #628): there is no condition (4).</strong> The backfill mints field rows
+    while a workspace still reads cells, so a flip-gated predicate rendered a
+    property through the cell AND showed its field row in the outline;
+    recognition now reads conditions (1)&ndash;(3) on either side of the flip,
+    in <code>recognizedFieldRowSql</code> and <code>tx.childrenOf</code> alike.
+    The flip still decides which side of the cell/children pair is the truth,
+    not whether a row is machinery. <strong>No positional
     condition exists</strong> (owner decision, 2026-07-22): recognition is
     <em>content-intrinsic</em>, identical at every depth, and
     <em>move-proof at any non-root position</em> — a row's classification cannot
@@ -2599,7 +2608,7 @@ supabase skill if it's kept.
     the only truth crossing the wire, so the bits are rebuildable forever.
     "All field rows under X" is an indexed scan (partial index
     <code>WHERE is_field_form = 1</code>); the classification predicate is flat —
-    bit + <code>parent_id IS NOT NULL</code> + checker + flip. Classification
+    bit + <code>parent_id IS NOT NULL</code> + checker (the flip leg is gone &mdash; see condition (4) above). Classification
     needs
     the definition, not the owning plugin (an uninstalled plugin's definitions sync
     like any block), and works for shadowed definitions too (§6 — losers stay

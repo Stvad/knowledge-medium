@@ -24,16 +24,19 @@
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import {z} from 'zod'
 import {
   ChangeScope,
   type AnyPostCommitProcessor,
   seedProperty,
+  defineQuery,
 } from '@/data/api'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '../repo'
-import { definitionSeedsFacet, postCommitProcessorsFacet } from '../facets'
+import { definitionSeedsFacet, postCommitProcessorsFacet, queriesFacet } from '../facets'
+import {aliasesProp, hasBlockType} from '../properties'
 
 const WS = 'ws-1'
 
@@ -365,5 +368,180 @@ describe('ProcessorRunner — awaitIdle wave', () => {
 
     expect(aCalls.events.length).toBeGreaterThanOrEqual(1)
     expect(bCalls.events).toHaveLength(1)
+  })
+})
+
+
+describe('ProcessorRunner — originating registry context', () => {
+  const writers: [string, (repo: Repo) => Promise<unknown>][] = [
+    ['tx', repo => repo.tx(tx => tx.setProperty('src', aliasesProp, ['derived']), {scope: ChangeScope.BlockDefault})],
+    ['Block', repo => repo.block('src').set(aliasesProp, ['derived'])],
+    ['mutator', repo => repo.mutate.setContent({id: 'src', content: 'derived'})],
+    ['type helper', repo => repo.addType('src', 'page')],
+  ]
+
+  it.each(writers)('keeps %s writes on the originating capture after the read phase crosses two switches', async (kind, write) => {
+    const {repo} = env
+    repo.setActiveWorkspaceId(WS)
+    await repo.tx(tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'initial'}),
+      {scope: ChangeScope.BlockDefault})
+    const original = repo.propertySchemaResolverFor(WS).resolve(aliasesProp)
+    expect(original.status).toBe('resolved')
+    if (original.status !== 'resolved') throw new Error('missing original registry')
+    const fieldId = original.schema.fieldId
+    let entered!: () => void
+    let release!: () => void
+    const reading = new Promise<void>(resolve => { entered = resolve })
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    repo.__setProcessorsForTesting([{
+      name: 'test.origin',
+      watches: {kind: 'field', table: 'blocks', fields: ['content']},
+      apply: async (event, ctx) => {
+        if (!event.changedRows.some(row => row.id === 'src' && row.after?.content === 'edit')) return
+        entered()
+        await gate
+        expect(ctx.repo.propertySchemaResolverFor(WS).resolveField(fieldId).status).toBe('resolved')
+        await write(ctx.repo)
+      },
+    }])
+    try {
+      await repo.tx(tx => tx.update('src', {content: 'edit'}), {scope: ChangeScope.BlockDefault})
+      await reading
+      repo.setActiveWorkspaceId('ws-b')
+      await repo.whenPropertyDefinitionsReady('ws-b')
+      repo.setActiveWorkspaceId('ws-c')
+      await repo.whenPropertyDefinitionsReady('ws-c')
+      expect(repo.propertySchemaResolverFor(WS).resolveField(fieldId).status).toBe('identity-unavailable')
+      if (kind === 'mutator') repo.__setMutatorsForTesting([])
+      release()
+      await repo.awaitProcessors()
+      expect(errors).not.toHaveBeenCalled()
+      const row = (await repo.load('src'))!
+      if (kind === 'mutator') expect(row.content).toBe('derived')
+      else if (kind === 'type helper') expect(hasBlockType(row, 'page')).toBe(true)
+      else expect(row.properties[aliasesProp.name]).toEqual(['derived'])
+      await expect(repo.tx(tx => tx.update('src', {content: 'fresh'}), {scope: ChangeScope.BlockDefault}))
+        .rejects.toThrow(/workspace registry.*not loaded/i)
+    } finally {
+      release()
+      errors.mockRestore()
+    }
+  })
+
+  it.each([
+    ['proxy', 'removed'], ['runQuery', 'removed'],
+    ['proxy', 'replaced'], ['runQuery', 'replaced'],
+    ['proxy', 'unchanged'], ['runQuery', 'unchanged'],
+  ] as const)('keeps %s queries on the originating runtime when live queries are %s', async (api, change) => {
+    const {repo} = env
+    repo.setActiveWorkspaceId(WS)
+    await repo.tx(tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'initial'}),
+      {scope: ChangeScope.BlockDefault})
+    const original = repo.propertySchemaResolverFor(WS).resolve(aliasesProp)
+    expect(original.status).toBe('resolved')
+    if (original.status !== 'resolved') throw new Error('missing original registry')
+    const fieldId = original.schema.fieldId
+    const leaf = defineQuery({
+      name: 'test.origin-leaf', argsSchema: z.void(), resultSchema: z.string(),
+      resolve: async (_, ctx) => {
+        ctx.depend({kind: 'row', id: 'src'})
+        const status = ctx.repo.propertySchemaResolverFor(WS).resolveField(fieldId).status
+        return `${status}:${(await ctx.repo.load('src'))?.content}`
+      },
+    })
+    const query = defineQuery({
+      name: 'test.origin-query', argsSchema: z.void(), resultSchema: z.string(),
+      resolve: async (_, ctx) => {
+        ctx.depend({kind: 'row', id: 'src'})
+        await ctx.run('core.children', {id: 'src'})
+        return ctx.repo.runQuery<string>(leaf.name, undefined)
+      },
+    })
+    const kernelQueries = [...repo.facetRuntime!.read(queriesFacet).values()]
+    repo.__setQueriesForTesting([...kernelQueries, leaf, query])
+    const sharedHandle = repo.query[query.name](undefined)
+    expect(await sharedHandle.load()).toBe('resolved:initial')
+    let entered!: () => void
+    let release!: () => void
+    const reading = new Promise<void>(resolve => { entered = resolve })
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    repo.__setProcessorsForTesting([{
+      name: 'test.origin-query-processor',
+      watches: {kind: 'field', table: 'blocks', fields: ['content']},
+      apply: async (event, ctx) => {
+        if (!event.changedRows.some(row => row.id === 'src' && row.after?.content === 'edit')) return
+        entered()
+        await gate
+        const result = await ctx.repo.undoGroup(grouped => api === 'proxy'
+          ? grouped.query[query.name](undefined).load()
+          : grouped.runQuery<string>(query.name, undefined))
+        await ctx.repo.block('src').set(aliasesProp, [result])
+      },
+    }])
+    try {
+      await repo.tx(async tx => {
+        await tx.update('src', {content: 'edit'})
+        if (change === 'replaced') {
+          repo.__setQueriesForTesting([...kernelQueries, leaf, {...query, resolve: async () => 'replacement'}])
+        }
+      }, {scope: ChangeScope.BlockDefault})
+      await reading
+      repo.setActiveWorkspaceId('ws-b')
+      await repo.whenPropertyDefinitionsReady('ws-b')
+      repo.setActiveWorkspaceId('ws-c')
+      await repo.whenPropertyDefinitionsReady('ws-c')
+      expect(repo.propertySchemaResolverFor(WS).resolveField(fieldId).status).toBe('identity-unavailable')
+      if (change === 'removed') {
+        repo.__setQueriesForTesting(kernelQueries)
+        await expect(repo.runQuery(query.name, undefined)).rejects.toThrow(/no query registered/)
+      } else if (change === 'replaced') {
+        expect(await repo.runQuery(query.name, undefined)).toBe('replacement')
+      } else {
+        sharedHandle.invalidate()
+        expect(await sharedHandle.load()).toBe('identity-unavailable:edit')
+      }
+      release()
+      await repo.awaitProcessors()
+      expect(errors).not.toHaveBeenCalled()
+      expect((await repo.load('src'))!.properties[aliasesProp.name]).toEqual(['resolved:edit'])
+    } finally {
+      release()
+      await repo.awaitProcessors()
+      errors.mockRestore()
+    }
+  })
+
+  it('keeps a delayed explicit processor on its originating registry', async () => {
+    const {repo} = env
+    repo.setActiveWorkspaceId(WS)
+    repo.__setProcessorsForTesting([{
+      name: 'test.delayed-origin',
+      watches: {kind: 'explicit'},
+      scheduledArgsSchema: {parse: value => value},
+      apply: async (_, ctx) => {
+        await ctx.repo.tx(tx => tx.setProperty('src', aliasesProp, ['delayed']), {scope: ChangeScope.BlockDefault})
+      },
+    }])
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.useFakeTimers({shouldAdvanceTime: true})
+    try {
+      await repo.tx(async tx => {
+        await tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0'})
+        tx.afterCommit('test.delayed-origin', undefined, {delayMs: 4000})
+      }, {scope: ChangeScope.BlockDefault})
+      repo.setActiveWorkspaceId('ws-b')
+      await repo.whenPropertyDefinitionsReady('ws-b')
+      repo.setActiveWorkspaceId('ws-c')
+      await repo.whenPropertyDefinitionsReady('ws-c')
+      await vi.advanceTimersByTimeAsync(4000)
+      await repo.awaitProcessors()
+      expect(errors).not.toHaveBeenCalled()
+      expect((await repo.load('src'))!.properties[aliasesProp.name]).toEqual(['delayed'])
+    } finally {
+      vi.useRealTimers()
+      errors.mockRestore()
+    }
   })
 })

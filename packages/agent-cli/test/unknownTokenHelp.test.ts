@@ -143,8 +143,13 @@ describe('withProfileHelp', () => {
       .toBe(error.message)
   })
 
-  it('exports the marker the server message actually contains', async () => {
+  it.each([
+    ['no tab connected', {connectedTabs: 0, tokenUser: 'unseen'}],
+    ['token never listed', {connectedTabs: 1, tokenUser: 'unseen'}],
+    ['its user\'s tab does not list it', {connectedTabs: 1, tokenUser: 'connected'}],
+    ['only other users connected', {connectedTabs: 2, tokenUser: 'not-connected'}],
+  ] as const)('opens every server message with the marker the CLI matches (%s)', async (_label, facts) => {
     const { unknownTokenMessage } = await import('../src/protocol.js')
-    expect(unknownTokenMessage).toContain(UNKNOWN_TOKEN_MARKER)
+    expect(unknownTokenMessage(facts).startsWith(UNKNOWN_TOKEN_MARKER)).toBe(true)
   })
 })

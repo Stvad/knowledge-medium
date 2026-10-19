@@ -124,6 +124,24 @@ managed Socktainer process when `DOCKER_HOST` is unset:
 pnpm check:db
 ```
 
+Socktainer needs to be at least 1.0.0. Older releases set the hostname to
+`<container name>-<uuid>` without capping it at Linux's 64 characters. The test
+container's name is long enough to go over that limit, so its start fails with
+`vmexec error ... Invalid argument`. Each Socktainer release is built against
+one Apple Container version (Socktainer 1.5.x against container 1.5.0), so
+upgrade the two together:
+
+```bash
+container system stop && brew upgrade container socktainer && container system start
+```
+
+Socktainer now ships in homebrew-core. If you installed it from the old
+`socktainer/tap`, run `brew untap socktainer/tap` first, as upstream recommends.
+
+The managed Socktainer logs to
+`$TMPDIR/knowledge-medium-socktainer-<pid>.log`, and its startup version check
+reports a mismatch there.
+
 The runtime helper is also available directly:
 
 ```bash

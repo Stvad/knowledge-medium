@@ -5,6 +5,7 @@ import type {
   SVGProps,
 } from 'react';
 import { Block } from '../data/block';
+import type { FocusedBlockLocation } from '../data/properties';
 import { EditorView } from '@codemirror/view'
 import type { PointerBindingSpec } from './canonicalizeChord.js'
 import type { GestureBindingSpec } from './gestureBinding.js'
@@ -189,6 +190,11 @@ export interface MultiSelectModeDependencies extends BaseShortcutDependencies {
  */
 export interface BlockPointerDependencies extends BlockShortcutDependencies {
   targetElement: HTMLElement;
+  /** The cursor a range gesture extends from when no selection is active, in
+   *  place of the focused row. Set by a dispatch decorator that knows focus was
+   *  moved without the user choosing it (cursor-follows-scroll), so the range
+   *  starts where the user left the cursor rather than where it was carried. */
+  rangeOrigin?: FocusedBlockLocation;
 }
 
 export interface ShortcutDependenciesMap {

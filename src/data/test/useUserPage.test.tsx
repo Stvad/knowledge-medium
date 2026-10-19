@@ -28,7 +28,7 @@ import { v4 as uuidv4 } from 'uuid'
 import { RepoContext } from '@/context/repo.tsx'
 import { useUserPage } from '@/data/globalState.ts'
 import { getUserBlock, userPageBlockId } from '@/data/stateBlocks.ts'
-import { systemAuthor, type User } from '@/data/api'
+import { ChangeScope, systemAuthor, type User } from '@/data/api'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import type { Repo } from '@/data/repo'
@@ -123,7 +123,12 @@ describe('useUserPage', () => {
   it('resolves against the caller-supplied workspace, not the active one', async () => {
     // Same user, a page in each workspace with a different display name.
     await getUserBlock(repo, WS, ALICE)
-    await getUserBlock(repo, OTHER_WS, {...ALICE, name: 'Alice elsewhere'})
+    const otherPageId = userPageBlockId(OTHER_WS, ALICE.id)
+    await repo.tx(async tx => {
+      await tx.create({
+        id: otherPageId, workspaceId: OTHER_WS, parentId: null, orderKey: 'a0', content: 'Alice elsewhere',
+      })
+    }, {scope: ChangeScope.UserPrefs, allowUnloadedWorkspace: true})
 
     renderProbe(ALICE.id, OTHER_WS)
 

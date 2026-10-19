@@ -304,7 +304,7 @@ const verifyTarget = (t, { reportIds, deadline }) => {
 
   const refs = [...new Set([...extractIssueRefs(text), ...[...byId.values()].filter(Boolean)])]
   if (refs.length) {
-    const cap = refsCap(deadline)
+    const cap = refsCap(deadline - Date.now())
     const capNote = moreRefsNote(refs.length, cap)
     if (cap > 0) notes.push(`${label}\n${issueRefsTable(text, refs.slice(0, cap), 'post')}${capNote}`)
     else notes.push(`${label}: ${refs.length} issue references not echoed (out of time budget) — check them yourself`)
@@ -340,7 +340,7 @@ const verifyMergeCommit = (n, deadline) => {
   // it back would be pure noise.
   const refs = extractIssueRefs(message).filter(r => r !== n)
   if (!refs.length) return notes
-  const cap = refsCap(deadline)
+  const cap = refsCap(deadline - Date.now())
   if (cap === 0) return [`merge commit of #${n}: ${refs.length} issue references not echoed (out of time budget) — check them yourself`]
   // Only the HEAD commit's text is known to have landed under every merge
   // strategy — a squash with custom subject/body does not land the PR's own

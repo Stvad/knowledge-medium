@@ -79,7 +79,19 @@ export const beginTestRepoScope = (): void => {
   scope = {refs: new Set(), sweepAt: SWEEP_FLOOR}
 }
 
-/** Release every Repo built during the test and drain its deferred work.
+/** Release every Repo built during the test — see `releaseTestRepos`. */
+export const endTestRepoScope = async (): Promise<void> => {
+  const closing = scope
+  scope = null
+  if (!closing) return
+  await releaseTestRepos([...closing.refs]
+    .map(ref => ref.deref())
+    .filter((repo): repo is Repo => repo !== undefined))
+}
+
+/** Release `live` and drain its deferred work — what `endTestRepoScope` does
+ *  at test end, exported for a test that outlives its Repos (a fuzz property
+ *  building one per fast-check case, all on one shared db).
  *
  *  Stopping the observer before unpinning is precautionary, not load-bearing:
  *  unpinning drives projector work, and a Repo on its way out has no business
@@ -91,13 +103,7 @@ export const beginTestRepoScope = (): void => {
  *  a partial release on a run that is already red, and costs a worse failure:
  *  a caught unpin leaves the Repo RE-PINNED (the setter rolls back), so the
  *  drain below never settles. */
-export const endTestRepoScope = async (): Promise<void> => {
-  const closing = scope
-  scope = null
-  if (!closing) return
-  const live = [...closing.refs]
-    .map(ref => ref.deref())
-    .filter((repo): repo is Repo => repo !== undefined)
+export const releaseTestRepos = async (live: readonly Repo[]): Promise<void> => {
   // Settle the observer BEFORE detaching it. `dispose()` is synchronous and the
   // drain only re-checks `disposed` at the top of its loop, so a window already
   // inside `applyWindow` commits regardless — after this hook returns, and after

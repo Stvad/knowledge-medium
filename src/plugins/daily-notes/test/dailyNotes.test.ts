@@ -18,22 +18,22 @@ import { ChangeScope } from '@/data/api'
 import { DeterministicIdCrossWorkspaceError } from '@/data/api/errors'
 import { aliasesProp } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
-import { dailyNoteDateProp } from '@/plugins/daily-notes/schema.js'
+import { DAILY_NOTE_TYPE, dailyNoteDateProp } from '@/plugins/daily-notes/schema.js'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
 import { createTestRepo, isBlockDeleted } from '@/data/test/createTestRepo'
 import {
-  DAILY_NOTE_TYPE,
   addDaysIso,
   dailyNoteBlockId,
-  dailyNotesDataExtension,
   getOrCreateDailyNote,
   getOrCreateJournalBlock,
   journalBlockId,
   todayIso,
-} from '@/plugins/daily-notes'
+} from '@/plugins/daily-notes/dailyNotes'
+import { dailyNotesDataExtension } from '@/plugins/daily-notes/dataExtension'
 import { todayDailyNoteLanding } from '@/plugins/daily-notes/landing.js'
+import { compileTypedBlockQuery } from '@/data/internals/typedBlockQuery'
 
 const WS = 'ws-1'
 
@@ -443,27 +443,47 @@ describe('idx_blocks_daily_note_date', () => {
    *  expression text must appear literally in the query. Both halves
    *  — the CREATE INDEX statement and the compiled `where` clause —
    *  have to agree on the exact `json_extract(properties_json, '...')`
-   *  spelling. This test pins that agreement by asking the planner
-   *  whether it picks the index for the motivating query, so a future
-   *  change to either the compiler's path-emission or the index DDL
-   *  that breaks the match fails here before it ships to prod. */
-  it('is picked by the planner for daily-note:date range queries', async () => {
+   *  spelling, and the compiler must keep the comparison its own AND term.
+   *  These run the compiler's own SQL, so a future change to either the
+   *  compiler or the index DDL that breaks the match fails here before it
+   *  ships to prod. */
+  const compiledDateQuery = (value: unknown) => compileTypedBlockQuery(
+    {workspaceId: WS, where: {[dailyNoteDateProp.name]: value}},
+    env.repo.propertySchemas,
+    {projection: 'ids'},
+  )
+
+  it('is picked by the planner for a daily-note:date equality', async () => {
     // Seed a daily note so the partial index isn't empty (an empty
     // index is the planner's strong default to skip).
     await getOrCreateDailyNote(env.repo, WS, '2026-04-28')
 
-    // Use repo.queryBlocks against the daily-note type filtered by
-    // date; whatever SQL the compiler emits is what we want indexed.
-    // Grab it via EXPLAIN QUERY PLAN on a hand-rolled equivalent that
-    // mirrors the candidates-CTE path-extract text exactly.
-    const plan = await env.h.db.getAll<{detail: string}>(`
-      EXPLAIN QUERY PLAN
-      SELECT id FROM blocks
-      WHERE deleted = 0
-        AND json_extract(properties_json, '$."${dailyNoteDateProp.name}"') < ?
-    `, ['2026-05-18T00:00:00.000Z'])
-    const detail = plan.map(r => r.detail).join(' | ')
-    expect(detail).toContain('idx_blocks_daily_note_date')
+    const {sql, params} = compiledDateQuery(new Date('2026-04-28T00:00:00.000Z'))
+    const plan = await env.h.db.getAll<{detail: string}>(`EXPLAIN QUERY PLAN ${sql}`, [...params])
+    expect(plan.map(r => r.detail).join(' | ')).toContain('idx_blocks_daily_note_date')
+  })
+
+  it.each([
+    ['equality', new Date('2026-04-28T00:00:00.000Z'), '(<expr>=?)'],
+    ['range', {lt: new Date('2026-05-18T00:00:00.000Z')}, '(<expr><?)'],
+    [
+      'between',
+      {between: [new Date('2026-04-01T00:00:00.000Z'), new Date('2026-05-18T00:00:00.000Z')]},
+      '(<expr>>? AND <expr><?)',
+    ],
+  ])('can SEARCH the index for a daily-note:date %s', async (_label, value, constraint) => {
+    // Without stats the planner prefers the workspace index for a range, so
+    // force this one. Forcing alone proves little — a partial index can still
+    // be SCANNED — so the plan must show the comparison as its search key.
+    const note = await getOrCreateDailyNote(env.repo, WS, '2026-04-28')
+    const {sql, params} = compiledDateQuery(value)
+    const forced = sql.replace('FROM blocks b', 'FROM blocks b INDEXED BY idx_blocks_daily_note_date')
+    expect(forced).not.toBe(sql)
+
+    const plan = await env.h.db.getAll<{detail: string}>(`EXPLAIN QUERY PLAN ${forced}`, [...params])
+    expect(plan.map(r => r.detail)).toContain(`SEARCH b USING INDEX idx_blocks_daily_note_date ${constraint}`)
+    const rows = await env.h.db.getAll<{id: string}>(forced, [...params])
+    expect(rows.map(r => r.id)).toEqual([note.id])
   })
 })
 

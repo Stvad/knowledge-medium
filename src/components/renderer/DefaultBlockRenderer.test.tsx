@@ -4,15 +4,13 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import {
   ChangeScope,
-  codecs,
-  defineProperty,
-  seedType,
+  seedProperty,
 } from '@/data/api'
 import { useEffect } from 'react'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
-import { typeSeedsFacet } from '@/data/facets'
+import { definitionSeedsFacet } from '@/data/facets'
 import { usePropertyValue } from '@/hooks/block'
 import { aliasPageBulletContribution, aliasPageStylingContribution } from '@/plugins/alias/pageStyling'
 import { aliasDataExtension } from '@/plugins/alias/dataExtension'
@@ -30,7 +28,7 @@ import { type FacetRuntime } from '@/facets/facet'
 import { ActiveContextsProvider } from '@/shortcuts/ActiveContexts'
 import type { Block } from '@/data/block'
 import type { BlockRendererProps } from '@/types'
-import { pasteMultilineText } from '@/paste/operations'
+import { pasteResolvedDecision, resolvePasteWithMediaCapture } from '@/paste/operations'
 import { DefaultBlockRenderer } from './DefaultBlockRenderer'
 import { MarkdownContentRenderer } from './MarkdownContentRenderer'
 import { BLOCK_TITLE_TEXT_CLASS } from './blockTitleText'
@@ -78,7 +76,7 @@ vi.mock('@/data/globalState.ts', async () => {
 })
 
 vi.mock('@/paste/operations.ts', () => ({
-  pasteMultilineText: vi.fn(async () => []),
+  pasteResolvedDecision: vi.fn(async () => []),
   pasteFromClipboard: vi.fn(async () => []),
   // The renderer resolves the decision (+ any media capture) through this; for a
   // plain text paste it returns the split decision and the text unchanged.
@@ -88,8 +86,8 @@ vi.mock('@/paste/operations.ts', () => ({
   })),
 }))
 
-const statusProp = defineProperty<string>('test:status', {
-  codec: codecs.string,
+const statusProp = seedProperty({
+  seedKey: 'test/property/status', revision: 1, name: 'test:status', preset: 'string',
   defaultValue: 'open',
   changeScope: ChangeScope.BlockDefault,
 })
@@ -108,11 +106,11 @@ const TestContentRenderer = ({block}: BlockRendererProps) => (
   <div>{block.id}</div>
 )
 
-const dispatchPaste = (target: Element, text: string): Event => {
+const dispatchPaste = (target: Element, text: string, html = ''): Event => {
   const event = new Event('paste', {bubbles: true, cancelable: true})
   Object.defineProperty(event, 'clipboardData', {
     value: {
-      getData: (type: string) => type === 'text/plain' ? text : '',
+      getData: (type: string) => type === 'text/plain' ? text : type === 'text/html' ? html : '',
     },
   })
   target.dispatchEvent(event)
@@ -134,7 +132,7 @@ describe('DefaultBlockRenderer paste handling', () => {
   let runtime: FacetRuntime
 
   beforeEach(async () => {
-    vi.mocked(pasteMultilineText).mockClear()
+    vi.mocked(pasteResolvedDecision).mockClear()
 
     await resetTestDb(sharedDb.db)
     h = sharedDb
@@ -142,10 +140,7 @@ describe('DefaultBlockRenderer paste handling', () => {
       kernelPropertyUiExtension,
       kernelValuePresetsExtension,
       defaultEditorInteractionExtension,
-      typeSeedsFacet.of(
-        seedType({seedKey: 'test/type/test-status-prop', revision: 1, id: 'test:status-prop', label: 'Test Status Prop', properties: [statusProp]}),
-        {source: 'test'},
-      ),
+      definitionSeedsFacet.of(statusProp, {source: 'test'}),
       blockLayoutFacet.of(
         () => ({id: 'property-only', label: 'Property only', render: propertyOnlyLayout}),
         {source: 'test'},
@@ -230,7 +225,7 @@ describe('DefaultBlockRenderer paste handling', () => {
     })
 
     expect(event?.defaultPrevented).toBe(false)
-    expect(pasteMultilineText).not.toHaveBeenCalled()
+    expect(pasteResolvedDecision).not.toHaveBeenCalled()
   })
 
   it('still handles paste on the focused block shell', async () => {
@@ -247,13 +242,26 @@ describe('DefaultBlockRenderer paste handling', () => {
     // preventDefault is synchronous; the apply now runs after the async
     // paste-verb decision, so wait for the call.
     expect(event?.defaultPrevented).toBe(true)
-    await vi.waitFor(() => expect(pasteMultilineText).toHaveBeenCalledTimes(1))
-    expect(pasteMultilineText).toHaveBeenCalledWith(
-      'first\nsecond',
+    await vi.waitFor(() => expect(pasteResolvedDecision).toHaveBeenCalledTimes(1))
+    expect(pasteResolvedDecision).toHaveBeenCalledWith(
+      {decision: {kind: 'split'}, text: 'first\nsecond'},
       repo.block('block-1'),
       repo,
-      {scopeRootId: 'root', asSingleBlock: false},
+      {scopeRootId: 'root'},
     )
+  })
+
+  it('pastes an html-only clipboard on the focused block shell', async () => {
+    renderBlock()
+
+    const shell = document.querySelector<HTMLElement>('[data-block-id="block-1"][data-editing="false"]')
+    act(() => {
+      dispatchPaste(shell!, '', '<img src="https://e.com/a.png">')
+    })
+
+    await vi.waitFor(() => expect(pasteResolvedDecision).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(resolvePasteWithMediaCapture).mock.lastCall?.[1])
+      .toMatchObject({text: '', html: '<img src="https://e.com/a.png">'})
   })
 
   it('applies the default focused-block shell highlight without visual navigation', () => {
