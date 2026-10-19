@@ -34,6 +34,7 @@ const DECOY_ROUNDS = Math.floor(HISTORY_PAGE / IDS_PER_FILTER) + 1
 const BLOCK_COLUMNS =
   'id, workspace_id, parent_id, order_key, content, properties_json, references_json, ' +
   'created_at, updated_at, user_updated_at, created_by, updated_by, deleted'
+const WIRE_COLUMNS = 'id, workspace_id, content, properties_json, references_json'
 
 /** A value that passes the re-seal's sealed test without being sealed. */
 const lookalike = () => ENVELOPE_PREFIX + randomBytes(32).toString('base64url')
@@ -60,12 +61,32 @@ const signedInClient = (restUrl: string, accessToken: string): SupabaseClient =>
     global: {fetch: (input, init) => fetch(String(input).replace(`${restUrl}/rest/v1/`, `${restUrl}/`), init)},
   })
 
+/** The flip, retried while the server finds writes in flight, as the design's
+ *  flow does. Here that is most likely an autovacuum of the freshly seeded
+ *  `blocks`, whose lock the flip's NOWAIT lock conflicts with. */
+const flip = async (client: SupabaseClient, workspaceId: string, wk: CryptoKey) => {
+  const canary = await mintCanary(wk, workspaceId)
+  const error = await vi.waitFor(async () => {
+    const {error} = await client.rpc('convert_workspace_to_e2ee', {p_workspace_id: workspaceId, p_wk_canary: canary})
+    if (error?.code === '55P03') throw new Error(error.message)
+    return error
+  }, {timeout: 20_000, interval: 250})
+  expect(error).toBeNull()
+}
+
+/** bigint columns (versions, event ids, counts) as numbers, as PostgREST returns them. */
+const int8AsNumber = {
+  getTypeParser: (oid: number, format?: 'text' | 'binary') =>
+    oid === pg.types.builtins.INT8 ? Number : pg.types.getTypeParser(oid, format),
+}
+
 // The test takes about 5 s against a fresh stack.
 describe('the re-seal and verify through PostgREST', {timeout: 60_000}, () => {
+  const {databaseUrl, authUrl, restUrl} = stack()
   let db: pg.Client
 
   beforeAll(async () => {
-    db = new pg.Client({connectionString: stack().databaseUrl})
+    db = new pg.Client({connectionString: databaseUrl, types: int8AsNumber})
     await db.connect()
   })
   afterAll(() => db?.end())
@@ -94,14 +115,11 @@ describe('the re-seal and verify through PostgREST', {timeout: 60_000}, () => {
       [workspaceId, ownerId, at, count],
     )
 
-  const idsOf = async (workspaceId: string): Promise<string[]> =>
-    (await query<{id: string}>('select id from public.blocks where workspace_id = $1 order by id', [workspaceId]))
-      .map(row => row.id)
-
+  /** Each row's content columns by id, in id order: the order PostgREST pages in. */
   const contentOf = async (workspaceId: string): Promise<Map<string, ContentColumns>> =>
     new Map(
       (await query<ContentColumns & {id: string}>(
-        'select id, content, properties_json, references_json from public.blocks where workspace_id = $1',
+        'select id, content, properties_json, references_json from public.blocks where workspace_id = $1 order by id',
         [workspaceId],
       )).map(row => [row.id, contentColumnsOf(row)]),
     )
@@ -109,29 +127,14 @@ describe('the re-seal and verify through PostgREST', {timeout: 60_000}, () => {
   const rowsOf = (workspaceId: string) =>
     query('select * from public.blocks where workspace_id = $1 order by id', [workspaceId])
 
-  const WIRE_COLUMNS = 'id, workspace_id, content, properties_json, references_json'
-
   const historyCount = async (workspaceId: string): Promise<number> =>
-    Number((await query<{count: string}>(
-      'select count(*) from public.blocks_history where workspace_id = $1',
-      [workspaceId],
-    ))[0].count)
+    (await query<{count: number}>('select count(*) from public.blocks_history where workspace_id = $1', [workspaceId]))[0]
+      .count
 
-  it('seals every row, finds each re-seal record, repairs a tampered row, and leaves history the purge accepts', async () => {
-    const {authUrl, restUrl} = stack()
-    const owner = await signUp(authUrl)
-    const client = signedInClient(restUrl, owner.accessToken)
-    const server = createSupabaseConversionServer(client)
-    const wk = await keyOf(7)
-    const ws = randomUUID()
-    // Another workspace of the same owner, which RLS shows to the same session.
-    const otherWs = randomUUID()
-    // A minute back, so the clamp trigger leaves the seeded versions alone.
-    const at = Date.now() - 60_000
-
-    // ── a plaintext workspace with history ──
-    await insertWorkspace(ws, owner.id, at)
-    await insertRows(ws, owner.id, at, ROWS)
+  /** A plaintext workspace with history, returning its plaintext. */
+  const seedPlaintextWorkspace = async (workspaceId: string, ownerId: string, at: number) => {
+    await insertWorkspace(workspaceId, ownerId, at)
+    await insertRows(workspaceId, ownerId, at, ROWS)
     // An empty value, a soft-deleted row, and a row two of whose columns
     // already pass the sealed test, which a plaintext workspace allows.
     await query(
@@ -139,7 +142,7 @@ describe('the re-seal and verify through PostgREST', {timeout: 60_000}, () => {
          (gen_random_uuid()::text, $1, null, 'b1', '', '{}', '[]', $3, $3, $3, $2, $2, false),
          (gen_random_uuid()::text, $1, null, 'b2', 'deleted', '{}', '[]', $3, $3, $3, $2, $2, true),
          (gen_random_uuid()::text, $1, null, 'b3', $4, '{"plain":true}', $5, $3, $3, $3, $2, $2, false)`,
-      [ws, owner.id, at, lookalike(), lookalike()],
+      [workspaceId, ownerId, at, lookalike(), lookalike()],
     )
     // Writes the history read's filter matches that aren't re-seal records:
     // their content only starts like an envelope.
@@ -150,7 +153,7 @@ describe('the re-seal and verify through PostgREST', {timeout: 60_000}, () => {
              properties_json = json_build_object('decoy', $3::int)::text,
              references_json = json_build_array($3::int)::text
          where id in (select id from public.blocks where workspace_id = $1 order by id limit $4)`,
-        [ws, ENVELOPE_PREFIX, round, IDS_PER_FILTER],
+        [workspaceId, ENVELOPE_PREFIX, round, IDS_PER_FILTER],
       )
     }
     // Writes the filter must leave out: an envelope-shaped value in content
@@ -158,32 +161,46 @@ describe('the re-seal and verify through PostgREST', {timeout: 60_000}, () => {
     await query(
       `update public.blocks set content = $2
        where id = (select id from public.blocks where workspace_id = $1 order by id desc limit 1)`,
-      [ws, lookalike()],
+      [workspaceId, lookalike()],
     )
     await query(
       `update public.blocks
        set content = 'ENC:V1:wrong case', properties_json = '{"edited":true}', references_json = '["edited"]'
        where id = (select id from public.blocks where workspace_id = $1 order by id desc offset 1 limit 1)`,
-      [ws],
+      [workspaceId],
     )
+    return contentOf(workspaceId)
+  }
+
+  /** One write with triggers off: it adds no history row and no new version. */
+  const writeWithoutTriggers = async (sql: string, params: unknown[]) => {
+    await query('begin')
+    await query('set local session_replication_role = replica')
+    await query(sql, params)
+    await query('commit')
+  }
+
+  it('seals every row, finds each re-seal record, repairs a tampered row, and leaves history the purge accepts', async () => {
+    const owner = await signUp(authUrl)
+    const client = signedInClient(restUrl, owner.accessToken)
+    const server = createSupabaseConversionServer(client)
+    const wk = await keyOf(7)
+    const ws = randomUUID()
+    // Another workspace of the same owner, which RLS shows to the same session.
+    const otherWs = randomUUID()
+    // A minute back, so the clamp trigger leaves the seeded versions alone.
+    const at = Date.now() - 60_000
+
+    const plaintext = await seedPlaintextWorkspace(ws, owner.id, at)
+    const total = plaintext.size
+    const ids = [...plaintext.keys()]
     await insertWorkspace(otherWs, owner.id, at)
     await insertRows(otherWs, owner.id, at, 3)
-
-    const plaintext = await contentOf(ws)
-    const total = plaintext.size
-    const ids = await idsOf(ws)
     const otherRows = await rowsOf(otherWs)
 
-    // ── the flip, retried while the server finds writes in flight, as the flow does ──
-    const canary = await mintCanary(wk, ws)
-    const flipError = await vi.waitFor(async () => {
-      const {error} = await client.rpc('convert_workspace_to_e2ee', {p_workspace_id: ws, p_wk_canary: canary})
-      if (error?.code === '55P03') throw new Error(error.message)
-      return error
-    }, {timeout: 20_000, interval: 250})
-    expect(flipError).toBeNull()
+    await flip(client, ws, wk)
     // The recovery bundle's archive point, read as the flow reads it right after the flip.
-    const [bundle] = await query<{through: string; archived: string}>(
+    const [bundle] = await query<{through: number; archived: number}>(
       'select coalesce(max(event_id), 0) as through, count(*) as archived from public.blocks_history where workspace_id = $1',
       [ws],
     )
@@ -191,12 +208,12 @@ describe('the re-seal and verify through PostgREST', {timeout: 60_000}, () => {
     // ── re-seal ──
     expect(await resealWorkspace({server, workspaceId: ws, wk})).toEqual({scanned: total, sealed: total})
 
-    const [{unsealed}] = await query<{unsealed: string}>(
+    const [{unsealed}] = await query<{unsealed: number}>(
       `select count(*) as unsealed from public.blocks
        where workspace_id = $1 and not public.is_sealed_block(content, properties_json, references_json)`,
       [ws],
     )
-    expect(Number(unsealed)).toBe(0)
+    expect(unsealed).toBe(0)
 
     // One write per row, each recording the row's whole plaintext in before_diff.
     const resealWrites = await query<{block_id: string; before_diff: ContentColumns}>(
@@ -208,7 +225,7 @@ describe('the re-seal and verify through PostgREST', {timeout: 60_000}, () => {
 
     // The adapter's history read returns exactly what its filter selects from
     // the whole history, across pages and id chunks.
-    const history = await query<{event_id: string; block_id: string; op: string; changed_columns: string[] | null; content: string | null}>(
+    const history = await query<{event_id: number; block_id: string; op: string; changed_columns: string[] | null; content: string | null}>(
       `select event_id, block_id, op, changed_columns, after_diff ->> 'content' as content
        from public.blocks_history where workspace_id = $1`,
       [ws],
@@ -222,24 +239,20 @@ describe('the re-seal and verify through PostgREST', {timeout: 60_000}, () => {
     expect(selected.filter(row => firstChunk.has(row.block_id)).length).toBeGreaterThan(HISTORY_PAGE)
     const read = await server.readContentSealHistory(ws, ids)
     const byEvent = (a: number, b: number) => a - b
-    expect(read.map(row => row.event_id).sort(byEvent)).toEqual(selected.map(row => Number(row.event_id)).sort(byEvent))
+    expect(read.map(row => row.event_id).sort(byEvent)).toEqual(selected.map(row => row.event_id).sort(byEvent))
 
     // ── tamper ──
-    // Another row's sealed content, written with triggers off: no history row
-    // and no new version, so the row differs from its record at the version
-    // the record wrote, the one difference verify repairs. The row is in the
-    // first chunk, whose records sit on the second page of its history.
+    // Another row's sealed content, so the row differs from its record at the
+    // version the record wrote: the one difference verify repairs. The row is
+    // in the first chunk, whose records sit on the second page of its history.
     const [tampered, donor] = ids
-    const [before] = await query<{updated_at: string}>('select updated_at from public.blocks where id = $1', [tampered])
+    const [before] = await query<{updated_at: number}>('select updated_at from public.blocks where id = $1', [tampered])
     const historyBefore = await historyCount(ws)
-    await query('begin')
-    await query('set local session_replication_role = replica')
-    await query(
+    await writeWithoutTriggers(
       'update public.blocks set content = (select content from public.blocks where id = $2) where id = $1',
       [tampered, donor],
     )
-    await query('commit')
-    const [after] = await query<WireBlockColumns & {updated_at: string}>(
+    const [after] = await query<WireBlockColumns & {updated_at: number}>(
       `select ${WIRE_COLUMNS}, updated_at from public.blocks where id = $1`,
       [tampered],
     )
@@ -259,8 +272,8 @@ describe('the re-seal and verify through PostgREST', {timeout: 60_000}, () => {
     // ── the purge takes the engine's writes as re-seal writes ──
     const {error: purgeError} = await client.rpc('purge_workspace_history', {
       p_workspace_id: ws,
-      p_through_event_id: Number(bundle.through),
-      p_archived_count: Number(bundle.archived),
+      p_through_event_id: bundle.through,
+      p_archived_count: bundle.archived,
     })
     expect(purgeError).toBeNull()
     expect(await historyCount(ws)).toBe(0)
