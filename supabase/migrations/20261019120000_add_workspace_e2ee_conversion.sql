@@ -210,16 +210,18 @@ grant execute on function public.convert_workspace_to_e2ee(text, text) to authen
 -- ── the purge ───────────────────────────────────────────────────────────
 -- A history row is a re-seal write iff it is an UPDATE that touched nothing
 -- but the content columns and the version, and wrote an envelope into each
--- content column it touched. The op needs no test of its own: I and D rows
--- carry no changed_columns, and the coalesce makes that NULL a refusal.
-create function private.is_reseal_history_row(p_changed_columns text[], p_after_diff jsonb)
+-- content column it touched. The op is tested on its own rather than through
+-- blocks_record_history leaving changed_columns NULL on I and D rows; the
+-- coalesce makes any NULL a refusal.
+create function private.is_reseal_history_row(p_op text, p_changed_columns text[], p_after_diff jsonb)
     returns boolean
     language sql
     immutable
     set search_path = ''
     as $$
     select coalesce(
-        p_changed_columns <@ array['content', 'properties_json', 'references_json', 'updated_at']
+        p_op = 'U'
+        and p_changed_columns <@ array['content', 'properties_json', 'references_json', 'updated_at']
         and (not (p_after_diff ? 'content')
              or public.is_enc_v1_envelope(p_after_diff ->> 'content'))
         and (not (p_after_diff ? 'properties_json')
@@ -229,8 +231,8 @@ create function private.is_reseal_history_row(p_changed_columns text[], p_after_
         false)
 $$;
 
-alter function private.is_reseal_history_row(text[], jsonb) owner to postgres;
-revoke all on function private.is_reseal_history_row(text[], jsonb) from public, anon, authenticated, service_role;
+alter function private.is_reseal_history_row(text, text[], jsonb) owner to postgres;
+revoke all on function private.is_reseal_history_row(text, text[], jsonb) from public, anon, authenticated, service_role;
 
 -- p_through_event_id and p_archived_count come from the client's verified
 -- recovery bundle: the last history event it archived (0 for an empty
@@ -296,7 +298,7 @@ begin
             where h.workspace_id = p_workspace_id
             returning h.event_id,
                       h.event_id > p_through_event_id
-                          and not private.is_reseal_history_row(h.changed_columns, h.after_diff)
+                          and not private.is_reseal_history_row(h.op, h.changed_columns, h.after_diff)
                           as is_foreign
     )
     select count(*) filter (where event_id <= p_through_event_id),

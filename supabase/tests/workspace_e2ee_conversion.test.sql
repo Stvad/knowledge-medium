@@ -18,7 +18,7 @@ BEGIN;
 CREATE EXTENSION IF NOT EXISTS pgtap WITH SCHEMA extensions;
 SET LOCAL search_path TO public, extensions;
 
-SELECT plan(63);
+SELECT plan(65);
 
 CREATE TEMP TABLE conv_ctx AS
 SELECT
@@ -576,6 +576,34 @@ SELECT is(
   format('KMC02: purge_workspace_history: 1 history row(s) after event %s are not re-seal writes',
          pg_temp.through()),
   'the purge refuses a hard delete after through'
+);
+
+-- Rows blocks_record_history does not write today, so that the purge's
+-- judgement does not lean on how it shapes I and D rows: an INSERT that
+-- carries changed_columns, and an UPDATE that does not.
+SELECT is(
+  pg_temp.probe('authenticated', pg_temp.owner_id(),
+    pg_temp.purge_sql(pg_temp.ws(), pg_temp.through(), pg_temp.archived()),
+    format($$INSERT INTO public.blocks_history
+               (block_id, workspace_id, op, semantic_op, changed_columns, after_diff)
+             VALUES (%L, %L, 'I', 'create', ARRAY['content', 'updated_at'],
+                     jsonb_build_object('content', %L, 'updated_at', 2))$$,
+           pg_temp.ws() || '-block-new', pg_temp.ws(), pg_temp.env('new'))),
+  format('KMC02: purge_workspace_history: 1 history row(s) after event %s are not re-seal writes',
+         pg_temp.through()),
+  'the purge refuses an INSERT after through, even one carrying changed_columns'
+);
+
+SELECT is(
+  pg_temp.probe('authenticated', pg_temp.owner_id(),
+    pg_temp.purge_sql(pg_temp.ws(), pg_temp.through(), pg_temp.archived()),
+    format($$INSERT INTO public.blocks_history
+               (block_id, workspace_id, op, semantic_op, changed_columns, after_diff)
+             VALUES (%L, %L, 'U', 'update', NULL, '{}'::jsonb)$$,
+           pg_temp.ws() || '-block-2', pg_temp.ws())),
+  format('KMC02: purge_workspace_history: 1 history row(s) after event %s are not re-seal writes',
+         pg_temp.through()),
+  'the purge refuses an UPDATE row with no changed_columns'
 );
 
 -- A history row shaped like a re-seal (an UPDATE of one content column and
