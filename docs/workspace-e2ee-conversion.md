@@ -287,12 +287,14 @@ The first production run is #1288.
       - Its slot count is no proof on its own: a Defragment that fails also ends with one slot, the old one.
     - Then open the other devices one at a time, and paste the key on each.
     - Once every device is back, the owner runs **Clean up attachments** ([§3](#3-the-single-client-contract)). Its report must list no object left in place; investigate any it does before going on.
-11. **Operator: `VACUUM FULL`** on `blocks`, `blocks_history`, `storage.objects` and `workspaces`, then on `pg_catalog.pg_statistic`.
+11. **Operator: `VACUUM FULL`** on five tables: `blocks`, `blocks_history`, `storage.objects` and `workspaces`, then `pg_catalog.pg_statistic`.
     - It takes ACCESS EXCLUSIVE locks, which block reads **and** writes on each table for a time proportional to the table's **total** size across all workspaces. Schedule it.
     - Set a `lock_timeout` of a few seconds, and retry on a timeout. A lock request that waits queues every tenant behind it, which is also why the flip uses `NOWAIT` ([§6.1](#61-server)).
     - Run it after the Defragment, whose snapshot would otherwise hold it off.
-    - **On each of the four tables, one at a time, run `VACUUM (FULL, ANALYZE, VERBOSE)`.** The `ANALYZE` replaces the planner's sampled values, which still hold plaintext ([§9.1](#91-supabase-postgres)). Then `VACUUM FULL pg_catalog.pg_statistic` drops the old samples.
-    - **Check each table:**
+    - **Run them one at a time.**
+      - On the first four, run `VACUUM (FULL, ANALYZE, VERBOSE)`. The `ANALYZE` replaces the planner's sampled values, which still hold plaintext ([§9.1](#91-supabase-postgres)).
+      - Then `VACUUM (FULL, VERBOSE) pg_catalog.pg_statistic` drops the old samples.
+    - **Check each of the five:**
       - **The output reports `0 dead row versions cannot be removed yet`.** A transaction older than the purge keeps alive the dead rows it can still see, and `VACUUM FULL` copies them into the new table. End that transaction, then run it again.
       - **`pg_relation_filenode()` changed.** A table the role can't vacuum is skipped with a WARNING, not an error, and keeps its filenode ([§9.5](#95-open-items) V4).
     - Record when it finished. The "safe from" date counts from that time.
@@ -349,11 +351,11 @@ After the purge, recovery **re-keys the workspace in place** from the newest rec
   - Slow-statement logging is off.
   - No bind parameters are logged on error.
   - An error's `DETAIL` can still print the failing row: a `NOT NULL` violation on `blocks` prints the whole row, content included. *(inferred: Postgres's error format)*
-- **The app's statements carry no content.**
+- **Under those defaults, the app's statements carry no content.**
   - Every content write is an RPC call (`apply_block_patches`, `apply_block_creates`), and every read filters by id or workspace id. *(read: `src/services/powersync.ts`, `src/sync/conversion/conversionServer.ts`)*
-  - PostgREST passes an RPC's arguments as a bind parameter, so a logged `STATEMENT` holds none of them. *(inferred: PostgREST's prepared statements)*
+  - PostgREST passes an RPC's arguments as a bind parameter, so an error's logged `STATEMENT` holds none of them. *(inferred: PostgREST's prepared statements)*
   - An ad-hoc operator query that failed would log its literals.
-- **Overrides.** A project, or a role through `ALTER ROLE … SET`, can override those defaults. `supautils.conf.j2` lets the privileged role set `log_statement`, `log_min_duration_statement` and `pgaudit.log`. This repo's migrations set none of them, and the hosted values weren't read ([§9.5](#95-open-items) V2).
+- **Overrides.** A project, or a role through `ALTER ROLE … SET`, can override those defaults. Logging every statement (`log_statement = 'all'`; an RPC call is a `SELECT`, so `mod` misses it), or logging by duration, would log an RPC's bind values in full, because `log_parameter_max_length` defaults to unlimited. *(read: [error reporting and logging](https://www.postgresql.org/docs/17/runtime-config-logging.html))* `supautils.conf.j2` lets the privileged role set `log_statement`, `log_min_duration_statement` and `pgaudit.log`. This repo's migrations set none of them, and the hosted values weren't read ([§9.5](#95-open-items) V2).
 - **API logs** have no documented request-body field, so bodies aren't kept *(inferred)*. The app sends content only in RPC bodies, and its URLs carry only ids *(read: same files)*.
 - **Log Drains** copy logs out, on Pro and up, with the destination's retention. *(read: [Log Drains](https://supabase.com/docs/guides/observability/log-drains))* Whether this project has one is [§9.5](#95-open-items) V1.
 
