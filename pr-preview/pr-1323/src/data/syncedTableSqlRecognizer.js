@@ -1,1 +1,1 @@
-import{dU as e,fU as t,pU as n}from"../../chunks/app-BH1ZCk5K.js";export{e as SYNCED_TABLES,t as syncedWriteTarget,n as writeTargets};
+import{DU as e,EU as t,OU as n}from"../../chunks/app-CE3vxKij.js";export{t as SYNCED_TABLES,e as syncedWriteTarget,n as writeTargets};

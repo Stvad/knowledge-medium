@@ -1,1 +1,1 @@
-import{i_ as e}from"../../../chunks/app-BH1ZCk5K.js";export{e as seedTutorial};
+import{y_ as e}from"../../../chunks/app-CE3vxKij.js";export{e as seedTutorial};
