@@ -20,6 +20,7 @@
 
 import { getActiveUserId, isRemoteSyncActive, syncResolverForUser } from '@/data/repoProvider.js'
 import type { Repo } from '@/data/repo.js'
+import { fetchWorkspaceConversionState } from '@/data/workspaceConversion.js'
 import type { SyncResolver } from '@/sync/keys/resolver.js'
 import { supabase } from '@/services/supabase.js'
 import { showError } from '@/utils/toast.js'
@@ -96,6 +97,7 @@ const drainDepsFor = (blobStore: BlobStore, resolver: SyncResolver | null) => ({
   byteStore: getByteStore(),
   blobStore,
   ...laneKeyDeps(resolver),
+  readLiveWorkspace: (workspaceId: string) => fetchWorkspaceConversionState(workspaceId),
 })
 
 // One per-user lock: the LANE lock makes the SLOW drain (uploads) single-owner

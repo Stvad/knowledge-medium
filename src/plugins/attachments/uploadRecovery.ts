@@ -62,6 +62,7 @@ import { decodeBytes } from '@/sync/byteTransform.js'
 import { verifyContentHash } from '@/sync/crypto/contentHash.js'
 import { materializabilityToMode, type GetCek, type GetMaterializability } from '@/sync/transform.js'
 import type { BlobStore } from './blobStore.js'
+import { deriveObjectKey } from './storagePaths.js'
 import type { ByteUploadRecord, ByteUploadStore } from './uploadStore.js'
 
 export interface UploadRecoveryDeps {
@@ -72,6 +73,8 @@ export interface UploadRecoveryDeps {
   readonly getMaterializability: GetMaterializability
   /** The workspace key for the e2ee AEAD-open of a PRESENT object. */
   readonly getCek: GetCek
+  /** The workspace's K_id (§10), which keys an e2ee object's address. */
+  readonly getContentKeyHmac: (workspaceId: string) => Promise<CryptoKey | null>
   /** Is the QUEUED user still the active account? The probe / decode ride the active
    *  session + resolve keys against the active user, so a mid-recovery account switch
    *  must not verify/re-drive userA's record under userB. Defaults to always-active. */
@@ -103,6 +106,7 @@ interface RecoverOneCtx {
   readonly blobStore: BlobStore
   readonly getMaterializability: GetMaterializability
   readonly getCek: GetCek
+  readonly getContentKeyHmac: (workspaceId: string) => Promise<CryptoKey | null>
   readonly isActiveUser: () => boolean
   readonly getAccessToken: () => Promise<string | null>
 }
@@ -122,6 +126,14 @@ const recoverOne = async (
   const mode = materializabilityToMode(await ctx.getMaterializability(rec.workspaceId))
   if (mode === null) return 'deferred'
 
+  // (1a) The address, derived now — a record that failed before an in-place
+  //      conversion probes the keyed one. No K_id (or a malformed hash): defer.
+  //      Under a stale plaintext mode this probes the raw path, which is safe:
+  //      recovery never uploads (a requeue goes through the drain's live-mode
+  //      check), and a raw object it verifies is one the cleaner seals.
+  const objectKey = await deriveObjectKey(rec.contentHash, mode, () => ctx.getContentKeyHmac(rec.workspaceId))
+  if (!objectKey.ok) return 'deferred'
+
   // (1b) A live session is required to TRUST the probe. With no token the read rides the anon
   //      role, where an RLS-denied download is 404-shaped (Storage hides existence) — so a 404
   //      can't be read as "path free", and requeuing off it would clear the §9 warning while the
@@ -138,7 +150,7 @@ const recoverOne = async (
   //     OWN authenticated read found the path free, not that we couldn't see it.
   let stored: Uint8Array<ArrayBuffer> | null
   try {
-    stored = await ctx.blobStore.probe(rec.workspaceId, rec.contentKey)
+    stored = await ctx.blobStore.probe(rec.workspaceId, objectKey.objectKey)
   } catch {
     return 'deferred'
   }
@@ -195,6 +207,7 @@ export const recoverFailedUploads = async (
     blobStore: deps.blobStore,
     getMaterializability: deps.getMaterializability,
     getCek: deps.getCek,
+    getContentKeyHmac: deps.getContentKeyHmac,
     isActiveUser: deps.isActiveUser ?? (() => true),
     getAccessToken: deps.getAccessToken ?? (async () => 'authed'),
   }

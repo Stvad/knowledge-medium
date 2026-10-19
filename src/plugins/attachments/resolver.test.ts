@@ -504,3 +504,69 @@ describe('createAssetResolver — concurrency', () => {
     await Promise.all([pA, pB])
   })
 })
+
+// A workspace converted in place (docs/workspace-e2ee-conversion.md §6.2): bytes
+// stored on this device before the conversion sit under the raw name, while the
+// e2ee address is the keyed one.
+describe('createAssetResolver — bytes stored before an in-place conversion', () => {
+  it('a pre-conversion local byte renders after the upgrade, with no download', async () => {
+    const plain = bytes(4, 4, 4)
+    const contentHash = await hashOf(plain)
+    const byteStore = new InMemoryByteStore()
+    await byteStore.put(USER, WS, await contentKeyFor('none', contentHash), plain)
+    const { resolver, blobGet } = build({
+      byteStore,
+      getMaterializability: mat('decrypt'),
+      serve: async () => { throw new Error('must not download') },
+    })
+
+    expect(await resolver.resolve({ workspaceId: WS, contentHash })).toEqual({ ok: true, bytes: plain })
+    expect(blobGet).not.toHaveBeenCalled()
+  })
+
+  it('the keyed name is read first, and a miss on both fetches the KEYED object only', async () => {
+    const plain = bytes(5, 6)
+    const contentHash = await hashOf(plain)
+    const served = await seal('e2ee', plain, contentHash)
+    const { resolver, blobGet, byteStore } = build({ getMaterializability: mat('decrypt'), serve: async () => served })
+
+    expect(await resolver.resolve({ workspaceId: WS, contentHash })).toEqual({ ok: true, bytes: plain })
+    const keyed = await contentKeyFor('e2ee', contentHash)
+    expect(blobGet).toHaveBeenCalledWith(WS, keyed)
+    expect(await byteStore.get(USER, WS, keyed)).toEqual(plain)
+  })
+
+  it('the backlog lane counts a raw-named local entry as present, from the hint or a probe, without reading it', async () => {
+    const plain = bytes(7, 7)
+    const contentHash = await hashOf(plain)
+    const raw = await contentKeyFor('none', contentHash)
+    const byteStore = new InMemoryByteStore()
+    await byteStore.put(USER, WS, raw, plain)
+    const { resolver, blobGet } = build({
+      byteStore,
+      getMaterializability: mat('decrypt'),
+      serve: async () => { throw new Error('must not download') },
+    })
+
+    // Without reading the bytes: the down-lane walks every media block each pass,
+    // so a presence miss here would read every pre-conversion file in full.
+    const read = vi.spyOn(byteStore, 'get')
+    expect(await resolver.replicate({ workspaceId: WS, contentHash }, new Set([raw])))
+      .toEqual({ ok: true, status: 'present' })
+    expect(await resolver.replicate({ workspaceId: WS, contentHash }))
+      .toEqual({ ok: true, status: 'present' })
+    expect(read).not.toHaveBeenCalled()
+    expect(blobGet).not.toHaveBeenCalled()
+  })
+
+  it('a plaintext workspace never looks under a keyed name', async () => {
+    // The fallback only widens e2ee lookups: a plaintext resolve reads one name.
+    const plain = bytes(8)
+    const contentHash = await hashOf(plain)
+    const byteStore = new InMemoryByteStore()
+    const get = vi.spyOn(byteStore, 'get')
+    const { resolver } = build({ byteStore, getMaterializability: mat('copy'), serve: async () => plain })
+    await resolver.resolve({ workspaceId: WS, contentHash })
+    expect(get.mock.calls.map(([, , key]) => key)).toEqual([await contentKeyFor('none', contentHash)])
+  })
+})
