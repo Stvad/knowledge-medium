@@ -1,1 +1,1 @@
-import{_L as e}from"../../chunks/app-Dpgyplgt.js";export{e as staticDataExtensions};
+import{_L as e}from"../../chunks/app-CWvnQh7-.js";export{e as staticDataExtensions};

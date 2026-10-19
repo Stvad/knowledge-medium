@@ -1,1 +1,1 @@
-import{Uv as e}from"../../../chunks/app-Dpgyplgt.js";export{e as blockEditingContentRenderer};
+import{Uv as e}from"../../../chunks/app-CWvnQh7-.js";export{e as blockEditingContentRenderer};

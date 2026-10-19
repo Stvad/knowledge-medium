@@ -1,1 +1,1 @@
-import{iE as e}from"../../chunks/app-Dpgyplgt.js";export{e as editorAutocompleteExtension};
+import{iE as e}from"../../chunks/app-CWvnQh7-.js";export{e as editorAutocompleteExtension};

@@ -1,1 +1,1 @@
-import{ig as e}from"../../../chunks/app-Dpgyplgt.js";export{e as videoPlayerPlugin};
+import{ig as e}from"../../../chunks/app-CWvnQh7-.js";export{e as videoPlayerPlugin};
