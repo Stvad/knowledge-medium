@@ -4,13 +4,13 @@
  * TWO parts, because two different things can make the copy on disk stale.
  *
  * `row_events.id` is an AUTOINCREMENT the client schema's triggers advance on
- * every insert, update and delete of `blocks` — local `repo.tx` writes and
- * sync-applied ones alike — so its maximum moves exactly when the DATA worth
- * copying moves, and reading it is a rowid lookup rather than a scan. That
- * matters because the alternative is copying multiple gigabytes to discover
- * nothing changed. An update that moves only a row's version does not advance
- * it: the copy on disk holds the same data, and sync re-delivers the bump to a
- * restored copy, whose checkpoint predates it.
+ * every change to `blocks` — local `repo.tx` writes and sync-applied ones alike
+ * — so its maximum moves exactly when the DATA worth copying moves, and reading
+ * it is a rowid lookup rather than a scan. That matters because the
+ * alternative is copying multiple gigabytes to discover nothing changed. An
+ * update that moves only a row's version is not a change: the copy on disk
+ * holds the same data, and sync re-delivers the bump to a restored copy, whose
+ * checkpoint predates it.
  *
  * The other two are the upload queues, and they are in here for a
  * restore-safety reason rather than a data one. THE RULE, so the next reader
@@ -82,8 +82,8 @@ const readQueueFingerprint = async (
  * id it is paired with in the filename is what separates those.
  *
  * The two ways of having no answer are kept APART because they call for
- * opposite things. An EMPTY log is a positive fact: the triggers fire on every
- * `blocks` write, local and sync-applied alike, so an empty log means no local
+ * opposite things. An EMPTY log is a positive fact: every `blocks` insert is
+ * logged, local and sync-applied alike, so an empty log means no local
  * writes — and therefore nothing in the upload queue either, which is the whole
  * of what this feature protects. There is nothing to copy, so no copy is taken.
  * An UNREADABLE log says nothing about the database; in particular it says

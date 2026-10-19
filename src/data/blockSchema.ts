@@ -462,9 +462,6 @@ const safeJsonParse = <T>(value: string | null | undefined, fallback: T): T => {
   }
 }
 
-export const parseBlockSnapshotJson = (value: string | null | undefined) =>
-  value ? safeJsonParse<BlockData | null>(value, null) ?? undefined : undefined
-
 export const parseBlockRow = (row: BlockRow): BlockData => ({
   id: row.id,
   workspaceId: row.workspace_id,
