@@ -37,10 +37,17 @@ export const stageOf = (read: WorkspaceConversionRead, userId: string): StageRea
     return {kind: 'unexpected', detail: `mode ${encryptionMode}, phase ${conversionPhase ?? 'none'}`}
   }
   if (conversionPhase === null) return {kind: 'stage', stage: {kind: 'done'}}
+  if (conversionPhase === 'unknown') return {kind: 'unexpected', detail: 'a conversion phase this version of the app does not know'}
   return {kind: 'stage', stage: {kind: conversionPhase, canary: wkCanary}}
 }
 
-const STAGE_ORDER: Record<ConversionStage['kind'], number> = {plaintext: 0, sealing: 1, cleaning: 2, done: 3}
+export type StageKind = ConversionStage['kind']
 
-export const stageMovedBack = (from: ConversionStage, to: ConversionStage): boolean =>
-  STAGE_ORDER[to.kind] < STAGE_ORDER[from.kind]
+const STAGE_ORDER: Record<StageKind, number> = {plaintext: 0, sealing: 1, cleaning: 2, done: 3}
+
+/** Whether the server shows a stage before `floor`, the latest one this run
+ *  knows the server reached. */
+export const stageMovedBack = (floor: StageKind, to: ConversionStage): boolean =>
+  STAGE_ORDER[to.kind] < STAGE_ORDER[floor]
+
+export const laterStage = (a: StageKind, b: StageKind): StageKind => (STAGE_ORDER[a] >= STAGE_ORDER[b] ? a : b)

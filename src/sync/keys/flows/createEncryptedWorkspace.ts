@@ -61,13 +61,7 @@ export const createEncryptedWorkspace = async <T extends object>(
     deps.generateKeyBytes,
   )
 
-  // Preflight the KEY store (IndexedDB) too — symmetric with the pin-store
-  // (localStorage) preflight above. Probe a write+delete with the real key at a
-  // sentinel id, so a key-store failure (quota / corruption / private mode)
-  // refuses the create HERE rather than producing a server-side e2ee workspace
-  // this device can't open: a pin would persist but no key, and re-pasting the
-  // WK would loop on the same failed write. Cleaned up immediately; the real key
-  // is persisted after the row exists.
+  // Refuse before the server row exists if this device couldn't keep the key.
   try {
     await probeKeyStore(deps.keyStore, deps.userId, record)
   } catch {

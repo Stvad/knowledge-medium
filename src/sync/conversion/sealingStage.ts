@@ -11,7 +11,7 @@ import { bundleRecordOf, type BundleRecord, type BundleRecordStore } from './bun
 import { takeBundle, type BundleProgress } from './bundle/takeBundle.js'
 import { BundleInvalid, verifyBundle } from './bundle/verifyBundle.js'
 import { ConversionErrorCode, errorCodeOf, type ConversionServer } from './conversionServer.js'
-import { abortableSleep } from './flip.js'
+import { abortableSleep } from '@/utils/abortableSleep.js'
 import { resealWorkspace, type ResealProgress } from './reseal.js'
 import { verifyReseal, type VerifyProgress } from './verifyReseal.js'
 

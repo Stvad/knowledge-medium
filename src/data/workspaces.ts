@@ -702,7 +702,10 @@ const primeLocalWorkspace = async (repo: Repo, workspace: Workspace): Promise<vo
  * the device then quarantines. Marked, those writes are held instead.
  *
  * Local only: the `workspaces` table has no upload trigger, and the synced row
- * that later replaces it carries the same values.
+ * that later replaces it carries the same values. A checkpoint from before the
+ * flip, still being applied, can put plaintext back; that is accepted, since
+ * every run past the flip marks the row again and writes refused meanwhile are
+ * quarantined, not lost.
  */
 export const markLocalWorkspaceConverted = async (
   db: {execute(sql: string, params?: unknown[]): Promise<unknown>},

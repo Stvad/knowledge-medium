@@ -1,5 +1,6 @@
 // main is a BOOT SHIM — do not grow it. It mounts the provider/boundary stack
-// and the pre-React instrumentation, nothing else. New app-root behavior goes
+// and the pre-React instrumentation, nothing else — plus the conversion flow's
+// host, which must outlive App's swap between a workspace and its gate. New app-root behavior goes
 // into an overridable seam — a block renderer (like TopLevelRenderer), a
 // facet, or the layout-root hook (usePanelLayoutProjection / LayoutRootContext).
 // See docs/perspective-keep-alive-design.html.

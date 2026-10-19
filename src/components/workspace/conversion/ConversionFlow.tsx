@@ -1,23 +1,33 @@
 import { useCallback, useState, type ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
-import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import type { SavedKeyProblem, SaveKeyPrompt } from '@/sync/conversion/conversionKey'
-import type { PreflightBlocker, PreflightReport } from '@/sync/conversion/preflight'
-import type {
-  ActiveStage,
-  ConversionFlowDeps,
-  ConversionRunResult,
-  ConversionStatus,
-  ConversionUi,
+import type { SavedKeyPrompt, SavedKeyProblem, SaveKeyPrompt } from '@/sync/conversion/conversionKey'
+import { FLIP_SETTLED_MS } from '@/sync/conversion/flipAttempts'
+import type { PreflightBlocker } from '@/sync/conversion/preflight'
+import {
+  runConversion,
+  type ActiveStage,
+  type ConversionFlowDeps,
+  type ConversionRunResult,
+  type ConversionStatus,
+  type ConversionUi,
 } from '@/sync/conversion/runConversion'
+import {
+  Explanation,
+  GateCard,
+  PASTED_KEY_PROBLEM,
+  WorkspaceKeyDisplay,
+  WorkspaceKeyField,
+} from '@/components/workspace/keyUi'
 import type { ConversionUnavailable } from './conversionFlowDeps'
-import { useConversionRun, type PendingPrompt, type RunState } from './useConversionRun'
+import { useConversionRun, type PromptChannel, type RunState } from './useConversionRun'
 
 interface Props {
   readonly workspaceName: string | null
-  readonly makeDeps: (ui: ConversionUi, signal: AbortSignal) => ConversionFlowDeps | ConversionUnavailable
+  /** Why this session can't run a conversion at all, if it can't. */
+  readonly unavailable: ConversionUnavailable | null
+  readonly makeDeps: (ui: ConversionUi, signal: AbortSignal) => ConversionFlowDeps
   readonly onClose: () => void
 }
 
@@ -26,26 +36,75 @@ interface Props {
  * time, each starting from what the server shows. Closing it between runs is
  * always safe; a conversion past the flip carries on from the workspace's gate.
  */
-export function ConversionFlow({workspaceName, makeDeps, onClose}: Props) {
-  const {state, start, cancel} = useConversionRun(makeDeps)
+export function ConversionFlow({workspaceName, unavailable, makeDeps, onClose}: Props) {
+  const runWith = useCallback(
+    (channel: PromptChannel, signal: AbortSignal) => runConversion(makeDeps(conversionUi(channel), signal)),
+    [makeDeps],
+  )
+  const {state, start, cancel} = useConversionRun(runWith)
   const name = workspaceName ? `"${workspaceName}"` : 'this workspace'
 
   return (
-    <div className="flex min-h-svh items-start justify-center overflow-y-auto p-6 sm:items-center">
-      <div className="w-full max-w-lg space-y-5 rounded-lg border bg-background p-6 shadow-sm">
-        <h1 className="text-lg font-semibold">Encrypt {name} end to end</h1>
-        <FlowBody state={state} start={start} cancel={cancel} onClose={onClose}/>
-      </div>
+    <GateCard title={`Encrypt ${name} end to end`} wide>
+      {unavailable
+        ? <UnavailableView why={unavailable} onClose={onClose}/>
+        : <FlowBody state={state} start={start} cancel={cancel} onClose={onClose}/>}
+    </GateCard>
+  )
+}
+
+/** Each question the run asks, as the prompt that answers it. */
+const conversionUi = (channel: PromptChannel): ConversionUi => ({
+  confirmContract: stage => channel.ask<void>((answer, cancel) => (
+    <ContractPrompt stage={stage} answer={() => answer()} cancel={cancel}/>
+  )),
+  confirmPreflight: () => channel.ask<void>((answer, cancel) => (
+    <PreflightPrompt answer={() => answer()} cancel={cancel}/>
+  )),
+  saveKey: prompt => channel.ask<string>((answer, cancel) => (
+    <SaveKeyPromptView prompt={prompt} answer={answer} cancel={cancel}/>
+  )),
+  enterSavedKey: prompt => channel.ask<string | null>((answer, cancel) => (
+    <SavedKeyPromptView prompt={prompt} answer={answer} cancel={cancel}/>
+  )),
+  status: status => channel.status(status),
+})
+
+const errorMessage = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error)
+
+interface ActionProps {
+  readonly label: string
+  readonly onClick: () => void
+  readonly disabled?: boolean
+}
+
+function Actions({primary, secondary}: {primary?: ActionProps; secondary?: ActionProps}) {
+  return (
+    <div className="flex justify-end gap-2">
+      {secondary && <Button type="button" variant="secondary" onClick={secondary.onClick}>{secondary.label}</Button>}
+      {primary && <Button type="button" disabled={primary.disabled} onClick={primary.onClick}>{primary.label}</Button>}
     </div>
   )
 }
 
-const Explanation = ({children}: {children: ReactNode}) => (
-  <p className="text-sm text-muted-foreground">{children}</p>
-)
+function UnavailableView({why, onClose}: {why: ConversionUnavailable; onClose: () => void}) {
+  return (
+    <>
+      <Explanation>
+        {why === 'no-server'
+          ? 'Converting needs this device signed in and syncing with the server.'
+          : "This browser can't make sure the conversion runs in one tab only. Use desktop Chrome or Edge."}
+      </Explanation>
+      <Actions secondary={{label: 'Close', onClick: onClose}}/>
+    </>
+  )
+}
 
-const errorMessage = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error)
+/** While the flip request is out it may commit whatever this run does next,
+ *  so there is nothing for Stop to stop. */
+const canStop = (status: ConversionStatus | null): boolean =>
+  !(status?.kind === 'flipping' && status.waiting === null)
 
 function FlowBody({state, start, cancel, onClose}: {
   state: RunState
@@ -66,20 +125,21 @@ function FlowBody({state, start, cancel, onClose}: {
         </>
       )
     case 'running':
-      return state.pending
-        ? <PromptView pending={state.pending} cancel={cancel}/>
-        : (
-          <>
-            <StatusView status={state.status}/>
-            <Actions secondary={{label: 'Stop', onClick: cancel}}/>
-          </>
-        )
+      return state.prompt ?? (
+        <>
+          <StatusView status={state.status}/>
+          {canStop(state.status) && <Actions secondary={{label: 'Stop', onClick: cancel}}/>}
+        </>
+      )
     case 'finished':
       return <ResultView result={state.result} retry={start} onClose={onClose}/>
     case 'cancelled':
       return (
         <>
-          <Explanation>Stopped. Nothing is lost: the next run carries on from where the server is.</Explanation>
+          <Explanation>
+            Stopped. The next run carries on from where the server is. If you saved a workspace key
+            during this run, keep it: the conversion goes on under that key.
+          </Explanation>
           <Actions primary={{label: 'Run again', onClick: start}} secondary={{label: 'Close', onClick: onClose}}/>
         </>
       )
@@ -91,48 +151,6 @@ function FlowBody({state, start, cancel, onClose}: {
           <Actions primary={{label: 'Try again', onClick: start}} secondary={{label: 'Close', onClick: onClose}}/>
         </>
       )
-    case 'unavailable':
-      return (
-        <>
-          <Explanation>
-            {state.why === 'no-server'
-              ? 'Converting needs a signed-in, synced session.'
-              : "This browser can't make sure the conversion runs in one tab only. Use desktop Chrome or Edge."}
-          </Explanation>
-          <Actions secondary={{label: 'Close', onClick: onClose}}/>
-        </>
-      )
-  }
-}
-
-interface ActionProps {
-  readonly label: string
-  readonly onClick: () => void
-  readonly disabled?: boolean
-}
-
-function Actions({primary, secondary}: {primary?: ActionProps; secondary?: ActionProps}) {
-  return (
-    <div className="flex justify-end gap-2">
-      {secondary && <Button type="button" variant="secondary" onClick={secondary.onClick}>{secondary.label}</Button>}
-      {primary && (
-        <Button type="button" disabled={primary.disabled} onClick={primary.onClick}>{primary.label}</Button>
-      )}
-    </div>
-  )
-}
-
-function PromptView({pending, cancel}: {pending: PendingPrompt; cancel: () => void}) {
-  switch (pending.kind) {
-    case 'contract':
-      return <ContractPrompt stage={pending.stage} answer={pending.answer} cancel={cancel}/>
-    case 'preflight':
-      return <PreflightPrompt report={pending.report} answer={pending.answer} cancel={cancel}/>
-    case 'save-key':
-      // A remount per key keeps a new key from inheriting the last one's step.
-      return <SaveKeyPromptView key={pending.prompt.displayed} prompt={pending.prompt} answer={pending.answer} cancel={cancel}/>
-    case 'saved-key':
-      return <SavedKeyPrompt problem={pending.problem} answer={pending.answer} cancel={cancel}/>
   }
 }
 
@@ -174,7 +192,7 @@ function ContractPrompt({stage, answer, cancel}: {stage: ActiveStage; answer: ()
   )
 }
 
-function PreflightPrompt({answer, cancel}: {report: PreflightReport; answer: () => void; cancel: () => void}) {
+function PreflightPrompt({answer, cancel}: {answer: () => void; cancel: () => void}) {
   const [understood, setUnderstood] = useState(false)
   return (
     <>
@@ -192,7 +210,7 @@ function PreflightPrompt({answer, cancel}: {report: PreflightReport; answer: () 
       <ConfirmCheck id="conversion-residue" checked={understood} onChange={setUnderstood}>
         I understand, and this can't be undone.
       </ConfirmCheck>
-      <Actions primary={{label: 'Create the key', onClick: answer, disabled: !understood}} secondary={{label: 'Cancel', onClick: cancel}}/>
+      <Actions primary={{label: 'Continue', onClick: answer, disabled: !understood}} secondary={{label: 'Cancel', onClick: cancel}}/>
     </>
   )
 }
@@ -205,10 +223,6 @@ function SaveKeyPromptView({prompt, answer, cancel}: {
   // Shown once: a mismatch asks for the saved copy again, never shows the key again.
   const [revealed, setRevealed] = useState(!prompt.mismatch)
   const [typed, setTyped] = useState('')
-  const [copied, setCopied] = useState(false)
-  const copy = useCallback(() => {
-    void navigator.clipboard?.writeText(prompt.displayed).then(() => setCopied(true), () => setCopied(false))
-  }, [prompt.displayed])
 
   if (revealed) {
     return (
@@ -218,72 +232,65 @@ function SaveKeyPromptView({prompt, answer, cancel}: {
           password manager and paper. Every other device asks for it, and without it the content
           can't be read again.
         </Explanation>
-        <code className="block select-all break-all rounded-md border bg-muted p-3 font-mono text-sm" data-testid="conversion-key">
-          {prompt.displayed}
-        </code>
-        <div className="flex justify-between gap-2">
-          <Button type="button" variant="secondary" onClick={copy}>{copied ? 'Copied' : 'Copy'}</Button>
-          <div className="flex gap-2">
-            <Button type="button" variant="secondary" onClick={cancel}>Cancel</Button>
-            <Button type="button" onClick={() => setRevealed(false)}>I've saved it</Button>
-          </div>
-        </div>
+        <WorkspaceKeyDisplay workspaceKey={prompt.displayed}/>
+        <Actions primary={{label: "I've saved it", onClick: () => setRevealed(false)}} secondary={{label: 'Cancel', onClick: cancel}}/>
       </>
     )
   }
   return (
     <>
       <Explanation>Paste or type the key back from where you saved it.</Explanation>
-      <div className="space-y-2">
-        <Label htmlFor="conversion-key-check">Workspace key</Label>
-        <Input
-          id="conversion-key-check"
-          autoFocus
-          autoComplete="off"
-          placeholder="kmp-wk-1:…"
-          value={typed}
-          onChange={event => setTyped(event.target.value)}
-          onKeyDown={event => { if (event.key === 'Enter' && typed.trim()) answer(typed.trim()) }}
-        />
-        {prompt.mismatch && (
-          <p className="text-sm text-destructive">
-            That isn't the key shown. Check the copy you saved; if it's wrong, cancel and start again for a new key.
-          </p>
-        )}
-      </div>
+      <WorkspaceKeyField
+        id="conversion-key-check"
+        value={typed}
+        onChange={setTyped}
+        onSubmit={() => answer(typed.trim())}
+        error={prompt.mismatch
+          ? "That isn't the key shown. Check the copy you saved; if it's wrong, cancel and start again for a new key."
+          : null}
+      />
       <Actions primary={{label: 'Confirm', onClick: () => answer(typed.trim()), disabled: !typed.trim()}} secondary={{label: 'Cancel', onClick: cancel}}/>
     </>
   )
 }
 
 const SAVED_KEY_PROBLEM: Record<SavedKeyProblem, string> = {
+  ...PASTED_KEY_PROBLEM,
   'stored-key-wrong': "The key on this device doesn't unlock the workspace. Paste the key you saved.",
-  'format': "That doesn't look like a workspace key (expected kmp-wk-1:…).",
-  'wrong-key': "That key doesn't unlock this workspace.",
 }
 
-function SavedKeyPrompt({problem, answer, cancel}: {
-  problem: SavedKeyProblem | null
-  answer: (pasted: string) => void
+function SavedKeyPromptView({prompt, answer, cancel}: {
+  prompt: SavedKeyPrompt
+  answer: (pasted: string | null) => void
   cancel: () => void
 }) {
   const [pasted, setPasted] = useState('')
   return (
     <>
-      <Explanation>Paste the workspace key you saved when the conversion started.</Explanation>
-      <div className="space-y-2">
-        <Label htmlFor="conversion-saved-key">Workspace key</Label>
-        <Input
-          id="conversion-saved-key"
-          autoFocus
-          autoComplete="off"
-          placeholder="kmp-wk-1:…"
-          value={pasted}
-          onChange={event => setPasted(event.target.value)}
-          onKeyDown={event => { if (event.key === 'Enter' && pasted.trim()) answer(pasted.trim()) }}
-        />
-        {problem && <p className="text-sm text-destructive">{SAVED_KEY_PROBLEM[problem]}</p>}
-      </div>
+      <Explanation>
+        {prompt.context === 'earlier-attempt'
+          ? "This device holds the key from an earlier attempt that didn't switch the server over. Paste the copy you saved then: the conversion goes on under that key."
+          : 'Paste the workspace key you saved when the conversion started.'}
+      </Explanation>
+      <WorkspaceKeyField
+        id="conversion-saved-key"
+        value={pasted}
+        onChange={setPasted}
+        onSubmit={() => answer(pasted.trim())}
+        error={prompt.problem && SAVED_KEY_PROBLEM[prompt.problem]}
+      />
+      {prompt.context === 'earlier-attempt' && (prompt.canStartOver
+        ? (
+          <Button type="button" variant="link" className="h-auto p-0 text-sm" onClick={() => answer(null)}>
+            I don't have it: make a new key
+          </Button>
+        )
+        : (
+          <p className="text-xs text-muted-foreground">
+            The earlier attempt may still reach the server, so a new key can be made only{' '}
+            {Math.round(FLIP_SETTLED_MS / 60_000)} minutes after it.
+          </p>
+        ))}
       <Actions primary={{label: 'Continue', onClick: () => answer(pasted.trim()), disabled: !pasted.trim()}} secondary={{label: 'Cancel', onClick: cancel}}/>
     </>
   )
@@ -298,7 +305,7 @@ const statusText = (status: ConversionStatus | null): string => {
       return 'Checking that the workspace can be converted…'
     case 'flipping':
       return status.waiting
-        ? `Waiting for the database to finish other writes (try ${status.waiting.attempt + 1}, in ${Math.ceil(status.waiting.retryInMs / 1000)} s)…`
+        ? `Waiting for the database to finish other writes (try ${status.waiting.attempt + 1}, in ${Math.max(1, Math.ceil(status.waiting.retryInMs / 1000))} s)…`
         : 'Switching the server to encrypted mode…'
     case 'checking-key':
       return 'Checking the workspace key…'
@@ -314,7 +321,7 @@ const BLOCKER_TEXT = (blocker: PreflightBlocker): string => {
     case 'sealed-looking-rows':
       return `${blocker.blockIds.length} block(s) already hold values shaped like encrypted ones, which the conversion could not tell apart afterwards: ${blocker.blockIds.join(', ')}.`
     case 'pending-uploads':
-      return `${blocker.count} change(s) on this device haven't uploaded yet. Wait for them to sync.`
+      return `This device has ${blocker.count} change(s), in any workspace, that haven't uploaded yet. Wait for them to sync.`
     case 'rejected-uploads':
       return `${blocker.count} change(s) were rejected by the server. Retry or discard them first.`
     case 'pins-not-durable':
@@ -370,9 +377,10 @@ function ResultView({result, retry, onClose}: {result: ConversionRunResult; retr
       return (
         <>
           <p className="text-sm text-destructive">
-            The server shows an earlier step ({result.to.kind}) than this run had reached ({result.from.kind}). Nothing more was done.
+            The server shows an earlier step ({result.shown.kind}) than this run had reached ({result.reached}).
+            Nothing more was done; try again in a moment.
           </p>
-          <Actions secondary={close}/>
+          <Actions primary={again} secondary={close}/>
         </>
       )
     case 'stopped':

@@ -2,23 +2,19 @@
  * Minting a workspace key (WK): the half that creating an encrypted workspace
  * (§8.1) and converting a plaintext one in place
  * (docs/workspace-e2ee-conversion.md §6.3 step 1) share. Neither flow trusts a
- * key it can't prove recoverable, so the string shown to the user is re-parsed
- * and must open the canary before anything is stored or sent.
+ * key it can't prove recoverable, so the key is imported from the very string
+ * shown to the user, and that string must open the canary before anything is
+ * stored or sent.
  */
 
 import { mintCanary, validateCanary } from '../crypto/canary.js'
-import { deriveContentKeyHmac } from '../crypto/contentKey.js'
-import {
-  formatWorkspaceKey,
-  generateWorkspaceKeyBytes,
-  importWorkspaceKey,
-  parseWorkspaceKey,
-} from '../crypto/workspaceKey.js'
+import { formatWorkspaceKey, generateWorkspaceKeyBytes } from '../crypto/workspaceKey.js'
+import { importPastedWorkspaceKey, type PastedWorkspaceKey } from './flows/pastedKey.js'
 import type { WorkspaceKeyRecord, WorkspaceKeyStore } from './keyStore.js'
 
 export interface MintedWorkspaceKey {
   /** What the key store holds: the non-extractable WK and its K_id. */
-  readonly record: WorkspaceKeyRecord & {readonly contentKeyHmac: CryptoKey}
+  readonly record: PastedWorkspaceKey
   /** The `kmp-wk-1:` string, the only form the raw key ever leaves in. */
   readonly displayed: string
   /** The canary for `workspaceId` under this key. */
@@ -31,30 +27,16 @@ export const mintWorkspaceKey = async (
 ): Promise<MintedWorkspaceKey> => {
   const keyBytes = generateKeyBytes()
   const displayed = formatWorkspaceKey(keyBytes)
-  let wk: CryptoKey
-  let contentKeyHmac: CryptoKey
-  try {
-    wk = await importWorkspaceKey(keyBytes)
-    // K_id needs the raw bytes, which the non-extractable WK can't give back.
-    contentKeyHmac = await deriveContentKeyHmac(keyBytes)
-  } finally {
-    keyBytes.fill(0)
-  }
-
-  const canary = await mintCanary(wk, workspaceId)
-  // Re-derived from the displayed string, not from `wk`: this proves the string
-  // the user saves unlocks the workspace, not merely that this key does.
-  const verifyBytes = parseWorkspaceKey(displayed)
-  let verifyKey: CryptoKey
-  try {
-    verifyKey = await importWorkspaceKey(verifyBytes)
-  } finally {
-    verifyBytes.fill(0)
-  }
-  if (!(await validateCanary(verifyKey, canary, workspaceId))) {
+  keyBytes.fill(0)
+  const record = await importPastedWorkspaceKey(displayed)
+  if (!record) throw new Error('mintWorkspaceKey: the minted key does not parse back')
+  const canary = await mintCanary(record.wk, workspaceId)
+  // Defence in depth: guards a mint/validate pairing that has drifted apart,
+  // before any server row exists whose canary no device could open.
+  if (!(await validateCanary(record.wk, canary, workspaceId))) {
     throw new Error('mintWorkspaceKey: the minted canary failed its round-trip check')
   }
-  return {record: {wk, contentKeyHmac}, displayed, canary}
+  return {record, displayed, canary}
 }
 
 /** Never a real workspace id: written, then deleted. */

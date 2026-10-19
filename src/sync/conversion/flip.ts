@@ -6,6 +6,7 @@
  * flight it refuses with `55P03` and is retried here, with backoff and jitter.
  */
 
+import { abortableSleep } from '@/utils/abortableSleep.js'
 import { ConversionErrorCode, errorCodeOf, type ConversionServer } from './conversionServer.js'
 
 export type FlipResult =
@@ -23,6 +24,8 @@ export interface FlipOptions {
   readonly server: ConversionServer
   readonly workspaceId: string
   readonly canary: string
+  /** Just before each request is sent: from then on the flip may commit. */
+  readonly onSend?: () => void
   /** Each time the flip waits for the database before trying again. */
   readonly onWait?: (wait: FlipWait) => void
   readonly signal?: AbortSignal
@@ -33,19 +36,11 @@ export interface FlipOptions {
 const FIRST_RETRY_MS = 500
 const MAX_RETRY_MS = 30_000
 
-export const abortableSleep = (ms: number, signal?: AbortSignal): Promise<void> =>
-  new Promise((resolve, reject) => {
-    signal?.throwIfAborted()
-    const timer = setTimeout(() => {
-      signal?.removeEventListener('abort', onAbort)
-      resolve()
-    }, ms)
-    const onAbort = () => {
-      clearTimeout(timer)
-      reject(signal!.reason)
-    }
-    signal?.addEventListener('abort', onAbort, {once: true})
-  })
+/** The server's own words, without the adapter's wrapping. */
+const serverMessage = (error: unknown): string => {
+  const cause = (error as {cause?: {message?: unknown}} | null)?.cause?.message
+  return typeof cause === 'string' ? cause : error instanceof Error ? error.message : String(error)
+}
 
 /** Any other failure throws: the flip may have committed with its response
  *  lost, so the caller re-reads the server before trying again. */
@@ -53,6 +48,7 @@ export const flipToE2ee = async ({
   server,
   workspaceId,
   canary,
+  onSend,
   onWait,
   signal,
   sleep = abortableSleep,
@@ -61,12 +57,13 @@ export const flipToE2ee = async ({
   for (let attempt = 1; ; attempt++) {
     signal?.throwIfAborted()
     try {
+      onSend?.()
       await server.convertWorkspaceToE2ee(workspaceId, canary)
       return {kind: 'flipped'}
     } catch (error) {
       const code = errorCodeOf(error)
       if (code === ConversionErrorCode.refused) {
-        return {kind: 'refused', message: error instanceof Error ? error.message : String(error)}
+        return {kind: 'refused', message: serverMessage(error)}
       }
       if (code !== ConversionErrorCode.lockNotAvailable) throw error
     }

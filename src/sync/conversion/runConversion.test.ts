@@ -2,9 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { validateCanary } from '../crypto/canary.js'
 import { InMemoryWorkspaceKeyStore, type WorkspaceKeyRecord } from '../keys/keyStore.js'
 import { mintWorkspaceKey } from '../keys/mintWorkspaceKey.js'
-import type { SavedKeyProblem, SaveKeyPrompt } from './conversionKey.js'
-import type { PreflightEnvironment, PreflightReport } from './preflight.js'
-import { conversionLockName, webConversionLock, type ConversionLock } from './runLock.js'
+import type { SavedKeyPrompt, SaveKeyPrompt } from './conversionKey.js'
+import { FLIP_SETTLED_MS, InMemoryFlipAttempts } from './flipAttempts.js'
+import type { PreflightReport } from './preflight.js'
+import { conversionLockName, webConversionLock } from './runLock.js'
 import {
   runConversion,
   type ActiveStage,
@@ -12,10 +13,9 @@ import {
   type ConversionStatus,
   type ConversionUi,
 } from './runConversion.js'
-import { seedPlaintext, sealFor, keyOf, WS } from './test/conversionFixtures.js'
+import { keyOf, sealFor, seedPlaintext, WS } from './test/conversionFixtures.js'
 import { FakeConversionServer } from './test/fakeConversionServer.js'
-
-const USER = 'user-1'
+import { flowDeps, passingEnvironment, USER } from './test/flowFixtures.js'
 
 /** A user who answers every prompt as told, and remembers what they were asked. */
 class ScriptedUi implements ConversionUi {
@@ -23,11 +23,11 @@ class ScriptedUi implements ConversionUi {
   readonly contracts: ActiveStage['kind'][] = []
   readonly preflights: PreflightReport[] = []
   readonly keyPrompts: SaveKeyPrompt[] = []
-  readonly savedKeyProblems: Array<SavedKeyProblem | null> = []
+  readonly savedKeyPrompts: SavedKeyPrompt[] = []
   /** What the user types back, given the key shown; by default what was shown. */
   typeBack: (prompt: SaveKeyPrompt) => string = prompt => prompt.displayed
-  /** What the user pastes when asked for the saved key, in order. */
-  pastes: string[] = []
+  /** What the user pastes when asked for the saved key, in order; null starts over. */
+  pastes: Array<string | null> = []
   cancelContract = false
 
   async confirmContract(stage: ActiveStage) {
@@ -44,8 +44,8 @@ class ScriptedUi implements ConversionUi {
     return this.typeBack(prompt)
   }
 
-  async enterSavedKey({problem}: {problem: SavedKeyProblem | null}) {
-    this.savedKeyProblems.push(problem)
+  async enterSavedKey(prompt: SavedKeyPrompt) {
+    this.savedKeyPrompts.push(prompt)
     const next = this.pastes.shift()
     if (next === undefined) throw new Error('the test pasted no more keys')
     return next
@@ -56,44 +56,30 @@ class ScriptedUi implements ConversionUi {
   }
 }
 
-const freeLock: ConversionLock = async (_name, run) => ({acquired: true, value: await run()})
-
-const environment = (overrides: Partial<PreflightEnvironment> = {}): PreflightEnvironment => ({
-  canPersistPins: () => true,
-  keyStoreIsDurable: true,
-  supportsDirectoryPicker: true,
-  uploadQueue: async () => ({pending: 0, rejected: 0}),
-  ...overrides,
-})
-
 let server: FakeConversionServer
 let keyStore: InMemoryWorkspaceKeyStore
+let flipAttempts: InMemoryFlipAttempts
 let ui: ScriptedUi
 let localCanaries: string[]
+let clock: number
 
 beforeEach(() => {
   server = new FakeConversionServer()
   seedPlaintext(server, 3)
   keyStore = new InMemoryWorkspaceKeyStore()
+  clock = 1_000_000
+  flipAttempts = new InMemoryFlipAttempts(() => clock)
   ui = new ScriptedUi()
   localCanaries = []
 })
 
-const deps = (overrides: Partial<ConversionFlowDeps> = {}): ConversionFlowDeps => ({
-  userId: USER,
-  workspaceId: WS,
-  server,
-  fetchConversionState: () => server.conversionState(WS),
-  keyStore,
-  lock: freeLock,
-  preflight: environment(),
-  markLocalConverted: async canary => void localCanaries.push(canary),
-  ui,
-  flipTiming: {sleep: async () => {}, random: () => 0.5},
-  ...overrides,
-})
-
-const run = (overrides: Partial<ConversionFlowDeps> = {}) => runConversion(deps(overrides))
+const run = (overrides: Partial<ConversionFlowDeps> = {}) =>
+  runConversion(flowDeps(server, ui, {
+    keyStore,
+    flipAttempts,
+    markLocalConverted: async canary => void localCanaries.push(canary),
+    ...overrides,
+  }))
 const flips = () => server.calls.filter(call => call.method === 'convertWorkspaceToE2ee').length
 
 const serverCanary = async (): Promise<string> => {
@@ -108,6 +94,15 @@ const storedKey = async (): Promise<WorkspaceKeyRecord> => {
   return record
 }
 
+/** A key an earlier attempt minted, showed, had typed back and stored, then didn't flip. */
+const earlierAttempt = async () => {
+  const earlier = await mintWorkspaceKey(WS)
+  await keyStore.put(USER, WS, earlier.record)
+  return earlier
+}
+
+const PLAINTEXT_READ = {kind: 'read' as const, state: {encryptionMode: 'none', conversionPhase: null, wkCanary: null, ownerUserId: USER}}
+
 describe('runConversion: preflight → key → flip', () => {
   it('flips under a key the user typed back, stores it, and marks the local row', async () => {
     const result = await run()
@@ -119,7 +114,7 @@ describe('runConversion: preflight → key → flip', () => {
     expect(await validateCanary((await storedKey()).wk, await serverCanary(), WS)).toBe(true)
     expect(localCanaries[0]).toBe(await serverCanary())
     // The sealing stage's canary check needed no paste: this device holds the key.
-    expect(ui.savedKeyProblems).toEqual([])
+    expect(ui.savedKeyPrompts).toEqual([])
   })
 
   it('asks again until the typed-back key unlocks the workspace, storing nothing before', async () => {
@@ -135,36 +130,69 @@ describe('runConversion: preflight → key → flip', () => {
     expect(put.mock.calls.filter(([, workspaceId]) => workspaceId === WS)).toHaveLength(1)
   })
 
-  it('reuses the key of an attempt that did not flip, without showing a new one', async () => {
-    const earlier = await mintWorkspaceKey(WS)
-    await keyStore.put(USER, WS, earlier.record)
+  it('flips under an earlier attempt\'s key only once the user pastes their copy of it', async () => {
+    const earlier = await earlierAttempt()
+    ui.pastes = [(await mintWorkspaceKey(WS)).displayed, earlier.displayed]
 
     await run()
 
     expect(ui.keyPrompts).toEqual([])
+    expect(ui.savedKeyPrompts).toEqual([
+      {context: 'earlier-attempt', problem: null, canStartOver: true},
+      {context: 'earlier-attempt', problem: 'invalid-key', canStartOver: true},
+    ])
     expect(await validateCanary(earlier.record.wk, await serverCanary(), WS)).toBe(true)
   })
 
-  it('resumes a flip that committed after its response was lost, under the same key', async () => {
-    server.loseNextFlipResponse = true
-    await expect(run()).rejects.toThrow(/timed out/)
-    const firstKey = await storedKey()
+  it('starts over with a new key when the user no longer has the earlier one', async () => {
+    const earlier = await earlierAttempt()
+    ui.pastes = [null]
 
-    const resumed = await run()
+    await run()
 
-    expect(resumed).toMatchObject({kind: 'stopped', stage: {kind: 'sealing'}})
-    expect(flips()).toBe(1)
-    expect(await validateCanary(firstKey.wk, await serverCanary(), WS)).toBe(true)
     expect(ui.keyPrompts).toHaveLength(1)
-    expect(ui.savedKeyProblems).toEqual([])
+    expect(await validateCanary(earlier.record.wk, await serverCanary(), WS)).toBe(false)
+    expect(await validateCanary((await storedKey()).wk, await serverCanary(), WS)).toBe(true)
+  })
+
+  it('keeps the earlier key while a flip sent under it could still commit', async () => {
+    const earlier = await earlierAttempt()
+    flipAttempts.markSent()
+    clock += FLIP_SETTLED_MS - 1
+    ui.pastes = [null, earlier.displayed]
+
+    await run()
+
+    expect(ui.savedKeyPrompts.map(prompt => prompt.canStartOver)).toEqual([false, false])
+    expect(ui.keyPrompts).toEqual([])
+    expect(await validateCanary(earlier.record.wk, await serverCanary(), WS)).toBe(true)
+  })
+
+  it('refuses rather than mint a second key when the key store cannot be read', async () => {
+    await earlierAttempt()
+    vi.spyOn(keyStore, 'get').mockRejectedValueOnce(new Error('IndexedDB unavailable'))
+    const put = vi.spyOn(keyStore, 'put')
+
+    await expect(run()).rejects.toThrow('IndexedDB unavailable')
+    expect(ui.keyPrompts).toEqual([])
+    expect(put).not.toHaveBeenCalled()
+    expect(flips()).toBe(0)
+  })
+
+  it('carries on past a flip that committed after its response was lost', async () => {
+    server.loseNextFlipResponse = true
+
+    expect(await run()).toMatchObject({kind: 'stopped', stage: {kind: 'sealing'}})
+    expect(flips()).toBe(1)
+    expect(await validateCanary((await storedKey()).wk, await serverCanary(), WS)).toBe(true)
+    // Marked from the server's canary as the sealing stage begins.
     expect(localCanaries).toEqual([await serverCanary()])
   })
 
   it('treats a not-plaintext refusal as a late flip when the server has moved on', async () => {
-    const earlier = await mintWorkspaceKey(WS)
-    await keyStore.put(USER, WS, earlier.record)
+    const earlier = await earlierAttempt()
+    ui.pastes = [earlier.displayed]
     // The earlier attempt's flip commits between this run's stage read and its own flip.
-    server.writesInFlight = 1
     const flip = server.convertWorkspaceToE2ee.bind(server)
     server.convertWorkspaceToE2ee = async (workspaceId, canary) => {
       if (flips() === 0) server.flip(WS, earlier.canary)
@@ -174,14 +202,31 @@ describe('runConversion: preflight → key → flip', () => {
     expect(await run()).toMatchObject({kind: 'stopped', stage: {kind: 'sealing', canary: earlier.canary}})
   })
 
+  it('reports a refusal it can\'t follow up as blocked, not as refused', async () => {
+    server.flip(WS, (await mintWorkspaceKey(WS)).canary)
+    const reads = vi.spyOn(server, 'conversionState')
+    reads.mockResolvedValueOnce(PLAINTEXT_READ)
+    reads.mockResolvedValue({kind: 'unavailable', error: new Error('offline')})
+
+    expect(await run()).toEqual({kind: 'blocked', read: {kind: 'unavailable'}})
+  })
+
   it('marks the local row as soon as the flip returns, before re-reading the server', async () => {
     const reads = vi.spyOn(server, 'conversionState')
-    reads.mockImplementationOnce(async () => ({kind: 'read', state: {encryptionMode: 'none', conversionPhase: null, wkCanary: null, ownerUserId: USER}}))
-    reads.mockImplementation(async () => ({kind: 'unavailable', error: new Error('offline')}))
+    reads.mockResolvedValueOnce(PLAINTEXT_READ)
+    reads.mockResolvedValue({kind: 'unavailable', error: new Error('offline')})
 
     expect(await run()).toEqual({kind: 'blocked', read: {kind: 'unavailable'}})
     reads.mockRestore()
     expect(localCanaries).toEqual([await serverCanary()])
+  })
+
+  it('refuses to fall back to preflight when a read after the flip lags behind it', async () => {
+    vi.spyOn(server, 'conversionState').mockResolvedValueOnce(PLAINTEXT_READ).mockResolvedValueOnce(PLAINTEXT_READ)
+
+    expect(await run()).toEqual({kind: 'stage-moved-back', reached: 'sealing', shown: {kind: 'plaintext'}})
+    expect(ui.preflights).toHaveLength(1)
+    expect(flips()).toBe(1)
   })
 
   it('refuses before showing a key this device could not keep', async () => {
@@ -203,7 +248,7 @@ describe('runConversion: preflight → key → flip', () => {
     expect(flips()).toBe(0)
   })
 
-  it('retries the flip while writes are in flight, reporting each wait', async () => {
+  it('retries the flip while writes are in flight, reporting each wait and each send', async () => {
     server.writesInFlight = 3
     const sleeps: number[] = []
 
@@ -211,11 +256,16 @@ describe('runConversion: preflight → key → flip', () => {
 
     expect(flips()).toBe(4)
     expect(sleeps).toEqual([500, 1000, 2000])
-    expect(ui.statuses.filter(status => status.kind === 'flipping' && status.waiting !== null)).toEqual([
+    expect(ui.statuses.filter(status => status.kind === 'flipping')).toEqual([
+      {kind: 'flipping', waiting: null},
       {kind: 'flipping', waiting: {attempt: 1, retryInMs: 500}},
+      {kind: 'flipping', waiting: null},
       {kind: 'flipping', waiting: {attempt: 2, retryInMs: 1000}},
+      {kind: 'flipping', waiting: null},
       {kind: 'flipping', waiting: {attempt: 3, retryInMs: 2000}},
+      {kind: 'flipping', waiting: null},
     ])
+    expect(flipAttempts.sentRecently()).toBe(true)
   })
 
   it('stops a flip retrying once the run is cancelled', async () => {
@@ -240,7 +290,7 @@ describe('runConversion: preflight → key → flip', () => {
   it('reports a refused flip and changes nothing', async () => {
     server.sessionUserId = 'someone-else'
     // The stage read says owner, as a stale membership might; the flip itself refuses.
-    expect(await run()).toMatchObject({kind: 'flip-refused', message: expect.stringMatching(/only the workspace owner/)})
+    expect(await run()).toEqual({kind: 'flip-refused', message: 'convert_workspace_to_e2ee: only the workspace owner can convert it'})
     expect(await server.conversionState(WS)).toMatchObject({state: {encryptionMode: 'none', conversionPhase: null}})
     expect(localCanaries).toEqual([])
   })
@@ -263,11 +313,8 @@ describe('runConversion: preflight', () => {
     expect(await blockers({})).toEqual([{kind: 'sealed-looking-rows', blockIds: ['looks-sealed']}])
   })
 
-  it('finds a sealed-looking row behind a page of prefix-only ones', async () => {
+  it('finds a sealed-looking row on a later page', async () => {
     server.maxRows = 2
-    for (const id of ['p1', 'p2', 'p3']) {
-      server.insert({id, workspace_id: WS, content: 'enc:v1:', properties_json: 'enc:v1:', references_json: 'enc:v1:'})
-    }
     const wk = await keyOf(9)
     server.insert({id: 'z-sealed', workspace_id: WS, ...await sealFor(wk, {id: 'z-sealed', workspace_id: WS}, {content: 'a', properties_json: '{}', references_json: '[]'})})
 
@@ -276,7 +323,7 @@ describe('runConversion: preflight', () => {
 
   it('refuses while uploads are pending or rejected, or storage would not last', async () => {
     expect(await blockers({
-      preflight: environment({
+      preflight: passingEnvironment({
         uploadQueue: async () => ({pending: 4, rejected: 1}),
         canPersistPins: () => false,
         keyStoreIsDurable: false,
@@ -372,7 +419,11 @@ describe('runConversion: the canary check past the flip', () => {
     ui.pastes = ['not a key', (await mintWorkspaceKey(WS)).displayed, saved.displayed]
 
     expect(await run()).toMatchObject({kind: 'stopped', stage: {kind: 'sealing'}})
-    expect(ui.savedKeyProblems).toEqual([null, 'format', 'wrong-key'])
+    expect(ui.savedKeyPrompts).toEqual([
+      {context: 'converting', problem: null, canStartOver: false},
+      {context: 'converting', problem: 'format', canStartOver: false},
+      {context: 'converting', problem: 'invalid-key', canStartOver: false},
+    ])
     expect(await validateCanary((await storedKey()).wk, saved.canary, WS)).toBe(true)
     expect(localCanaries).toEqual([saved.canary])
   })
@@ -383,6 +434,6 @@ describe('runConversion: the canary check past the flip', () => {
 
     await run()
 
-    expect(ui.savedKeyProblems).toEqual(['stored-key-wrong'])
+    expect(ui.savedKeyPrompts.map(prompt => prompt.problem)).toEqual(['stored-key-wrong'])
   })
 })
