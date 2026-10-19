@@ -1,1 +1,1 @@
-import{GZ as e,KZ as t}from"../../chunks/app-12_jXJeR.js";export{e as parsePropertyDefinitionMetadata,t as propertySchemaOriginForSeedKey};
+import{GZ as e,KZ as t}from"../../chunks/app-DZxmbZdT.js";export{e as parsePropertyDefinitionMetadata,t as propertySchemaOriginForSeedKey};

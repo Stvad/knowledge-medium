@@ -1,1 +1,1 @@
-import{Ml as e,Nl as t}from"../../chunks/app-12_jXJeR.js";export{e as extensionApiCatalog,t as extensionApiRuntimeExports};
+import{Ml as e,Nl as t}from"../../chunks/app-DZxmbZdT.js";export{e as extensionApiCatalog,t as extensionApiRuntimeExports};

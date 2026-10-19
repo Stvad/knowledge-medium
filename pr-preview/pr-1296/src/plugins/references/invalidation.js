@@ -1,1 +1,1 @@
-import{FL as e,PL as t}from"../../../chunks/app-12_jXJeR.js";export{t as REFERENCES_TARGET_INVALIDATION_CHANNEL,e as referencesInvalidationRule};
+import{FL as e,PL as t}from"../../../chunks/app-DZxmbZdT.js";export{t as REFERENCES_TARGET_INVALIDATION_CHANNEL,e as referencesInvalidationRule};
