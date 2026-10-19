@@ -23,16 +23,16 @@
  *    primitive `materializePropertyChildrenForExistingRow` again on an
  *    already-converged row (same names) writes NOTHING — the
  *    `primary.content !== content` / `primaryValue.content !== content`
- *    guards (:400-409) skip when nothing changed. Verified via row_events
- *    for exactly the field/value rows: zero from the re-run.
+ *    guards (:400-409) skip when nothing changed. Verified via the
+ *    field/value rows' write counts (`blockWrites`): unmoved by the re-run.
  *  - PROJECT re-run is a no-op: calling the exported
  *    `reprojectOwnersForRowStates` again with the SAME row state writes
  *    NOTHING to the parent — the `propertiesEqual` short-circuit (:276).
- *    Verified via the parent's row_events.
+ *    Verified via the parent's write count.
  *  - Engine-level repeat: writing the IDENTICAL cell bag a second time
  *    through `tx.update` is a true no-op end-to-end —
  *    `updatePatchChangesBlock` (txEngine.ts:569) short-circuits before
- *    either processor runs — zero row_events anywhere.
+ *    either processor runs — no write count moves.
  *
  * Both exported primitives are fed HAND-BUILT lookups matching the
  * (unexported) `PropertyChildrenLookups` shape — this suite deliberately
@@ -47,6 +47,7 @@ import { ChangeScope, codecs, defineProperty, type AnyPropertySchema } from '@/d
 import { kernelValuePresetCoresById } from '@/data/kernelValuePresetCores'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
+import { blockWrites, installBlockWriteCounter } from '@/data/test/blockWriteCounter'
 import { projectedPropertyDefinitionsFacet } from '@/data/facets'
 import type { Repo } from '@/data/repo'
 import {
@@ -133,7 +134,10 @@ const caseArb = KIND_ARB.chain(kind => fc.record({
 }))
 
 let sharedDb: TestDb
-beforeAll(async () => { sharedDb = await createTestDb() })
+beforeAll(async () => {
+  sharedDb = await createTestDb()
+  await installBlockWriteCounter(sharedDb.db)
+})
 afterAll(async () => {
   await guard.barrier()
   await sharedDb.cleanup()
@@ -188,10 +192,7 @@ const childrenRows = async (parentId: string): Promise<ChildRow[]> =>
     [parentId],
   )
 
-const updateEventCount = async (blockId: string): Promise<number> =>
-  (await sharedDb.db.getAll<{id: number}>(
-    `SELECT id FROM row_events WHERE block_id = ? AND kind = 'update'`, [blockId],
-  )).length
+const writeCount = (blockId: string): Promise<number> => blockWrites(sharedDb.db, blockId)
 
 const runCase = async ({kind, values}: {kind: Kind; values: unknown[]}): Promise<void> => {
   await resetTestDb(sharedDb.db)
@@ -233,8 +234,8 @@ const runCase = async ({kind, values}: {kind: Kind; values: unknown[]}): Promise
   // not just "no observable diff": the `primary.content !== fieldContent` /
   // `primaryValue.content !== content` guards
   // (propertyChildrenProcessor.ts:400-409) skip the `tx.update` call
-  // entirely when nothing changed, so a converged re-run must emit zero
-  // row_events for EITHER row. `childrenRows` below only compares SELECTED
+  // entirely when nothing changed, so a converged re-run must move neither
+  // row's write count. `childrenRows` below only compares SELECTED
   // structural columns (content/deleted/is_field_form/reference_target_id)
   // — a regression that rewrites the field or value row WITHOUT changing
   // those (e.g. one of the two guards above dropped, so the call goes
@@ -245,25 +246,25 @@ const runCase = async ({kind, values}: {kind: Kind; values: unknown[]}): Promise
   // regression could just as easily swap in a write primitive that isn't
   // gated by it. The event baselines further down are no substitute
   // either way: they're captured AFTER this call, so a leak here is
-  // invisible to them. Snapshot both rows' update-event counts BEFORE the
-  // call instead.
+  // invisible to them. Snapshot both rows' write counts BEFORE the call
+  // instead.
   const beforeMaterialize = {
-    field: await updateEventCount(fieldRowId),
-    value: await updateEventCount(valueRowId),
+    field: await writeCount(fieldRowId),
+    value: await writeCount(valueRowId),
   }
   await repo.tx(async tx => {
     const row = await tx.get('p')
     await materializePropertyChildrenForExistingRow(tx, row!, lookups, [schema.name])
   }, {scope: ChangeScope.BlockDefault})
-  expect(await updateEventCount(fieldRowId), 'MATERIALIZE re-run: field row gets no write')
+  expect(await writeCount(fieldRowId), 'MATERIALIZE re-run: field row gets no write')
     .toBe(beforeMaterialize.field)
-  expect(await updateEventCount(valueRowId), 'MATERIALIZE re-run: value row gets no write')
+  expect(await writeCount(valueRowId), 'MATERIALIZE re-run: value row gets no write')
     .toBe(beforeMaterialize.value)
   expect(await childrenRows(fieldRowId)).toEqual(converged)
   expect(await cellValue('p')).toEqual({[schema.name]: lastValue})
 
   // ── PROJECT re-run: an already-correct cell is untouched ──
-  const parentUpdatesBeforeProject = await updateEventCount('p')
+  const parentBeforeProject = await writeCount('p')
   await repo.tx(async tx => {
     const fieldRowState: ProjectableRow = {
       id: fieldRowId, parentId: 'p', workspaceId: WS,
@@ -271,15 +272,15 @@ const runCase = async ({kind, values}: {kind: Kind; values: unknown[]}): Promise
     }
     await reprojectOwnersForRowStates(tx, [fieldRowState], lookups, 'full')
   }, {scope: ChangeScope.BlockDefault})
-  expect(await updateEventCount('p')).toBe(parentUpdatesBeforeProject)
+  expect(await writeCount('p')).toBe(parentBeforeProject)
   expect(await cellValue('p')).toEqual({[schema.name]: lastValue})
 
   // ── Engine-level repeat: the identical raw cell write again is inert ──
-  const before = {parent: await updateEventCount('p'), field: await updateEventCount(fieldRowId)}
+  const before = {parent: await writeCount('p'), field: await writeCount(fieldRowId)}
   await repo.tx(tx => tx.update('p', {properties: {[schema.name]: lastValue}}),
     {scope: ChangeScope.BlockDefault})
-  expect(await updateEventCount('p')).toBe(before.parent)
-  expect(await updateEventCount(fieldRowId)).toBe(before.field)
+  expect(await writeCount('p')).toBe(before.parent)
+  expect(await writeCount(fieldRowId)).toBe(before.field)
 }
 
 describe('MATERIALIZE / PROJECT: convergent idempotent pair', () => {
