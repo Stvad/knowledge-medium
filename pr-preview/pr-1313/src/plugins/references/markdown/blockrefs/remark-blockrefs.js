@@ -1,1 +1,1 @@
-import{Mp as e}from"../../../../../chunks/app-41-tgTtr.js";export{e as remarkBlockrefs};
+import{kp as e}from"../../../../../chunks/app-BYK4uPFn.js";export{e as remarkBlockrefs};

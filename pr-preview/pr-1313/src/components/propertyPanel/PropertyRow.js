@@ -1,1 +1,1 @@
-import{_M as e}from"../../../chunks/app-41-tgTtr.js";export{e as PropertyRow};
+import{vM as e}from"../../../chunks/app-BYK4uPFn.js";export{e as PropertyRow};

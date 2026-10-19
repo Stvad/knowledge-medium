@@ -1,1 +1,1 @@
-import{Jm as e,Km as t,qm as n}from"../../../chunks/app-41-tgTtr.js";export{t as DEFAULT_MAX_CAPTURE_BYTES,n as captureMedia,e as mediaBlockId};
+import{Gm as e,Um as t,Wm as n}from"../../../chunks/app-BYK4uPFn.js";export{t as DEFAULT_MAX_CAPTURE_BYTES,n as captureMedia,e as mediaBlockId};

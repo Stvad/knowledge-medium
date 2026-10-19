@@ -1,1 +1,1 @@
-import{sO as e}from"../../chunks/app-41-tgTtr.js";export{e as BlockLoadingPlaceholder};
+import{cO as e}from"../../chunks/app-BYK4uPFn.js";export{e as BlockLoadingPlaceholder};

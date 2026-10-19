@@ -1,1 +1,1 @@
-import{ww as e}from"../../../chunks/app-41-tgTtr.js";export{e as SwipeActionMenu};
+import{Tw as e}from"../../../chunks/app-BYK4uPFn.js";export{e as SwipeActionMenu};

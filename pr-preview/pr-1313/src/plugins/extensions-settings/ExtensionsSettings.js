@@ -1,1 +1,1 @@
-import{Mt as e}from"../../../chunks/app-41-tgTtr.js";export{e as ExtensionsSettings};
+import{kt as e}from"../../../chunks/app-BYK4uPFn.js";export{e as ExtensionsSettings};

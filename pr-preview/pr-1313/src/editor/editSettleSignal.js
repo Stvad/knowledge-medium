@@ -1,1 +1,1 @@
-import{BA as e,LA as t,RA as n,zA as r}from"../../chunks/app-41-tgTtr.js";export{t as blockEditResumed,n as blockEditSettled,r as notifyBlockEditResumed,e as notifyBlockEditSettled};
+import{BA as e,RA as t,VA as n,zA as r}from"../../chunks/app-BYK4uPFn.js";export{t as blockEditResumed,r as blockEditSettled,e as notifyBlockEditResumed,n as notifyBlockEditSettled};

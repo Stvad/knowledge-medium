@@ -1,1 +1,1 @@
-import{Kv as e}from"../../../chunks/app-41-tgTtr.js";export{e as Breadcrumbs};
+import{qv as e}from"../../../chunks/app-BYK4uPFn.js";export{e as Breadcrumbs};

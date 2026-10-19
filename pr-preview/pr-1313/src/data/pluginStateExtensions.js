@@ -1,1 +1,1 @@
-import{MV as e,NV as t}from"../../chunks/app-41-tgTtr.js";export{e as pluginPrefsExtension,t as pluginUIStateExtension};
+import{NV as e,PV as t}from"../../chunks/app-BYK4uPFn.js";export{e as pluginPrefsExtension,t as pluginUIStateExtension};

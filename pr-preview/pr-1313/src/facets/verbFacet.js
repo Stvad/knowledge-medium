@@ -1,1 +1,1 @@
-import{cF as e}from"../../chunks/app-41-tgTtr.js";export{e as defineVerbFacet};
+import{lF as e}from"../../chunks/app-BYK4uPFn.js";export{e as defineVerbFacet};
