@@ -1,1 +1,1 @@
-import{JP as e,qP as t}from"../../chunks/app-Cizl0mpM.js";export{t as isIOS,e as isMacPlatform};
+import{JP as e,qP as t}from"../../chunks/app-BYcraf8t.js";export{t as isIOS,e as isMacPlatform};

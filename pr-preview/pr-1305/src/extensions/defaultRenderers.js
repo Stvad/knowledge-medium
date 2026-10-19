@@ -1,1 +1,1 @@
-import{nO as e,rO as t,tO as n}from"../../chunks/app-Cizl0mpM.js";export{n as defaultRegistry,e as defaultRendererContributions,t as defaultRenderersExtension};
+import{nO as e,rO as t,tO as n}from"../../chunks/app-BYcraf8t.js";export{n as defaultRegistry,e as defaultRendererContributions,t as defaultRenderersExtension};
