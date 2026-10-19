@@ -78,12 +78,17 @@ The server side (#1294) is owner-only SECURITY DEFINER RPCs over a staging area 
 
 - `private.workspace_conversions(workspace_id pk, attempt_id, canary, state, started_by, started_at)`. `state` is `staging` or `cleanup_pending`. **The workspace is frozen for as long as an attempt row exists**, from `begin` to `finish` or `abort`. `canary` is the new key's canary, minted by the client before `begin` and stored here, so the attempt is bound to exactly one workspace key.
 - `private.workspace_conversion_rows(workspace_id, attempt_id, block_id, content, properties_json, references_json)` holds only the sealed columns. The conversion only updates rows, so staging needs no op column, inserts or deletes.
+- `private.workspace_conversion_objects(workspace_id, attempt_id, keyed_path)` records the keyed attachment objects that the cleanup converted from raw objects which no media block references yet ([§5.4](#54-attachments)). Their path can't be recomputed from server blocks, so it must survive a crash. The names are keyed HMACs, so storing them adds no fingerprint.
 
 **Every id is scoped to the workspace being converted.** These functions run with the definer's privileges and bypass RLS. So a staged `block_id` whose server row is in any other workspace, or doesn't exist, is refused at stage time, and the apply's UPDATE is restricted to `workspace_id = ws`. Without that, a caller who owns workspace A could overwrite a block in workspace B by guessing its id.
 
 1. **`begin_workspace_conversion(ws, canary) → attempt_id`** inserts the attempt in `staging`, which freezes the workspace.
    - **One attempt at a time.** It refuses if any attempt row exists for `ws`. A second device, or a second tab with a different key, cannot start one alongside.
-   - **Block writes stall instead of being quarantined.** A BEFORE trigger on `blocks` refuses every write to a frozen workspace that the definer doesn't make, raising **`PT429`**. PostgREST turns that into HTTP 429, which `classifyUploadError` retries forever (`src/services/uploadErrorClassifier.ts`). That's the trick `blocks_refuse_anon` plays with `PT401` (`20261013120000_refuse_anon_writes_to_blocks.sql`); a 22/23/42/P0002 code would quarantine the edits.
+   - **Block writes stall instead of being quarantined.** A BEFORE trigger on `blocks` refuses every write to a frozen workspace except the conversion's own, raising **`PT429`**.
+     - "The conversion's own" is narrow: `current_user = 'postgres'` **and** a transaction-local `km.conversion_attempt` setting equal to the live `attempt_id`. Only `apply` sets that setting, via `set_config(…, true)`.
+     - `current_user` alone would admit every SECURITY DEFINER function. `delete_workspace`, for one, runs as `postgres` (consolidated initial migration), and its cascade would write full-row plaintext DELETE entries into history mid-conversion.
+     - A client can't be `postgres`, so the pair can't be forged.
+     - `delete_workspace` also refuses outright while an attempt exists ("finish or abort the conversion first"), so the owner gets a clear error rather than a stalled cascade. PostgREST turns that into HTTP 429, which `classifyUploadError` retries forever (`src/services/uploadErrorClassifier.ts`). That's the trick `blocks_refuse_anon` plays with `PT401` (`20261013120000_refuse_anon_writes_to_blocks.sql`); a 22/23/42/P0002 code would quarantine the edits.
    - **Attachment uploads are frozen on the client.** A build with #1293 checks `workspace_upload_mode` before every upload and defers while the workspace is frozen ([§5.2](#52-client-a-plaintext-pinned-device-that-sees-e2ee)). Old builds are excluded by the runbook.
 
      A Storage-policy freeze was considered and dropped. It would also refuse the conversion's own keyed uploads, and the drain treats its 403 as permanent.
@@ -111,8 +116,9 @@ The server side (#1294) is owner-only SECURITY DEFINER RPCs over a staging area 
    The attempt row also stays, because it is the only durable record that the plaintext Storage objects still need deleting.
 4. **`finish_workspace_conversion(ws, attempt_id)`** deletes the attempt row, which **ends the freeze**. The client calls it only after the cleanup and the "every object is in K" proof of [§5.4](#54-attachments) pass.
 5. **`abort_workspace_conversion(ws, attempt_id)`** works only while `staging`. It clears the freeze, the staging rows and the attempt; nothing else has changed. There is no abort after the apply ([§7](#7-runbook) step 4).
-6. **`get_workspace_conversion(ws)`** is the owner-only read that resume starts from. It returns `attempt_id`, `canary` and `state`.
-7. **`workspace_upload_mode(ws)`** is readable by any member. It returns `frozen` while an attempt exists, otherwise `none` or `e2ee`. The attachment drain makes this live check before every upload ([§5.2](#52-client-a-plaintext-pinned-device-that-sees-e2ee)).
+6. **`record_converted_object(ws, attempt_id, keyed_path)`** is called by the cleanup before it deletes each converted raw object ([§5.4](#54-attachments)).
+7. **`get_workspace_conversion(ws)`** is the owner-only read that resume starts from. It returns `attempt_id`, `canary` and `state`.
+8. **`workspace_upload_mode(ws)`** is readable by any member. It returns `frozen` while an attempt exists, otherwise `none` or `e2ee`. The attachment drain makes this live check before every upload ([§5.2](#52-client-a-plaintext-pinned-device-that-sees-e2ee)).
 
 **The cost of the freeze.**
 
@@ -124,6 +130,10 @@ The server side (#1294) is owner-only SECURITY DEFINER RPCs over a staging area 
 
 - `updated_at` is the row version, and the bump is how peers know to re-download.
 - The user sees `user_updated_at`; display reads it, not `updated_at`. The apply leaves it untouched, along with `created_at`, `created_by` and `updated_by`.
+- **The bump must not become local history.** The local `blocks_row_event_update` trigger (`src/data/internals/clientSchema.ts`) has no WHEN clause, so every sync-applied update appends full OLD and NEW snapshots to the never-pruned `row_events`.
+  - A whole-workspace bump would write hundreds of MB of redundant history on every device, right after an irreversible step.
+  - #1299 makes the trigger skip updates that change nothing but the row version. It compares the projection it logs, minus `updatedAt`, so later columns are covered automatically.
+  - That is a general dedup (drift bumps benefit too), and it must reach every device before the first conversion.
 
 **Why delete history inside the transaction instead of suppressing the history trigger.**
 
@@ -164,10 +174,13 @@ The conversion only updates rows, so it sends locked peers no deletes. A deferre
 
 1. Mark every staged `blocks_synced` row of the workspace for re-apply. That repairs a device that ran an older build across the conversion and already copied ciphertext into `blocks`.
 2. **Re-key the local byte store.** The byte store and every pending upload record are keyed by the content key computed at capture (`rec.contentKey`, a raw sha256 for a plaintext capture), and the drain reads the bytes by that key (`src/plugins/attachments/byteStore.ts`).
-   - For each entry: copy it to its keyed content key, point any pending record at the copy, then drop the old entry.
+   - A raw key and a keyed key are both 64 hex characters, so an entry's **name** can't say which it is. Classify each entry by its **content** instead: the store holds plaintext, so `h = sha256(bytes)` is always the true content hash.
+   - A key equal to `hex(h)` is raw: copy the entry to `hex(HMAC(K_id, h))`, point any pending record at the copy, then drop the raw entry.
+   - A key equal to `hex(HMAC(K_id, h))` is already keyed: skip it. A retry therefore never re-keys a copy.
+   - Anything else is corrupt: report it and leave it.
    - Re-keying only the record would strand its bytes, and the drain would see a clean miss and fail the record.
    - Leaving it alone would upload ciphertext to a raw sha256 path.
-   - Copy-then-switch means a crash at any point leaves at worst a duplicate entry.
+   - Copy-then-switch plus content classification means a crash at any point leaves at worst a duplicate, and a retry finishes the job.
 3. **Then** write the pin.
 
 The pin lives in localStorage and the flags in SQLite, so nothing makes the steps atomic; the ordering is what makes them recoverable. If the device crashes before step 3, the pin is still plaintext and the server still says e2ee. So the device still defers, and the next upgrade simply redoes steps 1 and 2, which are idempotent. If it crashes after step 3, steps 1 and 2 are already done.
@@ -226,8 +239,8 @@ The keyed-path and sealing logic already exists, in `src/sync/crypto/contentKey.
 **Ordering:**
 
 1. **Before** the apply, upload every keyed object and verify it by authenticated decryption plus a hash check, so no media block ever points at missing bytes.
-2. **After** the apply commits, with the attempt in `cleanup_pending` and the workspace still frozen, list `<ws>/`. Let **K** be the keyed paths this conversion has uploaded and verified. Every listed object outside K is classified by its **content**, never its header:
-   - **A raw object** is one whose name equals `hex(sha256(bytes))`, the content-addressed shape every plaintext-mode upload has. Its keyed path is derivable from the name alone: `hex(HMAC(K_id, sha256))`, per `deriveContentKey` in `src/sync/crypto/contentKey.ts`. So convert it: seal the bytes, upload them to the keyed path, verify, add that path to K, and only then delete the raw object.
+2. **After** the apply commits, with the attempt in `cleanup_pending` and the workspace still frozen, list `<ws>/`. Let **K** be the keyed paths of every media block in the workspace (recomputed from the server blocks), plus the paths recorded in `private.workspace_conversion_objects`. So a resumed cleanup rebuilds the same K. Every listed object outside K is classified by its **content**, never its header:
+   - **A raw object** is one whose name equals `hex(sha256(bytes))`, the content-addressed shape every plaintext-mode upload has. Its keyed path is derivable from the name alone: `hex(HMAC(K_id, sha256))`, per `deriveContentKey` in `src/sync/crypto/contentKey.ts`. So convert it in this order: seal the bytes, upload them to the keyed path, verify, **record the path** (`record_converted_object`), and only then delete the raw object. A crash at any point either leaves the raw object, which gets reconverted (the occupied-path check makes that idempotent), or leaves it already recorded.
      - This covers objects with no media block on the server yet: a capture whose block is still held behind the freeze, or one that never synced. When such a block arrives, its keyed bytes are already there.
    - **Anything else** is junk, neither ours nor content-addressed. Delete it.
 
@@ -288,7 +301,7 @@ Abort is never automatic.
 | 5. Upload and verify keyed attachment objects | partial, or a verification mismatch | extra ciphertext objects (harmless) | resume (the occupied-path check makes it idempotent); investigate any mismatch |
 | 6. Apply | refusal or timeout | the transaction rolls back; still frozen | fix the cause and re-apply, or abort |
 | 7. Upgrade the local pin | crash after the apply | server e2ee, attempt `cleanup_pending` (still frozen), pin still plaintext | automatic on restart: the stored key opens the canary ([§5.2](#52-client-a-plaintext-pinned-device-that-sees-e2ee)); resume then finds `cleanup_pending` |
-| 8. Convert every raw object outside K to its keyed path, delete junk, and repeat until a listing is clean | partial | `cleanup_pending`, still frozen; some raw objects remain | resume from `cleanup_pending` (conversion is idempotent per object) |
+| 8. Convert every raw object outside K to its keyed path (recording each), delete junk, and repeat until a listing is clean | partial | `cleanup_pending`, still frozen; some raw objects remain | resume from `cleanup_pending`: K is rebuilt from blocks plus recorded paths, and conversion is idempotent per object |
 | 9. Verify: every row opens, every listed object is in K, zero history rows remain (the ciphertext audit as a detector only) | a check fails | `cleanup_pending` | investigate; nothing is lost while the key is held |
 | 10. `finish`, which ends the freeze | RPC error | `cleanup_pending`, still frozen | retry |
 
@@ -341,7 +354,7 @@ The first production run is tracked in #1288.
    - the attachment bytes: download the workspace's Storage prefix, or the OPFS byte store from a device that holds every attachment.
 
    **The rollback is `abort`, and it exists only before the apply.** After the apply, nothing reverts the workspace to plaintext: e2ee → none is refused by design. If the key is lost, these snapshots let the content be rebuilt into a *new* plaintext workspace, with the losses of today's import (#401). The snapshots are for content recovery, not for undoing the conversion.
-5. **Fleet.** Every device runs a build with #1293, or is wiped (the browser's "clear site data"). Every device's upload queue is drained, and editing on other devices pauses for the duration.
+5. **Fleet.** Every device runs a build with #1293 and #1299, or is wiped (the browser's "clear site data"). Every device's upload queue is drained, and editing on other devices pauses for the duration.
 6. **Ordering.** Leave the workspace on the `cell` properties model until afterwards. A workspace that has already switched can't go back (the state is forward-only), so its definition ids remain on the [§6](#6-what-stays-visible-afterwards) list until #1297.
    - Property-definition synthesis runs only during the properties-as-blocks switch (`src/plugins/properties-migration/action.ts`), and on an e2ee workspace it mints K_id-keyed ids (`resolveSynthesisNamespace` in `src/data/internals/propertyDefinitionSynthesis.ts`).
    - Switching first would mint public, name-derived definition ids.
@@ -420,5 +433,6 @@ Plaintext → e2ee is that operation starting from "no key". The stage base is c
 | Attachment re-seal | #1291 | — |
 | Orchestrating flow | #1290 | #1291, #1292, #1293, #1294 |
 | Platform retention spike | #1289 | — |
-| First production run (runbook) | #1288 | #719, #1289, #1290, #1293 |
+| First production run (runbook) | #1288 | #719, #1289, #1290, #1293, #1299 |
 | Re-id migration for user-text-derived ids, every e2ee workspace | #1297 | #719 |
+| `row_events`: don't log version-only updates | #1299 | — |
