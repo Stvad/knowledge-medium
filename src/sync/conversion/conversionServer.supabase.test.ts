@@ -9,7 +9,7 @@
 import { randomBytes, randomUUID } from 'node:crypto'
 import pg from 'pg'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { mintCanary } from '../crypto/canary.js'
 import { ENVELOPE_PREFIX } from '../crypto/envelope.js'
 import { SEALED_COLUMNS, type WireBlockColumns } from '../transform.js'
@@ -176,12 +176,12 @@ describe('the re-seal and verify through PostgREST', {timeout: 60_000}, () => {
 
     // ── the flip, retried while the server finds writes in flight, as the flow does ──
     const canary = await mintCanary(wk, ws)
-    for (let attempt = 1; ; attempt++) {
+    const flipError = await vi.waitFor(async () => {
       const {error} = await client.rpc('convert_workspace_to_e2ee', {p_workspace_id: ws, p_wk_canary: canary})
-      if (!error) break
-      if (error.code !== '55P03' || attempt === 20) throw new Error(`flip failed (${error.code}): ${error.message}`)
-      await new Promise(resolve => setTimeout(resolve, 250))
-    }
+      if (error?.code === '55P03') throw new Error(error.message)
+      return error
+    }, {timeout: 20_000, interval: 250})
+    expect(flipError).toBeNull()
     // The recovery bundle's archive point, read as the flow reads it right after the flip.
     const [bundle] = await query<{through: string; archived: string}>(
       'select coalesce(max(event_id), 0) as through, count(*) as archived from public.blocks_history where workspace_id = $1',

@@ -22,7 +22,8 @@ const jwtSecret = 'check-db-throwaway-jwt-secret-of-32-chars-or-more'
 const containerName = `knowledge-medium-db-test-${process.pid}`
 const gotrueContainerName = `knowledge-medium-auth-test-${process.pid}`
 const postgrestContainerName = `knowledge-medium-rest-test-${process.pid}`
-// GoTrue and PostgREST reach Postgres by its container name on this network.
+// GoTrue and PostgREST reach Postgres by its address on this network, not its name: socktainer's per-network DNS
+// intermittently fails lookups (socktainer/socktainer#253), and GoTrue resolves the host on every connection.
 const networkName = containerName
 // The tests that need this stack; vitest.config.ts excludes them from `pnpm test`.
 const stackTestsConfig = join(repoRoot, 'vitest.supabase.config.ts')
@@ -178,6 +179,19 @@ async function startPostgresContainer(port) {
   await waitForPostgres(port)
 }
 
+async function containerAddress(name) {
+  const { stdout } = await runCommand(
+    'docker',
+    ['inspect', '-f', `{{(index .NetworkSettings.Networks "${networkName}").IPAddress}}`, name],
+    { capture: true },
+  )
+  const address = stdout.trim()
+  if (!address) {
+    throw new Error(`${name} has no address on ${networkName}`)
+  }
+  return address
+}
+
 /** Each `-e` pair of a container's environment. */
 const envArgs = (vars) => Object.entries(vars).flatMap(([name, value]) => ['-e', `${name}=${value}`])
 
@@ -203,7 +217,7 @@ async function setServerRolePasswords(port) {
 }
 
 // GoTrue migrates the auth schema as it starts, which is also what makes auth.uid() read the claims PostgREST sets.
-async function startGotrue(port) {
+async function startGotrue(port, postgresHost) {
   await runContainer(gotrueContainerName, [
     '-p',
     `127.0.0.1:${port}:9999`,
@@ -213,7 +227,7 @@ async function startGotrue(port) {
       API_EXTERNAL_URL: `http://127.0.0.1:${port}`,
       GOTRUE_SITE_URL: `http://127.0.0.1:${port}`,
       GOTRUE_DB_DRIVER: 'postgres',
-      GOTRUE_DB_DATABASE_URL: `postgresql://supabase_auth_admin:${postgresPassword}@${containerName}:5432/postgres`,
+      GOTRUE_DB_DATABASE_URL: `postgresql://supabase_auth_admin:${postgresPassword}@${postgresHost}:5432/postgres`,
       GOTRUE_JWT_SECRET: jwtSecret,
       // The token's `aud` and `role` claims; PostgREST switches to the role the token names.
       GOTRUE_JWT_AUD: 'authenticated',
@@ -226,13 +240,13 @@ async function startGotrue(port) {
 }
 
 // Started after the migrations, so its schema cache already holds them.
-async function startPostgrest(port) {
+async function startPostgrest(port, postgresHost) {
   await runContainer(postgrestContainerName, [
     '-p',
     `127.0.0.1:${port}:3000`,
     // The supabase CLI's settings for its PostgREST, which supabase/config.toml doesn't override.
     ...envArgs({
-      PGRST_DB_URI: `postgresql://authenticator:${postgresPassword}@${containerName}:5432/postgres`,
+      PGRST_DB_URI: `postgresql://authenticator:${postgresPassword}@${postgresHost}:5432/postgres`,
       PGRST_DB_SCHEMAS: 'public,graphql_public',
       PGRST_DB_EXTRA_SEARCH_PATH: 'public,extensions',
       PGRST_DB_MAX_ROWS: '1000',
@@ -336,10 +350,11 @@ try {
   await runSqlTests(port)
 
   await setServerRolePasswords(port)
+  const postgresHost = await containerAddress(containerName)
   const gotruePort = await getFreePort()
-  await startGotrue(gotruePort)
+  await startGotrue(gotruePort, postgresHost)
   const postgrestPort = await getFreePort()
-  await startPostgrest(postgrestPort)
+  await startPostgrest(postgrestPort, postgresHost)
   await runStackTests({ port, gotruePort, postgrestPort })
 } catch (error) {
   exitCode = error.exitCode ?? 1
