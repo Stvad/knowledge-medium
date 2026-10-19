@@ -120,6 +120,35 @@ describe('createSupabaseConversionServer', () => {
     expect((await server.readBlockPage(WS, blockId(1), 9)).map(row => row.id)).toEqual([blockId(2), blockId(3), blockId(4)])
   })
 
+  it('pages the rows whose three content columns all carry the envelope prefix', async () => {
+    const row = (i: number, overrides: Row = {}): Row => ({
+      id: blockId(i),
+      workspace_id: WS,
+      content: ENVELOPE,
+      properties_json: ENVELOPE,
+      references_json: ENVELOPE,
+      ...overrides,
+    })
+    const {client} = fakeClient({
+      blocks: [
+        row(2), row(0), row(1, {properties_json: '{}'}), row(3, {references_json: '[]'}), row(4, {content: 'enc:v2:'}),
+        row(5), row(6, {workspace_id: 'ws-other'}),
+      ],
+    })
+    const server = createSupabaseConversionServer(client)
+
+    expect((await server.readEnvelopePrefixedPage(WS, null, 1)).map(row => row.id)).toEqual([blockId(0)])
+    expect((await server.readEnvelopePrefixedPage(WS, blockId(0), 9)).map(row => row.id)).toEqual([blockId(2), blockId(5)])
+  })
+
+  it('flips with the workspace id and canary', async () => {
+    const {client, rpcs} = fakeClient({})
+
+    await createSupabaseConversionServer(client).convertWorkspaceToE2ee(WS, ENVELOPE)
+
+    expect(rpcs).toEqual([{fn: 'convert_workspace_to_e2ee', args: {p_workspace_id: WS, p_wk_canary: ENVELOPE}}])
+  })
+
   it('reads a workspace this session cannot see as null', async () => {
     const {client} = fakeClient({workspaces: [{id: 'ws-other', encryption_mode: 'e2ee', wk_canary: ENVELOPE}]})
 
@@ -142,5 +171,7 @@ describe('createSupabaseConversionServer', () => {
     await expect(server.countBlocks(WS)).rejects.toMatchObject(refused)
     await expect(server.readBlockPage(WS, null, 1)).rejects.toMatchObject(refused)
     await expect(server.applyBlockPatches([])).rejects.toMatchObject(refused)
+    await expect(server.readEnvelopePrefixedPage(WS, null, 1)).rejects.toMatchObject(refused)
+    await expect(server.convertWorkspaceToE2ee(WS, ENVELOPE)).rejects.toMatchObject(refused)
   })
 })

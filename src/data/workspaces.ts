@@ -694,6 +694,27 @@ const primeLocalWorkspace = async (repo: Repo, workspace: Workspace): Promise<vo
   )
 }
 
+/**
+ * Mark this device's `workspaces` row e2ee with the server's canary, as the
+ * flip just made the server row. The resolver reads the synced row, and until a
+ * checkpoint delivers the flip it would still say plaintext and let this
+ * device upload its own writes in plaintext — which the server now refuses, and
+ * the device then quarantines. Marked, those writes are held instead.
+ *
+ * Local only: the `workspaces` table has no upload trigger, and the synced row
+ * that later replaces it carries the same values.
+ */
+export const markLocalWorkspaceConverted = async (
+  db: {execute(sql: string, params?: unknown[]): Promise<unknown>},
+  workspaceId: string,
+  wkCanary: string,
+): Promise<void> => {
+  await db.execute(
+    `UPDATE workspaces SET encryption_mode = 'e2ee', wk_canary = ? WHERE id = ?`,
+    [wkCanary, workspaceId],
+  )
+}
+
 const primeLocalMembership = async (
   repo: Repo,
   membership: WorkspaceMembership,

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
+import { openConversionFlow } from '@/components/workspace/conversion/conversionFlowStore'
 import type { Repo } from '@/data/repo'
 import { fetchWorkspaceConversionState, hasCopiedCiphertext } from '@/data/workspaceConversion'
 import type { WorkspaceConversionRead } from '@/sync/keys/conversionState'
@@ -338,14 +339,22 @@ function ServerE2eeGate({userId, workspaceId, workspaceName, deps, onResolved}: 
     )
   }
   if (entry.kind === 'converting') {
-    // On the device running the conversion, this is where its flow resumes.
     return (
       <GateCard title={`${name} is being encrypted`}>
         <Explanation>
-          Its owner is converting it to end-to-end encryption. It stays closed on this device
-          until that's done. Changes made here meanwhile wait on this device and upload once
-          it's unlocked.
+          {entry.owned ? 'You are' : 'Its owner is'} converting it to end-to-end encryption. It
+          stays closed on this device until that's done. Changes made here meanwhile wait on this
+          device and upload once it's unlocked.
         </Explanation>
+        {entry.owned && (
+          <Button
+            type="button"
+            className="w-full"
+            onClick={() => openConversionFlow({workspaceId, workspaceName: workspaceName ?? null})}
+          >
+            Continue the conversion
+          </Button>
+        )}
         {checkAgain}
       </GateCard>
     )

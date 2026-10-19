@@ -36,6 +36,23 @@ export interface ResealPatch extends ContentColumns {
   readonly base_updated_at: number
 }
 
+/** The SQLSTATEs the conversion RPCs refuse with (supabase migration
+ *  20261019120000_add_workspace_e2ee_conversion.sql). */
+export const ConversionErrorCode = {
+  /** Refused: fix the state and retry. The message names the RPC and why. */
+  refused: 'KMC01',
+  /** The purge's recovery bundle is stale: re-take it, then purge again. */
+  staleBundle: 'KMC02',
+  /** The flip found block writes in flight: retry as is. */
+  lockNotAvailable: '55P03',
+} as const
+
+/** The PostgREST `code` a port call failed with, if it was the server's answer. */
+export const errorCodeOf = (error: unknown): string | undefined => {
+  const code = (error as {code?: unknown} | null)?.code
+  return typeof code === 'string' ? code : undefined
+}
+
 export interface ServerWorkspace {
   readonly encryption_mode: 'none' | 'e2ee'
   readonly wk_canary: string | null
@@ -57,6 +74,13 @@ export interface ConversionServer {
   readContentSealHistory(workspaceId: string, blockIds: readonly string[]): Promise<readonly ServerHistoryRow[]>
   /** One `apply_block_patches` call: one transaction, all or nothing. */
   applyBlockPatches(patches: readonly ResealPatch[]): Promise<void>
+  /** The workspace's rows with an id above `afterId` whose three content
+   *  columns all begin with the envelope prefix, in id order: a superset of the
+   *  rows the re-seal counts as sealed. Paged like {@link readBlockPage}. */
+  readEnvelopePrefixedPage(workspaceId: string, afterId: string | null, limit: number): Promise<readonly ServerBlockRow[]>
+  /** `convert_workspace_to_e2ee`: the mode becomes e2ee with this canary and
+   *  the `sealing` phase begins, in one transaction; no row changes. */
+  convertWorkspaceToE2ee(workspaceId: string, canary: string): Promise<void>
 }
 
 const BLOCK_COLUMNS = 'id,workspace_id,content,properties_json,references_json,updated_at'
@@ -145,5 +169,22 @@ export const createSupabaseConversionServer = (client: SupabaseClient): Conversi
   async applyBlockPatches(patches) {
     const {error, status} = await client.rpc('apply_block_patches', {patches})
     if (error) throw failed('apply_block_patches', error, status)
+  },
+
+  async readEnvelopePrefixedPage(workspaceId, afterId, limit) {
+    let query = client.from('blocks').select(BLOCK_COLUMNS).eq('workspace_id', workspaceId)
+    for (const column of SEALED_COLUMNS) query = query.like(column, `${ENVELOPE_PREFIX}%`)
+    if (afterId !== null) query = query.gt('id', afterId)
+    const {data, error, status} = await query.order('id', {ascending: true}).limit(limit)
+    if (error) throw failed('reading envelope-shaped blocks', error, status)
+    return data
+  },
+
+  async convertWorkspaceToE2ee(workspaceId, canary) {
+    const {error, status} = await client.rpc('convert_workspace_to_e2ee', {
+      p_workspace_id: workspaceId,
+      p_wk_canary: canary,
+    })
+    if (error) throw failed('convert_workspace_to_e2ee', error, status)
   },
 })

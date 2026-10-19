@@ -20,6 +20,7 @@ import { setDevAssertionsEnabled } from '@/data/internals/devAssertions.js'
 import { startStartupObservers } from '@/utils/startupTimeline.js'
 import { installIdleCallbackPolyfill } from '@/utils/idleCallbackPolyfill.js'
 import { installDbForensicsLifecycle } from '@/utils/dbForensicsHooks.js'
+import { ConversionFlowHost } from '@/components/workspace/conversion/ConversionFlowHost.js'
 
 // Begin tracking main-thread long tasks immediately, so the startup-metrics
 // plugin can later find when boot contention stopped (time to interactivity).
@@ -74,6 +75,10 @@ createRoot(document.getElementById('root')!).render(
             <Suspense fallback={<SuspenseFallback/>}>
               <App/>
             </Suspense>
+            {/* Outside App's boundary: a conversion run spans the flip, which
+                closes the workspace into its gate, and the pin upgrade, which
+                re-resolves it, and neither may suspend or remount the run. */}
+            <ConversionFlowHost/>
           </RepoProvider>
         </ErrorBoundary>
       </Login>

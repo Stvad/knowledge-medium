@@ -20,6 +20,7 @@ import {
   updateWorkspaceMemberRole,
 } from '@/data/workspaces'
 import type { Workspace, WorkspaceMemberWithEmail, WorkspaceRole } from '@/types'
+import { CONVERSION_START_ENABLED, openConversionFlow } from './conversion/conversionFlowStore'
 
 type InviteRole = Exclude<WorkspaceRole, 'owner'>
 
@@ -57,6 +58,9 @@ export function WorkspaceSettingsDialog({workspace, open, onOpenChange, onDelete
               subsection needs a setState-in-effect on workspace change. */}
           <RenameSection key={workspace.id} workspace={workspace} disabled={!isOwner} />
           <MembersSection key={workspace.id} workspace={workspace} canManage={isOwner} />
+          {isOwner && CONVERSION_START_ENABLED && workspace.encryptionMode === 'none' && (
+            <EncryptionSection workspace={workspace} onStart={() => onOpenChange(false)} />
+          )}
           {isOwner && <DangerSection workspace={workspace} onDeleted={() => { onOpenChange(false); onDeleted() }} />}
           {!isOwner && isViewer && (
             <p className="text-sm text-muted-foreground">
@@ -278,6 +282,27 @@ function MembersSection({workspace, canManage}: {workspace: Workspace, canManage
 
       {error && <p className="text-sm text-destructive">{error}</p>}
       {info && <p className="text-sm text-muted-foreground">{info}</p>}
+    </div>
+  )
+}
+
+function EncryptionSection({workspace, onStart}: {workspace: Workspace, onStart: () => void}) {
+  return (
+    <div className="space-y-2 rounded-md border p-3">
+      <Label>End-to-end encryption</Label>
+      <p className="text-sm text-muted-foreground">
+        Encrypt this workspace's content with a key only you hold. Links, ids and history on this
+        device are kept. It can't be undone.
+      </p>
+      <Button
+        variant="outline"
+        onClick={() => {
+          onStart()
+          openConversionFlow({workspaceId: workspace.id, workspaceName: workspace.name})
+        }}
+      >
+        Encrypt this workspace…
+      </Button>
     </div>
   )
 }

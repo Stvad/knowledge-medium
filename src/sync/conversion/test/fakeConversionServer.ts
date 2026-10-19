@@ -13,9 +13,17 @@
  */
 
 import { ENVELOPE_PREFIX } from '../../crypto/envelope.js'
+import type { ConversionPhase, WorkspaceConversionRead } from '../../keys/conversionState.js'
 import { SEALED_COLUMNS } from '../../transform.js'
-import type { ConversionServer, ResealPatch, ServerBlockRow, ServerHistoryRow, ServerWorkspace } from '../conversionServer.js'
-import { isSealedRow } from '../sealing.js'
+import {
+  ConversionErrorCode,
+  type ConversionServer,
+  type ResealPatch,
+  type ServerBlockRow,
+  type ServerHistoryRow,
+  type ServerWorkspace,
+} from '../conversionServer.js'
+import { isSealedRow, isSealedValue } from '../sealing.js'
 
 export interface FakeBlockRow extends ServerBlockRow {
   readonly user_updated_at: number
@@ -41,6 +49,7 @@ export class FakeConversionServer implements ConversionServer {
   private historyRows: FakeHistoryRow[] = []
   private nextEventId = 1
   private readonly workspaces = new Map<string, ServerWorkspace>()
+  private readonly phases = new Map<string, ConversionPhase>()
   /** Every port call in order, with how many rows or patches it carried. */
   readonly calls: Array<{method: keyof ConversionServer; count: number}> = []
   /** Rows per response, like PostgREST's `db-max-rows`. */
@@ -54,10 +63,42 @@ export class FakeConversionServer implements ConversionServer {
   readonly staleReads = new Map<string, FakeBlockRow>()
   /** A session that has lost its sign-in: RLS hides every row, and writes are refused. */
   signedOut = false
+  /** The workspaces' owner, for the owner-only RPCs. */
+  ownerUserId = 'user-1'
+  /** The user this session is signed in as. */
+  sessionUserId = 'user-1'
+  /** How many more flips refuse with `55P03`, as when block writes are in flight. */
+  writesInFlight = 0
+  /** The next flip commits, then its response is lost, as on a client timeout. */
+  loseNextFlipResponse = false
 
-  /** `convert_workspace_to_e2ee`: the mode and canary change, no row does. */
+  /** `convert_workspace_to_e2ee`, committed: the mode, canary and phase change,
+   *  no row does. */
   flip(workspaceId: string, canary: string): void {
     this.workspaces.set(workspaceId, {encryption_mode: 'e2ee', wk_canary: canary})
+    this.phases.set(workspaceId, 'sealing')
+  }
+
+  /** The purge and `finish_conversion` move the phase on; null ends the conversion. */
+  setPhase(workspaceId: string, phase: ConversionPhase | null): void {
+    if (phase === null) this.phases.delete(workspaceId)
+    else this.phases.set(workspaceId, phase)
+  }
+
+  /** What `fetchWorkspaceConversionState` reads: the workspace row with its
+   *  conversion phase, in one snapshot. */
+  async conversionState(workspaceId: string): Promise<WorkspaceConversionRead> {
+    if (this.signedOut) return {kind: 'not-visible'}
+    const workspace = this.workspaces.get(workspaceId) ?? {encryption_mode: 'none', wk_canary: null}
+    return {
+      kind: 'read',
+      state: {
+        encryptionMode: workspace.encryption_mode,
+        conversionPhase: this.phases.get(workspaceId) ?? null,
+        wkCanary: workspace.wk_canary,
+        ownerUserId: this.ownerUserId,
+      },
+    }
   }
 
   insert(row: Pick<FakeBlockRow, 'id' | 'workspace_id'> & Partial<FakeBlockRow>): FakeBlockRow {
@@ -161,6 +202,37 @@ export class FakeConversionServer implements ConversionServer {
       throw error
     }
     this.afterPatch?.(patches)
+  }
+
+  async readEnvelopePrefixedPage(workspaceId: string, afterId: string | null, limit: number): Promise<ServerBlockRow[]> {
+    const page = this.visibleRows(workspaceId)
+      .filter(row => afterId === null || row.id > afterId)
+      .filter(row => SEALED_COLUMNS.every(column => row[column].startsWith(ENVELOPE_PREFIX)))
+      .slice(0, Math.min(limit, this.maxRows))
+    this.calls.push({method: 'readEnvelopePrefixedPage', count: page.length})
+    return page
+  }
+
+  async convertWorkspaceToE2ee(workspaceId: string, canary: string): Promise<void> {
+    this.calls.push({method: 'convertWorkspaceToE2ee', count: 1})
+    if (this.signedOut || this.sessionUserId !== this.ownerUserId) {
+      throw new FakeServerError(ConversionErrorCode.refused, 'convert_workspace_to_e2ee: only the workspace owner can convert it')
+    }
+    if (!isSealedValue(canary)) {
+      throw new FakeServerError(ConversionErrorCode.refused, 'convert_workspace_to_e2ee: the canary is not an enc:v1: envelope')
+    }
+    if (this.workspaces.get(workspaceId)?.encryption_mode === 'e2ee') {
+      throw new FakeServerError(ConversionErrorCode.refused, 'convert_workspace_to_e2ee: the workspace is not plaintext')
+    }
+    if (this.writesInFlight > 0) {
+      this.writesInFlight--
+      throw new FakeServerError(ConversionErrorCode.lockNotAvailable, 'convert_workspace_to_e2ee: writes are in flight; retry')
+    }
+    this.flip(workspaceId, canary)
+    if (this.loseNextFlipResponse) {
+      this.loseNextFlipResponse = false
+      throw new Error('conversion: convert_workspace_to_e2ee failed: the request timed out')
+    }
   }
 
   private update(
