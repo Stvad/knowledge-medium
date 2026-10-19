@@ -1,0 +1,1 @@
+import{Db as e,Eb as t,Tb as n,wb as r}from"../../../chunks/app-_tRc5Ryp.js";export{r as OPEN_RECENTS_ACTION_ID,n as openRecentsAction,t as recentsHeaderItem,e as recentsPlugin};

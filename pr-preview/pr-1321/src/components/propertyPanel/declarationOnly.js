@@ -1,0 +1,1 @@
+import{AM as e,kM as t}from"../../../chunks/app-_tRc5Ryp.js";export{t as declarationOnlyDefinitionForName,e as declarationOnlyStatusText};

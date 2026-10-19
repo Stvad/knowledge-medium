@@ -1,0 +1,1 @@
+import{$B as e,QB as t,ZB as n}from"../../../chunks/app-_tRc5Ryp.js";export{n as charLimitProp,t as charProfileProp,e as charScopeProp};

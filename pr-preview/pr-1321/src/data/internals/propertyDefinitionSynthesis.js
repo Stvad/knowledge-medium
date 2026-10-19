@@ -1,0 +1,1 @@
+import{Gl as e,Jl as t,Kl as n,Wl as r,Xl as i,Yl as a,Zl as o,ql as s}from"../../../chunks/app-_tRc5Ryp.js";export{r as PROVE_DISTINCT_VALUE_LIMIT,e as applyPropertyDefinitionSynthesis,n as flipBlockedBySynthesis,s as keyCannotBeDefined,t as planPropertyDefinitionSynthesis,a as provePresetId,i as resolveSynthesisNamespace,o as synthesizedPropertyDefinitionBlockId};

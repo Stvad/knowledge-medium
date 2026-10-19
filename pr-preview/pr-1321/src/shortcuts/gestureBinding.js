@@ -1,0 +1,1 @@
+import{KE as e,qE as t}from"../../chunks/app-_tRc5Ryp.js";export{e as gestureBindingDescriptor,t as matchesGestureEvent};

@@ -1,0 +1,1 @@
+import{St as e,gE as t,hE as n}from"../../../chunks/app-_tRc5Ryp.js";export{n as extensionsOverridesProp,t as extensionsPrefsType,e as extensionsSettingsPlugin};

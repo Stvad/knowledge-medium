@@ -1,0 +1,1 @@
+import{fE as e,pE as t}from"../../../chunks/app-_tRc5Ryp.js";export{e as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,t as openExtensionsSettingsAction};

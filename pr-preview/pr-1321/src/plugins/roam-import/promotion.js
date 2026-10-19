@@ -1,0 +1,1 @@
+import{ic as e,rc as t}from"../../../chunks/app-_tRc5Ryp.js";export{t as computePromotedFromChildren,e as detectInlineAttribute};

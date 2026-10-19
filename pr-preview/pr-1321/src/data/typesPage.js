@@ -1,0 +1,1 @@
+import{c2 as e,s2 as t}from"../../chunks/app-_tRc5Ryp.js";export{t as getOrCreateTypesPage,e as typesPageBlockId};

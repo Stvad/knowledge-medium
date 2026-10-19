@@ -1,0 +1,1 @@
+import{JP as e,YP as t}from"../../chunks/app-_tRc5Ryp.js";export{e as isIOS,t as isMacPlatform};

@@ -1,0 +1,1 @@
+import{gV as e,hV as t}from"../../../../chunks/app-_tRc5Ryp.js";export{t as BACKLINKS_COUNT_FOR_BLOCK_QUERY,e as backlinksCountForBlockQuery};
