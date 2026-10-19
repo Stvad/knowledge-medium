@@ -442,6 +442,53 @@ describe('row_events trigger — DELETE', () => {
   })
 })
 
+// A re-sealed workspace drains back into `blocks` with identical content and a
+// new `updated_at` on every row; logging those would store two full snapshots
+// of the whole workspace on every device (#1299).
+describe('row_events trigger — version-only UPDATE', () => {
+  const BUMPED = defaultBlock.updated_at + 1000
+
+  it('writes nothing for a sync-applied update that moves only updated_at', () => {
+    h.insertBlock({id: 'b1', content: 'same'})
+    h.updateBlock('b1', {updated_at: BUMPED})
+    expect(h.rowEvents().map(e => e.kind)).toEqual(['create'])
+  })
+
+  it('writes nothing for a version bump on a row whose user_updated_at is NULL', () => {
+    // Its snapshot's `userUpdatedAt` falls back to `updated_at`, so it moves
+    // with the bump even though the row's user_updated_at did not.
+    h.insertBlock({id: 'b1', user_updated_at: null})
+    h.updateBlock('b1', {updated_at: BUMPED})
+    expect(h.rowEvents().map(e => e.kind)).toEqual(['create'])
+  })
+
+  it('still logs user_updated_at going from NULL to the instant its snapshot already showed', () => {
+    h.insertBlock({id: 'b1', user_updated_at: null})
+    h.updateBlock('b1', {user_updated_at: defaultBlock.updated_at, updated_at: BUMPED})
+    expect(h.rowEvents()).toHaveLength(2)
+  })
+
+  it.each<[string, Record<string, unknown>]>([
+    ['content', {content: 'edited'}],
+    ['properties', {properties_json: '{"status":"done"}'}],
+    ['references', {references_json: '[{"id":"b2","alias":"b2"}]'}],
+    ['parent', {parent_id: 'p1'}],
+    ['order', {order_key: 'a1'}],
+    ['deleted', {deleted: 1}],
+    ['user_updated_at', {user_updated_at: BUMPED}],
+    ['updated_by', {updated_by: 'user-2'}],
+    ['workspace', {workspace_id: 'ws2'}],
+    ['reference target', {reference_target_id: 'b2'}],
+    ['field form', {is_field_form: 1}],
+  ])('still logs a version bump that also changes %s', (_field, set) => {
+    h.insertBlock({id: 'b1'})
+    h.updateBlock('b1', {...set, updated_at: BUMPED})
+    const events = h.rowEvents()
+    expect(events).toHaveLength(2)
+    expect(JSON.parse(events[1].after_json!).updatedAt).toBe(BUMPED)
+  })
+})
+
 describe('upload-routing triggers', () => {
   it("forwards INSERT to ps_crud when source='user' and stamps tx_id from tx_seq", () => {
     h.setTxContext({txId: 'tx-1', txSeq: 4242, userId: 'user-1', scope: 'block-default', source: 'user'})
