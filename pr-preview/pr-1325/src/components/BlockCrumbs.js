@@ -1,1 +1,1 @@
-import{WS as e}from"../../chunks/app-OWQn8tzr.js";export{e as BlockCrumbs};
+import{GS as e}from"../../chunks/app-DfnKPIGU.js";export{e as BlockCrumbs};

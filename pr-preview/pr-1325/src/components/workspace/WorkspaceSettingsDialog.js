@@ -1,1 +1,1 @@
-import{Pb as e}from"../../../chunks/app-OWQn8tzr.js";export{e as WorkspaceSettingsDialog};
+import{Fb as e}from"../../../chunks/app-DfnKPIGU.js";export{e as WorkspaceSettingsDialog};

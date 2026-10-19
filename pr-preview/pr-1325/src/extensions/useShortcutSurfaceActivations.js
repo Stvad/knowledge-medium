@@ -1,1 +1,1 @@
-import{gM as e}from"../../chunks/app-OWQn8tzr.js";export{e as useShortcutSurfaceActivations};
+import{_M as e}from"../../chunks/app-DfnKPIGU.js";export{e as useShortcutSurfaceActivations};
