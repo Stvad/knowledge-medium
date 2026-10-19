@@ -84,7 +84,7 @@ The workspace is **frozen** while an attempt row exists ([§5.2](#52-the-freeze)
 
 Tables:
 
-- **`private.workspace_conversions(workspace_id pk, attempt_id, canary, state, started_by, started_at)`.** `canary` is the new key's canary. The client mints it before `begin`, and storing it here binds the attempt to exactly one key.
+- **`private.workspace_conversions(workspace_id pk, attempt_id, canary, state, started_by, started_at, lease_holder, lease_until)`.** The lease columns serialize the attachment cleanup ([§5.5](#55-attachments)). `canary` is the new key's canary. The client mints it before `begin`, and storing it here binds the attempt to exactly one key.
 - **`private.workspace_conversion_rows(workspace_id, attempt_id, block_id, content, properties_json, references_json)`.** Sealed columns only. The conversion only updates rows, so there's no op column.
 - **`private.workspace_conversion_objects(workspace_id, attempt_id, keyed_path, verified)`.** Every attachment object the cleanup writes, recorded **before** it is written ([§5.5](#55-attachments)). The names are keyed HMACs, so storing them adds no fingerprint.
 
@@ -100,8 +100,9 @@ Rules that apply to every RPC:
 | `stage_workspace_conversion(ws, attempt_id, rows)` | `staging`, `applied` | same | checks each row's per-column base against the current row, then **discards** the base and upserts the sealed columns ([§5.3](#53-sealing-apply-verification)) | foreign or missing `block_id`; base mismatch |
 | `apply_workspace_conversion(ws, attempt_id)` | `staging`, `applied` | `applied` | flips the mode and re-seals in one transaction ([§5.3](#53-sealing-apply-verification)); re-running it in `applied` re-applies re-staged rows | incomplete image; a non-envelope column |
 | `purge_workspace_history(ws, attempt_id, archived_count)` | `applied` | `cleanup_pending` | deletes the workspace's `blocks_history`, and clears staging ([§5.4](#54-history-archive-verify-purge)) | `archived_count` ≠ the frozen server count |
-| `record_conversion_object(ws, attempt_id, keyed_path, verified)` | `cleanup_pending` | same | records an object before it's written; never downgrades `verified` | — |
-| `finish_workspace_conversion(ws, attempt_id)` | `cleanup_pending` | done | deletes the attempt and its recorded objects, ending the freeze | — |
+| `claim_conversion_lease(ws, attempt_id, holder)` | `cleanup_pending` | same | grants or renews a time-limited lease, so one device runs the attachment cleanup ([§5.5](#55-attachments)) | another holder's lease is live |
+| `record_conversion_object(ws, attempt_id, holder, keyed_path, verified)` | `cleanup_pending` | same | records an object before it's written; never downgrades `verified` | caller doesn't hold the lease |
+| `finish_workspace_conversion(ws, attempt_id, holder)` | `cleanup_pending` | done | deletes the attempt and its recorded objects, ending the freeze | caller doesn't hold the lease |
 | `abort_workspace_conversion(ws, attempt_id)` | `staging` | gone | deletes the attempt and staging, ending the freeze. Nothing has been written to blocks or Storage yet. | — |
 | `abandon_workspace_conversion(ws, attempt_id)` | `applied`, `cleanup_pending` | gone | key-loss exit only: ends the freeze without finishing, so the recovery procedure ([§7](#7-runbook)) can run | — |
 | `get_workspace_conversion(ws)` | any | — | owner read: `attempt_id`, `canary`, `state` | — |
@@ -171,9 +172,19 @@ For a large workspace with many attachments that can take **hours**, not minutes
 History is **not** purged here. The plaintext's last server copy goes only after verification.
 
 **Verification before anything irreversible.**
-- The converting device keeps its pin plaintext while it verifies, so its local `blocks` still hold the pre-conversion plaintext: the resolver defers instead of copying ([§5.6](#56-clients)).
-- It waits for a checkpoint that covers the apply, then decrypts every row of the workspace straight out of `blocks_synced`, not through materialization. It compares each row with its local `blocks` row. The comparison is local, so it leaks nothing.
-- A row that fails to open or doesn't match is **repaired while still `applied`**. Re-stage it from the local plaintext, with the base over its current ciphertext, then re-run `apply`.
+- **What it compares against.** As each page is staged, the converting device keeps a local per-row record of what it sealed:
+  - the base of each sealed column;
+  - the invariant columns: `parent_id`, `order_key`, `deleted`, `created_at`, `user_updated_at`, `created_by`, `updated_by`;
+  - `updated_at`.
+
+  It's kept locally only, never sent, and local plaintext is outside the threat model anyway. Comparing against live local `blocks` rows wouldn't be sound: `setReadOnly` still lets UI-state and preference writes through ([§5.8](#58-flow-resume-failure-paths)), and a sync gap can leave a local row stale.
+- **The comparison.** The device keeps its pin plaintext, so the resolver defers instead of copying ([§5.6](#56-clients)). It waits for a checkpoint that covers the apply, then decrypts every row of the workspace straight out of `blocks_synced`, without going through materialization. For each row it checks:
+  - `sha256` of each decrypted column equals the kept base;
+  - every invariant column equals the kept value;
+  - `updated_at` is **greater** than the kept one, since the clamp's bump is expected.
+- **Repair.** A row that fails to open or doesn't match is repaired while the attempt is still `applied`: re-stage it, with the base over its current ciphertext, then re-run `apply`.
+  - The plaintext comes from the local `blocks` row if its current hashes still equal the kept bases. Otherwise it comes from the content-recovery snapshot, taken at the same point.
+  - A repaired row bumps `updated_at` again, which the "greater than" check allows, so verification can converge.
 - Only a clean pass proceeds to the purge. This catches the bugs a client-side seal check can't: a row or column mapping error in the stage RPC, its upsert, or the apply's `UPDATE … FROM`. The AAD binds the column, so a swapped column would pass the envelope trigger and then fail to open everywhere.
 
 **Timestamps.** The re-seal changes every row's content columns, so the clamp raises `updated_at` to at least `OLD.updated_at + 1` (`20260803000000_add_patch_base_version_drift_bump.sql`). That's intended: `updated_at` is the row version, and the bump makes peers re-download. Display reads `user_updated_at`, which the apply leaves untouched, as it does `created_at`, `created_by` and `updated_by`. The local-history side of the bump is in [§5.6](#56-clients).
@@ -233,10 +244,10 @@ Extract it once as `verifyStoredObject → match | mismatch | undecodable`. The 
 
 That last case means no raw object and no local bytes on this device. It's computed at proof time rather than stored, and reported to the user before `finish`.
 
-**Two cleaners at once are safe, with no lease.**
-- The only deletes are of a raw object whose keyed copy has been verified, or of an object that's unrecorded and unnamed.
-- A keyed upload is always recorded before it starts, so the second rule never catches another cleaner's object.
-- An upload to an occupied path takes the 409 → verify branch.
+**One cleaner, under a lease.** `claim_conversion_lease` grants it, and the cleaner renews it while it works. `record_conversion_object` and `finish` refuse anyone else ([§5.1](#51-the-attempt)).
+- The deletes alone would be safe without one. They only remove a raw object whose keyed copy is verified, or an object that is both unrecorded and unnamed, and a keyed upload is always recorded before it starts.
+- What a lease protects is the **listing**. `AuditIO.listObjects` pages by offset, so another cleaner's delete between two pages would shift an object past this cleaner's next offset. A missed raw orphan would then pass the proof.
+- The lease makes the listing, its mutations, the proof and `finish` one device's job. A lease that lapses without renewal can be claimed by another key-holding device.
 
 **Media block ids don't change.** The app derives an attachment's Storage path from the block's `media:hash`, the workspace mode and `K_id`; it doesn't store the path. So after the conversion an existing media block reads the keyed path. Re-capturing a file that predates the conversion mints a second block, at the keyed id; that's accepted (§6).
 
@@ -276,7 +287,12 @@ This also closes the window where a retry lands after `finish` but before the de
 3. `upgradeModePinToE2ee`.
 4. `repo.drainSyncWorkspace(ws)`, the same drain `WorkspaceKeyGate` runs on unlock (`src/App.tsx`). It uses scope `'all'`, so it doesn't trust `needs_apply` flags. Updating `needs_apply` alone wouldn't enqueue observer work, because `blocks_synced_changes_insert` fires only on INSERT. Then run `runUploadRecovery` for any fence-refused uploads, and clear the marker.
 
-At startup, a present marker re-runs step 4. A crash before step 3 leaves the pin plaintext, so the device keeps deferring and the next upgrade simply redoes the steps.
+**At startup, a present marker resumes the transition, branching on the pin.**
+- If the pin is still plaintext, it re-runs step 3 first. The key is already stored, and it re-validates against the canary.
+- It then runs step 4.
+- It clears the marker only once the pin reads e2ee **and** the drain has completed. Clearing it earlier would drop the only automatic recovery signal while the device still defers.
+
+A crash before step 2 leaves no marker and a plaintext pin, so the device keeps deferring and the next upgrade starts over.
 
 **A device that copied ciphertext.** An older build that ran across the conversion may already have copied ciphertext into `blocks`, which shows up as envelope-shaped local content. Such a device is **not repaired in place**: rewriting every row would flood `row_events`. It needs the gated reset of [§7](#7-runbook) instead. The fleet prerequisite makes this a runbook-violation path, not a normal one.
 
@@ -314,6 +330,10 @@ The orchestrator (#1290) refuses to start unless all of these hold:
 - the user confirms the named residue, such as a workspace already past `cell` ([§6](#6-what-stays-visible-afterwards));
 - the local upload queue is drained, attachment records included;
 - no rejected rows are pending;
+- **zero sync divergence** for the workspace once a post-freeze checkpoint has synced. That means no `unapplied` or `stranded` rows, computed as `agent health` reports `syncDivergence` (`src/plugins/agent-runtime/healthCommand.ts`).
+  - A stale or missing local row would otherwise leave the snapshot short, and make the local plaintext a wrong source for repair.
+  - The remedy is `repo.drainSyncWorkspace` followed by a re-check. A checkpoint wait alone doesn't clear a durable gap. If divergence remains, the conversion refuses;
+- the converting device sets `repo.setReadOnly(true)` for the run, so no block edit there changes the plaintext being converted;
 - the prerequisites of [§7](#7-runbook) hold.
 
 | Step | If it fails | State left | Recovery |
@@ -321,7 +341,7 @@ The orchestrator (#1290) refuses to start unless all of these hold:
 | **Key**: `mintWorkspaceKey`, reveal once, require a retype, store durably | before anything else | nothing | retry |
 | **Begin** | refused: an attempt exists | another device or tab is converting | resume it with its key, or abort it explicitly while `staging` |
 | **Archive**: export, then read back ([§5.4](#54-history-archive-verify-purge)) | export or read-back fails | frozen | redo the archive, or abort |
-| **Snapshot and stage**: wait for a post-freeze checkpoint, take the content-recovery snapshot ([§7](#7-runbook)), then seal → verify → stage page by page | crash, or base mismatch | frozen, partly staged | resume; re-staging is idempotent per block, and a mismatch means a pre-freeze read |
+| **Settle, snapshot and stage**: wait for a post-freeze checkpoint; require zero sync divergence for the workspace (below); take the content-recovery snapshot ([§7](#7-runbook)); then seal → verify → stage page by page, keeping the per-row verification record | crash, base mismatch, or divergence that the drain doesn't clear | frozen, partly staged | resume (re-staging is idempotent per block); a mismatch means a pre-freeze read; refuse to continue while divergence remains |
 | **Apply** | refusal or timeout | rolled back; `staging` | fix and re-apply, or abort |
 | **Verify** ([§5.3](#53-sealing-apply-verification)) | rows fail to open or don't match | `applied`; history and local plaintext intact | re-stage those rows and re-apply |
 | **Purge**, with the read-back count | count mismatch | `applied` | redo the archive |
@@ -332,7 +352,7 @@ The orchestrator (#1290) refuses to start unless all of these hold:
 
 **Resume.** On load, an owner device reads `get_workspace_conversion` for each workspace it owns. Abort and abandon are never automatic.
 - **`staging`:** if this device's durable key opens the stored canary, continue, redoing the archive unless its own verifies. Without that key, show "a conversion is in progress" with two choices: paste its key to take over, or abort explicitly.
-- **`applied` or `cleanup_pending`:** with the key, continue from that state. Without it, prompt for the key. Abandon is offered only when the user confirms the key is lost, and leads into the recovery procedure ([§7](#7-runbook)).
+- **`applied` or `cleanup_pending`:** with the key, continue from that state. In `cleanup_pending` that means claiming the lease first; if another device holds a live one, wait for it to finish or expire. Without it, prompt for the key. Abandon is offered only when the user confirms the key is lost, and leads into the recovery procedure ([§7](#7-runbook)).
 
 ## 6. What stays visible afterwards
 
@@ -386,7 +406,7 @@ The first production run is #1288.
 8. **Rehearse** on a scratch workspace first: convert it, then run the key-loss recovery below end to end.
 9. Run the flow from a desktop with the most attachment bytes stored locally.
 
-**Content-recovery snapshot.** The flow prompts for it once the workspace is frozen and this device has synced a post-freeze checkpoint. At that point it holds exactly what the apply will convert.
+**Content-recovery snapshot.** The flow prompts for it once the workspace is frozen, this device has synced a post-freeze checkpoint, and the workspace shows zero sync divergence ([§5.8](#58-flow-resume-failure-paths)). At that point it holds exactly what the apply will convert.
 - It is a zip of a raw SQLite export (`src/utils/exportSqliteDb.ts`, which covers the `.db` files only) plus every attachment's plaintext bytes. The bytes come from the local byte store, or are downloaded from Storage, which still holds them raw at that point.
 - The flow reads the zip back to check it.
 - Keep it encrypted and offline. It is plaintext.
@@ -463,7 +483,7 @@ Rotation differs from this conversion in two places:
 - **Writing the apply's own history and deleting it in the same transaction.** Rejected. It strands a full plaintext-plus-ciphertext copy until a vacuum, and the attempt-scoped setting suppresses it narrowly instead.
 - **Persisting the stage bases and re-checking them at apply.** Rejected. The freeze already guarantees nothing changes in between, and stored unkeyed hashes would outlive the plaintext.
 - **A pre-apply attachment upload phase.** Rejected ([§5.5](#55-attachments)). The cleanup converts every raw object anyway, and the phase would force an abort to clean up Storage.
-- **A cleanup lease.** Rejected, because no safety property depends on mutual exclusion ([§5.5](#55-attachments)).
+- **Running the attachment cleanup without a lease.** Rejected. `AuditIO.listObjects` pages by offset, so one cleaner's deletes can shift objects past another cleaner's next page. That lets a "complete" listing miss a raw object and still pass the proof. The lease makes the listing, its mutations, the proof and `finish` one device's job ([§5.5](#55-attachments)).
 - **Reporting unexplained attachment objects instead of deleting them.** Rejected. Any writer can store any bytes under any name, so "not content-addressed" proves nothing about plaintext.
 - **Re-keying upload records and the byte store at the pin upgrade.** Rejected. Deriving the upload path at drain time removes every case it had to cover ([§5.5](#55-attachments)).
 - **Repairing a device that copied ciphertext in place.** Rejected, because it would flood `row_events`. Use the gated reset instead.
