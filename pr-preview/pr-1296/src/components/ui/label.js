@@ -1,1 +1,1 @@
-import{Vx as e}from"../../../chunks/app-CLvJwEOW.js";export{e as Label};
+import{Vx as e}from"../../../chunks/app-BnCErDWy.js";export{e as Label};

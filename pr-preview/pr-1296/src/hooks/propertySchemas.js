@@ -1,1 +1,1 @@
-import{sI as e}from"../../chunks/app-CLvJwEOW.js";export{e as usePropertySchemas};
+import{sI as e}from"../../chunks/app-BnCErDWy.js";export{e as usePropertySchemas};
