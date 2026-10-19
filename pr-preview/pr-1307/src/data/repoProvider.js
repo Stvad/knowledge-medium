@@ -1,1 +1,0 @@
-import{_L as e,cL as t,dL as n,fL as r,gL as i,hL as a,lL as o,mL as s,pL as c,uL as l}from"../../chunks/app-Do6Lv3Xd.js";export{t as BATCH_SENTINEL_SQL,o as closePowerSyncDbIfOpen,l as ensurePowerSyncReady,n as getActiveSyncResolver,r as getActiveUserId,c as getPowerSyncDb,s as initializeClientSchema,a as isRemoteSyncActive,i as syncObserverDepsFor,e as syncResolverForUser};

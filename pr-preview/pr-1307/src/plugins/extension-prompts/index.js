@@ -1,1 +1,0 @@
-import{_E as e,gE as t}from"../../../chunks/app-Do6Lv3Xd.js";export{t as ExtensionPromptSurface,e as extensionPromptsExtension};

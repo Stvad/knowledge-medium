@@ -1,1 +1,0 @@
-import{QC as e,XC as t,YC as n,ZC as r}from"../../../chunks/app-Do6Lv3Xd.js";export{n as COMMAND_PALETTE_ACTION_ID,t as COMMAND_PALETTE_CONTEXT,r as COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,e as commandPaletteActionContext};

@@ -1,1 +1,0 @@
-import{_y as e,gy as t,hy as n}from"../../../chunks/app-Do6Lv3Xd.js";export{n as getOrCreateShortcutsBlock,t as journalShortcutBlockId,e as shortcutsBlockId};
