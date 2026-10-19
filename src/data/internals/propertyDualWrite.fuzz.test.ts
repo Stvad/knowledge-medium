@@ -108,6 +108,7 @@ import {
 } from '@/data/api'
 import { kernelValuePresetCoresById } from '@/data/kernelValuePresetCores'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { blocksWriteMark } from '@/data/test/writeMark'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { releaseTestRepos } from '@/data/test/testRepoScope'
 import { assertLegalKernelRejection, drain } from '@/data/test/fuzzKernelHarness'
@@ -526,6 +527,8 @@ type SnapRow = Record<string, unknown> & {id: string; deleted: number}
 
 const lastRowEvent = async (): Promise<number> =>
   (await sharedDb.db.get<{n: number}>('SELECT COALESCE(MAX(id), 0) AS n FROM row_events')).n
+
+const writeMark = (): Promise<string> => blocksWriteMark(sharedDb.db)
 
 // ──── content + selection helpers ────
 
@@ -1242,7 +1245,7 @@ const checkState = async (
     }
   }
 
-  const writesBefore = await lastRowEvent()
+  const writesBefore = await writeMark()
   await repo.tx(async tx => {
     for (const [ownerId, names] of rematerialize) {
       const owner = await tx.get(ownerId)
@@ -1252,9 +1255,9 @@ const checkState = async (
     }
     await reprojectOwnersForRowStates(tx, projectRows, lookups, 'full')
   }, {scope: ChangeScope.BlockDefault})
-  // Every write to `blocks` logs a row event, so "writes nothing" is literal:
-  // an identical rewrite fails it as surely as a changed one.
-  expect(await lastRowEvent(), `${label}: Q — re-running MATERIALIZE/PROJECT must write nothing`).toBe(writesBefore)
+  // "Writes nothing" is literal: an identical rewrite moves the mark as surely
+  // as a changed one.
+  expect(await writeMark(), `${label}: Q — re-running MATERIALIZE/PROJECT must write nothing`).toBe(writesBefore)
 }
 
 /** I — the cell ends where the tx's cell writes put it. */

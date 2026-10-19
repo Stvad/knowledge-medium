@@ -444,28 +444,12 @@ const BLOCK_SNAPSHOT_JSON_FIELDS = [
   {key: 'deleted', sqlExpression: rowRef => `json(CASE WHEN ${rowRef}.deleted THEN 'true' ELSE 'false' END)`},
 ] as const satisfies readonly BlockSnapshotJsonField[]
 
-const snapshotJsonObjectSql = (fields: readonly BlockSnapshotJsonField[], rowRef: string) => `
-  json_object(
-${formatSqlList(fields.map(field => `'${field.key}', ${field.sqlExpression(rowRef)}`), 4)}
-  )
-`
-
 /** The JSON snapshot of a `blocks` row that `row_events` stores. */
-export const buildBlockSnapshotJsonSql = (rowRef: string) =>
-  snapshotJsonObjectSql(BLOCK_SNAPSHOT_JSON_FIELDS, rowRef)
-
-/** The snapshot without the row version: a write's before and after differ
- *  exactly when it changed something besides `updated_at`. `userUpdatedAt` is
- *  read from its column, because the snapshot's fallback to `updated_at` when
- *  it is NULL would move with the version. */
-const VERSIONLESS_SNAPSHOT_FIELDS: readonly BlockSnapshotJsonField[] = BLOCK_SNAPSHOT_JSON_FIELDS.flatMap((field): BlockSnapshotJsonField[] => {
-  if (field.key === 'updatedAt') return []
-  if (field.key === 'userUpdatedAt') return [{key: field.key, sqlExpression: rowRef => `${rowRef}.user_updated_at`}]
-  return [field]
-})
-
-export const buildVersionlessBlockSnapshotSql = (rowRef: string) =>
-  snapshotJsonObjectSql(VERSIONLESS_SNAPSHOT_FIELDS, rowRef)
+export const buildBlockSnapshotJsonSql = (rowRef: string) => `
+  json_object(
+${formatSqlList(BLOCK_SNAPSHOT_JSON_FIELDS.map(field => `'${field.key}', ${field.sqlExpression(rowRef)}`), 4)}
+  )
+`.trim()
 
 const safeJsonParse = <T>(value: string | null | undefined, fallback: T): T => {
   if (!value) return fallback

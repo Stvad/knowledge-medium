@@ -18,9 +18,9 @@ import {
   RAISE_FIELD_SEP_SQL,
 } from './raiseProtocol'
 import {
+  BLOCKS_TABLE_COLUMN_NAMES,
   STAGING_LOCAL_COLUMNS,
   buildBlockSnapshotJsonSql,
-  buildVersionlessBlockSnapshotSql,
 } from '@/data/blockSchema.js'
 import { SEED_STAGING_NEEDS_APPLY_SQL } from './syncObserver/reconcile.js'
 
@@ -58,10 +58,10 @@ export const SEED_TX_CONTEXT_ROW_SQL = `
   INSERT OR IGNORE INTO tx_context (id) VALUES (1)
 `
 
-/** Per-row audit / change-history log. Trigger-written on every write to
+/** Per-row audit / change-history log. Trigger-written on every change to
  *  `blocks` — local (`repo.tx`) and sync-applied (observer materialize) alike
- *  — capturing the full before/after row state of each change. An update that
- *  moves only the row version is not a change and writes nothing. `tx_id` = NULL
+ *  — capturing the full before/after row state; an update that moves only the
+ *  row version (`updated_at`) is not a change. `tx_id` = NULL
  *  for sync-applied writes (see the COALESCE / CASE in the row_events triggers
  *  below); `source` distinguishes 'user' from 'sync'.
  *
@@ -485,11 +485,19 @@ export const CREATE_BLOCKS_INSERT_ROW_EVENT_TRIGGER_SQL = `
 
 /** An update that moves only the row version is not logged (#1299): it would
  *  store two full snapshots of a row whose data did not change — for every row,
- *  on every device, when a workspace is re-sealed. */
+ *  on every device, when a workspace is re-sealed. Raw columns, not the
+ *  snapshot: the snapshot normalizes some stored changes away (`json()`, the
+ *  boolean CASEs, `userUpdatedAt`'s fallback to `updated_at`), and a column it
+ *  lacks would otherwise go unlogged. */
+const blockRowChangedBesidesVersionSql = BLOCKS_TABLE_COLUMN_NAMES
+  .filter(name => name !== 'updated_at')
+  .map(name => `OLD.${name} IS NOT NEW.${name}`)
+  .join('\n    OR ')
+
 export const CREATE_BLOCKS_UPDATE_ROW_EVENT_TRIGGER_SQL = `
   CREATE TRIGGER IF NOT EXISTS blocks_row_event_update
   AFTER UPDATE ON blocks
-  WHEN ${buildVersionlessBlockSnapshotSql('OLD')} IS NOT ${buildVersionlessBlockSnapshotSql('NEW')}
+  WHEN ${blockRowChangedBesidesVersionSql}
   BEGIN
     INSERT INTO row_events (
       tx_id, block_id, kind, before_json, after_json, source, created_at, group_id
