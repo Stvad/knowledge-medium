@@ -14,6 +14,7 @@ describe('parseTag', () => {
     expect(parseTag('// @projects: workspace_members')).toEqual({
       table: 'workspace_members',
       extras: [],
+      excluded: [],
     })
   })
 
@@ -21,6 +22,7 @@ describe('parseTag', () => {
     expect(parseTag('-- @projects: workspace_invitations + workspace_name')).toEqual({
       table: 'workspace_invitations',
       extras: ['workspace_name'],
+      excluded: [],
     })
   })
 
@@ -28,6 +30,20 @@ describe('parseTag', () => {
     expect(parseTag('// @projects: workspace_invitations + workspace_name?')).toEqual({
       table: 'workspace_invitations',
       extras: ['workspace_name'],
+      excluded: [],
+    })
+  })
+
+  it('parses exclusions, alone and after extras', () => {
+    expect(parseTag('// @projects: workspaces - conversion_phase')).toEqual({
+      table: 'workspaces',
+      extras: [],
+      excluded: ['conversion_phase'],
+    })
+    expect(parseTag('-- @projects: things + email, label? - secret, notes')).toEqual({
+      table: 'things',
+      extras: ['email', 'label'],
+      excluded: ['secret', 'notes'],
     })
   })
 
@@ -203,6 +219,45 @@ describe('checkFile integration', () => {
       sot,
     )
     expect(findings).toEqual([])
+  })
+
+  it('accepts a projection that leaves out an excluded column', () => {
+    const findings = checkFile(
+      '/fake/excluded.sql',
+      projectionSql.replace('@projects: things', '@projects: things - secret'),
+      /--\s*@projects:[^\r\n]+/g,
+      extractReturnsTableColumns,
+      'sql',
+      sot,
+    )
+    expect(findings).toEqual([])
+  })
+
+  it('flags a projection that carries an excluded column', () => {
+    const findings = checkFile(
+      '/fake/excluded-but-present.sql',
+      `-- @projects: things - secret
+       CREATE FUNCTION f() RETURNS TABLE("id" text, "name" text, "secret" text) AS $$ select 1 $$;`,
+      /--\s*@projects:[^\r\n]+/g,
+      extractReturnsTableColumns,
+      'sql',
+      sot,
+    )
+    expect(findings).toHaveLength(1)
+    expect(findings[0].unexpected).toEqual(['secret'])
+  })
+
+  it('flags an exclusion of a column the table does not have', () => {
+    const findings = checkFile(
+      '/fake/stale-exclusion.sql',
+      projectionSql.replace('@projects: things', '@projects: things - secret, gone'),
+      /--\s*@projects:[^\r\n]+/g,
+      extractReturnsTableColumns,
+      'sql',
+      sot,
+    )
+    expect(findings).toHaveLength(1)
+    expect(findings[0].note).toMatch(/does not have: gone/)
   })
 
   it('flags an unknown table', () => {

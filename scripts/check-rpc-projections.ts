@@ -1,4 +1,4 @@
-// Validate that "@projects: <table> [+ <extra>, ...]" tags in SQL and TS
+// Validate that "@projects: <table> [+ <extra>, ...] [- <column>, ...]" tags in SQL and TS
 // match the table's column set as defined by the Postgres migrations.
 // Catches the drift shape that the E2EE design-doc review repeatedly
 // surfaced: a column added to a workspace-related Postgres table didn't
@@ -22,6 +22,11 @@
 // "+ <extra>, ..." declares fields the projection adds beyond the base
 // table (typically JOIN columns). Trailing "?" in an extra is allowed and
 // stripped — optional fields on the TS side still count as projected.
+//
+// "- <column>, ..." declares table columns the projection deliberately
+// leaves out (a column read some other way, never synced). An excluded
+// column the table does not have is flagged, so an exclusion cannot outlive
+// its column.
 //
 // Run via `pnpm check:rpc-projections`. Wired into `pnpm check`.
 
@@ -74,20 +79,23 @@ export const splitTopLevelCommas = (inside: string): string[] => {
 export interface ParsedTag {
   readonly table: string
   readonly extras: readonly string[]
+  readonly excluded: readonly string[]
 }
 
-/** Parse `@projects: <table> [+ <extra1>, <extra2>?, ...]`. */
+/** Parse `@projects: <table> [+ <extra1>, <extra2>?, ...] [- <column1>, ...]`. */
 export const parseTag = (text: string): ParsedTag | null => {
-  const m = text.match(/@projects:\s*([a-z_][a-z0-9_]*)(?:\s*\+\s*([^\r\n]+))?/)
+  const m = text.match(/@projects:\s*([a-z_][a-z0-9_]*)([^\r\n]*)/)
   if (!m) return null
-  const extrasRaw = m[2]?.trim() ?? ''
-  const extras = extrasRaw
-    ? extrasRaw
-        .split(',')
-        .map((s) => s.trim().replace(/\?$/, ''))
-        .filter(Boolean)
-    : []
-  return { table: m[1], extras }
+  const extras: string[] = []
+  const excluded: string[] = []
+  for (const [, sign, names] of m[2].matchAll(/([+-])\s*([^+\-\r\n]+)/g)) {
+    const list = names
+      .split(',')
+      .map((s) => s.trim().replace(/\?$/, ''))
+      .filter(Boolean)
+    ;(sign === '+' ? extras : excluded).push(...list)
+  }
+  return { table: m[1], extras, excluded }
 }
 
 // --- Migration DDL → source-of-truth column sets ---------------------------
@@ -237,12 +245,11 @@ const findLineNumber = (text: string, charIndex: number): number =>
 
 const buildExpected = (
   sot: Map<string, string[]>,
-  table: string,
-  extras: readonly string[],
+  tag: ParsedTag,
 ): Set<string> | null => {
-  const base = sot.get(table)
+  const base = sot.get(tag.table)
   if (!base) return null
-  return new Set([...base, ...extras])
+  return new Set([...base.filter((c) => !tag.excluded.includes(c)), ...tag.extras])
 }
 
 const diff = (
@@ -278,15 +285,23 @@ export const checkFile = (
     if (!parsed) {
       findings.push({
         file, line, tag: tagText, table: '?', missing: [], unexpected: [],
-        note: 'tag could not be parsed (expected "@projects: <table> [+ <extra>...]")',
+        note: 'tag could not be parsed (expected "@projects: <table> [+ <extra>...] [- <column>...]")',
       })
       continue
     }
-    const expected = buildExpected(sot, parsed.table, parsed.extras)
+    const expected = buildExpected(sot, parsed)
     if (!expected) {
       findings.push({
         file, line, tag: tagText, table: parsed.table, missing: [], unexpected: [],
         note: `unknown table "${parsed.table}" — no CREATE TABLE seen in supabase/migrations/`,
+      })
+      continue
+    }
+    const staleExclusions = parsed.excluded.filter((c) => !sot.get(parsed.table)?.includes(c))
+    if (staleExclusions.length) {
+      findings.push({
+        file, line, tag: tagText, table: parsed.table, missing: [], unexpected: [],
+        note: `excludes column(s) "${parsed.table}" does not have: ${staleExclusions.join(', ')}`,
       })
       continue
     }
