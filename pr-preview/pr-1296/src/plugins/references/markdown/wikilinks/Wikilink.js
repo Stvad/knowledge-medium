@@ -1,1 +1,1 @@
-import{bp as e}from"../../../../../chunks/app-BrgojSTG.js";export{e as Wikilink};
+import{bp as e}from"../../../../../chunks/app-BsXivvXx.js";export{e as Wikilink};

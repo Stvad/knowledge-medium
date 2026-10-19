@@ -1,1 +1,1 @@
-import{Kg as e}from"../../../chunks/app-BrgojSTG.js";export{e as seedTutorial};
+import{Kg as e}from"../../../chunks/app-BsXivvXx.js";export{e as seedTutorial};
