@@ -1,1 +1,1 @@
-import{jf as e}from"../../../chunks/app-DMKYo2vc.js";export{e as backlinksPlugin};
+import{Of as e}from"../../../chunks/app-DhKs8gZD.js";export{e as backlinksPlugin};

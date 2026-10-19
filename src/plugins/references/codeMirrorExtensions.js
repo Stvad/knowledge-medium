@@ -1,1 +1,1 @@
-import{Np as e,Pp as t}from"../../../chunks/app-DMKYo2vc.js";export{e as aliasCompletions,t as referencesCodeMirrorExtensions};
+import{Ap as e,jp as t}from"../../../chunks/app-DhKs8gZD.js";export{e as aliasCompletions,t as referencesCodeMirrorExtensions};

@@ -1,1 +1,1 @@
-import{KC as e}from"../../../chunks/app-DMKYo2vc.js";export{e as useCommandPaletteActions};
+import{qC as e}from"../../../chunks/app-DhKs8gZD.js";export{e as useCommandPaletteActions};

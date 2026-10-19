@@ -1,1 +1,1 @@
-import{_C as e,gC as t,hC as n,mC as r,pC as i}from"../../../chunks/app-DMKYo2vc.js";export{i as SHORTCUT_HELP_ACTION_ID,e as ShortcutHelpOverlay,r as shortcutHelpAction,n as shortcutHelpMount,t as shortcutHelpPlugin};
+import{_C as e,gC as t,hC as n,mC as r,vC as i}from"../../../chunks/app-DhKs8gZD.js";export{r as SHORTCUT_HELP_ACTION_ID,i as ShortcutHelpOverlay,n as shortcutHelpAction,t as shortcutHelpMount,e as shortcutHelpPlugin};
