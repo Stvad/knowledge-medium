@@ -1,1 +1,0 @@
-import{gt as e,hE as t,mE as n}from"../../../chunks/app-DMAgOaEH.js";export{n as extensionsOverridesProp,t as extensionsPrefsType,e as extensionsSettingsPlugin};

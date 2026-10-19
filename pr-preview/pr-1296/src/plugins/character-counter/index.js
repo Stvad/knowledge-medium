@@ -1,1 +1,0 @@
-import{A as e,JB as t,M as n,N as r,P as i,QB as a,XB as o,ZB as s}from"../../../chunks/app-DMAgOaEH.js";export{t as CHAR_COUNTER_TYPE,n as RAW_CHARACTER_COUNT_PROFILE_ID,i as charCountDisplay,o as charLimitProp,s as charProfileProp,a as charScopeProp,r as characterCountProfilesFacet,e as characterCounterPlugin};

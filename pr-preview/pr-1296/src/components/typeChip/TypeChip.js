@@ -1,1 +1,0 @@
-import{aT as e}from"../../../chunks/app-DMAgOaEH.js";export{e as TypeChip};
