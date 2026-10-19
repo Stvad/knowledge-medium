@@ -162,17 +162,17 @@ The bundle is plaintext, as sensitive as the database. Store it on an encrypted 
 **4. Re-seal** (#1292). Page through this device's `blocks_synced`, which is the server image: every row of the workspace, soft-deleted ones included. For each bounded page:
 1. **Seal.** `sealChunk` seals the three content columns under the existing envelope and AAD (`encodeForWire`).
 2. **Check the seal.** Open every column under the key before sending it.
-3. **Write a local verification record per row.** It holds the sha256 of each plaintext column, the invariant columns (`parent_id`, `order_key`, `deleted`, `created_at`, `user_updated_at`, `created_by`, `updated_by`) and `updated_at`.
-4. **Send it.** Call the existing `apply_block_patches` RPC **directly**: SECURITY INVOKER, granted to `authenticated`, one `{id, content, properties_json, references_json, base_updated_at}` per row. It bypasses the PowerSync queue, so the pin can stay plaintext.
+3. **Send it.** Call the existing `apply_block_patches` RPC **directly**: SECURITY INVOKER, granted to `authenticated`, one `{id, content, properties_json, references_json, base_updated_at}` per row. It bypasses the PowerSync queue, so the pin can stay plaintext.
 
-The step is resumable: after a checkpoint, any row still not sealed in `blocks_synced` is simply re-sent. It can take hours for a large workspace, so the flow keeps a progress view and a wake lock.
+The step keeps no local state. After a checkpoint, any row still not sealed in `blocks_synced` is simply re-sent. It can take hours for a large workspace, so the flow keeps a progress view and a wake lock.
 
-**5. Verify.** Wait for a checkpoint in which every row of the workspace in `blocks_synced` is fully sealed. Then decrypt each row there, without going through materialization, and compare it with its local record:
-- each column's hash equals the recorded one;
-- the invariant columns are equal;
-- `updated_at` is **greater**, because the clamp's bump is expected.
+**5. Verify.** Wait for a checkpoint in which every row of the workspace in `blocks_synced` is fully sealed. Then check each row against **the server's own record of its re-seal**:
+- **The record.** Each row's first history row after `through` whose new values are envelopes is its re-seal write. That row's `before_diff` holds the exact plaintext each content column had just before it was sealed, including any write that landed in between.
+- **The check.** Page that history the way the export does. Decrypt each row in `blocks_synced`, without going through materialization, and require every column to equal its `before_diff` value.
 
-A row that fails is re-sent from the local `blocks` row if that row's hashes match the record, otherwise from the bundle, and then verified again. Only a clean pass proceeds. This catches mapping bugs that a seal check alone can't see: the AAD binds the column, so a swapped column would pass the envelope trigger and then fail to open.
+The record is durable on the server until the purge and needs nothing local, so a crash at any point leaves verification possible. The other columns need no check here: the purge already refuses any write after `through` that touched more than the content columns and `updated_at`.
+
+A row that fails is re-sent from that same `before_diff` value and verified again. Only a clean pass proceeds. This catches mapping bugs that a seal check alone can't see: the AAD binds the column, so a swapped column would pass the envelope trigger and then fail to open.
 
 **6. Purge.** `purge_workspace_history(ws, through, count)`, with `through` and `count` taken from the verified bundle's record. The server re-checks all four conditions ([§6.1](#61-server)). A refusal clears the record, so the next run re-takes the bundle at a later `through`. Since nothing plaintext can enter history after the flip, a write in flight at the flip refuses only once. A refusal that survives a re-take means a row isn't sealed or the contract was broken.
 
@@ -268,20 +268,22 @@ The first production run is #1288.
     - This step, and the next two, are platform operations a client can't do.
 12. **Operator:** drop leftover ad-hoc tables from past scripts (`scripts/system-author-cleanup.sql`, `scripts/roam-ts-backfill/backfill.sql`).
 13. **Act on #1289's findings** and record the "safe from" date.
-14. **Take later recovery points.** From time to time, take a raw SQLite export from an unlocked device and keep it with the key. Its `blocks` are plaintext, and it's a later snapshot than the bundle.
+14. **Take later recovery points.** From time to time, on an unlocked device, take step 3's bundle again without its server history, which is ciphertext by then. Keep it with the key. A raw SQLite export alone isn't a recovery point: attachment bytes live outside the database (`src/plugins/attachments/byteStore.ts`), and their remote copies are sealed under the key.
 
 **Key-loss recovery** (#1302). This applies after the purge. Before it, nothing is lost. It **re-keys the workspace in place**: nothing is deleted, so no workspace or block id is ever free for another caller to claim.
-1. **Pick the newest plaintext snapshot.** In order of preference:
-   - a step-14 export;
-   - the recovery bundle;
-   - an export from a device that still defers, whose `blocks` keep their pre-conversion plaintext.
-2. **Re-key.** `mintWorkspaceKey` mints a new key. An owner-only RPC replaces the canary on the e2ee row ([§5](#5-the-invariant-we-relax)).
-3. **Re-seal from the snapshot.** This is steps 4–5 with the snapshot as the plaintext source: seal pages, call `apply_block_patches`, verify. History then holds only ciphertext under the lost key, so the purge is optional.
-   - Each row's base comes from the server row.
-   - Rows the snapshot lacks are tombstoned: sealed empty and marked deleted.
-4. **Attachments.** Stage the snapshot's bytes, then run step 8's cleaner. Objects under the old `K_id` are neither raw nor a media block's new keyed path, so its "anything else" rule deletes them.
-5. **Other devices** paste the new key.
-   - A locked device replaces its key record.
+1. **Pick the newest recovery point.** Each is a bundle-shaped zip, `local.db` plus attachment bytes. In order of preference:
+   - a step-14 recovery point;
+   - the conversion's bundle;
+   - one taken from a device that still defers, whose `blocks` keep their pre-conversion plaintext.
+2. **Re-key.** A new key is minted and stored as in step 1. An owner-only RPC replaces the canary on the e2ee row ([§5](#5-the-invariant-we-relax)).
+3. **Restore every row** through `apply_block_patches`, with each row's base taken from the server row.
+   - **Each patch carries the whole row.** That means the snapshot's content columns, sealed under the new key, **and** its other columns (`parent_id`, `order_key`, `deleted`, `created_at`, `user_updated_at`, `created_by`, `updated_by`). A move, reorder, delete or undelete made since the snapshot is undone too.
+   - **Rows the snapshot lacks are tombstoned:** sealed empty and marked deleted.
+   - **Progress is read by trial decryption.** An envelope doesn't say which key sealed it. So a row counts as restored only when it opens under the new key and equals the snapshot's row. A crash anywhere after the canary change resumes by re-checking every row against the same recovery point. The restore is done only when every row passes.
+   - History then holds only ciphertext under the lost key, so the purge is optional.
+4. **Attachments.** Stage the recovery point's bytes, then run step 8's cleaner. Objects under the old `K_id` are neither raw nor a media block's new keyed path, so its "anything else" rule deletes them.
+5. **Other devices.**
+   - **Every device checks its key record against the server canary on entry.** A record that doesn't open the current canary counts as locked, so the device prompts for the new key instead of quarantining every row. Today `resolveWorkspaceEntry` only checks that a record with `K_id` exists, so #1302 adds that check.
    - A deferring device takes #1293's pin upgrade.
    - No pin changes direction, so nothing needs retiring.
 
@@ -332,6 +334,7 @@ What it adds is safety against concurrent actors. What it keeps from this design
 - **The multi-client design** ([§11](#11-appendix-the-multi-client-design)). Deferred: about three times the work, to cover concurrency the single-client contract excludes.
 - **An operator-run conversion with service-role scripts.** Smaller still, but it needs privileged access and gives other users no in-app path.
 - **Re-sealing before the flip.** Rejected: a plaintext-pinned device would copy the ciphertext straight into `blocks`.
+- **A local verification record per re-sealed row.** Rejected: it has to survive a crash between a row's commit and the verify. The server's history already holds each row's pre-seal plaintext durably until the purge.
 - **Taking the bundle before the flip.** Rejected. Read-only still uploads UI-state, preference and automation writes, so the history snapshot could be raced right up to the flip. Rejecting those scopes too would break collapse, layout and preference changes for a run that can take hours. After the flip, the server refuses plaintext writes and this device holds its uploads.
 - **Key-loss recovery by delete and same-id restore.** Rejected. Every globally unique id, the workspace's and each block's, would have to be reserved across the gap. It also needed a restore RPC, a same-id importer and a pin-retirement gesture. Re-keying in place leaves no gap, and reuses the conversion's own steps.
 - **Re-sealing through the PowerSync queue.** Rejected. It would need the pin flipped first, and would push hundreds of thousands of rows through the device-wide FIFO queue. Calling the patch RPC directly avoids both.
