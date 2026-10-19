@@ -1,1 +1,1 @@
-import{ga as e,ha as t,ma as n}from"../../../chunks/app-EHoZx5UT.js";export{n as REMATERIALIZE_WORKSPACE_ACTION_ID,t as rematerializeWorkspaceAction,e as rematerializeWorkspaceActionContribution};
+import{ga as e,ha as t,ma as n}from"../../../chunks/app-B6Fdvpdg.js";export{n as REMATERIALIZE_WORKSPACE_ACTION_ID,t as rematerializeWorkspaceAction,e as rematerializeWorkspaceActionContribution};

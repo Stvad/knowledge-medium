@@ -1,1 +1,1 @@
-import{Hd as e,Vd as t}from"../../../chunks/app-EHoZx5UT.js";export{t as DATA_MODEL_GUIDE,e as dataModelGuide};
+import{Hd as e,Vd as t}from"../../../chunks/app-B6Fdvpdg.js";export{t as DATA_MODEL_GUIDE,e as dataModelGuide};
