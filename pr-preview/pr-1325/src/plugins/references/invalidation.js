@@ -1,0 +1,1 @@
+import{gz as e,hz as t}from"../../../chunks/app-OWQn8tzr.js";export{t as REFERENCES_TARGET_INVALIDATION_CHANNEL,e as referencesInvalidationRule};

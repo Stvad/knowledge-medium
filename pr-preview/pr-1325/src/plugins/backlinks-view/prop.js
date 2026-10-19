@@ -1,0 +1,1 @@
+import{Jp as e,Kp as t,Xp as n,Yp as r,qp as i}from"../../../chunks/app-OWQn8tzr.js";export{t as DEFAULT_BACKLINKS_VIEW_ID,i as FLAT_BACKLINKS_VIEW_ID,e as GROUPED_BACKLINKS_VIEW_ID,r as backlinksViewProp,n as defaultBacklinksViewIdForBlock};

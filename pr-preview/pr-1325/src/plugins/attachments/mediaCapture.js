@@ -1,0 +1,1 @@
+import{$h as e,Qh as t,Zh as n}from"../../../chunks/app-OWQn8tzr.js";export{n as DEFAULT_MAX_CAPTURE_BYTES,t as captureMedia,e as mediaBlockId};

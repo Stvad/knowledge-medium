@@ -1,0 +1,1 @@
+import{Bc as e,Dc as t,Ec as n,Mc as r,Tc as i,jc as a}from"../../../chunks/app-OWQn8tzr.js";export{n as ADD_TAG_ACTION_ID,t as ADD_TAG_BLOCKS_ACTION_ID,a as appendTagToBlocks,r as appendTagToContent,i as blockTaggingPlugin,e as blockTagsConfigProp};

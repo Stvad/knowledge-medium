@@ -1,0 +1,1 @@
+import{Hd as e,Vd as t}from"../../../chunks/app-OWQn8tzr.js";export{t as createWatchEventsRegistry,e as watchEventsRegistry};

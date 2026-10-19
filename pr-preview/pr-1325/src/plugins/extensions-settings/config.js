@@ -1,0 +1,1 @@
+import{JD as e,XD as t,YD as n,ZD as r}from"../../../chunks/app-OWQn8tzr.js";export{e as extensionsOverridesPresetCore,n as extensionsOverridesProp,t as extensionsPrefsType,r as overridesCodec};

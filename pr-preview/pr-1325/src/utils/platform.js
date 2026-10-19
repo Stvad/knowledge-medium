@@ -1,0 +1,1 @@
+import{OI as e,kI as t}from"../../chunks/app-OWQn8tzr.js";export{e as isIOS,t as isMacPlatform};

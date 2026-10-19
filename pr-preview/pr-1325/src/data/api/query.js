@@ -1,0 +1,1 @@
+import{b5 as e}from"../../../chunks/app-OWQn8tzr.js";export{e as defineQuery};

@@ -1,0 +1,1 @@
+import{HD as e,UD as t}from"../../../chunks/app-OWQn8tzr.js";export{e as ExtensionPromptSurface,t as extensionPromptsExtension};

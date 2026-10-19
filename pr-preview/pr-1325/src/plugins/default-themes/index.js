@@ -1,0 +1,1 @@
+import{Bx as e,nS as t,tS as n,zx as r}from"../../../chunks/app-OWQn8tzr.js";export{n as DEFAULT_THEME_ID_DARK,t as DEFAULT_THEME_ID_LIGHT,e as defaultThemeContributions,r as defaultThemesPlugin};
