@@ -1,6 +1,6 @@
 # Key-loss recovery: re-keying an E2EE workspace in place
 
-> **Status:** design, not built. Last verified against code: 2026-10-19, against master `ebbecd5ad5` (which has #1292, #1293 and #1294 merged). Code wins where they differ.
+> **Status:** design, not built. Last verified against code: 2026-10-19, against master `ebbecd5ad5` (which has #1292, #1293 and #1294 merged). Its attachment rules follow the conversion doc as revised on #1313. Code wins where they differ.
 > Tracking: #1302, under epic #1295. Its issue holds the requirements this design answers; [§12](#12-requirements-and-where-this-design-differs) maps each one to a section and names where this design departs from them, and why.
 
 ## 1. Goal
@@ -156,7 +156,7 @@ Before anything irreversible, and again on every resume (since the folder may ha
 - `blocks.jsonl` has exactly the manifest's block count, with no id repeated. Every row the point lacks is tombstoned, so a truncated file must never pass;
 - **binding:** the manifest's workspace id, and every row's `workspace_id`, equal the target. A point from another workspace would otherwise tombstone every target row, and try to recreate that workspace's ids here. The attempt fence would refuse those creates' touches on the server as well ([§3.2](#32-the-write-fence));
 - the manifest's `properties_migration` equals the workspace's current state. The switch is forward-only, so rows from an earlier stage would read wrong in a workspace that has moved past it (open question 2);
-- every media block has an `attachments/` entry whose bytes hash to its name, or is on the point's no-server-copy list ([§5](#5-attachments)).
+- every media block has an `attachments/` entry whose bytes hash to its name, or its hash is on the manifest's list of hashes with no verified source ([§5](#5-attachments)).
 
 The point is then indexed once, mapping each id to its line offset in `blocks.jsonl`. Rows are read by offset through the folder handle, so the order of the server's `ORDER BY id` never has to match the file's.
 
@@ -174,7 +174,8 @@ Each attempt runs three steps, all stamped with the new generation and the attem
 
 1. **Recreate.** Page the server's ids only. Any point id the server lacks was hard-deleted after the point; that only happens outside the app, and the history trigger records it.
    - Recreate them through `apply_block_creates`, with the point's row sealed under the new key. `updated_at` is the flow's clock, which the clamp caps.
-   - Parents go before children, across calls, since `blocks_workspace_id_parent_id_fkey` is checked at each call's commit. Recreates go before any patch, so a patch that moves a row back under a hard-deleted parent finds the parent present.
+   - **One row per call.** Recreates are rare, and a call is one transaction, so a refused row in a shared call would roll back its siblings without saying which one failed.
+   - Parents go before children, since `blocks_workspace_id_parent_id_fkey` is checked at each call's commit. Recreates go before any patch, so a patch that moves a row back under a hard-deleted parent finds the parent present.
    - An id that already exists in another workspace can't be recreated, and neither can its point descendants. The create's touch is refused by RLS, or by the attempt fence. Those ids go on the **unrestored** list ([§4.4](#44-completion)).
 2. **Check and repair**, verify's loop. A differing row is sent as one `apply_block_patches` element:
    - its expected content, sealed under the new key and opened back before sending, as today;
@@ -235,14 +236,10 @@ Under the new key, the classification rule (unchanged) gives:
 - **Every media block's object at its new keyed path** (`HMAC(K_id_new, hash)`) starts out missing. The proof rebuilds each one: seal, upload, verify with the shared helper.
 - **Raw objects** an old client left are converted, as in any standalone run.
 
-**The no-server-copy list carries forward.** Each recovery point's manifest carries the list of media blocks that have no Storage copy, and the proof treats it as the conversion's does. Today the conversion defines one kind: hashes with no verified source (*absent*). #1302 adds a second, for once #1291 lands: oversized raw objects whose bytes live only outside Storage (*archived*).
+**The proof is the conversion's** (conversion §6.3 step 8), minus its clause about objects a bundle archived under `other-objects/`. That clause needs a bundle record, which a standalone run doesn't have. A recovery that interrupted `cleaning` returns there, and the conversion's own pass still owes it.
 
-- An *absent* block is reported as unrecoverable.
-- An *archived* block expects no object. Its bytes must be in the point and over the e2ee capture cap, which the proof checks.
-
-The step-14 gesture copies the list and keeps it honest. An *archived* entry's bytes come from the conversion bundle or the device's byte store; if neither has them, the entry becomes *absent*.
-
-The terminal outcome is the conversion's: **passed, with these blocks unrecoverable**, confirmed by the user before `finish_recovery`.
+- **Blocks with no bytes.** Each point's manifest lists the media hashes that no source verified when the point was taken: conversion §6.3 step 3 for the bundle, and runbook step 14, which re-derives the list each time. The proof reports those blocks as unrecoverable. The terminal outcome is the conversion's: **passed, with these blocks unrecoverable**, confirmed by the user before `finish_recovery`.
+- **A refused upload**, such as a 413 for an object over the upload limits, holds the proof, with the conversion's remedy: raise the limits (conversion §6.3 step 0).
 
 **Accepted residue.** Each device's byte-store entries named under the old `K_id` stop being found. Media re-downloads from the rebuilt objects on demand, and the old local entries stay on disk until a later cleanup.
 
@@ -253,6 +250,7 @@ The terminal outcome is the conversion's: **passed, with these blocks unrecovera
 Each tab holds, per workspace, the **generation it entered at**. That's the `wk_generation` of the synced `workspaces` row whose canary its key opened at entry ([§6.3](#63-entry-and-adoption)). That number has two jobs:
 
 - **Every local write records it.** The engine puts it in the transaction's context, which already carries `source` and `tx_seq` (`tx_context`). The upload triggers copy the row's workspace's value into the queued write, beside `base_updated_at`, and the connector sends it as the write's stamp. A write therefore says which workspace its writer was looking at, however late it's sealed or sent. A tab that never pinned the workspace e2ee records none.
+  - **Compaction keeps the oldest stamp.** When the connector merges one block's patches from several transactions (`compactBlockCrudEntries`), the merged write carries the oldest stamp, with an absent one counting as oldest. That's the rule it already applies to `base_updated_at`. Otherwise a current patch could carry a stale patch's columns past the fence.
 - **Taking a new one resets the tab's view.** Before a tab takes a new generation for a workspace, it empties that workspace's undo and redo stacks and evicts its rows from its in-memory cache. Its next reads then hydrate from disk.
 
 Together these make every pre-recovery write refusable, in every tab, with no cross-tab coordination:
@@ -408,14 +406,20 @@ A failed RPC with `55P03` retries; any other failure stops the run, and the next
 | no `recovering` row, canary opens under the pending key | step 7, or the conversion's flow if the phase is `sealing` |
 | no `recovering` row, canary doesn't | step 0. The pending key is kept: the user saved it |
 
-**The step-14 gesture** ("take a recovery point") is #1302's. It reuses #1290's folder writer and verifier. Rows come from server pages opened under the key, and it refuses to take a point while any row doesn't open, listing those rows, since the restore needs an expected value for every row. The manifest records:
+**The step-14 gesture** ("take a recovery point") is #1302's. It reuses #1290's folder writer and verifier, and follows conversion runbook step 14:
+
+- **Rows** come from server pages opened under the key. The paging is bracketed by the same consistency check as the bundle's: the workspace's history count must be the same before and after, or the rows are re-read. Every block write adds a history row, so a file that passes is one instant.
+- **Media bytes** come from whichever source verifies.
+- **The no-verified-source list** is re-derived when the point is taken.
+
+It refuses to take a point while any row doesn't open, and lists those rows, since the restore needs an expected value for every row. The manifest records:
 
 - the workspace id;
 - the block count;
 - each part's hash;
 - the export time;
 - `properties_migration`;
-- the no-server-copy list ([§5](#5-attachments)).
+- the hashes with no verified source ([§5](#5-attachments)).
 
 **Who builds what:**
 
@@ -454,7 +458,7 @@ Every requirement in #1302 has a home:
 | whole-row restore, tombstones under the new key, completion by equality | [§4.2](#42-the-expected-row)–[§4.4](#44-completion) |
 | recreate hard-deleted rows; refuse a foreign id | [§4.3](#43-order-of-work) |
 | bind and verify the point; restore only from its `blocks.jsonl` | [§4.1](#41-the-point-verified-and-bound) |
-| attachments rebuilt; old objects and key records kept; no-server-copy list carried | [§5](#5-attachments), [§6.2](#62-key-records) |
+| attachments rebuilt; old objects and key records kept; the list of bytes no source verifies carried | [§5](#5-attachments), [§6.2](#62-key-records) |
 | entry checks the key against the canary, and again when it changes | [§6.3](#63-entry-and-adoption) |
 | server fence on old-key writes; per-attempt token invalidated by finish | [§3.2](#32-the-write-fence), [§3.3](#33-rpcs) |
 | quarantine the pre-recovery backlog; undo clear; rematerialize before admitting edits | [§6.1](#61-the-tabs-generation), [§6.3](#63-entry-and-adoption) |
