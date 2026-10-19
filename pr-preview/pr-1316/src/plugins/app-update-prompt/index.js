@@ -1,1 +1,1 @@
-import{LE as e}from"../../../chunks/app-o596MNDT.js";export{e as appUpdatePromptExtension};
+import{LE as e}from"../../../chunks/app-CumDGrku.js";export{e as appUpdatePromptExtension};

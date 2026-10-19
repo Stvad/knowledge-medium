@@ -1,1 +1,1 @@
-import{SH as e}from"../../../chunks/app-o596MNDT.js";export{e as aliasDataExtension};
+import{SH as e}from"../../../chunks/app-CumDGrku.js";export{e as aliasDataExtension};
