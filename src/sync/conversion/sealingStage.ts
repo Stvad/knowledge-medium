@@ -66,7 +66,7 @@ export type SealingPass =
 
 /** A fresh folder for one bundle, inside the one the user picked. */
 const bundleFolderName = (workspaceId: string, at: Date): string =>
-  `km-recovery-${workspaceId.slice(0, 8)}-${at.toISOString().replace(/[:.]/g, '-')}`
+  `e2ee-recovery-${workspaceId.slice(0, 8)}-${at.toISOString().replace(/[:.]/g, '-')}`
 
 const createBundleFolder = async (parent: BundleFolder, workspaceId: string, at: Date): Promise<BundleFolder> => {
   const base = bundleFolderName(workspaceId, at)
