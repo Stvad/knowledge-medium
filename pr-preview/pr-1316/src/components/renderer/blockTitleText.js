@@ -1,1 +1,1 @@
-import{Dj as e,Oj as t}from"../../../chunks/app-CumDGrku.js";export{e as BLOCK_TITLE_TEXT_CLASS,t as useBlockTitleTextClass};
+import{Dj as e,Oj as t}from"../../../chunks/app-BE3f4JIs.js";export{e as BLOCK_TITLE_TEXT_CLASS,t as useBlockTitleTextClass};

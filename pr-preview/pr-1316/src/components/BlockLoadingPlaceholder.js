@@ -1,1 +1,1 @@
-import{cO as e}from"../../chunks/app-CumDGrku.js";export{e as BlockLoadingPlaceholder};
+import{cO as e}from"../../chunks/app-BE3f4JIs.js";export{e as BlockLoadingPlaceholder};

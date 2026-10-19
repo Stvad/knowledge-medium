@@ -1,1 +1,1 @@
-import{_I as e}from"../../chunks/app-CumDGrku.js";export{e as usePropertySchemas};
+import{_I as e}from"../../chunks/app-BE3f4JIs.js";export{e as usePropertySchemas};
