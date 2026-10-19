@@ -12,7 +12,7 @@
  */
 
 import { getModePin, hasPinUpgradeMarker } from './modePin.js'
-import { getWorkspaceKeyStore } from './keyStore.js'
+import { getWorkspaceKeyStore, readUsableKeyRecord } from './keyStore.js'
 import { decideWorkspaceEntry, type LockReason } from './workspaceAccess.js'
 
 /** The local `workspaces` row fields the gate reads. `encryptionMode` decides
@@ -53,23 +53,13 @@ export const resolveWorkspaceEntry = async (
   loadWorkspace: (workspaceId: string) => Promise<GateWorkspace | null>,
 ): Promise<WorkspaceEntryResolution> => {
   if (hasPinUpgradeMarker(userId, workspaceId)) {
-    return {kind: 'locked', reason: 'finishing-upgrade', workspaceName: null, canary: null}
+    const workspace = await loadWorkspace(workspaceId)
+    return {kind: 'locked', reason: 'finishing-upgrade', workspaceName: workspace?.name ?? null, canary: null}
   }
   const pin = getModePin(userId, workspaceId)
   let hasKey = false
   if (pin === 'e2ee') {
-    try {
-      const record = await getWorkspaceKeyStore().get(userId, workspaceId)
-      // Require K_id, not just the WK: a LEGACY record (bare WK from before the
-      // content-key feature, `contentKeyHmac: null`) can decrypt text but not media,
-      // and K_id can't be re-derived from the stored non-extractable WK — only a
-      // re-paste repopulates it. Treat it as locked so the key gate prompts the
-      // re-paste (which co-derives K_id), rather than opening `ready` into
-      // permanently-broken media with no recovery path.
-      hasKey = record !== null && record.contentKeyHmac !== null
-    } catch (err) {
-      console.warn(`[App] workspace key read failed for ${workspaceId}; treating as locked`, err)
-    }
+    hasKey = (await readUsableKeyRecord(getWorkspaceKeyStore(), userId, workspaceId)) !== null
   }
   const workspace = await loadWorkspace(workspaceId)
   const entry = decideWorkspaceEntry(pin, hasKey, workspace)

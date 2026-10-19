@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import type { PowerSyncDb } from '@/data/internals/commitPipeline.js'
+import type { Repo } from '@/data/repo.js'
 import { readWorkspaceEncryptionMode } from '@/data/workspaceSchema.js'
 import { getModePin } from '@/sync/keys/modePin.js'
 
@@ -11,7 +11,7 @@ import { getModePin } from '@/sync/keys/modePin.js'
  * changed between the layout resolving and this effect subscribing.
  */
 export const useCloseOnServerE2ee = (
-  db: PowerSyncDb,
+  db: Repo['db'],
   userId: string,
   workspaceId: string,
   active: boolean,
@@ -22,8 +22,13 @@ export const useCloseOnServerE2ee = (
     let disposed = false
     const check = async () => {
       if (getModePin(userId, workspaceId) === 'e2ee') return
-      const mode = await readWorkspaceEncryptionMode(db, workspaceId)
-      if (!disposed && mode === 'e2ee') onClose()
+      try {
+        const mode = await readWorkspaceEncryptionMode(db, workspaceId)
+        if (!disposed && mode === 'e2ee') onClose()
+      } catch (err) {
+        // The database closing under an account switch, say; the next change re-checks.
+        console.warn('[gate] workspace mode read failed', err)
+      }
     }
     const unsubscribe = db.onChange(
       {onChange: check, onError: err => console.warn('[gate] workspace mode watch failed', err)},

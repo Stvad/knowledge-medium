@@ -88,6 +88,11 @@ describe('checkServerE2eeEntry', () => {
     expect(await checkServerE2eeEntry(entryDeps())).toEqual({kind: 'unavailable'})
   })
 
+  it('refuses when the workspace row is not visible to this session', async () => {
+    read = {kind: 'not-visible'}
+    expect(await checkServerE2eeEntry(entryDeps())).toEqual({kind: 'unavailable'})
+  })
+
   it('refuses when the server row is not e2ee or carries no canary', async () => {
     serverState = {...serverState, encryptionMode: 'none'}
     expect(await checkServerE2eeEntry(entryDeps())).toEqual({kind: 'unavailable'})
@@ -273,6 +278,24 @@ describe('a crash during the upgrade', () => {
     expect(await resume()).toEqual({kind: 'key-missing'})
     expect(hasPinUpgradeMarker(USER, WS)).toBe(false)
     expect(drainWorkspace).not.toHaveBeenCalled()
+  })
+
+  it('a key store that cannot be read keeps the marker: the resume throws, to be retried', async () => {
+    // Dropping it would let the next read succeed, open the workspace `ready`, and
+    // leave the mismatch window's rows staged with nothing to drain them.
+    await keyStore.put(USER, WS, storedRecord)
+    writePinUpgradeMarker(USER, WS)
+    upgradeModePinToE2ee(USER, WS)
+    const get = keyStore.get.bind(keyStore)
+    keyStore.get = async () => { throw new Error('IndexedDB unavailable') }
+
+    await expect(resume()).rejects.toThrow('IndexedDB unavailable')
+    expect(hasPinUpgradeMarker(USER, WS)).toBe(true)
+    expect(drainWorkspace).not.toHaveBeenCalled()
+
+    keyStore.get = get
+    expect(await resume()).toEqual({kind: 'resumed'})
+    expect(hasPinUpgradeMarker(USER, WS)).toBe(false)
   })
 
   it('a marker whose key was evicted before the pin moved is dropped, back to the gate', async () => {

@@ -22,6 +22,8 @@ export interface WorkspaceConversionState {
 
 export type WorkspaceConversionRead =
   | {readonly kind: 'read'; readonly state: WorkspaceConversionState}
-  /** Offline, a PostgREST error, a timeout, or no visible row: the phase is
-   *  unknown, so nothing may be decided that `sealing` would forbid. */
+  /** No row visible to this session: not a member (any more), or deleted. */
+  | {readonly kind: 'not-visible'}
+  /** Offline, a PostgREST error or a timeout: the phase is unknown, so nothing
+   *  may be decided that `sealing` would forbid. */
   | {readonly kind: 'unavailable'; readonly error: unknown}

@@ -145,6 +145,9 @@ const App = () => {
   if (initial.kind === 'locked') {
     return (
       <WorkspaceKeyGate
+        // One instance per workspace: a hash change between two locked
+        // workspaces must not carry one gate's state into the other's.
+        key={initial.workspaceId}
         userId={repo.user.id}
         workspaceId={initial.workspaceId}
         workspaceName={initial.workspaceName ?? undefined}

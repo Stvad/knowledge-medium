@@ -48,11 +48,16 @@ describe('decideWorkspaceEntry (row-aware — guards the unsynced-row case)', ()
   const noneRow = { encryptionMode: 'none' }
   const e2eeRow = { encryptionMode: 'e2ee' }
 
-  it('decides WITHOUT the row when the pin settles it', () => {
-    // plaintext pin → ready even before the row syncs (bootstrap is plaintext).
-    expect(decideWorkspaceEntry('plaintext', false, null)).toEqual({ kind: 'ready' })
-    // e2ee pin + WK loaded → ready (materialization uses the pin/key, not the row).
+  it('decides WITHOUT the row only for an e2ee pin with its WK', () => {
+    // Materialization uses the pin/key and uploads seal via the pin, not the row.
     expect(decideWorkspaceEntry('e2ee', true, null)).toEqual({ kind: 'ready' })
+  })
+
+  it('a plaintext pin waits for the row: the server may have converted the workspace', () => {
+    // Opening `ready` would let the bootstrap writes upload plaintext into an e2ee
+    // workspace before its row arrives (after a local-DB reset, say), where the
+    // ciphertext trigger refuses and quarantines them.
+    expect(decideWorkspaceEntry('plaintext', false, null)).toEqual({ kind: 'waiting' })
   })
 
   it('WAITS when the decision needs the row but it has not synced', () => {

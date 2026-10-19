@@ -26,7 +26,12 @@
 
 import { validateCanary } from '../../crypto/canary.js'
 import type { WorkspaceConversionRead } from '../conversionState.js'
-import type { WorkspaceKeyRecord, WorkspaceKeyStore } from '../keyStore.js'
+import {
+  getUsableKeyRecord,
+  readUsableKeyRecord,
+  type WorkspaceKeyRecord,
+  type WorkspaceKeyStore,
+} from '../keyStore.js'
 import {
   clearPinUpgradeMarker,
   hasPinUpgradeMarker,
@@ -60,7 +65,7 @@ export type ServerE2eeEntry =
 
 export const checkServerE2eeEntry = async (deps: ServerE2eeEntryDeps): Promise<ServerE2eeEntry> => {
   const read = await deps.fetchConversionState()
-  if (read.kind === 'unavailable') return {kind: 'unavailable'}
+  if (read.kind !== 'read') return {kind: 'unavailable'}
   const {state} = read
   if (state.encryptionMode !== 'e2ee' || !state.wkCanary) return {kind: 'unavailable'}
   if (state.conversionPhase === 'sealing') return {kind: 'converting'}
@@ -107,7 +112,7 @@ const resolveKey = async (
     const imported = await importPastedWorkspaceKey(args.key.text)
     return imported ? {record: imported, pasted: true} : 'format'
   }
-  const stored = await readUsableKey(args.keyStore, args.userId, args.workspaceId)
+  const stored = await readUsableKeyRecord(args.keyStore, args.userId, args.workspaceId)
   return stored ? {record: stored, pasted: false} : 'no-stored-key'
 }
 
@@ -125,23 +130,6 @@ const drainAndClearMarker = async (
   if (report && report.deferred > 0) return false
   clearPinUpgradeMarker(userId, workspaceId)
   return true
-}
-
-/** The stored key with K_id, or null — unreadable counts as absent. */
-const readUsableKey = async (
-  keyStore: WorkspaceKeyStore,
-  userId: string,
-  workspaceId: string,
-): Promise<WorkspaceKeyRecord | null> => {
-  let stored: WorkspaceKeyRecord | null = null
-  try {
-    stored = await keyStore.get(userId, workspaceId)
-  } catch (err) {
-    console.warn(`upgradeWorkspacePin: key read failed for ${workspaceId}`, err)
-  }
-  // K_id can't be re-derived from a stored WK, and an e2ee pin without it opens
-  // into broken media — the same rule as the entry gate.
-  return stored?.contentKeyHmac ? stored : null
 }
 
 export const upgradeWorkspacePin = async (args: UpgradeWorkspacePinArgs): Promise<UpgradeWorkspacePinResult> => {
@@ -184,8 +172,10 @@ export type ResumePinUpgradeResult =
   | {readonly kind: 'resumed'}
   /** The drain still deferred rows; the marker stays for another try. */
   | {readonly kind: 'incomplete'}
-  /** The stored key is gone (evicted, or unreadable now): the marker is dropped,
-   *  and the workspace goes back to a key prompt, whose unlock drains it all. */
+  /** The store read fine and holds no usable key (evicted): the marker is
+   *  dropped, and the workspace goes back to a key prompt, whose unlock drains it
+   *  all. A store that can't be read THROWS instead, keeping the marker — the
+   *  next read may well succeed, open the workspace `ready`, and drain nothing. */
   | {readonly kind: 'key-missing'}
 
 /** Startup's half: finish an upgrade a crash interrupted, from the current pin.
@@ -194,7 +184,7 @@ export type ResumePinUpgradeResult =
 export const resumePinUpgrade = async (args: ResumePinUpgradeArgs): Promise<ResumePinUpgradeResult> => {
   const {userId, workspaceId} = args
   if (!hasPinUpgradeMarker(userId, workspaceId)) return {kind: 'nothing-pending'}
-  if (!(await readUsableKey(args.keyStore, userId, workspaceId))) {
+  if (!(await getUsableKeyRecord(args.keyStore, userId, workspaceId))) {
     clearPinUpgradeMarker(userId, workspaceId)
     return {kind: 'key-missing'}
   }

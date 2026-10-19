@@ -1,28 +1,34 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // A chainable stand-in for `supabase.from(table).select(…).eq(…).abortSignal(…).maybeSingle()`.
-// Each terminal call takes the next scripted result, and the table each query
-// started from is recorded in order.
+// Each terminal call takes the next scripted result; every query's table and
+// column list are recorded in order.
 const query = vi.hoisted(() => ({
   results: [] as Array<{data: unknown; error: unknown} | Error>,
-  tables: [] as string[],
+  calls: [] as Array<{table: string; columns: string}>,
 }))
-vi.mock('@/services/supabase', () => {
-  const builder = {
-    select: () => builder,
-    eq: () => builder,
-    abortSignal: () => builder,
-    maybeSingle: async () => {
-      const next = query.results.shift()
-      if (next instanceof Error) throw next
-      return next ?? {data: null, error: null}
+vi.mock('@/services/supabase', () => ({
+  supabase: {
+    from: (table: string) => {
+      const call = {table, columns: ''}
+      query.calls.push(call)
+      const builder = {
+        select: (columns: string) => {
+          call.columns = columns
+          return builder
+        },
+        eq: () => builder,
+        abortSignal: () => builder,
+        maybeSingle: async () => {
+          const next = query.results.shift()
+          if (next instanceof Error) throw next
+          return next ?? {data: null, error: null}
+        },
+      }
+      return builder
     },
-  }
-  return {supabase: {from: (table: string) => {
-    query.tables.push(table)
-    return builder
-  }}}
-})
+  },
+}))
 
 import { BLOCKS_TABLE_COLUMN_NAMES, blockToRowParams } from '@/data/blockSchema'
 import type { BlockData } from '@/data/api'
@@ -42,7 +48,7 @@ const workspaceRow = (over: Record<string, unknown> = {}) => ({
 
 beforeEach(() => {
   query.results = []
-  query.tables = []
+  query.calls = []
 })
 
 describe('parseConversionPhase', () => {
@@ -59,8 +65,13 @@ describe('parseConversionPhase', () => {
 })
 
 describe('fetchWorkspaceConversionState', () => {
-  it('reads the mode, canary and owner from workspaces, and the phase from workspace_conversions', async () => {
-    query.results.push({data: workspaceRow(), error: null}, {data: {phase: 'cleaning'}, error: null})
+  const read = (phase: unknown) => ({data: workspaceRow({workspace_conversions: phase}), error: null})
+
+  it('reads the mode, canary, owner and phase in ONE statement, so from one snapshot', async () => {
+    // Two requests could each hit a different snapshot (a read replica), pairing
+    // a post-flip "e2ee" with a pre-flip "no conversion" and opening a sealing
+    // workspace.
+    query.results.push(read({phase: 'cleaning'}))
     expect(await fetchWorkspaceConversionState('ws')).toEqual({
       kind: 'read',
       state: {
@@ -70,56 +81,66 @@ describe('fetchWorkspaceConversionState', () => {
         ownerUserId: 'owner-1',
       },
     })
+    expect(query.calls).toHaveLength(1)
+    expect(query.calls[0].table).toBe('workspaces')
+    expect(query.calls[0].columns).toContain('workspace_conversions(phase)')
   })
 
-  it('reads the workspace row BEFORE the conversion row', async () => {
-    // The phase only moves forward, so a phase read after the mode can only be
-    // later, never earlier. The other order could pair a pre-flip "no row" with a
-    // post-flip "e2ee" and open a workspace that is sealing.
-    query.results.push({data: workspaceRow(), error: null}, {data: null, error: null})
-    await fetchWorkspaceConversionState('ws')
-    expect(query.tables).toEqual(['workspaces', 'workspace_conversions'])
+  it('accepts the embed as an array too', async () => {
+    query.results.push(read([{phase: 'sealing'}]))
+    expect(await fetchWorkspaceConversionState('ws')).toMatchObject({kind: 'read', state: {conversionPhase: 'sealing'}})
   })
 
   it('no conversion row means no conversion is running', async () => {
-    query.results.push({data: workspaceRow(), error: null}, {data: null, error: null})
+    query.results.push(read(null))
+    expect(await fetchWorkspaceConversionState('ws')).toMatchObject({kind: 'read', state: {conversionPhase: null}})
+    query.results.push(read([]))
     expect(await fetchWorkspaceConversionState('ws')).toMatchObject({kind: 'read', state: {conversionPhase: null}})
   })
 
   it('a phase value this build does not know reads as sealing', async () => {
-    query.results.push({data: workspaceRow(), error: null}, {data: {phase: 'verifying'}, error: null})
+    query.results.push(read({phase: 'verifying'}))
     expect(await fetchWorkspaceConversionState('ws')).toMatchObject({kind: 'read', state: {conversionPhase: 'sealing'}})
   })
 
-  it('a PostgREST error on either read is unavailable, never a guess', async () => {
-    query.results.push({data: null, error: {code: 'PGRST301', message: 'JWT expired'}})
-    expect(await fetchWorkspaceConversionState('ws')).toMatchObject({kind: 'unavailable'})
-    query.results.push({data: workspaceRow(), error: null}, {data: null, error: {code: 'PGRST301', message: 'JWT expired'}})
-    expect(await fetchWorkspaceConversionState('ws')).toMatchObject({kind: 'unavailable'})
-  })
-
-  it('a thrown fetch (offline) is unavailable', async () => {
-    query.results.push(new TypeError('Failed to fetch'))
+  it.each([
+    ['an auth error', {code: 'PGRST301', message: 'JWT expired'}],
+    ['a server error', {code: '57014', message: 'canceling statement due to statement timeout'}],
+    ['a broken policy naming a missing relation', {code: '42P01', message: 'relation "x" does not exist'}],
+  ])('%s is unavailable, never "no conversion"', async (_label, error) => {
+    query.results.push({data: null, error})
     expect(await fetchWorkspaceConversionState('ws')).toMatchObject({kind: 'unavailable'})
   })
 
-  it('no workspace row (RLS-hidden or deleted) is unavailable', async () => {
+  it.each([
+    ['offline', new TypeError('Failed to fetch')],
+    ['the timeout', new DOMException('signal timed out', 'TimeoutError')],
+  ])('a thrown fetch (%s) is unavailable', async (_label, thrown) => {
+    query.results.push(thrown)
+    expect(await fetchWorkspaceConversionState('ws')).toMatchObject({kind: 'unavailable'})
+  })
+
+  it('no visible workspace row (RLS-hidden or deleted) is not-visible', async () => {
     query.results.push({data: null, error: null})
-    const read = await fetchWorkspaceConversionState('ws')
-    expect(read).toMatchObject({kind: 'unavailable'})
-    expect(String((read as {error: unknown}).error)).toMatch(/not visible/)
+    expect(await fetchWorkspaceConversionState('ws')).toEqual({kind: 'not-visible'})
   })
 
-  it.each(['PGRST205', '42P01'])(
-    'a server without the conversions table (%s) predates the migration, so no conversion is running',
-    async code => {
-      query.results.push(
-        {data: workspaceRow(), error: null},
-        {data: null, error: {code, message: "Could not find the table 'public.workspace_conversions'"}},
-      )
-      expect(await fetchWorkspaceConversionState('ws')).toMatchObject({kind: 'read', state: {conversionPhase: null}})
-    },
-  )
+  it('a server with no conversions relationship (PGRST200) predates the migration: no conversion', async () => {
+    query.results.push(
+      {data: null, error: {code: 'PGRST200', message: "Could not find a relationship between 'workspaces' and 'workspace_conversions'"}},
+      {data: workspaceRow(), error: null},
+    )
+    expect(await fetchWorkspaceConversionState('ws')).toMatchObject({kind: 'read', state: {conversionPhase: null}})
+    expect(query.calls[1].columns).not.toContain('workspace_conversions')
+  })
+
+  it('the fallback read failing is unavailable too', async () => {
+    query.results.push(
+      {data: null, error: {code: 'PGRST200', message: 'no relationship'}},
+      new TypeError('Failed to fetch'),
+    )
+    expect(await fetchWorkspaceConversionState('ws')).toMatchObject({kind: 'unavailable'})
+  })
 })
 
 describe('hasCopiedCiphertext', () => {

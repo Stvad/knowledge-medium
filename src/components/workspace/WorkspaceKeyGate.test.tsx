@@ -231,6 +231,13 @@ describe('WorkspaceKeyGate — server-e2ee', () => {
     expect(getModePin(USER, WS)).toBe('e2ee')
   })
 
+  it('offers no saved-key unlock for a legacy record without K_id', async () => {
+    await getWorkspaceKeyStore().put(USER, WS, {wk: {} as CryptoKey, contentKeyHmac: null})
+    renderGate()
+    await screen.findByLabelText(/workspace key/i)
+    expect(screen.queryByRole('button', {name: /saved on this device/i})).toBeNull()
+  })
+
   it('offers the owner to finish a conversion still cleaning up', async () => {
     renderGate()
     expect(await screen.findByText(/conversion hasn't finished/i)).toBeInTheDocument()

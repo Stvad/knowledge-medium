@@ -36,10 +36,10 @@
  * (printable ASCII only) — an unqualified call here would silently drop
  * the "unicode homoglyphs" case this docblock claims to cover.
  *
- * `decideWorkspaceEntry(pin, hasKey, row)` (workspaceAccess.ts:76-84) adds
- * one more gate in front: when the local `workspaces` row hasn't replicated
- * yet (`row === null`) AND the pin alone doesn't settle it
- * (`canDecideWithoutRow`, line 81), it must return `{kind: 'waiting'}`
+ * `decideWorkspaceEntry(pin, hasKey, row)` adds one more gate in front: when
+ * the local `workspaces` row hasn't replicated yet (`row === null`) AND the pin
+ * alone doesn't settle it (`canDecideWithoutRow`: only an e2ee pin with its
+ * key does), it must return `{kind: 'waiting'}`
  * rather than falling through to `resolveWorkspaceAccess` with a guessed
  * server mode — the documented reason (workspaceAccess.ts:66-74) is that
  * proceeding here could bootstrap plaintext into a possibly-encrypted
@@ -163,10 +163,10 @@ describe('decideWorkspaceEntry (workspaceAccess.ts:76-84)', () => {
     )
   })
 
-  it("waits iff the row is missing AND the pin alone can't decide (plaintext, or e2ee+hasKey) — workspaceAccess.ts:81-82", () => {
+  it("waits iff the row is missing AND the pin alone can't decide (only e2ee+hasKey can)", () => {
     fc.assert(
       fc.property(entryCaseArb, ({ pin, hasKey, row }) => {
-        const canDecideWithoutRow = pin === 'plaintext' || (pin === 'e2ee' && hasKey)
+        const canDecideWithoutRow = pin === 'e2ee' && hasKey
         const result = decideWorkspaceEntry(pin, hasKey, row)
         const shouldWait = !canDecideWithoutRow && row === null
         expect(result.kind === 'waiting').toBe(shouldWait)
@@ -187,14 +187,11 @@ describe('decideWorkspaceEntry (workspaceAccess.ts:76-84)', () => {
     )
   })
 
-  it("pin 'plaintext' or 'e2ee'+hasKey decides immediately even with row === null (never waits) — workspaceAccess.ts:68-70", () => {
+  it("only pin 'e2ee'+hasKey decides immediately with row === null; a plaintext pin waits", () => {
     fc.assert(
-      fc.property(serverEncryptionModeArb, (unusedServerMode) => {
-        // unusedServerMode only documents that no row/server value is consulted here.
-        void unusedServerMode
-        expect(decideWorkspaceEntry('plaintext', false, null)).toEqual({ kind: 'ready' })
-        expect(decideWorkspaceEntry('plaintext', true, null)).toEqual({ kind: 'ready' })
+      fc.property(hasKeyArb, (hasKey) => {
         expect(decideWorkspaceEntry('e2ee', true, null)).toEqual({ kind: 'ready' })
+        expect(decideWorkspaceEntry('plaintext', hasKey, null)).toEqual({ kind: 'waiting' })
       }),
       fuzzParams(20),
     )

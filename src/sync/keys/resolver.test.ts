@@ -230,12 +230,20 @@ describe('createSyncResolver — pin plaintext while the server says e2ee', () =
     expect(await resolver.getUploadMode(WS)).toBe('none')
   })
 
-  it('an unreadable server mode fails closed: defer and hold', async () => {
+  it('an unreadable server mode never copies: materialization throws, so the window retries', async () => {
+    // A `defer` would consume the observer's window and strand plaintext rows.
     setModePin(USER, WS, 'plaintext')
     const resolver = createSyncResolver(() => USER, new InMemoryWorkspaceKeyStore(), async () => {
       throw new Error('database is locked')
     })
-    await expect(resolver.getMaterializability(WS)).resolves.toBe('defer')
+    await expect(resolver.getMaterializability(WS)).rejects.toThrow('database is locked')
+  })
+
+  it('an unreadable server mode holds uploads', async () => {
+    setModePin(USER, WS, 'plaintext')
+    const resolver = createSyncResolver(() => USER, new InMemoryWorkspaceKeyStore(), async () => {
+      throw new Error('database is locked')
+    })
     await expect(resolver.getUploadMode(WS)).resolves.toBe('hold')
   })
 

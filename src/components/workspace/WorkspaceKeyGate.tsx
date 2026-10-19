@@ -5,7 +5,7 @@ import { Label } from '@/components/ui/label'
 import type { Repo } from '@/data/repo'
 import { fetchWorkspaceConversionState, hasCopiedCiphertext } from '@/data/workspaceConversion'
 import type { WorkspaceConversionRead } from '@/sync/keys/conversionState'
-import { getWorkspaceKeyStore } from '@/sync/keys/keyStore'
+import { getWorkspaceKeyStore, readUsableKeyRecord } from '@/sync/keys/keyStore'
 import { confirmPlaintextForSession, setModePin } from '@/sync/keys/modePin'
 import type { WorkspaceEntryResolution } from '@/sync/keys/resolveWorkspaceEntry'
 import { unlockWorkspaceWithKey } from '@/sync/keys/flows/unlockWorkspaceWithKey'
@@ -69,8 +69,10 @@ export function WorkspaceKeyGate(props: Props) {
   return <KeyPromptGate {...props} reason={props.reason}/>
 }
 
-const displayName = (workspaceName: string | undefined): string =>
-  workspaceName ? `"${workspaceName}"` : 'This workspace'
+/** The workspace as a title names it: quoted, or "This workspace" opening a
+ *  sentence and "this workspace" inside one. */
+const displayName = (workspaceName: string | undefined, position: 'start' | 'inline' = 'start'): string =>
+  workspaceName ? `"${workspaceName}"` : position === 'start' ? 'This workspace' : 'this workspace'
 
 function GateCard({title, children}: {title: string; children: ReactNode}) {
   return (
@@ -275,9 +277,8 @@ function ServerE2eeGate({userId, workspaceId, workspaceName, deps, onResolved}: 
         return {kind: 'unavailable'}
       })
       .then(next => { if (!cancelled) setEntry(next) })
-    void getWorkspaceKeyStore().get(userId, workspaceId)
-      .then(record => { if (!cancelled) setHasStoredKey(record != null) })
-      .catch(() => {})
+    void readUsableKeyRecord(getWorkspaceKeyStore(), userId, workspaceId)
+      .then(record => { if (!cancelled) setHasStoredKey(record !== null) })
     return () => { cancelled = true }
   }, [userId, workspaceId, deps, checks])
 
@@ -307,6 +308,7 @@ function ServerE2eeGate({userId, workspaceId, workspaceName, deps, onResolved}: 
   }
 
   const name = displayName(workspaceName)
+  const inlineName = displayName(workspaceName, 'inline')
   const checkAgain = (
     <Button
       type="button"
@@ -323,14 +325,14 @@ function ServerE2eeGate({userId, workspaceId, workspaceName, deps, onResolved}: 
 
   if (entry === null) {
     return (
-      <GateCard title={`Opening ${name}…`}>
+      <GateCard title={`Opening ${inlineName}…`}>
         <Explanation>Checking this workspace's encryption status.</Explanation>
       </GateCard>
     )
   }
   if (entry.kind === 'unavailable') {
     return (
-      <GateCard title={`Can't check ${name} right now`}>
+      <GateCard title={`Can't check ${inlineName} right now`}>
         <Explanation>
           This workspace is end-to-end encrypted on the server, and this device has to confirm
           its encryption status before unlocking it. Check your connection and try again.
@@ -354,7 +356,7 @@ function ServerE2eeGate({userId, workspaceId, workspaceName, deps, onResolved}: 
   }
   if (entry.kind === 'copied-ciphertext') {
     return (
-      <GateCard title={`This device needs a reset for ${name}`}>
+      <GateCard title={`This device needs a reset for ${inlineName}`}>
         <Explanation>
           An older version of the app copied encrypted data into this device's local copy of
           the workspace, and unlocking can't repair it. Make sure every change on this device
@@ -423,7 +425,7 @@ function FinishingUpgradeGate({userId, workspaceId, workspaceName, deps, onResol
   }, [userId, workspaceId, deps, onResolved, attempt])
 
   return (
-    <GateCard title={`Finishing unlocking ${displayName(workspaceName)}…`}>
+    <GateCard title={`Finishing unlocking ${displayName(workspaceName, 'inline')}…`}>
       <Explanation>Decrypting this workspace on this device. This can take a while for a large workspace.</Explanation>
       {error && (
         <>

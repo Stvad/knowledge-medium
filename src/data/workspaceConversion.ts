@@ -3,9 +3,10 @@
  * (docs/workspace-e2ee-conversion.md §6.1–§6.2); the vocabulary is in
  * `sync/keys/conversionState.ts`.
  *
- * Neither read is synced: the mode, canary and owner come from `workspaces`
- * over PostgREST, and the phase from `workspace_conversions`, which holds a row
- * only while a conversion is in progress.
+ * Read over PostgREST, not from the synced copy: the mode, canary and owner from
+ * `workspaces`, and the phase from `workspace_conversions` (never synced), which
+ * holds a row only while a conversion is in progress. It is embedded through
+ * its `workspace_id` → `workspaces.id` foreign key.
  */
 
 import { supabase } from '@/services/supabase'
@@ -22,17 +23,23 @@ export const parseConversionPhase = (raw: unknown): ConversionPhase | null => {
   return raw === 'cleaning' ? 'cleaning' : 'sealing'
 }
 
-/** PostgREST's "no such table in the schema cache", and Postgres's own. A server
- *  without `workspace_conversions` predates the conversion migration, so no
- *  conversion can be running on it. */
-const MISSING_TABLE_CODES: ReadonlySet<string> = new Set(['PGRST205', '42P01'])
+/** PostgREST's "no relationship between `workspaces` and
+ *  `workspace_conversions`": a server that predates the conversion migration, so
+ *  no conversion can be running on it. Only this code: any other error (a broken
+ *  policy naming a missing relation included) is unavailable, never "none". */
+const NO_CONVERSIONS_RELATIONSHIP = 'PGRST200'
 
 const DEFAULT_TIMEOUT_MS = 10_000
+
+const WORKSPACE_COLUMNS = 'encryption_mode, wk_canary, owner_user_id'
 
 interface ServerWorkspaceRow {
   encryption_mode: string
   wk_canary: string | null
   owner_user_id: string
+  /** The embedded `workspace_conversions` row: an object, an array of one, or
+   *  null/empty when no conversion is running. */
+  workspace_conversions?: {phase: unknown} | Array<{phase: unknown}> | null
 }
 
 const requireSupabase = () => {
@@ -40,40 +47,41 @@ const requireSupabase = () => {
   return supabase
 }
 
+const embeddedPhase = (row: ServerWorkspaceRow): ConversionPhase | null => {
+  const embedded = row.workspace_conversions
+  const conversion = Array.isArray(embedded) ? embedded[0] : embedded
+  return parseConversionPhase(conversion?.phase)
+}
+
 export const fetchWorkspaceConversionState = async (
   workspaceId: string,
   {timeoutMs = DEFAULT_TIMEOUT_MS}: {timeoutMs?: number} = {},
 ): Promise<WorkspaceConversionRead> => {
   const signal = AbortSignal.timeout(timeoutMs)
+  const select = (columns: string) => requireSupabase()
+    .from('workspaces')
+    .select(columns)
+    .eq('id', workspaceId)
+    .abortSignal(signal)
+    .maybeSingle<ServerWorkspaceRow>()
   try {
-    const client = requireSupabase()
-    // The workspace row FIRST: the phase only moves forward, so a phase read
-    // after the mode can only be later than it. The other order could pair a
-    // pre-flip "no row" with a post-flip "e2ee" and open a sealing workspace.
-    const workspace = await client
-      .from('workspaces')
-      .select('encryption_mode, wk_canary, owner_user_id')
-      .eq('id', workspaceId)
-      .abortSignal(signal)
-      .maybeSingle<ServerWorkspaceRow>()
-    if (workspace.error) return {kind: 'unavailable', error: workspace.error}
-    if (!workspace.data) return {kind: 'unavailable', error: new Error(`workspace ${workspaceId} not visible`)}
-
-    const conversion = await client
-      .from('workspace_conversions')
-      .select('phase')
-      .eq('workspace_id', workspaceId)
-      .abortSignal(signal)
-      .maybeSingle<{phase: unknown}>()
-    const tableMissing = MISSING_TABLE_CODES.has((conversion.error as {code?: string} | null)?.code ?? '')
-    if (conversion.error && !tableMissing) return {kind: 'unavailable', error: conversion.error}
-
-    const row = workspace.data
+    // ONE statement, so the mode and the phase come from one snapshot: two
+    // requests may each land on a different one (a read replica), pairing a
+    // post-flip "e2ee" with a pre-flip "no conversion".
+    let result = await select(`${WORKSPACE_COLUMNS}, workspace_conversions(phase)`)
+    let conversionsExist = true
+    if ((result.error as {code?: string} | null)?.code === NO_CONVERSIONS_RELATIONSHIP) {
+      conversionsExist = false
+      result = await select(WORKSPACE_COLUMNS)
+    }
+    if (result.error) return {kind: 'unavailable', error: result.error}
+    if (!result.data) return {kind: 'not-visible'}
+    const row = result.data
     return {
       kind: 'read',
       state: {
         encryptionMode: row.encryption_mode,
-        conversionPhase: tableMissing ? null : parseConversionPhase(conversion.data?.phase),
+        conversionPhase: conversionsExist ? embeddedPhase(row) : null,
         wkCanary: row.wk_canary,
         ownerUserId: row.owner_user_id,
       },

@@ -14,12 +14,11 @@
  *
  * The PIN is the authority (§6 rule 1): the server's `encryption_mode` and the
  * `enc:v1:` prefix are both untrusted. The server's mode is read in ONE
- * direction only — it can make this device stricter, never looser. That
- * reverses the older "pin and key store only" contract for the case an in-place
- * conversion creates (docs/workspace-e2ee-conversion.md §6.2): a server that
- * says e2ee while the pin is not e2ee makes the device DEFER materialization and
- * HOLD uploads until the pin is upgraded, and nothing the server says can make
- * an e2ee pin decrypt less. A false e2ee claim therefore only stalls a device.
+ * direction only — it can make this device stricter, never looser
+ * (docs/workspace-e2ee-conversion.md §6.2): a server that says e2ee while the
+ * pin is not e2ee makes the device DEFER materialization and HOLD uploads until
+ * the pin is upgraded, and nothing the server says can make an e2ee pin decrypt
+ * less. A false e2ee claim therefore only stalls a device.
  * First-encounter handling (the server-trusting branches a/b of §6 rule 3) lives
  * in the §8 flows that own the UI to prompt/quarantine; it surfaces here only as
  * the fail-safe default — an UNPINNED workspace is never materialized (defer)
@@ -39,8 +38,10 @@
  *
  * "Server says e2ee" is the SYNCED `workspaces.encryption_mode`, which rides the
  * same checkpoint as the blocks it governs, so a row is never staged ahead of
- * the mode that covers it. An unreadable mode counts as e2ee (fail closed); a
- * missing row does not, since a device with no row has no synced blocks for it.
+ * the mode that covers it. A missing row does not count as e2ee, since a device
+ * with no row has no synced blocks for it (and the entry gate waits for it). An
+ * unreadable mode holds uploads, and makes materialization throw so the window
+ * is retried.
  *
  * Bound to a `getUserId` thunk rather than a fixed id so the resolver reads the
  * current user fresh: a signed-out resolver (`null`) fails safe — defer, no key,
@@ -48,7 +49,7 @@
  */
 
 import type { GetCek, GetMaterializability, UploadMode } from '../transform.js'
-import type { WorkspaceKeyStore } from './keyStore.js'
+import { readUsableKeyRecord, type WorkspaceKeyStore } from './keyStore.js'
 import { getModePin } from './modePin.js'
 
 export interface SyncResolver {
@@ -80,30 +81,16 @@ export const readContentKeyHmac = async (
   keyStore: WorkspaceKeyStore,
   userId: string,
   workspaceId: string,
-): Promise<CryptoKey | null> => {
-  try {
-    return (await keyStore.get(userId, workspaceId))?.contentKeyHmac ?? null
-  } catch (err) {
-    console.warn(`[syncResolver] K_id read failed for ${workspaceId}; treating as absent`, err)
-    return null
-  }
-}
+): Promise<CryptoKey | null> =>
+  (await readUsableKeyRecord(keyStore, userId, workspaceId))?.contentKeyHmac ?? null
 
 export const createSyncResolver = (
   getUserId: () => string | null,
   keyStore: WorkspaceKeyStore,
   readSyncedEncryptionMode: ReadSyncedEncryptionMode,
 ): SyncResolver => {
-  // Swallows a read failure as "e2ee" for the same reason getCek swallows one:
-  // getMaterializability runs outside the observer's per-row try/catch.
-  const serverSaysE2ee = async (workspaceId: string): Promise<boolean> => {
-    try {
-      return (await readSyncedEncryptionMode(workspaceId)) === 'e2ee'
-    } catch (err) {
-      console.warn(`[syncResolver] encryption_mode read failed for ${workspaceId}; treating as e2ee`, err)
-      return true
-    }
-  }
+  const serverSaysE2ee = async (workspaceId: string): Promise<boolean> =>
+    (await readSyncedEncryptionMode(workspaceId)) === 'e2ee'
 
   const getCek: GetCek = async (workspaceId) => {
     const userId = getUserId()
@@ -131,6 +118,9 @@ export const createSyncResolver = (
     const userId = getUserId()
     if (!userId) return 'defer'
     const pin = getModePin(userId, workspaceId)
+    // An unreadable mode THROWS here, unlike an unreadable key below: a throw
+    // leaves the observer's window queued for a retry, while a `defer` would
+    // consume it and strand a plaintext row nothing else re-reads.
     if (pin === 'plaintext') return (await serverSaysE2ee(workspaceId)) ? 'defer' : 'copy'
     if (pin === 'e2ee') {
       // getCek swallows read failures → null, so an unreadable key store defers
@@ -147,7 +137,13 @@ export const createSyncResolver = (
     const userId = getUserId()
     if (!userId) return 'none'
     if (getModePin(userId, workspaceId) === 'e2ee') return 'e2ee'
-    return (await serverSaysE2ee(workspaceId)) ? 'hold' : 'none'
+    try {
+      return (await serverSaysE2ee(workspaceId)) ? 'hold' : 'none'
+    } catch (err) {
+      // A held write is retried with the queue, so holding loses nothing.
+      console.warn(`[syncResolver] encryption_mode read failed for ${workspaceId}; holding uploads`, err)
+      return 'hold'
+    }
   }
 
   return { getMaterializability, getCek, getContentKeyHmac, getUploadMode }

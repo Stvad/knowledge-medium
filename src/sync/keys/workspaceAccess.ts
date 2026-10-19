@@ -64,22 +64,21 @@ export type WorkspaceEntry =
  * they are NOT (a workspace opened by URL right after an RLS-allowed access
  * check, before sync delivered the row).
  *
- * We can decide WITHOUT the row only when the local pin settles it and no
- * server-supplied field is needed:
- *   - plaintext pin            → ready (bootstrap-writing plaintext is correct);
- *   - e2ee pin + WK loaded      → ready (materialization uses the pin/key, the
- *     row isn't needed; uploads seal via the pin).
- * Otherwise the row's `encryption_mode` (branch a/b) and `wk_canary` (to
- * validate a pasted key) are required, so a missing row means WAIT — never
- * proceed (which would bootstrap plaintext into a possibly-encrypted workspace)
- * and never gate with a null canary (which can't validate any key).
+ * We can decide WITHOUT the row only for an e2ee pin with its WK loaded:
+ * materialization uses the pin/key and uploads seal via the pin, so nothing the
+ * row says can change the answer. Every other pin needs the row's
+ * `encryption_mode` (branch a/b, and a plaintext pin the server may have
+ * converted in place) and `wk_canary` (to validate a pasted key), so a missing
+ * row means WAIT — never proceed (which would bootstrap plaintext into a
+ * possibly-encrypted workspace) and never gate with a null canary (which can't
+ * validate any key).
  */
 export const decideWorkspaceEntry = (
   pin: ModePin | null,
   hasKey: boolean,
   row: WorkspaceModeRow | null,
 ): WorkspaceEntry => {
-  const canDecideWithoutRow = pin === 'plaintext' || (pin === 'e2ee' && hasKey)
+  const canDecideWithoutRow = pin === 'e2ee' && hasKey
   if (!canDecideWithoutRow && row === null) return { kind: 'waiting' }
   return resolveWorkspaceAccess(pin, row?.encryptionMode ?? 'none', hasKey)
 }

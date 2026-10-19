@@ -19,7 +19,10 @@ vi.mock('./modePin.js', () => ({
   getModePin: (u: string, w: string) => getModePin(u, w),
   hasPinUpgradeMarker: (u: string, w: string) => hasPinUpgradeMarker(u, w),
 }))
-vi.mock('./keyStore.js', () => ({getWorkspaceKeyStore: () => ({get: keyGet})}))
+vi.mock('./keyStore.js', async (importActual) => ({
+  ...(await importActual<typeof import('./keyStore.js')>()),
+  getWorkspaceKeyStore: () => ({get: keyGet}),
+}))
 
 const { resolveWorkspaceEntry } = await import('./resolveWorkspaceEntry.js')
 
@@ -39,11 +42,15 @@ beforeEach(() => {
 })
 
 describe('resolveWorkspaceEntry (read-inputs half of the §6 gate)', () => {
-  it('plaintext pin → ready without reading the key store or the row', async () => {
+  it('plaintext pin → ready without reading the key store', async () => {
     getModePin.mockReturnValue('plaintext')
-    const loadWorkspace = vi.fn()
-    expect(await resolveWorkspaceEntry('u', 'w', loadWorkspace)).toEqual({kind: 'ready'})
+    expect(await resolveWorkspaceEntry('u', 'w', async () => workspace())).toEqual({kind: 'ready'})
     expect(keyGet).not.toHaveBeenCalled()
+  })
+
+  it('plaintext pin with no row waits for it', async () => {
+    getModePin.mockReturnValue('plaintext')
+    expect(await resolveWorkspaceEntry('u', 'w', async () => null)).toEqual({kind: 'waiting'})
   })
 
   it('e2ee pin reads the key store; key present → ready', async () => {

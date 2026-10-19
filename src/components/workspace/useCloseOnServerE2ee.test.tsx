@@ -78,4 +78,19 @@ describe('useCloseOnServerE2ee — an open workspace closes when the server conv
     await vi.waitFor(() => expect(witness).toHaveBeenCalled())
     expect(onClose).not.toHaveBeenCalled()
   })
+
+  it('a mode read that fails is logged, not an unhandled rejection', async () => {
+    setModePin(USER, WS, 'plaintext')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const failing = {
+      ...shared.db,
+      onChange: shared.db.onChange.bind(shared.db),
+      getOptional: async () => { throw new Error('database closed') },
+    } as unknown as typeof shared.db
+    const onClose = vi.fn()
+    renderHook(() => useCloseOnServerE2ee(failing, USER, WS, true, onClose))
+    await vi.waitFor(() => expect(warn).toHaveBeenCalled())
+    expect(onClose).not.toHaveBeenCalled()
+    warn.mockRestore()
+  })
 })
