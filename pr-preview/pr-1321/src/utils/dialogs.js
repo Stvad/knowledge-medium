@@ -1,1 +1,1 @@
-import{Dk as e,Ek as t,Ok as n,Tk as r,kk as i}from"../../chunks/app-DdPOiSVa.js";export{r as __resetDialogsForTests,t as getDialogQueue,e as isDialogOpenForWorkspace,n as openDialog,i as subscribeDialogs};
+import{Dk as e,Ek as t,Ok as n,Tk as r,kk as i}from"../../chunks/app-4Gtz0sR9.js";export{r as __resetDialogsForTests,t as getDialogQueue,e as isDialogOpenForWorkspace,n as openDialog,i as subscribeDialogs};

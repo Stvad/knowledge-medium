@@ -1,1 +1,1 @@
-import{ag as e,eg as t,ig as n,ng as r,rg as i,tg as a}from"../../../chunks/app-DdPOiSVa.js";export{t as ASSETS_ROOT,a as InMemoryByteStore,r as OpfsByteStore,i as assetPathSegments,n as createByteStore,e as getByteStore};
+import{ag as e,eg as t,ig as n,ng as r,rg as i,tg as a}from"../../../chunks/app-4Gtz0sR9.js";export{t as ASSETS_ROOT,a as InMemoryByteStore,r as OpfsByteStore,i as assetPathSegments,n as createByteStore,e as getByteStore};

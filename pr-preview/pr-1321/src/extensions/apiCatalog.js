@@ -1,1 +1,1 @@
-import{Rl as e,zl as t}from"../../chunks/app-DdPOiSVa.js";export{e as extensionApiCatalog,t as extensionApiRuntimeExports};
+import{Rl as e,zl as t}from"../../chunks/app-4Gtz0sR9.js";export{e as extensionApiCatalog,t as extensionApiRuntimeExports};

@@ -1,1 +1,1 @@
-import{du as e,fu as t,lu as n,pu as r,uu as i}from"../../../chunks/app-DdPOiSVa.js";export{n as BLOCK_HISTORY_CONTENT_CHARS,i as LISTED_PROPERTY_NAMES,e as MAX_LISTED_CHANGES,t as blockHistory,r as recentChanges};
+import{du as e,fu as t,lu as n,pu as r,uu as i}from"../../../chunks/app-4Gtz0sR9.js";export{n as BLOCK_HISTORY_CONTENT_CHARS,i as LISTED_PROPERTY_NAMES,e as MAX_LISTED_CHANGES,t as blockHistory,r as recentChanges};

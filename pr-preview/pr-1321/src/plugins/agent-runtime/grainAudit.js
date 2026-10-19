@@ -1,1 +1,1 @@
-import{$l as e,Ql as t,eu as n,nu as r,ru as i,tu as a}from"../../../chunks/app-DdPOiSVa.js";export{t as AUDIT_BLOCK_LIMIT,e as auditBlocks,n as auditExtensionData,a as createBlockResolver,r as grainWarningsForProperties,i as writeWarnings};
+import{$l as e,Ql as t,eu as n,nu as r,ru as i,tu as a}from"../../../chunks/app-4Gtz0sR9.js";export{t as AUDIT_BLOCK_LIMIT,e as auditBlocks,n as auditExtensionData,a as createBlockResolver,r as grainWarningsForProperties,i as writeWarnings};
