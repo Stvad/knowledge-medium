@@ -73,6 +73,7 @@ import { aliasesProp } from '@/data/properties'
 import { definitionSeedsFacet } from '@/data/facets.js'
 import { refTestSeed } from './refTestSeeds.ts'
 import { computeAliasSeatId } from '@/data/targets'
+import { PLAINTEXT_ALIAS_SEATS } from '@/data/aliasSeatNamespace'
 import { dailyNoteBlockId } from '@/plugins/daily-notes/dailyNotes'
 import { dailyNotesDataExtension } from '@/plugins/daily-notes/dataExtension'
 import { runConsistencyAudit } from '@/plugins/data-integrity/audit'
@@ -607,7 +608,7 @@ describe('references pipeline sequences', () => {
         content: `[[ax]] and ((${ROOT})) on [[2026-01-05]]`,
       })
       await flush()
-      const axId = computeAliasSeatId('ax', WS)
+      const axId = computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'ax', WS)
       const dailyId = dailyNoteBlockId(WS, '2026-01-05')
       expect((await read(axId))?.deleted, 'alias target created').toBe(0)
       expect((await read(dailyId))?.deleted, 'daily-note target created').toBe(0)
@@ -645,7 +646,7 @@ describe('references pipeline sequences', () => {
         parentId: ROOT, position: {kind: 'last'}, content: '[[zz]]',
       })
       await flush()
-      const zzId = computeAliasSeatId('zz', WS)
+      const zzId = computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'zz', WS)
       expect((await read(zzId))?.deleted, 'orphan-candidate target created').toBe(0)
       await repo.mutate.setContent({id: orphanSrc, content: 'no more link'})
       await flush(4001)
@@ -786,7 +787,7 @@ describe('references pipeline sequences', () => {
         parentId: ROOT, position: {kind: 'last'}, content: 'see [[Inbox]]',
       })
       await flush()
-      const seat0 = computeAliasSeatId('Inbox', WS)
+      const seat0 = computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'Inbox', WS)
       expect(await bindingOf(referrer, 'Inbox'), 'referrer bound the seat').toBe(seat0)
 
       // Delete it, rename it while tombstoned, restore it. Each step is a

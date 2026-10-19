@@ -31,6 +31,7 @@ import { aliasesProp, typesProp } from '@/data/properties'
 import { seedProperty } from '@/data/propertySeeds'
 import { Repo } from '@/data/repo'
 import { aliasSeatSeed, computeAliasSeatId } from '@/data/targets'
+import { PLAINTEXT_ALIAS_SEATS } from '@/data/aliasSeatNamespace'
 import { propertyDefinitionBlockId } from '@/data/definitionSeeds'
 import { propertyFieldContent } from '@/data/propertyChildren'
 import { dailyNoteBlockId } from '@/plugins/daily-notes/dailyNotes'
@@ -108,7 +109,7 @@ afterEach(async () => {
 
 const WS = 'ws-1'
 
-const aliasId = (alias: string) => computeAliasSeatId(alias, WS)
+const aliasId = (alias: string) => computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, alias, WS)
 const dailyId = (date: string) => dailyNoteBlockId(WS, date)
 
 /** Run all pending processors to completion (synchronous + delayed).
@@ -1228,7 +1229,7 @@ describe('parseReferences — alias claimed between plan build and apply (write-
     expect(refs.some(ref => ref.alias === 'ParkZ'), 'unraced mark still derived').toBe(true)
     // The predicted seat must NOT have been minted — the claimant owns
     // the alias.
-    const seat = await env.read(computeAliasSeatId('RacedAlias', WS))
+    const seat = await env.read(computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'RacedAlias', WS))
     expect(seat, 'no seat row minted for a claimed alias').toBeNull()
   })
 

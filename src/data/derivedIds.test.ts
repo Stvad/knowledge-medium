@@ -29,6 +29,7 @@ import { recentsPageBlockId } from './recentsPage'
 import { propertyDefinitionBlockId, typeDefinitionBlockId } from './definitionSeeds'
 import { synthesizedPropertyDefinitionBlockId } from './internals/propertyDefinitionSynthesis'
 import { computeAliasSeatId } from './targets'
+import { PLAINTEXT_ALIAS_SEATS } from '@/data/aliasSeatNamespace'
 import { stateChildBlockId, userPageBlockId } from './stateBlocks'
 import { locationsPageBlockId } from '@/plugins/geo/locationsPage'
 import { reviewDeckBlockId } from '@/plugins/srs-review/deck'
@@ -157,9 +158,9 @@ describe('the ids live rows are already at', () => {
 
   it('alias seats, at every probe slot', () => {
     const aliasNs = 'a3c8a8c0-7c3a-4d2c-bc4f-1f6c2c6a7d11'
-    expect(computeAliasSeatId('Some Page', WS))
+    expect(computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'Some Page', WS))
       .toBe(uuidv5(`${WS}:Some Page:0`, aliasNs))
-    expect(computeAliasSeatId('Some Page', WS, 3))
+    expect(computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'Some Page', WS, 3))
       .toBe(uuidv5(`${WS}:Some Page:3`, aliasNs))
   })
 
@@ -211,8 +212,8 @@ describe('workspace scoping', () => {
     expect(roamBlockId(WS, 'abc123')).not.toBe(roamBlockId(OTHER_WS, 'abc123'))
     expect(mediaBlockId(WS, 'sha256-deadbeef'))
       .not.toBe(mediaBlockId(OTHER_WS, 'sha256-deadbeef'))
-    expect(computeAliasSeatId('Some Page', WS))
-      .not.toBe(computeAliasSeatId('Some Page', OTHER_WS))
+    expect(computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'Some Page', WS))
+      .not.toBe(computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'Some Page', OTHER_WS))
     expect(propertyDefinitionBlockId(WS, 'system:kernel-data/property/show-properties'))
       .not.toBe(propertyDefinitionBlockId(OTHER_WS, 'system:kernel-data/property/show-properties'))
     expect(synthesizedPropertyDefinitionBlockId(PLAINTEXT_SYNTHESIZED_NS, WS, 'demo:orphan'))

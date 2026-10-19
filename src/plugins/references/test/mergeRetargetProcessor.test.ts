@@ -12,6 +12,7 @@ import { definitionSeedsFacet } from '@/data/facets.js'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { computeAliasSeatId } from '@/data/targets'
+import { PLAINTEXT_ALIAS_SEATS } from '@/data/aliasSeatNamespace'
 import { aliasDataExtension } from '@/plugins/alias/dataExtension.js'
 import { ALIAS_COLLISION_MERGE_MUTATOR } from '@/plugins/alias/collisionMerge.ts'
 import { referencesDataExtension } from '../dataExtension.ts'
@@ -311,7 +312,7 @@ describe('references.retargetMergedBlockReferences', () => {
     // `content`, so the removal itself re-fires it.
     await env.repo.awaitProcessors()
     expect(env.read('ref')!.references).toEqual(
-      normalizeReferences([{id: computeAliasSeatId('Partial', WS, 0), alias: 'Partial'}]),
+      normalizeReferences([{id: computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'Partial', WS, 0), alias: 'Partial'}]),
     )
   })
 

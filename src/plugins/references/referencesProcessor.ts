@@ -75,6 +75,11 @@ import {
   matchesAliasSeatSeed,
   resolveAliasSeatId,
 } from '@/data/targets'
+import {
+  aliasSeatNamespacesInTx,
+  resolveAliasSeatNamespaces,
+  type AliasSeatNamespaces,
+} from '@/data/aliasSeatNamespace'
 import { EXTENSION_TYPE } from '@/data/blockTypes'
 import { readIsChildBackedWorkspace } from '@/data/workspaceSchema'
 import { aliasesProp, typesProp } from '@/data/properties'
@@ -232,6 +237,9 @@ const buildSourcePlan = async (
   const aliasesToEnsure: Array<{alias: string; id: string}> = []
   const datesToEnsure: Array<{iso: string; alias: string}> = []
   const seenAliases = new Set<string>()
+  // Resolved on the first lookup miss: it is the read that needs `K_id`, which
+  // the write phase cannot read under the lock (`@/data/aliasSeatNamespace`).
+  let seats: AliasSeatNamespaces | undefined
 
   for (const mark of aliasMarks) {
     if (seenAliases.has(mark.alias)) continue
@@ -274,7 +282,9 @@ const buildSourcePlan = async (
     // tombstoned. We probe here (read-phase, committed state) so the
     // predicted id matches what ensureAliasTarget will pick in the
     // write phase. Convergence: same world-state → same probe answer.
+    seats ??= await resolveAliasSeatNamespaces(ctx.repo, source.workspaceId)
     const id = await resolveAliasSeatId(
+      seats,
       aliasSeatReaderFromDb(ctx.db),
       mark.alias,
       source.workspaceId,
@@ -689,6 +699,7 @@ const reapSeatsInTx = async (
 ): Promise<void> => {
   await ctx.repo.tx(async tx => {
     const generatedFieldIds = generatedSeatFieldIds(workspaceId)
+    const seats = await aliasSeatNamespacesInTx(tx, ctx.repo, workspaceId)
     for (const id of ids) {
       // Re-read in-tx: a racer may have deleted (or hard-removed) the
       // seat since the read phase — nothing to reap then.
@@ -709,7 +720,7 @@ const reapSeatsInTx = async (
       // routing in targets.ts), which pass unless a user adopted the
       // seat inside the 4s window: exactly the case to skip.
       if (!matchesAliasSeatSeed(current)) continue
-      if (!isAliasSeatSlotId(id, current.content, workspaceId)) continue
+      if (!isAliasSeatSlotId(seats, id, current.content, workspaceId)) continue
       // In-tx children guard, for BOTH callers: a live child that isn't
       // the seat's own generated machinery is user content (someone
       // nested notes under the fresh page — reachable inside the
@@ -889,6 +900,7 @@ export const reapOrphanAliasSeatsProcessor = definePostCommitProcessor({
     const readSeat = aliasSeatReaderFromDb(ctx.db)
     const isChildBacked = await readIsChildBackedWorkspace(ctx.db, workspaceId)
     const generatedFieldIds = generatedSeatFieldIds(workspaceId)
+    let seats: AliasSeatNamespaces | undefined
     const candidates: string[] = []
     for (const id of dropped) {
       if (await hasLiveReferrer(ctx.db, workspaceId, id)) continue
@@ -896,7 +908,8 @@ export const reapOrphanAliasSeatsProcessor = definePostCommitProcessor({
       if (seat === null || seat.deleted) continue
       if (parseLiteralDailyPageTitle(seat.content) !== null) continue
       if (!matchesAliasSeatSeed(seat)) continue
-      if (!isAliasSeatSlotId(id, seat.content, workspaceId)) continue
+      seats ??= await resolveAliasSeatNamespaces(ctx.repo, workspaceId)
+      if (!isAliasSeatSlotId(seats, id, seat.content, workspaceId)) continue
       if (seat.hasLiveChildren) {
         // DEFENCE IN DEPTH, not load-bearing: `reapSeatsInTx` re-reads the
         // children in-tx and applies the same rule, so replacing this whole

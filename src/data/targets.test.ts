@@ -39,6 +39,7 @@ import {
   ensureAliasTarget,
 } from '@/data/targets'
 
+import { PLAINTEXT_ALIAS_SEATS } from '@/data/aliasSeatNamespace'
 const WS = 'ws-1'
 
 interface Harness {
@@ -65,24 +66,24 @@ beforeEach(async () => { env = await setup() })
 
 describe('computeAliasSeatId', () => {
   it('is stable for a given (workspaceId, alias)', () => {
-    expect(computeAliasSeatId('foo', WS)).toBe(computeAliasSeatId('foo', WS))
+    expect(computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'foo', WS)).toBe(computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'foo', WS))
   })
 
   it('differs across workspaces for the same alias', () => {
-    expect(computeAliasSeatId('foo', 'ws-a'))
-      .not.toBe(computeAliasSeatId('foo', 'ws-b'))
+    expect(computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'foo', 'ws-a'))
+      .not.toBe(computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'foo', 'ws-b'))
   })
 
   it('differs across aliases in the same workspace', () => {
-    expect(computeAliasSeatId('foo', WS))
-      .not.toBe(computeAliasSeatId('bar', WS))
+    expect(computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'foo', WS))
+      .not.toBe(computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'bar', WS))
   })
 })
 
 describe('createOrRestoreTargetBlock — insert path', () => {
   it('inserts a fresh row, returns {inserted: true}, fires callback', async () => {
     const callbackCalls: string[] = []
-    const id = computeAliasSeatId('fresh', WS)
+    const id = computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'fresh', WS)
 
     const result = await env.repo.tx(async tx => {
       return createOrRestoreTargetBlock(tx, {
@@ -108,7 +109,7 @@ describe('createOrRestoreTargetBlock — insert path', () => {
 
 describe('createOrRestoreTargetBlock — live-row hit', () => {
   it('returns {inserted: false} and does NOT fire callback', async () => {
-    const id = computeAliasSeatId('live', WS)
+    const id = computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'live', WS)
 
     // Pre-create the row.
     await env.repo.tx(tx => tx.create({
@@ -145,7 +146,7 @@ describe('createOrRestoreTargetBlock — live-row hit', () => {
 
 describe('createOrRestoreTargetBlock — tombstone path', () => {
   it('restores tombstoned row, applies freshContent, fires callback, returns inserted=true', async () => {
-    const id = computeAliasSeatId('tombstone', WS)
+    const id = computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'tombstone', WS)
 
     // Pre-create + soft-delete the row.
     await env.repo.tx(tx => tx.create({
@@ -183,7 +184,7 @@ describe('createOrRestoreTargetBlock — tombstone path', () => {
 
 describe('createOrRestoreTargetBlock — workspace mismatch', () => {
   it('surfaces DeterministicIdCrossWorkspaceError (does not swallow)', async () => {
-    const id = computeAliasSeatId('shared', 'ws-a')
+    const id = computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'shared', 'ws-a')
 
     // Pre-seed in ws-a.
     await env.repo.tx(tx => tx.create({
@@ -215,7 +216,7 @@ describe('ensureAliasTarget', () => {
       return ensureAliasTarget(tx, env.repo, 'foo', WS, typeSnapshot)
     }, {scope: ChangeScope.BlockDefault})
 
-    expect(result.id).toBe(computeAliasSeatId('foo', WS))
+    expect(result.id).toBe(computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'foo', WS))
     expect(result.inserted).toBe(true)
 
     const row = await env.h.db.get<{properties_json: string}>(
@@ -259,8 +260,8 @@ describe('ensureAliasTarget — indexed-deterministic seat probe', () => {
     // to `bar`, leaving slot 0 holding `bar`. A subsequent type of
     // [[foo]] should walk to slot 1, not silently re-resolve to the
     // renamed `bar` row.
-    const slot0Id = computeAliasSeatId('foo', WS, 0)
-    const slot1Id = computeAliasSeatId('foo', WS, 1)
+    const slot0Id = computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'foo', WS, 0)
+    const slot1Id = computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'foo', WS, 1)
     const typeSnapshot = env.repo.snapshotTypeRegistries()
     await env.repo.tx(async tx => {
       await tx.create({
@@ -296,7 +297,7 @@ describe('ensureAliasTarget — indexed-deterministic seat probe', () => {
     // tombstone's only signal is "no one referenced this transient seat
     // in time"; bringing it back at the same id keeps the deterministic-
     // id slot space compact instead of probing deeper on every retype.
-    const slot0Id = computeAliasSeatId('foo', WS, 0)
+    const slot0Id = computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'foo', WS, 0)
     const typeSnapshot = env.repo.snapshotTypeRegistries()
     await env.repo.tx(tx => ensureAliasTarget(tx, env.repo, 'foo', WS, typeSnapshot),
       {scope: ChangeScope.BlockDefault})
@@ -319,8 +320,8 @@ describe('ensureAliasTarget — indexed-deterministic seat probe', () => {
     // whether the user explicitly deleted a real page or whether cleanup
     // tombstoned a renamed-then-orphaned seat; either way restoring would
     // resurrect the rename, so keep slot 0 dead and probe to slot 1.
-    const slot0Id = computeAliasSeatId('foo', WS, 0)
-    const slot1Id = computeAliasSeatId('foo', WS, 1)
+    const slot0Id = computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'foo', WS, 0)
+    const slot1Id = computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'foo', WS, 1)
     const typeSnapshot = env.repo.snapshotTypeRegistries()
     await env.repo.tx(tx => ensureAliasTarget(tx, env.repo, 'foo', WS, typeSnapshot),
       {scope: ChangeScope.BlockDefault})
@@ -342,8 +343,8 @@ describe('ensureAliasTarget — indexed-deterministic seat probe', () => {
     // that is a user touch (a tag, a custom prop, etc.) and means the
     // page wasn't "purely transient" — restoring would resurrect those
     // edits.
-    const slot0Id = computeAliasSeatId('foo', WS, 0)
-    const slot1Id = computeAliasSeatId('foo', WS, 1)
+    const slot0Id = computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'foo', WS, 0)
+    const slot1Id = computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'foo', WS, 1)
     const typeSnapshot = env.repo.snapshotTypeRegistries()
     await env.repo.tx(tx => ensureAliasTarget(tx, env.repo, 'foo', WS, typeSnapshot),
       {scope: ChangeScope.BlockDefault})
@@ -369,8 +370,8 @@ describe('ensureAliasTarget — indexed-deterministic seat probe', () => {
     // Soft-delete doesn't cascade today, so a tombstoned seat with
     // live kids is "user touched"; restoring it would expose the kids
     // back under a now-live parent unannounced.
-    const slot0Id = computeAliasSeatId('foo', WS, 0)
-    const slot1Id = computeAliasSeatId('foo', WS, 1)
+    const slot0Id = computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'foo', WS, 0)
+    const slot1Id = computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'foo', WS, 1)
     const typeSnapshot = env.repo.snapshotTypeRegistries()
     await env.repo.tx(tx => ensureAliasTarget(tx, env.repo, 'foo', WS, typeSnapshot),
       {scope: ChangeScope.BlockDefault})
@@ -398,7 +399,7 @@ describe('ensureAliasTarget — indexed-deterministic seat probe', () => {
     // already exists at slot 0 claiming the alias (created by a sync
     // peer), and a fresh ensureAliasTarget should reuse it rather
     // than probing past.
-    const slot0Id = computeAliasSeatId('foo', WS, 0)
+    const slot0Id = computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'foo', WS, 0)
     await env.repo.tx(async tx => {
       await tx.create({
         id: slot0Id,

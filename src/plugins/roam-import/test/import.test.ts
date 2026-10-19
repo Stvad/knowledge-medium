@@ -48,7 +48,11 @@ import {
   srsReviewCountProp,
   srsSnapshotHistoryProp,
 } from '@/plugins/srs-rescheduling/schema'
-import { computeAliasSeatId } from '../../../data/targets'
+import { ALIAS_SEAT_PROBE_SLOTS, computeAliasSeatId } from '../../../data/targets'
+import { PLAINTEXT_ALIAS_SEATS } from '@/data/aliasSeatNamespace'
+import { deriveContentKeyHmac } from '@/sync/crypto/contentKey'
+import { getWorkspaceKeyStore } from '@/sync/keys/keyStore'
+import { setModePin } from '@/sync/keys/modePin'
 import { importRoam } from '../import'
 import { roamBlockId } from '../blockIds'
 import { ROAM_ISA_PROP, ROAM_PAGE_ALIAS_PROP } from '../properties'
@@ -779,7 +783,7 @@ describe('importRoam', {timeout: 30_000}, () => {
     // indexed deterministic seat sequence — same id any future import
     // (or parseReferences after the user types [[Get really good at
     // dancing]]) would land on in the same world-state.
-    expect(aliasRef!.id).toBe(computeAliasSeatId('Get really good at dancing', WORKSPACE))
+    expect(aliasRef!.id).toBe(computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'Get really good at dancing', WORKSPACE))
 
     const aliasBlock = await readBlock(aliasRef!.id)
     expect(aliasBlock?.content).toBe('Get really good at dancing')
@@ -793,7 +797,7 @@ describe('importRoam', {timeout: 30_000}, () => {
       workspaceId: WORKSPACE,
       currentUserId: USER_ID,
     })
-    const seatId = computeAliasSeatId('Get really good at dancing', WORKSPACE)
+    const seatId = computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'Get really good at dancing', WORKSPACE)
     expect(await readBlock(seatId)).not.toBeNull()
 
     // Second import of the same export. With indexed deterministic seats,
@@ -855,7 +859,7 @@ describe('importRoam', {timeout: 30_000}, () => {
     // running the import — parseReferences would land an empty stub at
     // the happy-path deterministic seat. We forge that state here
     // directly so the test doesn't depend on the parseReferences pipeline.
-    const seatId = computeAliasSeatId('Get really good at dancing', WORKSPACE)
+    const seatId = computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'Get really good at dancing', WORKSPACE)
     await env.repo.tx(async tx => {
       await tx.create({
         id: seatId,
@@ -893,8 +897,8 @@ describe('importRoam', {timeout: 30_000}, () => {
 
   it('probes past a post-rename alias-seat occupant when creating import alias targets', async () => {
     const alias = 'Get really good at dancing'
-    const slot0Id = computeAliasSeatId(alias, WORKSPACE, 0)
-    const slot1Id = computeAliasSeatId(alias, WORKSPACE, 1)
+    const slot0Id = computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, alias, WORKSPACE, 0)
+    const slot1Id = computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, alias, WORKSPACE, 1)
 
     // Simulate slot 0 after a rename: the row still lives at the old
     // alias-derived id, but no longer claims that old alias.
@@ -2086,7 +2090,7 @@ describe('importRoam', {timeout: 30_000}, () => {
     expect(lily).not.toBeNull()
     const lilyProperties = JSON.parse(lily!.properties_json) as Record<string, unknown>
     expect(lilyProperties[ROAM_PAGE_ALIAS_PROP]).toEqual([
-      computeAliasSeatId('Lily Anna', WORKSPACE),
+      computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'Lily Anna', WORKSPACE),
       roamBlockId(WORKSPACE, 'katerinaPage'),
     ])
     expect(lilyProperties[aliasesProp.name]).toEqual(['Lily @evoenn'])
@@ -2242,19 +2246,19 @@ describe('importRoam', {timeout: 30_000}, () => {
     const markerRefs = JSON.parse(marker!.references_json) as {id: string, alias: string}[]
     expect(markerRefs).toEqual(expect.arrayContaining([
       {
-        id: computeAliasSeatId('[[interval]]:31.1', WORKSPACE),
+        id: computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, '[[interval]]:31.1', WORKSPACE),
         alias: '[[interval]]:31.1',
       },
       {
-        id: computeAliasSeatId('interval', WORKSPACE),
+        id: computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'interval', WORKSPACE),
         alias: 'interval',
       },
       {
-        id: computeAliasSeatId('[[factor]]:2.50', WORKSPACE),
+        id: computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, '[[factor]]:2.50', WORKSPACE),
         alias: '[[factor]]:2.50',
       },
       {
-        id: computeAliasSeatId('factor', WORKSPACE),
+        id: computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'factor', WORKSPACE),
         alias: 'factor',
       },
       {
@@ -2419,5 +2423,53 @@ describe('importRoam', {timeout: 30_000}, () => {
     // No additional rows should have been written.
     const after = await env.h.db.get<{count: number}>('SELECT COUNT(*) AS count FROM blocks')
     expect(after.count).toBe(before.count)
+  })
+})
+
+describe('importRoam into an encrypted workspace', () => {
+  it('creates an unowned [[alias]] page under the workspace\'s own namespace', async () => {
+    // Its seat id would otherwise be a hash of the page name a server can
+    // recompute (#719).
+    const encrypted = 'ws-roam-e2ee'
+    const entries = new Map<string, string>()
+    const storage = {
+      getItem: (key: string) => entries.get(key) ?? null,
+      setItem: (key: string, value: string) => { entries.set(key, String(value)) },
+      removeItem: (key: string) => { entries.delete(key) },
+    }
+    vi.stubGlobal('localStorage', storage)
+    vi.stubGlobal('window', {localStorage: storage})
+    try {
+      await env.h.db.execute(
+        `INSERT INTO workspaces (id, name, owner_user_id, create_time, update_time,
+          encryption_mode, properties_migration) VALUES (?, 'ws', ?, 1, 1, 'e2ee', 'cell')`,
+        [encrypted, USER_ID])
+      setModePin(USER_ID, encrypted, 'e2ee')
+      const wk = await crypto.subtle.generateKey(
+        {name: 'AES-GCM', length: 256}, false, ['encrypt', 'decrypt'])
+      await getWorkspaceKeyStore().put(USER_ID, encrypted, {
+        wk, contentKeyHmac: await deriveContentKeyHmac(new Uint8Array(32).fill(5)),
+      })
+      env.repo.setActiveWorkspaceId(encrypted)
+      await getOrCreatePropertiesPage(env.repo, encrypted)
+
+      const alias = 'Get really good at dancing'
+      const summary = await importRoam(minimalExport, env.repo, {
+        workspaceId: encrypted,
+        currentUserId: USER_ID,
+      })
+
+      expect(summary.aliasBlocksCreated).toBe(1)
+      const parent = await readBlock(roamBlockId(encrypted, 'parentA'))
+      const refs = JSON.parse(parent!.references_json) as {id: string, alias: string}[]
+      const seatId = refs.find(r => r.alias === alias)!.id
+      const publicSlots = Array.from({length: ALIAS_SEAT_PROBE_SLOTS},
+        (_, index) => computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, alias, encrypted, index))
+      expect(publicSlots).not.toContain(seatId)
+      expect((await readBlock(seatId))?.content).toBe(alias)
+    } finally {
+      await getWorkspaceKeyStore().delete(USER_ID, encrypted)
+      vi.unstubAllGlobals()
+    }
   })
 })

@@ -17,6 +17,12 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
 import { dailyNotesDataExtension } from '@/plugins/daily-notes/dataExtension'
+import { ChangeScope } from '@/data/api'
+import { PLAINTEXT_ALIAS_SEATS } from '@/data/aliasSeatNamespace'
+import { ALIAS_SEAT_PROBE_SLOTS, computeAliasSeatId, ensureAliasTarget } from '@/data/targets'
+import { deriveContentKeyHmac } from '@/sync/crypto/contentKey'
+import { getWorkspaceKeyStore } from '@/sync/keys/keyStore'
+import { setModePin } from '@/sync/keys/modePin'
 import { bootstrapWorkspace } from './workspaceBootstrap.ts'
 
 const WS = 'ws-bootstrap'
@@ -39,12 +45,12 @@ beforeEach(async () => {
 // The deferred work `bootstrapWorkspace` schedules is released by the global
 // `testRepoScope` hooks, which unpin and drain every Repo built during a test.
 
-const open = () => bootstrapWorkspace({
+const open = (workspaceId = WS) => bootstrapWorkspace({
   repo,
-  workspaceId: WS,
+  workspaceId,
   freshlyCreated: false,
-  requestedHash: `#${WS}`,
-  requestedWorkspaceId: WS,
+  requestedHash: `#${workspaceId}`,
+  requestedWorkspaceId: workspaceId,
 })
 
 describe('bootstrapWorkspace', () => {
@@ -91,5 +97,37 @@ describe('bootstrapWorkspace', () => {
     expect((await repo.load(propertiesPageBlockId(WS)))?.content).toBe('Properties')
     expect((await repo.load(typesPageBlockId(WS)))?.content).toBe('Types')
     expect((await repo.load(recentsPageBlockId(WS)))?.content).toBe('Recents')
+  })
+
+  it('leaves an encrypted workspace ready for a page created inside a transaction', async () => {
+    // Such a writer cannot read `K_id` under the write lock, so it depends on
+    // the workspace's alias-seat namespace having been resolved on open.
+    const encrypted = 'ws-bootstrap-e2ee'
+    repo.setActiveWorkspaceId(encrypted)
+    await sharedDb.db.execute(
+      `INSERT INTO workspaces (id, name, owner_user_id, create_time, update_time,
+        encryption_mode, properties_migration) VALUES (?, 'test', 'user-1', 1, 1, 'e2ee', 'cell')`,
+      [encrypted],
+    )
+    setModePin('user-1', encrypted, 'e2ee')
+    const wk = await crypto.subtle.generateKey(
+      {name: 'AES-GCM', length: 256}, false, ['encrypt', 'decrypt'])
+    await getWorkspaceKeyStore().put('user-1', encrypted, {
+      wk, contentKeyHmac: await deriveContentKeyHmac(new Uint8Array(32).fill(3)),
+    })
+    try {
+      await open(encrypted)
+
+      let minted = ''
+      await repo.tx(async tx => {
+        minted = (await ensureAliasTarget(tx, repo, 'Private page', encrypted)).id
+      }, {scope: ChangeScope.BlockDefault, description: 'create page'})
+      const publicSlots = Array.from({length: ALIAS_SEAT_PROBE_SLOTS},
+        (_, index) => computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'Private page', encrypted, index))
+      expect(publicSlots).not.toContain(minted)
+    } finally {
+      localStorage.clear()
+      await getWorkspaceKeyStore().delete('user-1', encrypted)
+    }
   })
 })
