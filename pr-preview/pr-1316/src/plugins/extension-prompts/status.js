@@ -1,1 +1,1 @@
-import{bE as e,yE as t}from"../../../chunks/app-C-J6jE3O.js";export{t as extensionPromptDiagnosticContribution,e as extensionPromptDiagnosticSource};
+import{bE as e,yE as t}from"../../../chunks/app-krG_djNP.js";export{t as extensionPromptDiagnosticContribution,e as extensionPromptDiagnosticSource};
