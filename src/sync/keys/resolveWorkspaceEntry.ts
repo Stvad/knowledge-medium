@@ -23,6 +23,11 @@ export interface GateWorkspace {
   readonly wkCanary: string | null
 }
 
+/** Why the entry is locked — `finishing-upgrade`: a pin upgrade was interrupted
+ *  after its marker was written; the gate finishes it (`resumePinUpgrade`)
+ *  before anything else. */
+export type EntryLockReason = LockReason | 'finishing-upgrade'
+
 export type WorkspaceEntryResolution =
   | { readonly kind: 'ready' }
   /** The synced `workspaces` row isn't local yet and access can't be decided
@@ -30,9 +35,7 @@ export type WorkspaceEntryResolution =
   | { readonly kind: 'waiting' }
   | {
       readonly kind: 'locked'
-      /** `finishing-upgrade`: a pin upgrade was interrupted after its marker was
-       *  written; the gate finishes it (`resumePinUpgrade`) before anything else. */
-      readonly reason: LockReason | 'finishing-upgrade'
+      readonly reason: EntryLockReason
       readonly workspaceName: string | null
       readonly canary: string | null
     }

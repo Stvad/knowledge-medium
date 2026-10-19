@@ -131,8 +131,8 @@ export const setModePin = (
  * an e2ee pin; nothing here can write plaintext, so a pin it touched stays e2ee
  * and {@link setModePin} refuses to take it back.
  *
- * Only `upgradeWorkspacePin` calls it, after a workspace key has opened the
- * server's canary: a false e2ee claim can only stall this device, never make it
+ * Only the upgrade flow (`upgradeWorkspacePin` and its resume) calls it, after
+ * a workspace key has opened the server's canary: a false e2ee claim can only stall this device, never make it
  * decrypt less, which is why the upgrade needs no more proof than that.
  */
 export const upgradeModePinToE2ee = (userId: string, workspaceId: string): void => {

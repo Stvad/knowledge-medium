@@ -7,7 +7,7 @@ import { fetchWorkspaceConversionState, hasCopiedCiphertext } from '@/data/works
 import type { WorkspaceConversionRead } from '@/sync/keys/conversionState'
 import { getWorkspaceKeyStore, readUsableKeyRecord } from '@/sync/keys/keyStore'
 import { confirmPlaintextForSession, setModePin } from '@/sync/keys/modePin'
-import type { WorkspaceEntryResolution } from '@/sync/keys/resolveWorkspaceEntry'
+import type { EntryLockReason } from '@/sync/keys/resolveWorkspaceEntry'
 import { unlockWorkspaceWithKey } from '@/sync/keys/flows/unlockWorkspaceWithKey'
 import {
   checkServerE2eeEntry,
@@ -19,7 +19,7 @@ import {
   type WorkspaceDrain,
 } from '@/sync/keys/flows/upgradeWorkspacePin'
 
-export type GateReason = Extract<WorkspaceEntryResolution, {kind: 'locked'}>['reason']
+export type GateReason = EntryLockReason
 
 /** What the gate needs from outside the key layer. */
 export interface WorkspaceGateDeps {
@@ -161,13 +161,7 @@ function KeyPromptGate({
         return
       }
       setBusy(false)
-      setError(
-        result.reason === 'format'
-          ? "That doesn't look like a workspace key (expected kmp-wk-1:…)."
-          : result.reason === 'storage'
-            ? "Your key is correct, but it couldn't be saved on this device (storage may be full or blocked). Try again."
-            : "That key doesn't decrypt this workspace's data.",
-      )
+      setError(keyFailureMessage(result.reason))
     } catch (err) {
       // Defensive: never leave the button stuck on "Unlocking…" with no message.
       setBusy(false)
@@ -240,10 +234,12 @@ function KeyPromptGate({
   )
 }
 
-const upgradeFailureMessage = (
-  result: Exclude<UpgradeWorkspacePinResult, {ok: true} | {reason: 'refused'}>,
+/** Why a key the user offered didn't unlock — shared by the unlock and the
+ *  upgrade, whose failure reasons overlap. */
+const keyFailureMessage = (
+  reason: Exclude<UpgradeWorkspacePinResult, {ok: true} | {reason: 'refused'}>['reason'],
 ): string => {
-  switch (result.reason) {
+  switch (reason) {
     case 'format':
       return "That doesn't look like a workspace key (expected kmp-wk-1:…)."
     case 'invalid-key':
@@ -300,7 +296,7 @@ function ServerE2eeGate({userId, workspaceId, workspaceName, deps, onResolved}: 
       }
       setBusy(false)
       if (result.reason === 'refused') setEntry(result.entry)
-      else setError(upgradeFailureMessage(result))
+      else setError(keyFailureMessage(result.reason))
     } catch (err) {
       setBusy(false)
       setError(errorMessage(err, 'Could not unlock this workspace.'))

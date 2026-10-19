@@ -687,8 +687,9 @@ const forgetAmbiguousAttempts = (
  *
  *  Encrypt-on-upload (§9.2) is part of that isolation: a tx for an e2ee
  *  workspace whose key is momentarily missing/unreadable, or for a workspace
- *  whose upload is held ({@link UploadHeldError}), makes `encryptOps` throw. The BATCH encryption is guarded so that failure DOESN'T abort the
- *  whole preflight — it falls through to the per-tx loop, which drains every
+ *  whose upload is held ({@link UploadHeldError}), makes `encryptOps` throw.
+ *  The BATCH encryption is guarded so that failure DOESN'T abort the whole
+ *  preflight — it falls through to the per-tx loop, which drains every
  *  earlier (encryptable) tx and then stops at the un-encryptable one (its
  *  per-tx `encryptOps` throws out of the loop). `complete()` is a checkpoint
  *  that drains all PRECEDING txs, so we can't skip the bad tx and complete a

@@ -172,9 +172,10 @@ const readWorkspaceColumn = async (
 }
 
 /** The workspace's `encryption_mode`, or null when this device has no local
- *  `workspaces` row for it yet. Callers that gate on e2ee must treat the null
- *  as "unknown, assume the stricter answer" rather than as "not encrypted" —
- *  a device can be asked to act on a workspace whose row has not synced. */
+ *  `workspaces` row for it yet. The null is "unknown", not "not encrypted": a
+ *  device can be asked to act on a workspace whose row has not synced, and each
+ *  caller decides what unknown means for it (the §6 resolver, for one, reads it
+ *  as not-e2ee because the row rides the same checkpoint as the blocks). */
 export const readWorkspaceEncryptionMode = (
   db: WorkspaceColumnReader,
   workspaceId: string,
