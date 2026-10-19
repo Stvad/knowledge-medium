@@ -1,1 +1,1 @@
-import{h as e,m as t}from"../../../chunks/app-BV17zD9C.js";export{t as WorkspaceKeyGate,e as workspaceGateDeps};
+import{h as e,m as t}from"../../../chunks/app-BIYsilf6.js";export{t as WorkspaceKeyGate,e as workspaceGateDeps};
