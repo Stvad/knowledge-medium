@@ -265,7 +265,7 @@ The first production run is #1288.
    - The re-seal writes new row versions (about 1.33×), history rows holding both old and new values (about 2.3×), and WAL for all of it.
    - So confirm free disk of about **6×** that figure, plus room for `VACUUM FULL` to copy each table it rewrites. Auto-scaling disk grows only on a cooldown.
 7. **Ordering against the properties-as-blocks switch** is an open decision (#1288). Converting first keeps the ids of definitions synthesized at the switch keyed under `K_id`. Switching first leaves them name-derived ([§7](#7-what-stays-visible-afterwards)). The two must never overlap.
-8. **Rehearse** the conversion and the key-loss recovery on a scratch workspace first.
+8. **Rehearse** the conversion and the key-loss recovery on a scratch workspace first, ideally a full copy of the real one. Time the purge there against its 5-minute `statement_timeout`: it deletes the whole history, plus one re-seal row per block, in one statement. Confirm the hosted PostgREST applies a function's own `statement_timeout`, as v14.13 does locally.
 9. Run from desktop Chromium, on the device that holds the most attachment bytes locally.
 
 **After:**
