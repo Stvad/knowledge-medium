@@ -24,8 +24,8 @@
  */
 
 import { verifyObjectBytes } from '../byteTransform.js'
-import type { GetCek, SyncMode } from '../transform.js'
-import { CONTENT_HASH_PREFIX, digestFromContentHash, sha256 } from './contentHash.js'
+import type { SyncMode } from '../transform.js'
+import { computeContentHash, digestFromContentHash } from './contentHash.js'
 import { bytesToHex } from './hex.js'
 
 /** HKDF `info` label binding K_id to this purpose + version (§10). NOT optional:
@@ -105,27 +105,38 @@ export const deriveContentKey = async (ref: ContentKeyRef): Promise<string> => {
   return bytesToHex(new Uint8Array(mac))
 }
 
-/** The keyed names of a set of content hashes under one workspace's `K_id`,
- *  each mapped back to its hash. Only {@link indexKeyedNames} builds one. */
-export interface KeyedNameIndex {
+/** One workspace key pair: the key that seals its objects and the `K_id`
+ *  that names them, both from one key record. */
+export interface WorkspaceObjectKeys {
+  readonly cek: CryptoKey
+  readonly contentKeyHmac: CryptoKey
+}
+
+/** The keyed names of a set of content hashes, each mapped back to its hash,
+ *  with the key that opens the objects under them. */
+export interface KeyedNames {
+  readonly cek: CryptoKey
   readonly hashByName: ReadonlyMap<string, string>
 }
 
-/** Index the keyed name of each content hash. A malformed hash names no object,
- *  so it is skipped rather than thrown. */
+/** Index the keyed name of each content hash under `keys`. A malformed hash
+ *  names no object, so it is skipped; a key that can't sign throws. */
 export const indexKeyedNames = async (
   contentHashes: Iterable<string>,
-  contentKeyHmac: CryptoKey,
-): Promise<KeyedNameIndex> => {
+  keys: WorkspaceObjectKeys,
+): Promise<KeyedNames> => {
   const hashByName = new Map<string, string>()
   for (const contentHash of contentHashes) {
+    let digest: Uint8Array<ArrayBuffer>
     try {
-      hashByName.set(await deriveContentKey({contentHash, mode: 'e2ee', contentKeyHmac}), contentHash)
+      digest = digestFromContentHash(contentHash)
     } catch {
-      // not a content hash: nothing is stored under it
+      continue
     }
+    const mac = await crypto.subtle.sign('HMAC', keys.contentKeyHmac, digest)
+    hashByName.set(bytesToHex(new Uint8Array(mac)), contentHash)
   }
-  return {hashByName}
+  return {cek: keys.cek, hashByName}
 }
 
 export type StoredObjectClass =
@@ -136,8 +147,10 @@ export type StoredObjectClass =
   | {readonly kind: 'neither'}
 
 /**
- * What the object under `<workspaceId>/<name>` holds, decided by its bytes
- * (docs/workspace-e2ee-conversion.md §6.3 step 8). For bytes b under name n:
+ * What the object at `<workspaceId>/<name>` holds, decided by its bytes
+ * (docs/workspace-e2ee-conversion.md §6.3 step 8). `name` is the object's path
+ * under the workspace's folder, so a nested object is never raw or keyed. For
+ * bytes b under name n:
  *   - raw iff n == hex(sha256(b));
  *   - keyed iff b opens under the workspace key to p, and n == hex(HMAC(K_id, sha256(p)));
  *   - otherwise neither.
@@ -145,9 +158,9 @@ export type StoredObjectClass =
  * a plaintext file may begin with `encb:v1:`.
  *
  * The asset AAD binds the content hash, so b can only be opened with p's hash
- * in hand: an object is keyed only under a name `keyed.names` maps, and any
- * other is neither. `keyed` is null when nothing can be keyed: a plaintext
- * workspace, or a caller without the key.
+ * in hand: an object is keyed only under a name `keyed` maps, and any other is
+ * neither. `keyed` is null when nothing can be keyed: a plaintext workspace, or
+ * a caller without the key.
  */
 export const classifyStoredObject = async ({
   workspaceId,
@@ -158,14 +171,16 @@ export const classifyStoredObject = async ({
   readonly workspaceId: string
   readonly name: string
   readonly bytes: Uint8Array<ArrayBuffer>
-  readonly keyed: {readonly names: KeyedNameIndex; readonly getCek: GetCek} | null
+  readonly keyed: KeyedNames | null
 }): Promise<StoredObjectClass> => {
-  const rawName = bytesToHex(await sha256(bytes))
-  if (name === rawName) return {kind: 'raw', contentHash: CONTENT_HASH_PREFIX + rawName}
-  const contentHash = keyed?.names.hashByName.get(name)
-  if (keyed && contentHash !== undefined) {
-    const verified = await verifyObjectBytes(bytes, 'e2ee', keyed.getCek, {contentHash, workspaceId})
-    if (verified.ok) return {kind: 'keyed', contentHash}
+  const contentHash = await computeContentHash(bytes)
+  if (name === (await deriveContentKey({contentHash, mode: 'none', contentKeyHmac: null}))) {
+    return {kind: 'raw', contentHash}
+  }
+  const keyedHash = keyed?.hashByName.get(name)
+  if (keyed && keyedHash !== undefined) {
+    const verified = await verifyObjectBytes(bytes, 'e2ee', async () => keyed.cek, {contentHash: keyedHash, workspaceId})
+    if (verified.ok) return {kind: 'keyed', contentHash: keyedHash}
   }
   return {kind: 'neither'}
 }

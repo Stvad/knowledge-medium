@@ -1,8 +1,8 @@
 /**
  * The BYTE sync boundary (§5 / §6) — the asset-bytes analog of transform.ts.
  *
- *   encodeBytes(bytes, mode, getCek, ref)  — app → object store (seal on upload)
- *   decodeBytes(blob,  mode, getCek, ref)  — object store → app (open on download)
+ *   encodeBytes(bytes, mode, getCek, ref)        — app → object store (seal on upload)
+ *   verifyObjectBytes(blob, mode, getCek, ref)   — object store → app (open + hash-check)
  *
  * One transform parameterized by mode: `none` (plaintext) is the IDENTITY
  * case — bytes pass through unchanged, exactly as encodeForWire does for text —
@@ -11,10 +11,9 @@
  * the AAD binds the CONTENT HASH, not a block id (binding a block id would stop
  * a co-referencing block from opening it).
  *
- * decodeBytes authenticates the envelope only (AAD + GCM tag). It does NOT
- * verify the bytes match the content key — that is the hash check
- * (verifyContentHash, §5.1 / §7.3). {@link verifyObjectBytes} composes the two,
- * and is the only way anything may accept an object read from Storage.
+ * Opening an envelope authenticates it only (AAD + GCM tag), not that the
+ * bytes match the content hash, so the open is private: the only read is
+ * {@link verifyObjectBytes}, which always hash-checks too (§5.1 / §7.3).
  *
  * Like transform.ts, this is free of DB / PowerSync / Storage coupling: it
  * knows only bytes, a mode, a key lookup, and the AAD-binding ref.
@@ -45,10 +44,8 @@ export const encodeBytes = async (
   return sealBytes(key, bytes, assetBytesAad(ref.contentHash, ref.workspaceId))
 }
 
-/** Object store → app. Identity for plaintext; AES-GCM open for E2EE.
- *  Authenticates the envelope only — the caller verifies the content hash
- *  (§5.1). */
-export const decodeBytes = async (
+/** Identity for plaintext; AES-GCM open for E2EE. */
+const decodeBytes = async (
   blob: Uint8Array<ArrayBuffer>,
   mode: SyncMode,
   getCek: GetCek,
@@ -87,13 +84,14 @@ export const verifyObjectBytes = async (
   return { ok: true, plaintext }
 }
 
-/** The attachments bucket's original `file_size_limit`, 50 MiB. #1294 raises
- *  the bucket by the envelope overhead, but a hosted project caps every bucket at
- *  its global upload limit, so no upload may count on more than this. */
+/** The object size capture and preflight measure against. A hosted project
+ *  caps every bucket at its project-wide upload limit, whatever the bucket's own
+ *  `file_size_limit` says, so an upload beyond this one may be refused; uploads
+ *  themselves let Storage's 413 decide. */
 export const MAX_OBJECT_BYTES = 50 * 1024 * 1024
 
 /** Does a plaintext of this many bytes, encoded for `mode`, fit in `limit`?
- *  e2ee adds the envelope overhead, so a plaintext within 36 bytes of the limit
- *  can be stored raw but never sealed. */
+ *  e2ee adds {@link BINARY_ENVELOPE_OVERHEAD_BYTES}, so a plaintext just under
+ *  the limit can be stored raw but not sealed. */
 export const fitsObjectLimit = (plaintextBytes: number, mode: SyncMode, limit = MAX_OBJECT_BYTES): boolean =>
   plaintextBytes + (mode === 'e2ee' ? BINARY_ENVELOPE_OVERHEAD_BYTES : 0) <= limit

@@ -65,10 +65,9 @@ import {
 } from './mediaBlock.js'
 import type { ByteUploadStore } from './uploadStore.js'
 
-/** The bucket's `file_size_limit` (§10). The client guard rejects an oversize
- *  capture BEFORE staging, so we never queue an upload the server's 413 would
- *  only quarantine — and it bounds the ENCODED object ({@link fitsObjectLimit}),
- *  so an e2ee file just under the cap can't 413 at upload. */
+/** The capture cap (§10). The client guard rejects an oversize capture BEFORE
+ *  staging, so we never queue an upload the server's 413 would only quarantine;
+ *  it bounds the ENCODED object ({@link fitsObjectLimit}). */
 export const DEFAULT_MAX_CAPTURE_BYTES = MAX_OBJECT_BYTES
 
 /** uuid v5 namespace for media asset block ids (distinct from ASSETS_NS). */
@@ -150,11 +149,7 @@ export const captureMedia = async (
   const mode = materializabilityToMode(await deps.getMaterializability(workspaceId))
   if (mode === null) return { ok: false, reason: 'workspace-locked' }
 
-  // The uploaded OBJECT is the encoded bytes: e2ee wraps the plaintext in the
-  // encb:v1 envelope (magic+nonce+GCM tag); copy is passthrough. Guard the ENCODED
-  // size against the bucket's file_size_limit so an e2ee file in the top envelope-
-  // overhead bytes of the allowance can't pass here, then 413 (permanent) at upload.
-  if (!fitsObjectLimit(size, mode, deps.maxBytes ?? DEFAULT_MAX_CAPTURE_BYTES)) {
+  if (!fitsObjectLimit(size, mode, deps.maxBytes)) {
     return { ok: false, reason: 'too-large' }
   }
 

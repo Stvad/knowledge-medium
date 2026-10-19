@@ -68,7 +68,7 @@ export interface BlobStore {
    *  The bytes come from `encodeBytes` (§5), which is ArrayBuffer-backed. */
   put(workspaceId: string, contentKey: string, bytes: Uint8Array<ArrayBuffer>): Promise<'written' | 'exists'>
   /** Direct RLS-gated GET of the stored object bytes (ArrayBuffer-backed, so it
-   *  feeds `decodeBytes` directly). Throws if absent/denied. */
+   *  feeds `verifyObjectBytes` directly). Throws if absent/denied. */
   get(workspaceId: string, contentKey: string): Promise<Uint8Array<ArrayBuffer>>
   /** The §9 recovery actor's presence probe of the content path: the stored object's
    *  bytes when the path is occupied (so the caller can decode + hash-verify — the

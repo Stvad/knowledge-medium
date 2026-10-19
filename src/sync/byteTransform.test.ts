@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { decodeBytes, encodeBytes, fitsObjectLimit, MAX_OBJECT_BYTES, verifyObjectBytes } from './byteTransform.js'
+import { encodeBytes, verifyObjectBytes } from './byteTransform.js'
 import { BINARY_ENVELOPE_OVERHEAD_BYTES, hasBinaryEnvelopeMagic } from './crypto/binaryEnvelope.js'
-import { computeContentHash, verifyContentHash } from './crypto/contentHash.js'
+import { computeContentHash } from './crypto/contentHash.js'
 import { importWorkspaceKey } from './crypto/workspaceKey.js'
 import type { GetCek } from './transform.js'
 
@@ -17,30 +17,30 @@ const sampleBytes = () => {
   return b
 }
 
-describe('byte transform (encodeBytes / decodeBytes)', () => {
+describe('byte transform (encodeBytes / verifyObjectBytes)', () => {
   describe('plaintext (mode "none") is the identity case', () => {
-    it('encode and decode pass bytes through unchanged, needing no key', async () => {
+    it('encode passes bytes through unchanged, and they verify, needing no key', async () => {
       const bytes = sampleBytes()
       const ref = { contentHash: await computeContentHash(bytes), workspaceId: 'ws-A' }
       const encoded = await encodeBytes(bytes, 'none', noKey, ref)
       expect(encoded).toBe(bytes) // identity: the same reference, no copy
       expect(hasBinaryEnvelopeMagic(encoded)).toBe(false) // not framed/encrypted
-      const decoded = await decodeBytes(encoded, 'none', noKey, ref)
-      expect(Uint8Array.from(decoded)).toEqual(bytes)
+      const verified = await verifyObjectBytes(encoded, 'none', noKey, ref)
+      expect(verified.ok && Uint8Array.from(verified.plaintext)).toEqual(bytes)
     })
   })
 
   describe('e2ee round-trip', () => {
-    it('seals to an encb:v1: envelope and opens back to the original bytes', async () => {
+    it('seals to an encb:v1: envelope that opens and verifies back to the original bytes', async () => {
       const getCek = cekFrom(0x01)
       const bytes = sampleBytes()
       const ref = { contentHash: await computeContentHash(bytes), workspaceId: 'ws-A' }
       const sealed = await encodeBytes(bytes, 'e2ee', getCek, ref)
       expect(hasBinaryEnvelopeMagic(sealed)).toBe(true)
       expect(Uint8Array.from(sealed)).not.toEqual(bytes) // actually encrypted
-      const opened = await decodeBytes(sealed, 'e2ee', getCek, ref)
-      expect(Uint8Array.from(opened)).toEqual(bytes)
-      expect(await verifyContentHash(opened, ref.contentHash)).toBe(true)
+      expect(sealed.length).toBe(bytes.length + BINARY_ENVELOPE_OVERHEAD_BYTES)
+      const verified = await verifyObjectBytes(sealed, 'e2ee', getCek, ref)
+      expect(verified.ok && Uint8Array.from(verified.plaintext)).toEqual(bytes)
     })
 
     it('round-trips a 1 MiB buffer (multi-block GCM at realistic media size)', async () => {
@@ -52,118 +52,74 @@ describe('byte transform (encodeBytes / decodeBytes)', () => {
       for (let i = 0; i < bytes.length; i++) bytes[i] = (i * 2654435761) & 0xff
       const ref = { contentHash: await computeContentHash(bytes), workspaceId: 'ws-A' }
       const sealed = await encodeBytes(bytes, 'e2ee', getCek, ref)
-      const opened = await decodeBytes(sealed, 'e2ee', getCek, ref)
-      expect(Uint8Array.from(opened)).toEqual(bytes)
-      expect(await verifyContentHash(opened, ref.contentHash)).toBe(true)
+      const verified = await verifyObjectBytes(sealed, 'e2ee', getCek, ref)
+      expect(verified.ok && Uint8Array.from(verified.plaintext)).toEqual(bytes)
       // Heavy by design (1 MiB fill + seal/open + a 1 MiB deep-equal); give it
       // headroom so a contended CI runner doesn't trip the 5s default timeout.
     }, 30_000)
 
-    it('throws when the workspace key is unavailable (fail-closed, never plaintext)', async () => {
+    it('fails closed when the workspace key is unavailable: no seal, and nothing verifies', async () => {
       const bytes = sampleBytes()
       const ref = { contentHash: await computeContentHash(bytes), workspaceId: 'ws-A' }
       await expect(encodeBytes(bytes, 'e2ee', noKey, ref)).rejects.toThrow(/no workspace key/)
       const sealed = await encodeBytes(bytes, 'e2ee', cekFrom(0x01), ref)
-      await expect(decodeBytes(sealed, 'e2ee', noKey, ref)).rejects.toThrow(/no workspace key/)
+      expect(await verifyObjectBytes(sealed, 'e2ee', noKey, ref)).toEqual({ ok: false, reason: 'decode-failed' })
     })
   })
 
-  describe('tamper / swap (e2ee): the AAD content-hash binding blocks substitution', () => {
-    it('rejects bytes sealed for a different content hash (cross-content swap)', async () => {
-      const getCek = cekFrom(0x01)
-      const bytesA = sampleBytes()
-      const refA = { contentHash: await computeContentHash(bytesA), workspaceId: 'ws-A' }
-      const sealed = await encodeBytes(bytesA, 'e2ee', getCek, refA)
-      // Server returns this object for a DIFFERENT block's content key.
-      const refOther = { contentHash: `sha256:${'0'.repeat(64)}`, workspaceId: 'ws-A' }
-      await expect(decodeBytes(sealed, 'e2ee', getCek, refOther)).rejects.toThrow()
+  describe('decode-failed: an object that does not open', () => {
+    it('under a wrong key, or bytes that are not an envelope', async () => {
+      const bytes = sampleBytes()
+      const ref = { contentHash: await computeContentHash(bytes), workspaceId: 'ws-A' }
+      const sealed = await encodeBytes(bytes, 'e2ee', cekFrom(0x01), ref)
+      expect(await verifyObjectBytes(sealed, 'e2ee', cekFrom(0x02), ref)).toEqual({ ok: false, reason: 'decode-failed' })
+      expect(await verifyObjectBytes(bytes, 'e2ee', cekFrom(0x01), ref)).toEqual({ ok: false, reason: 'decode-failed' })
     })
 
-    it('rejects bytes rebound to another workspace', async () => {
+    it('sealed for a different content hash: the AAD binding blocks a cross-content swap', async () => {
+      const getCek = cekFrom(0x01)
+      const bytesA = sampleBytes()
+      const sealed = await encodeBytes(bytesA, 'e2ee', getCek, {
+        contentHash: await computeContentHash(bytesA),
+        workspaceId: 'ws-A',
+      })
+      // Server returns this object for a DIFFERENT block's content key.
+      const refOther = { contentHash: `sha256:${'0'.repeat(64)}`, workspaceId: 'ws-A' }
+      expect(await verifyObjectBytes(sealed, 'e2ee', getCek, refOther)).toEqual({ ok: false, reason: 'decode-failed' })
+    })
+
+    it('rebound to another workspace', async () => {
       const getCek = cekFrom(0x01)
       const bytes = sampleBytes()
       const contentHash = await computeContentHash(bytes)
       const sealed = await encodeBytes(bytes, 'e2ee', getCek, { contentHash, workspaceId: 'ws-A' })
-      await expect(
-        decodeBytes(sealed, 'e2ee', getCek, { contentHash, workspaceId: 'ws-B' }),
-      ).rejects.toThrow()
+      expect(await verifyObjectBytes(sealed, 'e2ee', getCek, { contentHash, workspaceId: 'ws-B' })).toEqual({
+        ok: false,
+        reason: 'decode-failed',
+      })
     })
   })
 
-  describe('stale / poisoned bytes: the read-side hash check is the load-bearing gate', () => {
-    it('e2ee — bytes that decrypt cleanly under the right AAD but do not match the hash fail verifyContentHash', async () => {
+  describe('hash-mismatch: stale / poisoned bytes, the load-bearing gate', () => {
+    it('e2ee — bytes that open cleanly under the right AAD but do not match the hash', async () => {
       // A poisoner who knows content hash H seals GARBAGE under the correct
       // (H, ws) AAD. GCM-open SUCCEEDS (the AAD matches), so the envelope check
-      // can't catch it — only the read-side sha256 verify against the block's
-      // hash does (§5.1 / §10.1 first-write-wins poisoning → §17).
+      // can't catch it — only the sha256 check against the block's hash does
+      // (§5.1 / §10.1 first-write-wins poisoning → §17).
       const getCek = cekFrom(0x01)
-      const honestHash = await computeContentHash(sampleBytes())
-      const garbage = new Uint8Array(64).fill(0xab)
-      const poisoned = await encodeBytes(garbage, 'e2ee', getCek, {
-        contentHash: honestHash, // poisoner targets the honest path's AAD
-        workspaceId: 'ws-A',
-      })
-      const opened = await decodeBytes(poisoned, 'e2ee', getCek, {
-        contentHash: honestHash,
-        workspaceId: 'ws-A',
-      })
-      expect(Uint8Array.from(opened)).toEqual(garbage) // decrypts fine...
-      expect(await verifyContentHash(opened, honestHash)).toBe(false) // ...but fails the hash gate
+      const ref = { contentHash: await computeContentHash(sampleBytes()), workspaceId: 'ws-A' }
+      const poisoned = await encodeBytes(new Uint8Array(64).fill(0xab), 'e2ee', getCek, ref)
+      expect(await verifyObjectBytes(poisoned, 'e2ee', getCek, ref)).toEqual({ ok: false, reason: 'hash-mismatch' })
     })
 
-    it('plaintext — stale/substituted bytes for a content path are caught by verifyContentHash', async () => {
-      // Plaintext mode has no AAD/GCM, so the read-side hash check is the ONLY
-      // integrity gate. A server returning different raw bytes for a content
-      // path must not pass.
-      const expectedHash = await computeContentHash(sampleBytes())
-      const stale = new Uint8Array(64).fill(0x99)
-      const decoded = await decodeBytes(stale, 'none', noKey, {
-        contentHash: expectedHash,
-        workspaceId: 'ws-A',
+    it('plaintext — substituted bytes for a content path', async () => {
+      // Plaintext mode has no AAD/GCM, so the hash check is the ONLY integrity
+      // gate. A server returning different raw bytes for a content path must not pass.
+      const ref = { contentHash: await computeContentHash(sampleBytes()), workspaceId: 'ws-A' }
+      expect(await verifyObjectBytes(new Uint8Array(64).fill(0x99), 'none', noKey, ref)).toEqual({
+        ok: false,
+        reason: 'hash-mismatch',
       })
-      expect(await verifyContentHash(decoded, expectedHash)).toBe(false)
     })
   })
-})
-
-describe('verifyObjectBytes (the one acceptance check for an object read from Storage)', () => {
-  it('passes the genuine object and hands back its plaintext, in either mode', async () => {
-    const bytes = sampleBytes()
-    const ref = { contentHash: await computeContentHash(bytes), workspaceId: 'ws-A' }
-    const plain = await verifyObjectBytes(bytes, 'none', noKey, ref)
-    expect(plain.ok && Uint8Array.from(plain.plaintext)).toEqual(bytes)
-    const sealed = await encodeBytes(bytes, 'e2ee', cekFrom(0x01), ref)
-    const opened = await verifyObjectBytes(sealed, 'e2ee', cekFrom(0x01), ref)
-    expect(opened.ok && Uint8Array.from(opened.plaintext)).toEqual(bytes)
-  })
-
-  it('an object that does not open is decode-failed: wrong key, no key, or not an envelope', async () => {
-    const bytes = sampleBytes()
-    const ref = { contentHash: await computeContentHash(bytes), workspaceId: 'ws-A' }
-    const sealed = await encodeBytes(bytes, 'e2ee', cekFrom(0x01), ref)
-    expect(await verifyObjectBytes(sealed, 'e2ee', cekFrom(0x02), ref)).toEqual({ ok: false, reason: 'decode-failed' })
-    expect(await verifyObjectBytes(sealed, 'e2ee', noKey, ref)).toEqual({ ok: false, reason: 'decode-failed' })
-    expect(await verifyObjectBytes(bytes, 'e2ee', cekFrom(0x01), ref)).toEqual({ ok: false, reason: 'decode-failed' })
-  })
-
-  it('an object that opens to other bytes is hash-mismatch, in either mode', async () => {
-    const ref = { contentHash: await computeContentHash(sampleBytes()), workspaceId: 'ws-A' }
-    const garbage = new Uint8Array(64).fill(0xab)
-    const poisoned = await encodeBytes(garbage, 'e2ee', cekFrom(0x01), ref)
-    expect(await verifyObjectBytes(poisoned, 'e2ee', cekFrom(0x01), ref)).toEqual({ ok: false, reason: 'hash-mismatch' })
-    expect(await verifyObjectBytes(garbage, 'none', noKey, ref)).toEqual({ ok: false, reason: 'hash-mismatch' })
-  })
-})
-
-describe('fitsObjectLimit', () => {
-  it('a plaintext of exactly the limit less the envelope overhead seals to exactly the limit; one byte more does not fit', async () => {
-    const bytes = new Uint8Array(MAX_OBJECT_BYTES - BINARY_ENVELOPE_OVERHEAD_BYTES)
-    const ref = { contentHash: await computeContentHash(bytes), workspaceId: 'ws-A' }
-    const sealed = await encodeBytes(bytes, 'e2ee', cekFrom(0x01), ref)
-    expect(sealed.length).toBe(MAX_OBJECT_BYTES)
-    expect(fitsObjectLimit(bytes.length, 'e2ee')).toBe(true)
-    expect(fitsObjectLimit(bytes.length + 1, 'e2ee')).toBe(false)
-    // The same bytes stored raw fit up to the limit itself.
-    expect(fitsObjectLimit(MAX_OBJECT_BYTES, 'none')).toBe(true)
-  }, 30_000)
 })

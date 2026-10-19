@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
 import { encodeBytes } from '../byteTransform.js'
-import type { GetCek } from '../transform.js'
 import { BINARY_ENVELOPE_MAGIC } from './binaryEnvelope.js'
 import { computeContentHash, digestFromContentHash } from './contentHash.js'
 import {
@@ -112,22 +111,19 @@ describe('deriveContentKey (the §10 object-path segment)', () => {
 
 describe('classifyStoredObject (the cleaner\'s one rule, by content)', () => {
   const WS = 'ws-A'
-  const cek = (fill: number): GetCek => {
-    const key = importWorkspaceKey(wkBytes(fill))
-    return async () => key
-  }
+  const cek = (fill: number) => importWorkspaceKey(wkBytes(fill))
   const rawName = async (bytes: Uint8Array<ArrayBuffer>) =>
     deriveContentKey({contentHash: await computeContentHash(bytes), mode: 'none', contentKeyHmac: null})
 
   /** A workspace keyed with WK fill 7, knowing the hashes of `known`. */
   const workspace = async (...known: Uint8Array<ArrayBuffer>[]) => {
-    const hmac = await deriveContentKeyHmac(wkBytes(7))
-    const names = await indexKeyedNames(await Promise.all(known.map(b => computeContentHash(b))), hmac)
+    const keys = {cek: await cek(7), contentKeyHmac: await deriveContentKeyHmac(wkBytes(7))}
+    const keyed = await indexKeyedNames(await Promise.all(known.map(b => computeContentHash(b))), keys)
     const keyedName = async (bytes: Uint8Array<ArrayBuffer>) =>
-      deriveContentKey({contentHash: await computeContentHash(bytes), mode: 'e2ee', contentKeyHmac: hmac})
-    const seal = async (bytes: Uint8Array<ArrayBuffer>, getCek = cek(7)) =>
-      encodeBytes(bytes, 'e2ee', getCek, {contentHash: await computeContentHash(bytes), workspaceId: WS})
-    return {keyed: {names, getCek: cek(7)}, keyedName, seal}
+      deriveContentKey({contentHash: await computeContentHash(bytes), mode: 'e2ee', contentKeyHmac: keys.contentKeyHmac})
+    const seal = async (bytes: Uint8Array<ArrayBuffer>, key = keys.cek) =>
+      encodeBytes(bytes, 'e2ee', async () => key, {contentHash: await computeContentHash(bytes), workspaceId: WS})
+    return {keyed, keyedName, seal}
   }
 
   it('raw: bytes under the hex of their own sha256', async () => {
@@ -167,8 +163,8 @@ describe('classifyStoredObject (the cleaner\'s one rule, by content)', () => {
     const plain = utf8('a photo')
     const {keyed, keyedName, seal} = await workspace(plain)
     const name = await keyedName(plain)
-    const wrongKey = await seal(plain, cek(8))
-    const poisoned = await encodeBytes(utf8('junk'), 'e2ee', cek(7), {
+    const wrongKey = await seal(plain, await cek(8))
+    const poisoned = await encodeBytes(utf8('junk'), 'e2ee', async () => keyed.cek, {
       contentHash: await computeContentHash(plain),
       workspaceId: WS,
     })
@@ -179,10 +175,13 @@ describe('classifyStoredObject (the cleaner\'s one rule, by content)', () => {
     }
   })
 
-  it('neither: bytes under a raw-shaped name that is not their own hash', async () => {
+  it('neither: bytes under a raw-shaped name that is not their own hash, or nested under a folder', async () => {
     const {keyed} = await workspace()
-    const name = await rawName(utf8('the original'))
-    expect(await classifyStoredObject({workspaceId: WS, name, bytes: utf8('truncated'), keyed})).toEqual({
+    const original = utf8('the original')
+    expect(await classifyStoredObject({workspaceId: WS, name: await rawName(original), bytes: utf8('truncated'), keyed})).toEqual({
+      kind: 'neither',
+    })
+    expect(await classifyStoredObject({workspaceId: WS, name: `dir/${await rawName(original)}`, bytes: original, keyed})).toEqual({
       kind: 'neither',
     })
   })
@@ -196,9 +195,11 @@ describe('classifyStoredObject (the cleaner\'s one rule, by content)', () => {
     })
   })
 
-  it('indexKeyedNames skips a malformed hash instead of throwing', async () => {
-    const hmac = await deriveContentKeyHmac(wkBytes(7))
-    const names = await indexKeyedNames(['not-a-hash', await HASH_ABC()], hmac)
+  it('indexKeyedNames skips a malformed hash, but throws on a key that cannot sign', async () => {
+    const keys = {cek: await cek(7), contentKeyHmac: await deriveContentKeyHmac(wkBytes(7))}
+    const names = await indexKeyedNames(['not-a-hash', await HASH_ABC()], keys)
     expect([...names.hashByName.values()]).toEqual([await HASH_ABC()])
+    // An AES key where K_id belongs must not read as "no object is keyed".
+    await expect(indexKeyedNames([await HASH_ABC()], {...keys, contentKeyHmac: keys.cek})).rejects.toThrow()
   })
 })

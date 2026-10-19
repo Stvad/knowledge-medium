@@ -169,10 +169,7 @@ const recoverOne = async (
 
   // (3b) PRESENT → decode + hash-verify against our own content hash (the §5.1 / §17
   //      check the drain's 409-verify runs — an existing object is untrusted).
-  const verified = await verifyObjectBytes(stored, mode, ctx.getCek, {
-    contentHash: rec.contentHash,
-    workspaceId: rec.workspaceId,
-  })
+  const verified = await verifyObjectBytes(stored, mode, ctx.getCek, rec)
   if (verified.ok) {
     // Already materialized on another device — clear the record, DON'T re-upload. The
     // local bytes stay (now eviction-eligible like any replicated byte, §9 tradeoff).
