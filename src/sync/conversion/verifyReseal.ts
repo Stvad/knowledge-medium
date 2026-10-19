@@ -11,10 +11,9 @@ import {
   ConversionRefusal,
   idsOf,
   isSealedRow,
-  isSealedValue,
   opensTo,
   RESEAL_PAGE_SIZE,
-  requireE2eeOnServer,
+  requireWorkspaceKey,
   sealAndSend,
   serverPages,
   type ContentColumns,
@@ -24,25 +23,26 @@ import {
  *  the clamp trigger bumps. */
 const RESEAL_WRITE_COLUMNS: ReadonlySet<string> = new Set([...SEALED_COLUMNS, 'updated_at'])
 
+const contentOf = (diff: Readonly<Record<string, unknown>> | null): ContentColumns | null => {
+  if (!diff) return null
+  const {content, properties_json, references_json} = diff
+  if (typeof content !== 'string' || typeof properties_json !== 'string' || typeof references_json !== 'string') return null
+  return {content, properties_json, references_json}
+}
+
 /** The plaintext a history row sealed, if it has the shape of a re-seal write:
- *  an UPDATE (the only op with both diffs) that changed only the re-seal's
- *  columns and took every content column from plaintext to an envelope.
- *  Matching the columns as well as the values makes a sealing write from any
- *  other path read as no record, so the run refuses rather than re-sending
- *  over it. */
+ *  an UPDATE that changed only the re-seal's columns and took the row from
+ *  short of sealed (the re-seal's own test, so a value that merely looks
+ *  sealed still counts as plaintext) to sealed. Matching the columns as well
+ *  as the values makes a sealing write from any other path read as no record,
+ *  so the run refuses rather than re-sending over it. */
 export const sealRecordOf = (history: ServerHistoryRow): ContentColumns | null => {
-  const {before_diff: before, after_diff: after} = history
+  const {before_diff, after_diff} = history
+  if (!after_diff || !Object.keys(after_diff).every(column => RESEAL_WRITE_COLUMNS.has(column))) return null
+  const before = contentOf(before_diff)
+  const after = contentOf(after_diff)
   if (!before || !after) return null
-  if (!Object.keys(after).every(column => RESEAL_WRITE_COLUMNS.has(column))) return null
-  const plaintext: Partial<Record<keyof ContentColumns, string>> = {}
-  for (const column of SEALED_COLUMNS) {
-    const was = before[column]
-    const now = after[column]
-    if (typeof was !== 'string' || typeof now !== 'string') return null
-    if (isSealedValue(was) || !isSealedValue(now)) return null
-    plaintext[column] = was
-  }
-  return plaintext as ContentColumns
+  return !isSealedRow(before) && isSealedRow(after) ? before : null
 }
 
 /** Each block's record: its last history row shaped like a re-seal write. It is
@@ -76,7 +76,7 @@ export interface VerifyProgress {
 export interface VerifyOptions {
   readonly server: ConversionServer
   readonly workspaceId: string
-  /** The workspace key, already checked against the server canary. */
+  /** The workspace key: the run refuses one that doesn't open the server canary. */
   readonly wk: CryptoKey
   readonly pageSize?: number
   readonly onProgress?: (progress: VerifyProgress) => void
@@ -91,7 +91,7 @@ export const verifyReseal = async ({
   onProgress,
   signal,
 }: VerifyOptions): Promise<VerifyProgress> => {
-  await requireE2eeOnServer(server, workspaceId)
+  await requireWorkspaceKey(server, workspaceId, wk)
   let checked = 0
   let repaired = 0
   for await (const page of serverPages(server, workspaceId, pageSize, signal)) {
@@ -114,6 +114,15 @@ export const verifyReseal = async ({
     checked += page.length
     repaired += differing.length
     onProgress?.({checked, repaired})
+  }
+
+  // A lost session reads as an empty table rather than as an error, so the
+  // pass proves it saw every row: as many as the workspace holds, counted
+  // while it is still visible to this session.
+  const total = await server.countBlocks(workspaceId)
+  await requireWorkspaceKey(server, workspaceId, wk)
+  if (total !== checked) {
+    throw new Error(`conversion: verify checked ${checked} of the workspace's ${total} rows; run it again`)
   }
   return {checked, repaired}
 }

@@ -10,7 +10,7 @@ import {
   contentColumnsOf,
   isSealedRow,
   RESEAL_PAGE_SIZE,
-  requireE2eeOnServer,
+  requireWorkspaceKey,
   sealAndSend,
   serverPages,
   type ContentColumns,
@@ -35,7 +35,7 @@ export interface ResealProgress {
 export interface ResealOptions {
   readonly server: ConversionServer
   readonly workspaceId: string
-  /** The workspace key, already checked against the server canary. */
+  /** The workspace key: the run refuses one that doesn't open the server canary. */
   readonly wk: CryptoKey
   readonly source?: PlaintextSource
   readonly pageSize?: number
@@ -52,7 +52,7 @@ export const resealWorkspace = async ({
   onProgress,
   signal,
 }: ResealOptions): Promise<ResealProgress> => {
-  await requireE2eeOnServer(server, workspaceId)
+  await requireWorkspaceKey(server, workspaceId, wk)
   let scanned = 0
   let sealed = 0
   for await (const page of serverPages(server, workspaceId, pageSize, signal)) {

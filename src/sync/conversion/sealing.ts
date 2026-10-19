@@ -1,31 +1,46 @@
 /**
  * What the re-seal and its verify share: when a value counts as sealed, the
- * open-check, the one way a sealed row is sent, and paging the server's rows.
+ * key check, the open-check, the one way a sealed row is sent, and paging the
+ * server's rows.
  */
 
 import { contentAad } from '../crypto/aad.js'
 import { open } from '../crypto/aead.js'
+import { validateCanary } from '../crypto/canary.js'
+import { ENVELOPE_PREFIX, GCM_TAG_BYTES, NONCE_BYTES } from '../crypto/envelope.js'
 import { encodeForWire, SEALED_COLUMNS, type GetCek, type WireBlockColumns } from '../transform.js'
 import type { ConversionServer, ResealPatch, ServerBlockRow } from './conversionServer.js'
 
 export type ContentColumns = Pick<WireBlockColumns, (typeof SEALED_COLUMNS)[number]>
 
-/** Rows per page: one read, then at most one `apply_block_patches` call, which
- *  stays under the upload path's per-call cap (`MAX_PATCHES_PER_SUPABASE_RPC`). */
+/** Rows per page: one read, then the page's patches. */
 export const RESEAL_PAGE_SIZE = 200
 
-export type ConversionRefusalReason = 'not-e2ee' | 'open-check' | 'unsealed' | 'no-record' | 'unrepaired'
+/** Sealed characters per `apply_block_patches` call. Every patch carries all
+ *  three content columns and the call also writes their history, so a page of
+ *  large rows is split rather than sent as one transaction that would time out
+ *  the same way on every resume. A single larger row still goes alone. */
+export const MAX_SEALED_CHARS_PER_CALL = 1_000_000
+
+export type ConversionRefusalReason =
+  | 'not-e2ee'
+  | 'wrong-key'
+  | 'open-check'
+  | 'unsealed'
+  | 'no-record'
+  | 'unrepaired'
 
 const REFUSALS: Record<ConversionRefusalReason, string> = {
   'not-e2ee': 'the server does not hold this workspace as e2ee',
+  'wrong-key': 'the key does not open the workspace canary',
   'open-check': 'sealed values did not open to their plaintext under the workspace key',
   'unsealed': 'rows are not sealed yet',
-  'no-record': 'rows were sealed by something other than the re-seal',
+  'no-record': 'rows have no re-seal record: something other than the re-seal sealed them',
   'unrepaired': 'rows still differ from their re-seal record after being re-sent',
 }
 
-/** The server's data, not the transport, is why the run stopped, so retrying
- *  the same call won't get past it. */
+/** The server's data, not the transport or the session, is why the run
+ *  stopped, so retrying the same call won't get past it. */
 export class ConversionRefusal extends Error {
   constructor(
     readonly reason: ConversionRefusalReason,
@@ -36,14 +51,25 @@ export class ConversionRefusal extends Error {
   }
 }
 
-/** `public.is_enc_v1_envelope`, the server's test of a sealed value: the
- *  prefix plus a base64url payload of at least a nonce and an auth tag. The
- *  purge applies it to every row, so the re-seal must call a value sealed
- *  exactly when the server does, or it skips a row the purge then refuses on. */
-const ENVELOPE_SHAPE = /^enc:v1:([A-Za-z0-9_-]{4}){9,}([A-Za-z0-9_-]{4}|[A-Za-z0-9_-]{2}|[A-Za-z0-9_-]{3})$/
+/** The shortest payload `public.is_enc_v1_envelope` accepts: a nonce and an
+ *  auth tag, base64url-encoded without padding. */
+const MIN_PAYLOAD_CHARS = Math.ceil(((NONCE_BYTES + GCM_TAG_BYTES) * 4) / 3)
+const BASE64URL_PAYLOAD = /^[A-Za-z0-9_-]*$/
 
-export const isSealedValue = (value: string): boolean => ENVELOPE_SHAPE.test(value)
+/** `public.is_enc_v1_envelope`, the server's test of a sealed value, which the
+ *  purge applies to every row: the re-seal must call a value sealed exactly
+ *  when the server does, or it skips a row the purge then refuses on. Checked
+ *  in linear time, since the server's regex, with its repeated group,
+ *  overflows V8's backtracking stack on a value of a few megabytes. */
+export const isSealedValue = (value: string): boolean => {
+  if (!value.startsWith(ENVELOPE_PREFIX)) return false
+  const payload = value.slice(ENVELOPE_PREFIX.length)
+  // Unpadded base64url never ends with a single leftover character.
+  return payload.length >= MIN_PAYLOAD_CHARS && payload.length % 4 !== 1 && BASE64URL_PAYLOAD.test(payload)
+}
 
+/** A row the server would take in an e2ee workspace. A row short of it is
+ *  plaintext to the re-seal, even when some of its values merely look sealed. */
 export const isSealedRow = (row: ContentColumns): boolean =>
   SEALED_COLUMNS.every(column => isSealedValue(row[column]))
 
@@ -74,12 +100,20 @@ export const opensTo = async (
 
 export const idsOf = (rows: readonly {readonly id: string}[]): string[] => rows.map(row => row.id)
 
-/** The server refuses plaintext writes once the flip has happened, but nothing
- *  refuses ciphertext in a plaintext workspace, and every device pinned to
- *  plaintext would copy it into its `blocks`. The mode never goes back to
- *  `none`, so checking once per run is enough. */
-export const requireE2eeOnServer = async (server: ConversionServer, workspaceId: string): Promise<void> => {
-  if ((await server.readEncryptionMode(workspaceId)) !== 'e2ee') throw new ConversionRefusal('not-e2ee')
+/** Each pass starts, and verify also ends, here. Nothing server-side refuses
+ *  ciphertext in a plaintext workspace, and every device pinned to plaintext
+ *  would copy it into its `blocks`; and a key that doesn't open the canary
+ *  would seal, or "repair", every row under a key nobody saved. A workspace
+ *  this session can't see is a session problem, not a refusal. */
+export const requireWorkspaceKey = async (
+  server: ConversionServer,
+  workspaceId: string,
+  wk: CryptoKey,
+): Promise<void> => {
+  const workspace = await server.readWorkspace(workspaceId)
+  if (!workspace) throw new Error(`conversion: workspace ${workspaceId} is not visible to this session`)
+  if (workspace.encryption_mode !== 'e2ee' || workspace.wk_canary === null) throw new ConversionRefusal('not-e2ee')
+  if (!(await validateCanary(wk, workspace.wk_canary, workspaceId))) throw new ConversionRefusal('wrong-key')
 }
 
 /** The workspace's rows, a page at a time, read only once the previous page has
@@ -106,8 +140,27 @@ export interface SealTarget {
   readonly plaintext: ContentColumns
 }
 
+const sealedChars = (patch: ResealPatch): number =>
+  patch.content.length + patch.properties_json.length + patch.references_json.length
+
+const callsOf = (patches: readonly ResealPatch[]): ResealPatch[][] => {
+  const calls: ResealPatch[][] = []
+  let size = 0
+  for (const patch of patches) {
+    const chars = sealedChars(patch)
+    if (calls.length === 0 || size + chars > MAX_SEALED_CHARS_PER_CALL) {
+      calls.push([])
+      size = 0
+    }
+    calls[calls.length - 1].push(patch)
+    size += chars
+  }
+  return calls
+}
+
 /** Seal each target's plaintext for its server row, check every sealed value
- *  opens back to it, then send them in one `apply_block_patches` call. */
+ *  opens back to it, then send them through `apply_block_patches`. Nothing is
+ *  sent unless every target passes the check. */
 export const sealAndSend = async (
   server: ConversionServer,
   workspaceId: string,
@@ -117,17 +170,18 @@ export const sealAndSend = async (
   if (targets.length === 0) return
   // A row from any other workspace gets no key, so it is refused, not sealed.
   const getCek: GetCek = async id => (id === workspaceId ? wk : null)
-  const patches = await Promise.all(targets.map(async ({row, plaintext}): Promise<ResealPatch> => {
-    const sealed = await encodeForWire({id: row.id, workspace_id: row.workspace_id, ...contentColumnsOf(plaintext)}, 'e2ee', getCek)
-    return {id: row.id, ...contentColumnsOf(sealed), base_updated_at: row.updated_at}
+  const sealed = await Promise.all(targets.map(async ({row, plaintext}) => {
+    const columns = await encodeForWire({id: row.id, workspace_id: row.workspace_id, ...contentColumnsOf(plaintext)}, 'e2ee', getCek)
+    const patch: ResealPatch = {id: row.id, ...contentColumnsOf(columns), base_updated_at: row.updated_at}
+    // Defence in depth: today's seal step cannot fail this. It opens each value
+    // independently of how `encodeForWire` picked its key and AAD, so a bug
+    // there is refused before anything is sent rather than found after a
+    // multi-hour pass.
+    return {patch, opens: await opensTo(wk, row, patch, plaintext)}
   }))
 
-  // Defence in depth: today's seal step cannot fail this. It opens each value
-  // independently of how `encodeForWire` picked its key and AAD, so a bug there
-  // is refused before anything is sent rather than found after a multi-hour pass.
-  const opens = await Promise.all(targets.map(({row, plaintext}, i) => opensTo(wk, row, patches[i], plaintext)))
-  const unopened = targets.filter((_, i) => !opens[i]).map(target => target.row)
+  const unopened = targets.filter((_, i) => !sealed[i].opens).map(target => target.row)
   if (unopened.length > 0) throw new ConversionRefusal('open-check', idsOf(unopened))
 
-  await server.applyBlockPatches(patches)
+  for (const call of callsOf(sealed.map(({patch}) => patch))) await server.applyBlockPatches(call)
 }

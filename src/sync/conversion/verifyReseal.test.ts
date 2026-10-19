@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { resealWorkspace } from './reseal.js'
 import { ConversionRefusal, contentColumnsOf } from './sealing.js'
-import { keyOf, openRow, seedPlaintext, sealFor, WS } from './test/conversionFixtures.js'
+import { flipUnder, keyOf, openRow, seedPlaintext, sealFor, WS } from './test/conversionFixtures.js'
 import { FakeConversionServer, type FakeBlockRow } from './test/fakeConversionServer.js'
 import { sealRecordOf, verifyReseal } from './verifyReseal.js'
 
@@ -15,7 +15,7 @@ beforeEach(async () => {
   seeded = seedPlaintext(server, 5)
 })
 
-const flip = () => server.setMode(WS, 'e2ee')
+const flip = () => flipUnder(server, wk)
 const reseal = (pageSize?: number) => resealWorkspace({server, workspaceId: WS, wk, pageSize})
 const verify = (pageSize?: number) => verifyReseal({server, workspaceId: WS, wk, pageSize})
 const patchCalls = () => server.calls.filter(call => call.method === 'applyBlockPatches').length
@@ -29,7 +29,7 @@ const writeMissedByTheRead = (id: string, content: string) => {
 
 describe('verifyReseal', () => {
   it('passes a clean re-seal without sending anything', async () => {
-    flip()
+    await flip()
     await reseal()
     const sentBefore = patchCalls()
 
@@ -38,7 +38,7 @@ describe('verifyReseal', () => {
   })
 
   it('repairs a swapped column from before_diff', async () => {
-    flip()
+    await flip()
     await reseal()
     const sealed = server.row('b01')
     server.write('b01', {content: sealed.properties_json, properties_json: sealed.content})
@@ -48,7 +48,7 @@ describe('verifyReseal', () => {
   })
 
   it('repairs a value that opens but is another row\'s', async () => {
-    flip()
+    await flip()
     await reseal()
     const b01 = server.row('b01')
     server.write('b01', await sealFor(wk, b01, {...contentColumnsOf(seeded[1]), content: seeded[2].content}))
@@ -59,7 +59,7 @@ describe('verifyReseal', () => {
 
   it('repairs a stale read that overwrote a write in flight at the flip', async () => {
     writeMissedByTheRead('b02', 'written at the flip')
-    flip()
+    await flip()
     await reseal()
     expect((await openRow(wk, server.row('b02'))).content).toBe('text 2')
 
@@ -69,21 +69,70 @@ describe('verifyReseal', () => {
 
   it('still verifies a row whose commit came just before a crash', async () => {
     writeMissedByTheRead('b00', 'written at the flip')
-    flip()
-    let rpcs = 0
-    server.beforePatch = () => {
-      if (++rpcs === 2) throw new Error('crash')
+    await flip()
+    server.afterPatch = () => {
+      server.afterPatch = undefined
+      throw new Error('crash')
     }
     await expect(reseal(2)).rejects.toThrow('crash')
-    server.beforePatch = undefined
 
     await reseal(2)
     expect(await verify(2)).toEqual({checked: 5, repaired: 1})
     expect((await openRow(wk, server.row('b00'))).content).toBe('written at the flip')
   })
 
+  it('passes a row whose plaintext merely looked sealed', async () => {
+    const looksSealed = `enc:v1:${'A'.repeat(38)}`
+    server.write('b01', {content: looksSealed})
+    await flip()
+    await reseal()
+
+    expect(await verify()).toEqual({checked: 5, repaired: 0})
+    expect((await openRow(wk, server.row('b01'))).content).toBe(looksSealed)
+  })
+
+  it('does not pass when the session is lost for the whole run', async () => {
+    await flip()
+    await reseal()
+    const readWorkspace = server.readWorkspace.bind(server)
+    server.readWorkspace = async workspaceId => {
+      const workspace = await readWorkspace(workspaceId)
+      server.signedOut = true
+      return workspace
+    }
+
+    await expect(verify()).rejects.toThrow('not visible to this session')
+  })
+
+  it('does not pass over the rows a lost session hid', async () => {
+    await flip()
+    await reseal()
+    const readHistory = server.readContentSealHistory.bind(server)
+    server.readContentSealHistory = async (workspaceId, ids) => {
+      const rows = await readHistory(workspaceId, ids)
+      server.signedOut = true
+      return rows
+    }
+    const countBlocks = server.countBlocks.bind(server)
+    server.countBlocks = async workspaceId => {
+      server.signedOut = false
+      return countBlocks(workspaceId)
+    }
+
+    await expect(verify(2)).rejects.toThrow('verify checked 2 of the workspace\'s 5 rows')
+  })
+
+  it('refuses a key that does not open the canary, before sending anything', async () => {
+    await flip()
+    await reseal()
+    const sentBefore = patchCalls()
+
+    await expect(verifyReseal({server, workspaceId: WS, wk: await keyOf(2)})).rejects.toEqual(new ConversionRefusal('wrong-key'))
+    expect(patchCalls()).toBe(sentBefore)
+  })
+
   it('refuses a row inserted already sealed, even once a re-seal-shaped write followed', async () => {
-    flip()
+    await flip()
     await reseal()
     const identity = {id: 'b09', workspace_id: WS}
     const plaintext = {content: 'x', properties_json: '{}', references_json: '[]'}
@@ -96,7 +145,7 @@ describe('verifyReseal', () => {
   })
 
   it('refuses a row sealed by a write that also changed other columns', async () => {
-    flip()
+    await flip()
     server.write('b03', {
       ...await sealFor(wk, seeded[3], {...contentColumnsOf(seeded[3]), content: 'edited elsewhere'}),
       user_updated_at: 99,
@@ -111,7 +160,7 @@ describe('verifyReseal', () => {
     const otherKey = await keyOf(2)
     server.write('b01', await sealFor(otherKey, seeded[1], contentColumnsOf(seeded[1])))
     server.write('b01', {content: 'plaintext again', properties_json: '{}', references_json: '[]'})
-    flip()
+    await flip()
     await reseal()
 
     expect(await verify()).toEqual({checked: 5, repaired: 0})
@@ -119,13 +168,13 @@ describe('verifyReseal', () => {
   })
 
   it('refuses while rows are still unsealed', async () => {
-    flip()
+    await flip()
 
     await expect(verify()).rejects.toEqual(new ConversionRefusal('unsealed', ['b00', 'b01', 'b02', 'b03', 'b04']))
   })
 
   it('refuses when a re-sent row still differs from its record', async () => {
-    flip()
+    await flip()
     await reseal()
     const sealed = server.row('b01')
     const swap = {content: sealed.properties_json, properties_json: sealed.content}
@@ -155,6 +204,11 @@ describe('sealRecordOf', () => {
 
   it('reads the plaintext of a re-seal write', () => {
     expect(sealRecordOf(resealWrite)).toEqual({content: 'c', properties_json: '{}', references_json: '[]'})
+  })
+
+  it('reads a value that only looked sealed as plaintext', () => {
+    const write = {...resealWrite, before_diff: {...resealWrite.before_diff, content: ENVELOPE}}
+    expect(sealRecordOf(write)).toEqual({content: ENVELOPE, properties_json: '{}', references_json: '[]'})
   })
 
   it.each([

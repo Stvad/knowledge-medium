@@ -11,10 +11,11 @@ const valueAt = (row: Row, path: string): unknown => {
 }
 
 /** Just enough of the PostgREST query builder, over in-memory tables. A
- *  response holds at most `maxRows` rows, like PostgREST's `db-max-rows`. */
+ *  response holds at most `maxRows` rows, like PostgREST's `db-max-rows`, and
+ *  without an `order` comes back in no particular order. */
 const fakeClient = (
   tables: Record<string, Row[]>,
-  {maxRows = Infinity, error}: {maxRows?: number; error?: {code: string; message: string}} = {},
+  {maxRows = Infinity, error, status = 400}: {maxRows?: number; error?: {code: string; message: string}; status?: number} = {},
 ) => {
   const inListLengths: number[] = []
   const rpcs: Array<{fn: string; args: unknown}> = []
@@ -22,19 +23,21 @@ const fakeClient = (
     const filters: Array<(row: Row) => boolean> = []
     let orderBy: string | undefined
     let limit = Infinity
-    let single = false
+    let maybeSingle = false
+    let head = false
     const respond = () => {
-      if (error) return {data: null, error}
-      let rows = tables[table].filter(row => filters.every(filter => filter(row)))
+      if (error) return {data: null, count: null, error, status}
+      let rows = tables[table].filter(row => filters.every(filter => filter(row))).reverse()
+      if (head) return {data: null, count: rows.length, error: null, status: 200}
       if (orderBy !== undefined) {
         const key = orderBy
         rows = [...rows].sort((a, b) => ((valueAt(a, key) as string | number) < (valueAt(b, key) as string | number) ? -1 : 1))
       }
       rows = rows.slice(0, Math.min(limit, maxRows))
-      return {data: single ? rows[0] : rows, error: null}
+      return {data: maybeSingle ? (rows[0] ?? null) : rows, count: null, error: null, status: 200}
     }
     const builder = {
-      select: () => builder,
+      select: (_columns: string, options?: {head?: boolean}) => ((head = options?.head ?? false), builder),
       eq: (column: string, value: unknown) => (filters.push(row => valueAt(row, column) === value), builder),
       gt: (column: string, value: string | number) =>
         (filters.push(row => (valueAt(row, column) as string | number) > value), builder),
@@ -52,7 +55,7 @@ const fakeClient = (
       },
       order: (column: string) => ((orderBy = column), builder),
       limit: (count: number) => ((limit = count), builder),
-      single: () => ((single = true), builder),
+      maybeSingle: () => ((maybeSingle = true), builder),
       then: (resolve: (value: unknown) => unknown, reject: (reason: unknown) => unknown) =>
         Promise.resolve(respond()).then(resolve, reject),
     }
@@ -60,7 +63,7 @@ const fakeClient = (
   }
   const rpc = async (fn: string, args: unknown) => {
     rpcs.push({fn, args})
-    return {error: error ?? null}
+    return {error: error ?? null, status: error ? status : 204}
   }
   return {client: {from, rpc} as unknown as SupabaseClient, inListLengths, rpcs}
 }
@@ -104,7 +107,7 @@ describe('createSupabaseConversionServer', () => {
 
     const rows = await createSupabaseConversionServer(client).readBlocks(WS, [...blocks.map(b => b.id), 'x'])
 
-    expect(rows).toEqual(blocks)
+    expect([...rows].sort((a, b) => (a.id < b.id ? -1 : 1))).toEqual(blocks)
     expect(Math.max(...inListLengths)).toBeLessThanOrEqual(100)
   })
 
@@ -126,12 +129,27 @@ describe('createSupabaseConversionServer', () => {
     expect(rpcs).toEqual([{fn: 'apply_block_patches', args: {patches}}])
   })
 
-  it('throws a server error with its code', async () => {
-    const {client} = fakeClient({workspaces: [], blocks: []}, {error: {code: '42501', message: 'permission denied'}})
-    const server = createSupabaseConversionServer(client)
+  it('reads a workspace this session cannot see as null', async () => {
+    const {client} = fakeClient({workspaces: [{id: 'ws-other', encryption_mode: 'e2ee', wk_canary: ENVELOPE}]})
 
-    await expect(server.readEncryptionMode(WS)).rejects.toThrow('(42501)')
-    await expect(server.readBlockPage(WS, null, 1)).rejects.toThrow('(42501)')
-    await expect(server.applyBlockPatches([])).rejects.toThrow('(42501)')
+    expect(await createSupabaseConversionServer(client).readWorkspace(WS)).toBeNull()
+  })
+
+  it('counts the workspace\'s rows', async () => {
+    const blocks = [0, 1, 2].map(i => ({id: blockId(i), workspace_id: WS}))
+    const {client} = fakeClient({blocks: [...blocks, {id: 'x', workspace_id: 'ws-other'}]})
+
+    expect(await createSupabaseConversionServer(client).countBlocks(WS)).toBe(3)
+  })
+
+  it('throws a server error with its code and HTTP status', async () => {
+    const {client} = fakeClient({workspaces: [], blocks: []}, {error: {code: '42501', message: 'permission denied'}, status: 403})
+    const server = createSupabaseConversionServer(client)
+    const refused = {code: '42501', status: 403}
+
+    await expect(server.readWorkspace(WS)).rejects.toMatchObject(refused)
+    await expect(server.countBlocks(WS)).rejects.toMatchObject(refused)
+    await expect(server.readBlockPage(WS, null, 1)).rejects.toMatchObject(refused)
+    await expect(server.applyBlockPatches([])).rejects.toMatchObject(refused)
   })
 })

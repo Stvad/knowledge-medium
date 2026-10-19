@@ -13,7 +13,7 @@ import { describe, expect, it } from 'vitest'
 import { fuzzParams, fuzzTestTimeout } from '@/test/fuzz'
 import { resealWorkspace } from './reseal.js'
 import { contentColumnsOf, type ContentColumns } from './sealing.js'
-import { keyOf, openRow, sealFor, WS } from './test/conversionFixtures.js'
+import { flipUnder, keyOf, openRow, sealFor, WS } from './test/conversionFixtures.js'
 import { FakeConversionServer } from './test/fakeConversionServer.js'
 
 const rowArb = fc.record({
@@ -36,7 +36,7 @@ describe('resealWorkspace (property)', () => {
           server.insert({...identity, deleted, ...alreadySealed ? await sealFor(wk, identity, columns) : columns})
           if (!alreadySealed) plaintext.set(identity.id, columns)
         }
-        server.setMode(WS, 'e2ee')
+        await flipUnder(server, wk)
         const before = server.workspaceRows(WS)
 
         const result = await resealWorkspace({server, workspaceId: WS, wk, pageSize})

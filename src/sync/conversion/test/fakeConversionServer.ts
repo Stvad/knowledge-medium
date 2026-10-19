@@ -13,7 +13,7 @@
  */
 
 import { SEALED_COLUMNS } from '../../transform.js'
-import type { ConversionServer, ResealPatch, ServerBlockRow, ServerHistoryRow } from '../conversionServer.js'
+import type { ConversionServer, ResealPatch, ServerBlockRow, ServerHistoryRow, ServerWorkspace } from '../conversionServer.js'
 import { isSealedRow } from '../sealing.js'
 
 export interface FakeBlockRow extends ServerBlockRow {
@@ -25,8 +25,6 @@ export interface FakeHistoryRow extends ServerHistoryRow {
   readonly workspace_id: string
   readonly changed_columns: readonly string[] | null
 }
-
-type Mode = 'none' | 'e2ee'
 
 export class FakeServerError extends Error {
   constructor(readonly code: string, message: string) {
@@ -40,7 +38,7 @@ export class FakeConversionServer implements ConversionServer {
   private rows = new Map<string, FakeBlockRow>()
   private historyRows: FakeHistoryRow[] = []
   private nextEventId = 1
-  private readonly modes = new Map<string, Mode>()
+  private readonly workspaces = new Map<string, ServerWorkspace>()
   /** Every port call in order, with how many rows or patches it carried. */
   readonly calls: Array<{method: keyof ConversionServer; count: number}> = []
   /** Rows per response, like PostgREST's `db-max-rows`. */
@@ -52,9 +50,12 @@ export class FakeConversionServer implements ConversionServer {
   afterPatch?: (patches: readonly ResealPatch[]) => void
   /** Rows the next page read returns in place of the current ones: a stale read. */
   readonly staleReads = new Map<string, FakeBlockRow>()
+  /** A session that has lost its sign-in: RLS hides every row, and writes are refused. */
+  signedOut = false
 
-  setMode(workspaceId: string, mode: Mode): void {
-    this.modes.set(workspaceId, mode)
+  /** `convert_workspace_to_e2ee`: the mode and canary change, no row does. */
+  flip(workspaceId: string, canary: string): void {
+    this.workspaces.set(workspaceId, {encryption_mode: 'e2ee', wk_canary: canary})
   }
 
   insert(row: Pick<FakeBlockRow, 'id' | 'workspace_id'> & Partial<FakeBlockRow>): FakeBlockRow {
@@ -98,13 +99,19 @@ export class FakeConversionServer implements ConversionServer {
     return this.historyRows
   }
 
-  async readEncryptionMode(workspaceId: string): Promise<Mode> {
-    this.calls.push({method: 'readEncryptionMode', count: 1})
-    return this.modes.get(workspaceId) ?? 'none'
+  async readWorkspace(workspaceId: string): Promise<ServerWorkspace | null> {
+    this.calls.push({method: 'readWorkspace', count: 1})
+    if (this.signedOut) return null
+    return this.workspaces.get(workspaceId) ?? {encryption_mode: 'none', wk_canary: null}
+  }
+
+  async countBlocks(workspaceId: string): Promise<number> {
+    this.calls.push({method: 'countBlocks', count: 1})
+    return this.visibleRows(workspaceId).length
   }
 
   async readBlockPage(workspaceId: string, afterId: string | null, limit: number): Promise<ServerBlockRow[]> {
-    const page = this.workspaceRows(workspaceId)
+    const page = this.visibleRows(workspaceId)
       .filter(row => afterId === null || row.id > afterId)
       .slice(0, Math.min(limit, this.maxRows))
       .map(row => {
@@ -117,13 +124,14 @@ export class FakeConversionServer implements ConversionServer {
   }
 
   async readBlocks(workspaceId: string, ids: readonly string[]): Promise<ServerBlockRow[]> {
-    const rows = this.workspaceRows(workspaceId).filter(row => ids.includes(row.id))
+    const rows = this.visibleRows(workspaceId).filter(row => ids.includes(row.id))
     this.calls.push({method: 'readBlocks', count: rows.length})
     return rows
   }
 
   async readContentSealHistory(workspaceId: string, blockIds: readonly string[]): Promise<ServerHistoryRow[]> {
     const rows = this.historyRows.filter(row =>
+      !this.signedOut &&
       row.workspace_id === workspaceId &&
       blockIds.includes(row.block_id) &&
       row.op === 'U' &&
@@ -135,6 +143,7 @@ export class FakeConversionServer implements ConversionServer {
 
   async applyBlockPatches(patches: readonly ResealPatch[]): Promise<void> {
     this.calls.push({method: 'applyBlockPatches', count: patches.length})
+    if (this.signedOut) throw new FakeServerError('42501', 'anon writes to blocks are refused')
     this.beforePatch?.(patches)
     const saved = {rows: new Map(this.rows), history: [...this.historyRows], nextEventId: this.nextEventId}
     try {
@@ -185,9 +194,13 @@ export class FakeConversionServer implements ConversionServer {
   }
 
   private requireCiphertext(row: FakeBlockRow): void {
-    if (this.modes.get(row.workspace_id) === 'e2ee' && !isSealedRow(row)) {
+    if (this.workspaces.get(row.workspace_id)?.encryption_mode === 'e2ee' && !isSealedRow(row)) {
       throw new FakeServerError('23514', 'blocks in an e2ee workspace must carry a well-formed enc:v1: envelope')
     }
+  }
+
+  private visibleRows(workspaceId: string): FakeBlockRow[] {
+    return this.signedOut ? [] : this.workspaceRows(workspaceId)
   }
 
   private require(id: string): FakeBlockRow {

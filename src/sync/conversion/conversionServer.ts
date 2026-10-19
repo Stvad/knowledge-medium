@@ -36,8 +36,16 @@ export interface ResealPatch {
   readonly base_updated_at: number
 }
 
+export interface ServerWorkspace {
+  readonly encryption_mode: 'none' | 'e2ee'
+  readonly wk_canary: string | null
+}
+
 export interface ConversionServer {
-  readEncryptionMode(workspaceId: string): Promise<'none' | 'e2ee'>
+  /** Null when this session can't see the workspace: signed out, or not a member. */
+  readWorkspace(workspaceId: string): Promise<ServerWorkspace | null>
+  /** How many rows the workspace holds, soft-deleted ones included. */
+  countBlocks(workspaceId: string): Promise<number>
   /** The workspace's rows with an id above `afterId`, in id order, soft-deleted
    *  ones included. A page may hold fewer than `limit` rows before the end (the
    *  API caps rows per response); only an empty page means there are no more. */
@@ -64,37 +72,53 @@ const chunk = <T>(items: readonly T[], size: number): T[][] => {
   return chunks
 }
 
-const failed = (what: string, error: {code?: string; message: string}): Error =>
-  new Error(`conversion: ${what} failed (${error.code || 'error'}): ${error.message}`, {cause: error})
+/** Carries the PostgREST `code` and the HTTP `status` (a sibling of the error in
+ *  the response, never on it), which are what tell a permanent failure from a
+ *  transient one (`classifyUploadError`). */
+const failed = (what: string, error: {code?: string; message: string}, status: number): Error =>
+  Object.assign(
+    new Error(`conversion: ${what} failed (${error.code || status}): ${error.message}`, {cause: error}),
+    {code: error.code, status},
+  )
 
 export const createSupabaseConversionServer = (client: SupabaseClient): ConversionServer => ({
-  async readEncryptionMode(workspaceId) {
-    const {data, error} = await client
+  async readWorkspace(workspaceId) {
+    const {data, error, status} = await client
       .from('workspaces')
-      .select('encryption_mode')
+      .select('encryption_mode,wk_canary')
       .eq('id', workspaceId)
-      .single()
-    if (error) throw failed('reading the workspace', error)
-    return data.encryption_mode
+      .maybeSingle()
+    if (error) throw failed('reading the workspace', error, status)
+    return data
+  },
+
+  async countBlocks(workspaceId) {
+    const {count, error, status} = await client
+      .from('blocks')
+      .select('id', {count: 'exact', head: true})
+      .eq('workspace_id', workspaceId)
+    if (error) throw failed('counting blocks', error, status)
+    if (count === null) throw new Error('conversion: counting blocks returned no count')
+    return count
   },
 
   async readBlockPage(workspaceId, afterId, limit) {
     let query = client.from('blocks').select(BLOCK_COLUMNS).eq('workspace_id', workspaceId)
     if (afterId !== null) query = query.gt('id', afterId)
-    const {data, error} = await query.order('id', {ascending: true}).limit(limit)
-    if (error) throw failed('reading blocks', error)
+    const {data, error, status} = await query.order('id', {ascending: true}).limit(limit)
+    if (error) throw failed('reading blocks', error, status)
     return data
   },
 
   async readBlocks(workspaceId, ids) {
     const rows: ServerBlockRow[] = []
     for (const idChunk of chunk(ids, IDS_PER_FILTER)) {
-      const {data, error} = await client
+      const {data, error, status} = await client
         .from('blocks')
         .select(BLOCK_COLUMNS)
         .eq('workspace_id', workspaceId)
         .in('id', idChunk)
-      if (error) throw failed('reading blocks', error)
+      if (error) throw failed('reading blocks', error, status)
       rows.push(...data)
     }
     return rows
@@ -104,7 +128,7 @@ export const createSupabaseConversionServer = (client: SupabaseClient): Conversi
     const rows: ServerHistoryRow[] = []
     for (const idChunk of chunk(blockIds, IDS_PER_FILTER)) {
       for (let afterEventId = 0; ;) {
-        const {data, error} = await client
+        const {data, error, status} = await client
           .from('blocks_history')
           .select(HISTORY_COLUMNS)
           .eq('workspace_id', workspaceId)
@@ -115,7 +139,7 @@ export const createSupabaseConversionServer = (client: SupabaseClient): Conversi
           .gt('event_id', afterEventId)
           .order('event_id', {ascending: true})
           .limit(HISTORY_PAGE)
-        if (error) throw failed('reading block history', error)
+        if (error) throw failed('reading block history', error, status)
         if (data.length === 0) break
         rows.push(...data)
         afterEventId = data[data.length - 1].event_id
@@ -125,7 +149,7 @@ export const createSupabaseConversionServer = (client: SupabaseClient): Conversi
   },
 
   async applyBlockPatches(patches) {
-    const {error} = await client.rpc('apply_block_patches', {patches})
-    if (error) throw failed('apply_block_patches', error)
+    const {error, status} = await client.rpc('apply_block_patches', {patches})
+    if (error) throw failed('apply_block_patches', error, status)
   },
 })
