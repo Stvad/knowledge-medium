@@ -1,1 +1,1 @@
-import{FO as e,IO as t,PO as n}from"../../../chunks/app-_tRc5Ryp.js";export{n as BlockTypeBlockRenderer,e as BlockTypeContentRenderer,t as writeBlockTypeLabel};
+import{FO as e,IO as t,PO as n}from"../../../chunks/app-DdPOiSVa.js";export{n as BlockTypeBlockRenderer,e as BlockTypeContentRenderer,t as writeBlockTypeLabel};

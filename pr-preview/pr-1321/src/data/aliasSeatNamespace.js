@@ -1,1 +1,1 @@
-import{d2 as e,f2 as t,p2 as n}from"../../chunks/app-_tRc5Ryp.js";export{e as PLAINTEXT_ALIAS_SEATS,t as aliasSeatNamespacesInTx,n as resolveAliasSeatNamespaces};
+import{d2 as e,f2 as t,p2 as n}from"../../chunks/app-DdPOiSVa.js";export{e as AliasSeatNamespaceUnavailableError,t as aliasSeatNamespacesInTx,n as resolveAliasSeatNamespaces};
