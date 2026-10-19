@@ -1,0 +1,1 @@
+import{pE as e}from"../../chunks/app-BxdkEvyN.js";export{e as editorAutocompleteExtension};

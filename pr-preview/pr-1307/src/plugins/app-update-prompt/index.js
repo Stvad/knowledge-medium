@@ -1,0 +1,1 @@
+import{IE as e}from"../../../chunks/app-BxdkEvyN.js";export{e as appUpdatePromptExtension};

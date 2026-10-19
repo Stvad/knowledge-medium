@@ -1,0 +1,1 @@
+import{vP as e,yP as t}from"../../../chunks/app-BxdkEvyN.js";export{e as isPropertyPanelHiddenProperty,t as isPropertyPanelReadOnlyProperty};

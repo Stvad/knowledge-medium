@@ -1,0 +1,1 @@
+import{JT as e,YT as t}from"../../chunks/app-BxdkEvyN.js";export{e as resolveStructuralEditPolicy,t as structuralEditPolicyForBlock};

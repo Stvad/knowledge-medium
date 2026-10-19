@@ -1,0 +1,1 @@
+import{_y as e,gy as t,hy as n}from"../../../chunks/app-BxdkEvyN.js";export{n as getOrCreateShortcutsBlock,t as journalShortcutBlockId,e as shortcutsBlockId};

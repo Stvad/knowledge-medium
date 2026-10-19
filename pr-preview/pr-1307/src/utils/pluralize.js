@@ -1,0 +1,1 @@
+import{CY as e,wY as t}from"../../chunks/app-BxdkEvyN.js";export{e as agree,t as pluralize};

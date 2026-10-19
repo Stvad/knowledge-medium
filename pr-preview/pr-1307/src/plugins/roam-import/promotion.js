@@ -1,0 +1,1 @@
+import{oc as e,sc as t}from"../../../chunks/app-BxdkEvyN.js";export{e as computePromotedFromChildren,t as detectInlineAttribute};

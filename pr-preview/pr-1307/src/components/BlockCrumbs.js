@@ -1,0 +1,1 @@
+import{vx as e}from"../../chunks/app-BxdkEvyN.js";export{e as BlockCrumbs};

@@ -1,0 +1,1 @@
+import{IA as e}from"../../chunks/app-BxdkEvyN.js";export{e as BlockEditor};

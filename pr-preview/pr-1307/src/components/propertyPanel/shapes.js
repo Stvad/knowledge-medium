@@ -1,0 +1,1 @@
+import{bI as e}from"../../../chunks/app-BxdkEvyN.js";export{e as propertyShapeLabel};

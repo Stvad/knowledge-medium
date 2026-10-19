@@ -1,0 +1,1 @@
+import{Br as e,Ir as t}from"../../../chunks/app-BxdkEvyN.js";export{e as migratePropertiesToBlocksAction,t as propertiesMigrationPlugin};

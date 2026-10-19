@@ -1,0 +1,1 @@
+import{SR as e}from"../../../chunks/app-BxdkEvyN.js";export{e as preferredSpanReplacement};

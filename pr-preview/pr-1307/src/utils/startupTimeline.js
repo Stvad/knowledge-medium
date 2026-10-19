@@ -1,0 +1,1 @@
+import{$I as e,QI as t,ZI as n,aL as r,eL as i,iL as a,nL as o,rL as s,tL as c}from"../../chunks/app-BxdkEvyN.js";export{n as getLastLongTaskEndMs,t as getStartupTimeline,e as hasStartupMark,i as longTasksSupported,c as markStartup,o as markStartupAt,s as onLongTask,a as resetStartupTimeline,r as startStartupObservers};

@@ -1,0 +1,1 @@
+import{dM as e}from"../../chunks/app-BxdkEvyN.js";export{e as BlockProperties};

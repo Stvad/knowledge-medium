@@ -1,0 +1,1 @@
+import{B6 as e,H6 as t,V6 as n}from"../../../chunks/app-BxdkEvyN.js";export{e as SYSTEM_AUTHOR_PREFIX,n as isSystemAuthor,t as systemAuthor};

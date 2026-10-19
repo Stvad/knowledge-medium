@@ -1,0 +1,1 @@
+import{Et as e}from"../../../chunks/app-BxdkEvyN.js";export{e as extensionsDataExtension};

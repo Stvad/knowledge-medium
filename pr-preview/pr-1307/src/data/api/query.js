@@ -1,0 +1,1 @@
+import{K6 as e}from"../../../chunks/app-BxdkEvyN.js";export{e as defineQuery};

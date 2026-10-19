@@ -1,0 +1,1 @@
+import{Uc as e}from"../../../chunks/app-BxdkEvyN.js";export{e as resolveDailyPage};

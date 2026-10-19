@@ -1,0 +1,1 @@
+import{Fz as e,Iz as t}from"../../../chunks/app-BxdkEvyN.js";export{e as PLACES_UNDER_BLOCK_QUERY,t as placesUnderBlockQuery};

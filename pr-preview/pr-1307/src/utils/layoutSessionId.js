@@ -1,0 +1,1 @@
+import{_0 as e,b0 as t,g0 as n,v0 as r,x0 as i,y0 as a}from"../../chunks/app-BxdkEvyN.js";export{n as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,e as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,r as __resetLayoutSessionIdForTesting,a as getLayoutSessionId,t as isInstalledAppDisplayMode,i as readOrCreateLayoutSessionId};

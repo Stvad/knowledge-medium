@@ -1,0 +1,1 @@
+import{n4 as e,r4 as t}from"../../chunks/app-BxdkEvyN.js";export{e as getOrCreatePropertiesPage,t as propertiesPageBlockId};

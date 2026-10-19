@@ -1,0 +1,1 @@
+import{kp as e}from"../../../../../chunks/app-BxdkEvyN.js";export{e as Wikilink};

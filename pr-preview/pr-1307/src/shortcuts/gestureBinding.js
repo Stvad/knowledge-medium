@@ -1,0 +1,1 @@
+import{eD as e,tD as t}from"../../chunks/app-BxdkEvyN.js";export{e as gestureBindingDescriptor,t as matchesGestureEvent};

@@ -1,0 +1,1 @@
+import{Dq as e}from"../../chunks/app-BxdkEvyN.js";export{e as kernelDataExtension};

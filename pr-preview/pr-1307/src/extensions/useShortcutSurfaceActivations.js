@@ -1,0 +1,1 @@
+import{WA as e}from"../../chunks/app-BxdkEvyN.js";export{e as useShortcutSurfaceActivations};

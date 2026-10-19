@@ -1,0 +1,1 @@
+import{CE as e,Tt as t,wE as n}from"../../../chunks/app-BxdkEvyN.js";export{e as extensionsOverridesProp,n as extensionsPrefsType,t as extensionsSettingsPlugin};

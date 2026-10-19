@@ -1,0 +1,1 @@
+import{yx as e}from"../../chunks/app-BxdkEvyN.js";export{e as useAncestorCrumbs};

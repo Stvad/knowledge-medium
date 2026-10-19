@@ -1,0 +1,1 @@
+import{q2 as e}from"../chunks/app-BxdkEvyN.js";export{e as isChildBackedPropertiesWorkspace};

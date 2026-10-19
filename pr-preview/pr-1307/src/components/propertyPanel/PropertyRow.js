@@ -1,0 +1,1 @@
+import{_M as e}from"../../../chunks/app-BxdkEvyN.js";export{e as PropertyRow};

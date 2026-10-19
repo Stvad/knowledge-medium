@@ -1,0 +1,1 @@
+import{GN as e,WN as t}from"../../chunks/app-BxdkEvyN.js";export{t as anyBlockTombstoned,e as isBlockTombstoned};

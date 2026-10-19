@@ -1,0 +1,1 @@
+import{SD as e,xD as t}from"../../chunks/app-BxdkEvyN.js";export{t as ClientLocalSettings,e as clientLocalSettings};

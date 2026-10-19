@@ -1,0 +1,1 @@
+import{j_ as e}from"../../../chunks/app-BxdkEvyN.js";export{e as spatialNavigationShellDecorator};
