@@ -84,7 +84,7 @@ The workspace is **frozen** while an attempt row exists ([§5.2](#52-the-freeze)
 
 Tables:
 
-- **`private.workspace_conversions(workspace_id pk, attempt_id, canary, state, started_by, started_at, lease_holder, lease_until)`.** The lease columns serialize the attachment cleanup ([§5.5](#55-attachments)). `canary` is the new key's canary. The client mints it before `begin`, and storing it here binds the attempt to exactly one key.
+- **`private.workspace_conversions(workspace_id pk, attempt_id, canary, state, started_by, started_at)`.** `canary` is the new key's canary. The client mints it before `begin`, and storing it here binds the attempt to exactly one key.
 - **`private.workspace_conversion_rows(workspace_id, attempt_id, block_id, content, properties_json, references_json)`.** Sealed columns only. The conversion only updates rows, so there's no op column.
 - **`private.workspace_conversion_objects(workspace_id, attempt_id, keyed_path, verified)`.** Every attachment object the cleanup writes, recorded **before** it is written ([§5.5](#55-attachments)). The names are keyed HMACs, so storing them adds no fingerprint.
 
@@ -96,13 +96,13 @@ Rules that apply to every RPC:
 
 | RPC | From state | To state | Effect | Refuses when |
 |---|---|---|---|---|
-| `begin_workspace_conversion(ws, canary) → attempt_id` | no attempt | `staging` | takes the serialization locks of [§5.2](#52-the-freeze), inserts the attempt (freezing the workspace) | an attempt exists; `encryption_mode ≠ 'none'` (checked in this transaction); caller isn't the owner |
+| `begin_workspace_conversion(ws, canary) → attempt_id` | no attempt | `staging` | takes the serialization locks of [§5.2](#52-the-freeze), including `FOR UPDATE` on the `workspaces` row so a `properties_migration` flip can't straddle it, then inserts the attempt (freezing the workspace) | an attempt exists; `encryption_mode ≠ 'none'` (checked in this transaction); caller isn't the owner |
 | `stage_workspace_conversion(ws, attempt_id, rows)` | `staging`, `applied` | same | checks each row's per-column base against the current row, then **discards** the base and upserts the sealed columns ([§5.3](#53-sealing-apply-verification)) | foreign or missing `block_id`; base mismatch |
 | `apply_workspace_conversion(ws, attempt_id)` | `staging`, `applied` | `applied` | flips the mode and re-seals in one transaction ([§5.3](#53-sealing-apply-verification)); re-running it in `applied` re-applies re-staged rows | incomplete image; a non-envelope column |
 | `purge_workspace_history(ws, attempt_id, archived_count)` | `applied` | `cleanup_pending` | deletes the workspace's `blocks_history`, and clears staging ([§5.4](#54-history-archive-verify-purge)) | `archived_count` ≠ the frozen server count |
-| `claim_conversion_lease(ws, attempt_id, holder)` | `cleanup_pending` | same | grants or renews a time-limited lease, so one device runs the attachment cleanup ([§5.5](#55-attachments)) | another holder's lease is live |
-| `record_conversion_object(ws, attempt_id, holder, keyed_path, verified)` | `cleanup_pending` | same | records an object before it's written; never downgrades `verified` | caller doesn't hold the lease |
-| `finish_workspace_conversion(ws, attempt_id, holder)` | `cleanup_pending` | done | deletes the attempt and its recorded objects, ending the freeze | caller doesn't hold the lease |
+| `list_workspace_objects(ws, attempt_id, after_name, limit)` | `cleanup_pending` | same | keyset page of `storage.objects` (bucket `attachments`, name under `<ws>/`, nested names included, `name > after_name` ordered by name) ([§5.5](#55-attachments)) | — |
+| `record_conversion_object(ws, attempt_id, keyed_path, verified)` | `cleanup_pending` | same | records an object before it's written; never downgrades `verified` | — |
+| `finish_workspace_conversion(ws, attempt_id)` | `cleanup_pending` | done | deletes the attempt and its recorded objects, ending the freeze | — |
 | `abort_workspace_conversion(ws, attempt_id)` | `staging` | gone | deletes the attempt and staging, ending the freeze. Nothing has been written to blocks or Storage yet. | — |
 | `abandon_workspace_conversion(ws, attempt_id)` | `applied`, `cleanup_pending` | gone | key-loss exit only: ends the freeze without finishing, so the recovery procedure ([§7](#7-runbook)) can run | — |
 | `get_workspace_conversion(ws)` | any | — | owner read: `attempt_id`, `canary`, `state` | — |
@@ -231,11 +231,16 @@ The rule reads the content, never a header and never the name's shape: raw and k
 Extract it once as `verifyStoredObject → match | mismatch | undecodable`. The cleanup uses it after every upload, and for a 409 on an occupied path.
 
 **The cleanup**, repeated until a complete listing needs no action:
-1. **List completely before acting.** Use `AuditIO.listObjects` (`src/plugins/attachments/audit/supabaseAuditIO.ts`), which is already paged by `collectPaged` and name-ordered. Deleting while paging by offset would skip objects.
+1. **List completely before acting**, through `list_workspace_objects`. It's a keyset scan of `storage.objects` (`name > after_name`, ordered by name), so a delete anywhere can never shift a later object out of the scan. It returns nested names (`<ws>/sub/file`) as real objects, not as virtual folder entries. And it runs in the owner's session, through an owner-only RPC.
+   - The audit's lister (`AuditIO.listObjects` in `src/plugins/attachments/audit/supabaseAuditIO.ts`) doesn't fit, for three reasons. It is a server-only adapter on a secret-tier key that bypasses RLS across every workspace, so it must never reach a browser. It pages by offset. And it returns folders as virtual entries.
 2. **Build K**: the keyed path of every media block in the workspace, plus every recorded path. A recorded path whose object is absent is re-uploaded from its source; one that's present but unverified gets verified.
 3. **Handle every listed object outside K:**
    - **Raw:** record the keyed path, seal, upload, verify, mark it verified, and only then delete the raw object. A crash leaves the raw source plus the record, and resume finishes the job. This also covers a raw object no block names yet, such as a capture whose block is still parked behind the freeze. When that block arrives, its keyed bytes are already there.
-   - **Anything else: delete it.** It isn't ours, because every cleanup upload is recorded before it starts. No media block names it, so nothing the app shows depends on it. And it can't be assumed harmless: any writer can put any bytes under any name. Each deletion is listed in the report.
+   - **Anything else: delete it by its full path.** That includes a nested object, which can never be raw, because content-addressed uploads are flat.
+     - It isn't ours, because every cleanup upload is recorded before it starts.
+     - No media block names it, so nothing the app shows depends on it.
+     - It can't be assumed harmless, because any writer can put any bytes under any name.
+     - Each deletion is listed in the report.
 
 **The proof:** in the final complete listing,
 - no raw object remains;
@@ -244,10 +249,9 @@ Extract it once as `verifyStoredObject → match | mismatch | undecodable`. The 
 
 That last case means no raw object and no local bytes on this device. It's computed at proof time rather than stored, and reported to the user before `finish`.
 
-**One cleaner, under a lease.** `claim_conversion_lease` grants it, and the cleaner renews it while it works. `record_conversion_object` and `finish` refuse anyone else ([§5.1](#51-the-attempt)).
-- The deletes alone would be safe without one. They only remove a raw object whose keyed copy is verified, or an object that is both unrecorded and unnamed, and a keyed upload is always recorded before it starts.
-- What a lease protects is the **listing**. `AuditIO.listObjects` pages by offset, so another cleaner's delete between two pages would shift an object past this cleaner's next offset. A missed raw orphan would then pass the proof.
-- The lease makes the listing, its mutations, the proof and `finish` one device's job. A lease that lapses without renewal can be claimed by another key-holding device.
+**Concurrent cleaners are safe, with no lease.**
+- **The deletes.** They only remove a raw object whose keyed copy has been verified, or an object that is both unrecorded and unnamed. A keyed upload is always recorded before it starts, so neither kind of delete can catch another cleaner's work.
+- **The listing.** It's a keyset scan, so nobody's delete can hide an object from it. Raw objects only ever disappear during `cleanup_pending`: the fence refuses new ones ([§5.2](#52-the-freeze)). So a complete scan that finds no raw object proves none is left, however many cleaners ran and whatever any of them still has in flight.
 
 **Media block ids don't change.** The app derives an attachment's Storage path from the block's `media:hash`, the workspace mode and `K_id`; it doesn't store the path. So after the conversion an existing media block reads the keyed path. Re-capturing a file that predates the conversion mints a second block, at the keyed id; that's accepted (§6).
 
@@ -319,6 +323,10 @@ The workspace key is the one thing whose loss can't be repaired, so the flow (#1
   - The stored key is non-extractable, so a leftover can't be shown again either. A fresh key gets a fresh reveal.
 - **`begin` refuses unless the mode is `none`**, checked inside its own transaction ([§5.1](#51-the-attempt)).
 - **Before apply,** re-read the durable record (not the in-memory handle) and require it to open the attempt's stored canary.
+- **Pin retirement, for key-loss recovery only** (#1302).
+  - Offered only when this device holds an `e2ee` pin for a workspace whose server row is plaintext.
+  - Requires an explicit confirmation that names the workspace and says it was deleted and restored after a lost key. It then drops the pin and the stale key record.
+  - A hostile server can produce exactly that state, and refusing it silently is the pin's whole job. So retirement is per device, user-initiated, and never automatic.
 - **Takeover** means another device carrying on an attempt with a pasted key. It stores that key **without pinning**. The pin changes only through `upgradeModePinToE2ee`, after the apply. Unlocking through `unlockWorkspaceWithKey` would pin e2ee first: an unpinned device that then saw the attempt aborted would stay e2ee-pinned on a plaintext workspace, uploading sealed edits that every other device reads as `enc:v1:` text.
 
 ### 5.8 Flow, resume, failure paths
@@ -341,7 +349,7 @@ The orchestrator (#1290) refuses to start unless all of these hold:
 | **Key**: `mintWorkspaceKey`, reveal once, require a retype, store durably | before anything else | nothing | retry |
 | **Begin** | refused: an attempt exists | another device or tab is converting | resume it with its key, or abort it explicitly while `staging` |
 | **Archive**: export, then read back ([§5.4](#54-history-archive-verify-purge)) | export or read-back fails | frozen | redo the archive, or abort |
-| **Settle, snapshot and stage**: wait for a post-freeze checkpoint; require zero sync divergence for the workspace (below); take the content-recovery snapshot ([§7](#7-runbook)); then seal → verify → stage page by page, keeping the per-row verification record | crash, base mismatch, or divergence that the drain doesn't clear | frozen, partly staged | resume (re-staging is idempotent per block); a mismatch means a pre-freeze read; refuse to continue while divergence remains |
+| **Settle, snapshot and stage**: wait for a post-freeze checkpoint; require zero sync divergence for the workspace (below); **re-scan the residue and re-confirm it** with the user (a properties switch or synthesized definitions that landed just before `begin`); take the content-recovery snapshot ([§7](#7-runbook)); then seal → verify → stage page by page, keeping the per-row verification record | crash, base mismatch, or divergence that the drain doesn't clear | frozen, partly staged | resume (re-staging is idempotent per block); a mismatch means a pre-freeze read; refuse to continue while divergence remains |
 | **Apply** | refusal or timeout | rolled back; `staging` | fix and re-apply, or abort |
 | **Verify** ([§5.3](#53-sealing-apply-verification)) | rows fail to open or don't match | `applied`; history and local plaintext intact | re-stage those rows and re-apply |
 | **Purge**, with the read-back count | count mismatch | `applied` | redo the archive |
@@ -352,7 +360,7 @@ The orchestrator (#1290) refuses to start unless all of these hold:
 
 **Resume.** On load, an owner device reads `get_workspace_conversion` for each workspace it owns. Abort and abandon are never automatic.
 - **`staging`:** if this device's durable key opens the stored canary, continue, redoing the archive unless its own verifies. Without that key, show "a conversion is in progress" with two choices: paste its key to take over, or abort explicitly.
-- **`applied` or `cleanup_pending`:** with the key, continue from that state. In `cleanup_pending` that means claiming the lease first; if another device holds a live one, wait for it to finish or expire. Without it, prompt for the key. Abandon is offered only when the user confirms the key is lost, and leads into the recovery procedure ([§7](#7-runbook)).
+- **`applied` or `cleanup_pending`:** with the key, continue from that state. Without it, prompt for the key. Abandon is offered only when the user confirms the key is lost, and leads into the recovery procedure ([§7](#7-runbook)).
 
 ## 6. What stays visible afterwards
 
@@ -427,7 +435,10 @@ The first production run is #1288.
 1. **Export first.** On every deferring device, take a raw SQLite export before anything else.
 2. **Abandon** the attempt, if one is live, so the workspace unfreezes and stops stalling uploads.
 3. **Delete the dead workspace.** This hard-deletes on every deferring device too, which is why step 1 comes first. The operator then deletes its remaining `blocks_history` rows and its Storage prefix.
-4. **Import the snapshot** into a new plaintext workspace **with the same ids.** That's only possible after step 3, because block ids are a global primary key. It's lossless only once #401 carries properties and timestamps.
+4. **Restore under the same workspace id** (#1302). Create a plaintext workspace with the dead workspace's id (`create_workspace` takes `p_workspace_id`), then import the snapshot with the same block ids. Both are possible only after step 3, because ids are a global primary key.
+   - A new workspace id would make every workspace-derived deterministic id disagree with what the runtime derives: daily notes, alias seats, kernel and user pages, media and plugin ids. The app would then mint duplicates.
+   - The import is lossless only once #401 carries properties and timestamps.
+5. **Retire the pin on each device**, as a deliberate user gesture (#1302, [§5.7](#57-key-custody)). Every upgraded device holds an `e2ee` pin for that id, which refuses the restored plaintext workspace. That refusal is exactly the downgrade protection, so it is lifted only by an explicit per-device confirmation, never automatically.
 
 ## 8. Platform residue, and when it is "safe if breached"
 
@@ -483,7 +494,11 @@ Rotation differs from this conversion in two places:
 - **Writing the apply's own history and deleting it in the same transaction.** Rejected. It strands a full plaintext-plus-ciphertext copy until a vacuum, and the attempt-scoped setting suppresses it narrowly instead.
 - **Persisting the stage bases and re-checking them at apply.** Rejected. The freeze already guarantees nothing changes in between, and stored unkeyed hashes would outlive the plaintext.
 - **A pre-apply attachment upload phase.** Rejected ([§5.5](#55-attachments)). The cleanup converts every raw object anyway, and the phase would force an abort to clean up Storage.
-- **Running the attachment cleanup without a lease.** Rejected. `AuditIO.listObjects` pages by offset, so one cleaner's deletes can shift objects past another cleaner's next page. That lets a "complete" listing miss a raw object and still pass the proof. The lease makes the listing, its mutations, the proof and `finish` one device's job ([§5.5](#55-attachments)).
+- **A cleanup lease.** Rejected.
+  - It was only ever needed for the listing, and an offset-paged lister isn't stable under another cleaner's deletes.
+  - Listing through a keyset scan of `storage.objects` makes it stable, so nothing depends on mutual exclusion ([§5.5](#55-attachments)).
+  - A lease would also need its own fence for in-flight Storage deletes from a holder whose lease had lapsed.
+- **Reusing the audit's Storage lister for the cleanup.** Rejected: it's server-only, on a secret-tier key that bypasses RLS, and it's offset-paged and folder-virtual ([§5.5](#55-attachments)).
 - **Reporting unexplained attachment objects instead of deleting them.** Rejected. Any writer can store any bytes under any name, so "not content-addressed" proves nothing about plaintext.
 - **Re-keying upload records and the byte store at the pin upgrade.** Rejected. Deriving the upload path at drain time removes every case it had to cover ([§5.5](#55-attachments)).
 - **Repairing a device that copied ciphertext in place.** Rejected, because it would flood `row_events`. Use the gated reset instead.
@@ -503,5 +518,6 @@ Rotation differs from this conversion in two places:
 | Attachment cleanup | #1291 | — |
 | Orchestrating flow, key custody, archive and its decoder | #1290 | #1291, #1292, #1293, #1294 |
 | Platform retention spike | #1289 | — |
-| First production run | #1288 | #719, #1289, #1290, #1293, #1299, #1300, #1301 |
+| First production run | #1288 | #719, #1289, #1290, #1293, #1299, #1300, #1301, #1302 |
+| Key-loss restore under the same id, with user-confirmed pin retirement | #1302 | — |
 | Re-id migration for user-text-derived ids, every e2ee workspace | #1297 | #719 |
