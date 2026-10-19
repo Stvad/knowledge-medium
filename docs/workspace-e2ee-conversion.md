@@ -151,7 +151,8 @@ The phase only moves forward, so a resume never falls back.
 
 **3. Recovery bundle.** One zip, taken right after the flip. The flip changes no row, so the bundle still holds the pre-conversion content. And since every earlier write committed before the flip, nothing but the re-seal can add history after its snapshot ([§6.1](#61-server)).
 - **Writing it** needs a zip save type and a writer that holds the database lock while it copies. `chooseRawSqliteExportFile` offers only `.db`, and the existing zip builder (`getRawSqliteDbBackup`) is the corruption path's, which runs without the lock.
-- **`blocks.jsonl`.** Every block row of the workspace, soft-deleted ones included, read from the server: PostgREST pages by id, every column verbatim. The flip has committed every earlier write and nothing else writes now, so this is a complete point-in-time copy. It's what key-loss recovery restores from ([§8](#8-runbook)). Reading the server rather than this device's database means no download gap or reconnect window can make it stale.
+- **`blocks.jsonl`.** Every block row of the workspace, soft-deleted ones included, read from the server: PostgREST pages by id, every column verbatim, except that **a sealed content column is opened under the workspace key**. So the file is always plaintext, even when it's re-taken after some rows were sealed. It's what key-loss recovery restores from ([§8](#8-runbook)). Reading the server rather than this device's database means no download gap or reconnect window can make it stale.
+  - **It's a consistent snapshot** only if the workspace's history count is the same before and after the paging, since every write to `blocks` adds a history row. Otherwise it's re-read. Right after the flip nothing else writes, so the first read passes.
 - **`local.db`.** The raw SQLite export, for the device-local history (`row_events`, `command_events`). It isn't a restore source.
 - **`server-history.jsonl`.** The workspace's `blocks_history`, which members can read under RLS (`blocks_history_read`).
   1. Read `through` = `coalesce(max(event_id), 0)`.
@@ -162,7 +163,7 @@ The phase only moves forward, so a resume never falls back.
   - Every local byte-store entry of a media block, soft-deleted ones included.
 - **`manifest.json`.** The workspace id, `through`, the line count, a sha256 of each part, and the export time.
 
-The flow **re-opens the file and verifies it**: the hashes match, and `server-history.jsonl`'s `event_id`s strictly increase and end at `through`, or it's empty and `through` is `0`. A workspace whose rows predate the history trigger can have no history at all. It then keeps `through`, the line count and the names of the Storage objects it holds on this device as the **bundle record**. The re-seal never starts without that record. It's cleared when the purge refuses, or once the conversion finishes; the attachment cleaner needs it after the purge.
+The flow **re-opens the file and verifies it**: the hashes match, and `server-history.jsonl`'s `event_id`s strictly increase and end at `through`, or it's empty and `through` is `0`. A workspace whose rows predate the history trigger can have no history at all. It then keeps `through`, the line count and the names of the Storage objects it holds on this device as the **bundle record**. The re-seal never starts without that record. It's cleared once the conversion finishes; the attachment cleaner needs it after the purge.
 
 The bundle is plaintext, as sensitive as the database. Store it on an encrypted volume or as a password-manager attachment. It isn't sealed under the workspace key, because then it would be unreadable exactly when it's needed: after the key is lost. **It's a point-in-time content snapshot, not a rollback.** There's no going back after the flip.
 
@@ -179,9 +180,13 @@ Resuming just runs this again. It can take hours for a large workspace, so the f
 - **A row with no record refuses the run.** Something other than the re-seal sealed it.
 - **The other columns** need no check here, because the purge refuses any write after `through` that touched more than the content columns and `updated_at`.
 
-**6. Purge.** `purge_workspace_history(ws, through, count)`, from the bundle record. The server re-checks all four conditions ([§6.1](#61-server)).
-- **A refusal** means a row isn't sealed or the contract was broken. Nothing is lost. It clears the record, so the next run re-takes the bundle at a later `through`.
-- **A transport error** retries and keeps the record.
+**6. Purge.**
+1. **Re-verify the bundle first.** Re-open the saved file, through the stored file handle or by asking the user to pick it, and check every hash against the bundle record again. The re-seal can take hours, and the file may have been moved or changed meanwhile.
+   - If it can't be read, or doesn't match, the purge doesn't run.
+   - The record is cleared, and the next run re-takes the bundle. History is still on the server, and `blocks.jsonl` opens rows that are already sealed, so the new bundle is as complete as the first.
+2. **Then purge:** `purge_workspace_history(ws, through, count)`, from the bundle record. The server re-checks all four conditions ([§6.1](#61-server)).
+   - **A refusal** means a row isn't sealed or the contract was broken. Nothing is lost, and the record stays: the next run re-seals what's left, verifies and tries again. A refusal that persists with every row sealed is for investigation.
+   - **A transport error** retries.
 
 **7. Pin upgrade on this device** (#1293). Every row is drained into `blocks`, decrypted. Each update is version-only, so #1299 keeps `row_events` clean. Held writes now upload, sealed.
 
@@ -269,7 +274,7 @@ The first production run is #1288.
 12. **Operator:** drop leftover ad-hoc tables from past scripts (`scripts/system-author-cleanup.sql`, `scripts/roam-ts-backfill/backfill.sql`).
 13. **Act on #1289's findings** and record the "safe from" date.
 14. **Take later recovery points.** From time to time, on an unlocked device, take a recovery point and keep it with the key. It's a zip with:
-    - `blocks.jsonl`: every block row read from the server, as in step 3, with its content columns opened under the key. Take it while other devices are idle: paging isn't a transaction, so concurrent edits would make it a mix of moments;
+    - `blocks.jsonl`: every block row read from the server, opened under the key, and checked for consistency exactly as in step 3. A write from any device during the paging, this one included, makes it re-read. Taking it while other devices are idle keeps that rare;
     - **the plaintext of every media block**, soft-deleted ones included. Each comes from the local byte store, or is downloaded and opened under the key, and each is hash-checked;
     - a manifest.
 
