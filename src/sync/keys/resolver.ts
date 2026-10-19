@@ -137,6 +137,10 @@ export const createSyncResolver = (
     const userId = getUserId()
     if (!userId) return 'none'
     if (getModePin(userId, workspaceId) === 'e2ee') return 'e2ee'
+    // Synced, not live: a write queued before this device saw the flip goes out
+    // plaintext, the ciphertext trigger refuses it, and it is quarantined until
+    // Retry after the upgrade (docs/workspace-e2ee-conversion.md §3). Holding it
+    // instead would block the checkpoint that tells the device about the flip.
     try {
       return (await serverSaysE2ee(workspaceId)) ? 'hold' : 'none'
     } catch (err) {
