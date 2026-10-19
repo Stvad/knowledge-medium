@@ -28,6 +28,7 @@ import {
   insertImageToolbarItem,
 } from './insertImageContribution.js'
 import { retryFailedUploadsAction } from './retryUploadsAction.js'
+import { attachmentCleanerIOContribution, cleanupAttachmentsAction } from './cleanupAttachments.js'
 import { uploadLaneDiagnosticSource } from './uploadLaneStatus.js'
 import {
   ASSETS_TYPE_CONTRIBUTION,
@@ -65,6 +66,10 @@ export const attachmentsPlugin: AppExtension = systemToggle({
   // The §9 explicit-user-retry surface: the failed-uploads diagnostics warning's Retry
   // button (and a command-palette entry) force-run recovery over the failed records.
   actionsFacet.of(retryFailedUploadsAction, { source: 'attachments' }),
+  // The attachment cleaner: Storage access for the conversion flow, and the owner's
+  // standalone Clean up attachments gesture.
+  attachmentCleanerIOContribution,
+  actionsFacet.of(cleanupAttachmentsAction, { source: 'attachments' }),
   // Boot recovery for crashed captures (§9) — gated on initial-sync settle.
   appMountsFacet.of({ id: 'attachments.upload-reconciler', component: MediaUploadReconciler }, { source: 'attachments' }),
   // Background replication of the active workspace's bytes to the local store (§8/§9).

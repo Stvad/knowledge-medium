@@ -1,0 +1,110 @@
+// @vitest-environment node
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import type { SupabaseClient } from '@supabase/supabase-js'
+import { ChangeScope } from '@/data/api'
+import { BlockCache } from '@/data/blockCache'
+import { definitionSeedsFacet, typeSeedsFacet } from '@/data/facets'
+import { kernelDataExtension } from '@/data/kernelDataExtension'
+import { Repo } from '@/data/repo'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { trackTestRepo } from '@/data/test/testRepoScope'
+import { resolveFacetRuntimeSync } from '@/facets/facet'
+import { listMediaBlocks, listWorkspaceObjects } from './attachmentCleanerIO.js'
+import { ASSETS_TYPE_CONTRIBUTION, MEDIA_PROPERTY_SCHEMAS, MEDIA_TYPE, MEDIA_TYPE_CONTRIBUTION, mediaHashProp } from './mediaBlock.js'
+
+const WS = 'ws-1'
+
+describe('listMediaBlocks', () => {
+  let sharedDb: TestDb
+  let repo: Repo
+
+  beforeAll(async () => {
+    sharedDb = await createTestDb()
+  })
+  afterAll(async () => {
+    await sharedDb.cleanup()
+  })
+  beforeEach(async () => {
+    await resetTestDb(sharedDb.db)
+    repo = trackTestRepo(new Repo({db: sharedDb.db, cache: new BlockCache(), user: {id: 'user-1'}, blockIdPolicy: 'any'}))
+    repo.setFacetRuntime(
+      resolveFacetRuntimeSync([
+        kernelDataExtension,
+        typeSeedsFacet.of(MEDIA_TYPE_CONTRIBUTION, {source: 'test'}),
+        typeSeedsFacet.of(ASSETS_TYPE_CONTRIBUTION, {source: 'test'}),
+        ...MEDIA_PROPERTY_SCHEMAS.map(s => definitionSeedsFacet.of(s, {source: 'test'})),
+      ]),
+    )
+    repo.setActiveWorkspaceId(WS)
+  })
+  afterEach(() => {
+    repo.stopSyncObserver()
+  })
+
+  const addMedia = async (id: string, orderKey: string, hash: string) => {
+    const snap = repo.snapshotTypeRegistries()
+    await repo.tx(
+      async tx => {
+        await tx.create({id, workspaceId: WS, parentId: null, orderKey, content: ''})
+        await tx.setProperty(id, mediaHashProp, hash)
+        await repo.addTypeInTx(tx, id, MEDIA_TYPE, {}, snap)
+      },
+      {scope: ChangeScope.BlockDefault},
+    )
+  }
+
+  it('includes soft-deleted media blocks, whose attachments must still be converted and kept', async () => {
+    await addMedia('live', 'a0', 'sha256:aaaa')
+    await addMedia('gone', 'a1', 'sha256:bbbb')
+    await repo.tx(tx => tx.delete('gone'), {scope: ChangeScope.BlockDefault})
+    await repo.tx(tx => tx.create({id: 'note', workspaceId: WS, parentId: null, orderKey: 'a2', content: 'not media'}), {
+      scope: ChangeScope.BlockDefault,
+    })
+    // Precondition: the typed query, which the down-lane uses, skips the deleted one.
+    expect((await repo.queryBlocks({workspaceId: WS, types: [MEDIA_TYPE]})).map(b => b.id)).toEqual(['live'])
+    expect(await listMediaBlocks(repo, WS)).toEqual(
+      expect.arrayContaining([
+        {blockId: 'live', contentHash: 'sha256:aaaa'},
+        {blockId: 'gone', contentHash: 'sha256:bbbb'},
+      ]),
+    )
+    expect(await listMediaBlocks(repo, WS)).toHaveLength(2)
+  })
+})
+
+describe('listWorkspaceObjects', () => {
+  /** A Storage list over `objects`: the entries directly under a prefix, a
+   *  nested folder as an entry with a null id, `limit`/`offset` by name. */
+  const fakeClient = (objects: readonly string[]) => {
+    const calls: {prefix: string; offset: number}[] = []
+    const list = async (prefix: string, {limit, offset}: {limit: number; offset: number}) => {
+      calls.push({prefix, offset})
+      const under = objects.filter(o => o.startsWith(`${prefix}/`)).map(o => o.slice(prefix.length + 1))
+      const entries = [...new Set(under.map(rest => rest.split('/')[0]))].sort().map(name => ({
+        name,
+        id: under.includes(name) ? `id-${name}` : null,
+      }))
+      return {data: entries.slice(offset, offset + limit), error: null}
+    }
+    return {client: {storage: {from: () => ({list})}} as unknown as SupabaseClient, calls}
+  }
+
+  it('lists every object, recursing into nested folders, relative to the workspace folder', async () => {
+    const {client} = fakeClient([`${WS}/aa`, `${WS}/dir/bb`, `${WS}/dir/deeper/cc`, 'other-ws/dd'])
+    expect(await listWorkspaceObjects(client, WS)).toEqual(['aa', 'dir/bb', 'dir/deeper/cc'])
+  })
+
+  it('pages a folder until a short page', async () => {
+    const names = Array.from({length: 2500}, (_, i) => `${WS}/${String(i).padStart(6, '0')}`)
+    const {client, calls} = fakeClient(names)
+    expect(await listWorkspaceObjects(client, WS)).toHaveLength(2500)
+    expect(calls.map(c => c.offset)).toEqual([0, 1000, 2000])
+  })
+
+  it('throws on a failed page rather than acting on a partial listing', async () => {
+    const client = {
+      storage: {from: () => ({list: async () => ({data: null, error: new Error('503')})})},
+    } as unknown as SupabaseClient
+    await expect(listWorkspaceObjects(client, WS)).rejects.toThrow('503')
+  })
+})

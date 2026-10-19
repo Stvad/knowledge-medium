@@ -1,0 +1,21 @@
+/**
+ * The seam the conversion flow reaches the attachment cleaner's Storage through
+ * ({@link AttachmentCleanerIO}). Core declares it; the attachments plugin, which
+ * owns Storage access, the byte store and the media type, supplies the impl. With
+ * the plugin off it yields null, and the flow can't prove the folder clean, so it
+ * must not finish the conversion.
+ */
+
+import type { Repo } from '@/data/repo.js'
+import { defineVerbFacet } from '@/facets/verbFacet.js'
+import type { AttachmentCleanerIO } from '@/sync/conversion/attachmentCleaner.js'
+
+export interface AttachmentCleanerIOInput {
+  readonly repo: Repo
+  readonly workspaceId: string
+}
+
+export const attachmentCleanerIOVerb = defineVerbFacet<AttachmentCleanerIOInput, AttachmentCleanerIO | null>({
+  id: 'conversion.attachment-cleaner-io',
+  defaultImpl: () => null,
+})
