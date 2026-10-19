@@ -1,2 +1,2 @@
-import{K6 as e}from"../../../chunks/app-CmBnAiY9.js";var t=e.optionalRef;export{t as optionalRefCodec};
+import{K6 as e}from"../../../chunks/app-BjDa7dih.js";var t=e.optionalRef;export{t as optionalRefCodec};
 //# sourceMappingURL=codecs.js.map

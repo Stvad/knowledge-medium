@@ -1,1 +1,1 @@
-import{py as e}from"../../../chunks/app-CmBnAiY9.js";export{e as WorkspaceSettingsDialog};
+import{py as e}from"../../../chunks/app-BjDa7dih.js";export{e as WorkspaceSettingsDialog};
