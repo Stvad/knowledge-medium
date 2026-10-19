@@ -1,1 +1,1 @@
-import{FT as e,IT as t,PT as n}from"../../chunks/app-J_AQTAp1.js";export{n as DEFAULT_TYPE_COLORS,e as defaultTypeColor,t as pickLeastUsedTypeColor};
+import{FT as e,IT as t,PT as n}from"../../chunks/app-C_yLw3Sq.js";export{n as DEFAULT_TYPE_COLORS,e as defaultTypeColor,t as pickLeastUsedTypeColor};

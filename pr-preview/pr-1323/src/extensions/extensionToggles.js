@@ -1,1 +1,1 @@
-import{QD as e,XD as t,YD as n,ZD as r}from"../../chunks/app-J_AQTAp1.js";export{n as extensionDisplayName,t as extensionName,r as userExtensionShellToggle,e as userExtensionToggle};
+import{QD as e,XD as t,YD as n,ZD as r}from"../../chunks/app-C_yLw3Sq.js";export{n as extensionDisplayName,t as extensionName,r as userExtensionShellToggle,e as userExtensionToggle};

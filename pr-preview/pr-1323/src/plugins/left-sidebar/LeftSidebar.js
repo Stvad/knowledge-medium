@@ -1,1 +1,1 @@
-import{_y as e,gy as t,hy as n}from"../../../chunks/app-J_AQTAp1.js";export{n as LeftSidebar,t as LeftSidebarCoreSection,e as LeftSidebarShortcutsSection};
+import{_y as e,gy as t,hy as n}from"../../../chunks/app-C_yLw3Sq.js";export{n as LeftSidebar,t as LeftSidebarCoreSection,e as LeftSidebarShortcutsSection};
