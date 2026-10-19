@@ -146,7 +146,7 @@ The phase only moves forward, so a resume never falls back.
 - the upload queue is drained, attachment records included, and no rejected rows are pending;
 - `canPersistPins()` passes, and the key store is durable (not `createWorkspaceKeyStore`'s in-memory fallback);
 - the File System Access API is available (desktop Chromium), because the bundle is a folder written through its directory picker and re-opened to verify it;
-- the user confirms the residue named in [§7](#7-what-stays-visible-afterwards), disk headroom ([§8](#8-runbook)), free space for the bundle, and any media block with no **hash-verified** source: no local copy, and no raw object whose bytes hash to the block's content hash. Storage objects are untrusted, so a remote-only object is downloaded and checked here. No step after the flip can bring those back. Its size is shown: the database, the attachment bytes, the server history and `blocks.jsonl`. A dry run of step 3's paging measures the last two without writing anything. A bundle that can't be written after the flip leaves every device waiting until it is.
+- the user confirms the residue named in [§7](#7-what-stays-visible-afterwards), disk headroom ([§8](#8-runbook)), free space for the bundle, and any media block with no **hash-verified** source: no local copy, and no raw object whose bytes hash to the block's content hash. Storage objects are untrusted, so a remote-only object is downloaded and checked here, then **kept in this device's byte store**. Step 3 takes it from there, so an object that's deleted or replaced on the server after preflight can't break the bundle after the flip. Disk headroom counts these bytes. No step after the flip can bring those back. Its size is shown: the database, the attachment bytes, the server history and `blocks.jsonl`. A dry run of step 3's paging measures the last two without writing anything. A bundle that can't be written after the flip leaves every device waiting until it is.
 
 **1. Key.**
 - If this device already holds a key record for the workspace, from an earlier attempt that didn't flip, the run reuses it. The user saved that key, and a late-committing flip would carry its canary.
@@ -213,7 +213,7 @@ Resuming just runs this again. It can take hours for a large workspace, so the f
 - **One verification helper**, shared with the resolver, the upload drain and upload recovery.
 - **Repeat until a complete listing needs no action:**
   1. List `<ws>/` **completely before acting**. Page by name, and recurse into the folder entries Storage returns for nested paths.
-  2. **Raw:** seal it, upload it to its keyed name, verify the upload (a 409 on an occupied path goes through the same check), then delete the raw object.
+  2. **Raw:** seal it, upload it to its keyed name, verify the upload, then delete the raw object. A 409 on an occupied keyed path goes through the same check. If the occupant fails it, the occupant is a poisoned or wrong-key copy of bytes this pass holds verified, so delete it and upload again. The Storage policy allows exactly that delete, for poison correction.
   3. **Keyed:** keep it.
   4. **Neither:** delete it if the bundle record names it (it was archived under `other-objects/`). Otherwise leave it and report it; it never stops the pass, so every raw object is still reached. A standalone run has no bundle record, so it converts raw objects and only reports the rest, such as objects kept from an old key after a key-loss recovery.
 - **The proof:**
