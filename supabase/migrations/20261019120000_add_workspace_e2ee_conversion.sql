@@ -20,8 +20,8 @@ begin;
 -- 'sealing': the server may still hold plaintext; no device may unlock.
 -- 'cleaning': only attachment cleanup is left.
 -- Members read it over PostgREST. Only the three RPCs below write it: RLS
--- has no write policy and the client roles hold no write grant. It is not
--- in the PowerSync sync config.
+-- has no write policy, and no API role holds a write grant, service_role
+-- included (it bypasses RLS). It is not in the PowerSync sync config.
 create table public.workspace_conversions (
     workspace_id text primary key
         references public.workspaces (id) on delete cascade,
@@ -37,8 +37,8 @@ create policy workspace_conversions_read on public.workspace_conversions
     for select to authenticated
     using (private.is_workspace_member(workspace_id, (auth.uid())::text));
 
-revoke all on table public.workspace_conversions from anon, authenticated;
-grant select on table public.workspace_conversions to authenticated;
+revoke all on table public.workspace_conversions from public, anon, authenticated, service_role;
+grant select on table public.workspace_conversions to authenticated, service_role;
 
 -- ── the admit ───────────────────────────────────────────────────────────
 -- encryption_mode and wk_canary change only by the flip, none -> e2ee with a

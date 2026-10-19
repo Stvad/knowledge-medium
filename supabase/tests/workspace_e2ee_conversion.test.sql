@@ -17,7 +17,7 @@ BEGIN;
 CREATE EXTENSION IF NOT EXISTS pgtap WITH SCHEMA extensions;
 SET LOCAL search_path TO public, extensions;
 
-SELECT plan(59);
+SELECT plan(60);
 
 CREATE TEMP TABLE conv_ctx AS
 SELECT
@@ -314,6 +314,13 @@ SELECT is(
     format('DELETE FROM public.workspace_conversions WHERE workspace_id = %L', pg_temp.ws())),
   '42501: permission denied for table workspace_conversions',
   'the owner cannot end the conversion directly'
+);
+
+SELECT is(
+  pg_temp.probe('service_role', NULL,
+    format($$UPDATE public.workspace_conversions SET phase = 'cleaning' WHERE workspace_id = %L$$, pg_temp.ws())),
+  '42501: permission denied for table workspace_conversions',
+  'service_role, which bypasses RLS, cannot write conversion rows either'
 );
 
 SELECT is(

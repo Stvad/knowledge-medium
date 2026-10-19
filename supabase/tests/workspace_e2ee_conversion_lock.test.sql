@@ -17,7 +17,7 @@ BEGIN;
 CREATE EXTENSION IF NOT EXISTS pgtap WITH SCHEMA extensions;
 SET LOCAL search_path TO public, extensions;
 
-SELECT plan(22);
+SELECT plan(23);
 
 SELECT rolsuper AS conv_lock_is_super FROM pg_roles WHERE rolname = current_user \gset
 
@@ -334,6 +334,7 @@ SELECT is(
 SELECT pg_temp.begin_as_owner('conv_setup');
 SELECT pg_temp.remote('conv_setup', pg_temp.flip_sql((pg_temp.ctx()).ws_e));
 SELECT pg_temp.remote('conv_setup', 'COMMIT');
+CREATE TEMP TABLE conv_lock_flipped_at AS SELECT clock_timestamp() AS at;
 
 INSERT INTO conv_lock_bundle
 SELECT workspace_id, max(event_id), count(*)
@@ -366,6 +367,12 @@ SELECT matches(pg_temp.async_outcome('conv_writer'),
   'and is refused on the phase once the first commits');
 SELECT pg_temp.remote('conv_writer', 'ROLLBACK');
 
+SELECT ok(
+  (SELECT updated_at FROM public.workspace_conversions WHERE workspace_id = (pg_temp.ctx()).ws_e)
+    > (SELECT at FROM conv_lock_flipped_at),
+  'the purge stamps updated_at'
+);
+
 SELECT pg_temp.begin_as_owner('conv_flipper');
 SELECT pg_temp.remote('conv_flipper', pg_temp.finish_sql((pg_temp.ctx()).ws_e));
 
@@ -395,7 +402,7 @@ SELECT dblink_disconnect(name) FROM conv_lock_pids;
 
 \else
 
-SELECT skip('dblink connects back only as a superuser; run with pnpm check:db', 22);
+SELECT skip('dblink connects back only as a superuser; run with pnpm check:db', 23);
 
 \endif
 
