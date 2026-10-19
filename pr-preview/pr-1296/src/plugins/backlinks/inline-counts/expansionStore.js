@@ -1,1 +1,1 @@
-import{Df as e,Ef as t}from"../../../../chunks/app-DE37Ct5Z.js";export{t as toggleBacklinkExpansion,e as useBacklinkExpansion};
+import{Df as e,Ef as t}from"../../../../chunks/app-12_jXJeR.js";export{t as toggleBacklinkExpansion,e as useBacklinkExpansion};

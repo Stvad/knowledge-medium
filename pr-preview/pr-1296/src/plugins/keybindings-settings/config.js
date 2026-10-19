@@ -1,1 +1,1 @@
-import{DC as e,EC as t,OC as n,TC as r,kC as i}from"../../../chunks/app-DE37Ct5Z.js";export{r as keybindingOverridesCodec,t as keybindingOverridesPresetCore,e as keybindingOverridesProp,n as keybindingsPrefsType,i as overrideEntryKey};
+import{DC as e,EC as t,OC as n,TC as r,kC as i}from"../../../chunks/app-12_jXJeR.js";export{r as keybindingOverridesCodec,t as keybindingOverridesPresetCore,e as keybindingOverridesProp,n as keybindingsPrefsType,i as overrideEntryKey};
