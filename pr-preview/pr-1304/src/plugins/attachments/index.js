@@ -1,0 +1,1 @@
+import{lm as e}from"../../../chunks/app-zJzKOghQ.js";export{e as attachmentsPlugin};

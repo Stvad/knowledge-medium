@@ -1,0 +1,1 @@
+import{wM as e}from"../../chunks/app-zJzKOghQ.js";export{e as buildPropertyPanelSections};

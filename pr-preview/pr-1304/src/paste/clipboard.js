@@ -1,0 +1,1 @@
+import{fA as e}from"../../chunks/app-zJzKOghQ.js";export{e as readClipboardContent};

@@ -1,0 +1,1 @@
+import{am as e}from"../../../chunks/app-zJzKOghQ.js";export{e as richPastePlugin};

@@ -1,0 +1,1 @@
+import{Pc as e}from"../../../chunks/app-zJzKOghQ.js";export{e as resolveDailyPage};
