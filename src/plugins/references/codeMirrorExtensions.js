@@ -1,1 +1,1 @@
-import{Tp as e,wp as t}from"../../../chunks/app-Dj7-Mq7U.js";export{t as aliasCompletions,e as referencesCodeMirrorExtensions};
+import{Tp as e,wp as t}from"../../../chunks/app-BZp04RRc.js";export{t as aliasCompletions,e as referencesCodeMirrorExtensions};
