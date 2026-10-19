@@ -198,7 +198,9 @@ export async function* serverPages(
 
 export interface SealTarget {
   /** The server row as just read: its identity binds the AAD, and its version
-   *  is the patch's base. */
+   *  is the patch's base. The base versions the write but is no compare-and-swap:
+   *  a writer between the read and the send is excluded by the single-client
+   *  contract, which the gate enforces while sealing, rather than caught here. */
   readonly row: ServerBlockRow
   readonly plaintext: ContentColumns
 }
