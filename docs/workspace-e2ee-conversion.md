@@ -110,7 +110,10 @@ Without this, two owner tabs could interleave. An `abort` could delete the attem
 - **Attachment inserts.** A plaintext-mode insert is refused when it lands.
   - Each upload declares the mode it was encoded under in its Storage metadata: `kmMode`, which storage-js sends as `x-metadata` and stores as `user_metadata`.
   - The `attachments` INSERT policy (`20260625000000_add_attachments_storage.sql`) calls `private.attachment_insert_admitted(ws, kmMode)`. That function refuses `kmMode = 'none'` under a workspace that is frozen or e2ee.
-  - The conversion's own keyed uploads declare `e2ee`. Uploads without the field come from older builds, which the runbook excludes, and are admitted.
+  - The conversion's own keyed uploads declare `e2ee`. Under a frozen or e2ee workspace, **anything that doesn't declare `e2ee` is refused**, and a missing field counts as plaintext.
+    - That fails closed for any build that predates the declaration: a device the fleet preflight missed, or a member who accepts an invitation mid-conversion on a cached build (`accept_invitation` just inserts a membership row).
+    - Membership therefore needs no freeze of its own. Both write surfaces fail closed for whoever is a member.
+    - **Deploy order:** ship the declaring client to every device first, then the policy. Otherwise old-build uploads to an *existing* e2ee workspace start being refused.
 - **Attachment uploads also defer on the client.** A build with #1293 checks `workspace_upload_mode` before every upload and defers while frozen ([§5.2](#52-client-a-plaintext-pinned-device-that-sees-e2ee)). The insert-time check is the guarantee; this check spares most uploads a refusal.
 
 **`begin` is serialized against writes already in flight, on both surfaces.** A write whose check read a snapshot from before the attempt row existed could otherwise commit after `begin`, behind a stage check or a cleanup listing that had already run.
@@ -310,7 +313,7 @@ The keyed-path and sealing logic already exists, in `src/sync/crypto/contentKey.
 - A plaintext-mode insert into a frozen or e2ee workspace is refused when it lands ([§5.1](#51-server-freeze-stage-apply-abort)), whenever the client checked.
 - Until `finish`, no build with #1293 even tries to upload to the workspace.
 - Keyed uploads after `finish` are ciphertext by construction.
-- An old build is excluded by the runbook. If one is missed, the periodic ciphertext audit is the detector.
+- An old build that omits `kmMode` is refused like a plaintext-mode one, so it fails closed rather than relying on the runbook. The periodic ciphertext audit remains a detector for anything that slips past the premises in [§5.1](#51-server-freeze-stage-apply-abort).
 
 **The existing ciphertext audit** (`src/plugins/attachments/audit/`) checks the `encb:v1:` magic and a minimum length (`supabaseAuditIO.ts`) without authenticating anything. So it's a detector and not the proof: a plaintext file that happens to start with those bytes would pass it. The 6-hourly audit workflow will flag the workspace between the apply and step 2; that's expected.
 
@@ -477,6 +480,16 @@ Rotation (`docs/e2ee-design.html` §14, unbuilt) needs four of this conversion's
 It also needs the re-id migration of [§6](#6-what-stays-visible-afterwards) (#1297), because K_id-derived ids (synthesized definitions, keyed media ids, and alias seats once #719 lands) all change with K_id.
 
 Plaintext → e2ee is that operation starting from "no key". The stage base is computed over the wire value, so it works unchanged when the source is old-key ciphertext. So the freeze / stage / apply RPCs, the sealed-image builder and the attachment pass should be written over a *source* key that may be absent, not with "plaintext" hard-coded. Rotation then adds one admitted transition (`e2ee → e2ee` with a new canary) and a decrypt step, instead of a second machine. Rotation itself is deliberately not built here.
+
+**The attachment cleanup generalizes the same way, with one difference rotation must design for.**
+
+- [§5.4](#54-attachments) recognizes a *source* object by whether its name is the source content key of its content. For a plaintext source that's `hex(sha256(bytes))`, which can be checked from the bytes alone.
+- Under rotation the source key is `hex(HMAC(K_old, h))`.
+  - **Old-key objects whose hash is known**, from the workspace's media blocks, can be recognized. Rotation converts them (decrypt under the old key, seal under the new one) and deletes the old copy once the replacement is verified.
+  - **Old-key orphans whose hash isn't known** can't be recognized. Their AAD needs `h`, so they can't be authenticated either.
+- Leaving those orphans is not acceptable under rotation, because whoever holds the retired key can read them.
+  - So rotation must record each intended new-key path **before** uploading it. Then a crash can never leave an unrecorded upload of its own.
+  - After that, it can delete every object outside the new K, which the conversion deliberately doesn't do ([§11](#11-alternatives-considered)).
 
 ## 11. Alternatives considered
 
