@@ -1,1 +1,1 @@
-import{vp as e}from"../../../chunks/app-BYcraf8t.js";export{e as referencesPlugin};
+import{vp as e}from"../../../chunks/app-BrOTCXDh.js";export{e as referencesPlugin};

@@ -1,1 +1,1 @@
-import{lM as e,uM as t}from"../../../chunks/app-BYcraf8t.js";export{e as HIDDEN_SECTION,t as buildPropertyPanelModel};
+import{lM as e,uM as t}from"../../../chunks/app-BrOTCXDh.js";export{e as HIDDEN_SECTION,t as buildPropertyPanelModel};

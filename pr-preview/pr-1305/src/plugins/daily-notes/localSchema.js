@@ -1,1 +1,1 @@
-import{kB as e}from"../../../chunks/app-BYcraf8t.js";export{e as dailyNotesLocalSchema};
+import{kB as e}from"../../../chunks/app-BrOTCXDh.js";export{e as dailyNotesLocalSchema};
