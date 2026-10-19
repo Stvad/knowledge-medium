@@ -1,1 +1,1 @@
-import{gI as e,hI as t}from"../../../chunks/app-BIYsilf6.js";export{t as floatingAnchorFromRect,e as useAnchoredFloating};
+import{gI as e,hI as t}from"../../../chunks/app-BUKIrPTl.js";export{t as floatingAnchorFromRect,e as useAnchoredFloating};

@@ -1,1 +1,1 @@
-import{KS as e}from"../../../chunks/app-BIYsilf6.js";export{e as dailyNotesDeletionGuard};
+import{KS as e}from"../../../chunks/app-BUKIrPTl.js";export{e as dailyNotesDeletionGuard};

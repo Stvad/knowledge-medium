@@ -1,1 +1,1 @@
-import{_d as e,gd as t,vd as n,yd as r}from"../../../../chunks/app-BIYsilf6.js";export{t as BlockRefError,e as MIN_ID_PREFIX,n as resolveBlockRef,r as shortIds};
+import{_d as e,gd as t,vd as n,yd as r}from"../../../../chunks/app-BUKIrPTl.js";export{t as BlockRefError,e as MIN_ID_PREFIX,n as resolveBlockRef,r as shortIds};

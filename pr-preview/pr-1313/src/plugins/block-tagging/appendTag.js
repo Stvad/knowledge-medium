@@ -1,1 +1,1 @@
-import{Cs as e,ws as t}from"../../../chunks/app-BIYsilf6.js";export{e as appendTagToBlocks,t as appendTagToContent};
+import{Cs as e,ws as t}from"../../../chunks/app-BUKIrPTl.js";export{e as appendTagToBlocks,t as appendTagToContent};

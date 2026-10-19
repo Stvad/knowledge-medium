@@ -1,1 +1,1 @@
-import{wy as e}from"../../../chunks/app-BIYsilf6.js";export{e as CreateWorkspaceDialog};
+import{wy as e}from"../../../chunks/app-BUKIrPTl.js";export{e as CreateWorkspaceDialog};

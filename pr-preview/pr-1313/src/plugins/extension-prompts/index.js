@@ -1,1 +1,1 @@
-import{_E as e,vE as t}from"../../../chunks/app-BIYsilf6.js";export{e as ExtensionPromptSurface,t as extensionPromptsExtension};
+import{_E as e,vE as t}from"../../../chunks/app-BUKIrPTl.js";export{e as ExtensionPromptSurface,t as extensionPromptsExtension};

@@ -1,1 +1,1 @@
-import{iO as e,rO as t}from"../../chunks/app-BIYsilf6.js";export{t as BlockChildren,e as BlockComponent};
+import{iO as e,rO as t}from"../../chunks/app-BUKIrPTl.js";export{t as BlockChildren,e as BlockComponent};

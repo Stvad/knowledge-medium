@@ -1,1 +1,1 @@
-import{mf as e}from"../../../chunks/app-BIYsilf6.js";export{e as updateIndicatorPlugin};
+import{mf as e}from"../../../chunks/app-BUKIrPTl.js";export{e as updateIndicatorPlugin};

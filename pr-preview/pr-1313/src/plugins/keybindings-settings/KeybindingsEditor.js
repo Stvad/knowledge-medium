@@ -1,1 +1,1 @@
-import{_t as e}from"../../../chunks/app-BIYsilf6.js";export{e as KeybindingsEditor};
+import{_t as e}from"../../../chunks/app-BUKIrPTl.js";export{e as KeybindingsEditor};

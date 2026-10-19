@@ -1,1 +1,1 @@
-import{RM as e,zM as t}from"../../../chunks/app-BIYsilf6.js";export{e as declarationOnlyDefinitionForName,t as declarationOnlyStatusText};
+import{RM as e,zM as t}from"../../../chunks/app-BUKIrPTl.js";export{e as declarationOnlyDefinitionForName,t as declarationOnlyStatusText};

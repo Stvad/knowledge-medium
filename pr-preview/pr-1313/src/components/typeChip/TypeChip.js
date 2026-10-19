@@ -1,1 +1,1 @@
-import{hT as e}from"../../../chunks/app-BIYsilf6.js";export{e as TypeChip};
+import{hT as e}from"../../../chunks/app-BUKIrPTl.js";export{e as TypeChip};

@@ -1,1 +1,1 @@
-import{xI as e}from"../../../chunks/app-BIYsilf6.js";export{e as propertyShapeLabel};
+import{xI as e}from"../../../chunks/app-BUKIrPTl.js";export{e as propertyShapeLabel};

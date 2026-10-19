@@ -1,1 +1,1 @@
-import{iF as e,rF as t}from"../../chunks/app-BIYsilf6.js";export{t as isIOS,e as isMacPlatform};
+import{iF as e,rF as t}from"../../chunks/app-BUKIrPTl.js";export{t as isIOS,e as isMacPlatform};
