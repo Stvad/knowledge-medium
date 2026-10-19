@@ -1,1 +1,0 @@
-import{AM as e}from"../../../chunks/app-Bi-wPL8M.js";export{e as AddPropertyForm};

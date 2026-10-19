@@ -1,1 +1,0 @@
-import{Ck as e,Sk as t}from"../../chunks/app-Bi-wPL8M.js";export{t as useIsMobile,e as usePointerCoarse};
