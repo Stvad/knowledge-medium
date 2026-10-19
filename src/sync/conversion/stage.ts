@@ -14,7 +14,7 @@ export type ConversionStage =
   /** Phase `cleaning`: pin upgrade → attachments → `finish_conversion`. */
   | {readonly kind: 'cleaning'; readonly canary: string}
   /** Mode `e2ee` with no conversion row: nothing is left to do. */
-  | {readonly kind: 'done'}
+  | {readonly kind: 'done'; readonly canary: string}
 
 export type StageRead =
   | {readonly kind: 'stage'; readonly stage: ConversionStage}
@@ -36,7 +36,7 @@ export const stageOf = (read: WorkspaceConversionRead, userId: string): StageRea
   if (encryptionMode !== 'e2ee' || !wkCanary) {
     return {kind: 'unexpected', detail: `mode ${encryptionMode}, phase ${conversionPhase ?? 'none'}`}
   }
-  if (conversionPhase === null) return {kind: 'stage', stage: {kind: 'done'}}
+  if (conversionPhase === null) return {kind: 'stage', stage: {kind: 'done', canary: wkCanary}}
   if (conversionPhase === 'unknown') return {kind: 'unexpected', detail: 'a conversion phase this version of the app does not know'}
   return {kind: 'stage', stage: {kind: conversionPhase, canary: wkCanary}}
 }

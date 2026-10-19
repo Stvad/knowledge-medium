@@ -99,6 +99,24 @@ const scanServer = async (server: ConversionServer, workspaceId: string, signal?
   }
 }
 
+/** The blockers this device can change on its own at any moment: checked in
+ *  preflight, and again right before the flip, since the prompts in between
+ *  can stay open indefinitely. */
+export const localBlockers = async (
+  environment: PreflightEnvironment,
+  signal?: AbortSignal,
+): Promise<PreflightBlocker[]> => {
+  const blockers: PreflightBlocker[] = []
+  if (!environment.canPersistPins()) blockers.push({kind: 'pins-not-durable'})
+  if (!environment.keyStoreIsDurable) blockers.push({kind: 'key-store-not-durable'})
+  if (!environment.supportsDirectoryPicker) blockers.push({kind: 'no-directory-picker'})
+
+  const queue = await environment.uploadQueue(signal)
+  if (queue.pending > 0) blockers.push({kind: 'pending-uploads', count: queue.pending})
+  if (queue.rejected > 0) blockers.push({kind: 'rejected-uploads', count: queue.rejected})
+  return blockers
+}
+
 export const runPreflight = async ({
   server,
   workspaceId,
@@ -110,17 +128,8 @@ export const runPreflight = async ({
   readonly environment: PreflightEnvironment
   readonly signal?: AbortSignal
 }): Promise<PreflightReport> => {
-  const blockers: PreflightBlocker[] = []
-  if (!environment.canPersistPins()) blockers.push({kind: 'pins-not-durable'})
-  if (!environment.keyStoreIsDurable) blockers.push({kind: 'key-store-not-durable'})
-  if (!environment.supportsDirectoryPicker) blockers.push({kind: 'no-directory-picker'})
-
-  const queue = await environment.uploadQueue(signal)
-  if (queue.pending > 0) blockers.push({kind: 'pending-uploads', count: queue.pending})
-  if (queue.rejected > 0) blockers.push({kind: 'rejected-uploads', count: queue.rejected})
-
+  const blockers = await localBlockers(environment, signal)
   const scan = await scanServer(server, workspaceId, signal)
   if (scan.sealedLooking.length > 0) blockers.push({kind: 'sealed-looking-rows', blockIds: scan.sealedLooking})
-
   return {blockers, sizes: {...scan.sizes, localDbBytes: await environment.localDbBytes()}}
 }

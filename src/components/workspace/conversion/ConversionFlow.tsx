@@ -514,7 +514,7 @@ function ResultView({result, retry, onClose}: {result: ConversionRunResult; retr
         <>
           <Explanation>The workspace can't be converted yet:</Explanation>
           <ul className="list-disc space-y-1 pl-5 text-sm">
-            {result.report.blockers.map(blocker => <li key={blocker.kind}>{BLOCKER_TEXT(blocker)}</li>)}
+            {result.blockers.map(blocker => <li key={blocker.kind}>{BLOCKER_TEXT(blocker)}</li>)}
           </ul>
           <Actions primary={again} secondary={close}/>
         </>

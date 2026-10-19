@@ -258,6 +258,17 @@ describe('runConversion: preflight → key → flip', () => {
     expect(flips()).toBe(1)
   })
 
+  it('checks the upload queue again right before the flip', async () => {
+    let checks = 0
+    // An upload lands while the user saves the key.
+    const uploadQueue = async () => ({pending: ++checks > 1 ? 2 : 0, rejected: 0})
+
+    expect(await run({preflight: passingEnvironment({uploadQueue})}))
+      .toEqual({kind: 'preflight-failed', blockers: [{kind: 'pending-uploads', count: 2}]})
+    expect(ui.keyPrompts).toHaveLength(1)
+    expect(flips()).toBe(0)
+  })
+
   it('refuses before showing a key this device could not keep', async () => {
     vi.spyOn(keyStore, 'put').mockRejectedValue(new Error('QuotaExceededError'))
 
@@ -331,7 +342,7 @@ describe('runConversion: preflight', () => {
     expect(ui.keyPrompts).toEqual([])
     expect(flips()).toBe(0)
     if (result.kind !== 'preflight-failed') throw new Error(`expected a failed preflight, got ${result.kind}`)
-    return result.report.blockers
+    return result.blockers
   }
 
   it('refuses a plaintext row the re-seal would count as sealed', async () => {
@@ -416,12 +427,14 @@ describe('runConversion: every run', () => {
     expect(await keyStore.get(USER, WS)).toBeNull()
   })
 
-  it('reports a finished conversion without asking anything', async () => {
-    server.flip(WS, (await mintWorkspaceKey(WS)).canary)
+  it('reports a finished conversion without asking anything, and marks the local row', async () => {
+    const minted = await mintWorkspaceKey(WS)
+    server.flip(WS, minted.canary)
     server.setPhase(WS, null)
 
     expect(await run()).toEqual({kind: 'done'})
     expect(ui.contracts).toEqual([])
+    expect(localCanaries).toEqual([minted.canary])
   })
 
   it('resumes from the stage the server shows', async () => {

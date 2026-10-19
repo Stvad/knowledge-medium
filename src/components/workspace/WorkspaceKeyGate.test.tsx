@@ -197,7 +197,7 @@ describe('WorkspaceKeyGate — server-e2ee', () => {
     state = {...state, conversionPhase: 'sealing'}
     renderGate()
     fireEvent.click(await screen.findByRole('button', {name: /continue the conversion/i}))
-    expect(conversionTarget()).toEqual({workspaceId: WS, workspaceName: 'Vault'})
+    expect(conversionTarget()).toEqual({userId: USER, workspaceId: WS, workspaceName: 'Vault'})
     cleanup()
     closeConversionFlow()
 

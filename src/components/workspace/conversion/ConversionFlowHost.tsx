@@ -1,25 +1,38 @@
 import * as DialogPrimitive from '@radix-ui/react-dialog'
-import { useCallback, useMemo } from 'react'
+import { useCallback, useEffect, useMemo } from 'react'
 import { ErrorBoundary, type FallbackProps } from 'react-error-boundary'
 import { Button } from '@/components/ui/button'
 import { useIsLocalOnly } from '@/components/Login'
 import { Explanation, GateCard } from '@/components/workspace/keyUi'
 import { useRepo } from '@/context/repo'
+import { cancelArmedHolds } from '@/shortcuts/holdRegistry'
 import type { ConversionUi } from '@/sync/conversion/runConversion'
 import { ConversionFlow } from './ConversionFlow'
 import { conversionFlowDeps, conversionUnavailable } from './conversionFlowDeps'
 import { closeConversionFlow, useConversionFlowTarget, type ConversionFlowTarget } from './conversionFlowStore'
 
 const preventDefault = (event: Event) => event.preventDefault()
+const keepFromShortcuts = (event: {stopPropagation(): void}) => event.stopPropagation()
 
 /**
  * Shows the open conversion flow over whatever the app renders below it, the
- * workspace or its gate. Modal: focus stays inside, and no key reaches the
- * app's shortcuts, which listen on the window, so nothing is written to the
- * workspace from underneath the run. Only the flow's own buttons close it.
+ * workspace or its gate. Modal: focus stays inside, and no keydown or keyup
+ * reaches the app's shortcuts, which listen on the window, so nothing is
+ * written to the workspace from underneath the run. Only the flow's own
+ * buttons close it.
  */
 export function ConversionFlowHost() {
-  const target = useConversionFlowTarget()
+  const repo = useRepo()
+  const opened = useConversionFlowTarget()
+  const target = opened?.userId === repo.user.id ? opened : null
+  useEffect(() => {
+    if (opened && !target) closeConversionFlow()
+  }, [opened, target])
+  // A hold shortcut armed just before the flow opened would fire under it:
+  // the flow swallows the keyup that would cancel it.
+  useEffect(() => {
+    if (target) cancelArmedHolds()
+  }, [target])
   if (!target) return null
   return (
     <DialogPrimitive.Root open>
@@ -30,7 +43,8 @@ export function ConversionFlowHost() {
           onEscapeKeyDown={preventDefault}
           onPointerDownOutside={preventDefault}
           onInteractOutside={preventDefault}
-          onKeyDown={event => event.stopPropagation()}
+          onKeyDown={keepFromShortcuts}
+          onKeyUp={keepFromShortcuts}
         >
           <DialogPrimitive.Title className="sr-only">Encrypt the workspace</DialogPrimitive.Title>
           <ErrorBoundary FallbackComponent={FlowCrashed}>

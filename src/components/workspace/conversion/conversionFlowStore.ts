@@ -9,6 +9,9 @@ import { useSyncExternalStore } from 'react'
 import { CallbackSet } from '@/utils/callbackSet'
 
 export interface ConversionFlowTarget {
+  /** Who opened it: the store outlives a sign-out, and another account never
+   *  sees this one's flow. */
+  readonly userId: string
   readonly workspaceId: string
   readonly workspaceName: string | null
 }

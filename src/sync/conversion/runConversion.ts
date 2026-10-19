@@ -18,7 +18,13 @@ import { obtainFlipKey, requireCanaryKey, type KeyPrompts } from './conversionKe
 import type { ConversionServer } from './conversionServer.js'
 import { flipToE2ee, type FlipOptions, type FlipWait } from './flip.js'
 import type { FlipAttempts } from './flipAttempts.js'
-import { runPreflight, type PreflightEnvironment, type PreflightReport } from './preflight.js'
+import {
+  localBlockers,
+  runPreflight,
+  type PreflightBlocker,
+  type PreflightEnvironment,
+  type PreflightReport,
+} from './preflight.js'
 import { conversionLockName, type ConversionLock } from './runLock.js'
 import {
   runSealingPass,
@@ -86,7 +92,7 @@ export type ConversionRunResult =
   /** Another tab of this browser is running the conversion. */
   | {readonly kind: 'busy'}
   | {readonly kind: 'blocked'; readonly read: Exclude<StageRead, {kind: 'stage'}>}
-  | {readonly kind: 'preflight-failed'; readonly report: PreflightReport}
+  | {readonly kind: 'preflight-failed'; readonly blockers: readonly PreflightBlocker[]}
   | {readonly kind: 'flip-refused'; readonly message: string}
   /** The server showed an earlier stage than this run knows it reached. */
   | {readonly kind: 'stage-moved-back'; readonly reached: StageKind; readonly shown: ConversionStage}
@@ -126,10 +132,12 @@ const runPlaintextStage = async (deps: ConversionFlowDeps): Promise<StageOutcome
   const {server, workspaceId, ui, signal} = deps
   ui.status({kind: 'preflight'})
   const report = await runPreflight({server, workspaceId, environment: deps.preflight, signal})
-  if (report.blockers.length > 0) return {kind: 'preflight-failed', report}
+  if (report.blockers.length > 0) return {kind: 'preflight-failed', blockers: report.blockers}
   await ui.confirmPreflight(report)
 
   const key = await obtainFlipKey({...deps, prompts: ui})
+  const lastChance = await localBlockers(deps.preflight, signal)
+  if (lastChance.length > 0) return {kind: 'preflight-failed', blockers: lastChance}
   let flip
   try {
     flip = await flipToE2ee({
@@ -206,10 +214,17 @@ const runStage = async (
   }
 }
 
+/** A finished conversion still marks the local row: this device's synced copy
+ *  may not have caught up with it yet. */
+const finished = async (deps: ConversionFlowDeps, canary: string): Promise<ConversionRunResult> => {
+  await deps.markLocalConverted(canary)
+  return {kind: 'done'}
+}
+
 const runLocked = async (deps: ConversionFlowDeps): Promise<ConversionRunResult> => {
   const first = await readStage(deps)
   if (first.kind !== 'stage') return {kind: 'blocked', read: first}
-  if (first.stage.kind === 'done') return {kind: 'done'}
+  if (first.stage.kind === 'done') return finished(deps, first.stage.canary)
   await deps.ui.confirmContract(first.stage)
 
   let reached: StageKind = first.stage.kind
@@ -230,7 +245,7 @@ const runLocked = async (deps: ConversionFlowDeps): Promise<ConversionRunResult>
     const next = await readStage(deps)
     if (next.kind !== 'stage') return {kind: 'blocked', read: next}
     if (stageMovedBack(reached, next.stage)) return {kind: 'stage-moved-back', reached, shown: next.stage}
-    if (next.stage.kind === 'done') return {kind: 'done'}
+    if (next.stage.kind === 'done') return finished(deps, next.stage.canary)
     stage = next.stage
   }
 }
