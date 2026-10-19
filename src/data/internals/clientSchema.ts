@@ -17,7 +17,11 @@ import {
   PARENT_DELETED_RAISE_PREFIX,
   RAISE_FIELD_SEP_SQL,
 } from './raiseProtocol'
-import { STAGING_LOCAL_COLUMNS } from '@/data/blockSchema.js'
+import {
+  STAGING_LOCAL_COLUMNS,
+  buildBlockSnapshotJsonSql,
+  buildVersionlessBlockSnapshotSql,
+} from '@/data/blockSchema.js'
 import { SEED_STAGING_NEEDS_APPLY_SQL } from './syncObserver/reconcile.js'
 
 // ============================================================================
@@ -56,15 +60,16 @@ export const SEED_TX_CONTEXT_ROW_SQL = `
 
 /** Per-row audit / change-history log. Trigger-written on every write to
  *  `blocks` — local (`repo.tx`) and sync-applied (observer materialize) alike
- *  — capturing the full before/after row state of each change. `tx_id` = NULL
+ *  — capturing the full before/after row state of each change. An update that
+ *  moves only the row version is not a change and writes nothing. `tx_id` = NULL
  *  for sync-applied writes (see the COALESCE / CASE in the row_events triggers
  *  below); `source` distinguishes 'user' from 'sync'.
  *
  *  This is the substrate for local change history / time-travel, and the ONLY
  *  place an INCOMING sync change is durably recorded — `command_events` covers
  *  local `repo.tx` operations only (mutator-grain), never sync apply. Nothing
- *  reads `row_events` at runtime: the Layout B observer owns invalidation, so
- *  this is a write-only history log.
+ *  reads `row_events` for invalidation (the Layout B observer owns that); its
+ *  readers are the agent-runtime history views and db-mirror's change marker.
  *
  *  Intentionally unbounded — full history is kept and never auto-trimmed. Any
  *  retention policy is a future opt-in, never a silent drop (preserving user
@@ -426,37 +431,15 @@ export const CREATE_BLOCKS_SYNCED_CHANGES_DELETE_TRIGGER_SQL = `
 // row_events triggers (3) — the per-row audit / change-history log. Fire for
 // BOTH local (`repo.tx`) and sync-applied (observer materialize) writes to
 // `blocks`; the COALESCE-to-'sync' tag distinguishes them. Nothing reads
-// row_events at runtime — the Layout B observer owns invalidation — so this is
-// a write-only history substrate (local change-history / time-travel; the only
-// durable record of incoming sync changes).
+// row_events for invalidation — the Layout B observer owns that — so this is a
+// history substrate (local change-history / time-travel; the only durable
+// record of incoming sync changes), read by the agent-runtime history views and
+// db-mirror's change marker.
 //
 // Soft-delete semantics (§4.3): tx.delete sets deleted = 1 (UPDATE), so it
 // fires the UPDATE trigger. The body inspects whether `deleted` transitioned
 // from 0 to 1 and writes kind = 'soft-delete' instead of 'update'.
 // ============================================================================
-
-/** Serializes a blocks row (NEW or OLD) to the JSON snapshot stored in
- *  `row_events.{before,after}_json`. NEW / OLD references resolve at
- *  trigger time. */
-const blockJsonObjectSql = (rowRef: 'NEW' | 'OLD') => `
-      json_object(
-        'id', ${rowRef}.id,
-        'workspaceId', ${rowRef}.workspace_id,
-        'parentId', ${rowRef}.parent_id,
-        'referenceTargetId', ${rowRef}.reference_target_id,
-        'isFieldForm', json(CASE WHEN ${rowRef}.is_field_form = 1 THEN 'true' ELSE 'false' END),
-        'orderKey', ${rowRef}.order_key,
-        'content', ${rowRef}.content,
-        'properties', json(${rowRef}.properties_json),
-        'references', json(${rowRef}.references_json),
-        'createdAt', ${rowRef}.created_at,
-        'updatedAt', ${rowRef}.updated_at,
-        'userUpdatedAt', coalesce(${rowRef}.user_updated_at, ${rowRef}.updated_at),
-        'createdBy', ${rowRef}.created_by,
-        'updatedBy', ${rowRef}.updated_by,
-        'deleted', json(CASE WHEN ${rowRef}.deleted THEN 'true' ELSE 'false' END)
-      )
-`.trim()
 
 /** Belt-and-suspenders source gate for tx_context projections: the column
  *  is the active local tx's value only when source IS NOT NULL. Sync-applied
@@ -492,7 +475,7 @@ export const CREATE_BLOCKS_INSERT_ROW_EVENT_TRIGGER_SQL = `
       NEW.id,
       'create',
       NULL,
-      ${blockJsonObjectSql('NEW')},
+      ${buildBlockSnapshotJsonSql('NEW')},
       ${triggerSourceSql},
       CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
       ${triggerGroupIdSql}
@@ -500,9 +483,13 @@ export const CREATE_BLOCKS_INSERT_ROW_EVENT_TRIGGER_SQL = `
   END
 `
 
+/** An update that moves only the row version is not logged (#1299): it would
+ *  store two full snapshots of a row whose data did not change — for every row,
+ *  on every device, when a workspace is re-sealed. */
 export const CREATE_BLOCKS_UPDATE_ROW_EVENT_TRIGGER_SQL = `
   CREATE TRIGGER IF NOT EXISTS blocks_row_event_update
   AFTER UPDATE ON blocks
+  WHEN ${buildVersionlessBlockSnapshotSql('OLD')} IS NOT ${buildVersionlessBlockSnapshotSql('NEW')}
   BEGIN
     INSERT INTO row_events (
       tx_id, block_id, kind, before_json, after_json, source, created_at, group_id
@@ -513,8 +500,8 @@ export const CREATE_BLOCKS_UPDATE_ROW_EVENT_TRIGGER_SQL = `
         WHEN OLD.deleted = 0 AND NEW.deleted = 1 THEN 'soft-delete'
         ELSE 'update'
       END,
-      ${blockJsonObjectSql('OLD')},
-      ${blockJsonObjectSql('NEW')},
+      ${buildBlockSnapshotJsonSql('OLD')},
+      ${buildBlockSnapshotJsonSql('NEW')},
       ${triggerSourceSql},
       CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
       ${triggerGroupIdSql}
@@ -535,7 +522,7 @@ export const CREATE_BLOCKS_DELETE_ROW_EVENT_TRIGGER_SQL = `
       ${triggerTxIdSql},
       OLD.id,
       'delete',
-      ${blockJsonObjectSql('OLD')},
+      ${buildBlockSnapshotJsonSql('OLD')},
       NULL,
       ${triggerSourceSql},
       CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
@@ -1303,7 +1290,7 @@ const withTriggerRecreate = (statements: readonly string[]): string[] =>
 
 /** Run `fn` with `triggerName` temporarily dropped, then recreate it from
  *  `createSql` (its canonical definition) — even if `fn` throws. For a bulk
- *  maintenance write that must NOT fan out through an unconditional per-row
+ *  maintenance write that must NOT fan out through a per-row
  *  side-effect trigger (e.g. a column backfill that would otherwise write one
  *  `row_events` row per block — hundreds of thousands of them). SQLite has no
  *  `DISABLE TRIGGER`, so drop+recreate is the equivalent; pass the same

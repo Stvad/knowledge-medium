@@ -8,7 +8,9 @@
  * sync-applied ones alike — so its maximum moves exactly when the DATA worth
  * copying moves, and reading it is a rowid lookup rather than a scan. That
  * matters because the alternative is copying multiple gigabytes to discover
- * nothing changed.
+ * nothing changed. An update that moves only a row's version does not advance
+ * it: the copy on disk holds the same data, and sync re-delivers the bump to a
+ * restored copy, whose checkpoint predates it.
  *
  * The other two are the upload queues, and they are in here for a
  * restore-safety reason rather than a data one. THE RULE, so the next reader
