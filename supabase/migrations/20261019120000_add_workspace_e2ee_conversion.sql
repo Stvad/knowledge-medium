@@ -9,9 +9,13 @@
 --   purge_workspace_history     phase 'sealing' -> 'cleaning', history deleted
 --   finish_conversion           phase 'cleaning' -> no conversion row
 --
--- Every refusal from the three RPCs raises SQLSTATE KMC01, so the client can
--- tell "the server said no" from a transport error. A flip that finds writes
--- in flight raises 55P03 instead: it means "retry", not "no".
+-- Refusals carry their own SQLSTATEs, so the client can tell "the server said
+-- no" from a transport error, and knows what to do next:
+--   KMC01  refused: fix the state (re-seal what is left, wait for the phase)
+--          and retry;
+--   KMC02  the purge's recovery bundle is stale: something other than the
+--          re-seal wrote history, so re-take the bundle, then purge again;
+--   55P03  the flip found writes in flight: retry as is.
 
 -- ── workspace_conversions ───────────────────────────────────────────────
 -- One row per conversion in progress; no row means none is.
@@ -113,7 +117,7 @@ end;
 $$;
 
 -- ── refusals ────────────────────────────────────────────────────────────
--- The one owner of the conversion RPCs' refusal SQLSTATE. PostgREST maps an
+-- The owners of the refusal SQLSTATEs (see the header). PostgREST maps an
 -- unknown SQLSTATE to HTTP 400 and returns the code in the body.
 create function private.refuse_conversion(p_message text)
     returns void
@@ -125,8 +129,20 @@ begin
 end;
 $$;
 
+create function private.refuse_stale_bundle(p_message text)
+    returns void
+    language plpgsql
+    set search_path = ''
+    as $$
+begin
+    raise exception '%', p_message using errcode = 'KMC02';
+end;
+$$;
+
 alter function private.refuse_conversion(text) owner to postgres;
+alter function private.refuse_stale_bundle(text) owner to postgres;
 revoke all on function private.refuse_conversion(text) from public, anon, authenticated, service_role;
+revoke all on function private.refuse_stale_bundle(text) from public, anon, authenticated, service_role;
 
 -- ── the flip ────────────────────────────────────────────────────────────
 -- LOCK TABLE blocks IN SHARE MODE conflicts with every block write's ROW
@@ -289,12 +305,12 @@ begin
         from deleted;
 
     if v_archived is distinct from p_archived_count then
-        perform private.refuse_conversion(format(
+        perform private.refuse_stale_bundle(format(
             'purge_workspace_history: %s history row(s) up to event %s, but the bundle archived %s',
             v_archived, p_through_event_id, coalesce(p_archived_count::text, 'null')));
     end if;
     if v_foreign > 0 then
-        perform private.refuse_conversion(format(
+        perform private.refuse_stale_bundle(format(
             'purge_workspace_history: %s history row(s) after event %s are not re-seal writes',
             v_foreign, p_through_event_id));
     end if;

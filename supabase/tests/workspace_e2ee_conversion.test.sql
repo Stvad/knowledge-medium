@@ -8,9 +8,10 @@
 -- residue. The flip's table lock needs two connections and is tested in
 -- workspace_e2ee_conversion_lock.test.sql.
 --
--- Every RPC refusal shares SQLSTATE KMC01, so each refusal test matches the
--- whole message, and each scenario breaks exactly one precondition: with a
--- refusal deleted, its own test is the one that fails.
+-- RPC refusals share SQLSTATE KMC01 (or KMC02, a stale bundle), so each
+-- refusal test matches the whole message, and each scenario breaks exactly
+-- one precondition: with a refusal deleted, its own test is the one that
+-- fails.
 
 BEGIN;
 
@@ -531,7 +532,7 @@ SELECT is(
 SELECT is(
   pg_temp.probe('authenticated', pg_temp.owner_id(),
     pg_temp.purge_sql(pg_temp.ws(), pg_temp.through(), pg_temp.archived() - 1)),
-  format('KMC01: purge_workspace_history: 5 history row(s) up to event %s, but the bundle archived 4',
+  format('KMC02: purge_workspace_history: 5 history row(s) up to event %s, but the bundle archived 4',
          pg_temp.through()),
   'the purge refuses when the count up to through does not match the bundle'
 );
@@ -544,14 +545,14 @@ SELECT is(
              SELECT min(event_id) - 1, %L, %L, 'I', 'create', '{}'::jsonb
              FROM public.blocks_history$$,
            pg_temp.ws() || '-block-late', pg_temp.ws())),
-  format('KMC01: purge_workspace_history: 6 history row(s) up to event %s, but the bundle archived 5',
+  format('KMC02: purge_workspace_history: 6 history row(s) up to event %s, but the bundle archived 5',
          pg_temp.through()),
   'the purge refuses a history row that committed late with an id below the boundary'
 );
 
 SELECT is(
   pg_temp.probe('authenticated', pg_temp.owner_id(), pg_temp.purge_sql(pg_temp.ws(), 0, 0)),
-  'KMC01: purge_workspace_history: 5 history row(s) after event 0 are not re-seal writes',
+  'KMC02: purge_workspace_history: 5 history row(s) after event 0 are not re-seal writes',
   'the purge over through = 0 refuses the plaintext history'
 );
 
@@ -563,7 +564,7 @@ SELECT is(
         'id', pg_temp.ws() || '-block-1',
         'order_key', 'z9',
         'base_updated_at', (SELECT updated_at FROM public.blocks WHERE id = pg_temp.ws() || '-block-1'))))),
-  format('KMC01: purge_workspace_history: 1 history row(s) after event %s are not re-seal writes',
+  format('KMC02: purge_workspace_history: 1 history row(s) after event %s are not re-seal writes',
          pg_temp.through()),
   'the purge refuses a sealed write after through that touched more than the content columns'
 );
@@ -572,7 +573,7 @@ SELECT is(
   pg_temp.probe('authenticated', pg_temp.owner_id(),
     pg_temp.purge_sql(pg_temp.ws(), pg_temp.through(), pg_temp.archived()),
     format('DELETE FROM public.blocks WHERE id = %L', pg_temp.ws() || '-block-3')),
-  format('KMC01: purge_workspace_history: 1 history row(s) after event %s are not re-seal writes',
+  format('KMC02: purge_workspace_history: 1 history row(s) after event %s are not re-seal writes',
          pg_temp.through()),
   'the purge refuses a hard delete after through'
 );
@@ -589,7 +590,7 @@ SELECT is(
                      jsonb_build_object(%L, 'plaintext', 'updated_at', 2))$$,
            pg_temp.ws() || '-block-2', pg_temp.ws(), col,
            col, pg_temp.env('before'), col)),
-  format('KMC01: purge_workspace_history: 1 history row(s) after event %s are not re-seal writes',
+  format('KMC02: purge_workspace_history: 1 history row(s) after event %s are not re-seal writes',
          pg_temp.through()),
   format('the purge refuses a re-seal-shaped history row with a plaintext %s', col)
 )
