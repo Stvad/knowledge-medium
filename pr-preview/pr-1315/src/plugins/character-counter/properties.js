@@ -1,0 +1,1 @@
+import{dV as e,fV as t,pV as n}from"../../../chunks/app-BslrxI7o.js";export{e as charLimitProp,t as charProfileProp,n as charScopeProp};

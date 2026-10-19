@@ -1,0 +1,1 @@
+import{cF as e,lF as t}from"../../chunks/app-BslrxI7o.js";export{e as isIOS,t as isMacPlatform};

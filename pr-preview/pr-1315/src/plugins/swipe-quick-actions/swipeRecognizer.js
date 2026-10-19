@@ -1,0 +1,1 @@
+import{Mw as e,Nw as t,jw as n}from"../../../chunks/app-BslrxI7o.js";export{n as SWIPE_QUICK_ACTIONS_GESTURE_ID,e as SWIPE_TRIGGER_PX,t as swipeRecognizer};

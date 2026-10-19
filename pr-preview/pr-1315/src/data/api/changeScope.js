@@ -1,0 +1,1 @@
+import{$8 as e,J8 as t,K8 as n,Q8 as r,X8 as i,Y8 as a,Z8 as o,e5 as s,q8 as c}from"../../../chunks/app-BslrxI7o.js";export{n as CHANGE_SCOPE_POLICIES,c as ChangeScope,t as isChangeScope,a as policyForScope,i as scopeAllowedInReadOnly,o as scopeIsUndoable,r as scopePoliciesEquivalent,e as scopeUploadsToServer,s as sourceForScope};

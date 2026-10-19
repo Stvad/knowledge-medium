@@ -1,0 +1,1 @@
+import{DE as e,EE as t}from"../../../chunks/app-BslrxI7o.js";export{t as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,e as openExtensionsSettingsAction};
