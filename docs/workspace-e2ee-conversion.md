@@ -42,7 +42,7 @@ The user converts from **one device, in one tab**, and confirms that every other
 | …writes blocks before the flip | Included. The flip waits for every in-flight write to commit ([§6.1](#61-server)), the bundle's history snapshot is taken after it, and the re-seal reads the server. |
 | …writes blocks after the flip | The ciphertext trigger refuses the plaintext write ([§6.1](#61-server)). That device quarantines it, recoverable with **Retry** once it unlocks. Nothing leaks. |
 | …tries to unlock the workspace mid-conversion | Refused: no device unlocks or upgrades its pin while the workspace's conversion phase is `sealing` ([§6.2](#62-client-prerequisites)). |
-| …uploads an attachment | #1293 builds defer: the drain checks the live mode. An older build could still leave a plaintext object behind. The 6-hourly ciphertext audit flags it, and re-running the attachment phase converts it. **This is the one accepted gap.** |
+| …uploads an attachment | #1293 builds defer: the drain checks the live mode. An older build could still leave a plaintext object behind. The 6-hourly ciphertext audit flags it, and the owner's **Clean up attachments** gesture converts it, at any time, conversion or not ([§6.3](#63-the-flow) step 8). **This is the one accepted gap.** |
 | …runs the properties-as-blocks switch | Not fenced on another device. See [§7](#7-what-stays-visible-afterwards) and runbook step 7. |
 
 ## 4. What the backend holds for a plaintext workspace today
@@ -130,7 +130,7 @@ The flow is one guarded, in-app flow on the converting device (#1290). It reads 
 | mode `none` | preflight → key → flip |
 | phase `sealing` | recovery bundle (unless this device holds a verified one) → re-seal → verify → purge |
 | phase `cleaning` | pin upgrade → attachments → `finish_conversion`. Every step is idempotent, and the phase re-runs in full each time |
-| mode `e2ee`, no conversion row | nothing left to do |
+| mode `e2ee`, no conversion row | nothing left to do, apart from the standalone attachment cleanup (step 8) |
 
 The phase only moves forward, so a resume never falls back.
 
@@ -138,6 +138,7 @@ The phase only moves forward, so a resume never falls back.
 
 **0. Preflight.** It refuses unless all of these hold:
 - the user owns the workspace, and it's plaintext. This is an early-out; the flip re-checks both;
+- no row already passes the re-seal's "sealed" test (all three content columns envelope-shaped). A plaintext workspace can't hold such a row legitimately, and after the flip it would be indistinguishable from a sealed one;
 - the upload queue is drained, attachment records included, and no rejected rows are pending;
 - `canPersistPins()` passes, and the key store is durable (not `createWorkspaceKeyStore`'s in-memory fallback);
 - the File System Access API is available (desktop Chromium), because the bundle has to be re-opened to verify it;
@@ -151,7 +152,7 @@ The phase only moves forward, so a resume never falls back.
 
 **3. Recovery bundle.** One zip, taken right after the flip. The flip changes no row, so the bundle still holds the pre-conversion content. And since every earlier write committed before the flip, nothing but the re-seal can add history after its snapshot ([§6.1](#61-server)).
 - **Writing it** needs a zip save type and a writer that holds the database lock while it copies. `chooseRawSqliteExportFile` offers only `.db`, and the existing zip builder (`getRawSqliteDbBackup`) is the corruption path's, which runs without the lock.
-- **`blocks.jsonl`.** Every block row of the workspace, soft-deleted ones included, read from the server: PostgREST pages by id, every column verbatim, except that **a sealed content column is opened under the workspace key**. So the file is always plaintext, even when it's re-taken after some rows were sealed. It's what key-loss recovery restores from ([§8](#8-runbook)). Reading the server rather than this device's database means no download gap or reconnect window can make it stale.
+- **`blocks.jsonl`.** Every block row of the workspace, soft-deleted ones included, read from the server: PostgREST pages by id, every column verbatim, except that **a row the re-seal counts as sealed has its content columns opened under the workspace key**. The test is the re-seal's own: all three columns envelope-shaped, which preflight guarantees no plaintext row meets. A row that passes it and doesn't open stops the bundle. So the file is always plaintext, even when it's re-taken after some rows were sealed. It's what key-loss recovery restores from ([§8](#8-runbook)). Reading the server rather than this device's database means no download gap or reconnect window can make it stale.
   - **It's a consistent snapshot** only if the workspace's history count is the same before and after the paging, since every write to `blocks` adds a history row. Otherwise it's re-read. Right after the flip nothing else writes, so the first read passes.
   - **Its row count is recorded.** The workspace's block count is read inside that same window and goes in the manifest. Key-loss recovery tombstones every row the file lacks, so a truncated file must never verify.
 - **`local.db`.** The raw SQLite export, for the device-local history (`row_events`, `command_events`). It isn't a restore source.
@@ -164,7 +165,7 @@ The phase only moves forward, so a resume never falls back.
   - Every local byte-store entry of a media block, soft-deleted ones included.
 - **`manifest.json`.** The workspace id, `through`, the line count of each `.jsonl` part, the server's block count, a sha256 of each part, and the export time.
 
-The flow **re-opens the file and verifies it**: the hashes match; `blocks.jsonl` has exactly the server's block count of lines, with no id repeated; and `server-history.jsonl`'s `event_id`s strictly increase and end at `through`, or it's empty and `through` is `0`. A workspace whose rows predate the history trigger can have no history at all. It then keeps `through`, the line count and the names of the Storage objects it holds on this device as the **bundle record**. The re-seal never starts without that record. It's cleared once the conversion finishes; the attachment cleaner needs it after the purge.
+The flow **re-opens the file and verifies it**: the hashes match; `blocks.jsonl` has exactly the server's block count of lines, with no id repeated; and `server-history.jsonl`'s `event_id`s strictly increase and end at `through`, or it's empty and `through` is `0`. A workspace whose rows predate the history trigger can have no history at all. It then keeps `through`, the line counts, the names of the Storage objects it holds, and the sha256 of the verified `manifest.json` on this device as the **bundle record**. The manifest's hash pins every part's hash, so a different file with matching counts can't pass step 6. The re-seal never starts without that record. It's cleared once the conversion finishes; the attachment cleaner needs it after the purge.
 
 The bundle is plaintext, as sensitive as the database. Store it on an encrypted volume or as a password-manager attachment. It isn't sealed under the workspace key, because then it would be unreadable exactly when it's needed: after the key is lost. **It's a point-in-time content snapshot, not a rollback.** There's no going back after the flip.
 
@@ -182,7 +183,7 @@ Resuming just runs this again. It can take hours for a large workspace, so the f
 - **The other columns** need no check here, because the purge refuses any write after `through` that touched more than the content columns and `updated_at`.
 
 **6. Purge.**
-1. **Re-verify the bundle first.** Re-open the saved file, through the stored file handle or by asking the user to pick it, and check every hash against the bundle record again. The re-seal can take hours, and the file may have been moved or changed meanwhile.
+1. **Re-verify the bundle first.** Re-open the saved file, through the stored file handle or by asking the user to pick it, and check that its manifest hashes to the one in the bundle record and every part matches its manifest. The re-seal can take hours, and the file may have been moved or changed meanwhile.
    - If it can't be read, or doesn't match, the purge doesn't run.
    - The record is cleared, and the next run re-takes the bundle. History is still on the server, and `blocks.jsonl` opens rows that are already sealed, so the new bundle is as complete as the first.
 2. **Then purge:** `purge_workspace_history(ws, through, count)`, from the bundle record. The server re-checks all four conditions ([§6.1](#61-server)).
@@ -193,7 +194,7 @@ Resuming just runs this again. It can take hours for a large workspace, so the f
 
 **7. Pin upgrade on this device** (#1293). Every row is drained into `blocks`, decrypted. Each update is version-only, so #1299 keeps `row_events` clean. Held writes now upload, sealed.
 
-**8. Attachments** (#1291). One cleaner, on this device, using the member client's Storage API.
+**8. Attachments** (#1291). One cleaner, on this device, using the member client's Storage API. The owner can also run it on its own on any e2ee workspace, as **Clean up attachments**, for a raw object an older client uploads later. It's the same idempotent pass, whether a conversion row exists or not.
 
 - **One classification rule, by content**, written once next to `deriveContentKey`. For bytes `b` under name `n`:
   - **raw** iff `n == hex(sha256(b))`;
@@ -206,7 +207,7 @@ Resuming just runs this again. It can take hours for a large workspace, so the f
   1. List `<ws>/` **completely before acting**. Page by name, and recurse into the folder entries Storage returns for nested paths.
   2. **Raw:** seal it, upload it to its keyed name, verify the upload (a 409 on an occupied path goes through the same check), then delete the raw object.
   3. **Keyed:** keep it.
-  4. **Neither:** delete it if the bundle record names it. Otherwise stop and report it.
+  4. **Neither:** delete it if the bundle record names it. Otherwise stop and report it. A standalone run has no bundle record, so it only converts raw objects and reports everything else.
 - **The proof:**
   - no raw object remains;
   - every media block's keyed object, soft-deleted blocks included, is present **and** passes the shared verification helper (downloaded, opened, hash-checked). That costs one download of the attachment set, because Storage objects are untrusted.
@@ -283,7 +284,13 @@ The first production run is #1288.
 
     It leaves out the server history and the Storage objects themselves, which are ciphertext by then and useless once the key is lost. A raw SQLite export isn't a recovery point. It holds only what this device has downloaded and applied, and attachment bytes live outside it (`src/plugins/attachments/byteStore.ts`).
 
-**Key-loss recovery** (#1302). This applies after the purge; before it, nothing is lost. It **re-keys the workspace in place** from the newest recovery point: a step-14 one, or the conversion's bundle. A device that still defers is no source: its `blocks` hold nothing the conversion's bundle lacks. **It's point-in-time, not lossless.** Everything written after that point is lost, because nothing else holds that plaintext. That's why the key lives in two places, and why step 14 exists.
+**Key-loss recovery** (#1302). Before the purge, nothing is lost, but a key lost during `sealing` still needs a way forward:
+- **Before the first re-sealed row,** no row is sealed. Re-key, take the bundle if it wasn't taken yet, and carry on.
+- **After it,** the conversion's bundle is a complete plaintext copy of every row, because nothing but the re-seal writes during `sealing`. Recovery runs exactly as below, from that bundle. Its equality check stands in for verify, and then the conversion's purge runs as usual, with `through` and the counts taken from the bundle's own verified manifest.
+
+So the re-key RPC is admitted during `sealing` too.
+
+After the purge, recovery **re-keys the workspace in place** from the newest recovery point: a step-14 one, or the conversion's bundle. A device that still defers is no source: its `blocks` hold nothing the conversion's bundle lacks. **It's point-in-time, not lossless.** Everything written after that point is lost, because nothing else holds that plaintext. That's why the key lives in two places, and why step 14 exists.
 
 #1302 holds the design. It has to meet these requirements:
 - **Nothing is deleted**, so no workspace or block id is ever free for another caller to claim. Old-`K_id` objects and key records are kept, in case the old key turns up.
