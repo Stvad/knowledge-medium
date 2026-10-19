@@ -135,9 +135,10 @@ Only the purge clears `conversion_pending`, so the last phase can't fall back.
 **0. Preflight.** It refuses unless all of these hold:
 - the user owns the workspace, and it's plaintext. This is an early-out; the flip re-checks both;
 - the upload queue is drained, attachment records included, and no rejected rows are pending;
+- **this device's view of the workspace has no gap.** After a drain and a re-materialization (`repo.drainSyncWorkspace`), `repo.workspaceViewGap` must report nothing: no download in flight, and every downloaded row in `blocks`. This is the predicate the properties migration gates on. It matters because `local.db` is the plaintext a key-loss recovery restores from ([§8](#8-runbook));
 - `canPersistPins()` passes, and the key store is durable (not `createWorkspaceKeyStore`'s in-memory fallback);
 - the File System Access API is available (desktop Chromium), because the bundle has to be re-opened to verify it;
-- the user confirms the residue named in [§7](#7-what-stays-visible-afterwards), disk headroom ([§8](#8-runbook)), and free space for the bundle, whose size (database plus attachment bytes) is shown.
+- the user confirms the residue named in [§7](#7-what-stays-visible-afterwards), disk headroom ([§8](#8-runbook)), and free space for the bundle. Its size is shown: the database, the attachment bytes, and the server history, which a dry run of step 3's history paging measures without writing anything. A bundle that can't be written after the flip leaves every device waiting until it is.
 
 **1. Key.**
 - If this device already holds a key record for the workspace, from an earlier attempt that didn't flip, the run reuses it. The user saved that key, and a late-committing flip would carry its canary.
@@ -187,14 +188,18 @@ Resuming just runs this again. It can take hours for a large workspace, so the f
   - **keyed** iff `b` opens under the workspace key to `p` and `n == hex(HMAC(K_id, sha256(p)))`;
   - otherwise **neither**.
 
-  Both kinds of name are 64 hex characters, so the rule never reads a header or the name's shape. As a fast path, a name equal to the keyed name of any media block's hash, soft-deleted ones included, is keyed without a download.
+  Both kinds of name are 64 hex characters, so the rule never reads a header or the name's shape. As a fast path, a name equal to the keyed name of any media block's hash, soft-deleted ones included, is kept without a download. The fast path only decides "don't delete"; the proof still verifies the object.
 - **One verification helper**, shared with the resolver, the upload drain and upload recovery.
 - **Repeat until a complete listing needs no action:**
   1. List `<ws>/` **completely before acting**. Page by name, and recurse into the folder entries Storage returns for nested paths.
   2. **Raw:** seal it, upload it to its keyed name, verify the upload (a 409 on an occupied path goes through the same check), then delete the raw object.
   3. **Keyed:** keep it.
   4. **Neither:** delete it if the bundle holds its bytes. Otherwise stop and report it.
-- **The proof:** no raw object remains, and every media block's keyed path is present, soft-deleted blocks included. A path whose bytes exist nowhere (not on the server, not in the bundle, not locally) is reported. It doesn't block done, since nothing could produce it.
+- **The proof:**
+  - no raw object remains;
+  - every media block's keyed object, soft-deleted blocks included, is present **and** passes the shared verification helper (downloaded, opened, hash-checked). That costs one download of the attachment set, because Storage objects are untrusted.
+
+  A missing or failing object is rebuilt from the bundle's bytes or the local ones. One whose bytes exist nowhere is reported. It doesn't block done, since nothing could produce it.
 - **Media block ids don't change.** The app derives an attachment's path from `media:hash`, the mode and `K_id`. Re-capturing a pre-conversion file mints a second block, which is accepted.
 
 **9. Done.** The flow reports the operator follow-ups ([§8](#8-runbook)) and the "safe from" date ([§9](#9-platform-residue-and-when-it-is-safe-if-breached)).
@@ -259,14 +264,14 @@ The first production run is #1288.
     - This step, and the next two, are platform operations a client can't do.
 12. **Operator:** drop leftover ad-hoc tables from past scripts (`scripts/system-author-cleanup.sql`, `scripts/roam-ts-backfill/backfill.sql`).
 13. **Act on #1289's findings** and record the "safe from" date.
-14. **Take later recovery points.** From time to time, on an unlocked device, take step 3's bundle again without its server history, which is ciphertext by then. Keep it with the key. A raw SQLite export alone isn't a recovery point: attachment bytes live outside the database (`src/plugins/attachments/byteStore.ts`), and their remote copies are sealed under the key.
+14. **Take later recovery points.** From time to time, on an unlocked device, take step 3's bundle again without its server history, which is ciphertext by then. Take it only when `repo.workspaceViewGap` reports no gap, after a drain and a re-materialization, exactly as step 0 requires. Keep it with the key. A raw SQLite export alone isn't a recovery point: attachment bytes live outside the database (`src/plugins/attachments/byteStore.ts`), and their remote copies are sealed under the key.
 
 **Key-loss recovery** (#1302). This applies after the purge; before it, nothing is lost. It **re-keys the workspace in place** from the newest recovery point: a step-14 one, the conversion's bundle, or one taken from a device that still defers. **It's point-in-time, not lossless.** Everything written after that point is lost, because nothing else holds that plaintext. That's why the key lives in two places, and why step 14 exists.
 
 #1302 holds the design. It has to meet these requirements:
 - **Nothing is deleted**, so no workspace or block id is ever free for another caller to claim. Old-`K_id` objects and key records are kept, in case the old key turns up.
 - **An owner-only canary replacement**, admitted like the flip ([§5](#5-the-invariant-we-relax)).
-- **A whole-row restore**: the content columns sealed under the new key, plus tree, order, `deleted` and the stamps. Rows the recovery point lacks are tombstoned. The recovery point must have had zero sync divergence.
+- **A whole-row restore**: the content columns sealed under the new key, plus tree, order, `deleted` and the stamps. Rows the recovery point lacks are tombstoned, which is safe only because every recovery point is taken with no view gap ([§6.3](#63-the-flow) step 0, runbook step 14).
 - **Progress read by trial decryption** under the new key, since an envelope doesn't say which key sealed it.
 - **Every device checks its key record against the canary**, on entry and whenever the synced canary changes. Today `resolveWorkspaceEntry` only checks that a record with `K_id` exists.
 - **The single-client contract** applies to recovery too.
