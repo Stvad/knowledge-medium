@@ -109,7 +109,7 @@ The server side (#1294) is owner-only SECURITY DEFINER RPCs over a staging area 
    6. Clear the staging rows and set `state = 'cleanup_pending'`. **The freeze stays.** The attachment cleanup of [§5.4](#54-attachments) has to run while nothing can upload, or it could delete an object captured after its snapshot.
 
    The attempt row also stays, because it is the only durable record that the plaintext Storage objects still need deleting.
-4. **`finish_workspace_conversion(ws, attempt_id)`** deletes the attempt row, which **ends the freeze**. The client calls it only after the cleanup and the expected-set check of [§5.4](#54-attachments) pass.
+4. **`finish_workspace_conversion(ws, attempt_id)`** deletes the attempt row, which **ends the freeze**. The client calls it only after the cleanup and the "every object is in K" proof of [§5.4](#54-attachments) pass.
 5. **`abort_workspace_conversion(ws, attempt_id)`** works only while `staging`. It clears the freeze, the staging rows and the attempt; nothing else has changed. There is no abort after the apply ([§7](#7-runbook) step 4).
 6. **`get_workspace_conversion(ws)`** is the owner-only read that resume starts from. It returns `attempt_id`, `canary` and `state`.
 7. **`workspace_upload_mode(ws)`** is readable by any member. It returns `frozen` while an attempt exists, otherwise `none` or `e2ee`. The attachment drain makes this live check before every upload ([§5.2](#52-client-a-plaintext-pinned-device-that-sees-e2ee)).
@@ -154,7 +154,7 @@ The change (#1293) applies when the synced `workspaces` row says `e2ee` but the 
 - when it is about to upload in plaintext mode, it also defers on `e2ee`.
 
 - After the apply, the mode never goes back. So a fresh `e2ee` answer stays true.
-- The race left is a check that answered `none` just before `begin`, followed by an upload that lands just after it. That object lands in plaintext mode at a raw path. The cleanup deletes it with every other object outside the expected set and reports it; it has to be re-captured.
+- One race is left: a check that answered `none` just before `begin`, followed by an upload that lands just after it. Its media block may still be held behind the freeze. The object lands in plaintext mode at a raw path, and the cleanup converts it to the keyed path before deleting it ([§5.4](#54-attachments)). So the media block still finds its bytes when it arrives.
 - The cost is one extra read per attachment upload, fleet-wide.
 - Block uploads don't get this check. The ciphertext trigger already fails them closed (see the known gap below). Attachments have no such backstop, and the read is what stands in for one.
 
@@ -226,8 +226,13 @@ The keyed-path and sealing logic already exists, in `src/sync/crypto/contentKey.
 **Ordering:**
 
 1. **Before** the apply, upload every keyed object and verify it by authenticated decryption plus a hash check, so no media block ever points at missing bytes.
-2. **After** the apply commits, while the attempt is `cleanup_pending` and the workspace is still frozen, compute the **expected set**: the keyed path of every media block in the workspace. List `<ws>/` and delete every object outside that set, **whatever its header says**. That removes every raw sha256 path and any orphan. Report each deleted object that wasn't a known raw path.
-3. **The proof** that no plaintext remains: the listed objects equal the expected set, and each was verified in step 1. Only then does the client call `finish_workspace_conversion`.
+2. **After** the apply commits, with the attempt in `cleanup_pending` and the workspace still frozen, list `<ws>/`. Let **K** be the keyed paths this conversion has uploaded and verified. Every listed object outside K is classified by its **content**, never its header:
+   - **A raw object** is one whose name equals `hex(sha256(bytes))`, the content-addressed shape every plaintext-mode upload has. Its keyed path is derivable from the name alone: `hex(HMAC(K_id, sha256))`, per `deriveContentKey` in `src/sync/crypto/contentKey.ts`. So convert it: seal the bytes, upload them to the keyed path, verify, add that path to K, and only then delete the raw object.
+     - This covers objects with no media block on the server yet: a capture whose block is still held behind the freeze, or one that never synced. When such a block arrives, its keyed bytes are already there.
+   - **Anything else** is junk, neither ours nor content-addressed. Delete it.
+
+   Repeat the listing until a pass finds nothing outside K.
+3. **The proof** that no plaintext remains: every listed object is in K, and each one was verified by authenticated decryption plus a hash check when this conversion wrote it. Only then does the client call `finish_workspace_conversion`.
 
 **Why the proof stays true afterwards.**
 
@@ -258,6 +263,7 @@ The orchestrator (#1290) refuses to start unless:
 - the user owns the workspace;
 - the workspace is still plaintext and has no live attempt; if it has one, resume that instead;
 - **the pin can be persisted**: `canPersistPins()`, the same preflight the create flow runs (`src/sync/keys/flows/createEncryptedWorkspace.ts`). Otherwise step 7 could never write the upgraded pin;
+- **the user confirms the known residue.** That includes a workspace past `cell`, whose synthesized definition ids stay property-name oracles ([§6](#6-what-stays-visible-afterwards)). The preflight names it and asks; it doesn't silently proceed;
 - **no live key record would be overwritten.**
   - `keyStore.put` replaces a record outright, and overwriting an applied attempt's key would lose the only key that opens the workspace. So step 1 never runs while an attempt exists.
   - A record found for a plaintext workspace with no attempt is a leftover from a crash before `begin`, because nothing on the server references it. The flow deletes it and starts over with a fresh key and a fresh reveal.
@@ -282,8 +288,8 @@ Abort is never automatic.
 | 5. Upload and verify keyed attachment objects | partial, or a verification mismatch | extra ciphertext objects (harmless) | resume (the occupied-path check makes it idempotent); investigate any mismatch |
 | 6. Apply | refusal or timeout | the transaction rolls back; still frozen | fix the cause and re-apply, or abort |
 | 7. Upgrade the local pin | crash after the apply | server e2ee, attempt `cleanup_pending` (still frozen), pin still plaintext | automatic on restart: the stored key opens the canary ([§5.2](#52-client-a-plaintext-pinned-device-that-sees-e2ee)); resume then finds `cleanup_pending` |
-| 8. Delete every object under `<ws>/` outside the expected keyed set | partial | `cleanup_pending`, still frozen; plaintext objects remain | resume from `cleanup_pending` |
-| 9. Verify: every row opens, the listed objects equal the expected keyed set, zero history rows remain (the ciphertext audit as a detector only) | a check fails | `cleanup_pending` | investigate; nothing is lost while the key is held |
+| 8. Convert every raw object outside K to its keyed path, delete junk, and repeat until a listing is clean | partial | `cleanup_pending`, still frozen; some raw objects remain | resume from `cleanup_pending` (conversion is idempotent per object) |
+| 9. Verify: every row opens, every listed object is in K, zero history rows remain (the ciphertext audit as a detector only) | a check fails | `cleanup_pending` | investigate; nothing is lost while the key is held |
 | 10. `finish`, which ends the freeze | RPC error | `cleanup_pending`, still frozen | retry |
 
 **Losing the key after the apply** makes the server copy unrecoverable. Devices that still hold plaintext `blocks` defer instead of copying, and receive no deletes ([§5.2](#52-client-a-plaintext-pinned-device-that-sees-e2ee)). Their local plaintext survives and can be exported. That's a last line of defence, not a plan: store the key in two independent places before step 2.
@@ -307,6 +313,7 @@ The design's accepted metadata (§15), unchanged here:
 | Daily notes (`src/plugins/daily-notes/dailyNotes.ts`) | ISO date | anyone (enumerable), which reveals which days have a note |
 | Roam import (`src/plugins/roam-import/blockIds.ts`) | Roam uid | holders of the source graph |
 | Extension records via `pluginBlockId` / derived identities | whatever the extension chose: external ids (Readwise `user_book_id` and highlight ids, `agent-extensions/readwise.tsx`; Matrix event ids, `agent-extensions/matrix-chat-client.tsx`) and user-chosen keys (Strength Tracker dates and group keys, `agent-extensions/strength-tracker/src/km/store.ts`) | the external service, or anyone who knows the value |
+| Synthesized property definitions, **only if** the workspace switched to properties-as-blocks *before* the conversion (`properties_migration` past `cell`; it is forward-only) | the property name, under the public namespace that plaintext synthesis uses (`src/data/internals/propertyDefinitionSynthesis.ts`) | anyone who guesses a property name. Switching after the conversion mints K_id-keyed ids instead ([§7](#7-runbook) step 6) |
 | Kernel pages, definition seeds, the user page, state children | code-owned constants and ids | anyone. Reveals which features and plugins are used, not what the user wrote |
 
 **Why the conversion doesn't re-id them.** It would have to give each such block a new id: delete the old row, insert a new one, and rewrite every pointer. That turns a pure re-seal into a migration with its own failure modes:
@@ -335,7 +342,7 @@ The first production run is tracked in #1288.
 
    **The rollback is `abort`, and it exists only before the apply.** After the apply, nothing reverts the workspace to plaintext: e2ee → none is refused by design. If the key is lost, these snapshots let the content be rebuilt into a *new* plaintext workspace, with the losses of today's import (#401). The snapshots are for content recovery, not for undoing the conversion.
 5. **Fleet.** Every device runs a build with #1293, or is wiped (the browser's "clear site data"). Every device's upload queue is drained, and editing on other devices pauses for the duration.
-6. **Ordering.** Leave the workspace on the `cell` properties model until afterwards.
+6. **Ordering.** Leave the workspace on the `cell` properties model until afterwards. A workspace that has already switched can't go back (the state is forward-only), so its definition ids remain on the [§6](#6-what-stays-visible-afterwards) list until #1297.
    - Property-definition synthesis runs only during the properties-as-blocks switch (`src/plugins/properties-migration/action.ts`), and on an e2ee workspace it mints K_id-keyed ids (`resolveSynthesisNamespace` in `src/data/internals/propertyDefinitionSynthesis.ts`).
    - Switching first would mint public, name-derived definition ids.
 7. Run the flow from a desktop: the device with the most attachment bytes stored locally.
