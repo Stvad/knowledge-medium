@@ -204,18 +204,11 @@ export class FakeConversionServer implements ConversionServer {
     this.afterPatch?.(patches)
   }
 
-  async readEnvelopePrefixedPage(workspaceId: string, afterId: string | null, limit: number): Promise<ServerBlockRow[]> {
-    const page = this.visibleRows(workspaceId)
-      .filter(row => afterId === null || row.id > afterId)
-      .filter(row => SEALED_COLUMNS.every(column => row[column].startsWith(ENVELOPE_PREFIX)))
-      .slice(0, Math.min(limit, this.maxRows))
-    this.calls.push({method: 'readEnvelopePrefixedPage', count: page.length})
-    return page
-  }
-
   async convertWorkspaceToE2ee(workspaceId: string, canary: string): Promise<void> {
     this.calls.push({method: 'convertWorkspaceToE2ee', count: 1})
-    if (this.signedOut || this.sessionUserId !== this.ownerUserId) {
+    // Signed out, the call runs as anon, whose EXECUTE is revoked.
+    if (this.signedOut) throw new FakeServerError('42501', 'permission denied for function convert_workspace_to_e2ee')
+    if (this.sessionUserId !== this.ownerUserId) {
       throw new FakeServerError(ConversionErrorCode.refused, 'convert_workspace_to_e2ee: only the workspace owner can convert it')
     }
     if (!isSealedValue(canary)) {

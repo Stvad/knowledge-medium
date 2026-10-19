@@ -5,7 +5,7 @@
  */
 
 import type { ConversionServer } from './conversionServer.js'
-import { idsOf, isSealedRow } from './sealing.js'
+import { idsOf, isSealedRow, RESEAL_PAGE_SIZE, serverPages } from './sealing.js'
 
 export interface PreflightEnvironment {
   /** Mode pins persist (`canPersistPins`): the pin upgrade writes one. */
@@ -14,9 +14,10 @@ export interface PreflightEnvironment {
   readonly keyStoreIsDurable: boolean
   /** The recovery bundle is a folder written through `showDirectoryPicker`. */
   readonly supportsDirectoryPicker: boolean
-  /** This device's upload queue: writes not uploaded yet, and uploads the
-   *  server rejected that wait for Retry. */
-  readonly uploadQueue: () => Promise<{readonly pending: number; readonly rejected: number}>
+  /** This device's upload queue, every workspace's: writes not uploaded yet,
+   *  and uploads the server rejected that wait for Retry. A write held for any
+   *  workspace stops this device's downloads, which the pin upgrade needs. */
+  readonly uploadQueue: (signal?: AbortSignal) => Promise<{readonly pending: number; readonly rejected: number}>
 }
 
 export type PreflightBlocker =
@@ -35,22 +36,19 @@ export interface PreflightReport {
 
 /** Enough to show the user; the scan stops once it has this many. */
 const SEALED_LOOKING_SAMPLE = 20
-const SCAN_PAGE_SIZE = 1000
 
-/** The server pre-filters on the envelope prefix; the re-seal's own test then
- *  decides, so a filtered row that isn't sealed never hides one that is. */
+/** Pages every row by id, as the re-seal does: each read is one bounded index
+ *  scan, where a server-side filter would walk the whole workspace in one
+ *  statement and hit the statement timeout on a large one. */
 const sealedLookingRows = async (
   server: ConversionServer,
   workspaceId: string,
   signal?: AbortSignal,
 ): Promise<string[]> => {
   const found: string[] = []
-  for (let afterId: string | null = null; found.length < SEALED_LOOKING_SAMPLE;) {
-    signal?.throwIfAborted()
-    const page = await server.readEnvelopePrefixedPage(workspaceId, afterId, SCAN_PAGE_SIZE)
-    if (page.length === 0) break
+  for await (const page of serverPages(server, workspaceId, RESEAL_PAGE_SIZE, signal)) {
     found.push(...idsOf(page.filter(isSealedRow)))
-    afterId = page[page.length - 1].id
+    if (found.length >= SEALED_LOOKING_SAMPLE) break
   }
   return found.slice(0, SEALED_LOOKING_SAMPLE)
 }
@@ -71,7 +69,7 @@ export const runPreflight = async ({
   if (!environment.keyStoreIsDurable) blockers.push({kind: 'key-store-not-durable'})
   if (!environment.supportsDirectoryPicker) blockers.push({kind: 'no-directory-picker'})
 
-  const queue = await environment.uploadQueue()
+  const queue = await environment.uploadQueue(signal)
   if (queue.pending > 0) blockers.push({kind: 'pending-uploads', count: queue.pending})
   if (queue.rejected > 0) blockers.push({kind: 'rejected-uploads', count: queue.rejected})
 

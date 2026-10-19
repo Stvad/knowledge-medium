@@ -85,6 +85,11 @@ describe('checkServerE2eeEntry', () => {
     expect(await checkServerE2eeEntry(entryDeps())).toEqual({kind: 'converting', owned: false})
   })
 
+  it('refuses under a phase this build does not know, as under sealing', async () => {
+    serverState = {...serverState, conversionPhase: 'unknown'}
+    expect(await checkServerE2eeEntry(entryDeps())).toEqual({kind: 'converting', owned: true})
+  })
+
   it('refuses when the phase cannot be read', async () => {
     read = {kind: 'unavailable', error: new TypeError('Failed to fetch')}
     expect(await checkServerE2eeEntry(entryDeps())).toEqual({kind: 'unavailable'})

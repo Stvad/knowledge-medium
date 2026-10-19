@@ -74,10 +74,6 @@ export interface ConversionServer {
   readContentSealHistory(workspaceId: string, blockIds: readonly string[]): Promise<readonly ServerHistoryRow[]>
   /** One `apply_block_patches` call: one transaction, all or nothing. */
   applyBlockPatches(patches: readonly ResealPatch[]): Promise<void>
-  /** The workspace's rows with an id above `afterId` whose three content
-   *  columns all begin with the envelope prefix, in id order: a superset of the
-   *  rows the re-seal counts as sealed. Paged like {@link readBlockPage}. */
-  readEnvelopePrefixedPage(workspaceId: string, afterId: string | null, limit: number): Promise<readonly ServerBlockRow[]>
   /** `convert_workspace_to_e2ee`: the mode becomes e2ee with this canary and
    *  the `sealing` phase begins, in one transaction; no row changes. */
   convertWorkspaceToE2ee(workspaceId: string, canary: string): Promise<void>
@@ -99,92 +95,89 @@ const failed = (what: string, error: {code?: string; message: string}, status: n
     {code: error.code, status},
   )
 
-export const createSupabaseConversionServer = (client: SupabaseClient): ConversionServer => ({
-  async readWorkspace(workspaceId) {
-    const {data, error, status} = await client
-      .from('workspaces')
-      .select('encryption_mode,wk_canary')
-      .eq('id', workspaceId)
-      .maybeSingle()
-    if (error) throw failed('reading the workspace', error, status)
-    return data
-  },
+/** `signal` cancels every read and write but the flip, which is never sent
+ *  half-way: an aborted flip request may still commit, with nobody waiting. */
+export const createSupabaseConversionServer = (client: SupabaseClient, signal?: AbortSignal): ConversionServer => {
+  const cancellable = <Q extends {abortSignal(signal: AbortSignal): Q}>(query: Q): Q =>
+    signal ? query.abortSignal(signal) : query
+  return {
+    async readWorkspace(workspaceId) {
+      const {data, error, status} = await cancellable(client
+        .from('workspaces')
+        .select('encryption_mode,wk_canary')
+        .eq('id', workspaceId))
+        .maybeSingle()
+      if (error) throw failed('reading the workspace', error, status)
+      return data
+    },
 
-  async countBlocks(workspaceId) {
-    const {count, error, status} = await client
-      .from('blocks')
-      .select('id', {count: 'exact', head: true})
-      .eq('workspace_id', workspaceId)
-    if (error) throw failed('counting blocks', error, status)
-    if (count === null) throw new Error('conversion: counting blocks returned no count')
-    return count
-  },
-
-  async readBlockPage(workspaceId, afterId, limit) {
-    let query = client.from('blocks').select(BLOCK_COLUMNS).eq('workspace_id', workspaceId)
-    if (afterId !== null) query = query.gt('id', afterId)
-    const {data, error, status} = await query.order('id', {ascending: true}).limit(limit)
-    if (error) throw failed('reading blocks', error, status)
-    return data
-  },
-
-  async readBlocks(workspaceId, ids) {
-    const rows: ServerBlockRow[] = []
-    for (const idChunk of chunk(ids, IDS_PER_FILTER)) {
-      const {data, error, status} = await client
+    async countBlocks(workspaceId) {
+      const {count, error, status} = await cancellable(client
         .from('blocks')
-        .select(BLOCK_COLUMNS)
-        .eq('workspace_id', workspaceId)
-        .in('id', idChunk)
+        .select('id', {count: 'exact', head: true})
+        .eq('workspace_id', workspaceId))
+      if (error) throw failed('counting blocks', error, status)
+      if (count === null) throw new Error('conversion: counting blocks returned no count')
+      return count
+    },
+
+    async readBlockPage(workspaceId, afterId, limit) {
+      let query = client.from('blocks').select(BLOCK_COLUMNS).eq('workspace_id', workspaceId)
+      if (afterId !== null) query = query.gt('id', afterId)
+      const {data, error, status} = await cancellable(query.order('id', {ascending: true}).limit(limit))
       if (error) throw failed('reading blocks', error, status)
-      rows.push(...data)
-    }
-    return rows
-  },
+      return data
+    },
 
-  async readContentSealHistory(workspaceId, blockIds) {
-    const rows: ServerHistoryRow[] = []
-    for (const idChunk of chunk(blockIds, IDS_PER_FILTER)) {
-      for (let afterEventId = 0; ;) {
-        const {data, error, status} = await client
-          .from('blocks_history')
-          .select(HISTORY_COLUMNS)
+    async readBlocks(workspaceId, ids) {
+      const rows: ServerBlockRow[] = []
+      for (const idChunk of chunk(ids, IDS_PER_FILTER)) {
+        const {data, error, status} = await cancellable(client
+          .from('blocks')
+          .select(BLOCK_COLUMNS)
           .eq('workspace_id', workspaceId)
-          .in('block_id', idChunk)
-          .eq('op', 'U')
-          .contains('changed_columns', [...SEALED_COLUMNS])
-          .like('after_diff->>content', `${ENVELOPE_PREFIX}%`)
-          .gt('event_id', afterEventId)
-          .order('event_id', {ascending: true})
-          .limit(HISTORY_PAGE)
-        if (error) throw failed('reading block history', error, status)
-        if (data.length === 0) break
+          .in('id', idChunk))
+        if (error) throw failed('reading blocks', error, status)
         rows.push(...data)
-        afterEventId = data[data.length - 1].event_id
       }
-    }
-    return rows
-  },
+      return rows
+    },
 
-  async applyBlockPatches(patches) {
-    const {error, status} = await client.rpc('apply_block_patches', {patches})
-    if (error) throw failed('apply_block_patches', error, status)
-  },
+    async readContentSealHistory(workspaceId, blockIds) {
+      const rows: ServerHistoryRow[] = []
+      for (const idChunk of chunk(blockIds, IDS_PER_FILTER)) {
+        for (let afterEventId = 0; ;) {
+          const {data, error, status} = await cancellable(client
+            .from('blocks_history')
+            .select(HISTORY_COLUMNS)
+            .eq('workspace_id', workspaceId)
+            .in('block_id', idChunk)
+            .eq('op', 'U')
+            .contains('changed_columns', [...SEALED_COLUMNS])
+            .like('after_diff->>content', `${ENVELOPE_PREFIX}%`)
+            .gt('event_id', afterEventId)
+            .order('event_id', {ascending: true})
+            .limit(HISTORY_PAGE))
+          if (error) throw failed('reading block history', error, status)
+          if (data.length === 0) break
+          rows.push(...data)
+          afterEventId = data[data.length - 1].event_id
+        }
+      }
+      return rows
+    },
 
-  async readEnvelopePrefixedPage(workspaceId, afterId, limit) {
-    let query = client.from('blocks').select(BLOCK_COLUMNS).eq('workspace_id', workspaceId)
-    for (const column of SEALED_COLUMNS) query = query.like(column, `${ENVELOPE_PREFIX}%`)
-    if (afterId !== null) query = query.gt('id', afterId)
-    const {data, error, status} = await query.order('id', {ascending: true}).limit(limit)
-    if (error) throw failed('reading envelope-shaped blocks', error, status)
-    return data
-  },
+    async applyBlockPatches(patches) {
+      const {error, status} = await cancellable(client.rpc('apply_block_patches', {patches}))
+      if (error) throw failed('apply_block_patches', error, status)
+    },
 
-  async convertWorkspaceToE2ee(workspaceId, canary) {
-    const {error, status} = await client.rpc('convert_workspace_to_e2ee', {
-      p_workspace_id: workspaceId,
-      p_wk_canary: canary,
-    })
-    if (error) throw failed('convert_workspace_to_e2ee', error, status)
-  },
-})
+    async convertWorkspaceToE2ee(workspaceId, canary) {
+      const {error, status} = await client.rpc('convert_workspace_to_e2ee', {
+        p_workspace_id: workspaceId,
+        p_wk_canary: canary,
+      })
+      if (error) throw failed('convert_workspace_to_e2ee', error, status)
+    },
+  }
+}

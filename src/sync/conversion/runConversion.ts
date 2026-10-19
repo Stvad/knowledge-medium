@@ -16,9 +16,10 @@ import type { WorkspaceKeyStore } from '../keys/keyStore.js'
 import { obtainFlipKey, requireCanaryKey, type KeyPrompts } from './conversionKey.js'
 import type { ConversionServer } from './conversionServer.js'
 import { flipToE2ee, type FlipOptions, type FlipWait } from './flip.js'
+import type { FlipAttempts } from './flipAttempts.js'
 import { runPreflight, type PreflightEnvironment, type PreflightReport } from './preflight.js'
 import { conversionLockName, type ConversionLock } from './runLock.js'
-import { stageMovedBack, stageOf, type ConversionStage, type StageRead } from './stage.js'
+import { laterStage, stageMovedBack, stageOf, type ConversionStage, type StageKind, type StageRead } from './stage.js'
 
 export type ActiveStage = Exclude<ConversionStage, {kind: 'done'}>
 
@@ -26,6 +27,8 @@ export type ActiveStage = Exclude<ConversionStage, {kind: 'done'}>
 export type ConversionStatus =
   | {readonly kind: 'reading-server'}
   | {readonly kind: 'preflight'}
+  /** `waiting` null: the request is out, and may commit whatever happens to
+   *  this run. Otherwise the database refused for now, and a retry is due. */
   | {readonly kind: 'flipping'; readonly waiting: FlipWait | null}
   | {readonly kind: 'checking-key'}
 
@@ -46,6 +49,7 @@ export interface ConversionFlowDeps {
   /** The workspace row and its conversion phase, read from the server now. */
   readonly fetchConversionState: () => Promise<WorkspaceConversionRead>
   readonly keyStore: WorkspaceKeyStore
+  readonly flipAttempts: FlipAttempts
   readonly lock: ConversionLock
   readonly preflight: PreflightEnvironment
   /** Write this device's `workspaces` row as the server now holds it: e2ee,
@@ -65,19 +69,27 @@ export type ConversionRunResult =
   | {readonly kind: 'blocked'; readonly read: Exclude<StageRead, {kind: 'stage'}>}
   | {readonly kind: 'preflight-failed'; readonly report: PreflightReport}
   | {readonly kind: 'flip-refused'; readonly message: string}
-  /** The server showed an earlier stage than this run had already seen. */
-  | {readonly kind: 'stage-moved-back'; readonly from: ConversionStage; readonly to: ConversionStage}
+  /** The server showed an earlier stage than this run knows it reached. */
+  | {readonly kind: 'stage-moved-back'; readonly reached: StageKind; readonly shown: ConversionStage}
   /** The run reached a stage this build has no steps for yet. */
   | {readonly kind: 'stopped'; readonly stage: ActiveStage}
   | {readonly kind: 'done'}
 
-/** A stage's steps either end the run or report that the server should now
- *  show a later stage. */
-type StageOutcome = ConversionRunResult | 'advanced'
+/** A stage's steps either end the run, or say the server should now show at
+ *  least `reached`. */
+type StageOutcome = ConversionRunResult | {readonly kind: 'advanced'; readonly reached: StageKind}
 
 const readStage = async (deps: ConversionFlowDeps): Promise<StageRead> => {
   deps.ui.status({kind: 'reading-server'})
   return stageOf(await deps.fetchConversionState(), deps.userId)
+}
+
+const FLIPPED: StageOutcome = {kind: 'advanced', reached: 'sealing'}
+
+/** Whether a flip that may have been sent has landed, or else what the server shows. */
+const flipLanded = async (deps: ConversionFlowDeps): Promise<StageRead | 'landed'> => {
+  const read = await readStage(deps)
+  return read.kind === 'stage' && read.stage.kind !== 'plaintext' ? 'landed' : read
 }
 
 const runPlaintextStage = async (deps: ConversionFlowDeps): Promise<StageOutcome> => {
@@ -88,27 +100,43 @@ const runPlaintextStage = async (deps: ConversionFlowDeps): Promise<StageOutcome
   await ui.confirmPreflight(report)
 
   const key = await obtainFlipKey({...deps, prompts: ui})
-  ui.status({kind: 'flipping', waiting: null})
-  const flip = await flipToE2ee({
-    server,
-    workspaceId,
-    canary: key.canary,
-    onWait: waiting => ui.status({kind: 'flipping', waiting}),
-    signal,
-    ...deps.flipTiming,
-  })
+  let flip
+  try {
+    flip = await flipToE2ee({
+      server,
+      workspaceId,
+      canary: key.canary,
+      onSend: () => {
+        deps.flipAttempts.markSent()
+        ui.status({kind: 'flipping', waiting: null})
+      },
+      onWait: waiting => ui.status({kind: 'flipping', waiting}),
+      signal,
+      ...deps.flipTiming,
+    })
+  } catch (error) {
+    // Aborted only while waiting to retry, after a refusal that changed nothing.
+    if (signal?.aborted) throw error
+    // The response may be lost with the flip committed.
+    if ((await flipLanded(deps)) === 'landed') return FLIPPED
+    throw error
+  }
   if (flip.kind === 'refused') {
     // An earlier attempt's flip may have committed after its response was lost.
-    const read = await readStage(deps)
-    return read.kind === 'stage' && read.stage.kind !== 'plaintext' ? 'advanced' : {kind: 'flip-refused', message: flip.message}
+    const landed = await flipLanded(deps)
+    if (landed === 'landed') return FLIPPED
+    return landed.kind === 'stage' ? {kind: 'flip-refused', message: flip.message} : {kind: 'blocked', read: landed}
   }
   // The flip succeeded, so the server holds this canary, not a late one's.
+  // Between its commit and this mark, an upload already in flight from this
+  // device is refused and quarantined, recoverable with Retry: one round trip.
   await deps.markLocalConverted(key.canary)
-  return 'advanced'
+  return FLIPPED
 }
 
 /** What every run past the flip does first. The local row is marked again in
- *  case a crash came between the flip and the first marking. */
+ *  case a crash came between the flip and the first marking, or a checkpoint
+ *  from before the flip overwrote it. */
 const enterSealedStage = async (deps: ConversionFlowDeps, canary: string): Promise<void> => {
   await deps.markLocalConverted(canary)
   deps.ui.status({kind: 'checking-key'})
@@ -132,13 +160,15 @@ const runLocked = async (deps: ConversionFlowDeps): Promise<ConversionRunResult>
   if (first.stage.kind === 'done') return {kind: 'done'}
   await deps.ui.confirmContract(first.stage)
 
+  let reached: StageKind = first.stage.kind
   for (let stage: ActiveStage = first.stage; ;) {
     deps.signal?.throwIfAborted()
     const outcome = await runStage(deps, stage)
-    if (outcome !== 'advanced') return outcome
+    if (outcome.kind !== 'advanced') return outcome
+    reached = laterStage(reached, outcome.reached)
     const next = await readStage(deps)
     if (next.kind !== 'stage') return {kind: 'blocked', read: next}
-    if (stageMovedBack(stage, next.stage)) return {kind: 'stage-moved-back', from: stage, to: next.stage}
+    if (stageMovedBack(reached, next.stage)) return {kind: 'stage-moved-back', reached, shown: next.stage}
     if (next.stage.kind === 'done') return {kind: 'done'}
     stage = next.stage
   }

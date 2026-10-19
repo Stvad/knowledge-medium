@@ -18,7 +18,8 @@ const fakeClient = (
   {maxRows = Infinity, error, status = 400}: {maxRows?: number; error?: {code: string; message: string}; status?: number} = {},
 ) => {
   const inListLengths: number[] = []
-  const rpcs: Array<{fn: string; args: unknown}> = []
+  const rpcs: Array<{fn: string; args: unknown; signal?: AbortSignal}> = []
+  const signals: AbortSignal[] = []
   const from = (table: string) => {
     const filters: Array<(row: Row) => boolean> = []
     let orderBy: string | undefined
@@ -56,16 +57,23 @@ const fakeClient = (
       order: (column: string) => ((orderBy = column), builder),
       limit: (count: number) => ((limit = count), builder),
       maybeSingle: () => ((maybeSingle = true), builder),
+      abortSignal: (signal: AbortSignal) => (signals.push(signal), builder),
       then: (resolve: (value: unknown) => unknown, reject: (reason: unknown) => unknown) =>
         Promise.resolve(respond()).then(resolve, reject),
     }
     return builder
   }
-  const rpc = async (fn: string, args: unknown) => {
-    rpcs.push({fn, args})
-    return {error: error ?? null, status: error ? status : 204}
+  const rpc = (fn: string, args: unknown) => {
+    const call: {fn: string; args: unknown; signal?: AbortSignal} = {fn, args}
+    rpcs.push(call)
+    const response = {
+      abortSignal: (signal: AbortSignal) => ((call.signal = signal), response),
+      then: (resolve: (value: unknown) => unknown, reject: (reason: unknown) => unknown) =>
+        Promise.resolve({error: error ?? null, status: error ? status : 204}).then(resolve, reject),
+    }
+    return response
   }
-  return {client: {from, rpc} as unknown as SupabaseClient, inListLengths, rpcs}
+  return {client: {from, rpc} as unknown as SupabaseClient, inListLengths, rpcs, signals}
 }
 
 const WS = 'ws-1'
@@ -120,33 +128,28 @@ describe('createSupabaseConversionServer', () => {
     expect((await server.readBlockPage(WS, blockId(1), 9)).map(row => row.id)).toEqual([blockId(2), blockId(3), blockId(4)])
   })
 
-  it('pages the rows whose three content columns all carry the envelope prefix', async () => {
-    const row = (i: number, overrides: Row = {}): Row => ({
-      id: blockId(i),
-      workspace_id: WS,
-      content: ENVELOPE,
-      properties_json: ENVELOPE,
-      references_json: ENVELOPE,
-      ...overrides,
-    })
-    const {client} = fakeClient({
-      blocks: [
-        row(2), row(0), row(1, {properties_json: '{}'}), row(3, {references_json: '[]'}), row(4, {content: 'enc:v2:'}),
-        row(5), row(6, {workspace_id: 'ws-other'}),
-      ],
-    })
-    const server = createSupabaseConversionServer(client)
-
-    expect((await server.readEnvelopePrefixedPage(WS, null, 1)).map(row => row.id)).toEqual([blockId(0)])
-    expect((await server.readEnvelopePrefixedPage(WS, blockId(0), 9)).map(row => row.id)).toEqual([blockId(2), blockId(5)])
-  })
-
   it('flips with the workspace id and canary', async () => {
     const {client, rpcs} = fakeClient({})
 
     await createSupabaseConversionServer(client).convertWorkspaceToE2ee(WS, ENVELOPE)
 
     expect(rpcs).toEqual([{fn: 'convert_workspace_to_e2ee', args: {p_workspace_id: WS, p_wk_canary: ENVELOPE}}])
+  })
+
+  it('lets the run cancel every request but the flip, which may commit with nobody waiting', async () => {
+    const {client, rpcs, signals} = fakeClient({blocks: [], workspaces: []})
+    const run = new AbortController()
+    const server = createSupabaseConversionServer(client, run.signal)
+
+    await server.readBlockPage(WS, null, 1)
+    await server.applyBlockPatches([])
+    await server.convertWorkspaceToE2ee(WS, ENVELOPE)
+
+    expect(signals).toEqual([run.signal])
+    expect(rpcs.map(call => [call.fn, call.signal])).toEqual([
+      ['apply_block_patches', run.signal],
+      ['convert_workspace_to_e2ee', undefined],
+    ])
   })
 
   it('reads a workspace this session cannot see as null', async () => {
@@ -171,7 +174,6 @@ describe('createSupabaseConversionServer', () => {
     await expect(server.countBlocks(WS)).rejects.toMatchObject(refused)
     await expect(server.readBlockPage(WS, null, 1)).rejects.toMatchObject(refused)
     await expect(server.applyBlockPatches([])).rejects.toMatchObject(refused)
-    await expect(server.readEnvelopePrefixedPage(WS, null, 1)).rejects.toMatchObject(refused)
     await expect(server.convertWorkspaceToE2ee(WS, ENVELOPE)).rejects.toMatchObject(refused)
   })
 })

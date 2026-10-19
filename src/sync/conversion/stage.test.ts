@@ -26,6 +26,7 @@ describe('stageOf', () => {
     expect(stageOf(read({encryptionMode: 'e2ee', conversionPhase: 'sealing'}), USER)).toMatchObject({kind: 'unexpected'})
     expect(stageOf(read({conversionPhase: 'sealing'}), USER)).toMatchObject({kind: 'unexpected'})
     expect(stageOf(read({encryptionMode: 'something-new'}), USER)).toMatchObject({kind: 'unexpected'})
+    expect(stageOf(read({encryptionMode: 'e2ee', wkCanary: 'c', conversionPhase: 'unknown'}), USER)).toMatchObject({kind: 'unexpected'})
   })
 
   it('passes on a read that saw nothing', () => {
@@ -36,9 +37,9 @@ describe('stageOf', () => {
 
 describe('stageMovedBack', () => {
   it('only moves forward', () => {
-    expect(stageMovedBack({kind: 'sealing', canary: 'c'}, {kind: 'plaintext'})).toBe(true)
-    expect(stageMovedBack({kind: 'cleaning', canary: 'c'}, {kind: 'sealing', canary: 'c'})).toBe(true)
-    expect(stageMovedBack({kind: 'sealing', canary: 'c'}, {kind: 'sealing', canary: 'c'})).toBe(false)
-    expect(stageMovedBack({kind: 'plaintext'}, {kind: 'done'})).toBe(false)
+    expect(stageMovedBack('sealing', {kind: 'plaintext'})).toBe(true)
+    expect(stageMovedBack('cleaning', {kind: 'sealing', canary: 'c'})).toBe(true)
+    expect(stageMovedBack('sealing', {kind: 'sealing', canary: 'c'})).toBe(false)
+    expect(stageMovedBack('plaintext', {kind: 'done'})).toBe(false)
   })
 })

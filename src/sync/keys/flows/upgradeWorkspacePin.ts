@@ -25,7 +25,7 @@
  */
 
 import { validateCanary } from '../../crypto/canary.js'
-import type { WorkspaceConversionRead } from '../conversionState.js'
+import { phaseKeepsWorkspaceClosed, type WorkspaceConversionRead } from '../conversionState.js'
 import {
   getUsableKeyRecord,
   readUsableKeyRecord,
@@ -70,7 +70,7 @@ export const checkServerE2eeEntry = async (deps: ServerE2eeEntryDeps): Promise<S
   const {state} = read
   if (state.encryptionMode !== 'e2ee' || !state.wkCanary) return {kind: 'unavailable'}
   const owned = state.ownerUserId === deps.userId
-  if (state.conversionPhase === 'sealing') return {kind: 'converting', owned}
+  if (phaseKeepsWorkspaceClosed(state.conversionPhase)) return {kind: 'converting', owned}
   if (await deps.hasCopiedCiphertext()) return {kind: 'copied-ciphertext'}
   return {
     kind: 'open',
