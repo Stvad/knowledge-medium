@@ -189,14 +189,16 @@ For each server row, the expected row is one of two things:
 
 - **The point's row, if it has one.** That means its three content columns as plaintext, plus `parent_id`, `order_key`, `deleted`, `created_at`, `user_updated_at`, `created_by` and `updated_by`. So moves, reorders, deletes and undeletes since the point are undone too.
   - **Never `updated_at`.** It's the row version: the clamp floors it at the old value and bumps it on a content change, so a restored row's version always advances.
-- **The tombstone form, if it doesn't, or if the manifest lists the row as unreadable** ([§9](#9-the-flow)). A row the point lacks was created after the point. Its content is `''`, `'{}'` and `'[]'` sealed **under the new key**, and `deleted` is true; its other columns are left as they are. The content is re-sealed so that a device still holding the row live can open the tombstone and apply it.
+- **The tombstone form, if it doesn't.** The row was created after the point. Its content is `''`, `'{}'` and `'[]'` sealed **under the new key**, and `deleted` is true; its other columns are left as they are. The content is re-sealed so that a device still holding the row live can open the tombstone and apply it.
+
+A row the point's manifest lists as **unreadable** ([§9](#9-the-flow)) is expected with the point's metadata, `deleted` included, and that same empty content sealed under the new key. It keeps its place in the tree, so children the point has under it stay reachable. Its content was unreadable at the point anyway.
 
 ### 4.3 Order of work
 
 Each attempt runs three steps, all stamped with the new generation and the attempt token:
 
 1. **Recreate.** Page the server's ids only. Any point id the server lacks was hard-deleted after the point; that only happens outside the app, and the history trigger records it.
-   - **What gets written.** Each goes through `apply_block_creates`: the point's row sealed under the new key, but with **`parent_id` null**. Step 2 then sets its parent like any other column.
+   - **What gets written.** Each goes through `apply_block_creates`: its expected row ([§4.2](#42-the-expected-row)) sealed under the new key, which for an unreadable row means the empty content. The one exception is **`parent_id`, written null**. Step 2 then sets its parent like any other column.
    - **No order needed.** With every recreate a root, `blocks_workspace_id_parent_id_fkey` never refuses one, so they need no parents-first order and no special case for a parent cycle.
    - **`updated_at`** is the flow's clock, which the clamp caps.
    - **One row per call.** Recreates are rare, and a call is one transaction, so a refused row in a shared call would roll back its siblings without saying which one failed.
@@ -279,7 +281,7 @@ Each tab holds, per workspace, the **generation it entered at**: the synced `wk_
 
 **Every write records it.**
 
-- **What carries it.** When `checkWorkspace` pins a transaction to its workspace, the engine writes the tab's generation for that workspace into the transaction's context (`tx_context`, which already carries `source` and `tx_seq`).
+- **What carries it.** Right before each block statement, the engine writes the tab's generation for the row's workspace into the transaction's context (`tx_context`, which already carries `source` and `tx_seq`). That's where `checkWorkspace` already runs with the row's workspace. `pinWorkspace` runs only after the statement, too late for the statement's own upload trigger. A transaction touches one workspace, so the value never changes within it.
   - Both upload triggers copy it into the queued write: the insert trigger's create and the update trigger's patch.
   - The connector sends it as the write's stamp, and folding a patch into its create keeps it.
   - `tx_context` gains the column with the same upgrade path an earlier column took.
@@ -487,7 +489,7 @@ A failed RPC with `55P03` retries; any other failure stops the run, and the next
 - **Media bytes** come from whichever source verifies.
 - **The no-verified-source list** is re-derived when the point is taken.
 
-A row that doesn't open under the key, such as garbage a member wrote, keeps its line with its metadata, and its id goes on the manifest's list of unreadable rows. The restore expects such a row in tombstone form. One bad row therefore never stops a point from being taken, and §4.4's invariant still holds. The manifest records:
+A row that doesn't open under the key, such as garbage a member wrote, keeps its line with its metadata, and its id goes on the manifest's list of unreadable rows. The restore gives such a row empty content under the new key and keeps its place ([§4.2](#42-the-expected-row)). One bad row therefore never stops a point from being taken, and §4.4's invariant still holds. The manifest records:
 
 - the workspace id;
 - the block count;
