@@ -1,1 +1,1 @@
-import{lV as e}from"../../../chunks/app--CyIQZMV.js";export{e as backlinksDataExtension};
+import{lV as e}from"../../../chunks/app-BzJxSYMv.js";export{e as backlinksDataExtension};

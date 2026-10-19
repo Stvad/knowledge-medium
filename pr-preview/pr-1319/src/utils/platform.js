@@ -1,1 +1,1 @@
-import{iF as e,rF as t}from"../../chunks/app--CyIQZMV.js";export{t as isIOS,e as isMacPlatform};
+import{iF as e,rF as t}from"../../chunks/app-BzJxSYMv.js";export{t as isIOS,e as isMacPlatform};

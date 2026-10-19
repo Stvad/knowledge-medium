@@ -1,1 +1,1 @@
-import{BM as e}from"../../../chunks/app--CyIQZMV.js";export{e as AddPropertyForm};
+import{BM as e}from"../../../chunks/app-BzJxSYMv.js";export{e as AddPropertyForm};
