@@ -1,1 +1,1 @@
-import{MY as e,NY as t}from"../../chunks/app-BNT9rtUH.js";export{e as Block,t as requireLoadedBlock};
+import{NY as e,PY as t}from"../../chunks/app-BA5WTdvB.js";export{e as Block,t as requireLoadedBlock};

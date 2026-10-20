@@ -1,1 +1,1 @@
-import{WT as e}from"../../../chunks/app-BNT9rtUH.js";export{e as shortcutHelpToggle};
+import{GT as e}from"../../../chunks/app-BA5WTdvB.js";export{e as shortcutHelpToggle};

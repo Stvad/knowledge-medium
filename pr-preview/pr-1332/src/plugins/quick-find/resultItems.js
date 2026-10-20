@@ -1,1 +1,1 @@
-import{MC as e,NC as t,PC as n}from"../../../chunks/app-BNT9rtUH.js";export{e as aliasResultItems,t as blockResultItems,n as recentResultItems};
+import{FC as e,NC as t,PC as n}from"../../../chunks/app-BA5WTdvB.js";export{t as aliasResultItems,n as blockResultItems,e as recentResultItems};

@@ -1,1 +1,1 @@
-import{bh as e,fh as t,hh as n,lh as r,mh as i,ph as a,yh as o}from"../../../chunks/app-BNT9rtUH.js";export{t as MOVE_BLOCKS_ACTION_ID,a as MULTI_SELECT_MOVE_BLOCKS_ACTION_ID,e as MoveDestinationPicker,i as moveBlockAction,n as moveBlocksAction,r as moveBlocksPlugin,o as moveBlocksTo};
+import{bh as e,fh as t,hh as n,lh as r,mh as i,ph as a,yh as o}from"../../../chunks/app-BA5WTdvB.js";export{t as MOVE_BLOCKS_ACTION_ID,a as MULTI_SELECT_MOVE_BLOCKS_ACTION_ID,e as MoveDestinationPicker,i as moveBlockAction,n as moveBlocksAction,r as moveBlocksPlugin,o as moveBlocksTo};

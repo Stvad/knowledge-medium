@@ -1,1 +1,1 @@
-import{GI as e,WI as t}from"../../../chunks/app-BNT9rtUH.js";export{t as isPropertyPanelHiddenProperty,e as isPropertyPanelReadOnlyProperty};
+import{GI as e,KI as t}from"../../../chunks/app-BA5WTdvB.js";export{e as isPropertyPanelHiddenProperty,t as isPropertyPanelReadOnlyProperty};

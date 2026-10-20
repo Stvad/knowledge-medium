@@ -1,1 +1,1 @@
-import{Fn as e,Mn as t,Nn as n,Pn as r}from"../../chunks/app-BNT9rtUH.js";export{t as TypeRegistrationTimeout,n as createTypeBlock,r as findCandidatesByPropertyShape,e as retagBlocks};
+import{Fn as e,Mn as t,Nn as n,Pn as r}from"../../chunks/app-BA5WTdvB.js";export{t as TypeRegistrationTimeout,n as createTypeBlock,r as findCandidatesByPropertyShape,e as retagBlocks};

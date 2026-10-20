@@ -1,1 +1,1 @@
-import{Gf as e,Hf as t,Uf as n,Wf as r}from"../../../../chunks/app-BNT9rtUH.js";export{t as BlockRefError,n as MIN_ID_PREFIX,r as resolveBlockRef,e as shortIds};
+import{Gf as e,Hf as t,Uf as n,Wf as r}from"../../../../chunks/app-BA5WTdvB.js";export{t as BlockRefError,n as MIN_ID_PREFIX,r as resolveBlockRef,e as shortIds};
