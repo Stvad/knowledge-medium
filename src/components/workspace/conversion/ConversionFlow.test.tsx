@@ -106,7 +106,7 @@ describe('ConversionFlow', () => {
     // The database copy waits on a slow drive until Stop.
     const writeLocalDb = (_folder: unknown, signal?: AbortSignal) =>
       new Promise<never>((_resolve, reject) => signal?.addEventListener('abort', () => reject(signal.reason)))
-    renderFlow(null, {writeLocalDb})
+    renderFlow({kind: 'ready', makeDeps: makeDepsWith({writeLocalDb})})
     await startToKeyStep()
     const key = (await screen.findByTestId('workspace-key')).textContent!
     click(/i've saved it/i)
