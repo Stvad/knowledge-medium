@@ -96,7 +96,14 @@ export async function chooseRawSqliteExportFile(
 export async function exportRawSqliteDbToFile(
   repo: Repo,
   destinationHandle: FileSystemFileHandle,
-  options: {timeoutMessage?: string} = {},
+  options: {
+    timeoutMessage?: string
+    /** The slowest destination to wait for: the deadline grows by the time
+     *  the copy takes at this rate, on top of the lock-and-checkpoint budget. */
+    minBytesPerSecond?: number
+    /** Each chunk as it is copied, e.g. to hash it in the same pass. */
+    onChunk?: (chunk: Uint8Array) => void
+  } = {},
 ): Promise<RawSqliteDbFileExport> {
   const userId = repo.user.id
   const dbFilename = dbFilenameForUser(userId)
@@ -104,11 +111,12 @@ export async function exportRawSqliteDbToFile(
 
   const root = await navigator.storage.getDirectory()
   const fileHandle = await root.getFileHandle(dbFilename)
+  const copyMs = options.minBytesPerSecond ? ((await fileHandle.getFile()).size / options.minBytesPerSecond) * 1000 : 0
   const size = await withCheckpointedDbLock(repo, async signal => {
     const sourceFile = await fileHandle.getFile()
-    await pipeBlobToFileHandle(sourceFile, destinationHandle, signal)
+    await pipeBlobToFileHandle(sourceFile, destinationHandle, signal, options.onChunk)
     return sourceFile.size
-  }, options.timeoutMessage)
+  }, options.timeoutMessage, EXPORT_LOCK_TIMEOUT_MS + copyMs)
 
   return {filename, size}
 }
@@ -851,6 +859,7 @@ const withCheckpointedDbLock = async <T,>(
    *  reload" is wrong for the cause it actually hits — a destination too slow
    *  to finish inside the window a background copy may hold the database. */
   timeoutMessage: string = DEFAULT_LOCK_TIMEOUT_MESSAGE,
+  deadlineMs: number = EXPORT_LOCK_TIMEOUT_MS,
 ): Promise<T> => {
   const maybeDb = repo.db as unknown as Partial<PowerSyncWriteLockDb>
   if (typeof maybeDb.writeLock !== 'function') {
@@ -891,18 +900,27 @@ const withCheckpointedDbLock = async <T,>(
     // deadline, and the copy writes to the caller's chosen destination.
     if (signal.aborted) throw new Error('Export abandoned before the copy began.')
     return callback(signal)
-  }), EXPORT_LOCK_TIMEOUT_MS, timeoutMessage)
+  }), deadlineMs, timeoutMessage)
 }
 
 const pipeBlobToFileHandle = async (
   blob: Blob,
   fileHandle: FileSystemFileHandle,
   signal?: AbortSignal,
+  onChunk?: (chunk: Uint8Array) => void,
 ): Promise<void> => {
   const writable = await fileHandle.createWritable({keepExistingData: false})
+  const source = onChunk
+    ? blob.stream().pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+      transform: (chunk, controller) => {
+        onChunk(chunk)
+        controller.enqueue(chunk)
+      },
+    }))
+    : blob.stream()
   // Through `pipeTo`, so an abort tears down the writable too — a copy that
   // merely stops being awaited keeps writing.
-  await blob.stream().pipeTo(writable, {signal})
+  await source.pipeTo(writable, {signal})
 }
 
 const removeEntryIfExists = async (

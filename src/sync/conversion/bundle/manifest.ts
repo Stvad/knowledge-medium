@@ -30,6 +30,9 @@ export interface BundleManifest {
   readonly through: number
   /** The workspace's block count, read in the same window as `blocks.jsonl`. */
   readonly serverBlockCount: number
+  /** `workspaces.properties_migration` as the bundle was taken: rows from
+   *  another stage of that switch read differently, so a restore checks it. */
+  readonly propertiesMigration: string
   readonly parts: {
     readonly [BUNDLE_PARTS.blocks]: JsonlDigest
     readonly [BUNDLE_PARTS.history]: JsonlDigest

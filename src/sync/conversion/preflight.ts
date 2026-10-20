@@ -6,7 +6,9 @@
 
 import { SEALED_COLUMNS } from '../transform.js'
 import type { ConversionServer } from './conversionServer.js'
-import { idsOf, isSealedRow, RESEAL_PAGE_SIZE } from './sealing.js'
+import { encodeJsonlLine } from './bundle/bundleParts.js'
+import { BUNDLE_PAGE_SIZE, blockRowPages, historyRowPages } from './bundle/takeBundle.js'
+import { idsOf, isSealedRow } from './sealing.js'
 
 export interface PreflightEnvironment {
   /** Mode pins persist (`canPersistPins`): the pin upgrade writes one. */
@@ -34,7 +36,7 @@ export type PreflightBlocker =
   | {readonly kind: 'no-directory-picker'}
 
 /** What the recovery bundle and the conversion will take, measured by a dry
- *  run of the bundle's own paging. A bundle that can't be written after the
+ *  run of the bundle's own paging and line encoding. A bundle that can't be written after the
  *  flip leaves every device waiting until it is. */
 export interface ConversionSizes {
   readonly blockRows: number
@@ -58,40 +60,31 @@ export interface PreflightReport {
 const SEALED_LOOKING_SAMPLE = 20
 
 const encoder = new TextEncoder()
-/** One `.jsonl` line, as the bundle writes it. */
-const lineBytes = (row: unknown): number => encoder.encode(JSON.stringify(row)).length + 1
 
-/** The dry run, which also finds sealed-looking rows. Every read is one
- *  bounded index scan by id, where a server-side filter over the whole
- *  workspace would hit the statement timeout on a large one. */
+/** The dry run of the bundle's own paging, which also finds sealed-looking
+ *  rows. Every read is one bounded index scan by id, where a server-side
+ *  filter over the whole workspace would hit the statement timeout on a large
+ *  one. */
 const scanServer = async (server: ConversionServer, workspaceId: string, signal?: AbortSignal) => {
   const sealedLooking: string[] = []
   let blockRows = 0
   let blocksBytes = 0
   let contentBytes = 0
-  for (let afterId: string | null = null; ;) {
-    signal?.throwIfAborted()
-    const page = await server.readFullBlockPage(workspaceId, afterId, RESEAL_PAGE_SIZE)
-    if (page.length === 0) break
+  for await (const page of blockRowPages(server, workspaceId, BUNDLE_PAGE_SIZE, signal)) {
     for (const row of page) {
-      blocksBytes += lineBytes(row)
+      blocksBytes += encodeJsonlLine(row).length
       for (const column of SEALED_COLUMNS) contentBytes += encoder.encode(row[column]).length
     }
     if (sealedLooking.length < SEALED_LOOKING_SAMPLE) sealedLooking.push(...idsOf(page.filter(isSealedRow)))
     blockRows += page.length
-    afterId = page[page.length - 1].id
   }
 
-  const {maxEventId} = await server.historyBounds(workspaceId)
+  const {maxEventId} = await server.workspaceCounts(workspaceId)
   let historyRows = 0
   let historyBytes = 0
-  for (let afterEventId = 0; afterEventId < maxEventId;) {
-    signal?.throwIfAborted()
-    const page = await server.readHistoryPage(workspaceId, afterEventId, maxEventId, RESEAL_PAGE_SIZE)
-    if (page.length === 0) break
-    for (const row of page) historyBytes += lineBytes(row)
+  for await (const page of historyRowPages(server, workspaceId, maxEventId, BUNDLE_PAGE_SIZE, signal)) {
+    for (const row of page) historyBytes += encodeJsonlLine(row).length
     historyRows += page.length
-    afterEventId = page[page.length - 1].event_id
   }
   return {
     sealedLooking: sealedLooking.slice(0, SEALED_LOOKING_SAMPLE),

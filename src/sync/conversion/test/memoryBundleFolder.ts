@@ -49,6 +49,10 @@ export class MemoryBundleFolder implements BundleFolder {
     return folder
   }
 
+  async removeEntry(name: string): Promise<void> {
+    if (!this.files.delete(name) && !this.folders.delete(name)) throw new DOMException(`${name} not found`, 'NotFoundError')
+  }
+
   text(name: string): string {
     return new TextDecoder().decode(this.files.get(name))
   }

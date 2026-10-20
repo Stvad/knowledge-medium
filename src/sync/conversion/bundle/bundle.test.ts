@@ -4,7 +4,8 @@ import { contentColumnsOf } from '../sealing.js'
 import { flipUnder, keyOf, sealFor, seedPlaintext, WS } from '../test/conversionFixtures.js'
 import { FakeConversionServer, type FakeBlockRow } from '../test/fakeConversionServer.js'
 import { MemoryBundleFolder } from '../test/memoryBundleFolder.js'
-import { sha256Hex, type BundleFolder } from './bundleParts.js'
+import { sha256Hex } from './bundleParts.js'
+import { FAKE_LOCAL_DB, writeFakeLocalDb } from '../test/flowFixtures.js'
 import { BUNDLE_PARTS, type BundleManifest } from './manifest.js'
 import { BundleRefusal, takeBundle, type TakeBundleOptions } from './takeBundle.js'
 import { BundleInvalid, verifyBundle } from './verifyBundle.js'
@@ -14,7 +15,6 @@ let folder: MemoryBundleFolder
 let seeded: FakeBlockRow[]
 let wk: CryptoKey
 
-const LOCAL_DB = new TextEncoder().encode('SQLite format 3\0 local history')
 
 beforeEach(async () => {
   server = new FakeConversionServer()
@@ -23,14 +23,8 @@ beforeEach(async () => {
   wk = await keyOf(1)
 })
 
-const writeLocalDb = async (into: BundleFolder) => {
-  const writable = await (await into.getFileHandle(BUNDLE_PARTS.localDb, {create: true})).createWritable()
-  await writable.write(LOCAL_DB.slice())
-  await writable.close()
-}
-
 const take = (options: Partial<TakeBundleOptions> = {}) =>
-  takeBundle({server, workspaceId: WS, folder, writeLocalDb, pageSize: 2, now: () => new Date(0), ...options})
+  takeBundle({server, workspaceId: WS, folder, writeLocalDb: writeFakeLocalDb, pageSize: 2, now: () => new Date(0), ...options})
 const verify = (manifestSha256?: string) => verifyBundle({folder, workspaceId: WS, manifestSha256})
 
 const lines = (name: string) => folder.text(name).split('\n').filter(Boolean).map(line => JSON.parse(line))
@@ -67,10 +61,11 @@ describe('takeBundle', () => {
       workspaceId: WS,
       through: Math.max(...server.history(WS).map(row => row.event_id)),
       serverBlockCount: 5,
-      parts: {[BUNDLE_PARTS.blocks]: {lines: 5}, [BUNDLE_PARTS.history]: {lines: 5}, [BUNDLE_PARTS.localDb]: {bytes: LOCAL_DB.length}},
+      parts: {[BUNDLE_PARTS.blocks]: {lines: 5}, [BUNDLE_PARTS.history]: {lines: 5}, [BUNDLE_PARTS.localDb]: {bytes: FAKE_LOCAL_DB.length}},
     })
+    expect(manifest.propertiesMigration).toBe('children')
     expect(manifestOf()).toEqual(manifest)
-    expect((await verify()).manifest).toEqual(manifest)
+    expect(await verify()).toMatchObject({manifest, counted: {blockRows: 5, historyRows: 5, through: manifest.through}})
   })
 
   it('holds plaintext for rows the re-seal already sealed', async () => {
@@ -111,6 +106,11 @@ describe('takeBundle', () => {
     await expect(take()).rejects.toEqual(new BundleRefusal('no-record', ['outsider']))
   })
 
+  it('copies this device\'s database before the long server read, so a slow folder fails first', async () => {
+    await expect(take({writeLocalDb: async () => { throw new Error('too slow') }})).rejects.toThrow('too slow')
+    expect(server.calls.some(call => call.method === 'readFullBlockPage' || call.method === 'readHistoryPage')).toBe(false)
+  })
+
   it('reads again when a write lands during the paging', async () => {
     const read = server.readFullBlockPage.bind(server)
     let reads = 0
@@ -146,9 +146,17 @@ describe('takeBundle', () => {
     await expect(take()).rejects.toThrow(/read 2 of the workspace's 5 rows/)
   })
 
+  it('refuses a history read that skipped a row', async () => {
+    const read = server.readHistoryPage.bind(server)
+    server.readHistoryPage = async (...args) => (await read(...args)).filter(row => row.event_id !== 2)
+
+    await expect(take()).rejects.toThrow(/4 of its 5 history rows/)
+  })
+
   it('treats a session that sees no rows as an error, not an empty workspace', async () => {
     server.signedOut = true
-    await expect(take()).rejects.toThrow(/not visible to this session/)
+    await expect(take()).rejects.toThrow(/permission denied|not visible to this session/)
+    expect(folder.files.has(BUNDLE_PARTS.manifest)).toBe(false)
   })
 })
 
@@ -171,7 +179,24 @@ describe('verifyBundle', () => {
 
   it('refuses a bundle whose writing never finished', async () => {
     folder.files.delete(BUNDLE_PARTS.manifest)
-    expect(await problemOf(verify())).toBe('missing-part')
+    expect(await problemOf(verify())).toBe('unreadable')
+  })
+
+  it('refuses a bundle missing one of its parts', async () => {
+    folder.files.delete(BUNDLE_PARTS.history)
+    expect(await problemOf(verify())).toBe('part-unreadable')
+  })
+
+  it('refuses a manifest that claims a line count its parts do not hold', async () => {
+    for (const name of [BUNDLE_PARTS.blocks, BUNDLE_PARTS.history]) {
+      await take()
+      const manifest = manifestOf()
+      folder.setText(BUNDLE_PARTS.manifest, JSON.stringify({
+        ...manifest,
+        parts: {...manifest.parts, [name]: {...manifest.parts[name], lines: manifest.parts[name].lines + 1}},
+      }))
+      expect(await problemOf(verify())).toBe('row-count')
+    }
   })
 
   it('refuses a truncated blocks file even when its manifest entry matches it', async () => {

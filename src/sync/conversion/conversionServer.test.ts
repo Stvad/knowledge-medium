@@ -15,7 +15,12 @@ const valueAt = (row: Row, path: string): unknown => {
  *  without an `order` comes back in no particular order. */
 const fakeClient = (
   tables: Record<string, Row[]>,
-  {maxRows = Infinity, error, status = 400}: {maxRows?: number; error?: {code: string; message: string}; status?: number} = {},
+  {maxRows = Infinity, error, status = 400, rpcData = {}}: {
+    maxRows?: number
+    error?: {code: string; message: string}
+    status?: number
+    rpcData?: Record<string, unknown>
+  } = {},
 ) => {
   const inListLengths: number[] = []
   const rpcs: Array<{fn: string; args: unknown; signal?: AbortSignal}> = []
@@ -69,7 +74,7 @@ const fakeClient = (
     const response = {
       abortSignal: (signal: AbortSignal) => ((call.signal = signal), response),
       then: (resolve: (value: unknown) => unknown, reject: (reason: unknown) => unknown) =>
-        Promise.resolve({error: error ?? null, status: error ? status : 204}).then(resolve, reject),
+        Promise.resolve({data: error ? null : (rpcData[fn] ?? null), error: error ?? null, status: error ? status : 200}).then(resolve, reject),
     }
     return response
   }
@@ -158,11 +163,13 @@ describe('createSupabaseConversionServer', () => {
     expect(await createSupabaseConversionServer(client).readWorkspace(WS)).toBeNull()
   })
 
-  it('counts the workspace\'s rows', async () => {
-    const blocks = [0, 1, 2].map(i => ({id: blockId(i), workspace_id: WS}))
-    const {client} = fakeClient({blocks: [...blocks, {id: 'x', workspace_id: 'ws-other'}]})
+  it('counts the workspace through the one owner-only RPC', async () => {
+    const {client, rpcs} = fakeClient({}, {
+      rpcData: {conversion_workspace_counts: [{block_count: 3, history_count: 7, max_event_id: 42}]},
+    })
 
-    expect(await createSupabaseConversionServer(client).countBlocks(WS)).toBe(3)
+    expect(await createSupabaseConversionServer(client).workspaceCounts(WS)).toEqual({blocks: 3, history: 7, maxEventId: 42})
+    expect(rpcs).toEqual([{fn: 'conversion_workspace_counts', args: {p_workspace_id: WS}}])
   })
 
   it('throws a server error with its code and HTTP status', async () => {
@@ -171,7 +178,7 @@ describe('createSupabaseConversionServer', () => {
     const refused = {code: '42501', status: 403}
 
     await expect(server.readWorkspace(WS)).rejects.toMatchObject(refused)
-    await expect(server.countBlocks(WS)).rejects.toMatchObject(refused)
+    await expect(server.workspaceCounts(WS)).rejects.toMatchObject(refused)
     await expect(server.readBlockPage(WS, null, 1)).rejects.toMatchObject(refused)
     await expect(server.applyBlockPatches([])).rejects.toMatchObject(refused)
     await expect(server.convertWorkspaceToE2ee(WS, ENVELOPE)).rejects.toMatchObject(refused)

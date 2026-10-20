@@ -30,9 +30,12 @@ export type FullServerHistoryRow = Readonly<Record<string, unknown>> & {
   readonly workspace_id: string
 }
 
-export interface HistoryBounds {
-  /** How many history rows the workspace has. Every write to a block adds one. */
-  readonly count: number
+/** `conversion_workspace_counts`: read in one statement, so from one snapshot. */
+export interface WorkspaceCounts {
+  /** Block rows, soft-deleted ones included. */
+  readonly blocks: number
+  /** History rows. Every write to a block adds one. */
+  readonly history: number
   /** The workspace's highest `event_id`, or 0 when it has no history. */
   readonly maxEventId: number
 }
@@ -73,13 +76,15 @@ export const errorCodeOf = (error: unknown): string | undefined => {
 export interface ServerWorkspace {
   readonly encryption_mode: 'none' | 'e2ee'
   readonly wk_canary: string | null
+  readonly properties_migration: string
 }
 
 export interface ConversionServer {
   /** Null when this session can't see the workspace: signed out, or not a member. */
   readWorkspace(workspaceId: string): Promise<ServerWorkspace | null>
-  /** How many rows the workspace holds, soft-deleted ones included. */
-  countBlocks(workspaceId: string): Promise<number>
+  /** Owner-only, through one RPC: counting under the row-level policies costs a
+   *  check per row and runs past the statement timeout on a large workspace. */
+  workspaceCounts(workspaceId: string): Promise<WorkspaceCounts>
   /** The workspace's rows with an id above `afterId`, in id order, soft-deleted
    *  ones included. A page may hold fewer than `limit` rows before the end (the
    *  API caps rows per response); only an empty page means there are no more. */
@@ -96,7 +101,6 @@ export interface ConversionServer {
   convertWorkspaceToE2ee(workspaceId: string, canary: string): Promise<void>
   /** {@link readBlockPage}, with every column. */
   readFullBlockPage(workspaceId: string, afterId: string | null, limit: number): Promise<readonly FullServerBlockRow[]>
-  historyBounds(workspaceId: string): Promise<HistoryBounds>
   /** The workspace's history rows with `afterEventId < event_id ≤ throughEventId`,
    *  in `event_id` order, every column. Paged like {@link readBlockPage}. */
   readHistoryPage(
@@ -135,21 +139,19 @@ export const createSupabaseConversionServer = (client: SupabaseClient, signal?: 
     async readWorkspace(workspaceId) {
       const {data, error, status} = await cancellable(client
         .from('workspaces')
-        .select('encryption_mode,wk_canary')
+        .select('encryption_mode,wk_canary,properties_migration')
         .eq('id', workspaceId))
         .maybeSingle()
       if (error) throw failed('reading the workspace', error, status)
       return data
     },
 
-    async countBlocks(workspaceId) {
-      const {count, error, status} = await cancellable(client
-        .from('blocks')
-        .select('id', {count: 'exact', head: true})
-        .eq('workspace_id', workspaceId))
-      if (error) throw failed('counting blocks', error, status)
-      if (count === null) throw new Error('conversion: counting blocks returned no count')
-      return count
+    async workspaceCounts(workspaceId) {
+      const {data, error, status} = await cancellable(client.rpc('conversion_workspace_counts', {p_workspace_id: workspaceId}))
+      if (error) throw failed('conversion_workspace_counts', error, status)
+      const [row] = data as Array<{block_count: number; history_count: number; max_event_id: number}>
+      if (!row) throw new Error('conversion: conversion_workspace_counts returned no row')
+      return {blocks: row.block_count, history: row.history_count, maxEventId: row.max_event_id}
     },
 
     async readBlockPage(workspaceId, afterId, limit) {
@@ -209,23 +211,6 @@ export const createSupabaseConversionServer = (client: SupabaseClient, signal?: 
       const {data, error, status} = await cancellable(query.order('id', {ascending: true}).limit(limit))
       if (error) throw failed('reading blocks', error, status)
       return data as FullServerBlockRow[]
-    },
-
-    async historyBounds(workspaceId) {
-      const counted = await cancellable(client
-        .from('blocks_history')
-        .select('event_id', {count: 'exact', head: true})
-        .eq('workspace_id', workspaceId))
-      if (counted.error) throw failed('counting block history', counted.error, counted.status)
-      if (counted.count === null) throw new Error('conversion: counting block history returned no count')
-      const latest = await cancellable(client
-        .from('blocks_history')
-        .select('event_id')
-        .eq('workspace_id', workspaceId)
-        .order('event_id', {ascending: false})
-        .limit(1))
-      if (latest.error) throw failed('reading block history', latest.error, latest.status)
-      return {count: counted.count, maxEventId: latest.data[0]?.event_id ?? 0}
     },
 
     async readHistoryPage(workspaceId, afterEventId, throughEventId, limit) {

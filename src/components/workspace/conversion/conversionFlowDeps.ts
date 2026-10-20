@@ -5,7 +5,7 @@ import type { Repo } from '@/data/repo'
 import { fetchWorkspaceConversionState } from '@/data/workspaceConversion'
 import { markLocalWorkspaceConverted } from '@/data/workspaces'
 import { supabase } from '@/services/supabase'
-import type { BundleFolder } from '@/sync/conversion/bundle/bundleParts'
+import { createPartHasher, type BundleFolder } from '@/sync/conversion/bundle/bundleParts'
 import { IndexedDbBundleRecordStore } from '@/sync/conversion/bundle/bundleRecord'
 import { BUNDLE_PARTS } from '@/sync/conversion/bundle/manifest'
 import { createSupabaseConversionServer } from '@/sync/conversion/conversionServer'
@@ -62,8 +62,14 @@ export const conversionUnavailable = (localOnly: boolean): ConversionUnavailable
 
 let bundleRecords: IndexedDbBundleRecordStore | null = null
 
-/** In the browser every bundle folder is a `FileSystemDirectoryHandle`. */
-const directoryOf = (folder: BundleFolder): FileSystemDirectoryHandle => folder as unknown as FileSystemDirectoryHandle
+/** The slowest folder the database copy waits for: a USB 2 stick or a slow
+ *  network share, in bytes a second. */
+const SLOWEST_BUNDLE_DISK = 5 * 1024 * 1024
+
+/** In the browser every bundle folder is a `FileSystemDirectoryHandle`: the
+ *  picker made it, or IndexedDB stored one. */
+export const directoryHandleOf = (folder: BundleFolder): FileSystemDirectoryHandle =>
+  folder as unknown as FileSystemDirectoryHandle
 
 /** Call only once {@link conversionUnavailable} has returned null. */
 export const conversionFlowDeps = (
@@ -85,10 +91,16 @@ export const conversionFlowDeps = (
     preflight: preflightEnvironment(repo),
     markLocalConverted: canary => markLocalWorkspaceConverted(repo.db, workspaceId, canary),
     bundles: (bundleRecords ??= new IndexedDbBundleRecordStore()),
-    canReadFolder: async folder => (await queryDirectoryPermission(directoryOf(folder), 'read')) === 'granted',
+    canReadFolder: async folder => (await queryDirectoryPermission(directoryHandleOf(folder), 'read')) === 'granted',
     writeLocalDb: async folder => {
-      const file = await folder.getFileHandle(BUNDLE_PARTS.localDb, {create: true})
-      await exportRawSqliteDbToFile(repo, file as unknown as FileSystemFileHandle)
+      const hasher = createPartHasher()
+      await exportRawSqliteDbToFile(repo, await directoryHandleOf(folder).getFileHandle(BUNDLE_PARTS.localDb, {create: true}), {
+        timeoutMessage:
+          "Copying this device's database into the recovery bundle took too long. Pick a folder on a faster disk, then try again.",
+        minBytesPerSecond: SLOWEST_BUNDLE_DISK,
+        onChunk: chunk => hasher.update(chunk),
+      })
+      return hasher.digest()
     },
     keepAwake: holdScreenWakeLock,
     upgradePin: async () => {

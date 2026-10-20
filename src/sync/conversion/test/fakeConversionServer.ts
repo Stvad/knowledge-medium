@@ -20,11 +20,11 @@ import {
   type ConversionServer,
   type FullServerBlockRow,
   type FullServerHistoryRow,
-  type HistoryBounds,
   type ResealPatch,
   type ServerBlockRow,
   type ServerHistoryRow,
   type ServerWorkspace,
+  type WorkspaceCounts,
 } from '../conversionServer.js'
 import { isSealedRow, isSealedValue } from '../sealing.js'
 
@@ -44,6 +44,10 @@ class FakeServerError extends Error {
     super(message)
   }
 }
+
+/** The purge's refusal over a row that isn't sealed, as the server raises it. */
+export const notSealedRefusal = (): Error =>
+  new FakeServerError(ConversionErrorCode.refused, 'purge_workspace_history: a block row of the workspace is not fully sealed')
 
 const VERSIONED_COLUMNS = [...SEALED_COLUMNS, 'deleted'] as const
 
@@ -76,6 +80,8 @@ export class FakeConversionServer implements ConversionServer {
   readonly staleReads = new Map<string, FakeBlockRow>()
   /** A session that has lost its sign-in: RLS hides every row, and writes are refused. */
   signedOut = false
+  /** `workspaces.properties_migration`. */
+  propertiesMigration = 'children'
   /** The workspaces' owner, for the owner-only RPCs. */
   ownerUserId = 'user-1'
   /** The user this session is signed in as. */
@@ -88,7 +94,7 @@ export class FakeConversionServer implements ConversionServer {
   /** `convert_workspace_to_e2ee`, committed: the mode, canary and phase change,
    *  no row does. */
   flip(workspaceId: string, canary: string): void {
-    this.workspaces.set(workspaceId, {encryption_mode: 'e2ee', wk_canary: canary})
+    this.workspaces.set(workspaceId, {encryption_mode: 'e2ee', wk_canary: canary, properties_migration: this.propertiesMigration})
     this.phases.set(workspaceId, 'sealing')
   }
 
@@ -102,7 +108,7 @@ export class FakeConversionServer implements ConversionServer {
    *  conversion phase, in one snapshot. */
   async conversionState(workspaceId: string): Promise<WorkspaceConversionRead> {
     if (this.signedOut) return {kind: 'not-visible'}
-    const workspace = this.workspaces.get(workspaceId) ?? {encryption_mode: 'none', wk_canary: null}
+    const workspace = this.workspaces.get(workspaceId) ?? {encryption_mode: 'none', wk_canary: null, properties_migration: this.propertiesMigration}
     return {
       kind: 'read',
       state: {
@@ -154,23 +160,26 @@ export class FakeConversionServer implements ConversionServer {
   async readWorkspace(workspaceId: string): Promise<ServerWorkspace | null> {
     this.calls.push({method: 'readWorkspace', count: 1})
     if (this.signedOut) return null
-    return this.workspaces.get(workspaceId) ?? {encryption_mode: 'none', wk_canary: null}
+    return this.workspaces.get(workspaceId) ?? {encryption_mode: 'none', wk_canary: null, properties_migration: this.propertiesMigration}
   }
 
-  async countBlocks(workspaceId: string): Promise<number> {
-    this.calls.push({method: 'countBlocks', count: 1})
-    return this.visibleRows(workspaceId).length
+  async workspaceCounts(workspaceId: string): Promise<WorkspaceCounts> {
+    this.calls.push({method: 'workspaceCounts', count: 1})
+    // Signed out, the call runs as anon, whose EXECUTE is revoked.
+    if (this.signedOut) throw new FakeServerError('42501', 'permission denied for function conversion_workspace_counts')
+    if (this.sessionUserId !== this.ownerUserId) {
+      throw new FakeServerError(ConversionErrorCode.refused, 'conversion_workspace_counts: only the workspace owner can count it')
+    }
+    const history = this.historyRows.filter(row => row.workspace_id === workspaceId)
+    return {
+      blocks: this.workspaceRows(workspaceId).length,
+      history: history.length,
+      maxEventId: history.reduce((max, row) => Math.max(max, row.event_id), 0),
+    }
   }
 
   async readBlockPage(workspaceId: string, afterId: string | null, limit: number): Promise<ServerBlockRow[]> {
-    const page = this.visibleRows(workspaceId)
-      .filter(row => afterId === null || row.id > afterId)
-      .slice(0, Math.min(limit, this.maxRows))
-      .map(row => {
-        const stale = this.staleReads.get(row.id)
-        this.staleReads.delete(row.id)
-        return stale ?? row
-      })
+    const page = this.pageOf(workspaceId, afterId, limit)
     this.calls.push({method: 'readBlockPage', count: page.length})
     return page
   }
@@ -242,14 +251,21 @@ export class FakeConversionServer implements ConversionServer {
   }
 
   async readFullBlockPage(workspaceId: string, afterId: string | null, limit: number): Promise<FullServerBlockRow[]> {
-    const page = await this.readBlockPage(workspaceId, afterId, limit)
+    const page = this.pageOf(workspaceId, afterId, limit)
+    this.calls.push({method: 'readFullBlockPage', count: page.length})
     return page.map(row => ({...row}))
   }
 
-  async historyBounds(workspaceId: string): Promise<HistoryBounds> {
-    this.calls.push({method: 'historyBounds', count: 1})
-    const rows = this.visibleHistory(workspaceId)
-    return {count: rows.length, maxEventId: rows.reduce((max, row) => Math.max(max, row.event_id), 0)}
+  /** A page by id, as RLS shows it; a stale read stands in for a row once. */
+  private pageOf(workspaceId: string, afterId: string | null, limit: number): FakeBlockRow[] {
+    return this.visibleRows(workspaceId)
+      .filter(row => afterId === null || row.id > afterId)
+      .slice(0, Math.min(limit, this.maxRows))
+      .map(row => {
+        const stale = this.staleReads.get(row.id)
+        this.staleReads.delete(row.id)
+        return stale ?? row
+      })
   }
 
   async readHistoryPage(

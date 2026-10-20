@@ -29,7 +29,6 @@ import { conversionLockName, type ConversionLock } from './runLock.js'
 import {
   runSealingPass,
   type BundlePrompts,
-  type BundleRetakeReason,
   type SealingDeps,
   type SealingPass,
   type SealingStatus,
@@ -59,7 +58,8 @@ export interface ConversionUi extends KeyPrompts, BundlePrompts {
   status(status: ConversionStatus): void
 }
 
-export interface ConversionFlowDeps {
+export interface ConversionFlowDeps
+  extends Pick<SealingDeps, 'bundles' | 'canReadFolder' | 'writeLocalDb' | 'keepAwake' | 'purgeRetry'> {
   readonly userId: string
   readonly workspaceId: string
   readonly server: ConversionServer
@@ -74,10 +74,6 @@ export interface ConversionFlowDeps {
    *  say plaintext until a checkpoint delivers the flip, and send this device's
    *  own writes up as plaintext for the server to refuse. */
   readonly markLocalConverted: (canary: string) => Promise<void>
-  readonly bundles: SealingDeps['bundles']
-  readonly canReadFolder: SealingDeps['canReadFolder']
-  readonly writeLocalDb: SealingDeps['writeLocalDb']
-  readonly keepAwake: SealingDeps['keepAwake']
   /** Step 7: this device's one-way pin upgrade, under the stored key, then
    *  the drain. Reopens the workspace here once it succeeds. */
   readonly upgradePin: () => Promise<UpgradeWorkspacePinResult>
@@ -85,7 +81,6 @@ export interface ConversionFlowDeps {
   readonly signal?: AbortSignal
   readonly generateKeyBytes?: () => Uint8Array<ArrayBuffer>
   readonly flipTiming?: Pick<FlipOptions, 'sleep' | 'random'>
-  readonly purgeRetry?: SealingDeps['purgeRetry']
 }
 
 export type ConversionRunResult =
@@ -131,7 +126,8 @@ const flipLanded = async (deps: ConversionFlowDeps): Promise<StageRead | 'landed
 const runPlaintextStage = async (deps: ConversionFlowDeps): Promise<StageOutcome> => {
   const {server, workspaceId, ui, signal} = deps
   ui.status({kind: 'preflight'})
-  const report = await runPreflight({server, workspaceId, environment: deps.preflight, signal})
+  const release = await deps.keepAwake()
+  const report = await runPreflight({server, workspaceId, environment: deps.preflight, signal}).finally(release)
   if (report.blockers.length > 0) return {kind: 'preflight-failed', blockers: report.blockers}
   await ui.confirmPreflight(report)
 
@@ -184,10 +180,16 @@ const enterSealedStage = async (deps: ConversionFlowDeps, canary: string): Promi
 const runSealingStage = async (
   deps: ConversionFlowDeps,
   canary: string,
-  retakeReason: BundleRetakeReason | null,
+  lastPass: SealingPass | null,
 ): Promise<StageOutcome> => {
   const key = await enterSealedStage(deps, canary)
-  const pass = await runSealingPass(deps, key.wk, retakeReason)
+  const pass = await runSealingPass(deps, key.wk, {
+    retakeReason: lastPass?.kind === 'retake' ? lastPass.reason : null,
+    // The last pass re-sealed and verified everything, then dropped only its
+    // bundle; the server is as it left it unless the purge found history the
+    // bundle lacked.
+    resealed: lastPass?.kind === 'retake' && lastPass.reason !== 'stale',
+  })
   return pass.kind === 'purged' ? {kind: 'advanced', reached: 'cleaning'} : {kind: 'again', pass}
 }
 
@@ -208,7 +210,7 @@ const runStage = async (
     case 'plaintext':
       return runPlaintextStage(deps)
     case 'sealing':
-      return runSealingStage(deps, stage.canary, lastPass?.kind === 'retake' ? lastPass.reason : null)
+      return runSealingStage(deps, stage.canary, lastPass)
     case 'cleaning':
       return runCleaningStage(deps, stage)
   }
@@ -233,19 +235,18 @@ const runLocked = async (deps: ConversionFlowDeps): Promise<ConversionRunResult>
   for (let stage: ActiveStage = first.stage; ;) {
     deps.signal?.throwIfAborted()
     const outcome = await runStage(deps, stage, lastPass)
-    if (outcome.kind === 'again') {
-      lastPass = outcome.pass
-      if (++sealingPasses >= MAX_SEALING_PASSES) return {kind: 'sealing-stuck', pass: outcome.pass}
-    } else if (outcome.kind === 'advanced') {
-      lastPass = null
-      reached = laterStage(reached, outcome.reached)
-    } else {
-      return outcome
-    }
+    if (outcome.kind === 'advanced') reached = laterStage(reached, outcome.reached)
+    else if (outcome.kind !== 'again') return outcome
+    lastPass = outcome.kind === 'again' ? outcome.pass : null
     const next = await readStage(deps)
     if (next.kind !== 'stage') return {kind: 'blocked', read: next}
     if (stageMovedBack(reached, next.stage)) return {kind: 'stage-moved-back', reached, shown: next.stage}
     if (next.stage.kind === 'done') return finished(deps, next.stage.canary)
+    // Counted only once the server still shows sealing: a pass whose purge
+    // landed with its response lost has moved the stage on.
+    if (outcome.kind === 'again' && next.stage.kind === 'sealing' && ++sealingPasses >= MAX_SEALING_PASSES) {
+      return {kind: 'sealing-stuck', pass: outcome.pass}
+    }
     stage = next.stage
   }
 }

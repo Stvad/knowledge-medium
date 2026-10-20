@@ -33,7 +33,7 @@ export const useConversionFlowTarget = (): ConversionFlowTarget | null =>
   useSyncExternalStore(callback => subscribers.add(callback), conversionFlowTarget)
 
 /** Offered from workspace settings only in development builds until the flow
- *  can finish a conversion: preflight, key and flip are built, the recovery
- *  bundle and cleanup are not (#1290). The gate offers to continue a
- *  conversion that has already flipped in every build. */
+ *  can finish a conversion: the attachment cleanup and `finish_conversion` are
+ *  not wired in yet (#1290). The gate offers to continue a conversion that has
+ *  already flipped in every build. */
 export const CONVERSION_START_ENABLED = import.meta.env.DEV

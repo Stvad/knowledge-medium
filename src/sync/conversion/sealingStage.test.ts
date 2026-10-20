@@ -5,12 +5,11 @@ import type { BundleFolder } from './bundle/bundleParts.js'
 import { InMemoryBundleRecordStore } from './bundle/bundleRecord.js'
 import { BUNDLE_PARTS } from './bundle/manifest.js'
 import { verifyBundle } from './bundle/verifyBundle.js'
-import { ConversionErrorCode } from './conversionServer.js'
 import { runConversion, type ConversionFlowDeps, type ConversionUi } from './runConversion.js'
 import { contentColumnsOf, isSealedRow } from './sealing.js'
 import type { BundleRetakeReason } from './sealingStage.js'
 import { openRow, seedPlaintext, WS } from './test/conversionFixtures.js'
-import { FakeConversionServer, type FakeBlockRow } from './test/fakeConversionServer.js'
+import { FakeConversionServer, notSealedRefusal, type FakeBlockRow } from './test/fakeConversionServer.js'
 import { flowDeps, USER } from './test/flowFixtures.js'
 import { MemoryBundleFolder } from './test/memoryBundleFolder.js'
 
@@ -19,6 +18,9 @@ class SealingUi implements ConversionUi {
   readonly parent = new MemoryBundleFolder('picked')
   readonly folderReasons: Array<BundleRetakeReason | null> = []
   reopened = 0
+  readonly problems: Array<string | null> = []
+  /** What the user hands back when asked for the folder again; by default the recorded one. */
+  reopenWith: (recorded: BundleFolder) => BundleFolder | null = recorded => recorded
   async confirmContract() {}
   async confirmPreflight() {}
   async saveKey(): Promise<string> {
@@ -31,9 +33,10 @@ class SealingUi implements ConversionUi {
     this.folderReasons.push(reason)
     return this.parent
   }
-  async reopenBundleFolder({recorded}: {recorded: BundleFolder}) {
+  async reopenBundleFolder({recorded, problem}: {recorded: BundleFolder; problem: string | null}) {
     this.reopened++
-    return recorded
+    this.problems.push(problem)
+    return this.reopenWith(recorded)
   }
   status() {}
 }
@@ -137,10 +140,14 @@ describe('the sealing stage', () => {
       if (!options?.create) throw new DOMException('not found', 'NotFoundError')
       return folder
     }
+    const removed: string[] = []
+    ui.parent.removeEntry = async name => void removed.push(name)
 
     await expect(run()).rejects.toThrow(/doesn't check out/)
     expect(await record()).toBeNull()
     expect(patchCalls()).toBe(0)
+    // The half-written plaintext copy is not left behind.
+    expect(removed).toEqual([folder.name])
   })
 
   it('re-takes a bundle edited during the re-seal, and the new one holds plaintext for rows already sealed', async () => {
@@ -152,6 +159,8 @@ describe('the sealing stage', () => {
     expect(await run()).toMatchObject({kind: 'stopped', stage: {kind: 'cleaning'}})
 
     expect(ui.folderReasons).toEqual([null, 'changed'])
+    // The server is as the first pass left it, so the re-seal and verify don't run again.
+    expect(server.calls.filter(call => call.method === 'readBlockPage')).toHaveLength(4)
     const retaken = bundleFolders()[1]
     expect(retaken.text(BUNDLE_PARTS.blocks).split('\n').filter(Boolean).map(line => contentColumnsOf(JSON.parse(line))))
       .toEqual(seeded.map(contentColumnsOf))
@@ -178,12 +187,99 @@ describe('the sealing stage', () => {
     expect((await record())?.folder).toBe(moved)
   })
 
+  /** The recorded folder, gone: moved, deleted, or on a drive that was unplugged. */
+  const loseRecordedFolder = () => {
+    server.afterPatch = () => {
+      const [folder] = bundleFolders()
+      folder.getFileHandle = async () => {
+        throw new DOMException('gone', 'NotFoundError')
+      }
+    }
+  }
+  const copyOf = (folder: MemoryBundleFolder, name = folder.name) => {
+    const copy = new MemoryBundleFolder(name)
+    for (const [file, bytes] of folder.files) copy.files.set(file, bytes)
+    return copy
+  }
+
+  it('asks for a folder it can no longer read rather than drop the bundle', async () => {
+    let moved: MemoryBundleFolder | null = null
+    loseRecordedFolder()
+    ui.reopenWith = () => (moved ??= copyOf(original!))
+    let original: MemoryBundleFolder | null = null
+    server.beforePatch = () => { original ??= copyOf(bundleFolders()[0]) }
+
+    expect(await run()).toMatchObject({kind: 'stopped', stage: {kind: 'cleaning'}})
+    expect(ui.folderReasons).toEqual([null])
+    expect(ui.problems).toEqual([expect.stringMatching(/can't be read/)])
+    expect((await record())?.folder).toBe(moved)
+  })
+
+  it('asks again after a wrong pick, and finds the bundle inside the folder it was made in', async () => {
+    loseRecordedFolder()
+    let original: MemoryBundleFolder | null = null
+    server.beforePatch = () => { original ??= copyOf(bundleFolders()[0]) }
+    const picks: BundleFolder[] = []
+    ui.reopenWith = () => {
+      // A regression that never finds the bundle stops here rather than looping.
+      if (picks.length >= 3) return null
+      // First an unrelated folder; then the parent the bundle was made in.
+      const pick = picks.length === 0 ? new MemoryBundleFolder('elsewhere') : (() => {
+        const parent = new MemoryBundleFolder('picked-again')
+        parent.folders.set(original!.name, original!)
+        return parent
+      })()
+      picks.push(pick)
+      return pick
+    }
+
+    expect(await run()).toMatchObject({kind: 'stopped', stage: {kind: 'cleaning'}})
+    expect(ui.reopened).toBe(2)
+    expect((await record())?.folder).toBe(original)
+  })
+
+  it('takes a new bundle when the user asks for one', async () => {
+    ui.reopenWith = () => null
+    let checks = 0
+
+    await run({canReadFolder: async () => ++checks > 1})
+
+    expect(ui.folderReasons).toEqual([null, 'requested'])
+  })
+
+  it('takes a new bundle when a part no longer decodes', async () => {
+    server.afterPatch = () => {
+      const [folder] = bundleFolders()
+      const bytes = folder.files.get(BUNDLE_PARTS.blocks)!.slice()
+      bytes[10] = 0xff
+      folder.files.set(BUNDLE_PARTS.blocks, bytes)
+    }
+
+    expect(await run()).toMatchObject({kind: 'stopped', stage: {kind: 'cleaning'}})
+    expect(ui.folderReasons).toEqual([null, 'changed'])
+  })
+
+  it('counts a pass as stuck only while the server still shows sealing', async () => {
+    const purge = server.purgeWorkspaceHistory.bind(server)
+    let calls = 0
+    server.purgeWorkspaceHistory = async (...args) => {
+      calls++
+      // Two refusals, then a purge that lands with its response lost.
+      if (calls <= 2) throw notSealedRefusal()
+      await purge(...args)
+      throw new Error('conversion: purge_workspace_history failed: the request timed out')
+    }
+
+    // The retry of the lost one meets the phase already moved on.
+    expect(await run()).toMatchObject({kind: 'stopped', stage: {kind: 'cleaning'}})
+  })
+
   it('re-seals and retries under the same bundle after a not-sealed refusal', async () => {
     const purge = server.purgeWorkspaceHistory.bind(server)
     let refusals = 1
     server.purgeWorkspaceHistory = async (...args) => {
       if (refusals-- > 0) {
-        throw Object.assign(new Error('purge_workspace_history: a block row of the workspace is not fully sealed'), {code: ConversionErrorCode.refused})
+        throw notSealedRefusal()
       }
       return purge(...args)
     }
@@ -206,11 +302,13 @@ describe('the sealing stage', () => {
 
     expect(await run()).toMatchObject({kind: 'stopped', stage: {kind: 'cleaning'}})
     expect(ui.folderReasons).toEqual([null, 'stale'])
+    // Something wrote the workspace, so the second pass re-seals and verifies again.
+    expect(server.calls.filter(call => call.method === 'readBlockPage')).toHaveLength(8)
   })
 
   it('stops after repeated refusals rather than retry for ever', async () => {
     server.purgeWorkspaceHistory = async () => {
-      throw Object.assign(new Error('purge_workspace_history: a block row of the workspace is not fully sealed'), {code: ConversionErrorCode.refused})
+      throw notSealedRefusal()
     }
 
     expect(await run()).toMatchObject({kind: 'sealing-stuck', pass: {kind: 'purge-refused'}})
@@ -252,13 +350,20 @@ describe('the sealing stage', () => {
     expect(result).toEqual({kind: 'pin-upgrade-failed', result: {ok: false, reason: 'refused', entry: {kind: 'unavailable'}}})
   })
 
-  it('keeps the screen awake for the re-seal and the verify only', async () => {
-    const release = vi.fn()
-    const keepAwake = vi.fn(async () => release)
+  it('keeps the screen awake for the whole pass, and lets it sleep after', async () => {
+    const awake: string[] = []
+    const keepAwake = vi.fn(async () => {
+      awake.push('on')
+      return () => void awake.push('off')
+    })
+    ui.chooseBundleFolder = async ({reason}) => {
+      awake.push('bundle')
+      ui.folderReasons.push(reason)
+      return ui.parent
+    }
 
     await run({keepAwake})
 
-    expect(keepAwake).toHaveBeenCalledTimes(1)
-    expect(release).toHaveBeenCalledTimes(1)
+    expect(awake).toEqual(['on', 'bundle', 'off'])
   })
 })

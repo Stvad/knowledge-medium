@@ -9,7 +9,6 @@
 
 import { IdbKeyedStore, idbRecordId } from '@/utils/idbKeyedStore.js'
 import type { BundleFolder } from './bundleParts.js'
-import { BUNDLE_PARTS } from './manifest.js'
 import type { VerifiedBundle } from './verifyBundle.js'
 
 export interface BundleRecord {
@@ -25,12 +24,13 @@ export interface BundleRecord {
   readonly folder: BundleFolder
 }
 
-export const bundleRecordOf = ({manifest, manifestSha256}: VerifiedBundle, folder: BundleFolder): BundleRecord => ({
+/** From what the read-back counted, not what the manifest claims. */
+export const bundleRecordOf = ({manifest, manifestSha256, counted}: VerifiedBundle, folder: BundleFolder): BundleRecord => ({
   workspaceId: manifest.workspaceId,
   manifestSha256,
-  through: manifest.through,
-  historyRows: manifest.parts[BUNDLE_PARTS.history].lines,
-  blockRows: manifest.parts[BUNDLE_PARTS.blocks].lines,
+  through: counted.through,
+  historyRows: counted.historyRows,
+  blockRows: counted.blockRows,
   exportedAt: manifest.exportedAt,
   folder,
 })

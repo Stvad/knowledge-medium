@@ -9,13 +9,18 @@ export const holdScreenWakeLock = async (): Promise<() => void> => {
   if (!wakeLock) return () => {}
   let sentinel: WakeLockSentinel | null = null
   let released = false
+  let acquiring = false
   const acquire = async () => {
+    if (acquiring) return
+    acquiring = true
     try {
       const next = await wakeLock.request('screen')
       if (released) void next.release()
       else sentinel = next
     } catch {
       // Refused (battery saver, a hidden tab): the pass runs on regardless.
+    } finally {
+      acquiring = false
     }
   }
   const onVisibilityChange = () => {

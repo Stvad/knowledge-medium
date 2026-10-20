@@ -15,10 +15,9 @@ import {
 } from './runConversion.js'
 import { keyOf, sealFor, seedPlaintext, WS } from './test/conversionFixtures.js'
 import { FakeConversionServer } from './test/fakeConversionServer.js'
-import { flowDeps, passingEnvironment, USER } from './test/flowFixtures.js'
+import { FAKE_LOCAL_DB, flowDeps, passingEnvironment, USER } from './test/flowFixtures.js'
 import { MemoryBundleFolder } from './test/memoryBundleFolder.js'
 import type { BundleFolder } from './bundle/bundleParts.js'
-import type { BundleRetakeReason } from './sealingStage.js'
 
 /** A user who answers every prompt as told, and remembers what they were asked. */
 class ScriptedUi implements ConversionUi {
@@ -34,10 +33,8 @@ class ScriptedUi implements ConversionUi {
   cancelContract = false
   /** Where the user puts each new bundle. */
   readonly bundleParent = new MemoryBundleFolder('picked')
-  readonly bundleReasons: Array<BundleRetakeReason | null> = []
 
-  async chooseBundleFolder({reason}: {reason: BundleRetakeReason | null}) {
-    this.bundleReasons.push(reason)
+  async chooseBundleFolder() {
     return this.bundleParent
   }
 
@@ -135,7 +132,7 @@ describe('runConversion: preflight → key → flip', () => {
         blocksBytes: manifest.parts['blocks.jsonl'].bytes,
         historyRows: 3,
         historyBytes: manifest.parts['server-history.jsonl'].bytes,
-        localDbBytes: 16,
+        localDbBytes: FAKE_LOCAL_DB.length,
         contentBytes: expect.any(Number),
       },
     }])
@@ -144,6 +141,15 @@ describe('runConversion: preflight → key → flip', () => {
     expect(localCanaries[0]).toBe(await serverCanary())
     // The sealing stage's canary check needed no paste: this device holds the key.
     expect(ui.savedKeyPrompts).toEqual([])
+  })
+
+  it('keeps the screen awake through the preflight scan', async () => {
+    const awake: string[] = []
+    ui.confirmPreflight = async () => void awake.push('confirm')
+
+    await run({keepAwake: async () => (awake.push('on'), () => void awake.push('off'))})
+
+    expect(awake.slice(0, 3)).toEqual(['on', 'off', 'confirm'])
   })
 
   it('asks again until the typed-back key unlocks the workspace, storing nothing before', async () => {
@@ -328,8 +334,11 @@ describe('runConversion: preflight → key → flip', () => {
   })
 
   it('reports a refused flip and changes nothing', async () => {
-    server.sessionUserId = 'someone-else'
-    // The stage read says owner, as a stale membership might; the flip itself refuses.
+    // As a stale ownership would: everything before the flip passes, and the
+    // flip itself refuses.
+    server.convertWorkspaceToE2ee = async () => {
+      throw Object.assign(new Error('convert_workspace_to_e2ee: only the workspace owner can convert it'), {code: 'KMC01'})
+    }
     expect(await run()).toEqual({kind: 'flip-refused', message: 'convert_workspace_to_e2ee: only the workspace owner can convert it'})
     expect(await server.conversionState(WS)).toMatchObject({state: {encryptionMode: 'none', conversionPhase: null}})
     expect(localCanaries).toEqual([])

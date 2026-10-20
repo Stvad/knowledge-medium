@@ -10,6 +10,7 @@ import { validateCanary } from '../crypto/canary.js'
 import { ENVELOPE_PREFIX, GCM_TAG_BYTES, NONCE_BYTES } from '../crypto/envelope.js'
 import { encodeForWire, SEALED_COLUMNS, type GetCek, type WireBlockColumns } from '../transform.js'
 import type { ContentColumns, ConversionServer, ResealPatch, ServerBlockRow } from './conversionServer.js'
+import { keysetPages } from './pages.js'
 
 /** Patches per `apply_block_patches` call, whatever the page size: the call
  *  runs one UPDATE per patch in a single statement, and the upload path caps
@@ -167,34 +168,33 @@ export const requireWorkspaceKey = async (
 
 /** A lost session reads as an empty table rather than as an error, so each pass
  *  ends by proving it saw every row: as many as the workspace holds, counted
- *  while it is still visible to this session. */
+ *  once it is shown to be still visible to this session. */
 export const requireWholeWorkspace = async (
   server: ConversionServer,
   workspaceId: string,
   wk: CryptoKey,
   seen: number,
 ): Promise<void> => {
-  const total = await server.countBlocks(workspaceId)
   await requireWorkspaceKey(server, workspaceId, wk)
+  const total = (await server.workspaceCounts(workspaceId)).blocks
   if (total !== seen) throw new Error(`conversion: the pass saw ${seen} of the workspace's ${total} rows; run it again`)
 }
 
 /** The workspace's rows, a page at a time, read only once the previous page has
  *  been handled. */
-export async function* serverPages(
+export const serverPages = (
   server: ConversionServer,
   workspaceId: string,
   pageSize: number,
   signal?: AbortSignal,
-): AsyncGenerator<readonly ServerBlockRow[]> {
-  for (let afterId: string | null = null; ;) {
-    signal?.throwIfAborted()
-    const page = await server.readBlockPage(workspaceId, afterId, pageSize)
-    if (page.length === 0) return
-    yield page
-    afterId = page[page.length - 1].id
-  }
-}
+): AsyncGenerator<readonly ServerBlockRow[]> =>
+  keysetPages<ServerBlockRow, string | null>({
+    read: (after, limit) => server.readBlockPage(workspaceId, after, limit),
+    first: null,
+    cursorOf: row => row.id,
+    pageSize,
+    signal,
+  })
 
 export interface SealTarget {
   /** The server row as just read: its identity binds the AAD, and its version

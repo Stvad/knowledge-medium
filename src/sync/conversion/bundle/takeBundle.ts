@@ -6,9 +6,10 @@
  */
 
 import { contentColumnsOf, idsOf, isSealedRow } from '../sealing.js'
-import type { ConversionServer, FullServerBlockRow } from '../conversionServer.js'
+import type { ConversionServer, FullServerBlockRow, FullServerHistoryRow } from '../conversionServer.js'
+import { keysetPages } from '../pages.js'
 import { latestResealWrites } from '../verifyReseal.js'
-import { scanPart, writeBytesPart, writeJsonlPart, type BundleFolder, type JsonlDigest } from './bundleParts.js'
+import { writeBytesPart, writeJsonlPart, type BundleFolder, type JsonlDigest, type PartDigest } from './bundleParts.js'
 import {
   BUNDLE_FORMAT,
   BUNDLE_FORMAT_VERSION,
@@ -46,8 +47,8 @@ export interface TakeBundleOptions {
   /** An empty folder for this bundle alone. */
   readonly folder: BundleFolder
   /** Write this device's database, copied under its lock, into `folder` as
-   *  {@link BUNDLE_PARTS.localDb}. */
-  readonly writeLocalDb: (folder: BundleFolder) => Promise<void>
+   *  {@link BUNDLE_PARTS.localDb}, and return its digest. */
+  readonly writeLocalDb: (folder: BundleFolder) => Promise<PartDigest>
   /** Media hashes the user confirmed in preflight have no verified source. */
   readonly noVerifiedSource?: readonly string[]
   readonly now?: () => Date
@@ -60,7 +61,8 @@ export interface TakenBundle {
   readonly manifest: BundleManifest
 }
 
-const PAGE_SIZE = 500
+/** Rows per page, for the bundle and for preflight's dry run of it. */
+export const BUNDLE_PAGE_SIZE = 500
 /** Each read that a concurrent write invalidates is retried this many times. */
 const READ_ATTEMPTS = 3
 
@@ -83,18 +85,46 @@ const archivedRows = async (
   })
 }
 
+/** Every block row, by id. */
+export const blockRowPages = (
+  server: ConversionServer,
+  workspaceId: string,
+  pageSize: number,
+  signal?: AbortSignal,
+): AsyncGenerator<readonly FullServerBlockRow[]> =>
+  keysetPages<FullServerBlockRow, string | null>({
+    read: (after, limit) => server.readFullBlockPage(workspaceId, after, limit),
+    first: null,
+    cursorOf: row => row.id,
+    pageSize,
+    signal,
+  })
+
+/** Every history row up to `through`, by event id. */
+export const historyRowPages = (
+  server: ConversionServer,
+  workspaceId: string,
+  through: number,
+  pageSize: number,
+  signal?: AbortSignal,
+): AsyncGenerator<readonly FullServerHistoryRow[]> =>
+  keysetPages<FullServerHistoryRow, number>({
+    read: (after, limit) => server.readHistoryPage(workspaceId, after, through, limit),
+    first: 0,
+    cursorOf: row => row.event_id,
+    pageSize,
+    done: after => after >= through,
+    signal,
+  })
+
 const writeBlocks = (options: TakeBundleOptions): Promise<JsonlDigest> =>
   writeJsonlPart(options.folder, BUNDLE_PARTS.blocks, async writeRow => {
     const {server, workspaceId, signal} = options
     let rows = 0
-    for (let afterId: string | null = null; ;) {
-      signal?.throwIfAborted()
-      const page = await server.readFullBlockPage(workspaceId, afterId, options.pageSize ?? PAGE_SIZE)
-      if (page.length === 0) return
+    for await (const page of blockRowPages(server, workspaceId, options.pageSize ?? BUNDLE_PAGE_SIZE, signal)) {
       for (const row of await archivedRows(server, workspaceId, page)) await writeRow(row)
       rows += page.length
       options.onProgress?.({part: 'blocks', rows})
-      afterId = page[page.length - 1].id
     }
   })
 
@@ -102,14 +132,10 @@ const writeHistory = (options: TakeBundleOptions, through: number): Promise<Json
   writeJsonlPart(options.folder, BUNDLE_PARTS.history, async writeRow => {
     const {server, workspaceId, signal} = options
     let rows = 0
-    for (let afterEventId = 0; afterEventId < through;) {
-      signal?.throwIfAborted()
-      const page = await server.readHistoryPage(workspaceId, afterEventId, through, options.pageSize ?? PAGE_SIZE)
-      if (page.length === 0) return
+    for await (const page of historyRowPages(server, workspaceId, through, options.pageSize ?? BUNDLE_PAGE_SIZE, signal)) {
       for (const row of page) await writeRow(row)
       rows += page.length
       options.onProgress?.({part: 'history', rows})
-      afterEventId = page[page.length - 1].event_id
     }
   })
 
@@ -118,6 +144,7 @@ interface ServerSnapshot {
   readonly blocks: JsonlDigest
   readonly history: JsonlDigest
   readonly serverBlockCount: number
+  readonly propertiesMigration: string
 }
 
 /** Both `.jsonl` parts, consistent with each other and with the block count:
@@ -126,30 +153,40 @@ interface ServerSnapshot {
 const readServerSnapshot = async (options: TakeBundleOptions): Promise<ServerSnapshot> => {
   const {server, workspaceId} = options
   for (let attempt = 1; attempt <= READ_ATTEMPTS; attempt++) {
-    const before = await server.historyBounds(workspaceId)
+    const before = await server.workspaceCounts(workspaceId)
     const history = await writeHistory(options, before.maxEventId)
     const blocks = await writeBlocks(options)
-    const serverBlockCount = await server.countBlocks(workspaceId)
     // A lost session reads every table as empty; this one is an error instead.
-    if (!(await server.readWorkspace(workspaceId))) {
-      throw new Error(`conversion: workspace ${workspaceId} is not visible to this session`)
+    const workspace = await server.readWorkspace(workspaceId)
+    if (!workspace) throw new Error(`conversion: workspace ${workspaceId} is not visible to this session`)
+    const after = await server.workspaceCounts(workspaceId)
+    if (after.history !== before.history) continue
+    // With the history count unchanged, the block count is the one the pages
+    // saw, and every history row is at or below `through`.
+    if (blocks.lines !== after.blocks || history.lines !== before.history) {
+      throw new Error(
+        `conversion: the bundle read ${blocks.lines} of the workspace's ${after.blocks} rows and ` +
+          `${history.lines} of its ${before.history} history rows; take it again`,
+      )
     }
-    const after = await server.historyBounds(workspaceId)
-    if (after.count !== before.count) continue
-    if (blocks.lines !== serverBlockCount) {
-      throw new Error(`conversion: the bundle read ${blocks.lines} of the workspace's ${serverBlockCount} rows; take it again`)
+    return {
+      through: before.maxEventId,
+      blocks,
+      history,
+      serverBlockCount: after.blocks,
+      propertiesMigration: workspace.properties_migration,
     }
-    return {through: before.maxEventId, blocks, history, serverBlockCount}
   }
   throw new BundleRefusal('unstable')
 }
 
 export const takeBundle = async (options: TakeBundleOptions): Promise<TakenBundle> => {
-  const snapshot = await readServerSnapshot(options)
-  options.signal?.throwIfAborted()
+  // First: it is the part a slow destination can't take in time, and it
+  // should fail before the long server read rather than after it.
   options.onProgress?.({part: 'local-db'})
-  await options.writeLocalDb(options.folder)
-  const localDb = await scanPart(await (await options.folder.getFileHandle(BUNDLE_PARTS.localDb)).getFile(), undefined, options.signal)
+  const localDb = await options.writeLocalDb(options.folder)
+  options.signal?.throwIfAborted()
+  const snapshot = await readServerSnapshot(options)
 
   const manifest: BundleManifest = {
     format: BUNDLE_FORMAT,
@@ -158,6 +195,7 @@ export const takeBundle = async (options: TakeBundleOptions): Promise<TakenBundl
     exportedAt: (options.now?.() ?? new Date()).toISOString(),
     through: snapshot.through,
     serverBlockCount: snapshot.serverBlockCount,
+    propertiesMigration: snapshot.propertiesMigration,
     parts: {
       [BUNDLE_PARTS.blocks]: snapshot.blocks,
       [BUNDLE_PARTS.history]: snapshot.history,
