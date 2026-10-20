@@ -1,1 +1,1 @@
-import{Cd as e,Sd as t,bd as n,vd as r,xd as i,yd as a}from"../../../chunks/app-B1MOfFIu.js";export{r as AUDIT_BLOCK_LIMIT,a as auditBlocks,n as auditExtensionData,i as createBlockResolver,t as grainWarningsForProperties,e as writeWarnings};
+import{Cd as e,Sd as t,bd as n,vd as r,xd as i,yd as a}from"../../../chunks/app-4iTqmRtl.js";export{r as AUDIT_BLOCK_LIMIT,a as auditBlocks,n as auditExtensionData,i as createBlockResolver,t as grainWarningsForProperties,e as writeWarnings};

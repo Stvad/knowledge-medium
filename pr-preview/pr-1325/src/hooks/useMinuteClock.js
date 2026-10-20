@@ -1,1 +1,1 @@
-import{OS as e}from"../../chunks/app-B1MOfFIu.js";export{e as useMinuteClock};
+import{AS as e}from"../../chunks/app-4iTqmRtl.js";export{e as useMinuteClock};

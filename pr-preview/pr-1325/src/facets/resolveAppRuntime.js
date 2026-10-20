@@ -1,1 +1,1 @@
-import{ok as e,sk as t}from"../../chunks/app-B1MOfFIu.js";export{e as resolveAppRuntime,t as resolveAppRuntimeSync};
+import{ck as e,lk as t}from"../../chunks/app-4iTqmRtl.js";export{e as resolveAppRuntime,t as resolveAppRuntimeSync};

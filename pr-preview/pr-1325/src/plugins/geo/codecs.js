@@ -1,2 +1,2 @@
-import{G5 as e}from"../../../chunks/app-B1MOfFIu.js";var t=e.optionalRef;export{t as optionalRefCodec};
+import{J5 as e}from"../../../chunks/app-4iTqmRtl.js";var t=e.optionalRef;export{t as optionalRefCodec};
 //# sourceMappingURL=codecs.js.map

@@ -1,1 +1,1 @@
-import{SP as e}from"../../../chunks/app-B1MOfFIu.js";export{e as AddPropertyForm};
+import{TP as e}from"../../../chunks/app-4iTqmRtl.js";export{e as AddPropertyForm};

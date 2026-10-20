@@ -1,1 +1,1 @@
-import{mb as e}from"../../../chunks/app-B1MOfFIu.js";export{e as getBreadcrumbContentPreview};
+import{gb as e}from"../../../chunks/app-4iTqmRtl.js";export{e as getBreadcrumbContentPreview};

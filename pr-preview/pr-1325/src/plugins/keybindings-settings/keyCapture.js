@@ -1,1 +1,1 @@
-import{BI as e,IT as t,LT as n,PI as r,RT as i,zT as a}from"../../../chunks/app-B1MOfFIu.js";export{t as chordFromEvent,n as formatChord,e as isMacPlatform,i as isModifierOnly,a as modifierPreview,r as normalizeChord};
+import{BT as e,LI as t,RT as n,UI as r,VT as i,zT as a}from"../../../chunks/app-4iTqmRtl.js";export{n as chordFromEvent,a as formatChord,r as isMacPlatform,e as isModifierOnly,i as modifierPreview,t as normalizeChord};
