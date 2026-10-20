@@ -511,7 +511,7 @@ A failed RPC with `55P03` retries; any other failure stops the run, and the next
 **The step-14 gesture** ("take a recovery point") is #1302's. It reuses #1290's folder writer and verifier, and follows conversion runbook step 14:
 
 - **Rows** come from server pages opened under the key. The paging is bracketed by the bundle's consistency check: the workspace's history count must be the same before and after, or the rows are re-read. Every block write adds a history row, so a file that passes is one instant.
-- **Media bytes** come from whichever source verifies.
+- **Media bytes** come from whichever of runbook step 14's sources verifies.
 - **The no-verified-source list** is re-derived when the point is taken.
 
 A row that doesn't open under the key, such as garbage a member wrote, keeps its line with its metadata, and its id goes on the manifest's list of unreadable rows. The restore gives such a row empty content under the new key and keeps its place ([§4.2](#42-the-expected-row)). One bad row therefore never stops a point from being taken, and §4.4's invariant still holds. The manifest records:
