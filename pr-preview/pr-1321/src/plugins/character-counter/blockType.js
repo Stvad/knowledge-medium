@@ -1,1 +1,0 @@
-import{XB as e,YB as t}from"../../../chunks/app-4Gtz0sR9.js";export{t as CHAR_COUNTER_TYPE,e as CHAR_COUNTER_TYPE_CONTRIBUTIONS};

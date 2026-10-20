@@ -1,1 +1,0 @@
-import{dI as e,uI as t}from"../../../chunks/app-4Gtz0sR9.js";export{t as PropertyShapeButton,e as PropertyShapeGlyph};

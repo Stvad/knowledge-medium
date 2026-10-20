@@ -1,1 +1,0 @@
-import{HC as e,UC as t,VC as n,WC as r}from"../../../chunks/app-4Gtz0sR9.js";export{n as COMMAND_PALETTE_ACTION_ID,e as COMMAND_PALETTE_CONTEXT,t as COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,r as commandPaletteActionContext};
