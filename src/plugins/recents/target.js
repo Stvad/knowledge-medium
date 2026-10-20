@@ -1,1 +1,1 @@
-import{CC as e}from"../../../chunks/app-DaOxZ57R.js";export{e as openRecentsPage};
+import{CC as e}from"../../../chunks/app-CDDqhtS2.js";export{e as openRecentsPage};

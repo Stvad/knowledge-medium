@@ -1,1 +1,1 @@
-import{Sk as e,xk as t}from"../chunks/app-DaOxZ57R.js";export{t as checkForAppUpdate,e as registerServiceWorker};
+import{Sk as e,xk as t}from"../chunks/app-CDDqhtS2.js";export{t as checkForAppUpdate,e as registerServiceWorker};

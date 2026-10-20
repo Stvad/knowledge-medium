@@ -1,1 +1,1 @@
-import{dM as e,fM as t,lM as n,pM as r,uM as i}from"../../chunks/app-DaOxZ57R.js";export{n as __resetDialogsForTests,i as getDialogQueue,e as isDialogOpenForWorkspace,t as openDialog,r as subscribeDialogs};
+import{dM as e,fM as t,lM as n,pM as r,uM as i}from"../../chunks/app-CDDqhtS2.js";export{n as __resetDialogsForTests,i as getDialogQueue,e as isDialogOpenForWorkspace,t as openDialog,r as subscribeDialogs};

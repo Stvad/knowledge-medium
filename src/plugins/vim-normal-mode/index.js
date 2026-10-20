@@ -1,1 +1,1 @@
-import{ny as e,ry as t}from"../../../chunks/app-DaOxZ57R.js";export{e as vimNormalModeInteractionExtension,t as vimNormalModePlugin};
+import{ny as e,ry as t}from"../../../chunks/app-CDDqhtS2.js";export{e as vimNormalModeInteractionExtension,t as vimNormalModePlugin};

@@ -1,1 +1,1 @@
-import{$k as e,eA as t}from"../../chunks/app-DaOxZ57R.js";export{e as resolveAppRuntime,t as resolveAppRuntimeSync};
+import{$k as e,eA as t}from"../../chunks/app-CDDqhtS2.js";export{e as resolveAppRuntime,t as resolveAppRuntimeSync};
