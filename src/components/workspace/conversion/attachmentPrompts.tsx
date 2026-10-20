@@ -6,16 +6,16 @@
 
 import { useState } from 'react'
 import { Explanation } from '@/components/workspace/keyUi'
-import type { CleanerReport, LeftReason, UnrecoverableMedia } from '@/sync/conversion/attachmentCleaner'
+import { limitToRaise, type CleanerReport, type LeftReason, type UnrecoverableMedia } from '@/sync/conversion/attachmentCleaner'
 import type { OversizedObject } from '@/sync/conversion/bundle/attachmentParts'
 import type { FinishPrompt } from '@/sync/conversion/cleaningStage'
-import { Actions, CappedList, ConfirmCheck, formatBytes } from './flowUi'
+import { Actions, ScrollList, ConfirmCheck, formatBytes } from './flowUi'
 
 const Mono = ({children}: {children: string}) => <span className="font-mono text-xs">{children}</span>
 
 export function MediaList({media}: {media: readonly UnrecoverableMedia[]}) {
   return (
-    <CappedList
+    <ScrollList
       items={media}
       render={item => (
         <>
@@ -48,7 +48,7 @@ export function NoVerifiedSourceNotice({media, accepted, onAccept}: {
   )
 }
 
-/** Asked after the flip only when an attachment lost its copy since preflight. */
+/** Asked as the bundle is taken, for whatever has no verified copy then. */
 export function NoVerifiedSourcePrompt({media, answer, cancel}: {
   media: readonly UnrecoverableMedia[]
   answer: () => void
@@ -68,6 +68,13 @@ const raiseLimits = (bytes: number): string =>
   `Raise the hosted project's upload limits to at least ${formatBytes(bytes)} (${bytes} bytes): the project-wide ` +
   "Storage limit, and the attachments bucket's own limit if it's lower."
 
+/** The remedy sentence (with its leading space) for refusals that were over a
+ *  limit; empty when none were. */
+const raiseRemedy = (refused: CleanerReport['refused']): string => {
+  const bytes = limitToRaise(refused)
+  return bytes === null ? '' : ` ${raiseLimits(bytes)}`
+}
+
 export function OversizedNotice({oversized, raised, onRaised}: {
   oversized: readonly OversizedObject[]
   raised: boolean
@@ -79,7 +86,7 @@ export function OversizedNotice({oversized, raised, onRaised}: {
       <Explanation>
         {oversized.length} attachment(s) are too big to upload once encrypted:
       </Explanation>
-      <CappedList items={oversized} render={item => <><Mono>{item.what}</Mono>: {formatBytes(item.sealedBytes)} encrypted</>}/>
+      <ScrollList items={oversized} render={item => <><Mono>{item.what}</Mono>: {formatBytes(item.sealedBytes)} encrypted</>}/>
       <Explanation>
         {raiseLimits(largest)} If the limits are still too low, nothing is lost: each original stays
         on the server until its encrypted copy uploads, and the conversion waits for it.
@@ -100,12 +107,12 @@ const LEFT_REASON: Record<LeftReason, string> = {
 }
 
 function LeftList({left}: {left: CleanerReport['left']}) {
-  return <CappedList items={left} render={item => <><Mono>{item.path}</Mono>: {LEFT_REASON[item.reason]}</>}/>
+  return <ScrollList items={left} render={item => <><Mono>{item.path}</Mono>: {LEFT_REASON[item.reason]}</>}/>
 }
 
 function RefusedList({refused}: {refused: CleanerReport['refused']}) {
   return (
-    <CappedList
+    <ScrollList
       items={refused}
       render={item => (
         <><Mono>{item.path}</Mono>: refused{item.status ? ` (${item.status})` : ''}, {formatBytes(item.sealedBytes)} encrypted</>
@@ -116,12 +123,18 @@ function RefusedList({refused}: {refused: CleanerReport['refused']}) {
 
 /** Everything the conversion leaves behind, before it is declared done. */
 export function FinishPromptView({prompt, answer, cancel}: {prompt: FinishPrompt; answer: () => void; cancel: () => void}) {
-  const {unrecoverable, left, refused} = prompt
+  const {unrecoverable, left, refused, bundleRead} = prompt
   const [accepted, setAccepted] = useState(false)
   const residue = unrecoverable.length + left.length + refused.length
   return (
     <>
       <Explanation>Every attachment on the server is encrypted, and each one checks out.</Explanation>
+      {!bundleRead && (
+        <Explanation>
+          This run went on without the recovery bundle; nothing in it was needed. It is still what the
+          workspace is restored from if the key is lost.
+        </Explanation>
+      )}
       {unrecoverable.length > 0 && (
         <>
           <Explanation>{unrecoverable.length} attachment(s) have no bytes anywhere and stay broken:</Explanation>
@@ -136,7 +149,7 @@ export function FinishPromptView({prompt, answer, cancel}: {prompt: FinishPrompt
       )}
       {refused.length > 0 && (
         <>
-          <Explanation>{refused.length} upload(s) were refused. {raiseLimits(Math.max(...refused.map(item => item.sealedBytes)))}</Explanation>
+          <Explanation>{refused.length} upload(s) were refused.{raiseRemedy(refused)}</Explanation>
           <RefusedList refused={refused}/>
         </>
       )}
@@ -162,7 +175,7 @@ export function CleanupIncompleteView({report}: {report: CleanerReport}) {
           <li>{proof.rawRemaining.length} attachment(s) on the server aren't encrypted yet.</li>
         )}
         {refused.length > 0 && (
-          <li>{refused.length} upload(s) were refused. {raiseLimits(Math.max(...refused.map(item => item.sealedBytes)))}</li>
+          <li>{refused.length} upload(s) were refused.{raiseRemedy(refused)}</li>
         )}
         {errors.length > 0 && (
           <li>{errors.length} step(s) failed on a network or server error.</li>

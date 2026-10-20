@@ -90,8 +90,12 @@ export const verifyObjectBytes = async (
  *  themselves let Storage's 413 decide. */
 export const MAX_OBJECT_BYTES = 50 * 1024 * 1024
 
-/** Does a plaintext of this many bytes, encoded for `mode`, fit in `limit`?
- *  e2ee adds {@link BINARY_ENVELOPE_OVERHEAD_BYTES}, so a plaintext just under
- *  the limit can be stored raw but not sealed. */
+/** The stored size of a plaintext of this many bytes encoded for `mode`: e2ee
+ *  adds {@link BINARY_ENVELOPE_OVERHEAD_BYTES}. */
+export const encodedSize = (plaintextBytes: number, mode: SyncMode): number =>
+  plaintextBytes + (mode === 'e2ee' ? BINARY_ENVELOPE_OVERHEAD_BYTES : 0)
+
+/** Does a plaintext of this many bytes, encoded for `mode`, fit in `limit`? A
+ *  plaintext just under the limit can be stored raw but not sealed. */
 export const fitsObjectLimit = (plaintextBytes: number, mode: SyncMode, limit = MAX_OBJECT_BYTES): boolean =>
-  plaintextBytes + (mode === 'e2ee' ? BINARY_ENVELOPE_OVERHEAD_BYTES : 0) <= limit
+  encodedSize(plaintextBytes, mode) <= limit

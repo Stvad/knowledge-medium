@@ -1,18 +1,19 @@
 /**
- * The attachment cleaner's view of one workspace ({@link AttachmentCleanerIO}),
- * over this plugin's Storage, byte store and media blocks. The pass itself is
+ * One workspace's Storage folder, byte store and media blocks, as the
+ * attachment cleaner and the conversion read them ({@link ConversionAttachmentsIO}). The pass itself is
  * core (`src/sync/conversion/attachmentCleaner.ts`); the conversion flow reaches
  * this through `attachmentCleanerIOVerb`, the owner gesture directly.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Repo } from '@/data/repo.js'
-import type { AttachmentCleanerIO, MediaRef, ObjectPath } from '@/sync/conversion/attachmentCleaner.js'
+import type { MediaRef, ObjectPath } from '@/sync/conversion/attachmentCleaner.js'
+import type { ConversionAttachmentsIO } from '@/sync/conversion/conversionAttachments.js'
 import { collectPaged } from './audit/paginate.js'
 import { ATTACHMENTS_BUCKET, BlobPutError, type BlobStore } from './blobStore.js'
 import type { ByteStore } from './byteStore.js'
 import type { ByteUploadStore } from './uploadStore.js'
-import { MEDIA_TYPE, mediaHashOf } from './mediaBlock.js'
+import { MEDIA_TYPE, mediaHashOfStoredRow } from './mediaBlock.js'
 
 const LIST_PAGE = 1000
 
@@ -85,7 +86,7 @@ export const listMediaBlocks = async (repo: Repo, workspaceId: string): Promise<
     [workspaceId, MEDIA_TYPE],
   )
   return rows.flatMap(row => {
-    const contentHash = mediaHashOf(JSON.parse(row.properties_json) as Record<string, unknown>)
+    const contentHash = mediaHashOfStoredRow(row.properties_json)
     return contentHash ? [{blockId: row.id, contentHash}] : []
   })
 }
@@ -101,7 +102,7 @@ export interface AttachmentCleanerIODeps {
   readonly isRemoteSyncActive: () => boolean
 }
 
-export const createAttachmentCleanerIO = (deps: AttachmentCleanerIODeps): AttachmentCleanerIO => {
+export const createAttachmentCleanerIO = (deps: AttachmentCleanerIODeps): ConversionAttachmentsIO => {
   const {blobStore, byteStore, repo, userId, workspaceId} = deps
   return {
     listObjects: signal => listWorkspaceObjects({...deps, signal}),
@@ -124,18 +125,7 @@ export const createAttachmentCleanerIO = (deps: AttachmentCleanerIODeps): Attach
     },
     readLocal: name => byteStore.get(userId, workspaceId, name),
     writeLocal: (name, bytes) => byteStore.put(userId, workspaceId, name, bytes),
-    mediaHashOf: propertiesJson => {
-      let properties: unknown
-      try {
-        properties = JSON.parse(propertiesJson)
-      } catch {
-        return null
-      }
-      if (typeof properties !== 'object' || properties === null) return null
-      const types = (properties as {types?: unknown}).types
-      if (!Array.isArray(types) || !types.includes(MEDIA_TYPE)) return null
-      return mediaHashOf(properties as Record<string, unknown>)
-    },
+    mediaHashOf: mediaHashOfStoredRow,
     async pendingUploads() {
       const statuses = ['staged', 'pending', 'failed'] as const
       const records = await Promise.all(statuses.map(status => deps.uploadStore.listByStatus(userId, status)))

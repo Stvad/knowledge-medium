@@ -41,14 +41,12 @@ export const formatBytes = (bytes: number): string => {
   return `${(bytes / 1024 ** 3).toFixed(2)} GB`
 }
 
-/** Enough of a long list to act on; the rest is counted. */
-const LIST_SHOWN = 50
-
-export function CappedList<T>({items, render}: {items: readonly T[]; render: (item: T) => ReactNode}) {
+/** Every item, scrolled: these lists are what the conversion leaves behind,
+ *  shown once, so none goes unnamed. */
+export function ScrollList<T>({items, render}: {items: readonly T[]; render: (item: T) => ReactNode}) {
   return (
     <ul className="max-h-48 list-disc space-y-1 overflow-y-auto pl-5 text-sm">
-      {items.slice(0, LIST_SHOWN).map((item, index) => <li key={index} className="break-all">{render(item)}</li>)}
-      {items.length > LIST_SHOWN && <li className="list-none text-muted-foreground">and {items.length - LIST_SHOWN} more</li>}
+      {items.map((item, index) => <li key={index} className="break-all">{render(item)}</li>)}
     </ul>
   )
 }

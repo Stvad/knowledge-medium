@@ -8,7 +8,7 @@ import type { Repo } from '@/data/repo'
 import { fetchWorkspaceConversionState } from '@/data/workspaceConversion'
 import { markLocalWorkspaceConverted } from '@/data/workspaces'
 import { supabase } from '@/services/supabase'
-import type { AttachmentCleanerIO } from '@/sync/conversion/attachmentCleaner'
+import type { ConversionAttachmentsIO } from '@/sync/conversion/conversionAttachments'
 import { createPartHasher, type BundleFolder } from '@/sync/conversion/bundle/bundleParts'
 import { IndexedDbBundleRecordStore } from '@/sync/conversion/bundle/bundleRecord'
 import { BUNDLE_PARTS } from '@/sync/conversion/bundle/manifest'
@@ -55,6 +55,10 @@ const preflightEnvironment = (repo: Repo): PreflightEnvironment => ({
       root.getFileHandle(dbFilename + suffix).then(handle => handle.getFile()).then(file => file.size, () => 0)))
     return sizes.reduce((sum, size) => sum + size, 0)
   },
+  freeLocalBytes: async () => {
+    const {quota, usage} = await navigator.storage.estimate().catch(() => ({quota: undefined, usage: undefined}))
+    return quota === undefined || usage === undefined ? null : Math.max(0, quota - usage)
+  },
 })
 
 export type ConversionUnavailable =
@@ -81,18 +85,22 @@ const SLOWEST_BUNDLE_DISK = 5 * 1024 * 1024
 export const directoryHandleOf = (folder: BundleFolder): FileSystemDirectoryHandle =>
   folder as unknown as FileSystemDirectoryHandle
 
-const attachmentsOf = (repo: Repo, workspaceId: string): AttachmentCleanerIOResult =>
-  repo.facetRuntime
-    ? attachmentCleanerIOVerb.runSync(repo.facetRuntime, {repo, workspaceId})
-    : {kind: 'unavailable', reason: "the app's extensions haven't loaded"}
+const attachmentsOf = async (repo: Repo, workspaceId: string): Promise<AttachmentCleanerIOResult> => {
+  if (!repo.facetRuntime) return {kind: 'unavailable', reason: "the app's extensions haven't loaded"}
+  try {
+    return await attachmentCleanerIOVerb.run(repo.facetRuntime, {repo, workspaceId})
+  } catch (error) {
+    return {kind: 'unavailable', reason: error instanceof Error ? error.message : String(error)}
+  }
+}
 
 /** The run's dependencies, or why this session can't run a conversion. */
-export const conversionSetup = (repo: Repo, workspaceId: string, localOnly: boolean): ConversionSetup => {
+export const conversionSetup = async (repo: Repo, workspaceId: string, localOnly: boolean): Promise<ConversionSetup> => {
   const client = supabase
   if (!client || localOnly) return {kind: 'unavailable', why: {kind: 'no-server'}}
   const lock = webConversionLock()
   if (!lock) return {kind: 'unavailable', why: {kind: 'no-web-locks'}}
-  const attachments = attachmentsOf(repo, workspaceId)
+  const attachments = await attachmentsOf(repo, workspaceId)
   if (attachments.kind === 'unavailable') {
     return {kind: 'unavailable', why: {kind: 'no-attachments', reason: attachments.reason}}
   }
@@ -107,7 +115,7 @@ const conversionFlowDeps = ({repo, workspaceId, client, lock, attachments, ui, s
   workspaceId: string
   client: SupabaseClient
   lock: ConversionLock
-  attachments: AttachmentCleanerIO
+  attachments: ConversionAttachmentsIO
   ui: ConversionUi
   signal: AbortSignal
 }): ConversionFlowDeps => ({

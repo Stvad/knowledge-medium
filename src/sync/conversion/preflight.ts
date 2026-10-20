@@ -6,8 +6,15 @@
 
 import { SEALED_COLUMNS } from '../transform.js'
 import type { ConversionServer } from './conversionServer.js'
-import type { AttachmentCleanerIO, UnrecoverableMedia } from './attachmentCleaner.js'
-import { MediaBlocks, surveyAttachments, type AttachmentSource, type OversizedObject } from './bundle/attachmentParts.js'
+import type { UnrecoverableMedia } from './attachmentCleaner.js'
+import {
+  MediaBlocks,
+  surveyAttachments,
+  type AttachmentSource,
+  type OversizedObject,
+  type SurveyProgress,
+} from './bundle/attachmentParts.js'
+import type { ConversionAttachmentsIO } from './conversionAttachments.js'
 import { encodeJsonlLine } from './bundle/bundleParts.js'
 import { BUNDLE_PAGE_SIZE, blockRowPages, historyRowPages } from './bundle/takeBundle.js'
 import { idsOf, isSealedRow } from './sealing.js'
@@ -25,6 +32,9 @@ export interface PreflightEnvironment {
   readonly uploadQueue: (signal?: AbortSignal) => Promise<{readonly pending: number; readonly rejected: number}>
   /** The size of this device's database, which the bundle copies whole. */
   readonly localDbBytes: () => Promise<number>
+  /** What this site's storage can still take, or null when the browser can't
+   *  say: preflight keeps there every attachment only Storage holds. */
+  readonly freeLocalBytes: () => Promise<number | null>
 }
 
 export type PreflightBlocker =
@@ -38,6 +48,8 @@ export type PreflightBlocker =
   | {readonly kind: 'pins-not-durable'}
   | {readonly kind: 'key-store-not-durable'}
   | {readonly kind: 'no-directory-picker'}
+  /** No room here for the attachments only Storage holds, which preflight keeps. */
+  | {readonly kind: 'local-space'; readonly neededBytes: number; readonly freeBytes: number}
 
 /** What the recovery bundle and the conversion will take, measured by a dry
  *  run of the bundle's own paging and line encoding. A bundle that can't be written after the
@@ -121,7 +133,7 @@ const scanServer = async (
  *  can stay open indefinitely. */
 export const localBlockers = async (
   environment: PreflightEnvironment,
-  attachments: Pick<AttachmentCleanerIO, 'pendingUploads'>,
+  attachments: Pick<ConversionAttachmentsIO, 'pendingUploads'>,
   signal?: AbortSignal,
 ): Promise<PreflightBlocker[]> => {
   const blockers: PreflightBlocker[] = []
@@ -137,35 +149,40 @@ export const localBlockers = async (
   return blockers
 }
 
+/** Room left for the database to grow while the conversion runs (the pin
+ *  upgrade rewrites every row's version). */
+const LOCAL_HEADROOM_BYTES = 512 * 1024 * 1024
+
 export const runPreflight = async ({
   server,
   workspaceId,
   environment,
   attachments,
   signal,
+  onProgress,
 }: {
   readonly server: ConversionServer
   readonly workspaceId: string
   readonly environment: PreflightEnvironment
-  readonly attachments: AttachmentCleanerIO
+  readonly attachments: ConversionAttachmentsIO
   readonly signal?: AbortSignal
+  readonly onProgress?: (progress: SurveyProgress) => void
 }): Promise<PreflightOutcome> => {
   const blockers = await localBlockers(environment, attachments, signal)
   const scan = await scanServer(server, workspaceId, attachments, signal)
   if (scan.sealedLooking.length > 0) blockers.push({kind: 'sealed-looking-rows', blockIds: scan.sealedLooking})
   // Before the survey, which downloads every attachment only Storage holds.
   if (blockers.length > 0) return {kind: 'blocked', blockers}
-  // A copy only Storage holds is kept here once verified: Storage could
-  // change it after the flip.
-  const survey = await surveyAttachments({source: attachments, mediaHashes: scan.media.hashes(), preflight: true, signal})
+  const free = await environment.freeLocalBytes()
+  const keepBudget = free === null ? null : Math.max(0, free - LOCAL_HEADROOM_BYTES)
+  const survey = await surveyAttachments({source: attachments, mediaHashes: scan.media.hashes(), keepBudget, signal, onProgress})
+  if (survey.unkeptBytes > 0) {
+    return {kind: 'blocked', blockers: [{kind: 'local-space', neededBytes: survey.unkeptBytes, freeBytes: keepBudget ?? 0}]}
+  }
   return {
     kind: 'ready',
     report: {
-      sizes: {
-        ...scan.sizes,
-        localDbBytes: await environment.localDbBytes(),
-        attachmentBytes: survey.mediaBytes + survey.otherBytes,
-      },
+      sizes: {...scan.sizes, localDbBytes: await environment.localDbBytes(), attachmentBytes: survey.bundleBytes},
       oversized: survey.oversized,
       noVerifiedSource: scan.media.blocksOf(survey.noVerifiedSource),
     },

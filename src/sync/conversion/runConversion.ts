@@ -26,6 +26,7 @@ import {
   type PreflightReport,
 } from './preflight.js'
 import { conversionLockName, type ConversionLock } from './runLock.js'
+import type { SurveyProgress } from './bundle/attachmentParts.js'
 import { runCleaningPass, type CleaningPrompts, type CleaningStatus } from './cleaningStage.js'
 import type { CleanerReport } from './attachmentCleaner.js'
 import {
@@ -42,7 +43,8 @@ export type ActiveStage = Exclude<ConversionStage, {kind: 'done'}>
 /** What the run tells the user while no prompt is waiting. */
 export type ConversionStatus =
   | {readonly kind: 'reading-server'}
-  | {readonly kind: 'preflight'}
+  /** `progress`: the attachment survey, once it starts. */
+  | {readonly kind: 'preflight'; readonly progress: SurveyProgress | null}
   /** `waiting` null: the request is out, and may commit whatever happens to
    *  this run. Otherwise the database refused for now, and a retry is due. */
   | {readonly kind: 'flipping'; readonly waiting: FlipWait | null}
@@ -53,7 +55,7 @@ export type ConversionStatus =
 
 /** The run's side of the UI. Each prompt settles when the user answers, and
  *  rejects when they cancel, which ends the run. */
-export interface ConversionUi extends KeyPrompts, BundlePrompts, Omit<CleaningPrompts, 'reopenBundleFolder'> {
+export interface ConversionUi extends KeyPrompts, BundlePrompts, CleaningPrompts {
   /** Every other device and tab with this workspace is closed. */
   confirmContract(stage: ActiveStage): Promise<void>
   /** Nothing blocks the conversion, and the user accepts what it leaves behind. */
@@ -102,7 +104,8 @@ export type ConversionRunResult =
   | {readonly kind: 'cleanup-incomplete'; readonly report: CleanerReport}
   /** The owner's "Clean up attachments" is running in another tab. */
   | {readonly kind: 'cleaner-busy'}
-  | {readonly kind: 'done'}
+  /** `bundleFolder`: the recovery bundle's folder, when this device recorded one. */
+  | {readonly kind: 'done'; readonly bundleFolder: string | null}
 
 /** A stage's steps either end the run, say the server should now show at
  *  least `reached`, or ran a sealing pass that left the stage where it was. */
@@ -130,9 +133,16 @@ const flipLanded = async (deps: ConversionFlowDeps): Promise<StageRead | 'landed
 
 const runPlaintextStage = async (deps: ConversionFlowDeps): Promise<StageOutcome> => {
   const {server, workspaceId, ui, signal} = deps
-  ui.status({kind: 'preflight'})
+  ui.status({kind: 'preflight', progress: null})
   const release = await deps.keepAwake()
-  const preflight = await runPreflight({server, workspaceId, environment: deps.preflight, attachments: deps.attachments, signal}).finally(release)
+  const preflight = await runPreflight({
+    server,
+    workspaceId,
+    environment: deps.preflight,
+    attachments: deps.attachments,
+    signal,
+    onProgress: progress => ui.status({kind: 'preflight', progress}),
+  }).finally(release)
   if (preflight.kind === 'blocked') return {kind: 'preflight-failed', blockers: preflight.blockers}
   await ui.confirmPreflight(preflight.report)
 
@@ -205,13 +215,26 @@ const runCleaningStage = async (deps: ConversionFlowDeps, stage: ActiveStage & {
   if (!upgraded.ok) return {kind: 'pin-upgrade-failed', result: upgraded}
   const pass = await runCleaningPass(deps, key, stage.canary)
   switch (pass.kind) {
-    case 'finished':
-      return {kind: 'advanced', reached: 'done'}
+    case 'proved':
+      return finishConversion(deps)
     case 'not-proved':
       return {kind: 'cleanup-incomplete', report: pass.report}
     case 'busy':
       return {kind: 'cleaner-busy'}
   }
+}
+
+/** Step 9. The response may be lost with the phase gone, or a lagging read
+ *  have let this run ask twice: the server then refuses, and its stage says. */
+const finishConversion = async (deps: ConversionFlowDeps): Promise<StageOutcome> => {
+  deps.ui.status({kind: 'finishing'})
+  try {
+    await deps.server.finishConversion(deps.workspaceId)
+  } catch (error) {
+    const read = await readStage(deps)
+    if (read.kind !== 'stage' || read.stage.kind !== 'done') throw error
+  }
+  return {kind: 'advanced', reached: 'done'}
 }
 
 const runStage = async (
@@ -234,8 +257,9 @@ const runStage = async (
  *  after `finish_conversion`, whose response may be lost once it commits. */
 const finished = async (deps: ConversionFlowDeps, canary: string): Promise<ConversionRunResult> => {
   await deps.markLocalConverted(canary)
+  const record = await deps.bundles.get(deps.userId, deps.workspaceId)
   await deps.bundles.delete(deps.userId, deps.workspaceId)
-  return {kind: 'done'}
+  return {kind: 'done', bundleFolder: record?.folder.name ?? null}
 }
 
 const runLocked = async (deps: ConversionFlowDeps): Promise<ConversionRunResult> => {

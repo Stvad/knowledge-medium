@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { resealWorkspace } from '../reseal.js'
 import { contentColumnsOf } from '../sealing.js'
 import { flipUnder, keyOf, mediaPropertiesJson, seedMedia, sealFor, seedPlaintext, WS } from '../test/conversionFixtures.js'
@@ -343,6 +343,49 @@ describe('takeBundle attachments', () => {
     expect(manifest.otherObjects).toHaveLength(2)
     expect(otherDir().files.get(utf8Hex('nested/thing'))).toEqual(nested)
     await verify()
+  })
+
+  it('does not archive or list an unaddressable Storage path', async () => {
+    storage.objects.set('dir/a b', bytesOf('spaced'))
+    storage.objects.set('plain', bytesOf('plain bytes'))
+
+    const {manifest} = await take()
+
+    expect(manifest.otherObjects.map(entry => entry.path)).toEqual(['plain'])
+    expect([...otherDir().files.keys()]).toEqual([utf8Hex('plain')])
+    await verify()
+  })
+
+  it('asks about the missing media only after the verified attachments are written', async () => {
+    const present = await seedMedia(server, storage, {id: 'ok', bytes: bytesOf('present'), at: {local: true}})
+    await seedMedia(server, storage, {id: 'lost', bytes: bytesOf('nowhere'), at: {}})
+    const seenAtConfirm: string[][] = []
+
+    await take({attachments: {source: storage.io, confirmNoVerifiedSource: async () => {
+      seenAtConfirm.push([...attachmentsDir().files.keys()])
+      expect(folder.files.has(BUNDLE_PARTS.manifest)).toBe(false)
+    }}})
+
+    expect(seenAtConfirm).toEqual([[rawNameOf(present)]])
+  })
+
+  it('leaves no manifest when the confirmation rejects after the files were written', async () => {
+    const present = await seedMedia(server, storage, {id: 'ok', bytes: bytesOf('present'), at: {local: true}})
+    await seedMedia(server, storage, {id: 'lost', bytes: bytesOf('nowhere'), at: {}})
+
+    await expect(take({attachments: {source: storage.io, confirmNoVerifiedSource: async () => { throw new Error('user said no') }}}))
+      .rejects.toThrow('user said no')
+
+    expect([...attachmentsDir().files.keys()]).toEqual([rawNameOf(present)])
+    expect(folder.files.has(BUNDLE_PARTS.manifest)).toBe(false)
+  })
+
+  it('rejects when a listed object reads as absent', async () => {
+    storage.objects.set('ghost', bytesOf('x'))
+    vi.spyOn(storage.io, 'readObject').mockResolvedValue(null)
+
+    await expect(take()).rejects.toMatchObject({name: 'ListedObjectUnreadable', path: 'ghost'})
+    expect(folder.files.has(BUNDLE_PARTS.manifest)).toBe(false)
   })
 })
 

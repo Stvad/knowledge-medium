@@ -10,7 +10,7 @@ import type { ConversionServer, FullServerBlockRow, FullServerHistoryRow } from 
 import { keysetPages } from '../pages.js'
 import { latestResealWrites } from '../verifyReseal.js'
 import type { UnrecoverableMedia } from '../attachmentCleaner.js'
-import { MediaBlocks, surveyAttachments, writeAttachmentParts, type AttachmentSource } from './attachmentParts.js'
+import { MediaBlocks, writeAttachmentParts, type AttachmentSource } from './attachmentParts.js'
 import { writeBytesPart, writeJsonlPart, type BundleFolder, type JsonlDigest, type PartDigest } from './bundleParts.js'
 import {
   BUNDLE_FORMAT,
@@ -209,18 +209,15 @@ export const takeBundle = async (options: TakeBundleOptions): Promise<TakenBundl
   // it's read once, after the rows.
   const {source, confirmNoVerifiedSource} = options.attachments
   options.onProgress?.({part: 'attachments', files: 0})
-  const mediaHashes = snapshot.media.hashes()
-  const survey = await surveyAttachments({source, mediaHashes, preflight: false, signal: options.signal})
-  if (survey.noVerifiedSource.length > 0) await confirmNoVerifiedSource(snapshot.media.blocksOf(survey.noVerifiedSource))
-  const otherObjects = await writeAttachmentParts({
+  const {missing, otherObjects} = await writeAttachmentParts({
     folder: options.folder,
     source,
-    mediaHashes,
-    noVerifiedSource: new Set(survey.noVerifiedSource),
-    otherObjects: survey.otherObjects,
+    mediaHashes: snapshot.media.hashes(),
     signal: options.signal,
     onProgress: files => options.onProgress?.({part: 'attachments', files}),
   })
+  // Before the manifest: a cancel leaves a folder that never verifies.
+  if (missing.length > 0) await confirmNoVerifiedSource(snapshot.media.blocksOf(missing))
 
   const manifest: BundleManifest = {
     format: BUNDLE_FORMAT,
@@ -235,7 +232,7 @@ export const takeBundle = async (options: TakeBundleOptions): Promise<TakenBundl
       [BUNDLE_PARTS.history]: snapshot.history,
       [BUNDLE_PARTS.localDb]: localDb,
     },
-    noVerifiedSource: survey.noVerifiedSource,
+    noVerifiedSource: missing,
     otherObjects,
   }
   await writeBytesPart(options.folder, BUNDLE_PARTS.manifest, new TextEncoder().encode(`${JSON.stringify(manifest, null, 2)}\n`))

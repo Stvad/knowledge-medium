@@ -4,15 +4,13 @@
  * owner has unlocked, with no recovery bundle. It converts raw objects an older
  * client left behind and reports everything else; with no bundle it deletes no
  * object it can't identify. The conversion flow runs the same pass, through
- * {@link attachmentCleanerIOVerb}.
+ * `attachmentCleanerIOVerb`.
  */
 
 import { Sparkles } from 'lucide-react'
-import { attachmentCleanerIOVerb, type AttachmentCleanerIOResult } from '@/data/attachmentCleanerIOVerb.js'
 import { isRemoteSyncActive } from '@/data/repoProvider.js'
 import type { Repo } from '@/data/repo.js'
 import { fetchWorkspaceConversionState } from '@/data/workspaceConversion.js'
-import { supabase } from '@/services/supabase.js'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.js'
 import {
   attachmentCleanerLockName,
@@ -21,42 +19,14 @@ import {
   type CleanerReport,
 } from '@/sync/conversion/attachmentCleaner.js'
 import type { WorkspaceObjectKeys } from '@/sync/crypto/contentKey.js'
-import { getWorkspaceKeyStore } from '@/sync/keys/keyStore.js'
+import { getWorkspaceKeyStore, objectKeysOf } from '@/sync/keys/keyStore.js'
 import { openDialog } from '@/utils/dialogs.js'
 import { showError } from '@/utils/toast.js'
-import { getBlobStore } from './assetUpload.js'
-import { createAttachmentCleanerIO } from './attachmentCleanerIO.js'
-import { getByteStore } from './byteStore.js'
-import { getByteUploadStore } from './uploadStore.js'
+import { cleanerIOFor } from './cleanerIO.js'
 import { CleanupAttachmentsDialog } from './CleanupAttachmentsDialog.js'
 import { runSingleOwner } from './laneLock.js'
 
 export const CLEANUP_ATTACHMENTS_ACTION_ID = 'attachments.cleanup'
-
-const cleanerIOFor = (repo: Repo, workspaceId: string): AttachmentCleanerIOResult => {
-  const userId = repo.user.id
-  if (!userId) return {kind: 'unavailable', reason: 'no one is signed in'}
-  const blobStore = getBlobStore()
-  if (!supabase || !blobStore) return {kind: 'unavailable', reason: 'remote sync is off'}
-  return {
-    kind: 'ready',
-    io: createAttachmentCleanerIO({
-      client: supabase,
-      blobStore,
-      byteStore: getByteStore(),
-      uploadStore: getByteUploadStore(),
-      repo,
-      userId,
-      workspaceId,
-      isRemoteSyncActive,
-    }),
-  }
-}
-
-export const attachmentCleanerIOContribution = attachmentCleanerIOVerb.impl(
-  ({repo, workspaceId}) => cleanerIOFor(repo, workspaceId),
-  {source: 'attachments'},
-)
 
 interface CleanupContext {
   readonly keys: WorkspaceObjectKeys
@@ -76,8 +46,9 @@ const readCleanupContext = async (userId: string, workspaceId: string): Promise<
   if (state.conversionPhase !== null) return 'This workspace is being converted; the conversion cleans up its attachments itself.'
   // One read, so the key and K_id come from the same record.
   const record = await getWorkspaceKeyStore().get(userId, workspaceId)
-  if (!record?.contentKeyHmac) return 'Unlock the workspace with its key first.'
-  return {keys: {cek: record.wk, contentKeyHmac: record.contentKeyHmac}, canary: state.wkCanary}
+  const keys = record && objectKeysOf(record)
+  if (!keys) return 'Unlock the workspace with its key first.'
+  return {keys, canary: state.wkCanary}
 }
 
 export type CleanupRun = (

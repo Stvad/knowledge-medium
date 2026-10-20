@@ -1,5 +1,6 @@
 import { InMemoryWorkspaceKeyStore } from '../../keys/keyStore.js'
-import { writeBytesPart, type BundleFolder, type PartDigest } from '../bundle/bundleParts.js'
+import { sha256Hex, writeBytesPart, type BundleFolder, type PartDigest } from '../bundle/bundleParts.js'
+import type { BundleRecord } from '../bundle/bundleRecord.js'
 import { InMemoryBundleRecordStore } from '../bundle/bundleRecord.js'
 import { BUNDLE_PARTS } from '../bundle/manifest.js'
 import { InMemoryFlipAttempts } from '../flipAttempts.js'
@@ -7,6 +8,7 @@ import type { PreflightEnvironment } from '../preflight.js'
 import type { ConversionLock } from '../runLock.js'
 import type { ConversionFlowDeps, ConversionUi } from '../runConversion.js'
 import { WS } from './conversionFixtures.js'
+import { MemoryBundleFolder } from './memoryBundleFolder.js'
 import { createFakeAttachmentStorage } from './fakeAttachmentStorage.js'
 import type { FakeConversionServer } from './fakeConversionServer.js'
 
@@ -21,6 +23,7 @@ export const passingEnvironment = (overrides: Partial<PreflightEnvironment> = {}
   supportsDirectoryPicker: true,
   uploadQueue: async () => ({pending: 0, rejected: 0}),
   localDbBytes: async () => FAKE_LOCAL_DB.length,
+  freeLocalBytes: async () => null,
   ...overrides,
 })
 
@@ -57,3 +60,21 @@ export const flowDeps = (
   purgeRetry: {attempts: 2, sleep: async () => {}},
   ...overrides,
 })
+
+/** A bundle record with nothing archived, over a folder whose manifest is the
+ *  one it records: a workspace with no attachments, past the purge. */
+export const emptyBundleRecord = (): BundleRecord => {
+  const folder = new MemoryBundleFolder('bundle')
+  folder.setText(BUNDLE_PARTS.manifest, '{}\n')
+  return {
+    workspaceId: WS,
+    folder,
+    manifestSha256: sha256Hex(folder.files.get(BUNDLE_PARTS.manifest)!),
+    through: 0,
+    blockRows: 0,
+    historyRows: 0,
+    exportedAt: '2026-10-19T00:00:00.000Z',
+    noVerifiedSource: [],
+    otherObjectPaths: [],
+  }
+}

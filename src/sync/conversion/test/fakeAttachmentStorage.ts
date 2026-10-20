@@ -6,7 +6,8 @@
  */
 
 import { MAX_OBJECT_BYTES } from '../../byteTransform.js'
-import type { AttachmentCleanerIO, ConversionBundle, MediaRef, ObjectPath } from '../attachmentCleaner.js'
+import type { ConversionBundle, MediaRef, ObjectPath } from '../attachmentCleaner.js'
+import type { ConversionAttachmentsIO } from '../conversionAttachments.js'
 
 /** The plugin's reading of a stored row, for the fake's rows. */
 export const fakeMediaHashOf = (propertiesJson: string): string | null => {
@@ -21,7 +22,7 @@ export const fakeMediaHashOf = (propertiesJson: string): string | null => {
 }
 
 export interface FakeAttachmentStorage {
-  readonly io: AttachmentCleanerIO
+  readonly io: ConversionAttachmentsIO
   readonly objects: Map<ObjectPath, Uint8Array<ArrayBuffer>>
   readonly media: MediaRef[]
   /** This device's byte store, by local name. */
@@ -38,7 +39,7 @@ export const createFakeAttachmentStorage = ({limit = MAX_OBJECT_BYTES}: {limit?:
   const local = new Map<string, Uint8Array<ArrayBuffer>>()
   const deletes: ObjectPath[] = []
   const storage = {pendingUploads: 0} as {pendingUploads: number}
-  const io: AttachmentCleanerIO = {
+  const io: ConversionAttachmentsIO = {
     listObjects: async () => [...objects.keys()].sort(),
     readObject: async path => objects.get(path)?.slice() ?? null,
     writeObject: async (path, bytes) => {

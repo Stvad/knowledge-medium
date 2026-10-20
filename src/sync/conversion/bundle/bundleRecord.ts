@@ -64,13 +64,20 @@ export class InMemoryBundleRecordStore implements BundleRecordStore {
   }
 }
 
+/** A stored record, or null for one without the attachment lists: its bundle
+ *  predates the attachment parts, so it can't vouch for the cleanup. */
+export const storedBundleRecord = (stored: unknown): BundleRecord | null => {
+  const record = stored as Partial<BundleRecord> | undefined
+  if (!record || !Array.isArray(record.otherObjectPaths) || !Array.isArray(record.noVerifiedSource)) return null
+  return record as BundleRecord
+}
+
 /** IndexedDB, which structured-clones the directory handle along with the record. */
 export class IndexedDbBundleRecordStore implements BundleRecordStore {
   private readonly idb = new IdbKeyedStore('km-e2ee-conversion', 'bundle_records')
 
   async get(userId: string, workspaceId: string) {
-    const record = await this.idb.tx<BundleRecord | undefined>('readonly', store => store.get(idbRecordId(userId, workspaceId)))
-    return record ?? null
+    return storedBundleRecord(await this.idb.tx<unknown>('readonly', store => store.get(idbRecordId(userId, workspaceId))))
   }
 
   async put(userId: string, workspaceId: string, record: BundleRecord) {

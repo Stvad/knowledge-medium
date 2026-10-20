@@ -19,7 +19,10 @@ vi.mock('@/data/workspaceConversion.js', () => ({
     return h.read
   },
 }))
-vi.mock('@/sync/keys/keyStore.js', () => ({getWorkspaceKeyStore: () => ({get: async () => h.record})}))
+vi.mock('@/sync/keys/keyStore.js', async orig => ({
+  ...(await orig<typeof import('@/sync/keys/keyStore.js')>()),
+  getWorkspaceKeyStore: () => ({get: async () => h.record}),
+}))
 vi.mock('@/services/supabase.js', () => ({supabase: {}}))
 vi.mock('./assetUpload.js', () => ({getBlobStore: () => ({})}))
 vi.mock('@/data/repoProvider.js', () => ({isRemoteSyncActive: () => h.remote}))

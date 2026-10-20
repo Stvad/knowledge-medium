@@ -10,6 +10,8 @@ const bytes = (...vals: number[]) => new Uint8Array(vals)
 class FakeFileHandle {
   kind = 'file' as const
   data = new Uint8Array(0)
+  /** Fails the next write, as a full disk does. */
+  static failWrites: Error | null = null
   async getFile() {
     // A fresh copy each read, like a real File over OPFS.
     return { arrayBuffer: async () => this.data.slice().buffer }
@@ -17,7 +19,11 @@ class FakeFileHandle {
   async createWritable() {
     const chunks: Uint8Array[] = []
     return {
-      write: async (chunk: Uint8Array) => void chunks.push(new Uint8Array(chunk)),
+      write: async (chunk: Uint8Array) => {
+        if (FakeFileHandle.failWrites) throw FakeFileHandle.failWrites
+        chunks.push(new Uint8Array(chunk))
+      },
+      abort: async () => {},
       close: async () => {
         const total = chunks.reduce((n, c) => n + c.length, 0)
         const out = new Uint8Array(total)
@@ -203,6 +209,21 @@ describe('OpfsByteStore — on-disk layout', () => {
     expect(await store.get(U, WS, KEY)).toBeNull()
     expect(await store.has(U, WS, KEY)).toBe(false)
     expect(root.dirs.size).toBe(0) // nothing was created
+  })
+
+  it('a failed write surfaces its own error and leaves no empty entry to read back', async () => {
+    const { store } = opfsWithRoot()
+    await store.put(U, WS, 'kept', bytes(1))
+    FakeFileHandle.failWrites = new DOMException('full', 'QuotaExceededError')
+    try {
+      await expect(store.put(U, WS, KEY, bytes(1, 2))).rejects.toMatchObject({name: 'QuotaExceededError'})
+      // An existing entry is kept as it was.
+      await expect(store.put(U, WS, 'kept', bytes(9))).rejects.toMatchObject({name: 'QuotaExceededError'})
+    } finally {
+      FakeFileHandle.failWrites = null
+    }
+    expect(await store.get(U, WS, KEY)).toBeNull()
+    expect(await store.get(U, WS, 'kept')).toEqual(bytes(1))
   })
 
   it('purgeWorkspace removes the workspace subtree from disk', async () => {

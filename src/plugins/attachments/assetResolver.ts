@@ -79,7 +79,7 @@ export const remoteSyncGated = (remote: BlobStore): BlobStore => ({
  *  Cheap to rebuild (the Supabase wrapper is stateless — every op rides the
  *  client's own session), so callers that need a fresh one (the per-user path)
  *  just call this again rather than caching. */
-const buildBlobStore = (): BlobStore => {
+export const buildBlobStore = (): BlobStore => {
   if (!supabase) return NO_REMOTE_BLOB_STORE
   const client = supabase
   return remoteSyncGated(

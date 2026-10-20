@@ -74,7 +74,7 @@ const REOPEN_PURPOSE: Record<ReopenBundlePrompt['purpose'], {why: string; withou
   },
 }
 
-export function ReopenBundleFolderPrompt({prompt: {recorded, problem, purpose}, answer, cancel}: {
+export function ReopenBundleFolderPrompt({prompt: {recorded, problem, purpose, archived}, answer, cancel}: {
   prompt: ReopenBundlePrompt
   answer: (folder: BundleFolder | null) => void
   cancel: () => void
@@ -89,7 +89,11 @@ export function ReopenBundleFolderPrompt({prompt: {recorded, problem, purpose}, 
         folder you made it in) if it has moved.
       </Explanation>
       {purpose === 'cleanup' && (
-        <Explanation>Without it, the objects it archived stay on the server, and the conversion can't finish.</Explanation>
+        <Explanation>
+          {archived > 0
+            ? `Without it, the ${archived} object(s) it archived stay on the server, and the conversion can't finish.`
+            : "Without it, an attachment missing everywhere else can't be rebuilt from it."}
+        </Explanation>
       )}
       {problem && <p className="text-sm text-destructive">{problem}</p>}
       {denied && <p className="text-sm text-destructive">Access wasn't granted. Choose the folder instead.</p>}

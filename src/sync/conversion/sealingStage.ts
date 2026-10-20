@@ -6,7 +6,8 @@
  * resume just runs the stage again.
  */
 
-import type { AttachmentCleanerIO, UnrecoverableMedia } from './attachmentCleaner.js'
+import type { UnrecoverableMedia } from './attachmentCleaner.js'
+import type { ConversionAttachmentsIO } from './conversionAttachments.js'
 import { bundleFolderIn, type BundleFolder, type PartDigest } from './bundle/bundleParts.js'
 import { bundleRecordOf, type BundleRecord, type BundleRecordStore } from './bundle/bundleRecord.js'
 import { takeBundle, type BundleProgress } from './bundle/takeBundle.js'
@@ -33,6 +34,8 @@ export interface ReopenBundlePrompt {
   /** purge: null takes a new bundle. cleanup: null goes on without it, which
    *  leaves the objects it archived in place. */
   readonly purpose: 'purge' | 'cleanup'
+  /** The objects the bundle archived, which only it lets the cleaner delete. */
+  readonly archived: number
 }
 
 export interface BundlePrompts {
@@ -59,7 +62,7 @@ export interface SealingDeps {
   readonly server: ConversionServer
   readonly bundles: BundleRecordStore
   /** Storage and this device's byte store, through the attachments plugin. */
-  readonly attachments: AttachmentCleanerIO
+  readonly attachments: ConversionAttachmentsIO
   /** Whether the folder can be read now, without asking the user. */
   readonly canReadFolder: (folder: BundleFolder) => Promise<boolean>
   /** Write this device's database, copied under its lock, into the folder,
@@ -123,6 +126,7 @@ const takeVerifiedBundle = async (deps: SealingDeps, reason: BundleRetakeReason 
     })
     // Read back from the folder, not from what was written: this is what the
     // record vouches for.
+    ui.status({kind: 'checking-bundle'})
     const record = bundleRecordOf(await verifyBundle({folder, workspaceId, mediaHashOf: deps.attachments.mediaHashOf, signal}), folder)
     await deps.bundles.put(userId, workspaceId, record)
     return record
@@ -133,6 +137,22 @@ const takeVerifiedBundle = async (deps: SealingDeps, reason: BundleRetakeReason 
   }
 }
 
+/** The recorded folder when it is readable and nothing was wrong with it, else
+ *  the one the user hands back: the recorded one with access granted, or a pick,
+ *  descended into when it holds a folder of the recorded name. Null when the
+ *  user would rather do without it. Whether it holds the bundle is the caller's
+ *  check. */
+export const reopenRecordedFolder = async (
+  deps: Pick<SealingDeps, 'canReadFolder'> & {readonly ui: Pick<BundlePrompts, 'reopenBundleFolder'>},
+  record: BundleRecord,
+  problem: string | null,
+  purpose: ReopenBundlePrompt['purpose'],
+): Promise<BundleFolder | null> => {
+  if (problem === null && (await deps.canReadFolder(record.folder))) return record.folder
+  const picked = await deps.ui.reopenBundleFolder({recorded: record.folder, problem, purpose, archived: record.otherObjectPaths.length})
+  return picked && picked !== record.folder ? bundleFolderIn(picked, record.folder.name) : picked
+}
+
 /** Step 6.1. The re-seal can take hours, and the folder may have been moved
  *  or changed meanwhile. Only the recorded folder holding other bytes means the
  *  bundle no longer counts: one that can't be read, or a wrong pick, asks the
@@ -140,12 +160,9 @@ const takeVerifiedBundle = async (deps: SealingDeps, reason: BundleRetakeReason 
 const recheckBundle = async (deps: SealingDeps, record: BundleRecord): Promise<VerifiedBundle | BundleRetakeReason> => {
   const {userId, workspaceId, ui, signal} = deps
   ui.status({kind: 'checking-bundle'})
-  let tried: BundleFolder | null = (await deps.canReadFolder(record.folder))
-    ? record.folder
-    : await ui.reopenBundleFolder({recorded: record.folder, problem: null, purpose: 'purge'})
-  for (;;) {
-    if (!tried) return 'requested'
-    const folder = tried === record.folder ? tried : await bundleFolderIn(tried, record.folder.name)
+  for (let problem: string | null = null; ;) {
+    const folder = await reopenRecordedFolder(deps, record, problem, 'purge')
+    if (!folder) return 'requested'
     let verified: VerifiedBundle
     try {
       verified = await verifyBundle({
@@ -158,7 +175,7 @@ const recheckBundle = async (deps: SealingDeps, record: BundleRecord): Promise<V
     } catch (error) {
       if (!(error instanceof BundleInvalid)) throw error
       if (folder === record.folder && error.problem !== 'unreadable') return 'changed'
-      tried = await ui.reopenBundleFolder({recorded: record.folder, problem: error.message, purpose: 'purge'})
+      problem = error.message
       continue
     }
     if (folder !== record.folder) await deps.bundles.put(userId, workspaceId, {...record, folder})
@@ -186,7 +203,7 @@ const purge = async (deps: SealingDeps, {counted}: VerifiedBundle): Promise<void
   }
 }
 
-const withScreenAwake = async <T>(deps: SealingDeps, run: () => Promise<T>): Promise<T> => {
+export const withScreenAwake = async <T>(deps: Pick<SealingDeps, 'keepAwake'>, run: () => Promise<T>): Promise<T> => {
   const release = await deps.keepAwake()
   try {
     return await run()

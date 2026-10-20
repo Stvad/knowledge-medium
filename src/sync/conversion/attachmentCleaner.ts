@@ -21,8 +21,7 @@
  * and the proof fails if the folder changes in a way the run did not cause.
  */
 
-import { encodeBytes, verifyObjectBytes } from '../byteTransform.js'
-import { BINARY_ENVELOPE_OVERHEAD_BYTES } from '../crypto/binaryEnvelope.js'
+import { encodeBytes, encodedSize, verifyObjectBytes } from '../byteTransform.js'
 import { validateCanary } from '../crypto/canary.js'
 import { CONTENT_HASH_PREFIX, verifyContentHash } from '../crypto/contentHash.js'
 import { classifyStoredObject, deriveContentKey, indexKeyedNames, type WorkspaceObjectKeys } from '../crypto/contentKey.js'
@@ -61,15 +60,6 @@ export interface AttachmentCleanerIO {
   mediaBlocks(): Promise<readonly MediaRef[]>
   /** This device's local byte-store entry under `name`, or null. */
   readLocal(name: string): Promise<Uint8Array<ArrayBuffer> | null>
-  /** Keep bytes, already verified, in this device's byte store under `name`. */
-  writeLocal(name: string, bytes: Uint8Array<ArrayBuffer>): Promise<void>
-  /** The content hash a stored block row carries if it is a media block, by
-   *  its `properties_json`; null for any other row. The conversion's bundle
-   *  reads the server's rows, not this device's. */
-  mediaHashOf(propertiesJson: string): string | null
-  /** This device's attachment uploads for the workspace that haven't been
-   *  confirmed: staged, pending or failed. */
-  pendingUploads(): Promise<number>
 }
 
 /**
@@ -190,6 +180,13 @@ export interface CleanerReport {
   readonly proof: CleanerProof
 }
 
+/** The sealed size the upload limits must reach for every refused-as-too-large
+ *  upload (a 413), or null when none was refused for size. */
+export const limitToRaise = (refused: CleanerReport['refused']): number | null => {
+  const sizes = refused.filter(item => item.status === 413).map(item => item.sealedBytes)
+  return sizes.length > 0 ? Math.max(...sizes) : null
+}
+
 /** A pass that keeps finding something to delete after this many listings is
  *  racing another writer. */
 const MAX_PASSES = 8
@@ -201,7 +198,7 @@ const MAX_PASSES = 8
  * would address different objects, and a URL collapses dot segments onto some
  * other object entirely. The app only writes hex names.
  */
-const isAddressable = (path: ObjectPath): boolean =>
+export const isAddressable = (path: ObjectPath): boolean =>
   path
     .split('/')
     .every(segment => segment !== '' && segment !== '.' && segment !== '..' && encodeURIComponent(segment) === segment)
@@ -466,7 +463,7 @@ export const cleanAttachments = async (input: CleanAttachmentsInput): Promise<Cl
     const write = await io.writeObject(rawName, plaintext)
     if (write.kind === 'refused') {
       // Its sealed upload would need at least as much: the same remedy covers both.
-      const sealedBytes = plaintext.length + BINARY_ENVELOPE_OVERHEAD_BYTES
+      const sealedBytes = encodedSize(plaintext.length, 'e2ee')
       refused.push({path: keyedName, status: write.status, sealedBytes})
       return 'unverified'
     }

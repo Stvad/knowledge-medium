@@ -201,16 +201,6 @@ describe('listWorkspaceObjects', () => {
 describe('createAttachmentCleanerIO mediaBlocks', () => {
   it('refuses while this device has synced rows not yet applied to blocks', async () => {
     const repo = {workspaceViewGap: async () => ({reason: 'synced rows are still draining into `blocks`', transient: true})}
-    const io = createAttachmentCleanerIO({
-      client: {} as SupabaseClient,
-      blobStore: {} as BlobStore,
-      byteStore: new InMemoryByteStore(),
-      uploadStore: new InMemoryByteUploadStore(),
-      repo: repo as unknown as Repo,
-      userId: 'user-1',
-      workspaceId: WS,
-      isRemoteSyncActive: () => true,
-    })
-    await expect(io.mediaBlocks()).rejects.toThrow(/incomplete: synced rows are still draining/)
+    await expect(cleanerIO(repo as unknown as Repo).mediaBlocks()).rejects.toThrow(/incomplete: synced rows are still draining/)
   })
 })

@@ -13,7 +13,7 @@
 
 import { SEALED_COLUMNS } from '../../transform.js'
 import { isSealedRow } from '../sealing.js'
-import { ATTACHMENTS_DIR, OTHER_OBJECTS_DIR, rawNameOf } from './attachmentParts.js'
+import { ATTACHMENTS_DIR, OTHER_OBJECTS_DIR, otherObjectNameOf, rawNameOf } from './attachmentParts.js'
 import { scanPart, sha256Hex, type BundleFolder, type PartDigest } from './bundleParts.js'
 import { BUNDLE_FORMAT, BUNDLE_FORMAT_VERSION, BUNDLE_PARTS, type BundleManifest } from './manifest.js'
 
@@ -66,7 +66,7 @@ export interface VerifiedBundle {
 export interface VerifyBundleOptions {
   readonly folder: BundleFolder
   readonly workspaceId: string
-  /** A stored row's media content hash, or null: `AttachmentCleanerIO.mediaHashOf`. */
+  /** A stored row's media content hash, or null: `ConversionAttachmentsIO.mediaHashOf`. */
   readonly mediaHashOf: (propertiesJson: string) => string | null
   /** The bundle record's manifest digest: the folder must be that bundle. */
   readonly manifestSha256?: string
@@ -217,7 +217,7 @@ const verifyOtherObjects = async (folder: BundleFolder, manifest: BundleManifest
   if (manifest.otherObjects.length === 0) return
   const others = await subfolder(folder, OTHER_OBJECTS_DIR)
   for (const entry of manifest.otherObjects) {
-    if (entry.name !== sha256Hex(new TextEncoder().encode(entry.path))) {
+    if (entry.name !== otherObjectNameOf(entry.path)) {
       throw new BundleInvalid('other-object-mismatch', `${OTHER_OBJECTS_DIR}/${entry.name} isn't named for ${entry.path}`)
     }
     const digest = await scanFolderPart(others, entry.name, undefined, signal)
@@ -263,12 +263,19 @@ const readManifest = async (folder: BundleFolder): Promise<Uint8Array> => {
   }
 }
 
+const manifestChanged = () =>
+  new BundleInvalid('manifest-changed', `${BUNDLE_PARTS.manifest} isn't the one this device recorded`)
+
+/** Is this the bundle the record vouches for? Its manifest pins every part's
+ *  digest, so the manifest's own hash says so without reading the parts. */
+export const checkManifest = async (folder: BundleFolder, manifestSha256: string): Promise<void> => {
+  if (sha256Hex(await readManifest(folder)) !== manifestSha256) throw manifestChanged()
+}
+
 export const verifyBundle = async ({folder, workspaceId, manifestSha256, mediaHashOf, signal}: VerifyBundleOptions): Promise<VerifiedBundle> => {
   const manifestBytes = await readManifest(folder)
   const digest = sha256Hex(manifestBytes)
-  if (manifestSha256 !== undefined && digest !== manifestSha256) {
-    throw new BundleInvalid('manifest-changed', `${BUNDLE_PARTS.manifest} isn't the one this device recorded`)
-  }
+  if (manifestSha256 !== undefined && digest !== manifestSha256) throw manifestChanged()
   const manifest = parseManifest(manifestBytes, workspaceId)
   const {blockRows, mediaHashes} = await verifyBlocks(folder, manifest, mediaHashOf, signal)
   const {historyRows, through} = await verifyHistory(folder, manifest, signal)

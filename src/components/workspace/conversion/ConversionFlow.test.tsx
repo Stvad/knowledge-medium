@@ -8,9 +8,9 @@ import type { ConversionFlowDeps, ConversionUi } from '@/sync/conversion/runConv
 import { seedMedia, seedPlaintext, WS } from '@/sync/conversion/test/conversionFixtures'
 import { createFakeAttachmentStorage, type FakeAttachmentStorage } from '@/sync/conversion/test/fakeAttachmentStorage'
 import { FakeConversionServer } from '@/sync/conversion/test/fakeConversionServer'
-import { flowDeps, USER } from '@/sync/conversion/test/flowFixtures'
+import { emptyBundleRecord, flowDeps, USER } from '@/sync/conversion/test/flowFixtures'
 import { MemoryBundleFolder } from '@/sync/conversion/test/memoryBundleFolder'
-import { ConversionFlow } from './ConversionFlow'
+import { ConversionFlow, PreflightPrompt } from './ConversionFlow'
 import type { ConversionSetup } from './conversionFlowDeps'
 
 let server: FakeConversionServer
@@ -100,6 +100,27 @@ describe('ConversionFlow', () => {
     expect(await screen.findByRole('button', {name: /choose a folder/i})).toBeInTheDocument()
   })
 
+  it('offers no Stop while the finish request is out', async () => {
+    const minted = await mintWorkspaceKey(WS)
+    await keyStore.put(USER, WS, minted.record)
+    server.flip(WS, minted.canary)
+    server.setPhase(WS, 'cleaning')
+    await bundles.put(USER, WS, emptyBundleRecord())
+    let commit!: () => void
+    const finish = server.finishConversion.bind(server)
+    server.finishConversion = workspaceId => new Promise<void>(resolve => (commit = resolve)).then(() => finish(workspaceId))
+    renderFlow()
+    click(/^start$/i)
+    fireEvent.click(await screen.findByLabelText(/every other device/i))
+    click(/^continue$/i)
+    fireEvent.click(await screen.findByRole('button', {name: /^finish$/i}))
+
+    expect(await screen.findByText(/finishing the conversion/i)).toBeInTheDocument()
+    expect(screen.queryByRole('button', {name: /stop/i})).toBeNull()
+    commit()
+    expect(await screen.findByText(DONE)).toBeInTheDocument()
+  })
+
   it('asks for the earlier attempt\'s key, and makes a new one only on request', async () => {
     const earlier = await mintWorkspaceKey(WS)
     await keyStore.put(USER, WS, earlier.record)
@@ -152,11 +173,7 @@ describe('ConversionFlow', () => {
     await keyStore.put(USER, WS, minted.record)
     server.flip(WS, minted.canary)
     server.setPhase(WS, 'cleaning')
-    const bundle = new MemoryBundleFolder('bundle')
-    await bundles.put(USER, WS, {
-      workspaceId: WS, folder: bundle, manifestSha256: 'f'.repeat(64), through: 0, blockRows: 0, historyRows: 0,
-      exportedAt: '2026-10-19T00:00:00.000Z', noVerifiedSource: [], otherObjectPaths: [],
-    })
+    await bundles.put(USER, WS, emptyBundleRecord())
     // Uploaded from outside the app after the bundle was taken.
     storage.objects.set('stray', new Uint8Array([9]))
     renderFlow()
@@ -173,5 +190,29 @@ describe('ConversionFlow', () => {
     expect(await screen.findByText(DONE)).toBeInTheDocument()
     expect(storage.objects.has('stray')).toBe(true)
     expect(await bundles.get(USER, WS)).toBeNull()
+  })
+})
+
+describe('PreflightPrompt', () => {
+  it('goes on past an object too big to upload sealed only once the limits are raised', () => {
+    const answer = vi.fn()
+    const sealedBytes = 50 * 1024 * 1024 + 100
+    render(<PreflightPrompt
+      report={{
+        sizes: {blockRows: 1, blocksBytes: 1, historyRows: 1, historyBytes: 1, localDbBytes: 1, attachmentBytes: 1, contentBytes: 1},
+        oversized: [{what: 'sha256:big', sealedBytes}],
+        noVerifiedSource: [],
+      }}
+      answer={answer}
+      cancel={() => {}}
+    />)
+    fireEvent.click(screen.getByLabelText(/i understand/i))
+
+    expect(screen.getByText('sha256:big')).toBeInTheDocument()
+    expect(screen.getByText(new RegExp(`at least .*\\(${sealedBytes} bytes\\)`))).toBeInTheDocument()
+    expect(screen.getByRole('button', {name: /^continue$/i})).toBeDisabled()
+    fireEvent.click(screen.getByLabelText(/upload limits are raised/i))
+    click(/^continue$/i)
+    expect(answer).toHaveBeenCalledOnce()
   })
 })

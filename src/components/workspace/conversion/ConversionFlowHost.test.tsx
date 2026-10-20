@@ -34,7 +34,7 @@ describe('ConversionFlowHost', () => {
     expect(conversionFlowTarget()).toBeNull()
   })
 
-  it('keeps every key from the shortcuts underneath, and cancels a hold armed before it opened', () => {
+  it('keeps every key from the shortcuts underneath, and cancels a hold armed before it opened', async () => {
     const reached: string[] = []
     const listen = (event: KeyboardEvent) => reached.push(event.type)
     window.addEventListener('keydown', listen)
@@ -42,7 +42,7 @@ describe('ConversionFlowHost', () => {
     try {
       act(() => openConversionFlow({userId: USER, workspaceId: 'ws', workspaceName: 'Vault'}))
       renderHost()
-      const inside = screen.getByRole('button', {name: /close/i})
+      const inside = await screen.findByRole('button', {name: /close/i})
 
       fireEvent.keyDown(inside, {key: 'Enter'})
       fireEvent.keyUp(inside, {key: 'Enter'})

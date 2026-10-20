@@ -24,6 +24,7 @@
  * still unlocked).
  */
 
+import type {WorkspaceObjectKeys} from '../crypto/contentKey.js'
 import {IdbKeyedStore, idbKeyPrefix, idbRecordId} from '@/utils/idbKeyedStore.js'
 
 /**
@@ -49,6 +50,11 @@ export interface WorkspaceKeyRecord {
   readonly wk: CryptoKey
   readonly contentKeyHmac: CryptoKey | null
 }
+
+/** The keys that seal and name a workspace's objects, or null for a record
+ *  with no K_id yet (the legacy shape). */
+export const objectKeysOf = (record: WorkspaceKeyRecord): WorkspaceObjectKeys | null =>
+  record.contentKeyHmac ? {cek: record.wk, contentKeyHmac: record.contentKeyHmac} : null
 
 /** Normalize a raw stored value to a {@link WorkspaceKeyRecord}: a new-shape
  *  record passes through; a LEGACY bare `CryptoKey` (pre-K_id) becomes

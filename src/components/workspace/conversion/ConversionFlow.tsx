@@ -5,6 +5,7 @@ import { FLIP_SETTLED_MS } from '@/sync/conversion/flipAttempts'
 import type { BundleFolder } from '@/sync/conversion/bundle/bundleParts'
 import type { CleanerProgress } from '@/sync/conversion/attachmentCleaner'
 import type { PreflightBlocker, PreflightReport } from '@/sync/conversion/preflight'
+import type { BundleProgress } from '@/sync/conversion/bundle/takeBundle'
 import type { SealingPass } from '@/sync/conversion/sealingStage'
 import type { UpgradeWorkspacePinResult } from '@/sync/keys/flows/upgradeWorkspacePin'
 import {
@@ -120,10 +121,10 @@ function UnavailableView({why, onClose}: {why: ConversionUnavailable; onClose: (
   )
 }
 
-/** While the flip request is out it may commit whatever this run does next,
- *  so there is nothing for Stop to stop. */
+/** While the flip or the finish request is out it may commit whatever this
+ *  run does next, so there is nothing for Stop to stop. */
 const canStop = (status: ConversionStatus | null): boolean =>
-  !(status?.kind === 'flipping' && status.waiting === null)
+  !(status?.kind === 'flipping' && status.waiting === null) && status?.kind !== 'finishing'
 
 function FlowBody({state, start, cancel, onClose}: {
   state: RunState
@@ -201,7 +202,7 @@ function ContractPrompt({stage, answer, cancel}: {stage: ActiveStage; answer: ()
  *  (runbook step 6). */
 const SERVER_HEADROOM_FACTOR = 6
 
-function PreflightPrompt({report, answer, cancel}: {report: PreflightReport; answer: () => void; cancel: () => void}) {
+export function PreflightPrompt({report, answer, cancel}: {report: PreflightReport; answer: () => void; cancel: () => void}) {
   const {sizes, oversized, noVerifiedSource} = report
   const [understood, setUnderstood] = useState(false)
   const [limitsRaised, setLimitsRaised] = useState(false)
@@ -327,7 +328,9 @@ const statusText = (status: ConversionStatus | null): string => {
     case 'reading-server':
       return 'Checking the workspace on the server…'
     case 'preflight':
-      return 'Checking that the workspace can be converted…'
+      return status.progress
+        ? `Checking the workspace's attachments: ${status.progress.checked} of ${status.progress.total}. Keep this tab open.`
+        : 'Checking that the workspace can be converted…'
     case 'flipping':
       return status.waiting
         ? `Waiting for the database to finish other writes (try ${status.waiting.attempt + 1}, in ${Math.max(1, Math.ceil(status.waiting.retryInMs / 1000))} s)…`
@@ -335,23 +338,13 @@ const statusText = (status: ConversionStatus | null): string => {
     case 'checking-key':
       return 'Checking the workspace key…'
     case 'taking-bundle':
-      switch (status.progress?.part) {
-        case undefined:
-        case 'local-db':
-          return "Copying this device's database into the bundle…"
-        case 'attachments':
-          return `Copying attachments into the recovery bundle (${status.progress.files} files). Keep this tab open.`
-        case 'blocks':
-        case 'history':
-          return `Writing the recovery bundle (${status.progress.rows} ${status.progress.part === 'history' ? 'history rows' : 'blocks'}). Keep this tab open.`
-      }
-      break
+      return bundleText(status.progress)
     case 'resealing':
       return `Encrypting blocks on the server: ${status.progress?.scanned ?? 0} checked, ${status.progress?.sealed ?? 0} encrypted. Keep this tab open.`
     case 'verifying':
       return `Checking every encrypted block: ${status.progress?.checked ?? 0} checked${status.progress?.repaired ? `, ${status.progress.repaired} repaired` : ''}.`
     case 'checking-bundle':
-      return 'Checking the recovery bundle once more…'
+      return 'Checking the recovery bundle…'
     case 'purging':
       return "Deleting the server's plaintext history…"
     case 'upgrading-pin':
@@ -361,7 +354,19 @@ const statusText = (status: ConversionStatus | null): string => {
     case 'finishing':
       return 'Finishing the conversion…'
   }
-  return ''
+}
+
+const bundleText = (progress: BundleProgress | null): string => {
+  switch (progress?.part) {
+    case undefined:
+    case 'local-db':
+      return "Copying this device's database into the bundle…"
+    case 'attachments':
+      return `Copying attachments into the recovery bundle (${progress.files} files). Keep this tab open.`
+    case 'blocks':
+    case 'history':
+      return `Writing the recovery bundle (${progress.rows} ${progress.part === 'history' ? 'history rows' : 'blocks'}). Keep this tab open.`
+  }
 }
 
 const cleaningText = (progress: CleanerProgress | null): string => {
@@ -397,6 +402,8 @@ const BLOCKER_TEXT = (blocker: PreflightBlocker): string => {
       return "This browser can't keep the workspace key between visits (storage is blocked or in private mode)."
     case 'no-directory-picker':
       return 'Converting writes a recovery folder, which needs desktop Chrome or Edge.'
+    case 'local-space':
+      return `This device needs about ${formatBytes(blocker.neededBytes)} more free storage to keep the attachments only the server holds (${formatBytes(blocker.freeBytes)} is free for them). Free some disk space, then try again.`
   }
 }
 
@@ -512,20 +519,20 @@ function ResultView({result, retry, onClose}: {result: ConversionRunResult; retr
         </>
       )
     case 'done':
-      return <DoneView onClose={onClose}/>
+      return <DoneView bundleFolder={result.bundleFolder} onClose={onClose}/>
   }
 }
 
 /** Step 9: what is left to do, by the user and by the server's operator. */
-function DoneView({onClose}: {onClose: () => void}) {
+function DoneView({bundleFolder, onClose}: {bundleFolder: string | null; onClose: () => void}) {
   return (
     <>
       <Explanation>This workspace is end-to-end encrypted.</Explanation>
       <ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
         <li>Open each other device one at a time, and paste the key there.</li>
         <li>
-          Keep the recovery bundle with the key: if the key is lost, the workspace is restored from the
-          newest one. From time to time, take a new one.
+          Keep the recovery bundle{bundleFolder && <> (the folder "{bundleFolder}")</>} with the key: if
+          the key is lost, the workspace is restored from the newest one.
         </li>
         <li>
           For the server's operator: <span className="font-mono text-xs">VACUUM FULL</span> on blocks,

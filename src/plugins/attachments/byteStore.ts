@@ -231,12 +231,23 @@ export class OpfsByteStore implements ByteStore {
     bytes: Uint8Array<ArrayBuffer>,
   ): Promise<void> {
     const dir = await this.workspaceDir(userId, workspaceId, true)
-    const fileHandle = await dir.getFileHandle(encodeSegment(contentKey), { create: true })
+    const name = encodeSegment(contentKey)
+    let created = false
+    const fileHandle = await dir.getFileHandle(name).catch((err: unknown) => {
+      if (!isNotFound(err)) throw err
+      created = true
+      return dir.getFileHandle(name, { create: true })
+    })
     const writable = await fileHandle.createWritable()
     try {
       await writable.write(bytes)
-    } finally {
       await writable.close()
+    } catch (err) {
+      // The write's own error (a full disk's QuotaExceededError), not the errored
+      // stream's close(); and no empty file left for a read to serve as the bytes.
+      await writable.abort().catch(() => {})
+      if (created) await dir.removeEntry(name).catch(() => {})
+      throw err
     }
   }
 

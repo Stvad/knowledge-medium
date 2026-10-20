@@ -5,7 +5,7 @@ import { mintCanary } from '../crypto/canary.js'
 import { computeContentHash } from '../crypto/contentHash.js'
 import { deriveContentKey, deriveContentKeyHmac } from '../crypto/contentKey.js'
 import { importWorkspaceKey } from '../crypto/workspaceKey.js'
-import { cleanAttachments, type ConversionBundle } from './attachmentCleaner.js'
+import { cleanAttachments, limitToRaise, type ConversionBundle } from './attachmentCleaner.js'
 import { ConversionRefusal } from './sealing.js'
 import { createFakeAttachmentStorage, createFakeBundle, type FakeAttachmentStorage } from './test/fakeAttachmentStorage.js'
 
@@ -596,5 +596,21 @@ describe('cleanAttachments: runs', () => {
     expect(report.converted).toEqual([])
     expect(report.errors).toEqual([{path: await rawName(photo), message: 'deleted, but still listed'}])
     expect(report.proof).toMatchObject({kind: 'not-passed', rawRemaining: [await rawName(photo)]})
+  })
+})
+
+describe('limitToRaise', () => {
+  it('is the largest sealed size among the 413 refusals only', () => {
+    expect(limitToRaise([
+      {path: 'a', status: 413, sealedBytes: 10},
+      {path: 'b', status: 413, sealedBytes: 30},
+      {path: 'c', status: 400, sealedBytes: 99},
+      {path: 'd', sealedBytes: 99},
+    ])).toBe(30)
+  })
+
+  it('is null when nothing was refused for size', () => {
+    expect(limitToRaise([])).toBeNull()
+    expect(limitToRaise([{path: 'a', status: 403, sealedBytes: 5}])).toBeNull()
   })
 })

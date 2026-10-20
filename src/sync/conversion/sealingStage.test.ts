@@ -49,7 +49,10 @@ class SealingUi implements ConversionUi {
   async confirmFinish() {
     this.atFinish = await this.bundles.get(USER, WS)
   }
-  status() {}
+  readonly statuses: string[] = []
+  status(status: {kind: string}) {
+    this.statuses.push(status.kind)
+  }
 }
 
 let server: FakeConversionServer
@@ -103,7 +106,7 @@ describe('the sealing stage', () => {
   it('takes and verifies a bundle, re-seals, verifies, purges, then upgrades the pin', async () => {
     const through = Math.max(...server.history(WS).map(row => row.event_id))
 
-    expect(await run()).toEqual({kind: 'done'})
+    expect(await run()).toMatchObject({kind: 'done'})
 
     expect(await phase()).toBeNull()
     expect(server.history(WS)).toEqual([])
@@ -111,6 +114,9 @@ describe('the sealing stage', () => {
     for (const row of seeded) expect(await openRow(key.record.wk, server.row(row.id))).toEqual(contentColumnsOf(row))
     expect(ui.folderReasons).toEqual([null])
     expect(bundleFolders()).toHaveLength(1)
+    // The read-back of the new bundle shows as its own step, before the re-seal.
+    const steps = ui.statuses.filter((kind, i, all) => kind !== all[i - 1])
+    expect(steps.slice(steps.indexOf('taking-bundle'), steps.indexOf('resealing') + 1)).toEqual(['taking-bundle', 'checking-bundle', 'resealing'])
     // The record outlives the purge, for the attachment cleaner, and goes once the conversion is done.
     expect(ui.atFinish).toMatchObject({through, historyRows: 5, blockRows: 5})
     const {manifestSha256} = await verifyBundle({folder: bundleFolders()[0], workspaceId: WS, mediaHashOf: fakeMediaHashOf})
@@ -128,7 +134,7 @@ describe('the sealing stage', () => {
 
     expect(server.workspaceRows(WS).filter(isSealedRow)).toHaveLength(2)
 
-    expect(await run()).toEqual({kind: 'done'})
+    expect(await run()).toMatchObject({kind: 'done'})
     expect(ui.folderReasons).toEqual([null])
     expect(bundleFolders()).toHaveLength(1)
   })
@@ -168,7 +174,7 @@ describe('the sealing stage', () => {
       folder.setText(BUNDLE_PARTS.blocks, folder.text(BUNDLE_PARTS.blocks).replace('text 0', 'edited'))
     }
 
-    expect(await run()).toEqual({kind: 'done'})
+    expect(await run()).toMatchObject({kind: 'done'})
 
     expect(ui.folderReasons).toEqual([null, 'changed'])
     // The server is as the first pass left it, so the re-seal and verify don't run again.
@@ -216,7 +222,7 @@ describe('the sealing stage', () => {
     let original: MemoryBundleFolder | null = null
     server.beforePatch = () => { original ??= bundleFolders()[0].copy() }
 
-    expect(await run()).toEqual({kind: 'done'})
+    expect(await run()).toMatchObject({kind: 'done'})
     expect(ui.folderReasons).toEqual([null])
     expect(ui.problems).toEqual([expect.stringMatching(/can't be read/)])
     expect(ui.atFinish?.folder).toBe(moved)
@@ -240,7 +246,7 @@ describe('the sealing stage', () => {
       return pick
     }
 
-    expect(await run()).toEqual({kind: 'done'})
+    expect(await run()).toMatchObject({kind: 'done'})
     expect(ui.reopened).toBe(2)
     expect(ui.atFinish?.folder).toBe(original)
   })
@@ -262,7 +268,7 @@ describe('the sealing stage', () => {
       folder.files.set(BUNDLE_PARTS.blocks, bytes)
     }
 
-    expect(await run()).toEqual({kind: 'done'})
+    expect(await run()).toMatchObject({kind: 'done'})
     expect(ui.folderReasons).toEqual([null, 'changed'])
   })
 
@@ -278,7 +284,7 @@ describe('the sealing stage', () => {
     }
 
     // The retry of the lost one meets the phase already moved on.
-    expect(await run()).toEqual({kind: 'done'})
+    expect(await run()).toMatchObject({kind: 'done'})
   })
 
   it('re-seals and retries under the same bundle after a not-sealed refusal', async () => {
@@ -291,7 +297,7 @@ describe('the sealing stage', () => {
       return purge(...args)
     }
 
-    expect(await run()).toEqual({kind: 'done'})
+    expect(await run()).toMatchObject({kind: 'done'})
     expect(ui.folderReasons).toEqual([null])
   })
 
@@ -307,7 +313,7 @@ describe('the sealing stage', () => {
       return purge(...args)
     }
 
-    expect(await run()).toEqual({kind: 'done'})
+    expect(await run()).toMatchObject({kind: 'done'})
     expect(ui.folderReasons).toEqual([null, 'stale'])
     // Something wrote the workspace, so the second pass re-seals and verifies again.
     expect(server.calls.filter(call => call.method === 'readBlockPage')).toHaveLength(8)
@@ -334,7 +340,7 @@ describe('the sealing stage', () => {
       }
     }
 
-    expect(await run()).toEqual({kind: 'done'})
+    expect(await run()).toMatchObject({kind: 'done'})
     expect(upgraded).toBe(1)
   })
 
@@ -347,7 +353,7 @@ describe('the sealing stage', () => {
     // The retry sees the phase moved on; this run's own upgrade then crashes.
     await expect(run({upgradePin: async () => { throw new Error('crash before the pin upgrade') }})).rejects.toThrow('crash before the pin upgrade')
 
-    expect(await run()).toEqual({kind: 'done'})
+    expect(await run()).toMatchObject({kind: 'done'})
     expect(upgraded).toBe(1)
   })
 

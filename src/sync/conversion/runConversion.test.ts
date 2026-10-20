@@ -16,10 +16,10 @@ import {
 import { rawNameOf } from './bundle/attachmentParts.js'
 import { keyOf, mediaPropertiesJson, sealFor, seedMedia, seedPlaintext, WS } from './test/conversionFixtures.js'
 import { FakeConversionServer } from './test/fakeConversionServer.js'
-import { FAKE_LOCAL_DB, flowDeps, passingEnvironment, USER } from './test/flowFixtures.js'
+import { emptyBundleRecord, FAKE_LOCAL_DB, flowDeps, passingEnvironment, USER } from './test/flowFixtures.js'
 import { MemoryBundleFolder } from './test/memoryBundleFolder.js'
 import type { BundleFolder } from './bundle/bundleParts.js'
-import { InMemoryBundleRecordStore, type BundleRecord } from './bundle/bundleRecord.js'
+import { InMemoryBundleRecordStore } from './bundle/bundleRecord.js'
 import type { FinishPrompt } from './cleaningStage.js'
 import { createFakeAttachmentStorage, type FakeAttachmentStorage } from './test/fakeAttachmentStorage.js'
 
@@ -94,18 +94,6 @@ let clock: number
 let storage: FakeAttachmentStorage
 let bundles: InMemoryBundleRecordStore
 
-/** A bundle record with nothing archived, as for a workspace with no attachments. */
-const emptyBundleRecord = (): BundleRecord => ({
-  workspaceId: WS,
-  folder: new MemoryBundleFolder('bundle'),
-  manifestSha256: 'f'.repeat(64),
-  through: 0,
-  blockRows: 0,
-  historyRows: 0,
-  exportedAt: '2026-10-19T00:00:00.000Z',
-  noVerifiedSource: [],
-  otherObjectPaths: [],
-})
 
 beforeEach(() => {
   server = new FakeConversionServer()
@@ -156,8 +144,8 @@ describe('runConversion: preflight → key → flip', () => {
     const result = await run()
 
     // Past the flip the stage runs on through the bundle, re-seal, purge and cleanup.
-    expect(result).toEqual({kind: 'done'})
-    expect(ui.finishes).toEqual([{unrecoverable: [], left: [], refused: []}])
+    expect(result).toMatchObject({kind: 'done'})
+    expect(ui.finishes).toEqual([{unrecoverable: [], left: [], refused: [], bundleRead: true}])
     expect(ui.contracts).toEqual(['plaintext'])
     // The dry run measures what the bundle then writes.
     const [bundle] = [...ui.bundleParent.folders.values()]
@@ -256,7 +244,7 @@ describe('runConversion: preflight → key → flip', () => {
   it('carries on past a flip that committed after its response was lost', async () => {
     server.loseNextFlipResponse = true
 
-    expect(await run()).toEqual({kind: 'done'})
+    expect(await run()).toMatchObject({kind: 'done'})
     expect(flips()).toBe(1)
     expect(await validateCanary((await storedKey()).wk, await serverCanary(), WS)).toBe(true)
     // Marked from the server's canary as each stage past the flip begins.
@@ -273,7 +261,7 @@ describe('runConversion: preflight → key → flip', () => {
       return flip(workspaceId, canary)
     }
 
-    expect(await run()).toEqual({kind: 'done'})
+    expect(await run()).toMatchObject({kind: 'done'})
     expect(await serverCanary()).toBe(earlier.canary)
   })
 
@@ -445,6 +433,32 @@ describe('runConversion: preflight', () => {
     expect(flips()).toBe(0)
   })
 
+  it('refuses when this device has no room to keep the attachments only Storage holds, saying how much', async () => {
+    const big = new Uint8Array(3000)
+    await seedMedia(server, storage, {id: 'kept', bytes: new Uint8Array(1000), at: {remote: true}})
+    await seedMedia(server, storage, {id: 'big', bytes: big, at: {remote: true}})
+    // Room for the first, after the database's headroom.
+    const freeLocalBytes = async () => 512 * 1024 * 1024 + 2000
+
+    expect(await blockers({preflight: passingEnvironment({freeLocalBytes})}))
+      .toEqual([{kind: 'local-space', neededBytes: big.length, freeBytes: 2000}])
+  })
+
+  it('reports the attachment survey as it goes', async () => {
+    await seedMedia(server, storage, {id: 'a', bytes: new Uint8Array([1]), at: {remote: true}})
+    storage.objects.set('stray', new Uint8Array([2]))
+    ui.confirmPreflight = async () => {
+      throw new DOMException('cancelled', 'AbortError')
+    }
+
+    await expect(run()).rejects.toThrow('cancelled')
+    expect(ui.statuses.filter(status => status.kind === 'preflight')).toEqual([
+      {kind: 'preflight', progress: null},
+      {kind: 'preflight', progress: {checked: 1, total: 2}},
+      {kind: 'preflight', progress: {checked: 2, total: 2}},
+    ])
+  })
+
   it('lists media with no verified copy with the blocks that carry it, and keeps a Storage-only copy here', async () => {
     const remoteOnly = new Uint8Array([1, 2, 3])
     const kept = await seedMedia(server, storage, {id: 'kept', bytes: remoteOnly, at: {remote: true}})
@@ -497,7 +511,7 @@ describe('runConversion: every run', () => {
 
       expect(await run({lock})).toEqual({kind: 'busy'})
       releaseFirst()
-      expect(await first).toEqual({kind: 'done'})
+      expect(await first).toMatchObject({kind: 'done'})
     } finally {
       vi.unstubAllGlobals()
     }
@@ -523,7 +537,7 @@ describe('runConversion: every run', () => {
     server.flip(WS, minted.canary)
     server.setPhase(WS, null)
 
-    expect(await run()).toEqual({kind: 'done'})
+    expect(await run()).toMatchObject({kind: 'done'})
     expect(ui.contracts).toEqual([])
     expect(localCanaries).toEqual([minted.canary])
   })
@@ -535,11 +549,54 @@ describe('runConversion: every run', () => {
     server.setPhase(WS, 'cleaning')
     await bundles.put(USER, WS, emptyBundleRecord())
 
-    expect(await run()).toEqual({kind: 'done'})
+    expect(await run()).toMatchObject({kind: 'done'})
     expect(ui.contracts).toEqual(['cleaning'])
     expect(flips()).toBe(0)
   })
 })
+
+describe('runConversion: finishing', () => {
+  beforeEach(async () => {
+    const minted = await mintWorkspaceKey(WS)
+    await keyStore.put(USER, WS, minted.record)
+    server.flip(WS, minted.canary)
+    server.setPhase(WS, 'cleaning')
+    await bundles.put(USER, WS, emptyBundleRecord())
+  })
+  const finishes = () => server.calls.filter(call => call.method === 'finishConversion').length
+
+  it('finishes, names the bundle folder, and forgets the bundle record', async () => {
+    expect(await run()).toEqual({kind: 'done', bundleFolder: 'bundle'})
+    expect(finishes()).toBe(1)
+    expect(await bundles.get(USER, WS)).toBeNull()
+  })
+
+  it('takes a finish whose response was lost as done', async () => {
+    const finish = server.finishConversion.bind(server)
+    server.finishConversion = async workspaceId => {
+      await finish(workspaceId)
+      throw new Error('conversion: finish_conversion failed: the request timed out')
+    }
+
+    expect(await run()).toEqual({kind: 'done', bundleFolder: 'bundle'})
+    expect(await bundles.get(USER, WS)).toBeNull()
+  })
+
+  it('reports a finish that failed with the conversion still unfinished', async () => {
+    server.finishConversion = async () => {
+      throw new Error('conversion: finish_conversion failed: the request timed out')
+    }
+
+    await expect(run()).rejects.toThrow('timed out')
+    expect(await phaseOf()).toBe('cleaning')
+    expect(await bundles.get(USER, WS)).not.toBeNull()
+  })
+})
+
+const phaseOf = async () => {
+  const read = await server.conversionState(WS)
+  return read.kind === 'read' ? read.state.conversionPhase : null
+}
 
 describe('runConversion: the canary check past the flip', () => {
   let saved: Awaited<ReturnType<typeof mintWorkspaceKey>>
@@ -552,7 +609,7 @@ describe('runConversion: the canary check past the flip', () => {
   it('asks for the saved key when this device holds none, and stores it', async () => {
     ui.pastes = ['not a key', (await mintWorkspaceKey(WS)).displayed, saved.displayed]
 
-    expect(await run()).toEqual({kind: 'done'})
+    expect(await run()).toMatchObject({kind: 'done'})
     expect(ui.savedKeyPrompts).toEqual([
       {context: 'converting', problem: null, canStartOver: false},
       {context: 'converting', problem: 'format', canStartOver: false},

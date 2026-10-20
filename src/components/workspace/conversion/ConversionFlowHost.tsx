@@ -1,5 +1,5 @@
 import * as DialogPrimitive from '@radix-ui/react-dialog'
-import { useEffect, useMemo } from 'react'
+import { useEffect, useState } from 'react'
 import { ErrorBoundary, type FallbackProps } from 'react-error-boundary'
 import { Button } from '@/components/ui/button'
 import { useIsLocalOnly } from '@/components/Login'
@@ -7,7 +7,7 @@ import { Explanation, GateCard } from '@/components/workspace/keyUi'
 import { useRepo } from '@/context/repo'
 import { cancelArmedHolds } from '@/shortcuts/holdRegistry'
 import { ConversionFlow } from './ConversionFlow'
-import { conversionSetup } from './conversionFlowDeps'
+import { conversionSetup, type ConversionSetup } from './conversionFlowDeps'
 import { closeConversionFlow, useConversionFlowTarget, type ConversionFlowTarget } from './conversionFlowStore'
 
 const preventDefault = (event: Event) => event.preventDefault()
@@ -59,8 +59,23 @@ export function ConversionFlowHost() {
 function HostedFlow({target}: {target: ConversionFlowTarget}) {
   const repo = useRepo()
   const localOnly = useIsLocalOnly()
-  const setup = useMemo(() => conversionSetup(repo, target.workspaceId, localOnly), [repo, target.workspaceId, localOnly])
-  return <ConversionFlow workspaceName={target.workspaceName} setup={setup} onClose={closeConversionFlow}/>
+  const [setup, setSetup] = useState<{for: string; setup: ConversionSetup} | null>(null)
+  const key = `${target.workspaceId}:${localOnly}`
+  useEffect(() => {
+    let live = true
+    void conversionSetup(repo, target.workspaceId, localOnly).then(next => {
+      if (live) setSetup({for: key, setup: next})
+    })
+    return () => { live = false }
+  }, [repo, target.workspaceId, localOnly, key])
+  if (setup?.for !== key) {
+    return (
+      <GateCard title="Preparing the conversion…" wide>
+        <Explanation>Checking what this device can reach.</Explanation>
+      </GateCard>
+    )
+  }
+  return <ConversionFlow workspaceName={target.workspaceName} setup={setup.setup} onClose={closeConversionFlow}/>
 }
 
 function FlowCrashed({error}: FallbackProps) {

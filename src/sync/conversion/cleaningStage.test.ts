@@ -36,7 +36,9 @@ let lostHash: string
 /** What the scripted UI was asked, in order. */
 let events: string[]
 let finishPrompts: FinishPrompt[]
-let reopenPrompts: Array<{problem: string | null; purpose: string; recorded: BundleFolder}>
+let reopenPrompts: Array<{problem: string | null; purpose: string; recorded: BundleFolder; archived: number}>
+/** Storage deletes already made when each reopen prompt was shown. */
+let deletesAtReopen: number[]
 let choosePrompts: Array<string | null>
 let chooseAnswers: BundleFolder[]
 let reopenAnswers: Array<BundleFolder | null>
@@ -48,7 +50,6 @@ let awake: {held: number; released: number}
 const deps = (overrides: Partial<CleaningDeps> = {}): CleaningDeps => ({
   userId: USER,
   workspaceId: WS,
-  server,
   bundles,
   attachments: storage.io,
   canReadFolder: folder => canRead(folder),
@@ -62,7 +63,7 @@ const deps = (overrides: Partial<CleaningDeps> = {}): CleaningDeps => ({
   },
   lock: (name, run) => lock(name, run),
   ui: {
-    status: () => {},
+    status: status => { if (status.kind === 'checking-bundle') events.push('status:checking-bundle') },
     chooseExistingBundle: async ({problem}) => {
       events.push('choose')
       choosePrompts.push(problem)
@@ -72,7 +73,8 @@ const deps = (overrides: Partial<CleaningDeps> = {}): CleaningDeps => ({
     },
     reopenBundleFolder: async prompt => {
       events.push('reopen')
-      reopenPrompts.push({problem: prompt.problem, purpose: prompt.purpose, recorded: prompt.recorded})
+      reopenPrompts.push({problem: prompt.problem, purpose: prompt.purpose, recorded: prompt.recorded, archived: prompt.archived})
+      deletesAtReopen.push(storage.deletes.length)
       if (reopenAnswers.length === 0) throw new Error('unscripted reopenBundleFolder')
       return reopenAnswers.shift() ?? null
     },
@@ -96,6 +98,7 @@ beforeEach(async () => {
   events = []
   finishPrompts = []
   reopenPrompts = []
+  deletesAtReopen = []
   choosePrompts = []
   chooseAnswers = []
   reopenAnswers = []
@@ -141,9 +144,9 @@ describe('runCleaningPass with this device\'s bundle record', () => {
     storage.local.delete(rawNameOf(localHash)) // the bundle holds it; the cleaner must read it from there
     const pass = await run()
 
-    expect(pass).toEqual({kind: 'finished'})
+    expect(pass).toEqual({kind: 'proved'})
     expect(events.filter(e => e === 'confirmFinish' || e === 'choose' || e === 'reopen')).toEqual(['confirmFinish'])
-    expect(finishPrompts).toEqual([{unrecoverable: [{contentHash: lostHash, blockIds: ['m-lost']}], left: [], refused: []}])
+    expect(finishPrompts).toEqual([{unrecoverable: [{contentHash: lostHash, blockIds: ['m-lost']}], left: [], refused: [], bundleRead: true}])
     // The raw name is gone, a keyed copy took its place for each media hash.
     expect(storage.objects.has(rawNameOf(rawHash))).toBe(false)
     expect(storage.objects.has(rawNameOf(localHash))).toBe(false)
@@ -151,9 +154,9 @@ describe('runCleaningPass with this device\'s bundle record', () => {
     expect(storage.deletes).toContain('nested/thing')
     expect(storage.objects.has('nested/thing')).toBe(false)
     expect([...storage.objects.keys()]).toHaveLength(2)
-    // The server's phase moved on, after the confirmation.
-    expect((await phaseOf())).toBeNull()
-    expect(finishCalls()).toBe(1)
+    // Finishing is the run's job: the pass leaves the phase alone.
+    expect((await phaseOf())).toBe('cleaning')
+    expect(finishCalls()).toBe(0)
   })
 
   it('asks the user before finishing, and a cancelled confirmation never finishes', async () => {
@@ -166,21 +169,14 @@ describe('runCleaningPass with this device\'s bundle record', () => {
     expect((await phaseOf())).toBe('cleaning')
   })
 
-  it('confirms before it finishes', async () => {
-    const order: string[] = []
-    confirmFinish = async () => { order.push(`confirm:${finishCalls()}`) }
-    await run()
-    order.push(`finish:${finishCalls()}`)
-    expect(order).toEqual(['confirm:0', 'finish:1'])
-  })
-
   it('shows an object left behind, which stays in Storage', async () => {
     // Uploaded after the bundle was taken: not archived.
     storage.objects.set('late/upload', bytesOf('arrived after the bundle'))
 
-    expect(await run()).toEqual({kind: 'finished'})
+    expect(await run()).toEqual({kind: 'proved'})
 
     expect(finishPrompts[0].left).toEqual([{path: 'late/upload', reason: 'not-archived'}])
+    expect(finishPrompts[0].bundleRead).toBe(true)
     expect(storage.objects.get('late/upload')).toEqual(bytesOf('arrived after the bundle'))
     expect(storage.deletes).not.toContain('late/upload')
   })
@@ -207,23 +203,51 @@ describe('runCleaningPass with this device\'s bundle record', () => {
     parent.folders.set('bundle', folder)
     reopenAnswers = [parent]
 
-    expect(await run()).toEqual({kind: 'finished'})
+    expect(await run()).toEqual({kind: 'proved'})
 
-    expect(reopenPrompts).toEqual([{problem: null, purpose: 'cleanup', recorded: folder}])
+    expect(reopenPrompts).toEqual([{problem: null, purpose: 'cleanup', recorded: folder, archived: 1}])
     // The bundle's own folder inside the pick was used and recorded.
     expect((await bundles.get(USER, WS))?.folder).toBe(folder)
     expect(storage.objects.has('nested/thing')).toBe(false)
   })
 
-  it('stores a picked folder that holds no subfolder of the recorded name, as picked', async () => {
-    canRead = async f => f !== folder
-    const moved = folder.copy('renamed')
-    reopenAnswers = [moved]
+  it('asks again for a pick that is not this bundle, and never stores it', async () => {
+    const gone = new MemoryBundleFolder('bundle')
+    await bundles.put(USER, WS, {...record, folder: gone})
+    canRead = async f => f !== gone
+    const otherBundle = folder.copy('bundle')
+    otherBundle.setText('manifest.json', otherBundle.text('manifest.json').replace(`"workspaceId": "${WS}"`, '"workspaceId": "ws-other"'))
+    const archivedDir = await folder.getDirectoryHandle('other-objects')
+    const puts: BundleFolder[] = []
+    const put = bundles.put.bind(bundles)
+    bundles.put = async (user, workspace, next) => { puts.push(next.folder); return put(user, workspace, next) }
+    reopenAnswers = [otherBundle, new MemoryBundleFolder('empty'), archivedDir, folder]
 
-    expect(await run()).toEqual({kind: 'finished'})
+    expect(await run()).toEqual({kind: 'proved'})
 
-    expect((await bundles.get(USER, WS))?.folder).toBe(moved)
+    const prefix = "That folder doesn't hold this conversion's recovery bundle"
+    expect(reopenPrompts.map(p => p.problem?.startsWith(prefix) ?? p.problem)).toEqual([null, true, true, true])
+    expect(reopenPrompts.every(p => p.archived === 1)).toBe(true)
+    // No cleaner pass ran against a wrong pick: Storage is untouched until the right one.
+    expect(deletesAtReopen).toEqual([0, 0, 0, 0])
+    expect(puts).toEqual([folder])
+    expect((await bundles.get(USER, WS))?.folder).toBe(folder)
     expect(storage.objects.has('nested/thing')).toBe(false)
+  })
+
+  it('asks again, before any cleaner pass, when the recorded folder\'s manifest changed', async () => {
+    const changed = folder.copy('bundle')
+    changed.setText('manifest.json', changed.text('manifest.json') + ' ')
+    await bundles.put(USER, WS, {...record, folder: changed})
+    reopenAnswers = [folder]
+
+    expect(await run()).toEqual({kind: 'proved'})
+
+    expect(reopenPrompts).toHaveLength(1)
+    expect(reopenPrompts[0].problem).toMatch(/^That folder doesn't hold this conversion's recovery bundle/)
+    expect(reopenPrompts[0].recorded).toBe(changed)
+    expect(deletesAtReopen).toEqual([0])
+    expect((await bundles.get(USER, WS))?.folder).toBe(folder)
   })
 
   it('goes on without the bundle when the user declines, leaving what it archived', async () => {
@@ -237,6 +261,23 @@ describe('runCleaningPass with this device\'s bundle record', () => {
     expect(reopenPrompts).toHaveLength(1)
     expect(storage.objects.has('nested/thing')).toBe(true)
     expect((await bundles.get(USER, WS))?.folder).toBe(folder)
+    expect(finishCalls()).toBe(0)
+  })
+
+  it('tells the confirmation the bundle was not read when the user goes on without it and the proof still passes', async () => {
+    // Nothing archived, so the folder is not needed for the proof.
+    await bundles.put(USER, WS, {...record, otherObjectPaths: []})
+    storage.objects.delete('nested/thing')
+    // The "lost" media turned up on the device since the bundle, so no bundle entry is needed.
+    storage.local.set(rawNameOf(lostHash), bytesOf('nowhere'))
+    canRead = async () => false
+    reopenAnswers = [null]
+
+    expect(await run()).toEqual({kind: 'proved'})
+
+    expect(reopenPrompts).toEqual([{problem: null, purpose: 'cleanup', recorded: folder, archived: 0}])
+    expect(finishPrompts).toHaveLength(1)
+    expect(finishPrompts[0].bundleRead).toBe(false)
     expect(finishCalls()).toBe(0)
   })
 
@@ -254,7 +295,7 @@ describe('runCleaningPass with this device\'s bundle record', () => {
     it('re-asks with the problem message, and a readable answer lets it finish', async () => {
       reopenAnswers = [folder]
 
-      expect(await run()).toEqual({kind: 'finished'})
+      expect(await run()).toEqual({kind: 'proved'})
 
       expect(reopenPrompts.map(p => p.problem)).toEqual([PROBLEM])
       expect(reopenPrompts[0].purpose).toBe('cleanup')
@@ -348,7 +389,7 @@ describe('runCleaningPass without a bundle record', () => {
     const manifestText = folder.text('manifest.json')
     other.setText('manifest.json', manifestText.replace(`"workspaceId": "${WS}"`, '"workspaceId": "ws-other"'))
 
-    expect(await run()).toEqual({kind: 'finished'})
+    expect(await run()).toEqual({kind: 'proved'})
 
     expect(choosePrompts).toHaveLength(3)
     expect(choosePrompts[0]).toBeNull()
@@ -360,14 +401,29 @@ describe('runCleaningPass without a bundle record', () => {
     expect(stored?.workspaceId).toBe(WS)
     // The adopted bundle was used: its archived object was deleted against it.
     expect(storage.deletes).toContain('nested/thing')
-    expect(finishCalls()).toBe(1)
+    expect(finishCalls()).toBe(0)
+    // Each pick is checked on its own, under the screen lock; the pass takes it once more.
+    expect(events.slice(0, 12)).toEqual([
+      'choose', 'status:checking-bundle', 'awake', 'release',
+      'choose', 'status:checking-bundle', 'awake', 'release',
+      'choose', 'status:checking-bundle', 'awake', 'release',
+    ])
+    expect(awake).toEqual({held: 4, released: 4})
   })
 
-  it('rethrows what is not a bundle problem', async () => {
-    const broken = folder.copy('bundle')
-    broken.getFileHandle = async () => { throw new DOMException('denied', 'NotAllowedError') }
-    chooseAnswers = [broken]
-    await expect(run()).rejects.toThrow()
+  it('ends on a cancellation during the check rather than asking again', async () => {
+    const stop = new AbortController()
+    // Stop lands while the picked folder is being read.
+    const stopping = folder.copy('bundle')
+    const open = stopping.getFileHandle.bind(stopping)
+    stopping.getFileHandle = async (name, options) => {
+      stop.abort(new DOMException('stopped', 'AbortError'))
+      return open(name, options)
+    }
+    chooseAnswers = [stopping]
+
+    await expect(run({signal: stop.signal})).rejects.toThrow('stopped')
+    expect(choosePrompts).toHaveLength(1)
     expect(await bundles.get(USER, WS)).toBeNull()
     expect(finishCalls()).toBe(0)
   })
