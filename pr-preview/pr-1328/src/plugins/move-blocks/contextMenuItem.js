@@ -1,0 +1,1 @@
+import{Bp as e,Vp as t}from"../../../chunks/app-D7_hVRKI.js";export{e as MOVE_BLOCKS_CONTEXT_MENU_ITEM_ID,t as moveBlocksContextMenuItem};

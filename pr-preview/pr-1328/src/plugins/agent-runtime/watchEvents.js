@@ -1,0 +1,1 @@
+import{Fu as e,Iu as t}from"../../../chunks/app-D7_hVRKI.js";export{e as createWatchEventsRegistry,t as watchEventsRegistry};

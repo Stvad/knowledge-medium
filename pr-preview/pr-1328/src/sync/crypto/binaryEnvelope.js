@@ -1,0 +1,1 @@
+import{$h as e,Qh as t,Xh as n,Zh as r,eg as i,ng as a,tg as o}from"../../../chunks/app-D7_hVRKI.js";export{n as BINARY_ENVELOPE_MAGIC,r as BINARY_ENVELOPE_MIN_BYTES,t as BINARY_ENVELOPE_OVERHEAD_BYTES,e as BINARY_MAGIC_BYTES,i as decodeBinaryEnvelope,o as encodeBinaryEnvelope,a as hasBinaryEnvelopeMagic};

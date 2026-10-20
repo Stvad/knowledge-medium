@@ -1,0 +1,1 @@
+import{BM as e,VM as t}from"../../../chunks/app-D7_hVRKI.js";export{e as declarationOnlyDefinitionForName,t as declarationOnlyStatusText};

@@ -1,0 +1,1 @@
+import{cE as e,sE as t}from"../../chunks/app-D7_hVRKI.js";export{t as BlockPasteShellDecorator,e as blockPasteShellDecorator};

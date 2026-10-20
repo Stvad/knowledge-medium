@@ -1,0 +1,1 @@
+import{Cs as e,ws as t}from"../../../chunks/app-D7_hVRKI.js";export{e as appendTagToBlocks,t as appendTagToContent};

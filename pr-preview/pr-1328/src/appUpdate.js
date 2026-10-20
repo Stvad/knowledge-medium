@@ -1,0 +1,1 @@
+import{XE as e,ZE as t}from"../chunks/app-D7_hVRKI.js";export{e as appUpdate,t as useAppUpdateAvailable};

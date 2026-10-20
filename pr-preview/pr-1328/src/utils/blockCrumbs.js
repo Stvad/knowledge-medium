@@ -1,0 +1,1 @@
+import{Cx as e,Dx as t,Ex as n,Tx as r,wx as i}from"../../chunks/app-D7_hVRKI.js";export{e as CRUMB_ELLIPSIS,i as CRUMB_MAX_CHARS,r as CRUMB_MAX_SEGMENTS,n as collapseCrumbs,t as crumbsFromAncestors};

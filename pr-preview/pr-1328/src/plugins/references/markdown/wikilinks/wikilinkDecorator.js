@@ -1,0 +1,1 @@
+import{BS as e,RS as t,zS as n}from"../../../../../chunks/app-D7_hVRKI.js";export{t as isWikilinkDisplayParts,n as resolveWikilinkDisplay,e as wikilinkDisplayDecoratorFacet};

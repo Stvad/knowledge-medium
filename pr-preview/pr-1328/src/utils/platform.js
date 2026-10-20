@@ -1,0 +1,1 @@
+import{aF as e,oF as t}from"../../chunks/app-D7_hVRKI.js";export{e as isIOS,t as isMacPlatform};

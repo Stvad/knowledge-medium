@@ -1,0 +1,1 @@
+import{Rz as e,zz as t}from"../../../chunks/app-D7_hVRKI.js";export{e as PLACES_UNDER_BLOCK_QUERY,t as placesUnderBlockQuery};

@@ -1,0 +1,1 @@
+import{Dw as e,Jw as t,Ow as n,Sw as r,Xw as i}from"../../../chunks/app-D7_hVRKI.js";export{n as SWIPE_QUICK_ACTIONS_GESTURE_ID,t as SWIPE_RIGHT_BLOCK_ACTION_ID,e as SwipeActionMenu,i as quickActionItemsFacet,r as swipeQuickActionsPlugin};

@@ -1,0 +1,1 @@
+import{Aj as e,kj as t}from"../../../chunks/app-D7_hVRKI.js";export{t as BLOCK_TITLE_TEXT_CLASS,e as useBlockTitleTextClass};

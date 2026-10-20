@@ -1,0 +1,1 @@
+import{Gl as e,Hl as t,Ul as n,Wl as r}from"../../../chunks/app-D7_hVRKI.js";export{t as PROVENANCE_BLOCKS_PER_KEY,n as PROVENANCE_KEY_LIMIT,r as auditPropertyRegistration,e as describeUnregisteredProperty};

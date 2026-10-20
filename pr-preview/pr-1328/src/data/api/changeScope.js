@@ -1,0 +1,1 @@
+import{a5 as e,c5 as t,d5 as n,i5 as r,l5 as i,o5 as a,r5 as o,s5 as s,u5 as c}from"../../../chunks/app-D7_hVRKI.js";export{o as CHANGE_SCOPE_POLICIES,r as ChangeScope,e as isChangeScope,a as policyForScope,s as scopeAllowedInReadOnly,t as scopeIsUndoable,i as scopePoliciesEquivalent,c as scopeUploadsToServer,n as sourceForScope};

@@ -1,0 +1,1 @@
+import{aM as e,oM as t}from"../../chunks/app-D7_hVRKI.js";export{e as isFocalRender,t as useIsFocalRender};

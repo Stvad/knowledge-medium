@@ -1,0 +1,1 @@
+"use client";import{dM as e,fM as t,uM as n}from"../../../chunks/app-D7_hVRKI.js";export{n as Collapsible,e as CollapsibleContent,t as CollapsibleTrigger};

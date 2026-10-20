@@ -1,0 +1,1 @@
+import{FD as e,ID as t,LD as n,PD as r}from"../../chunks/app-D7_hVRKI.js";export{r as extensionDisplayName,e as extensionName,t as userExtensionShellToggle,n as userExtensionToggle};

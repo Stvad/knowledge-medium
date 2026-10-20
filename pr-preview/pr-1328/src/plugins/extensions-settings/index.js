@@ -1,0 +1,1 @@
+import{DE as e,EE as t,St as n}from"../../../chunks/app-D7_hVRKI.js";export{t as extensionsOverridesProp,e as extensionsPrefsType,n as extensionsSettingsPlugin};

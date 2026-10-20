@@ -1,0 +1,1 @@
+import{F0 as e,I0 as t,L0 as n,P0 as r,R0 as i,z0 as a}from"../../chunks/app-D7_hVRKI.js";export{r as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,e as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,t as __resetLayoutSessionIdForTesting,n as getLayoutSessionId,i as isInstalledAppDisplayMode,a as readOrCreateLayoutSessionId};

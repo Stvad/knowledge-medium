@@ -1,0 +1,1 @@
+import{ay as e,iy as t,ny as n,ry as r}from"../../../chunks/app-D7_hVRKI.js";export{n as WorkspaceSwitcherSidebarSection,r as pendingInvitationsHeaderItem,t as workspaceHeaderPlugin,e as workspaceSwitcherSidebarSection};

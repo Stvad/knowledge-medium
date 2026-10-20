@@ -1,0 +1,1 @@
+import{SI as e,xI as t}from"../../../chunks/app-D7_hVRKI.js";export{t as PropertyShapeButton,e as PropertyShapeGlyph};

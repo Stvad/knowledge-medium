@@ -1,0 +1,1 @@
+import{Uq as e,Wq as t}from"../../chunks/app-D7_hVRKI.js";export{e as Block,t as requireLoadedBlock};

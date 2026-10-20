@@ -1,0 +1,1 @@
+import{_I as e,vI as t}from"../../../chunks/app-D7_hVRKI.js";export{e as floatingAnchorFromRect,t as useAnchoredFloating};
