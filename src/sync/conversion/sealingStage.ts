@@ -50,7 +50,7 @@ export interface SealingDeps {
   readonly canReadFolder: (folder: BundleFolder) => Promise<boolean>
   /** Write this device's database, copied under its lock, into the folder,
    *  and return its digest. */
-  readonly writeLocalDb: (folder: BundleFolder) => Promise<PartDigest>
+  readonly writeLocalDb: (folder: BundleFolder, signal?: AbortSignal) => Promise<PartDigest>
   /** Keep the screen awake for a long pass; resolves to the release. */
   readonly keepAwake: () => Promise<() => void>
   readonly ui: BundlePrompts & {status(status: SealingStatus): void}

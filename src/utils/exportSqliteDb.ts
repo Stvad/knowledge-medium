@@ -103,6 +103,8 @@ export async function exportRawSqliteDbToFile(
     minBytesPerSecond?: number
     /** Each chunk as it is copied, e.g. to hash it in the same pass. */
     onChunk?: (chunk: Uint8Array) => void
+    /** Stops the copy, and so releases the database lock, as soon as it aborts. */
+    signal?: AbortSignal
   } = {},
 ): Promise<RawSqliteDbFileExport> {
   const userId = repo.user.id
@@ -112,8 +114,10 @@ export async function exportRawSqliteDbToFile(
   const root = await navigator.storage.getDirectory()
   const fileHandle = await root.getFileHandle(dbFilename)
   const copyMs = options.minBytesPerSecond ? ((await fileHandle.getFile()).size / options.minBytesPerSecond) * 1000 : 0
-  const size = await withCheckpointedDbLock(repo, async signal => {
+  options.signal?.throwIfAborted()
+  const size = await withCheckpointedDbLock(repo, async deadline => {
     const sourceFile = await fileHandle.getFile()
+    const signal = options.signal ? AbortSignal.any([deadline, options.signal]) : deadline
     await pipeBlobToFileHandle(sourceFile, destinationHandle, signal, options.onChunk)
     return sourceFile.size
   }, options.timeoutMessage, EXPORT_LOCK_TIMEOUT_MS + copyMs)

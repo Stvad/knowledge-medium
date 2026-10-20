@@ -1,5 +1,6 @@
 import { workspaceGateDeps } from '@/components/workspace/WorkspaceKeyGate'
 import { notifyWorkspaceUnlocked } from '@/components/workspace/workspaceUnlocked'
+import { WRITE_AHEAD_SIDECAR_SUFFIXES } from '@/data/dbFileSiblings'
 import { dbFilenameForUser } from '@/data/localDbStorage'
 import type { Repo } from '@/data/repo'
 import { fetchWorkspaceConversionState } from '@/data/workspaceConversion'
@@ -42,9 +43,14 @@ const preflightEnvironment = (repo: Repo): PreflightEnvironment => ({
   keyStoreIsDurable: getWorkspaceKeyStore() instanceof IndexedDbWorkspaceKeyStore,
   supportsDirectoryPicker: supportsDirectoryPicker(),
   uploadQueue: uploadQueue(repo),
+  // The copy checkpoints first, so pages still in the write-ahead sidecars
+  // land in it: counting them too makes this an upper bound.
   localDbBytes: async () => {
     const root = await navigator.storage.getDirectory()
-    return (await (await root.getFileHandle(dbFilenameForUser(repo.user.id))).getFile()).size
+    const dbFilename = dbFilenameForUser(repo.user.id)
+    const sizes = await Promise.all(['', ...WRITE_AHEAD_SIDECAR_SUFFIXES].map(suffix =>
+      root.getFileHandle(dbFilename + suffix).then(handle => handle.getFile()).then(file => file.size, () => 0)))
+    return sizes.reduce((sum, size) => sum + size, 0)
   },
 })
 
@@ -92,13 +98,14 @@ export const conversionFlowDeps = (
     markLocalConverted: canary => markLocalWorkspaceConverted(repo.db, workspaceId, canary),
     bundles: (bundleRecords ??= new IndexedDbBundleRecordStore()),
     canReadFolder: async folder => (await queryDirectoryPermission(directoryHandleOf(folder), 'read')) === 'granted',
-    writeLocalDb: async folder => {
+    writeLocalDb: async (folder, signal) => {
       const hasher = createPartHasher()
       await exportRawSqliteDbToFile(repo, await directoryHandleOf(folder).getFileHandle(BUNDLE_PARTS.localDb, {create: true}), {
         timeoutMessage:
           "Copying this device's database into the recovery bundle took too long. Pick a folder on a faster disk, then try again.",
         minBytesPerSecond: SLOWEST_BUNDLE_DISK,
         onChunk: chunk => hasher.update(chunk),
+        signal,
       })
       return hasher.digest()
     },

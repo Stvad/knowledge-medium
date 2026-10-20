@@ -143,6 +143,9 @@ const verifyJsonlPart = async (
 
 const verifyBlocks = async (folder: BundleFolder, manifest: BundleManifest, signal?: AbortSignal): Promise<number> => {
   const name = BUNDLE_PARTS.blocks
+  // Every id, not just the last: the rows come in the server's collation,
+  // which a JS string comparison can't stand in for. About 40-100 MB per
+  // million blocks.
   const ids = new Set<string>()
   const lines = await verifyJsonlPart(folder, manifest, name, (row, line) => {
     if (typeof row.id !== 'string' || ids.has(row.id)) {

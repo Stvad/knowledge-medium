@@ -111,6 +111,14 @@ describe('takeBundle', () => {
     expect(server.calls.some(call => call.method === 'readFullBlockPage' || call.method === 'readHistoryPage')).toBe(false)
   })
 
+  it('hands the run\'s signal to the database copy, so Stop releases the database lock', async () => {
+    const run = new AbortController()
+    let seen: AbortSignal | undefined
+    await take({signal: run.signal, writeLocalDb: async (into, signal) => ((seen = signal), writeFakeLocalDb(into))})
+
+    expect(seen).toBe(run.signal)
+  })
+
   it('reads again when a write lands during the paging', async () => {
     const read = server.readFullBlockPage.bind(server)
     let reads = 0

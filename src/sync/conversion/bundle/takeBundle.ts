@@ -48,7 +48,7 @@ export interface TakeBundleOptions {
   readonly folder: BundleFolder
   /** Write this device's database, copied under its lock, into `folder` as
    *  {@link BUNDLE_PARTS.localDb}, and return its digest. */
-  readonly writeLocalDb: (folder: BundleFolder) => Promise<PartDigest>
+  readonly writeLocalDb: (folder: BundleFolder, signal?: AbortSignal) => Promise<PartDigest>
   /** Media hashes the user confirmed in preflight have no verified source. */
   readonly noVerifiedSource?: readonly string[]
   readonly now?: () => Date
@@ -184,7 +184,7 @@ export const takeBundle = async (options: TakeBundleOptions): Promise<TakenBundl
   // First: it is the part a slow destination can't take in time, and it
   // should fail before the long server read rather than after it.
   options.onProgress?.({part: 'local-db'})
-  const localDb = await options.writeLocalDb(options.folder)
+  const localDb = await options.writeLocalDb(options.folder, options.signal)
   options.signal?.throwIfAborted()
   const snapshot = await readServerSnapshot(options)
 
