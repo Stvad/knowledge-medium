@@ -11,6 +11,7 @@ import {attributionCreatorsProp, attributionEditorsProp} from '@/plugins/contrib
 import {userPageBlockId} from '@/data/stateBlocks'
 import {resolveFacetRuntimeSync} from '@/facets/facet'
 import {computeAliasSeatId, ensureAliasTarget} from '@/data/targets'
+import {PLAINTEXT_ALIAS_SEATS} from '@/data/test/plaintextAliasSeats'
 
 const WS = 'ws'
 let db: TestDb
@@ -41,7 +42,7 @@ describe('agent contributor selection', () => {
 
   it('creates contributor profiles at the shared alias seat and refuses an existing page', async () => {
     const atlas = await run({type: 'create-contributor', name: 'Atlas'}) as ContributorProfile
-    expect(atlas.id).toBe(computeAliasSeatId('Atlas', WS, 0))
+    expect(atlas.id).toBe(computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'Atlas', WS, 0))
     expect((await context.repo.load(atlas.id))?.updatedAt).toBeGreaterThan(0)
     const existing = await context.repo.withTxContext({contributorId: null}).tx(tx => ensureAliasTarget(
       tx, context.repo, 'Existing', WS,

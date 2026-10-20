@@ -58,8 +58,7 @@
  * records after this pass, inside one lane lock.
  */
 
-import { decodeBytes } from '@/sync/byteTransform.js'
-import { verifyContentHash } from '@/sync/crypto/contentHash.js'
+import { verifyObjectBytes } from '@/sync/byteTransform.js'
 import { materializabilityToMode, type GetCek, type GetMaterializability } from '@/sync/transform.js'
 import type { BlobStore } from './blobStore.js'
 import { deriveObjectKey } from './storagePaths.js'
@@ -170,16 +169,8 @@ const recoverOne = async (
 
   // (3b) PRESENT → decode + hash-verify against our own content hash (the §5.1 / §17
   //      check the drain's 409-verify runs — an existing object is untrusted).
-  let decoded: Uint8Array<ArrayBuffer>
-  try {
-    decoded = await decodeBytes(stored, mode, ctx.getCek, {
-      contentHash: rec.contentHash,
-      workspaceId: rec.workspaceId,
-    })
-  } catch {
-    return 'poisoned' // present but undecodable (corrupt / wrong envelope) — §17, stay failed
-  }
-  if (await verifyContentHash(decoded, rec.contentHash)) {
+  const verified = await verifyObjectBytes(stored, mode, ctx.getCek, rec)
+  if (verified.ok) {
     // Already materialized on another device — clear the record, DON'T re-upload. The
     // local bytes stay (now eviction-eligible like any replicated byte, §9 tradeoff).
     // `delete` intentionally skips the `stagedAt` CAS the requeue/markFailed writes use:
@@ -192,7 +183,7 @@ const recoverOne = async (
     await ctx.store.delete(userId, rec.assetBlockId)
     return 'cleared'
   }
-  return 'poisoned' // present but wrong content — poisoned path (§17), stay failed
+  return 'poisoned' // present but undecodable or wrong content — poisoned path (§17), stay failed
 }
 
 /** Probe + 3-way every `failed` record for `userId` (design §9/§17). Sequential — the

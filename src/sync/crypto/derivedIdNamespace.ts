@@ -25,11 +25,12 @@
  * and it matters because that other output is PUBLISHED as the Storage object
  * path, so a 32-byte label would make the namespace a prefix of a public value.
  *
- * NOT every derived-id kind in this class is covered. `computeAliasSeatId`
- * (`@/data/targets`) still hashes the alias TEXT under a public constant on
- * every workspace, which is the same oracle on a more sensitive input; it is
- * tracked separately because re-namespacing orphans every seat already minted.
- * Do not read this module as evidence the class is handled.
+ * NOT every derived-id kind in this class is covered. Alias seats are only
+ * going forward: `@/data/aliasSeatNamespace` mints new ones here, but a seat
+ * minted before keeps its public, name-derived id (#1297); and daily notes,
+ * media and extension records still hash under public constants
+ * (docs/workspace-e2ee-conversion.md §7). Do not read this module as evidence
+ * the class is handled.
  *
  * ROTATION: WK rotation is unbuilt (e2ee-design §14). If it lands it changes
  * `K_id`, hence every namespace derived here, and ids already minted become

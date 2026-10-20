@@ -17,6 +17,7 @@ import {
   type TypeRegistrySnapshot,
 } from '@/data/api'
 import { derivedBlockId } from '@/data/derivedIds'
+import { aliasSeatNamespacesInTx, type AliasSeatNamespaces } from '@/data/aliasSeatNamespace'
 import type { Repo } from '@/data/repo'
 import { keyAtEnd } from './orderKey'
 import { aliasesProp, addBlockTypeToProperties, typesProp } from './properties'
@@ -143,14 +144,7 @@ export const createOrRestoreTargetBlock = async (
   }
 }
 
-// ──── Deterministic-id namespaces (UUIDv5) ────
-
-/** Namespace for alias-seat ids. The probe input is
- *  `${workspaceId}:${alias}:${index}`; two workspaces typing the same
- *  alias get distinct seats, and within a workspace the index lets
- *  parallel probes resolve to additional slots when slot 0 was claimed
- *  by a previous alias that has since been renamed. */
-const ALIAS_NS = 'a3c8a8c0-7c3a-4d2c-bc4f-1f6c2c6a7d11'
+// ──── Deterministic seat ids (UUIDv5) ────
 
 /** Probe cap. The expected indexed depth is 0–2 in realistic
  *  workloads (one rename per alias is rare; multiple is rarer). A cap
@@ -159,16 +153,28 @@ const ALIAS_NS = 'a3c8a8c0-7c3a-4d2c-bc4f-1f6c2c6a7d11'
  *  hang. */
 export const ALIAS_SEAT_PROBE_SLOTS = 64
 
+/** The probe input is `${workspaceId}:${alias}:${index}`: two workspaces
+ *  typing the same alias get distinct seats, and within a workspace the
+ *  index lets parallel probes resolve to additional slots when slot 0 was
+ *  claimed by a previous alias that has since been renamed. */
+const seatSlotId = (namespace: string, alias: string, workspaceId: string, index: number): string =>
+  derivedBlockId({namespace, key: `${workspaceId}:${alias}:${index}`})
+
 /** Deterministic id for the `index`-th alias-seat slot. Slot 0 is the
  *  happy-path id; higher slots are claimed by probes that skipped a
  *  live row claiming a different alias (post-rename) or a tombstoned
  *  prior occupant. Two clients in the same world-state hit the same
- *  index for a given `(alias, workspaceId)`. */
+ *  index for a given `(alias, workspaceId)`.
+ *
+ *  `seats` is NOT defaulted: the public namespace is the wrong answer for
+ *  an encrypted workspace, and a default is how a caller gets it without
+ *  asking (`@/data/aliasSeatNamespace`). */
 export const computeAliasSeatId = (
+  seats: AliasSeatNamespaces,
   alias: string,
   workspaceId: string,
   index: number = 0,
-): string => derivedBlockId({namespace: ALIAS_NS, key: `${workspaceId}:${alias}:${index}`})
+): string => seatSlotId(seats.mint, alias, workspaceId, index)
 
 /** Single source of truth for the freshly-materialised alias-seat
  *  shape. `ensureAliasTarget` writes a row whose `(content, properties)`
@@ -360,26 +366,30 @@ const isRestorableTransientTombstone = (row: AliasSeatRow, alias: string): boole
   && matchesAliasSeatSeed(row)
 
 /** Is `id` one of the deterministic seat-slot ids for `(alias,
- *  workspaceId)`? Pure compute over the same slot window the probe
- *  walks. The reference-drop orphan reaper (issue #402) uses this as
+ *  workspaceId)`, under any namespace in `seats.recognized`? Pure compute
+ *  over the same slot window the probe walks. The reference-drop orphan
+ *  reaper (issue #402) uses this as
  *  its machine-mint discriminator: a user-created page can share the
  *  seat SEED SHAPE exactly (quick-find's create-page writes content +
  *  alias + PAGE_TYPE), but it gets a random uuid — only
  *  `ensureAliasTarget` mints rows at these ids, so shape + slot-id
  *  together mean "ours to reap". */
 export const isAliasSeatSlotId = (
+  seats: AliasSeatNamespaces,
   id: string,
   alias: string,
   workspaceId: string,
 ): boolean => {
-  for (let index = 0; index < ALIAS_SEAT_PROBE_SLOTS; index++) {
-    if (computeAliasSeatId(alias, workspaceId, index) === id) return true
+  for (const namespace of seats.recognized) {
+    for (let index = 0; index < ALIAS_SEAT_PROBE_SLOTS; index++) {
+      if (seatSlotId(namespace, alias, workspaceId, index) === id) return true
+    }
   }
   return false
 }
 
-/** Walk indexed-deterministic seat slots for `(alias, workspaceId)`
- *  until one of:
+/** Walk indexed-deterministic seat slots for `(alias, workspaceId)`,
+ *  under `seats.mint` only, until one of:
  *   - empty slot → return that id (caller will insert),
  *   - live row claiming `alias` → return that id (reuse / convergence),
  *   - pristine transient tombstone for `alias` → return that id (caller
@@ -391,6 +401,11 @@ export const isAliasSeatSlotId = (
  *  user-added props, live children — i.e. anything that wasn't a
  *  pristine cleanup target).
  *
+ *  A pristine tombstone under another recognized namespace stays dead and
+ *  the probe mints afresh: restoring it would write at an id that names the
+ *  alias, and by the predicate it holds nothing to keep. Restoring that
+ *  tombstone later by other means meets the fresh seat holding its alias.
+ *
  *  Two clients with the same observed world-state probe the same way
  *  and land on the same slot — that's the deterministic-id convergence
  *  guarantee. The restorable predicate is a pure function of the row,
@@ -400,12 +415,13 @@ export const isAliasSeatSlotId = (
  *  by alias text, so a second parseReferences pass on either client
  *  resolves through the lookup rather than the probe. */
 export const resolveAliasSeatId = async (
+  seats: AliasSeatNamespaces,
   read: AliasSeatReader,
   alias: string,
   workspaceId: string,
 ): Promise<string> => {
   for (let index = 0; index < ALIAS_SEAT_PROBE_SLOTS; index++) {
-    const id = computeAliasSeatId(alias, workspaceId, index)
+    const id = computeAliasSeatId(seats, alias, workspaceId, index)
     const row = await read(id)
     if (row === null) return id
     if (row.deleted) {
@@ -457,7 +473,8 @@ export const ensureAliasTarget = async (
   // unrelated id.
   const claimant = await tx.aliasLookup(alias, workspaceId)
   if (claimant !== null) return {id: claimant.id, inserted: false}
-  const id = await resolveAliasSeatId(aliasSeatReaderFromTx(tx), alias, workspaceId)
+  const seats = await aliasSeatNamespacesInTx(tx, repo, workspaceId)
+  const id = await resolveAliasSeatId(seats, aliasSeatReaderFromTx(tx), alias, workspaceId)
   const seed = aliasSeatSeed(alias)
   return createOrRestoreTargetBlock(tx, {
     id,

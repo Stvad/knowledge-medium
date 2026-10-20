@@ -18,6 +18,7 @@ import { ChangeScope } from '@/data/api'
 import type { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
+import { storeWorkspaceKey, stubLocalStorage } from '@/data/test/e2eeFixtures'
 import { propertiesPageBlockId } from '@/data/propertiesPage'
 import { deriveContentKeyHmac } from '@/sync/crypto/contentKey'
 import { deriveWorkspaceIdNamespace } from '@/sync/crypto/derivedIdNamespace'
@@ -39,28 +40,9 @@ const PLAINTEXT_NS = 'b1d6b0c7-6a2a-4c1e-9a19-2f0f7b6b3c41'
 let sharedDb: TestDb
 let repo: Repo
 
-/** `setModePin` refuses to pin `e2ee` without a durable localStorage — by
- *  design, since the pin is the only local authority on the mode. Node has
- *  none, so give it one; the store is per-test, so a pin never leaks across. */
-const stubLocalStorage = () => {
-  const entries = new Map<string, string>()
-  const storage = {
-    getItem: (key: string) => entries.get(key) ?? null,
-    setItem: (key: string, value: string) => { entries.set(key, String(value)) },
-    removeItem: (key: string) => { entries.delete(key) },
-  }
-  vi.stubGlobal('localStorage', storage)
-  vi.stubGlobal('window', {localStorage: storage})
-}
-
 /** Put `K_id` where the pass looks for it: the same per-device store an unlock
  *  flow writes, holding the same subkey the asset path uses. */
-const storeContentKey = async (fill = 7) => {
-  const contentKeyHmac = await deriveContentKeyHmac(new Uint8Array(32).fill(fill))
-  const wk = await crypto.subtle.generateKey(
-    {name: 'AES-GCM', length: 256}, false, ['encrypt', 'decrypt'])
-  await getWorkspaceKeyStore().put(USER, WS, {wk, contentKeyHmac})
-}
+const storeContentKey = (fill = 7) => storeWorkspaceKey(USER, WS, fill)
 
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })

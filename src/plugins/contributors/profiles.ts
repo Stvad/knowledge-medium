@@ -5,6 +5,7 @@ import {ensureUserPageInTx} from '@/data/stateBlocks'
 import type {Repo} from '@/data/repo'
 import {applyTypeTagInTx} from '@/data/typeTagger'
 import {ensureAliasTarget} from '@/data/targets'
+import {resolveAliasSeatNamespaces} from '@/data/aliasSeatNamespace'
 import {
   CONTRIBUTOR_TYPE, contributorForProp, contributorKindOf, contributorKindProp, contributorRoleProp,
   type ContributorKind,
@@ -48,6 +49,7 @@ export const createContributor = async (
   assertRoundTrippableReferenceLabel(name, 'Contributor name')
   const kind = input.kind ?? 'agent'
   const role = input.role?.trim() || undefined
+  await resolveAliasSeatNamespaces(repo, workspaceId)
   const snapshot = repo.snapshotTypeRegistries()
   const id = await repo.withTxContext({contributorId: null}).tx(async tx => {
     const target = await ensureAliasTarget(tx, repo, name, workspaceId, snapshot, {systemMint: false})

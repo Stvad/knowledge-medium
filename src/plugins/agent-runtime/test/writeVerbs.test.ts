@@ -10,6 +10,7 @@ import { ChangeScope } from '@/data/api'
 import { PAGE_TYPE } from '@/data/blockTypes'
 import { aliasesProp, getBlockTypes } from '@/data/properties'
 import { computeAliasSeatId } from '@/data/targets'
+import { PLAINTEXT_ALIAS_SEATS } from '@/data/test/plaintextAliasSeats'
 import { MAX_ALIAS_LENGTH } from '@/data/referenceBlock'
 import { ensureDailyNoteTarget } from '@/plugins/daily-notes/dailyNotes'
 import type { Repo } from '@/data/repo'
@@ -147,7 +148,7 @@ describe('target resolution', () => {
 
   it('creates a missing page at the alias seat a wikilink would mint', async () => {
     const resolved = await resolveAgentTarget(repo, '[[Project X]]', 'test')
-    expect(resolved).toEqual({id: computeAliasSeatId('Project X', WS, 0), kind: 'page', created: true})
+    expect(resolved).toEqual({id: computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'Project X', WS, 0), kind: 'page', created: true})
     const page = (await repo.load(resolved.id))!
     expect(page.parentId).toBeNull()
     expect(getBlockTypes(page)).toContain(PAGE_TYPE)
@@ -354,7 +355,7 @@ describe('append-markdown', () => {
     const result = await run({type: 'append-markdown', format: 'json', target: '[[Reading list]]', markdown: '- a book'}) as {
       target: {id: string, kind: string, created: boolean}
     }
-    expect(result.target).toMatchObject({id: computeAliasSeatId('Reading list', WS, 0), kind: 'page', created: true})
+    expect(result.target).toMatchObject({id: computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'Reading list', WS, 0), kind: 'page', created: true})
     expect((await liveChildren(result.target.id)).map(row => row.content)).toEqual(['a book'])
   })
 
@@ -476,7 +477,7 @@ describe('create-page', () => {
   it('creates a page by name once, and returns it again after', async () => {
     const first = await run({type: 'create-page', name: 'Groceries'}) as {id: string, created: boolean}
     const again = await run({type: 'create-page', name: '[[Groceries]]'}) as {id: string, created: boolean}
-    expect(first).toMatchObject({id: computeAliasSeatId('Groceries', WS, 0), created: true})
+    expect(first).toMatchObject({id: computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'Groceries', WS, 0), created: true})
     expect(again).toMatchObject({id: first.id, created: false})
   })
 
@@ -532,7 +533,7 @@ describe('agent write attribution', () => {
 
   it('create-block accepts a [[page]] parent, creating the page', async () => {
     const created = await run({type: 'create-block', parentId: '[[Someday]]', content: 'idea'}) as {parentId: string}
-    expect(created.parentId).toBe(computeAliasSeatId('Someday', WS, 0))
+    expect(created.parentId).toBe(computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'Someday', WS, 0))
   })
 
   it('create-block refuses an explicit id that exists before creating a [[page]] parent', async () => {
@@ -1005,7 +1006,7 @@ describe('review round 4', () => {
     const appended = await run({type: 'append-markdown', format: 'json', target: '[[Inbox]]', markdown: '- x'}) as {
       target: {id: string, kind: string}
     }
-    expect(appended.target).toMatchObject({id: computeAliasSeatId('Inbox', WS, 0), kind: 'page'})
+    expect(appended.target).toMatchObject({id: computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'Inbox', WS, 0), kind: 'page'})
   })
 
   it('keeps ((x)) and ^x meaning the id x when x is missing, beside a row literally named the wrapper', async () => {
