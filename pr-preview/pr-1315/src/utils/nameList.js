@@ -1,1 +1,0 @@
-import{MY as e,NY as t,PY as n}from"../../chunks/app-CEzps1oX.js";export{e as NAMES_IN_A_SENTENCE,t as describeNames,n as firstFew};

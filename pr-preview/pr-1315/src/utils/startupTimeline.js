@@ -1,1 +1,0 @@
-import{aL as e,cL as t,iL as n,lL as r,nL as i,oL as a,rL as o,sL as s,uL as c}from"../../chunks/app-CEzps1oX.js";export{i as getLastLongTaskEndMs,o as getStartupTimeline,n as hasStartupMark,e as longTasksSupported,a as markStartup,s as markStartupAt,t as onLongTask,r as resetStartupTimeline,c as startStartupObservers};

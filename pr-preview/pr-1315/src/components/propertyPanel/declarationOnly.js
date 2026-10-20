@@ -1,1 +1,0 @@
-import{HM as e,UM as t}from"../../../chunks/app-CEzps1oX.js";export{e as declarationOnlyDefinitionForName,t as declarationOnlyStatusText};

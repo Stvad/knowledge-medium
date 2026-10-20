@@ -1,1 +1,0 @@
-import{ID as e,LD as t,RD as n,zD as r}from"../../chunks/app-CEzps1oX.js";export{e as extensionDisplayName,t as extensionName,n as userExtensionShellToggle,r as userExtensionToggle};

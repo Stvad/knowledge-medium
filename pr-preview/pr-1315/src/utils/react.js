@@ -1,1 +1,0 @@
-import{Ik as e,Lk as t}from"../../chunks/app-CEzps1oX.js";export{e as useIsMobile,t as usePointerCoarse};
