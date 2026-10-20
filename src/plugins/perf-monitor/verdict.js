@@ -1,1 +1,1 @@
-import{di as e,ui as t}from"../../../chunks/app-Bo5Ii6Wg.js";export{t as formatRegression,e as summarize};
+import{li as e,ui as t}from"../../../chunks/app-CJae8UDA.js";export{e as formatRegression,t as summarize};

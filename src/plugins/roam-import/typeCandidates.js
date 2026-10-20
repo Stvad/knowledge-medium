@@ -1,1 +1,1 @@
-import{Cl as e,Sl as t}from"../../../chunks/app-Bo5Ii6Wg.js";export{t as collectTypeCandidates,e as formatTypeCandidateReport};
+import{Sl as e,xl as t}from"../../../chunks/app-CJae8UDA.js";export{t as collectTypeCandidates,e as formatTypeCandidateReport};
