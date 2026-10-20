@@ -6,7 +6,8 @@
  *   - the up-lane / resolver go through storage-js (`from(bucket).upload/download`),
  *     which builds the object path internally — they pass it attachmentObjectPath;
  *   - the off-path ciphertext audit needs a Range header storage-js doesn't expose,
- *     so it hand-builds the request URL via authenticatedObjectUrl — kept HERE,
+ *     and a single-object delete has no storage-js call, so both hand-build the
+ *     request URL via storageObjectUrl — kept HERE,
  *     matching storage-js's own shape, so a future storage-js bump can't silently
  *     leave the audit hitting a different (404-ing) endpoint than the app's reads.
  */
@@ -72,8 +73,10 @@ export const attachmentObjectPath = (workspaceId: string, contentKey: string): s
  * path segment is percent-encoded. There is deliberately NO `/authenticated/` segment
  * — that would address a bucket literally named "authenticated" and 404 every object.
  */
-export const authenticatedObjectUrl = (baseUrl: string, bucket: string, path: string): string => {
-  const base = baseUrl.replace(/\/$/, '')
-  const encoded = path.split('/').map(encodeURIComponent).join('/')
-  return `${base}/storage/v1/object/${bucket}/${encoded}`
-}
+export const authenticatedObjectUrl = (baseUrl: string, bucket: string, path: string): string =>
+  storageObjectUrl(`${baseUrl.replace(/\/$/, '')}/storage/v1`, bucket, path)
+
+/** One object's URL under a Storage API base (`<project>/storage/v1`), each
+ *  path segment percent-encoded: storage-js's own `/object/<bucket>/<path>`. */
+export const storageObjectUrl = (storageUrl: string, bucket: string, path: string): string =>
+  `${storageUrl}/object/${bucket}/${path.split('/').map(encodeURIComponent).join('/')}`
