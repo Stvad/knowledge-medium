@@ -75,6 +75,12 @@ import {
   matchesAliasSeatSeed,
   resolveAliasSeatId,
 } from '@/data/targets'
+import {
+  AliasSeatNamespaceUnavailableError,
+  aliasSeatNamespacesInTx,
+  resolveAliasSeatNamespaces,
+  type AliasSeatNamespaces,
+} from '@/data/aliasSeatNamespace'
 import { EXTENSION_TYPE } from '@/data/blockTypes'
 import { readIsChildBackedWorkspace } from '@/data/workspaceSchema'
 import { aliasesProp, typesProp } from '@/data/properties'
@@ -190,6 +196,14 @@ interface SourcePlan {
   referencesChanged: boolean
 }
 
+/** A new-page mark whose seat cannot be minted without the public namespace
+ *  stays underived (`null`); any other failure is rethrown. */
+const leaveSeatOut = (err: unknown, sourceId: string): null => {
+  if (!(err instanceof AliasSeatNamespaceUnavailableError)) throw err
+  console.warn(`[references] left a new page unminted for ${sourceId}: ${err.message}`)
+  return null
+}
+
 /** Read phase: parse refs, resolve existing alias targets via committed-
  *  state lookup, and produce a SourcePlan describing what the write
  *  phase needs to do. No tx opened here — `ctx.repo.query.aliasLookup`
@@ -232,6 +246,12 @@ const buildSourcePlan = async (
   const aliasesToEnsure: Array<{alias: string; id: string}> = []
   const datesToEnsure: Array<{iso: string; alias: string}> = []
   const seenAliases = new Set<string>()
+  // Resolved on the first lookup miss, before the lock: the write phase's
+  // `ensureAliasTarget` reads it from the cache this fills, since `K_id` cannot
+  // be read under the lock (`@/data/aliasSeatNamespace`). `null`: unavailable,
+  // so this source's new-page marks stay underived rather than failing the
+  // whole event.
+  let seats: AliasSeatNamespaces | null | undefined
 
   for (const mark of aliasMarks) {
     if (seenAliases.has(mark.alias)) continue
@@ -274,7 +294,13 @@ const buildSourcePlan = async (
     // tombstoned. We probe here (read-phase, committed state) so the
     // predicted id matches what ensureAliasTarget will pick in the
     // write phase. Convergence: same world-state → same probe answer.
+    if (seats === undefined) {
+      seats = await resolveAliasSeatNamespaces(ctx.repo, source.workspaceId)
+        .catch(err => leaveSeatOut(err, source.id))
+    }
+    if (seats === null) continue
     const id = await resolveAliasSeatId(
+      seats,
       aliasSeatReaderFromDb(ctx.db),
       mark.alias,
       source.workspaceId,
@@ -517,7 +543,18 @@ const applySourcePlan = async (
     await claimLiteralDateAliases(tx, ensured.id, iso, aliases)
   }
   for (const {alias, id: predicted} of plan.aliasesToEnsure) {
+    // The mode can turn sealed between the read phase and this lock. The
+    // throw precedes every write in the ensure, so dropping just this
+    // reference leaves the rest of the transaction sound.
     const ensured = await ensureAliasTarget(tx, ctx.repo, alias, plan.workspaceId, typeSnapshot)
+      .catch(err => leaveSeatOut(err, plan.sourceId))
+    if (ensured === null) {
+      // DEFENCE IN DEPTH: left in, this dangling reference re-fires the
+      // processor, whose next read phase mints the page or leaves it out.
+      references = references.filter(ref =>
+        !(ref.sourceField === undefined && ref.id === predicted && ref.alias === alias))
+      continue
+    }
     if (ensured.inserted) newlyInserted.push(ensured.id)
     retarget(predicted, ensured.id, alias)
     // The §9 arrival-order repair (late-binding rederive of NULL-stamped
@@ -689,6 +726,7 @@ const reapSeatsInTx = async (
 ): Promise<void> => {
   await ctx.repo.tx(async tx => {
     const generatedFieldIds = generatedSeatFieldIds(workspaceId)
+    const seats = await aliasSeatNamespacesInTx(tx, ctx.repo, workspaceId)
     for (const id of ids) {
       // Re-read in-tx: a racer may have deleted (or hard-removed) the
       // seat since the read phase — nothing to reap then.
@@ -709,7 +747,7 @@ const reapSeatsInTx = async (
       // routing in targets.ts), which pass unless a user adopted the
       // seat inside the 4s window: exactly the case to skip.
       if (!matchesAliasSeatSeed(current)) continue
-      if (!isAliasSeatSlotId(id, current.content, workspaceId)) continue
+      if (!isAliasSeatSlotId(seats, id, current.content, workspaceId)) continue
       // In-tx children guard, for BOTH callers: a live child that isn't
       // the seat's own generated machinery is user content (someone
       // nested notes under the fresh page — reachable inside the
@@ -889,6 +927,7 @@ export const reapOrphanAliasSeatsProcessor = definePostCommitProcessor({
     const readSeat = aliasSeatReaderFromDb(ctx.db)
     const isChildBacked = await readIsChildBackedWorkspace(ctx.db, workspaceId)
     const generatedFieldIds = generatedSeatFieldIds(workspaceId)
+    let seats: AliasSeatNamespaces | undefined
     const candidates: string[] = []
     for (const id of dropped) {
       if (await hasLiveReferrer(ctx.db, workspaceId, id)) continue
@@ -896,7 +935,8 @@ export const reapOrphanAliasSeatsProcessor = definePostCommitProcessor({
       if (seat === null || seat.deleted) continue
       if (parseLiteralDailyPageTitle(seat.content) !== null) continue
       if (!matchesAliasSeatSeed(seat)) continue
-      if (!isAliasSeatSlotId(id, seat.content, workspaceId)) continue
+      seats ??= await resolveAliasSeatNamespaces(ctx.repo, workspaceId)
+      if (!isAliasSeatSlotId(seats, id, seat.content, workspaceId)) continue
       if (seat.hasLiveChildren) {
         // DEFENCE IN DEPTH, not load-bearing: `reapSeatsInTx` re-reads the
         // children in-tx and applies the same rule, so replacing this whole

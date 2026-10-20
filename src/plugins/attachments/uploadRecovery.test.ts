@@ -140,7 +140,7 @@ describe('recoverFailedUploads (§9 failed-upload recovery actor)', () => {
   })
 
   it('PRESENT but UNDECODABLE (e2ee, wrong/absent key) → poisoned, stays failed', async () => {
-    // e2ee mode with no CEK: decodeBytes throws → treated as poisoned (§17), like the drain.
+    // e2ee mode with no CEK: the object can't be opened → treated as poisoned (§17), like the drain.
     await stageFailed(store, { contentHash: await computeContentHash(bytes(8)) })
     blobStore.probeResult = bytes(50) // not a valid encb envelope for this key
 

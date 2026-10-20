@@ -2,7 +2,7 @@
 // (docs/workspace-e2ee-conversion.md §6.2): the real queue, byte store, drain,
 // recovery and reconciler, with the mode the §6 resolver reports at each stage.
 import { beforeEach, describe, expect, it } from 'vitest'
-import { decodeBytes } from '@/sync/byteTransform.js'
+import { verifyObjectBytes } from '@/sync/byteTransform.js'
 import { computeContentHash } from '@/sync/crypto/contentHash.js'
 import { deriveContentKey, deriveContentKeyHmac } from '@/sync/crypto/contentKey.js'
 import type { WorkspaceConversionRead } from '@/sync/keys/conversionState.js'
@@ -105,8 +105,8 @@ describe('attachment records across an in-place conversion', () => {
       const sealed = blobStore.objects.get(keyed)
       expect(sealed, record.assetBlockId).toBeDefined()
       expect([...sealed!]).not.toEqual([...record.plain])
-      const opened = await decodeBytes(sealed!, 'e2ee', getCek, {contentHash: record.contentHash, workspaceId: WS})
-      expect([...opened]).toEqual([...record.plain])
+      const opened = await verifyObjectBytes(sealed!, 'e2ee', getCek, {contentHash: record.contentHash, workspaceId: WS})
+      expect(opened.ok && [...opened.plaintext]).toEqual([...record.plain])
       expect(await store.get(USER, record.assetBlockId)).toBeNull()
     }
     expect(blobStore.objects.size).toBe(3)

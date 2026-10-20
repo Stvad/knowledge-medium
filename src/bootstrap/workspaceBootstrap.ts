@@ -11,6 +11,7 @@ import { getLayoutSessionId } from '@/utils/layoutSessionId.js'
 import { applyCurrentLayoutUrl, createPanelRowInTx } from '@/utils/panelLayoutProjection.js'
 import { keyAtEnd } from '@/data/orderKey.js'
 import { ChangeScope } from '@/data/api'
+import { resolveAliasSeatNamespaces } from '@/data/aliasSeatNamespace.js'
 
 const replaceHash = (hash: string): void => {
   if (typeof window === 'undefined') return
@@ -118,6 +119,15 @@ export const bootstrapWorkspace = async ({
   // stored definition shadows or renames a seed. Keep bootstrap's writes behind
   // that completeness boundary; the shared Repo tx path queues other callers.
   await repo.whenPropertyDefinitionsReady(workspaceId)
+
+  // An encrypted workspace's alias-seat namespace needs `K_id`, which a seat
+  // written inside a transaction cannot read, so it is resolved here for
+  // every in-transaction writer of the open workspace. NOT awaited: it opens
+  // IndexedDB, which can hang rather than fail, and a writer that runs before
+  // it lands refuses rather than minting a public id.
+  void resolveAliasSeatNamespaces(repo, workspaceId).catch(err => {
+    console.warn(`[bootstrap] alias-seat namespace for ${workspaceId} is unresolved`, err)
+  })
 
   // Only NOW remember it as the default. Remembering a locked/waiting workspace
   // would make the next empty-hash visit re-select it and render only the key
