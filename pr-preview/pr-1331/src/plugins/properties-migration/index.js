@@ -1,0 +1,1 @@
+import{Lr as e,Nr as t}from"../../../chunks/app-CobiUJgp.js";export{e as migratePropertiesToBlocksAction,t as propertiesMigrationPlugin};

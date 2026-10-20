@@ -1,0 +1,1 @@
+"use client";import{vb as e}from"../../../chunks/app-CobiUJgp.js";export{e as ThemeToggle};

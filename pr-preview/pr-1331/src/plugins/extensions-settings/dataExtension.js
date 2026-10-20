@@ -1,0 +1,1 @@
+import{Ct as e}from"../../../chunks/app-CobiUJgp.js";export{e as extensionsDataExtension};

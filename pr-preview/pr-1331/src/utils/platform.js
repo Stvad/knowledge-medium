@@ -1,0 +1,1 @@
+import{iF as e,rF as t}from"../../chunks/app-CobiUJgp.js";export{t as isIOS,e as isMacPlatform};

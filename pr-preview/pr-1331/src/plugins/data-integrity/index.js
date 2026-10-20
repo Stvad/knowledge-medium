@@ -1,0 +1,1 @@
+import{Mi as e}from"../../../chunks/app-CobiUJgp.js";export{e as dataIntegrityPlugin};
