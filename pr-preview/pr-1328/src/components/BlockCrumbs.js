@@ -1,1 +1,1 @@
-import{Wx as e}from"../../chunks/app-m01pSXse.js";export{e as BlockCrumbs};
+import{Wx as e}from"../../chunks/app-CPjVYL-I.js";export{e as BlockCrumbs};

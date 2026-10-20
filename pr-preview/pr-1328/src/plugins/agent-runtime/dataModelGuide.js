@@ -1,1 +1,1 @@
-import{Jd as e,Yd as t}from"../../../chunks/app-m01pSXse.js";export{e as DATA_MODEL_GUIDE,t as dataModelGuide};
+import{Jd as e,Yd as t}from"../../../chunks/app-CPjVYL-I.js";export{e as DATA_MODEL_GUIDE,t as dataModelGuide};
