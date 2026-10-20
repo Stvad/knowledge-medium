@@ -7,7 +7,7 @@ import { BUNDLE_PARTS } from './bundle/manifest.js'
 import { verifyBundle } from './bundle/verifyBundle.js'
 import { runConversion, type ConversionFlowDeps, type ConversionUi } from './runConversion.js'
 import { contentColumnsOf, isSealedRow } from './sealing.js'
-import type { BundleRetakeReason } from './sealingStage.js'
+import { BundleLeftBehind, type BundleRetakeReason } from './sealingStage.js'
 import { openRow, seedPlaintext, WS } from './test/conversionFixtures.js'
 import { FakeConversionServer, notSealedRefusal, type FakeBlockRow } from './test/fakeConversionServer.js'
 import { flowDeps, USER } from './test/flowFixtures.js'
@@ -158,7 +158,42 @@ describe('the sealing stage', () => {
     const failing = run({writeLocalDb: async () => { throw new Error('copying the database failed.') }})
 
     await expect(failing).rejects.toThrow(/^copying the database failed\. The partly written recovery bundle "e2ee-recovery-/)
-    await expect(failing).rejects.toThrow(`"${bundleFolders()[0].name}" couldn't be removed`)
+    await expect(failing).rejects.toThrow(`"${bundleFolders()[0].name}" may not have been removed`)
+  })
+
+  it('stops waiting on a removal the drive never answers, and says the bundle may remain', async () => {
+    vi.useFakeTimers()
+    try {
+      let removing = false
+      ui.parent.removeEntry = () => {
+        removing = true
+        return new Promise<void>(() => {})
+      }
+      const failing = run({writeLocalDb: async () => { throw new Error('copying the database failed.') }})
+      const rejects = expect(failing).rejects.toBeInstanceOf(BundleLeftBehind)
+
+      await vi.waitFor(() => expect(removing).toBe(true))
+      await vi.advanceTimersByTimeAsync(10_000)
+      await rejects
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('reports a bundle left behind by a Stop as such, not as a plain cancellation', async () => {
+    const stop = new AbortController()
+    ui.parent.removeEntry = async () => {
+      throw new DOMException('the drive went away', 'NotFoundError')
+    }
+    const writeLocalDb = async () => {
+      stop.abort(new DOMException('stopped', 'AbortError'))
+      throw stop.signal.reason
+    }
+
+    const failing = run({signal: stop.signal, writeLocalDb})
+
+    await expect(failing).rejects.toBeInstanceOf(BundleLeftBehind)
+    await expect(failing).rejects.toThrow(/^Stopped\. The partly written recovery bundle/)
   })
 
   it('re-takes a bundle edited during the re-seal, and the new one holds plaintext for rows already sealed', async () => {

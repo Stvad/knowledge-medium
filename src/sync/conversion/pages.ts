@@ -6,22 +6,17 @@
  * Every read is by cursor, so a retried one returns the same rows.
  */
 
+import { classifyUploadError } from '@/services/uploadErrorClassifier.js'
 import { abortableSleep } from '@/utils/abortableSleep.js'
 import { errorCodeOf } from './conversionServer.js'
 
 const STATEMENT_TIMEOUT = '57014'
 const READ_ATTEMPTS = 4
 
-/** A failure worth trying again: PostgREST couldn't reach or wait for the
- *  database (`PGRST000`–`PGRST003`), or no answer came at all. Any other code
- *  is the database's verdict on the request, which a retry would repeat. */
-const isTransient = (error: unknown): boolean => {
-  const code = errorCodeOf(error) ?? ''
-  if (code.startsWith('PGRST00')) return true
-  if (code !== '') return false
-  const status = (error as {status?: unknown} | null)?.status
-  return typeof status !== 'number' || status === 0 || status >= 500
-}
+/** A failure worth trying again, read as the upload queue reads one: no
+ *  answer, a 5xx, a timeout or rate limit, a token not yet refreshed. A
+ *  verdict on the request itself would come back the same. */
+const isTransient = (error: unknown): boolean => classifyUploadError(error) === 'transient'
 
 export interface PagesOptions<Row, Cursor> {
   readonly read: (after: Cursor, limit: number) => Promise<readonly Row[]>

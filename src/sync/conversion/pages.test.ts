@@ -48,6 +48,13 @@ describe('keysetPages', () => {
     expect(limits.slice(0, 5)).toEqual([8, 4, 2, 1, 1])
   })
 
+  it('retries a rate limit and an expired token, as the upload queue does', async () => {
+    const {read, limits} = reader(call => (call === 1 ? failure(undefined, 429) : call === 3 ? failure('PGRST301', 401) : null))
+
+    expect(await collect(read)).toEqual(ROWS.map(row => row.id))
+    expect(limits.slice(0, 4)).toEqual([4, 4, 4, 4])
+  })
+
   it('stops on the database refusing the request itself', async () => {
     const {read, limits} = reader(() => failure('42501', 401))
 
