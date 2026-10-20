@@ -1,1 +1,1 @@
-import{BE as e,HE as t,RE as n,VE as r,zE as i}from"../../../chunks/app-SwspH9_3.js";export{n as APP_CHECK_FOR_UPDATES_ACTION_ID,i as APP_RELOAD_ACTION_ID,e as appCheckForUpdatesActionContribution,r as appReloadActionContribution,t as appUpdateDiagnosticContribution};
+import{BE as e,HE as t,RE as n,VE as r,zE as i}from"../../../chunks/app-BXdxxiB_.js";export{n as APP_CHECK_FOR_UPDATES_ACTION_ID,i as APP_RELOAD_ACTION_ID,e as appCheckForUpdatesActionContribution,r as appReloadActionContribution,t as appUpdateDiagnosticContribution};

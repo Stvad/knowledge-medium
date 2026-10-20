@@ -1,1 +1,1 @@
-import{cV as e,oV as t,sV as n}from"../../../chunks/app-SwspH9_3.js";export{t as charLimitProp,n as charProfileProp,e as charScopeProp};
+import{cV as e,oV as t,sV as n}from"../../../chunks/app-BXdxxiB_.js";export{t as charLimitProp,n as charProfileProp,e as charScopeProp};
