@@ -208,6 +208,7 @@ describe('the attachment cleaner over real Storage', {timeout: 30_000}, () => {
         left: [{path: 'outside/note', reason: 'not-archived'}],
         rebuilt: [],
         errors: [],
+        bundleFault: null,
         proof: {kind: 'passed', unrecoverable: []},
       })
       expect(await storedNames(ws)).toEqual([keyedName, 'outside/note'].sort())
