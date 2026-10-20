@@ -392,9 +392,9 @@ After the purge, recovery **re-keys the workspace in place** from the newest rec
 - **A delete has no trash.** The docs say deleted files are "permanently removed and not recoverable". *(read: [Delete objects](https://supabase.com/docs/guides/storage/management/delete-objects))*
 - **The two delete routes differ.** *(read: [`src/storage/object.ts`](https://github.com/supabase/storage/blob/v1.80.2/src/storage/object.ts) and [`src/storage/backend/s3/adapter.ts`](https://github.com/supabase/storage/blob/v1.80.2/src/storage/backend/s3/adapter.ts) at v1.80.2, the hosted version `npx supabase services` reported on 2026-10-19)*
   - **The single-object route** (`DELETE /object/<bucket>/<path>`) deletes the S3 object inside the transaction that deletes the row. A backend failure rolls the row back.
-  - **The bulk route**, which supabase-js's `remove()` uses and the app calls, deletes the rows, then sends S3 `DeleteObjects` requests. A request that fails rolls its batch back, but the per-key errors inside a successful response are never read.
+  - **The bulk route**, which supabase-js's `remove()` uses, deletes the rows, then sends S3 `DeleteObjects` requests. A request that fails rolls its batch back, but the per-key errors inside a successful response are never read.
   - S3 reports per-key failures inside a successful response *(inferred: S3's `DeleteObjects` contract)*. So a key it failed to delete stays in the backend with no row, invisible to every listing, the cleaner's included.
-  - **So the cleaner should delete raw objects through the single-object route.**
+  - **So the app deletes through the single-object route**, cleaner included *(read: `delete` in `src/plugins/attachments/blobStore.ts`)*.
 - **Versioning.**
   - The hosted version has no bucket versioning. Storage `master` adds it, off by default, and nothing here enables it. *(read: v1.80.2 and `master`, this repo's migrations)*
   - Whether the S3 bucket behind Supabase Storage keeps object versions isn't documented ([§9.5](#95-open-items) S3).
