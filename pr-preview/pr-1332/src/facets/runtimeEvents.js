@@ -1,1 +1,1 @@
-import{$R as e,QR as t}from"../../chunks/app-Dx36VZ-N.js";export{t as appRuntimeUpdateEvent,e as refreshAppRuntime};
+import{$R as e,QR as t}from"../../chunks/app-DMzu2YJb.js";export{t as appRuntimeUpdateEvent,e as refreshAppRuntime};

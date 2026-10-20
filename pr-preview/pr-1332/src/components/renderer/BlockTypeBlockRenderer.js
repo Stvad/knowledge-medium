@@ -1,1 +1,1 @@
-import{_j as e,vj as t,yj as n}from"../../../chunks/app-Dx36VZ-N.js";export{e as BlockTypeBlockRenderer,t as BlockTypeContentRenderer,n as writeBlockTypeLabel};
+import{_j as e,gj as t,vj as n}from"../../../chunks/app-DMzu2YJb.js";export{t as BlockTypeBlockRenderer,e as BlockTypeContentRenderer,n as writeBlockTypeLabel};

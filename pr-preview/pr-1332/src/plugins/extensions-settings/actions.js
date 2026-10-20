@@ -1,1 +1,1 @@
-import{XO as e,YO as t}from"../../../chunks/app-Dx36VZ-N.js";export{t as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,e as openExtensionsSettingsAction};
+import{JO as e,YO as t}from"../../../chunks/app-DMzu2YJb.js";export{e as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,t as openExtensionsSettingsAction};
