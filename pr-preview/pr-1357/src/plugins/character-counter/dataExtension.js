@@ -1,1 +1,1 @@
-import{GU as e}from"../../../chunks/app-Fth78vyt.js";export{e as characterCounterDataExtension};
+import{KU as e}from"../../../chunks/app-BJKZtTU_.js";export{e as characterCounterDataExtension};
