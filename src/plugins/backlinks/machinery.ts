@@ -53,15 +53,19 @@ const workspacesWithMachinery = new WeakMap<ProbeDb, Set<string>>()
  *  thousands of rows, whose invalidation traffic no mounted view outlives —
  *  and it is the same dependency gap the filters already have, not a new one.
  *
- *  A YES is remembered per read surface (one per `Repo`) and workspace, so a
- *  machinery workspace pays for the probe once rather than on every wave of
- *  inline badges (`sourceBatch.ts`) and every filtered or grouped backlinks
- *  resolve. Remembering it obeys THE RULE: a stale yes only sends a caller
- *  down the filtering path, which finds nothing to drop and returns what the
- *  fast path would. It goes stale only when every marked row,
+ *  A YES is remembered per read surface (one per `Repo`) and workspace, so once
+ *  one has landed a machinery workspace stops paying for the probe on every
+ *  wave of inline badges (`sourceBatch.ts`) and every filtered or grouped
+ *  backlinks resolve. Remembering it obeys THE RULE: a stale yes only sends a
+ *  caller down the filtering path, which finds nothing to drop and returns
+ *  what the fast path would. It goes stale only when every marked row,
  *  tombstones included, is physically removed (a sync-applied delete), and
  *  lasts until the Repo is rebuilt. A NO is never remembered — a backfill can
  *  mint machinery at any moment.
+ *
+ *  Callers racing the first probe each ask; not coalesced here because the
+ *  badges already share one probe per wave, and joining an in-flight read
+ *  would hand a caller a no read before it asked.
  */
 export const workspaceHasPropertyMachinery = async (
   db: ProbeDb,
