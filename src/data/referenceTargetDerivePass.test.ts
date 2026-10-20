@@ -21,7 +21,7 @@ import { projectedPropertyDefinitionsFacet } from '@/data/facets'
 import { aliasesProp, typesProp } from '@/data/properties'
 import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
 import { registryRecognitionParams } from '@/data/internals/kernelQueries'
-import { propertyMachinerySourceIds } from '@/plugins/backlinks/query'
+import { propertyMachinerySourceIds } from '@/plugins/backlinks/machinery'
 import type { Repo } from './repo'
 
 const WS = 'ws-derive-pass'
