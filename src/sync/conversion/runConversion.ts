@@ -273,6 +273,9 @@ const runLocked = async (deps: ConversionFlowDeps): Promise<ConversionRunResult>
   const first = await readStage(deps)
   if (first.kind !== 'stage') return {kind: 'blocked', read: first}
   if (first.stage.kind === 'done') return finished(deps, first.stage.canary)
+  // Past the flip the local row is marked before any prompt, which the user
+  // may cancel: the run then ends with no stage to mark it.
+  if (first.stage.kind !== 'plaintext') await deps.markLocalConverted(first.stage.canary)
   await deps.ui.confirmContract(first.stage)
 
   let reached: StageKind = first.stage.kind
