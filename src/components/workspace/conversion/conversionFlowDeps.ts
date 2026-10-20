@@ -40,17 +40,15 @@ const uploadQueue = (repo: Repo) => async (signal?: AbortSignal): Promise<{pendi
   }
 }
 
-const preflightEnvironment = (repo: Repo): PreflightEnvironment => ({
-  canPersistPins,
-  keyStoreIsDurable: getWorkspaceKeyStore() instanceof IndexedDbWorkspaceKeyStore,
-  supportsDirectoryPicker: supportsDirectoryPicker(),
-  uploadQueue: uploadQueue(repo),
-  localDbBytes: () => localDbFileBytes(repo.user.id),
-  freeLocalBytes: async () => {
-    const {quota, usage} = await navigator.storage.estimate().catch(() => ({quota: undefined, usage: undefined}))
-    return quota === undefined || usage === undefined ? null : Math.max(0, quota - usage)
-  },
-})
+/** What only the browser gives the run: stores that outlive the page, the
+ *  bundle folder's permission and the database copy, the screen lock, and
+ *  preflight's checks of them. A run outside a browser supplies its own. */
+export interface ConversionPlatform
+  extends Pick<ConversionFlowDeps, 'keyStore' | 'bundles' | 'canReadFolder' | 'writeLocalDb' | 'keepAwake'> {
+  /** The upload queue is the repo's own, and the pins are localStorage's,
+   *  which the run's other state lives in too. */
+  readonly environment: Omit<PreflightEnvironment, 'uploadQueue' | 'canPersistPins'>
+}
 
 export type ConversionUnavailable =
   /** Not signed in to a server: local-only, or none configured. */
@@ -95,9 +93,41 @@ export const conversionSetup = async (repo: Repo, workspaceId: string, localOnly
   if (attachments.kind === 'unavailable') {
     return {kind: 'unavailable', why: {kind: 'no-attachments', reason: attachments.reason}}
   }
+  const platform = webConversionPlatform(repo)
   return {
     kind: 'ready',
-    makeDeps: (ui, signal) => conversionFlowDeps({repo, workspaceId, client, lock, attachments: attachments.io, ui, signal}),
+    makeDeps: (ui, signal) => conversionFlowDeps({repo, workspaceId, client, lock, attachments: attachments.io, platform, ui, signal}),
+  }
+}
+
+const webConversionPlatform = (repo: Repo): ConversionPlatform => {
+  const keyStore = getWorkspaceKeyStore()
+  return {
+    keyStore,
+    bundles: (bundleRecords ??= new IndexedDbBundleRecordStore()),
+    canReadFolder: async folder => (await queryDirectoryPermission(directoryHandleOf(folder), 'read')) === 'granted',
+    writeLocalDb: async (folder, signal) => {
+      const hasher = createPartHasher()
+      const file = await untilStopped(directoryHandleOf(folder).getFileHandle(BUNDLE_PARTS.localDb, {create: true}), signal)
+      await exportRawSqliteDbToFile(repo, file, {
+        timeoutMessage:
+          "Copying this device's database into the recovery bundle took too long. Pick a folder on a faster disk, then try again.",
+        minBytesPerSecond: SLOWEST_BUNDLE_DISK,
+        onChunk: chunk => hasher.update(chunk),
+        signal,
+      })
+      return hasher.digest()
+    },
+    keepAwake: holdScreenWakeLock,
+    environment: {
+      keyStoreIsDurable: keyStore instanceof IndexedDbWorkspaceKeyStore,
+      supportsDirectoryPicker: supportsDirectoryPicker(),
+      localDbBytes: () => localDbFileBytes(repo.user.id),
+      freeLocalBytes: async () => {
+        const {quota, usage} = await navigator.storage.estimate().catch(() => ({quota: undefined, usage: undefined}))
+        return quota === undefined || usage === undefined ? null : Math.max(0, quota - usage)
+      },
+    },
   }
 }
 
@@ -108,12 +138,13 @@ export const conversionSetup = async (repo: Repo, workspaceId: string, localOnly
  *  first write at a keyed name wins and the cleaner verifies what is there. The
  *  bundle folder, which the user picks mid-run, is bound where it's used
  *  (`stoppableFolder`). */
-const conversionFlowDeps = ({repo, workspaceId, client, lock, attachments, ui, signal}: {
+export const conversionFlowDeps = ({repo, workspaceId, client, lock, attachments, platform, ui, signal}: {
   repo: Repo
   workspaceId: string
   client: SupabaseClient
   lock: ConversionLock
   attachments: ConversionAttachmentsIO
+  platform: ConversionPlatform
   ui: ConversionUi
   signal: AbortSignal
 }): ConversionFlowDeps => ({
@@ -121,34 +152,23 @@ const conversionFlowDeps = ({repo, workspaceId, client, lock, attachments, ui, s
   workspaceId,
   server: createSupabaseConversionServer(client, signal),
   fetchConversionState: () => untilStopped(fetchWorkspaceConversionState(workspaceId), signal),
-  keyStore: getWorkspaceKeyStore(),
+  keyStore: platform.keyStore,
   flipAttempts: localFlipAttempts(repo.user.id, workspaceId),
   lock,
-  preflight: preflightEnvironment(repo),
+  preflight: {...platform.environment, canPersistPins, uploadQueue: uploadQueue(repo)},
   markLocalConverted: canary => markLocalWorkspaceConverted(repo.db, workspaceId, canary),
-  bundles: (bundleRecords ??= new IndexedDbBundleRecordStore()),
+  bundles: platform.bundles,
   attachments: stoppable(attachments, signal),
-  canReadFolder: async folder => (await queryDirectoryPermission(directoryHandleOf(folder), 'read')) === 'granted',
-  writeLocalDb: async (folder, signal) => {
-    const hasher = createPartHasher()
-    const file = await untilStopped(directoryHandleOf(folder).getFileHandle(BUNDLE_PARTS.localDb, {create: true}), signal)
-    await exportRawSqliteDbToFile(repo, file, {
-      timeoutMessage:
-        "Copying this device's database into the recovery bundle took too long. Pick a folder on a faster disk, then try again.",
-      minBytesPerSecond: SLOWEST_BUNDLE_DISK,
-      onChunk: chunk => hasher.update(chunk),
-      signal,
-    })
-    return hasher.digest()
-  },
-  keepAwake: holdScreenWakeLock,
+  canReadFolder: platform.canReadFolder,
+  writeLocalDb: platform.writeLocalDb,
+  keepAwake: platform.keepAwake,
   upgradePin: async () => {
     const result = await upgradeWorkspacePin({
       userId: repo.user.id,
       workspaceId,
       ...workspaceGateDeps(repo, workspaceId),
       key: {kind: 'stored'},
-      keyStore: getWorkspaceKeyStore(),
+      keyStore: platform.keyStore,
     })
     if (result.ok) notifyWorkspaceUnlocked(workspaceId)
     return result

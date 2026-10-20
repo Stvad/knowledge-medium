@@ -167,9 +167,10 @@ export const requireWorkspaceKey = async (
   if (!(await validateCanary(wk, workspace.wk_canary, workspaceId))) throw new ConversionRefusal('wrong-key')
 }
 
-/** A lost session reads as an empty table rather than as an error, so each pass
- *  ends by proving it saw every row: as many as the workspace holds, counted
- *  once it is shown to be still visible to this session. */
+/** A lost session reads as an empty table rather than as an error, so the
+ *  sealing passes, which nothing writes alongside, end by proving they saw
+ *  every row: as many as the workspace holds, counted once it is shown to be
+ *  still visible to this session. */
 export const requireWholeWorkspace = async (
   server: ConversionServer,
   workspaceId: string,
@@ -200,8 +201,11 @@ export const serverPages = (
 /** The workspace's media blocks as the server holds them, each row opened under
  *  `wk`: the set a proof covers, which neither this device's view nor a bundle
  *  can stand in for, since either may be stale. A row that doesn't open fails
- *  the read rather than be left out, and so does a pass that didn't see every
- *  row. */
+ *  the read rather than be left out, and so does a pass that stopped before
+ *  the row that was last when it began: keyset paging misses no row before
+ *  that one, and a lapsed token's request reads as an empty page, ending the
+ *  pass early. Not {@link requireWholeWorkspace}'s count after the pass: past
+ *  the purge rows keep arriving, this device's held writes among them. */
 export const serverMediaBlocks = async (
   server: ConversionServer,
   workspaceId: string,
@@ -209,8 +213,11 @@ export const serverMediaBlocks = async (
   mediaHashOf: (propertiesJson: string) => string | null,
   signal?: AbortSignal,
 ): Promise<MediaRef[]> => {
+  // The count refuses a lapsed session where a read would show it no rows.
+  const {blocks} = await server.workspaceCounts(workspaceId)
+  const last = blocks > 0 ? await server.readLastBlockId(workspaceId) : null
   const media: MediaRef[] = []
-  let seen = 0
+  let reachedLast = blocks === 0
   for await (const page of serverPages(server, workspaceId, RESEAL_PAGE_SIZE, signal)) {
     const opened = await Promise.all(page.map(row => openSealed(wk, row, contentColumnsOf(row))))
     for (const [i, row] of page.entries()) {
@@ -218,10 +225,10 @@ export const serverMediaBlocks = async (
       if (!columns) throw new Error(`conversion: block ${row.id} does not open under the workspace key`)
       const contentHash = mediaHashOf(columns.properties_json)
       if (contentHash) media.push({blockId: row.id, contentHash})
+      if (row.id === last) reachedLast = true
     }
-    seen += page.length
   }
-  await requireWholeWorkspace(server, workspaceId, wk, seen)
+  if (!reachedLast) throw new Error("conversion: the pass stopped before the workspace's last row; run it again")
   return media
 }
 

@@ -184,6 +184,11 @@ export class FakeConversionServer implements ConversionServer {
     return page
   }
 
+  async readLastBlockId(workspaceId: string): Promise<string | null> {
+    this.calls.push({method: 'readLastBlockId', count: 1})
+    return this.visibleRows(workspaceId).at(-1)?.id ?? null
+  }
+
   async readBlocks(workspaceId: string, ids: readonly string[]): Promise<ServerBlockRow[]> {
     const rows = this.visibleRows(workspaceId).filter(row => ids.includes(row.id))
     this.calls.push({method: 'readBlocks', count: rows.length})

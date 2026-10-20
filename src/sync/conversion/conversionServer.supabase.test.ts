@@ -9,10 +9,9 @@
  */
 
 import { randomBytes, randomUUID } from 'node:crypto'
-import pg from 'pg'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
-import { signedInUser, supabaseStack } from '@/test/supabaseStack'
+import { connectStackDb, signedInUser, supabaseStack, type StackDb } from '@/test/supabaseStack'
 import { mintCanary } from '../crypto/canary.js'
 import { ENVELOPE_PREFIX } from '../crypto/envelope.js'
 import { SEALED_COLUMNS, type WireBlockColumns } from '../transform.js'
@@ -54,37 +53,20 @@ const flip = async (client: SupabaseClient, workspaceId: string, wk: CryptoKey) 
   expect(error).toBeNull()
 }
 
-/** bigint columns (versions, event ids, counts) as numbers, as PostgREST returns them. */
-const int8AsNumber = {
-  getTypeParser: (oid: number, format?: 'text' | 'binary') =>
-    oid === pg.types.builtins.INT8 ? Number : pg.types.getTypeParser(oid, format),
-}
-
 // The test takes 1–5 s against a fresh stack.
 describe('the re-seal and verify through PostgREST', {timeout: 60_000}, () => {
   const stack = supabaseStack()
-  let db: pg.Client
+  let db: StackDb
 
   beforeAll(async () => {
-    db = new pg.Client({connectionString: stack.databaseUrl, types: int8AsNumber})
-    await db.connect()
+    db = await connectStackDb(stack)
   })
   afterAll(() => db?.end())
 
-  const query = async <Row extends pg.QueryResultRow>(sql: string, params: unknown[] = []): Promise<Row[]> =>
-    (await db.query<Row>(sql, params)).rows
+  const query: StackDb['query'] = (sql, params) => db.query(sql, params)
 
-  const insertWorkspace = async (workspaceId: string, ownerId: string, at: number) => {
-    await query(
-      `insert into public.workspaces (id, name, owner_user_id, create_time, update_time) values ($1, 'conversion', $2, $3, $3)`,
-      [workspaceId, ownerId, at],
-    )
-    await query(
-      `insert into public.workspace_members (id, workspace_id, user_id, role, create_time)
-       values (gen_random_uuid()::text, $1, $2, 'owner', $3)`,
-      [workspaceId, ownerId, at],
-    )
-  }
+  const insertWorkspace = (id: string, ownerId: string, at: number) =>
+    db.insertWorkspace({id, name: 'conversion', at, members: [[ownerId, 'owner']]})
 
   const insertRows = (workspaceId: string, ownerId: string, at: number, count: number) =>
     query(
@@ -152,14 +134,6 @@ describe('the re-seal and verify through PostgREST', {timeout: 60_000}, () => {
     return contentOf(workspaceId)
   }
 
-  /** One write with triggers off: it adds no history row and no new version. */
-  const writeWithoutTriggers = async (sql: string, params: unknown[]) => {
-    await query('begin')
-    await query('set local session_replication_role = replica')
-    await query(sql, params)
-    await query('commit')
-  }
-
   it('seals every row, finds each re-seal record, repairs a tampered row, and leaves history the purge accepts', async () => {
     const owner = await signedInUser(stack)
     const client = owner.client
@@ -222,6 +196,9 @@ describe('the re-seal and verify through PostgREST', {timeout: 60_000}, () => {
     const firstChunk = new Set(ids.slice(0, IDS_PER_FILTER))
     expect(selected.filter(row => firstChunk.has(row.block_id)).length).toBeGreaterThan(HISTORY_PAGE)
     const read = await server.readContentSealHistory(ws, ids)
+    // The last row in the order the pages go in, which the cleaning stage's read must reach.
+    expect(await server.readLastBlockId(ws)).toBe(ids.at(-1))
+    expect(await server.readLastBlockId(randomUUID())).toBeNull()
     const byEvent = (a: number, b: number) => a - b
     expect(read.map(row => row.event_id).sort(byEvent)).toEqual(selected.map(row => row.event_id).sort(byEvent))
 
@@ -232,7 +209,7 @@ describe('the re-seal and verify through PostgREST', {timeout: 60_000}, () => {
     const [tampered, donor] = ids
     const [before] = await query<{updated_at: number}>('select updated_at from public.blocks where id = $1', [tampered])
     const historyBefore = await historyCount(ws)
-    await writeWithoutTriggers(
+    await db.writeWithoutTriggers(
       'update public.blocks set content = (select content from public.blocks where id = $2) where id = $1',
       [tampered, donor],
     )
