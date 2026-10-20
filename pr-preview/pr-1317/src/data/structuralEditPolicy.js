@@ -1,1 +1,1 @@
-import{XT as e,YT as t}from"../../chunks/app-mfT7JKmK.js";export{t as resolveStructuralEditPolicy,e as structuralEditPolicyForBlock};
+import{vE as e,yE as t}from"../../chunks/app-DWDE-jhO.js";export{e as resolveStructuralEditPolicy,t as structuralEditPolicyForBlock};

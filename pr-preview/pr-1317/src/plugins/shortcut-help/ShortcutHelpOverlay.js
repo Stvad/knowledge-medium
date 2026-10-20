@@ -1,1 +1,1 @@
-import{vC as e}from"../../../chunks/app-mfT7JKmK.js";export{e as ShortcutHelpOverlay};
+import{VC as e}from"../../../chunks/app-DWDE-jhO.js";export{e as ShortcutHelpOverlay};
