@@ -99,6 +99,26 @@ describe('ConversionFlow', () => {
     upgrade()
   })
 
+  it('shows a bundle a Stop left behind, rather than a plain stop', async () => {
+    picked.removeEntry = async () => {
+      throw new DOMException('the drive went away', 'NotFoundError')
+    }
+    // The database copy waits on a slow drive until Stop.
+    const writeLocalDb = (_folder: unknown, signal?: AbortSignal) =>
+      new Promise<never>((_resolve, reject) => signal?.addEventListener('abort', () => reject(signal.reason)))
+    renderFlow(null, {writeLocalDb})
+    await startToKeyStep()
+    const key = (await screen.findByTestId('workspace-key')).textContent!
+    click(/i've saved it/i)
+    fireEvent.change(screen.getByLabelText(/workspace key/i), {target: {value: key}})
+    click(/^confirm$/i)
+    fireEvent.click(await screen.findByRole('button', {name: /choose a folder/i}))
+    fireEvent.click(await screen.findByRole('button', {name: /^stop$/i}))
+
+    expect(await screen.findByText(/may not have been removed: delete it yourself/i)).toBeInTheDocument()
+    expect(screen.queryByText(/^stopped\. the next run/i)).toBeNull()
+  })
+
   it('offers no Stop while the flip request is out', async () => {
     let commit!: () => void
     const flip = server.convertWorkspaceToE2ee.bind(server)

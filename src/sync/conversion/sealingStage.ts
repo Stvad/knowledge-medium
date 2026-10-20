@@ -105,6 +105,36 @@ const createBundleFolder = async (parent: BundleFolder, workspaceId: string, at:
   }
 }
 
+/** A half-written bundle this device couldn't remove: plaintext the user has
+ *  to delete. It carries no cause, so a Stop's `AbortError` can't make it read
+ *  as a plain cancellation, whose view says nothing about the folder. */
+export class BundleLeftBehind extends Error {
+  constructor(readonly folderName: string, failure: unknown, stopped: boolean) {
+    super(
+      `${stopped ? 'Stopped.' : failure instanceof Error ? failure.message : String(failure)} The partly written ` +
+        `recovery bundle "${folderName}" may not have been removed: delete it yourself, since it holds a plaintext ` +
+        'copy of the workspace.',
+    )
+    this.name = 'BundleLeftBehind'
+  }
+}
+
+/** How long removing a half-written bundle may take: the drive that just
+ *  failed, or stopped answering, may not answer this either. */
+const BUNDLE_CLEANUP_MS = 10_000
+
+const removedWithin = async (parent: BundleFolder, name: string): Promise<boolean> => {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      parent.removeEntry(name, {recursive: true}).then(() => true, () => false),
+      new Promise<boolean>(resolve => { timer = setTimeout(() => resolve(false), BUNDLE_CLEANUP_MS) }),
+    ])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 const takeVerifiedBundle = async (deps: SealingDeps, reason: BundleRetakeReason | null): Promise<BundleRecord> => {
   const {userId, workspaceId, server, ui, signal} = deps
   const parent = await ui.chooseBundleFolder({reason})
@@ -131,15 +161,9 @@ const takeVerifiedBundle = async (deps: SealingDeps, reason: BundleRetakeReason 
     await deps.bundles.put(userId, workspaceId, record)
     return record
   } catch (error) {
-    // A bundle that never verified is a plaintext copy nothing will use, and
-    // one left behind is the user's to delete.
-    const removed = await parent.removeEntry(folder.name, {recursive: true}).then(() => true, () => false)
-    if (removed) throw error
-    throw new Error(
-      `${error instanceof Error ? error.message : String(error)} The partly written recovery bundle "${folder.name}" ` +
-        "couldn't be removed: delete it yourself, since it holds a plaintext copy of the workspace.",
-      {cause: error},
-    )
+    // A bundle that never verified is a plaintext copy nothing will use.
+    if (await removedWithin(parent, folder.name)) throw error
+    throw new BundleLeftBehind(folder.name, error, signal?.aborted ?? false)
   }
 }
 
