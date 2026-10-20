@@ -1,1 +1,1 @@
-import{gC as e,hC as t,mC as n}from"../../../../../chunks/app-CVEd70qw.js";export{n as isWikilinkDisplayParts,t as resolveWikilinkDisplay,e as wikilinkDisplayDecoratorFacet};
+import{aC as e,oC as t,sC as n}from"../../../../../chunks/app-C4KbCLPc.js";export{e as isWikilinkDisplayParts,t as resolveWikilinkDisplay,n as wikilinkDisplayDecoratorFacet};

@@ -1,1 +1,1 @@
-import{fC as e}from"../../../chunks/app-CVEd70qw.js";export{e as dailyDateWikilinkDecorator};
+import{rC as e}from"../../../chunks/app-C4KbCLPc.js";export{e as dailyDateWikilinkDecorator};

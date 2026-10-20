@@ -1,1 +1,1 @@
-import{Of as e}from"../../../chunks/app-CVEd70qw.js";export{e as backlinksPlugin};
+import{Df as e}from"../../../chunks/app-C4KbCLPc.js";export{e as backlinksPlugin};

@@ -1,1 +1,1 @@
-import{Sg as e,_g as t,bg as n,vg as r,xg as i,yg as a}from"../../../chunks/app-CVEd70qw.js";export{t as ASSETS_ROOT,r as InMemoryByteStore,a as OpfsByteStore,n as assetPathSegments,i as createByteStore,e as getByteStore};
+import{_g as e,bg as t,gg as n,vg as r,xg as i,yg as a}from"../../../chunks/app-C4KbCLPc.js";export{n as ASSETS_ROOT,e as InMemoryByteStore,r as OpfsByteStore,a as assetPathSegments,t as createByteStore,i as getByteStore};
