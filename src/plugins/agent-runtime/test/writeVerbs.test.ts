@@ -853,7 +853,7 @@ describe('review round 1', () => {
 
   it('refuses to create a daily note when the workspace moved since it was pinned', async () => {
     let reads = 0
-    const spy = vi.spyOn(repo, 'activeWorkspaceId', 'get')
+    const spy = vi.spyOn(repo.client, 'activeWorkspaceId', 'get')
       .mockImplementation(() => (reads++ === 0 ? WS : 'ws-elsewhere'))
     try {
       await expect(run({type: 'create-page', date: '2026-10-15'})).rejects.toThrow(/workspace registry.*not loaded/i)

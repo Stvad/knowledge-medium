@@ -85,7 +85,6 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   countBlocksUsingProperty: 'read',
   snapshotTypeRegistries: 'read — returns existing registry maps, no minting',
   propertySchemaResolverFor: 'read — returns a resolver bound to an existing immutable snapshot',
-  withTxContext: 'builds a call-local facade and Block cache; its writes retain the parent tx binding',
   whenPropertyDefinitionsReady: 'waits on the constructor-bound projector service; assigns no Repo fields',
   whenTypeDefinitionsReady: 'waits on the constructor-bound projector service; assigns no Repo fields',
   load: 'read + shared BlockCache mutation (object-interior, reached via chain)',

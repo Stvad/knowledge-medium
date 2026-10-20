@@ -155,6 +155,47 @@ describe('agent contributor selection', () => {
     expect((await context.repo.load(result.id))?.properties[attributionEditorsProp.name]).toEqual([profile.id])
   })
 
+  it('keeps the command contributor on direct eval tx writes while preserving unrelated tx context', async () => {
+    const atlas = await run({type: 'create-contributor', name: 'Atlas'}) as ContributorProfile
+    const contextFromTx = await run({
+      type: 'eval',
+      contributorId: atlas.id,
+      code: `return await repo.tx(async tx => {
+        await tx.create({id: 'eval-direct-attributed', workspaceId: 'ws', parentId: null, orderKey: 'a0', content: 'Direct eval write'})
+        return tx.meta.context
+      }, {scope: 'block-default', context: {contributorId: null, traceId: 'keep-me'}})`,
+    }) as {contributorId?: string | null, traceId?: string}
+
+    expect(contextFromTx).toMatchObject({contributorId: atlas.id, traceId: 'keep-me'})
+    expect((await context.repo.load('eval-direct-attributed'))?.properties[attributionCreatorsProp.name]).toEqual([atlas.id])
+  })
+
+  it('keeps the command contributor through eval undoGroup tx writes', async () => {
+    const atlas = await run({type: 'create-contributor', name: 'Atlas'}) as ContributorProfile
+    const scout = await run({type: 'create-contributor', name: 'Scout'}) as ContributorProfile
+    const contextFromTx = await run({
+      type: 'eval',
+      contributorId: atlas.id,
+      code: `return await repo.undoGroup(async grouped => grouped.tx(async tx => {
+        await tx.create({id: 'eval-group-attributed', workspaceId: 'ws', parentId: null, orderKey: 'a0', content: 'Grouped eval write'})
+        return tx.meta.context
+      }, {scope: 'block-default', context: {contributorId: '${scout.id}', traceId: 'group-context'}}))`,
+    }) as {contributorId?: string | null, traceId?: string}
+
+    expect(contextFromTx).toMatchObject({contributorId: atlas.id, traceId: 'group-context'})
+    expect((await context.repo.load('eval-group-attributed'))?.properties[attributionCreatorsProp.name]).toEqual([atlas.id])
+  })
+
+  it('does not let an unconfigured eval opt out through tx context', async () => {
+    await expect(run({
+      type: 'eval',
+      code: `return await repo.tx(tx => tx.create({
+        id: 'eval-unconfigured-optout', workspaceId: 'ws', parentId: null, orderKey: 'a0', content: 'Unconfigured eval write'
+      }), {scope: 'block-default', context: {contributorId: null}})`,
+    })).rejects.toThrow(/Choose a contributor/)
+    expect(await context.repo.load('eval-unconfigured-optout')).toBeNull()
+  })
+
   it.each(['move-parent', 'move-order', 'delete', 'restore'] as const)(
     'requires a contributor for %s and attributes surviving blocks', async operation => {
       const profile = await run({type: 'create-contributor', name: 'Atlas'}) as ContributorProfile

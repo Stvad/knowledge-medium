@@ -2018,11 +2018,13 @@ export class Repo {
     return fn(this.groupedFacade(this.newId()))
   }
 
-  /** Bind plugin context to this host's writes without changing other clients. */
+  /** Bind plugin context to this host's writes; only explicit rebinding replaces bound keys. */
   withTxContext(context: NonNullable<RepoTxOptions['context']>): Repo {
     const captured = Object.freeze({...context})
-    return this.contextFacade((fn, opts) =>
-      this.tx(fn, {...opts, context: {...captured, ...opts.context}}))
+    const facade = this.contextFacade((fn, opts) =>
+      this.tx(fn, {...opts, context: {...opts.context, ...captured}}))
+    facade.withTxContext = next => this.withTxContext({...captured, ...next})
+    return facade
   }
 
   /** Give context-bound hosts their own Block identity without retaining them in shared caches. */
@@ -2040,7 +2042,9 @@ export class Repo {
 
   /** Build the group-injecting facade for {@link undoGroup}. */
   private groupedFacade(groupId: string): Repo {
-    return this.transactionFacade((fn, opts) => this.tx(fn, {...opts, groupId}))
+    const facade = this.transactionFacade((fn, opts) => this.tx(fn, {...opts, groupId}))
+    facade.withTxContext = context => this.withTxContext(context).groupedFacade(groupId)
+    return facade
   }
 
   /** Share the binding rules for transaction-scoped Repo hosts. */

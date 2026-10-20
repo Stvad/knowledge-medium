@@ -810,11 +810,11 @@ describe('agent runtime commands', () => {
       // block itself, against type registries snapshotted outside the tx. A
       // switch landing in the alias lookup between them would write that whole
       // tree into one workspace off another's snapshot.
-      const real = env.repo.snapshotTypeRegistries.bind(env.repo)
-      const restore = vi.spyOn(env.repo, 'snapshotTypeRegistries').mockImplementation(() => {
+      const real = Repo.prototype.snapshotTypeRegistries
+      const restore = vi.spyOn(Repo.prototype, 'snapshotTypeRegistries').mockImplementation(function (this: Repo) {
         // The switch lands between the snapshot and the tx that writes off it.
         env.repo.setActiveWorkspaceId('ws-elsewhere')
-        return real()
+        return real.call(this)
       })
       try {
         await expect(install('install-fresh-ws-switch'))
@@ -1153,10 +1153,10 @@ describe('agent runtime commands', () => {
       const restore = compileTo(valuePresetCoresFacet.of(numberRating))
       // `snapshotTypeRegistries` is the last call before `repo.tx`, so it is
       // the window's near edge.
-      const spy = vi.spyOn(env.repo, 'snapshotTypeRegistries').mockImplementation(function (this: Repo) {
+      const spy = vi.spyOn(Repo.prototype, 'snapshotTypeRegistries').mockImplementation(function (this: Repo) {
         env.repo.setActiveWorkspaceId('ws-elsewhere')
         spy.mockRestore()
-        return env.repo.snapshotTypeRegistries()
+        return this.snapshotTypeRegistries()
       })
       try {
         await expect(install('install-ws-late-switch'))
