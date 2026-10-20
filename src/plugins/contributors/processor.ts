@@ -3,13 +3,13 @@ import {isFieldValueChild, isPropertyFieldInstance} from '@/data/propertyChildre
 import {jsonValuesEqual} from '@/data/internals/jsonCanonical'
 import {PAGE_TYPE} from '@/data/blockTypes'
 import {hasBlockType} from '@/data/properties'
-import {assertContributor, ensureHumanContributor, ensureUnconfiguredAgent} from './profiles'
+import {assertContributor, ensureHumanContributor} from './profiles'
 import {attributionCreatorsProp, attributionEditorsProp, contributorKindProp} from './schema'
 
 declare module '@/data/api/tx' {
   interface TransactionContext {
     contributorId?: string | null
-    contributorFallback?: 'agent'
+    contributorSource?: 'agent'
   }
 }
 
@@ -77,7 +77,7 @@ export const contributorAttributionProcessor = defineSameTxProcessor({
     const context = ctx.tx.meta.context
     const selectedId = context?.contributorId ?? undefined
     const selected = selectedId ? await ctx.tx.get(selectedId) : null
-    const human = context?.contributorFallback !== 'agent' && (selectedId === undefined
+    const human = context?.contributorSource !== 'agent' && (selectedId === undefined
       || contributorKindProp.codec.decode(selected?.properties[contributorKindProp.name] ?? 'agent') === 'human')
     const eligible: Array<[string, boolean]> = []
     for (const [id, created] of targets) {
@@ -87,11 +87,12 @@ export const contributorAttributionProcessor = defineSameTxProcessor({
       eligible.push([id, created])
     }
     if (eligible.length === 0) return
+    if (context?.contributorSource === 'agent' && selectedId === undefined) {
+      throw new Error('Choose a contributor before writing: run contributor create <name> or contributor use <id>; --contributor none opts out. A current CLI or MCP with contributor support is required; upgrade @knowledge-medium/agent-cli or use this checkout\'s pnpm agent.')
+    }
     const snapshot = {types: ctx.types, propertySchemas: ctx.propertySchemas}
-    const contributorId = selectedId ?? (human
-      ? await ensureHumanContributor(ctx.tx, event.workspaceId, event.user, snapshot)
-      : await ensureUnconfiguredAgent(ctx.tx, event.workspaceId, event.user, snapshot))
-    await assertContributor(ctx.tx, contributorId, event.workspaceId, {allowHuman: context?.contributorFallback !== 'agent'})
+    const contributorId = selectedId ?? await ensureHumanContributor(ctx.tx, event.workspaceId, event.user, snapshot)
+    await assertContributor(ctx.tx, contributorId, event.workspaceId, {allowHuman: context?.contributorSource !== 'agent'})
     for (const [id, created] of eligible) {
       const prop = created ? attributionCreatorsProp : attributionEditorsProp
       await ctx.tx.setProperty(id, prop, current => [...new Set([...(current ?? []), contributorId])], {skipMetadata: true})

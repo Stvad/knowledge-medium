@@ -1,20 +1,14 @@
 import {ChangeScope, type Tx, type TypeRegistrySnapshot, type User} from '@/data/api'
 import {hasBlockType} from '@/data/properties'
-import {PAGE_TYPE} from '@/data/blockTypes'
-import {derivedBlockId} from '@/data/derivedIds'
 import {assertRoundTrippableReferenceLabel} from '@/data/referenceBlock'
 import {ensureUserPageInTx} from '@/data/stateBlocks'
 import type {Repo} from '@/data/repo'
 import {applyTypeTagInTx} from '@/data/typeTagger'
-import {createOrRestoreTargetBlock, ensureAliasTarget} from '@/data/targets'
+import {ensureAliasTarget} from '@/data/targets'
 import {
   CONTRIBUTOR_TYPE, contributorForProp, contributorKindProp, contributorRoleProp,
   type ContributorKind,
 } from './schema'
-
-const UNCONFIGURED_AGENT_NS = 'd0a1624e-8baa-41d7-9a39-a7bbcfa5abb7'
-export const unconfiguredAgentPageId = (workspaceId: string, userId: string): string =>
-  derivedBlockId({namespace: UNCONFIGURED_AGENT_NS, key: JSON.stringify([workspaceId, userId])})
 
 export const ensureHumanContributor = async (tx: Tx, workspaceId: string, user: User, snapshot: TypeRegistrySnapshot): Promise<string> => {
   const id = await ensureUserPageInTx(tx, workspaceId, user, snapshot, {skipMetadata: true})
@@ -23,20 +17,6 @@ export const ensureHumanContributor = async (tx: Tx, workspaceId: string, user: 
     await applyTypeTagInTx(tx, snapshot, {blockId: id, typeId: CONTRIBUTOR_TYPE,
       initialValues: {[contributorKindProp.name]: 'human'}, writeOpts: {skipMetadata: true}})
   }
-  return id
-}
-
-export const ensureUnconfiguredAgent = async (
-  tx: Tx, workspaceId: string, user: User, snapshot: TypeRegistrySnapshot,
-): Promise<string> => {
-  const id = unconfiguredAgentPageId(workspaceId, user.id)
-  const actingFor = await ensureHumanContributor(tx, workspaceId, user, snapshot)
-  await createOrRestoreTargetBlock(tx, {id, workspaceId, parentId: null, orderKey: 'a0',
-    freshContent: 'Unconfigured agent', systemMint: true})
-  const writeOpts = {skipMetadata: true}
-  await applyTypeTagInTx(tx, snapshot, {blockId: id, typeId: PAGE_TYPE, writeOpts})
-  await applyTypeTagInTx(tx, snapshot, {blockId: id, typeId: CONTRIBUTOR_TYPE, writeOpts,
-    initialValues: {[contributorKindProp.name]: 'agent', [contributorForProp.name]: actingFor}})
   return id
 }
 

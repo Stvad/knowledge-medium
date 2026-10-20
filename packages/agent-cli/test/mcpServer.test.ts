@@ -1,4 +1,4 @@
-import {describe, expect, it, vi} from 'vitest'
+import {afterEach, describe, expect, it, vi} from 'vitest'
 import type {CallToolResult} from '@modelcontextprotocol/sdk/types.js'
 import fs from 'node:fs/promises'
 import path from 'node:path'
@@ -11,6 +11,8 @@ import {GRAPH_READ_TOOLS} from '../src/readTools'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const packageJsonPath = path.resolve(here, '../package.json')
+
+afterEach(() => vi.unstubAllEnvs())
 
 interface RegisteredToolHarness {
   _registeredTools: Record<string, {
@@ -85,6 +87,27 @@ describe('createGraphMcpServer', () => {
     expect(commands[0]).toMatchObject({type: 'sql', mode: 'all'})
     expect(commands[0]).not.toHaveProperty('contributorId')
     expect(commands[1]).toMatchObject({type: 'create-page', contributorId})
+  })
+
+  it.each([
+    ['none', null],
+    [' contributor-env ', 'contributor-env'],
+    ['', undefined],
+    ['   ', undefined],
+  ] as const)('parses AGENT_RUNTIME_CONTRIBUTOR_ID %j for writes', async (value, contributorId) => {
+    vi.stubEnv('AGENT_RUNTIME_CONTRIBUTOR_ID', value)
+    const commands: KnownCommand[] = []
+    const client = clientFrom(async command => {
+      commands.push(command)
+      return {id: 'page-1'}
+    })
+    const server = createGraphMcpServer({client, serverOptions: {capabilities: {tools: {}}}})
+    const tools = (server as unknown as RegisteredToolHarness)._registeredTools
+
+    await tools.create_page.handler({name: 'Inbox'}, {})
+
+    if (contributorId === undefined) expect(commands[0]).not.toHaveProperty('contributorId')
+    else expect(commands[0]).toMatchObject({type: 'create-page', contributorId})
   })
 
   it('runs the optional write guard before mutating tools', async () => {

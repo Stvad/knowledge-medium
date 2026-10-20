@@ -60,20 +60,13 @@ describe('agent contributor selection', () => {
     expect(await context.repo.db.getAll('SELECT id FROM blocks WHERE content = ?', ['Must not exist'])).toEqual([])
   })
 
-  it('keeps inspection and watcher setup free of profiles, then attributes legacy client writes as agents', async () => {
+  it('allows inspection and watcher setup, but requires a selected actor for meaningful external writes', async () => {
     await run({type: 'eval', code: 'return 1'})
     await run({type: 'watch-events', consumer: 'contributor-test', watchers: []})
     expect(await run({type: 'list-contributors'})).toEqual({contributors: []})
-    const page = await run({type: 'create-page', name: 'Legacy client'}) as {id: string}
-    const profiles = await run({type: 'list-contributors'}) as {contributors: ContributorProfile[]}
-    const agent = profiles.contributors.find(profile => profile.name === 'Unconfigured agent')!
-    expect(agent).toMatchObject({kind: 'agent', workspaceId: WS})
-    expect((await context.repo.load(page.id))?.properties[attributionCreatorsProp.name]).toEqual([agent.id])
-    await run({type: 'delete-block', id: agent.id, contributorId: null})
-    expect(await context.repo.load(agent.id)).toBeNull()
-    const next = await run({type: 'create-page', name: 'Legacy client again'}) as {id: string}
-    expect((await context.repo.load(next.id))?.properties[attributionCreatorsProp.name]).toEqual([agent.id])
-    expect((await context.repo.load(agent.id))?.deleted).toBe(false)
+    await expect(run({type: 'create-page', name: 'Unconfigured client'})).rejects.toThrow(/Choose a contributor.*CLI or MCP/)
+    expect(await context.repo.db.getAll('SELECT id FROM blocks WHERE content = ?', ['Unconfigured client'])).toEqual([])
+    expect(await run({type: 'list-contributors'})).toEqual({contributors: []})
   })
 
   it('records the selected profile through multi-transaction and eval write paths', async () => {
@@ -105,8 +98,7 @@ describe('agent contributor selection', () => {
   it('leaves explicitly opted-out writes unattributed and does not leak the previous selection', async () => {
     const profile = await run({type: 'create-contributor', name: 'Atlas'}) as ContributorProfile
     await run({type: 'create-page', name: 'First', contributorId: profile.id})
-    const second = await run({type: 'create-page', name: 'Second'}) as {id: string}
-    expect((await context.repo.load(second.id))?.properties[attributionCreatorsProp.name]).not.toContain(profile.id)
+    await expect(run({type: 'create-page', name: 'Second'})).rejects.toThrow(/Choose a contributor/)
     const result = await run({type: 'create-page', name: 'Third', contributorId: null}) as {id: string}
     expect((await context.repo.load(result.id))?.properties[attributionCreatorsProp.name]).toBeUndefined()
   })

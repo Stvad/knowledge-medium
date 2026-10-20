@@ -116,6 +116,16 @@ This rename intentionally does **not** carry a permanent `claude:*` compatibilit
    return {scanned: rows.length, updated}
    ```
 
+## Contributor selection
+
+Before starting active watchers, save a contributor for the configured profile and workspace:
+
+```bash
+kmagent --profile agent-dispatch contributor create "Dispatch" --kind automation --workspace <workspace-id>
+```
+
+Creation selects the profile. To reuse one, run `contributor use <id>` with the same profile/workspace flags; `contributor use none` explicitly opts out. From a repo checkout, use `pnpm agent` in place of `kmagent`. The daemon and its spawned agents use this saved choice; restart the daemon after changing it. Without a choice, active dispatch stops with setup instructions before contacting the bridge. Disabling all watchers can still clear their registration without a contributor.
+
 ## Install from npm
 
 If you only want to *run* the daemon (not hack on the repo), install the published packages instead of cloning. You need **both**: `agent-dispatch` (the daemon) and `agent-cli` (the `kmagent` bridge it reaches the live app through).
@@ -305,7 +315,7 @@ The same generic graph tools work from any MCP client — e.g. Claude Desktop / 
     "km": {
       "command": "node",
       "args": ["<repo>/packages/agent-cli/dist/mcp.js"],
-      "env": {"AGENT_RUNTIME_PROFILE": "agent-dispatch"}
+      "env": {"AGENT_RUNTIME_PROFILE": "agent-dispatch", "AGENT_RUNTIME_CONTRIBUTOR_ID": "<contributor-id>"}
     }
   }
 }
@@ -328,8 +338,10 @@ Claude Code's channels primitive (research preview, v2.1.80+) can push watcher e
 1. Register km in the project's `.mcp.json` with the channel port:
 
    ```json
-   {"mcpServers": {"km": {"command": "node", "args": ["<repo>/packages/agent-dispatch/dist/mcp.js"], "env": {"AGENT_RUNTIME_PROFILE": "agent-dispatch", "KM_AGENT_DISPATCH_CHANNEL_PORT": "8790", "KM_MCP_BLOCKED_WIKILINKS": "[\"claude\"]"}}}}
+   {"mcpServers": {"km": {"command": "node", "args": ["<repo>/packages/agent-dispatch/dist/mcp.js"], "env": {"AGENT_RUNTIME_PROFILE": "agent-dispatch", "AGENT_RUNTIME_WORKSPACE": "<workspace-id>", "KM_AGENT_DISPATCH_CHANNEL_PORT": "8790", "KM_MCP_BLOCKED_WIKILINKS": "[\"claude\"]"}}}}
    ```
+
+   `AGENT_RUNTIME_WORKSPACE` pins the ambient session to the daemon's workspace. The dispatch MCP server reads the contributor selection saved for that profile and workspace; create/select it first with `kmagent --profile agent-dispatch contributor use <id|none> --workspace <workspace-id>`. An explicit `AGENT_RUNTIME_CONTRIBUTOR_ID` in this MCP config overrides the saved choice (`none` opts out of attribution).
 
    (`KM_MCP_BLOCKED_WIKILINKS` is consumed by the dispatch wrapper — without it the ambient session's write tools would happily write `[[claude]]` and re-trigger the watcher.)
 

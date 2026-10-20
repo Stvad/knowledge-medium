@@ -63,7 +63,7 @@ describe('automatic contributor attribution', () => {
   it('rejects a human actor inside an external transaction, even without command admission', async () => {
     await create(repo.withTxContext({contributorId: 'atlas'}))
     await repo.tx(tx => tx.update('note', {content: 'Human revision'}), opts)
-    await expect(create(repo.withTxContext({contributorId: HUMAN, contributorFallback: 'agent'}), 'disguised'))
+    await expect(create(repo.withTxContext({contributorId: HUMAN, contributorSource: 'agent'}), 'disguised'))
       .rejects.toThrow(/agent or automation/)
     expect(await repo.load('disguised')).toBeNull()
   })
@@ -96,6 +96,19 @@ describe('automatic contributor attribution', () => {
     expect(await read('note', attributionCreatorsProp.name)).toBeUndefined()
     expect(await read('note', attributionEditorsProp.name)).toBeUndefined()
   })
+
+  it('allows unconfigured external bookkeeping and no-ops, but rolls back a meaningful edit', async () => {
+    await create(repo.withTxContext({contributorId: null}))
+    const external = repo.withTxContext({contributorSource: 'agent'})
+    await external.tx(tx => tx.update('note', {content: 'Derived'}, {skipMetadata: true}), opts)
+    expect((await repo.load('note'))?.content).toBe('Derived')
+    await external.tx(tx => tx.update('note', {content: 'Derived'}), opts)
+    await expect(external.tx(tx => tx.update('note', {content: 'Authored'}), opts))
+      .rejects.toThrow(/Choose a contributor/)
+    expect((await repo.load('note'))?.content).toBe('Derived')
+    expect(await read('note', attributionEditorsProp.name)).toBeUndefined()
+  })
+
   it.each(['set', 'batch', 'replace', 'unset', 'batch-unset'] as const)(
     'keeps derived %s property writes unattributed in a children-backed workspace', async mode => {
       await db.db.execute(`INSERT INTO workspaces

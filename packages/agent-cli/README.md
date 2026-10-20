@@ -241,7 +241,7 @@ Use the port from `AGENT_RUNTIME_URL` if you set one. Restart MCP clients that l
 
 ## Contributors
 
-Contributor support attributes external block writes to page-backed profiles. Older or unconfigured clients use an automatic "Unconfigured agent" profile per workspace and authenticated user. Create a named profile to distinguish an agent or role; creation selects it for the current CLI profile and workspace:
+Contributor support attributes external block writes to page-backed profiles. Choose a profile before writing; creation selects it for the current CLI profile and workspace:
 
 ```bash
 kmagent contributor create "Research assistant" --kind agent --role "Research"
@@ -249,9 +249,11 @@ kmagent contributor list
 kmagent contributor use <id>   # or: kmagent contributor use none
 ```
 
-Contributor choices are stored separately in one file per token profile and workspace under `agent-contributors/`. `--contributor <id|none>` overrides the saved choice for one CLI invocation. An unconfigured selection is sent as no field; the runtime creates its fallback profile only when a meaningful block write occurs. `none` sends explicit null and records an intentionally unattributed write. External writers can select agent or automation profiles; human profiles are reserved for human edits. Reads and derived maintenance do not create profiles.
+Contributor choices are stored separately in one file per token profile and workspace under `agent-contributors/`. For CLI writes, `--contributor <id|none>` overrides `AGENT_RUNTIME_CONTRIBUTOR_ID`, which overrides the saved choice; an empty environment value leaves the saved choice in effect. An unconfigured selection is sent as no field; meaningful external block writes then fail with setup instructions, while reads, watcher setup and derived maintenance remain available. `none` sends explicit null and records an intentionally unattributed write. External writers can select agent or automation profiles; human profiles are reserved for human edits.
 
 `contributor create --kind human` creates a profile for a person without selecting it; the current agent selection stays in place.
+
+Older CLI/MCP versions without contributor support must be upgraded before making attributed writes. Use this checkout's `pnpm agent` when the needed CLI version has not been published yet.
 
 For MCP, `list_contributors` and `create_contributor` work before attribution is configured. They do not change the MCP server's selection. Set `AGENT_RUNTIME_CONTRIBUTOR_ID=<id|none>` or launch `km-mcp --contributor <id|none>` to attribute writes. Programmatic clients can pass `contributorId` to `createBridgeClient` or `GraphMcpServerOptions`; `null` opts out explicitly, while `undefined` leaves the choice unconfigured.
 
@@ -271,7 +273,7 @@ For MCP, `list_contributors` and `create_contributor` work before attribution is
 | `AGENT_RUNTIME_TOKEN` | One-shot token, skips the persisted profile lookup. |
 | `AGENT_RUNTIME_WORKSPACE` | Workspace id to name on every call that names none (see [Workspaces](#workspaces)). |
 | `AGENT_RUNTIME_PROFILE` | Default profile selection for `kmagent <command>`. |
-| `AGENT_RUNTIME_CONTRIBUTOR_ID` | Contributor id for MCP writes; `none` explicitly leaves them unattributed. |
+| `AGENT_RUNTIME_CONTRIBUTOR_ID` | Contributor id for CLI and MCP writes; `none` explicitly leaves them unattributed. |
 | `AGENT_RUNTIME_CONTRIBUTOR_DIR` | Override the directory holding per-profile/workspace CLI contributor selections. |
 | `AGENT_RUNTIME_CONFIG_DIR` | Override the config directory (default: `$XDG_CONFIG_HOME/knowledge-medium`). |
 | `AGENT_RUNTIME_BRIDGE_SECRET` | Override the bridge secret (otherwise auto-generated per machine). |

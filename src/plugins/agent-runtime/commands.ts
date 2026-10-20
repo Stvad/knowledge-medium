@@ -2263,7 +2263,7 @@ export const executeCommand = async (
       await assertContributor({get: id => context.repo.load(id)}, id, workspaceId, {allowHuman: false})
     }
     context = createAgentRuntimeContext({
-      repo: context.repo.withTxContext({contributorId: command.contributorId, contributorFallback: 'agent'}),
+      repo: context.repo.withTxContext({contributorId: command.contributorId, contributorSource: 'agent'}),
       runtime: context.runtime,
       safeMode: context.safeMode,
     })

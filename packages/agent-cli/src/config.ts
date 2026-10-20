@@ -33,6 +33,13 @@ export const contributorSelectionPath = (profile: string, workspaceId: string) =
     `${encodeURIComponent(JSON.stringify([profile, workspaceId]))}.json`,
   )
 
+/** Parse an explicit contributor setting shared by CLI flags and MCP env. */
+export const parseContributorSelection = (value: string | undefined): string | null | undefined => {
+  const selected = value?.trim()
+  if (!selected) return undefined
+  return selected === 'none' ? null : selected
+}
+
 export const loadContributorSelection = async (
   profile: string,
   workspaceId: string,

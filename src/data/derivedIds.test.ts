@@ -38,7 +38,6 @@ import { dailyNoteBlockId, journalBlockId } from '@/plugins/daily-notes/dailyNot
 import { roamBlockId } from '@/plugins/roam-import/blockIds'
 import { mediaBlockId } from '@/plugins/attachments/mediaCapture'
 import { shortcutsBlockId, journalShortcutBlockId } from '@/plugins/left-sidebar/shortcuts'
-import {unconfiguredAgentPageId} from '@/plugins/contributors/profiles'
 
 /** The plaintext-workspace namespace, spelled out rather than imported: this
  *  file's job is to compare each formula against its literal historical
@@ -73,13 +72,6 @@ describe('derivedBlockId', () => {
  * whose rows would be orphaned rather than a line number.
  */
 describe('the ids live rows are already at', () => {
-  it('unconfigured agent profiles are scoped to the workspace and authenticated user', () => {
-    expect(unconfiguredAgentPageId(WS, 'user-1')).toBe(uuidv5(
-      JSON.stringify([WS, 'user-1']), 'd0a1624e-8baa-41d7-9a39-a7bbcfa5abb7',
-    ))
-    expect(unconfiguredAgentPageId(WS, 'user-1')).not.toBe(unconfiguredAgentPageId(OTHER_WS, 'user-1'))
-    expect(unconfiguredAgentPageId(WS, 'user-1')).not.toBe(unconfiguredAgentPageId(WS, 'user-2'))
-  })
   it('plugin-owned blocks (public API — extension authors have written rows here)', () => {
     const pluginNs = '0d4f1c2e-7e9a-4f4d-a4f1-2c0a3a6e7f01'
     expect(pluginBlockId(WS, pluginNs, 'library-root'))

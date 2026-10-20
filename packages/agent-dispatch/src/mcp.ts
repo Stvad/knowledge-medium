@@ -8,13 +8,31 @@
 import http from 'node:http'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { createGraphMcpServer } from '@knowledge-medium/agent-cli/mcpServer'
+import { loadContributorSelection, parseContributorSelection } from '@knowledge-medium/agent-cli/config'
 import { BLOCKED_WIKILINKS_ENV, createBlockedWikilinkWriteGuard, decodeBlockedWikilinks } from './blockedWikilinks.js'
 import { CHANNEL_PORT_ENV, CHANNEL_SECRET_HEADER, loadOrCreateChannelSecret } from './channelSecret.js'
 
 const channelPort = Number(process.env[CHANNEL_PORT_ENV] ?? '') || null
 const blockedWikilinks = decodeBlockedWikilinks(process.env[BLOCKED_WIKILINKS_ENV])
+const profile = process.env.AGENT_RUNTIME_PROFILE ?? 'default'
+const workspaceId = process.env.AGENT_RUNTIME_WORKSPACE
+if (!workspaceId) {
+  throw new Error('AGENT_RUNTIME_WORKSPACE is required by the dispatch MCP server to pin graph operations.')
+}
+const configuredContributor = parseContributorSelection(process.env.AGENT_RUNTIME_CONTRIBUTOR_ID)
+const contributorId = configuredContributor !== undefined
+  ? configuredContributor
+  : await loadContributorSelection(profile, workspaceId)
+if (contributorId === undefined) {
+  throw new Error(
+    `No contributor selection saved for profile "${profile}" and workspace "${workspaceId}". `
+    + `Choose one with: kmagent --profile ${profile} contributor use <id|none> --workspace ${workspaceId}`,
+  )
+}
 
 const server = createGraphMcpServer({
+  profile,
+  contributorId,
   writeGuard: ({graph}) => createBlockedWikilinkWriteGuard(graph, blockedWikilinks),
   serverOptions: channelPort
     ? {

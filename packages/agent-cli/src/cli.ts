@@ -13,6 +13,7 @@ import {
   isErrnoException,
   isLocalBridgeUrl,
   loadContributorSelection,
+  parseContributorSelection,
   pairingUrl,
   saveContributorSelection,
   tokenStorePath as resolveTokenStorePath,
@@ -523,7 +524,10 @@ const runCommand = async (command: KnownCommand, options?: {timeoutMs?: number})
     return client().runCommand({...command, contributorId: selectedContributorOverride}, options)
   }
   const workspaceId = await commandWorkspaceId(command)
-  const selected = await loadContributorSelection(selectedProfileName, workspaceId)
+  const fromEnvironment = parseContributorSelection(process.env.AGENT_RUNTIME_CONTRIBUTOR_ID)
+  const selected = fromEnvironment !== undefined
+    ? fromEnvironment
+    : await loadContributorSelection(selectedProfileName, workspaceId)
   return client().runCommand(attributeCommandToWorkspace(command, workspaceId, selected), options)
 }
 
@@ -1192,9 +1196,14 @@ const main = async () => {
     selectedProfileName = normalizeProfileName(String(profileOption))
   }
   const contributorOption = cli.options.contributor
-  if (contributorOption !== undefined) {
+  if (Object.hasOwn(cli.options, 'contributor')) {
     if (Array.isArray(contributorOption)) throw new Error('--contributor expects one value.')
-    selectedContributorOverride = String(contributorOption) === 'none' ? null : String(contributorOption)
+    selectedContributorOverride = typeof contributorOption === 'string'
+      ? parseContributorSelection(contributorOption)
+      : undefined
+    if (selectedContributorOverride === undefined) {
+      throw new Error('Usage: kmagent <command> [--contributor <id|none>]')
+    }
   }
 
   // When --help / -h or --version / -v is set, cac has already

@@ -110,7 +110,7 @@ afterEach(async () => {
   await fs.rm(tempDir, {recursive: true, force: true})
 })
 
-const runCli = (args: string[]) => execFileAsync(process.execPath, [cliScript, ...args], {
+const runCli = (args: string[], contributorEnv = '') => execFileAsync(process.execPath, [cliScript, ...args], {
   env: {
     ...process.env,
     AGENT_RUNTIME_PROFILE: '',
@@ -118,10 +118,17 @@ const runCli = (args: string[]) => execFileAsync(process.execPath, [cliScript, .
     AGENT_RUNTIME_TOKEN_FILE: tokenFile,
     AGENT_RUNTIME_CONTRIBUTOR_DIR: selectionDir,
     AGENT_RUNTIME_URL: bridge.baseUrl,
+    AGENT_RUNTIME_CONTRIBUTOR_ID: contributorEnv,
   },
 })
 
 describe('compiled CLI contributor commands', {timeout: 30_000}, () => {
+  it.each(['', '   '])('rejects contributor flag value %j before command dispatch', async value => {
+    await expect(runCli(['--contributor', value, '--help']))
+      .rejects.toMatchObject({stderr: expect.stringContaining('Usage: kmagent')})
+    expect(bridge.commands).toEqual([])
+  })
+
   it('dispatches list/create/use and applies the saved choice to a later write', async () => {
     const listResult = await runCli(['contributor', 'list'])
     expect(JSON.parse(listResult.stdout)).toEqual({contributors: []})
@@ -176,6 +183,24 @@ describe('compiled CLI contributor commands', {timeout: 30_000}, () => {
     await runCli(['contributor', 'use', 'none'])
     await runCli(['create-page', 'Unattributed'])
     expect(bridge.commands.at(-1)).toMatchObject({type: 'create-page', contributorId: null})
+  })
+
+  it('uses the CLI flag before the environment and the environment before the saved selection', async () => {
+    const created = await runCli(['contributor', 'create', 'Saved profile'])
+    const savedId = JSON.parse(created.stdout).id as string
+    await runCli(['contributor', 'use', savedId])
+
+    await runCli(['create-page', 'Unattributed'], ' none ')
+    expect(bridge.commands.at(-1)).toMatchObject({type: 'create-page', contributorId: null})
+
+    await runCli(['create-page', 'Environment'], ' contributor-env ')
+    expect(bridge.commands.at(-1)).toMatchObject({type: 'create-page', contributorId: 'contributor-env'})
+
+    await runCli(['--contributor', 'contributor-flag', 'create-page', 'Flag'], 'contributor-env')
+    expect(bridge.commands.at(-1)).toMatchObject({type: 'create-page', contributorId: 'contributor-flag'})
+
+    await runCli(['create-page', 'Saved'], '   ')
+    expect(bridge.commands.at(-1)).toMatchObject({type: 'create-page', contributorId: savedId})
   })
 
   it('prints contributor-specific help for the supported single command', async () => {

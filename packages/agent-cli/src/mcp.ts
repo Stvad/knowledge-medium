@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
+import { parseContributorSelection } from './config.js'
 import { createGraphMcpServer } from './mcpServer.js'
 
 const args = process.argv.slice(2)
@@ -16,6 +17,10 @@ for (let index = 0; index < args.length; index += 1) {
   contributorArg = value
   index += 1
 }
+const contributorId = parseContributorSelection(contributorArg)
+if (contributorArg !== undefined && contributorId === undefined) {
+  throw new Error('Usage: km-mcp [--contributor <id|none>]')
+}
 await createGraphMcpServer({
-  ...(contributorArg !== undefined ? {contributorId: contributorArg === 'none' ? null : contributorArg} : {}),
+  ...(contributorId !== undefined ? {contributorId} : {}),
 }).connect(new StdioServerTransport())

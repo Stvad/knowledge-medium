@@ -14,6 +14,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { readFileSync } from 'node:fs'
 import { z } from 'zod'
 import { createBridgeClient, type BridgeClient, withContributorId } from './client.js'
+import { parseContributorSelection } from './config.js'
 import { createBridgeGraph, type BridgeGraph } from './graph.js'
 import { type KmMcpToolName, MCP_SERVER_NAME } from './mcpShared.js'
 import {
@@ -93,7 +94,7 @@ export interface GraphMcpServerOptions {
 export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpServer => {
   const configuredContributorId = options.contributorId !== undefined
     ? options.contributorId
-    : contributorFromEnvironment()
+    : parseContributorSelection(process.env.AGENT_RUNTIME_CONTRIBUTOR_ID)
   const baseClient = options.client ?? createBridgeClient({
     profile: options.profile ?? process.env.AGENT_RUNTIME_PROFILE,
     timeoutMs: options.timeoutMs ?? 60_000,
@@ -301,10 +302,4 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
     json(await graph.recentChanges({since: since ?? sessionStartedAt, limit, includeUser})))
 
   return server
-}
-
-const contributorFromEnvironment = (): string | null | undefined => {
-  const value = process.env.AGENT_RUNTIME_CONTRIBUTOR_ID
-  if (value === undefined || value.trim() === '') return undefined
-  return value.trim() === 'none' ? null : value.trim()
 }

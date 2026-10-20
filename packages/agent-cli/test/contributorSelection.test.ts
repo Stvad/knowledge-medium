@@ -2,7 +2,7 @@ import {afterEach, describe, expect, it} from 'vitest'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import {contributorSelectionPath, loadContributorSelection, saveContributorSelection} from '../src/config.js'
+import {contributorSelectionPath, loadContributorSelection, parseContributorSelection, saveContributorSelection} from '../src/config.js'
 
 describe('CLI contributor selections', () => {
   const previousDirectory = process.env.AGENT_RUNTIME_CONTRIBUTOR_DIR
@@ -12,6 +12,17 @@ describe('CLI contributor selections', () => {
     if (previousDirectory === undefined) delete process.env.AGENT_RUNTIME_CONTRIBUTOR_DIR
     else process.env.AGENT_RUNTIME_CONTRIBUTOR_DIR = previousDirectory
     if (directory) await fs.rm(directory, {recursive: true, force: true})
+  })
+
+  it.each([
+    [undefined, undefined],
+    ['', undefined],
+    ['   ', undefined],
+    ['none', null],
+    [' none ', null],
+    [' contributor-1 ', 'contributor-1'],
+  ] as const)('parses explicit contributor setting %j like the MCP server', (value, expected) => {
+    expect(parseContributorSelection(value)).toBe(expected)
   })
 
   it('updates different profile/workspace choices concurrently without losing either', async () => {

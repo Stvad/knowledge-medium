@@ -11,6 +11,8 @@ const mcpScript = path.resolve(here, '../dist/mcp.js')
 describe('km-mcp contributor argument parsing', {timeout: 15_000}, () => {
   it.each([
     {label: 'a missing value', args: ['--contributor']},
+    {label: 'an empty value', args: ['--contributor', '']},
+    {label: 'a whitespace-only value', args: ['--contributor', '   ']},
     {label: 'an option-looking value', args: ['--contributor', '--foo']},
     {label: 'duplicate selections', args: ['--contributor', 'id', '--contributor', 'other']},
   ])('rejects $label before starting MCP transport', async ({args}) => {
