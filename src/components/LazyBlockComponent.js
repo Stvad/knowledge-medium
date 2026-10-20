@@ -1,1 +1,1 @@
-import{IA as e}from"../../chunks/app-BIscmFrD.js";export{e as LazyBlockComponent};
+import{LA as e}from"../../chunks/app-BLmALlBk.js";export{e as LazyBlockComponent};

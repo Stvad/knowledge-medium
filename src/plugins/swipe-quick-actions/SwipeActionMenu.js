@@ -1,1 +1,1 @@
-import{nD as e}from"../../../chunks/app-BIscmFrD.js";export{e as SwipeActionMenu};
+import{rD as e}from"../../../chunks/app-BLmALlBk.js";export{e as SwipeActionMenu};

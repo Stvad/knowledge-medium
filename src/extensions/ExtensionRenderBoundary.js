@@ -1,1 +1,1 @@
-import{_M as e}from"../../chunks/app-BIscmFrD.js";export{e as ExtensionRenderBoundary};
+import{vM as e}from"../../chunks/app-BLmALlBk.js";export{e as ExtensionRenderBoundary};

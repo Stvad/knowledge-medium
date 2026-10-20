@@ -1,1 +1,1 @@
-import{hu as e}from"../../../chunks/app-BIscmFrD.js";export{e as resolveDailyPage};
+import{gu as e}from"../../../chunks/app-BLmALlBk.js";export{e as resolveDailyPage};

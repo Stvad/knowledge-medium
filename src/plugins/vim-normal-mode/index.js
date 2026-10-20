@@ -1,1 +1,1 @@
-import{ay as e,iy as t}from"../../../chunks/app-BIscmFrD.js";export{t as vimNormalModeInteractionExtension,e as vimNormalModePlugin};
+import{ay as e,oy as t}from"../../../chunks/app-BLmALlBk.js";export{e as vimNormalModeInteractionExtension,t as vimNormalModePlugin};

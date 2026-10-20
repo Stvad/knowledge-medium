@@ -1,1 +1,1 @@
-import{Uq as e,Wq as t}from"../../chunks/app-BIscmFrD.js";export{e as TypeTagger,t as applyTypeTagInTx};
+import{Gq as e,Wq as t}from"../../chunks/app-BLmALlBk.js";export{t as TypeTagger,e as applyTypeTagInTx};

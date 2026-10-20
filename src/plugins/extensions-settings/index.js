@@ -1,1 +1,1 @@
-import{Kn as e,nk as t,tk as n}from"../../../chunks/app-BIscmFrD.js";export{n as extensionsOverridesProp,t as extensionsPrefsType,e as extensionsSettingsPlugin};
+import{nk as e,qn as t,rk as n}from"../../../chunks/app-BLmALlBk.js";export{e as extensionsOverridesProp,n as extensionsPrefsType,t as extensionsSettingsPlugin};

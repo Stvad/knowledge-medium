@@ -1,1 +1,1 @@
-import{im as e}from"../../../chunks/app-BIscmFrD.js";export{e as backlinksPlugin};
+import{am as e}from"../../../chunks/app-BLmALlBk.js";export{e as backlinksPlugin};

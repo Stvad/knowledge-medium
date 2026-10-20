@@ -1,1 +1,1 @@
-import{ch as e}from"../../chunks/app-BIscmFrD.js";export{e as blockrefCompletionSource};
+import{lh as e}from"../../chunks/app-BLmALlBk.js";export{e as blockrefCompletionSource};

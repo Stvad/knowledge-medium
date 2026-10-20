@@ -1,1 +1,1 @@
-import{IO as e,LO as t}from"../../chunks/app-BIscmFrD.js";export{e as BlockPasteShellDecorator,t as blockPasteShellDecorator};
+import{LO as e,RO as t}from"../../chunks/app-BLmALlBk.js";export{e as BlockPasteShellDecorator,t as blockPasteShellDecorator};

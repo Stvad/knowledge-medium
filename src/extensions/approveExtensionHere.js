@@ -1,1 +1,1 @@
-import{lk as e}from"../../chunks/app-BIscmFrD.js";export{e as approveExtensionHere};
+import{uk as e}from"../../chunks/app-BLmALlBk.js";export{e as approveExtensionHere};
