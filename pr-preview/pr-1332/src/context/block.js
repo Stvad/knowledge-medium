@@ -1,1 +1,1 @@
-import{FR as e,MR as t,NR as n,PR as r}from"../../chunks/app-B2YdZB47.js";export{t as BlockContext,n as BlockContextProvider,r as NestedBlockContextProvider,e as useBlockContext};
+import{FR as e,IR as t,NR as n,PR as r}from"../../chunks/app-DXY3ZREh.js";export{n as BlockContext,r as BlockContextProvider,e as NestedBlockContextProvider,t as useBlockContext};

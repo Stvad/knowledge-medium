@@ -1,1 +1,1 @@
-import{IP as e,LP as t}from"../../chunks/app-B2YdZB47.js";export{e as markdownExtensionsFacet,t as resolveMarkdownRenderConfig};
+import{LP as e,RP as t}from"../../chunks/app-DXY3ZREh.js";export{e as markdownExtensionsFacet,t as resolveMarkdownRenderConfig};

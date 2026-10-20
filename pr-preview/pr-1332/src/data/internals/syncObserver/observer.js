@@ -1,1 +1,1 @@
-import{EY as e,TY as t}from"../../../../chunks/app-B2YdZB47.js";export{t as cycleScanCandidatesByWorkspace,e as startBlocksSyncedObserver};
+import{DY as e,EY as t}from"../../../../chunks/app-DXY3ZREh.js";export{t as cycleScanCandidatesByWorkspace,e as startBlocksSyncedObserver};

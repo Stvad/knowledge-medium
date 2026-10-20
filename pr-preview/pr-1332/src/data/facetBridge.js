@@ -1,1 +1,1 @@
-import{fq as e}from"../../chunks/app-B2YdZB47.js";export{e as FacetBridge};
+import{pq as e}from"../../chunks/app-DXY3ZREh.js";export{e as FacetBridge};
