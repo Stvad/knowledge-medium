@@ -56,6 +56,17 @@ describe('automatic contributor attribution', () => {
     expect(await read('note', attributionEditorsProp.name)).toEqual(['scout', 'atlas'])
   })
 
+  it('allows explicit corrections to the creator and editor lists', async () => {
+    await create(repo.withTxContext({contributorId: 'atlas'}))
+    await repo.withTxContext({contributorId: 'scout'}).tx(tx => tx.update('note', {content: 'Revision'}), opts)
+    await repo.tx(tx => tx.setProperties('note', {set: [
+      {schema: attributionCreatorsProp, value: ['scout']},
+      {schema: attributionEditorsProp, value: []},
+    ]}), opts)
+    expect(await read('note', attributionCreatorsProp.name)).toEqual(['scout'])
+    expect(await read('note', attributionEditorsProp.name)).toEqual([])
+  })
+
   it('does not attribute no-ops, bookkeeping writes, or explicit unattributed work', async () => {
     await create(repo.withTxContext({contributorId: null}))
     const scout = repo.withTxContext({contributorId: 'scout'})
