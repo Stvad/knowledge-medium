@@ -296,7 +296,7 @@ The first production run is #1288.
       - Then `VACUUM (FULL, VERBOSE) pg_catalog.pg_statistic` drops the old samples.
     - **Check each of the five:**
       - **The output reports `0 dead row versions cannot be removed yet`.** A transaction older than the purge keeps alive the dead rows it can still see, and `VACUUM FULL` copies them into the new table. End that transaction, then run it again.
-      - **`pg_relation_filenode()` changed.** A table the role can't vacuum is skipped with a WARNING, not an error, and keeps its filenode ([§9.5](#95-open-items) V4).
+      - **`pg_relation_filenode()` changed.** A table the role can't vacuum is skipped with a WARNING, not an error, and keeps its filenode. `postgres` owns the database, which lets it vacuum all five ([§9.1](#91-supabase-postgres)).
     - Record when it finished. The "safe from" date counts from that time.
     - While it runs, the health probe fails `postgrest`, which reads `blocks`, and may fail `pgsql_tmp`.
     - `pg_repack`, if available, is the non-blocking alternative to the rewrite; the `ANALYZE` and the `pg_statistic` step still apply.
@@ -327,7 +327,7 @@ After the purge, recovery **re-keys the workspace in place** from the newest rec
 ## 9. Platform residue, and when it is "safe if breached"
 
 #1289 answered these on 2026-10-19 for the hosted project. Each answer ends with what it rests on:
-- *(measured)*: read from this project with the Supabase CLI's Management API reads (`backups list`, `services`, `postgres-config get`);
+- *(measured)*: read from this project on 2026-10-19 with the Supabase CLI: its Management API reads (`backups list`, `services`, `postgres-config get`), and read-only `db query --linked`;
 - *(read: …)*: stated by a primary source, the vendor's docs or its code at the version linked;
 - *(inferred)*: reasoned, from what the label or the bullet names.
 
@@ -337,25 +337,30 @@ After the purge, recovery **re-keys the workspace in place** from the newest rec
 - The project takes a physical backup every day at about 14:14 UTC, plus off-schedule ones, such as one on 2026-10-17 around a hosted Postgres upgrade, and lists the last 7 days of them. PITR is off: on 2026-10-19 the listing showed `pitr_enabled: false` and `walg_enabled: true`. *(measured)*
 - Retention is the plan's: 7 days on Pro, 14 on Team, up to 30 on Enterprise. The 7-day listing matches Pro. *(read: [Backups](https://supabase.com/docs/guides/platform/backups))*
 - **A physical backup snapshots the database's directory,** dead tuples included. So every backup that started before `VACUUM FULL` finished holds plaintext. *(read: same page; inferred: how a file-level copy works)*
-- **Enabling PITR stops the daily backups and archives WAL instead,** for the retention period chosen: 7, 14 or 28 days. *(read: same page)*
+- **WAL is archived even with PITR off:** `archive_mode = on`, with `archive_timeout = 120`. *(measured)*
   - The conversion's WAL carries the re-seal's history rows, whose `before_diff` is plaintext. *(inferred)*
-  - So PITR stays off until the "safe from" date, or its retention is added to it.
-- **Not documented** ([§9.5](#95-open-items) S1, S2):
-  - whether WAL is archived while PITR is off;
-  - whether a backup that leaves the listing is deleted.
+  - How long that archive is kept with PITR off isn't documented ([§9.5](#95-open-items) S1).
+- **Enabling PITR stops the daily backups,** and keeps WAL for the retention period chosen: 7, 14 or 28 days. *(read: same page)* So PITR stays off until the "safe from" date, or its retention is added to it.
+- **Whether a backup that leaves the listing is deleted** isn't documented ([§9.5](#95-open-items) S2).
 
 **Logs.**
 - API and database logs are kept 1 day on Free, 7 on Pro, 28 on Team and 90 on Enterprise. *(read: the [pricing](https://supabase.com/pricing) table, `packages/shared-data/pricing.ts` in supabase/supabase)*
-- **Postgres logs hold content only in error lines,** by Supabase's defaults. *(read: [`postgresql.conf.j2`](https://github.com/supabase/postgres/blob/6939f8696270341c67822113aac64987171d1cb6/ansible/files/postgresql_config/postgresql.conf.j2))*
-  - `log_statement = 'ddl'`.
-  - Slow-statement logging is off.
-  - No bind parameters are logged on error.
-  - An error's `DETAIL` can still print the failing row: a `NOT NULL` violation on `blocks` prints the whole row, content included. *(inferred: Postgres's error format)*
-- **Under those defaults, the app's statements carry no content.**
+- **The hosted logging settings** *(measured)*. They match Supabase's template ([`postgresql.conf.j2`](https://github.com/supabase/postgres/blob/6939f8696270341c67822113aac64987171d1cb6/ansible/files/postgresql_config/postgresql.conf.j2)):
+  - `log_statement = 'ddl'`;
+  - `log_min_duration_statement = -1`;
+  - `log_parameter_max_length_on_error = 0`, so an error logs no bind values;
+  - `pgaudit.log = none`.
+
+  `postgres-config get` shows no project-level override. No role or database override touches logging, apart from `log_statement = none` for Supabase's own service roles.
+- **An error's `DETAIL` can print the failing row.** A `NOT NULL` violation on `blocks` prints the whole row, content included. *(inferred: Postgres's error format)*
+- **`auto_explain` logs any top-level statement over 10 s with its bind values in full.** *(measured: `auto_explain.log_min_duration = 10000`, `auto_explain.log_parameter_max_length = -1`)*
+  - App traffic never reaches that. `authenticated` and `authenticator` time out at 8 s *(measured)*, and `auto_explain` logs only a statement that finishes *(inferred: it logs at executor end)*.
+  - The only functions that raise their own timeout, `purge_workspace_history` and `delete_workspace`, take ids and counts *(read: `supabase/migrations/`)*.
+  - An operator's slow query as `postgres`, which has no timeout, would be logged with its values.
+- **So an app statement's text and parameters stay out of the logs.** Only an error's `DETAIL` can carry content.
   - Every content write is an RPC call (`apply_block_patches`, `apply_block_creates`), and every read filters by id or workspace id. *(read: `src/services/powersync.ts`, `src/sync/conversion/conversionServer.ts`)*
   - PostgREST passes an RPC's arguments as a bind parameter, so an error's logged `STATEMENT` holds none of them. *(inferred: PostgREST's prepared statements)*
-  - An ad-hoc operator query that failed would log its literals.
-- **Overrides.** A project, or a role through `ALTER ROLE … SET`, can override those defaults. Logging every statement (`log_statement = 'all'`; an RPC call is a `SELECT`, so `mod` misses it), or logging by duration, would log an RPC's bind values in full, because `log_parameter_max_length` defaults to unlimited. *(read: [error reporting and logging](https://www.postgresql.org/docs/17/runtime-config-logging.html))* `supautils.conf.j2` lets the privileged role set `log_statement`, `log_min_duration_statement` and `pgaudit.log`. This repo's migrations set none of them, and the hosted values weren't read ([§9.5](#95-open-items) V2).
+  - That holds only while the settings above do. Logging every statement (`log_statement = 'all'`), or logging by duration, would log an RPC's bind values in full, because `log_parameter_max_length` is unlimited. *(read: [error reporting and logging](https://www.postgresql.org/docs/17/runtime-config-logging.html))*
 - **API logs** have no documented request-body field, so bodies aren't kept *(inferred)*. The app sends content only in RPC bodies, and its URLs carry only ids *(read: same files)*.
 - **Log Drains** copy logs out, on Pro and up, with the destination's retention. *(read: [Log Drains](https://supabase.com/docs/guides/observability/log-drains))* Whether this project has one is [§9.5](#95-open-items) V1.
 
@@ -365,7 +370,9 @@ After the purge, recovery **re-keys the workspace in place** from the newest rec
   - Those include values of `blocks.content`, `properties_json`, `references_json`, `blocks_history`'s diffs and `workspaces.name`. *(inferred)*
   - `VACUUM FULL` doesn't refresh them; only `ANALYZE` does. *(read: [`VACUUM`](https://www.postgresql.org/docs/17/sql-vacuum.html))*
   - The old samples stay as dead tuples in `pg_statistic` until that table is vacuumed. Runbook step 11 does both.
-- **The host's own Postgres log file.** It rotates by size, 9 files of 50 MB, not by age. So on a quiet project it holds error lines for longer than the plan's log window. It isn't readable through SQL. *(read: `logrotate-postgres-csv.conf` in supabase/postgres at the commit above)*
+  - `postgres` may vacuum it. It isn't a superuser, holds no MAINTAIN privilege on `pg_statistic`, and isn't in `pg_maintain`, but it owns the database *(measured)*.
+  - Postgres 17 lets a database's owner vacuum any table in it that isn't shared, and `pg_statistic` isn't. *(read: `vacuum_is_permitted_for_relation` in [`vacuum.c`](https://github.com/postgres/postgres/blob/REL_17_STABLE/src/backend/commands/vacuum.c))*
+- **The host's own Postgres log file.** It rotates by size, 9 files of 50 MB, not by age. So on a quiet project it holds the log lines above for longer than the plan's log window. It isn't readable through SQL. *(read: `logrotate-postgres-csv.conf` in supabase/postgres at the commit above)*
 - **`pg_wal`** keeps the conversion's WAL until it's recycled, and it isn't readable through SQL. *(inferred)*
 - None of these hold plaintext:
   - `pg_stat_statements` stores normalized statements. *(read: upstream Postgres)*
@@ -446,16 +453,12 @@ None of these blocks the run.
 
 **For Vlad**, from the dashboard or read-only queries:
 - **V1.** *(gates the date)* Does the project have a Log Drain (Project Settings, Log Drains)? If it does, its destination's retention applies.
-- **V2.** The hosted logging settings. `npx supabase postgres-config get --experimental` shows no project-level overrides *(measured, 2026-10-19)*. Still unread, because they need a database query:
-  - `log_statement`, `log_min_duration_statement`, `log_min_error_statement`, `log_parameter_max_length`, `log_parameter_max_length_on_error`, `auto_explain.log_min_duration`, `pgaudit.log` and `archive_mode`, from `pg_settings`;
-  - any per-role or per-database override in `pg_db_role_setting`, for `authenticator`, `authenticated`, `anon` and `postgres`. `pg_settings` shows only the session's own values.
+- **V2.** Answered on 2026-10-19: the hosted logging settings, in [§9.1](#91-supabase-postgres).
 - **V3.** *(gates the date)* Is the plan Pro? That's inferred from the 7-day backup listing and the health probe's sizing.
-- **V4.** Can `postgres` vacuum `pg_catalog.pg_statistic` and `storage.objects` on the hosted project?
-  - A plain `VACUUM` of each, which is cheap, either runs or warns that it's skipping the table.
-  - If it warns, step 11 needs Supabase support for that table.
+- **V4.** Answered on 2026-10-19: `postgres` can vacuum all five of step 11's tables ([§9.1](#91-supabase-postgres)).
 
 **For Supabase support:**
-- **S1.** *(gates the date)* Is WAL archived while PITR is off, and for how long? The template's [`custom_walg.conf`](https://github.com/supabase/postgres/blob/6939f8696270341c67822113aac64987171d1cb6/ansible/files/postgresql_config/custom_walg.conf) has archiving commented out, and the hosted config may differ.
+- **S1.** *(gates the date)* WAL is archived while PITR is off (`archive_mode = on`, measured). For how long is that archive kept?
 - **S2.** *(gates the date)* Is a backup deleted from storage when it leaves the listing? Do off-schedule backups follow the same retention? Are backups encrypted at rest?
 - **S3.** Does the S3 bucket behind Storage keep versions of deleted objects? Are keys with no `storage.objects` row, left by a failed delete or a failed upload, ever swept?
 - **S4.** Is the instance's own Postgres log file ever pruned by age, rather than only rotated by size? Who can read it?
