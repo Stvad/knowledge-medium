@@ -1,1 +1,0 @@
-import{LI as e,RI as t}from"../../../chunks/app-C5RIHr4-.js";export{e as floatingAnchorFromRect,t as useAnchoredFloating};

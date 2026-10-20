@@ -1,1 +1,0 @@
-import{Os as e}from"../../../chunks/app-C5RIHr4-.js";export{e as blockTaggingDataExtension};

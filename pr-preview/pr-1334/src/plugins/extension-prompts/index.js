@@ -1,1 +1,0 @@
-import{BE as e,zE as t}from"../../../chunks/app-C5RIHr4-.js";export{t as ExtensionPromptSurface,e as extensionPromptsExtension};

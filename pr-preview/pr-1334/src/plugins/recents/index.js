@@ -1,1 +1,0 @@
-import{ix as e,nx as t,rx as n,tx as r}from"../../../chunks/app-C5RIHr4-.js";export{r as OPEN_RECENTS_ACTION_ID,t as openRecentsAction,n as recentsHeaderItem,e as recentsPlugin};

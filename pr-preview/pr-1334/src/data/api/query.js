@@ -1,1 +1,0 @@
-import{A8 as e}from"../../../chunks/app-C5RIHr4-.js";export{e as defineQuery};
