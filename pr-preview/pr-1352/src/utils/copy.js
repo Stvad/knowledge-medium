@@ -1,1 +1,0 @@
-import{CO as e,SO as t,bO as n,wO as r,xO as i}from"../../chunks/app-DQsy8m-W.js";export{n as copyBlockIdsToClipboard,i as copyBlockToClipboard,t as copySelectedBlocksToClipboard,e as serializeBlock,r as serializeSelectedBlocks};
