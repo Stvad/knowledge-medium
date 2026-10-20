@@ -1,1 +1,1 @@
-import{DY as e,EY as t,OY as n,QG as r}from"../../chunks/app-Bz2NkA1p.js";export{t as runAnalyzeIfStale,r as runAnalyzeInstalledTables,e as runAnalyzeNow,n as runAnalyzeTables};
+import{XY as e,YY as t,ZY as n,_K as r,vK as i}from"../../chunks/app-CklEe1Tx.js";export{r as oweAnalyzeInstalledTables,t as runAnalyzeIfStale,i as runAnalyzeInstalledTables,e as runAnalyzeNow,n as runAnalyzeTables};

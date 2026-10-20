@@ -1,1 +1,1 @@
-import{Mc as e,Nc as t,Pc as n,jc as r}from"../../../chunks/app-Bz2NkA1p.js";export{r as clearSrsClipboard,e as getSrsClipboard,t as setSrsClipboard,n as subscribeSrsClipboard};
+import{Mc as e,Nc as t,Pc as n,jc as r}from"../../../chunks/app-CklEe1Tx.js";export{r as clearSrsClipboard,e as getSrsClipboard,t as setSrsClipboard,n as subscribeSrsClipboard};

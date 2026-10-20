@@ -1,1 +1,1 @@
-import{XY as e,ZY as t}from"../../chunks/app-Bz2NkA1p.js";export{e as Block,t as requireLoadedBlock};
+import{bX as e,yX as t}from"../../chunks/app-CklEe1Tx.js";export{t as Block,e as requireLoadedBlock};
