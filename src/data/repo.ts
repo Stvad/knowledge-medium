@@ -2018,9 +2018,33 @@ export class Repo {
     return fn(this.groupedFacade(this.newId()))
   }
 
+  /** Bind plugin context; tx options cannot replace it, but explicit rebinding supports source imports. */
+  withTxContext(context: NonNullable<RepoTxOptions['context']>): Repo {
+    const captured = Object.freeze({...context})
+    const facade = this.contextFacade((fn, opts) =>
+      this.tx(fn, {...opts, context: {...opts.context, ...captured}}))
+    facade.withTxContext = next => this.withTxContext({...captured, ...next})
+    return facade
+  }
+
+  /** Give context-bound hosts their own Block identity without retaining them in shared caches. */
+  private contextFacade(tx: Repo['tx']): Repo {
+    const facade = this.transactionFacade(tx)
+    const blocks = new Map<string, Block>()
+    facade.block = id => {
+      let block = blocks.get(id)
+      if (!block) { block = new Block(facade, id); blocks.set(id, block) }
+      return block
+    }
+    facade.undoGroup = async fn => fn(facade.groupedFacade(this.newId()))
+    return facade
+  }
+
   /** Build the group-injecting facade for {@link undoGroup}. */
   private groupedFacade(groupId: string): Repo {
-    return this.transactionFacade((fn, opts) => this.tx(fn, {...opts, groupId}))
+    const facade = this.transactionFacade((fn, opts) => this.tx(fn, {...opts, groupId}))
+    facade.withTxContext = context => this.withTxContext(context).groupedFacade(groupId)
+    return facade
   }
 
   /** Share the binding rules for transaction-scoped Repo hosts. */
@@ -2039,6 +2063,9 @@ export class Repo {
     // Constructor-bound helpers would escape through the parent's tx.
     // Host the stateless tagger here so its writes use this facade.
     const groupedTagger = new TypeTagger(facade)
+    // Keep schema creation on this host while sharing its same-name reservation
+    // set with the Repo-owned service and any other transaction facade.
+    const userSchemas = this.userSchemas.withRepo(facade)
     const addType: Repo['addType'] = (blockId, typeId, initialValues = {}) =>
       groupedTagger.addType(blockId, typeId, initialValues)
     const removeType: Repo['removeType'] = (blockId, typeId) =>
@@ -2069,6 +2096,7 @@ export class Repo {
     const setActiveLayoutSessionId: Repo['setActiveLayoutSessionId'] = (id) =>
       this.setActiveLayoutSessionId(id)
     const setReadOnly: Repo['setReadOnly'] = (value) => this.setReadOnly(value)
+    // Replay restores recorded provenance exactly; the caller does not become a new author.
     const undo: Repo['undo'] = (scope) => this.undo(scope)
     const redo: Repo['redo'] = (scope) => this.redo(scope)
     const startSyncObserver: Repo['startSyncObserver'] = (options) =>
@@ -2078,6 +2106,7 @@ export class Repo {
     return Object.assign(facade, {
       tx, run, mutate, undoGroup, block, runQuery,
       addType, removeType, toggleType, setBlockTypes,
+      userSchemas,
       scheduleWorkspaceBackfills, scheduleWorkspaceRefBackfill,
       scheduleWorkspaceSeedMaterialization, scheduleReconcileRescan,
       scheduleReferenceTargetDerivePass,
@@ -2088,8 +2117,7 @@ export class Repo {
 
   /** Follow-up transactions keep the runtime that scheduled the processor. */
   private processorFacade(runtime: TransactionRuntime): Repo {
-    const facade = this.transactionFacade((fn, opts) => this.transact(fn, opts, runtime))
-    const blocks = new Map<string, Block>()
+    const facade = this.contextFacade((fn, opts) => this.transact(fn, opts, runtime))
     facade.mutators = new Map(runtime.mutators)
     // Share invalidation, but never a loader bound to another runtime's host.
     const querySnapshot = {registry: runtime.queries, cacheScope: `processor:${uuidv4()}`}
@@ -2109,13 +2137,6 @@ export class Repo {
       runtime.propertySchemaWorkspaceId === null || workspaceId === runtime.propertySchemaWorkspaceId,
     )
     facade.snapshotTypeRegistries = () => ({types: runtime.types, propertySchemas: runtime.propertySchemas})
-    // Context-bound blocks stay local; the shared cache must never retain this host.
-    facade.block = id => {
-      let block = blocks.get(id)
-      if (!block) { block = new Block(facade, id); blocks.set(id, block) }
-      return block
-    }
-    facade.undoGroup = async fn => fn(facade.groupedFacade(this.newId()))
     return facade
   }
 

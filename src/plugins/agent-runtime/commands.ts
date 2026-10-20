@@ -63,6 +63,7 @@ import {
 import { findExtensionBlock } from '@/extensions/extensionLookup.js'
 import {
   definitionSeedsFacet,
+  sameTxProcessorsFacet,
   projectedTypeDefinitionsFacet,
   typeSeedsFacet,
   valuePresetCoresFacet,
@@ -96,6 +97,10 @@ import {
   pingRuntime,
 } from './describeRuntime.ts'
 import type {KnownAgentCommand} from '@knowledge-medium/agent-cli/protocol'
+import {isReadOnlyAgentCommand} from '@knowledge-medium/agent-cli/protocol'
+import {assertContributor, createContributor, listContributors} from '@/plugins/contributors/profiles'
+import {contributorAttributionProcessor} from '@/plugins/contributors/processor'
+import {viewWorkspace} from './agentViews/shared'
 import {
   PROPERTY_CELL_BACKFILL_ID,
   takeLastPropertyCellBackfillRun,
@@ -236,12 +241,13 @@ const assertSyncedTableWriteAllowed = (sql: string, allowSyncedWrite: boolean): 
       'repo.tx, so the write leaves tx_context.source = NULL (never uploads to the ' +
       'server or other clients) and skips the kernel derivations (block_types, ' +
       'reference normalization, property projection), desyncing derived state. Use ' +
-      'create-block / update-block / run-action (which go through repo.tx) for a normal ' +
+      'create-block / update-block (which go through repo.tx) for a normal ' +
       'write. For a deliberate surgical fix, pass --allow-synced-write on the CLI ' +
       '(or {allowSyncedWrite: true} on the command body) to override this check.',
   )
 }
 
+// Deliberate raw maintenance bypasses Repo processors, including contributor selection and attribution.
 const runSql = async (
   repo: Repo,
   sql: string,
@@ -1649,6 +1655,9 @@ const runtimeBlock = (
 const chosenBlockId = (...candidates: readonly unknown[]): string | undefined =>
   candidates.find((id): id is string => isString(id) && id !== '')
 
+const contributorsEnabled = (context: AgentRuntimeContext): boolean =>
+  context.runtime.read(sameTxProcessorsFacet).has(contributorAttributionProcessor.name)
+
 const runRuntimeAction = async (
   command: KnownAgentCommand,
   context: AgentRuntimeContext,
@@ -1672,6 +1681,10 @@ const runRuntimeAction = async (
     throw new Error(
       `Action ${action.id} runs in ${action.context}; bridge run-action cannot provide editor/input UI dependencies`,
     )
+  }
+
+  if (contributorsEnabled(context)) {
+    throw new Error('run-action is unavailable while Contributors is enabled: UI action handlers can retain an unbound repository. Use graph commands or eval with the supplied repo instead.')
   }
 
   const selectedBlockIds = Array.isArray(dependencies.selectedBlockIds)
@@ -2249,7 +2262,34 @@ export const executeCommand = async (
   command: KnownAgentCommand,
   context: AgentRuntimeContext,
 ) => {
+  const enabled = contributorsEnabled(context)
+  const readOnly = isReadOnlyAgentCommand(command)
+  if (enabled && !readOnly && command.type !== 'create-contributor') {
+    if (command.contributorId !== undefined && command.contributorId !== null) {
+      const id = requireString(command.contributorId, 'contributorId')
+      const workspaceId = viewWorkspace(context.repo, assertedWorkspaceOverride(command.workspaceId))
+      await assertContributor({get: id => context.repo.load(id)}, id, workspaceId, {allowHuman: false})
+    }
+    context = createAgentRuntimeContext({
+      repo: context.repo.withTxContext({contributorId: command.contributorId, contributorSource: 'agent'}),
+      runtime: context.runtime,
+      safeMode: context.safeMode,
+    })
+  }
+  return executeAttributedCommand(command, context)
+}
+
+const executeAttributedCommand = async (
+  command: KnownAgentCommand,
+  context: AgentRuntimeContext,
+) => {
   switch (command.type) {
+    case 'create-contributor':
+      if (!contributorsEnabled(context)) throw new Error('Enable the Contributors plugin to create contributor profiles.')
+      return createContributor(context.repo, viewWorkspace(context.repo, command.workspaceId), command)
+
+    case 'list-contributors':
+      return listContributors(context.repo, viewWorkspace(context.repo, command.workspaceId))
     case 'ping':
       return pingRuntime(context)
 

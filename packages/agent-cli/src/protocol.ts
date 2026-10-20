@@ -108,6 +108,9 @@ export const namedWorkspaceId = (payload: object): string | null => {
 // always sees it.
 
 const commandIdField = {commandId: z.string().optional()}
+/** Explicit attribution for write commands. `undefined` means unconfigured;
+ * `null` is an intentional unattributed write. */
+const contributorField = {contributorId: z.string().nullable().optional()}
 
 /** Write verbs' id fields (`id`, `parentId`, `position.siblingId`) are already
  *  stored ids: used exactly, never read as a ref. km-mcp sends it after it has
@@ -121,16 +124,19 @@ const exactIdsField = {exactIds: z.boolean().optional()}
 
 export const pingCommandSchema = z.looseObject({
   type: z.literal('ping'),
+  ...contributorField,
   ...commandIdField,
 })
 
 export const runtimeSummaryCommandSchema = z.looseObject({
   type: z.literal('runtime-summary'),
+  ...contributorField,
   ...commandIdField,
 })
 
 export const healthCommandSchema = z.looseObject({
   type: z.literal('health'),
+  ...contributorField,
   ...commandIdField,
 })
 
@@ -146,6 +152,7 @@ export const describeRuntimeCommandSchema = z.looseObject({
   components: z.array(z.string()).optional(),
   storage: z.boolean().optional(),
   brief: z.boolean().optional(),
+  ...contributorField,
   ...commandIdField,
 })
 
@@ -168,6 +175,7 @@ export const sqlCommandSchema = z.looseObject({
    *  bound) and every string cell cut to a fixed length (marked). Unset
    *  returns the bare row array. */
   maxRows: z.number().int().positive().optional(),
+  ...contributorField,
   ...commandIdField,
 })
 
@@ -178,12 +186,14 @@ export const getBlockCommandSchema = z.looseObject({
   // discriminatedUnion, so we leave the constraint to runtime.
   id: z.string().optional(),
   blockId: z.string().optional(),
+  ...contributorField,
   ...commandIdField,
 })
 
 export const getSubtreeCommandSchema = z.looseObject({
   type: z.literal('get-subtree'),
   rootId: z.string(),
+  ...contributorField,
   ...commandIdField,
 })
 
@@ -192,8 +202,28 @@ export const createBlockCommandSchema = z.looseObject({
   // Absent or null: a top-level block, as move-block takes it.
   parentId: z.string().nullable().optional(),
   // position, content, properties forwarded verbatim (looseObject).
+  ...contributorField,
   ...commandIdField,
 })
+
+export const createContributorCommandSchema = z.looseObject({
+  type: z.literal('create-contributor'),
+  name: z.string(),
+  kind: z.enum(['human', 'agent', 'automation']).optional(),
+  role: z.string().optional(),
+  workspaceId: z.string().optional(),
+  ...contributorField,
+  ...commandIdField,
+})
+
+export const listContributorsCommandSchema = z.looseObject({
+  type: z.literal('list-contributors'),
+  workspaceId: z.string().optional(),
+  ...contributorField,
+  ...commandIdField,
+})
+export type CreateContributorCommand = z.infer<typeof createContributorCommandSchema>
+export type ListContributorsCommand = z.infer<typeof listContributorsCommandSchema>
 
 /** Reconcile a keyed block SUBTREE under `parentId` to match `markdown`,
  *  in one transaction. The markdown is parsed with the app's own paste
@@ -215,6 +245,7 @@ export const reconcileMarkdownSubtreeCommandSchema = z.looseObject({
   key: z.string(),
   shape: z.enum(['outline', 'block']).optional(),
   final: z.boolean().optional(),
+  ...contributorField,
   ...commandIdField,
 })
 
@@ -229,6 +260,7 @@ export const updateBlockCommandSchema = z.looseObject({
   expectedContent: z.string().optional(),
   // properties forwarded verbatim (looseObject).
   ...exactIdsField,
+  ...contributorField,
   ...commandIdField,
 })
 
@@ -246,6 +278,7 @@ export const moveBlockCommandSchema = z.looseObject({
   parentId: z.string().nullable(),
   position: moveBlockPositionSchema,
   ...exactIdsField,
+  ...contributorField,
   ...commandIdField,
 })
 
@@ -268,6 +301,7 @@ export const appendMarkdownCommandSchema = z.looseObject({
   shape: z.enum(['outline', 'block']).optional(),
   ...formatField,
   ...exactIdsField,
+  ...contributorField,
   ...commandIdField,
 })
 
@@ -279,6 +313,7 @@ export const editBlockCommandSchema = z.looseObject({
   old: z.string(),
   new: z.string(),
   ...exactIdsField,
+  ...contributorField,
   ...commandIdField,
 })
 
@@ -288,6 +323,7 @@ export const createPageCommandSchema = z.looseObject({
   type: z.literal('create-page'),
   name: z.string().optional(),
   date: z.string().optional(),
+  ...contributorField,
   ...commandIdField,
 })
 
@@ -299,6 +335,7 @@ export const recentChangesCommandSchema = z.looseObject({
   since: z.union([z.number(), z.string()]).optional(),
   limit: z.number().int().positive().optional(),
   includeUser: z.boolean().optional(),
+  ...contributorField,
   ...commandIdField,
 })
 
@@ -309,6 +346,7 @@ export const recentChangesCommandSchema = z.looseObject({
 export const resolveBlockIdCommandSchema = z.looseObject({
   type: z.literal('resolve-block-id'),
   ref: z.string(),
+  ...contributorField,
   ...commandIdField,
 })
 
@@ -317,6 +355,7 @@ export const blockHistoryCommandSchema = z.looseObject({
   type: z.literal('block-history'),
   id: z.string().describe('The block: a full id or a unique id prefix as printed (^3f2a9c1d)'),
   limit: z.number().int().positive().optional().describe('Max events (default 20, at most 100)'),
+  ...contributorField,
   ...commandIdField,
 })
 
@@ -325,6 +364,7 @@ export const deleteBlockCommandSchema = z.looseObject({
   id: z.string().optional(),
   blockId: z.string().optional(),
   ...exactIdsField,
+  ...contributorField,
   ...commandIdField,
 })
 
@@ -333,6 +373,7 @@ export const restoreBlockCommandSchema = z.looseObject({
   id: z.string().optional(),
   blockId: z.string().optional(),
   ...exactIdsField,
+  ...contributorField,
   ...commandIdField,
 })
 
@@ -346,6 +387,7 @@ export const installExtensionCommandSchema = z.looseObject({
   reload: z.boolean().optional(),
   verify: z.boolean().optional(),
   allowPresetChange: z.boolean().optional(),
+  ...contributorField,
   ...commandIdField,
 })
 
@@ -353,6 +395,7 @@ export const enableExtensionCommandSchema = z.looseObject({
   type: z.literal('enable-extension'),
   id: z.string().optional(),
   label: z.string().optional(),
+  ...contributorField,
   ...commandIdField,
 })
 
@@ -360,6 +403,7 @@ export const disableExtensionCommandSchema = z.looseObject({
   type: z.literal('disable-extension'),
   id: z.string().optional(),
   label: z.string().optional(),
+  ...contributorField,
   ...commandIdField,
 })
 
@@ -372,6 +416,7 @@ export const setExtensionEnabledCommandSchema = z.looseObject({
   id: z.string().optional(),
   label: z.string().optional(),
   enabled: z.boolean(),
+  ...contributorField,
   ...commandIdField,
 })
 
@@ -379,6 +424,7 @@ export const uninstallExtensionCommandSchema = z.looseObject({
   type: z.literal('uninstall-extension'),
   id: z.string().optional(),
   label: z.string().optional(),
+  ...contributorField,
   ...commandIdField,
 })
 
@@ -386,12 +432,14 @@ export const auditExtensionCommandSchema = z.looseObject({
   type: z.literal('audit-extension'),
   id: z.string().optional(),
   label: z.string().optional(),
+  ...contributorField,
   ...commandIdField,
 })
 
 export const auditPropertiesCommandSchema = z.looseObject({
   type: z.literal('audit-properties'),
   workspaceId: z.string().optional(),
+  ...contributorField,
   ...commandIdField,
 })
 
@@ -399,6 +447,7 @@ export const runBackfillCommandSchema = z.looseObject({
   type: z.literal('run-backfill'),
   backfillId: z.string(),
   workspaceId: z.string().optional(),
+  ...contributorField,
   ...commandIdField,
 })
 
@@ -408,6 +457,7 @@ export const rematerializeWorkspaceCommandSchema = z.looseObject({
   /** `'unapplied' | 'all'`; validated kernel-side so an unknown value comes
    *  back as a named refusal rather than a schema rejection with no advice. */
   scope: z.string().optional(),
+  ...contributorField,
   ...commandIdField,
 })
 
@@ -415,6 +465,7 @@ export const runActionCommandSchema = z.looseObject({
   type: z.literal('run-action'),
   id: z.string(),
   dependencies: z.record(z.string(), z.unknown()).optional(),
+  ...contributorField,
   ...commandIdField,
 })
 
@@ -425,6 +476,7 @@ export const actionCommandSchema = z.looseObject({
   type: z.literal('action'),
   id: z.string(),
   dependencies: z.record(z.string(), z.unknown()).optional(),
+  ...contributorField,
   ...commandIdField,
 })
 
@@ -437,6 +489,7 @@ export const evalCommandSchema = z.looseObject({
    *  context. JSON-serialized over the wire, so callers should keep
    *  values to JSON-representable types. */
   data: z.unknown().optional(),
+  ...contributorField,
   ...commandIdField,
 })
 
@@ -449,6 +502,7 @@ export const backlinksCommandSchema = z.looseObject({
   blockId: z.string().optional(),
   workspaceId: z.string().optional(),
   filter: z.unknown().optional(),
+  ...contributorField,
   ...commandIdField,
 })
 
@@ -462,6 +516,7 @@ export const groupedBacklinksCommandSchema = z.looseObject({
   workspaceId: z.string().optional(),
   filter: z.unknown().optional(),
   grouping: z.unknown().optional(),
+  ...contributorField,
   ...commandIdField,
 })
 
@@ -479,6 +534,7 @@ export const dataModelCommandSchema = z.looseObject({
   topic: z.string().optional().describe(
     'A topic id from the index to read that section, or "all" for the whole guide. Omit for the index.',
   ),
+  ...contributorField,
   ...commandIdField,
 })
 
@@ -492,6 +548,7 @@ export const pageCommandSchema = z.looseObject({
   name: z.string().describe('Page name or alias to resolve'),
   workspaceId: readWorkspaceField,
   limit: z.number().int().positive().optional().describe('Max substring candidates (default 20)'),
+  ...contributorField,
   ...commandIdField,
 })
 
@@ -502,6 +559,7 @@ export const dailyNoteCommandSchema = z.looseObject({
   type: z.literal('daily-note'),
   date: z.string().describe('today, yesterday, an ISO date (2026-06-18), or natural language (next monday)'),
   workspaceId: readWorkspaceField,
+  ...contributorField,
   ...commandIdField,
 })
 
@@ -511,6 +569,7 @@ export const searchCommandSchema = z.looseObject({
   query: z.string(),
   workspaceId: z.string().optional(),
   limit: z.number().int().positive().optional(),
+  ...contributorField,
   ...commandIdField,
 })
 
@@ -586,6 +645,7 @@ export const viewBlockCommandSchema = z.looseObject({
     'Start the content at this character (to read past a truncation)',
   ),
   ...viewFields,
+  ...contributorField,
   ...commandIdField,
 })
 
@@ -604,6 +664,7 @@ export const viewOutlineCommandSchema = z.looseObject({
     'Expand blocks below the root that the user collapsed (default: summarized as +N children)',
   ),
   ...viewFields,
+  ...contributorField,
   ...commandIdField,
 })
 
@@ -614,6 +675,7 @@ export const viewBacklinksCommandSchema = z.looseObject({
   offset: viewOffsetField('backlinks'),
   filter: backlinksFilterField,
   ...viewFields,
+  ...contributorField,
   ...commandIdField,
 })
 
@@ -630,6 +692,7 @@ export const viewGroupedBacklinksCommandSchema = z.looseObject({
     .optional()
     .describe("user (default; the user's grouping config, as the UI shows it) | none | a grouping-config object"),
   ...viewFields,
+  ...contributorField,
   ...commandIdField,
 })
 
@@ -642,6 +705,7 @@ export const viewSearchCommandSchema = z.looseObject({
   under: z.string().optional().describe('Only blocks inside this block/page (same forms as a block ref)'),
   includeExtensions: z.boolean().optional().describe('Include extension source blocks (excluded by default)'),
   ...viewFields,
+  ...contributorField,
   ...commandIdField,
 })
 
@@ -739,6 +803,7 @@ export const watchEventsCommandSchema = z.looseObject({
       {message: 'watcher names must be unique within a registration'},
     ),
   ttlMs: z.number().int().min(1_000).max(24 * 3_600_000).optional(),
+  ...contributorField,
   ...commandIdField,
 })
 
@@ -769,6 +834,8 @@ export const knownCommandSchema = z.discriminatedUnion('type', [
   getBlockCommandSchema,
   getSubtreeCommandSchema,
   createBlockCommandSchema,
+  createContributorCommandSchema,
+  listContributorsCommandSchema,
   reconcileMarkdownSubtreeCommandSchema,
   updateBlockCommandSchema,
   moveBlockCommandSchema,
@@ -824,6 +891,8 @@ export const knownAgentCommandSchema = z.discriminatedUnion('type', [
   getBlockCommandSchema,
   getSubtreeCommandSchema,
   createBlockCommandSchema,
+  createContributorCommandSchema,
+  listContributorsCommandSchema,
   reconcileMarkdownSubtreeCommandSchema,
   updateBlockCommandSchema,
   moveBlockCommandSchema,
@@ -951,6 +1020,16 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
     description: 'Create one block. Body: {parentId, content, properties?, position?: first|last}; parentId is a target '
       + `as for append-markdown, or null for a top-level block (not a page — use create-page). ${TODO_WRITE_HELP}`,
     readOnly: false,
+  },
+  'create-contributor': {
+    usage: 'kmagent contributor create <name> [--kind human|agent|automation] [--role <text>]',
+    description: 'Create a page-backed contributor record in the active workspace.',
+    readOnly: false,
+  },
+  'list-contributors': {
+    usage: 'kmagent contributor list [--workspace <id>]',
+    description: 'List page-backed contributors in a workspace.',
+    readOnly: true,
   },
   'reconcile-markdown-subtree': {
     usage: 'kmagent reconcile-markdown-subtree <json:{parentId,markdown,key,shape?,final?,properties?}>',
@@ -1144,6 +1223,14 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
  *  Type-safe — TypeScript guarantees every `KnownCommandType` resolves. */
 export const getCommandMeta = (type: KnownCommandType): KnownCommandMeta =>
   knownCommandRegistry[type]
+
+/** Shared by token authorization and contributor admission. Unknown verbs write. */
+export const isReadOnlyAgentCommand = (command: {type: string; mode?: unknown; sql?: unknown}): boolean => {
+  if (command.type === 'sql') {
+    return command.mode !== 'execute' && typeof command.sql === 'string' && isReadOnlySql(command.sql)
+  }
+  return (knownCommandRegistry as Partial<Record<string, KnownCommandMeta>>)[command.type]?.readOnly === true
+}
 
 export const commandStatusSchema = z.enum(['pending', 'delivered', 'completed', 'failed'])
 export type CommandStatus = z.infer<typeof commandStatusSchema>

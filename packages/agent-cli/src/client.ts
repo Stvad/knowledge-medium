@@ -14,7 +14,9 @@ import {
   bridgeLogPath,
   bridgeSecret as resolveBridgeSecret,
   bridgeUrl as resolveBridgeUrl,
+  defaultProfileName,
   isErrnoException,
+  normalizeProfileName,
   tokenStorePath as resolveTokenStorePath,
 } from './config.js'
 import {
@@ -22,6 +24,7 @@ import {
   type CommandStatusResponse,
   type EventsNextResponse,
   type KnownCommand,
+  isReadOnlyAgentCommand,
   namedWorkspaceId,
   UNKNOWN_TOKEN_MARKER,
   type WhoamiInfo,
@@ -29,8 +32,7 @@ import {
 } from './protocol.js'
 
 export { UNKNOWN_TOKEN_MARKER } from './protocol.js'
-
-export const defaultProfileName = 'default'
+export { defaultProfileName, normalizeProfileName } from './config.js'
 
 export const errorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error)
@@ -169,15 +171,6 @@ export interface TokenRecord {
 
 export interface TokenStore {
   profiles: Record<string, TokenRecord>
-}
-
-export const normalizeProfileName = (value = ''): string => {
-  const name = value.trim()
-  if (!name) return defaultProfileName
-  if (!/^[A-Za-z0-9_.-]+$/.test(name)) {
-    throw new Error('Profile names may only contain letters, numbers, underscores, dots, and dashes.')
-  }
-  return name
 }
 
 const normalizeTokenRecord = (value: unknown): TokenRecord | null => {
@@ -377,6 +370,8 @@ export interface BridgeClientOptions {
    *  tab has open, which moves as they navigate; an unattended consumer pins
    *  to stay put. Defaults to AGENT_RUNTIME_WORKSPACE. */
   workspaceId?: string
+  /** Attribution for writes made by this client; null explicitly opts out. */
+  contributorId?: string | null
 }
 
 export interface BridgeClient {
@@ -395,6 +390,26 @@ export interface BridgeClient {
   /** The token this client resolves to (null when unpaired). */
   resolveToken: () => Promise<string | null>
 }
+
+/** Bind default contributor attribution without discarding prototype methods
+ * on caller-provided clients. An explicit command value, including null,
+ * remains authoritative; read commands are sent untouched. */
+export const withContributorId = (
+  client: BridgeClient,
+  contributorId: string | null | undefined,
+): BridgeClient => contributorId === undefined ? client : ({
+  bridgeUrl: client.bridgeUrl,
+  runCommand: (command, commandOptions) => client.runCommand(
+    !isReadOnlyAgentCommand(command) && command.contributorId === undefined
+      ? {...command, contributorId}
+      : command,
+    commandOptions,
+  ),
+  nextEvents: eventOptions => client.nextEvents(eventOptions),
+  whoami: () => client.whoami(),
+  health: () => client.health(),
+  resolveToken: () => client.resolveToken(),
+})
 
 export const createBridgeClient = (options: BridgeClientOptions = {}): BridgeClient => {
   const bridgeUrl = (options.bridgeUrl ?? resolveBridgeUrl()).replace(/\/+$/, '')
@@ -525,7 +540,7 @@ export const createBridgeClient = (options: BridgeClientOptions = {}): BridgeCli
     }
   }
 
-  return {
+  const client: BridgeClient = {
     bridgeUrl,
     runCommand,
     nextEvents,
@@ -533,4 +548,5 @@ export const createBridgeClient = (options: BridgeClientOptions = {}): BridgeCli
     health,
     resolveToken: clientResolveToken,
   }
+  return withContributorId(client, options.contributorId)
 }

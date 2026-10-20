@@ -47,6 +47,7 @@ import {
   VENDOR_REVIEW_TITLE,
 } from './tasks'
 import { type FixtureTestGraph, openFixtureRuntime, openFixtureTestGraph } from './testGraph'
+import {attributionCreatorsProp, attributionEditorsProp} from '@/plugins/contributors/schema'
 
 const {truth} = buildFixture()
 
@@ -111,6 +112,19 @@ const onFreshGraph = async <T>(body: (graph: Graph) => Promise<T>): Promise<T> =
 }
 
 describe('imported fixture', () => {
+  it('keeps imported authorship unattributed instead of crediting the importing user', async () => {
+    const rows = await sqlAll<{properties_json: string}>(probe,
+      'SELECT properties_json FROM blocks WHERE workspace_id = ? AND deleted = 0', [TEST_WORKSPACE_ID])
+    expect(rows.length).toBeGreaterThan(5000)
+    const imported = rows.filter(row => Object.keys(JSON.parse(row.properties_json) as object).some(name => name.startsWith('roam:')))
+    expect(imported.length).toBeGreaterThan(5000)
+    for (const row of imported) {
+      const properties = JSON.parse(row.properties_json) as Record<string, unknown>
+      expect(properties[attributionCreatorsProp.name]).toBeUndefined()
+      expect(properties[attributionEditorsProp.name]).toBeUndefined()
+    }
+  })
+
   it('releases the fixture workspace before its caller closes the database', async () => {
     const runtime = await openFixtureRuntime(graph.db, {seed: false})
     try {

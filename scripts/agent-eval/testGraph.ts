@@ -60,7 +60,7 @@ export const openFixtureRuntime = async (db: TestDb['db'], {seed}: {seed: boolea
 export const createInProcessBridgeClient = (context: AgentRuntimeContext): BridgeClient => ({
   bridgeUrl: 'in-process://agent-eval',
   runCommand: async command => {
-    const result = await commandResult(() => executeCommand(knownAgentCommandSchema.parse(command), context))
+    const result = await commandResult(() => executeCommand(knownAgentCommandSchema.parse({contributorId: null, ...command}), context))
     if (!result.ok) throw new Error(result.error.message)
     return JSON.parse(JSON.stringify(result.value)) as unknown
   },

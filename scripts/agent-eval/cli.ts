@@ -293,6 +293,7 @@ const run = async (options: RunOptions) => {
         AGENT_RUNTIME_URL: bridge.url,
         AGENT_RUNTIME_TOKEN: graph.token,
         AGENT_RUNTIME_CONFIG_DIR: path.join(jobDir, 'agent-runtime'),
+        AGENT_RUNTIME_CONTRIBUTOR_ID: 'none',
       }
       const mcpConfig = path.join(jobDir, 'mcp.json')
       writeFileSync(mcpConfig, JSON.stringify({

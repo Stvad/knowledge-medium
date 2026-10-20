@@ -68,6 +68,14 @@ describe('blocked wikilink helpers', () => {
 })
 
 describe('createBlockedWikilinkWriteGuard', () => {
+  it('checks contributor profile content before creating the page', async () => {
+    const guard = createBlockedWikilinkWriteGuard(graphFrom(), ['claude'])
+    await expect(guard.beforeWrite({type: 'create_contributor', name: 'Research [[cc]]'}))
+      .rejects.toThrow('references a blocked page')
+    await expect(guard.beforeWrite({type: 'create_contributor', name: 'Research assistant'}))
+      .resolves.toBeUndefined()
+  })
+
   it('blocks create_block when content references a blocked target alias', async () => {
     const guard = createBlockedWikilinkWriteGuard(graphFrom(), ['claude'])
 

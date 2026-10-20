@@ -56,7 +56,7 @@ afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => {
   await resetTestDb(sharedDb.db)
   // Real uuids, so created blocks get `^short` ids like production ones.
-  repo = createTestRepo({db: sharedDb.db, user: USER, newId: () => crypto.randomUUID()}).repo
+  repo = createTestRepo({db: sharedDb.db, user: USER, newId: () => crypto.randomUUID()}).repo.withTxContext({contributorId: null})
   const runtime = resolveFacetRuntimeSync([staticDataExtensions], {repo, workspaceId: WS, safeMode: false})
   repo.setFacetRuntime(runtime)
   repo.setActiveWorkspaceId(WS)
@@ -80,7 +80,7 @@ const seed = async (
 }
 
 const run = (command: Record<string, unknown>) =>
-  executeCommand({commandId: 'c', ...command} as never, context)
+  executeCommand({commandId: 'c', contributorId: null, ...command} as never, context)
 
 const liveChildren = async (parentId: string) =>
   sharedDb.db.getAll<{id: string, content: string}>(
@@ -853,7 +853,7 @@ describe('review round 1', () => {
 
   it('refuses to create a daily note when the workspace moved since it was pinned', async () => {
     let reads = 0
-    const spy = vi.spyOn(repo, 'activeWorkspaceId', 'get')
+    const spy = vi.spyOn(repo.client, 'activeWorkspaceId', 'get')
       .mockImplementation(() => (reads++ === 0 ? WS : 'ws-elsewhere'))
     try {
       await expect(run({type: 'create-page', date: '2026-10-15'})).rejects.toThrow(/workspace registry.*not loaded/i)

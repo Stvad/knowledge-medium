@@ -225,13 +225,19 @@ export interface AddSchemaArgs {
 
 /** Thin facade over the `'user-schemas'` projector. Projector lifecycle,
  * contribution state, and indexes live in the `ProjectorHandle`, reached
- * through `repo.projectors`; this facade owns only in-flight name reservations
- * that serialize same-Repo creation attempts. Singleton on `Repo` so
- * imperative callers share both the projector generation and reservations. */
+ * through `repo.projectors`; service views share the in-flight name
+ * reservations that serialize same-Repo creation attempts. */
 export class UserSchemasService {
-  private readonly pendingCreations = new Set<string>()
+  constructor(
+    private readonly repo: Repo,
+    private readonly pendingCreations = new Set<string>(),
+  ) {}
 
-  constructor(private readonly repo: Repo) {}
+  /** Bind imperative writes to another Repo host while sharing the name
+   * reservations owned by the original Repo service. */
+  withRepo(repo: Repo): UserSchemasService {
+    return new UserSchemasService(repo, this.pendingCreations)
+  }
 
   private get handle() {
     return this.repo.projectors.handle<ProjectedPropertyDefinition>(USER_SCHEMAS_PROJECTOR_ID)

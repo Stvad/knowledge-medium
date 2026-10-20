@@ -176,6 +176,8 @@ export const importRoam = async (
   repo: Repo,
   options: RoamImportOptions,
 ): Promise<RoamImportSummary> => {
+  // Imported authorship belongs to the source, not the person running the import.
+  repo = repo.withTxContext({contributorId: null})
   const start = Date.now()
   const log = (msg: string) => options.onProgress?.(msg)
   // Phase-timer helper: each call returns the elapsed seconds since

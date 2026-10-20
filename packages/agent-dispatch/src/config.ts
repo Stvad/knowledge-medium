@@ -230,14 +230,17 @@ const rawConfigSchema = z.strictObject({
    *  Validated here with the bridge client's own rules — an invalid
    *  name must be a CONFIG error (clean exit 0) rather than a later
    *  client throw that launchd restart-loops on. */
-  profile: z.string().default('agent-dispatch').refine(name => {
+  profile: z.string().default('agent-dispatch').transform((name, ctx) => {
     try {
-      normalizeProfileName(name)
-      return true
+      return normalizeProfileName(name)
     } catch {
-      return false
+      ctx.addIssue({
+        code: 'custom',
+        message: 'profile names may only contain letters, numbers, underscores, dots, and dashes',
+      })
+      return z.NEVER
     }
-  }, {message: 'profile names may only contain letters, numbers, underscores, dots, and dashes'}),
+  }),
   /** The workspace the daemon acts on. Every bridge call it and its runs
    *  make names it: one that named none would act on whichever workspace the
    *  user's focused app tab has open, and move as they navigate. Its writes

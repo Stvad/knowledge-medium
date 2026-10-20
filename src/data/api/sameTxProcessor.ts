@@ -178,6 +178,12 @@ export interface SameTxTypeOwnership {
 }
 
 export interface SameTxCtx {
+  /** Whether the user callback wrote the row without skipping intent metadata.
+   * Internal property materialization and processor writes do not count. */
+  hasUserWrite(id: string): boolean
+  /** Whether the typed API explicitly unset a canonical property key,
+   * rather than omitting it from a replacement bag. */
+  wasPropertyUnset(id: string, name: string): boolean
   /** Active `Tx` — same handle the user fn used. Reads see staged
    *  state; writes amend the same tx. Throws here roll back the
    *  whole user tx via SQLite's `writeTransaction` abort. */
@@ -187,6 +193,8 @@ export interface SameTxCtx {
   db: SameTxReadDb
   /** Merged property-schema registry snapshotted at tx start. */
   propertySchemas: ReadonlyMap<string, AnyPropertySchema>
+  /** Merged type registry captured alongside the property schemas. */
+  types: ReadonlyMap<string, TypeContribution>
   /** Registered value presets, snapshotted at tx start alongside
    *  `propertySchemas`. What `propertySchemas` CANNOT give you: a codec for a
    *  definition as the tx is about to leave it. That registry is frozen at tx

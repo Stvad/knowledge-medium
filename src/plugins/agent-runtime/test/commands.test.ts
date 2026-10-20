@@ -8,6 +8,7 @@ import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { staticDataExtensions } from '@/extensions/staticDataExtensions'
+import { contributorsDataExtension } from '@/plugins/contributors/dataExtension'
 import { extensionsDataExtension } from '@/plugins/extensions-settings/dataExtension'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import {
@@ -33,7 +34,10 @@ import {
   extensionTypeSeedKey,
 } from '@/extensions/dynamicExtensionSeeds'
 import { ActionContextTypes, type BlockShortcutDependencies, type MultiSelectModeDependencies } from '@/shortcuts/types'
-import { createAgentRuntimeContext, executeCommand } from '../commands'
+import { createAgentRuntimeContext, executeCommand as executeRuntimeCommand } from '../commands'
+
+const executeCommand: typeof executeRuntimeCommand = (command, context) =>
+  executeRuntimeCommand({contributorId: null, ...command}, context)
 import type { AgentRuntimeContext, InstallExtensionResult } from '../protocol'
 import { InvalidBlockIdError } from '@/data/blockId'
 import type { BlockData } from '@/data/api'
@@ -52,10 +56,11 @@ interface Harness {
 const setup = async (): Promise<Harness> => {
   await resetTestDb(sharedDb.db)
   const h = sharedDb
-  const { repo } = createTestRepo({
+  const { repo: baseRepo } = createTestRepo({
     db: h.db,
     user: USER,
   })
+  const repo = baseRepo.withTxContext({contributorId: null})
   const runtime = resolveFacetRuntimeSync([staticDataExtensions, extensionsDataExtension], {
     repo,
     workspaceId: WS,
@@ -805,11 +810,11 @@ describe('agent runtime commands', () => {
       // block itself, against type registries snapshotted outside the tx. A
       // switch landing in the alias lookup between them would write that whole
       // tree into one workspace off another's snapshot.
-      const real = env.repo.snapshotTypeRegistries.bind(env.repo)
-      const restore = vi.spyOn(env.repo, 'snapshotTypeRegistries').mockImplementation(() => {
+      const real = Repo.prototype.snapshotTypeRegistries
+      const restore = vi.spyOn(Repo.prototype, 'snapshotTypeRegistries').mockImplementation(function (this: Repo) {
         // The switch lands between the snapshot and the tx that writes off it.
         env.repo.setActiveWorkspaceId('ws-elsewhere')
-        return real()
+        return real.call(this)
       })
       try {
         await expect(install('install-fresh-ws-switch'))
@@ -1148,10 +1153,10 @@ describe('agent runtime commands', () => {
       const restore = compileTo(valuePresetCoresFacet.of(numberRating))
       // `snapshotTypeRegistries` is the last call before `repo.tx`, so it is
       // the window's near edge.
-      const spy = vi.spyOn(env.repo, 'snapshotTypeRegistries').mockImplementation(function (this: Repo) {
+      const spy = vi.spyOn(Repo.prototype, 'snapshotTypeRegistries').mockImplementation(function (this: Repo) {
         env.repo.setActiveWorkspaceId('ws-elsewhere')
         spy.mockRestore()
-        return env.repo.snapshotTypeRegistries()
+        return this.snapshotTypeRegistries()
       })
       try {
         await expect(install('install-ws-late-switch'))
@@ -1975,7 +1980,8 @@ describe('mutating bridge commands rely on the transaction workspace guard', () 
 
     const withProbeAction = (): AgentRuntimeContext => {
       const runtime = resolveFacetRuntimeSync(
-        [staticDataExtensions, extensionsDataExtension, actionsFacet.of(probeAction, {source: 'test'})],
+        [staticDataExtensions.filter(extension => extension !== contributorsDataExtension),
+          extensionsDataExtension, actionsFacet.of(probeAction, {source: 'test'})],
         {repo: env.repo, workspaceId: WS, safeMode: false},
       )
       env.repo.setFacetRuntime(runtime)
