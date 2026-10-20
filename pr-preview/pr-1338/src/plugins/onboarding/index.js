@@ -1,0 +1,1 @@
+import{b_ as e,o_ as t,v_ as n,x_ as r,y_ as i}from"../../../chunks/app-DLrHwHIi.js";export{i as EXTENSIONS_PAGE_TITLE,e as TUTORIAL_DEFAULT_TITLE,r as TUTORIAL_VIM_TITLE,t as onboardingPlugin,n as seedTutorial};

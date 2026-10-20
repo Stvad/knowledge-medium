@@ -1,0 +1,1 @@
+import{DM as e,EM as t}from"../../chunks/app-DLrHwHIi.js";export{t as isFocalRender,e as useIsFocalRender};

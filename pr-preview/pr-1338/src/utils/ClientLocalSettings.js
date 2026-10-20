@@ -1,0 +1,1 @@
+import{GD as e,KD as t}from"../../chunks/app-DLrHwHIi.js";export{e as ClientLocalSettings,t as clientLocalSettings};

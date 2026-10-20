@@ -1,0 +1,1 @@
+import{j8 as e}from"../../../chunks/app-DLrHwHIi.js";export{e as defineQuery};

@@ -1,0 +1,1 @@
+import{BR as e,GR as t,HR as n,UR as r,VR as i,WR as a,zR as o}from"../../../chunks/app-DLrHwHIi.js";export{o as RENAME_BACKLINKS_PRECEDENCE,e as RENAME_BACKLINKS_PROCESSOR,i as applyRefRewrites,n as renameBacklinksProcessor,r as renameSameTxProcessors,a as replacementFor,t as splitBySurvivingSpan};

@@ -1,0 +1,1 @@
+import{aC as e,oC as t,sC as n}from"../../../../../chunks/app-DLrHwHIi.js";export{e as isWikilinkDisplayParts,t as resolveWikilinkDisplay,n as wikilinkDisplayDecoratorFacet};

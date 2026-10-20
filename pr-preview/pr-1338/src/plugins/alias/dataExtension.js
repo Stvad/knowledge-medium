@@ -1,0 +1,1 @@
+import{GH as e}from"../../../chunks/app-DLrHwHIi.js";export{e as aliasDataExtension};

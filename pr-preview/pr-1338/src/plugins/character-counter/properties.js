@@ -1,0 +1,1 @@
+import{AV as e,jV as t,kV as n}from"../../../chunks/app-DLrHwHIi.js";export{n as charLimitProp,e as charProfileProp,t as charScopeProp};

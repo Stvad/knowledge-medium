@@ -1,0 +1,1 @@
+import{ej as e,tj as t}from"../../chunks/app-DLrHwHIi.js";export{e as defaultPasteDecision,t as pasteDecisionVerb};

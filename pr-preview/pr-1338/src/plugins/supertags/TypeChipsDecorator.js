@@ -1,0 +1,1 @@
+import{T as e}from"../../../chunks/app-DLrHwHIi.js";export{e as typeChipsDecoratorContribution};

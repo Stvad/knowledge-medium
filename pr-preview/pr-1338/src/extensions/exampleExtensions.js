@@ -1,0 +1,1 @@
+import{_E as e,gE as t}from"../../chunks/app-DLrHwHIi.js";export{t as exampleExtensions,e as insertExampleExtensionsUnder};

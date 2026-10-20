@@ -1,0 +1,1 @@
+import{J_ as e}from"../../../chunks/app-DLrHwHIi.js";export{e as spatialNavigationShellDecorator};
