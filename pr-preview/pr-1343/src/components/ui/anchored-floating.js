@@ -1,1 +1,0 @@
-import{JR as e,YR as t}from"../../../chunks/app-CklEe1Tx.js";export{e as floatingAnchorFromRect,t as useAnchoredFloating};

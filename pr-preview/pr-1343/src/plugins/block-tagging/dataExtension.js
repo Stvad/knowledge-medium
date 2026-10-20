@@ -1,1 +1,0 @@
-import{rl as e}from"../../../chunks/app-CklEe1Tx.js";export{e as blockTaggingDataExtension};

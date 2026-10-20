@@ -1,1 +1,0 @@
-import{JU as e,KU as t,WU as n,cn as r,ln as i,on as a,qU as o,un as s}from"../../../chunks/app-CklEe1Tx.js";export{n as CHAR_COUNTER_TYPE,r as RAW_CHARACTER_COUNT_PROFILE_ID,s as charCountDisplay,t as charLimitProp,o as charProfileProp,e as charScopeProp,i as characterCountProfilesFacet,a as characterCounterPlugin};
