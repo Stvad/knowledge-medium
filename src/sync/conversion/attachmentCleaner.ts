@@ -173,7 +173,8 @@ export interface CleanerReport {
   /** Raw objects sealed, uploaded, verified and then deleted, and gone from
    *  the final listing. */
   readonly converted: readonly ObjectPath[]
-  /** Sealed uploads Storage refused: a raw object, still in place, or a media
+  /** Sealed uploads refused for good, by Storage or, over a limit the adapter
+   *  can read, before sending: a raw object, still in place, or a media
    *  block's keyed copy that could not be rebuilt. For a 413 the remedy is to
    *  raise the project-wide upload limit, and the bucket's own limit if it is
    *  lower, to at least `sealedBytes`, then run again. */

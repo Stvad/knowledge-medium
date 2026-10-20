@@ -30,8 +30,8 @@ const bytes = (text: string) => new TextEncoder().encode(text) as Uint8Array<Arr
 const randomObject = (size: number) => new Uint8Array(randomBytes(size)) as Uint8Array<ArrayBuffer>
 const rawNameOf = async (body: Uint8Array<ArrayBuffer>) => (await computeContentHash(body)).slice('sha256:'.length)
 
-// The end-to-end test takes 1–3 s against a fresh stack; the 413 one, which
-// uploads ~100 MiB, has its own budget.
+// The end-to-end test takes 1–3 s against a fresh stack; the over-limit one,
+// which uploads a ~50 MiB raw object, has its own budget.
 describe('the attachment cleaner over real Storage', {timeout: 30_000}, () => {
   const stack = supabaseStack()
   /** RLS doesn't filter it: plants what only a write from outside the app makes. */
@@ -176,10 +176,10 @@ describe('the attachment cleaner over real Storage', {timeout: 30_000}, () => {
       return {ws, keys: {cek, contentKeyHmac}, canary}
     }
 
-    const ioFor = (ws: string, media: readonly MediaRef[]) => ({
+    const ioFor = (ws: string, media: readonly MediaRef[], blobStore = blobStoreOf(owner)) => ({
       ...createAttachmentCleanerIO({
         client: owner.client,
-        blobStore: blobStoreOf(owner),
+        blobStore,
         byteStore: new InMemoryByteStore(),
         uploadStore: new InMemoryByteUploadStore(),
         // Read only by `mediaBlocks`, which is given here instead.
@@ -208,6 +208,7 @@ describe('the attachment cleaner over real Storage', {timeout: 30_000}, () => {
         left: [{path: 'outside/note', reason: 'not-archived'}],
         rebuilt: [],
         errors: [],
+        bundleFault: null,
         proof: {kind: 'passed', unrecoverable: []},
       })
       expect(await storedNames(ws)).toEqual([keyedName, 'outside/note'].sort())
@@ -227,7 +228,7 @@ describe('the attachment cleaner over real Storage', {timeout: 30_000}, () => {
       expect(await storedNames(ws)).toEqual([keyedName, 'outside/note'].sort())
     })
 
-    it("keeps a raw object whose sealed copy is one byte over the bucket's limit, reporting Storage's 413", async () => {
+    it("keeps a raw object whose sealed copy is one byte over the bucket's limit, refused as a 413 without uploading it", async () => {
       const {ws, keys, canary} = await e2eeWorkspace()
       const [{file_size_limit: limit}] = await query<{file_size_limit: string}>(
         'select file_size_limit from storage.buckets where id = $1',
@@ -237,14 +238,19 @@ describe('the attachment cleaner over real Storage', {timeout: 30_000}, () => {
       const contentHash = await computeContentHash(tooBig)
       const rawName = await rawNameOf(tooBig)
       expect(await blobStoreOf(owner).put(ws, rawName, tooBig)).toBe('written')
+      const cleanerStore = blobStoreOf(owner)
+      const put = vi.spyOn(cleanerStore, 'put')
 
-      const report = await cleanAttachments({workspaceId: ws, io: ioFor(ws, [{blockId: 'block-1', contentHash}]), keys, canary, bundle: null})
+      const io = ioFor(ws, [{blockId: 'block-1', contentHash}], cleanerStore)
+      const report = await cleanAttachments({workspaceId: ws, io, keys, canary, bundle: null})
       expect(report).toMatchObject({
         converted: [],
         refused: [{path: rawName, status: 413, sealedBytes: Number(limit) + 1}],
         errors: [],
         proof: {kind: 'not-passed', rawRemaining: [rawName], unverified: [contentHash], unsettled: false},
       })
+      // Not `not.toHaveBeenCalled()`: its failure message prints the 50 MiB body.
+      expect(put.mock.calls.length).toBe(0)
       expect(await storedNames(ws)).toEqual([rawName])
     }, 60_000)
   })

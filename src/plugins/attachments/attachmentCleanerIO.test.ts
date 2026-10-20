@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { ChangeScope } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
@@ -9,7 +9,7 @@ import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { trackTestRepo } from '@/data/test/testRepoScope'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
-import type { BlobStore } from './blobStore.js'
+import { ATTACHMENTS_BUCKET, type BlobStore } from './blobStore.js'
 import { InMemoryByteStore } from './byteStore.js'
 import { InMemoryByteUploadStore } from './uploadStore.js'
 import { createAttachmentCleanerIO, listMediaBlocks, listWorkspaceObjects } from './attachmentCleanerIO.js'
@@ -231,6 +231,54 @@ describe('listWorkspaceObjects', () => {
 
   it('refuses a name outside the folder rather than cut a path out of it', async () => {
     await expect(list(clientServing({objects: [{name: 'aa'}], folders: [], hasNext: false}))).rejects.toThrow(/listed aa under/)
+  })
+})
+
+describe('createAttachmentCleanerIO writeObject', () => {
+  /** A client whose `attachments` bucket has `limit`, or none to read. */
+  const clientWithBucket = (limit: number | null | Error) =>
+    ({
+      storage: {
+        getBucket: async (id: string) =>
+          limit instanceof Error || id !== ATTACHMENTS_BUCKET
+            ? {data: null, error: limit instanceof Error ? limit : new Error('Bucket not found')}
+            : {data: {id, file_size_limit: limit}, error: null},
+      },
+    }) as unknown as SupabaseClient
+  const ioOver = (client: SupabaseClient) => {
+    const put = vi.fn<BlobStore['put']>(async () => 'written')
+    const io = createAttachmentCleanerIO({
+      client,
+      blobStore: {put} as unknown as BlobStore,
+      byteStore: new InMemoryByteStore(),
+      uploadStore: new InMemoryByteUploadStore(),
+      repo: {} as Repo,
+      userId: 'user-1',
+      workspaceId: WS,
+      isRemoteSyncActive: () => true,
+    })
+    return {io, put}
+  }
+  const ofSize = (n: number) => new Uint8Array(n) as Uint8Array<ArrayBuffer>
+
+  it("refuses a body over the bucket's limit as a 413 without sending it, and sends one at the limit", async () => {
+    const {io, put} = ioOver(clientWithBucket(10))
+    expect(await io.writeObject('over', ofSize(11))).toEqual({kind: 'refused', status: 413})
+    expect(put).not.toHaveBeenCalled()
+    expect(await io.writeObject('at', ofSize(10))).toEqual({kind: 'written'})
+    expect(put).toHaveBeenCalledWith(WS, 'at', ofSize(10))
+  })
+
+  it('leaves the size to Storage when the bucket has no limit of its own', async () => {
+    const {io, put} = ioOver(clientWithBucket(null))
+    expect(await io.writeObject('any', ofSize(11))).toEqual({kind: 'written'})
+    expect(put).toHaveBeenCalledOnce()
+  })
+
+  it("throws, sending nothing, when the bucket's limit can't be read", async () => {
+    const {io, put} = ioOver(clientWithBucket(new Error('Bucket not found')))
+    await expect(io.writeObject('any', ofSize(1))).rejects.toThrow(/upload limit.*Bucket not found/)
+    expect(put).not.toHaveBeenCalled()
   })
 })
 

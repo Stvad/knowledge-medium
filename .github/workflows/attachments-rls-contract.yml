@@ -75,12 +75,12 @@ jobs:
       - name: Start Supabase (ephemeral stack)
         run: supabase start -x studio,imgproxy,edge-runtime,logflare,vector
 
-      # The attachments migration GUARDS its bucket+policy block on
-      # `to_regclass('storage.buckets')` and no-ops when the storage tables are
+      # The attachments migrations GUARD their bucket+policy blocks on
+      # `to_regclass('storage.buckets')` and no-op when the storage tables are
       # absent — which they are when migrations run at `supabase start` (the
       # Storage container boots AFTER). So the policies are NOT applied by start.
       # Re-apply the (idempotent: `drop policy if exists` + `on conflict`)
-      # migration now that Storage is up, so the policies actually land — exactly
+      # migrations now that Storage is up, so the policies actually land — exactly
       # what `db push` does on hosted. Without this, every deny assertion would
       # FALSE-PASS (no policy ⇒ storage's own default-deny, not our contract).
       - name: Apply attachments Storage RLS (skipped at start; Storage now up)
@@ -88,6 +88,7 @@ jobs:
           sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client
           DB_URL=$(supabase status -o json | jq -r '.DB_URL')
           psql "$DB_URL" -v ON_ERROR_STOP=1 -f supabase/migrations/20260625000000_add_attachments_storage.sql
+          psql "$DB_URL" -v ON_ERROR_STOP=1 -f supabase/migrations/20261020190443_let_signed_in_users_read_attachments_bucket.sql
 
       # Keys come from the ephemeral stack itself (vanilla start ⇒ the demo JWT
       # secret matches the keys `status` reports), so no repo secrets are needed

@@ -93,6 +93,15 @@ export const listMediaBlocks = async (repo: Repo, workspaceId: string): Promise<
   })
 }
 
+/** The attachments bucket's own upload limit in bytes, or null when it has
+ *  none and only the project-wide limit applies. Signed-in users may read the
+ *  bucket's row; anyone else is told it doesn't exist. */
+const bucketUploadLimit = async (client: SupabaseClient): Promise<number | null> => {
+  const {data, error} = await client.storage.getBucket(ATTACHMENTS_BUCKET)
+  if (error) throw new Error(`attachments: the bucket's upload limit could not be read: ${error.message}`)
+  return data.file_size_limit ?? null
+}
+
 export interface AttachmentCleanerIODeps {
   readonly client: SupabaseClient
   readonly blobStore: BlobStore
@@ -110,6 +119,11 @@ export const createAttachmentCleanerIO = (deps: AttachmentCleanerIODeps): Conver
     listObjects: signal => listWorkspaceObjects({...deps, signal}),
     readObject: path => blobStore.probe(workspaceId, path),
     async writeObject(path, bytes) {
+      // Storage refuses an upload over the bucket's limit before the body has
+      // arrived and can close the connection mid-send, so its 413 may never be
+      // read. The project-wide limit is unreadable here and stays its call.
+      const limit = await bucketUploadLimit(deps.client)
+      if (limit !== null && bytes.length > limit) return {kind: 'refused', status: 413}
       try {
         return {kind: await blobStore.put(workspaceId, path, bytes)}
       } catch (err) {
