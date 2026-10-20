@@ -1,1 +1,1 @@
-import{HR as e}from"../../chunks/app-DE5AX30V.js";export{e as usePropertySchemas};
+import{UR as e}from"../../chunks/app-e6yUEQrd.js";export{e as usePropertySchemas};

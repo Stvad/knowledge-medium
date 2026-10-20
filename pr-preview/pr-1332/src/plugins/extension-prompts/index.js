@@ -1,1 +1,1 @@
-import{HO as e,UO as t}from"../../../chunks/app-DE5AX30V.js";export{e as ExtensionPromptSurface,t as extensionPromptsExtension};
+import{UO as e,WO as t}from"../../../chunks/app-e6yUEQrd.js";export{e as ExtensionPromptSurface,t as extensionPromptsExtension};

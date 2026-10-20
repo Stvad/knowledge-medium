@@ -1,1 +1,1 @@
-import{Rp as e}from"../../../chunks/app-DE5AX30V.js";export{e as blockInfoPlugin};
+import{zp as e}from"../../../chunks/app-e6yUEQrd.js";export{e as blockInfoPlugin};

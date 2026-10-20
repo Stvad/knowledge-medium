@@ -1,1 +1,1 @@
-import{WC as e}from"../../chunks/app-DE5AX30V.js";export{e as BlockCrumbs};
+import{GC as e}from"../../chunks/app-e6yUEQrd.js";export{e as BlockCrumbs};
