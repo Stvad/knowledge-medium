@@ -1,1 +1,0 @@
-import{aE as e,oE as t}from"../../chunks/app-BXQL19z5.js";export{e as BlockPasteShellDecorator,t as blockPasteShellDecorator};

@@ -1,1 +1,0 @@
-import{ic as e,rc as t}from"../../../chunks/app-BXQL19z5.js";export{t as computePromotedFromChildren,e as detectInlineAttribute};
