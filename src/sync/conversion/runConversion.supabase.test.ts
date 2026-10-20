@@ -87,7 +87,9 @@ const endpointOf = (url: URL): string => url.pathname.replace(/^\/(rest|storage)
 /** The SQLSTATE of a PostgREST error response. */
 const errorCode = async (response: Response): Promise<string> => (await response.clone().json()).code
 
-describe('the conversion flow against the real stack', {timeout: 120_000}, () => {
+// Measured alone against a fresh stack: 0.7–3 s a test, the slowest the crash
+// chain and the lost purge's response (2 s of it the purge's real retry wait).
+describe('the conversion flow against the real stack', {timeout: 30_000}, () => {
   const stack = supabaseStack()
   /** RLS doesn't filter it: plants what an older client or an operator left. */
   const admin = stackClient(stack, stack.serviceKey)
