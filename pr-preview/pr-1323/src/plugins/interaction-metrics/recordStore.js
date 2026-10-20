@@ -1,1 +1,1 @@
-import{dr as e,fr as t,pr as n,ur as r}from"../../../chunks/app-F29I3lEh.js";export{r as appendClientRecord,e as clientGroupId,t as clientSeriesQuery,n as updateClientRecord};
+import{dr as e,fr as t,pr as n,ur as r}from"../../../chunks/app-BF3ef2i-.js";export{r as appendClientRecord,e as clientGroupId,t as clientSeriesQuery,n as updateClientRecord};

@@ -1,1 +1,1 @@
-import{Gs as e,Ks as t}from"../../../chunks/app-F29I3lEh.js";export{e as collectTypeCandidates,t as formatTypeCandidateReport};
+import{Gs as e,Ks as t}from"../../../chunks/app-BF3ef2i-.js";export{e as collectTypeCandidates,t as formatTypeCandidateReport};

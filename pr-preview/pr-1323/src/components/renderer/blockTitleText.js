@@ -1,1 +1,1 @@
-import{aM as e,oM as t}from"../../../chunks/app-F29I3lEh.js";export{e as BLOCK_TITLE_TEXT_CLASS,t as useBlockTitleTextClass};
+import{aM as e,oM as t}from"../../../chunks/app-BF3ef2i-.js";export{e as BLOCK_TITLE_TEXT_CLASS,t as useBlockTitleTextClass};
