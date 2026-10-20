@@ -23,6 +23,24 @@ const maxConcurrentCommands = 4
 // exactly the park boundary.
 const saturatedParkMs = 45_000
 
+// Keep diagnostic output bounded to safe fields, never request or error contents.
+const classifyBridgeError = (error: unknown) => {
+  const value = error as {name?: unknown, message?: unknown} | null
+  const name = typeof value?.name === 'string'
+    && ['Error', 'TypeError', 'DOMException', 'AbortError', 'SecurityError', 'SyntaxError'].includes(value.name)
+    ? value.name : 'Error'
+  const message = typeof value?.message === 'string' ? value.message : ''
+  if (message.startsWith('Agent runtime bridge is not paired.')) {
+    return {name, category: 'missing-browser-bridge-pairing'}
+  }
+  const status = message.match(/^Agent runtime bridge (?:request|poll) failed: ([0-9]{3})$/)
+  if (status) return {name, category: 'http-error', httpStatus: Number(status[1])}
+  if (name === 'AbortError') return {name, category: 'aborted'}
+  if (name === 'TypeError') return {name, category: 'type-or-fetch-error'}
+  if (name === 'SecurityError') return {name, category: 'browser-security-error'}
+  return {name, category: 'other'}
+}
+
 /** A command's result as it goes back over the wire. */
 export const commandResult = async (run: () => Promise<unknown>): Promise<{ok: true, value: unknown} | {ok: false, error: ReturnType<typeof serializeError>}> => {
   try {
@@ -57,6 +75,8 @@ export interface BridgeLoop {
   stop: () => void
 }
 
+type DiagnosticStageObserver = (stage: string) => void
+
 export const startBridgeLoop = (options: BridgeLoopOptions): BridgeLoop => {
   const {clientId} = options
   const abortController = new AbortController()
@@ -64,6 +84,7 @@ export const startBridgeLoop = (options: BridgeLoopOptions): BridgeLoop => {
   let attempts = 0
   let wakeResolve: (() => void) | null = null
   let bridgeUnavailableLogged = false
+  let lastDiagnosticKey: string | null = null
 
   const waitForWakeOrTimeout = (ms: number) => new Promise<void>(resolve => {
     let settled = false
@@ -89,15 +110,26 @@ export const startBridgeLoop = (options: BridgeLoopOptions): BridgeLoop => {
     }
   }
 
-  const postJson = async (url: string, body: unknown, withClientId: boolean) => {
+  const postJson = async (
+    url: string,
+    body: unknown,
+    withClientId: boolean,
+    stages: {headers: string, serialize: string, fetch: string},
+    observeStage?: DiagnosticStageObserver,
+  ) => {
+    observeStage?.(stages.headers)
+    const headers = {
+      'content-type': 'application/json',
+      ...options.headers(),
+      ...(withClientId ? {'x-agent-runtime-client-id': clientId} : {}),
+    }
+    observeStage?.(stages.serialize)
+    const serialized = JSON.stringify(body)
+    observeStage?.(stages.fetch)
     const response = await options.fetch(url, {
       method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        ...options.headers(),
-        ...(withClientId ? {'x-agent-runtime-client-id': clientId} : {}),
-      },
-      body: JSON.stringify(body),
+      headers,
+      body: serialized,
       signal: abortController.signal,
     })
 
@@ -113,8 +145,18 @@ export const startBridgeLoop = (options: BridgeLoopOptions): BridgeLoop => {
   // receives, so two in flight could land stale-last and re-list a revoked
   // token.
   let registrationTail: Promise<unknown> | null = null
-  const register = (baseUrl = options.baseUrl()) => {
-    const send = () => postJson(`${baseUrl}/runtime/clients/${clientId}`, options.registration(), false)
+  const register = (baseUrl = options.baseUrl(), observeStage?: DiagnosticStageObserver) => {
+    const send = () => {
+      observeStage?.('build-registration')
+      const registration = options.registration()
+      return postJson(
+        `${baseUrl}/runtime/clients/${clientId}`,
+        registration,
+        false,
+        {headers: 'headers', serialize: 'serialize-registration', fetch: 'registration-fetch'},
+        observeStage,
+      )
+    }
     const turn = registrationTail ? registrationTail.then(send, send) : send()
     registrationTail = turn
     const release = () => { if (registrationTail === turn) registrationTail = null }
@@ -122,8 +164,18 @@ export const startBridgeLoop = (options: BridgeLoopOptions): BridgeLoop => {
     return turn
   }
 
-  const reportResult = (commandId: string, payload: unknown, baseUrl: string) =>
-    postJson(`${baseUrl}/runtime/commands/${commandId}/result`, payload, true)
+  const reportResult = (
+    commandId: string,
+    payload: unknown,
+    baseUrl: string,
+    observeStage?: DiagnosticStageObserver,
+  ) => postJson(
+    `${baseUrl}/runtime/commands/${commandId}/result`,
+    payload,
+    true,
+    {headers: 'result-headers', serialize: 'serialize-result', fetch: 'result-fetch'},
+    observeStage,
+  )
 
   const inFlightCommands = new Set<Promise<void>>()
 
@@ -144,8 +196,10 @@ export const startBridgeLoop = (options: BridgeLoopOptions): BridgeLoop => {
   const poll = async () => {
     while (!abortController.signal.aborted) {
       const baseUrl = options.baseUrl()
+      let diagnosticStage = 'registration'
+      const observeStage = (stage: string) => { diagnosticStage = stage }
       try {
-        await register(baseUrl)
+        await register(baseUrl, observeStage)
 
         if (bridgeUnavailableLogged) {
           console.info(`Agent runtime bridge reconnected at ${baseUrl}.`)
@@ -156,17 +210,22 @@ export const startBridgeLoop = (options: BridgeLoopOptions): BridgeLoop => {
         nextUrl.searchParams.set('clientId', clientId)
         nextUrl.searchParams.set('timeoutMs', String(longPollMs))
 
+        observeStage('poll-headers')
+        const headers = options.headers()
+        observeStage('poll-fetch')
         const response = await options.fetch(nextUrl, {
-          headers: options.headers(),
+          headers,
           signal: abortController.signal,
         })
         if (!response.ok) {
           throw new Error(`Agent runtime bridge poll failed: ${response.status}`)
         }
 
+        observeStage('poll-decode')
         const rawCommand = await response.json() as unknown
         retryMs = retryBaseMs
         attempts = 0
+        lastDiagnosticKey = null
 
         if (!rawCommand) continue
 
@@ -183,7 +242,7 @@ export const startBridgeLoop = (options: BridgeLoopOptions): BridgeLoop => {
               error: serializeError(
                 new Error(`Invalid command body: ${parsed.error.issues.map(i => i.message).join('; ')}`),
               ),
-            }, baseUrl)
+            }, baseUrl, observeStage)
           }
           continue
         }
@@ -202,14 +261,23 @@ export const startBridgeLoop = (options: BridgeLoopOptions): BridgeLoop => {
           // Re-register FIRST: the long-poll that delivered this command may
           // have been held up to 25s server-side, and lastSeen + 25s + the
           // park would breach the server's 60s client TTL.
-          await register(baseUrl)
+          await register(baseUrl, observeStage)
           await Promise.race([...inFlightCommands, waitForWakeOrTimeout(saturatedParkMs)])
           if (inFlightCommands.size >= maxConcurrentCommands) {
             console.warn(`Agent runtime: ${inFlightCommands.size} commands in flight past the saturation park — delivering anyway.`)
           }
         }
-      } catch {
+      } catch (error) {
         if (abortController.signal.aborted) return
+        const diagnostic = {
+          stage: diagnosticStage,
+          ...classifyBridgeError(error),
+        }
+        const diagnosticKey = JSON.stringify(diagnostic)
+        if (diagnosticKey !== lastDiagnosticKey) {
+          console.warn('Agent runtime diagnostic', diagnostic)
+          lastDiagnosticKey = diagnosticKey
+        }
 
         attempts += 1
         if (attempts >= maxFastAttemptsBeforeQuiet) {
@@ -237,7 +305,12 @@ export const startBridgeLoop = (options: BridgeLoopOptions): BridgeLoop => {
   return {
     register: () => register(),
     wake,
-    post: (path, body) => postJson(`${options.baseUrl()}${path}`, body, true),
+    post: (path, body) => postJson(
+      `${options.baseUrl()}${path}`,
+      body,
+      true,
+      {headers: 'post-headers', serialize: 'serialize-post', fetch: 'post-fetch'},
+    ),
     stop: () => {
       abortController.abort()
       wake()
