@@ -1,1 +1,1 @@
-import{OM as e,kM as t}from"../../chunks/app-DWyX0iga.js";export{e as isFocalRender,t as useIsFocalRender};
+import{OM as e,kM as t}from"../../chunks/app-B3MIV0i0.js";export{e as isFocalRender,t as useIsFocalRender};

@@ -1,1 +1,1 @@
-import{au as e,eu as t,iu as n,nu as r,ru as i,tu as a}from"../../../chunks/app-DWyX0iga.js";export{t as AUDIT_BLOCK_LIMIT,a as auditBlocks,r as auditExtensionData,i as createBlockResolver,n as grainWarningsForProperties,e as writeWarnings};
+import{au as e,eu as t,iu as n,nu as r,ru as i,tu as a}from"../../../chunks/app-B3MIV0i0.js";export{t as AUDIT_BLOCK_LIMIT,a as auditBlocks,r as auditExtensionData,i as createBlockResolver,n as grainWarningsForProperties,e as writeWarnings};

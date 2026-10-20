@@ -1,1 +1,1 @@
-import{$g as e,Qg as t,Xg as n,Zg as r}from"../../../chunks/app-DWyX0iga.js";export{n as closeVideoNotesView,r as ensureEditableVideoNoteChild,t as enterVideoNotesView,e as focusVideoNote};
+import{$g as e,Qg as t,Xg as n,Zg as r}from"../../../chunks/app-B3MIV0i0.js";export{n as closeVideoNotesView,r as ensureEditableVideoNoteChild,t as enterVideoNotesView,e as focusVideoNote};
