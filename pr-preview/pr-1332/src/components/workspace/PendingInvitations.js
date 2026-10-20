@@ -1,1 +1,1 @@
-import{wS as e}from"../../../chunks/app-YGAjfqXo.js";export{e as PendingInvitations};
+import{wS as e}from"../../../chunks/app-CT0uoyJm.js";export{e as PendingInvitations};
