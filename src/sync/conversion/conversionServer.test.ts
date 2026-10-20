@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { describe, expect, it, vi } from 'vitest'
-import { createSupabaseConversionServer, IDS_PER_FILTER } from './conversionServer.js'
+import { createSupabaseConversionServer, IDS_PER_FILTER, type ConversionServer } from './conversionServer.js'
 
 type Row = Record<string, unknown>
 
@@ -24,8 +24,11 @@ const fakeClient = (
 ) => {
   const inListLengths: number[] = []
   const rpcs: Array<{fn: string; args: unknown; signal?: AbortSignal}> = []
-  const signals: AbortSignal[] = []
+  /** Every request made, table read or RPC, with the signal it was handed. */
+  const requests: Array<{signal?: AbortSignal}> = []
   const from = (table: string) => {
+    const request: {signal?: AbortSignal} = {}
+    requests.push(request)
     const filters: Array<(row: Row) => boolean> = []
     let orderBy: string | undefined
     let limit = Infinity
@@ -47,6 +50,8 @@ const fakeClient = (
       eq: (column: string, value: unknown) => (filters.push(row => valueAt(row, column) === value), builder),
       gt: (column: string, value: string | number) =>
         (filters.push(row => (valueAt(row, column) as string | number) > value), builder),
+      lte: (column: string, value: string | number) =>
+        (filters.push(row => (valueAt(row, column) as string | number) <= value), builder),
       in: (column: string, values: unknown[]) => {
         inListLengths.push(values.length)
         filters.push(row => values.includes(valueAt(row, column)))
@@ -62,7 +67,7 @@ const fakeClient = (
       order: (column: string) => ((orderBy = column), builder),
       limit: (count: number) => ((limit = count), builder),
       maybeSingle: () => ((maybeSingle = true), builder),
-      abortSignal: (signal: AbortSignal) => (signals.push(signal), builder),
+      abortSignal: (signal: AbortSignal) => ((request.signal = signal), builder),
       then: (resolve: (value: unknown) => unknown, reject: (reason: unknown) => unknown) =>
         Promise.resolve(respond()).then(resolve, reject),
     }
@@ -71,6 +76,7 @@ const fakeClient = (
   const rpc = (fn: string, args: unknown) => {
     const call: {fn: string; args: unknown; signal?: AbortSignal} = {fn, args}
     rpcs.push(call)
+    requests.push(call)
     const response = {
       abortSignal: (signal: AbortSignal) => ((call.signal = signal), response),
       then: (resolve: (value: unknown) => unknown, reject: (reason: unknown) => unknown) =>
@@ -78,12 +84,27 @@ const fakeClient = (
     }
     return response
   }
-  return {client: {from, rpc} as unknown as SupabaseClient, inListLengths, rpcs, signals}
+  return {client: {from, rpc} as unknown as SupabaseClient, inListLengths, rpcs, requests}
 }
 
 const WS = 'ws-1'
 const blockId = (i: number) => `b${String(i).padStart(3, '0')}`
 const ENVELOPE = 'enc:v1:AAAA'
+
+/** One call of every server method but the flip, typed over the interface: a
+ *  method added to it doesn't compile here until it's listed. */
+const cancellableCalls: {[K in Exclude<keyof ConversionServer, 'convertWorkspaceToE2ee'>]: (server: ConversionServer) => Promise<unknown>} = {
+  readWorkspace: server => server.readWorkspace(WS),
+  workspaceCounts: server => server.workspaceCounts(WS),
+  readBlockPage: server => server.readBlockPage(WS, null, 1),
+  readBlocks: server => server.readBlocks(WS, [blockId(0)]),
+  readContentSealHistory: server => server.readContentSealHistory(WS, [blockId(0)]),
+  applyBlockPatches: server => server.applyBlockPatches([]),
+  readFullBlockPage: server => server.readFullBlockPage(WS, null, 1),
+  readHistoryPage: server => server.readHistoryPage(WS, 0, 1, 1),
+  purgeWorkspaceHistory: server => server.purgeWorkspaceHistory(WS, 1, 0),
+  finishConversion: server => server.finishConversion(WS),
+}
 
 describe('createSupabaseConversionServer', () => {
   it('reads the history of any number of blocks, across id chunks and capped responses', async () => {
@@ -141,20 +162,21 @@ describe('createSupabaseConversionServer', () => {
     expect(rpcs.map(({fn, args}) => ({fn, args}))).toEqual([{fn: 'convert_workspace_to_e2ee', args: {p_workspace_id: WS, p_wk_canary: ENVELOPE}}])
   })
 
-  it('lets the run cancel every request but the flip, which may commit with nobody waiting', async () => {
-    const {client, rpcs, signals} = fakeClient({blocks: [], workspaces: []})
+  it('lets the run cancel every request of every method but the flip, which may commit with nobody waiting', async () => {
+    for (const [method, call] of Object.entries(cancellableCalls)) {
+      const {client, requests} = fakeClient({blocks: [], blocks_history: [], workspaces: []}, {rpcData: {conversion_workspace_counts: [{block_count: 0, history_count: 0, max_event_id: 0}]}})
+      const run = new AbortController()
+      await call(createSupabaseConversionServer(client, run.signal))
+      expect(requests.length, method).toBeGreaterThan(0)
+      expect(requests.map(request => request.signal), method).toEqual(requests.map(() => run.signal))
+    }
+
+    const {client, requests} = fakeClient({})
     const run = new AbortController()
-    const server = createSupabaseConversionServer(client, run.signal)
-
-    await server.readBlockPage(WS, null, 1)
-    await server.applyBlockPatches([])
-    await server.convertWorkspaceToE2ee(WS, ENVELOPE)
+    await createSupabaseConversionServer(client, run.signal).convertWorkspaceToE2ee(WS, ENVELOPE)
     run.abort()
-
-    expect(signals).toEqual([run.signal])
-    expect(rpcs.map(call => call.fn)).toEqual(['apply_block_patches', 'convert_workspace_to_e2ee'])
-    expect(rpcs[0].signal).toBe(run.signal)
-    expect(rpcs[1].signal?.aborted).toBe(false)
+    expect(requests).toHaveLength(1)
+    expect(requests[0].signal?.aborted).toBe(false)
   })
 
   it('gives up waiting on a flip request past its own deadline', async () => {
