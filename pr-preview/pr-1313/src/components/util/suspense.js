@@ -1,1 +1,1 @@
-import{ZI as e}from"../../../chunks/app-CnyBTnbt.js";export{e as SuspenseFallback};
+import{ZI as e}from"../../../chunks/app-D2EnKJ4G.js";export{e as SuspenseFallback};

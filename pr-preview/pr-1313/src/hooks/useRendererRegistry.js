@@ -1,1 +1,1 @@
-import{dO as e,lO as t,uO as n}from"../../chunks/app-CnyBTnbt.js";export{e as defaultRegistry,t as refreshRendererRegistry,n as useRenderer};
+import{dO as e,lO as t,uO as n}from"../../chunks/app-D2EnKJ4G.js";export{e as defaultRegistry,t as refreshRendererRegistry,n as useRenderer};

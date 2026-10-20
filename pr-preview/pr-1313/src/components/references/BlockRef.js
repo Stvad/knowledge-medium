@@ -1,1 +1,1 @@
-import{Ub as e}from"../../../chunks/app-CnyBTnbt.js";export{e as BlockRef};
+import{Ub as e}from"../../../chunks/app-D2EnKJ4G.js";export{e as BlockRef};
