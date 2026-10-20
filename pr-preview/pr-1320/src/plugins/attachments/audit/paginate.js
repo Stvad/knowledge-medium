@@ -1,1 +1,1 @@
-import{Um as e}from"../../../../chunks/app-oTxFWCvn.js";export{e as collectPaged};
+import{Um as e}from"../../../../chunks/app-BNN039lb.js";export{e as collectPaged};

@@ -1,1 +1,1 @@
-import{Nf as e}from"../../../chunks/app-oTxFWCvn.js";export{e as updateIndicatorPlugin};
+import{Nf as e}from"../../../chunks/app-BNN039lb.js";export{e as updateIndicatorPlugin};
