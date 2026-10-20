@@ -30,6 +30,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   BLOCK_STORAGE_COLUMNS,
+  CREATE_BLOCKS_FIELD_FORM_INDEX_SQL,
   CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL,
   CREATE_BLOCKS_SYNCED_TABLE_SQL,
   CREATE_BLOCKS_TABLE_SQL,
@@ -60,6 +61,7 @@ import {
   ANALYZE_OPTIMIZE_SQL,
   runAnalyzeIfStale,
   runAnalyzeNow,
+  runAnalyzeTables,
   CLIENT_SCHEMA_TRIGGER_CREATE_SQL,
   SELECT_CLIENT_SCHEMA_TRIGGERS_SQL,
   triggerRecreateStatements,
@@ -1402,6 +1404,76 @@ describe('runAnalyzeNow', () => {
   })
 
 
+})
+
+describe('runAnalyzeTables — growth PRAGMA optimize does not see', () => {
+  // The shape the properties-as-blocks migration leaves: the field-form index
+  // was EMPTY when `blocks` was last analyzed, then the table roughly tripled
+  // with rows that all land in it.
+  let db: DatabaseSync
+  const cols = BLOCK_STORAGE_COLUMNS.map(c => c.name)
+  const insertRows = (prefix: string, n: number, fieldForm: 0 | 1) => {
+    const ins = db.prepare(
+      `INSERT INTO blocks (${cols.join(',')}, is_field_form) ` +
+      `VALUES (${cols.map(() => '?').join(',')}, ${fieldForm})`,
+    )
+    db.exec('BEGIN')
+    for (let i = 0; i < n; i++) {
+      ins.run(...cols.map(c => {
+        if (c === 'id') return `${prefix}-${i}`
+        if (c === 'workspace_id') return 'ws1'
+        // Ten owners, so the field rows' `parent_id` has a real distribution.
+        if (c === 'parent_id') return fieldForm ? `b-${i % 10}` : null
+        if (c === 'order_key') return `a${i}`
+        if (c === 'created_at' || c === 'updated_at') return 1
+        if (c === 'created_by' || c === 'updated_by') return 'u1'
+        if (c === 'deleted') return 0
+        if (c === 'content') return 'x'
+        if (c === 'properties_json') return '{}'
+        if (c === 'references_json') return '[]'
+        return null
+      }) as Array<string | number | null>)
+    }
+    db.exec('COMMIT')
+  }
+  const rowsPerStat = (idx: string) => statRows(db, 'blocks')[idx]?.split(' ').map(Number)
+  const adapter = () => ({
+    execute: async (sql: string) => ({rows: {_array: db.prepare(sql).all()}}),
+    getOptional: async <T,>(sql: string) => (db.prepare(sql).get() ?? null) as T | null,
+  })
+
+  beforeEach(() => {
+    db = new DatabaseSync(':memory:')
+    db.exec(CREATE_BLOCKS_TABLE_SQL)
+    db.exec(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
+    db.exec(CREATE_BLOCKS_FIELD_FORM_INDEX_SQL)
+    // Above SQLite's own 2000-row optimize limit, as in the arming suite.
+    insertRows('b', 2500, 0)
+    db.exec('ANALYZE')
+    insertRows('f', 5000, 1)
+  })
+  afterEach(() => { db.close() })
+
+  it('re-records the grown table and the index that was empty, exactly', async () => {
+    // The premise, asserted so a SQLite that starts catching this shows up
+    // here rather than as a pass nobody needs.
+    await runAnalyzeIfStale(adapter())
+    expect(rowsPerStat('idx_blocks_field_form')?.[0]).toBe(0)
+
+    // Left standing on the connection, as the agent bridge can.
+    db.exec('PRAGMA analysis_limit=400')
+    await runAnalyzeTables(adapter(), ['blocks'])
+
+    expect(rowsPerStat('idx_blocks_field_form')).toEqual([5000, 5000, 500, 500])
+    expect(rowsPerStat('idx_blocks_workspace_active')).toEqual([7500, 7500])
+  })
+
+  it('moves the schema cookie, so already-open readers re-plan', async () => {
+    const cookie = () => (db.prepare('PRAGMA schema_version').get() as {schema_version: number}).schema_version
+    const before = cookie()
+    await runAnalyzeTables(adapter(), ['blocks'])
+    expect(cookie()).toBeGreaterThan(before)
+  })
 })
 
 // The block_types side-index backs byType / typedBlocks — among the most

@@ -9,12 +9,14 @@ import {
 import {
   ANALYZE_ARMING_PROBES,
   CLIENT_SCHEMA_STATEMENTS,
+  CORE_ANALYZE_TABLES,
 } from '@/data/internals/clientSchema'
 import { syncedWriteTarget } from '@/data/syncedTableWriteGuard'
 import { POWERSYNC_STUB_TABLES_SQL } from '@/data/test/powerSyncStubTables'
 import { staticDataExtensions } from '@/extensions/staticDataExtensions.js'
 import {
   resolveAnalyzeArmingProbes,
+  resolveAnalyzeTables,
   resolveLocalSchemaContributions,
 } from './localSchema.ts'
 
@@ -68,15 +70,15 @@ describe('resolveAnalyzeArmingProbes', () => {
     ]))
   })
 
-  it('has each contributed probe search the table its `name` claims', () => {
-    // `name` and `probe` are read by DIFFERENT paths — the exact-stats repair
-    // analyzes the name, the staleness check runs the probe — so nothing in
-    // production ever compares them, and a copy-paste that leaves them naming
-    // different tables would repair one table while arming another. Both halves
-    // would look right in isolation. This is the only place they meet.
-    const declared = contributions.flatMap(c => c.analyzeTables ?? [])
-    expect(declared.length).toBeGreaterThan(0)
-    for (const {name, probe} of declared) {
+  it('has each probe search the table its `name` claims', () => {
+    // `name` and `probe` are read by DIFFERENT paths — `runAnalyzeTables`
+    // analyzes the name after a bulk write, the staleness check runs the probe —
+    // so nothing in production ever compares them, and a copy-paste that leaves
+    // them naming different tables would refresh one table while arming another.
+    // Both halves would look right in isolation. This is the only place they meet.
+    const tables = resolveAnalyzeTables(contributions)
+    expect(tables.length).toBeGreaterThan(CORE_ANALYZE_TABLES.length)
+    for (const {name, probe} of tables) {
       expect(planOf(probe)).toContain(`SEARCH ${name}`)
     }
   })

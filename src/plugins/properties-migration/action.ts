@@ -34,6 +34,9 @@ import { ActionConfig, ActionContextTypes } from '@/shortcuts/types.js'
 import { openDialog } from '@/utils/dialogs.js'
 import { dismissToast, showInfo } from '@/utils/toast.js'
 import { reportMigrationProgress, type MigrationProgress } from './progressReport.ts'
+import { runAnalyzeTables } from '@/data/maintenance'
+import { installedAnalyzeTableNames } from '@/data/localSchema.js'
+import { CATCHUP_DEEP_IDLE, scheduleDeepIdle } from '@/utils/scheduleIdle.js'
 import {
   ConfirmMigrationDialog, type NamedPropertyKeys,
 } from './ConfirmMigrationDialog.tsx'
@@ -392,6 +395,19 @@ interface ClaimedMigration {
   readonly banner: MigrationProgress
 }
 
+/** Re-record planner stats for what the pass grew. On a large graph it about
+ *  triples `blocks` and `block_references` and fills the field-form indexes from
+ *  empty — growth `PRAGMA optimize` does not react to, so the boot check would
+ *  leave the pre-migration stats in place. Deep idle, like the importer's
+ *  check: a full scan of the largest tables parks the writer for seconds. */
+const scheduleMigrationAnalyze = (repo: Repo): void => {
+  scheduleDeepIdle(() => {
+    void runAnalyzeTables(repo.db, installedAnalyzeTableNames()).catch(error => {
+      console.warn('[properties-migration] ANALYZE after the pass failed:', error)
+    })
+  }, CATCHUP_DEEP_IDLE)
+}
+
 /** What the gesture WRITES, plus the report that follows it — everything that
  *  must happen with the graph-wide claim held.
  *
@@ -664,6 +680,8 @@ const migrateUnderClaim = async (
       undoNote(undoCleared))
   } finally {
     unsubscribe()
+    // On every ending, a throw included: whatever committed grew the tables.
+    if (valuesMaterializedTotal > 0) scheduleMigrationAnalyze(repo)
   }
 }
 

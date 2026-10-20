@@ -23,6 +23,7 @@ import {
   buildBlockSnapshotJsonSql,
 } from '@/data/blockSchema.js'
 import { SEED_STAGING_NEEDS_APPLY_SQL } from './syncObserver/reconcile.js'
+import type { LocalSchemaAnalyzeTable } from '../facets.ts'
 
 // ============================================================================
 // Tables
@@ -1185,7 +1186,9 @@ export const RESET_ANALYZE_SAMPLE_LIMIT_SQL = `PRAGMA analysis_limit=0`
 
 export const SELECT_BLOCKS_COUNT_SQL = `SELECT COUNT(*) AS count FROM blocks`
 
-/** Planner-visible probes that ARM the staleness check. Load-bearing.
+/** The core hot tables: each `name` is what {@link runAnalyzeTables} analyzes,
+ *  each `probe` a planner-visible query that ARMS the staleness check.
+ *  The probes are load-bearing.
  *
  *  `PRAGMA optimize`'s stale-stats rule only considers tables the CONNECTION
  *  has planned a query against, so each hot table must be announced with an
@@ -1200,15 +1203,17 @@ export const SELECT_BLOCKS_COUNT_SQL = `SELECT COUNT(*) AS count FROM blocks`
  *  passes them through — a probe rewritten as a write would fail every
  *  boot's ANALYZE.
  *
- *  CORE tables only. A plugin's table is armed by that plugin, through
- *  `LocalSchemaContribution.analyzeTables` — see `resolveAnalyzeArmingProbes`
- *  in `src/data/localSchema.ts`, which is what callers should pass to
+ *  CORE tables only. A plugin's table is declared by that plugin, through
+ *  `LocalSchemaContribution.analyzeTables` — see `resolveAnalyzeTables` in
+ *  `src/data/localSchema.ts`, whose probes are what callers should pass to
  *  {@link runAnalyzeIfStale}. */
-export const ANALYZE_ARMING_PROBES: readonly string[] = [
-  `SELECT id FROM blocks WHERE workspace_id = '' AND deleted = 0`,
-  `SELECT block_id FROM block_types WHERE type = '' AND workspace_id = ''`,
-  `SELECT block_id FROM block_aliases WHERE workspace_id = '' AND alias = ''`,
+export const CORE_ANALYZE_TABLES: readonly LocalSchemaAnalyzeTable[] = [
+  {name: 'blocks', probe: `SELECT id FROM blocks WHERE workspace_id = '' AND deleted = 0`},
+  {name: 'block_types', probe: `SELECT block_id FROM block_types WHERE type = '' AND workspace_id = ''`},
+  {name: 'block_aliases', probe: `SELECT block_id FROM block_aliases WHERE workspace_id = '' AND alias = ''`},
 ]
+
+export const ANALYZE_ARMING_PROBES: readonly string[] = CORE_ANALYZE_TABLES.map(table => table.probe)
 
 /** Per-name reprojection markers. Once `reprojectRefTypedProperties`
  *  has done a catch-up pass for property name `X`, a row keyed
@@ -1715,9 +1720,14 @@ export const runAnalyzeIfStale = async (
  *  forgotten at a fourth site. Paired, not hoisted to the top of a pass:
  *  {@link RESET_ANALYZE_SAMPLE_LIMIT_SQL} is only sound adjacent to the
  *  statement it protects. */
-const analyzeUnbounded = async (db: ClientSchemaBootstrapDb, sql: string): Promise<void> => {
-  await db.execute(RESET_ANALYZE_SAMPLE_LIMIT_SQL)
-  await db.execute(sql)
+const analyzeUnbounded = async (
+  db: ClientSchemaBootstrapDb,
+  ...statements: readonly string[]
+): Promise<void> => {
+  for (const sql of statements) {
+    await db.execute(RESET_ANALYZE_SAMPLE_LIMIT_SQL)
+    await db.execute(sql)
+  }
 
   // Writing `sqlite_stat1` does not bump `schema_version` (see the note on
   // `runAnalyzeIfStale`), so a connection that was already open keeps the old
@@ -1735,6 +1745,21 @@ const analyzeUnbounded = async (db: ClientSchemaBootstrapDb, sql: string): Promi
   await db.execute('CREATE TABLE IF NOT EXISTS __km_analyze_bump(x)')
   await db.execute('DROP TABLE IF EXISTS __km_analyze_bump')
 }
+
+/** Unconditional ANALYZE of the named tables, for a bulk writer that KNOWS it
+ *  grew them. {@link runAnalyzeIfStale} cannot be relied on there: `PRAGMA
+ *  optimize` re-analyzes a table only once its row count drifts ~10x, so one
+ *  that tripled keeps its old count, and an index that was EMPTY when last
+ *  analyzed keeps its `0 0` row and reads as empty however full it is.
+ *
+ *  A full scan of each table holding the single SQLite worker: schedule it off
+ *  the render path. */
+export const runAnalyzeTables = async (
+  db: ClientSchemaBootstrapDb,
+  tables: readonly string[],
+): Promise<void> => serializeAnalyze(() => analyzeUnbounded(
+  db, ...tables.map(table => `ANALYZE "main"."${table.replaceAll('"', '""')}"`),
+))
 
 /** Unconditional `ANALYZE` for the manual command-palette command.
  *

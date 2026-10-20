@@ -45,8 +45,8 @@ export interface LocalSchemaBackfill {
 /** One table a contribution owns that the ANALYZE paths have to reach.
  *
  *  Both pieces, because the two paths need different things and asking for them
- *  separately is what lets them drift apart. The one-shot exact-stats repair
- *  wants a NAME, to `ANALYZE` it. The arming probes want SQL, and a name cannot
+ *  separately is what lets them drift apart. `runAnalyzeTables` wants a NAME, to
+ *  `ANALYZE` it. The arming probes want SQL, and a name cannot
  *  be turned into one: measured on the shipped wa-sqlite build against
  *  degenerate stats, every generic name-only shape (`SELECT 1 FROM t`,
  *  `… LIMIT 1`, a covering scan, `WHERE rowid = 0`, `ORDER BY <indexed col>`)
@@ -69,10 +69,9 @@ export interface LocalSchemaContribution {
   triggerNames?: readonly string[]
   backfills?: readonly LocalSchemaBackfill[]
   /** Tables this contribution owns that core's ANALYZE paths must reach, so
-   *  core never has to name a plugin's table. Consumed by
-   *  `resolveAnalyzeArmingProbes` (`src/data/localSchema.ts`), and by the
-   *  one-shot exact-stats repair's table list — deliberately the same set, so
-   *  it is declared once here rather than twice in core. */
+   *  core never has to name a plugin's table. Read through
+   *  `resolveAnalyzeTables` (`src/data/localSchema.ts`): the probes arm the
+   *  staleness check, the names are what a bulk writer re-analyzes. */
   analyzeTables?: readonly LocalSchemaAnalyzeTable[]
 }
 

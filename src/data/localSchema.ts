@@ -1,8 +1,9 @@
 import type { AppExtension } from '@/facets/facet.js'
 import { resolveFacetRuntimeSync } from '@/facets/facet.js'
-import { ANALYZE_ARMING_PROBES } from './internals/clientSchema.ts'
+import { CORE_ANALYZE_TABLES } from './internals/clientSchema.ts'
 import {
   localSchemaFacet,
+  type LocalSchemaAnalyzeTable,
   type LocalSchemaContribution,
   type LocalSchemaDb,
 } from './facets.ts'
@@ -12,23 +13,25 @@ export const resolveLocalSchemaContributions = (
 ): readonly LocalSchemaContribution[] =>
   resolveFacetRuntimeSync(extensions).read(localSchemaFacet)
 
-/** The core probes plus whatever the installed contributions bring, for
- *  `runAnalyzeIfStale`. Every caller that can reach the contributions should go
- *  through here: a plugin table left out is simply never re-analyzed on the
- *  drift axis, which is invisible until a join order inverts.
- *
- *  The sibling reader for `LocalSchemaAnalyzeTable.name` — the one-shot
- *  exact-stats repair's table list — is on the warm-boot branch, not here. Both
- *  read the SAME declaration on purpose: the repair set and the probe set are
- *  the same tables, and two fields would let them drift. */
-export const resolveAnalyzeArmingProbes = (
+/** The core hot tables plus whatever the installed contributions bring. The
+ *  probe set and the name set are read off this ONE list on purpose: they are
+ *  the same tables, and two lists would let them drift. */
+export const resolveAnalyzeTables = (
   contributions: readonly LocalSchemaContribution[],
-): readonly string[] => [
-  ...ANALYZE_ARMING_PROBES,
-  ...contributions.flatMap(c => (c.analyzeTables ?? []).map(table => table.probe)),
+): readonly LocalSchemaAnalyzeTable[] => [
+  ...CORE_ANALYZE_TABLES,
+  ...contributions.flatMap(c => c.analyzeTables ?? []),
 ]
 
-let installedProbes: readonly string[] = ANALYZE_ARMING_PROBES
+/** The probes of {@link resolveAnalyzeTables}, for `runAnalyzeIfStale`. Every
+ *  caller that can reach the contributions should go through here: a plugin
+ *  table left out is simply never re-analyzed on the drift axis, which is
+ *  invisible until a join order inverts. */
+export const resolveAnalyzeArmingProbes = (
+  contributions: readonly LocalSchemaContribution[],
+): readonly string[] => resolveAnalyzeTables(contributions).map(table => table.probe)
+
+let installedTables: readonly LocalSchemaAnalyzeTable[] = CORE_ANALYZE_TABLES
 
 /** The arming probes for the local schema actually INSTALLED in this process.
  *
@@ -43,7 +46,13 @@ let installedProbes: readonly string[] = ANALYZE_ARMING_PROBES
  *
  *  Falls back to the core probes until {@link applyLocalSchemaContributions}
  *  runs, which is the honest answer before a schema is installed. */
-export const installedAnalyzeArmingProbes = (): readonly string[] => installedProbes
+export const installedAnalyzeArmingProbes = (): readonly string[] =>
+  installedTables.map(table => table.probe)
+
+/** The same installed tables by name, for `runAnalyzeTables` after a bulk write
+ *  that grew them. Same source, and the same reason not to read the runtime. */
+export const installedAnalyzeTableNames = (): readonly string[] =>
+  installedTables.map(table => table.name)
 
 export const applyLocalSchemaContributions = async (
   db: LocalSchemaDb,
@@ -52,7 +61,7 @@ export const applyLocalSchemaContributions = async (
   // Recorded here, not at the call site: this function IS "the schema this
   // process installed", so the probe set stays in step with the DDL by
   // construction rather than by two callers remembering to agree.
-  installedProbes = resolveAnalyzeArmingProbes(contributions)
+  installedTables = resolveAnalyzeTables(contributions)
   for (const contribution of contributions) {
     for (const statement of contribution.statements ?? []) {
       await db.execute(statement)

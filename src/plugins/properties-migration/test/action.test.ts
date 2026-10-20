@@ -61,10 +61,26 @@ vi.mock('@/data/internals/propertyDefinitionSynthesis', () => ({
  *  pass id stay real. */
 const surveyCells = vi.fn<() => Promise<PropertyCellRejectionSurvey>>()
 const cellValuesBlocked = vi.fn<() => string | null>()
+/** The gesture's progress subscription, so a stubbed pass can report what it
+ *  materialized the way the real one does. */
+let progressListener: ((progress: PropertyCellBackfillProgress) => void) | null = null
 vi.mock('@/data/internals/propertyCellBackfill', async importOriginal => ({
   ...(await importOriginal<typeof import('@/data/internals/propertyCellBackfill')>()),
   surveyPropertyCellRejections: () => surveyCells(),
   flipBlockedByCellValues: () => cellValuesBlocked(),
+  onPropertyCellBackfillProgress: (listener: (progress: PropertyCellBackfillProgress) => void) => {
+    progressListener = listener
+    return () => { progressListener = null }
+  },
+}))
+const runAnalyzeTables = vi.fn<(db: unknown, tables: readonly string[]) => Promise<void>>(async () => {})
+vi.mock('@/data/maintenance', () => ({
+  runAnalyzeTables: (db: unknown, tables: readonly string[]) => runAnalyzeTables(db, tables),
+}))
+// Inline, so the assertion does not race a real idle frame.
+vi.mock('@/utils/scheduleIdle.js', () => ({
+  CATCHUP_DEEP_IDLE: 'catchup',
+  scheduleDeepIdle: (fn: () => void) => { fn() },
 }))
 
 /** A plan with `n` keys to mint and nothing wrong. */
@@ -78,7 +94,10 @@ const plan = (candidates = 0) => ({
 
 import type { OperatorBackfillResult, Repo, ViewGap, WorkspaceRematerialization } from '@/data/repo'
 import type { SynthesisResult } from '@/data/internals/propertyDefinitionSynthesis'
-import type { PropertyCellRejectionSurvey } from '@/data/internals/propertyCellBackfill'
+import type {
+  PropertyCellBackfillProgress,
+  PropertyCellRejectionSurvey,
+} from '@/data/internals/propertyCellBackfill'
 import type { HistoryDrop } from '@/data/internals/undoManager'
 import { getClientId } from '@/utils/clientId'
 import { claimStub, type ClaimStubLog } from './claimStub.ts'
@@ -228,6 +247,7 @@ afterEach(() => {
   flipBlocked.mockReset()
   surveyCells.mockReset()
   cellValuesBlocked.mockReset()
+  runAnalyzeTables.mockClear()
 })
 
 // Every default lives HERE, not split with `afterEach`: arming in `afterEach`
@@ -1693,5 +1713,50 @@ describe('pre-dialog recovery of a durable workspace gap', () => {
     expect(workspaceViewGap).toHaveBeenCalledTimes(1)
     expect(showInfo.mock.calls.flat().join(' ')).toMatch(/may have partially completed/)
     expect(showInfo.mock.calls.flat().join(' ')).not.toMatch(/No properties were migrated/)
+  })
+})
+
+describe('planner stats after the pass', () => {
+  /** A pass that reports, as the real one does, before it returns or throws. */
+  const passThatMaterialized = (blocks: number, ending: OperatorBackfillResult | Error) =>
+    async () => {
+      progressListener?.({
+        blocksScanned: blocks, blocksMaterialized: blocks, blocksMaterializedTotal: blocks,
+        valuesMaterialized: blocks, valuesMaterializedTotal: blocks, sweeps: 1,
+        failures: [], failureCount: 0, unresolvedNames: [], unresolvedCount: 0,
+      })
+      if (ending instanceof Error) throw ending
+      return ending
+    }
+
+  it('re-analyzes what a run grew, because PRAGMA optimize will not', async () => {
+    const {repo, runPass} = makeRepo(RAN, {flipped: true})
+    runPass.mockImplementation(passThatMaterialized(40, RAN))
+
+    await invoke(repo)
+
+    expect(runAnalyzeTables).toHaveBeenCalledWith(repo.db, expect.arrayContaining(['blocks']))
+  })
+
+  it('still does after a run that threw partway, which grew them all the same', async () => {
+    const {repo, runPass} = makeRepo(RAN, {flipped: true})
+    runPass.mockImplementation(passThatMaterialized(40, new Error('claim write failed')))
+
+    await invoke(repo)
+
+    expect(progressHandle.fail).toHaveBeenCalled()
+    expect(runAnalyzeTables).toHaveBeenCalled()
+  })
+
+  it('leaves them alone after a run that materialized nothing', async () => {
+    // A converged re-run is the common one; a full scan of the largest table for
+    // it would be a multi-second park of the worker bought for nothing.
+    const {repo, runPass} = makeRepo(RAN, {flipped: true})
+    runPass.mockImplementation(passThatMaterialized(0, RAN))
+
+    await invoke(repo)
+
+    expect(runPass).toHaveBeenCalled()
+    expect(runAnalyzeTables).not.toHaveBeenCalled()
   })
 })
