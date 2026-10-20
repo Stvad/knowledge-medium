@@ -1,1 +1,1 @@
-import{gc as e}from"../../../chunks/app-B0xhMcxl.js";export{e as roamImportPlugin};
+import{rc as e}from"../../../chunks/app-EnQ_aCrb.js";export{e as roamImportPlugin};

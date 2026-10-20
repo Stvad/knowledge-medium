@@ -1,1 +1,1 @@
-import{CD as e,SD as t,tn as n}from"../../../chunks/app-B0xhMcxl.js";export{t as extensionsOverridesProp,e as extensionsPrefsType,n as extensionsSettingsPlugin};
+import{Ht as e,MD as t,ND as n}from"../../../chunks/app-EnQ_aCrb.js";export{t as extensionsOverridesProp,n as extensionsPrefsType,e as extensionsSettingsPlugin};

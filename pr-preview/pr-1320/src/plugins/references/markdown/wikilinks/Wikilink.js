@@ -1,1 +1,1 @@
-import{am as e}from"../../../../../chunks/app-B0xhMcxl.js";export{e as Wikilink};
+import{Gp as e}from"../../../../../chunks/app-EnQ_aCrb.js";export{e as Wikilink};

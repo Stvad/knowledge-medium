@@ -1,1 +1,1 @@
-import{Qg as e}from"../../../chunks/app-B0xhMcxl.js";export{e as videoPlayerPlugin};
+import{t_ as e}from"../../../chunks/app-EnQ_aCrb.js";export{e as videoPlayerPlugin};

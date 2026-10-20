@@ -1,1 +1,1 @@
-import{Xg as e,Yg as t,Zg as n}from"../../../chunks/app-B0xhMcxl.js";export{t as attachmentObjectPath,e as authenticatedObjectUrl,n as deriveObjectKey};
+import{$g as e,Qg as t,Zg as n,e_ as r}from"../../../chunks/app-EnQ_aCrb.js";export{n as attachmentObjectPath,t as authenticatedObjectUrl,e as deriveObjectKey,r as storageObjectUrl};

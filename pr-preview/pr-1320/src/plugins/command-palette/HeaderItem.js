@@ -1,1 +1,1 @@
-import{pT as e}from"../../../chunks/app-B0xhMcxl.js";export{e as CommandPaletteHeaderItem};
+import{CT as e}from"../../../chunks/app-EnQ_aCrb.js";export{e as CommandPaletteHeaderItem};
