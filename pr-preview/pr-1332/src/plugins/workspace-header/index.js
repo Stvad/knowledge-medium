@@ -1,1 +1,0 @@
-import{Jb as e,Xb as t,Yb as n,Zb as r}from"../../../chunks/app-D2yXVz_s.js";export{e as WorkspaceSwitcherSidebarSection,n as pendingInvitationsHeaderItem,t as workspaceHeaderPlugin,r as workspaceSwitcherSidebarSection};
