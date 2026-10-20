@@ -1,1 +1,1 @@
-import{aJ as e,cJ as t,lJ as n,oJ as r,sJ as i,uJ as a}from"../../chunks/app-Cq9nkoC1.js";export{e as WRITE_AHEAD_HEADROOM_BYTES,r as awaitWriteAheadHeadroom,i as checkpointResultPages,t as describeWriteAheadPause,n as drainWriteAheadLog,a as onWriteAheadPause};
+import{aJ as e,cJ as t,dJ as n,fJ as r,lJ as i,oJ as a,sJ as o,uJ as s}from"../../chunks/app-CuHCIXkj.js";export{e as WRITE_AHEAD_HEADROOM_BYTES,a as asWriteLockDb,o as awaitWriteAheadHeadroom,t as checkpointResultPages,i as describeWriteAheadPause,s as drainWriteAheadLog,n as onWriteAheadPause,r as runBulkWrite};

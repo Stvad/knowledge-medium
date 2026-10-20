@@ -1,1 +1,1 @@
-import{HC as e,UC as t,VC as n}from"../../../chunks/app-Cq9nkoC1.js";export{n as aliasResultItems,e as blockResultItems,t as recentResultItems};
+import{HC as e,UC as t,VC as n}from"../../../chunks/app-CuHCIXkj.js";export{n as aliasResultItems,e as blockResultItems,t as recentResultItems};

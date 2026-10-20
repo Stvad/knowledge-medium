@@ -1,1 +1,1 @@
-import{pE as e}from"../../../chunks/app-Cq9nkoC1.js";export{e as openKeybindingsSettingsAction};
+import{pE as e}from"../../../chunks/app-CuHCIXkj.js";export{e as openKeybindingsSettingsAction};
