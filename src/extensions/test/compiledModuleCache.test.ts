@@ -15,6 +15,7 @@ import {
   __setInstantiateImplForTest,
   __setTranspileImplForTest,
   approveExtension,
+  COMPILER_VERSION,
   createCompileCache,
   loadApprovedExtension,
   lookupApproval,
@@ -127,7 +128,7 @@ describe('approveExtension + loadApprovedExtension — trust gate + L3 cache', (
       sourceHash: result.contentHash,
       approvedSource: 'SRC',
       compiled: 'transpiled:SRC',
-      compilerVersion: '2',
+      compilerVersion: COMPILER_VERSION,
     })
     expect(typeof row!.approvedAt).toBe('number')
   })
@@ -194,7 +195,7 @@ describe('approveExtension + loadApprovedExtension — trust gate + L3 cache', (
     // Re-pinned at the current compiler version (approval hash unchanged).
     expect(await persistent.read('cv-1')).toMatchObject({
       sourceHash: stored!.sourceHash,
-      compilerVersion: '2',
+      compilerVersion: COMPILER_VERSION,
       compiled: 'transpiled:SRC',
     })
   })

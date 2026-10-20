@@ -39,7 +39,11 @@ installDbForensicsLifecycle()
 // constant false in prod (import.meta.env.DEV is statically replaced by Vite).
 setDevAssertionsEnabled(import.meta.env.DEV)
 
-// Todo remember why I need this something about version mismatch/having implied react in custom blocks
+// Legacy convenience for stored extension sources that name `React` without
+// importing it. Not part of the extension contract: the loader's JSX no longer
+// reads it (EXTENSION_BABEL_PRESETS uses the automatic runtime), and extensions
+// are told to import `react` / `react-dom`. Removable once no stored extension
+// reads the bare global.
 window.React = React
 window.ReactDOM = ReactDOM
 

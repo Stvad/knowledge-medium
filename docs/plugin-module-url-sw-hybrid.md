@@ -57,7 +57,7 @@ Plugin code lives in blocks of `type: 'extension'`. The loader walks them and, f
 compiles its source and reads `module.default` as an `AppExtension` (`src/extensions/dynamicExtensions.ts:220`).
 The compile is a deliberate **two-step** pipeline (`src/extensions/compileExtensionModule.ts`):
 
-1. **Transpile** TS/JSX → JS string via `@babel/standalone` (`react` + `typescript` presets), dynamically
+1. **Transpile** TS/JSX → JS string via `@babel/standalone` (`react` with the automatic JSX runtime + `typescript` presets), dynamically
    `import()`ed so the ~0.85 MB compiler stays out of the eager startup graph (`defaultTranspileViaBabel`,
    `compileExtensionModule.ts:148`). It now also emits an inline source map + a sanitized
    `//# sourceURL=km-extension://<blockId>.tsx` (the §6 change, shipped in PR #252).

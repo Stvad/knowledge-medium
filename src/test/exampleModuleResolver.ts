@@ -15,6 +15,7 @@
 
 import * as Babel from '@babel/standalone'
 import {extensionApiCatalog} from '@/extensions/apiCatalog'
+import {EXTENSION_BABEL_PRESETS} from '@/extensions/compileExtensionModule'
 import type {AppExtension} from '@/facets/facet'
 
 const IMPORT_SPECIFIER_RE = /\bfrom\s*['"]([^'"]+)['"]/g
@@ -30,7 +31,9 @@ const resolvableSpecifier = (specifier: string): string =>
 export const buildExampleRequire = async (
   source: string,
 ): Promise<(specifier: string) => unknown> => {
-  const specifiers = new Set<string>()
+  // The loader's automatic JSX runtime makes Babel emit a `react/jsx-runtime`
+  // require for any JSX, an import the snippet never wrote.
+  const specifiers = new Set<string>(['react/jsx-runtime'])
   for (const match of source.matchAll(IMPORT_SPECIFIER_RE)) {
     specifiers.add(match[1])
   }
@@ -59,7 +62,7 @@ export const evaluateExampleModule = async (
 ): Promise<AppExtension> => {
   const compiled = Babel.transform(source, {
     filename,
-    presets: ['react', 'typescript'],
+    presets: EXTENSION_BABEL_PRESETS,
     plugins: ['transform-modules-commonjs'],
   }).code
   if (!compiled) throw new Error(`${filename}: Babel returned empty output`)

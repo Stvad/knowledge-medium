@@ -40,6 +40,11 @@
 // `@/data/api` is the data layer's own stable public barrel (a directory), so
 // extensions must write its explicit `/index.js` form; every other entry here
 // is a single file.
+//
+// `react` / `react-dom` (and their subpaths, `react/jsx-runtime` included) are
+// not listed because they are not app modules: the page importmap supplies the
+// host's copies, and an extension must never bundle its own. JSX compiles to
+// `react/jsx-runtime` (EXTENSION_BABEL_PRESETS), so it needs no React import.
 
 export interface ApiModuleGroup {
   /** Coarse grouping for discovery display (facets, data, ui, navigation, …). */
