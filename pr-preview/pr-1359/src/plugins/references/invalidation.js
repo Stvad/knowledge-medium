@@ -1,0 +1,1 @@
+import{gB as e,hB as t}from"../../../chunks/app-6w_nX4Fa.js";export{t as REFERENCES_TARGET_INVALIDATION_CHANNEL,e as referencesInvalidationRule};
