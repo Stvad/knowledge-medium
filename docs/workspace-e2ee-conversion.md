@@ -343,7 +343,7 @@ After the purge, recovery **re-keys the workspace in place** from the newest rec
 
 **Backups.**
 - The project takes a physical backup every day at about 14:14 UTC, plus off-schedule ones, such as one on 2026-10-17 around a hosted Postgres upgrade, and lists the last 7 days of them. PITR is off: on 2026-10-19 the listing showed `pitr_enabled: false` and `walg_enabled: true`. *(measured)*
-- Retention is the plan's: 7 days on Pro, 14 on Team, up to 30 on Enterprise. The 7-day listing matches Pro. *(read: [Backups](https://supabase.com/docs/guides/platform/backups))*
+- Retention is the plan's: 7 days on Pro, 14 on Team, up to 30 on Enterprise. *(read: [Backups](https://supabase.com/docs/guides/platform/backups))* The project is on Pro, which matches the 7-day listing. *(measured: the owner, in the dashboard, 2026-10-20)*
 - **A physical backup snapshots the database's directory,** dead tuples included. So every backup that started before `VACUUM FULL` finished holds plaintext. *(read: same page; inferred: how a file-level copy works)*
 - **WAL is archived even with PITR off:** `archive_mode = on`, with `archive_timeout = 120`. *(measured)*
   - The conversion's WAL carries the re-seal's history rows, whose `before_diff` is plaintext. *(inferred)*
@@ -370,7 +370,7 @@ After the purge, recovery **re-keys the workspace in place** from the newest rec
   - PostgREST passes an RPC's arguments as a bind parameter, so an error's logged `STATEMENT` holds none of them. *(inferred: PostgREST's prepared statements)*
   - That holds only while the settings above do. Logging every statement (`log_statement = 'all'`), or logging by duration, would log an RPC's bind values in full, because `log_parameter_max_length` is unlimited. *(read: [error reporting and logging](https://www.postgresql.org/docs/17/runtime-config-logging.html))*
 - **API logs** have no documented request-body field, so bodies aren't kept *(inferred)*. The app sends content only in RPC bodies, and its URLs carry only ids *(read: same files)*.
-- **Log Drains** copy logs out, on Pro and up, with the destination's retention. *(read: [Log Drains](https://supabase.com/docs/guides/observability/log-drains))* Whether this project has one is [§9.5](#95-open-items) V1.
+- **Log Drains** copy logs out, on Pro and up, with the destination's retention. *(read: [Log Drains](https://supabase.com/docs/guides/observability/log-drains))* This project has none. *(measured: the owner, in the dashboard, 2026-10-20)* Adding one before the "safe from" date would add its retention.
 
 **Elsewhere on the server.**
 - **Planner statistics hold sampled values.**
@@ -446,9 +446,9 @@ After the purge, recovery **re-keys the workspace in place** from the newest rec
   1. **the first day the oldest backup in `npx supabase backups list` was taken at least a day after `VACUUM FULL` finished.**
      - The day's margin covers not knowing whether `inserted_at` marks a backup's start or its end.
      - Reading the oldest backup covers off-schedule backups too.
-     - On the current plan, that's about 8 days after `VACUUM FULL`;
+     - On Pro, that's about 8 days after `VACUUM FULL`;
   2. **the plan's log retention after `finish_conversion`**: 7 days on Pro. It only binds on a plan whose logs outlive its backups, such as Team.
-- **The date stays provisional while any [§9.5](#95-open-items) item marked *gates the date* is open.** Those items cover the copies no listing shows, and the plan that sets the log window. A longer window from any answer moves the date, and so does turning PITR on.
+- **The date stays provisional while any [§9.5](#95-open-items) item marked *gates the date* is open.** Those items cover the copies no listing shows. A longer window from any answer moves the date, and so does turning PITR on, or adding a Log Drain.
 - **The date covers a breach through SQL, the Storage API, the sync protocol or a backup.** A breach of the provider's hosts or disks still finds the residue accepted above, past the date. That includes the host's log file, which rotates by size ([§9.5](#95-open-items) S4).
 - **Until the date, don't restore or duplicate the project from a backup.** That brings the plaintext back into a live database, and a backup from before the flip also undoes the conversion.
 - The date is recorded with the run (#1288), not here.
@@ -459,11 +459,11 @@ None of these blocks the run.
 - An item marked *gates the date* names a copy, or a retention window, that the date waits for. [§9.4](#94-the-safe-from-rule) keeps the date provisional while one is open.
 - The rest bear on the "live systems" line, or on what lies outside the date's boundary.
 
-**For Vlad**, from the dashboard or read-only queries:
-- **V1.** *(gates the date)* Does the project have a Log Drain (Project Settings, Log Drains)? If it does, its destination's retention applies.
-- **V2.** Answered on 2026-10-19: the hosted logging settings, in [§9.1](#91-supabase-postgres).
-- **V3.** *(gates the date)* Is the plan Pro? That's inferred from the 7-day backup listing and the health probe's sizing.
-- **V4.** Answered on 2026-10-19: `postgres` can vacuum all five of step 11's tables ([§9.1](#91-supabase-postgres)).
+**For Vlad:** all four are answered, and recorded in [§9.1](#91-supabase-postgres):
+- **V1.** No Log Drain is configured.
+- **V2.** The hosted logging settings.
+- **V3.** The plan is Pro.
+- **V4.** `postgres` can vacuum all five of step 11's tables.
 
 **For Supabase support:**
 - **S1.** *(gates the date)* WAL is archived while PITR is off (`archive_mode = on`, measured). For how long is that archive kept?
