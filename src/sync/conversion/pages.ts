@@ -49,7 +49,9 @@ export async function* keysetPages<Row, Cursor>({
   for (let after = first; !done?.(after);) {
     signal?.throwIfAborted()
     let page: readonly Row[]
-    for (let attempt = 1; ; attempt++) {
+    // A smaller page after a statement timeout isn't a retry: only transient
+    // failures spend the attempts.
+    for (let attempt = 1; ;) {
       try {
         page = await read(after, limit)
         break
@@ -61,6 +63,7 @@ export async function* keysetPages<Row, Cursor>({
         }
         if (!isTransient(error) || attempt >= READ_ATTEMPTS) throw error
         await sleep(1000 * 2 ** (attempt - 1), signal)
+        attempt++
       }
     }
     if (page.length === 0) return

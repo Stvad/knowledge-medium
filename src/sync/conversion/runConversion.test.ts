@@ -126,7 +126,6 @@ describe('runConversion: preflight → key → flip', () => {
     const [bundle] = [...ui.bundleParent.folders.values()]
     const manifest = JSON.parse(bundle.text('manifest.json'))
     expect(ui.preflights).toEqual([{
-      blockers: [],
       sizes: {
         blockRows: 3,
         blocksBytes: manifest.parts['blocks.jsonl'].bytes,
@@ -406,6 +405,11 @@ describe('runConversion: preflight', () => {
     server.insert({id: 'z-sealed', workspace_id: WS, ...await sealFor(wk, {id: 'z-sealed', workspace_id: WS}, {content: 'a', properties_json: '{}', references_json: '[]'})})
 
     expect(await blockers({})).toEqual([{kind: 'sealed-looking-rows', blockIds: ['z-sealed']}])
+  })
+
+  it('refuses on this device\'s own blockers before reading the workspace from the server', async () => {
+    expect(await blockers({preflight: passingEnvironment({supportsDirectoryPicker: false})})).toEqual([{kind: 'no-directory-picker'}])
+    expect(server.calls.filter(call => call.method === 'readFullBlockPage' || call.method === 'readHistoryPage')).toEqual([])
   })
 
   it('refuses while uploads are pending or rejected, or storage would not last', async () => {

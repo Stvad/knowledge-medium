@@ -150,6 +150,17 @@ describe('the sealing stage', () => {
     expect(removed).toEqual([folder.name])
   })
 
+  it('names a half-written bundle it could not remove, which holds plaintext', async () => {
+    ui.parent.removeEntry = async () => {
+      throw new DOMException('the drive went away', 'NotFoundError')
+    }
+
+    const failing = run({writeLocalDb: async () => { throw new Error('copying the database failed.') }})
+
+    await expect(failing).rejects.toThrow(/^copying the database failed\. The partly written recovery bundle "e2ee-recovery-/)
+    await expect(failing).rejects.toThrow(`"${bundleFolders()[0].name}" couldn't be removed`)
+  })
+
   it('re-takes a bundle edited during the re-seal, and the new one holds plaintext for rows already sealed', async () => {
     server.afterPatch = () => {
       const [folder] = bundleFolders()

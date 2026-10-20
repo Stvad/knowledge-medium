@@ -131,9 +131,9 @@ const runPlaintextStage = async (deps: ConversionFlowDeps): Promise<StageOutcome
   const {server, workspaceId, ui, signal} = deps
   ui.status({kind: 'preflight'})
   const release = await deps.keepAwake()
-  const report = await runPreflight({server, workspaceId, environment: deps.preflight, signal}).finally(release)
-  if (report.blockers.length > 0) return {kind: 'preflight-failed', blockers: report.blockers}
-  await ui.confirmPreflight(report)
+  const preflight = await runPreflight({server, workspaceId, environment: deps.preflight, signal}).finally(release)
+  if (preflight.kind === 'blocked') return {kind: 'preflight-failed', blockers: preflight.blockers}
+  await ui.confirmPreflight(preflight.report)
 
   const key = await obtainFlipKey({...deps, prompts: ui})
   // The prompts in between can stay open indefinitely, and so can the flip's

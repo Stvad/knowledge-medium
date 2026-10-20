@@ -51,10 +51,14 @@ export interface ConversionSizes {
   readonly contentBytes: number
 }
 
+/** What the user confirms before the flip. */
 export interface PreflightReport {
-  readonly blockers: readonly PreflightBlocker[]
   readonly sizes: ConversionSizes
 }
+
+export type PreflightOutcome =
+  | {readonly kind: 'blocked'; readonly blockers: readonly PreflightBlocker[]}
+  | {readonly kind: 'ready'; readonly report: PreflightReport}
 
 /** Enough to show the user. */
 const SEALED_LOOKING_SAMPLE = 20
@@ -119,9 +123,12 @@ export const runPreflight = async ({
   readonly workspaceId: string
   readonly environment: PreflightEnvironment
   readonly signal?: AbortSignal
-}): Promise<PreflightReport> => {
+}): Promise<PreflightOutcome> => {
   const blockers = await localBlockers(environment, signal)
+  // Before the scan, which reads every row of the workspace: these the user
+  // can fix in moments.
+  if (blockers.length > 0) return {kind: 'blocked', blockers}
   const scan = await scanServer(server, workspaceId, signal)
-  if (scan.sealedLooking.length > 0) blockers.push({kind: 'sealed-looking-rows', blockIds: scan.sealedLooking})
-  return {blockers, sizes: {...scan.sizes, localDbBytes: await environment.localDbBytes()}}
+  if (scan.sealedLooking.length > 0) return {kind: 'blocked', blockers: [{kind: 'sealed-looking-rows', blockIds: scan.sealedLooking}]}
+  return {kind: 'ready', report: {sizes: {...scan.sizes, localDbBytes: await environment.localDbBytes()}}}
 }

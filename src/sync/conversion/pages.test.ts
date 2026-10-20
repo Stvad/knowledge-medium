@@ -40,6 +40,14 @@ describe('keysetPages', () => {
     expect(limits).toEqual([4, 2, 4, 4, 4])
   })
 
+  it('keeps its transient retries for after a page had to shrink several times', async () => {
+    // Three statement timeouts shrink 8 to 1; then one failure with no answer.
+    const {read, limits} = reader(call => (call <= 3 ? failure('57014', 500) : call === 4 ? failure(undefined, 503) : null))
+
+    expect(await collect(read, 8)).toEqual(ROWS.map(row => row.id))
+    expect(limits.slice(0, 5)).toEqual([8, 4, 2, 1, 1])
+  })
+
   it('stops on the database refusing the request itself', async () => {
     const {read, limits} = reader(() => failure('42501', 401))
 

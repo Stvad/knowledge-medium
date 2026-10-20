@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { InMemoryWorkspaceKeyStore } from '@/sync/keys/keyStore'
 import { mintWorkspaceKey } from '@/sync/keys/mintWorkspaceKey'
-import type { ConversionUi } from '@/sync/conversion/runConversion'
+import type { ConversionFlowDeps, ConversionUi } from '@/sync/conversion/runConversion'
 import { seedPlaintext, WS } from '@/sync/conversion/test/conversionFixtures'
 import { FakeConversionServer } from '@/sync/conversion/test/fakeConversionServer'
 import { flowDeps, USER } from '@/sync/conversion/test/flowFixtures'
@@ -27,10 +27,10 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-const makeDeps = (ui: ConversionUi, signal: AbortSignal) => flowDeps(server, ui, {keyStore, signal})
-
-const renderFlow = (unavailable: ConversionUnavailable | null = null) =>
-  render(<ConversionFlow workspaceName="Vault" unavailable={unavailable} makeDeps={makeDeps} onClose={() => {}}/>)
+const renderFlow = (unavailable: ConversionUnavailable | null = null, overrides: Partial<ConversionFlowDeps> = {}) => {
+  const makeDeps = (ui: ConversionUi, signal: AbortSignal) => flowDeps(server, ui, {keyStore, signal, ...overrides})
+  return render(<ConversionFlow workspaceName="Vault" unavailable={unavailable} makeDeps={makeDeps} onClose={() => {}}/>)
+}
 const click = (name: RegExp) => fireEvent.click(screen.getByRole('button', {name}))
 const flipped = async () => {
   const read = await server.conversionState(WS)
@@ -72,6 +72,22 @@ describe('ConversionFlow', () => {
     expect(await flipped()).toBe(true)
     expect(await keyStore.get(USER, WS)).not.toBeNull()
     expect(picked.folders.size).toBe(1)
+  })
+
+  it('offers no Stop while this device decrypts the workspace, which runs to its end', async () => {
+    const minted = await mintWorkspaceKey(WS)
+    await keyStore.put(USER, WS, minted.record)
+    server.flip(WS, minted.canary)
+    server.setPhase(WS, 'cleaning')
+    let upgrade!: () => void
+    renderFlow(undefined, {upgradePin: () => new Promise(resolve => (upgrade = () => resolve({ok: true})))})
+    click(/^start$/i)
+    fireEvent.click(await screen.findByLabelText(/every other device/i))
+    click(/^continue$/i)
+
+    expect(await screen.findByText(/decrypting the workspace on this device/i)).toBeInTheDocument()
+    expect(screen.queryByRole('button', {name: /stop/i})).toBeNull()
+    upgrade()
   })
 
   it('offers no Stop while the flip request is out', async () => {

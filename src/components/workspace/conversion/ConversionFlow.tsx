@@ -95,9 +95,10 @@ function UnavailableView({why, onClose}: {why: ConversionUnavailable; onClose: (
 }
 
 /** While the flip request is out it may commit whatever this run does next,
- *  so there is nothing for Stop to stop. */
+ *  and the pin upgrade runs to its end whatever the run's signal says: there
+ *  is nothing for Stop to stop. */
 const canStop = (status: ConversionStatus | null): boolean =>
-  !(status?.kind === 'flipping' && status.waiting === null)
+  !(status?.kind === 'flipping' && status.waiting === null) && status?.kind !== 'upgrading-pin'
 
 function FlowBody({state, start, cancel, onClose}: {
   state: RunState
