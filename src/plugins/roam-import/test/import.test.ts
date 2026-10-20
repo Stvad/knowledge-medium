@@ -1534,6 +1534,58 @@ describe('importRoam', {timeout: 30_000}, () => {
     expect(leaf?.parent_id).toBe(roamBlockId(WORKSPACE, 'chainMid'))
   })
 
+  describe('the write-ahead log', () => {
+    const threeDescendants: RoamExport = [{
+      title: 'page-wa', uid: 'pageWa',
+      children: [{string: 'a', uid: 'waA'}, {string: 'b', uid: 'waB'}, {string: 'c', uid: 'waC'}],
+    }]
+    /** Imports with the database reporting a log far past any limit, recording
+     *  the checkpoints, the pragmas and the progress lines in one order. */
+    const importAgainstAGrowingLog = async () => {
+      const events: string[] = []
+      // The RAW database, which the repo meters through a proxy; shared by
+      // every test here, so restored.
+      const execute = env.h.db.execute.bind(env.h.db)
+      const spy = vi.spyOn(env.h.db, 'execute').mockImplementation(async (sql, params) => {
+        if (sql.startsWith('PRAGMA journal_size_limit')) events.push(sql)
+        if (sql === 'PRAGMA wal_checkpoint=noop') return {rows: {_array: [{'9999999': '9999999'}]}} as never
+        if (sql === 'PRAGMA wal_checkpoint=truncate') { events.push('checkpoint'); return undefined as never }
+        return execute(sql, params)
+      })
+      try {
+        await importRoam(threeDescendants, env.repo, {
+          workspaceId: WORKSPACE,
+          currentUserId: USER_ID,
+          descendantChunkSize: 2,
+          onProgress: msg => events.push(msg.replace(/ \(.*\)$/, '')),
+        })
+      } finally {
+        spy.mockRestore()
+      }
+      return events
+    }
+
+    it('waits for it to be checkpointed before each chunk, and says why', async () => {
+      const events = await importAgainstAGrowingLog()
+
+      const chunks = events.slice(0, events.findIndex(e => e.startsWith('All 3 descendants')))
+        .filter(e => e === 'checkpoint' || e.startsWith('Wrote descendants') || e.startsWith('Paused'))
+      expect(chunks).toEqual([
+        expect.stringMatching(/^Paused/), 'checkpoint', 'Wrote descendants 2/3',
+        expect.stringMatching(/^Paused/), 'checkpoint', 'Wrote descendants 3/3',
+      ])
+    })
+
+    it('drains it once everything is written, so a reload does not re-read it', async () => {
+      const events = await importAgainstAGrowingLog()
+
+      // The import log is its last write.
+      const lastWrite = events.findIndex(e => e.startsWith('Wrote import-log block'))
+      expect(lastWrite).toBeGreaterThan(-1)
+      expect(events.indexOf('PRAGMA journal_size_limit=1', lastWrite)).toBeGreaterThan(lastWrite)
+    })
+  })
+
   it('writes a grouped post-import log block on today\'s daily-note', async () => {
     // Export with two URL siblings (case 2 → list) and a deeply
     // nested attribute that triggers the "depth > 2" diagnostic.

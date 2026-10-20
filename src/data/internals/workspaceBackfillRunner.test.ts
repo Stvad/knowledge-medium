@@ -1151,6 +1151,66 @@ describe('workspace backfill runner — operator trigger', () => {
   })
 })
 
+describe('workspace backfill runner — write-ahead log', () => {
+  it('waits for a log a long read kept growing to be checkpointed before EVERY batch', async () => {
+    const events: string[] = []
+    const repo = makeRepo({
+      id: 'operator-chunked-v1',
+      trigger: 'operator',
+      run: async ({tx}) => {
+        for (let i = 0; i < 2; i++) await tx(async () => { events.push(`batch ${i}`) }, {})
+      },
+    })
+    await seedTarget(repo)
+    // The RAW database, which `repo.db` meters through a proxy, and restored
+    // after: every test in this file shares it.
+    const execute = sharedDb.db.execute.bind(sharedDb.db)
+    const spy = vi.spyOn(sharedDb.db, 'execute').mockImplementation(async (sql, params) => {
+      // The write-ahead VFS's answer, for a log far past any limit.
+      if (sql === 'PRAGMA wal_checkpoint=noop') return {rows: {_array: [{'9999999': '9999999'}]}} as never
+      if (sql === 'PRAGMA wal_checkpoint=truncate') { events.push('checkpoint'); return undefined as never }
+      return execute(sql, params)
+    })
+    try {
+      expect((await repo.runWorkspaceBackfillNow(WS, 'operator-chunked-v1')).outcome).toBe('ran')
+    } finally {
+      spy.mockRestore()
+    }
+
+    expect(events).toEqual(['checkpoint', 'batch 0', 'checkpoint', 'batch 1'])
+  })
+
+  it('asks whether the device is still caught up AFTER that wait, which lasts as long as any read', async () => {
+    const events: string[] = []
+    let caughtUp = true
+    const repo = makeRepo({
+      id: 'chunked-wa-v1',
+      trigger: 'workspace-open',
+      run: async ({tx}) => { await tx(async () => { events.push('batch') }, {}) },
+    }, cb => { if (caughtUp) cb(); return () => {} })
+    await seedTarget(repo)
+    const execute = sharedDb.db.execute.bind(sharedDb.db)
+    const spy = vi.spyOn(sharedDb.db, 'execute').mockImplementation(async (sql, params) => {
+      if (sql === 'PRAGMA wal_checkpoint=noop') return {rows: {_array: [{'9999999': '9999999'}]}} as never
+      if (sql === 'PRAGMA wal_checkpoint=truncate') {
+        events.push('checkpoint')
+        // A download starts while the writer waits out the read.
+        caughtUp = false
+        return undefined as never
+      }
+      return execute(sql, params)
+    })
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await drain(repo)
+    } finally {
+      spy.mockRestore()
+    }
+
+    expect(events).toEqual(['checkpoint'])
+  })
+})
+
 describe('workspace backfill runner — operator outcomes', () => {
   it('does not claim while this device is behind the server', async () => {
     // `tryClaim` WRITES (the Migrations page, then the claim row). Claiming

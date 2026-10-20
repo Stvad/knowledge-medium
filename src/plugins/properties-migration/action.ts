@@ -35,6 +35,7 @@ import { openDialog } from '@/utils/dialogs.js'
 import { dismissToast, showInfo } from '@/utils/toast.js'
 import { reportMigrationProgress, type MigrationProgress } from './progressReport.ts'
 import { oweAnalyzeInstalledTables, runAnalyzeInstalledTables } from '@/data/maintenance'
+import { describeWriteAheadPause, drainWriteAheadLog, onWriteAheadPause } from '@/data/writeAheadLog'
 import {
   ConfirmMigrationDialog, type NamedPropertyKeys,
 } from './ConfirmMigrationDialog.tsx'
@@ -393,14 +394,16 @@ interface ClaimedMigration {
   readonly banner: MigrationProgress
 }
 
-/** Runs the pass, then re-records planner stats for the tables it grows, on
- *  every ending and BEFORE the caller reports one, so the plans are good in this
- *  session. The refresh is recorded as owed first: a reload, a tab that dies or
- *  a refresh that fails leaves it for the next boot's check, which is the only
- *  other thing that would ever repair this growth (see `runAnalyzeTables`).
+/** Runs the pass, then re-records planner stats for the tables it grows and
+ *  drains the write-ahead log, on every ending and BEFORE the caller reports
+ *  one: so the plans are good in this session, and a reload right after does
+ *  not re-read the log. The refresh is recorded as owed first: a reload, a tab
+ *  that dies or a refresh that fails leaves it for the next boot's check, which
+ *  is the only other thing that would ever repair this growth (see
+ *  `runAnalyzeTables`). The drain goes last because the refresh writes too.
  *
- *  Neither failure changes the run's outcome; each only warns. */
-const runPassThenRefreshStats = async (
+ *  No failure here changes the run's outcome; each only warns. */
+const runPassThenTidyDatabase = async (
   pass: OperatorBackfillPass,
   repo: Repo,
   banner: MigrationProgress,
@@ -414,6 +417,10 @@ const runPassThenRefreshStats = async (
     banner.update('Refreshing query statistics…')
     await runAnalyzeInstalledTables(repo.db).catch(error => {
       console.warn('[properties-migration] ANALYZE after the pass failed:', error)
+    })
+    banner.update('Writing pending changes into the database file…')
+    await drainWriteAheadLog(repo.db).catch(error => {
+      console.warn('[properties-migration] draining the write-ahead log after the pass failed:', error)
     })
   }
 }
@@ -625,6 +632,8 @@ const migrateUnderClaim = async (
    *  gesture without the gesture changing. */
   let pending = 0
   let valuesMaterializedTotal = 0
+  /** What a pause hands the status line back to when it ends. */
+  let progressLine = 'Migrating properties to blocks…'
   const unsubscribe = onPropertyCellBackfillProgress(progress => {
     // The RUN's total, not this sweep's. They answer different questions: the
     // per-sweep count is "was what this sweep scanned acceptable", so on a
@@ -639,14 +648,19 @@ const migrateUnderClaim = async (
     // Counts are per-sweep, and the sweep number is shown because a second
     // pass over the same blocks is normal — without it the bar restarts from
     // zero for no reason the operator can see.
-    banner.update(
+    progressLine =
       `Migrating properties to blocks… sweep ${progress.sweeps}, ` +
       `${progress.blocksScanned.toLocaleString()}/` +
-      `${Math.max(blockCount, progress.blocksScanned).toLocaleString()}`,
-    )
+      `${Math.max(blockCount, progress.blocksScanned).toLocaleString()}`
+    banner.update(progressLine)
+  })
+  // Otherwise a pause — which lasts as long as some other read does — leaves
+  // the count frozen with no reason given.
+  const stopPauseReport = onWriteAheadPause(pause => {
+    banner.update(pause ? describeWriteAheadPause(pause) : progressLine)
   })
   try {
-    const result = await runPassThenRefreshStats(pass, repo, banner)
+    const result = await runPassThenTidyDatabase(pass, repo, banner)
     const {message, failed, followUp} = describeOutcome(
       result,
       {blocksMaterializedTotal, valuesMaterializedTotal, unmigrated,
@@ -690,6 +704,7 @@ const migrateUnderClaim = async (
       undoNote(undoCleared))
   } finally {
     unsubscribe()
+    stopPauseReport()
   }
 }
 

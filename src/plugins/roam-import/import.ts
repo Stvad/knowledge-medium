@@ -59,6 +59,12 @@ import {
 import { parseLiteralDailyPageTitle } from '@/utils/relativeDate'
 import type { Repo } from '@/data/repo'
 import {
+  awaitWriteAheadHeadroom,
+  describeWriteAheadPause,
+  drainWriteAheadLog,
+  onWriteAheadPause,
+} from '@/data/writeAheadLog'
+import {
   parseRoamImportReferences,
   planImport,
   type PreparedBlock,
@@ -538,28 +544,35 @@ export const importRoam = async (
   const chunkSize = options.descendantChunkSize ?? DESCENDANT_CHUNK_SIZE
   const descendantsStart = Date.now()
   let written = 0
-  for (let chunkStart = total - 1; chunkStart >= 0; chunkStart -= chunkSize) {
-    const chunkEnd = Math.max(0, chunkStart - chunkSize + 1)
-    const chunkBeganAt = Date.now()
-    await repo.tx(async tx => {
-      for (let i = chunkStart; i >= chunkEnd; i--) {
-        const desc = plan.descendants[i]
-        const data = applyReparent(desc.data, reparentMap)
-        appendRoamMemoExistingConflicts(plan.diagnostics, desc, await tx.get(data.id))
-        await upsertImportedBlock(tx, data, repo.propertySchemas, mergeOptionsForDescendant(desc))
-        await applyMappedTypesInTx(tx, desc, repo, typeSnapshot)
-      }
-    }, {scope: ChangeScope.BlockDefault, description: 'roam import: descendants'})
-    const chunkRows = chunkStart - chunkEnd + 1
-    written += chunkRows
-    const chunkSec = (Date.now() - chunkBeganAt) / 1000
-    const elapsedSec = (Date.now() - descendantsStart) / 1000
-    const rate = elapsedSec > 0 ? written / elapsedSec : 0
-    const remaining = total - written
-    const etaSec = rate > 0 ? remaining / rate : 0
-    log(`Wrote descendants ${written}/${total} ` +
-      `(chunk ${chunkRows} rows in ${chunkSec.toFixed(1)}s, ` +
-      `${rate.toFixed(0)} rows/s, eta ~${formatEta(etaSec)})`)
+  // The next chunk's line replaces this, so only the pause itself needs saying.
+  const stopPauseLog = onWriteAheadPause(pause => { if (pause) log(describeWriteAheadPause(pause)) })
+  try {
+    for (let chunkStart = total - 1; chunkStart >= 0; chunkStart -= chunkSize) {
+      const chunkEnd = Math.max(0, chunkStart - chunkSize + 1)
+      await awaitWriteAheadHeadroom(repo.db)
+      const chunkBeganAt = Date.now()
+      await repo.tx(async tx => {
+        for (let i = chunkStart; i >= chunkEnd; i--) {
+          const desc = plan.descendants[i]
+          const data = applyReparent(desc.data, reparentMap)
+          appendRoamMemoExistingConflicts(plan.diagnostics, desc, await tx.get(data.id))
+          await upsertImportedBlock(tx, data, repo.propertySchemas, mergeOptionsForDescendant(desc))
+          await applyMappedTypesInTx(tx, desc, repo, typeSnapshot)
+        }
+      }, {scope: ChangeScope.BlockDefault, description: 'roam import: descendants'})
+      const chunkRows = chunkStart - chunkEnd + 1
+      written += chunkRows
+      const chunkSec = (Date.now() - chunkBeganAt) / 1000
+      const elapsedSec = (Date.now() - descendantsStart) / 1000
+      const rate = elapsedSec > 0 ? written / elapsedSec : 0
+      const remaining = total - written
+      const etaSec = rate > 0 ? remaining / rate : 0
+      log(`Wrote descendants ${written}/${total} ` +
+        `(chunk ${chunkRows} rows in ${chunkSec.toFixed(1)}s, ` +
+        `${rate.toFixed(0)} rows/s, eta ~${formatEta(etaSec)})`)
+    }
+  } finally {
+    stopPauseLog()
   }
   if (total > 0) log(`All ${total} descendants written (${sinceLastPhase()})`)
 
@@ -588,6 +601,16 @@ export const importRoam = async (
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     log(`Could not write import-log block: ${message}`)
+  }
+
+  // 7. So a reload right after the import does not re-read all it wrote. Like
+  //    the log block, a failure here costs nothing already written.
+  log('Writing pending changes into the database file…')
+  try {
+    await drainWriteAheadLog(repo.db)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    log(`Could not write pending changes into the database file: ${message}`)
   }
 
   return {

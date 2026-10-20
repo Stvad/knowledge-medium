@@ -8,6 +8,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { PropertyCellBackfillProgress } from '@/data/internals/propertyCellBackfill'
+import type { WriteAheadPause } from '@/data/writeAheadLog'
 
 const openDialog = vi.fn(async () => true)
 const progressHandle = {
@@ -48,6 +49,20 @@ const oweAnalyzeInstalledTables = vi.fn(async () => { steps.push('owe') })
 vi.mock('@/data/maintenance', () => ({
   oweAnalyzeInstalledTables: () => oweAnalyzeInstalledTables(),
   runAnalyzeInstalledTables: () => runAnalyzeInstalledTables(),
+}))
+const drainWriteAheadLog = vi.fn(async () => {
+  await new Promise(resolve => setTimeout(resolve, 0))
+  steps.push('drain')
+})
+let pauseListener: ((pause: WriteAheadPause | null) => void) | null = null
+vi.mock('@/data/writeAheadLog', async importOriginal => ({
+  // The real wording: these tests read the banner.
+  describeWriteAheadPause: (await importOriginal<typeof import('@/data/writeAheadLog')>()).describeWriteAheadPause,
+  drainWriteAheadLog: () => drainWriteAheadLog(),
+  onWriteAheadPause: (listener: (pause: WriteAheadPause | null) => void) => {
+    pauseListener = listener
+    return () => { pauseListener = null }
+  },
 }))
 // The synthesis half has its own file; here it must simply not refuse, so the
 // gesture reaches the pass.
@@ -96,11 +111,13 @@ const progress = (over: Partial<PropertyCellBackfillProgress> = {}): PropertyCel
 let claimHeldAfterRun: false | 'this-device' | 'a-peer' = false
 let runHasHappened = false
 
-/** Emits `reported` from inside the run, the way the pass notifies. */
+/** Emits `reported` from inside the run, the way the pass notifies, then runs
+ *  `during` while the pass is still in flight. */
 const runReporting = async (
   reported: PropertyCellBackfillProgress,
   outcome: {outcome: 'ran' | 'deferred'; undoHistoryCleared: boolean; reason?: string;
             retryable?: boolean} | Error = {outcome: 'ran', undoHistoryCleared: false},
+  during: () => void = () => {},
 ) => {
   const repo = {
     activeWorkspaceId: 'ws-1',
@@ -130,6 +147,7 @@ const runReporting = async (
     withOperatorBackfillClaim: claimStub(async () => {
       steps.push('pass')
       emit?.(reported)
+      during()
       runHasHappened = true
       if (outcome instanceof Error) throw outcome
       return outcome
@@ -178,6 +196,8 @@ afterEach(() => {
   runAnalyzeInstalledTables.mockImplementation(refreshFinishing)
   oweAnalyzeInstalledTables.mockReset()
   oweAnalyzeInstalledTables.mockImplementation(async () => { steps.push('owe') })
+  drainWriteAheadLog.mockClear()
+  pauseListener = null
 })
 
 describe('the migration progress path', () => {
@@ -325,18 +345,20 @@ describe('the migration progress path', () => {
   })
 })
 
-describe('planner stats after the pass', () => {
+describe('planner stats and the write-ahead log after the pass', () => {
   beforeEach(() => {
     progressHandle.done.mockImplementation(() => { steps.push('done') })
     progressHandle.fail.mockImplementation(() => { steps.push('fail') })
   })
 
-  it('records the refresh as owed before the pass, and refreshes before reporting', async () => {
+  it('records the refresh as owed before the pass, and refreshes, then drains, before reporting', async () => {
     // Owed first, so a reload, a dead tab or a failed refresh leaves it for
     // the next boot's check; refreshed before the report, so plans are good now.
+    // Drained after the refresh, which writes too, and before the report, which
+    // is what tells the operator a reload is safe.
     await runReporting(progress())
 
-    expect(steps).toEqual(['owe', 'pass', 'analyze', 'done'])
+    expect(steps).toEqual(['owe', 'pass', 'analyze', 'drain', 'done'])
   })
 
   it('refreshes them after a run that wrote nothing, which may finish one that died first', async () => {
@@ -345,13 +367,13 @@ describe('planner stats after the pass', () => {
       valuesMaterialized: 0, valuesMaterializedTotal: 0,
     }))
 
-    expect(steps).toEqual(['owe', 'pass', 'analyze', 'done'])
+    expect(steps).toEqual(['owe', 'pass', 'analyze', 'drain', 'done'])
   })
 
-  it('refreshes them when the pass throws partway, before reporting the failure', async () => {
+  it('refreshes and drains when the pass throws partway, before reporting the failure', async () => {
     await runReporting(progress(), new Error('claim write failed'))
 
-    expect(steps).toEqual(['owe', 'pass', 'analyze', 'fail'])
+    expect(steps).toEqual(['owe', 'pass', 'analyze', 'drain', 'fail'])
   })
 
   it('keeps the run\'s outcome when the refresh itself fails, leaving it owed', async () => {
@@ -368,6 +390,41 @@ describe('planner stats after the pass', () => {
 
     await runReporting(progress())
 
-    expect(steps).toEqual(['pass', 'analyze', 'done'])
+    expect(steps).toEqual(['pass', 'analyze', 'drain', 'done'])
+  })
+
+  it('keeps the run\'s outcome when the drain fails', async () => {
+    drainWriteAheadLog.mockRejectedValueOnce(new Error('database is locked'))
+
+    await runReporting(progress())
+
+    expect(progressHandle.done).toHaveBeenCalled()
+    expect(progressHandle.fail).not.toHaveBeenCalled()
+  })
+})
+
+describe('a pause for the write-ahead log', () => {
+  it('says why the migration stopped, and goes back to its count when it resumes', async () => {
+    const MB = 1024 * 1024
+    await runReporting(progress({sweeps: 1, blocksScanned: 3}), undefined, () => {
+      pauseListener?.({logBytes: 300 * MB})
+      pauseListener?.(null)
+    })
+
+    const lines = progressHandle.update.mock.calls.map(([line]) => line as string)
+    const counting = lines.findIndex(line => /sweep 1, 3\//.test(line))
+    expect(lines.slice(counting, counting + 3)).toEqual([
+      lines[counting],
+      expect.stringMatching(/paused.*300 MB/i),
+      lines[counting],
+    ])
+  })
+
+  it('listens only while the gesture runs', async () => {
+    let listeningDuringPass = false
+    await runReporting(progress(), undefined, () => { listeningDuringPass = pauseListener !== null })
+
+    expect(listeningDuringPass).toBe(true)
+    expect(pauseListener).toBeNull()
   })
 })

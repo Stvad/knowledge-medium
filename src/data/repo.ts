@@ -132,6 +132,7 @@ import {
   type ParsedAliasCollision,
 } from './internals/raiseProtocol'
 import { UndoManager, type HistoryDrop, type UndoEntry } from './internals/undoManager'
+import { awaitWriteAheadHeadroom } from './writeAheadLog'
 import { replayApplicationOrder } from './internals/txSnapshots'
 import { CallbackSet } from '@/utils/callbackSet'
 import { scheduleDeepIdle, CATCHUP_DEEP_IDLE } from '@/utils/scheduleIdle'
@@ -4134,6 +4135,9 @@ export class Repo {
           // callback's return value never arrives on that path. Release beats
           // the guarantee; the `catch` below is the other half.
           let drop: HistoryDrop | undefined
+          // Before the precondition probe, which it can outlast by as long as
+          // the longest read in flight — so the probe stays fresh for the write.
+          await awaitWriteAheadHeadroom(this.db)
           // OUTSIDE the transaction — see the method, which says why it cannot
           // be read from inside one.
           //

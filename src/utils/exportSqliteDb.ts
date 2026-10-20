@@ -22,6 +22,7 @@ import { Zip, ZipPassThrough } from 'fflate'
 import type { Repo } from '../data/repo'
 import { dbFilenameForUser } from '@/data/localDbStorage'
 import { supportsWriteAheadVfs } from '@/data/localDbVfs.js'
+import { checkpointResultPages } from '@/data/writeAheadLog.js'
 import { untilStopped } from '@/utils/untilStopped.js'
 import {
   DB_FILE_SIBLING_SUFFIXES,
@@ -858,22 +859,10 @@ const withDeadline = async <T,>(
 /**
  * Whether a `PRAGMA wal_checkpoint` result says nothing is left outstanding.
  *
- * Read positionally because the two VFSes answer differently, and the first
- * cell means "nothing outstanding" as zero under both: `OPFSWriteAheadVFS`
- * returns one cell whose column NAME is the remaining page count, while under
- * `OPFSCoopSyncVFS` SQLite answers its own pragma with `busy, log, checkpointed`
- * — busy 0 in rollback-journal mode, where there is no WAL to drain at all.
- *
  * An unrecognised shape is NOT drained: the caller is about to copy the main
  * file alone, and a loud refusal beats a backup that quietly omits writes.
  */
-const checkpointDrained = (result: unknown): boolean => {
-  const rows = (result as {rows?: {_array?: unknown[]}} | undefined)?.rows?._array
-  const row = Array.isArray(rows) ? rows[0] : undefined
-  if (!row || typeof row !== 'object') return false
-  const [value] = Object.values(row as Record<string, unknown>)
-  return Number(value) === 0
-}
+const checkpointDrained = (result: unknown): boolean => checkpointResultPages(result) === 0
 
 /**
  * Run `callback` with NO other writer able to touch the database, having first

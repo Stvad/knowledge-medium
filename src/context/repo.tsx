@@ -17,7 +17,7 @@ import { resolveFacetRuntimeSync } from '@/facets/facet.js'
 import { staticDataExtensions } from '@/extensions/staticDataExtensions.js'
 import { surfaceProcessorRejection } from '@/extensions/processorRejectionToast.js'
 import { markStartup } from '@/utils/startupTimeline.js'
-import { SuspenseFallback } from '@/components/util/suspense.js'
+import { BootFallback } from '@/components/util/BootFallback.js'
 
 // Memoize on (userId, useRemoteSync) so toggling local-only doesn't reuse a
 // previously-connected repo. In practice the toggle is followed by a reload
@@ -135,7 +135,7 @@ export function RepoProvider({children, boot = bareBoot}: { children: ReactNode;
     return () => { live = false }
   }, [promise, ready])
   if (failure) throw failure.reason
-  if (!promise || !ready) return <SuspenseFallback/>
+  if (!promise || !ready) return <BootFallback/>
   const repoInstance = promise.value as Repo
 
   return (
