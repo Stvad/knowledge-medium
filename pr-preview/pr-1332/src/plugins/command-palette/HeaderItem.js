@@ -1,1 +1,1 @@
-import{GE as e}from"../../../chunks/app-BS1mRTJi.js";export{e as CommandPaletteHeaderItem};
+import{WE as e}from"../../../chunks/app-D2yXVz_s.js";export{e as CommandPaletteHeaderItem};

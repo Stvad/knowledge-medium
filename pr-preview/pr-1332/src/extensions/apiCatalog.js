@@ -1,1 +1,1 @@
-import{md as e,pd as t}from"../../chunks/app-BS1mRTJi.js";export{t as extensionApiCatalog,e as extensionApiRuntimeExports};
+import{md as e,pd as t}from"../../chunks/app-D2yXVz_s.js";export{t as extensionApiCatalog,e as extensionApiRuntimeExports};

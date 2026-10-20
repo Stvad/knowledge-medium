@@ -1,1 +1,1 @@
-import{Hb as e}from"../../../chunks/app-BS1mRTJi.js";export{e as Breadcrumbs};
+import{Vb as e}from"../../../chunks/app-D2yXVz_s.js";export{e as Breadcrumbs};
