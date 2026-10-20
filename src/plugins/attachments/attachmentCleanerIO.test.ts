@@ -9,7 +9,7 @@ import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { trackTestRepo } from '@/data/test/testRepoScope'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
-import type { BlobStore } from './blobStore.js'
+import { ATTACHMENTS_BUCKET, type BlobStore } from './blobStore.js'
 import { InMemoryByteStore } from './byteStore.js'
 import { InMemoryByteUploadStore } from './uploadStore.js'
 import { createAttachmentCleanerIO, listMediaBlocks, listWorkspaceObjects } from './attachmentCleanerIO.js'
@@ -231,6 +231,52 @@ describe('listWorkspaceObjects', () => {
 
   it('refuses a name outside the folder rather than cut a path out of it', async () => {
     await expect(list(clientServing({objects: [{name: 'aa'}], folders: [], hasNext: false}))).rejects.toThrow(/listed aa under/)
+  })
+})
+
+describe('createAttachmentCleanerIO uploadLimit', () => {
+  /** A client whose `attachments` bucket has `limit`, or none to read. */
+  const clientWithBucket = (limit: number | null | Error) => {
+    const reads: string[] = []
+    const client = {
+      storage: {
+        getBucket: async (id: string) => {
+          reads.push(id)
+          return limit instanceof Error || id !== ATTACHMENTS_BUCKET
+            ? {data: null, error: limit instanceof Error ? limit : new Error('Bucket not found')}
+            : {data: {id, file_size_limit: limit}, error: null}
+        },
+      },
+    } as unknown as SupabaseClient
+    return {client, reads}
+  }
+  const ioOver = (client: SupabaseClient, isRemoteSyncActive = () => true) =>
+    createAttachmentCleanerIO({
+      client,
+      blobStore: {} as BlobStore,
+      byteStore: new InMemoryByteStore(),
+      uploadStore: new InMemoryByteUploadStore(),
+      repo: {} as Repo,
+      userId: 'user-1',
+      workspaceId: WS,
+      isRemoteSyncActive,
+    })
+
+  it("reads the attachments bucket's limit, or null when it has none of its own", async () => {
+    expect(await ioOver(clientWithBucket(10).client).uploadLimit()).toBe(10)
+    expect(await ioOver(clientWithBucket(null).client).uploadLimit()).toBeNull()
+  })
+
+  it('refuses while remote sync is off, before asking Storage', async () => {
+    const {client, reads} = clientWithBucket(10)
+    await expect(ioOver(client, () => false).uploadLimit()).rejects.toThrow(/remote sync/)
+    expect(reads).toEqual([])
+  })
+
+  it("throws, naming why, when the bucket's limit can't be read", async () => {
+    await expect(ioOver(clientWithBucket(new Error('Bucket not found')).client).uploadLimit()).rejects.toThrow(
+      /upload limit.*Bucket not found/,
+    )
   })
 })
 

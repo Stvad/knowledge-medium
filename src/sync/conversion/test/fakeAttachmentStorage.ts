@@ -31,6 +31,9 @@ export interface FakeAttachmentStorage {
   readonly deletes: ObjectPath[]
   /** Uploads this device hasn't had confirmed. */
   pendingUploads: number
+  /** What `uploadLimit` reports. Null by default, so a size refusal comes
+   *  from the write, as one for a limit the client can't read does. */
+  reportedLimit: number | null
 }
 
 export const createFakeAttachmentStorage = ({limit = MAX_OBJECT_BYTES}: {limit?: number} = {}): FakeAttachmentStorage => {
@@ -38,10 +41,11 @@ export const createFakeAttachmentStorage = ({limit = MAX_OBJECT_BYTES}: {limit?:
   const media: MediaRef[] = []
   const local = new Map<string, Uint8Array<ArrayBuffer>>()
   const deletes: ObjectPath[] = []
-  const storage = {pendingUploads: 0} as {pendingUploads: number}
+  const storage: {pendingUploads: number; reportedLimit: number | null} = {pendingUploads: 0, reportedLimit: null}
   const io: ConversionAttachmentsIO = {
     listObjects: async () => [...objects.keys()].sort(),
     readObject: async path => objects.get(path)?.slice() ?? null,
+    uploadLimit: async () => storage.reportedLimit,
     writeObject: async (path, bytes) => {
       if (bytes.length > limit) return {kind: 'refused', status: 413}
       if (objects.has(path)) return {kind: 'exists'}

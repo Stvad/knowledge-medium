@@ -114,6 +114,39 @@ describe('cleanAttachments: raw objects', () => {
     })
   }, 60_000)
 
+  it('an object over the upload limit the store reports is refused without a write; each run reads the limit once', async () => {
+    const store = createFakeAttachmentStorage()
+    store.reportedLimit = 43
+    const photo = utf8('a photo') // seals to exactly 43
+    const tooBig = new Uint8Array(64).fill(2) // seals to 100
+    await putRaw(store, photo, 'block-1')
+    await putRaw(store, tooBig, 'block-2')
+    const limit = vi.spyOn(store.io, 'uploadLimit')
+    const write = vi.spyOn(store.io, 'writeObject')
+    const report = await clean(store)
+    expect(report.converted).toEqual([await rawName(photo)])
+    expect(report.refused).toEqual([{path: await rawName(tooBig), status: 413, sealedBytes: 100}])
+    expect(write.mock.calls.map(([path]) => path)).toEqual([await keyedName(photo)])
+    expect(limit).toHaveBeenCalledOnce()
+
+    // A limit raised after a run applies to the next one.
+    store.reportedLimit = 100
+    expect((await clean(store)).converted).toEqual([await rawName(tooBig)])
+    expect(limit).toHaveBeenCalledTimes(2)
+  })
+
+  it("a failed read of the upload limit is that object's error, and the run's next write reads it again", async () => {
+    const store = createFakeAttachmentStorage()
+    const photos = [utf8('one photo'), utf8('another photo')]
+    for (const [i, photo] of photos.entries()) await putRaw(store, photo, `block-${i}`)
+    vi.spyOn(store.io, 'uploadLimit').mockRejectedValueOnce(new Error('offline'))
+    const report = await clean(store)
+    expect(report.errors).toEqual([{path: expect.any(String), message: 'offline'}])
+    expect([...report.converted, ...report.errors.map(e => ('path' in e ? e.path : ''))].sort()).toEqual(
+      (await Promise.all(photos.map(rawName))).sort(),
+    )
+  })
+
   it('a corrupt object already at the keyed path is replaced, then the raw object is converted and deleted', async () => {
     const store = createFakeAttachmentStorage()
     const photo = utf8('a photo')

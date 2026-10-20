@@ -17,6 +17,11 @@ import { MEDIA_TYPE, mediaHashOfStoredRow } from './mediaBlock.js'
 
 const LIST_PAGE = 1000
 
+/** Before every Storage request, not once: local-only mode can begin mid-run. */
+const assertRemote = (isRemoteSyncActive: () => boolean) => {
+  if (!isRemoteSyncActive()) throw new Error('attachments: remote sync is off')
+}
+
 export interface ListWorkspaceObjectsInput {
   readonly client: SupabaseClient
   readonly userId: string
@@ -44,11 +49,7 @@ export const listWorkspaceObjects = async ({
   isRemoteSyncActive,
   signal,
 }: ListWorkspaceObjectsInput): Promise<ObjectPath[]> => {
-  // Before every request, not once: local-only mode can begin mid-listing.
-  const assertRemote = () => {
-    if (!isRemoteSyncActive()) throw new Error('attachments: remote sync is off')
-  }
-  assertRemote()
+  assertRemote(isRemoteSyncActive)
   const {session} = (await client.auth.getSession()).data
   if (!session || session.user.id !== userId) {
     throw new Error("attachments: the signed-in session is not this account's; sign in again")
@@ -58,7 +59,7 @@ export const listWorkspaceObjects = async ({
   const out: ObjectPath[] = []
   for (let cursor: string | undefined, more = true; more; ) {
     signal?.throwIfAborted()
-    assertRemote()
+    assertRemote(isRemoteSyncActive)
     const {data, error} = await files.listV2({prefix, cursor, limit: LIST_PAGE}, {signal})
     if (error) throw error
     // Without a delimiter `name` is the object's full name. Defence in depth:
@@ -93,6 +94,19 @@ export const listMediaBlocks = async (repo: Repo, workspaceId: string): Promise<
   })
 }
 
+/** The attachments bucket's own upload limit in bytes, or null when it has
+ *  none and only the project-wide limit, which a client can't read, applies.
+ *  Signed-in users may read the bucket's row; anyone else is told it doesn't
+ *  exist. */
+const bucketUploadLimit = async (
+  {client, isRemoteSyncActive}: {readonly client: SupabaseClient; readonly isRemoteSyncActive: () => boolean},
+): Promise<number | null> => {
+  assertRemote(isRemoteSyncActive)
+  const {data, error} = await client.storage.getBucket(ATTACHMENTS_BUCKET)
+  if (error) throw new Error(`attachments: the bucket's upload limit could not be read: ${error.message}`)
+  return data.file_size_limit ?? null
+}
+
 export interface AttachmentCleanerIODeps {
   readonly client: SupabaseClient
   readonly blobStore: BlobStore
@@ -109,6 +123,7 @@ export const createAttachmentCleanerIO = (deps: AttachmentCleanerIODeps): Conver
   return {
     listObjects: signal => listWorkspaceObjects({...deps, signal}),
     readObject: path => blobStore.probe(workspaceId, path),
+    uploadLimit: () => bucketUploadLimit(deps),
     async writeObject(path, bytes) {
       try {
         return {kind: await blobStore.put(workspaceId, path, bytes)}
