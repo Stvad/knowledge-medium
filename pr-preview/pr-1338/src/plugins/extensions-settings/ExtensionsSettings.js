@@ -1,1 +1,1 @@
-import{kt as e}from"../../../chunks/app-DLrHwHIi.js";export{e as ExtensionsSettings};
+import{kt as e}from"../../../chunks/app-1tipUwz4.js";export{e as ExtensionsSettings};
