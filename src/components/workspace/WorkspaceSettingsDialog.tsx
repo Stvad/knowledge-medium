@@ -305,7 +305,7 @@ function DangerSection({workspace, onDeleted}: {workspace: Workspace, onDeleted:
     <div className="space-y-2 rounded-md border border-destructive/40 p-3">
       <Label className="text-destructive">Delete workspace</Label>
       <p className="text-sm text-muted-foreground">
-        This permanently deletes the workspace and all its blocks. To confirm, type the workspace name below.
+        This permanently deletes the workspace for everyone in it: all its blocks and their edit history. It can't be undone. To confirm, type the workspace name below.
       </p>
       <Input
         placeholder={workspace.name}
