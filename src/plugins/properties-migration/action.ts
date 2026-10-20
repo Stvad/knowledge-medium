@@ -34,7 +34,7 @@ import { ActionConfig, ActionContextTypes } from '@/shortcuts/types.js'
 import { openDialog } from '@/utils/dialogs.js'
 import { dismissToast, showInfo } from '@/utils/toast.js'
 import { reportMigrationProgress, type MigrationProgress } from './progressReport.ts'
-import { runAnalyzeInstalledTables } from '@/data/maintenance'
+import { oweAnalyzeInstalledTables, runAnalyzeInstalledTables } from '@/data/maintenance'
 import {
   ConfirmMigrationDialog, type NamedPropertyKeys,
 } from './ConfirmMigrationDialog.tsx'
@@ -394,18 +394,20 @@ interface ClaimedMigration {
 }
 
 /** Runs the pass, then re-records planner stats for the tables it grows, on
- *  every ending and BEFORE the caller reports one. The boot check never repairs
- *  this growth (see `runAnalyzeTables`), so a refresh deferred past the report
- *  is one a reload can lose for good. A run that wrote nothing still refreshes:
- *  it may be finishing one that died before its own refresh.
+ *  every ending and BEFORE the caller reports one, so the plans are good in this
+ *  session. The refresh is recorded as owed first: a reload, a tab that dies or
+ *  a refresh that fails leaves it for the next boot's check, which is the only
+ *  other thing that would ever repair this growth (see `runAnalyzeTables`).
  *
- *  A failed refresh only warns — it must not turn the run's outcome into a
- *  different one. */
+ *  Neither failure changes the run's outcome; each only warns. */
 const runPassThenRefreshStats = async (
   pass: OperatorBackfillPass,
   repo: Repo,
   banner: MigrationProgress,
 ): Promise<OperatorBackfillResult> => {
+  await oweAnalyzeInstalledTables(repo.db).catch(error => {
+    console.warn('[properties-migration] could not record the stats refresh as owed:', error)
+  })
   try {
     return await pass.run()
   } finally {

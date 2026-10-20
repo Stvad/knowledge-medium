@@ -1609,6 +1609,9 @@ export interface AnalyzeResult {
    *  them), NOT that nothing happened: the optimize still ran, we just can't
    *  report what it did. Observability only; nothing branches on it. */
   proposed: string[] | null
+  /** Tables a bulk writer had recorded as owed ({@link recordAnalyzeOwed}),
+   *  analyzed unconditionally before the optimize. */
+  owed: readonly string[]
 }
 
 /** Announce interest in the hot tables so the staleness check considers them.
@@ -1708,12 +1711,15 @@ export const runAnalyzeIfStale = async (
   db: ClientSchemaBootstrapDb,
   probes: readonly string[] = ANALYZE_ARMING_PROBES,
 ): Promise<AnalyzeResult> => serializeAnalyze(async () => {
+  // The optimize cannot see growth under ~10x, so what a writer owed goes first.
+  const owed = await readAnalyzeOwed(db)
+  if (owed.length > 0) await analyzeTablesUnbounded(db, owed)
   await armAnalyzeProbes(db, probes)
   // The dry run fixes `proposed` BEFORE anything analyzes, which is what makes
   // it a report of the optimize's own decision rather than of leftover state.
   const proposed = readOptimizeRows(await db.execute(ANALYZE_DRY_RUN_SQL))
   await analyzeUnbounded(db, ANALYZE_OPTIMIZE_SQL)
-  return {proposed}
+  return {proposed, owed}
 })
 
 /** Every ANALYZE in this module goes through here, so the reset cannot be
@@ -1746,20 +1752,71 @@ const analyzeUnbounded = async (
   await db.execute('DROP TABLE IF EXISTS __km_analyze_bump')
 }
 
+/** A bulk writer's record that `sqlite_stat1` is behind for a table, one
+ *  `client_schema_state` row per table. `PRAGMA optimize` re-analyzes a table
+ *  only once its row count drifts ~10x, so one that tripled keeps its old count,
+ *  and an index that was EMPTY when last analyzed keeps its `0 0` row and reads
+ *  as empty however full it is.
+ *
+ *  Recorded BEFORE the write, so a reload, a tab that dies or a refresh that
+ *  fails all leave it for the next {@link runAnalyzeIfStale}; cleared only by an
+ *  ANALYZE of that table that succeeded. Local, like the stats it is about.
+ *
+ *  Accepted: another tab's boot check can repay a marker while the write is
+ *  still going. The writer's own refresh covers the rest unless it dies too. */
+export const ANALYZE_OWED_MARKER_PREFIX = 'analyze_owed:'
+
+const RECORD_ANALYZE_OWED_SQL = `
+  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
+  VALUES (?, strftime('%s', 'now') * 1000)
+`
+
+const CLEAR_ANALYZE_OWED_SQL = `DELETE FROM client_schema_state WHERE key = ?`
+
+/** One row, so it reads through `getOptional`: the bootstrap shims' `execute`
+ *  hands back no rows. */
+const SELECT_ANALYZE_OWED_SQL = String.raw`
+  SELECT group_concat(substr(key, ${ANALYZE_OWED_MARKER_PREFIX.length + 1}), char(31)) AS tables
+    FROM client_schema_state
+   WHERE key LIKE 'analyze\_owed:%' ESCAPE '\'
+`
+
+const analyzeOwedKey = (table: string): string => `${ANALYZE_OWED_MARKER_PREFIX}${table}`
+
+export const recordAnalyzeOwed = async (
+  db: ClientSchemaBootstrapDb,
+  tables: readonly string[],
+): Promise<void> => {
+  for (const table of tables) await db.execute(RECORD_ANALYZE_OWED_SQL, [analyzeOwedKey(table)])
+}
+
+const readAnalyzeOwed = async (db: ClientSchemaBootstrapDb): Promise<string[]> => {
+  const row = await db.getOptional<{tables: string | null}>(SELECT_ANALYZE_OWED_SQL)
+  return row?.tables ? row.tables.split('\x1f') : []
+}
+
+/** Inside {@link serializeAnalyze} only. Settles each table's owed marker once
+ *  its ANALYZE has succeeded. */
+const analyzeTablesUnbounded = async (
+  db: ClientSchemaBootstrapDb,
+  tables: readonly string[],
+): Promise<void> => {
+  await analyzeUnbounded(
+    db, ...tables.map(table => `ANALYZE "main"."${table.replaceAll('"', '""')}"`),
+  )
+  for (const table of tables) await db.execute(CLEAR_ANALYZE_OWED_SQL, [analyzeOwedKey(table)])
+}
+
 /** Unconditional ANALYZE of the named tables, for a bulk writer that KNOWS it
- *  grew them. {@link runAnalyzeIfStale} cannot be relied on there: `PRAGMA
- *  optimize` re-analyzes a table only once its row count drifts ~10x, so one
- *  that tripled keeps its old count, and an index that was EMPTY when last
- *  analyzed keeps its `0 0` row and reads as empty however full it is.
+ *  grew them — see {@link ANALYZE_OWED_MARKER_PREFIX} for why the drift check
+ *  cannot stand in, and for the marker a writer records first.
  *
  *  A full scan of each table on the writer (the only connection on CoopSync):
  *  keep it off the render path. */
 export const runAnalyzeTables = async (
   db: ClientSchemaBootstrapDb,
   tables: readonly string[],
-): Promise<void> => serializeAnalyze(() => analyzeUnbounded(
-  db, ...tables.map(table => `ANALYZE "main"."${table.replaceAll('"', '""')}"`),
-))
+): Promise<void> => serializeAnalyze(() => analyzeTablesUnbounded(db, tables))
 
 /** Unconditional `ANALYZE` for the manual command-palette command.
  *

@@ -24,7 +24,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -62,6 +62,7 @@ import {
   runAnalyzeIfStale,
   runAnalyzeNow,
   runAnalyzeTables,
+  recordAnalyzeOwed,
   CLIENT_SCHEMA_TRIGGER_CREATE_SQL,
   SELECT_CLIENT_SCHEMA_TRIGGERS_SQL,
   triggerRecreateStatements,
@@ -1131,8 +1132,10 @@ const buildRecordingDb = ({
 /** The bootstrap-db shape over a node:sqlite connection, returning rows the way
  *  PowerSync's `execute` does. */
 const sqliteAdapter = (db: DatabaseSync) => ({
-  execute: async (sql: string) => ({rows: {_array: db.prepare(sql).all()}}),
-  getOptional: async <T,>(sql: string) => (db.prepare(sql).get() ?? null) as T | null,
+  execute: async (sql: string, params: unknown[] = []) =>
+    ({rows: {_array: db.prepare(sql).all(...(params as SQLInputValue[]))}}),
+  getOptional: async <T,>(sql: string, params: unknown[] = []) =>
+    (db.prepare(sql).get(...(params as SQLInputValue[])) ?? null) as T | null,
 })
 
 const statRows = (db: DatabaseSync, tbl: string): Record<string, string> => {
@@ -1438,6 +1441,7 @@ describe('runAnalyzeTables — growth PRAGMA optimize does not see', () => {
     db.exec(CREATE_BLOCKS_TABLE_SQL)
     db.exec(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
     db.exec(CREATE_BLOCKS_FIELD_FORM_INDEX_SQL)
+    db.exec(CREATE_CLIENT_SCHEMA_STATE_TABLE_SQL)
     // Above SQLite's own 2000-row optimize limit, as in the arming suite.
     insertRows('b', 2500, 0)
     db.exec('ANALYZE')
@@ -1475,6 +1479,45 @@ describe('runAnalyzeTables — growth PRAGMA optimize does not see', () => {
     await runAnalyzeTables(interleaving, ['blocks', 'blocks'])
 
     expect(rowsPerStat('idx_blocks_workspace_active')).toEqual([7500, 7500])
+  })
+
+  const owedTables = () => (db.prepare(
+    `SELECT key FROM client_schema_state WHERE key LIKE 'analyze%' ORDER BY key`,
+  ).all() as Array<{key: string}>).map(row => row.key)
+
+  it('repays a refresh a bulk writer owed at the next boot check', async () => {
+    // What the boot check does when the writer's own refresh never ran: a
+    // reload, a tab that died, or a refresh that failed.
+    await recordAnalyzeOwed(sqliteAdapter(db), ['blocks'])
+
+    const {owed} = await runAnalyzeIfStale(sqliteAdapter(db))
+
+    expect(owed).toEqual(['blocks'])
+    expect(rowsPerStat('idx_blocks_field_form')).toEqual([5000, 5000, 500, 500])
+    expect(owedTables()).toEqual([])
+  })
+
+  it('keeps the refresh owed when it fails', async () => {
+    await recordAnalyzeOwed(sqliteAdapter(db), ['blocks'])
+    const failing = {
+      ...sqliteAdapter(db),
+      execute: async (sql: string, params?: unknown[]) => {
+        if (sql.startsWith('ANALYZE')) throw new Error('database is locked')
+        return sqliteAdapter(db).execute(sql, params)
+      },
+    }
+
+    await expect(runAnalyzeTables(failing, ['blocks'])).rejects.toThrow('database is locked')
+
+    expect(owedTables()).toHaveLength(1)
+  })
+
+  it('settles what it analyzed, and only that', async () => {
+    await recordAnalyzeOwed(sqliteAdapter(db), ['blocks', 'block_references'])
+
+    await runAnalyzeTables(sqliteAdapter(db), ['blocks'])
+
+    expect(owedTables()).toEqual(['analyze_owed:block_references'])
   })
 
   it('moves the schema cookie, so already-open readers re-plan', async () => {

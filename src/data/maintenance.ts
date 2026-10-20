@@ -11,13 +11,20 @@
  * is a multi-second pass on a large DB on the writer. See the docs on each
  * function.
  */
-import { runAnalyzeTables } from './internals/clientSchema'
+import { recordAnalyzeOwed, runAnalyzeTables } from './internals/clientSchema'
 import { installedAnalyzeTableNames } from './localSchema'
 
 export { runAnalyzeIfStale, runAnalyzeNow, runAnalyzeTables } from './internals/clientSchema'
 
-/** {@link runAnalyzeTables} over every hot table the INSTALLED schema declares,
- *  plugin-owned ones included, for a bulk block writer that grew them. */
-export const runAnalyzeInstalledTables = (db: Parameters<typeof runAnalyzeTables>[0]): Promise<void> =>
+type MaintenanceDb = Parameters<typeof runAnalyzeTables>[0]
+
+/** Before a bulk block write: record a refresh as owed for every hot table the
+ *  INSTALLED schema declares, plugin-owned ones included, so the next boot's
+ *  check repays it if the writer's own refresh never lands. */
+export const oweAnalyzeInstalledTables = (db: MaintenanceDb): Promise<void> =>
+  recordAnalyzeOwed(db, installedAnalyzeTableNames())
+
+/** After it: {@link runAnalyzeTables} over the same tables, settling what was owed. */
+export const runAnalyzeInstalledTables = (db: MaintenanceDb): Promise<void> =>
   runAnalyzeTables(db, installedAnalyzeTableNames())
 export type { AnalyzeResult } from './internals/clientSchema'

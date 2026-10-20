@@ -640,11 +640,14 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
       void runAnalyzeIfStale(
         backfillDb,
         installedAnalyzeArmingProbes(),
-      ).then(({proposed}) => {
+      ).then(({proposed, owed}) => {
         // Silent when nothing was stale, which is every boot after the first —
         // but when it DOES park the worker, say which tables it was for.
         // Otherwise the only symptom of a mis-tuned staleness rule is an
         // unexplained pause.
+        if (owed.length > 0) {
+          console.info(`[Repo] ANALYZE owed by a bulk write (${reason}):`, owed.join(', '))
+        }
         if (proposed && proposed.length > 0) {
           console.info(`[Repo] ANALYZE (${reason}):`, proposed.join(', '))
         }

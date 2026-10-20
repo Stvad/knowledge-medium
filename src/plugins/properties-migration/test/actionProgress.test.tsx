@@ -44,7 +44,9 @@ const refreshFinishing = async () => {
   steps.push('analyze')
 }
 const runAnalyzeInstalledTables = vi.fn(refreshFinishing)
+const oweAnalyzeInstalledTables = vi.fn(async () => { steps.push('owe') })
 vi.mock('@/data/maintenance', () => ({
+  oweAnalyzeInstalledTables: () => oweAnalyzeInstalledTables(),
   runAnalyzeInstalledTables: () => runAnalyzeInstalledTables(),
 }))
 // The synthesis half has its own file; here it must simply not refuse, so the
@@ -126,6 +128,7 @@ const runReporting = async (
       beginHistoryDrop: () => ({finish: () => {}, abandon: () => {}}),
     }),
     withOperatorBackfillClaim: claimStub(async () => {
+      steps.push('pass')
       emit?.(reported)
       runHasHappened = true
       if (outcome instanceof Error) throw outcome
@@ -173,6 +176,8 @@ afterEach(() => {
   steps.length = 0
   runAnalyzeInstalledTables.mockReset()
   runAnalyzeInstalledTables.mockImplementation(refreshFinishing)
+  oweAnalyzeInstalledTables.mockReset()
+  oweAnalyzeInstalledTables.mockImplementation(async () => { steps.push('owe') })
 })
 
 describe('the migration progress path', () => {
@@ -326,10 +331,12 @@ describe('planner stats after the pass', () => {
     progressHandle.fail.mockImplementation(() => { steps.push('fail') })
   })
 
-  it('refreshes them before reporting the run, so a reload after the report cannot lose it', async () => {
+  it('records the refresh as owed before the pass, and refreshes before reporting', async () => {
+    // Owed first, so a reload, a dead tab or a failed refresh leaves it for
+    // the next boot's check; refreshed before the report, so plans are good now.
     await runReporting(progress())
 
-    expect(steps).toEqual(['analyze', 'done'])
+    expect(steps).toEqual(['owe', 'pass', 'analyze', 'done'])
   })
 
   it('refreshes them after a run that wrote nothing, which may finish one that died first', async () => {
@@ -338,21 +345,29 @@ describe('planner stats after the pass', () => {
       valuesMaterialized: 0, valuesMaterializedTotal: 0,
     }))
 
-    expect(steps).toEqual(['analyze', 'done'])
+    expect(steps).toEqual(['owe', 'pass', 'analyze', 'done'])
   })
 
   it('refreshes them when the pass throws partway, before reporting the failure', async () => {
     await runReporting(progress(), new Error('claim write failed'))
 
-    expect(steps).toEqual(['analyze', 'fail'])
+    expect(steps).toEqual(['owe', 'pass', 'analyze', 'fail'])
   })
 
-  it('keeps the run\'s outcome when the refresh itself fails', async () => {
+  it('keeps the run\'s outcome when the refresh itself fails, leaving it owed', async () => {
     runAnalyzeInstalledTables.mockRejectedValue(new Error('database is locked'))
 
     await runReporting(progress())
 
     expect(progressHandle.done).toHaveBeenCalled()
     expect(progressHandle.fail).not.toHaveBeenCalled()
+  })
+
+  it('still runs the pass when the debt cannot be recorded', async () => {
+    oweAnalyzeInstalledTables.mockRejectedValue(new Error('disk I/O error'))
+
+    await runReporting(progress())
+
+    expect(steps).toEqual(['pass', 'analyze', 'done'])
   })
 })
