@@ -1,1 +1,1 @@
-import{ag as e,cg as t,ig as n,og as r,rg as i,sg as a}from"../../../chunks/app-D7_hVRKI.js";export{i as ASSETS_ROOT,n as InMemoryByteStore,e as OpfsByteStore,r as assetPathSegments,a as createByteStore,t as getByteStore};
+import{ag as e,cg as t,ig as n,og as r,rg as i,sg as a}from"../../../chunks/app-D3JBDftb.js";export{i as ASSETS_ROOT,n as InMemoryByteStore,e as OpfsByteStore,r as assetPathSegments,a as createByteStore,t as getByteStore};

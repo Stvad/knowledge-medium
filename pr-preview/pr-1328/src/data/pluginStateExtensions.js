@@ -1,1 +1,1 @@
-import{JV as e,YV as t}from"../../chunks/app-D7_hVRKI.js";export{e as pluginPrefsExtension,t as pluginUIStateExtension};
+import{JV as e,YV as t}from"../../chunks/app-D3JBDftb.js";export{e as pluginPrefsExtension,t as pluginUIStateExtension};

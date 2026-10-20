@@ -1,1 +1,1 @@
-import{DO as e,EO as t}from"../../../chunks/app-D7_hVRKI.js";export{t as PropertySchemaBlockRenderer,e as PropertySchemaContentRenderer};
+import{DO as e,EO as t}from"../../../chunks/app-D3JBDftb.js";export{t as PropertySchemaBlockRenderer,e as PropertySchemaContentRenderer};

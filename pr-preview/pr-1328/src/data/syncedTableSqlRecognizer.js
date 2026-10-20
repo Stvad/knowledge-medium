@@ -1,1 +1,1 @@
-import{dU as e,lU as t,uU as n}from"../../chunks/app-D7_hVRKI.js";export{t as SYNCED_TABLES,n as syncedWriteTarget,e as writeTargets};
+import{dU as e,fU as t,uU as n}from"../../chunks/app-D3JBDftb.js";export{n as SYNCED_TABLES,e as syncedWriteTarget,t as writeTargets};

@@ -1,1 +1,1 @@
-import{Op as e}from"../../../../../chunks/app-D7_hVRKI.js";export{e as Wikilink};
+import{Op as e}from"../../../../../chunks/app-D3JBDftb.js";export{e as Wikilink};

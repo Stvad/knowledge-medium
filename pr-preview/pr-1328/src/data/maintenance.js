@@ -1,1 +1,1 @@
-import{bq as e,xq as t}from"../../chunks/app-D7_hVRKI.js";export{e as runAnalyzeIfStale,t as runAnalyzeNow};
+import{Sq as e,xq as t}from"../../chunks/app-D3JBDftb.js";export{t as runAnalyzeIfStale,e as runAnalyzeNow};

@@ -1,1 +1,1 @@
-import{Sy as e,xy as t}from"../../../chunks/app-D7_hVRKI.js";export{t as isLeftSidebarSectionContribution,e as leftSidebarSectionsFacet};
+import{Sy as e,xy as t}from"../../../chunks/app-D3JBDftb.js";export{t as isLeftSidebarSectionContribution,e as leftSidebarSectionsFacet};

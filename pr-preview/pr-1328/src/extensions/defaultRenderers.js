@@ -1,1 +1,1 @@
-import{hO as e,mO as t,pO as n}from"../../chunks/app-D7_hVRKI.js";export{n as defaultRegistry,t as defaultRendererContributions,e as defaultRenderersExtension};
+import{hO as e,mO as t,pO as n}from"../../chunks/app-D3JBDftb.js";export{n as defaultRegistry,t as defaultRendererContributions,e as defaultRenderersExtension};

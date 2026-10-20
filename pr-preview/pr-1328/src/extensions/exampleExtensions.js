@@ -1,1 +1,1 @@
-import{XT as e,YT as t}from"../../chunks/app-D7_hVRKI.js";export{t as exampleExtensions,e as insertExampleExtensionsUnder};
+import{XT as e,YT as t}from"../../chunks/app-D3JBDftb.js";export{t as exampleExtensions,e as insertExampleExtensionsUnder};

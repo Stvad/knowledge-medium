@@ -1,1 +1,1 @@
-import{BC as e,mt as t,zC as n}from"../../../chunks/app-D7_hVRKI.js";export{n as keybindingOverridesProp,e as keybindingsPrefsType,t as keybindingsSettingsPlugin};
+import{BC as e,mt as t,zC as n}from"../../../chunks/app-D3JBDftb.js";export{n as keybindingOverridesProp,e as keybindingsPrefsType,t as keybindingsSettingsPlugin};

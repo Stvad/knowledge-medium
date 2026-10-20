@@ -1,1 +1,1 @@
-import{DE as e,EE as t,OE as n,TE as r}from"../../../chunks/app-D7_hVRKI.js";export{r as extensionsOverridesPresetCore,t as extensionsOverridesProp,e as extensionsPrefsType,n as overridesCodec};
+import{DE as e,EE as t,OE as n,TE as r}from"../../../chunks/app-D3JBDftb.js";export{r as extensionsOverridesPresetCore,t as extensionsOverridesProp,e as extensionsPrefsType,n as overridesCodec};
