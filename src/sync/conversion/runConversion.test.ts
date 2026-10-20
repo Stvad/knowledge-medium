@@ -15,7 +15,9 @@ import {
 } from './runConversion.js'
 import { keyOf, sealFor, seedPlaintext, WS } from './test/conversionFixtures.js'
 import { FakeConversionServer } from './test/fakeConversionServer.js'
-import { flowDeps, passingEnvironment, USER } from './test/flowFixtures.js'
+import { FAKE_LOCAL_DB, flowDeps, passingEnvironment, USER } from './test/flowFixtures.js'
+import { MemoryBundleFolder } from './test/memoryBundleFolder.js'
+import type { BundleFolder } from './bundle/bundleParts.js'
 
 /** A user who answers every prompt as told, and remembers what they were asked. */
 class ScriptedUi implements ConversionUi {
@@ -29,6 +31,16 @@ class ScriptedUi implements ConversionUi {
   /** What the user pastes when asked for the saved key, in order; null starts over. */
   pastes: Array<string | null> = []
   cancelContract = false
+  /** Where the user puts each new bundle. */
+  readonly bundleParent = new MemoryBundleFolder('picked')
+
+  async chooseBundleFolder() {
+    return this.bundleParent
+  }
+
+  async reopenBundleFolder({recorded}: {recorded: BundleFolder}) {
+    return recorded
+  }
 
   async confirmContract(stage: ActiveStage) {
     this.contracts.push(stage.kind)
@@ -107,14 +119,36 @@ describe('runConversion: preflight → key → flip', () => {
   it('flips under a key the user typed back, stores it, and marks the local row', async () => {
     const result = await run()
 
-    expect(result).toEqual({kind: 'stopped', stage: {kind: 'sealing', canary: await serverCanary()}})
+    // Past the flip the stage runs on through the bundle, re-seal and purge.
+    expect(result).toEqual({kind: 'stopped', stage: {kind: 'cleaning', canary: await serverCanary()}})
     expect(ui.contracts).toEqual(['plaintext'])
-    expect(ui.preflights).toEqual([{blockers: []}])
+    // The dry run measures what the bundle then writes.
+    const [bundle] = [...ui.bundleParent.folders.values()]
+    const manifest = JSON.parse(bundle.text('manifest.json'))
+    expect(ui.preflights).toEqual([{
+      sizes: {
+        blockRows: 3,
+        blocksBytes: manifest.parts['blocks.jsonl'].bytes,
+        historyRows: 3,
+        historyBytes: manifest.parts['server-history.jsonl'].bytes,
+        localDbBytes: FAKE_LOCAL_DB.length,
+        contentBytes: expect.any(Number),
+      },
+    }])
     expect(ui.keyPrompts).toHaveLength(1)
     expect(await validateCanary((await storedKey()).wk, await serverCanary(), WS)).toBe(true)
     expect(localCanaries[0]).toBe(await serverCanary())
     // The sealing stage's canary check needed no paste: this device holds the key.
     expect(ui.savedKeyPrompts).toEqual([])
+  })
+
+  it('keeps the screen awake through the preflight scan', async () => {
+    const awake: string[] = []
+    ui.confirmPreflight = async () => void awake.push('confirm')
+
+    await run({keepAwake: async () => (awake.push('on'), () => void awake.push('off'))})
+
+    expect(awake.slice(0, 3)).toEqual(['on', 'off', 'confirm'])
   })
 
   it('asks again until the typed-back key unlocks the workspace, storing nothing before', async () => {
@@ -182,10 +216,10 @@ describe('runConversion: preflight → key → flip', () => {
   it('carries on past a flip that committed after its response was lost', async () => {
     server.loseNextFlipResponse = true
 
-    expect(await run()).toMatchObject({kind: 'stopped', stage: {kind: 'sealing'}})
+    expect(await run()).toMatchObject({kind: 'stopped', stage: {kind: 'cleaning'}})
     expect(flips()).toBe(1)
     expect(await validateCanary((await storedKey()).wk, await serverCanary(), WS)).toBe(true)
-    // Marked from the server's canary as the sealing stage begins.
+    // Marked from the server's canary as each stage past the flip begins.
     expect(new Set(localCanaries)).toEqual(new Set([await serverCanary()]))
   })
 
@@ -211,7 +245,7 @@ describe('runConversion: preflight → key → flip', () => {
       return flip(workspaceId, canary)
     }
 
-    expect(await run()).toMatchObject({kind: 'stopped', stage: {kind: 'sealing', canary: earlier.canary}})
+    expect(await run()).toMatchObject({kind: 'stopped', stage: {kind: 'cleaning', canary: earlier.canary}})
   })
 
   it('reports a refusal it can\'t follow up as blocked, not as refused', async () => {
@@ -247,7 +281,7 @@ describe('runConversion: preflight → key → flip', () => {
     const uploadQueue = async () => ({pending: ++checks > 1 ? 2 : 0, rejected: 0})
 
     expect(await run({preflight: passingEnvironment({uploadQueue})}))
-      .toEqual({kind: 'preflight-failed', report: {blockers: [{kind: 'pending-uploads', count: 2}]}})
+      .toEqual({kind: 'preflight-failed', blockers: [{kind: 'pending-uploads', count: 2}]})
     expect(ui.keyPrompts).toHaveLength(1)
     expect(flips()).toBe(0)
   })
@@ -259,7 +293,7 @@ describe('runConversion: preflight → key → flip', () => {
     const uploadQueue = async () => ({pending: ++checks > 2 ? 1 : 0, rejected: 0})
 
     expect(await run({preflight: passingEnvironment({uploadQueue})}))
-      .toEqual({kind: 'preflight-failed', report: {blockers: [{kind: 'pending-uploads', count: 1}]}})
+      .toEqual({kind: 'preflight-failed', blockers: [{kind: 'pending-uploads', count: 1}]})
     // The refused send changed nothing; no second one went out.
     expect(flips()).toBe(1)
     expect(await server.conversionState(WS)).toMatchObject({kind: 'read', state: {encryptionMode: 'none'}})
@@ -337,8 +371,11 @@ describe('runConversion: preflight → key → flip', () => {
   })
 
   it('reports a refused flip and changes nothing', async () => {
-    server.sessionUserId = 'someone-else'
-    // The stage read says owner, as a stale membership might; the flip itself refuses.
+    // As a stale ownership would: everything before the flip passes, and the
+    // flip itself refuses.
+    server.convertWorkspaceToE2ee = async () => {
+      throw Object.assign(new Error('convert_workspace_to_e2ee: only the workspace owner can convert it'), {code: 'KMC01'})
+    }
     expect(await run()).toEqual({kind: 'flip-refused', message: 'convert_workspace_to_e2ee: only the workspace owner can convert it'})
     expect(await server.conversionState(WS)).toMatchObject({state: {encryptionMode: 'none', conversionPhase: null}})
     expect(localCanaries).toEqual([])
@@ -351,7 +388,7 @@ describe('runConversion: preflight', () => {
     expect(ui.keyPrompts).toEqual([])
     expect(flips()).toBe(0)
     if (result.kind !== 'preflight-failed') throw new Error(`expected a failed preflight, got ${result.kind}`)
-    return result.report.blockers
+    return result.blockers
   }
 
   it('refuses a plaintext row the re-seal would count as sealed', async () => {
@@ -362,12 +399,39 @@ describe('runConversion: preflight', () => {
     expect(await blockers({})).toEqual([{kind: 'sealed-looking-rows', blockIds: ['looks-sealed']}])
   })
 
+  it('refuses on a sealed-looking row before reading the workspace\'s history', async () => {
+    const wk = await keyOf(9)
+    server.insert({id: 'looks-sealed', workspace_id: WS, ...await sealFor(wk, {id: 'looks-sealed', workspace_id: WS}, {content: 'a', properties_json: '{}', references_json: '[]'})})
+
+    expect(await blockers({})).toEqual([{kind: 'sealed-looking-rows', blockIds: ['looks-sealed']}])
+    expect(server.calls.filter(call => call.method === 'readHistoryPage' || call.method === 'workspaceCounts')).toEqual([])
+  })
+
+  it('stops reading blocks once its sample of sealed-looking rows is full', async () => {
+    server.maxRows = 10
+    const wk = await keyOf(9)
+    for (let i = 0; i < 40; i++) {
+      const id = `s${String(i).padStart(2, '0')}`
+      server.insert({id, workspace_id: WS, ...await sealFor(wk, {id, workspace_id: WS}, {content: 'a', properties_json: '{}', references_json: '[]'})})
+    }
+
+    const [blocker] = await blockers({})
+    expect(blocker).toMatchObject({kind: 'sealed-looking-rows'})
+    // 3 plaintext rows then 40 sealed, 10 a page: the sample of 20 fills on the third.
+    expect(server.calls.filter(call => call.method === 'readFullBlockPage')).toHaveLength(3)
+  })
+
   it('finds a sealed-looking row on a later page', async () => {
     server.maxRows = 2
     const wk = await keyOf(9)
     server.insert({id: 'z-sealed', workspace_id: WS, ...await sealFor(wk, {id: 'z-sealed', workspace_id: WS}, {content: 'a', properties_json: '{}', references_json: '[]'})})
 
     expect(await blockers({})).toEqual([{kind: 'sealed-looking-rows', blockIds: ['z-sealed']}])
+  })
+
+  it('refuses on this device\'s own blockers before reading the workspace from the server', async () => {
+    expect(await blockers({preflight: passingEnvironment({supportsDirectoryPicker: false})})).toEqual([{kind: 'no-directory-picker'}])
+    expect(server.calls.filter(call => call.method === 'readFullBlockPage' || call.method === 'readHistoryPage')).toEqual([])
   })
 
   it('refuses while uploads are pending or rejected, or storage would not last', async () => {
@@ -485,7 +549,7 @@ describe('runConversion: the canary check past the flip', () => {
   it('asks for the saved key when this device holds none, and stores it', async () => {
     ui.pastes = ['not a key', (await mintWorkspaceKey(WS)).displayed, saved.displayed]
 
-    expect(await run()).toMatchObject({kind: 'stopped', stage: {kind: 'sealing'}})
+    expect(await run()).toMatchObject({kind: 'stopped', stage: {kind: 'cleaning'}})
     expect(ui.savedKeyPrompts).toEqual([
       {context: 'converting', problem: null, canStartOver: false},
       {context: 'converting', problem: 'format', canStartOver: false},

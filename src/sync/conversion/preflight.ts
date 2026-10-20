@@ -4,8 +4,11 @@
  * plaintext mode are the run's stage read; the flip re-checks both.
  */
 
+import { SEALED_COLUMNS } from '../transform.js'
 import type { ConversionServer } from './conversionServer.js'
-import { idsOf, isSealedRow, RESEAL_PAGE_SIZE, serverPages } from './sealing.js'
+import { encodeJsonlLine } from './bundle/bundleParts.js'
+import { BUNDLE_PAGE_SIZE, blockRowPages, historyRowPages } from './bundle/takeBundle.js'
+import { idsOf, isSealedRow } from './sealing.js'
 
 export interface PreflightEnvironment {
   /** Mode pins persist (`canPersistPins`): the pin upgrade writes one. */
@@ -18,6 +21,8 @@ export interface PreflightEnvironment {
    *  and uploads the server rejected that wait for Retry. A write held for any
    *  workspace stops this device's downloads, which the pin upgrade needs. */
   readonly uploadQueue: (signal?: AbortSignal) => Promise<{readonly pending: number; readonly rejected: number}>
+  /** The size of this device's database, which the bundle copies whole. */
+  readonly localDbBytes: () => Promise<number>
 }
 
 export type PreflightBlocker =
@@ -30,27 +35,67 @@ export type PreflightBlocker =
   | {readonly kind: 'key-store-not-durable'}
   | {readonly kind: 'no-directory-picker'}
 
-export interface PreflightReport {
-  readonly blockers: readonly PreflightBlocker[]
+/** What the recovery bundle and the conversion will take, measured by a dry
+ *  run of the bundle's own paging and line encoding. A bundle that can't be written after the
+ *  flip leaves every device waiting until it is. */
+export interface ConversionSizes {
+  readonly blockRows: number
+  /** `blocks.jsonl`, as the bundle writes it. */
+  readonly blocksBytes: number
+  readonly historyRows: number
+  /** `server-history.jsonl`. */
+  readonly historyBytes: number
+  readonly localDbBytes: number
+  /** The content columns' total: the server needs several times this free
+   *  while it re-seals and keeps history of both versions (runbook step 6). */
+  readonly contentBytes: number
 }
 
-/** Enough to show the user; the scan stops once it has this many. */
+/** What the user confirms before the flip. */
+export interface PreflightReport {
+  readonly sizes: ConversionSizes
+}
+
+export type PreflightOutcome =
+  | {readonly kind: 'blocked'; readonly blockers: readonly PreflightBlocker[]}
+  | {readonly kind: 'ready'; readonly report: PreflightReport}
+
+/** Enough to show the user. */
 const SEALED_LOOKING_SAMPLE = 20
 
-/** Pages every row by id, as the re-seal does: each read is one bounded index
- *  scan, where a server-side filter would walk the whole workspace in one
- *  statement and hit the statement timeout on a large one. */
-const sealedLookingRows = async (
-  server: ConversionServer,
-  workspaceId: string,
-  signal?: AbortSignal,
-): Promise<string[]> => {
-  const found: string[] = []
-  for await (const page of serverPages(server, workspaceId, RESEAL_PAGE_SIZE, signal)) {
-    found.push(...idsOf(page.filter(isSealedRow)))
-    if (found.length >= SEALED_LOOKING_SAMPLE) break
+const encoder = new TextEncoder()
+
+/** The dry run of the bundle's own paging, in two halves: the blocks, which
+ *  also finds sealed-looking rows, then the history. Every read is one bounded
+ *  index scan by id, where a server-side filter over the whole workspace would
+ *  hit the statement timeout on a large one. */
+const scanBlocks = async (server: ConversionServer, workspaceId: string, signal?: AbortSignal) => {
+  const sealedLooking: string[] = []
+  let blockRows = 0
+  let blocksBytes = 0
+  let contentBytes = 0
+  for await (const page of blockRowPages(server, workspaceId, BUNDLE_PAGE_SIZE, signal)) {
+    for (const row of page) {
+      blocksBytes += encodeJsonlLine(row).length
+      for (const column of SEALED_COLUMNS) contentBytes += encoder.encode(row[column]).length
+    }
+    if (sealedLooking.length < SEALED_LOOKING_SAMPLE) sealedLooking.push(...idsOf(page.filter(isSealedRow)))
+    blockRows += page.length
+    // Blocked whatever the rest holds, and nothing measured is used then.
+    if (sealedLooking.length >= SEALED_LOOKING_SAMPLE) break
   }
-  return found.slice(0, SEALED_LOOKING_SAMPLE)
+  return {sealedLooking: sealedLooking.slice(0, SEALED_LOOKING_SAMPLE), sizes: {blockRows, blocksBytes, contentBytes}}
+}
+
+const scanHistory = async (server: ConversionServer, workspaceId: string, signal?: AbortSignal) => {
+  const {maxEventId} = await server.workspaceCounts(workspaceId)
+  let historyRows = 0
+  let historyBytes = 0
+  for await (const page of historyRowPages(server, workspaceId, maxEventId, BUNDLE_PAGE_SIZE, signal)) {
+    for (const row of page) historyBytes += encodeJsonlLine(row).length
+    historyRows += page.length
+  }
+  return {historyRows, historyBytes}
 }
 
 /** The blockers this device can change on its own at any moment: checked in
@@ -80,9 +125,14 @@ export const runPreflight = async ({
   readonly workspaceId: string
   readonly environment: PreflightEnvironment
   readonly signal?: AbortSignal
-}): Promise<PreflightReport> => {
+}): Promise<PreflightOutcome> => {
   const blockers = await localBlockers(environment, signal)
-  const sealedLooking = await sealedLookingRows(server, workspaceId, signal)
-  if (sealedLooking.length > 0) blockers.push({kind: 'sealed-looking-rows', blockIds: sealedLooking})
-  return {blockers}
+  // Before the scan, which reads every row of the workspace: these the user
+  // can fix in moments.
+  if (blockers.length > 0) return {kind: 'blocked', blockers}
+  const blocks = await scanBlocks(server, workspaceId, signal)
+  // Before the history, which can be the larger read.
+  if (blocks.sealedLooking.length > 0) return {kind: 'blocked', blockers: [{kind: 'sealed-looking-rows', blockIds: blocks.sealedLooking}]}
+  const history = await scanHistory(server, workspaceId, signal)
+  return {kind: 'ready', report: {sizes: {...blocks.sizes, ...history, localDbBytes: await environment.localDbBytes()}}}
 }

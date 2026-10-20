@@ -1,15 +1,25 @@
+import { workspaceGateDeps } from '@/components/workspace/WorkspaceKeyGate'
+import { notifyWorkspaceUnlocked } from '@/components/workspace/workspaceUnlocked'
 import type { Repo } from '@/data/repo'
 import { fetchWorkspaceConversionState } from '@/data/workspaceConversion'
 import { markLocalWorkspaceConverted } from '@/data/workspaces'
 import { supabase } from '@/services/supabase'
+import { createPartHasher, type BundleFolder } from '@/sync/conversion/bundle/bundleParts'
+import { IndexedDbBundleRecordStore } from '@/sync/conversion/bundle/bundleRecord'
+import { BUNDLE_PARTS } from '@/sync/conversion/bundle/manifest'
 import { createSupabaseConversionServer } from '@/sync/conversion/conversionServer'
 import { localFlipAttempts } from '@/sync/conversion/flipAttempts'
 import type { PreflightEnvironment } from '@/sync/conversion/preflight'
 import { webConversionLock } from '@/sync/conversion/runLock'
 import type { ConversionFlowDeps, ConversionUi } from '@/sync/conversion/runConversion'
 import { getWorkspaceKeyStore, IndexedDbWorkspaceKeyStore } from '@/sync/keys/keyStore'
+import { upgradeWorkspacePin } from '@/sync/keys/flows/upgradeWorkspacePin'
 import { canPersistPins } from '@/sync/keys/modePin'
 import { abortableSleep } from '@/utils/abortableSleep'
+import { exportRawSqliteDbToFile, localDbFileBytes } from '@/utils/exportSqliteDb'
+import { queryDirectoryPermission, supportsDirectoryPicker } from '@/utils/fileSystemAccess'
+import { holdScreenWakeLock } from '@/utils/screenWakeLock'
+import { untilStopped } from '@/utils/untilStopped'
 
 /** UI-state and preference writes upload continuously, so a queue that is
  *  momentarily non-empty gets this long to drain before it counts. */
@@ -27,14 +37,12 @@ const uploadQueue = (repo: Repo) => async (signal?: AbortSignal): Promise<{pendi
   }
 }
 
-const supportsDirectoryPicker = (): boolean =>
-  typeof (globalThis as {showDirectoryPicker?: unknown}).showDirectoryPicker === 'function'
-
 const preflightEnvironment = (repo: Repo): PreflightEnvironment => ({
   canPersistPins,
   keyStoreIsDurable: getWorkspaceKeyStore() instanceof IndexedDbWorkspaceKeyStore,
   supportsDirectoryPicker: supportsDirectoryPicker(),
   uploadQueue: uploadQueue(repo),
+  localDbBytes: () => localDbFileBytes(repo.user.id),
 })
 
 export type ConversionUnavailable =
@@ -48,6 +56,17 @@ export const conversionUnavailable = (localOnly: boolean): ConversionUnavailable
   if (!webConversionLock()) return 'no-web-locks'
   return null
 }
+
+let bundleRecords: IndexedDbBundleRecordStore | null = null
+
+/** The slowest folder the database copy waits for: a USB 2 stick or a slow
+ *  network share, in bytes a second. */
+const SLOWEST_BUNDLE_DISK = 5 * 1024 * 1024
+
+/** In the browser every bundle folder is a `FileSystemDirectoryHandle`: the
+ *  picker made it, or IndexedDB stored one. */
+export const directoryHandleOf = (folder: BundleFolder): FileSystemDirectoryHandle =>
+  folder as unknown as FileSystemDirectoryHandle
 
 /** Call only once {@link conversionUnavailable} has returned null. */
 export const conversionFlowDeps = (
@@ -68,6 +87,32 @@ export const conversionFlowDeps = (
     lock,
     preflight: preflightEnvironment(repo),
     markLocalConverted: canary => markLocalWorkspaceConverted(repo.db, workspaceId, canary),
+    bundles: (bundleRecords ??= new IndexedDbBundleRecordStore()),
+    canReadFolder: async folder => (await queryDirectoryPermission(directoryHandleOf(folder), 'read')) === 'granted',
+    writeLocalDb: async (folder, signal) => {
+      const hasher = createPartHasher()
+      const file = await untilStopped(directoryHandleOf(folder).getFileHandle(BUNDLE_PARTS.localDb, {create: true}), signal)
+      await exportRawSqliteDbToFile(repo, file, {
+        timeoutMessage:
+          "Copying this device's database into the recovery bundle took too long. Pick a folder on a faster disk, then try again.",
+        minBytesPerSecond: SLOWEST_BUNDLE_DISK,
+        onChunk: chunk => hasher.update(chunk),
+        signal,
+      })
+      return hasher.digest()
+    },
+    keepAwake: holdScreenWakeLock,
+    upgradePin: async () => {
+      const result = await upgradeWorkspacePin({
+        userId: repo.user.id,
+        workspaceId,
+        ...workspaceGateDeps(repo, workspaceId),
+        key: {kind: 'stored'},
+        keyStore: getWorkspaceKeyStore(),
+      })
+      if (result.ok) notifyWorkspaceUnlocked(workspaceId)
+      return result
+    },
     ui,
     signal,
   }

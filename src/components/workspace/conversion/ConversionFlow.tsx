@@ -4,7 +4,10 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Label } from '@/components/ui/label'
 import type { SavedKeyPrompt, SavedKeyProblem, SaveKeyPrompt } from '@/sync/conversion/conversionKey'
 import { FLIP_SETTLED_MS } from '@/sync/conversion/flipAttempts'
-import type { PreflightBlocker } from '@/sync/conversion/preflight'
+import type { BundleFolder } from '@/sync/conversion/bundle/bundleParts'
+import type { ConversionSizes, PreflightBlocker } from '@/sync/conversion/preflight'
+import type { SealingPass } from '@/sync/conversion/sealingStage'
+import type { UpgradeWorkspacePinResult } from '@/sync/keys/flows/upgradeWorkspacePin'
 import {
   runConversion,
   type ActiveStage,
@@ -21,6 +24,8 @@ import {
   WorkspaceKeyField,
 } from '@/components/workspace/keyUi'
 import type { ConversionUnavailable } from './conversionFlowDeps'
+import { ChooseBundleFolderPrompt, ReopenBundleFolderPrompt } from './bundleFolderPrompts'
+import { Actions, errorMessage } from './flowUi'
 import { useConversionRun, type PromptChannel, type RunState } from './useConversionRun'
 
 interface Props {
@@ -58,8 +63,8 @@ const conversionUi = (channel: PromptChannel): ConversionUi => ({
   confirmContract: stage => channel.ask<void>((answer, cancel) => (
     <ContractPrompt stage={stage} answer={() => answer()} cancel={cancel}/>
   )),
-  confirmPreflight: () => channel.ask<void>((answer, cancel) => (
-    <PreflightPrompt answer={() => answer()} cancel={cancel}/>
+  confirmPreflight: report => channel.ask<void>((answer, cancel) => (
+    <PreflightPrompt sizes={report.sizes} answer={() => answer()} cancel={cancel}/>
   )),
   saveKey: prompt => channel.ask<string>((answer, cancel) => (
     <SaveKeyPromptView prompt={prompt} answer={answer} cancel={cancel}/>
@@ -67,26 +72,14 @@ const conversionUi = (channel: PromptChannel): ConversionUi => ({
   enterSavedKey: prompt => channel.ask<string | null>((answer, cancel) => (
     <SavedKeyPromptView prompt={prompt} answer={answer} cancel={cancel}/>
   )),
+  chooseBundleFolder: ({reason}) => channel.ask<BundleFolder>((answer, cancel) => (
+    <ChooseBundleFolderPrompt reason={reason} answer={answer} cancel={cancel}/>
+  )),
+  reopenBundleFolder: ({recorded, problem}) => channel.ask<BundleFolder | null>((answer, cancel) => (
+    <ReopenBundleFolderPrompt recorded={recorded} problem={problem} answer={answer} cancel={cancel}/>
+  )),
   status: status => channel.status(status),
 })
-
-const errorMessage = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error)
-
-interface ActionProps {
-  readonly label: string
-  readonly onClick: () => void
-  readonly disabled?: boolean
-}
-
-function Actions({primary, secondary}: {primary?: ActionProps; secondary?: ActionProps}) {
-  return (
-    <div className="flex justify-end gap-2">
-      {secondary && <Button type="button" variant="secondary" onClick={secondary.onClick}>{secondary.label}</Button>}
-      {primary && <Button type="button" disabled={primary.disabled} onClick={primary.onClick}>{primary.label}</Button>}
-    </div>
-  )
-}
 
 function UnavailableView({why, onClose}: {why: ConversionUnavailable; onClose: () => void}) {
   return (
@@ -102,9 +95,10 @@ function UnavailableView({why, onClose}: {why: ConversionUnavailable; onClose: (
 }
 
 /** While the flip request is out it may commit whatever this run does next,
- *  so there is nothing for Stop to stop. */
+ *  and the pin upgrade runs to its end whatever the run's signal says: there
+ *  is nothing for Stop to stop. */
 const canStop = (status: ConversionStatus | null): boolean =>
-  !(status?.kind === 'flipping' && status.waiting === null)
+  !(status?.kind === 'flipping' && status.waiting === null) && status?.kind !== 'upgrading-pin'
 
 function FlowBody({state, start, cancel, onClose}: {
   state: RunState
@@ -192,8 +186,19 @@ function ContractPrompt({stage, answer, cancel}: {stage: ActiveStage; answer: ()
   )
 }
 
-function PreflightPrompt({answer, cancel}: {answer: () => void; cancel: () => void}) {
+const formatBytes = (bytes: number): string => {
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`
+  if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(1)} MB`
+  return `${(bytes / 1024 ** 3).toFixed(2)} GB`
+}
+
+/** The server re-seals every row and keeps history of both versions, plus WAL
+ *  (runbook step 6). */
+const SERVER_HEADROOM_FACTOR = 6
+
+function PreflightPrompt({sizes, answer, cancel}: {sizes: ConversionSizes; answer: () => void; cancel: () => void}) {
   const [understood, setUnderstood] = useState(false)
+  const bundleBytes = sizes.blocksBytes + sizes.historyBytes + sizes.localDbBytes
   return (
     <>
       <Explanation>Ready to convert. What stays readable on the server afterwards:</Explanation>
@@ -207,8 +212,14 @@ function PreflightPrompt({answer, cancel}: {answer: () => void; cancel: () => vo
         Server backups keep the old plaintext until they age out. Without the workspace key nobody,
         including you, can read the content again.
       </Explanation>
+      <Explanation>
+        The recovery bundle will take about {formatBytes(bundleBytes)}: {sizes.blockRows} blocks
+        ({formatBytes(sizes.blocksBytes)}), {sizes.historyRows} history rows ({formatBytes(sizes.historyBytes)}) and
+        this device's database ({formatBytes(sizes.localDbBytes)}). Pick a folder with room for it.
+        The server needs about {formatBytes(sizes.contentBytes * SERVER_HEADROOM_FACTOR)} of free disk while it converts.
+      </Explanation>
       <ConfirmCheck id="conversion-residue" checked={understood} onChange={setUnderstood}>
-        I understand, and this can't be undone.
+        I understand, there is room for both, and this can't be undone.
       </ConfirmCheck>
       <Actions primary={{label: 'Continue', onClick: answer, disabled: !understood}} secondary={{label: 'Cancel', onClick: cancel}}/>
     </>
@@ -309,6 +320,20 @@ const statusText = (status: ConversionStatus | null): string => {
         : 'Switching the server to encrypted mode…'
     case 'checking-key':
       return 'Checking the workspace key…'
+    case 'taking-bundle':
+      return status.progress?.part === 'local-db'
+        ? "Copying this device's database into the bundle…"
+        : `Writing the recovery bundle (${status.progress?.rows ?? 0} ${status.progress?.part === 'history' ? 'history rows' : 'blocks'}). Keep this tab open.`
+    case 'resealing':
+      return `Encrypting blocks on the server: ${status.progress?.scanned ?? 0} checked, ${status.progress?.sealed ?? 0} encrypted. Keep this tab open.`
+    case 'verifying':
+      return `Checking every encrypted block: ${status.progress?.checked ?? 0} checked${status.progress?.repaired ? `, ${status.progress.repaired} repaired` : ''}.`
+    case 'checking-bundle':
+      return 'Checking the recovery bundle once more…'
+    case 'purging':
+      return "Deleting the server's plaintext history…"
+    case 'upgrading-pin':
+      return 'Decrypting the workspace on this device…'
   }
 }
 
@@ -331,6 +356,33 @@ const BLOCKER_TEXT = (blocker: PreflightBlocker): string => {
     case 'no-directory-picker':
       return 'Converting writes a recovery folder, which needs desktop Chrome or Edge.'
   }
+}
+
+const sealingStuckText = (pass: Exclude<SealingPass, {kind: 'purged'}>): string =>
+  pass.kind === 'purge-refused'
+    ? `the server refused to delete it (${pass.message}).`
+    : 'the recovery bundle kept going out of date.'
+
+const pinUpgradeFailure = (result: Exclude<UpgradeWorkspacePinResult, {ok: true}>): string => {
+  switch (result.reason) {
+    case 'refused':
+      switch (result.entry.kind) {
+        case 'unavailable':
+          return "Can't reach the server to open the workspace on this device. Check your connection and try again."
+        case 'copied-ciphertext':
+          return "An older version of the app copied encrypted data into this device's local copy, so this device needs a reset before it can open the workspace. The workspace's gate explains how."
+        case 'converting':
+          return "The server isn't ready for this device to open the workspace yet. Try again in a moment."
+      }
+      break
+    case 'storage':
+      return "This device couldn't save the change (storage may be full or blocked). Try again."
+    case 'format':
+    case 'invalid-key':
+    case 'no-stored-key':
+      return "The key on this device doesn't open the workspace. Paste the key you saved on the next run."
+  }
+  return 'The workspace could not be opened on this device.'
 }
 
 function ResultView({result, retry, onClose}: {result: ConversionRunResult; retry: () => void; onClose: () => void}) {
@@ -361,7 +413,7 @@ function ResultView({result, retry, onClose}: {result: ConversionRunResult; retr
         <>
           <Explanation>The workspace can't be converted yet:</Explanation>
           <ul className="list-disc space-y-1 pl-5 text-sm">
-            {result.report.blockers.map(blocker => <li key={blocker.kind}>{BLOCKER_TEXT(blocker)}</li>)}
+            {result.blockers.map(blocker => <li key={blocker.kind}>{BLOCKER_TEXT(blocker)}</li>)}
           </ul>
           <Actions primary={again} secondary={close}/>
         </>
@@ -383,12 +435,29 @@ function ResultView({result, retry, onClose}: {result: ConversionRunResult; retr
           <Actions primary={again} secondary={close}/>
         </>
       )
+    case 'sealing-stuck':
+      return (
+        <>
+          <p className="text-sm text-destructive">
+            The server's history could not be deleted: {sealingStuckText(result.pass)}
+          </p>
+          <Explanation>Nothing is lost. The next run carries on; if this keeps happening, it needs looking into.</Explanation>
+          <Actions primary={again} secondary={close}/>
+        </>
+      )
+    case 'pin-upgrade-failed':
+      return (
+        <>
+          <p className="text-sm text-destructive">{pinUpgradeFailure(result.result)}</p>
+          <Actions primary={again} secondary={close}/>
+        </>
+      )
     case 'stopped':
       return (
         <>
           <Explanation>
-            The server is in encrypted mode and this device holds the key. The remaining steps aren't
-            available in this version of the app yet; the workspace stays closed until they run.
+            The workspace's content is encrypted on the server, and this device is opening it again.
+            Its attachments still need converting, which this version of the app can't do yet.
           </Explanation>
           <Actions secondary={close}/>
         </>

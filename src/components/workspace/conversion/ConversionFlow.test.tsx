@@ -1,34 +1,43 @@
 // @vitest-environment happy-dom
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { InMemoryWorkspaceKeyStore } from '@/sync/keys/keyStore'
 import { mintWorkspaceKey } from '@/sync/keys/mintWorkspaceKey'
-import type { ConversionUi } from '@/sync/conversion/runConversion'
+import type { ConversionFlowDeps, ConversionUi } from '@/sync/conversion/runConversion'
 import { seedPlaintext, WS } from '@/sync/conversion/test/conversionFixtures'
 import { FakeConversionServer } from '@/sync/conversion/test/fakeConversionServer'
 import { flowDeps, USER } from '@/sync/conversion/test/flowFixtures'
+import { MemoryBundleFolder } from '@/sync/conversion/test/memoryBundleFolder'
 import { ConversionFlow } from './ConversionFlow'
 import type { ConversionUnavailable } from './conversionFlowDeps'
 
 let server: FakeConversionServer
 let keyStore: InMemoryWorkspaceKeyStore
+let picked: MemoryBundleFolder
 
 beforeEach(() => {
   server = new FakeConversionServer()
   seedPlaintext(server, 2)
   keyStore = new InMemoryWorkspaceKeyStore()
+  picked = new MemoryBundleFolder('picked')
+  vi.stubGlobal('showDirectoryPicker', async () => picked)
 })
-afterEach(() => cleanup())
+afterEach(() => {
+  cleanup()
+  vi.unstubAllGlobals()
+})
 
-const makeDeps = (ui: ConversionUi, signal: AbortSignal) => flowDeps(server, ui, {keyStore, signal})
-
-const renderFlow = (unavailable: ConversionUnavailable | null = null) =>
-  render(<ConversionFlow workspaceName="Vault" unavailable={unavailable} makeDeps={makeDeps} onClose={() => {}}/>)
+const renderFlow = (unavailable: ConversionUnavailable | null = null, overrides: Partial<ConversionFlowDeps> = {}) => {
+  const makeDeps = (ui: ConversionUi, signal: AbortSignal) => flowDeps(server, ui, {keyStore, signal, ...overrides})
+  return render(<ConversionFlow workspaceName="Vault" unavailable={unavailable} makeDeps={makeDeps} onClose={() => {}}/>)
+}
 const click = (name: RegExp) => fireEvent.click(screen.getByRole('button', {name}))
 const flipped = async () => {
   const read = await server.conversionState(WS)
   return read.kind === 'read' && read.state.encryptionMode === 'e2ee'
 }
+
+const DONE = /attachments still need converting/i
 
 /** Start, confirm the contract and the residue. */
 const startToKeyStep = async () => {
@@ -57,9 +66,48 @@ describe('ConversionFlow', () => {
     fireEvent.change(screen.getByLabelText(/workspace key/i), {target: {value: key}})
     click(/^confirm$/i)
 
-    expect(await screen.findByText(/aren't available in this version/i)).toBeInTheDocument()
+    // Past the flip: the bundle goes into a new folder inside the picked one.
+    fireEvent.click(await screen.findByRole('button', {name: /choose a folder/i}))
+    expect(await screen.findByText(DONE)).toBeInTheDocument()
     expect(await flipped()).toBe(true)
     expect(await keyStore.get(USER, WS)).not.toBeNull()
+    expect(picked.folders.size).toBe(1)
+  })
+
+  it('offers no Stop while this device decrypts the workspace, which runs to its end', async () => {
+    const minted = await mintWorkspaceKey(WS)
+    await keyStore.put(USER, WS, minted.record)
+    server.flip(WS, minted.canary)
+    server.setPhase(WS, 'cleaning')
+    let upgrade!: () => void
+    renderFlow(undefined, {upgradePin: () => new Promise(resolve => (upgrade = () => resolve({ok: true})))})
+    click(/^start$/i)
+    fireEvent.click(await screen.findByLabelText(/every other device/i))
+    click(/^continue$/i)
+
+    expect(await screen.findByText(/decrypting the workspace on this device/i)).toBeInTheDocument()
+    expect(screen.queryByRole('button', {name: /stop/i})).toBeNull()
+    upgrade()
+  })
+
+  it('shows a bundle a Stop left behind, rather than a plain stop', async () => {
+    picked.removeEntry = async () => {
+      throw new DOMException('the drive went away', 'NotFoundError')
+    }
+    // The database copy waits on a slow drive until Stop.
+    const writeLocalDb = (_folder: unknown, signal?: AbortSignal) =>
+      new Promise<never>((_resolve, reject) => signal?.addEventListener('abort', () => reject(signal.reason)))
+    renderFlow(null, {writeLocalDb})
+    await startToKeyStep()
+    const key = (await screen.findByTestId('workspace-key')).textContent!
+    click(/i've saved it/i)
+    fireEvent.change(screen.getByLabelText(/workspace key/i), {target: {value: key}})
+    click(/^confirm$/i)
+    fireEvent.click(await screen.findByRole('button', {name: /choose a folder/i}))
+    fireEvent.click(await screen.findByRole('button', {name: /^stop$/i}))
+
+    expect(await screen.findByText(/may not have been removed: delete it yourself/i)).toBeInTheDocument()
+    expect(screen.queryByText(/^stopped\. the next run/i)).toBeNull()
   })
 
   it('offers no Stop while the flip request is out', async () => {
@@ -77,7 +125,7 @@ describe('ConversionFlow', () => {
     expect(await screen.findByText(/switching the server to encrypted mode/i)).toBeInTheDocument()
     expect(screen.queryByRole('button', {name: /stop/i})).toBeNull()
     commit()
-    expect(await screen.findByText(/aren't available in this version/i)).toBeInTheDocument()
+    expect(await screen.findByRole('button', {name: /choose a folder/i})).toBeInTheDocument()
   })
 
   it('asks for the earlier attempt\'s key, and makes a new one only on request', async () => {

@@ -56,6 +56,7 @@
     "@journeyapps/wa-sqlite": "^1.7.0",
     "@knowledge-medium/agent-cli": "workspace:*",
     "@lezer/common": "^1.5.2",
+    "@noble/hashes": "^2.4.0",
     "@powersync/common": "^1.55.0",
     "@powersync/react": "^1.10.0",
     "@powersync/web": "^1.38.4",

@@ -5,7 +5,7 @@
  * whatever it was waiting on.
  */
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { createElement, Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import type { ConversionRunResult, ConversionStatus } from '@/sync/conversion/runConversion'
 
 export interface PromptChannel {
@@ -41,21 +41,28 @@ const createChannel = (
   signal: AbortSignal,
   cancel: () => void,
   update: (change: (running: Running) => Running) => void,
-): PromptChannel => ({
-  ask: <T>(render: (answer: (value: T) => void, cancel: () => void) => ReactNode) =>
-    new Promise<T>((resolve, reject) => {
-      if (signal.aborted) return reject(signal.reason)
-      const onAbort = () => reject(signal.reason)
-      signal.addEventListener('abort', onAbort, {once: true})
-      const answer = (value: T) => {
-        signal.removeEventListener('abort', onAbort)
-        update(current => ({...current, prompt: null}))
-        resolve(value)
-      }
-      update(running => ({...running, prompt: render(answer, cancel)}))
-    }),
-  status: status => update(running => ({...running, status})),
-})
+): PromptChannel => {
+  let asks = 0
+  return {
+    // A prompt clears only itself: a late second answer (a double click on an
+    // async picker) can't dismiss the prompt after it.
+    // Keyed per ask, so a prompt of the same kind starts with fresh state.
+    ask: <T>(render: (answer: (value: T) => void, cancel: () => void) => ReactNode) =>
+      new Promise<T>((resolve, reject) => {
+        if (signal.aborted) return reject(signal.reason)
+        const onAbort = () => reject(signal.reason)
+        signal.addEventListener('abort', onAbort, {once: true})
+        const answer = (value: T) => {
+          signal.removeEventListener('abort', onAbort)
+          update(current => (current.prompt === prompt ? {...current, prompt: null} : current))
+          resolve(value)
+        }
+        const prompt = createElement(Fragment, {key: ++asks}, render(answer, cancel))
+        update(running => ({...running, prompt}))
+      }),
+    status: status => update(running => ({...running, status})),
+  }
+}
 
 export interface ConversionRun {
   readonly state: RunState

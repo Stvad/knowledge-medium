@@ -39,26 +39,53 @@ const contentOf = (diff: Readonly<Record<string, unknown>> | null): ContentColum
   return {content, properties_json, references_json}
 }
 
-/** The record a history row is, if it is a re-seal write: an UPDATE that
- *  changed only the re-seal's columns and took the row from short of sealed
- *  (the re-seal's own test, so a value that merely looks sealed still counts
- *  as plaintext) to sealed for this row under `wk`, in whichever column the
- *  server stored each value. Until the conversion finishes only the re-seal
- *  seals under the workspace key, so a row sealed by any other writer, before
- *  the flip or after it, has no record and the run refuses rather than
- *  re-sending over it. */
+/** A history row that has the shape of a re-seal write: an UPDATE that changed
+ *  only the re-seal's columns and took the row from short of sealed (the
+ *  re-seal's own test, so a value that merely looks sealed still counts as
+ *  plaintext) to sealed. Judged without the key, so a re-taken recovery bundle
+ *  can read it even after the key that sealed it is lost. */
+export interface ResealWrite {
+  readonly before: ContentColumns
+  readonly after: ContentColumns
+  /** The row version the write produced. */
+  readonly version: unknown
+}
+
+export const resealWriteOf = (history: ServerHistoryRow): ResealWrite | null => {
+  const {before_diff, after_diff} = history
+  if (!after_diff || !Object.keys(after_diff).every(column => RESEAL_WRITE_COLUMNS.has(column))) return null
+  const before = contentOf(before_diff)
+  const after = contentOf(after_diff)
+  if (!before || !after || isSealedRow(before) || !isSealedRow(after)) return null
+  return {before, after, version: after_diff.updated_at}
+}
+
+/** Each block's latest re-seal-shaped write. After the flip only the re-seal
+ *  moves a row from plaintext to sealed, so the latest such write is the
+ *  re-seal's, even when an older pre-conversion write had the same shape. */
+export const latestResealWrites = (history: readonly ServerHistoryRow[]): Map<string, ResealWrite> => {
+  const latest = new Map<string, {eventId: number; write: ResealWrite}>()
+  for (const row of history) {
+    const write = resealWriteOf(row)
+    const current = latest.get(row.block_id)
+    if (write && (!current || row.event_id > current.eventId)) latest.set(row.block_id, {eventId: row.event_id, write})
+  }
+  return new Map([...latest].map(([blockId, {write}]) => [blockId, write]))
+}
+
+/** The record a history row is, if it is a re-seal write sealed for this row
+ *  under `wk`, in whichever column the server stored each value. Until the
+ *  conversion finishes only the re-seal seals under the workspace key, so a row
+ *  sealed by any other writer, before the flip or after it, has no record and
+ *  the run refuses rather than re-sending over it. */
 export const sealRecordOf = async (
   history: ServerHistoryRow,
   workspaceId: string,
   wk: CryptoKey,
 ): Promise<SealRecord | null> => {
-  const {block_id: id, before_diff, after_diff} = history
-  if (!after_diff || !Object.keys(after_diff).every(column => RESEAL_WRITE_COLUMNS.has(column))) return null
-  const before = contentOf(before_diff)
-  const after = contentOf(after_diff)
-  if (!before || !after || isSealedRow(before)) return null
-  if (!(await sealedForRow(wk, {id, workspace_id: workspaceId}, after))) return null
-  return {plaintext: before, version: after_diff.updated_at}
+  const write = resealWriteOf(history)
+  if (!write || !(await sealedForRow(wk, {id: history.block_id, workspace_id: workspaceId}, write.after))) return null
+  return {plaintext: write.before, version: write.version}
 }
 
 /** Each block's record, found by content rather than by position in the
