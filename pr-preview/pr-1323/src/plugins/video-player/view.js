@@ -1,1 +1,1 @@
-import{$g as e,e_ as t,t_ as n}from"../../../chunks/app-BygAccxp.js";export{e as DEFAULT_VIDEO_NOTES_PANE_RATIO,t as VIDEO_NOTES_VIEW_MODE,n as videoNotesPaneRatioProp};
+import{$g as e,e_ as t,t_ as n}from"../../../chunks/app-4904j1xo.js";export{e as DEFAULT_VIDEO_NOTES_PANE_RATIO,t as VIDEO_NOTES_VIEW_MODE,n as videoNotesPaneRatioProp};

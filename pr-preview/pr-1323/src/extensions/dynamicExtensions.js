@@ -1,1 +1,1 @@
-import{iO as e}from"../../chunks/app-BygAccxp.js";export{e as dynamicExtensionsExtension};
+import{iO as e}from"../../chunks/app-4904j1xo.js";export{e as dynamicExtensionsExtension};

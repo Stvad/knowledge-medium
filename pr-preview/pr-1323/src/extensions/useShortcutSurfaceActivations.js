@@ -1,1 +1,1 @@
-import{Cj as e}from"../../chunks/app-BygAccxp.js";export{e as useShortcutSurfaceActivations};
+import{Cj as e}from"../../chunks/app-4904j1xo.js";export{e as useShortcutSurfaceActivations};

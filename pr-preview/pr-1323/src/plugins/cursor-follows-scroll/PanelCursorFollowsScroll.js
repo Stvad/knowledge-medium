@@ -1,1 +1,1 @@
-import{R_ as e}from"../../../chunks/app-BygAccxp.js";export{e as PanelCursorFollowsScroll};
+import{R_ as e}from"../../../chunks/app-4904j1xo.js";export{e as PanelCursorFollowsScroll};

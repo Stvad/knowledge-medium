@@ -1,1 +1,1 @@
-import{gy as e}from"../../../chunks/app-BygAccxp.js";export{e as blockEditingContentRenderer};
+import{gy as e}from"../../../chunks/app-4904j1xo.js";export{e as blockEditingContentRenderer};

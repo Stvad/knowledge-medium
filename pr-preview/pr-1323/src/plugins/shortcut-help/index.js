@@ -1,1 +1,1 @@
-import{JC as e,KC as t,XC as n,YC as r,qC as i}from"../../../chunks/app-BygAccxp.js";export{t as SHORTCUT_HELP_ACTION_ID,n as ShortcutHelpOverlay,i as shortcutHelpAction,e as shortcutHelpMount,r as shortcutHelpPlugin};
+import{JC as e,KC as t,XC as n,YC as r,qC as i}from"../../../chunks/app-4904j1xo.js";export{t as SHORTCUT_HELP_ACTION_ID,n as ShortcutHelpOverlay,i as shortcutHelpAction,e as shortcutHelpMount,r as shortcutHelpPlugin};

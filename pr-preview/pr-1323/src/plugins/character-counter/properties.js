@@ -1,1 +1,1 @@
-import{BV as e,RV as t,zV as n}from"../../../chunks/app-BygAccxp.js";export{t as charLimitProp,n as charProfileProp,e as charScopeProp};
+import{BV as e,RV as t,zV as n}from"../../../chunks/app-4904j1xo.js";export{t as charLimitProp,n as charProfileProp,e as charScopeProp};

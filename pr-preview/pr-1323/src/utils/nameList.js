@@ -1,1 +1,1 @@
-import{cX as e,oX as t,sX as n}from"../../chunks/app-BygAccxp.js";export{t as NAMES_IN_A_SENTENCE,n as describeNames,e as firstFew};
+import{cX as e,oX as t,sX as n}from"../../chunks/app-4904j1xo.js";export{t as NAMES_IN_A_SENTENCE,n as describeNames,e as firstFew};
