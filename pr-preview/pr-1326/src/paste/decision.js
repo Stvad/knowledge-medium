@@ -1,0 +1,1 @@
+import{MA as e,jA as t}from"../../chunks/app-3AvRhX-x.js";export{t as defaultPasteDecision,e as pasteDecisionVerb};
