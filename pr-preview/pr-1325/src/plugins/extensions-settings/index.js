@@ -1,1 +1,0 @@
-import{Cn as e,SO as t,xO as n}from"../../../chunks/app-AqB5dqed.js";export{n as extensionsOverridesProp,t as extensionsPrefsType,e as extensionsSettingsPlugin};

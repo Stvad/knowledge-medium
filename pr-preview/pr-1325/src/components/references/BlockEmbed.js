@@ -1,1 +1,0 @@
-import{rD as e}from"../../../chunks/app-AqB5dqed.js";export{e as BlockEmbed};

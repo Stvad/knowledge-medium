@@ -1,1 +1,0 @@
-import{Cb as e,Sb as t,_b as n,bb as r,vb as i,wb as a,xb as o,yb as s}from"../../../chunks/app-AqB5dqed.js";export{a as BreadcrumbList,o as BreadcrumbRenderer,e as Breadcrumbs,r as PromotableBreadcrumbList,n as breadcrumbRendererContribution,i as breadcrumbsPlugin,t as getBreadcrumbContentPreview,s as usePromotableBreadcrumb};

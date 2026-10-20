@@ -1,1 +1,0 @@
-import{Ez as e}from"../../chunks/app-AqB5dqed.js";export{e as staticDataExtensions};

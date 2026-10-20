@@ -1,1 +1,0 @@
-import{PO as e}from"../../../chunks/app-AqB5dqed.js";export{e as appUpdatePromptExtension};
