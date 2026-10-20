@@ -1,1 +1,1 @@
-import{Kn as e,QO as t,ZO as n}from"../../../chunks/app-KHSELJOU.js";export{n as extensionsOverridesProp,t as extensionsPrefsType,e as extensionsSettingsPlugin};
+import{Kn as e,QO as t,ZO as n}from"../../../chunks/app-t2aytcn3.js";export{n as extensionsOverridesProp,t as extensionsPrefsType,e as extensionsSettingsPlugin};

@@ -1,1 +1,1 @@
-import{u as e}from"../../chunks/app-KHSELJOU.js";export{e as holdScreenWakeLock};
+import{u as e}from"../../chunks/app-t2aytcn3.js";export{e as holdScreenWakeLock};

@@ -1,1 +1,1 @@
-import{GD as e,KD as t,WD as n}from"../../chunks/app-KHSELJOU.js";export{n as DEFAULT_TYPE_COLORS,e as defaultTypeColor,t as pickLeastUsedTypeColor};
+import{GD as e,KD as t,WD as n}from"../../chunks/app-t2aytcn3.js";export{n as DEFAULT_TYPE_COLORS,e as defaultTypeColor,t as pickLeastUsedTypeColor};
