@@ -63,6 +63,7 @@ import {
 import { findExtensionBlock } from '@/extensions/extensionLookup.js'
 import {
   definitionSeedsFacet,
+  sameTxProcessorsFacet,
   projectedTypeDefinitionsFacet,
   typeSeedsFacet,
   valuePresetCoresFacet,
@@ -96,6 +97,10 @@ import {
   pingRuntime,
 } from './describeRuntime.ts'
 import type {KnownAgentCommand} from '@knowledge-medium/agent-cli/protocol'
+import {isReadOnlyAgentCommand} from '@knowledge-medium/agent-cli/protocol'
+import {assertContributor, createContributor, listContributors} from '@/plugins/contributors/profiles'
+import {contributorAttributionProcessor} from '@/plugins/contributors/processor'
+import {viewWorkspace} from './agentViews/shared'
 import {
   PROPERTY_CELL_BACKFILL_ID,
   takeLastPropertyCellBackfillRun,
@@ -2249,7 +2254,37 @@ export const executeCommand = async (
   command: KnownAgentCommand,
   context: AgentRuntimeContext,
 ) => {
+  const enabled = context.runtime.read(sameTxProcessorsFacet).has(contributorAttributionProcessor.name)
+  const readOnly = isReadOnlyAgentCommand(command)
+  if (enabled && !readOnly && command.type !== 'create-contributor') {
+    if (command.contributorId === undefined) {
+      throw new Error('Choose a contributor before writing: run contributor create <name> or contributor use <id>; --contributor none explicitly leaves writes unattributed.')
+    }
+    if (command.contributorId !== null) {
+      const id = requireString(command.contributorId, 'contributorId')
+      const workspaceId = viewWorkspace(context.repo, assertedWorkspaceOverride(command.workspaceId))
+      await assertContributor({get: id => context.repo.load(id)}, id, workspaceId)
+    }
+    context = createAgentRuntimeContext({
+      repo: context.repo.withTxContext({contributorId: command.contributorId}),
+      runtime: context.runtime,
+      safeMode: context.safeMode,
+    })
+  }
+  return executeAttributedCommand(command, context)
+}
+
+const executeAttributedCommand = async (
+  command: KnownAgentCommand,
+  context: AgentRuntimeContext,
+) => {
   switch (command.type) {
+    case 'create-contributor':
+      if (!context.runtime.read(sameTxProcessorsFacet).has(contributorAttributionProcessor.name)) throw new Error('Enable the Contributors plugin to create contributor profiles.')
+      return createContributor(context.repo, viewWorkspace(context.repo, command.workspaceId), command)
+
+    case 'list-contributors':
+      return listContributors(context.repo, viewWorkspace(context.repo, command.workspaceId))
     case 'ping':
       return pingRuntime(context)
 

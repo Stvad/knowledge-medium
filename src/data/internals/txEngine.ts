@@ -378,6 +378,11 @@ const bulkInsertSql = (rowCount: number): string =>
 
 export class TxImpl implements Tx {
   readonly meta: TxMeta
+  private readonly userWrittenIds = new Set<string>()
+
+  hasUserWrite(id: string): boolean {
+    return this.userWrittenIds.has(id)
+  }
 
   private readonly ctx: TxImplContext
 
@@ -1610,6 +1615,7 @@ export class TxImpl implements Tx {
     const now = this.ctx.now()
     const updatedAt = this.systemMintedIds.has(id) ? 0 : Math.max(now, before.updatedAt + 1)
     if (skipMetadata) return {updatedAt}
+    this.userWrittenIds.add(id)
     return {updatedAt, userUpdatedAt: now, updatedBy: this.meta.user.id}
   }
 
@@ -1653,6 +1659,7 @@ export class TxImpl implements Tx {
     // `skipMetadata` bookkeeping create are born at the `0` pristine sentinel so
     // the reconcile gate lets the server win; a normal create starts at `now`.
     const updatedAt = opts?.skipMetadata || opts?.systemMint ? 0 : now
+    if (!opts?.skipMetadata && !opts?.systemMint) this.userWrittenIds.add(id)
     // `sourceTimestamps` (import/restore) stamps the origin + display fields
     // from a trusted external source while leaving `updated_at` engine-owned
     // above. Suppressed under `skipMetadata` — a 0-sentinel bookkeeping insert
@@ -1767,7 +1774,9 @@ export const newTxMeta = (params: {
   source: TxSource
   user: User
   description?: string
+  context?: TxMeta['context']
 }): TxMeta => ({
+  context: params.context,
   txId: params.txId,
   scope: params.scope,
   source: params.source,

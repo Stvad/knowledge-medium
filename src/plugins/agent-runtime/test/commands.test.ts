@@ -33,7 +33,10 @@ import {
   extensionTypeSeedKey,
 } from '@/extensions/dynamicExtensionSeeds'
 import { ActionContextTypes, type BlockShortcutDependencies, type MultiSelectModeDependencies } from '@/shortcuts/types'
-import { createAgentRuntimeContext, executeCommand } from '../commands'
+import { createAgentRuntimeContext, executeCommand as executeRuntimeCommand } from '../commands'
+
+const executeCommand: typeof executeRuntimeCommand = (command, context) =>
+  executeRuntimeCommand({contributorId: null, ...command}, context)
 import type { AgentRuntimeContext, InstallExtensionResult } from '../protocol'
 import { InvalidBlockIdError } from '@/data/blockId'
 import type { BlockData } from '@/data/api'
@@ -52,10 +55,11 @@ interface Harness {
 const setup = async (): Promise<Harness> => {
   await resetTestDb(sharedDb.db)
   const h = sharedDb
-  const { repo } = createTestRepo({
+  const { repo: baseRepo } = createTestRepo({
     db: h.db,
     user: USER,
   })
+  const repo = baseRepo.withTxContext({contributorId: null})
   const runtime = resolveFacetRuntimeSync([staticDataExtensions, extensionsDataExtension], {
     repo,
     workspaceId: WS,

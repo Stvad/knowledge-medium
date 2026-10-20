@@ -22,6 +22,7 @@ import {
   type CommandStatusResponse,
   type EventsNextResponse,
   type KnownCommand,
+  isReadOnlyAgentCommand,
   namedWorkspaceId,
   UNKNOWN_TOKEN_MARKER,
   type WhoamiInfo,
@@ -377,6 +378,8 @@ export interface BridgeClientOptions {
    *  tab has open, which moves as they navigate; an unattended consumer pins
    *  to stay put. Defaults to AGENT_RUNTIME_WORKSPACE. */
   workspaceId?: string
+  /** Attribution for writes made by this client; null explicitly opts out. */
+  contributorId?: string | null
 }
 
 export interface BridgeClient {
@@ -448,9 +451,14 @@ export const createBridgeClient = (options: BridgeClientOptions = {}): BridgeCli
   }
 
   const submitCommand = async (command: KnownCommand): Promise<string> => {
-    const pinned = pinnedWorkspaceId && namedWorkspaceId(command) === null
-      ? {...command, workspaceId: pinnedWorkspaceId}
+    const attributed = !isReadOnlyAgentCommand(command)
+      && command.contributorId === undefined
+      && options.contributorId !== undefined
+      ? {...command, contributorId: options.contributorId}
       : command
+    const pinned = pinnedWorkspaceId && namedWorkspaceId(attributed) === null
+      ? {...attributed, workspaceId: pinnedWorkspaceId}
+      : attributed
     const response = await authedRequest<{id: string}>(`${bridgeUrl}/runtime/commands`, {
       method: 'POST',
       body: JSON.stringify(pinned),

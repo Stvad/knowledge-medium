@@ -46,6 +46,7 @@ import { updateIndicatorPlugin } from '@/plugins/update-indicator'
 import { blockInfoPlugin } from '@/plugins/block-info'
 import { agentRuntimePlugin } from '@/plugins/agent-runtime'
 import { agentDispatchCompanionPlugin } from '@/plugins/agent-dispatch-companion'
+import { contributorsPlugin } from '@/plugins/contributors'
 import { appIntentsPlugin } from '@/plugins/app-intents'
 import { roamImportPlugin } from '@/plugins/roam-import'
 import { blockTaggingPlugin } from '@/plugins/block-tagging'
@@ -174,6 +175,7 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   blockInfoPlugin,
   agentRuntimePlugin,
   agentDispatchCompanionPlugin,
+  contributorsPlugin,
   roamImportPlugin({repo}),
   birthdayPlugin,
   // appIntentsPlugin's bootstrap effect resolves the layout-session

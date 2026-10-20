@@ -9,14 +9,19 @@ import {
   bridgeLogPath,
   bridgeSecret as resolveBridgeSecret,
   bridgeUrl as resolveBridgeUrl,
+  contributorSelectionPath,
   isErrnoException,
   isLocalBridgeUrl,
+  loadContributorSelection,
   pairingUrl,
+  saveContributorSelection,
   tokenStorePath as resolveTokenStorePath,
 } from './config.js'
 import {
   type Audience,
+  createContributorCommandSchema,
   getCommandMeta,
+  isReadOnlyAgentCommand,
   type KnownCommand,
   type KnownCommandType,
   moveBlockCommandSchema,
@@ -48,12 +53,15 @@ import {cliCommandFrom, cliOptionsFor, GRAPH_READ_TOOLS, hasJsonFormat, renderTo
 import {helpSections} from './cliHelp.js'
 import {
   appendPositionOption,
+  attributeCommandToWorkspace,
   editArgumentsOption,
+  explicitWorkspaceForContributorSelection,
   limitOption,
   markdownText,
   scopeAssertion,
   textArguments,
   toStringArray,
+  refuseNumberified,
   workspaceAssertion,
 } from './cliOptions.js'
 import {extensionScaffold, slugify, titleize} from './scaffold.js'
@@ -76,6 +84,7 @@ const bridgeUrl = resolveBridgeUrl()
 const bridgeStartTimeoutMs = 5_000
 const tokenStorePath = resolveTokenStorePath()
 let selectedProfileName = defaultProfileName
+let selectedContributorOverride: string | null | undefined
 
 /** Bridge client bound to the currently selected profile. Created per
  *  call because `--profile` mutates `selectedProfileName` after parse. */
@@ -492,8 +501,31 @@ const connectInteractively = async ({force = false} = {}) => {
   await connectWithToken(token, {saveBeforeVerify: false})
 }
 
-const runCommand = (command: KnownCommand): Promise<unknown> =>
-  client().runCommand(command)
+const isMutationCommand = (command: KnownCommand): boolean =>
+  !isReadOnlyAgentCommand(command)
+
+const commandWorkspaceId = async (command: KnownCommand): Promise<string> => {
+  const named = explicitWorkspaceForContributorSelection(command)
+  const workspaceId = named
+    ? named
+    : typeof process.env.AGENT_RUNTIME_WORKSPACE === 'string' && process.env.AGENT_RUNTIME_WORKSPACE.trim()
+      ? process.env.AGENT_RUNTIME_WORKSPACE.trim()
+      : (await client().whoami()).audience?.workspaceId
+  if (!workspaceId) throw new Error('No active workspace is available; open a workspace in the app or set AGENT_RUNTIME_WORKSPACE.')
+  return workspaceId
+}
+
+const runCommand = async (command: KnownCommand, options?: {timeoutMs?: number}): Promise<unknown> => {
+  if (!isMutationCommand(command) || command.contributorId !== undefined) {
+    return client().runCommand(command, options)
+  }
+  if (selectedContributorOverride !== undefined) {
+    return client().runCommand({...command, contributorId: selectedContributorOverride}, options)
+  }
+  const workspaceId = await commandWorkspaceId(command)
+  const selected = await loadContributorSelection(selectedProfileName, workspaceId)
+  return client().runCommand(attributeCommandToWorkspace(command, workspaceId, selected), options)
+}
 
 /** Helper: connect to the bridge, run a wire-protocol command, and
  *  pretty-print the result as JSON. */
@@ -518,6 +550,7 @@ const wireDescription = (type: KnownCommandType): string =>
 // `cli.options.profile` after parse rather than inside each action, so the
 // value is set before `ensureBridgeRunning`/token lookup runs.
 cli.option('--profile, -p <name>', 'Saved CLI token profile to use')
+cli.option('--contributor <id|none>', 'Write contributor id, or none')
 
 // ----- Local / bridge-management commands ---------------------------
 
@@ -566,6 +599,62 @@ cli
       selectedProfile: selectedProfileName,
       profiles,
     })}\n`)
+  })
+
+cli
+  .command('contributor <action> [value]', 'List, create, or select a workspace contributor')
+  .option('--workspace <id>', 'Workspace for list/create/use (defaults to the active one)')
+  .option('--kind <kind>', 'For create: human, agent (default), or automation')
+  .option('--role <text>', 'For create: optional role description')
+  .action(async (action: string, value: unknown, options: {workspace?: unknown; kind?: string; role?: string}) => {
+    if (!['list', 'create', 'use'].includes(action)) {
+      throw new Error('contributor action must be list, create, or use.')
+    }
+    if (action === 'list' && value !== undefined) throw new Error('contributor list takes no value.')
+    if ((action === 'create' || action === 'use') && typeof value !== 'string') {
+      throw new Error(`contributor ${action} requires a text ${action === 'create' ? 'name' : 'id'}.`)
+    }
+    if (action !== 'create' && (options.kind !== undefined || options.role !== undefined)) {
+      throw new Error('--kind and --role are only valid with contributor create.')
+    }
+
+    const workspaceOption = workspaceAssertion(options.workspace)
+    if (action === 'list') {
+      const workspaceId = await commandWorkspaceId({type: 'list-contributors', ...workspaceOption})
+      await runAndPrint({type: 'list-contributors', workspaceId})
+      return
+    }
+
+    if (action === 'create') {
+      const name = value as string
+      const workspaceId = await commandWorkspaceId({type: 'create-contributor', name, ...workspaceOption})
+      const command = createContributorCommandSchema.parse({
+        type: 'create-contributor', name, workspaceId,
+        ...(options.kind !== undefined ? {kind: options.kind} : {}),
+        ...(options.role !== undefined ? {role: options.role} : {}),
+      })
+      const created = await runCommand(command) as {id?: unknown; workspaceId?: unknown}
+      if (typeof created?.id !== 'string' || created.id.trim() === '') {
+        throw new Error('create-contributor returned no contributor id; selection was not changed.')
+      }
+      const selectedWorkspaceId = typeof created.workspaceId === 'string' ? created.workspaceId : workspaceId
+      await saveContributorSelection(selectedProfileName, selectedWorkspaceId, created.id)
+      process.stdout.write(`${toDisplayJson({...created, selected: true, profile: selectedProfileName})}\n`)
+      return
+    }
+
+    refuseNumberified('contributor id', value)
+    const id = value as string
+    const workspaceId = await commandWorkspaceId({type: 'list-contributors', ...workspaceOption})
+    const contributorId = id === 'none' ? null : id
+    if (contributorId !== null) {
+      const response = await client().runCommand({type: 'list-contributors', workspaceId}) as {contributors?: Array<{id?: unknown}>}
+      if (!response.contributors?.some(contributor => contributor.id === contributorId)) {
+        throw new Error(`Contributor "${contributorId}" was not found in workspace ${workspaceId}.`)
+      }
+    }
+    await saveContributorSelection(selectedProfileName, workspaceId, contributorId)
+    process.stdout.write(`${toDisplayJson({profile: selectedProfileName, workspaceId, contributorId, store: contributorSelectionPath(selectedProfileName, workspaceId)})}\n`)
   })
 
 cli
@@ -940,7 +1029,7 @@ cli
   .option('--wait <seconds>', `How long to wait for the pass to finish (default ${runBackfillDefaultWaitSeconds}). A full properties migration is hundreds of thousands of writes and runs for minutes; the default command timeout would give up while the app is still working, reporting a timeout for a run that is in fact progressing.`, {default: runBackfillDefaultWaitSeconds})
   .action(async (backfillId: string, options: {workspace?: unknown; wait?: string | number}) => {
     await ensureBridgeRunning()
-    const value = await client().runCommand({
+    const value = await runCommand({
       type: 'run-backfill',
       backfillId,
       ...workspaceAssertion(options.workspace),
@@ -976,7 +1065,7 @@ cli
   .action(async (options: {workspace?: unknown; scope?: unknown; wait?: string | number}) => {
     const scope = scopeAssertion(options.scope)
     await ensureBridgeRunning()
-    const value = await client().runCommand({
+    const value = await runCommand({
       type: 'rematerialize-workspace',
       ...workspaceAssertion(options.workspace),
       ...scope,
@@ -1091,6 +1180,11 @@ const main = async () => {
   const profileOption = cli.options.profile
   if (profileOption !== undefined) {
     selectedProfileName = normalizeProfileName(String(profileOption))
+  }
+  const contributorOption = cli.options.contributor
+  if (contributorOption !== undefined) {
+    if (Array.isArray(contributorOption)) throw new Error('--contributor expects one value.')
+    selectedContributorOverride = String(contributorOption) === 'none' ? null : String(contributorOption)
   }
 
   // When --help / -h or --version / -v is set, cac has already

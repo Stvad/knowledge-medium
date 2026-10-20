@@ -239,6 +239,20 @@ kill $(lsof -t -iTCP:8787 -sTCP:LISTEN)
 
 Use the port from `AGENT_RUNTIME_URL` if you set one. Restart MCP clients that launch `km-mcp` too; an `npx` launch can reuse a cached copy, so name the version to be sure (`npx -y -p @knowledge-medium/agent-cli@0.7.0 km-mcp`).
 
+## Contributors
+
+Writes need a page-backed contributor id when the runtime's contributor support is enabled. Create one in the active workspace; creation selects it for the current CLI profile and workspace:
+
+```bash
+kmagent contributor create "Research assistant" --kind agent --role "Research"
+kmagent contributor list
+kmagent contributor use <id>   # or: kmagent contributor use none
+```
+
+Contributor choices are stored separately in one file per token profile and workspace under `agent-contributors/`. `--contributor <id|none>` overrides the saved choice for one CLI invocation. An unconfigured selection is sent as no field and the runtime refuses writes when attribution is required; `none` sends explicit null and records an intentionally unattributed write. Reads do not need a contributor.
+
+For MCP, `list_contributors` and `create_contributor` work before attribution is configured. They do not change the MCP server's selection. Set `AGENT_RUNTIME_CONTRIBUTOR_ID=<id|none>` or launch `km-mcp --contributor <id|none>` to attribute writes. Programmatic clients can pass `contributorId` to `createBridgeClient` or `GraphMcpServerOptions`; `null` opts out explicitly, while `undefined` leaves the choice unconfigured.
+
 ### 0.7.0
 
 - **Restart the bridge.** Tokens now belong to the user rather than the workspace they were minted in, and the bridge routes each call to a tab that has its workspace open. An old bridge keeps one tab per token, so with several tabs open in different workspaces, calls bounce between them; writes fail closed. Existing pairings keep working; no re-pairing is needed.
@@ -255,6 +269,8 @@ Use the port from `AGENT_RUNTIME_URL` if you set one. Restart MCP clients that l
 | `AGENT_RUNTIME_TOKEN` | One-shot token, skips the persisted profile lookup. |
 | `AGENT_RUNTIME_WORKSPACE` | Workspace id to name on every call that names none (see [Workspaces](#workspaces)). |
 | `AGENT_RUNTIME_PROFILE` | Default profile selection for `kmagent <command>`. |
+| `AGENT_RUNTIME_CONTRIBUTOR_ID` | Contributor id for MCP writes; `none` explicitly leaves them unattributed. |
+| `AGENT_RUNTIME_CONTRIBUTOR_DIR` | Override the directory holding per-profile/workspace CLI contributor selections. |
 | `AGENT_RUNTIME_CONFIG_DIR` | Override the config directory (default: `$XDG_CONFIG_HOME/knowledge-medium`). |
 | `AGENT_RUNTIME_BRIDGE_SECRET` | Override the bridge secret (otherwise auto-generated per machine). |
 | `AGENT_RUNTIME_ALLOWED_ORIGINS` | Comma-separated extra origins the bridge will accept connections from. |

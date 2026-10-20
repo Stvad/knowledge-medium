@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createBridgeClient } from '../src/client.js'
+import { attributeCommandToWorkspace } from '../src/cliOptions.js'
 
 // A call that names no workspace goes to whichever app tab the user focused
 // last; a pinned client names one on every call, so an unattended consumer
@@ -66,5 +67,33 @@ describe('bridge client workspace pin', () => {
     await client().runCommand({type: 'ping'})
 
     expect(submitted[0]).not.toHaveProperty('workspaceId')
+  })
+
+  it('injects configured contributor attribution into writes, preserving explicit null', async () => {
+    const configured = createBridgeClient({bridgeUrl: 'http://127.0.0.1:1', token: 'TOKEN', contributorId: 'contrib-1', pollIntervalMs: 1})
+    await configured.runCommand({type: 'update-block', id: 'b1', content: 'x'})
+    await configured.runCommand({type: 'update-block', id: 'b1', content: 'x', contributorId: null})
+    expect(submitted.map(command => command.contributorId)).toEqual(['contrib-1', null])
+  })
+
+  it('does not inject attribution into reads or when it is unconfigured', async () => {
+    await client().runCommand({type: 'search', query: 'x'})
+    await client({contributorId: 'contrib-1'}).runCommand({type: 'search', query: 'x'})
+    await client().runCommand({type: 'update-block', id: 'b1', content: 'x'})
+    expect(submitted[0]).not.toHaveProperty('contributorId')
+    expect(submitted[1]).not.toHaveProperty('contributorId')
+    expect(submitted[2]).not.toHaveProperty('contributorId')
+  })
+
+  it('sends the workspace resolved for the saved selection with an explicit none choice', async () => {
+    const command = attributeCommandToWorkspace(
+      {type: 'update-block', id: 'b1', content: 'x'},
+      'workspace-from-whoami',
+      null,
+    )
+    await client().runCommand(command)
+    expect(submitted[0]).toMatchObject({
+      type: 'update-block', workspaceId: 'workspace-from-whoami', contributorId: null,
+    })
   })
 })

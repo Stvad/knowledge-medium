@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
-import { randomBytes } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 
 export const defaultBridgeHost = '127.0.0.1'
 export const defaultBridgePort = 8787
@@ -21,6 +21,57 @@ export const bridgeConfigPath = () =>
 export const tokenStorePath = () =>
   process.env.AGENT_RUNTIME_TOKEN_FILE
   ?? path.join(agentRuntimeConfigDir(), 'agent-token.json')
+
+/** Per-profile/workspace contributor choices; files contain ids only. */
+export const contributorSelectionDirectory = () =>
+  process.env.AGENT_RUNTIME_CONTRIBUTOR_DIR
+  ?? path.join(agentRuntimeConfigDir(), 'agent-contributors')
+
+export const contributorSelectionPath = (profile: string, workspaceId: string) =>
+  path.join(
+    contributorSelectionDirectory(),
+    `${encodeURIComponent(JSON.stringify([profile, workspaceId]))}.json`,
+  )
+
+export const loadContributorSelection = async (
+  profile: string,
+  workspaceId: string,
+): Promise<string | null | undefined> => {
+  try {
+    const raw = await fs.readFile(contributorSelectionPath(profile, workspaceId), 'utf8')
+    const value = JSON.parse(raw) as {contributorId?: unknown}
+    if (!value || typeof value !== 'object' || !('contributorId' in value)
+      || (value.contributorId !== null
+        && (typeof value.contributorId !== 'string' || value.contributorId.trim() === ''))) {
+      throw new Error(`Invalid contributor selection file for profile "${profile}" and workspace "${workspaceId}".`)
+    }
+    return value.contributorId
+  } catch (error) {
+    if (isErrnoException(error) && error.code === 'ENOENT') return undefined
+    throw error
+  }
+}
+
+export const saveContributorSelection = async (
+  profile: string,
+  workspaceId: string,
+  contributorId: string | null,
+): Promise<void> => {
+  if (!profile.trim() || !workspaceId.trim() || (contributorId !== null && !contributorId.trim())) {
+    throw new Error('Contributor selection needs non-empty profile, workspace, and contributor ids; use null for none.')
+  }
+  const file = contributorSelectionPath(profile, workspaceId)
+  const directory = path.dirname(file)
+  await fs.mkdir(directory, {recursive: true})
+  const temporary = `${file}.${randomUUID()}.tmp`
+  try {
+    await fs.writeFile(temporary, `${JSON.stringify({contributorId}, null, 2)}\n`, {mode: 0o600})
+    await fs.rename(temporary, file)
+  } catch (error) {
+    await fs.rm(temporary, {force: true}).catch(() => {})
+    throw error
+  }
+}
 
 export const bridgeLogPath = () =>
   process.env.AGENT_RUNTIME_LOG_FILE

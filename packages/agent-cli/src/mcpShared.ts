@@ -21,6 +21,8 @@ export const KM_MCP_TOOL_NAMES = [
   'append_markdown',
   'edit_block',
   'create_page',
+  'list_contributors',
+  'create_contributor',
   'recent_changes',
   'block_history',
 ] as const

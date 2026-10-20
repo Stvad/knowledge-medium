@@ -39,6 +39,7 @@ import type {
   RepoTxOptions,
   SameTxEmittedEvent,
   Tx,
+  TypeContribution,
   User,
 } from '@/data/api'
 import {
@@ -352,6 +353,7 @@ export interface RunTxParams<R> {
    *  boundary as `processors` so processor code sees a consistent
    *  runtime bundle. */
   propertySchemas: ReadonlyMap<string, AnyPropertySchema>
+  types: ReadonlyMap<string, TypeContribution>
   /** Registered value presets, captured at that same boundary. Lets a same-tx
    *  processor build a codec the frozen `propertySchemas` cannot answer for —
    *  see `SameTxCtx.valuePresets`. */
@@ -414,7 +416,7 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
   const {
     db, cache, fn, opts, user, isReadOnly,
     newTxId, newTxSeq, newId, blockIdPolicy, now,
-    mutators, processors, sameTxProcessors, propertySchemas, valuePresets,
+    mutators, processors, sameTxProcessors, propertySchemas, types, valuePresets,
     contentReferencePrefill,
     typeDefinitionsForWorkspace,
     propertyDefinitionRegistryForWorkspace,
@@ -487,7 +489,7 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
   // the tx with `fn = tx => tx.run(m, args)`). Pipeline serializes
   // the list at commit time into command_events.mutator_calls.
   const mutatorCalls: MutatorCallRecord[] = []
-  const meta = newTxMeta({txId, scope, source, user, description})
+  const meta = newTxMeta({txId, scope, source, user, description, context: opts.context})
   const timing: TxTimingDiagnostics = {
     sameTxMs: 0,
     sameTxChangedRows: 0,
@@ -638,7 +640,8 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
               emittedEvents,
             },
             {
-              tx, db: txDb, propertySchemas, valuePresets,
+              tx, db: txDb, propertySchemas, types, valuePresets,
+              hasUserWrite: id => tx.hasUserWrite(id),
               // Resolved against the TX's pinned workspace, not the active one:
               // `TxImpl` pins from the first write, and the merge mutator does
               // not require the active workspace to match.

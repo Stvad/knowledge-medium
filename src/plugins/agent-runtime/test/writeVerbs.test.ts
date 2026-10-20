@@ -55,7 +55,7 @@ afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => {
   await resetTestDb(sharedDb.db)
   // Real uuids, so created blocks get `^short` ids like production ones.
-  repo = createTestRepo({db: sharedDb.db, user: USER, newId: () => crypto.randomUUID()}).repo
+  repo = createTestRepo({db: sharedDb.db, user: USER, newId: () => crypto.randomUUID()}).repo.withTxContext({contributorId: null})
   const runtime = resolveFacetRuntimeSync([staticDataExtensions], {repo, workspaceId: WS, safeMode: false})
   repo.setFacetRuntime(runtime)
   repo.setActiveWorkspaceId(WS)
@@ -79,7 +79,7 @@ const seed = async (
 }
 
 const run = (command: Record<string, unknown>) =>
-  executeCommand({commandId: 'c', ...command} as never, context)
+  executeCommand({commandId: 'c', contributorId: null, ...command} as never, context)
 
 const liveChildren = async (parentId: string) =>
   sharedDb.db.getAll<{id: string, content: string}>(

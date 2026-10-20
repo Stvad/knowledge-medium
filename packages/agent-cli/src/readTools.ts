@@ -215,10 +215,11 @@ const classify = (field: string, type: z.ZodType): {kind: OptionKind, keywords: 
 const positionalOnly = (tool: GraphReadTool, field: string): boolean =>
   field === tool.cli?.positional?.field && tool.cli.positional.optional !== true
 
-/** Every field but a positional-only one and `format` becomes an option. */
+/** Every user-facing field but a positional-only one and `format` becomes an option.
+ * `contributorId` is supplied by the client configuration or global CLI option. */
 export const cliOptionsFor = (tool: GraphReadTool): CliOptionSpec[] =>
   Object.entries(tool.shape)
-    .filter(([field]) => !positionalOnly(tool, field) && field !== 'format')
+    .filter(([field]) => !positionalOnly(tool, field) && field !== 'format' && field !== 'contributorId')
     .map(([field, type]) => {
       const {kind, keywords} = classify(field, type)
       const name = flagName(field)

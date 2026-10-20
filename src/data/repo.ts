@@ -2018,6 +2018,21 @@ export class Repo {
     return fn(this.groupedFacade(this.newId()))
   }
 
+  /** Bind plugin context to this host's writes without changing other clients. */
+  withTxContext(context: NonNullable<RepoTxOptions['context']>): Repo {
+    const captured = Object.freeze({...context})
+    const facade = this.transactionFacade((fn, opts) =>
+      this.tx(fn, {...opts, context: {...captured, ...opts.context}}))
+    const blocks = new Map<string, Block>()
+    facade.block = id => {
+      let block = blocks.get(id)
+      if (!block) { block = new Block(facade, id); blocks.set(id, block) }
+      return block
+    }
+    facade.undoGroup = async fn => fn(facade.groupedFacade(this.newId()))
+    return facade
+  }
+
   /** Build the group-injecting facade for {@link undoGroup}. */
   private groupedFacade(groupId: string): Repo {
     return this.transactionFacade((fn, opts) => this.tx(fn, {...opts, groupId}))

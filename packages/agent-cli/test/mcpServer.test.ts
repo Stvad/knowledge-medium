@@ -202,6 +202,38 @@ describe('recent_changes', () => {
     expect(new Set(Object.keys(tools))).toEqual(new Set(KM_MCP_TOOL_NAMES))
   })
 
+  it('lets an unconfigured MCP connection discover and create contributor profiles', async () => {
+    const commands: KnownCommand[] = []
+    const operations: GraphMcpWriteOperation[] = []
+    const server = createGraphMcpServer({
+      client: clientFrom(async command => {
+        commands.push(command)
+        return command.type === 'create-contributor'
+          ? {id: 'contributor-1', name: command.name, kind: command.kind ?? 'agent', workspaceId: command.workspaceId}
+          : {contributors: [{id: 'contributor-1', name: 'Researcher', kind: 'agent'}]}
+      }),
+      writeGuard: {beforeWrite: operation => { operations.push(operation) }},
+      serverOptions: {capabilities: {tools: {}}},
+    })
+    const tools = (server as unknown as RegisteredToolHarness)._registeredTools
+
+    const listed = await tools.list_contributors.handler({workspaceId: 'workspace-a'}, {})
+    const created = await tools.create_contributor.handler({
+      name: 'Researcher', kind: 'agent', role: 'Research', workspaceId: 'workspace-a',
+    }, {})
+
+    expect(commands).toEqual([
+      {type: 'list-contributors', workspaceId: 'workspace-a'},
+      {type: 'create-contributor', name: 'Researcher', kind: 'agent', role: 'Research', workspaceId: 'workspace-a'},
+    ])
+    expect(JSON.parse(listed.content[0]!.text)).toMatchObject({contributors: [{id: 'contributor-1'}]})
+    expect(JSON.parse(created.content[0]!.text)).toMatchObject({id: 'contributor-1'})
+    expect(operations).toEqual([{
+      type: 'create_contributor', name: 'Researcher', kind: 'agent', role: 'Research', workspaceId: 'workspace-a',
+    }])
+    expect(() => tools.create_contributor.inputSchema.parse({name: 'bad', kind: 'robot'})).toThrow()
+  })
+
   it('forwards read tools as view commands and returns the app text verbatim', async () => {
     const runCommand = vi.fn<BridgeClient['runCommand']>(async () => '- hello  ^abc')
     const server = createGraphMcpServer({
