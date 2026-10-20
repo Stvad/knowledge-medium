@@ -56,7 +56,6 @@ import {
   type AnyPostCommitProcessor,
   type CommittedEvent,
   type ProcessorCtx,
-  type ProcessorReadDb,
   type TypeRegistrySnapshot,
   type Tx,
 } from '@/data/api'
@@ -67,7 +66,7 @@ import {
 import { isRetainableAbsentRef, projectPropertyReferences } from './referenceProjection.ts'
 import { devAssertionsEnabled } from '@/data/internals/devAssertions.js'
 import { parseAliasCollisionError } from '@/data/internals/raiseProtocol.js'
-import { SELECT_LIVE_REFERRER_SQL } from '@/data/internals/kernelQueries.js'
+import { readHasLiveReferrer } from '@/data/internals/kernelQueries.js'
 import {
   aliasSeatReaderFromDb,
   ensureAliasTarget,
@@ -95,19 +94,6 @@ import { parseLiteralDailyPageTitle } from '@/utils/relativeDate.js'
 
 export const PARSE_REFERENCES_PROCESSOR = 'references.parseReferences'
 export const CLEANUP_ORPHAN_ALIASES_PROCESSOR = 'references.cleanupOrphanAliases'
-
-/** Committed-state probe: does any LIVE source still reference
- *  `targetId`? The pre-tx prefilter for the mint-time orphan cleanup and the
- *  reference-drop reaper; `reapSeatsInTx` re-asks under the lock. */
-const hasLiveReferrer = async (
-  db: ProcessorReadDb,
-  workspaceId: string,
-  targetId: string,
-): Promise<boolean> =>
-  (await db.getOptional<{present: number}>(
-    SELECT_LIVE_REFERRER_SQL,
-    [workspaceId, targetId],
-  )) !== null
 
 /** Parse-basis fingerprint of a row's parse-relevant columns (content,
  *  properties, references), serialized together so the write phase can
@@ -670,7 +656,7 @@ export const cleanupOrphanAliasesProcessor = definePostCommitProcessor<CleanupAr
     // Read phase — gather actual orphans without holding a writer slot.
     const orphans: string[] = []
     for (const id of ids) {
-      if (!(await hasLiveReferrer(ctx.db, workspaceId, id))) orphans.push(id)
+      if (!(await readHasLiveReferrer(ctx.db, id, workspaceId))) orphans.push(id)
     }
     if (orphans.length === 0) return
 
@@ -725,9 +711,7 @@ const reapSeatsInTx = async (
       // seat since the read phase — nothing to reap then.
       const current = await tx.get(id)
       if (current === null || current.deleted) continue
-      // In-tx referrer re-check: the caller's probe read committed state
-      // before this lock, and a parse tx can commit a reference to the seat
-      // in between.
+      // The caller's referrer probe predates this lock; re-ask under it.
       if (await tx.hasLiveReferrer(id, workspaceId)) continue
       // In-tx SHAPE re-check: a queued user tx can ADOPT the seat between
       // the read phase and this write lock — rename it (quick-find, title
@@ -927,7 +911,7 @@ export const reapOrphanAliasSeatsProcessor = definePostCommitProcessor({
     let seats: AliasSeatNamespaces | undefined
     const candidates: string[] = []
     for (const id of dropped) {
-      if (await hasLiveReferrer(ctx.db, workspaceId, id)) continue
+      if (await readHasLiveReferrer(ctx.db, id, workspaceId)) continue
       const seat = await readSeat(id)
       if (seat === null || seat.deleted) continue
       if (parseLiteralDailyPageTitle(seat.content) !== null) continue
