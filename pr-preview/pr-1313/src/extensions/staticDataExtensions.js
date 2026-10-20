@@ -1,1 +1,0 @@
-import{DL as e}from"../../chunks/app-D2EnKJ4G.js";export{e as staticDataExtensions};
