@@ -1,1 +1,1 @@
-import{Kn as e,QO as t,ZO as n}from"../../../chunks/app-t2aytcn3.js";export{n as extensionsOverridesProp,t as extensionsPrefsType,e as extensionsSettingsPlugin};
+import{$O as e,Kn as t,QO as n}from"../../../chunks/app-DEx6in_-.js";export{n as extensionsOverridesProp,e as extensionsPrefsType,t as extensionsSettingsPlugin};

@@ -1,1 +1,1 @@
-import{Ez as e}from"../../../chunks/app-t2aytcn3.js";export{e as SuspenseFallback};
+import{Dz as e}from"../../../chunks/app-DEx6in_-.js";export{e as SuspenseFallback};

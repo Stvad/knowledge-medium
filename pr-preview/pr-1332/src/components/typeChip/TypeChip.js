@@ -1,1 +1,1 @@
-import{HD as e}from"../../../chunks/app-t2aytcn3.js";export{e as TypeChip};
+import{UD as e}from"../../../chunks/app-DEx6in_-.js";export{e as TypeChip};

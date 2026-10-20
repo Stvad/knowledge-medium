@@ -1,1 +1,1 @@
-import{JO as e,YO as t}from"../../../chunks/app-t2aytcn3.js";export{e as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,t as openExtensionsSettingsAction};
+import{XO as e,YO as t}from"../../../chunks/app-DEx6in_-.js";export{t as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,e as openExtensionsSettingsAction};

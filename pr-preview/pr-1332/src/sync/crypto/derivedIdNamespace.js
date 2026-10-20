@@ -1,1 +1,1 @@
-import{O6 as e}from"../../../chunks/app-t2aytcn3.js";export{e as deriveWorkspaceIdNamespace};
+import{k6 as e}from"../../../chunks/app-DEx6in_-.js";export{e as deriveWorkspaceIdNamespace};
