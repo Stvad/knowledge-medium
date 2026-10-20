@@ -1,0 +1,1 @@
+import{MQ as e,NQ as t,PQ as n}from"../../chunks/app-Cq9nkoC1.js";export{e as NAMES_IN_A_SENTENCE,t as describeNames,n as firstFew};
