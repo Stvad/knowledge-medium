@@ -1,1 +1,1 @@
-import{oo as e}from"../../../chunks/app-DbEUFbiw.js";export{e as dataIntegrityPlugin};
+import{co as e}from"../../../chunks/app-Dx36VZ-N.js";export{e as dataIntegrityPlugin};

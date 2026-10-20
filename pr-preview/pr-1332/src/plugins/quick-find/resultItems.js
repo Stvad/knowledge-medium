@@ -1,1 +1,1 @@
-import{FC as e,IC as t,PC as n}from"../../../chunks/app-DbEUFbiw.js";export{n as aliasResultItems,e as blockResultItems,t as recentResultItems};
+import{IC as e,LC as t,RC as n}from"../../../chunks/app-Dx36VZ-N.js";export{e as aliasResultItems,t as blockResultItems,n as recentResultItems};

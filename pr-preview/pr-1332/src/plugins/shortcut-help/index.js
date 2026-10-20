@@ -1,1 +1,1 @@
-import{BT as e,HT as t,UT as n,VT as r,WT as i}from"../../../chunks/app-DbEUFbiw.js";export{e as SHORTCUT_HELP_ACTION_ID,i as ShortcutHelpOverlay,r as shortcutHelpAction,t as shortcutHelpMount,n as shortcutHelpPlugin};
+import{GT as e,HT as t,KT as n,UT as r,WT as i}from"../../../chunks/app-Dx36VZ-N.js";export{t as SHORTCUT_HELP_ACTION_ID,n as ShortcutHelpOverlay,r as shortcutHelpAction,i as shortcutHelpMount,e as shortcutHelpPlugin};

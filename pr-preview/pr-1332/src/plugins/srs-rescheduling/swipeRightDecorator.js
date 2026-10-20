@@ -1,1 +1,1 @@
-import{Sc as e,bc as t,xc as n}from"../../../chunks/app-DbEUFbiw.js";export{t as archiveSrsBlock,n as srsSwipeRightDecorator,e as srsTodoCycleDecorators};
+import{Cc as e,Sc as t,wc as n}from"../../../chunks/app-Dx36VZ-N.js";export{t as archiveSrsBlock,e as srsSwipeRightDecorator,n as srsTodoCycleDecorators};

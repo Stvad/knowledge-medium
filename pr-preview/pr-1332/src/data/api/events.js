@@ -1,1 +1,1 @@
-import{X7 as e,Y7 as t}from"../../../chunks/app-DbEUFbiw.js";export{t as CORE_BLOCK_DELETED_EVENT,e as CORE_BLOCK_MERGED_EVENT};
+import{Q7 as e,Z7 as t}from"../../../chunks/app-Dx36VZ-N.js";export{t as CORE_BLOCK_DELETED_EVENT,e as CORE_BLOCK_MERGED_EVENT};

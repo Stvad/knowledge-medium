@@ -1,1 +1,1 @@
-import{UX as e,WX as t}from"../../chunks/app-DbEUFbiw.js";export{e as assertAliasClaimable,t as claimedAliases};
+import{GX as e,KX as t}from"../../chunks/app-Dx36VZ-N.js";export{e as assertAliasClaimable,t as claimedAliases};

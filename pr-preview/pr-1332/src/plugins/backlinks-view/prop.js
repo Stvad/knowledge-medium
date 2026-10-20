@@ -1,1 +1,1 @@
-import{dm as e,fm as t,hm as n,mm as r,pm as i}from"../../../chunks/app-DbEUFbiw.js";export{e as DEFAULT_BACKLINKS_VIEW_ID,t as FLAT_BACKLINKS_VIEW_ID,i as GROUPED_BACKLINKS_VIEW_ID,r as backlinksViewProp,n as defaultBacklinksViewIdForBlock};
+import{_m as e,gm as t,hm as n,mm as r,pm as i}from"../../../chunks/app-Dx36VZ-N.js";export{i as DEFAULT_BACKLINKS_VIEW_ID,r as FLAT_BACKLINKS_VIEW_ID,n as GROUPED_BACKLINKS_VIEW_ID,t as backlinksViewProp,e as defaultBacklinksViewIdForBlock};
