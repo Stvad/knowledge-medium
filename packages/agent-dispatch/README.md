@@ -41,6 +41,17 @@ By default a watcher runs `claude`. Configure `"runner": {"executor": "codex"}` 
 - **Tools:** the km MCP server is injected into the codex run via `-c mcp_servers.*` config overrides (not a config file), alongside codex's own built-in tools. Claude's `runner.allowedTools` and the top-level `defaultAllowedTools` are **claude-only** and are ignored for a codex watcher — there's no equivalent allowlist gate at the codex CLI layer today.
 - **Sessions don't cross executors:** `agent:session` ids are executor-scoped — codex thread ids are stored as `codex:<id>`, claude session ids bare (matching every pre-executor session). A follow-up whose nearest thread session belongs to the *other* executor starts a **fresh** thread instead of forwarding the foreign id to `--resume`/`resume` (which would fail the run outright). Switching a watcher's `runner.executor` therefore drops thread continuity, never mixes histories, and never burns retries on doomed resumes.
 
+## Upgrade to 0.3.0
+
+0.3.0 requires `@knowledge-medium/agent-cli` 0.8.0. Before starting active watchers, save an agent or automation contributor for the daemon's configured profile and workspace with `kmagent --profile agent-dispatch contributor use <id> --workspace <workspace-id>`; `contributor use none` explicitly opts out by sending null attribution. You can also create and select an automation profile with `contributor create`.
+
+Upgrade both packages, restart the bridge as described in the agent-cli README's [Upgrading](https://github.com/Stvad/knowledge-medium/tree/master/packages/agent-cli#upgrading) section, save the choice, then restart the daemon. It and its spawned agents use the same saved profile/workspace selection. The ambient channel MCP reads the saved choice when it starts, so restart that MCP client after changing the selection. With no saved choice, active dispatch exits with setup instructions before contacting the bridge; all-disabled watcher cleanup still works without attribution.
+
+```bash
+npm i -g @knowledge-medium/agent-dispatch @knowledge-medium/agent-cli
+launchctl kickstart -k gui/$(id -u)/org.knowledge-medium.agent-dispatch
+```
+
 ## Upgrade to 0.2.0
 
 0.2.0 requires `@knowledge-medium/agent-cli` 0.7, and a config that names its workspace. A config without `workspaceId` is now a config error: the daemon logs a `config error` saying `workspaceId is required` and exits cleanly, so launchd does not restart it and dispatch stops until the field is added.

@@ -237,7 +237,11 @@ The bridge is a background process that keeps running after the CLI that started
 kill $(lsof -t -iTCP:8787 -sTCP:LISTEN)
 ```
 
-Use the port from `AGENT_RUNTIME_URL` if you set one. Restart MCP clients that launch `km-mcp` too; an `npx` launch can reuse a cached copy, so name the version to be sure (`npx -y -p @knowledge-medium/agent-cli@0.7.0 km-mcp`).
+Use the port from `AGENT_RUNTIME_URL` if you set one. Restart MCP clients that launch `km-mcp` too; an `npx` launch can reuse a cached copy, so name the version to be sure (`npx -y -p @knowledge-medium/agent-cli@0.8.0 km-mcp`).
+
+### Upgrade to 0.8.0
+
+External block writes now require a page-backed contributor choice for each CLI profile and workspace. Upgrade `agent-cli`, restart the bridge using the steps above, and restart every MCP client that launches `km-mcp`. Select an agent or automation profile with `kmagent contributor use <id>` (or create one with `contributor create`); run `contributor use none` to explicitly opt out and send null attribution. Until a choice is saved, meaningful writes fail with setup instructions. MCP clients can instead set `AGENT_RUNTIME_CONTRIBUTOR_ID=<id|none>` or launch `km-mcp --contributor <id|none>`; restart the MCP client after changing the setting.
 
 ## Contributors
 
