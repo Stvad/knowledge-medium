@@ -1,1 +1,1 @@
-import{hy as e}from"../../../chunks/app-DXY3ZREh.js";export{e as PanelCursorFollowsScroll};
+import{gy as e}from"../../../chunks/app-BS1mRTJi.js";export{e as PanelCursorFollowsScroll};

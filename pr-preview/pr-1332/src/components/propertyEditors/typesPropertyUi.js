@@ -1,1 +1,1 @@
-import{BD as e,VD as t,zD as n}from"../../../chunks/app-DXY3ZREh.js";export{n as kernelPropertyUiExtension,e as typesPropertyUi,t as typesPropertyUiExtension};
+import{BD as e,HD as t,VD as n}from"../../../chunks/app-BS1mRTJi.js";export{e as kernelPropertyUiExtension,n as typesPropertyUi,t as typesPropertyUiExtension};

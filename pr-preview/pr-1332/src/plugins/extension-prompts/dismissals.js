@@ -1,1 +1,1 @@
-import{ak as e,ik as t,ok as n}from"../../../chunks/app-DXY3ZREh.js";export{t as ExtensionPromptDismissalStore,e as extensionPromptDismissals,n as useExtensionPromptDismissals};
+import{ak as e,ok as t,sk as n}from"../../../chunks/app-BS1mRTJi.js";export{e as ExtensionPromptDismissalStore,t as extensionPromptDismissals,n as useExtensionPromptDismissals};

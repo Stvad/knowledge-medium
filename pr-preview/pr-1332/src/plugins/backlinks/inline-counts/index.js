@@ -1,1 +1,1 @@
-import{rm as e}from"../../../../chunks/app-DXY3ZREh.js";export{e as inlineBacklinkCountsExtension};
+import{rm as e}from"../../../../chunks/app-BS1mRTJi.js";export{e as inlineBacklinkCountsExtension};
