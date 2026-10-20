@@ -1,1 +1,1 @@
-import{bO as e,yO as t}from"../../../chunks/app-Bp8Udi7e.js";export{t as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,e as openExtensionsSettingsAction};
+import{vO as e,yO as t}from"../../../chunks/app-fBWL315v.js";export{e as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,t as openExtensionsSettingsAction};

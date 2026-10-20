@@ -1,1 +1,1 @@
-import{Fi as e,zi as t}from"../../../chunks/app-Bp8Udi7e.js";export{t as migratePropertiesToBlocksAction,e as propertiesMigrationPlugin};
+import{Pi as e,Ri as t}from"../../../chunks/app-fBWL315v.js";export{t as migratePropertiesToBlocksAction,e as propertiesMigrationPlugin};

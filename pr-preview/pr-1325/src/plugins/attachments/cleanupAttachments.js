@@ -1,1 +1,1 @@
-import{Ch as e,Sh as t,Th as n,wh as r}from"../../../chunks/app-Bp8Udi7e.js";export{t as CLEANUP_ATTACHMENTS_ACTION_ID,e as attachmentCleanerIOContribution,r as cleanupAttachmentsAction,n as prepareCleanup};
+import{Ch as e,Sh as t,wh as n,xh as r}from"../../../chunks/app-fBWL315v.js";export{r as CLEANUP_ATTACHMENTS_ACTION_ID,t as attachmentCleanerIOContribution,e as cleanupAttachmentsAction,n as prepareCleanup};

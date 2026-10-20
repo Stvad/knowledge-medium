@@ -1,1 +1,1 @@
-import{CR as e,wR as t}from"../../chunks/app-Bp8Udi7e.js";export{e as appRuntimeUpdateEvent,t as refreshAppRuntime};
+import{CR as e,wR as t}from"../../chunks/app-fBWL315v.js";export{e as appRuntimeUpdateEvent,t as refreshAppRuntime};

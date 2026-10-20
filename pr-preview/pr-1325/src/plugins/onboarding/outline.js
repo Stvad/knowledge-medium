@@ -1,1 +1,1 @@
-import{Fv as e,Iv as t,Lv as n,Pv as r,Rv as i}from"../../../chunks/app-Bp8Udi7e.js";export{r as EXTENSIONS_PAGE_TITLE,e as TUTORIAL_DEFAULT_TITLE,t as TUTORIAL_VIM_TITLE,n as extensionsPageOutline,i as tutorialOutline};
+import{Fv as e,Iv as t,Lv as n,Nv as r,Pv as i}from"../../../chunks/app-fBWL315v.js";export{r as EXTENSIONS_PAGE_TITLE,i as TUTORIAL_DEFAULT_TITLE,e as TUTORIAL_VIM_TITLE,t as extensionsPageOutline,n as tutorialOutline};
