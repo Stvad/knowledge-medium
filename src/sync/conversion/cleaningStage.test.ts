@@ -456,6 +456,16 @@ describe('conversionBundleOf', () => {
     expect(await bundle.readAttachment(localHash)).toEqual(bytesOf('only on device'))
   })
 
+  it('ends a read the bundle drive never answers on Stop', async () => {
+    const stop = new AbortController()
+    const stalled = folder.copy('bundle')
+    stalled.getDirectoryHandle = () => new Promise(() => {})
+    const reading = conversionBundleOf(record, stalled, stop.signal).readArchivedObject('nested/thing')
+
+    stop.abort(new DOMException('stopped', 'AbortError'))
+    await expect(reading).rejects.toThrow('stopped')
+  })
+
   it('returns null for a missing entry', async () => {
     const bundle = conversionBundleOf(record, folder)
     expect(await bundle.readArchivedObject('never/archived')).toBeNull()

@@ -14,7 +14,7 @@
 import { SEALED_COLUMNS } from '../../transform.js'
 import { isSealedRow } from '../sealing.js'
 import { ATTACHMENTS_DIR, OTHER_OBJECTS_DIR, otherObjectNameOf, rawNameOf } from './attachmentParts.js'
-import { scanPart, sha256Hex, type BundleFolder, type PartDigest } from './bundleParts.js'
+import { scanPart, sha256Hex, stoppableFolder, untilStopped, type BundleFolder, type PartDigest } from './bundleParts.js'
 import { BUNDLE_FORMAT, BUNDLE_FORMAT_VERSION, BUNDLE_PARTS, type BundleManifest } from './manifest.js'
 
 export type BundleProblem =
@@ -207,7 +207,7 @@ const verifyAttachments = async (
   for (const hash of noSource) {
     if (!mediaHashes.has(hash)) throw new BundleInvalid('no-source-list', `${hash} is listed as having no source, but no block carries it`)
   }
-  const attachments = await subfolder(folder, ATTACHMENTS_DIR)
+  const attachments = await subfolder(folder, ATTACHMENTS_DIR, signal)
   for (const hash of mediaHashes) {
     if (noSource.has(hash)) continue
     const name = rawNameOf(hash)
@@ -223,7 +223,7 @@ const verifyAttachments = async (
 
 const verifyOtherObjects = async (folder: BundleFolder, manifest: BundleManifest, signal?: AbortSignal): Promise<void> => {
   if (manifest.otherObjects.length === 0) return
-  const others = await subfolder(folder, OTHER_OBJECTS_DIR)
+  const others = await subfolder(folder, OTHER_OBJECTS_DIR, signal)
   for (const entry of manifest.otherObjects) {
     if (entry.name !== otherObjectNameOf(entry.path)) {
       throw new BundleInvalid('other-object-mismatch', `${OTHER_OBJECTS_DIR}/${entry.name} isn't named for ${entry.path}`)
@@ -235,10 +235,11 @@ const verifyOtherObjects = async (folder: BundleFolder, manifest: BundleManifest
   }
 }
 
-const subfolder = async (folder: BundleFolder, name: string): Promise<BundleFolder> => {
+const subfolder = async (folder: BundleFolder, name: string, signal?: AbortSignal): Promise<BundleFolder> => {
   try {
     return await folder.getDirectoryHandle(name)
   } catch (error) {
+    if (signal?.aborted) throw error
     throw new BundleInvalid('part-unreadable', `${name}/ can't be read (${describe(error)})`)
   }
 }
@@ -263,10 +264,12 @@ const verifyHistory = async (
   return {historyRows, through}
 }
 
-const readManifest = async (folder: BundleFolder): Promise<Uint8Array> => {
+const readManifest = async (folder: BundleFolder, signal?: AbortSignal): Promise<Uint8Array> => {
   try {
-    return new Uint8Array(await (await (await folder.getFileHandle(BUNDLE_PARTS.manifest)).getFile()).arrayBuffer())
+    const file = await (await folder.getFileHandle(BUNDLE_PARTS.manifest)).getFile()
+    return new Uint8Array(await untilStopped(file.arrayBuffer(), signal))
   } catch (error) {
+    if (signal?.aborted) throw error
     throw new BundleInvalid('unreadable', `the folder can't be read (${describe(error)})`)
   }
 }
@@ -276,12 +279,13 @@ const manifestChanged = () =>
 
 /** Is this the bundle the record vouches for? Its manifest pins every part's
  *  digest, so the manifest's own hash says so without reading the parts. */
-export const checkManifest = async (folder: BundleFolder, manifestSha256: string): Promise<void> => {
-  if (sha256Hex(await readManifest(folder)) !== manifestSha256) throw manifestChanged()
+export const checkManifest = async (folder: BundleFolder, manifestSha256: string, signal?: AbortSignal): Promise<void> => {
+  if (sha256Hex(await readManifest(stoppableFolder(folder, signal), signal)) !== manifestSha256) throw manifestChanged()
 }
 
-export const verifyBundle = async ({folder, workspaceId, manifestSha256, mediaHashOf, signal}: VerifyBundleOptions): Promise<VerifiedBundle> => {
-  const manifestBytes = await readManifest(folder)
+export const verifyBundle = async ({folder: given, workspaceId, manifestSha256, mediaHashOf, signal}: VerifyBundleOptions): Promise<VerifiedBundle> => {
+  const folder = stoppableFolder(given, signal)
+  const manifestBytes = await readManifest(folder, signal)
   const digest = sha256Hex(manifestBytes)
   if (manifestSha256 !== undefined && digest !== manifestSha256) throw manifestChanged()
   const manifest = parseManifest(manifestBytes, workspaceId)

@@ -17,7 +17,7 @@ import {
   type UnrecoverableMedia,
 } from './attachmentCleaner.js'
 import { ATTACHMENTS_DIR, OTHER_OBJECTS_DIR, otherObjectNameOf, rawNameOf } from './bundle/attachmentParts.js'
-import type { BundleFolder } from './bundle/bundleParts.js'
+import { stoppableFolder, untilStopped, type BundleFolder } from './bundle/bundleParts.js'
 import { bundleRecordOf, type BundleRecord, type BundleRecordStore } from './bundle/bundleRecord.js'
 import { BundleInvalid, checkManifest, verifyBundle } from './bundle/verifyBundle.js'
 import type { ConversionAttachmentsIO } from './conversionAttachments.js'
@@ -99,7 +99,7 @@ const bundleFolder = async (deps: CleaningDeps, record: BundleRecord, problem: s
     const folder = await reopenRecordedFolder(deps, record, problem, 'cleanup')
     if (!folder) return null
     try {
-      await checkManifest(folder, record.manifestSha256)
+      await checkManifest(folder, record.manifestSha256, deps.signal)
       return folder
     } catch (error) {
       if (!(error instanceof BundleInvalid)) throw error
@@ -111,7 +111,12 @@ const bundleFolder = async (deps: CleaningDeps, record: BundleRecord, problem: s
 /** An entry, or null when the folder holds none; throws when the folder
  *  itself can't be read, or the user went on without it, which the cleaner
  *  reports as unreadable. */
-const readEntry = async (folder: BundleFolder | null, dir: string, name: string): Promise<Uint8Array<ArrayBuffer> | null> => {
+const readEntry = async (
+  folder: BundleFolder | null,
+  dir: string,
+  name: string,
+  signal?: AbortSignal,
+): Promise<Uint8Array<ArrayBuffer> | null> => {
   if (!folder) throw new Error('conversion: the user went on without the recovery bundle')
   const entries = await folder.getDirectoryHandle(dir)
   let file
@@ -121,18 +126,21 @@ const readEntry = async (folder: BundleFolder | null, dir: string, name: string)
     if (error instanceof DOMException && error.name === 'NotFoundError') return null
     throw error
   }
-  return new Uint8Array(await (await file.getFile()).arrayBuffer())
+  return new Uint8Array(await untilStopped((await file.getFile()).arrayBuffer(), signal))
 }
 
 /** The bundle as the cleaner reads it: the record's lists, the folder's bytes.
  *  Without a folder the lists still hold, so what the bundle archived stays and
  *  holds the proof back. */
-export const conversionBundleOf = (record: BundleRecord, folder: BundleFolder | null): ConversionBundle => ({
-  archivedPaths: new Set(record.otherObjectPaths),
-  noVerifiedSource: new Set(record.noVerifiedSource),
-  readArchivedObject: path => readEntry(folder, OTHER_OBJECTS_DIR, otherObjectNameOf(path)),
-  readAttachment: contentHash => readEntry(folder, ATTACHMENTS_DIR, rawNameOf(contentHash)),
-})
+export const conversionBundleOf = (record: BundleRecord, folder: BundleFolder | null, signal?: AbortSignal): ConversionBundle => {
+  const target = folder && stoppableFolder(folder, signal)
+  return {
+    archivedPaths: new Set(record.otherObjectPaths),
+    noVerifiedSource: new Set(record.noVerifiedSource),
+    readArchivedObject: path => readEntry(target, OTHER_OBJECTS_DIR, otherObjectNameOf(path), signal),
+    readAttachment: contentHash => readEntry(target, ATTACHMENTS_DIR, rawNameOf(contentHash), signal),
+  }
+}
 
 /** What a pass found wrong with the bundle folder, which another pick may fix. */
 const BUNDLE_FAULT: Partial<Record<LeftReason, string>> = {
@@ -163,7 +171,7 @@ export const runCleaningPass = async (
       await deps.bundles.put(userId, workspaceId, record)
     }
     ui.status({kind: 'cleaning', progress: null})
-    const bundle = conversionBundleOf(record, folder)
+    const bundle = conversionBundleOf(record, folder, signal)
     const result = await withScreenAwake(deps, () =>
       deps.lock(attachmentCleanerLockName(userId, workspaceId), () => cleanAttachments({
         workspaceId,

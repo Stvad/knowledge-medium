@@ -15,7 +15,7 @@ import { CONTENT_HASH_PREFIX, verifyContentHash } from '../../crypto/contentHash
 import { abortableSleep } from '@/utils/abortableSleep.js'
 import { isAddressable, type ObjectPath, type UnrecoverableMedia } from '../attachmentCleaner.js'
 import type { ConversionAttachmentsIO } from '../conversionAttachments.js'
-import { sha256Hex, writeBytesPart, type BundleFolder } from './bundleParts.js'
+import { sha256Hex, stoppableFolder, writeBytesPart, type BundleFolder } from './bundleParts.js'
 
 export const ATTACHMENTS_DIR = 'attachments'
 export const OTHER_OBJECTS_DIR = 'other-objects'
@@ -279,7 +279,8 @@ export const writeAttachmentParts = async ({
 }): Promise<AttachmentParts> => {
   const hashes = [...mediaHashes].sort()
   const {listed, otherObjects: paths} = await listFolder(source, hashes, signal)
-  const attachments = await folder.getDirectoryHandle(ATTACHMENTS_DIR, {create: true})
+  const target = stoppableFolder(folder, signal)
+  const attachments = await target.getDirectoryHandle(ATTACHMENTS_DIR, {create: true})
   const missing: string[] = []
   let written = 0
   for (const hash of hashes) {
@@ -293,7 +294,7 @@ export const writeAttachmentParts = async ({
     onProgress?.(++written)
   }
 
-  const others = await folder.getDirectoryHandle(OTHER_OBJECTS_DIR, {create: true})
+  const others = await target.getDirectoryHandle(OTHER_OBJECTS_DIR, {create: true})
   const otherObjects: OtherObjectEntry[] = []
   for (const path of paths) {
     const bytes = await readListed(source, path, {signal, sleep})
