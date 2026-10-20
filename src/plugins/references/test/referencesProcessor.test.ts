@@ -1723,26 +1723,30 @@ describe('parseReferences — daily-note routing (§7.6)', () => {
  *  pre-tx read it made, so only a check inside that tx can see the write.
  *  Writes are RAW: they keep the trigger-backed indexes current but fire no
  *  processor, so no re-parse can repair the outcome before the assertion.
- *  Returns whether the race fired, for the precondition. */
+ *  Returns whether the race completed — the write landed and the processor's
+ *  own tx then committed — for the precondition: the runner swallows an
+ *  `apply` rejection, so a failed write would otherwise look like a kept seat. */
 const raceBeforeWriteTx = (
   processor: AnyPostCommitProcessor,
   write: (db: TestDb['db']) => Promise<unknown>,
 ): (() => boolean) => {
   const apply = processor.apply
-  let fired = false
+  let injected = false
+  let raced = false
   const spy = vi.spyOn(processor, 'apply').mockImplementation((event, ctx) => {
     const racingRepo = Object.create(ctx.repo) as Repo
     racingRepo.tx = async (fn, opts) => {
-      if (!fired) {
-        fired = true
-        await write(env.h.db)
-      }
-      return ctx.repo.tx(fn, opts)
+      if (injected) return ctx.repo.tx(fn, opts)
+      injected = true
+      await write(env.h.db)
+      const result = await ctx.repo.tx(fn, opts)
+      raced = true
+      return result
     }
     return apply.call(processor, event, {...ctx, repo: racingRepo})
   })
   onTestFinished(() => spy.mockRestore())
-  return () => fired
+  return () => raced
 }
 
 const rawReferrer = (targetId: string, alias: string) => (db: TestDb['db']) =>

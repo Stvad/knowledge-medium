@@ -883,14 +883,15 @@ const liveReferenceTargetIds = (row: BlockData | null): ReadonlySet<string> =>
  *  sees every reference EDGE committed before the reap takes the lock. What
  *  it cannot see is a source whose parse has not committed yet — the parse
  *  resolved `[[alias]]` to this seat, or has not run at all — and the reap
- *  wins the lock. That source's next read phase misses the alias and the
- *  seat-slot probe restores the pristine tombstone in place, so the wikilink
- *  case converges unaided rather than needing a guard in the parse's write
- *  phase. Accepted: an id-based pointer (`((id))`, a ref property) to the seat
- *  written in that window stays bound to the tombstone, since only the alias
- *  path restores.
+ *  wins the lock. That source's next read phase (in the first case, re-fired
+ *  by the parse's own `references` write) misses the alias, and the seat-slot
+ *  probe restores the tombstone, or mints afresh when the seat sat under a
+ *  non-mint namespace. So the wikilink case converges unaided rather than
+ *  needing a guard in the parse's write phase. Accepted: an id-based pointer
+ *  (`((id))`, a ref property) to the seat written in that window stays bound
+ *  to the tombstone, since only an alias mark is re-resolved.
  *
- *  Second documented residual (cross-device): the reap is a LOCAL
+ *  Documented residual (cross-device): the reap is a LOCAL
  *  decision against this device's committed state. A peer that nested
  *  user content under the seat
  *  while offline syncs those children in AFTER the tombstone — sync
