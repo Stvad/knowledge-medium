@@ -102,14 +102,17 @@ Run the SQL migration test suite with:
 pnpm check:db
 ```
 
-This starts a local Supabase Postgres test container, applies
-`supabase/migrations/*.sql` as `supabase_admin`, and runs every pgTAP test in
-`supabase/tests`. It then starts GoTrue and PostgREST against that database and
-runs the vitest files named `*.supabase.test.ts` (through
-`vitest.supabase.config.ts`), which drive the app's own PostgREST code against
-it. Finally it removes the containers and their network so the next run starts
-clean. It is not part of `pnpm check`; the pre-commit gate stays JS-only and
-does not require a container runtime.
+This starts a local Supabase Postgres test container and the Storage API,
+applies `supabase/migrations/*.sql` as `supabase_admin`, and runs every pgTAP
+test in `supabase/tests`. Storage starts first, as on the hosted project, so the
+migrations' Storage blocks (the attachments bucket and its policies) run. It
+then starts GoTrue and PostgREST against that database and runs the vitest files
+named `*.supabase.test.ts` (through `vitest.supabase.config.ts`), which drive the
+app's own PostgREST and Storage code against it. Finally it removes the
+containers and their network so the next run starts clean. It is not part of
+`pnpm check`; the pre-commit gate stays JS-only and does not require a container
+runtime. `pnpm check:db --hold` brings the stack up, prints its `CHECK_DB_*`
+exports and keeps it running until Ctrl-C, so one stack test can run alone.
 
 For Apple Container, install `container` and `socktainer`. `pnpm check:db`
 uses the shared runtime helper and starts the Apple container system plus a
