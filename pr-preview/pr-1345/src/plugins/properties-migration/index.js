@@ -1,1 +1,0 @@
-import{ca as e,ia as t}from"../../../chunks/app-CshHoxB6.js";export{e as migratePropertiesToBlocksAction,t as propertiesMigrationPlugin};

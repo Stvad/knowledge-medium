@@ -1,1 +1,0 @@
-import{JP as e,YP as t}from"../../../chunks/app-CshHoxB6.js";export{e as MetadataRow,t as PropertySectionLabel};

@@ -1,1 +1,0 @@
-import{bF as e,yF as t}from"../../../chunks/app-CshHoxB6.js";export{t as declarationOnlyDefinitionForName,e as declarationOnlyStatusText};

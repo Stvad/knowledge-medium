@@ -1,1 +1,0 @@
-import{nl as e}from"../../../chunks/app-CshHoxB6.js";export{e as blockTagsConfigUi};

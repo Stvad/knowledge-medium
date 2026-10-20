@@ -1,1 +1,0 @@
-import{Bb as e}from"../../../chunks/app-CshHoxB6.js";export{e as usePromotableBreadcrumb};

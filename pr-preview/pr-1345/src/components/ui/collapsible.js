@@ -1,1 +1,0 @@
-"use client";import{GP as e,UP as t,WP as n}from"../../../chunks/app-CshHoxB6.js";export{t as Collapsible,n as CollapsibleContent,e as CollapsibleTrigger};

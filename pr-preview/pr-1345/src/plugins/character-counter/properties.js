@@ -1,1 +1,0 @@
-import{iW as e,nW as t,rW as n}from"../../../chunks/app-CshHoxB6.js";export{t as charLimitProp,n as charProfileProp,e as charScopeProp};

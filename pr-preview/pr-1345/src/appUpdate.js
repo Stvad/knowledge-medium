@@ -1,1 +1,0 @@
-import{Dk as e,Ek as t}from"../chunks/app-CshHoxB6.js";export{t as appUpdate,e as useAppUpdateAvailable};

@@ -1,1 +1,0 @@
-import{cet as e,det as t,fet as n,get as r,het as i,let as a,met as o,pet as s,uet as c}from"../../../chunks/app-CshHoxB6.js";export{e as CHANGE_SCOPE_POLICIES,a as ChangeScope,c as isChangeScope,t as policyForScope,n as scopeAllowedInReadOnly,s as scopeIsUndoable,o as scopePoliciesEquivalent,i as scopeUploadsToServer,r as sourceForScope};
