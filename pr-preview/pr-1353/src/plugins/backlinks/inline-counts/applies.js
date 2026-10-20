@@ -1,1 +1,1 @@
-import{pm as e}from"../../../../chunks/app-G0BKury8.js";export{e as inlineBacklinksApplies};
+import{pm as e}from"../../../../chunks/app-BvcmakLQ.js";export{e as inlineBacklinksApplies};

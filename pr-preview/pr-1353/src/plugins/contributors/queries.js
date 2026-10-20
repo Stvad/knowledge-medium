@@ -1,1 +1,1 @@
-import{MU as e,NU as t}from"../../../chunks/app-G0BKury8.js";export{e as CONTRIBUTOR_PROFILES_BY_IDS_QUERY,t as contributorProfilesByIdsQuery};
+import{MU as e,NU as t}from"../../../chunks/app-BvcmakLQ.js";export{e as CONTRIBUTOR_PROFILES_BY_IDS_QUERY,t as contributorProfilesByIdsQuery};
