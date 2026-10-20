@@ -1,16 +1,29 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { Repo } from '@/data/repo'
 import type { BundleFolder } from '@/sync/conversion/bundle/bundleParts'
+import type { ConversionAttachmentsIO } from '@/sync/conversion/conversionAttachments'
 import type { ConversionUi } from '@/sync/conversion/runConversion'
 import { exportRawSqliteDbToFile } from '@/utils/exportSqliteDb'
 import { conversionSetup } from './conversionFlowDeps'
 
-const h = vi.hoisted(() => ({
-  io: {
-    readObject: () => new Promise<never>(() => {}),
+const h = vi.hoisted(() => {
+  const stalled = () => new Promise<never>(() => {})
+  /** Every member of the attachments IO: a call that never answers, except
+   *  `mediaHashOf`, which answers at once. Typed over the interface, so a
+   *  member added to it doesn't compile here until it's listed. */
+  const io: ConversionAttachmentsIO = {
+    listObjects: stalled,
+    readObject: stalled,
+    writeObject: stalled,
+    deleteObject: stalled,
+    mediaBlocks: stalled,
+    readLocal: stalled,
+    writeLocal: stalled,
+    pendingUploads: stalled,
     mediaHashOf: () => 'sha256:x',
-  },
-}))
+  }
+  return {io}
+})
 vi.mock('@/services/supabase', () => ({supabase: {}}))
 vi.mock('@/sync/conversion/runLock', () => ({webConversionLock: () => ({})}))
 vi.mock('@/utils/exportSqliteDb', () => ({exportRawSqliteDbToFile: vi.fn(), localDbFileBytes: vi.fn()}))
@@ -48,17 +61,22 @@ describe('conversionFlowDeps', () => {
     expect(exportRawSqliteDbToFile).not.toHaveBeenCalled()
   })
 
-  it("ends the run's stalled attachment calls and stage reads when it stops", async () => {
+  it("ends every call on the attachments IO, and the stage read, when the run stops", async () => {
     const run = new AbortController()
     const deps = await depsFor(run.signal)
 
-    const calls = [deps.attachments.readObject('ws/a'), deps.fetchConversionState()]
-    const flags = calls.map(settledFlag)
+    const answers = (Object.keys(h.io) as (keyof ConversionAttachmentsIO)[])
+      .map(member => [member, (deps.attachments[member] as () => unknown)()] as const)
     // A call that answers at once still answers with its value.
-    expect(deps.attachments.mediaHashOf('{}')).toBe('sha256:x')
+    expect(answers.filter(([, answer]) => !(answer instanceof Promise))).toEqual([['mediaHashOf', 'sha256:x']])
+    const waits = [
+      ...answers.filter((entry): entry is readonly [keyof ConversionAttachmentsIO, Promise<unknown>] => entry[1] instanceof Promise),
+      ['fetchConversionState', deps.fetchConversionState()] as const,
+    ]
+    const flags = waits.map(([, wait]) => settledFlag(wait))
     run.abort(new DOMException('stopped', 'AbortError'))
 
     await vi.waitFor(() => expect(flags.every(flag => flag.settled)).toBe(true))
-    for (const call of calls) await expect(call).rejects.toThrow('stopped')
+    for (const [member, wait] of waits) await expect(wait, member).rejects.toThrow('stopped')
   })
 })
