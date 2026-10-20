@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { resealWorkspace } from '../reseal.js'
 import { contentColumnsOf } from '../sealing.js'
 import { flipUnder, keyOf, sealFor, seedPlaintext, WS } from '../test/conversionFixtures.js'
@@ -51,6 +51,35 @@ const problemOf = async (promise: Promise<unknown>) => {
 }
 
 describe('takeBundle', () => {
+  it('stops at once on Stop while the destination is slow to take a write', async () => {
+    await flipUnder(server, wk)
+    const stop = new AbortController()
+    const open = folder.getFileHandle.bind(folder)
+    let writing = false
+    // The drive stops answering partway through the history.
+    folder.getFileHandle = async (name, options) => {
+      const file = await open(name, options)
+      if (name !== BUNDLE_PARTS.history) return file
+      return {
+        getFile: file.getFile,
+        createWritable: async () => ({
+          write: () => { writing = true; return new Promise<void>(() => {}) },
+          close: async () => {},
+          abort: async () => {},
+        }),
+      }
+    }
+
+    const taking = take({signal: stop.signal})
+    await vi.waitFor(() => expect(writing).toBe(true))
+    stop.abort(new DOMException('stopped', 'AbortError'))
+
+    await expect(taking).rejects.toThrow('stopped')
+    // Opening the part made an empty file; nothing was written into it.
+    expect(folder.files.get(BUNDLE_PARTS.history)).toEqual(new Uint8Array())
+    expect(folder.files.has(BUNDLE_PARTS.manifest)).toBe(false)
+  })
+
   it('archives every block row and every history row verbatim, with matching counts', async () => {
     await flipUnder(server, wk)
     const {manifest} = await take()

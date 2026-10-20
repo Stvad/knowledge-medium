@@ -65,11 +65,11 @@ const SEALED_LOOKING_SAMPLE = 20
 
 const encoder = new TextEncoder()
 
-/** The dry run of the bundle's own paging, which also finds sealed-looking
- *  rows. Every read is one bounded index scan by id, where a server-side
- *  filter over the whole workspace would hit the statement timeout on a large
- *  one. */
-const scanServer = async (server: ConversionServer, workspaceId: string, signal?: AbortSignal) => {
+/** The dry run of the bundle's own paging, in two halves: the blocks, which
+ *  also finds sealed-looking rows, then the history. Every read is one bounded
+ *  index scan by id, where a server-side filter over the whole workspace would
+ *  hit the statement timeout on a large one. */
+const scanBlocks = async (server: ConversionServer, workspaceId: string, signal?: AbortSignal) => {
   const sealedLooking: string[] = []
   let blockRows = 0
   let blocksBytes = 0
@@ -82,7 +82,10 @@ const scanServer = async (server: ConversionServer, workspaceId: string, signal?
     if (sealedLooking.length < SEALED_LOOKING_SAMPLE) sealedLooking.push(...idsOf(page.filter(isSealedRow)))
     blockRows += page.length
   }
+  return {sealedLooking: sealedLooking.slice(0, SEALED_LOOKING_SAMPLE), sizes: {blockRows, blocksBytes, contentBytes}}
+}
 
+const scanHistory = async (server: ConversionServer, workspaceId: string, signal?: AbortSignal) => {
   const {maxEventId} = await server.workspaceCounts(workspaceId)
   let historyRows = 0
   let historyBytes = 0
@@ -90,10 +93,7 @@ const scanServer = async (server: ConversionServer, workspaceId: string, signal?
     for (const row of page) historyBytes += encodeJsonlLine(row).length
     historyRows += page.length
   }
-  return {
-    sealedLooking: sealedLooking.slice(0, SEALED_LOOKING_SAMPLE),
-    sizes: {blockRows, blocksBytes, historyRows, historyBytes, contentBytes},
-  }
+  return {historyRows, historyBytes}
 }
 
 /** The blockers this device can change on its own at any moment: checked in
@@ -128,7 +128,9 @@ export const runPreflight = async ({
   // Before the scan, which reads every row of the workspace: these the user
   // can fix in moments.
   if (blockers.length > 0) return {kind: 'blocked', blockers}
-  const scan = await scanServer(server, workspaceId, signal)
-  if (scan.sealedLooking.length > 0) return {kind: 'blocked', blockers: [{kind: 'sealed-looking-rows', blockIds: scan.sealedLooking}]}
-  return {kind: 'ready', report: {sizes: {...scan.sizes, localDbBytes: await environment.localDbBytes()}}}
+  const blocks = await scanBlocks(server, workspaceId, signal)
+  // Before the history, which can be the larger read.
+  if (blocks.sealedLooking.length > 0) return {kind: 'blocked', blockers: [{kind: 'sealed-looking-rows', blockIds: blocks.sealedLooking}]}
+  const history = await scanHistory(server, workspaceId, signal)
+  return {kind: 'ready', report: {sizes: {...blocks.sizes, ...history, localDbBytes: await environment.localDbBytes()}}}
 }

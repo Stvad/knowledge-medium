@@ -126,7 +126,7 @@ const writeBlocks = (options: TakeBundleOptions): Promise<JsonlDigest> =>
       rows += page.length
       options.onProgress?.({part: 'blocks', rows})
     }
-  })
+  }, options.signal)
 
 const writeHistory = (options: TakeBundleOptions, through: number): Promise<JsonlDigest> =>
   writeJsonlPart(options.folder, BUNDLE_PARTS.history, async writeRow => {
@@ -137,7 +137,7 @@ const writeHistory = (options: TakeBundleOptions, through: number): Promise<Json
       rows += page.length
       options.onProgress?.({part: 'history', rows})
     }
-  })
+  }, options.signal)
 
 interface ServerSnapshot {
   readonly through: number
@@ -203,6 +203,7 @@ export const takeBundle = async (options: TakeBundleOptions): Promise<TakenBundl
     },
     noVerifiedSource: options.noVerifiedSource ?? [],
   }
-  await writeBytesPart(options.folder, BUNDLE_PARTS.manifest, new TextEncoder().encode(`${JSON.stringify(manifest, null, 2)}\n`))
+  const manifestBytes = new TextEncoder().encode(`${JSON.stringify(manifest, null, 2)}\n`)
+  await writeBytesPart(options.folder, BUNDLE_PARTS.manifest, manifestBytes, options.signal)
   return {manifest}
 }
