@@ -1,1 +1,1 @@
-import{kp as e}from"../../../../../chunks/app-COtH7_6m.js";export{e as remarkWikilinks};
+import{Op as e}from"../../../../../chunks/app-Ct1TgHt0.js";export{e as remarkWikilinks};
