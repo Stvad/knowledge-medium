@@ -1,1 +1,1 @@
-import{H8 as e,V8 as t}from"../../../chunks/app-C4KbCLPc.js";export{t as CORE_BLOCK_DELETED_EVENT,e as CORE_BLOCK_MERGED_EVENT};
+import{H8 as e,V8 as t}from"../../../chunks/app-Cf2awmR8.js";export{t as CORE_BLOCK_DELETED_EVENT,e as CORE_BLOCK_MERGED_EVENT};

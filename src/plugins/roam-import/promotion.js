@@ -1,1 +1,1 @@
-import{ic as e,rc as t}from"../../../chunks/app-C4KbCLPc.js";export{t as computePromotedFromChildren,e as detectInlineAttribute};
+import{ic as e,rc as t}from"../../../chunks/app-Cf2awmR8.js";export{t as computePromotedFromChildren,e as detectInlineAttribute};
