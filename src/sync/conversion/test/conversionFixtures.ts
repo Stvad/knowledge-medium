@@ -1,6 +1,6 @@
 import { mintCanary } from '../../crypto/canary.js'
 import { importWorkspaceKey } from '../../crypto/workspaceKey.js'
-import { decodeFromWire, encodeForWire } from '../../transform.js'
+import { decodeFromWire, encodeForWire, type WireBlockColumns } from '../../transform.js'
 import type { ContentColumns, ServerBlockRow } from '../conversionServer.js'
 import { contentColumnsOf } from '../sealing.js'
 import type { FakeBlockRow, FakeConversionServer } from './fakeConversionServer.js'
@@ -13,7 +13,7 @@ export const keyOf = (fill: number): Promise<CryptoKey> => importWorkspaceKey(ne
 export const flipUnder = async (server: FakeConversionServer, wk: CryptoKey): Promise<void> =>
   server.flip(WS, await mintCanary(wk, WS))
 
-export const openRow = async (wk: CryptoKey, row: ServerBlockRow): Promise<ContentColumns> =>
+export const openRow = async (wk: CryptoKey, row: WireBlockColumns): Promise<ContentColumns> =>
   contentColumnsOf(await decodeFromWire(row, 'e2ee', async () => wk))
 
 export const sealFor = async (

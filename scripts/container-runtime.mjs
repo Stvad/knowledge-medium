@@ -110,9 +110,11 @@ async function startSocktainer({ env, managed, logPath }) {
   console.log(`[container-runtime] Starting Socktainer; logs: ${logPath}`)
   // Keep socktainer's version check so a mismatch with Apple Container shows up in its log. Since socktainer
   // 1.3.0 that is a warning; older releases exit, and the socket wait below times out naming the log.
+  // Its own process group even when managed, so a Ctrl-C meant for the caller doesn't stop it before the caller's
+  // cleanup has used it.
   const child = spawn('socktainer', [], {
     cwd: repoRoot,
-    detached: !managed,
+    detached: true,
     env,
     stdio: ['ignore', logFd, logFd],
   })
