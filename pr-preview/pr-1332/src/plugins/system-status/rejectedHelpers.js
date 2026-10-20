@@ -1,1 +1,1 @@
-import{as as e,is as t,ns as n,rs as r}from"../../../chunks/app-CDzWRJ3l.js";export{n as extractBlockDetails,r as parseRejectionError,t as shortenId,e as summarizeOp};
+import{as as e,is as t,ns as n,rs as r}from"../../../chunks/app-DE5AX30V.js";export{n as extractBlockDetails,r as parseRejectionError,t as shortenId,e as summarizeOp};
