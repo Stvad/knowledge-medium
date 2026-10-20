@@ -5,15 +5,14 @@
  * adapter's filters and pages, and what `apply_block_patches` leaves in
  * `blocks_history` for the verify to find before the purge deletes it.
  *
- * `pnpm test` skips it. Against a stack that is already up, run it with the
- * CHECK_DB_* addresses `stack()` reads and
- * `vitest run --config vitest.supabase.config.ts`.
+ * `pnpm test` skips it. `pnpm check:db --hold` keeps a stack up to run it alone.
  */
 
 import { randomBytes, randomUUID } from 'node:crypto'
 import pg from 'pg'
-import { createClient, type SupabaseClient } from '@supabase/supabase-js'
+import type { SupabaseClient } from '@supabase/supabase-js'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { signedInUser, supabaseStack } from '@/test/supabaseStack'
 import { mintCanary } from '../crypto/canary.js'
 import { ENVELOPE_PREFIX } from '../crypto/envelope.js'
 import { SEALED_COLUMNS, type WireBlockColumns } from '../transform.js'
@@ -22,12 +21,6 @@ import { resealWorkspace } from './reseal.js'
 import { contentColumnsOf, RESEAL_PAGE_SIZE } from './sealing.js'
 import { keyOf, openRow } from './test/conversionFixtures.js'
 import { verifyReseal } from './verifyReseal.js'
-
-const stack = () => {
-  const {CHECK_DB_DATABASE_URL: databaseUrl, CHECK_DB_AUTH_URL: authUrl, CHECK_DB_REST_URL: restUrl} = process.env
-  if (!databaseUrl || !authUrl || !restUrl) throw new Error('this test needs the stack `pnpm check:db` starts; run it there')
-  return {databaseUrl, authUrl, restUrl}
-}
 
 /** More rows than one page of the re-seal, so both passes page by id. */
 const ROWS = RESEAL_PAGE_SIZE + 50
@@ -47,28 +40,6 @@ const AWKWARD_TEXT = ' · ünïcödé ✓ \\ " \t \u0001 😀 \r\n'
 
 /** A value that passes the re-seal's sealed test without being sealed. */
 const lookalike = () => ENVELOPE_PREFIX + randomBytes(32).toString('base64url')
-
-/** A new user, signed up through GoTrue, which here confirms the address without mail. */
-const signUp = async (authUrl: string): Promise<{id: string; accessToken: string}> => {
-  const response = await fetch(`${authUrl}/signup`, {
-    method: 'POST',
-    headers: {'content-type': 'application/json'},
-    body: JSON.stringify({email: `owner-${randomUUID()}@example.test`, password: randomUUID()}),
-  })
-  const body = await response.json()
-  if (!response.ok || typeof body.access_token !== 'string') {
-    throw new Error(`sign-up failed (${response.status}): ${JSON.stringify(body)}`)
-  }
-  return {id: body.user.id, accessToken: body.access_token}
-}
-
-/** supabase-js addresses PostgREST under the gateway's `/rest/v1`. This stack
- *  has no gateway, so each request goes to PostgREST's root instead. */
-const signedInClient = (restUrl: string, accessToken: string): SupabaseClient =>
-  createClient(restUrl, 'no-gateway', {
-    accessToken: async () => accessToken,
-    global: {fetch: (input, init) => fetch(String(input).replace(`${restUrl}/rest/v1/`, `${restUrl}/`), init)},
-  })
 
 /** The flip, retried while the server finds writes in flight, as the design's
  *  flow does. Here that is most likely an autovacuum of the freshly seeded
@@ -91,11 +62,11 @@ const int8AsNumber = {
 
 // The test takes 1–5 s against a fresh stack.
 describe('the re-seal and verify through PostgREST', {timeout: 60_000}, () => {
-  const {databaseUrl, authUrl, restUrl} = stack()
+  const stack = supabaseStack()
   let db: pg.Client
 
   beforeAll(async () => {
-    db = new pg.Client({connectionString: databaseUrl, types: int8AsNumber})
+    db = new pg.Client({connectionString: stack.databaseUrl, types: int8AsNumber})
     await db.connect()
   })
   afterAll(() => db?.end())
@@ -190,8 +161,8 @@ describe('the re-seal and verify through PostgREST', {timeout: 60_000}, () => {
   }
 
   it('seals every row, finds each re-seal record, repairs a tampered row, and leaves history the purge accepts', async () => {
-    const owner = await signUp(authUrl)
-    const client = signedInClient(restUrl, owner.accessToken)
+    const owner = await signedInUser(stack)
+    const client = owner.client
     const server = createSupabaseConversionServer(client)
     const wk = await keyOf(7)
     const ws = randomUUID()

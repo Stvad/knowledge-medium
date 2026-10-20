@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn } from 'node:child_process'
+import { createHmac } from 'node:crypto'
 import { readdir } from 'node:fs/promises'
 import net from 'node:net'
 import { dirname, join } from 'node:path'
@@ -17,19 +18,36 @@ const postgresImage = process.env.CHECK_DB_POSTGRES_IMAGE ?? 'public.ecr.aws/sup
 // rest-version).
 const gotrueImage = process.env.CHECK_DB_GOTRUE_IMAGE ?? 'public.ecr.aws/supabase/gotrue:v2.189.0'
 const postgrestImage = process.env.CHECK_DB_POSTGREST_IMAGE ?? 'public.ecr.aws/supabase/postgrest:v14.5'
+// The hosted project's Storage API (`npx supabase services`).
+const storageImage = process.env.CHECK_DB_STORAGE_IMAGE ?? 'public.ecr.aws/supabase/storage-api:v1.80.2'
 const postgresPassword = 'postgres'
 const jwtSecret = 'check-db-throwaway-jwt-secret-of-32-chars-or-more'
 const containerName = `knowledge-medium-db-test-${process.pid}`
 const gotrueContainerName = `knowledge-medium-auth-test-${process.pid}`
 const postgrestContainerName = `knowledge-medium-rest-test-${process.pid}`
-// GoTrue and PostgREST reach Postgres by its address on this network, not its name: socktainer's per-network DNS
+const storageContainerName = `knowledge-medium-storage-test-${process.pid}`
+// GoTrue, PostgREST and Storage reach Postgres by its address on this network, not its name: socktainer's per-network DNS
 // intermittently fails lookups (socktainer/socktainer#253), and GoTrue resolves the host on every connection.
 const networkName = containerName
 // The tests that need this stack; vitest.config.ts excludes them from `pnpm test`.
 const stackTestsConfig = join(repoRoot, 'vitest.supabase.config.ts')
 const vitestBin = join(repoRoot, 'node_modules', '.bin', 'vitest')
+// Brings the stack up and keeps it until a signal, printing its addresses, so one stack test file can be run against
+// it at a time; skips both test suites.
+const hold = process.argv.slice(2).includes('--hold')
 
 const env = { ...process.env }
+
+/** An API key for `role`: the HS256 token the gateway hands out, signed with the stack's secret. It outlives any
+ *  `--hold`, whose stack would otherwise refuse its own keys. */
+function apiKey(role) {
+  const encode = (value) => Buffer.from(JSON.stringify(value)).toString('base64url')
+  const iat = Math.floor(Date.now() / 1000)
+  const unsigned = `${encode({ alg: 'HS256', typ: 'JWT' })}.${encode({ iss: 'check-db', role, iat, exp: iat + 10 * 365 * 24 * 3600 })}`
+  return `${unsigned}.${createHmac('sha256', jwtSecret).update(unsigned).digest('base64url')}`
+}
+const anonKey = apiKey('anon')
+const serviceKey = apiKey('service_role')
 
 function runCommand(command, commandArgs, options = {}) {
   const displayArgs = options.displayArgs ?? commandArgs
@@ -205,9 +223,9 @@ async function waitForHttp(label, url) {
   })
 }
 
-// The image doesn't give the roles GoTrue and PostgREST log in as the container's password.
+// The image doesn't give the roles GoTrue, PostgREST and Storage log in as the container's password.
 async function setServerRolePasswords(port) {
-  const sql = ['authenticator', 'supabase_auth_admin']
+  const sql = ['authenticator', 'supabase_auth_admin', 'supabase_storage_admin']
     .map((role) => `alter role ${role} with password '${postgresPassword}';`)
     .join(' ')
   await runCommand('psql', [postgresUrl(port), '-X', '-q', '-v', 'ON_ERROR_STOP=1', '-c', sql], {
@@ -257,6 +275,32 @@ async function startPostgrest(port, postgresHost) {
     postgrestImage,
   ])
   await waitForHttp('PostgREST to serve', `http://127.0.0.1:${port}/`)
+}
+
+// Started before the migrations, as the hosted project's Storage predates every `db push`: Storage creates its own
+// tables as it starts, so the migrations' guarded Storage blocks (the attachments bucket, its policies and limit)
+// run here instead of skipping. A local `supabase start` takes the skipping branch; the migration-contracts
+// workflow runs that order.
+async function startStorage(port, postgresHost) {
+  await runContainer(storageContainerName, [
+    '-p',
+    `127.0.0.1:${port}:5000`,
+    // The supabase CLI's settings for its Storage, with supabase/config.toml's project-wide upload limit.
+    ...envArgs({
+      DATABASE_URL: `postgresql://supabase_storage_admin:${postgresPassword}@${postgresHost}:5432/postgres`,
+      AUTH_JWT_SECRET: jwtSecret,
+      ANON_KEY: anonKey,
+      SERVICE_KEY: serviceKey,
+      FILE_SIZE_LIMIT: String(51 * 1024 * 1024),
+      STORAGE_BACKEND: 'file',
+      FILE_STORAGE_BACKEND_PATH: '/mnt',
+      TENANT_ID: 'stub',
+      STORAGE_S3_REGION: 'stub',
+      GLOBAL_S3_BUCKET: 'stub',
+    }),
+    storageImage,
+  ])
+  await waitForHttp('Storage to serve', `http://127.0.0.1:${port}/status`)
 }
 
 async function applyMigrations(port) {
@@ -315,15 +359,26 @@ async function runSqlTests(port) {
   }
 }
 
-async function runStackTests({ port, gotruePort, postgrestPort }) {
-  await runCommand(vitestBin, ['run', '--config', stackTestsConfig], {
-    env: {
-      ...env,
-      CHECK_DB_DATABASE_URL: postgresUrl(port),
-      CHECK_DB_AUTH_URL: `http://127.0.0.1:${gotruePort}`,
-      CHECK_DB_REST_URL: `http://127.0.0.1:${postgrestPort}`,
-    },
-  })
+/** What a stack test reads to reach the stack. */
+const stackTestEnv = ({ port, gotruePort, postgrestPort, storagePort }) => ({
+  CHECK_DB_DATABASE_URL: postgresUrl(port),
+  CHECK_DB_AUTH_URL: `http://127.0.0.1:${gotruePort}`,
+  CHECK_DB_REST_URL: `http://127.0.0.1:${postgrestPort}`,
+  CHECK_DB_STORAGE_URL: `http://127.0.0.1:${storagePort}`,
+  CHECK_DB_ANON_KEY: anonKey,
+  CHECK_DB_SERVICE_KEY: serviceKey,
+})
+
+async function runStackTests(stackEnv) {
+  await runCommand(vitestBin, ['run', '--config', stackTestsConfig], { env: { ...env, ...stackEnv } })
+}
+
+/** Until a signal, whose handler removes the stack. */
+async function holdStack(stackEnv) {
+  console.log(Object.entries(stackEnv).map(([name, value]) => `export ${name}='${value}'`).join('\n'))
+  console.log(`[check:db] holding the stack; run a stack test with those exports and \`vitest run --config ${stackTestsConfig} <file>\`, stop with Ctrl-C`)
+  // A pending promise alone lets Node exit; the interval keeps it running.
+  await new Promise(() => setInterval(() => {}, 60_000))
 }
 
 async function cleanUp(command, args) {
@@ -383,16 +438,21 @@ try {
   await createNetwork()
   const port = await getFreePort()
   await startPostgresContainer(port)
-  await applyMigrations(port)
-  await runSqlTests(port)
-
   await setServerRolePasswords(port)
   const postgresHost = await containerAddress(containerName)
+  const storagePort = await getFreePort()
+  await startStorage(storagePort, postgresHost)
+  await applyMigrations(port)
+  if (!hold) {
+    await runSqlTests(port)
+  }
+
   const gotruePort = await getFreePort()
   await startGotrue(gotruePort, postgresHost)
   const postgrestPort = await getFreePort()
   await startPostgrest(postgrestPort, postgresHost)
-  await runStackTests({ port, gotruePort, postgrestPort })
+  const stackEnv = stackTestEnv({ port, gotruePort, postgrestPort, storagePort })
+  await (hold ? holdStack(stackEnv) : runStackTests(stackEnv))
 } catch (error) {
   exitCode = error.exitCode ?? 1
   if (!stopping) {

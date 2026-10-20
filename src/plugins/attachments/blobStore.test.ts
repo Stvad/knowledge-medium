@@ -221,8 +221,8 @@ describe('SupabaseBlobStore.probe (the §9 recovery presence probe)', () => {
 
 describe('SupabaseBlobStore.delete', () => {
   /** The bucket API's own url and authed fetch, which delete() rides. */
-  const makeDeleteStore = (status: number) => {
-    const fetch = vi.fn<(url: string, init: RequestInit) => Promise<Response>>(async () => new Response(null, {status}))
+  const makeDeleteStore = (status: number, body: string | null = null) => {
+    const fetch = vi.fn<(url: string, init: RequestInit) => Promise<Response>>(async () => new Response(body, {status}))
     const remove = vi.fn()
     const from = vi.fn(() => ({url: 'https://x.supabase.co/storage/v1', headers: {'X-Client-Info': 't'}, fetch, remove}))
     const client = {storage: {from}} as unknown as SupabaseClient
@@ -255,10 +255,14 @@ describe('SupabaseBlobStore.delete', () => {
     await expect(deleting).rejects.toThrow('stopped')
   })
 
-  it('throws unless Storage confirms the delete, a 404 included (absent, or not permitted)', async () => {
+  it('throws unless Storage confirms the delete, naming the code its body gives', async () => {
     for (const status of [404, 403, 500]) {
       const {store} = makeDeleteStore(status)
-      await expect(store.delete('ws', 'k', undefined)).rejects.toThrow(String(status))
+      await expect(store.delete('ws', 'k', undefined)).rejects.toThrow(`(${status})`)
     }
+    await expect(makeDeleteStore(400, 'null').store.delete('ws', 'k', undefined)).rejects.toThrow('blob delete failed (400) for ws/k')
+    // Storage's shape for an absent object; a denial differs only in the code.
+    const {store} = makeDeleteStore(400, JSON.stringify({statusCode: '404', error: 'not_found', code: 'NoSuchKey'}))
+    await expect(store.delete('ws', 'k', undefined)).rejects.toThrow('blob delete failed (400 NoSuchKey) for ws/k')
   })
 })

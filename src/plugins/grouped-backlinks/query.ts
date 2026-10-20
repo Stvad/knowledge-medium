@@ -8,10 +8,12 @@ import { labelForBlockData } from '@/utils/linkTargetAutocomplete.js'
 import {
   hasBacklinksFilter,
   normalizeBacklinksFilter,
-  propertyMachinerySourceIds,
-  workspaceHasPropertyMachinery,
   type BacklinksFilter,
 } from '@/plugins/backlinks/query.js'
+import {
+  propertyMachinerySourceIds,
+  workspaceHasPropertyMachinery,
+} from '@/plugins/backlinks/machinery.js'
 import {
   TYPED_BLOCKS_LABEL_CHANNEL,
   TYPED_BLOCKS_PROPERTY_CHANNEL,
