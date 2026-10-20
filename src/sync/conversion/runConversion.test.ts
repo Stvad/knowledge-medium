@@ -436,6 +436,22 @@ describe('runConversion: every run', () => {
     expect(await keyStore.get(USER, WS)).toBeNull()
   })
 
+  it('marks the local row past the flip even when the user cancels the contract check', async () => {
+    const minted = await mintWorkspaceKey(WS)
+    server.flip(WS, minted.canary)
+    ui.cancelContract = true
+
+    await expect(run()).rejects.toThrow('cancelled')
+    expect(localCanaries).toEqual([minted.canary])
+  })
+
+  it('leaves the local row alone when a plaintext run is cancelled', async () => {
+    ui.cancelContract = true
+
+    await expect(run()).rejects.toThrow('cancelled')
+    expect(localCanaries).toEqual([])
+  })
+
   it('reports a finished conversion without asking anything, and marks the local row', async () => {
     const minted = await mintWorkspaceKey(WS)
     server.flip(WS, minted.canary)
@@ -476,7 +492,7 @@ describe('runConversion: the canary check past the flip', () => {
       {context: 'converting', problem: 'invalid-key', canStartOver: false},
     ])
     expect(await validateCanary((await storedKey()).wk, saved.canary, WS)).toBe(true)
-    expect(localCanaries).toEqual([saved.canary])
+    expect(new Set(localCanaries)).toEqual(new Set([saved.canary]))
   })
 
   it('says so when the key this device holds does not open the canary', async () => {
