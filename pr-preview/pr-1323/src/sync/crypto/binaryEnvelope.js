@@ -1,1 +1,0 @@
-import{Sb as e,_b as t,bb as n,gb as r,vb as i,xb as a,yb as o}from"../../../chunks/app-BF3ef2i-.js";export{r as BINARY_ENVELOPE_MAGIC,t as BINARY_ENVELOPE_MIN_BYTES,i as BINARY_ENVELOPE_OVERHEAD_BYTES,o as BINARY_MAGIC_BYTES,n as decodeBinaryEnvelope,a as encodeBinaryEnvelope,e as hasBinaryEnvelopeMagic};

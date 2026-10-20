@@ -1,1 +1,0 @@
-import{Rl as e,zl as t}from"../../chunks/app-BF3ef2i-.js";export{e as extensionApiCatalog,t as extensionApiRuntimeExports};

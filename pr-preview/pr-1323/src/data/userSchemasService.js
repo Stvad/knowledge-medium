@@ -1,1 +1,0 @@
-import{$J as e,JJ as t,QJ as n,XJ as r,YJ as i,ZJ as a,eY as o}from"../../chunks/app-BF3ef2i-.js";export{t as USER_SCHEMAS_PROJECTOR_ID,i as UserSchemasService,r as decodePresetConfig,a as isRegistrablePropertyName,n as propertySchemaNameRejection,e as tryBuildSchema,o as userSchemasProjector};

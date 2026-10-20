@@ -1,1 +1,0 @@
-import{dx as e,fx as t,mx as n,px as r}from"../../../chunks/app-BF3ef2i-.js";export{e as OPEN_RECENTS_ACTION_ID,t as openRecentsAction,r as recentsHeaderItem,n as recentsPlugin};

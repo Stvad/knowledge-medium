@@ -1,1 +1,0 @@
-import{dO as e,fO as t,pO as n,uO as r}from"../../chunks/app-BF3ef2i-.js";export{r as extensionDisplayName,e as extensionName,t as userExtensionShellToggle,n as userExtensionToggle};

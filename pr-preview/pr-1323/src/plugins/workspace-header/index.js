@@ -1,1 +1,0 @@
-import{_y as e,by as t,vy as n,yy as r}from"../../../chunks/app-BF3ef2i-.js";export{e as WorkspaceSwitcherSidebarSection,n as pendingInvitationsHeaderItem,r as workspaceHeaderPlugin,t as workspaceSwitcherSidebarSection};

@@ -1,1 +1,0 @@
-import{$E as e,eD as t}from"../../../chunks/app-BF3ef2i-.js";export{e as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,t as openExtensionsSettingsAction};

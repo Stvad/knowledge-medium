@@ -1,1 +1,0 @@
-import{AL as e,FL as t,IL as n,LL as r,ML as i,NL as a,PL as o,RL as s,jL as c}from"../../chunks/app-BF3ef2i-.js";export{e as getLastLongTaskEndMs,c as getStartupTimeline,i as hasStartupMark,a as longTasksSupported,o as markStartup,t as markStartupAt,n as onLongTask,r as resetStartupTimeline,s as startStartupObservers};

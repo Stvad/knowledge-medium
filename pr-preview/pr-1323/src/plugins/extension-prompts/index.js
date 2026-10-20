@@ -1,1 +1,0 @@
-import{XE as e,YE as t}from"../../../chunks/app-BF3ef2i-.js";export{t as ExtensionPromptSurface,e as extensionPromptsExtension};

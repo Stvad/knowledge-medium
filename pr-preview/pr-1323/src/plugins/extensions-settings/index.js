@@ -1,1 +1,0 @@
-import{St as e,nD as t,rD as n}from"../../../chunks/app-BF3ef2i-.js";export{t as extensionsOverridesProp,n as extensionsPrefsType,e as extensionsSettingsPlugin};

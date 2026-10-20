@@ -1,1 +1,0 @@
-import{F_ as e,I_ as t,P_ as n}from"../../../chunks/app-BF3ef2i-.js";export{n as COLEMAK_KEYBINDINGS_PLUGIN_ID,e as colemakKeybindingsPlugin,t as colemakMovementKeybindingOverrides};

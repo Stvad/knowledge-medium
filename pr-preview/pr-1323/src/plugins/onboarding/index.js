@@ -1,1 +1,0 @@
-import{S_ as e,b_ as t,s_ as n,x_ as r,y_ as i}from"../../../chunks/app-BF3ef2i-.js";export{t as EXTENSIONS_PAGE_TITLE,r as TUTORIAL_DEFAULT_TITLE,e as TUTORIAL_VIM_TITLE,n as onboardingPlugin,i as seedTutorial};

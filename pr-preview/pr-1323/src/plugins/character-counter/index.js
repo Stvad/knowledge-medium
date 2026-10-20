@@ -1,1 +1,0 @@
-import{B as e,BV as t,I as n,IV as r,R as i,RV as a,z as o,zV as s}from"../../../chunks/app-BF3ef2i-.js";export{r as CHAR_COUNTER_TYPE,i as RAW_CHARACTER_COUNT_PROFILE_ID,e as charCountDisplay,a as charLimitProp,s as charProfileProp,t as charScopeProp,o as characterCountProfilesFacet,n as characterCounterPlugin};

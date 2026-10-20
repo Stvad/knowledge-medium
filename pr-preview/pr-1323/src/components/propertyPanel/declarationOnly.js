@@ -1,1 +1,0 @@
-import{_N as e,gN as t}from"../../../chunks/app-BF3ef2i-.js";export{t as declarationOnlyDefinitionForName,e as declarationOnlyStatusText};
