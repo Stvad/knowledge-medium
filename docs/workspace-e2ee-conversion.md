@@ -327,7 +327,7 @@ After the purge, recovery **re-keys the workspace in place** from the newest rec
 ## 9. Platform residue, and when it is "safe if breached"
 
 #1289 answered these on 2026-10-19 for the hosted project. Each answer ends with what it rests on:
-- *(measured)*: read from this project with `npx supabase backups list`, a Management API read;
+- *(measured)*: read from this project with the Supabase CLI's Management API reads (`backups list`, `services`, `postgres-config get`);
 - *(read: …)*: stated by a primary source, the vendor's docs or its code at the version linked;
 - *(inferred)*: reasoned, from what the label or the bullet names.
 
@@ -375,13 +375,13 @@ After the purge, recovery **re-keys the workspace in place** from the newest rec
 ### 9.2 Supabase Storage
 
 - **A delete has no trash.** The docs say deleted files are "permanently removed and not recoverable". *(read: [Delete objects](https://supabase.com/docs/guides/storage/management/delete-objects))*
-- **The two delete routes differ.** *(read: [`src/storage/object.ts`](https://github.com/supabase/storage/blob/v1.58.1/src/storage/object.ts) and `src/storage/backend/s3/adapter.ts` at v1.58.1, the version the CLI recorded when this project was linked, in its local `supabase/.temp/storage-version`)*
+- **The two delete routes differ.** *(read: [`src/storage/object.ts`](https://github.com/supabase/storage/blob/v1.80.2/src/storage/object.ts) and [`src/storage/backend/s3/adapter.ts`](https://github.com/supabase/storage/blob/v1.80.2/src/storage/backend/s3/adapter.ts) at v1.80.2, the hosted version `npx supabase services` reported on 2026-10-19)*
   - **The single-object route** (`DELETE /object/<bucket>/<path>`) deletes the S3 object inside the transaction that deletes the row. A backend failure rolls the row back.
-  - **The bulk route**, which supabase-js's `remove()` uses and the app calls, deletes the rows, then sends one S3 `DeleteObjects` request and never reads its per-key errors.
+  - **The bulk route**, which supabase-js's `remove()` uses and the app calls, deletes the rows, then sends S3 `DeleteObjects` requests. A request that fails rolls its batch back, but the per-key errors inside a successful response are never read.
   - S3 reports per-key failures inside a successful response *(inferred: S3's `DeleteObjects` contract)*. So a key it failed to delete stays in the backend with no row, invisible to every listing, the cleaner's included.
   - **So the cleaner should delete raw objects through the single-object route.**
 - **Versioning.**
-  - Newer Storage versions add bucket versioning. It's off by default, and nothing here enables it. *(read: Storage `master`, this repo's migrations)*
+  - The hosted version has no bucket versioning. Storage `master` adds it, off by default, and nothing here enables it. *(read: v1.80.2 and `master`, this repo's migrations)*
   - Whether the S3 bucket behind Supabase Storage keeps object versions isn't documented ([§9.5](#95-open-items) S3).
 - **No overwrite.** The app uploads with `upsert: false`, and the bucket has no UPDATE policy, so an object is never replaced in place. *(read: `src/plugins/attachments/blobStore.ts`, `supabase/migrations/`)*
 - **Backups don't hold objects,** only their `storage.objects` rows. *(read: [Backups](https://supabase.com/docs/guides/platform/backups))* Those rows name each raw object `hex(sha256(plaintext))`, a guess oracle but not content, and they follow the database backups' window.
@@ -446,7 +446,7 @@ None of these blocks the run.
 
 **For Vlad**, from the dashboard or read-only queries:
 - **V1.** *(gates the date)* Does the project have a Log Drain (Project Settings, Log Drains)? If it does, its destination's retention applies.
-- **V2.** The hosted logging settings:
+- **V2.** The hosted logging settings. `npx supabase postgres-config get --experimental` shows no project-level overrides *(measured, 2026-10-19)*. Still unread, because they need a database query:
   - `log_statement`, `log_min_duration_statement`, `log_min_error_statement`, `log_parameter_max_length`, `log_parameter_max_length_on_error`, `auto_explain.log_min_duration`, `pgaudit.log` and `archive_mode`, from `pg_settings`;
   - any per-role or per-database override in `pg_db_role_setting`, for `authenticator`, `authenticated`, `anon` and `postgres`. `pg_settings` shows only the session's own values.
 - **V3.** *(gates the date)* Is the plan Pro? That's inferred from the 7-day backup listing and the health probe's sizing.
