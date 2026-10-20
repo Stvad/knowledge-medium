@@ -1,0 +1,1 @@
+import{Wp as e}from"../../../chunks/app-DRGsvUJW.js";export{e as blockInfoPlugin};

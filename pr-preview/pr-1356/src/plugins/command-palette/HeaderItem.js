@@ -1,0 +1,1 @@
+import{JE as e}from"../../../chunks/app-DRGsvUJW.js";export{e as CommandPaletteHeaderItem};

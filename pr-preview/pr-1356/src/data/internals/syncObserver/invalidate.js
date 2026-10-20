@@ -1,0 +1,1 @@
+import{uX as e}from"../../../../chunks/app-DRGsvUJW.js";export{e as applySyncInvalidation};

@@ -1,0 +1,1 @@
+import{zD as e}from"../../../chunks/app-DRGsvUJW.js";export{e as BlockEmbed};

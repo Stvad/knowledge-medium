@@ -1,0 +1,1 @@
+import{L6 as e,R6 as t}from"../../chunks/app-DRGsvUJW.js";export{e as getOrCreatePropertiesPage,t as propertiesPageBlockId};

@@ -1,0 +1,1 @@
+import{nA as e,tA as t}from"../../chunks/app-DRGsvUJW.js";export{t as ClientLocalSettings,e as clientLocalSettings};

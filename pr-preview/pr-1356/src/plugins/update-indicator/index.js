@@ -1,0 +1,1 @@
+import{Kp as e}from"../../../chunks/app-DRGsvUJW.js";export{e as updateIndicatorPlugin};

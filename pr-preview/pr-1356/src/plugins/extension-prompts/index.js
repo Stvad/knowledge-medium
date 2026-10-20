@@ -1,0 +1,1 @@
+import{XO as e,ZO as t}from"../../../chunks/app-DRGsvUJW.js";export{e as ExtensionPromptSurface,t as extensionPromptsExtension};

@@ -1,0 +1,1 @@
+import{Kb as e}from"../../../chunks/app-DRGsvUJW.js";export{e as BreadcrumbList};

@@ -1,0 +1,1 @@
+import{Ay as e}from"../../../chunks/app-DRGsvUJW.js";export{e as spatialNavigationShellDecorator};
