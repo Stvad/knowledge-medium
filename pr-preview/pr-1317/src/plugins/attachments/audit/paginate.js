@@ -1,1 +1,1 @@
-import{Cm as e}from"../../../../chunks/app-DuFwRXBi.js";export{e as collectPaged};
+import{Cm as e}from"../../../../chunks/app-Ca_KJATh.js";export{e as collectPaged};

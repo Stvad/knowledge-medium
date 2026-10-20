@@ -1,1 +1,1 @@
-import{My as e,Ny as t,Py as n}from"../../../chunks/app-DuFwRXBi.js";export{e as getOrCreateShortcutsBlock,t as journalShortcutBlockId,n as shortcutsBlockId};
+import{My as e,Ny as t,Py as n}from"../../../chunks/app-Ca_KJATh.js";export{e as getOrCreateShortcutsBlock,t as journalShortcutBlockId,n as shortcutsBlockId};
