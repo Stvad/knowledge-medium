@@ -170,8 +170,8 @@ export const scanPart = async (
   const reader = blob.stream().getReader()
   try {
     for (;;) {
-      signal?.throwIfAborted()
-      const {done, value} = await reader.read()
+      // A read from a drive that stopped answering never settles on its own.
+      const {done, value} = await untilStopped(reader.read(), signal)
       if (done) break
       hasher.update(value)
       if (!onLine) continue
@@ -186,7 +186,8 @@ export const scanPart = async (
       if (start < text.length) partial.push(text.slice(start))
     }
   } finally {
-    reader.releaseLock()
+    if (signal?.aborted) void reader.cancel(signal.reason).catch(() => {})
+    else reader.releaseLock()
   }
   if (onLine) {
     partial.push(decoder.decode())

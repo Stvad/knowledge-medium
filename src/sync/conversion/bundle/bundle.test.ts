@@ -4,7 +4,7 @@ import { contentColumnsOf } from '../sealing.js'
 import { flipUnder, keyOf, sealFor, seedPlaintext, WS } from '../test/conversionFixtures.js'
 import { FakeConversionServer, type FakeBlockRow } from '../test/fakeConversionServer.js'
 import { MemoryBundleFolder } from '../test/memoryBundleFolder.js'
-import { sha256Hex } from './bundleParts.js'
+import { scanPart, sha256Hex } from './bundleParts.js'
 import { FAKE_LOCAL_DB, writeFakeLocalDb } from '../test/flowFixtures.js'
 import { BUNDLE_PARTS, type BundleManifest } from './manifest.js'
 import { BundleRefusal, takeBundle, type TakeBundleOptions } from './takeBundle.js'
@@ -49,6 +49,17 @@ const problemOf = async (promise: Promise<unknown>) => {
   if (!(error instanceof BundleInvalid)) throw new Error(`expected BundleInvalid, got ${String(error)}`)
   return error.problem
 }
+
+describe('scanPart', () => {
+  it('ends on Stop even while the drive is slow to give a read', async () => {
+    const stop = new AbortController()
+    const stalled = {stream: () => new ReadableStream<Uint8Array>({pull: () => new Promise<void>(() => {})})} as unknown as Blob
+    const scanning = scanPart(stalled, undefined, stop.signal)
+
+    stop.abort(new DOMException('stopped', 'AbortError'))
+    await expect(scanning).rejects.toThrow('stopped')
+  })
+})
 
 describe('takeBundle', () => {
   it('stops at once on Stop while the destination is slow to take a write', async () => {

@@ -109,6 +109,34 @@ describe('exportRawSqliteDbToFile', () => {
     await expect(localDbFileBytes('user-1')).rejects.toMatchObject({name: 'NotAllowedError'})
   })
 
+  it('lets the caller stop the wait for the database lock, well before the deadline', async () => {
+    vi.useFakeTimers()
+    try {
+      const getFileHandle = vi.fn(async () => ({getFile: async () => fakeFile(new Uint8Array(4))}))
+      Object.defineProperty(navigator, 'storage', {
+        configurable: true,
+        value: {getDirectory: async () => ({getFileHandle})},
+      })
+      // A write lock that never grants.
+      const writeLock = vi.fn(() => new Promise<never>(() => {}))
+      const stop = new AbortController()
+      const copying = exportRawSqliteDbToFile(
+        {user: {id: 'user-1'}, db: {writeLock}} as unknown as Repo,
+        {name: 'copy.db'} as unknown as FileSystemFileHandle,
+        {signal: stop.signal},
+      )
+      const rejects = expect(copying).rejects.toThrow('stopped')
+
+      await vi.advanceTimersByTimeAsync(1_000)
+      stop.abort(new DOMException('stopped', 'AbortError'))
+      // The abort's grace period, not the three-minute deadline.
+      await vi.advanceTimersByTimeAsync(6_000)
+      await rejects
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('budgets the copy for the write-ahead sidecars the checkpoint folds in', async () => {
     vi.useFakeTimers()
     try {
