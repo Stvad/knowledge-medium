@@ -65,6 +65,7 @@ interface CleanupContext {
  *  before offering the dialog and again inside the lock, since the dialog can
  *  stay open across a re-key or the start of a conversion. */
 const readCleanupContext = async (userId: string, workspaceId: string): Promise<CleanupContext | string> => {
+  if (!isRemoteSyncActive()) return 'Attachments need remote sync, which is off.'
   const read = await fetchWorkspaceConversionState(workspaceId)
   if (read.kind !== 'read') return 'Could not read the workspace from the server. Try again when online.'
   const {state} = read

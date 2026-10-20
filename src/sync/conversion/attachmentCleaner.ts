@@ -158,9 +158,10 @@ export interface CleanerReport {
   /** Raw objects sealed, uploaded, verified and then deleted, and gone from
    *  the final listing. */
   readonly converted: readonly ObjectPath[]
-  /** Raw objects whose sealed upload Storage refused; still in place. For a 413
-   *  the remedy is to raise the project-wide upload limit, and the bucket's own
-   *  limit if it is lower, to at least `sealedBytes`, then run again. */
+  /** Sealed uploads Storage refused: a raw object, still in place, or a media
+   *  block's keyed copy that could not be rebuilt. For a 413 the remedy is to
+   *  raise the project-wide upload limit, and the bucket's own limit if it is
+   *  lower, to at least `sealedBytes`, then run again. */
   readonly refused: readonly {
     readonly path: ObjectPath
     readonly status?: number
@@ -184,13 +185,16 @@ export interface CleanerReport {
 const MAX_PASSES = 8
 
 /**
- * A path the cleaner may read or delete: every segment non-empty and needing
- * no URL escaping. storage-js sends a read's path as it is while the delete
- * escapes it, so for any other name (`x?y` reads `x`) the two would address
- * different objects. The app only writes hex names.
+ * A path the cleaner may read or delete: every segment non-empty, not `.` or
+ * `..`, and needing no URL escaping. storage-js sends a read's path as it is
+ * while the delete escapes it, so for any other name (`x?y` reads `x`) the two
+ * would address different objects, and a URL collapses dot segments onto some
+ * other object entirely. The app only writes hex names.
  */
 const isAddressable = (path: ObjectPath): boolean =>
-  path.split('/').every(segment => segment !== '' && encodeURIComponent(segment) === segment)
+  path
+    .split('/')
+    .every(segment => segment !== '' && segment !== '.' && segment !== '..' && encodeURIComponent(segment) === segment)
 
 /** What this run decided about a path it listed. A run never revisits a path
  *  it settled, so an object that stays (left, refused) costs one download a run. */
@@ -244,14 +248,30 @@ export const cleanAttachments = async (input: CleanAttachmentsInput): Promise<Cl
   const left: CleanerReport['left'][number][] = []
   const rebuilt: string[] = []
   const errors: CleanerError[] = []
+  /** Paths whose current occupant this run proved a genuine keyed object. */
+  const provenKeyed = new Set<ObjectPath>()
+
+  /** A listed object's bytes. A read that finds nothing at a path a listing just
+   *  showed is not absence: Storage answers a read it denies as absent. */
+  const readListed = async (path: ObjectPath): Promise<Uint8Array<ArrayBuffer>> => {
+    const bytes = await io.readObject(path)
+    if (!bytes) throw new Error('listed, but could not be read')
+    return bytes
+  }
 
   /**
    * Put `plaintext` (verified to hash to `contentHash`) at `name`, its keyed
    * name, and prove it is there. An occupant that fails verification is a
    * poisoned or wrong-key copy of bytes this pass holds verified, so it is
-   * deleted and the upload repeated once.
+   * deleted and the upload repeated once. A refused upload is reported under
+   * `reportAs`, the object it was for.
    */
-  const placeKeyed = async (name: string, contentHash: string, plaintext: Uint8Array<ArrayBuffer>): Promise<Placement> => {
+  const placeKeyed = async (
+    name: string,
+    contentHash: string,
+    plaintext: Uint8Array<ArrayBuffer>,
+    reportAs: ObjectPath,
+  ): Promise<Placement> => {
     const sealed = await encodeBytes(plaintext, 'e2ee', getCek, {contentHash, workspaceId})
     const writeAndCheck = async (): Promise<Placement | {readonly kind: 'occupied-by-other'}> => {
       const write = await io.writeObject(name, sealed)
@@ -270,18 +290,20 @@ export const cleanAttachments = async (input: CleanAttachmentsInput): Promise<Cl
     }
     if (result.kind === 'verified') {
       settled.set(name, {kind: 'stays', placed: true})
+      provenKeyed.add(name)
       return result
     }
-    return result.kind === 'refused' ? result : {kind: 'unverified'}
+    if (result.kind === 'refused') {
+      refused.push({path: reportAs, status: result.status, sealedBytes: result.sealedBytes})
+      return result
+    }
+    return {kind: 'unverified'}
   }
 
   const convertRaw = async (path: ObjectPath, plaintext: Uint8Array<ArrayBuffer>, contentHash: string, keyedName: string) => {
     settled.set(path, {kind: 'unfinished', contentHash})
-    const placement = await placeKeyed(keyedName, contentHash, plaintext)
-    if (placement.kind === 'refused') {
-      refused.push({path, status: placement.status, sealedBytes: placement.sealedBytes})
-      return
-    }
+    const placement = await placeKeyed(keyedName, contentHash, plaintext, path)
+    if (placement.kind === 'refused') return
     if (placement.kind === 'unverified') {
       errors.push({path, message: 'its keyed copy did not verify after upload'})
       return
@@ -318,14 +340,12 @@ export const cleanAttachments = async (input: CleanAttachmentsInput): Promise<Cl
       return
     }
     settled.set(path, {kind: 'unfinished'})
-    const bytes = await io.readObject(path)
-    if (!bytes) {
-      errors.push({path, message: 'listed, but could not be read'})
-      return
-    }
+    const bytes = await readListed(path)
     const cls = await classifyStoredObject({workspaceId, name: path, bytes, keyed: keyedNames})
-    if (cls.kind === 'keyed') settled.set(path, {kind: 'stays'})
-    else if (cls.kind === 'raw') {
+    if (cls.kind === 'keyed') {
+      settled.set(path, {kind: 'stays'})
+      provenKeyed.add(path)
+    } else if (cls.kind === 'raw') {
       const keyedName = await deriveContentKey({contentHash: cls.contentHash, mode: 'e2ee', contentKeyHmac: keys.contentKeyHmac})
       await convertRaw(path, bytes, cls.contentHash, keyedName)
     } else await handleNeither(path, bytes)
@@ -387,7 +407,6 @@ export const cleanAttachments = async (input: CleanAttachmentsInput): Promise<Cl
     return s === undefined || s.kind === 'unfinished' || (s.kind === 'removed' && s.contentHash !== undefined)
   }
   const rawRemaining = final.filter(maybeRaw)
-  const archivedRemaining = final.filter(path => bundle?.archivedPaths.has(path))
   /** Hashes whose raw object is still listed: their bytes exist, so they are
    *  never unrecoverable, and a later run converts them. */
   const rawHashes = new Set(
@@ -434,9 +453,12 @@ export const cleanAttachments = async (input: CleanAttachmentsInput): Promise<Cl
    */
   const convertOccupant = async (contentHash: string, keyedName: string, plaintext: Uint8Array<ArrayBuffer>): Promise<MediaVerdict> => {
     const rawName = await deriveContentKey({contentHash, mode: 'none', contentKeyHmac: null})
-    if ((await io.writeObject(rawName, plaintext)).kind === 'refused') return 'unverified'
-    const staged = await io.readObject(rawName)
-    if (!staged || !(await verifyContentHash(staged, contentHash))) return 'unverified'
+    const write = await io.writeObject(rawName, plaintext)
+    const staged = write.kind === 'refused' ? null : await io.readObject(rawName)
+    if (!staged || !(await verifyContentHash(staged, contentHash))) {
+      errors.push({path: keyedName, message: 'its plaintext could not be staged at its raw name to convert it'})
+      return 'unverified'
+    }
     await convertRaw(rawName, staged, contentHash, keyedName)
     return settled.get(rawName)?.kind === 'removed' ? 'rebuilt' : 'unverified'
   }
@@ -452,15 +474,18 @@ export const cleanAttachments = async (input: CleanAttachmentsInput): Promise<Cl
     let occupant: Uint8Array<ArrayBuffer> | null = null
     if (listed.has(name)) {
       if (placedThisRun(name)) return 'kept' // verified after this run uploaded it
-      occupant = await io.readObject(name)
-      if (occupant && (await verifyKeyed(occupant, contentHash))) return 'kept'
+      occupant = await readListed(name)
+      if (await verifyKeyed(occupant, contentHash)) {
+        provenKeyed.add(name)
+        return 'kept'
+      }
     }
     if (rawHashes.has(contentHash)) return 'unverified'
     const copy = await outsideCopy(contentHash, name)
     if (copy.kind === 'unreadable') return 'unverified'
     // A durable copy outside Storage: replacing a failing occupant loses nothing.
     if (copy.kind === 'copy') {
-      return (await placeKeyed(name, contentHash, copy.bytes)).kind === 'verified' ? 'rebuilt' : 'unverified'
+      return (await placeKeyed(name, contentHash, copy.bytes, name)).kind === 'verified' ? 'rebuilt' : 'unverified'
     }
     // The block's own plaintext, unsealed at its keyed name, and its only copy.
     if (occupant && (await verifyContentHash(occupant, contentHash))) return convertOccupant(contentHash, name, occupant)
@@ -494,6 +519,9 @@ export const cleanAttachments = async (input: CleanAttachmentsInput): Promise<Cl
   for (const path of [...converted, ...deleted]) {
     if (listed.has(path)) errors.push({path, message: 'deleted, but still listed'})
   }
+  // Archived means the archived BYTES: a path whose occupant this run proved a
+  // genuine keyed copy (a poisoned occupant replaced, say) no longer holds them.
+  const archivedRemaining = final.filter(path => bundle?.archivedPaths.has(path) && !provenKeyed.has(path))
   const proof: CleanerProof =
     !unsettled && rawRemaining.length === 0 && archivedRemaining.length === 0 && unverified.length === 0
       ? {kind: 'passed', unrecoverable}

@@ -7,15 +7,22 @@ import type { WorkspaceConversionRead } from '@/sync/keys/conversionState.js'
 import type { CleanerReport } from '@/sync/conversion/attachmentCleaner.js'
 
 const h = vi.hoisted(() => ({
+  remote: true,
+  fetchState: 0,
   read: null as unknown as WorkspaceConversionRead,
   record: null as {wk: CryptoKey; contentKeyHmac: CryptoKey | null} | null,
   clean: vi.fn(),
 }))
-vi.mock('@/data/workspaceConversion.js', () => ({fetchWorkspaceConversionState: async () => h.read}))
+vi.mock('@/data/workspaceConversion.js', () => ({
+  fetchWorkspaceConversionState: async () => {
+    h.fetchState++
+    return h.read
+  },
+}))
 vi.mock('@/sync/keys/keyStore.js', () => ({getWorkspaceKeyStore: () => ({get: async () => h.record})}))
 vi.mock('@/services/supabase.js', () => ({supabase: {}}))
 vi.mock('./assetUpload.js', () => ({getBlobStore: () => ({})}))
-vi.mock('@/data/repoProvider.js', () => ({isRemoteSyncActive: () => true}))
+vi.mock('@/data/repoProvider.js', () => ({isRemoteSyncActive: () => h.remote}))
 vi.mock('@/sync/conversion/attachmentCleaner.js', async orig => ({
   ...(await orig<typeof import('@/sync/conversion/attachmentCleaner.js')>()),
   cleanAttachments: h.clean,
@@ -48,6 +55,8 @@ const report = (over: Partial<CleanerReport> = {}): CleanerReport => ({
 })
 
 beforeEach(() => {
+  h.remote = true
+  h.fetchState = 0
   h.read = e2ee()
   h.record = {wk: key, contentKeyHmac: key}
   h.clean.mockReset()
@@ -83,6 +92,14 @@ describe('prepareCleanup', () => {
       expect(await prepareCleanup(repo, WS)).toMatch(message)
     }
     expect(h.clean).not.toHaveBeenCalled()
+  })
+})
+
+describe('prepareCleanup in local-only mode', () => {
+  it('refuses without a single server request', async () => {
+    h.remote = false
+    expect(await prepareCleanup(repo, WS)).toMatch(/remote sync/)
+    expect(h.fetchState).toBe(0)
   })
 })
 

@@ -355,6 +355,40 @@ describe('cleanAttachments: the proof', () => {
     expect(report.proof).toEqual({kind: 'passed', unrecoverable: [{contentHash: await hashOf(lost), blockIds: ['block-1']}]})
   })
 
+  it('a media object the final listing shows but a read finds nothing at is unverified, not unrecoverable', async () => {
+    const store = createFakeAttachmentStorage()
+    const photo = utf8('a photo')
+    store.media.push({blockId: 'block-1', contentHash: await hashOf(photo)})
+    store.objects.set(await keyedName(photo), await seal(photo))
+    const read = store.io.readObject
+    vi.spyOn(store.io, 'readObject').mockImplementation(async path => (path === (await keyedName(photo)) ? null : read(path)))
+    const report = await clean(store)
+    expect(report.proof).toMatchObject({kind: 'not-passed', unverified: [await hashOf(photo)]})
+  })
+
+  it('a rebuild Storage refuses is reported with the size the limits must reach', async () => {
+    const store = createFakeAttachmentStorage({limit: 80})
+    const big = new Uint8Array(64).fill(5) // seals to 100
+    store.media.push({blockId: 'block-1', contentHash: await hashOf(big)})
+    store.local.set(await rawName(big), big)
+    const report = await clean(store)
+    expect(report.refused).toEqual([{path: await keyedName(big), status: 413, sealedBytes: 100}])
+    expect(report.proof).toMatchObject({kind: 'not-passed', unverified: [await hashOf(big)]})
+  })
+
+  it('a path the bundle archived counts as remaining only while it may still hold the archived bytes', async () => {
+    // The bundle archived a corrupt occupant at what becomes a media block's keyed
+    // name; converting the raw object replaces it with a verified copy.
+    const store = createFakeAttachmentStorage()
+    const photo = utf8('a photo')
+    await putRaw(store, photo, 'block-1')
+    const corrupt = utf8('corrupt occupant')
+    store.objects.set(await keyedName(photo), corrupt)
+    const report = await clean(store, createFakeBundle(new Map([[await keyedName(photo), corrupt]])))
+    expect(await holdsKeyed(store, photo)).toBe(true)
+    expect(report.proof).toEqual({kind: 'passed', unrecoverable: []})
+  })
+
   it('rebuilds a missing keyed object from the bundle', async () => {
     const store = createFakeAttachmentStorage()
     const photo = utf8('a photo')
@@ -506,7 +540,7 @@ describe('cleanAttachments: runs', () => {
 
   it('never reads or deletes a name a read and a delete would address differently', async () => {
     const store = createFakeAttachmentStorage()
-    const odd = ['x?y', 'dir/a b', 'a//b']
+    const odd = ['x?y', 'dir/a b', 'a//b', 'dir/../elsewhere', './x']
     for (const path of odd) store.objects.set(path, utf8(path))
     const read = vi.spyOn(store.io, 'readObject')
     const report = await clean(store, createFakeBundle(new Map(odd.map(path => [path, utf8(path)]))))
