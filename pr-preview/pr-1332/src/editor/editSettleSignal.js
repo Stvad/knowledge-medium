@@ -1,1 +1,1 @@
-import{_N as e,gN as t,hN as n,vN as r}from"../../chunks/app-Bjoj72GX.js";export{n as blockEditResumed,t as blockEditSettled,e as notifyBlockEditResumed,r as notifyBlockEditSettled};
+import{_N as e,gN as t,hN as n,vN as r}from"../../chunks/app-B2YdZB47.js";export{n as blockEditResumed,t as blockEditSettled,e as notifyBlockEditResumed,r as notifyBlockEditSettled};

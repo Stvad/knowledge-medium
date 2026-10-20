@@ -1,1 +1,1 @@
-import{JU as e,KU as t,qU as n}from"../../../chunks/app-Bjoj72GX.js";export{t as DAILY_NOTE_TYPE,n as dailyNoteDateProp,e as dailyNoteType};
+import{JU as e,KU as t,qU as n}from"../../../chunks/app-B2YdZB47.js";export{t as DAILY_NOTE_TYPE,n as dailyNoteDateProp,e as dailyNoteType};

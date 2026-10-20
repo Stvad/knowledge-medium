@@ -1,1 +1,1 @@
-import{sr as e}from"../../../chunks/app-Bjoj72GX.js";export{e as PerfTrendDialog};
+import{sr as e}from"../../../chunks/app-B2YdZB47.js";export{e as PerfTrendDialog};
