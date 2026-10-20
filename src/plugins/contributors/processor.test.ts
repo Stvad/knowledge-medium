@@ -234,6 +234,34 @@ describe('automatic contributor attribution', () => {
     expect(await read('note', attributionEditorsProp.name)).toBeUndefined()
   })
 
+  const nonDocumentScopeCases = [
+    ['ui-state', ChangeScope.UiState],
+    ['user-prefs', ChangeScope.UserPrefs],
+    ['automation', ChangeScope.Automation],
+    ['references', ChangeScope.References],
+  ] as const
+  const actorCases = [
+    ['unconfigured', {contributorSource: 'agent'}],
+    ['selected', {contributorSource: 'agent', contributorId: 'atlas'}],
+  ] as const
+  it.each(nonDocumentScopeCases.flatMap(([scopeName, scope]) => actorCases.map(([actorName, context]) =>
+    [scopeName, actorName, scope, context] as const,
+  )))('%s scope stays quiet for the %s external actor', async (scopeName, actorName, scope, context) => {
+    const host = repo.withTxContext(context)
+    const id = `${scopeName}-${actorName}`
+    await host.tx(tx => tx.create({
+      id, workspaceId: WS, parentId: null, orderKey: 'a0', content: 'Created in non-document scope',
+    }), {scope})
+    expect((await repo.load(id))?.content).toBe('Created in non-document scope')
+    expect(await read(id, attributionCreatorsProp.name)).toBeUndefined()
+    expect(await read(id, attributionEditorsProp.name)).toBeUndefined()
+
+    await host.tx(tx => tx.update(id, {content: 'Updated in non-document scope'}), {scope})
+    expect((await repo.load(id))?.content).toBe('Updated in non-document scope')
+    expect(await read(id, attributionCreatorsProp.name)).toBeUndefined()
+    expect(await read(id, attributionEditorsProp.name)).toBeUndefined()
+  })
+
   it.each(['parent', 'order'] as const)('requires selection and credits a pure %s move', async field => {
     await create(repo, 'parent')
     await create(repo)

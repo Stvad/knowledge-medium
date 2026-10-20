@@ -31,6 +31,13 @@ beforeEach(async () => {
 })
 const run = (command: Record<string, unknown>) => executeCommand({commandId: 'test', ...command} as never, context)
 
+const readStoredBlock = async (id: string) => {
+  const row = await db.db.get<{content: string; properties_json: string}>(
+    'SELECT content, properties_json FROM blocks WHERE id = ?', [id],
+  )
+  return row ? {content: row.content, properties: JSON.parse(row.properties_json) as Record<string, unknown>} : null
+}
+
 describe('agent contributor selection', () => {
   it('permits discovery and profile creation without a preselected contributor', async () => {
     expect(await run({type: 'list-contributors'})).toEqual({contributors: []})
@@ -153,6 +160,86 @@ describe('agent contributor selection', () => {
     expect((await context.repo.load(result.id))?.properties[attributionCreatorsProp.name]).toEqual([profile.id])
     await run({type: 'eval', contributorId: profile.id, code: 'await block(data.id).setContent("Revised")', data: {id: result.id}})
     expect((await context.repo.load(result.id))?.properties[attributionEditorsProp.name]).toEqual([profile.id])
+  })
+
+  it('keeps exact contributor provenance through unconfigured eval undo and configured eval redo', async () => {
+    const atlas = await run({type: 'create-contributor', name: 'Atlas'}) as ContributorProfile
+    const scout = await run({type: 'create-contributor', name: 'Scout'}) as ContributorProfile
+    const page = await run({
+      type: 'create-page', name: 'Undo provenance', contributorId: atlas.id,
+    }) as {id: string}
+    await run({
+      type: 'update-block', id: page.id, content: 'Scout revision', contributorId: scout.id,
+    })
+
+    const edited = await readStoredBlock(page.id)
+    expect(edited?.content).toBe('Scout revision')
+    expect(edited?.properties[attributionCreatorsProp.name]).toEqual([atlas.id])
+    expect(edited?.properties[attributionEditorsProp.name]).toEqual([scout.id])
+
+    // Undo restores the prior snapshot without adding the eval as an editor.
+    await expect(run({type: 'eval', code: 'return await repo.undo()'})).resolves.toBe(true)
+    const undone = await readStoredBlock(page.id)
+    expect(undone?.content).toBe('Undo provenance')
+    expect(undone?.properties[attributionCreatorsProp.name]).toEqual([atlas.id])
+    expect(undone?.properties[attributionEditorsProp.name]).toBeUndefined()
+
+    // Redo restores Scout's original edit provenance, not Atlas's command identity.
+    await expect(run({
+      type: 'eval', contributorId: atlas.id, code: 'return await repo.redo()',
+    })).resolves.toBe(true)
+    const redone = await readStoredBlock(page.id)
+    expect(redone?.content).toBe('Scout revision')
+    expect(redone?.properties[attributionCreatorsProp.name]).toEqual([atlas.id])
+    expect(redone?.properties[attributionEditorsProp.name]).toEqual([scout.id])
+  })
+
+  it('keeps deliberate raw SQL and eval DB maintenance outside Repo attribution', async () => {
+    const atlas = await run({type: 'create-contributor', name: 'Atlas'}) as ContributorProfile
+    const scout = await run({type: 'create-contributor', name: 'Scout'}) as ContributorProfile
+    const page = await run({
+      type: 'create-page', name: 'Raw maintenance', contributorId: atlas.id,
+    }) as {id: string}
+    const original = await readStoredBlock(page.id)
+    expect(original?.properties[attributionCreatorsProp.name]).toEqual([atlas.id])
+
+    const updateSql = 'UPDATE blocks SET content = ? WHERE id = ?'
+    const params = ['Raw SQL maintenance', page.id]
+    await expect(run({
+      type: 'sql', mode: 'execute', sql: updateSql, params, contributorId: scout.id,
+    })).rejects.toThrow(/refusing to write to synced table "blocks"/)
+    expect(await readStoredBlock(page.id)).toEqual(original)
+
+    await run({
+      type: 'sql', mode: 'execute', sql: updateSql, params,
+      allowSyncedWrite: true, contributorId: scout.id,
+    })
+    const afterSql = await readStoredBlock(page.id)
+    expect(afterSql?.content).toBe('Raw SQL maintenance')
+    expect(afterSql?.properties[attributionCreatorsProp.name]).toEqual([atlas.id])
+    expect(afterSql?.properties[attributionEditorsProp.name]).toBeUndefined()
+
+    await run({
+      type: 'eval',
+      contributorId: scout.id,
+      data: {id: page.id},
+      code: `await db.execute('UPDATE blocks SET content = ? WHERE id = ?', ['Eval db maintenance', data.id])`,
+    })
+    const afterEvalDb = await readStoredBlock(page.id)
+    expect(afterEvalDb?.content).toBe('Eval db maintenance')
+    expect(afterEvalDb?.properties[attributionCreatorsProp.name]).toEqual([atlas.id])
+    expect(afterEvalDb?.properties[attributionEditorsProp.name]).toBeUndefined()
+
+    await run({
+      type: 'eval',
+      contributorId: scout.id,
+      data: {id: page.id},
+      code: `await repo.db.execute('UPDATE blocks SET content = ? WHERE id = ?', ['Eval repo.db maintenance', data.id])`,
+    })
+    const afterEvalRepoDb = await readStoredBlock(page.id)
+    expect(afterEvalRepoDb?.content).toBe('Eval repo.db maintenance')
+    expect(afterEvalRepoDb?.properties[attributionCreatorsProp.name]).toEqual([atlas.id])
+    expect(afterEvalRepoDb?.properties[attributionEditorsProp.name]).toBeUndefined()
   })
 
   it('keeps the command contributor on direct eval tx writes while preserving unrelated tx context', async () => {

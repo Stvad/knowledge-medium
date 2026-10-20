@@ -231,6 +231,10 @@ Write the way you would edit files, and let the app do the outline:
   \`get-block\`, not from an outline line — and the update is refused if the
   content is no longer that.
 - ${TODO_WRITE_HELP}
+- The Contributors plugin attributes normal \`BlockDefault\` document edits. Undo/redo
+  restores recorded provenance; UI, preference, automation and reference scopes
+  stay quiet. Explicit context rebinding and direct database maintenance in
+  trusted \`eval\` remain available outside automatic attribution.
 - With Contributors enabled, \`run-action\` / \`action\` refuses dispatch:
   UI action closures can retain repositories outside the command context.
   Use graph write commands or \`eval\` with its supplied \`repo\` instead.

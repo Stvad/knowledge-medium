@@ -247,6 +247,7 @@ const assertSyncedTableWriteAllowed = (sql: string, allowSyncedWrite: boolean): 
   )
 }
 
+// Deliberate raw maintenance bypasses Repo processors, including contributor selection and attribution.
 const runSql = async (
   repo: Repo,
   sql: string,

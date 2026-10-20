@@ -2096,6 +2096,7 @@ export class Repo {
     const setActiveLayoutSessionId: Repo['setActiveLayoutSessionId'] = (id) =>
       this.setActiveLayoutSessionId(id)
     const setReadOnly: Repo['setReadOnly'] = (value) => this.setReadOnly(value)
+    // Replay restores recorded provenance exactly; the caller does not become a new author.
     const undo: Repo['undo'] = (scope) => this.undo(scope)
     const redo: Repo['redo'] = (scope) => this.redo(scope)
     const startSyncObserver: Repo['startSyncObserver'] = (options) =>

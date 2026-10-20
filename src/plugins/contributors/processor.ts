@@ -59,6 +59,7 @@ export const contributorAttributionProcessor = defineSameTxProcessor({
   name: 'contributors.recordAttribution',
   watches: {kind: 'field', table: 'blocks', fields: authoredFields},
   apply: async (event, ctx) => {
+    // Attribute document edits; system and preference scopes neither require a selection nor add authors.
     if (event.scope !== ChangeScope.BlockDefault) return
     const targets = new Map<string, {created: boolean; authored: boolean; corrections: Set<AttributionProperty>}>()
     for (const change of event.changedRows) {

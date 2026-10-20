@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
-import { randomBytes, randomUUID } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 
 export const defaultBridgeHost = '127.0.0.1'
 export const defaultBridgePort = 8787
@@ -38,11 +38,15 @@ export const contributorSelectionDirectory = () =>
   ?? path.join(agentRuntimeConfigDir(), 'agent-contributors')
 
 export const contributorSelectionPath = (profile: string, workspaceId: string) => {
+  const normalizedProfile = normalizeProfileName(profile)
   const normalizedWorkspaceId = workspaceId.trim()
   if (!normalizedWorkspaceId) throw new Error('Contributor selection needs a non-empty workspace id.')
+  const key = createHash('sha256')
+    .update(JSON.stringify([normalizedProfile, normalizedWorkspaceId]))
+    .digest('hex')
   return path.join(
     contributorSelectionDirectory(),
-    `${encodeURIComponent(JSON.stringify([normalizeProfileName(profile), normalizedWorkspaceId]))}.json`,
+    `${key}.json`,
   )
 }
 

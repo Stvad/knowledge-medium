@@ -73,6 +73,24 @@ describe('CLI contributor selections', () => {
       .toBe(contributorSelectionPath('work', 'workspace-a'))
   })
 
+  it.each([
+    ['profile case', 'Work', 'work', 'workspace-a', 'contributor-upper-profile', 'contributor-lower-profile'],
+    ['workspace case', 'work', 'work', 'Workspace-a', 'contributor-upper-workspace', 'contributor-lower-workspace'],
+  ])('keeps case-sensitive %s selections on distinct portable paths', async (
+    _label, firstProfile, secondProfile, secondWorkspace, firstId, secondId,
+  ) => {
+    directory = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-contributor-selection-'))
+    process.env.AGENT_RUNTIME_CONTRIBUTOR_DIR = directory
+
+    await saveContributorSelection(firstProfile, 'workspace-a', firstId)
+    await saveContributorSelection(secondProfile, secondWorkspace, secondId)
+
+    expect(await loadContributorSelection(firstProfile, 'workspace-a')).toBe(firstId)
+    expect(await loadContributorSelection(secondProfile, secondWorkspace)).toBe(secondId)
+    expect(contributorSelectionPath(firstProfile, 'workspace-a').toLowerCase())
+      .not.toBe(contributorSelectionPath(secondProfile, secondWorkspace).toLowerCase())
+  })
+
   it('maps a blank profile to default and round-trips explicit none in one file', async () => {
     directory = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-contributor-selection-'))
     process.env.AGENT_RUNTIME_CONTRIBUTOR_DIR = directory
