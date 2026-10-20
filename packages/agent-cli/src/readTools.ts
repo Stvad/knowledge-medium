@@ -52,7 +52,7 @@ export interface GraphReadTool {
   buildCommand: (input: ToolInput) => KnownCommand
 }
 
-const WIRE_ONLY_FIELDS = ['type', 'commandId'] as const
+const WIRE_ONLY_FIELDS = ['type', 'commandId', 'contributorId'] as const
 
 /** A wire schema's fields minus the envelope ones. */
 const inputShapeOf = (schema: z.ZodObject): InputShape => {
@@ -215,7 +215,7 @@ const classify = (field: string, type: z.ZodType): {kind: OptionKind, keywords: 
 const positionalOnly = (tool: GraphReadTool, field: string): boolean =>
   field === tool.cli?.positional?.field && tool.cli.positional.optional !== true
 
-/** Every field but a positional-only one and `format` becomes an option. */
+/** Every user-facing field but a positional-only one and `format` becomes an option. */
 export const cliOptionsFor = (tool: GraphReadTool): CliOptionSpec[] =>
   Object.entries(tool.shape)
     .filter(([field]) => !positionalOnly(tool, field) && field !== 'format')

@@ -31,6 +31,7 @@ describe('kmagent help', () => {
     const lines = commandLines(text)
 
     expect(text.length).toBeLessThanOrEqual(TOP_LEVEL_HELP_BUDGET)
+    expect(text).toContain('--contributor <id|none>')
     expect(lines.map(line => line.trim().split(/\s/)[0])).toEqual(expect.arrayContaining([
       'connect', 'health', 'sql', 'get-block', 'subtree', 'search', 'data-model', 'rematerialize-workspace', 'types',
     ]))

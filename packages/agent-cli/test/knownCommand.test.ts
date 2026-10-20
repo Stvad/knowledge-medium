@@ -23,6 +23,8 @@ describe('knownCommandSchema — branch acceptance', () => {
     ['get-block', {type: 'get-block', id: 'b-1'}],
     ['get-subtree', {type: 'get-subtree', rootId: 'r-1'}],
     ['create-block', {type: 'create-block', parentId: 'p-1', content: 'hi'}],
+    ['create-contributor', {type: 'create-contributor', name: 'Vlad'}],
+    ['list-contributors', {type: 'list-contributors'}],
     ['create-block (top level, as move-block spells it)', {type: 'create-block', parentId: null, content: 'hi'}],
     ['update-block', {type: 'update-block', id: 'b-1', content: 'hi'}],
     ['move-block', {type: 'move-block', id: 'b-1', parentId: 'p-1', position: {kind: 'last'}}],
@@ -54,6 +56,12 @@ describe('knownCommandSchema — branch acceptance', () => {
 })
 
 describe('knownCommandSchema — rejection', () => {
+  it('preserves explicit nullable contributor attribution on write commands', () => {
+    expect(knownCommandSchema.parse({type: 'create-block', contributorId: null})).toMatchObject({contributorId: null})
+    expect(knownCommandSchema.parse({type: 'create-block', contributorId: 'contrib-1'})).toMatchObject({contributorId: 'contrib-1'})
+    expect(knownCommandSchema.parse({type: 'create-contributor', name: 'A', kind: 'automation'})).toMatchObject({kind: 'automation'})
+  })
+
   it('rejects an unknown command type', () => {
     const result = knownCommandSchema.safeParse({type: 'not-a-real-command'})
     expect(result.success).toBe(false)

@@ -1,6 +1,6 @@
 import { cac } from 'cac'
 import { describe, expect, it } from 'vitest'
-import { appendPositionOption, editArgumentsOption, limitOption, markdownText, scopeAssertion, workspaceAssertion } from '../src/cliOptions.js'
+import { appendPositionOption, attributeCommandToWorkspace, editArgumentsOption, explicitWorkspaceForContributorSelection, limitOption, markdownText, scopeAssertion, workspaceAssertion } from '../src/cliOptions.js'
 
 /** Parse argv the way the real CLI does and hand back what the option
  *  actually became — so this pins CAC's behaviour too, not just our handling
@@ -20,6 +20,33 @@ const parseOption = (name: 'workspace' | 'limit' | 'scope', argv: string[]): unk
 }
 
 const parseWorkspaceOption = (argv: string[]): unknown => parseOption('workspace', argv)
+
+describe('attributeCommandToWorkspace', () => {
+  it('pins the resolved workspace and preserves intentional unattributed selection', () => {
+    expect(attributeCommandToWorkspace(
+      {type: 'update-block', id: 'b1', content: 'x'},
+      'workspace-from-whoami',
+      null,
+    )).toEqual({
+      type: 'update-block', id: 'b1', content: 'x',
+      workspaceId: 'workspace-from-whoami', contributorId: null,
+    })
+  })
+})
+
+describe('explicitWorkspaceForContributorSelection', () => {
+  it.each([
+    [{type: 'update-block', id: 'b1', workspaceId: ''}, /workspaceId must be a non-empty string/],
+    [{type: 'create-block', data: {workspaceId: '  '}}, /data\.workspaceId must be a non-empty string/],
+  ] as const)('refuses malformed explicit workspace fields before choosing a fallback', (command, message) => {
+    expect(() => explicitWorkspaceForContributorSelection(command as never)).toThrow(message)
+  })
+
+  it('keeps a named workspace for the contributor selection lookup', () => {
+    expect(explicitWorkspaceForContributorSelection({type: 'update-block', id: 'b1', workspaceId: ' ws-1 '}))
+      .toBe('ws-1')
+  })
+})
 
 describe('workspaceAssertion', () => {
   it('keeps an EMPTY --workspace as an assertion so the command layer can refuse it', () => {

@@ -13,9 +13,7 @@ import {
   type BridgeEventRecord,
   type CommandPayload,
   commandPayloadSchema,
-  isReadOnlySql,
-  knownCommandRegistry,
-  type KnownCommandMeta,
+  isReadOnlyAgentCommand,
   namedWorkspaceId,
   registerClientMetadataSchema,
   registerTokenSpecSchema,
@@ -312,25 +310,6 @@ const tokenScope = (value: unknown): TokenScope =>
 // (protocol.ts isReadOnlySql) — the previous local `/^(select|explain)/`
 // prefix check let a read-only token run `SELECT powersync_clear(1)`
 // (local-data wipe) or smuggle a second statement after a `;`.
-
-const isReadOnlyCommand = (command: CommandPayload): boolean => {
-  // `sql` is the one verb whose read-only-ness depends on the call, not
-  // just the verb: a non-execute SELECT/EXPLAIN is a read, but
-  // `mode: 'execute'` (or a mutating statement) is not. Refine it here
-  // before falling back to the schema-derived registry.
-  if (command.type === 'sql') {
-    return command.mode !== 'execute'
-      && typeof command.sql === 'string'
-      && isReadOnlySql(command.sql)
-  }
-  // Every other verb's read-only-ness is the static per-verb fact declared in
-  // `knownCommandRegistry`. Unknown types (legacy aliases `action` /
-  // `set-extension-enabled`, or arbitrary `kmagent raw` bodies) have no entry
-  // and default to write (deny).
-  const meta: KnownCommandMeta | undefined =
-    (knownCommandRegistry as Record<string, KnownCommandMeta>)[command.type]
-  return meta?.readOnly === true
-}
 
 const failCommand = (command: CommandRecord, name: string, message: string): void => {
   command.status = 'failed'
@@ -890,7 +869,7 @@ const handleRequest = async (
         sendUnknownToken(response, token)
         return
       }
-      if (route.grant.scope === 'read-only' && !isReadOnlyCommand(payload)) {
+      if (route.grant.scope === 'read-only' && !isReadOnlyAgentCommand(payload)) {
         sendJson(response, 403, {error: `Token scope read-only does not allow command type: ${payload.type}`})
         return
       }

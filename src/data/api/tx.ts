@@ -43,6 +43,10 @@ export interface TxInsertOpts extends TxWriteOpts {
   sourceTimestamps?: {createdAt: number; userUpdatedAt: number}
 }
 
+/** Plugin-owned context captured for one transaction or a bound Repo host. */
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+export interface TransactionContext { /* augmented by plugins */ }
+
 /** Tx metadata exposed to mutators / processor `apply` bodies.
  *  - `txId` — uuid for this tx; written into `command_events.tx_id` and
  *    every `row_events.tx_id` for this tx.
@@ -51,6 +55,7 @@ export interface TxInsertOpts extends TxWriteOpts {
  *    lands. `tx.afterCommit` throws `WorkspaceNotPinnedError` if called
  *    before that. */
 export interface TxMeta {
+  context?: Readonly<TransactionContext>
   description?: string
   scope: ChangeScope
   user: User
@@ -518,6 +523,7 @@ export interface Tx {
 }
 
 export interface RepoTxOptions {
+  context?: Readonly<TransactionContext>
   scope: ChangeScope
   description?: string
   /** Permit deliberate writes outside the captured open workspace. The caller

@@ -84,7 +84,7 @@ The CLI exposes both *local* commands (pairing, profile management) and *bridge*
 
 Run `kmagent <command> --help` for per-command details or `kmagent --help` for the full menu.
 
-**`kmagent sql` and synced tables:** a raw `INSERT`/`UPDATE`/`DELETE` against `blocks`, `workspaces`, or `workspace_members` bypasses `repo.tx` — it leaves `tx_context.source = NULL` (the row never uploads to the server or other clients) and skips the kernel's post-commit derivations (block_types, reference normalization, property projection), so derived state goes stale. `kmagent sql` refuses such writes by default and names the offending table in the error. Prefer `create-block` / `update-block` / `run-action` (all go through `repo.tx`) for a normal write. If you genuinely need a raw statement against one of these tables, pass `--allow-synced-write` (or `{allowSyncedWrite: true}` on a `kmagent raw` body) to opt in for that one call.
+**`kmagent sql` and synced tables:** a raw `INSERT`/`UPDATE`/`DELETE` against `blocks`, `workspaces`, or `workspace_members` bypasses `repo.tx` — it leaves `tx_context.source = NULL` (the row never uploads to the server or other clients), skips contributor selection and attribution, and skips the kernel's post-commit derivations (block_types, reference normalization, property projection), so derived state goes stale. `kmagent sql` refuses such writes by default and names the offending table in the error. Prefer `create-block` / `update-block` (which go through `repo.tx`) for a normal write. If you genuinely need a raw statement against one of these tables, pass `--allow-synced-write` (or `{allowSyncedWrite: true}` on a `kmagent raw` body) to opt in for that one call.
 
 ## Writing
 
@@ -94,7 +94,7 @@ Writes are markdown-native and conflict-safe, so an agent can treat the graph li
 - **Append.** `append-markdown` parses with the app's paste parser and inserts the whole outline in one transaction, printing the created blocks with their short ids.
 - **Edit.** `edit-block` replaces one exact occurrence inside the writing transaction; `update-block` takes `expectedContent` — the block's exact content, read whole with `get-block` — and refuses the overwrite when the content is no longer that.
 - **Todos.** A todo is a block with properties `{"types": ["todo"], "status": "open"}`; set `status` to `"done"` to complete it.
-- **Review.** Every bridge write is a transaction described `agent runtime <verb>`; `recent-changes` and `block-history` read them back from the local change log. Not attributed: `eval`, `sql execute` and `run-action`.
+- **Review.** Direct graph verbs record transactions described `agent runtime <verb>`; `recent-changes` and `block-history` read them back from the local change log. Transactions opened by `eval` and explicit raw SQL writes may not carry that description.
 
 ## MCP Server
 
@@ -237,7 +237,33 @@ The bridge is a background process that keeps running after the CLI that started
 kill $(lsof -t -iTCP:8787 -sTCP:LISTEN)
 ```
 
-Use the port from `AGENT_RUNTIME_URL` if you set one. Restart MCP clients that launch `km-mcp` too; an `npx` launch can reuse a cached copy, so name the version to be sure (`npx -y -p @knowledge-medium/agent-cli@0.7.0 km-mcp`).
+Use the port from `AGENT_RUNTIME_URL` if you set one. Restart MCP clients that launch `km-mcp` too; an `npx` launch can reuse a cached copy, so name the version to be sure (`npx -y -p @knowledge-medium/agent-cli@0.8.0 km-mcp`).
+
+### Upgrade to 0.8.0
+
+External document edits through graph commands or normal Repo transactions now require a page-backed contributor choice for each CLI profile and workspace. Upgrade `agent-cli`, restart the bridge using the steps above, and restart every MCP client that launches `km-mcp`. Select an agent or automation profile with `kmagent contributor use <id>` (or create one with `contributor create`); run `contributor use none` to explicitly opt out and send null attribution. Until a choice is saved, meaningful document edits fail with setup instructions. MCP clients can instead set `AGENT_RUNTIME_CONTRIBUTOR_ID=<id|none>` or launch `km-mcp --contributor <id|none>`; restart the MCP client after changing the setting.
+
+## Contributors
+
+Contributor support attributes document edits to page-backed profiles. Choose a profile before writing; creation selects it for the current CLI profile and workspace:
+
+```bash
+kmagent contributor create "Research assistant" --kind agent --role "Research"
+kmagent contributor list
+kmagent contributor use <id>   # or: kmagent contributor use none
+```
+
+Contributor choices are stored separately in one file per token profile and workspace under `agent-contributors/`. For CLI writes, `--contributor <id|none>` overrides `AGENT_RUNTIME_CONTRIBUTOR_ID`, which overrides the saved choice; an empty environment value leaves the saved choice in effect. An unconfigured selection is sent as no field; meaningful external document edits then fail with setup instructions, while reads, watcher setup and derived maintenance remain available. `none` sends explicit null and records an intentionally unattributed write. External writers can select agent or automation profiles; human profiles are reserved for human edits.
+
+Attribution covers normal `BlockDefault` document transactions. Undo/redo restores the recorded contributor lists exactly; UI state, preferences, automation records and reference maintenance stay quiet without requiring selection. Trusted `eval` retains explicit `repo.withTxContext(...)` rebinding for imports and direct `db` / `repo.db` access; raw database writes, including SQL with `--allow-synced-write`, bypass Repo attribution.
+
+`run-action` (and its raw `action` alias) refuses dispatch while Contributors is enabled: UI action handlers and middleware can retain repositories outside the command context. Use graph commands or `eval` with its supplied `repo` for attributed work.
+
+`contributor create --kind human` creates a profile for a person without selecting it; the current agent selection stays in place.
+
+Older CLI/MCP versions without contributor support must be upgraded before making attributed writes. Use this checkout's `pnpm agent` when the needed CLI version has not been published yet.
+
+For MCP, `list_contributors` and `create_contributor` work before attribution is configured. They do not change the MCP server's selection. Set `AGENT_RUNTIME_CONTRIBUTOR_ID=<id|none>` or launch `km-mcp --contributor <id|none>` to attribute writes. Programmatic clients can pass `contributorId` to `createBridgeClient` or `GraphMcpServerOptions`; `null` opts out explicitly, while `undefined` leaves the choice unconfigured.
 
 ### 0.7.0
 
@@ -255,6 +281,8 @@ Use the port from `AGENT_RUNTIME_URL` if you set one. Restart MCP clients that l
 | `AGENT_RUNTIME_TOKEN` | One-shot token, skips the persisted profile lookup. |
 | `AGENT_RUNTIME_WORKSPACE` | Workspace id to name on every call that names none (see [Workspaces](#workspaces)). |
 | `AGENT_RUNTIME_PROFILE` | Default profile selection for `kmagent <command>`. |
+| `AGENT_RUNTIME_CONTRIBUTOR_ID` | Contributor id for CLI and MCP writes; `none` explicitly leaves them unattributed. |
+| `AGENT_RUNTIME_CONTRIBUTOR_DIR` | Override the directory holding per-profile/workspace CLI contributor selections. |
 | `AGENT_RUNTIME_CONFIG_DIR` | Override the config directory (default: `$XDG_CONFIG_HOME/knowledge-medium`). |
 | `AGENT_RUNTIME_BRIDGE_SECRET` | Override the bridge secret (otherwise auto-generated per machine). |
 | `AGENT_RUNTIME_ALLOWED_ORIGINS` | Comma-separated extra origins the bridge will accept connections from. |

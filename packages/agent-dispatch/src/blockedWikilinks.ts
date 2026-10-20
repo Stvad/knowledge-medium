@@ -403,6 +403,9 @@ export const createBlockedWikilinkWriteGuard = (
             operation.name === undefined ? undefined : createPageName(operation.name),
           ))
           return
+        case 'create_contributor':
+          await assertNoBlockedRefs(operation.name)
+          return
         default: {
           // A new write tool must say here what it can make reference.
           const unhandled: never = operation

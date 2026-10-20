@@ -5,7 +5,7 @@ import {BLOCKED_WIKILINKS_ENV, decodeBlockedWikilinks} from '../src/blockedWikil
 import {buildMcpServerDef} from '../src/mcpServerDef'
 
 describe('buildMcpServerDef', () => {
-  it('uses the dispatch MCP wrapper and blocks active backlink watcher targets', () => {
+  it('uses the dispatch MCP wrapper, contributor identity, and active backlink watcher targets', () => {
     const config = parseConfig({
       profile: 'agent-dispatch',
       workspaceId: 'ws-dispatch',
@@ -17,18 +17,34 @@ describe('buildMcpServerDef', () => {
       ],
     })
 
-    const serverDef = buildMcpServerDef(config)
+    const serverDef = buildMcpServerDef(config, 'contributor-agent')
 
     expect(serverDef).toMatchObject({
       name: 'km',
       command: process.execPath,
       // The spawned run's graph calls act on the daemon's workspace too.
-      env: {AGENT_RUNTIME_PROFILE: 'agent-dispatch', AGENT_RUNTIME_WORKSPACE: 'ws-dispatch'},
+      env: {
+        AGENT_RUNTIME_PROFILE: 'agent-dispatch',
+        AGENT_RUNTIME_WORKSPACE: 'ws-dispatch',
+        AGENT_RUNTIME_CONTRIBUTOR_ID: 'contributor-agent',
+      },
     })
     expect(serverDef.args).toHaveLength(1)
     expect(path.basename(serverDef.args[0])).toBe('mcp.js')
     expect(serverDef.args[0]).toContain(`${path.sep}packages${path.sep}agent-dispatch${path.sep}`)
     expect(serverDef.args[0]).not.toContain(`${path.sep}packages${path.sep}agent-cli${path.sep}`)
     expect(decodeBlockedWikilinks(serverDef.env[BLOCKED_WIKILINKS_ENV])).toEqual(['claude', 'codex'])
+  })
+
+  it('encodes explicit null as an unattributed dispatch MCP setting', () => {
+    const config = parseConfig({
+      profile: 'agent-dispatch',
+      workspaceId: 'ws-dispatch',
+      watchers: [{name: 'claude mentions', kind: 'backlinks', target: 'claude'}],
+    })
+
+    expect(buildMcpServerDef(config, null).env).toMatchObject({
+      AGENT_RUNTIME_CONTRIBUTOR_ID: 'none',
+    })
   })
 })

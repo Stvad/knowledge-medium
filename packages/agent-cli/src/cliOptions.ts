@@ -2,6 +2,33 @@
  *
  * Lives here rather than in `cli.ts` because that module self-executes
  * (`main()` runs on import), so nothing in it can be unit-tested. */
+import {namedWorkspaceId, type KnownCommand} from './protocol.js'
+
+/** Bind the contributor choice and the workspace it was resolved for to one
+ * write, so active-tab changes cannot redirect an attributed command. */
+export const attributeCommandToWorkspace = (
+  command: KnownCommand,
+  workspaceId: string,
+  contributorId: string | null | undefined,
+): KnownCommand => ({...command, workspaceId, contributorId}) as KnownCommand
+
+/** Return a command's explicit workspace while refusing malformed workspace
+ * fields before the selection lookup can replace them with an active one. */
+export const explicitWorkspaceForContributorSelection = (command: KnownCommand): string | undefined => {
+  const candidate = command as {workspaceId?: unknown; data?: unknown}
+  const rootWorkspaceId = candidate.workspaceId
+  if (rootWorkspaceId !== undefined && (typeof rootWorkspaceId !== 'string' || rootWorkspaceId.trim() === '')) {
+    throw new Error('workspaceId must be a non-empty string.')
+  }
+  const data = candidate.data
+  const dataWorkspaceId = data && typeof data === 'object' && !Array.isArray(data)
+    ? (data as {workspaceId?: unknown}).workspaceId
+    : undefined
+  if (dataWorkspaceId !== undefined && (typeof dataWorkspaceId !== 'string' || dataWorkspaceId.trim() === '')) {
+    throw new Error('data.workspaceId must be a non-empty string.')
+  }
+  return namedWorkspaceId(command) ?? undefined
+}
 
 /** Turn a `--workspace` option into the command's `workspaceId` field.
  *

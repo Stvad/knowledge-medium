@@ -13,10 +13,18 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { readFileSync } from 'node:fs'
 import { z } from 'zod'
-import { createBridgeClient, type BridgeClient } from './client.js'
+import { createBridgeClient, type BridgeClient, withContributorId } from './client.js'
+import { parseContributorSelection } from './config.js'
 import { createBridgeGraph, type BridgeGraph } from './graph.js'
 import { type KmMcpToolName, MCP_SERVER_NAME } from './mcpShared.js'
-import { moveBlockPositionSchema, TODO_WRITE_HELP, toDisplayJson, WRITE_TARGET_HELP } from './protocol.js'
+import {
+  createContributorCommandSchema,
+  listContributorsCommandSchema,
+  moveBlockPositionSchema,
+  TODO_WRITE_HELP,
+  toDisplayJson,
+  WRITE_TARGET_HELP,
+} from './protocol.js'
 import { GRAPH_READ_TOOLS, renderToolResult, toolCommand } from './readTools.js'
 
 interface PackageJson {
@@ -42,7 +50,9 @@ The views (get_block, subtree, backlinks, grouped_backlinks, search) and sql_que
 
 Start with subtree on a page name or "today" for an overview, search for text (filters: types, under, includeExtensions), backlinks / grouped_backlinks for what references something. guide indexes the data model (guide with a topic reads one section); sql_query is the escape hatch (read-only, rows capped).
 
-Writing: append_markdown writes an outline in one call; edit_block changes one passage of a block; pass update_block the block's exact content as expectedContent so a concurrent edit of it is refused rather than overwritten.`
+Writing: append_markdown writes an outline in one call; edit_block changes one passage of a block; pass update_block the block's exact content as expectedContent so a concurrent edit of it is refused rather than overwritten.
+
+Contributor setup: use list_contributors and create_contributor to discover or create page-backed identities from a new MCP connection. These tools do not change this server's attribution choice; configure contributorId on GraphMcpServerOptions or AGENT_RUNTIME_CONTRIBUTOR_ID for writes.`
 
 type MoveBlockPositionInput = z.infer<typeof moveBlockPositionSchema>
 
@@ -60,6 +70,7 @@ export type GraphMcpWriteOperation =
   | {type: 'append_markdown', target: string, markdown: string, position?: MoveBlockPositionInput, shape?: 'outline' | 'block'}
   | {type: 'edit_block', id: string, old: string, new: string}
   | {type: 'create_page', name?: string, date?: string}
+  | {type: 'create_contributor', name: string, kind?: 'human' | 'agent' | 'automation', role?: string, workspaceId?: string}
 
 export interface GraphMcpWriteGuard {
   beforeWrite: (operation: GraphMcpWriteOperation) => void | Promise<void>
@@ -73,16 +84,22 @@ export interface GraphMcpWriteGuardContext {
 export interface GraphMcpServerOptions {
   client?: BridgeClient
   profile?: string
+  /** Attribution for every MCP write; undefined leaves attribution unconfigured. */
+  contributorId?: string | null
   timeoutMs?: number
   writeGuard?: GraphMcpWriteGuard | ((context: GraphMcpWriteGuardContext) => GraphMcpWriteGuard)
   serverOptions?: ConstructorParameters<typeof McpServer>[1]
 }
 
 export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpServer => {
-  const client = options.client ?? createBridgeClient({
+  const configuredContributorId = options.contributorId !== undefined
+    ? options.contributorId
+    : parseContributorSelection(process.env.AGENT_RUNTIME_CONTRIBUTOR_ID)
+  const baseClient = options.client ?? createBridgeClient({
     profile: options.profile ?? process.env.AGENT_RUNTIME_PROFILE,
     timeoutMs: options.timeoutMs ?? 60_000,
   })
+  const client = withContributorId(baseClient, configuredContributorId)
   const graph = createBridgeGraph(client)
   const writeGuard = typeof options.writeGuard === 'function'
     ? options.writeGuard({client, graph})
@@ -125,6 +142,35 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
       inputSchema: tool.shape,
     }, async input => text(renderToolResult(await client.runCommand(toolCommand(tool, input)))))
   }
+
+  server.registerTool('list_contributors' satisfies KmMcpToolName, {
+    description: 'List page-backed contributors in a workspace. Use this to find an id for contributorId configuration.',
+    inputSchema: {
+      workspaceId: listContributorsCommandSchema.shape.workspaceId,
+    },
+  }, async ({workspaceId}) => json(await client.runCommand({
+    type: 'list-contributors',
+    ...(workspaceId !== undefined ? {workspaceId} : {}),
+  })))
+
+  server.registerTool('create_contributor' satisfies KmMcpToolName, {
+    description: 'Create a page-backed contributor. Configure the returned id as contributorId on this MCP server to attribute its future writes.',
+    inputSchema: {
+      name: createContributorCommandSchema.shape.name,
+      kind: createContributorCommandSchema.shape.kind,
+      role: createContributorCommandSchema.shape.role,
+      workspaceId: createContributorCommandSchema.shape.workspaceId,
+    },
+  }, async ({name, kind, role, workspaceId}) => {
+    await beforeWrite({type: 'create_contributor', name, kind, role, workspaceId})
+    return json(await client.runCommand({
+      type: 'create-contributor',
+      name,
+      ...(kind !== undefined ? {kind} : {}),
+      ...(role !== undefined ? {role} : {}),
+      ...(workspaceId !== undefined ? {workspaceId} : {}),
+    }))
+  })
 
   server.registerTool('create_block' satisfies KmMcpToolName, {
     description: 'Create ONE block (content kept whole) under parentId, a target as described for append_markdown — '
