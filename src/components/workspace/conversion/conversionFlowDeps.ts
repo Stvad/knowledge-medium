@@ -1,7 +1,5 @@
 import { workspaceGateDeps } from '@/components/workspace/WorkspaceKeyGate'
 import { notifyWorkspaceUnlocked } from '@/components/workspace/workspaceUnlocked'
-import { WRITE_AHEAD_SIDECAR_SUFFIXES } from '@/data/dbFileSiblings'
-import { dbFilenameForUser } from '@/data/localDbStorage'
 import type { Repo } from '@/data/repo'
 import { fetchWorkspaceConversionState } from '@/data/workspaceConversion'
 import { markLocalWorkspaceConverted } from '@/data/workspaces'
@@ -18,7 +16,7 @@ import { getWorkspaceKeyStore, IndexedDbWorkspaceKeyStore } from '@/sync/keys/ke
 import { upgradeWorkspacePin } from '@/sync/keys/flows/upgradeWorkspacePin'
 import { canPersistPins } from '@/sync/keys/modePin'
 import { abortableSleep } from '@/utils/abortableSleep'
-import { exportRawSqliteDbToFile } from '@/utils/exportSqliteDb'
+import { exportRawSqliteDbToFile, localDbFileBytes } from '@/utils/exportSqliteDb'
 import { queryDirectoryPermission, supportsDirectoryPicker } from '@/utils/fileSystemAccess'
 import { holdScreenWakeLock } from '@/utils/screenWakeLock'
 
@@ -43,15 +41,7 @@ const preflightEnvironment = (repo: Repo): PreflightEnvironment => ({
   keyStoreIsDurable: getWorkspaceKeyStore() instanceof IndexedDbWorkspaceKeyStore,
   supportsDirectoryPicker: supportsDirectoryPicker(),
   uploadQueue: uploadQueue(repo),
-  // The copy checkpoints first, so pages still in the write-ahead sidecars
-  // land in it: counting them too makes this an upper bound.
-  localDbBytes: async () => {
-    const root = await navigator.storage.getDirectory()
-    const dbFilename = dbFilenameForUser(repo.user.id)
-    const sizes = await Promise.all(['', ...WRITE_AHEAD_SIDECAR_SUFFIXES].map(suffix =>
-      root.getFileHandle(dbFilename + suffix).then(handle => handle.getFile()).then(file => file.size, () => 0)))
-    return sizes.reduce((sum, size) => sum + size, 0)
-  },
+  localDbBytes: () => localDbFileBytes(repo.user.id),
 })
 
 export type ConversionUnavailable =
