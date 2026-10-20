@@ -13,7 +13,7 @@ import {DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, 
 import {
   attributionCreatorsProp,
   attributionEditorsProp,
-  contributorKindProp,
+  contributorKindOf,
   contributorRoleProp,
   type ContributorKind,
 } from './schema.js'
@@ -59,10 +59,8 @@ const ContributorBadgesView = ({block, Inner}: {block: Block; Inner: BlockRender
       const id = allIds[index]
       let kind: ContributorKind = 'agent'
       let role: string | undefined
-      try {
-        kind = readProperty(row, contributorKindProp)
-        role = readProperty(row, contributorRoleProp)
-      } catch { /* An unreadable profile still gets a useful linked fallback. */ }
+      try { kind = contributorKindOf(row) } catch { /* An unreadable profile still gets a useful linked fallback. */ }
+      try { role = readProperty(row, contributorRoleProp) } catch { /* A role is optional display metadata. */ }
       byId.set(id, {
         id,
         name: row.content.trim().split('\n')[0] || `${kind} contributor`,

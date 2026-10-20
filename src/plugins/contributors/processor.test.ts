@@ -61,6 +61,19 @@ describe('automatic contributor attribution', () => {
     expect(await read('note', attributionEditorsProp.name)).toEqual(['atlas', HUMAN])
   })
 
+  it('keeps a note with only a user-page contributor quiet when its stored kind has drifted', async () => {
+    await create(repo)
+    await repo.withTxContext({contributorId: null}).tx(async tx => {
+      await ensureUserPageInTx(tx, WS, repo.user, repo.snapshotTypeRegistries())
+      await repo.addTypeInTx(tx, HUMAN, CONTRIBUTOR_TYPE, {[contributorKindProp.name]: 'agent'})
+      await tx.setProperty('note', attributionCreatorsProp, [HUMAN])
+    }, opts)
+    expect(await read(HUMAN, contributorKindProp.name)).toBe('agent')
+    await repo.tx(tx => tx.update('note', {content: 'Human revision'}), opts)
+    expect((await repo.load('note'))?.content).toBe('Human revision')
+    expect(await read('note', attributionEditorsProp.name)).toBeUndefined()
+  })
+
   it('rejects a human actor inside an external transaction, even without command admission', async () => {
     await create(repo.withTxContext({contributorId: 'atlas'}))
     await repo.tx(tx => tx.update('note', {content: 'Human revision'}), opts)

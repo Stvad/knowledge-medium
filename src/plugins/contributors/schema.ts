@@ -1,4 +1,6 @@
-import {ChangeScope, seedProperty, seedType} from '@/data/api'
+import {ChangeScope, seedProperty, seedType, type BlockData} from '@/data/api'
+import {USER_TYPE} from '@/data/blockTypes'
+import {hasBlockType} from '@/data/properties'
 
 export const CONTRIBUTOR_TYPE = 'contributor:profile'
 
@@ -17,6 +19,12 @@ export const contributorKindProp = seedProperty<ContributorKind>({
   defaultValue: 'agent',
   changeScope: ChangeScope.BlockDefault,
 })
+
+// User identity takes precedence over an editable contributor kind.
+export const contributorKindOf = (row: Pick<BlockData, 'properties'> | null | undefined): ContributorKind => {
+  if (row && hasBlockType(row, USER_TYPE)) return 'human'
+  return contributorKindProp.codec.decode(row?.properties[contributorKindProp.name] ?? 'agent')
+}
 
 export const contributorRoleProp = seedProperty({
   seedKey: 'system:contributors/property/contributor-role',

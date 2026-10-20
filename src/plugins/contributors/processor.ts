@@ -4,7 +4,7 @@ import {jsonValuesEqual} from '@/data/internals/jsonCanonical'
 import {PAGE_TYPE} from '@/data/blockTypes'
 import {hasBlockType} from '@/data/properties'
 import {assertContributor, ensureHumanContributor} from './profiles'
-import {attributionCreatorsProp, attributionEditorsProp, contributorKindProp} from './schema'
+import {attributionCreatorsProp, attributionEditorsProp, contributorKindOf} from './schema'
 
 declare module '@/data/api/tx' {
   interface TransactionContext {
@@ -46,7 +46,7 @@ const hasNonHumanAttribution = async (row: BlockData, ctx: SameTxCtx): Promise<b
   for (const prop of [attributionCreatorsProp, attributionEditorsProp]) {
     for (const id of prop.codec.decode(row.properties[prop.name] ?? [])) {
       const profile = await ctx.tx.get(id)
-      if (contributorKindProp.codec.decode(profile?.properties[contributorKindProp.name] ?? 'agent') !== 'human') return true
+      if (contributorKindOf(profile) !== 'human') return true
     }
   }
   return false
@@ -78,7 +78,7 @@ export const contributorAttributionProcessor = defineSameTxProcessor({
     const selectedId = context?.contributorId ?? undefined
     const selected = selectedId ? await ctx.tx.get(selectedId) : null
     const human = context?.contributorSource !== 'agent' && (selectedId === undefined
-      || contributorKindProp.codec.decode(selected?.properties[contributorKindProp.name] ?? 'agent') === 'human')
+      || contributorKindOf(selected) === 'human')
     const eligible: Array<[string, boolean]> = []
     for (const [id, created] of targets) {
       const row = await ctx.tx.get(id)

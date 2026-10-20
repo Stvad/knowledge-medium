@@ -6,7 +6,7 @@ import {createTestRepo} from '@/data/test/createTestRepo'
 import type {Repo} from '@/data/repo'
 import {applyTypeTagInTx} from '@/data/typeTagger'
 import {contributorsDataExtension} from './dataExtension'
-import {assertContributor, createContributor, ensureHumanContributor} from './profiles'
+import {assertContributor, createContributor, ensureHumanContributor, listContributors} from './profiles'
 import {CONTRIBUTOR_TYPE, contributorKindProp} from './schema'
 
 const WS = 'workspace'
@@ -57,6 +57,7 @@ describe('contributor profiles', () => {
     ['agent kind', 'agent'],
   ] as const)('rejects an automatic user profile with %s before reconciliation', async (_label, kind) => {
     await createAutomaticUserContributor(kind)
+    expect((await listContributors(repo, WS)).contributors.find(profile => profile.id === USER_PAGE_ID)?.kind).toBe('human')
 
     await expect(repo.withTxContext({contributorId: null}).tx(tx =>
       assertContributor(tx, USER_PAGE_ID, WS, {allowHuman: false}), opts,

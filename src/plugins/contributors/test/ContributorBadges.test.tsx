@@ -3,6 +3,8 @@ import {cleanup, fireEvent, render, screen} from '@testing-library/react'
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest'
 import type {Block} from '@/data/block'
 import type {BlockData} from '@/data/api'
+import {USER_TYPE} from '@/data/blockTypes'
+import {typesProp} from '@/data/properties'
 
 const {useHandleMock, useHandlesMock, useOpenBlockMock} = vi.hoisted(() => ({
   useHandleMock: vi.fn(),
@@ -73,6 +75,28 @@ describe('contributor badges', () => {
     fireEvent.pointerDown(screen.getByRole('button', {name: /Authorship details/}), {button: 0, pointerType: 'mouse'})
     await screen.findByRole('menu')
     expect(screen.getByText('automation · summarizer')).toBeTruthy()
+  })
+
+  it('treats a USER_TYPE profile as human even when its stored kind is agent', () => {
+    const Decorated = decorate({
+      [attributionCreatorsProp.name]: attributionCreatorsProp.codec.encode(['agent']),
+      [attributionEditorsProp.name]: attributionEditorsProp.codec.encode([]),
+    })
+    let current = profile('agent', 'Research Agent', 'agent', 'research')
+    useHandlesMock.mockImplementation((handles: readonly {id: string}[]) => handles.map(handle => handle.id === 'agent' ? current : undefined))
+    const view = render(<Decorated block={block}/>)
+    expect(screen.getByRole('button', {name: /Research Agent/})).toBeTruthy()
+
+    current = {
+      ...current,
+      properties: {
+        ...current.properties,
+        [typesProp.name]: typesProp.codec.encode([USER_TYPE]),
+      },
+    }
+    view.rerender(<Decorated block={block}/>)
+    expect(screen.queryByRole('button', {name: /Authorship details/})).toBeNull()
+    expect(screen.getByText('Body note')).toBeTruthy()
   })
 
   it('keeps repeated and additional contributors compact with a count', () => {
