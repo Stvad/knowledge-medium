@@ -482,6 +482,21 @@ export const SELECT_BLOCKS_BY_ALIAS_IN_WORKSPACE_SQL = `
   ORDER BY blocks.created_at, blocks.id
 `
 
+/** Existence probe: does any LIVE source in the workspace reference the
+ *  target? Params `[workspaceId, targetId]`, served by
+ *  `idx_block_references_target`. One owner for the committed-state probe and
+ *  `tx.hasLiveReferrer`, so the pre-tx prefilter and the in-tx gate cannot
+ *  disagree about what counts as a referrer. */
+export const SELECT_LIVE_REFERRER_SQL = `
+  SELECT 1 AS present
+  FROM block_references br
+  JOIN blocks source ON source.id = br.source_id
+  WHERE br.workspace_id = ?
+    AND br.target_id = ?
+    AND source.deleted = 0
+  LIMIT 1
+`
+
 /** Variant of `SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL` that ignores
  *  one specific block. Same plan as above with an extra `blocks.id !=
  *  ?` predicate. Used exclusively by the same-tx collision-detection

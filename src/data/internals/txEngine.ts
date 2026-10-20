@@ -83,6 +83,7 @@ import { IS_DESCENDANT_OF_SQL } from './treeQueries'
 import {
   SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL,
   SELECT_BLOCKS_BY_ALIAS_IN_WORKSPACE_SQL,
+  SELECT_LIVE_REFERRER_SQL,
 } from './kernelQueries'
 import { jsonValuesEqual } from './jsonCanonical'
 import type { BlockCache } from '@/data/blockCache'
@@ -1424,6 +1425,14 @@ export class TxImpl implements Tx {
       [workspaceId, alias],
     )
     return rows.map(parseBlockRow)
+  }
+
+  async hasLiveReferrer(targetId: string, workspaceId: string): Promise<boolean> {
+    const row = await this.ctx.txDb.getOptional<{present: number}>(
+      SELECT_LIVE_REFERRER_SQL,
+      [workspaceId, targetId],
+    )
+    return row !== null
   }
 
   // ──── Post-commit scheduling ────

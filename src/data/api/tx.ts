@@ -500,6 +500,15 @@ export interface Tx {
    *  own writes. */
   aliasesOf(blockId: string): Promise<string[]>
 
+  /** Does any LIVE block in `workspaceId` reference `targetId`? Reads the
+   *  trigger-maintained `block_references` edge index, so it sees this tx's own
+   *  writes and, under the write lock, every committed one.
+   *
+   *  The in-tx half of a delete-if-unreferenced decision: a probe taken before
+   *  the tx is stale by the time the lock is held, because a reference can
+   *  commit in between. */
+  hasLiveReferrer(targetId: string, workspaceId: string): Promise<boolean>
+
   // ──── Post-commit scheduling ────
 
   /** Schedule a follow-up post-commit job. Runs in its own
