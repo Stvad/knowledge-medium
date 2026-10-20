@@ -27,6 +27,11 @@ import { CallbackSet } from './callbackSet'
  *  "pixels appeared"; `interactive` is the headline "contention stopped, UI
  *  usable" (time to interactivity). */
 export type StartupPhase =
+  | 'dbRequested'         // boot asked for the local DB; earlier is page load
+  | 'dbPrepared'          // VFS chosen + on-disk handoff done; app connection not open yet
+  | 'dbOpened'            // PowerSync `init()`: VFS open + PowerSync's own schema
+  | 'clientSchemaApplied' // our tables, indexes, column migrations, triggers
+  | 'localSchemaApplied'  // one-shot side-index backfills + plugin local schema
   | 'repoReady'           // Repo constructed + PowerSync ready
   | 'workspaceResolved'   // active workspace + §6 access gate decided
   | 'bootstrapDone'       // bootstrapWorkspace writes complete
@@ -42,9 +47,24 @@ export interface StartupTimeline {
   /** ms-since-`timeOrigin` for each phase reached so far. A phase absent from
    *  the map was never reached this session. */
   readonly marks: Readonly<Partial<Record<StartupPhase, number>>>
+  /** Sizes of the local database's files as boot found them, before anything
+   *  opened them — see {@link recordStartupDbFiles}. Absent when boot never got
+   *  that far. */
+  readonly dbFileBytes?: DbFileBytes
 }
 
+/** Bytes per database file, keyed `main` plus each write-ahead sidecar suffix;
+ *  `null` = missing or unreadable. */
+export type DbFileBytes = Readonly<Record<string, number | null>>
+
+/** The phases one attempt to open the local database stamps — what
+ *  {@link discardDbOpenTimeline} forgets when that attempt fails. */
+const DB_OPEN_PHASES: readonly StartupPhase[] = [
+  'dbRequested', 'dbPrepared', 'dbOpened', 'clientSchemaApplied', 'localSchemaApplied',
+]
+
 const marks: Partial<Record<StartupPhase, number>> = {}
+let dbFileBytes: DbFileBytes | undefined
 
 const nowMs = (): number =>
   typeof performance !== 'undefined' ? performance.now() : 0
@@ -70,9 +90,28 @@ export const markStartupAt = (phase: StartupPhase, ms: number): void => {
 export const hasStartupMark = (phase: StartupPhase): boolean =>
   marks[phase] !== undefined
 
+/** Record the database file sizes boot found. A large sidecar is a log the open
+ *  has to replay, which is the first suspect for a slow `dbOpened`. First write
+ *  wins, like the marks. */
+export const recordStartupDbFiles = (bytes: DbFileBytes): void => {
+  dbFileBytes ??= Object.freeze({ ...bytes })
+}
+
+/** Forget a failed open's marks and file sizes. First-write-wins would
+ *  otherwise hand them to the next attempt in this page — which, after a
+ *  sign-out from the error screen, can be another user's boot. */
+export const discardDbOpenTimeline = (): void => {
+  for (const phase of DB_OPEN_PHASES) delete marks[phase]
+  dbFileBytes = undefined
+}
+
 /** Frozen snapshot of the timeline so far. */
 export const getStartupTimeline = (): StartupTimeline =>
-  Object.freeze({ timeOriginMs: timeOrigin(), marks: Object.freeze({ ...marks }) })
+  Object.freeze({
+    timeOriginMs: timeOrigin(),
+    marks: Object.freeze({ ...marks }),
+    ...(dbFileBytes ? { dbFileBytes } : {}),
+  })
 
 // ──── long-task tracking (for the `interactive` quiet-window detection) ────
 
@@ -128,6 +167,7 @@ export const getLastLongTaskEndMs = (): number | null => lastLongTaskEndMs
 /** Test helper — clear all marks and reset long-task tracking. */
 export const resetStartupTimeline = (): void => {
   for (const key of Object.keys(marks)) delete marks[key as StartupPhase]
+  dbFileBytes = undefined
   longTaskObserver?.disconnect()
   longTaskObserver = null
   longTasksObserving = false

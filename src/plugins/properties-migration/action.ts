@@ -34,6 +34,7 @@ import { ActionConfig, ActionContextTypes } from '@/shortcuts/types.js'
 import { openDialog } from '@/utils/dialogs.js'
 import { dismissToast, showInfo } from '@/utils/toast.js'
 import { reportMigrationProgress, type MigrationProgress } from './progressReport.ts'
+import { oweAnalyzeInstalledTables, runAnalyzeInstalledTables } from '@/data/maintenance'
 import {
   ConfirmMigrationDialog, type NamedPropertyKeys,
 } from './ConfirmMigrationDialog.tsx'
@@ -392,6 +393,31 @@ interface ClaimedMigration {
   readonly banner: MigrationProgress
 }
 
+/** Runs the pass, then re-records planner stats for the tables it grows, on
+ *  every ending and BEFORE the caller reports one, so the plans are good in this
+ *  session. The refresh is recorded as owed first: a reload, a tab that dies or
+ *  a refresh that fails leaves it for the next boot's check, which is the only
+ *  other thing that would ever repair this growth (see `runAnalyzeTables`).
+ *
+ *  Neither failure changes the run's outcome; each only warns. */
+const runPassThenRefreshStats = async (
+  pass: OperatorBackfillPass,
+  repo: Repo,
+  banner: MigrationProgress,
+): Promise<OperatorBackfillResult> => {
+  await oweAnalyzeInstalledTables(repo.db).catch(error => {
+    console.warn('[properties-migration] could not record the stats refresh as owed:', error)
+  })
+  try {
+    return await pass.run()
+  } finally {
+    banner.update('Refreshing query statistics…')
+    await runAnalyzeInstalledTables(repo.db).catch(error => {
+      console.warn('[properties-migration] ANALYZE after the pass failed:', error)
+    })
+  }
+}
+
 /** What the gesture WRITES, plus the report that follows it — everything that
  *  must happen with the graph-wide claim held.
  *
@@ -620,7 +646,7 @@ const migrateUnderClaim = async (
     )
   })
   try {
-    const result = await pass.run()
+    const result = await runPassThenRefreshStats(pass, repo, banner)
     const {message, failed, followUp} = describeOutcome(
       result,
       {blocksMaterializedTotal, valuesMaterializedTotal, unmigrated,

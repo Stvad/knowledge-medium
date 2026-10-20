@@ -9,12 +9,13 @@ import {
 import {
   ANALYZE_ARMING_PROBES,
   CLIENT_SCHEMA_STATEMENTS,
+  CORE_ANALYZE_TABLES,
 } from '@/data/internals/clientSchema'
 import { syncedWriteTarget } from '@/data/syncedTableWriteGuard'
 import { POWERSYNC_STUB_TABLES_SQL } from '@/data/test/powerSyncStubTables'
 import { staticDataExtensions } from '@/extensions/staticDataExtensions.js'
 import {
-  resolveAnalyzeArmingProbes,
+  resolveAnalyzeTables,
   resolveLocalSchemaContributions,
 } from './localSchema.ts'
 
@@ -24,9 +25,9 @@ import {
 // drift axis until some join order inverts. So the whole resolved set — core
 // plus every installed contribution — is checked against a real schema here
 // rather than by eye at each declaration.
-describe('resolveAnalyzeArmingProbes', () => {
+describe('resolveAnalyzeTables', () => {
   const contributions = resolveLocalSchemaContributions(staticDataExtensions)
-  const probes = resolveAnalyzeArmingProbes(contributions)
+  const probes = resolveAnalyzeTables(contributions).map(table => table.probe)
   let db: DatabaseSync
 
   beforeAll(() => {
@@ -68,21 +69,21 @@ describe('resolveAnalyzeArmingProbes', () => {
     ]))
   })
 
-  it('has each contributed probe search the table its `name` claims', () => {
-    // `name` and `probe` are read by DIFFERENT paths — the exact-stats repair
-    // analyzes the name, the staleness check runs the probe — so nothing in
-    // production ever compares them, and a copy-paste that leaves them naming
-    // different tables would repair one table while arming another. Both halves
-    // would look right in isolation. This is the only place they meet.
-    const declared = contributions.flatMap(c => c.analyzeTables ?? [])
-    expect(declared.length).toBeGreaterThan(0)
-    for (const {name, probe} of declared) {
+  it('has each probe search the table its `name` claims', () => {
+    // `name` and `probe` are read by DIFFERENT paths — `runAnalyzeTables`
+    // analyzes the name after a bulk write, the staleness check runs the probe —
+    // so nothing in production ever compares them, and a copy-paste that leaves
+    // them naming different tables would refresh one table while arming another.
+    // Both halves would look right in isolation. This is the only place they meet.
+    const tables = resolveAnalyzeTables(contributions)
+    expect(tables.length).toBeGreaterThan(CORE_ANALYZE_TABLES.length)
+    for (const {name, probe} of tables) {
       expect(planOf(probe)).toContain(`SEARCH ${name}`)
     }
   })
 
   it('carries the core probes as well as the contributed ones', () => {
-    // `resolveAnalyzeArmingProbes` is the only caller-facing composition point;
+    // `resolveAnalyzeTables` is the only caller-facing composition point;
     // a bug that returned contributions ALONE would still pass the plan check
     // above for every table a plugin happens to own.
     expect(probes).toEqual(expect.arrayContaining([...ANALYZE_ARMING_PROBES]))

@@ -23,6 +23,7 @@ import {
   buildBlockSnapshotJsonSql,
 } from '@/data/blockSchema.js'
 import { SEED_STAGING_NEEDS_APPLY_SQL } from './syncObserver/reconcile.js'
+import type { LocalSchemaAnalyzeTable } from '../facets.ts'
 
 // ============================================================================
 // Tables
@@ -1185,7 +1186,9 @@ export const RESET_ANALYZE_SAMPLE_LIMIT_SQL = `PRAGMA analysis_limit=0`
 
 export const SELECT_BLOCKS_COUNT_SQL = `SELECT COUNT(*) AS count FROM blocks`
 
-/** Planner-visible probes that ARM the staleness check. Load-bearing.
+/** The core hot tables: each `name` is what {@link runAnalyzeTables} analyzes,
+ *  each `probe` a planner-visible query that ARMS the staleness check.
+ *  The probes are load-bearing.
  *
  *  `PRAGMA optimize`'s stale-stats rule only considers tables the CONNECTION
  *  has planned a query against, so each hot table must be announced with an
@@ -1200,15 +1203,17 @@ export const SELECT_BLOCKS_COUNT_SQL = `SELECT COUNT(*) AS count FROM blocks`
  *  passes them through — a probe rewritten as a write would fail every
  *  boot's ANALYZE.
  *
- *  CORE tables only. A plugin's table is armed by that plugin, through
- *  `LocalSchemaContribution.analyzeTables` — see `resolveAnalyzeArmingProbes`
- *  in `src/data/localSchema.ts`, which is what callers should pass to
+ *  CORE tables only. A plugin's table is declared by that plugin, through
+ *  `LocalSchemaContribution.analyzeTables` — see `resolveAnalyzeTables` in
+ *  `src/data/localSchema.ts`, whose probes are what callers should pass to
  *  {@link runAnalyzeIfStale}. */
-export const ANALYZE_ARMING_PROBES: readonly string[] = [
-  `SELECT id FROM blocks WHERE workspace_id = '' AND deleted = 0`,
-  `SELECT block_id FROM block_types WHERE type = '' AND workspace_id = ''`,
-  `SELECT block_id FROM block_aliases WHERE workspace_id = '' AND alias = ''`,
+export const CORE_ANALYZE_TABLES: readonly LocalSchemaAnalyzeTable[] = [
+  {name: 'blocks', probe: `SELECT id FROM blocks WHERE workspace_id = '' AND deleted = 0`},
+  {name: 'block_types', probe: `SELECT block_id FROM block_types WHERE type = '' AND workspace_id = ''`},
+  {name: 'block_aliases', probe: `SELECT block_id FROM block_aliases WHERE workspace_id = '' AND alias = ''`},
 ]
+
+export const ANALYZE_ARMING_PROBES: readonly string[] = CORE_ANALYZE_TABLES.map(table => table.probe)
 
 /** Per-name reprojection markers. Once `reprojectRefTypedProperties`
  *  has done a catch-up pass for property name `X`, a row keyed
@@ -1604,6 +1609,9 @@ export interface AnalyzeResult {
    *  them), NOT that nothing happened: the optimize still ran, we just can't
    *  report what it did. Observability only; nothing branches on it. */
   proposed: string[] | null
+  /** Tables a bulk writer had recorded as owed ({@link recordAnalyzeOwed}),
+   *  analyzed unconditionally before the optimize. */
+  owed: readonly string[]
 }
 
 /** Announce interest in the hot tables so the staleness check considers them.
@@ -1639,11 +1647,11 @@ const readOptimizeRows = (result: unknown): string[] | null => {
     .filter((sql): sql is string => typeof sql === 'string')
 }
 
-/** Serializes the two ANALYZE entry points against each other and against
+/** Serializes the ANALYZE entry points against each other and against
  *  themselves.
  *
- *  Four schedulers point at them (repoProvider's boot and first-sync checks, the
- *  Roam importer, the manual command) and the boot/first-sync pair has
+ *  Several schedulers point at them (repoProvider's boot and first-sync checks,
+ *  the bulk writers, the manual command) and the boot/first-sync pair has
  *  overlapped before. Two concurrent passes are two multi-second parks of this
  *  tab's SQLite connection to reach one settled `sqlite_stat1`.
  *
@@ -1687,7 +1695,7 @@ const serializeAnalyze = <T>(run: () => Promise<T>): Promise<T> => {
  *  pause for an unbounded stretch of bad plans.
  *
  *  `probes` defaults to the CORE tables. A caller that can reach the local-schema
- *  contributions should pass `resolveAnalyzeArmingProbes` of them instead, so
+ *  contributions should pass `installedAnalyzeArmingProbes()` instead, so
  *  plugin-owned tables are armed too; the default is what a bootstrap-time
  *  caller with no runtime yet gets.
  *
@@ -1703,21 +1711,29 @@ export const runAnalyzeIfStale = async (
   db: ClientSchemaBootstrapDb,
   probes: readonly string[] = ANALYZE_ARMING_PROBES,
 ): Promise<AnalyzeResult> => serializeAnalyze(async () => {
+  // The optimize cannot see growth under ~10x, so what a writer owed goes first.
+  const owed = await readAnalyzeOwed(db)
+  if (owed.length > 0) await analyzeTablesUnbounded(db, owed)
   await armAnalyzeProbes(db, probes)
   // The dry run fixes `proposed` BEFORE anything analyzes, which is what makes
   // it a report of the optimize's own decision rather than of leftover state.
   const proposed = readOptimizeRows(await db.execute(ANALYZE_DRY_RUN_SQL))
   await analyzeUnbounded(db, ANALYZE_OPTIMIZE_SQL)
-  return {proposed}
+  return {proposed, owed}
 })
 
 /** Every ANALYZE in this module goes through here, so the reset cannot be
  *  forgotten at a fourth site. Paired, not hoisted to the top of a pass:
  *  {@link RESET_ANALYZE_SAMPLE_LIMIT_SQL} is only sound adjacent to the
  *  statement it protects. */
-const analyzeUnbounded = async (db: ClientSchemaBootstrapDb, sql: string): Promise<void> => {
-  await db.execute(RESET_ANALYZE_SAMPLE_LIMIT_SQL)
-  await db.execute(sql)
+const analyzeUnbounded = async (
+  db: ClientSchemaBootstrapDb,
+  ...statements: readonly string[]
+): Promise<void> => {
+  for (const sql of statements) {
+    await db.execute(RESET_ANALYZE_SAMPLE_LIMIT_SQL)
+    await db.execute(sql)
+  }
 
   // Writing `sqlite_stat1` does not bump `schema_version` (see the note on
   // `runAnalyzeIfStale`), so a connection that was already open keeps the old
@@ -1735,6 +1751,72 @@ const analyzeUnbounded = async (db: ClientSchemaBootstrapDb, sql: string): Promi
   await db.execute('CREATE TABLE IF NOT EXISTS __km_analyze_bump(x)')
   await db.execute('DROP TABLE IF EXISTS __km_analyze_bump')
 }
+
+/** A bulk writer's record that `sqlite_stat1` is behind for a table, one
+ *  `client_schema_state` row per table. `PRAGMA optimize` re-analyzes a table
+ *  only once its row count drifts ~10x, so one that tripled keeps its old count,
+ *  and an index that was EMPTY when last analyzed keeps its `0 0` row and reads
+ *  as empty however full it is.
+ *
+ *  Recorded BEFORE the write, so a reload, a tab that dies or a refresh that
+ *  fails all leave it for the next {@link runAnalyzeIfStale}; cleared only by an
+ *  ANALYZE of that table that succeeded. Local, like the stats it is about.
+ *
+ *  Accepted: another tab's boot check can repay a marker while the write is
+ *  still going. The writer's own refresh covers the rest unless it dies too. */
+export const ANALYZE_OWED_MARKER_PREFIX = 'analyze_owed:'
+
+const RECORD_ANALYZE_OWED_SQL = `
+  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
+  VALUES (?, strftime('%s', 'now') * 1000)
+`
+
+const CLEAR_ANALYZE_OWED_SQL = `DELETE FROM client_schema_state WHERE key = ?`
+
+/** One row, so it reads through `getOptional`: the bootstrap shims' `execute`
+ *  hands back no rows. */
+const SELECT_ANALYZE_OWED_SQL = String.raw`
+  SELECT group_concat(substr(key, ${ANALYZE_OWED_MARKER_PREFIX.length + 1}), char(31)) AS tables
+    FROM client_schema_state
+   WHERE key LIKE 'analyze\_owed:%' ESCAPE '\'
+`
+
+const analyzeOwedKey = (table: string): string => `${ANALYZE_OWED_MARKER_PREFIX}${table}`
+
+export const recordAnalyzeOwed = async (
+  db: ClientSchemaBootstrapDb,
+  tables: readonly string[],
+): Promise<void> => {
+  for (const table of tables) await db.execute(RECORD_ANALYZE_OWED_SQL, [analyzeOwedKey(table)])
+}
+
+const readAnalyzeOwed = async (db: ClientSchemaBootstrapDb): Promise<string[]> => {
+  const row = await db.getOptional<{tables: string | null}>(SELECT_ANALYZE_OWED_SQL)
+  return row?.tables ? row.tables.split('\x1f') : []
+}
+
+/** Inside {@link serializeAnalyze} only. Settles each table's owed marker once
+ *  its ANALYZE has succeeded. */
+const analyzeTablesUnbounded = async (
+  db: ClientSchemaBootstrapDb,
+  tables: readonly string[],
+): Promise<void> => {
+  await analyzeUnbounded(
+    db, ...tables.map(table => `ANALYZE "main"."${table.replaceAll('"', '""')}"`),
+  )
+  for (const table of tables) await db.execute(CLEAR_ANALYZE_OWED_SQL, [analyzeOwedKey(table)])
+}
+
+/** Unconditional ANALYZE of the named tables, for a bulk writer that KNOWS it
+ *  grew them — see {@link ANALYZE_OWED_MARKER_PREFIX} for why the drift check
+ *  cannot stand in, and for the marker a writer records first.
+ *
+ *  A full scan of each table on the writer (the only connection on CoopSync):
+ *  keep it off the render path. */
+export const runAnalyzeTables = async (
+  db: ClientSchemaBootstrapDb,
+  tables: readonly string[],
+): Promise<void> => serializeAnalyze(() => analyzeTablesUnbounded(db, tables))
 
 /** Unconditional `ANALYZE` for the manual command-palette command.
  *
