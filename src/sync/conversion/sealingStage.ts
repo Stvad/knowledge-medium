@@ -8,7 +8,8 @@
 
 import type { UnrecoverableMedia } from './attachmentCleaner.js'
 import type { ConversionAttachmentsIO } from './conversionAttachments.js'
-import { bundleFolderIn, untilStopped, type BundleFolder, type PartDigest } from './bundle/bundleParts.js'
+import { untilStopped } from '@/utils/untilStopped.js'
+import { bundleFolderIn, type BundleFolder, type PartDigest } from './bundle/bundleParts.js'
 import { bundleRecordOf, type BundleRecord, type BundleRecordStore } from './bundle/bundleRecord.js'
 import { takeBundle, type BundleProgress } from './bundle/takeBundle.js'
 import { BundleInvalid, verifyBundle, type VerifiedBundle } from './bundle/verifyBundle.js'

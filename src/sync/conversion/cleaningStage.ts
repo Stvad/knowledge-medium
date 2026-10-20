@@ -17,7 +17,8 @@ import {
   type UnrecoverableMedia,
 } from './attachmentCleaner.js'
 import { ATTACHMENTS_DIR, OTHER_OBJECTS_DIR, otherObjectNameOf, rawNameOf } from './bundle/attachmentParts.js'
-import { stoppableFolder, untilStopped, type BundleFolder } from './bundle/bundleParts.js'
+import { untilStopped } from '@/utils/untilStopped.js'
+import { stoppableFolder, type BundleFolder } from './bundle/bundleParts.js'
 import { bundleRecordOf, type BundleRecord, type BundleRecordStore } from './bundle/bundleRecord.js'
 import { BundleInvalid, checkManifest, verifyBundle } from './bundle/verifyBundle.js'
 import type { ConversionAttachmentsIO } from './conversionAttachments.js'

@@ -22,6 +22,7 @@ import { abortableSleep } from '@/utils/abortableSleep'
 import { exportRawSqliteDbToFile, localDbFileBytes } from '@/utils/exportSqliteDb'
 import { queryDirectoryPermission, supportsDirectoryPicker } from '@/utils/fileSystemAccess'
 import { holdScreenWakeLock } from '@/utils/screenWakeLock'
+import { untilStopped } from '@/utils/untilStopped'
 
 /** UI-state and preference writes upload continuously, so a queue that is
  *  momentarily non-empty gets this long to drain before it counts. */
@@ -123,7 +124,8 @@ const conversionFlowDeps = ({repo, workspaceId, client, lock, attachments, ui, s
   canReadFolder: async folder => (await queryDirectoryPermission(directoryHandleOf(folder), 'read')) === 'granted',
   writeLocalDb: async (folder, signal) => {
     const hasher = createPartHasher()
-    await exportRawSqliteDbToFile(repo, await directoryHandleOf(folder).getFileHandle(BUNDLE_PARTS.localDb, {create: true}), {
+    const file = await untilStopped(directoryHandleOf(folder).getFileHandle(BUNDLE_PARTS.localDb, {create: true}), signal)
+    await exportRawSqliteDbToFile(repo, file, {
       timeoutMessage:
         "Copying this device's database into the recovery bundle took too long. Pick a folder on a faster disk, then try again.",
       minBytesPerSecond: SLOWEST_BUNDLE_DISK,

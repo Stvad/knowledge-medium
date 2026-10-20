@@ -22,6 +22,7 @@ import { Zip, ZipPassThrough } from 'fflate'
 import type { Repo } from '../data/repo'
 import { dbFilenameForUser } from '@/data/localDbStorage'
 import { supportsWriteAheadVfs } from '@/data/localDbVfs.js'
+import { untilStopped } from '@/utils/untilStopped.js'
 import {
   DB_FILE_SIBLING_SUFFIXES,
   SQLITE_JOURNAL_SUFFIXES,
@@ -948,7 +949,9 @@ const pipeBlobToFileHandle = async (
   signal?: AbortSignal,
   onChunk?: (chunk: Uint8Array) => void,
 ): Promise<void> => {
-  const writable = await fileHandle.createWritable({keepExistingData: false})
+  // Raced, so a destination that stops answering can't hold the database lock
+  // past an abort; a writable that opens after it is discarded.
+  const writable = await untilStopped(fileHandle.createWritable({keepExistingData: false}), signal, late => void late.abort().catch(() => {}))
   const source = onChunk
     ? blob.stream().pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
       transform: (chunk, controller) => {
