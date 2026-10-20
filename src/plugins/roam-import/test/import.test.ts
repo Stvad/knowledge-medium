@@ -1540,40 +1540,75 @@ describe('importRoam', {timeout: 30_000}, () => {
       children: [{string: 'a', uid: 'waA'}, {string: 'b', uid: 'waB'}, {string: 'c', uid: 'waC'}],
     }]
     /** Imports with the database reporting a log far past any limit, recording
-     *  the checkpoints, the pragmas and the progress lines in one order. */
-    const importAgainstAGrowingLog = async () => {
-      const events: string[] = []
+     *  the checkpoints, the drain's swap threshold and the progress lines in one
+     *  order. `onProgress` may throw, which is how a test fails the import
+     *  partway. */
+    const importAgainstAGrowingLog = async ({pages = threeDescendants, onProgress = () => {}, events = []}: {
+      pages?: RoamExport
+      onProgress?: (line: string) => void
+      /** Pass one in to read it after an import that throws. */
+      events?: string[]
+    } = {}) => {
       // The RAW database, which the repo meters through a proxy; shared by
       // every test here, so restored.
       const execute = env.h.db.execute.bind(env.h.db)
-      const spy = vi.spyOn(env.h.db, 'execute').mockImplementation(async (sql, params) => {
-        if (sql.startsWith('PRAGMA journal_size_limit')) events.push(sql)
+      const executeSpy = vi.spyOn(env.h.db, 'execute').mockImplementation(async (sql, params) => {
         if (sql === 'PRAGMA wal_checkpoint=noop') return {rows: {_array: [{'9999999': '9999999'}]}} as never
         if (sql === 'PRAGMA wal_checkpoint=truncate') { events.push('checkpoint'); return undefined as never }
         return execute(sql, params)
       })
+      // The drain runs inside one writer lease, on that lease's connection.
+      const writeLock = env.h.db.writeLock.bind(env.h.db)
+      const lockSpy = vi.spyOn(env.h.db, 'writeLock').mockImplementation(fn => writeLock(tx => fn(
+        Object.assign(Object.create(tx), {
+          execute: (sql: string, params?: unknown[]) => {
+            if (sql.startsWith('PRAGMA journal_size_limit')) events.push(sql)
+            return tx.execute(sql, params)
+          },
+        }))))
+      vi.spyOn(console, 'info').mockImplementation(() => {})
       try {
-        await importRoam(threeDescendants, env.repo, {
+        await importRoam(pages, env.repo, {
           workspaceId: WORKSPACE,
           currentUserId: USER_ID,
           descendantChunkSize: 2,
-          onProgress: msg => events.push(msg.replace(/ \(.*\)$/, '')),
+          onProgress: msg => {
+            const line = msg.replace(/ \(.*\)$/, '')
+            events.push(line)
+            onProgress(line)
+          },
         })
       } finally {
-        spy.mockRestore()
+        executeSpy.mockRestore()
+        lockSpy.mockRestore()
+        vi.mocked(console.info).mockRestore()
       }
       return events
     }
+    const DRAINED = 'PRAGMA journal_size_limit=1'
 
     it('waits for it to be checkpointed before each chunk, and says why', async () => {
       const events = await importAgainstAGrowingLog()
 
-      const chunks = events.slice(0, events.findIndex(e => e.startsWith('All 3 descendants')))
+      const descendants = events.slice(events.findIndex(e => e.startsWith('Wrote frontmatter')),
+        events.findIndex(e => e.startsWith('All 3 descendants')))
         .filter(e => e === 'checkpoint' || e.startsWith('Wrote descendants') || e.startsWith('Paused'))
-      expect(chunks).toEqual([
+      expect(descendants).toEqual([
         expect.stringMatching(/^Paused/), 'checkpoint', 'Wrote descendants 2/3',
         expect.stringMatching(/^Paused/), 'checkpoint', 'Wrote descendants 3/3',
       ])
+    })
+
+    it('waits before the frontmatter and before each daily note too, which can be most of an import', async () => {
+      const events = await importAgainstAGrowingLog({pages: [
+        {title: 'April 28th, 2026', uid: '04-28-2026', children: [{string: 'x', uid: 'waDaily1'}]},
+        {title: 'April 29th, 2026', uid: '04-29-2026', children: [{string: 'y', uid: 'waDaily2'}]},
+      ]})
+
+      const beforeFrontmatter = events.slice(0, events.findIndex(e => e.startsWith('Wrote frontmatter')))
+      const dailies = beforeFrontmatter.slice(0, beforeFrontmatter.findIndex(e => e.startsWith('Materialised')))
+      expect(dailies.filter(e => e === 'checkpoint')).toHaveLength(2)
+      expect(beforeFrontmatter.filter(e => e === 'checkpoint')).toHaveLength(3)
     })
 
     it('drains it once everything is written, so a reload does not re-read it', async () => {
@@ -1582,7 +1617,17 @@ describe('importRoam', {timeout: 30_000}, () => {
       // The import log is its last write.
       const lastWrite = events.findIndex(e => e.startsWith('Wrote import-log block'))
       expect(lastWrite).toBeGreaterThan(-1)
-      expect(events.indexOf('PRAGMA journal_size_limit=1', lastWrite)).toBeGreaterThan(lastWrite)
+      expect(events.indexOf(DRAINED, lastWrite)).toBeGreaterThan(lastWrite)
+    })
+
+    it('drains it when a chunk fails partway, and still reports that failure', async () => {
+      const events: string[] = []
+      await expect(importAgainstAGrowingLog({events, onProgress: line => {
+        if (line === 'Wrote descendants 2/3') throw new Error('chunk 2 failed')
+      }})).rejects.toThrow('chunk 2 failed')
+
+      expect(events).not.toContain('Wrote descendants 3/3')
+      expect(events.indexOf(DRAINED)).toBeGreaterThan(events.indexOf('Wrote descendants 2/3'))
     })
   })
 

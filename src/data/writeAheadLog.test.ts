@@ -6,6 +6,7 @@ import {
   checkpointResultPages,
   drainWriteAheadLog,
   onWriteAheadPause,
+  runBulkWrite,
   type WriteAheadPause,
 } from './writeAheadLog.ts'
 
@@ -186,6 +187,10 @@ class WriteAheadModel {
     this.inactive.bytes = 0
   }
 
+  /** One lease on the writer, as PowerSync's `writeLock` hands out. */
+  writeLock = async <T,>(fn: (tx: {execute: (sql: string) => Promise<unknown>}) => Promise<T>): Promise<T> =>
+    fn({execute: this.execute})
+
   execute = async (sql: string): Promise<unknown> => {
     const limit = /^PRAGMA journal_size_limit=(-?\d+)$/.exec(sql)
     if (limit) { this.journalSizeLimit = Number(limit[1]); return undefined }
@@ -241,14 +246,83 @@ describe('drainWriteAheadLog', () => {
     const model = new WriteAheadModel(afterAHeldRead)
     const execute = model.execute
     const db = {
-      execute: async (sql: string) => {
-        if (sql.startsWith('DELETE')) throw new Error('disk full')
-        return execute(sql)
-      },
+      writeLock: <T,>(fn: (tx: {execute: (sql: string) => Promise<unknown>}) => Promise<T>) => fn({
+        execute: async (sql: string) => {
+          if (sql.startsWith('DELETE')) throw new Error('disk full')
+          return execute(sql)
+        },
+      }),
     }
 
     await expect(drainWriteAheadLog(db)).rejects.toThrow('disk full')
 
     expect(model.journalSizeLimit).toBeLessThanOrEqual(0)
+  })
+
+  it('holds the writer throughout, so another connection cannot checkpoint between its writes', async () => {
+    // A checkpoint landing between the two writes empties the log the first
+    // one left, so the second finds nothing pending and does not swap.
+    const model = new WriteAheadModel(afterAHeldRead)
+    const db = {
+      writeLock: model.writeLock,
+      // Outside the lease, another tab's writer gets in first.
+      execute: async (sql: string) => { model.truncateCheckpoint(); return model.execute(sql) },
+    }
+
+    await drainWriteAheadLog(db)
+
+    expect(model.files[model.active]!.bytes).toBeLessThan(64 * 1024)
+  })
+})
+
+describe('runBulkWrite', () => {
+  const lockedDb = () => {
+    const statements: string[] = []
+    const db = {
+      writeLock: async <T,>(fn: (tx: {execute: (sql: string) => Promise<unknown>}) => Promise<T>): Promise<T> =>
+        fn({execute: async (sql: string) => { statements.push(sql); return undefined }}),
+    }
+    return {db, drained: () => statements.includes('PRAGMA journal_size_limit=1')}
+  }
+
+  it('drains the log once the write ends', async () => {
+    const {db, drained} = lockedDb()
+
+    await expect(runBulkWrite(db, {onPause: () => {}}, async () => 'written')).resolves.toBe('written')
+
+    expect(drained()).toBe(true)
+  })
+
+  it('drains it when the write throws partway, and keeps the write\'s error', async () => {
+    const {db, drained} = lockedDb()
+
+    await expect(runBulkWrite(db, {onPause: () => {}}, async () => { throw new Error('chunk 3 failed') }))
+      .rejects.toThrow('chunk 3 failed')
+
+    expect(drained()).toBe(true)
+  })
+
+  it('a drain that fails, or cannot run, does not replace the write\'s outcome', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const failing = {writeLock: async () => { throw new Error('database is locked') }}
+    const lockless = {execute: async () => undefined}
+
+    for (const db of [failing, lockless]) {
+      await expect(runBulkWrite(db, {onPause: () => {}}, async () => 'written')).resolves.toBe('written')
+    }
+    expect(console.warn).toHaveBeenCalledTimes(2)
+  })
+
+  it('says it is draining, and hears pauses only while the write runs', async () => {
+    const {db} = lockedDb()
+    const heard: (WriteAheadPause | null | 'draining')[] = []
+    const pausing = scriptedDb({noop: vfsPages(pagesOver(WRITE_AHEAD_HEADROOM_BYTES))})
+
+    await runBulkWrite(db, {onPause: pause => heard.push(pause), onDrain: () => heard.push('draining')}, async () => {
+      await awaitWriteAheadHeadroom(pausing.db)
+    })
+    await awaitWriteAheadHeadroom(pausing.db)
+
+    expect(heard).toEqual([{logBytes: expect.any(Number)}, null, 'draining'])
   })
 })

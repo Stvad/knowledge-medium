@@ -35,7 +35,7 @@ import { openDialog } from '@/utils/dialogs.js'
 import { dismissToast, showInfo } from '@/utils/toast.js'
 import { reportMigrationProgress, type MigrationProgress } from './progressReport.ts'
 import { oweAnalyzeInstalledTables, runAnalyzeInstalledTables } from '@/data/maintenance'
-import { describeWriteAheadPause, drainWriteAheadLog, onWriteAheadPause } from '@/data/writeAheadLog'
+import { describeWriteAheadPause, runBulkWrite, type WriteAheadPause } from '@/data/writeAheadLog'
 import {
   ConfirmMigrationDialog, type NamedPropertyKeys,
 } from './ConfirmMigrationDialog.tsx'
@@ -407,22 +407,24 @@ const runPassThenTidyDatabase = async (
   pass: OperatorBackfillPass,
   repo: Repo,
   banner: MigrationProgress,
+  onPause: (pause: WriteAheadPause | null) => void,
 ): Promise<OperatorBackfillResult> => {
   await oweAnalyzeInstalledTables(repo.db).catch(error => {
     console.warn('[properties-migration] could not record the stats refresh as owed:', error)
   })
-  try {
-    return await pass.run()
-  } finally {
-    banner.update('Refreshing query statistics…')
-    await runAnalyzeInstalledTables(repo.db).catch(error => {
-      console.warn('[properties-migration] ANALYZE after the pass failed:', error)
-    })
-    banner.update('Writing pending changes into the database file…')
-    await drainWriteAheadLog(repo.db).catch(error => {
-      console.warn('[properties-migration] draining the write-ahead log after the pass failed:', error)
-    })
-  }
+  return runBulkWrite(repo.db, {
+    onPause,
+    onDrain: () => banner.update('Writing pending changes into the database file…'),
+  }, async () => {
+    try {
+      return await pass.run()
+    } finally {
+      banner.update('Refreshing query statistics…')
+      await runAnalyzeInstalledTables(repo.db).catch(error => {
+        console.warn('[properties-migration] ANALYZE after the pass failed:', error)
+      })
+    }
+  })
 }
 
 /** What the gesture WRITES, plus the report that follows it — everything that
@@ -654,13 +656,12 @@ const migrateUnderClaim = async (
       `${Math.max(blockCount, progress.blocksScanned).toLocaleString()}`
     banner.update(progressLine)
   })
-  // Otherwise a pause — which lasts as long as some other read does — leaves
-  // the count frozen with no reason given.
-  const stopPauseReport = onWriteAheadPause(pause => {
-    banner.update(pause ? describeWriteAheadPause(pause) : progressLine)
-  })
   try {
-    const result = await runPassThenTidyDatabase(pass, repo, banner)
+    // Said, because a pause lasts as long as some other read does, and would
+    // otherwise leave the count frozen with no reason given.
+    const result = await runPassThenTidyDatabase(pass, repo, banner, pause => {
+      banner.update(pause ? describeWriteAheadPause(pause) : progressLine)
+    })
     const {message, failed, followUp} = describeOutcome(
       result,
       {blocksMaterializedTotal, valuesMaterializedTotal, unmigrated,
@@ -704,7 +705,6 @@ const migrateUnderClaim = async (
       undoNote(undoCleared))
   } finally {
     unsubscribe()
-    stopPauseReport()
   }
 }
 

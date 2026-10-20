@@ -6,17 +6,32 @@
  * dirtied. A bulk writer racing a long read grows the log by gigabytes, and the
  * next page load re-reads all of it before the app can open (#1341).
  *
- * Bulk writers call {@link awaitWriteAheadHeadroom} between batches and
- * {@link drainWriteAheadLog} once they finish. Both take PowerSync's `execute`,
- * which runs on the WRITER connection: the log size and the checkpoint are per
- * connection, and only the writer's describe the log it is growing. Under
- * `OPFSCoopSyncVFS` there is no log, SQLite answers these pragmas itself, and
- * both are no-ops.
+ * A bulk writer runs inside {@link runBulkWrite}, which drains the log however
+ * the write ends, and calls {@link awaitWriteAheadHeadroom} between its batches.
+ * Both run on the WRITER connection — PowerSync's `execute` and `writeLock` —
+ * because the log size and the checkpoint are per connection, and only the
+ * writer's describe the log it is growing. Under `OPFSCoopSyncVFS` there is no
+ * log, SQLite answers these pragmas itself, and both are no-ops.
  */
 import { CallbackSet } from '@/utils/callbackSet'
 
 interface WriteAheadDb {
   execute(sql: string): Promise<unknown>
+}
+
+/** PowerSync's `writeLock`: one lease on the writer connection, which other
+ *  tabs' writers wait for too. */
+export interface WriteLockDb {
+  writeLock<T>(fn: (tx: WriteAheadDb) => Promise<T>): Promise<T>
+}
+
+/** `db` as a {@link WriteLockDb}. PowerSync's database has `writeLock`, but
+ *  `PowerSyncDb` does not declare it. */
+export const asWriteLockDb = (db: unknown): WriteLockDb => {
+  if (typeof (db as Partial<WriteLockDb> | null)?.writeLock !== 'function') {
+    throw new Error('PowerSync database does not expose writeLock')
+  }
+  return db as WriteLockDb
 }
 
 /** Log size at which a bulk writer stops and waits for a checkpoint. Re-reading
@@ -112,7 +127,8 @@ const DRAIN_MARKER_KEY = 'write_ahead_drain'
 
 /**
  * After a bulk write: leave both log files small, so the next page load has
- * nothing to re-read.
+ * nothing to re-read. Prefer {@link runBulkWrite}, which calls this on every
+ * ending.
  *
  * One truncate checkpoint is not enough. It copies every page into the main
  * file but truncates only the INACTIVE log file; the active one keeps its bytes
@@ -123,17 +139,53 @@ const DRAIN_MARKER_KEY = 'write_ahead_drain'
  * log, the second swaps), and checkpoint again, which truncates the file the
  * writer just left.
  *
- * Waits out any read in flight, twice, like {@link awaitWriteAheadHeadroom}.
+ * All under one lease on the writer: another connection's checkpoint between
+ * the two writes would empty the log the first one left, and the second would
+ * then not swap. Waits out any read in flight, twice, like
+ * {@link awaitWriteAheadHeadroom}.
  */
-export const drainWriteAheadLog = async (db: WriteAheadDb): Promise<void> => {
-  await db.execute('PRAGMA wal_checkpoint=truncate')
-  await db.execute(`PRAGMA journal_size_limit=${SWAP_ON_NEXT_WRITE}`)
+export const drainWriteAheadLog = (db: WriteLockDb): Promise<void> => db.writeLock(async tx => {
+  await tx.execute('PRAGMA wal_checkpoint=truncate')
+  await tx.execute(`PRAGMA journal_size_limit=${SWAP_ON_NEXT_WRITE}`)
   try {
-    await db.execute(
+    await tx.execute(
       `INSERT OR REPLACE INTO client_schema_state (key, completed_at) VALUES ('${DRAIN_MARKER_KEY}', 0)`)
-    await db.execute(`DELETE FROM client_schema_state WHERE key = '${DRAIN_MARKER_KEY}'`)
+    await tx.execute(`DELETE FROM client_schema_state WHERE key = '${DRAIN_MARKER_KEY}'`)
   } finally {
-    await db.execute(`PRAGMA journal_size_limit=${DEFAULT_JOURNAL_SIZE_LIMIT}`)
+    await tx.execute(`PRAGMA journal_size_limit=${DEFAULT_JOURNAL_SIZE_LIMIT}`)
   }
-  await db.execute('PRAGMA wal_checkpoint=truncate')
+  await tx.execute('PRAGMA wal_checkpoint=truncate')
+})
+
+/**
+ * Run a bulk write with both halves of the log's upkeep around it: `onPause`
+ * hears every pause while it runs (see {@link onWriteAheadPause}), and the log
+ * is drained when it ends — however it ends, since a write that throws after
+ * some batches committed leaves as much log behind as one that finished.
+ * `write` still calls {@link awaitWriteAheadHeadroom} between its batches.
+ *
+ * The drain is best-effort: a failure only warns, and never replaces the
+ * write's own outcome — nor does a `db` with no `writeLock` to drain through.
+ */
+export const runBulkWrite = async <T,>(
+  db: unknown,
+  reporting: {
+    onPause: (pause: WriteAheadPause | null) => void
+    /** Called as the drain starts, which can wait out a read like a pause does. */
+    onDrain?: () => void
+  },
+  write: () => Promise<T>,
+): Promise<T> => {
+  const stopReporting = onWriteAheadPause(reporting.onPause)
+  try {
+    return await write()
+  } finally {
+    stopReporting()
+    reporting.onDrain?.()
+    try {
+      await drainWriteAheadLog(asWriteLockDb(db))
+    } catch (error) {
+      console.warn('[writeAheadLog] draining the log after a bulk write failed:', error)
+    }
+  }
 }

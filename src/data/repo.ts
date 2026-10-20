@@ -4135,8 +4135,11 @@ export class Repo {
           // callback's return value never arrives on that path. Release beats
           // the guarantee; the `catch` below is the other half.
           let drop: HistoryDrop | undefined
-          // Before the precondition probe, which it can outlast by as long as
-          // the longest read in flight — so the probe stays fresh for the write.
+          // The wait below lasts as long as the longest read in flight, so a run
+          // already abandoned refuses before it, on the check that costs nothing.
+          this.assertBackfillSessionUnchanged(workspaceId, backfill.id, generation)
+          // Before the precondition probe, which the wait can outlast — so the
+          // probe stays fresh for the write.
           await awaitWriteAheadHeadroom(this.db)
           // OUTSIDE the transaction — see the method, which says why it cannot
           // be read from inside one.

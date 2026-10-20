@@ -1180,6 +1180,37 @@ describe('workspace backfill runner — write-ahead log', () => {
     expect(events).toEqual(['checkpoint', 'batch 0', 'checkpoint', 'batch 1'])
   })
 
+  it('does not wait on the log for a batch whose run the user already left', async () => {
+    // The wait can last as long as any read; a run that is aborting anyway
+    // must not hold the writer for it.
+    const events: string[] = []
+    const repo: Repo = makeRepo({
+      id: 'chunked-left-v1',
+      trigger: 'workspace-open',
+      run: async ({tx}) => {
+        for (let i = 0; i < 2; i++) {
+          if (i === 1) repo.setActiveWorkspaceId(OTHER_WS)
+          await tx(async () => { events.push(`batch ${i}`) }, {})
+        }
+      },
+    }, cb => { cb(); return () => {} })
+    await seedTarget(repo)
+    const execute = sharedDb.db.execute.bind(sharedDb.db)
+    const spy = vi.spyOn(sharedDb.db, 'execute').mockImplementation(async (sql, params) => {
+      if (sql === 'PRAGMA wal_checkpoint=noop') return {rows: {_array: [{'9999999': '9999999'}]}} as never
+      if (sql === 'PRAGMA wal_checkpoint=truncate') { events.push('checkpoint'); return undefined as never }
+      return execute(sql, params)
+    })
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await drain(repo)
+    } finally {
+      spy.mockRestore()
+    }
+
+    expect(events).toEqual(['checkpoint', 'batch 0'])
+  })
+
   it('asks whether the device is still caught up AFTER that wait, which lasts as long as any read', async () => {
     const events: string[] = []
     let caughtUp = true
