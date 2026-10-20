@@ -1,1 +1,1 @@
-import{AY as e,OY as t,kY as n}from"../../chunks/app-BaCImHRc.js";export{t as NAMES_IN_A_SENTENCE,n as describeNames,e as firstFew};
+import{AY as e,OY as t,kY as n}from"../../chunks/app-5MM0_O7T.js";export{t as NAMES_IN_A_SENTENCE,n as describeNames,e as firstFew};

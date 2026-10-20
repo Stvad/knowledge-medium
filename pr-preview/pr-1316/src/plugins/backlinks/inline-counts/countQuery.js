@@ -1,1 +1,1 @@
-import{TV as e,wV as t}from"../../../../chunks/app-BaCImHRc.js";export{t as BACKLINKS_COUNT_FOR_BLOCK_QUERY,e as backlinksCountForBlockQuery};
+import{TV as e,wV as t}from"../../../../chunks/app-5MM0_O7T.js";export{t as BACKLINKS_COUNT_FOR_BLOCK_QUERY,e as backlinksCountForBlockQuery};
