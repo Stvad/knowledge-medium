@@ -1,0 +1,1 @@
+import{Ou as e}from"../../../chunks/app-CgL16Z64.js";export{e as contributorsPlugin};

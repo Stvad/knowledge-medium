@@ -1,1 +1,1 @@
-import{bQ as e,xQ as t}from"../../../chunks/app-xduDkPU1.js";export{e as onFirstSync,t as onSyncSettled};
+import{BQ as e,VQ as t}from"../../../chunks/app-CgL16Z64.js";export{e as onFirstSync,t as onSyncSettled};
