@@ -25,7 +25,7 @@
  */
 
 import { validateCanary } from '../../crypto/canary.js'
-import type { WorkspaceConversionRead } from '../conversionState.js'
+import { phaseKeepsWorkspaceClosed, type WorkspaceConversionRead } from '../conversionState.js'
 import {
   getUsableKeyRecord,
   readUsableKeyRecord,
@@ -54,8 +54,9 @@ export type ServerE2eeEntry =
   /** The server couldn't be read, or its row isn't a well-formed e2ee one. */
   | {readonly kind: 'unavailable'}
   /** `sealing`: the server may still hold plaintext and every write must wait
-   *  for the purge, so no device unlocks or upgrades its pin. */
-  | {readonly kind: 'converting'}
+   *  for the purge, so no device unlocks or upgrades its pin. `owned`: this
+   *  user owns the workspace, so this device can carry the conversion on. */
+  | {readonly kind: 'converting'; readonly owned: boolean}
   /** An older build copied ciphertext into this device's `blocks`; the device
    *  needs the gated reset, not an upgrade. */
   | {readonly kind: 'copied-ciphertext'}
@@ -68,12 +69,13 @@ export const checkServerE2eeEntry = async (deps: ServerE2eeEntryDeps): Promise<S
   if (read.kind !== 'read') return {kind: 'unavailable'}
   const {state} = read
   if (state.encryptionMode !== 'e2ee' || !state.wkCanary) return {kind: 'unavailable'}
-  if (state.conversionPhase === 'sealing') return {kind: 'converting'}
+  const owned = state.ownerUserId === deps.userId
+  if (phaseKeepsWorkspaceClosed(state.conversionPhase)) return {kind: 'converting', owned}
   if (await deps.hasCopiedCiphertext()) return {kind: 'copied-ciphertext'}
   return {
     kind: 'open',
     canary: state.wkCanary,
-    offerFinish: state.conversionPhase === 'cleaning' && state.ownerUserId === deps.userId,
+    offerFinish: state.conversionPhase === 'cleaning' && owned,
   }
 }
 

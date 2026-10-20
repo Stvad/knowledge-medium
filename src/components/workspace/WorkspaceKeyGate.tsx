@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { Input } from '@/components/ui/input'
+import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
-import { Label } from '@/components/ui/label'
+import { Explanation, GateCard, PASTED_KEY_PROBLEM, WorkspaceKeyField } from '@/components/workspace/keyUi'
+import { openConversionFlow } from '@/components/workspace/conversion/conversionFlowStore'
 import type { Repo } from '@/data/repo'
 import { fetchWorkspaceConversionState, hasCopiedCiphertext } from '@/data/workspaceConversion'
 import type { WorkspaceConversionRead } from '@/sync/keys/conversionState'
@@ -74,21 +74,6 @@ export function WorkspaceKeyGate(props: Props) {
 const displayName = (workspaceName: string | undefined, position: 'start' | 'inline' = 'start'): string =>
   workspaceName ? `"${workspaceName}"` : position === 'start' ? 'This workspace' : 'this workspace'
 
-function GateCard({title, children}: {title: string; children: ReactNode}) {
-  return (
-    <div className="flex min-h-svh items-center justify-center p-6">
-      <div className="w-full max-w-md space-y-5 rounded-lg border bg-background p-6 shadow-sm">
-        <h1 className="text-lg font-semibold">{title}</h1>
-        {children}
-      </div>
-    </div>
-  )
-}
-
-const Explanation = ({children}: {children: ReactNode}) => (
-  <p className="text-sm text-muted-foreground">{children}</p>
-)
-
 function KeyInput({
   busy,
   error,
@@ -104,18 +89,7 @@ function KeyInput({
 }) {
   return (
     <div className="space-y-2">
-      <Label htmlFor="wk-paste">Workspace key</Label>
-      <Input
-        id="wk-paste"
-        autoFocus
-        autoComplete="off"
-        placeholder="kmp-wk-1:…"
-        value={pasted}
-        disabled={busy}
-        onChange={(e) => onChange(e.target.value)}
-        onKeyDown={(e) => { if (e.key === 'Enter') onSubmit() }}
-      />
-      {error && <p className="text-sm text-destructive">{error}</p>}
+      <WorkspaceKeyField id="wk-paste" value={pasted} onChange={onChange} onSubmit={onSubmit} disabled={busy} error={error}/>
       <Button type="button" className="w-full" disabled={busy || !pasted.trim()} onClick={onSubmit}>
         {busy ? 'Unlocking…' : 'Unlock'}
       </Button>
@@ -241,9 +215,8 @@ const keyFailureMessage = (
 ): string => {
   switch (reason) {
     case 'format':
-      return "That doesn't look like a workspace key (expected kmp-wk-1:…)."
     case 'invalid-key':
-      return "That key doesn't decrypt this workspace's data."
+      return PASTED_KEY_PROBLEM[reason]
     case 'no-stored-key':
       return 'The key saved on this device is incomplete. Paste the workspace key instead.'
     case 'storage':
@@ -338,14 +311,22 @@ function ServerE2eeGate({userId, workspaceId, workspaceName, deps, onResolved}: 
     )
   }
   if (entry.kind === 'converting') {
-    // On the device running the conversion, this is where its flow resumes.
     return (
       <GateCard title={`${name} is being encrypted`}>
         <Explanation>
-          Its owner is converting it to end-to-end encryption. It stays closed on this device
-          until that's done. Changes made here meanwhile wait on this device and upload once
-          it's unlocked.
+          {entry.owned ? 'You are' : 'Its owner is'} converting it to end-to-end encryption. It
+          stays closed on this device until that's done. Changes made here meanwhile wait on this
+          device and upload once it's unlocked.
         </Explanation>
+        {entry.owned && (
+          <Button
+            type="button"
+            className="w-full"
+            onClick={() => openConversionFlow({userId, workspaceId, workspaceName: workspaceName ?? null})}
+          >
+            Continue the conversion
+          </Button>
+        )}
         {checkAgain}
       </GateCard>
     )

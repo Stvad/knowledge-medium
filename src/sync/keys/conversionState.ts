@@ -10,7 +10,14 @@
  * stays true for good.
  */
 
-export type ConversionPhase = 'sealing' | 'cleaning'
+// `unknown`: a phase this build doesn't know. It keeps every device closed, as
+// `sealing` does, and the conversion flow does nothing under it.
+export type ConversionPhase = 'sealing' | 'cleaning' | 'unknown'
+
+/** Whether the phase forbids every unlock and pin upgrade: the server may
+ *  still hold plaintext, and every write must wait for the purge. */
+export const phaseKeepsWorkspaceClosed = (phase: ConversionPhase | null): boolean =>
+  phase === 'sealing' || phase === 'unknown'
 
 export interface WorkspaceConversionState {
   readonly encryptionMode: string

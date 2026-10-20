@@ -15,15 +15,8 @@
  * `CreatedWorkspace & { workspaceKey }`.
  */
 
-import { validateCanary, mintCanary } from '../../crypto/canary.js'
-import { deriveContentKeyHmac } from '../../crypto/contentKey.js'
-import {
-  formatWorkspaceKey,
-  generateWorkspaceKeyBytes,
-  importWorkspaceKey,
-  parseWorkspaceKey,
-} from '../../crypto/workspaceKey.js'
 import type { WorkspaceKeyStore } from '../keyStore.js'
+import { mintWorkspaceKey, probeKeyStore } from '../mintWorkspaceKey.js'
 import { canPersistPins, setModePin } from '../modePin.js'
 
 export interface CreateEncryptedWorkspaceDeps<T> {
@@ -43,10 +36,6 @@ export interface CreateEncryptedWorkspaceDeps<T> {
   readonly generateKeyBytes?: () => Uint8Array<ArrayBuffer>
 }
 
-// Sentinel workspace id used only to probe key-store writability before
-// creating the server row. Never a real workspace id; written then deleted.
-const KEY_STORE_PROBE_ID = '__e2ee_keystore_probe__'
-
 export const createEncryptedWorkspace = async <T extends object>(
   name: string,
   deps: CreateEncryptedWorkspaceDeps<T>,
@@ -64,52 +53,17 @@ export const createEncryptedWorkspace = async <T extends object>(
   }
 
   const workspaceId = (deps.newWorkspaceId ?? (() => crypto.randomUUID()))()
-  const keyBytes = (deps.generateKeyBytes ?? generateWorkspaceKeyBytes)()
-  // The paste-friendly string is the ONLY place the raw key ever leaves this
-  // function; show it once, then it lives only as a non-extractable handle.
-  const workspaceKey = formatWorkspaceKey(keyBytes)
-  let cryptoKey: CryptoKey
-  let contentKeyHmac: CryptoKey
-  try {
-    cryptoKey = await importWorkspaceKey(keyBytes)
-    // Derive K_id (§10) from the raw bytes BEFORE zeroing — their only in-scope
-    // window (the imported WK handle is non-extractable). Co-located with the WK
-    // in one keyStore record so they evict together.
-    contentKeyHmac = await deriveContentKeyHmac(keyBytes)
-  } finally {
-    // Zero on EVERY exit (success or a throw mid-import/derive) — symmetric with
-    // the §8.2 unlock flow, so a reject in import/derive can't leave the raw WK
-    // bytes on the GC heap.
-    keyBytes.fill(0)
-  }
+  // The returned string is the ONLY place the raw key ever leaves this flow:
+  // shown once, after which the key lives only as a non-extractable handle.
+  // Minting fails before a server row exists whose canary no device could open.
+  const {record, displayed: workspaceKey, canary: wkCanary} = await mintWorkspaceKey(
+    workspaceId,
+    deps.generateKeyBytes,
+  )
 
-  const wkCanary = await mintCanary(cryptoKey, workspaceId)
-  // Self-check (§8.1): prove the EXACT string we show the user re-imports to a
-  // key that opens the canary — i.e. the §8.2 new-device unlock will succeed.
-  // Re-deriving from `workspaceKey` (not reusing `cryptoKey`) is what makes this
-  // a real proof of recoverability, not just "this key opens it". Fail before
-  // creating a server row whose canary no device could ever open.
-  const verifyBytes = parseWorkspaceKey(workspaceKey)
-  let verifyKey: CryptoKey
+  // Refuse before the server row exists if this device couldn't keep the key.
   try {
-    verifyKey = await importWorkspaceKey(verifyBytes)
-  } finally {
-    verifyBytes.fill(0) // same best-effort zero as keyBytes — no raw WK bytes left on the heap
-  }
-  if (!(await validateCanary(verifyKey, wkCanary, workspaceId))) {
-    throw new Error('createEncryptedWorkspace: minted canary failed round-trip self-validation')
-  }
-
-  // Preflight the KEY store (IndexedDB) too — symmetric with the pin-store
-  // (localStorage) preflight above. Probe a write+delete with the real key at a
-  // sentinel id, so a key-store failure (quota / corruption / private mode)
-  // refuses the create HERE rather than producing a server-side e2ee workspace
-  // this device can't open: a pin would persist but no key, and re-pasting the
-  // WK would loop on the same failed write. Cleaned up immediately; the real key
-  // is persisted after the row exists.
-  try {
-    await deps.keyStore.put(deps.userId, KEY_STORE_PROBE_ID, { wk: cryptoKey, contentKeyHmac })
-    await deps.keyStore.delete(deps.userId, KEY_STORE_PROBE_ID)
+    await probeKeyStore(deps.keyStore, deps.userId, record)
   } catch {
     throw new Error(
       'Encrypted workspaces need browser storage that is currently unavailable ' +
@@ -142,7 +96,7 @@ export const createEncryptedWorkspace = async <T extends object>(
     )
   }
   try {
-    await deps.keyStore.put(deps.userId, workspaceId, { wk: cryptoKey, contentKeyHmac })
+    await deps.keyStore.put(deps.userId, workspaceId, record)
   } catch (err) {
     console.warn(
       `createEncryptedWorkspace: key store write failed for ${workspaceId}; ` +

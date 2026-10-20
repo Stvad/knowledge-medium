@@ -2,6 +2,7 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { WorkspaceKeyGate, type WorkspaceGateDeps } from './WorkspaceKeyGate.tsx'
+import { closeConversionFlow, conversionFlowTarget as conversionTarget } from './conversion/conversionFlowStore'
 import { getWorkspaceKeyStore } from '@/sync/keys/keyStore'
 import { getModePin, hasPinUpgradeMarker, setModePin, writePinUpgradeMarker } from '@/sync/keys/modePin'
 import type { WorkspaceConversionState } from '@/sync/keys/conversionState'
@@ -189,6 +190,20 @@ describe('WorkspaceKeyGate — server-e2ee', () => {
     expect(screen.queryByLabelText(/workspace key/i)).toBeNull()
     expect(screen.queryByRole('button', {name: /saved on this device/i})).toBeNull()
     expect(getModePin(USER, WS)).toBe('plaintext')
+  })
+
+  it('offers the owner, and only the owner, to continue the conversion while sealing', async () => {
+    state = {...state, conversionPhase: 'sealing'}
+    renderGate()
+    fireEvent.click(await screen.findByRole('button', {name: /continue the conversion/i}))
+    expect(conversionTarget()).toEqual({userId: USER, workspaceId: WS, workspaceName: 'Vault'})
+    cleanup()
+    closeConversionFlow()
+
+    state = {...state, ownerUserId: 'someone-else'}
+    renderGate()
+    expect(await screen.findByText(/its owner is converting/i)).toBeInTheDocument()
+    expect(screen.queryByRole('button', {name: /continue the conversion/i})).toBeNull()
   })
 
   it('a check that cannot reach the server offers no unlock, and checks again on request', async () => {

@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { describe, expect, it } from 'vitest'
-import { createSupabaseConversionServer, IDS_PER_FILTER } from './conversionServer.js'
+import { describe, expect, it, vi } from 'vitest'
+import { createSupabaseConversionServer, IDS_PER_FILTER, type ConversionServer } from './conversionServer.js'
 
 type Row = Record<string, unknown>
 
@@ -18,8 +18,12 @@ const fakeClient = (
   {maxRows = Infinity, error, status = 400}: {maxRows?: number; error?: {code: string; message: string}; status?: number} = {},
 ) => {
   const inListLengths: number[] = []
-  const rpcs: Array<{fn: string; args: unknown}> = []
+  const rpcs: Array<{fn: string; args: unknown; signal?: AbortSignal}> = []
+  /** Every request made, table read or RPC, with the signal it was handed. */
+  const requests: Array<{signal?: AbortSignal}> = []
   const from = (table: string) => {
+    const request: {signal?: AbortSignal} = {}
+    requests.push(request)
     const filters: Array<(row: Row) => boolean> = []
     let orderBy: string | undefined
     let limit = Infinity
@@ -56,21 +60,40 @@ const fakeClient = (
       order: (column: string) => ((orderBy = column), builder),
       limit: (count: number) => ((limit = count), builder),
       maybeSingle: () => ((maybeSingle = true), builder),
+      abortSignal: (signal: AbortSignal) => ((request.signal = signal), builder),
       then: (resolve: (value: unknown) => unknown, reject: (reason: unknown) => unknown) =>
         Promise.resolve(respond()).then(resolve, reject),
     }
     return builder
   }
-  const rpc = async (fn: string, args: unknown) => {
-    rpcs.push({fn, args})
-    return {error: error ?? null, status: error ? status : 204}
+  const rpc = (fn: string, args: unknown) => {
+    const call: {fn: string; args: unknown; signal?: AbortSignal} = {fn, args}
+    rpcs.push(call)
+    requests.push(call)
+    const response = {
+      abortSignal: (signal: AbortSignal) => ((call.signal = signal), response),
+      then: (resolve: (value: unknown) => unknown, reject: (reason: unknown) => unknown) =>
+        Promise.resolve({error: error ?? null, status: error ? status : 204}).then(resolve, reject),
+    }
+    return response
   }
-  return {client: {from, rpc} as unknown as SupabaseClient, inListLengths, rpcs}
+  return {client: {from, rpc} as unknown as SupabaseClient, inListLengths, rpcs, requests}
 }
 
 const WS = 'ws-1'
 const blockId = (i: number) => `b${String(i).padStart(3, '0')}`
 const ENVELOPE = 'enc:v1:AAAA'
+
+/** One call of every server method but the flip, typed over the interface: a
+ *  method added to it doesn't compile here until it's listed. */
+const cancellableCalls: {[K in Exclude<keyof ConversionServer, 'convertWorkspaceToE2ee'>]: (server: ConversionServer) => Promise<unknown>} = {
+  readWorkspace: server => server.readWorkspace(WS),
+  countBlocks: server => server.countBlocks(WS),
+  readBlockPage: server => server.readBlockPage(WS, null, 1),
+  readBlocks: server => server.readBlocks(WS, [blockId(0)]),
+  readContentSealHistory: server => server.readContentSealHistory(WS, [blockId(0)]),
+  applyBlockPatches: server => server.applyBlockPatches([]),
+}
 
 describe('createSupabaseConversionServer', () => {
   it('reads the history of any number of blocks, across id chunks and capped responses', async () => {
@@ -120,6 +143,38 @@ describe('createSupabaseConversionServer', () => {
     expect((await server.readBlockPage(WS, blockId(1), 9)).map(row => row.id)).toEqual([blockId(2), blockId(3), blockId(4)])
   })
 
+  it('flips with the workspace id and canary', async () => {
+    const {client, rpcs} = fakeClient({})
+
+    await createSupabaseConversionServer(client).convertWorkspaceToE2ee(WS, ENVELOPE)
+
+    expect(rpcs.map(({fn, args}) => ({fn, args}))).toEqual([{fn: 'convert_workspace_to_e2ee', args: {p_workspace_id: WS, p_wk_canary: ENVELOPE}}])
+  })
+
+  it('lets the run cancel every request of every method but the flip, which may commit with nobody waiting', async () => {
+    for (const [method, call] of Object.entries(cancellableCalls)) {
+      const {client, requests} = fakeClient({blocks: [], blocks_history: [], workspaces: []})
+      const run = new AbortController()
+      await call(createSupabaseConversionServer(client, run.signal))
+      expect(requests.length, method).toBeGreaterThan(0)
+      expect(requests.map(request => request.signal), method).toEqual(requests.map(() => run.signal))
+    }
+
+    const {client, requests} = fakeClient({})
+    const run = new AbortController()
+    await createSupabaseConversionServer(client, run.signal).convertWorkspaceToE2ee(WS, ENVELOPE)
+    run.abort()
+    expect(requests).toHaveLength(1)
+    expect(requests[0].signal?.aborted).toBe(false)
+  })
+
+  it('gives up waiting on a flip request past its own deadline', async () => {
+    const {client, rpcs} = fakeClient({workspaces: []})
+    await createSupabaseConversionServer(client, undefined, {flipTimeoutMs: 1}).convertWorkspaceToE2ee(WS, ENVELOPE)
+
+    await vi.waitFor(() => expect(rpcs[0].signal?.aborted).toBe(true))
+  })
+
   it('reads a workspace this session cannot see as null', async () => {
     const {client} = fakeClient({workspaces: [{id: 'ws-other', encryption_mode: 'e2ee', wk_canary: ENVELOPE}]})
 
@@ -142,5 +197,6 @@ describe('createSupabaseConversionServer', () => {
     await expect(server.countBlocks(WS)).rejects.toMatchObject(refused)
     await expect(server.readBlockPage(WS, null, 1)).rejects.toMatchObject(refused)
     await expect(server.applyBlockPatches([])).rejects.toMatchObject(refused)
+    await expect(server.convertWorkspaceToE2ee(WS, ENVELOPE)).rejects.toMatchObject(refused)
   })
 })
