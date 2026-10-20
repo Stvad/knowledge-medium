@@ -14,6 +14,7 @@ import {computeAliasSeatId, ensureAliasTarget} from '@/data/targets'
 import {PLAINTEXT_ALIAS_SEATS} from '@/data/test/plaintextAliasSeats'
 import {actionsFacet} from '@/extensions/core'
 import {contributorsDataExtension} from '@/plugins/contributors/dataExtension'
+import {getOrCreatePropertiesPage} from '@/data/propertiesPage'
 
 const WS = 'ws'
 let db: TestDb
@@ -70,6 +71,19 @@ describe('agent contributor selection', () => {
     await expect(run({type: 'create-page', name: 'Unconfigured client'})).rejects.toThrow(/Choose a contributor.*CLI or MCP/)
     expect(await context.repo.db.getAll('SELECT id FROM blocks WHERE content = ?', ['Unconfigured client'])).toEqual([])
     expect(await run({type: 'list-contributors'})).toEqual({contributors: []})
+  })
+
+  it('binds schema creation reached through the supplied eval Repo to its contributor', async () => {
+    const repo = context.repo
+    await getOrCreatePropertiesPage(repo, WS)
+    const code = 'return (await repo.userSchemas.addSchema({name: "agent:rating", presetId: "string"})).fieldId'
+    await expect(run({type: 'eval', code})).rejects.toThrow(/Choose a contributor/)
+    expect(repo.userSchemas.getSchemaBlockId('agent:rating')).toBeUndefined()
+
+    const contributor = await run({type: 'create-contributor', name: 'Atlas'}) as ContributorProfile
+    const id = await run({type: 'eval', code, contributorId: contributor.id}) as string
+    expect((await repo.load(id))?.properties[attributionCreatorsProp.name]).toEqual([contributor.id])
+    expect(repo.userSchemas.getSchemaBlockId('agent:rating')).toBe(id)
   })
 
   it.each([undefined, null, 'selected'] as const)('refuses action closures that bypass the command-bound repository (selection: %s)', async selection => {
@@ -198,6 +212,22 @@ describe('agent contributor selection', () => {
     await run({type: 'update-block', id: page.id, contributorId: null, content: 'Unattributed revision', properties: {}, replaceProperties: true})
     expect((await context.repo.load(page.id))?.properties[attributionCreatorsProp.name]).toEqual([atlas.id])
     expect((await context.repo.load(page.id))?.properties[attributionEditorsProp.name]).toEqual([atlas.id, scout.id])
+  })
+
+  it('requires selection for update-block provenance corrections and validates their profile references', async () => {
+    const atlas = await run({type: 'create-contributor', name: 'Atlas'}) as ContributorProfile
+    const scout = await run({type: 'create-contributor', name: 'Scout'}) as ContributorProfile
+    const page = await run({type: 'create-page', name: 'Research', contributorId: atlas.id}) as {id: string}
+    const correct = {type: 'update-block', id: page.id, properties: {[attributionCreatorsProp.name]: []}}
+    await expect(run(correct)).rejects.toThrow(/Choose a contributor/)
+    await expect(run({...correct, contributorId: null, properties: {[attributionCreatorsProp.name]: [page.id]}}))
+      .rejects.toThrow(/Contributor.*profile.*workspace/)
+    expect((await context.repo.load(page.id))?.properties[attributionCreatorsProp.name]).toEqual([atlas.id])
+
+    await run({...correct, contributorId: atlas.id, properties: {[attributionCreatorsProp.name]: [scout.id]}})
+    const row = await context.repo.load(page.id)
+    expect(row?.properties[attributionCreatorsProp.name]).toEqual([scout.id])
+    expect(row?.properties[attributionEditorsProp.name]).toBeUndefined()
   })
 
   it('leaves explicitly opted-out writes unattributed and does not leak the previous selection', async () => {

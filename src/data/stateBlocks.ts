@@ -37,6 +37,7 @@ import {
 import { UI_STATE_PATH_PART, USER_PREFS_PATH_PART } from '@/data/userPrefs.js'
 import { PAGE_TYPE, USER_TYPE } from '@/data/blockTypes.js'
 import {applyTypeTagInTx} from '@/data/typeTagger'
+import {partitionClaimableAliases, restorePropertiesStrippingAliases} from '@/data/targets'
 
 // ──── Deterministic-id namespaces ────
 
@@ -201,17 +202,9 @@ const ensureUserPrefsChild = (repo: Repo, parent: Block): Promise<Block> =>
 
 const dedupe = (values: readonly string[]): string[] => [...new Set(values)]
 
-/** Repair an existing user page to the current shape: the user id as an
- *  alias, the `USER_TYPE` marker, and the `user:id` property. Pages
- *  created before any of these existed (or restored by an older client)
- *  are upgraded in place on first access. Idempotent and additive —
- *  never rewrites the display-name alias or content, so a user who
- *  renamed their own page keeps that. Runs at most once per memoized
- *  (repo, workspace, user) since the caller is itself memoized; the peek
- *  skips the tx entirely once the page is up to date. Best-effort: an
- *  alias-collision rejection (the id already claimed elsewhere — not
- *  expected for opaque ids) is swallowed so it can't break user-page
- *  resolution. */
+/** Repair legacy identity metadata without rewriting content or claiming
+ * aliases owned elsewhere. The preflight avoids a transaction for healthy
+ * pages; failed repair must not prevent user-page resolution. */
 const reconcileUserPage = async (repo: Repo, id: string, userId: string): Promise<void> => {
   const block = repo.block(id)
   const data = block.peek()
@@ -228,14 +221,7 @@ const reconcileUserPage = async (repo: Repo, id: string, userId: string): Promis
     await repo.tx(async tx => {
       const row = await tx.get(id)
       if (!row || row.deleted) return
-      const txAliases = await tx.getProperty(id, aliasesProp)
-      if (!txAliases.includes(userId)) {
-        await tx.setProperty(id, aliasesProp, [...txAliases, userId])
-      }
-      if ((await tx.getProperty(id, userIdProp)) !== userId) {
-        await tx.setProperty(id, userIdProp, userId)
-      }
-      await repo.addTypeInTx(tx, id, USER_TYPE, {}, typeSnapshot)
+      await ensureUserPageInTx(tx, row.workspaceId, {id: userId}, typeSnapshot)
     }, {scope: ChangeScope.UserPrefs, description: 'user-page reconcile'})
   } catch (err) {
     console.warn(`[stateBlocks] could not reconcile user page ${id}:`, err)
@@ -255,16 +241,25 @@ export const ensureUserPageInTx = async (
   if (existing && existing.workspaceId !== workspaceId) {
     throw new Error('The user page belongs to another workspace.')
   }
-  if (existing && !existing.deleted) return id
   const displayName = user.name ?? user.id
-  const aliases = dedupe([displayName, user.id])
-  if (existing) {
-    await tx.restore(id, {content: displayName}, opts)
-  } else {
+  const aliases = existing ? await tx.getProperty(id, aliasesProp) : [displayName]
+  if (existing?.deleted) {
+    await tx.restore(id, {properties: await restorePropertiesStrippingAliases(tx, id)}, opts)
+  } else if (!existing) {
     await tx.create({id, workspaceId, parentId: null, orderKey: 'a0', content: displayName}, {systemMint: true})
   }
-  await applyTypeTagInTx(tx, snapshot, {blockId: id, typeId: PAGE_TYPE, initialValues: {[aliasesProp.name]: aliases}, writeOpts: opts})
-  await applyTypeTagInTx(tx, snapshot, {blockId: id, typeId: USER_TYPE, initialValues: {[userIdProp.name]: user.id}, writeOpts: opts})
+  const claimable = await partitionClaimableAliases(tx, id, dedupe([...aliases, user.id]), workspaceId)
+  const row = (await tx.get(id))!
+  const aliasSchema = await tx.resolvePropertySchema(id, aliasesProp)
+  const userIdSchema = await tx.resolvePropertySchema(id, userIdProp)
+  // Identity bootstrap also runs in UserPrefs transactions.
+  await tx.update(id, {properties: {
+    ...row.properties,
+    [aliasSchema.name]: aliasSchema.codec.encode(claimable),
+    [userIdSchema.name]: userIdSchema.codec.encode(user.id),
+  }}, opts)
+  await applyTypeTagInTx(tx, snapshot, {blockId: id, typeId: PAGE_TYPE, writeOpts: opts})
+  await applyTypeTagInTx(tx, snapshot, {blockId: id, typeId: USER_TYPE, writeOpts: opts})
   return id
 }
 

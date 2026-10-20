@@ -102,6 +102,83 @@ describe('automatic contributor attribution', () => {
     expect(await read('note', attributionEditorsProp.name)).toEqual([])
   })
 
+  it.each([false, true])('requires selection for external attribution corrections without appending an editor (children: %s)', async children => {
+    if (children) {
+      await db.db.execute(`INSERT INTO workspaces
+        (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+        VALUES (?, 'Test', 'vlad', 1, 1, 'none', NULL, 'children')`, [WS])
+      repo.setActiveWorkspaceId(WS)
+    }
+    await create(repo.withTxContext({contributorId: 'atlas'}))
+    const external = repo.withTxContext({contributorSource: 'agent'})
+    await expect(external.tx(tx => tx.setProperty('note', attributionCreatorsProp, []), opts))
+      .rejects.toThrow(/Choose a contributor/)
+    expect(await read('note', attributionCreatorsProp.name)).toEqual(['atlas'])
+
+    await external.withTxContext({contributorId: 'atlas'}).tx(tx => tx.setProperties('note', {set: [
+      {schema: attributionCreatorsProp, value: ['scout']},
+      {schema: attributionEditorsProp, value: []},
+    ]}), opts)
+    expect(await read('note', attributionCreatorsProp.name)).toEqual(['scout'])
+    expect(await read('note', attributionEditorsProp.name)).toEqual([])
+  })
+
+  it.each(['missing', 'untyped', 'foreign'] as const)('rejects a %s profile in an external attribution correction, including explicit opt-out', async invalid => {
+    await create(repo.withTxContext({contributorId: 'atlas'}))
+    await repo.withTxContext({contributorId: null}).tx(async tx => {
+      await tx.create({id: 'untyped', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'Ordinary note'})
+    }, opts)
+    await repo.withTxContext({contributorId: null}).tx(async tx => {
+      await tx.create({id: 'foreign', workspaceId: 'other', parentId: null, orderKey: 'a0', content: 'Foreign profile',
+        properties: {[typesProp.name]: [PAGE_TYPE, CONTRIBUTOR_TYPE]}})
+    }, opts)
+    for (const contributorId of ['atlas', null]) {
+      const external = repo.withTxContext({contributorSource: 'agent', contributorId})
+      await expect(external.tx(tx => tx.setProperty('note', attributionCreatorsProp, [invalid]), opts))
+        .rejects.toThrow(/Contributor.*profile.*workspace/)
+      expect(await read('note', attributionCreatorsProp.name)).toEqual(['atlas'])
+    }
+  })
+
+  it('accepts a historical deleted profile in a correction and preserves an explicit editor correction alongside content', async () => {
+    await create(repo.withTxContext({contributorId: 'atlas'}))
+    await repo.withTxContext({contributorId: null}).tx(tx => tx.delete('scout'), opts)
+    await repo.withTxContext({contributorSource: 'agent', contributorId: 'atlas'}).tx(async tx => {
+      await tx.update('note', {content: 'Corrected'})
+      await tx.setProperty('note', attributionCreatorsProp, ['scout'])
+      await tx.setProperty('note', attributionEditorsProp, [])
+    }, opts)
+    expect(await read('note', attributionCreatorsProp.name)).toEqual(['scout'])
+    expect(await read('note', attributionEditorsProp.name)).toEqual([])
+  })
+
+  it.each(['missing', ''] as const)('validates the selected actor even for correction-only writes (%s)', async contributorId => {
+    await create(repo.withTxContext({contributorId: 'atlas'}))
+    await expect(repo.withTxContext({contributorSource: 'agent', contributorId}).tx(tx =>
+      tx.setProperty('note', attributionCreatorsProp, ['scout']), opts,
+    )).rejects.toThrow(/Contributor.*live Contributor profile/)
+    expect(await read('note', attributionCreatorsProp.name)).toEqual(['atlas'])
+  })
+
+  it('requires selection for direct attribution-value edits in children-backed storage', async () => {
+    await db.db.execute(`INSERT INTO workspaces
+      (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+      VALUES (?, 'Test', 'vlad', 1, 1, 'none', NULL, 'children')`, [WS])
+    repo.setActiveWorkspaceId(WS)
+    await create(repo.withTxContext({contributorId: 'atlas'}))
+    const fieldId = propertyDefinitionBlockId(WS, attributionCreatorsProp.seedKey)
+    const field = await db.db.get<{id: string}>('SELECT id FROM blocks WHERE parent_id = ? AND content = ? AND deleted = 0',
+      ['note', propertyFieldContent(fieldId)])
+    const value = await db.db.get<{id: string}>('SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0', [field.id])
+    const external = repo.withTxContext({contributorSource: 'agent'})
+    await expect(external.tx(tx => tx.delete(value.id), opts)).rejects.toThrow(/Choose a contributor/)
+    expect(await read('note', attributionCreatorsProp.name)).toEqual(['atlas'])
+
+    await external.withTxContext({contributorId: 'atlas'}).tx(tx => tx.delete(value.id), opts)
+    expect(await read('note', attributionCreatorsProp.name)).toEqual([])
+    expect(await read('note', attributionEditorsProp.name)).toBeUndefined()
+  })
+
   it.each([false, true])('honors property-panel removals and batch unsets (children: %s)', async children => {
     if (children) {
       await db.db.execute(`INSERT INTO workspaces

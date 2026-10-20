@@ -20,11 +20,11 @@ export const ensureHumanContributor = async (tx: Tx, workspaceId: string, user: 
 }
 
 export const assertContributor = async (
-  tx: Pick<Tx, 'get'>, id: string, workspaceId: string, options: {allowHuman?: boolean} = {},
+  tx: Pick<Tx, 'get'>, id: string, workspaceId: string, options: {allowHuman?: boolean; allowDeleted?: boolean} = {},
 ): Promise<void> => {
   const profile = await tx.get(id)
-  if (!profile || profile.deleted || profile.workspaceId !== workspaceId || !hasBlockType(profile, CONTRIBUTOR_TYPE)) {
-    throw new Error(`Contributor ${id} must be a live Contributor profile in this workspace.`)
+  if (!profile || (profile.deleted && !options.allowDeleted) || profile.workspaceId !== workspaceId || !hasBlockType(profile, CONTRIBUTOR_TYPE)) {
+    throw new Error(`Contributor ${id} must be a ${options.allowDeleted ? '' : 'live '}Contributor profile in this workspace.`)
   }
   if (options.allowHuman === false && contributorKindOf(profile) === 'human') {
     throw new Error('Agent writes require an agent or automation contributor, not a human profile.')

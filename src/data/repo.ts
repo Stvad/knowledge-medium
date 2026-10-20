@@ -2059,6 +2059,9 @@ export class Repo {
     // Constructor-bound helpers would escape through the parent's tx.
     // Host the stateless tagger here so its writes use this facade.
     const groupedTagger = new TypeTagger(facade)
+    // Keep schema creation on this host while sharing its same-name reservation
+    // set with the Repo-owned service and any other transaction facade.
+    const userSchemas = this.userSchemas.withRepo(facade)
     const addType: Repo['addType'] = (blockId, typeId, initialValues = {}) =>
       groupedTagger.addType(blockId, typeId, initialValues)
     const removeType: Repo['removeType'] = (blockId, typeId) =>
@@ -2098,6 +2101,7 @@ export class Repo {
     return Object.assign(facade, {
       tx, run, mutate, undoGroup, block, runQuery,
       addType, removeType, toggleType, setBlockTypes,
+      userSchemas,
       scheduleWorkspaceBackfills, scheduleWorkspaceRefBackfill,
       scheduleWorkspaceSeedMaterialization, scheduleReconcileRescan,
       scheduleReferenceTargetDerivePass,

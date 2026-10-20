@@ -13,7 +13,9 @@ declare module '@/data/api/tx' {
   }
 }
 
-const attributionNames = new Set([attributionCreatorsProp.name, attributionEditorsProp.name])
+const attributionProps = [attributionCreatorsProp, attributionEditorsProp] as const
+type AttributionProperty = typeof attributionProps[number]
+const attributionNames = new Set(attributionProps.map(prop => prop.name))
 const authoredFields = ['content', 'properties', 'deleted', 'parentId', 'orderKey'] as const
 
 const meaningfulChange = ({before, after}: ChangedRow): boolean => {
@@ -26,20 +28,21 @@ const meaningfulChange = ({before, after}: ChangedRow): boolean => {
     && !jsonValuesEqual(before.properties[name], after.properties[name]))
 }
 
-const targetOf = async (row: BlockData, ctx: SameTxCtx): Promise<string | undefined> => {
+const targetOf = async (row: BlockData, ctx: SameTxCtx): Promise<{id: string; attribution?: AttributionProperty} | undefined> => {
   const field = (candidate: BlockData | null) => isPropertyFieldInstance(candidate,
     id => ctx.resolvePropertySchemaField(row.workspaceId, id).status === 'resolved')
   const ownerOf = (candidate: BlockData) => {
     const resolved = ctx.resolvePropertySchemaField(row.workspaceId, candidate.referenceTargetId!)
-    return resolved.status === 'resolved' && !attributionNames.has(resolved.schema.name)
-      ? candidate.parentId ?? undefined : undefined
+    return resolved.status === 'resolved' && candidate.parentId
+      ? {id: candidate.parentId, attribution: attributionProps.find(prop => prop.name === resolved.schema.name)}
+      : undefined
   }
   if (field(row)) return ownerOf(row)
   if (row.parentId && isFieldValueChild(row)) {
     const parent = await ctx.tx.get(row.parentId)
     if (parent && field(parent)) return ownerOf(parent)
   }
-  return row.id
+  return {id: row.id}
 }
 
 const hasNonHumanAttribution = async (row: BlockData, ctx: SameTxCtx): Promise<boolean> => {
@@ -57,11 +60,11 @@ export const contributorAttributionProcessor = defineSameTxProcessor({
   watches: {kind: 'field', table: 'blocks', fields: authoredFields},
   apply: async (event, ctx) => {
     if (event.scope !== ChangeScope.BlockDefault) return
-    const targets = new Map<string, boolean>()
+    const targets = new Map<string, {created: boolean; authored: boolean; corrections: Set<AttributionProperty>}>()
     for (const change of event.changedRows) {
       if (!ctx.hasUserWrite(change.id)) continue
       if (change.before && change.after && !change.after.deleted) {
-        for (const prop of [attributionCreatorsProp, attributionEditorsProp]) {
+        for (const prop of attributionProps) {
           const previous = change.before.properties[prop.name]
           if (previous !== undefined && change.after.properties[prop.name] === undefined
             && !ctx.wasPropertyUnset(change.id, prop.name)) {
@@ -69,32 +72,59 @@ export const contributorAttributionProcessor = defineSameTxProcessor({
           }
         }
       }
-      if (!meaningfulChange(change)) continue
+      const authored = meaningfulChange(change)
+      const corrections = attributionProps.filter(prop =>
+        !jsonValuesEqual(change.before?.properties[prop.name], change.after?.properties[prop.name])
+        && (change.after?.properties[prop.name] !== undefined || ctx.wasPropertyUnset(change.id, prop.name)))
+      if (!authored && corrections.length === 0) continue
       const target = await targetOf(change.after!, ctx)
-      if (target) targets.set(target, targets.get(target) === true || (target === change.id && change.before === null))
+      if (!target) continue
+      const entry = targets.get(target.id) ?? {created: false, authored: false, corrections: new Set<AttributionProperty>()}
+      if (target.attribution) entry.corrections.add(target.attribution)
+      else {
+        entry.authored ||= authored
+        entry.created ||= target.id === change.id && change.before === null
+        for (const prop of corrections) entry.corrections.add(prop)
+      }
+      targets.set(target.id, entry)
     }
-    if (targets.size === 0 || ctx.tx.meta.context?.contributorId === null) return
+    if (targets.size === 0) return
     const context = ctx.tx.meta.context
     const selectedId = context?.contributorId ?? undefined
+    const external = context?.contributorSource === 'agent'
+    if (external) {
+      if (context.contributorId === undefined) {
+        throw new Error('Choose a contributor before writing: run contributor create <name> or contributor use <id>; --contributor none opts out. A current CLI or MCP with contributor support is required; upgrade @knowledge-medium/agent-cli or use this checkout\'s pnpm agent.')
+      }
+      if (selectedId !== undefined) await assertContributor(ctx.tx, selectedId, event.workspaceId, {allowHuman: false})
+      for (const [id, {corrections}] of targets) {
+        const row = await ctx.tx.get(id)
+        for (const prop of corrections) {
+          for (const profileId of prop.codec.decode(row?.properties[prop.name] ?? [])) {
+            await assertContributor(ctx.tx, profileId, event.workspaceId, {allowDeleted: true})
+          }
+        }
+      }
+    }
+    if (context?.contributorId === null) return
     const selected = selectedId ? await ctx.tx.get(selectedId) : null
-    const human = context?.contributorSource !== 'agent' && (selectedId === undefined
+    const human = !external && (selectedId === undefined
       || contributorKindOf(selected) === 'human')
     const eligible: Array<[string, boolean]> = []
-    for (const [id, created] of targets) {
+    for (const [id, {created, authored}] of targets) {
+      if (!authored) continue
       const row = await ctx.tx.get(id)
       if (!row || row.deleted) continue
       if (human && !await hasNonHumanAttribution(row, ctx)) continue
       eligible.push([id, created])
     }
-    if (eligible.length === 0 && context?.contributorSource !== 'agent') return
-    if (context?.contributorSource === 'agent' && selectedId === undefined) {
-      throw new Error('Choose a contributor before writing: run contributor create <name> or contributor use <id>; --contributor none opts out. A current CLI or MCP with contributor support is required; upgrade @knowledge-medium/agent-cli or use this checkout\'s pnpm agent.')
-    }
+    if (eligible.length === 0) return
     const snapshot = {types: ctx.types, propertySchemas: ctx.propertySchemas}
     const contributorId = selectedId ?? await ensureHumanContributor(ctx.tx, event.workspaceId, event.user, snapshot)
-    await assertContributor(ctx.tx, contributorId, event.workspaceId, {allowHuman: context?.contributorSource !== 'agent'})
+    if (!external) await assertContributor(ctx.tx, contributorId, event.workspaceId)
     for (const [id, created] of eligible) {
       const prop = created ? attributionCreatorsProp : attributionEditorsProp
+      if (targets.get(id)!.corrections.has(prop)) continue
       await ctx.tx.setProperty(id, prop, current => [...new Set([...(current ?? []), contributorId])], {skipMetadata: true})
     }
   },

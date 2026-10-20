@@ -52,6 +52,13 @@ describe('parseConfig', () => {
     expect(() => parseConfig({workspaceId: 'ws-test', profile: 'bad name', watchers: []})).toThrow(/[Pp]rofile/)
   })
 
+  it('stores the normalized profile name used by bridge token lookup', () => {
+    expect(parseConfig({workspaceId: 'ws-test', profile: '  dispatch-test  ', watchers: []}).profile)
+      .toBe('dispatch-test')
+    expect(parseConfig({workspaceId: 'ws-test', profile: '   ', watchers: []}).profile)
+      .toBe('default')
+  })
+
   it('rejects duplicate watcher names (they would silently share cursor/baseline state)', () => {
     expect(() => parseConfig({workspaceId: 'ws-test', watchers: [
       {kind: 'query', name: 'inbox', sql: 'SELECT id FROM a'},

@@ -105,6 +105,25 @@ const runDaemon = async () => execFileAsync(process.execPath, [daemonScript, '--
 })
 
 describe('dispatch contributor selection', {timeout: 20_000}, () => {
+  it('uses the normalized profile for both token lookup and saved contributor selection', async () => {
+    vi.stubEnv('AGENT_RUNTIME_CONTRIBUTOR_DIR', selectionDir)
+    await saveContributorSelection('dispatch-test', 'workspace-test', 'contributor-agent')
+    const statePath = path.join(tempDir, 'state.json')
+    await fs.writeFile(configPath, JSON.stringify({
+      profile: '  dispatch-test  ',
+      workspaceId: 'workspace-test',
+      statePath,
+      push: false,
+      watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude'}],
+    }))
+    await fs.writeFile(statePath, JSON.stringify({backlinkBaselines: {mentions: 0}}))
+
+    await runDaemon()
+
+    const update = commands.find(command => command.type === 'update-block')
+    expect(update).toMatchObject({contributorId: 'contributor-agent'})
+  })
+
   it('refuses an unset exact profile/workspace selection before bridge or pidfile startup', async () => {
     // An unrelated choice must not become a fallback for this daemon.
     vi.stubEnv('AGENT_RUNTIME_CONTRIBUTOR_DIR', selectionDir)
