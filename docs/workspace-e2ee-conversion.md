@@ -266,10 +266,9 @@ The first production run is #1288.
 
 **Before:**
 1. **Deploys:**
-   - **every** device runs a build that includes #1293 and #1302's client half, as #1302 defines it: at least the canary check on entry, the upload fence with key-generation stamping, and the backlog quarantine. A device without them could, after a later key-loss recovery, upload stale or old-key writes over the restore. #1299 and #1300 merge before #1293, so such a build has them too. Boot reinstalls whichever local triggers the running build defines, so what matters is the build each device runs, not when it last updated;
+   - **every** device runs a build that includes #1293. #1299 and #1300 merge before #1293, so such a build has them too. Boot reinstalls whichever local triggers the running build defines, so what matters is the build each device runs, not when it last updated;
    - #1294's migration is applied. The upload limits can stay as they are, unless preflight lists an oversized object (step 0);
    - #719 has shipped, so new `[[links]]` stop minting public ids;
-   - #1302's recovery path exists, because the safety net has to exist before an irreversible step on the main workspace.
 2. **No wipe shortcut.**
    - Clearing site data erases every workspace key, pin, `row_events` history, extension approval and pending attachment on that browser profile.
    - The **gated reset**, for a device that copied ciphertext: drain every workspace's queue; make sure no attachment records are pending or failed; confirm every e2ee key on that profile is saved elsewhere; take a raw SQLite export; then reset.
@@ -281,7 +280,7 @@ The first production run is #1288.
    - The re-seal writes new row versions (about 1.33×), history rows holding both old and new values (about 2.3×), and WAL for all of it.
    - So confirm free disk of about **6×** that figure, plus room for `VACUUM FULL` to copy each table it rewrites. Auto-scaling disk grows only on a cooldown.
 7. **Ordering against the properties-as-blocks switch** is an open decision (#1288). Converting first keeps the ids of definitions synthesized at the switch keyed under `K_id`. Switching first leaves them name-derived ([§7](#7-what-stays-visible-afterwards)). The two must never overlap.
-8. **Rehearse** the conversion and the key-loss recovery on a scratch workspace first, ideally a full copy of the real one. Time the purge there against its 5-minute `statement_timeout`: it deletes the whole history, plus one re-seal row per block, in one statement. Confirm the hosted PostgREST applies a function's own `statement_timeout`, as v14.13 does locally.
+8. **Rehearse** the conversion on a scratch workspace first, ideally a full copy of the real one. Time the purge there against its 5-minute `statement_timeout`: it deletes the whole history, plus one re-seal row per block, in one statement. Confirm the hosted PostgREST applies a function's own `statement_timeout`, as v14.13 does locally.
 9. Run from desktop Chromium, on the device that holds the most attachment bytes locally.
 
 **After:**
@@ -311,14 +310,18 @@ The first production run is #1288.
     - This step and the next, and step 10's Defragment, are platform operations a client can't do.
 12. **Operator:** drop leftover ad-hoc tables from past scripts (`scripts/system-author-cleanup.sql`, `scripts/roam-ts-backfill/backfill.sql`).
 13. **Record the "safe from" date** privately: the date that [§9.4](#94-the-safe-from-rule) sets from step 11's finish time. It stays provisional while any [§9.5](#95-open-items) item marked *gates the date* is open.
-14. **Take later recovery points.** From time to time, on an unlocked device, take a recovery point and keep it with the key. It's a folder, like step 3's, with:
+14. **Take later recovery points.** From time to time, on an unlocked device, take a recovery point and keep it with the key. The gesture that takes one is part of #1302's build. Until it ships, the conversion's bundle is the only recovery point, so a lost key would bring the workspace back to its state at the conversion. It's a folder, like step 3's, with:
     - `blocks.jsonl`: every block row read from the server, checked for consistency and against the server's block count exactly as in step 3. History has been purged by then, so each row's content columns are opened under the key. A write from any device during the paging, this one included, makes it re-read. Taking it while other devices are idle keeps that rare;
     - **the plaintext of every media block**, soft-deleted ones included. Each comes from whichever source verifies: the local byte store, the keyed object downloaded and opened under the key, a raw object whose bytes hash to its name (a late upload from an older client), or an earlier recovery point (the conversion's bundle included). Each is hash-checked. The manifest lists only the hashes that no source verifies **now**, so a block that had no bytes at the conversion but was re-captured since is included again;
     - a manifest.
 
     It leaves out the server history and the Storage objects themselves, which are ciphertext by then and useless once the key is lost. A raw SQLite export isn't a recovery point. It holds only what this device has downloaded and applied, and attachment bytes live outside it (`src/plugins/attachments/byteStore.ts`).
 
-**Key-loss recovery** (#1302). Before the purge, nothing is lost, but a key lost during `sealing` still needs a way forward:
+**Key-loss recovery** (#1302) **isn't a prerequisite for the first run** (the owner's call, 2026-10-20). What protects the workspace is the key saved in two places, from before the flip, and the plaintext bundle, from right after it. Until the purge, the server alone can rebuild that bundle without the key (step 3), so the window between the flip and the bundle loses nothing either. The restore can be built when a key is actually lost, and nothing is lost while it doesn't exist. Until then, a lost key leaves the workspace unreadable until recovery is built, and it comes back at the newest recovery point.
+
+No device needs #1302's build before a recovery runs either, lost ones included. Once a workspace is re-keyed, #1302's server fence refuses every write without the current key-generation stamp, which covers every write from an older build (#1316 §3.2). Such a device's writes go to the rejection quarantine instead of landing over the restore. Upgrading a device only lets it keep writing.
+
+Before the purge, nothing is lost, but a key lost during `sealing` still needs a way forward:
 - **Before the first re-sealed row,** no row is sealed. Re-key, take the bundle if it wasn't taken yet, and carry on.
 - **After it,** the conversion's bundle is a complete plaintext copy of every row, because nothing but the re-seal writes during `sealing`. If it's lost too, re-take it: step 3 needs no key before the purge. Recovery then runs exactly as below, from that bundle. Its equality check stands in for verify, and then the conversion's purge runs as usual, with `through` and the counts taken from the bundle's own verified manifest.
 
@@ -326,11 +329,11 @@ So the re-key RPC is admitted during `sealing` too.
 
 After the purge, recovery **re-keys the workspace in place** from the newest recovery point: a step-14 one, or the conversion's bundle. A device that still defers is no source: its `blocks` hold nothing the conversion's bundle lacks. **It's point-in-time, not lossless.** Everything written after that point is lost, because nothing else holds that plaintext. That's why the key lives in two places, and why step 14 exists.
 
-**#1302 holds recovery's requirements, and needs its own design doc and review before it's built.** Its bead is their single home; this doc doesn't repeat them. What the conversion owes it, all specified above:
+**#1302 holds recovery's requirements, and #1316 is its design.** Its bead is their single home; this doc doesn't repeat them. What the conversion owes it, all specified above:
 - a bundle that needs no key before the purge, so a key lost during `sealing` is recoverable even without the saved bundle (step 3);
 - a re-key that the server admits during `sealing` as well as after it, with the flip's lock order;
 - recovery points that are complete, bound to this workspace, and verified (step 14);
-- the fleet gate in runbook step 1, which includes #1302's client half.
+- nothing from the fleet: #1302's server fence refuses an un-upgraded device's writes, so the conversion's deploy gate doesn't include #1302's client half.
 
 ## 9. Platform residue, and when it is "safe if breached"
 
@@ -533,6 +536,6 @@ What it adds is safety against concurrent actors. What it keeps from this design
 | The in-app flow, including the recovery bundle | #1290 | #1291, #1292, #1293, #1294 |
 | Key-loss recovery: in-place re-key from a recovery point | #1302 | — |
 | Platform retention spike | #1289 | — |
-| First production run | #1288 | #719, #1289, #1290, #1293, #1299, #1300, #1302 |
+| First production run | #1288 | #719, #1289, #1290, #1293, #1299, #1300 |
 | Re-id migration (all e2ee workspaces) | #1297 | #719 |
 | Upload parking: removes the sync stall a held write causes (deferred) | #1301 | — |
