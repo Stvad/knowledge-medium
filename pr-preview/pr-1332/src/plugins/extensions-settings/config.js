@@ -1,1 +1,1 @@
-import{$O as e,QO as t,XO as n,ZO as r}from"../../../chunks/app-DMzu2YJb.js";export{n as extensionsOverridesPresetCore,r as extensionsOverridesProp,t as extensionsPrefsType,e as overridesCodec};
+import{$O as e,QO as t,XO as n,ZO as r}from"../../../chunks/app-k7o-ugJ5.js";export{n as extensionsOverridesPresetCore,r as extensionsOverridesProp,t as extensionsPrefsType,e as overridesCodec};
