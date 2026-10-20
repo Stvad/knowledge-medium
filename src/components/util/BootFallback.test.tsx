@@ -19,7 +19,7 @@ describe('BootFallback', () => {
 
     act(() => { recordStartupDbFiles({main: 3 * GB, '-wa0': 0, '-wa1': 1.8 * GB}) })
 
-    expect(screen.getByText(/applying 1\.8 GB of pending database changes/i)).toBeTruthy()
+    expect(screen.getByText(/applying 1\.80 GB of pending database changes/i)).toBeTruthy()
   })
 
   it('stays plain for a log the open reads in no noticeable time', () => {

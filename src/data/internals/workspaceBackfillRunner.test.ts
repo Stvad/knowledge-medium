@@ -7,6 +7,7 @@ import { Repo, type OperatorBackfillResult } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { BLOCKS_SYNCED_RAW_TABLE, blockToSyncedRowParams } from '@/data/blockSchema'
 import { createTestRepo } from '@/data/test/createTestRepo'
+import { spyOnOverfullLog } from '@/data/test/overfullWriteAheadLog'
 import { DeterministicIdCrossWorkspaceError } from '@/data/api/errors'
 
 /** Properties of the shared `WorkspaceBackfill` runner, independent of any one
@@ -1166,13 +1167,7 @@ describe('workspace backfill runner — write-ahead log', () => {
     await seedTarget(repo)
     // The RAW database, which `repo.db` meters through a proxy, and restored
     // after: every test in this file shares it.
-    const execute = sharedDb.db.execute.bind(sharedDb.db)
-    const spy = vi.spyOn(sharedDb.db, 'execute').mockImplementation(async (sql, params) => {
-      // The write-ahead VFS's answer, for a log far past any limit.
-      if (sql === 'PRAGMA wal_checkpoint=noop') return {rows: {_array: [{'9999999': '9999999'}]}} as never
-      if (sql === 'PRAGMA wal_checkpoint=truncate') { events.push('checkpoint'); return undefined as never }
-      return execute(sql, params)
-    })
+    const spy = spyOnOverfullLog(sharedDb.db, () => { events.push('checkpoint') })
     try {
       expect((await repo.runWorkspaceBackfillNow(WS, 'operator-chunked-v1')).outcome).toBe('ran')
     } finally {
@@ -1197,12 +1192,7 @@ describe('workspace backfill runner — write-ahead log', () => {
       },
     }, cb => { cb(); return () => {} })
     await seedTarget(repo)
-    const execute = sharedDb.db.execute.bind(sharedDb.db)
-    const spy = vi.spyOn(sharedDb.db, 'execute').mockImplementation(async (sql, params) => {
-      if (sql === 'PRAGMA wal_checkpoint=noop') return {rows: {_array: [{'9999999': '9999999'}]}} as never
-      if (sql === 'PRAGMA wal_checkpoint=truncate') { events.push('checkpoint'); return undefined as never }
-      return execute(sql, params)
-    })
+    const spy = spyOnOverfullLog(sharedDb.db, () => { events.push('checkpoint') })
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {
       await drain(repo)
@@ -1222,16 +1212,10 @@ describe('workspace backfill runner — write-ahead log', () => {
       run: async ({tx}) => { await tx(async () => { events.push('batch') }, {}) },
     }, cb => { if (caughtUp) cb(); return () => {} })
     await seedTarget(repo)
-    const execute = sharedDb.db.execute.bind(sharedDb.db)
-    const spy = vi.spyOn(sharedDb.db, 'execute').mockImplementation(async (sql, params) => {
-      if (sql === 'PRAGMA wal_checkpoint=noop') return {rows: {_array: [{'9999999': '9999999'}]}} as never
-      if (sql === 'PRAGMA wal_checkpoint=truncate') {
-        events.push('checkpoint')
-        // A download starts while the writer waits out the read.
-        caughtUp = false
-        return undefined as never
-      }
-      return execute(sql, params)
+    const spy = spyOnOverfullLog(sharedDb.db, () => {
+      events.push('checkpoint')
+      // A download starts while the writer waits out the read.
+      caughtUp = false
     })
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {

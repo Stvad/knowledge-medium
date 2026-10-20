@@ -8,7 +8,8 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { PropertyCellBackfillProgress } from '@/data/internals/propertyCellBackfill'
-import { WRITE_AHEAD_HEADROOM_BYTES, awaitWriteAheadHeadroom } from '@/data/writeAheadLog'
+import { NOTICEABLE_LOG_BYTES, awaitWriteAheadHeadroom } from '@/data/writeAheadLog'
+import { vfsCheckpointAnswer } from '@/data/test/overfullWriteAheadLog'
 
 const openDialog = vi.fn(async () => true)
 const progressHandle = {
@@ -64,7 +65,7 @@ const writeLock = async <T,>(fn: (tx: {execute: (sql: string) => Promise<unknown
 /** A writer whose log is past the limit, so a headroom check pauses on it. */
 const overLimitWriter = {
   execute: async (sql: string) => sql === 'PRAGMA wal_checkpoint=noop'
-    ? {rows: {_array: [{n: WRITE_AHEAD_HEADROOM_BYTES}]}}
+    ? vfsCheckpointAnswer(Math.ceil(NOTICEABLE_LOG_BYTES / 4096))
     : sql === 'PRAGMA page_size' ? {rows: {_array: [{page_size: 4096}]}} : undefined,
 }
 // The synthesis half has its own file; here it must simply not refuse, so the

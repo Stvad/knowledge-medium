@@ -27,6 +27,7 @@ import { PAGE_TYPE } from '@/data/blockTypes'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
+import { spyOnOverfullLog } from '@/data/test/overfullWriteAheadLog'
 import { Repo } from '../../../data/repo'
 import {
   dailyNoteBlockId,
@@ -1551,12 +1552,7 @@ describe('importRoam', {timeout: 30_000}, () => {
     } = {}) => {
       // The RAW database, which the repo meters through a proxy; shared by
       // every test here, so restored.
-      const execute = env.h.db.execute.bind(env.h.db)
-      const executeSpy = vi.spyOn(env.h.db, 'execute').mockImplementation(async (sql, params) => {
-        if (sql === 'PRAGMA wal_checkpoint=noop') return {rows: {_array: [{'9999999': '9999999'}]}} as never
-        if (sql === 'PRAGMA wal_checkpoint=truncate') { events.push('checkpoint'); return undefined as never }
-        return execute(sql, params)
-      })
+      const executeSpy = spyOnOverfullLog(env.h.db, () => { events.push('checkpoint') })
       // The drain runs inside one writer lease, on that lease's connection.
       const writeLock = env.h.db.writeLock.bind(env.h.db)
       const lockSpy = vi.spyOn(env.h.db, 'writeLock').mockImplementation(fn => writeLock(tx => fn(

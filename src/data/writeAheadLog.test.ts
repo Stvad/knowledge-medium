@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  WRITE_AHEAD_HEADROOM_BYTES,
+  NOTICEABLE_LOG_BYTES,
   awaitWriteAheadHeadroom,
   checkpointResultPages,
   drainWriteAheadLog,
@@ -9,10 +9,8 @@ import {
   runBulkWrite,
   type WriteAheadPause,
 } from './writeAheadLog.ts'
+import { vfsCheckpointAnswer } from './test/overfullWriteAheadLog.ts'
 
-/** What `OPFSWriteAheadVFS` answers `PRAGMA wal_checkpoint`: one cell whose
- *  column NAME is also its value, the approximate un-checkpointed page count. */
-const vfsPages = (pages: number) => ({rows: {_array: [{[String(pages)]: String(pages)}]}})
 /** SQLite's own answer in rollback-journal mode — every CoopSync device. */
 const SQLITE_ROLLBACK_ANSWER = {rows: {_array: [{busy: 0, log: -1, checkpointed: -1}]}}
 
@@ -50,7 +48,7 @@ afterEach(() => { vi.restoreAllMocks() })
 
 describe('checkpointResultPages', () => {
   it('reads the VFS\'s page count, and SQLite\'s own answer as nothing outstanding', () => {
-    expect(checkpointResultPages(vfsPages(1234))).toBe(1234)
+    expect(checkpointResultPages(vfsCheckpointAnswer(1234))).toBe(1234)
     expect(checkpointResultPages(SQLITE_ROLLBACK_ANSWER)).toBe(0)
   })
 
@@ -63,7 +61,7 @@ describe('checkpointResultPages', () => {
 
 describe('awaitWriteAheadHeadroom', () => {
   it('lets the next batch through without checkpointing while the log is under the limit', async () => {
-    const {db, executed} = scriptedDb({noop: vfsPages(1000)})
+    const {db, executed} = scriptedDb({noop: vfsCheckpointAnswer(1000)})
     const {pauses, off} = recordPauses()
 
     await awaitWriteAheadHeadroom(db)
@@ -76,8 +74,8 @@ describe('awaitWriteAheadHeadroom', () => {
   it('holds the writer in a truncate checkpoint once the log passes the limit, and says so for exactly that long', async () => {
     let finish!: () => void
     const truncating = new Promise<void>(resolve => { finish = resolve })
-    const pages = pagesOver(WRITE_AHEAD_HEADROOM_BYTES)
-    const {db, executed} = scriptedDb({noop: vfsPages(pages), truncate: () => truncating})
+    const pages = pagesOver(NOTICEABLE_LOG_BYTES)
+    const {db, executed} = scriptedDb({noop: vfsCheckpointAnswer(pages), truncate: () => truncating})
     const {pauses, off} = recordPauses()
 
     let returned = false
@@ -96,14 +94,14 @@ describe('awaitWriteAheadHeadroom', () => {
 
   it('measures the limit in bytes of the database\'s own page size', async () => {
     // Under the limit at 4 KiB pages, over it at 64 KiB.
-    const pages = pagesOver(WRITE_AHEAD_HEADROOM_BYTES, 65536)
-    expect(pages * (4096 + FRAME_HEADER_BYTES)).toBeLessThan(WRITE_AHEAD_HEADROOM_BYTES)
+    const pages = pagesOver(NOTICEABLE_LOG_BYTES, 65536)
+    expect(pages * (4096 + FRAME_HEADER_BYTES)).toBeLessThan(NOTICEABLE_LOG_BYTES)
 
-    const small = scriptedDb({noop: vfsPages(pages), pageSize: 4096})
+    const small = scriptedDb({noop: vfsCheckpointAnswer(pages), pageSize: 4096})
     await awaitWriteAheadHeadroom(small.db)
     expect(small.executed).not.toContain('PRAGMA wal_checkpoint=truncate')
 
-    const large = scriptedDb({noop: vfsPages(pages), pageSize: 65536})
+    const large = scriptedDb({noop: vfsCheckpointAnswer(pages), pageSize: 65536})
     await awaitWriteAheadHeadroom(large.db)
     expect(large.executed).toContain('PRAGMA wal_checkpoint=truncate')
   })
@@ -111,7 +109,7 @@ describe('awaitWriteAheadHeadroom', () => {
   it('never pauses where the answer is SQLite\'s own, or unreadable', async () => {
     for (const noop of [SQLITE_ROLLBACK_ANSWER, undefined, {rows: {_array: [{n: 'many'}]}}]) {
       const {db, executed} = scriptedDb({noop})
-      await awaitWriteAheadHeadroom(db, 1)
+      await awaitWriteAheadHeadroom(db)
       expect(executed).not.toContain('PRAGMA wal_checkpoint=truncate')
     }
   })
@@ -120,8 +118,8 @@ describe('awaitWriteAheadHeadroom', () => {
     // Each check takes the writer separately, so two bulk writers can both be
     // waiting; the first to finish must not announce that writing has resumed.
     const ends: (() => void)[] = []
-    const pages = pagesOver(WRITE_AHEAD_HEADROOM_BYTES)
-    const {db} = scriptedDb({noop: vfsPages(pages), truncate: () => new Promise<void>(resolve => { ends.push(resolve) })})
+    const pages = pagesOver(NOTICEABLE_LOG_BYTES)
+    const {db} = scriptedDb({noop: vfsCheckpointAnswer(pages), truncate: () => new Promise<void>(resolve => { ends.push(resolve) })})
     const {pauses, off} = recordPauses()
 
     const first = awaitWriteAheadHeadroom(db)
@@ -139,7 +137,7 @@ describe('awaitWriteAheadHeadroom', () => {
   })
 
   it('reads the page size once per database', async () => {
-    const {db, executed} = scriptedDb({noop: vfsPages(1000)})
+    const {db, executed} = scriptedDb({noop: vfsCheckpointAnswer(1000)})
 
     await awaitWriteAheadHeadroom(db)
     await awaitWriteAheadHeadroom(db)
@@ -148,7 +146,7 @@ describe('awaitWriteAheadHeadroom', () => {
   })
 
   it('never pauses on a page size it cannot read', async () => {
-    const {db, executed} = scriptedDb({noop: vfsPages(pagesOver(WRITE_AHEAD_HEADROOM_BYTES)), pageSize: Number.NaN})
+    const {db, executed} = scriptedDb({noop: vfsCheckpointAnswer(pagesOver(NOTICEABLE_LOG_BYTES)), pageSize: Number.NaN})
 
     await awaitWriteAheadHeadroom(db)
 
@@ -158,7 +156,7 @@ describe('awaitWriteAheadHeadroom', () => {
   it('a checkpoint that fails does not fail the write it was protecting', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const {db} = scriptedDb({
-      noop: vfsPages(pagesOver(WRITE_AHEAD_HEADROOM_BYTES)),
+      noop: vfsCheckpointAnswer(pagesOver(NOTICEABLE_LOG_BYTES)),
       truncate: () => Promise.reject(new Error('checkpoint failed')),
     })
     const {pauses, off} = recordPauses()
@@ -234,7 +232,7 @@ class WriteAheadModel {
     const limit = /^PRAGMA journal_size_limit=(-?\d+)$/.exec(sql)
     if (limit) { this.journalSizeLimit = Number(limit[1]); return undefined }
     if (sql === 'PRAGMA wal_checkpoint=truncate') { this.truncateCheckpoint(); return undefined }
-    if (sql === 'PRAGMA wal_checkpoint=noop') return vfsPages(this.pendingPages)
+    if (sql === 'PRAGMA wal_checkpoint=noop') return vfsCheckpointAnswer(this.pendingPages)
     if (/^(INSERT|UPDATE|DELETE)\b/.test(sql)) {
       // Page 1 (the change counter) plus the leaf the row lives on.
       this.write(2)
@@ -342,15 +340,12 @@ describe('runBulkWrite', () => {
     expect(drained()).toBe(true)
   })
 
-  it('a drain that fails, or cannot run, does not replace the write\'s outcome', async () => {
+  it('a drain that fails does not replace the write\'s outcome', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const failing = {writeLock: async () => { throw new Error('database is locked') }}
-    const lockless = {execute: async () => undefined}
 
-    for (const db of [failing, lockless]) {
-      await expect(runBulkWrite(db, quiet, async () => 'written')).resolves.toBe('written')
-    }
-    expect(console.warn).toHaveBeenCalledTimes(2)
+    await expect(runBulkWrite(failing, quiet, async () => 'written')).resolves.toBe('written')
+    expect(console.warn).toHaveBeenCalled()
   })
 
   it('a status line that throws neither skips the drain nor replaces the outcome', async () => {
@@ -366,7 +361,7 @@ describe('runBulkWrite', () => {
   it('says why it paused, when it resumed and that it is draining — pauses only while the write runs', async () => {
     const {db} = lockedDb()
     const heard: (string | null)[] = []
-    const pausing = scriptedDb({noop: vfsPages(pagesOver(WRITE_AHEAD_HEADROOM_BYTES))})
+    const pausing = scriptedDb({noop: vfsCheckpointAnswer(pagesOver(NOTICEABLE_LOG_BYTES))})
 
     await runBulkWrite(db, line => heard.push(line), async () => {
       await awaitWriteAheadHeadroom(pausing.db)

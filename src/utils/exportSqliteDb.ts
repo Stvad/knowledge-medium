@@ -22,7 +22,7 @@ import { Zip, ZipPassThrough } from 'fflate'
 import type { Repo } from '../data/repo'
 import { dbFilenameForUser } from '@/data/localDbStorage'
 import { supportsWriteAheadVfs } from '@/data/localDbVfs.js'
-import { asWriteLockDb, checkpointResultPages } from '@/data/writeAheadLog.js'
+import { checkpointResultPages } from '@/data/writeAheadLog.js'
 import { untilStopped } from '@/utils/untilStopped.js'
 import {
   DB_FILE_SIBLING_SUFFIXES,
@@ -886,7 +886,7 @@ const withCheckpointedDbLock = async <T,>(
   /** Ends the wait for the lock, the checkpoint and the callback alike. */
   stop?: AbortSignal,
 ): Promise<T> => {
-  const db = asWriteLockDb(repo.db)
+  const {db} = repo
   // The deadline wraps the WHOLE lock, not the checkpoint inside it. A deadline
   // on the statement alone cannot surface: `writeLock`'s own `finally` awaits
   // `completeAccess` on the same connection, which queues behind the statement

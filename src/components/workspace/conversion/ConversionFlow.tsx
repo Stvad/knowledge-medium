@@ -32,7 +32,8 @@ import {
 } from './attachmentPrompts'
 import type { ConversionSetup, ConversionUnavailable } from './conversionFlowDeps'
 import { ChooseBundleFolderPrompt, ChooseExistingBundlePrompt, ReopenBundleFolderPrompt } from './bundleFolderPrompts'
-import { Actions, ConfirmCheck, errorMessage, formatBytes } from './flowUi'
+import { Actions, ConfirmCheck, errorMessage } from './flowUi'
+import { formatBytes } from '@/utils/formatBytes'
 import { useConversionRun, type PromptChannel, type RunState } from './useConversionRun'
 
 interface Props {

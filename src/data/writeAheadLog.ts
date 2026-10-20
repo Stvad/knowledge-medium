@@ -15,6 +15,7 @@
  * and the drain costs two tiny writes.
  */
 import { CallbackSet } from '@/utils/callbackSet'
+import { formatBytes } from '@/utils/formatBytes'
 
 interface WriteAheadDb {
   execute(sql: string): Promise<unknown>
@@ -22,24 +23,15 @@ interface WriteAheadDb {
 
 /** PowerSync's `writeLock`: one lease on the writer connection, which other
  *  tabs' writers wait for too. */
-export interface WriteLockDb {
+interface WriteLockDb {
   writeLock<T>(fn: (tx: WriteAheadDb) => Promise<T>): Promise<T>
 }
 
-/** `db` as a {@link WriteLockDb}. PowerSync's database has `writeLock`, but
- *  `PowerSyncDb` does not declare it. */
-export const asWriteLockDb = (db: unknown): WriteLockDb => {
-  if (typeof (db as Partial<WriteLockDb> | null)?.writeLock !== 'function') {
-    throw new Error('PowerSync database does not expose writeLock')
-  }
-  return db as WriteLockDb
-}
-
-/** Log size at which a bulk writer stops and waits for a checkpoint, which
- *  bounds what the next page load has to re-read at a few seconds. Up to about
- *  twice this can stay on disk: a checkpoint leaves the active file's bytes in
- *  place until the writer next swaps files. */
-export const WRITE_AHEAD_HEADROOM_BYTES = 256 * 1024 * 1024
+/** A log the next page load re-reads in a couple of seconds. Bulk writers stop
+ *  and wait for a checkpoint here, and the boot screen explains a wait for a
+ *  bigger one. Up to about twice this can stay on disk: a checkpoint leaves the
+ *  active file's bytes in place until the writer next swaps files. */
+export const NOTICEABLE_LOG_BYTES = 256 * 1024 * 1024
 
 /** Each logged page carries a frame header. */
 const FRAME_HEADER_BYTES = 32
@@ -86,7 +78,7 @@ export const onWriteAheadPause = (listener: (pause: WriteAheadPause | null) => v
 /** The status line for a pause, shared by every bulk writer that shows one. */
 const describeWriteAheadPause = ({logBytes}: WriteAheadPause): string =>
   `Paused until a long-running read of the database finishes: writing on would grow its log of ` +
-  `pending changes past ${Math.round(logBytes / (1024 * 1024))} MB. This continues by itself.`
+  `pending changes past ${formatBytes(logBytes)}. This continues by itself.`
 
 /** Fixed for a database's life, so read once per connection object. */
 const pageSizes = new WeakMap<WriteAheadDb, number>()
@@ -100,7 +92,7 @@ const pageSizeOf = async (db: WriteAheadDb): Promise<number | null> => {
 }
 
 /**
- * Between two batches of a bulk write: if the log has passed `limitBytes`, wait
+ * Between two batches of a bulk write: if the log has passed {@link NOTICEABLE_LOG_BYTES}, wait
  * in a truncate checkpoint until it is folded into the main file.
  *
  * The checkpoint waits for every read in flight, which is the point — the
@@ -112,18 +104,15 @@ const pageSizeOf = async (db: WriteAheadDb): Promise<number | null> => {
  * A failed checkpoint only warns. The log stays as large as it would have been
  * without this call, which is no reason to abort the write it was protecting.
  */
-export const awaitWriteAheadHeadroom = async (
-  db: WriteAheadDb,
-  limitBytes: number = WRITE_AHEAD_HEADROOM_BYTES,
-): Promise<void> => {
+export const awaitWriteAheadHeadroom = async (db: WriteAheadDb): Promise<void> => {
   const pages = checkpointResultPages(await db.execute('PRAGMA wal_checkpoint=noop')) ?? 0
   if (pages === 0) return
   const pageSize = await pageSizeOf(db)
   if (pageSize === null) return
   const logBytes = pages * (pageSize + FRAME_HEADER_BYTES)
-  if (logBytes < limitBytes) return
+  if (logBytes < NOTICEABLE_LOG_BYTES) return
   const pausedAt = performance.now()
-  console.info(`[writeAheadLog] pausing bulk writes: the log is ~${Math.round(logBytes / 1048576)} MB`)
+  console.info(`[writeAheadLog] pausing bulk writes: the log is ~${formatBytes(logBytes)}`)
   pausedChecks += 1
   pauseListeners.notify({logBytes})
   try {
@@ -190,10 +179,10 @@ const DRAINING_STATUS = 'Writing pending changes into the database file…'
  * {@link awaitWriteAheadHeadroom} between its batches.
  *
  * Neither the drain nor `say` can change the write's outcome: each failure only
- * warns, and so does a `db` with no `writeLock` to drain through.
+ * warns.
  */
 export const runBulkWrite = async <T,>(
-  db: unknown,
+  db: WriteLockDb,
   say: (line: string | null) => void,
   write: () => Promise<T>,
 ): Promise<T> => {
@@ -208,7 +197,7 @@ export const runBulkWrite = async <T,>(
       console.warn('[writeAheadLog] a bulk write\'s status line threw:', error)
     }
     try {
-      await drainWriteAheadLog(asWriteLockDb(db))
+      await drainWriteAheadLog(db)
     } catch (error) {
       console.warn('[writeAheadLog] draining the log after a bulk write failed:', error)
     }
