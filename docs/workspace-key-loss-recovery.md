@@ -180,7 +180,9 @@ The point is verified by #1290's bundle verifier (conversion §6.3 step 3), befo
 Two checks differ from the bundle's:
 
 - **The row count** is checked against the manifest's block count, not the server's, since the server has moved on. Every row the point lacks is tombstoned, so a truncated file must never pass.
-- **The manifest's `properties_migration`** must equal the workspace's current state. The switch is forward-only, so rows from an earlier stage would read wrong (open question 2). The bundle records it at the flip, and the conversion and the switch never overlap (conversion runbook step 7), so it can't move during `sealing`.
+- **The manifest's `properties_migration`** must equal the workspace's current state. The switch is forward-only, so rows from an earlier stage would read wrong (open question 2). The bundle records it at the flip.
+  - **The state can't move under a recovery.** `workspaces_prevent_properties_migration_change` refuses the switch while the workspace has any `workspace_conversions` row. That's one more condition in the trigger, and it also enforces conversion runbook step 7's "never overlap".
+  - **Each attempt re-checks it** after `begin_recovery_attempt`, so a switch that landed between preflight and the re-key is caught before any restore write.
 
 The point is then indexed once, mapping each id to its line offset in `blocks.jsonl`. Rows are read by offset through the folder handle, so the order of the server's `ORDER BY id` never has to match the file's.
 
@@ -303,6 +305,10 @@ Each tab holds, per workspace, the **generation it entered at**: the synced `wk_
   1. It blocks input.
   2. It flushes every open editor, through a registry of flushers.
   3. It fences with an empty write transaction, then waits for the post-commit processors to go idle. Everything it flushed then commits stamped with the old generation. A derived follow-up started after the fence is lost, and is re-derived after the reload.
+
+  Steps 1 to 3 run holding the workspace's **fence lock** in shared mode. Adoption takes that lock exclusively for its steps 5 to 7 ([§6.3](#63-entry-and-adoption)), so it doesn't quarantine and drain until every fence already under way has committed.
+  - **Why that's enough.** Every tab that entered the workspace starts its fence when the synced `wk_generation` moves. That's at the re-key, before adoption's step 4 can pass.
+  - **What it doesn't cover.** A tab too throttled to notice until later breaks the single-client contract. Its stale writes are still refused, and re-applied when they are.
   4. It reloads.
 - **Why reload.** One boot discards everything the old generation could leak into the new one: editor buffers, the in-memory cache, handles, memoized state blocks, background passes, undo and redo stacks. That's once per tab per recovery.
 - **Why ids derived from `K_id` need nothing more.** Synthesis and media capture read `K_id` before their transaction, but no gesture survives a reload. So none can mint an old namespace's id under a new generation.
@@ -368,7 +374,7 @@ It's a no-op when the current record already has `adoptedGeneration` = *G*, the 
 4. **Wait until the device has synced past the recovery:** its synced row's `restored_generation` is at least *G* ([§3.1](#31-state)). If the synced `wk_generation` passes *G* meanwhile, the key is already superseded: adoption drops back to the gate. `finish_recovery` set it in the same transaction that ended the recovery, and `workspaces` and `blocks` ride one sync stream. So a checkpoint that carries it carries the whole restore. Until then the gate shows that the workspace is downloading.
    - Storing the key first is what unsticks this. Any of the workspace's queued writes that couldn't be sealed now seal, carry their stale stamps, are refused, and leave `ps_crud`. A checkpoint is published only while `ps_crud` is empty (`ps_crud_hold_downloads`).
    - A write held for *another* workspace still stalls downloads, and so this step. That's the stall #1301 removes.
-5. **Quarantine what the fence would refuse.** Every queued transaction holding a write for the workspace with a stamp other than *G* (or none, once *G* is above 0) moves to `ps_crud_rejected`, with [§6.1](#61-the-tabs-generation)'s re-apply.
+5. **Take the fence lock exclusively** ([§6.1](#61-the-tabs-generation)), and hold it through step 7. Then **quarantine what the fence would refuse**: every queued transaction holding a write for the workspace with a stamp other than *G* (or none, once *G* is above 0) moves to `ps_crud_rejected`, with §6.1's re-apply.
    - **Why it's needed.** It catches writes the uploader hasn't sent: ones queued after step 4's checkpoint by a tab that hadn't reloaded yet, or ones behind a held write.
    - **How it moves.** Each transaction moves in one write transaction, keyed by `tx_id` as `recordRejectionToTable` keys it, so a concurrent refusal leaves one copy.
    - **At generation 0** nothing moves, so a conversion's held writes still upload after its pin upgrade, as #1293 designed.
@@ -601,7 +607,7 @@ These are met differently from how the issue words them:
 
 | Piece | Where |
 |---|---|
-| Migration: `wk_generation` and `restored_generation` (both synced), the `recovering` phase and its two columns, the fence, the stamp keys in both write RPCs, the three RPCs, pgTAP | #1302 |
+| Migration: `wk_generation` and `restored_generation` (both synced), the `recovering` phase and its two columns, the fence, the stamp keys in both write RPCs, the three RPCs, the switch refused during a conversion row, pgTAP | #1302 |
 | Restore: the recovery `PlaintextSource`, wider server reads, metadata in `ResealPatch`, optional read-back, recreates as roots, stamps | #1302, on #1292's module |
 | Tab generation: `tx_context` column, both upload triggers, compaction, reload on change, re-apply on a `23K01` refusal, Retry re-stamp | #1302 |
 | Key store: `adoptedGeneration`, pending slot, archive | #1302 |
@@ -621,6 +627,7 @@ These are met differently from how the issue words them:
   - `begin_recovery_attempt` and `finish_recovery` refuse non-owners, the wrong phase, and a dead attempt;
   - `finish_recovery` goes to `return_phase` (`sealing`, `cleaning`, or no row) and sets `restored_generation`;
   - a create whose touch reaches another workspace's row while carrying an attempt is refused;
+  - the properties-as-blocks switch is refused while a `workspace_conversions` row exists;
 - the recovery runs end to end on a scratch workspace:
   - every block id is kept, and every derived id resolves;
   - moved, deleted and undeleted rows return to the point's state;
