@@ -1,0 +1,1 @@
+import{ek as e,qn as t,tk as n}from"../../../chunks/app-xduDkPU1.js";export{e as extensionsOverridesProp,n as extensionsPrefsType,t as extensionsSettingsPlugin};

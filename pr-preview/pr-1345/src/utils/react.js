@@ -1,0 +1,1 @@
+import{cM as e,lM as t}from"../../chunks/app-xduDkPU1.js";export{e as useIsMobile,t as usePointerCoarse};

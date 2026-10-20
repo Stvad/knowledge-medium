@@ -1,0 +1,1 @@
+import{_m as e,gm as t,hm as n,mm as r,pm as i}from"../../../chunks/app-xduDkPU1.js";export{i as DEFAULT_BACKLINKS_VIEW_ID,r as FLAT_BACKLINKS_VIEW_ID,n as GROUPED_BACKLINKS_VIEW_ID,t as backlinksViewProp,e as defaultBacklinksViewIdForBlock};

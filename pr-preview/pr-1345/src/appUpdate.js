@@ -1,0 +1,1 @@
+import{Tk as e,wk as t}from"../chunks/app-xduDkPU1.js";export{t as appUpdate,e as useAppUpdateAvailable};

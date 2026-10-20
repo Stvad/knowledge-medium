@@ -1,0 +1,1 @@
+import{Az as e,Fz as t,Iz as n,Lz as r,Mz as i,Nz as a,Pz as o,Rz as s,jz as c}from"../../chunks/app-xduDkPU1.js";export{e as getLastLongTaskEndMs,c as getStartupTimeline,i as hasStartupMark,a as longTasksSupported,o as markStartup,t as markStartupAt,n as onLongTask,r as resetStartupTimeline,s as startStartupObservers};

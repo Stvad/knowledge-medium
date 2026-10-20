@@ -1,0 +1,1 @@
+import{B4 as e,F4 as t,I4 as n,L4 as r,R4 as i,z4 as a}from"../../chunks/app-xduDkPU1.js";export{t as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,n as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,r as __resetLayoutSessionIdForTesting,i as getLayoutSessionId,a as isInstalledAppDisplayMode,e as readOrCreateLayoutSessionId};

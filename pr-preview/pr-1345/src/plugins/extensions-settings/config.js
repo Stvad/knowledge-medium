@@ -1,0 +1,1 @@
+import{$O as e,ek as t,nk as n,tk as r}from"../../../chunks/app-xduDkPU1.js";export{e as extensionsOverridesPresetCore,t as extensionsOverridesProp,r as extensionsPrefsType,n as overridesCodec};

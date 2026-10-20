@@ -1,0 +1,1 @@
+import{G9 as e,H9 as t,J9 as n,K9 as r,U9 as i,W9 as a,X9 as o,Y9 as s,q9 as c}from"../../../chunks/app-xduDkPU1.js";export{t as CHANGE_SCOPE_POLICIES,i as ChangeScope,a as isChangeScope,e as policyForScope,r as scopeAllowedInReadOnly,c as scopeIsUndoable,n as scopePoliciesEquivalent,s as scopeUploadsToServer,o as sourceForScope};

@@ -1,0 +1,1 @@
+import{GS as e,WS as t,oC as n,sC as r}from"../../../chunks/app-xduDkPU1.js";export{n as DEFAULT_THEME_ID_DARK,r as DEFAULT_THEME_ID_LIGHT,e as defaultThemeContributions,t as defaultThemesPlugin};

@@ -1,0 +1,1 @@
+import{FP as e,PP as t}from"../../chunks/app-xduDkPU1.js";export{t as defineVariant,e as defineVariantFacet};

@@ -1,0 +1,1 @@
+import{EO as e,TO as t}from"../../chunks/app-xduDkPU1.js";export{t as resolveStructuralEditPolicy,e as structuralEditPolicyForBlock};

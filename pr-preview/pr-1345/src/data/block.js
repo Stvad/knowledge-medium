@@ -1,0 +1,1 @@
+import{GY as e,WY as t}from"../../chunks/app-xduDkPU1.js";export{t as Block,e as requireLoadedBlock};

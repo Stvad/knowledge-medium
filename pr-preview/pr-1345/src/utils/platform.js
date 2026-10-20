@@ -1,0 +1,1 @@
+import{IL as e,LL as t}from"../../chunks/app-xduDkPU1.js";export{e as isIOS,t as isMacPlatform};

@@ -1,0 +1,1 @@
+import{GP as e}from"../../chunks/app-xduDkPU1.js";export{e as BlockProperties};

@@ -1,0 +1,1 @@
+import{F6 as e}from"../../../chunks/app-xduDkPU1.js";export{e as deriveWorkspaceIdNamespace};

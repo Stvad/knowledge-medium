@@ -1,0 +1,1 @@
+import{G7 as e,K7 as t,W7 as n}from"../../../chunks/app-xduDkPU1.js";export{n as SYSTEM_AUTHOR_PREFIX,e as isSystemAuthor,t as systemAuthor};

@@ -1,0 +1,1 @@
+import{$B as e,JB as t,QB as n,XB as r,YB as i,ZB as a,eV as o}from"../../../chunks/app-xduDkPU1.js";export{t as RENAME_BACKLINKS_PRECEDENCE,i as RENAME_BACKLINKS_PROCESSOR,r as applyRefRewrites,a as renameBacklinksProcessor,n as renameSameTxProcessors,e as replacementFor,o as splitBySurvivingSpan};

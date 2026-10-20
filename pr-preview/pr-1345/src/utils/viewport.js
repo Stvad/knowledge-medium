@@ -1,0 +1,1 @@
+import{dI as e,fI as t}from"../../chunks/app-xduDkPU1.js";export{e as MOBILE_BREAKPOINT_QUERY,t as isMobileViewport};

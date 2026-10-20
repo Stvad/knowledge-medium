@@ -1,0 +1,1 @@
+import{Ub as e}from"../../../chunks/app-xduDkPU1.js";export{e as BreadcrumbList};

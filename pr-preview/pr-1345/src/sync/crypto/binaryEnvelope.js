@@ -1,0 +1,1 @@
+import{aS as e,iS as t,nS as n,oS as r,rS as i,sS as a,tS as o}from"../../../chunks/app-xduDkPU1.js";export{o as BINARY_ENVELOPE_MAGIC,n as BINARY_ENVELOPE_MIN_BYTES,i as BINARY_ENVELOPE_OVERHEAD_BYTES,t as BINARY_MAGIC_BYTES,e as decodeBinaryEnvelope,r as encodeBinaryEnvelope,a as hasBinaryEnvelopeMagic};
