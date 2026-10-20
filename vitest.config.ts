@@ -2,6 +2,8 @@ import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 import { resolve } from 'path'
 
+export const SUPABASE_STACK_TESTS = 'src/**/*.supabase.test.ts'
+
 export default defineConfig({
   plugins: [react()],
   test: {
@@ -54,9 +56,12 @@ export default defineConfig({
     // (see AGENTS.md). `*.probe.*` is the escape hatch for a scratch test file
     // next to an extension — gitignored, and skipped here so a leftover one
     // can't redden an unrelated run.
+    // `*.supabase.test.ts` needs a running Supabase stack: `pnpm check:db`
+    // starts one and runs those through vitest.supabase.config.ts.
     exclude: [
       '**/node_modules/**', '**/dist/**', '.claude/**', '.codex/**', 'tmp/**',
       'agent-extensions/*/**', 'agent-extensions/*.probe.*',
+      SUPABASE_STACK_TESTS,
     ],
     coverage: {
       reporter: ['text', 'json', 'html'],

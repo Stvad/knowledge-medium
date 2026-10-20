@@ -38,6 +38,7 @@ import {
   type BlockRow,
 } from '@/data/blockSchema.js'
 import { normalizeReferences, type BlockData } from '@/data/api'
+import { PENDING_UPLOAD_IDS_SQL } from '@/data/pendingUploadsSql.js'
 import type { PowerSyncDb } from '@/data/internals/commitPipeline.js'
 import { devAssertionsEnabled } from '@/data/internals/devAssertions.js'
 import { buildInClause, MAX_IDS_PER_IN_CLAUSE } from '@/data/internals/sqlBinds.js'
@@ -46,7 +47,6 @@ import {
   blocksAlreadyReflects,
   decideStagingRow,
   localHoldsStagedRow,
-  PENDING_UPLOAD_IDS_SQL,
   syncedColumnsEqual,
 } from './reconcile.js'
 import {

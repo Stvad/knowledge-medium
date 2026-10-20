@@ -58,8 +58,7 @@
  * block-exists-before-PUT" note; correctness-equivalent given immutable objects.)
  */
 
-import { decodeBytes, encodeBytes } from '@/sync/byteTransform.js'
-import { verifyContentHash } from '@/sync/crypto/contentHash.js'
+import { encodeBytes, verifyObjectBytes } from '@/sync/byteTransform.js'
 import type { WorkspaceConversionRead } from '@/sync/keys/conversionState.js'
 import { materializabilityToMode, type GetCek, type GetMaterializability, type SyncMode } from '@/sync/transform.js'
 import { BlobPutError, type BlobStore } from './blobStore.js'
@@ -201,10 +200,7 @@ const drainOne = async (
   // (3) Encode at drain + direct upload. A fresh 200 write → delete the record;
   //     a 409 (path already occupied) → verify the existing object before clearing.
   try {
-    const sealed = await encodeBytes(plaintext, mode, ctx.getCek, {
-      contentHash: rec.contentHash,
-      workspaceId: rec.workspaceId,
-    })
+    const sealed = await encodeBytes(plaintext, mode, ctx.getCek, rec)
     if (mode === 'none') {
       // Accepted: a flip landing between this read and the PUT still leaves a
       // raw object — the conversion's cleaner seals raw objects it lists, and
@@ -260,21 +256,12 @@ const verifyExistingOrQuarantine = async (
   } catch {
     return retryOrFail(userId, rec, ctx) // exists, but the verify read failed — transient
   }
-  let decoded: Uint8Array<ArrayBuffer>
-  try {
-    decoded = await decodeBytes(stored, mode, ctx.getCek, {
-      contentHash: rec.contentHash,
-      workspaceId: rec.workspaceId,
-    })
-  } catch {
-    await ctx.store.markFailed(userId, rec.assetBlockId, rec.stagedAt) // undecodable existing object — poisoned
-    return 'failed'
-  }
-  if (await verifyContentHash(decoded, rec.contentHash)) {
+  const verified = await verifyObjectBytes(stored, mode, ctx.getCek, rec)
+  if (verified.ok) {
     await ctx.store.delete(userId, rec.assetBlockId) // genuine dedup — the path holds our content
     return 'uploaded'
   }
-  await ctx.store.markFailed(userId, rec.assetBlockId, rec.stagedAt) // present but wrong content — poisoned (§17)
+  await ctx.store.markFailed(userId, rec.assetBlockId, rec.stagedAt) // undecodable or wrong content — poisoned (§17)
   return 'failed'
 }
 
