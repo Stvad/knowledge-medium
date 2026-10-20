@@ -29,6 +29,19 @@ export const mediaHashProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 
+/** A media block's content hash from its stored properties, or null when it
+ *  has none yet. Total: a legacy or hand-edited row can hold a value the codec
+ *  throws on, and one such row must not abort a walk over the workspace. */
+export const mediaHashOf = (properties: Readonly<Record<string, unknown>>): string | null => {
+  const encoded = properties[mediaHashProp.name]
+  if (encoded === undefined) return null
+  try {
+    return mediaHashProp.codec.decode(encoded) || null
+  } catch {
+    return null
+  }
+}
+
 /** The object's MIME type — drives the renderer branch (image / file). Defaults
  *  to the bytes' on-the-wire type; the real value is set at capture (§11). */
 export const mediaMimeProp = seedProperty({

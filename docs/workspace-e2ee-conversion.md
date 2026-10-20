@@ -93,7 +93,7 @@ This is #1294: one migration, three owner-only SECURITY DEFINER RPCs, and one sm
   - a write that commits before the delete's snapshot is counted by it, so a foreign row raises `KMC02`;
   - one that commits later can only be ciphertext, because the trigger refuses plaintext, so it survives as ciphertext history. That's accepted.
 - **`finish_conversion(ws)`.** It refuses unless the caller owns `ws` and the phase is `cleaning`, then deletes the row. The client calls it only after the attachment proof passes; the server can't check that proof itself.
-- **Bucket limit.** Raise `attachments.file_size_limit` by the binary envelope's overhead (`BINARY_ENVELOPE_OVERHEAD_BYTES`, 36 bytes; round up to 64). Supabase caps every bucket at the project-wide upload limit, so that must be raised too. It's `[storage] file_size_limit` locally (`supabase/config.toml`), and a project setting on the hosted project (runbook step 1).
+- **Bucket limit.** Raise `attachments.file_size_limit` by the binary envelope's overhead (`BINARY_ENVELOPE_OVERHEAD_BYTES`, 36 bytes; round up to 64). Supabase caps every bucket at the project-wide upload limit, so on the hosted project this raise only takes effect up to that setting. The conversion depends on it only for an object within 36 bytes of the 50 MiB cap: such an object seals only once the upload limits are raised to its sealed size (step 0, step 8).
   - `captureMedia` caps a plaintext capture at exactly 50 MiB (`DEFAULT_MAX_CAPTURE_BYTES`). Sealing such a file adds the overhead, and Storage would return a permanent 413.
   - The capture cap itself stays where it is. It already accounts for the overhead in e2ee mode, so new uploads gain nothing from the raise.
 - **Export index.** Add `(workspace_id, event_id)` on `blocks_history` so the export and verify can page by id.
@@ -146,6 +146,10 @@ The phase only moves forward, so a resume never falls back.
 - the upload queue is drained, attachment records included, and no rejected rows are pending;
 - `canPersistPins()` passes, and the key store is durable (not `createWorkspaceKeyStore`'s in-memory fallback);
 - the File System Access API is available (desktop Chromium), because the bundle is a folder written through its directory picker and re-opened to verify it;
+- the user has dealt with any **oversized object**: one whose sealed size, its bytes plus `BINARY_ENVELOPE_OVERHEAD_BYTES` (36), exceeds 50 MiB, the attachments bucket's original limit. Preflight checks each media block's verified bytes, soft-deleted ones included, and each raw Storage object, orphans included. It measures the bytes, not `media:size`, which is cosmetic.
+  - **Why:** a plaintext capture can reach exactly 50 MiB (`DEFAULT_MAX_CAPTURE_BYTES`), and sealing adds 36 bytes. e2ee captures already count the overhead, so only pre-conversion plaintext can fall in that window.
+  - **The remedy** is a settings change, not a data change: raise the hosted project's upload limits to at least the largest sealed size preflight reports. That's the project-wide Storage limit, and the attachments bucket's own limit (50 MiB + 64 after #1294's migration) if it's lower. A plaintext capture never needs more than the bucket already allows, but an orphan uploaded outside the app can. The object then seals like any other. The flow lists such objects with their sealed sizes and the remedy, and continues once the user confirms the limits are raised. This is the one point where the conversion itself waits on an operator. Raising the limits ahead of time wouldn't rule it out: the app's own capture cap doesn't move with them, and an upload from outside the app can land within 36 bytes of any limit.
+  - **Nothing is discarded** if that confirmation is wrong. The cleaner deletes a raw object only after its keyed copy is uploaded and verified, so a refused upload leaves it in place and the proof waits (step 8);
 - the user confirms the residue named in [§7](#7-what-stays-visible-afterwards), disk headroom ([§8](#8-runbook)), free space for the bundle, and any media block with no **hash-verified** source: no local copy, and no raw object whose bytes hash to the block's content hash. Storage objects are untrusted, so a remote-only object is downloaded and checked here, then **kept in this device's byte store**. Step 3 takes it from there, so an object that's deleted or replaced on the server after preflight can't break the bundle after the flip. Disk headroom counts these bytes. No step after the flip can bring those back. Its size is shown: the database, the attachment bytes, the server history and `blocks.jsonl`. A dry run of step 3's paging measures the last two without writing anything. A bundle that can't be written after the flip leaves every device waiting until it is.
 
 **1. Key.**
@@ -206,21 +210,25 @@ Resuming just runs this again. It can take hours for a large workspace, so the f
 
 - **One classification rule, by content**, written once next to `deriveContentKey`. For bytes `b` under name `n`:
   - **raw** iff `n == hex(sha256(b))`;
-  - **keyed** iff `b` opens under the workspace key to `p` and `n == hex(HMAC(K_id, sha256(p)))`;
+  - **keyed** iff `n == hex(HMAC(K_id, h))` for a hash `h` the pass already knows, and `b` opens under the workspace key to a `p` with `sha256(p) == h`. The asset AAD binds the content hash (`assetBytesAad`), so an envelope can only be opened under a candidate hash. The candidates are every media block's hash, soft-deleted ones included, plus the hash of each raw object this pass converts. A keyed object under any other hash, such as a converted orphan's copy on a later pass, is **neither**: it's kept and reported, never deleted, because the bundle record names only original paths;
   - otherwise **neither**.
 
   Both kinds of name are 64 hex characters, so the rule never reads a header or the name's shape. As a fast path, a name equal to the keyed name of any media block's hash, soft-deleted ones included, is kept without a download. The fast path only decides "don't delete"; the proof still verifies the object.
 - **One verification helper**, shared with the resolver, the upload drain and upload recovery.
 - **Repeat until a complete listing needs no action:**
   1. List `<ws>/` **completely before acting**. Page by name, and recurse into the folder entries Storage returns for nested paths.
-  2. **Raw:** seal it, upload it to its keyed name, verify the upload, then delete the raw object. A 409 on an occupied keyed path goes through the same check. If the occupant fails it, the occupant is a poisoned or wrong-key copy of bytes this pass holds verified, so delete it and upload again. The Storage policy allows exactly that delete, for poison correction.
+  2. **Raw:** seal it, upload it to its keyed name, verify the upload, then delete the raw object. A 409 on an occupied keyed path goes through the same check. If the occupant fails it, the occupant is a poisoned or wrong-key copy of bytes this pass holds verified, so delete it and upload again. The Storage policy allows exactly that delete, for poison correction. **A refused upload**, such as a 413 for an oversized object (step 0), leaves the raw object in place. The pass reports it with the remedy and goes on.
   3. **Keyed:** keep it.
-  4. **Neither:** delete it if the bundle record names it (it was archived under `other-objects/`). Otherwise leave it and report it; it never stops the pass, so every raw object is still reached. A standalone run has no bundle record, so it converts raw objects and only reports the rest, such as objects kept from an old key after a key-loss recovery.
+  4. **Neither:** if the bundle archived it under `other-objects/`, re-read that entry immediately before the delete, and delete the object only if the entry matches its bytes. The bundle record alone isn't enough, because the folder can be moved or changed after it was verified. Otherwise, or if the entry can't be read, leave the object and report it; it never stops the pass, so every raw object is still reached. A standalone run has no bundle record, so it converts raw objects and only reports the rest, such as objects kept from an old key after a key-loss recovery.
 - **The proof:**
-  - no raw object remains;
+  - no raw object remains, and no object the bundle archived under `other-objects/`. Either one holds back `finish_conversion` until its cause is fixed and the pass re-runs: a refused upload's limits (step 0), or a bundle folder that can't be read, which the flow asks the user to pick again. If the bundle is lost for good, the conversion stays in `cleaning` with those objects reported as residue, because deleting them without a copy is never the answer;
   - every media block's keyed object, soft-deleted blocks included, is present **and** passes the shared verification helper (downloaded, opened, hash-checked). That costs one download of the attachment set, because Storage objects are untrusted.
 
-  A missing or failing object is rebuilt from the bundle's bytes or the local ones. A media block whose bytes exist nowhere (no raw object, no bundle entry, no local copy) can't be rebuilt, so the proof's result is **passed, with these blocks unrecoverable**. The flow lists them, and `finish_conversion` follows the user's confirmation. Preflight already lists the same blocks before the flip (step 0).
+  A missing or failing object is rebuilt from the bundle's bytes or the local ones. When neither has them and there's no raw object, the failing object at the block's keyed name is all that's left:
+  - **If it holds the block's own plaintext,** it's that block's only copy. It's first copied to its raw name and read back verified, then converted from there like any raw object.
+  - **Otherwise** the block's bytes exist nowhere and it can't be rebuilt. The object is a **neither** object the bundle never archived, so it's kept and reported (step 4 above): deleting it without a copy could lose bytes someone else can still open.
+
+  So the proof's result is **passed, with these blocks unrecoverable**. The flow lists them together with every object the pass kept and reported, and `finish_conversion` follows the user's confirmation, so nothing left behind is silent. Preflight already lists the same blocks before the flip (step 0).
 - **Media block ids don't change.** The app derives an attachment's path from `media:hash`, the mode and `K_id`. Re-capturing a pre-conversion file mints a second block, which is accepted.
 
 **9. Done.** The flow calls `finish_conversion`, then reports the operator follow-ups ([§8](#8-runbook)) and the "safe from" date ([§9](#9-platform-residue-and-when-it-is-safe-if-breached)).
@@ -259,7 +267,7 @@ The first production run is #1288.
 **Before:**
 1. **Deploys:**
    - **every** device runs a build that includes #1293 and #1302's client half, as #1302 defines it: at least the canary check on entry, the upload fence with key-generation stamping, and the backlog quarantine. A device without them could, after a later key-loss recovery, upload stale or old-key writes over the restore. #1299 and #1300 merge before #1293, so such a build has them too. Boot reinstalls whichever local triggers the running build defines, so what matters is the build each device runs, not when it last updated;
-   - #1294's migration is applied, and the hosted project's project-wide Storage upload limit is raised to at least the attachments bucket's new limit;
+   - #1294's migration is applied. The upload limits can stay as they are, unless preflight lists an oversized object (step 0);
    - #719 has shipped, so new `[[links]]` stop minting public ids;
    - #1302's recovery path exists, because the safety net has to exist before an irreversible step on the main workspace.
 2. **No wipe shortcut.**
@@ -287,7 +295,7 @@ The first production run is #1288.
 13. **Act on #1289's findings** and record the "safe from" date.
 14. **Take later recovery points.** From time to time, on an unlocked device, take a recovery point and keep it with the key. It's a folder, like step 3's, with:
     - `blocks.jsonl`: every block row read from the server, checked for consistency and against the server's block count exactly as in step 3. History has been purged by then, so each row's content columns are opened under the key. A write from any device during the paging, this one included, makes it re-read. Taking it while other devices are idle keeps that rare;
-    - **the plaintext of every media block**, soft-deleted ones included. Each comes from the local byte store, or is downloaded and opened under the key, and each is hash-checked. The exception is a block the conversion recorded as unrecoverable: its manifest's list is carried into this one;
+    - **the plaintext of every media block**, soft-deleted ones included. Each comes from whichever source verifies: the local byte store, the keyed object downloaded and opened under the key, a raw object whose bytes hash to its name (a late upload from an older client), or an earlier recovery point (the conversion's bundle included). Each is hash-checked. The manifest lists only the hashes that no source verifies **now**, so a block that had no bytes at the conversion but was re-captured since is included again;
     - a manifest.
 
     It leaves out the server history and the Storage objects themselves, which are ciphertext by then and useless once the key is lost. A raw SQLite export isn't a recovery point. It holds only what this device has downloaded and applied, and attachment bytes live outside it (`src/plugins/attachments/byteStore.ts`).

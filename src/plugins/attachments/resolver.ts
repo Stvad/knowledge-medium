@@ -29,8 +29,7 @@
  * bytes makes the security-critical core fully unit-testable without the DOM.
  */
 
-import { decodeBytes } from '@/sync/byteTransform.js'
-import { verifyContentHash } from '@/sync/crypto/contentHash.js'
+import { verifyObjectBytes } from '@/sync/byteTransform.js'
 import {
   materializabilityToMode,
   type GetCek,
@@ -252,18 +251,11 @@ export const createAssetResolver = (deps: AssetResolverDeps): AssetResolver => {
         return fail('fetch-failed') // absent / denied / offline — transient or §9 backstop
       }
 
-      // (5) Decode: identity for plaintext, AEAD-open for e2ee (throws on a wrong
-      // key / tampered envelope / mismatched AAD).
-      let plaintext: Uint8Array<ArrayBuffer>
-      try {
-        plaintext = await decodeBytes(blob, mode, getCek, { contentHash, workspaceId })
-      } catch {
-        return fail('decode-failed')
-      }
-
-      // (6) THE load-bearing check (§5.1). A mismatch is discarded — never stored,
-      // never served — even though step 5's AEAD tag passed.
-      if (!(await verifyContentHash(plaintext, contentHash))) return fail('hash-mismatch')
+      // (5)+(6) Decode, then THE load-bearing hash check (§5.1). A failure is
+      // discarded — never stored, never served — even when the AEAD tag passed.
+      const verified = await verifyObjectBytes(blob, mode, getCek, { contentHash, workspaceId })
+      if (!verified.ok) return fail(verified.reason)
+      const plaintext = verified.plaintext
 
       // (7) Cache the verified bytes, then serve. A cache-write failure (quota) must
       // NOT deny the render — serve these verified bytes; the next render re-fetches.

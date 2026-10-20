@@ -15,6 +15,7 @@ import type { Repo } from '@/data/repo'
 import type { InsertPosition } from '@/data/mutators.js'
 import { assertRoundTrippableReferenceLabel } from '@/data/referenceBlock.js'
 import { ensureAliasTarget } from '@/data/targets.js'
+import { resolveAliasSeatNamespaces } from '@/data/aliasSeatNamespace.js'
 import { dailyNoteBlockId, getOrCreateDailyNote } from '@/plugins/daily-notes/dailyNotes.js'
 import { parseLiteralDailyPageTitle } from '@/utils/relativeDate.js'
 import { agentTxOptions } from './agentWrites.ts'
@@ -161,6 +162,9 @@ export const resolvePageTarget = async (
   if (options.create === false) throw new Error(`${verb}: no page named [[${name}]].`)
   // Typing a link no parser reads as one creates nothing; neither does this.
   assertRoundTrippableReferenceLabel(name, `${verb}: page name`)
+  // Before the lock: `ensureAliasTarget` reads an encrypted workspace's
+  // namespace from the cache this fills (`@/data/aliasSeatNamespace`).
+  await resolveAliasSeatNamespaces(repo, workspaceId)
   let result: {id: string; inserted: boolean} | undefined
   await repo.tx(async tx => {
     result = await ensureAliasTarget(tx, repo, name, workspaceId)
