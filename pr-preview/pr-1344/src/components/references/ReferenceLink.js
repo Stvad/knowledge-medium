@@ -1,1 +1,1 @@
-import{bC as e,yC as t}from"../../../chunks/app-CJZCqnp7.js";export{t as ReferenceLink,e as classifyReferenceClick};
+import{SC as e,xC as t}from"../../../chunks/app-BO1XR-rf.js";export{t as ReferenceLink,e as classifyReferenceClick};
