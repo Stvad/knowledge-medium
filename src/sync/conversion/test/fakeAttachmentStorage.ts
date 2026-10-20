@@ -8,6 +8,18 @@
 import { MAX_OBJECT_BYTES } from '../../byteTransform.js'
 import type { AttachmentCleanerIO, ConversionBundle, MediaRef, ObjectPath } from '../attachmentCleaner.js'
 
+/** The plugin's reading of a stored row, for the fake's rows. */
+export const fakeMediaHashOf = (propertiesJson: string): string | null => {
+  let properties: {types?: unknown; 'media:hash'?: unknown}
+  try {
+    properties = JSON.parse(propertiesJson) as typeof properties
+  } catch {
+    return null
+  }
+  const isMedia = Array.isArray(properties?.types) && properties.types.includes('media')
+  return isMedia && typeof properties['media:hash'] === 'string' && properties['media:hash'] ? properties['media:hash'] : null
+}
+
 export interface FakeAttachmentStorage {
   readonly io: AttachmentCleanerIO
   readonly objects: Map<ObjectPath, Uint8Array<ArrayBuffer>>
@@ -16,6 +28,8 @@ export interface FakeAttachmentStorage {
   readonly local: Map<string, Uint8Array<ArrayBuffer>>
   /** Every delete, in order. */
   readonly deletes: ObjectPath[]
+  /** Uploads this device hasn't had confirmed. */
+  pendingUploads: number
 }
 
 export const createFakeAttachmentStorage = ({limit = MAX_OBJECT_BYTES}: {limit?: number} = {}): FakeAttachmentStorage => {
@@ -23,6 +37,7 @@ export const createFakeAttachmentStorage = ({limit = MAX_OBJECT_BYTES}: {limit?:
   const media: MediaRef[] = []
   const local = new Map<string, Uint8Array<ArrayBuffer>>()
   const deletes: ObjectPath[] = []
+  const storage = {pendingUploads: 0} as {pendingUploads: number}
   const io: AttachmentCleanerIO = {
     listObjects: async () => [...objects.keys()].sort(),
     readObject: async path => objects.get(path)?.slice() ?? null,
@@ -38,8 +53,11 @@ export const createFakeAttachmentStorage = ({limit = MAX_OBJECT_BYTES}: {limit?:
     },
     mediaBlocks: async () => media,
     readLocal: async name => local.get(name)?.slice() ?? null,
+    writeLocal: async (name, bytes) => void local.set(name, bytes.slice()),
+    mediaHashOf: fakeMediaHashOf,
+    pendingUploads: async () => storage.pendingUploads,
   }
-  return {io, objects, media, local, deletes}
+  return Object.assign(storage, {io, objects, media, local, deletes})
 }
 
 export const createFakeBundle = (

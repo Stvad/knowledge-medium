@@ -353,10 +353,21 @@ function ServerE2eeGate({userId, workspaceId, workspaceName, deps, onResolved}: 
         on this device only.
       </Explanation>
       {entry.offerFinish && (
-        <Explanation>
-          You own this workspace and its conversion hasn't finished: its attachments still
-          need converting. Unlock it here, then finish the conversion.
-        </Explanation>
+        <>
+          <Explanation>
+            You own this workspace and its conversion hasn't finished: its attachments still need
+            converting. Finishing it asks for the key too.
+          </Explanation>
+          <Button
+            type="button"
+            variant="secondary"
+            className="w-full"
+            disabled={busy}
+            onClick={() => openConversionFlow({userId, workspaceId, workspaceName: workspaceName ?? null})}
+          >
+            Finish the conversion
+          </Button>
+        </>
       )}
       <KeyInput
         busy={busy}

@@ -166,4 +166,13 @@ export const scanPart = async (
   return hasher.digest()
 }
 
+/** The bundle's own folder, when the user picked the one it was made in. */
+export const bundleFolderIn = async (picked: BundleFolder, name: string): Promise<BundleFolder> => {
+  try {
+    return await picked.getDirectoryHandle(name)
+  } catch {
+    return picked
+  }
+}
+
 export const sha256Hex = (bytes: Uint8Array): string => bytesToHex(sha256(bytes))

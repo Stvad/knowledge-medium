@@ -112,6 +112,8 @@ export interface ConversionServer {
   /** `purge_workspace_history`: delete the workspace's history and move the
    *  phase to `cleaning`, if the server's checks against the bundle pass. */
   purgeWorkspaceHistory(workspaceId: string, throughEventId: number, archivedCount: number): Promise<void>
+  /** `finish_conversion`: end a conversion in `cleaning`. */
+  finishConversion(workspaceId: string): Promise<void>
 }
 
 const BLOCK_COLUMNS = 'id,workspace_id,content,properties_json,references_json,updated_at'
@@ -233,6 +235,11 @@ export const createSupabaseConversionServer = (client: SupabaseClient, signal?: 
         p_archived_count: archivedCount,
       }))
       if (error) throw failed('purge_workspace_history', error, status)
+    },
+
+    async finishConversion(workspaceId) {
+      const {error, status} = await cancellable(client.rpc('finish_conversion', {p_workspace_id: workspaceId}))
+      if (error) throw failed('finish_conversion', error, status)
     },
 
     async convertWorkspaceToE2ee(workspaceId, canary) {

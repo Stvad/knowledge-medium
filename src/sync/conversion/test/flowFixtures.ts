@@ -7,6 +7,7 @@ import type { PreflightEnvironment } from '../preflight.js'
 import type { ConversionLock } from '../runLock.js'
 import type { ConversionFlowDeps, ConversionUi } from '../runConversion.js'
 import { WS } from './conversionFixtures.js'
+import { createFakeAttachmentStorage } from './fakeAttachmentStorage.js'
 import type { FakeConversionServer } from './fakeConversionServer.js'
 
 export const USER = 'user-1'
@@ -46,6 +47,7 @@ export const flowDeps = (
   preflight: passingEnvironment(),
   markLocalConverted: async () => {},
   bundles: new InMemoryBundleRecordStore(),
+  attachments: createFakeAttachmentStorage().io,
   canReadFolder: async () => true,
   writeLocalDb: writeFakeLocalDb,
   keepAwake: async () => () => {},

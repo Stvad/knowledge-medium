@@ -9,6 +9,8 @@ import { contentColumnsOf, idsOf, isSealedRow } from '../sealing.js'
 import type { ConversionServer, FullServerBlockRow, FullServerHistoryRow } from '../conversionServer.js'
 import { keysetPages } from '../pages.js'
 import { latestResealWrites } from '../verifyReseal.js'
+import type { UnrecoverableMedia } from '../attachmentCleaner.js'
+import { MediaBlocks, surveyAttachments, writeAttachmentParts, type AttachmentSource } from './attachmentParts.js'
 import { writeBytesPart, writeJsonlPart, type BundleFolder, type JsonlDigest, type PartDigest } from './bundleParts.js'
 import {
   BUNDLE_FORMAT,
@@ -21,6 +23,7 @@ export type BundleProgress =
   | {readonly part: 'blocks'; readonly rows: number}
   | {readonly part: 'history'; readonly rows: number}
   | {readonly part: 'local-db'}
+  | {readonly part: 'attachments'; readonly files: number}
 
 export type BundleRefusalReason =
   /** Sealed rows with no re-seal record: something other than the re-seal
@@ -49,8 +52,13 @@ export interface TakeBundleOptions {
   /** Write this device's database, copied under its lock, into `folder` as
    *  {@link BUNDLE_PARTS.localDb}, and return its digest. */
   readonly writeLocalDb: (folder: BundleFolder, signal?: AbortSignal) => Promise<PartDigest>
-  /** Media hashes the user confirmed in preflight have no verified source. */
-  readonly noVerifiedSource?: readonly string[]
+  readonly attachments: {
+    readonly source: AttachmentSource
+    /** The user accepts that this media has no hash-verified copy anywhere:
+     *  its hashes go in the manifest, and the bundle holds no bytes for them.
+     *  Asked again after the flip, since nothing can bring them back. */
+    readonly confirmNoVerifiedSource: (media: readonly UnrecoverableMedia[]) => Promise<void>
+  }
   readonly now?: () => Date
   readonly pageSize?: number
   readonly onProgress?: (progress: BundleProgress) => void
@@ -117,16 +125,23 @@ export const historyRowPages = (
     signal,
   })
 
-const writeBlocks = (options: TakeBundleOptions): Promise<JsonlDigest> =>
-  writeJsonlPart(options.folder, BUNDLE_PARTS.blocks, async writeRow => {
+/** `blocks.jsonl`, and the media its rows carry. */
+const writeBlocks = async (options: TakeBundleOptions): Promise<{digest: JsonlDigest; media: MediaBlocks}> => {
+  const media = new MediaBlocks(options.attachments.source.mediaHashOf)
+  const digest = await writeJsonlPart(options.folder, BUNDLE_PARTS.blocks, async writeRow => {
     const {server, workspaceId, signal} = options
     let rows = 0
     for await (const page of blockRowPages(server, workspaceId, options.pageSize ?? BUNDLE_PAGE_SIZE, signal)) {
-      for (const row of await archivedRows(server, workspaceId, page)) await writeRow(row)
+      for (const row of await archivedRows(server, workspaceId, page)) {
+        await writeRow(row)
+        media.add(row)
+      }
       rows += page.length
       options.onProgress?.({part: 'blocks', rows})
     }
   })
+  return {digest, media}
+}
 
 const writeHistory = (options: TakeBundleOptions, through: number): Promise<JsonlDigest> =>
   writeJsonlPart(options.folder, BUNDLE_PARTS.history, async writeRow => {
@@ -142,6 +157,7 @@ const writeHistory = (options: TakeBundleOptions, through: number): Promise<Json
 interface ServerSnapshot {
   readonly through: number
   readonly blocks: JsonlDigest
+  readonly media: MediaBlocks
   readonly history: JsonlDigest
   readonly serverBlockCount: number
   readonly propertiesMigration: string
@@ -155,7 +171,7 @@ const readServerSnapshot = async (options: TakeBundleOptions): Promise<ServerSna
   for (let attempt = 1; attempt <= READ_ATTEMPTS; attempt++) {
     const before = await server.workspaceCounts(workspaceId)
     const history = await writeHistory(options, before.maxEventId)
-    const blocks = await writeBlocks(options)
+    const {digest: blocks, media} = await writeBlocks(options)
     // A lost session reads every table as empty; this one is an error instead.
     const workspace = await server.readWorkspace(workspaceId)
     if (!workspace) throw new Error(`conversion: workspace ${workspaceId} is not visible to this session`)
@@ -172,6 +188,7 @@ const readServerSnapshot = async (options: TakeBundleOptions): Promise<ServerSna
     return {
       through: before.maxEventId,
       blocks,
+      media,
       history,
       serverBlockCount: after.blocks,
       propertiesMigration: workspace.properties_migration,
@@ -188,6 +205,23 @@ export const takeBundle = async (options: TakeBundleOptions): Promise<TakenBundl
   options.signal?.throwIfAborted()
   const snapshot = await readServerSnapshot(options)
 
+  // Storage isn't in the history window: nothing writes it after the flip, so
+  // it's read once, after the rows.
+  const {source, confirmNoVerifiedSource} = options.attachments
+  options.onProgress?.({part: 'attachments', files: 0})
+  const mediaHashes = snapshot.media.hashes()
+  const survey = await surveyAttachments({source, mediaHashes, preflight: false, signal: options.signal})
+  if (survey.noVerifiedSource.length > 0) await confirmNoVerifiedSource(snapshot.media.blocksOf(survey.noVerifiedSource))
+  const otherObjects = await writeAttachmentParts({
+    folder: options.folder,
+    source,
+    mediaHashes,
+    noVerifiedSource: new Set(survey.noVerifiedSource),
+    otherObjects: survey.otherObjects,
+    signal: options.signal,
+    onProgress: files => options.onProgress?.({part: 'attachments', files}),
+  })
+
   const manifest: BundleManifest = {
     format: BUNDLE_FORMAT,
     version: BUNDLE_FORMAT_VERSION,
@@ -201,7 +235,8 @@ export const takeBundle = async (options: TakeBundleOptions): Promise<TakenBundl
       [BUNDLE_PARTS.history]: snapshot.history,
       [BUNDLE_PARTS.localDb]: localDb,
     },
-    noVerifiedSource: options.noVerifiedSource ?? [],
+    noVerifiedSource: survey.noVerifiedSource,
+    otherObjects,
   }
   await writeBytesPart(options.folder, BUNDLE_PARTS.manifest, new TextEncoder().encode(`${JSON.stringify(manifest, null, 2)}\n`))
   return {manifest}

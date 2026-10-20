@@ -1,18 +1,21 @@
+import type { SupabaseClient } from '@supabase/supabase-js'
 import { workspaceGateDeps } from '@/components/workspace/WorkspaceKeyGate'
 import { notifyWorkspaceUnlocked } from '@/components/workspace/workspaceUnlocked'
+import { attachmentCleanerIOVerb, type AttachmentCleanerIOResult } from '@/data/attachmentCleanerIOVerb'
 import { WRITE_AHEAD_SIDECAR_SUFFIXES } from '@/data/dbFileSiblings'
 import { dbFilenameForUser } from '@/data/localDbStorage'
 import type { Repo } from '@/data/repo'
 import { fetchWorkspaceConversionState } from '@/data/workspaceConversion'
 import { markLocalWorkspaceConverted } from '@/data/workspaces'
 import { supabase } from '@/services/supabase'
+import type { AttachmentCleanerIO } from '@/sync/conversion/attachmentCleaner'
 import { createPartHasher, type BundleFolder } from '@/sync/conversion/bundle/bundleParts'
 import { IndexedDbBundleRecordStore } from '@/sync/conversion/bundle/bundleRecord'
 import { BUNDLE_PARTS } from '@/sync/conversion/bundle/manifest'
 import { createSupabaseConversionServer } from '@/sync/conversion/conversionServer'
 import { localFlipAttempts } from '@/sync/conversion/flipAttempts'
 import type { PreflightEnvironment } from '@/sync/conversion/preflight'
-import { webConversionLock } from '@/sync/conversion/runLock'
+import { webConversionLock, type ConversionLock } from '@/sync/conversion/runLock'
 import type { ConversionFlowDeps, ConversionUi } from '@/sync/conversion/runConversion'
 import { getWorkspaceKeyStore, IndexedDbWorkspaceKeyStore } from '@/sync/keys/keyStore'
 import { upgradeWorkspacePin } from '@/sync/keys/flows/upgradeWorkspacePin'
@@ -56,15 +59,16 @@ const preflightEnvironment = (repo: Repo): PreflightEnvironment => ({
 
 export type ConversionUnavailable =
   /** Not signed in to a server: local-only, or none configured. */
-  | 'no-server'
+  | {readonly kind: 'no-server'}
   /** Without Web Locks, a second tab can't be kept out of the run. */
-  | 'no-web-locks'
+  | {readonly kind: 'no-web-locks'}
+  /** Without the attachments plugin's Storage access the folder can't be
+   *  proved clean, so the conversion could never finish. */
+  | {readonly kind: 'no-attachments'; readonly reason: string}
 
-export const conversionUnavailable = (localOnly: boolean): ConversionUnavailable | null => {
-  if (!supabase || localOnly) return 'no-server'
-  if (!webConversionLock()) return 'no-web-locks'
-  return null
-}
+export type ConversionSetup =
+  | {readonly kind: 'ready'; readonly makeDeps: (ui: ConversionUi, signal: AbortSignal) => ConversionFlowDeps}
+  | {readonly kind: 'unavailable'; readonly why: ConversionUnavailable}
 
 let bundleRecords: IndexedDbBundleRecordStore | null = null
 
@@ -77,51 +81,71 @@ const SLOWEST_BUNDLE_DISK = 5 * 1024 * 1024
 export const directoryHandleOf = (folder: BundleFolder): FileSystemDirectoryHandle =>
   folder as unknown as FileSystemDirectoryHandle
 
-/** Call only once {@link conversionUnavailable} has returned null. */
-export const conversionFlowDeps = (
-  repo: Repo,
-  workspaceId: string,
-  ui: ConversionUi,
-  signal: AbortSignal,
-): ConversionFlowDeps => {
+const attachmentsOf = (repo: Repo, workspaceId: string): AttachmentCleanerIOResult =>
+  repo.facetRuntime
+    ? attachmentCleanerIOVerb.runSync(repo.facetRuntime, {repo, workspaceId})
+    : {kind: 'unavailable', reason: "the app's extensions haven't loaded"}
+
+/** The run's dependencies, or why this session can't run a conversion. */
+export const conversionSetup = (repo: Repo, workspaceId: string, localOnly: boolean): ConversionSetup => {
+  const client = supabase
+  if (!client || localOnly) return {kind: 'unavailable', why: {kind: 'no-server'}}
   const lock = webConversionLock()
-  if (!supabase || !lock) throw new Error('conversion: this session cannot run a conversion')
+  if (!lock) return {kind: 'unavailable', why: {kind: 'no-web-locks'}}
+  const attachments = attachmentsOf(repo, workspaceId)
+  if (attachments.kind === 'unavailable') {
+    return {kind: 'unavailable', why: {kind: 'no-attachments', reason: attachments.reason}}
+  }
   return {
-    userId: repo.user.id,
-    workspaceId,
-    server: createSupabaseConversionServer(supabase, signal),
-    fetchConversionState: () => fetchWorkspaceConversionState(workspaceId),
-    keyStore: getWorkspaceKeyStore(),
-    flipAttempts: localFlipAttempts(repo.user.id, workspaceId),
-    lock,
-    preflight: preflightEnvironment(repo),
-    markLocalConverted: canary => markLocalWorkspaceConverted(repo.db, workspaceId, canary),
-    bundles: (bundleRecords ??= new IndexedDbBundleRecordStore()),
-    canReadFolder: async folder => (await queryDirectoryPermission(directoryHandleOf(folder), 'read')) === 'granted',
-    writeLocalDb: async (folder, signal) => {
-      const hasher = createPartHasher()
-      await exportRawSqliteDbToFile(repo, await directoryHandleOf(folder).getFileHandle(BUNDLE_PARTS.localDb, {create: true}), {
-        timeoutMessage:
-          "Copying this device's database into the recovery bundle took too long. Pick a folder on a faster disk, then try again.",
-        minBytesPerSecond: SLOWEST_BUNDLE_DISK,
-        onChunk: chunk => hasher.update(chunk),
-        signal,
-      })
-      return hasher.digest()
-    },
-    keepAwake: holdScreenWakeLock,
-    upgradePin: async () => {
-      const result = await upgradeWorkspacePin({
-        userId: repo.user.id,
-        workspaceId,
-        ...workspaceGateDeps(repo, workspaceId),
-        key: {kind: 'stored'},
-        keyStore: getWorkspaceKeyStore(),
-      })
-      if (result.ok) notifyWorkspaceUnlocked(workspaceId)
-      return result
-    },
-    ui,
-    signal,
+    kind: 'ready',
+    makeDeps: (ui, signal) => conversionFlowDeps({repo, workspaceId, client, lock, attachments: attachments.io, ui, signal}),
   }
 }
+
+const conversionFlowDeps = ({repo, workspaceId, client, lock, attachments, ui, signal}: {
+  repo: Repo
+  workspaceId: string
+  client: SupabaseClient
+  lock: ConversionLock
+  attachments: AttachmentCleanerIO
+  ui: ConversionUi
+  signal: AbortSignal
+}): ConversionFlowDeps => ({
+  userId: repo.user.id,
+  workspaceId,
+  server: createSupabaseConversionServer(client, signal),
+  fetchConversionState: () => fetchWorkspaceConversionState(workspaceId),
+  keyStore: getWorkspaceKeyStore(),
+  flipAttempts: localFlipAttempts(repo.user.id, workspaceId),
+  lock,
+  preflight: preflightEnvironment(repo),
+  markLocalConverted: canary => markLocalWorkspaceConverted(repo.db, workspaceId, canary),
+  bundles: (bundleRecords ??= new IndexedDbBundleRecordStore()),
+  attachments,
+  canReadFolder: async folder => (await queryDirectoryPermission(directoryHandleOf(folder), 'read')) === 'granted',
+  writeLocalDb: async (folder, signal) => {
+    const hasher = createPartHasher()
+    await exportRawSqliteDbToFile(repo, await directoryHandleOf(folder).getFileHandle(BUNDLE_PARTS.localDb, {create: true}), {
+      timeoutMessage:
+        "Copying this device's database into the recovery bundle took too long. Pick a folder on a faster disk, then try again.",
+      minBytesPerSecond: SLOWEST_BUNDLE_DISK,
+      onChunk: chunk => hasher.update(chunk),
+      signal,
+    })
+    return hasher.digest()
+  },
+  keepAwake: holdScreenWakeLock,
+  upgradePin: async () => {
+    const result = await upgradeWorkspacePin({
+      userId: repo.user.id,
+      workspaceId,
+      ...workspaceGateDeps(repo, workspaceId),
+      key: {kind: 'stored'},
+      keyStore: getWorkspaceKeyStore(),
+    })
+    if (result.ok) notifyWorkspaceUnlocked(workspaceId)
+    return result
+  },
+  ui,
+  signal,
+})

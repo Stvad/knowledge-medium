@@ -27,6 +27,7 @@ import { showError } from '@/utils/toast.js'
 import { getBlobStore } from './assetUpload.js'
 import { createAttachmentCleanerIO } from './attachmentCleanerIO.js'
 import { getByteStore } from './byteStore.js'
+import { getByteUploadStore } from './uploadStore.js'
 import { CleanupAttachmentsDialog } from './CleanupAttachmentsDialog.js'
 import { runSingleOwner } from './laneLock.js'
 
@@ -43,6 +44,7 @@ const cleanerIOFor = (repo: Repo, workspaceId: string): AttachmentCleanerIOResul
       client: supabase,
       blobStore,
       byteStore: getByteStore(),
+      uploadStore: getByteUploadStore(),
       repo,
       userId,
       workspaceId,

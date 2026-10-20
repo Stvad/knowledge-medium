@@ -11,6 +11,7 @@ import { trackTestRepo } from '@/data/test/testRepoScope'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import type { BlobStore } from './blobStore.js'
 import { InMemoryByteStore } from './byteStore.js'
+import { InMemoryByteUploadStore } from './uploadStore.js'
 import { createAttachmentCleanerIO, listMediaBlocks, listWorkspaceObjects } from './attachmentCleanerIO.js'
 import { ASSETS_TYPE_CONTRIBUTION, MEDIA_PROPERTY_SCHEMAS, MEDIA_TYPE, MEDIA_TYPE_CONTRIBUTION, mediaHashProp } from './mediaBlock.js'
 
@@ -71,6 +72,51 @@ describe('listMediaBlocks', () => {
       ]),
     )
     expect(await listMediaBlocks(repo, WS)).toHaveLength(2)
+  })
+
+  it('reads a media block\'s hash from its stored row, as the bundle reads the server\'s', async () => {
+    await addMedia('photo', 'a0', 'sha256:aaaa')
+    await repo.tx(async tx => {
+      await tx.create({id: 'note', workspaceId: WS, parentId: null, orderKey: 'a1', content: 'not media'})
+      // A hash-shaped value on a block that isn't media.
+      await tx.setProperty('note', mediaHashProp, 'sha256:bbbb')
+    }, {scope: ChangeScope.BlockDefault})
+    const stored = async (id: string) =>
+      (await sharedDb.db.get<{properties_json: string}>('SELECT properties_json FROM blocks WHERE id = ?', [id])).properties_json
+    const io = cleanerIO(repo)
+
+    expect(io.mediaHashOf(await stored('photo'))).toBe('sha256:aaaa')
+    expect(io.mediaHashOf(await stored('note'))).toBeNull()
+    expect(io.mediaHashOf('enc:v1:not-json')).toBeNull()
+    expect(io.mediaHashOf('null')).toBeNull()
+  })
+})
+
+const cleanerIO = (repo: Repo, uploadStore = new InMemoryByteUploadStore()) => createAttachmentCleanerIO({
+  client: {} as SupabaseClient,
+  blobStore: {} as BlobStore,
+  byteStore: new InMemoryByteStore(),
+  uploadStore,
+  repo,
+  userId: 'user-1',
+  workspaceId: WS,
+  isRemoteSyncActive: () => true,
+})
+
+describe('createAttachmentCleanerIO pendingUploads', () => {
+  it('counts this workspace\'s staged, pending and failed uploads, and nobody else\'s', async () => {
+    const uploads = new InMemoryByteUploadStore()
+    const stage = (assetBlockId: string, workspaceId = WS, userId = 'user-1') =>
+      uploads.stage({userId, assetBlockId, workspaceId, contentHash: 'sha256:aaaa', contentKey: assetBlockId})
+    await stage('staged')
+    await stage('pending')
+    await uploads.promote('user-1', 'pending')
+    await stage('failed')
+    await uploads.markFailed('user-1', 'failed')
+    await stage('other-workspace', 'ws-2')
+    await stage('other-user', WS, 'user-2')
+
+    expect(await cleanerIO({} as Repo, uploads).pendingUploads()).toBe(3)
   })
 })
 
@@ -159,6 +205,7 @@ describe('createAttachmentCleanerIO mediaBlocks', () => {
       client: {} as SupabaseClient,
       blobStore: {} as BlobStore,
       byteStore: new InMemoryByteStore(),
+      uploadStore: new InMemoryByteUploadStore(),
       repo: repo as unknown as Repo,
       userId: 'user-1',
       workspaceId: WS,

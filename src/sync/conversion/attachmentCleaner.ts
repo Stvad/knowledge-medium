@@ -61,6 +61,15 @@ export interface AttachmentCleanerIO {
   mediaBlocks(): Promise<readonly MediaRef[]>
   /** This device's local byte-store entry under `name`, or null. */
   readLocal(name: string): Promise<Uint8Array<ArrayBuffer> | null>
+  /** Keep bytes, already verified, in this device's byte store under `name`. */
+  writeLocal(name: string, bytes: Uint8Array<ArrayBuffer>): Promise<void>
+  /** The content hash a stored block row carries if it is a media block, by
+   *  its `properties_json`; null for any other row. The conversion's bundle
+   *  reads the server's rows, not this device's. */
+  mediaHashOf(propertiesJson: string): string | null
+  /** This device's attachment uploads for the workspace that haven't been
+   *  confirmed: staged, pending or failed. */
+  pendingUploads(): Promise<number>
 }
 
 /**

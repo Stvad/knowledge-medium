@@ -1,11 +1,10 @@
-import { useCallback, useState, type ReactNode } from 'react'
+import { useCallback, useState } from 'react'
 import { Button } from '@/components/ui/button'
-import { Checkbox } from '@/components/ui/checkbox'
-import { Label } from '@/components/ui/label'
 import type { SavedKeyPrompt, SavedKeyProblem, SaveKeyPrompt } from '@/sync/conversion/conversionKey'
 import { FLIP_SETTLED_MS } from '@/sync/conversion/flipAttempts'
 import type { BundleFolder } from '@/sync/conversion/bundle/bundleParts'
-import type { ConversionSizes, PreflightBlocker } from '@/sync/conversion/preflight'
+import type { CleanerProgress } from '@/sync/conversion/attachmentCleaner'
+import type { PreflightBlocker, PreflightReport } from '@/sync/conversion/preflight'
 import type { SealingPass } from '@/sync/conversion/sealingStage'
 import type { UpgradeWorkspacePinResult } from '@/sync/keys/flows/upgradeWorkspacePin'
 import {
@@ -23,16 +22,21 @@ import {
   WorkspaceKeyDisplay,
   WorkspaceKeyField,
 } from '@/components/workspace/keyUi'
-import type { ConversionUnavailable } from './conversionFlowDeps'
-import { ChooseBundleFolderPrompt, ReopenBundleFolderPrompt } from './bundleFolderPrompts'
-import { Actions, errorMessage } from './flowUi'
+import {
+  CleanupIncompleteView,
+  FinishPromptView,
+  NoVerifiedSourceNotice,
+  NoVerifiedSourcePrompt,
+  OversizedNotice,
+} from './attachmentPrompts'
+import type { ConversionSetup, ConversionUnavailable } from './conversionFlowDeps'
+import { ChooseBundleFolderPrompt, ChooseExistingBundlePrompt, ReopenBundleFolderPrompt } from './bundleFolderPrompts'
+import { Actions, ConfirmCheck, errorMessage, formatBytes } from './flowUi'
 import { useConversionRun, type PromptChannel, type RunState } from './useConversionRun'
 
 interface Props {
   readonly workspaceName: string | null
-  /** Why this session can't run a conversion at all, if it can't. */
-  readonly unavailable: ConversionUnavailable | null
-  readonly makeDeps: (ui: ConversionUi, signal: AbortSignal) => ConversionFlowDeps
+  readonly setup: ConversionSetup
   readonly onClose: () => void
 }
 
@@ -41,21 +45,27 @@ interface Props {
  * time, each starting from what the server shows. Closing it between runs is
  * always safe; a conversion past the flip carries on from the workspace's gate.
  */
-export function ConversionFlow({workspaceName, unavailable, makeDeps, onClose}: Props) {
+export function ConversionFlow({workspaceName, setup, onClose}: Props) {
+  const name = workspaceName ? `"${workspaceName}"` : 'this workspace'
+  return (
+    <GateCard title={`Encrypt ${name} end to end`} wide>
+      {setup.kind === 'ready'
+        ? <ReadyFlow makeDeps={setup.makeDeps} onClose={onClose}/>
+        : <UnavailableView why={setup.why} onClose={onClose}/>}
+    </GateCard>
+  )
+}
+
+function ReadyFlow({makeDeps, onClose}: {
+  makeDeps: (ui: ConversionUi, signal: AbortSignal) => ConversionFlowDeps
+  onClose: () => void
+}) {
   const runWith = useCallback(
     (channel: PromptChannel, signal: AbortSignal) => runConversion(makeDeps(conversionUi(channel), signal)),
     [makeDeps],
   )
   const {state, start, cancel} = useConversionRun(runWith)
-  const name = workspaceName ? `"${workspaceName}"` : 'this workspace'
-
-  return (
-    <GateCard title={`Encrypt ${name} end to end`} wide>
-      {unavailable
-        ? <UnavailableView why={unavailable} onClose={onClose}/>
-        : <FlowBody state={state} start={start} cancel={cancel} onClose={onClose}/>}
-    </GateCard>
-  )
+  return <FlowBody state={state} start={start} cancel={cancel} onClose={onClose}/>
 }
 
 /** Each question the run asks, as the prompt that answers it. */
@@ -64,7 +74,7 @@ const conversionUi = (channel: PromptChannel): ConversionUi => ({
     <ContractPrompt stage={stage} answer={() => answer()} cancel={cancel}/>
   )),
   confirmPreflight: report => channel.ask<void>((answer, cancel) => (
-    <PreflightPrompt sizes={report.sizes} answer={() => answer()} cancel={cancel}/>
+    <PreflightPrompt report={report} answer={() => answer()} cancel={cancel}/>
   )),
   saveKey: prompt => channel.ask<string>((answer, cancel) => (
     <SaveKeyPromptView prompt={prompt} answer={answer} cancel={cancel}/>
@@ -75,20 +85,36 @@ const conversionUi = (channel: PromptChannel): ConversionUi => ({
   chooseBundleFolder: ({reason}) => channel.ask<BundleFolder>((answer, cancel) => (
     <ChooseBundleFolderPrompt reason={reason} answer={answer} cancel={cancel}/>
   )),
-  reopenBundleFolder: ({recorded, problem}) => channel.ask<BundleFolder | null>((answer, cancel) => (
-    <ReopenBundleFolderPrompt recorded={recorded} problem={problem} answer={answer} cancel={cancel}/>
+  reopenBundleFolder: prompt => channel.ask<BundleFolder | null>((answer, cancel) => (
+    <ReopenBundleFolderPrompt prompt={prompt} answer={answer} cancel={cancel}/>
+  )),
+  confirmNoVerifiedSource: ({media}) => channel.ask<void>((answer, cancel) => (
+    <NoVerifiedSourcePrompt media={media} answer={() => answer()} cancel={cancel}/>
+  )),
+  chooseExistingBundle: ({problem}) => channel.ask<BundleFolder>((answer, cancel) => (
+    <ChooseExistingBundlePrompt problem={problem} answer={answer} cancel={cancel}/>
+  )),
+  confirmFinish: prompt => channel.ask<void>((answer, cancel) => (
+    <FinishPromptView prompt={prompt} answer={() => answer()} cancel={cancel}/>
   )),
   status: status => channel.status(status),
 })
 
+const UNAVAILABLE_TEXT = (why: ConversionUnavailable): string => {
+  switch (why.kind) {
+    case 'no-server':
+      return 'Converting needs this device signed in and syncing with the server.'
+    case 'no-web-locks':
+      return "This browser can't make sure the conversion runs in one tab only. Use desktop Chrome or Edge."
+    case 'no-attachments':
+      return `Converting has to encrypt the workspace's attachments too, and this device can't reach them: ${why.reason}.`
+  }
+}
+
 function UnavailableView({why, onClose}: {why: ConversionUnavailable; onClose: () => void}) {
   return (
     <>
-      <Explanation>
-        {why === 'no-server'
-          ? 'Converting needs this device signed in and syncing with the server.'
-          : "This browser can't make sure the conversion runs in one tab only. Use desktop Chrome or Edge."}
-      </Explanation>
+      <Explanation>{UNAVAILABLE_TEXT(why)}</Explanation>
       <Actions secondary={{label: 'Close', onClick: onClose}}/>
     </>
   )
@@ -153,20 +179,6 @@ const STAGE_INTRO: Record<ActiveStage['kind'], string> = {
   cleaning: "The workspace's content is encrypted; this run finishes the cleanup.",
 }
 
-function ConfirmCheck({id, checked, onChange, children}: {
-  id: string
-  checked: boolean
-  onChange: (checked: boolean) => void
-  children: ReactNode
-}) {
-  return (
-    <div className="flex items-start gap-2">
-      <Checkbox id={id} checked={checked} onCheckedChange={value => onChange(value === true)} className="mt-0.5"/>
-      <Label htmlFor={id} className="text-sm font-normal leading-snug">{children}</Label>
-    </div>
-  )
-}
-
 function ContractPrompt({stage, answer, cancel}: {stage: ActiveStage; answer: () => void; cancel: () => void}) {
   const [closed, setClosed] = useState(false)
   return (
@@ -185,19 +197,17 @@ function ContractPrompt({stage, answer, cancel}: {stage: ActiveStage; answer: ()
   )
 }
 
-const formatBytes = (bytes: number): string => {
-  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`
-  if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(1)} MB`
-  return `${(bytes / 1024 ** 3).toFixed(2)} GB`
-}
-
 /** The server re-seals every row and keeps history of both versions, plus WAL
  *  (runbook step 6). */
 const SERVER_HEADROOM_FACTOR = 6
 
-function PreflightPrompt({sizes, answer, cancel}: {sizes: ConversionSizes; answer: () => void; cancel: () => void}) {
+function PreflightPrompt({report, answer, cancel}: {report: PreflightReport; answer: () => void; cancel: () => void}) {
+  const {sizes, oversized, noVerifiedSource} = report
   const [understood, setUnderstood] = useState(false)
-  const bundleBytes = sizes.blocksBytes + sizes.historyBytes + sizes.localDbBytes
+  const [limitsRaised, setLimitsRaised] = useState(false)
+  const [lossAccepted, setLossAccepted] = useState(false)
+  const confirmed = understood && (oversized.length === 0 || limitsRaised) && (noVerifiedSource.length === 0 || lossAccepted)
+  const bundleBytes = sizes.blocksBytes + sizes.historyBytes + sizes.localDbBytes + sizes.attachmentBytes
   return (
     <>
       <Explanation>Ready to convert. What stays readable on the server afterwards:</Explanation>
@@ -213,14 +223,19 @@ function PreflightPrompt({sizes, answer, cancel}: {sizes: ConversionSizes; answe
       </Explanation>
       <Explanation>
         The recovery bundle will take about {formatBytes(bundleBytes)}: {sizes.blockRows} blocks
-        ({formatBytes(sizes.blocksBytes)}), {sizes.historyRows} history rows ({formatBytes(sizes.historyBytes)}) and
-        this device's database ({formatBytes(sizes.localDbBytes)}). Pick a folder with room for it.
+        ({formatBytes(sizes.blocksBytes)}), {sizes.historyRows} history rows ({formatBytes(sizes.historyBytes)}),
+        attachments ({formatBytes(sizes.attachmentBytes)}) and this device's database
+        ({formatBytes(sizes.localDbBytes)}). Pick a folder with room for it.
         The server needs about {formatBytes(sizes.contentBytes * SERVER_HEADROOM_FACTOR)} of free disk while it converts.
       </Explanation>
+      {oversized.length > 0 && <OversizedNotice oversized={oversized} raised={limitsRaised} onRaised={setLimitsRaised}/>}
+      {noVerifiedSource.length > 0 && (
+        <NoVerifiedSourceNotice media={noVerifiedSource} accepted={lossAccepted} onAccept={setLossAccepted}/>
+      )}
       <ConfirmCheck id="conversion-residue" checked={understood} onChange={setUnderstood}>
         I understand, there is room for both, and this can't be undone.
       </ConfirmCheck>
-      <Actions primary={{label: 'Continue', onClick: answer, disabled: !understood}} secondary={{label: 'Cancel', onClick: cancel}}/>
+      <Actions primary={{label: 'Continue', onClick: answer, disabled: !confirmed}} secondary={{label: 'Cancel', onClick: cancel}}/>
     </>
   )
 }
@@ -320,9 +335,17 @@ const statusText = (status: ConversionStatus | null): string => {
     case 'checking-key':
       return 'Checking the workspace key…'
     case 'taking-bundle':
-      return status.progress?.part === 'local-db'
-        ? "Copying this device's database into the bundle…"
-        : `Writing the recovery bundle (${status.progress?.rows ?? 0} ${status.progress?.part === 'history' ? 'history rows' : 'blocks'}). Keep this tab open.`
+      switch (status.progress?.part) {
+        case undefined:
+        case 'local-db':
+          return "Copying this device's database into the bundle…"
+        case 'attachments':
+          return `Copying attachments into the recovery bundle (${status.progress.files} files). Keep this tab open.`
+        case 'blocks':
+        case 'history':
+          return `Writing the recovery bundle (${status.progress.rows} ${status.progress.part === 'history' ? 'history rows' : 'blocks'}). Keep this tab open.`
+      }
+      break
     case 'resealing':
       return `Encrypting blocks on the server: ${status.progress?.scanned ?? 0} checked, ${status.progress?.sealed ?? 0} encrypted. Keep this tab open.`
     case 'verifying':
@@ -333,6 +356,24 @@ const statusText = (status: ConversionStatus | null): string => {
       return "Deleting the server's plaintext history…"
     case 'upgrading-pin':
       return 'Decrypting the workspace on this device…'
+    case 'cleaning':
+      return cleaningText(status.progress)
+    case 'finishing':
+      return 'Finishing the conversion…'
+  }
+  return ''
+}
+
+const cleaningText = (progress: CleanerProgress | null): string => {
+  switch (progress?.phase) {
+    case undefined:
+      return "Starting on the workspace's attachments…"
+    case 'listing':
+      return `Listing the attachments on the server (pass ${progress.pass})…`
+    case 'cleaning':
+      return `Encrypting attachments on the server: ${progress.done} of ${progress.total} (pass ${progress.pass}). Keep this tab open.`
+    case 'proving':
+      return `Checking every attachment on the server: ${progress.done} of ${progress.total}.`
   }
 }
 
@@ -346,6 +387,8 @@ const BLOCKER_TEXT = (blocker: PreflightBlocker): string => {
       return `${blocker.blockIds.length} block(s) already hold values shaped like encrypted ones, which the conversion could not tell apart afterwards: ${blocker.blockIds.join(', ')}.`
     case 'pending-uploads':
       return `This device has ${blocker.count} change(s), in any workspace, that haven't uploaded yet. Wait for them to sync.`
+    case 'pending-attachment-uploads':
+      return `${blocker.count} attachment(s) from this device haven't finished uploading. Wait for them, or retry the failed ones.`
     case 'rejected-uploads':
       return `${blocker.count} change(s) were rejected by the server. Retry or discard them first.`
     case 'pins-not-durable':
@@ -451,22 +494,50 @@ function ResultView({result, retry, onClose}: {result: ConversionRunResult; retr
           <Actions primary={again} secondary={close}/>
         </>
       )
-    case 'stopped':
+    case 'cleanup-incomplete':
+      return (
+        <>
+          <CleanupIncompleteView report={result.report}/>
+          <Actions primary={again} secondary={close}/>
+        </>
+      )
+    case 'cleaner-busy':
       return (
         <>
           <Explanation>
-            The workspace's content is encrypted on the server, and this device is opening it again.
-            Its attachments still need converting, which this version of the app can't do yet.
+            Clean up attachments is running for this workspace in another tab of this browser. Let it
+            finish, then try again.
           </Explanation>
-          <Actions secondary={close}/>
+          <Actions primary={again} secondary={close}/>
         </>
       )
     case 'done':
-      return (
-        <>
-          <Explanation>This workspace is end-to-end encrypted.</Explanation>
-          <Actions secondary={close}/>
-        </>
-      )
+      return <DoneView onClose={onClose}/>
   }
+}
+
+/** Step 9: what is left to do, by the user and by the server's operator. */
+function DoneView({onClose}: {onClose: () => void}) {
+  return (
+    <>
+      <Explanation>This workspace is end-to-end encrypted.</Explanation>
+      <ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
+        <li>Open each other device one at a time, and paste the key there.</li>
+        <li>
+          Keep the recovery bundle with the key: if the key is lost, the workspace is restored from the
+          newest one. From time to time, take a new one.
+        </li>
+        <li>
+          For the server's operator: <span className="font-mono text-xs">VACUUM FULL</span> on blocks,
+          blocks_history, storage.objects and workspaces (it locks each table while it runs), and drop
+          leftover ad-hoc tables.
+        </li>
+        <li>
+          Server backups keep the old plaintext until they age out. A breach of a backup is safe only
+          once the longest retention window has passed since that clean-up.
+        </li>
+      </ul>
+      <Actions secondary={{label: 'Close', onClick: onClose}}/>
+    </>
+  )
 }

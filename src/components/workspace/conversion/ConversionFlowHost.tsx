@@ -1,14 +1,13 @@
 import * as DialogPrimitive from '@radix-ui/react-dialog'
-import { useCallback, useEffect, useMemo } from 'react'
+import { useEffect, useMemo } from 'react'
 import { ErrorBoundary, type FallbackProps } from 'react-error-boundary'
 import { Button } from '@/components/ui/button'
 import { useIsLocalOnly } from '@/components/Login'
 import { Explanation, GateCard } from '@/components/workspace/keyUi'
 import { useRepo } from '@/context/repo'
 import { cancelArmedHolds } from '@/shortcuts/holdRegistry'
-import type { ConversionUi } from '@/sync/conversion/runConversion'
 import { ConversionFlow } from './ConversionFlow'
-import { conversionFlowDeps, conversionUnavailable } from './conversionFlowDeps'
+import { conversionSetup } from './conversionFlowDeps'
 import { closeConversionFlow, useConversionFlowTarget, type ConversionFlowTarget } from './conversionFlowStore'
 
 const preventDefault = (event: Event) => event.preventDefault()
@@ -60,19 +59,8 @@ export function ConversionFlowHost() {
 function HostedFlow({target}: {target: ConversionFlowTarget}) {
   const repo = useRepo()
   const localOnly = useIsLocalOnly()
-  const unavailable = useMemo(() => conversionUnavailable(localOnly), [localOnly])
-  const makeDeps = useCallback(
-    (ui: ConversionUi, signal: AbortSignal) => conversionFlowDeps(repo, target.workspaceId, ui, signal),
-    [repo, target.workspaceId],
-  )
-  return (
-    <ConversionFlow
-      workspaceName={target.workspaceName}
-      unavailable={unavailable}
-      makeDeps={makeDeps}
-      onClose={closeConversionFlow}
-    />
-  )
+  const setup = useMemo(() => conversionSetup(repo, target.workspaceId, localOnly), [repo, target.workspaceId, localOnly])
+  return <ConversionFlow workspaceName={target.workspaceName} setup={setup} onClose={closeConversionFlow}/>
 }
 
 function FlowCrashed({error}: FallbackProps) {

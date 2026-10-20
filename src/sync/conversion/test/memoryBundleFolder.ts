@@ -53,6 +53,14 @@ export class MemoryBundleFolder implements BundleFolder {
     if (!this.files.delete(name) && !this.folders.delete(name)) throw new DOMException(`${name} not found`, 'NotFoundError')
   }
 
+  /** A copy of this folder and everything in it, as a moved bundle would be. */
+  copy(name = this.name): MemoryBundleFolder {
+    const copy = new MemoryBundleFolder(name)
+    for (const [file, bytes] of this.files) copy.files.set(file, bytes.slice())
+    for (const [folder, inner] of this.folders) copy.folders.set(folder, inner.copy())
+    return copy
+  }
+
   text(name: string): string {
     return new TextDecoder().decode(this.files.get(name))
   }

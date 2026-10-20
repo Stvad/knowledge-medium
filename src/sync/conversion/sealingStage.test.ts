@@ -2,20 +2,24 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { InMemoryWorkspaceKeyStore } from '../keys/keyStore.js'
 import { mintWorkspaceKey, type MintedWorkspaceKey } from '../keys/mintWorkspaceKey.js'
 import type { BundleFolder } from './bundle/bundleParts.js'
-import { InMemoryBundleRecordStore } from './bundle/bundleRecord.js'
+import { InMemoryBundleRecordStore, type BundleRecord, type BundleRecordStore } from './bundle/bundleRecord.js'
 import { BUNDLE_PARTS } from './bundle/manifest.js'
 import { verifyBundle } from './bundle/verifyBundle.js'
 import { runConversion, type ConversionFlowDeps, type ConversionUi } from './runConversion.js'
 import { contentColumnsOf, isSealedRow } from './sealing.js'
 import type { BundleRetakeReason } from './sealingStage.js'
 import { openRow, seedPlaintext, WS } from './test/conversionFixtures.js'
+import { fakeMediaHashOf } from './test/fakeAttachmentStorage.js'
 import { FakeConversionServer, notSealedRefusal, type FakeBlockRow } from './test/fakeConversionServer.js'
 import { flowDeps, USER } from './test/flowFixtures.js'
 import { MemoryBundleFolder } from './test/memoryBundleFolder.js'
 
 /** The user past the flip: confirms the contract, picks a folder when asked. */
 class SealingUi implements ConversionUi {
+  constructor(private readonly bundles: BundleRecordStore) {}
   readonly parent = new MemoryBundleFolder('picked')
+  /** The bundle record as the finish prompt found it. */
+  atFinish: BundleRecord | null = null
   readonly folderReasons: Array<BundleRetakeReason | null> = []
   reopened = 0
   readonly problems: Array<string | null> = []
@@ -38,6 +42,13 @@ class SealingUi implements ConversionUi {
     this.problems.push(problem)
     return this.reopenWith(recorded)
   }
+  async confirmNoVerifiedSource() {}
+  async chooseExistingBundle(): Promise<BundleFolder> {
+    throw new Error('this device took the bundle')
+  }
+  async confirmFinish() {
+    this.atFinish = await this.bundles.get(USER, WS)
+  }
   status() {}
 }
 
@@ -57,7 +68,7 @@ beforeEach(async () => {
   await keyStore.put(USER, WS, key.record)
   server.flip(WS, key.canary)
   bundles = new InMemoryBundleRecordStore()
-  ui = new SealingUi()
+  ui = new SealingUi(bundles)
   upgraded = 0
 })
 
@@ -92,18 +103,19 @@ describe('the sealing stage', () => {
   it('takes and verifies a bundle, re-seals, verifies, purges, then upgrades the pin', async () => {
     const through = Math.max(...server.history(WS).map(row => row.event_id))
 
-    expect(await run()).toEqual({kind: 'stopped', stage: {kind: 'cleaning', canary: key.canary}})
+    expect(await run()).toEqual({kind: 'done'})
 
-    expect(await phase()).toBe('cleaning')
+    expect(await phase()).toBeNull()
     expect(server.history(WS)).toEqual([])
     expect(server.workspaceRows(WS).every(isSealedRow)).toBe(true)
     for (const row of seeded) expect(await openRow(key.record.wk, server.row(row.id))).toEqual(contentColumnsOf(row))
     expect(ui.folderReasons).toEqual([null])
     expect(bundleFolders()).toHaveLength(1)
-    // The record stays after the purge: the attachment cleaner reads the bundle through it.
-    expect(await record()).toMatchObject({through, historyRows: 5, blockRows: 5})
-    const {manifestSha256} = await verifyBundle({folder: bundleFolders()[0], workspaceId: WS})
-    expect((await record())?.manifestSha256).toBe(manifestSha256)
+    // The record outlives the purge, for the attachment cleaner, and goes once the conversion is done.
+    expect(ui.atFinish).toMatchObject({through, historyRows: 5, blockRows: 5})
+    const {manifestSha256} = await verifyBundle({folder: bundleFolders()[0], workspaceId: WS, mediaHashOf: fakeMediaHashOf})
+    expect(ui.atFinish?.manifestSha256).toBe(manifestSha256)
+    expect(await record()).toBeNull()
     expect(upgraded).toBe(1)
   })
 
@@ -116,7 +128,7 @@ describe('the sealing stage', () => {
 
     expect(server.workspaceRows(WS).filter(isSealedRow)).toHaveLength(2)
 
-    expect(await run()).toMatchObject({kind: 'stopped', stage: {kind: 'cleaning'}})
+    expect(await run()).toEqual({kind: 'done'})
     expect(ui.folderReasons).toEqual([null])
     expect(bundleFolders()).toHaveLength(1)
   })
@@ -156,7 +168,7 @@ describe('the sealing stage', () => {
       folder.setText(BUNDLE_PARTS.blocks, folder.text(BUNDLE_PARTS.blocks).replace('text 0', 'edited'))
     }
 
-    expect(await run()).toMatchObject({kind: 'stopped', stage: {kind: 'cleaning'}})
+    expect(await run()).toEqual({kind: 'done'})
 
     expect(ui.folderReasons).toEqual([null, 'changed'])
     // The server is as the first pass left it, so the re-seal and verify don't run again.
@@ -164,7 +176,7 @@ describe('the sealing stage', () => {
     const retaken = bundleFolders()[1]
     expect(retaken.text(BUNDLE_PARTS.blocks).split('\n').filter(Boolean).map(line => contentColumnsOf(JSON.parse(line))))
       .toEqual(seeded.map(contentColumnsOf))
-    expect((await record())?.manifestSha256).toBe((await verifyBundle({folder: retaken, workspaceId: WS})).manifestSha256)
+    expect(ui.atFinish?.manifestSha256).toBe((await verifyBundle({folder: retaken, workspaceId: WS, mediaHashOf: fakeMediaHashOf})).manifestSha256)
   })
 
   it('asks for the folder again when this device lost access to it', async () => {
@@ -172,19 +184,19 @@ describe('the sealing stage', () => {
     await run({canReadFolder: async () => ++calls > 1})
 
     expect(ui.reopened).toBe(1)
-    expect(await phase()).toBe('cleaning')
+    expect(await phase()).toBeNull()
   })
 
   it('records the folder the user picks when the bundle has moved', async () => {
-    const moved = new MemoryBundleFolder('moved')
+    let moved: MemoryBundleFolder | null = null
     ui.reopenBundleFolder = async ({recorded}) => {
-      for (const [name, bytes] of (recorded as MemoryBundleFolder).files) moved.files.set(name, bytes)
+      moved ??= (recorded as MemoryBundleFolder).copy('moved')
       return moved
     }
 
     await run({canReadFolder: async folder => folder === moved})
 
-    expect((await record())?.folder).toBe(moved)
+    expect(ui.atFinish?.folder).toBe(moved)
   })
 
   /** The recorded folder, gone: moved, deleted, or on a drive that was unplugged. */
@@ -196,29 +208,24 @@ describe('the sealing stage', () => {
       }
     }
   }
-  const copyOf = (folder: MemoryBundleFolder, name = folder.name) => {
-    const copy = new MemoryBundleFolder(name)
-    for (const [file, bytes] of folder.files) copy.files.set(file, bytes)
-    return copy
-  }
 
   it('asks for a folder it can no longer read rather than drop the bundle', async () => {
     let moved: MemoryBundleFolder | null = null
     loseRecordedFolder()
-    ui.reopenWith = () => (moved ??= copyOf(original!))
+    ui.reopenWith = () => (moved ??= original!.copy())
     let original: MemoryBundleFolder | null = null
-    server.beforePatch = () => { original ??= copyOf(bundleFolders()[0]) }
+    server.beforePatch = () => { original ??= bundleFolders()[0].copy() }
 
-    expect(await run()).toMatchObject({kind: 'stopped', stage: {kind: 'cleaning'}})
+    expect(await run()).toEqual({kind: 'done'})
     expect(ui.folderReasons).toEqual([null])
     expect(ui.problems).toEqual([expect.stringMatching(/can't be read/)])
-    expect((await record())?.folder).toBe(moved)
+    expect(ui.atFinish?.folder).toBe(moved)
   })
 
   it('asks again after a wrong pick, and finds the bundle inside the folder it was made in', async () => {
     loseRecordedFolder()
     let original: MemoryBundleFolder | null = null
-    server.beforePatch = () => { original ??= copyOf(bundleFolders()[0]) }
+    server.beforePatch = () => { original ??= bundleFolders()[0].copy() }
     const picks: BundleFolder[] = []
     ui.reopenWith = () => {
       // A regression that never finds the bundle stops here rather than looping.
@@ -233,9 +240,9 @@ describe('the sealing stage', () => {
       return pick
     }
 
-    expect(await run()).toMatchObject({kind: 'stopped', stage: {kind: 'cleaning'}})
+    expect(await run()).toEqual({kind: 'done'})
     expect(ui.reopened).toBe(2)
-    expect((await record())?.folder).toBe(original)
+    expect(ui.atFinish?.folder).toBe(original)
   })
 
   it('takes a new bundle when the user asks for one', async () => {
@@ -255,7 +262,7 @@ describe('the sealing stage', () => {
       folder.files.set(BUNDLE_PARTS.blocks, bytes)
     }
 
-    expect(await run()).toMatchObject({kind: 'stopped', stage: {kind: 'cleaning'}})
+    expect(await run()).toEqual({kind: 'done'})
     expect(ui.folderReasons).toEqual([null, 'changed'])
   })
 
@@ -271,7 +278,7 @@ describe('the sealing stage', () => {
     }
 
     // The retry of the lost one meets the phase already moved on.
-    expect(await run()).toMatchObject({kind: 'stopped', stage: {kind: 'cleaning'}})
+    expect(await run()).toEqual({kind: 'done'})
   })
 
   it('re-seals and retries under the same bundle after a not-sealed refusal', async () => {
@@ -284,7 +291,7 @@ describe('the sealing stage', () => {
       return purge(...args)
     }
 
-    expect(await run()).toMatchObject({kind: 'stopped', stage: {kind: 'cleaning'}})
+    expect(await run()).toEqual({kind: 'done'})
     expect(ui.folderReasons).toEqual([null])
   })
 
@@ -300,7 +307,7 @@ describe('the sealing stage', () => {
       return purge(...args)
     }
 
-    expect(await run()).toMatchObject({kind: 'stopped', stage: {kind: 'cleaning'}})
+    expect(await run()).toEqual({kind: 'done'})
     expect(ui.folderReasons).toEqual([null, 'stale'])
     // Something wrote the workspace, so the second pass re-seals and verifies again.
     expect(server.calls.filter(call => call.method === 'readBlockPage')).toHaveLength(8)
@@ -327,7 +334,7 @@ describe('the sealing stage', () => {
       }
     }
 
-    expect(await run()).toMatchObject({kind: 'stopped', stage: {kind: 'cleaning'}})
+    expect(await run()).toEqual({kind: 'done'})
     expect(upgraded).toBe(1)
   })
 
@@ -340,7 +347,7 @@ describe('the sealing stage', () => {
     // The retry sees the phase moved on; this run's own upgrade then crashes.
     await expect(run({upgradePin: async () => { throw new Error('crash before the pin upgrade') }})).rejects.toThrow('crash before the pin upgrade')
 
-    expect(await run()).toEqual({kind: 'stopped', stage: {kind: 'cleaning', canary: key.canary}})
+    expect(await run()).toEqual({kind: 'done'})
     expect(upgraded).toBe(1)
   })
 
@@ -364,6 +371,7 @@ describe('the sealing stage', () => {
 
     await run({keepAwake})
 
-    expect(awake).toEqual(['on', 'bundle', 'off'])
+    // Then again for the attachment cleanup.
+    expect(awake).toEqual(['on', 'bundle', 'off', 'on', 'off'])
   })
 })

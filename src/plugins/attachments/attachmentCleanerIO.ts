@@ -11,6 +11,7 @@ import type { AttachmentCleanerIO, MediaRef, ObjectPath } from '@/sync/conversio
 import { collectPaged } from './audit/paginate.js'
 import { ATTACHMENTS_BUCKET, BlobPutError, type BlobStore } from './blobStore.js'
 import type { ByteStore } from './byteStore.js'
+import type { ByteUploadStore } from './uploadStore.js'
 import { MEDIA_TYPE, mediaHashOf } from './mediaBlock.js'
 
 const LIST_PAGE = 1000
@@ -93,6 +94,7 @@ export interface AttachmentCleanerIODeps {
   readonly client: SupabaseClient
   readonly blobStore: BlobStore
   readonly byteStore: ByteStore
+  readonly uploadStore: ByteUploadStore
   readonly repo: Repo
   readonly userId: string
   readonly workspaceId: string
@@ -121,5 +123,23 @@ export const createAttachmentCleanerIO = (deps: AttachmentCleanerIODeps): Attach
       return listMediaBlocks(repo, workspaceId)
     },
     readLocal: name => byteStore.get(userId, workspaceId, name),
+    writeLocal: (name, bytes) => byteStore.put(userId, workspaceId, name, bytes),
+    mediaHashOf: propertiesJson => {
+      let properties: unknown
+      try {
+        properties = JSON.parse(propertiesJson)
+      } catch {
+        return null
+      }
+      if (typeof properties !== 'object' || properties === null) return null
+      const types = (properties as {types?: unknown}).types
+      if (!Array.isArray(types) || !types.includes(MEDIA_TYPE)) return null
+      return mediaHashOf(properties as Record<string, unknown>)
+    },
+    async pendingUploads() {
+      const statuses = ['staged', 'pending', 'failed'] as const
+      const records = await Promise.all(statuses.map(status => deps.uploadStore.listByStatus(userId, status)))
+      return records.flat().filter(record => record.workspaceId === workspaceId).length
+    },
   }
 }

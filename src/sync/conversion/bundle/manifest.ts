@@ -8,6 +8,7 @@
  * Key-loss recovery (#1302) reads it too, so its shape is versioned.
  */
 
+import type { OtherObjectEntry } from './attachmentParts.js'
 import type { JsonlDigest, PartDigest } from './bundleParts.js'
 
 export const BUNDLE_FORMAT = 'km-e2ee-conversion-bundle'
@@ -42,4 +43,6 @@ export interface BundleManifest {
    *  user confirmed before the flip have no hash-verified source: the only
    *  media blocks `attachments/` may lack. */
   readonly noVerifiedSource: readonly string[]
+  /** Every other Storage object archived under `other-objects/`. */
+  readonly otherObjects: readonly OtherObjectEntry[]
 }

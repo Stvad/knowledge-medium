@@ -20,6 +20,11 @@ export interface BundleRecord {
   readonly historyRows: number
   readonly blockRows: number
   readonly exportedAt: string
+  /** Media hashes the bundle holds no bytes for: confirmed before it was taken. */
+  readonly noVerifiedSource: readonly string[]
+  /** The Storage paths archived under `other-objects/`: the only objects the
+   *  cleaner may delete without converting them. */
+  readonly otherObjectPaths: readonly string[]
   /** The bundle's folder: a `FileSystemDirectoryHandle` in the browser. */
   readonly folder: BundleFolder
 }
@@ -32,6 +37,8 @@ export const bundleRecordOf = ({manifest, manifestSha256, counted}: VerifiedBund
   historyRows: counted.historyRows,
   blockRows: counted.blockRows,
   exportedAt: manifest.exportedAt,
+  noVerifiedSource: manifest.noVerifiedSource,
+  otherObjectPaths: manifest.otherObjects.map(entry => entry.path),
   folder,
 })
 
