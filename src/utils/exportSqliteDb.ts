@@ -98,8 +98,19 @@ export async function chooseRawSqliteExportFile(
 export async function localDbFileBytes(userId: string): Promise<number> {
   const root = await navigator.storage.getDirectory()
   const dbFilename = dbFilenameForUser(userId)
-  const sizes = await Promise.all(['', ...WRITE_AHEAD_SIDECAR_SUFFIXES].map(suffix =>
-    root.getFileHandle(dbFilename + suffix).then(handle => handle.getFile()).then(file => file.size, () => 0)))
+  // Only a sidecar may be absent; any other failure is no size at all.
+  const sizeOf = async (name: string, optional: boolean) => {
+    try {
+      return (await (await root.getFileHandle(name)).getFile()).size
+    } catch (error) {
+      if (optional && error instanceof DOMException && error.name === 'NotFoundError') return 0
+      throw error
+    }
+  }
+  const sizes = await Promise.all([
+    sizeOf(dbFilename, false),
+    ...WRITE_AHEAD_SIDECAR_SUFFIXES.map(suffix => sizeOf(dbFilename + suffix, true)),
+  ])
   return sizes.reduce((sum, size) => sum + size, 0)
 }
 

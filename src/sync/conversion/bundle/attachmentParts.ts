@@ -164,6 +164,9 @@ export interface AttachmentSurvey {
   readonly bundleBytes: number
   /** Storage-only copies this device had no room to keep. */
   readonly unkeptBytes: number
+  /** What was still free for them when the survey stopped keeping: the user
+   *  frees `unkeptBytes` less this. */
+  readonly spareBytes: number
 }
 
 export interface SurveyProgress {
@@ -212,6 +215,19 @@ export const surveyAttachments = async ({
   let bundleBytes = 0
   let budget = keepBudget ?? Infinity
   let unkeptBytes = 0
+  // Once one copy doesn't fit, none after it is kept: what is left free then
+  // is the spare that offsets the shortfall.
+  const keep = async (hash: string, bytes: Uint8Array<ArrayBuffer>) => {
+    if (unkeptBytes === 0 && bytes.length <= budget) {
+      if (await keptLocally(source, hash, bytes)) {
+        budget -= bytes.length
+        return
+      }
+      // The store is full, whatever the estimate said.
+      budget = 0
+    }
+    unkeptBytes += bytes.length
+  }
   const progress = {checked: 0, total: hashes.length + otherObjects.length}
   const tick = () => onProgress?.({...progress, checked: ++progress.checked})
   const measure = (what: string, bytes: number) => {
@@ -227,13 +243,7 @@ export const surveyAttachments = async ({
       continue
     }
     measure(hash, copy.bytes.length)
-    if (copy.from === 'local') continue
-    if (copy.bytes.length <= budget && (await keptLocally(source, hash, copy.bytes))) {
-      budget -= copy.bytes.length
-    } else {
-      budget = 0
-      unkeptBytes += copy.bytes.length
-    }
+    if (copy.from === 'storage') await keep(hash, copy.bytes)
   }
 
   for (const path of otherObjects) {
@@ -244,7 +254,7 @@ export const surveyAttachments = async ({
     if (sha256Hex(bytes) === path) measure(path, bytes.length)
     else bundleBytes += bytes.length
   }
-  return {noVerifiedSource, oversized, bundleBytes, unkeptBytes}
+  return {noVerifiedSource, oversized, bundleBytes, unkeptBytes, spareBytes: unkeptBytes > 0 ? budget : 0}
 }
 
 export interface AttachmentParts {

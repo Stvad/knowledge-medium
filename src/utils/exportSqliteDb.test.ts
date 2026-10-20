@@ -9,6 +9,7 @@ import {
   exportRawSqliteDbToFile,
   getRawSqliteDbBackup,
   importRawSqliteDb,
+  localDbFileBytes,
   removeRecoveryBackupTemps,
 } from './exportSqliteDb'
 
@@ -85,6 +86,27 @@ describe('exportRawSqliteDbToFile', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('sizes the database with its sidecars, failing on anything but an absent sidecar', async () => {
+    const storage = (files: Record<string, number | Error>) => Object.defineProperty(navigator, 'storage', {
+      configurable: true,
+      value: {getDirectory: async () => ({
+        getFileHandle: async (name: string) => {
+          const entry = Object.entries(files).find(([suffix]) => name.endsWith(`.db${suffix}`))?.[1]
+          if (entry === undefined) throw new DOMException(name, 'NotFoundError')
+          if (entry instanceof Error) throw entry
+          return {getFile: async () => fakeFile(new Uint8Array(entry))}
+        },
+      })},
+    })
+
+    storage({'': 10, '-wa0': 5})
+    expect(await localDbFileBytes('user-1')).toBe(15)
+    storage({'-wa0': 5})
+    await expect(localDbFileBytes('user-1')).rejects.toMatchObject({name: 'NotFoundError'})
+    storage({'': 10, '-wa1': new DOMException('denied', 'NotAllowedError')})
+    await expect(localDbFileBytes('user-1')).rejects.toMatchObject({name: 'NotAllowedError'})
   })
 
   it('budgets the copy for the write-ahead sidecars the checkpoint folds in', async () => {

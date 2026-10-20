@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { createSupabaseConversionServer, IDS_PER_FILTER } from './conversionServer.js'
 
 type Row = Record<string, unknown>
@@ -138,7 +138,7 @@ describe('createSupabaseConversionServer', () => {
 
     await createSupabaseConversionServer(client).convertWorkspaceToE2ee(WS, ENVELOPE)
 
-    expect(rpcs).toEqual([{fn: 'convert_workspace_to_e2ee', args: {p_workspace_id: WS, p_wk_canary: ENVELOPE}}])
+    expect(rpcs.map(({fn, args}) => ({fn, args}))).toEqual([{fn: 'convert_workspace_to_e2ee', args: {p_workspace_id: WS, p_wk_canary: ENVELOPE}}])
   })
 
   it('lets the run cancel every request but the flip, which may commit with nobody waiting', async () => {
@@ -149,12 +149,19 @@ describe('createSupabaseConversionServer', () => {
     await server.readBlockPage(WS, null, 1)
     await server.applyBlockPatches([])
     await server.convertWorkspaceToE2ee(WS, ENVELOPE)
+    run.abort()
 
     expect(signals).toEqual([run.signal])
-    expect(rpcs.map(call => [call.fn, call.signal])).toEqual([
-      ['apply_block_patches', run.signal],
-      ['convert_workspace_to_e2ee', undefined],
-    ])
+    expect(rpcs.map(call => call.fn)).toEqual(['apply_block_patches', 'convert_workspace_to_e2ee'])
+    expect(rpcs[0].signal).toBe(run.signal)
+    expect(rpcs[1].signal?.aborted).toBe(false)
+  })
+
+  it('gives up waiting on a flip request past its own deadline', async () => {
+    const {client, rpcs} = fakeClient({workspaces: []})
+    await createSupabaseConversionServer(client, undefined, {flipTimeoutMs: 1}).convertWorkspaceToE2ee(WS, ENVELOPE)
+
+    await vi.waitFor(() => expect(rpcs[0].signal?.aborted).toBe(true))
   })
 
   it('reads a workspace this session cannot see as null', async () => {

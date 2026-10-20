@@ -132,9 +132,18 @@ const failed = (what: string, error: {code?: string; message: string}, status: n
     {code: error.code, status},
   )
 
-/** `signal` cancels every read and write but the flip, which is never sent
- *  half-way: an aborted flip request may still commit, with nobody waiting. */
-export const createSupabaseConversionServer = (client: SupabaseClient, signal?: AbortSignal): ConversionServer => {
+/** How long the flip request may take before the run stops waiting for it
+ *  and reads the server's stage instead. */
+export const FLIP_REQUEST_TIMEOUT_MS = 60_000
+
+/** `signal` cancels every read and write but the flip, which Stop never cuts:
+ *  an aborted flip request may still commit, with nobody waiting. The flip has
+ *  its own deadline instead, after which the run reads what the server holds. */
+export const createSupabaseConversionServer = (
+  client: SupabaseClient,
+  signal?: AbortSignal,
+  {flipTimeoutMs = FLIP_REQUEST_TIMEOUT_MS}: {flipTimeoutMs?: number} = {},
+): ConversionServer => {
   const cancellable = <Q extends {abortSignal(signal: AbortSignal): Q}>(query: Q): Q =>
     signal ? query.abortSignal(signal) : query
   return {
@@ -250,7 +259,7 @@ export const createSupabaseConversionServer = (client: SupabaseClient, signal?: 
       const {error, status} = await client.rpc('convert_workspace_to_e2ee', {
         p_workspace_id: workspaceId,
         p_wk_canary: canary,
-      })
+      }).abortSignal(AbortSignal.timeout(flipTimeoutMs))
       if (error) throw failed('convert_workspace_to_e2ee', error, status)
     },
   }

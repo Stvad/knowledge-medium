@@ -129,8 +129,7 @@ const scanServer = async (
 }
 
 /** The blockers this device can change on its own at any moment: checked in
- *  preflight, and again right before the flip, since the prompts in between
- *  can stay open indefinitely. */
+ *  preflight, and again before every flip request. */
 export const localBlockers = async (
   environment: PreflightEnvironment,
   attachments: Pick<ConversionAttachmentsIO, 'pendingUploads'>,
@@ -169,15 +168,17 @@ export const runPreflight = async ({
   readonly onProgress?: (progress: SurveyProgress) => void
 }): Promise<PreflightOutcome> => {
   const blockers = await localBlockers(environment, attachments, signal)
-  const scan = await scanServer(server, workspaceId, attachments, signal)
-  if (scan.sealedLooking.length > 0) blockers.push({kind: 'sealed-looking-rows', blockIds: scan.sealedLooking})
-  // Before the survey, which downloads every attachment only Storage holds.
+  // Before the scan, which reads every row of the workspace: these the user
+  // can fix in moments.
   if (blockers.length > 0) return {kind: 'blocked', blockers}
+  const scan = await scanServer(server, workspaceId, attachments, signal)
+  if (scan.sealedLooking.length > 0) return {kind: 'blocked', blockers: [{kind: 'sealed-looking-rows', blockIds: scan.sealedLooking}]}
   const free = await environment.freeLocalBytes()
   const keepBudget = free === null ? null : Math.max(0, free - LOCAL_HEADROOM_BYTES)
   const survey = await surveyAttachments({source: attachments, mediaHashes: scan.media.hashes(), keepBudget, signal, onProgress})
   if (survey.unkeptBytes > 0) {
-    return {kind: 'blocked', blockers: [{kind: 'local-space', neededBytes: survey.unkeptBytes, freeBytes: keepBudget ?? 0}]}
+    const neededBytes = survey.unkeptBytes - survey.spareBytes
+    return {kind: 'blocked', blockers: [{kind: 'local-space', neededBytes, freeBytes: survey.spareBytes}]}
   }
   return {
     kind: 'ready',

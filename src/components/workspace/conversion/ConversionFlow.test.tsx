@@ -33,10 +33,10 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-const makeDeps = (ui: ConversionUi, signal: AbortSignal): ConversionFlowDeps =>
-  flowDeps(server, ui, {keyStore, bundles, attachments: storage.io, signal})
+const makeDepsWith = (overrides: Partial<ConversionFlowDeps> = {}) => (ui: ConversionUi, signal: AbortSignal): ConversionFlowDeps =>
+  flowDeps(server, ui, {keyStore, bundles, attachments: storage.io, signal, ...overrides})
 
-const renderFlow = (setup: ConversionSetup = {kind: 'ready', makeDeps}) =>
+const renderFlow = (setup: ConversionSetup = {kind: 'ready', makeDeps: makeDepsWith()}) =>
   render(<ConversionFlow workspaceName="Vault" setup={setup} onClose={() => {}}/>)
 const click = (name: RegExp) => fireEvent.click(screen.getByRole('button', {name}))
 const flipped = async () => {
@@ -80,6 +80,23 @@ describe('ConversionFlow', () => {
     expect(await flipped()).toBe(true)
     expect(await keyStore.get(USER, WS)).not.toBeNull()
     expect(picked.folders.size).toBe(1)
+  })
+
+  it('offers no Stop while this device decrypts the workspace, which runs to its end', async () => {
+    const minted = await mintWorkspaceKey(WS)
+    await keyStore.put(USER, WS, minted.record)
+    server.flip(WS, minted.canary)
+    server.setPhase(WS, 'cleaning')
+    await bundles.put(USER, WS, emptyBundleRecord())
+    let upgrade!: () => void
+    renderFlow({kind: 'ready', makeDeps: makeDepsWith({upgradePin: () => new Promise(resolve => (upgrade = () => resolve({ok: true})))})})
+    click(/^start$/i)
+    fireEvent.click(await screen.findByLabelText(/every other device/i))
+    click(/^continue$/i)
+
+    expect(await screen.findByText(/decrypting the workspace on this device/i)).toBeInTheDocument()
+    expect(screen.queryByRole('button', {name: /stop/i})).toBeNull()
+    upgrade()
   })
 
   it('offers no Stop while the flip request is out', async () => {

@@ -131,9 +131,15 @@ const takeVerifiedBundle = async (deps: SealingDeps, reason: BundleRetakeReason 
     await deps.bundles.put(userId, workspaceId, record)
     return record
   } catch (error) {
-    // A bundle that never verified is a plaintext copy nothing will use.
-    await parent.removeEntry(folder.name, {recursive: true}).catch(() => {})
-    throw error
+    // A bundle that never verified is a plaintext copy nothing will use, and
+    // one left behind is the user's to delete.
+    const removed = await parent.removeEntry(folder.name, {recursive: true}).then(() => true, () => false)
+    if (removed) throw error
+    throw new Error(
+      `${error instanceof Error ? error.message : String(error)} The partly written recovery bundle "${folder.name}" ` +
+        "couldn't be removed: delete it yourself, since it holds a plaintext copy of the workspace.",
+      {cause: error},
+    )
   }
 }
 
