@@ -50,7 +50,7 @@
 
 import type { GetCek, GetMaterializability, UploadMode } from '../transform.js'
 import { readUsableKeyRecord, type WorkspaceKeyStore } from './keyStore.js'
-import { getModePin } from './modePin.js'
+import { getModePin, type ModePin } from './modePin.js'
 
 export interface SyncResolver {
   /** Observer: how to materialize a workspace's staging rows. */
@@ -83,6 +83,18 @@ export const readContentKeyHmac = async (
   workspaceId: string,
 ): Promise<CryptoKey | null> =>
   (await readUsableKeyRecord(keyStore, userId, workspaceId))?.contentKeyHmac ?? null
+
+/** The upload-mode policy (module header) for one pin, reading the synced
+ *  `encryption_mode` only when the pin leaves the answer open. Throws when that
+ *  read does. Also decides the alias-seat namespace (`@/data/aliasSeatNamespace`),
+ *  which may be public only when the rows it names leave as plaintext. */
+export const uploadModeFor = async (
+  pin: ModePin | null,
+  readSyncedEncryptionMode: () => Promise<string | null>,
+): Promise<UploadMode> => {
+  if (pin === 'e2ee') return 'e2ee'
+  return (await readSyncedEncryptionMode()) === 'e2ee' ? 'hold' : 'none'
+}
 
 export const createSyncResolver = (
   getUserId: () => string | null,
@@ -136,13 +148,13 @@ export const createSyncResolver = (
   const getUploadMode = async (workspaceId: string): Promise<UploadMode> => {
     const userId = getUserId()
     if (!userId) return 'none'
-    if (getModePin(userId, workspaceId) === 'e2ee') return 'e2ee'
     // Synced, not live: a write queued before this device saw the flip goes out
     // plaintext, the ciphertext trigger refuses it, and it is quarantined until
     // Retry after the upgrade (docs/workspace-e2ee-conversion.md §3). Holding it
     // instead would block the checkpoint that tells the device about the flip.
     try {
-      return (await serverSaysE2ee(workspaceId)) ? 'hold' : 'none'
+      return await uploadModeFor(
+        getModePin(userId, workspaceId), () => readSyncedEncryptionMode(workspaceId))
     } catch (err) {
       // A held write is retried with the queue, so holding loses nothing.
       console.warn(`[syncResolver] encryption_mode read failed for ${workspaceId}; holding uploads`, err)

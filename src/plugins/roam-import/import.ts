@@ -51,6 +51,11 @@ import {
   aliasSeatReaderFromTx,
   resolveAliasSeatId,
 } from '@/data/targets'
+import {
+  aliasSeatNamespacesInTx,
+  resolveAliasSeatNamespaces,
+  type AliasSeatNamespaces,
+} from '@/data/aliasSeatNamespace'
 import { parseLiteralDailyPageTitle } from '@/utils/relativeDate'
 import type { Repo } from '@/data/repo'
 import {
@@ -684,7 +689,8 @@ const ensureAliasSeat = async (
   {alias, workspaceId}: {alias: string; workspaceId: string},
   typeSnapshot: TypeRegistrySnapshot,
 ): Promise<{ id: string; inserted: boolean }> => {
-  const id = await resolveAliasSeatId(aliasSeatReaderFromTx(tx), alias, workspaceId)
+  const seats = await aliasSeatNamespacesInTx(tx, repo, workspaceId)
+  const id = await resolveAliasSeatId(seats, aliasSeatReaderFromTx(tx), alias, workspaceId)
   const properties = {
     [aliasesProp.name]: aliasesProp.codec.encode([alias]),
   }
@@ -996,6 +1002,7 @@ const resolveAliases = async (
 ): Promise<AliasResolution> => {
   const aliasIdMap = new Map<string, string>()
   const aliasesNeedingSeat: string[] = []
+  let seats: AliasSeatNamespaces | undefined
 
   // First, alias = imported-page-title shortcuts to that page's final id
   // or page_alias-derived alias shortcuts to that page's final id
@@ -1041,7 +1048,11 @@ const resolveAliases = async (
           // The seat row will be created in the main import tx; if slot
           // 0 is occupied by a post-rename row that no longer claims
           // this alias, the probe advances to the next stable slot.
+          // Resolved here, before the main import tx, so its in-tx probe
+          // finds the namespace cached (`@/data/aliasSeatNamespace`).
+          seats ??= await resolveAliasSeatNamespaces(repo, workspaceId)
           const id = await resolveAliasSeatId(
+            seats,
             aliasSeatReaderFromDb(repo.db),
             alias,
             workspaceId,

@@ -198,7 +198,7 @@ export const createWorkspaceKeyStore = (): WorkspaceKeyStore => {
 // store so a WK pasted/minted in a flow is the same handle the observer and
 // upload connector resolve — an IndexedDB-backed instance is shared storage,
 // but a single instance also keeps the in-memory fallback coherent within a
-// session. Tests inject their own store and never touch this singleton.
+// session.
 let sharedKeyStore: WorkspaceKeyStore | null = null
 export const getWorkspaceKeyStore = (): WorkspaceKeyStore =>
   (sharedKeyStore ??= createWorkspaceKeyStore())
