@@ -380,6 +380,23 @@ describe('cleanAttachments: the proof', () => {
     expect(await holdsKeyed(store, photo)).toBe(true)
   })
 
+  it("proves a block under the bundle's hash as well as this device's, since either may be the newer", async () => {
+    const store = createFakeAttachmentStorage()
+    const before = utf8('the attachment this device last saw')
+    const current = utf8('the attachment the server holds')
+    // This device's row still carries the older hash, whose object is in place;
+    // the current one's only copy is in the bundle.
+    store.media.push({blockId: 'block-1', contentHash: await hashOf(before)})
+    store.objects.set(await keyedName(before), await seal(before))
+    const bundle = createFakeBundle(new Map(), new Map([[await hashOf(current), current]]), new Set(), [
+      {blockId: 'block-1', contentHash: await hashOf(current)},
+    ])
+    const report = await clean(store, bundle)
+    expect(report.rebuilt).toEqual([await hashOf(current)])
+    expect(await holdsKeyed(store, current)).toBe(true)
+    expect(report.proof).toEqual({kind: 'passed', unrecoverable: []})
+  })
+
   it('with a copy outside Storage, a plaintext occupant is replaced from that copy', async () => {
     const store = createFakeAttachmentStorage()
     const photo = utf8('a photo')

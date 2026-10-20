@@ -247,12 +247,14 @@ type OutsideCopy =
 
 type MediaVerdict = 'kept' | 'rebuilt' | 'unverified' | 'unrecoverable'
 
-/** This device's media blocks, and the bundle's for blocks this device's view
- *  doesn't hold yet: a block it holds carries its current hash. */
+/** This device's media blocks and the bundle's, each pairing of block and hash
+ *  once. A block whose hash differs between the two is proved under both:
+ *  either view may be the stale one. */
 const withBundleMedia = (own: readonly MediaRef[], bundle: ConversionBundle | null): readonly MediaRef[] => {
   if (!bundle) return own
-  const held = new Set(own.map(ref => ref.blockId))
-  return [...own, ...bundle.media.filter(ref => !held.has(ref.blockId))]
+  const pairing = (ref: MediaRef) => `${ref.blockId}\n${ref.contentHash}`
+  const held = new Set(own.map(pairing))
+  return [...own, ...bundle.media.filter(ref => !held.has(pairing(ref)))]
 }
 
 const bytesEqual = (a: Uint8Array, b: Uint8Array): boolean => {
