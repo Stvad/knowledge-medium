@@ -272,6 +272,23 @@ const utf8Hex = (text: string): string => sha256Hex(bytesOf(text))
 const attachmentsDir = () => folder.folders.get('attachments')!
 const otherDir = () => folder.folders.get('other-objects')!
 
+describe('verifyBundle manifest shapes', () => {
+  it('refuses a manifest whose lists hold malformed entries, rather than crash on them', async () => {
+    await flipUnder(server, wk)
+    await take()
+    const manifest = manifestOf()
+    for (const broken of [
+      {...manifest, otherObjects: [null]},
+      {...manifest, otherObjects: [{name: 'x', path: 'x', sha256: 'x'}]},
+      {...manifest, noVerifiedSource: [7]},
+      {...manifest, parts: {...manifest.parts, [BUNDLE_PARTS.blocks]: null}},
+    ]) {
+      folder.setText(BUNDLE_PARTS.manifest, JSON.stringify(broken))
+      expect(await problemOf(verify())).toBe('manifest-unreadable')
+    }
+  })
+})
+
 describe('takeBundle attachments', () => {
   it('archives media bytes held only locally, only in Storage, or in both, under their bare hex', async () => {
     const onlyLocal = await seedMedia(server, storage, {id: 'm1', bytes: bytesOf('local only'), at: {local: true}})

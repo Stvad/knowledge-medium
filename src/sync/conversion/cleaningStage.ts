@@ -13,6 +13,7 @@ import {
   type CleanerProgress,
   type CleanerReport,
   type ConversionBundle,
+  type LeftReason,
   type UnrecoverableMedia,
 } from './attachmentCleaner.js'
 import { ATTACHMENTS_DIR, OTHER_OBJECTS_DIR, otherObjectNameOf, rawNameOf } from './bundle/attachmentParts.js'
@@ -133,9 +134,13 @@ export const conversionBundleOf = (record: BundleRecord, folder: BundleFolder | 
   readAttachment: contentHash => readEntry(folder, ATTACHMENTS_DIR, rawNameOf(contentHash)),
 })
 
-const UNREADABLE = 'The recovery bundle folder could not be read.'
-/** Cleaner passes per run after the first, each over an unreadable folder the
- *  user re-picked: a pass downloads every attachment. */
+/** What a pass found wrong with the bundle folder, which another pick may fix. */
+const BUNDLE_FAULT: Partial<Record<LeftReason, string>> = {
+  'bundle-unreadable': 'The recovery bundle folder could not be read.',
+  'archive-mismatch': "Some of the recovery bundle's copies are missing, or differ from the objects on the server. If you have an intact copy of the bundle, choose it.",
+}
+/** Cleaner passes per run after the first, each over a folder the user
+ *  re-picked after a {@link BUNDLE_FAULT}: a pass downloads every attachment. */
 const MAX_REPICKS = 2
 
 export const runCleaningPass = async (
@@ -148,8 +153,11 @@ export const runCleaningPass = async (
   if (!keys) throw new Error('conversion: the workspace key on this device has no K_id')
   let record = (await deps.bundles.get(userId, workspaceId)) ?? (await adoptBundle(deps))
 
+  let report: CleanerReport | null = null
   for (let repicks = 0, problem: string | null = null; ; repicks++) {
     const folder = await bundleFolder(deps, record, problem)
+    // Declined after a pass: another one without the bundle would change nothing.
+    if (folder === null && report) return {kind: 'not-proved', report}
     if (folder && folder !== record.folder) {
       record = {...record, folder}
       await deps.bundles.put(userId, workspaceId, record)
@@ -167,7 +175,7 @@ export const runCleaningPass = async (
         onProgress: progress => ui.status({kind: 'cleaning', progress}),
       })))
     if (!result.acquired) return {kind: 'busy'}
-    const report = result.value
+    report = result.value
     if (report.proof.kind === 'passed') {
       // Nothing left behind is silent: every unrecoverable block, and every
       // object the cleaner kept and reported, before the conversion is done.
@@ -179,8 +187,8 @@ export const runCleaningPass = async (
       })
       return {kind: 'proved'}
     }
-    const unreadable = report.left.some(item => item.reason === 'bundle-unreadable')
-    if (!unreadable || folder === null || repicks >= MAX_REPICKS) return {kind: 'not-proved', report}
-    problem = UNREADABLE
+    const fault = report.left.map(item => BUNDLE_FAULT[item.reason]).find(message => message !== undefined)
+    if (fault === undefined || folder === null || repicks >= MAX_REPICKS) return {kind: 'not-proved', report}
+    problem = fault
   }
 }

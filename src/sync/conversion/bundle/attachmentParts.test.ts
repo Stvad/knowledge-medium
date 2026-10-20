@@ -171,6 +171,8 @@ describe('surveyAttachments', () => {
     expect(storage.local.has(rawNameOf(second.hash))).toBe(false)
     expect(storage.local.has(rawNameOf(third.hash))).toBe(false)
     expect(result.unkeptBytes).toBe(second.bytes.length + third.bytes.length)
+    // What was left when keeping stopped: the shortfall is the rest.
+    expect(result.spareBytes).toBe(second.bytes.length - 1)
     expect(result.bundleBytes).toBe(20)
     expect(result.noVerifiedSource).toEqual([])
   })

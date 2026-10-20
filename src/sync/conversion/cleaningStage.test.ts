@@ -183,8 +183,12 @@ describe('runCleaningPass with this device\'s bundle record', () => {
 
   it('does not delete an archived object whose bytes changed since the bundle', async () => {
     storage.objects.set('nested/thing', bytesOf('changed afterwards'))
+    // Asked for another copy of the bundle, the user has none.
+    reopenAnswers = [null]
 
     const pass = await run()
+
+    expect(reopenPrompts.map(prompt => prompt.problem)).toEqual([expect.stringMatching(/copies are missing, or differ/)])
 
     // A kept archived object holds the proof back: nothing to confirm yet.
     expect(pass.kind).toBe('not-proved')
@@ -195,6 +199,18 @@ describe('runCleaningPass with this device\'s bundle record', () => {
     expect(storage.objects.get('nested/thing')).toEqual(bytesOf('changed afterwards'))
     expect(finishPrompts).toEqual([])
     expect(finishCalls()).toBe(0)
+  })
+
+  it('asks for an intact copy when the recorded bundle lost an archived entry, and deletes against it', async () => {
+    const intact = folder.copy('bundle')
+    // The recorded folder still reads, and its manifest is unchanged.
+    folder.folders.get('other-objects')!.files.clear()
+    reopenAnswers = [intact]
+
+    expect(await run()).toEqual({kind: 'proved'})
+    expect(reopenPrompts.map(prompt => prompt.problem)).toEqual([expect.stringMatching(/copies are missing, or differ/)])
+    expect(storage.objects.has('nested/thing')).toBe(false)
+    expect((await bundles.get(USER, WS))?.folder).toBe(intact)
   })
 
   it('goes to a readable pick when the recorded folder is unreadable, and stores a descended-into folder', async () => {

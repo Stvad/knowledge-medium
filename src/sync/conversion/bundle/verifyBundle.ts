@@ -95,6 +95,17 @@ const scanFolderPart = async (
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
 
+const isOtherObjectEntry = (entry: unknown): boolean =>
+  isRecord(entry) && typeof entry.name === 'string' && typeof entry.path === 'string' &&
+  typeof entry.sha256 === 'string' && typeof entry.bytes === 'number'
+
+/** Every list and record a later check reads into, so a malformed manifest
+ *  is a bundle problem rather than a crash. */
+const hasManifestShape = (manifest: Record<string, unknown>): boolean =>
+  isRecord(manifest.parts) && Object.values(manifest.parts).every(isRecord) &&
+  Array.isArray(manifest.noVerifiedSource) && manifest.noVerifiedSource.every(hash => typeof hash === 'string') &&
+  Array.isArray(manifest.otherObjects) && manifest.otherObjects.every(isOtherObjectEntry)
+
 const parseManifest = (bytes: Uint8Array, workspaceId: string): BundleManifest => {
   let manifest: unknown
   try {
@@ -102,10 +113,7 @@ const parseManifest = (bytes: Uint8Array, workspaceId: string): BundleManifest =
   } catch {
     throw new BundleInvalid('manifest-unreadable', `${BUNDLE_PARTS.manifest} isn't JSON`)
   }
-  if (
-    !isRecord(manifest) || manifest.format !== BUNDLE_FORMAT || manifest.version !== BUNDLE_FORMAT_VERSION ||
-    !isRecord(manifest.parts) || !Array.isArray(manifest.noVerifiedSource) || !Array.isArray(manifest.otherObjects)
-  ) {
+  if (!isRecord(manifest) || manifest.format !== BUNDLE_FORMAT || manifest.version !== BUNDLE_FORMAT_VERSION || !hasManifestShape(manifest)) {
     throw new BundleInvalid('manifest-unreadable', `${BUNDLE_PARTS.manifest} isn't a version ${BUNDLE_FORMAT_VERSION} bundle manifest`)
   }
   if (manifest.workspaceId !== workspaceId) {
