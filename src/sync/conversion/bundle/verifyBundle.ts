@@ -13,7 +13,8 @@
 
 import { SEALED_COLUMNS } from '../../transform.js'
 import { isSealedRow } from '../sealing.js'
-import { scanPart, sha256Hex, stoppableFolder, untilStopped, type BundleFolder, type PartDigest } from './bundleParts.js'
+import { untilStopped } from '@/utils/untilStopped.js'
+import { scanPart, sha256Hex, stoppableFolder, type BundleFolder, type PartDigest } from './bundleParts.js'
 import { BUNDLE_FORMAT, BUNDLE_FORMAT_VERSION, BUNDLE_PARTS, type BundleManifest } from './manifest.js'
 
 export type BundleProblem =

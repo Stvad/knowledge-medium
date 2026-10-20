@@ -137,6 +137,44 @@ describe('exportRawSqliteDbToFile', () => {
     }
   })
 
+  it('releases the database lock when stopped while the destination is still opening its writable', async () => {
+    Object.defineProperty(navigator, 'storage', {
+      configurable: true,
+      value: {getDirectory: async () => ({getFileHandle: async () => ({getFile: async () => fakeFile(new Uint8Array(4))})})},
+    })
+    const {execute} = fakeWriteLock()
+    let lockReleased = false
+    const writeLock = vi.fn(async <T,>(fn: (tx: {execute: typeof execute}) => Promise<T>) => {
+      try {
+        return await fn({execute})
+      } finally {
+        lockReleased = true
+      }
+    })
+    let openWritable: ((writable: FileSystemWritableFileStream) => void) | undefined
+    const destination = {
+      name: 'copy.db',
+      createWritable: () => new Promise<FileSystemWritableFileStream>(resolve => { openWritable = resolve }),
+    }
+    const stop = new AbortController()
+    const copying = exportRawSqliteDbToFile(
+      {user: {id: 'user-1'}, db: {writeLock}} as unknown as Repo,
+      destination as unknown as FileSystemFileHandle,
+      {signal: stop.signal},
+    )
+    const rejects = expect(copying).rejects.toThrow('stopped')
+    await vi.waitFor(() => expect(openWritable).toBeDefined())
+
+    stop.abort(new DOMException('stopped', 'AbortError'))
+    await vi.waitFor(() => expect(lockReleased).toBe(true))
+    await rejects
+
+    // A writable that opens after the stop is discarded, not left open.
+    const late = {abort: vi.fn(async () => {})}
+    openWritable!(late as unknown as FileSystemWritableFileStream)
+    await vi.waitFor(() => expect(late.abort).toHaveBeenCalled())
+  })
+
   it('budgets the copy for the write-ahead sidecars the checkpoint folds in', async () => {
     vi.useFakeTimers()
     try {

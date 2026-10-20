@@ -6,7 +6,8 @@
  * resume just runs the stage again.
  */
 
-import { untilStopped, type BundleFolder, type PartDigest } from './bundle/bundleParts.js'
+import { untilStopped } from '@/utils/untilStopped.js'
+import type { BundleFolder, PartDigest } from './bundle/bundleParts.js'
 import { bundleRecordOf, type BundleRecord, type BundleRecordStore } from './bundle/bundleRecord.js'
 import { takeBundle, type BundleProgress } from './bundle/takeBundle.js'
 import { BundleInvalid, verifyBundle, type VerifiedBundle } from './bundle/verifyBundle.js'

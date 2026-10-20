@@ -5,6 +5,7 @@
  */
 
 import { sha256 } from '@noble/hashes/sha2.js'
+import { untilStopped } from '@/utils/untilStopped.js'
 import { bytesToHex } from '../../crypto/hex.js'
 
 /** The part of a File System Access directory the bundle uses, so tests can
@@ -60,27 +61,6 @@ export const encodeJsonlLine = (row: unknown): Uint8Array<ArrayBuffer> => encode
 /** Bytes buffered before each write, so a part of millions of short lines
  *  isn't millions of writes. */
 const WRITE_CHUNK_BYTES = 1 << 20
-
-/** A step that ends with `signal`'s reason as soon as it aborts. `onLate`
- *  gets what the step brings if it arrives after that, to undo it. */
-export const untilStopped = <R>(step: Promise<R>, signal: AbortSignal | undefined, onLate?: (value: R) => void): Promise<R> => {
-  if (!signal) return step
-  let stopped = false
-  void step.then(value => { if (stopped) onLate?.(value) }, () => {})
-  if (signal.aborted) {
-    stopped = true
-    return Promise.reject(signal.reason)
-  }
-  let onAbort = () => {}
-  const stop = new Promise<never>((_resolve, reject) => {
-    onAbort = () => {
-      stopped = true
-      reject(signal.reason)
-    }
-    signal.addEventListener('abort', onAbort, {once: true})
-  })
-  return Promise.race([step, stop]).finally(() => signal.removeEventListener('abort', onAbort))
-}
 
 /** `folder`, with every call on it, and on what it hands back, ending at
  *  `signal`: a drive that stops answering can't hold a stopped run. A writable
