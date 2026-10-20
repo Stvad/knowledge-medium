@@ -1,1 +1,1 @@
-import{cN as e,sN as t}from"../../../chunks/app-D7fAoDx_.js";export{t as declarationOnlyDefinitionForName,e as declarationOnlyStatusText};
+import{IP as e,LP as t}from"../../../chunks/app-D7FIG51h.js";export{e as declarationOnlyDefinitionForName,t as declarationOnlyStatusText};

@@ -1,1 +1,1 @@
-import{Tp as e}from"../../../../../chunks/app-D7fAoDx_.js";export{e as Wikilink};
+import{jm as e}from"../../../../../chunks/app-D7FIG51h.js";export{e as Wikilink};
