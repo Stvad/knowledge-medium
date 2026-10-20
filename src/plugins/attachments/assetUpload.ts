@@ -57,7 +57,7 @@ const getSupabaseAccessToken = async (): Promise<string | null> =>
  *  configured Supabase client but must upload NOTHING — capture stays in OPFS and the
  *  lane is a no-op. Re-checked each call (before the singleton) so the gate
  *  is dynamic across an account/mode switch. */
-const getBlobStore = (): BlobStore | null => {
+export const getBlobStore = (): BlobStore | null => {
   if (!supabase || !isRemoteSyncActive()) return null
   if (!blobStoreSingleton) {
     const client = supabase

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import { decodeBytes } from '@/sync/byteTransform.js'
+import { verifyObjectBytes } from '@/sync/byteTransform.js'
 import { computeContentHash } from '@/sync/crypto/contentHash.js'
 import { deriveContentKey, deriveContentKeyHmac } from '@/sync/crypto/contentKey.js'
 import type { WorkspaceConversionRead } from '@/sync/keys/conversionState.js'
@@ -168,17 +168,18 @@ describe('drainUploads (Phase 5b — the up-lane)', () => {
     const key = await aesKey()
     const matDecrypt = mat('decrypt')
     const getCek: GetCek = async () => key
-    await store.stage(stageInput())
-    await store.promote(USER, BLOCK)
     const plain = bytes(40)
+    const contentHash = await computeContentHash(plain)
+    await store.stage(stageInput({ contentHash }))
+    await store.promote(USER, BLOCK)
     await byteStore.put(USER, WS, KEY, plain)
 
     await drainUploads(USER, deps({ getMaterializability: matDecrypt, getCek, getContentKeyHmac: async () => kid }))
 
     const uploaded = blobStore.puts[0].bytes
     expect([...uploaded]).not.toEqual([...plain]) // sealed, not raw
-    const opened = await decodeBytes(uploaded, 'e2ee', getCek, { contentHash: HASH, workspaceId: WS })
-    expect([...opened]).toEqual([...plain]) // and it opens back to the plaintext
+    const opened = await verifyObjectBytes(uploaded, 'e2ee', getCek, { contentHash, workspaceId: WS })
+    expect(opened.ok && [...opened.plaintext]).toEqual([...plain]) // and it opens back to the plaintext
     expect(await store.get(USER, BLOCK)).toBeNull()
   })
 
@@ -352,8 +353,8 @@ describe('drainUploads (Phase 5b — the up-lane)', () => {
 
       const keyed = await deriveContentKey({ contentHash, mode: 'e2ee', contentKeyHmac: kid })
       expect(blobStore.puts.map(p => p.contentKey)).toEqual([keyed])
-      const opened = await decodeBytes(blobStore.puts[0].bytes, 'e2ee', async () => key, { contentHash, workspaceId: WS })
-      expect([...opened]).toEqual([...plain])
+      const opened = await verifyObjectBytes(blobStore.puts[0].bytes, 'e2ee', async () => key, { contentHash, workspaceId: WS })
+      expect(opened.ok && [...opened.plaintext]).toEqual([...plain])
     })
 
     it('verifies a 409 at the derived address', async () => {
