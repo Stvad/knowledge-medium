@@ -275,7 +275,7 @@ export const startBridgeLoop = (options: BridgeLoopOptions): BridgeLoop => {
         }
         const diagnosticKey = JSON.stringify(diagnostic)
         if (diagnosticKey !== lastDiagnosticKey) {
-          console.warn('Agent runtime diagnostic', diagnostic)
+          console.warn('Agent runtime diagnostic', diagnosticKey)
           lastDiagnosticKey = diagnosticKey
         }
 

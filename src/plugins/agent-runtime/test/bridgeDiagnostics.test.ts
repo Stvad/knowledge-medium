@@ -47,11 +47,11 @@ describe('bridge loop diagnostics', () => {
     await vi.waitFor(() => expect(warn).toHaveBeenCalledTimes(1))
 
     expect(fetch).not.toHaveBeenCalled()
-    expect(warn).toHaveBeenCalledWith('Agent runtime diagnostic', {
+    expect(warn).toHaveBeenCalledWith('Agent runtime diagnostic', JSON.stringify({
       stage: 'headers',
       name: 'Error',
       category: 'missing-browser-bridge-pairing',
-    })
+    }))
     expect(JSON.stringify(warn.mock.calls)).not.toContain('PAIRING_SECRET_MARKER')
   })
 
@@ -61,11 +61,11 @@ describe('bridge loop diagnostics', () => {
 
     await vi.waitFor(() => expect(warn).toHaveBeenCalledTimes(1))
 
-    expect(warn).toHaveBeenCalledWith('Agent runtime diagnostic', {
+    expect(warn).toHaveBeenCalledWith('Agent runtime diagnostic', JSON.stringify({
       stage: 'registration-fetch',
       name: 'TypeError',
       category: 'type-or-fetch-error',
-    })
+    }))
     const logged = JSON.stringify(warn.mock.calls)
     for (const marker of ['HEADER_SECRET_MARKER', 'BODY_SECRET_MARKER', 'ERROR_SECRET_MARKER']) {
       expect(logged).not.toContain(marker)
@@ -78,12 +78,12 @@ describe('bridge loop diagnostics', () => {
 
     await vi.waitFor(() => expect(warn).toHaveBeenCalledTimes(1))
 
-    expect(warn).toHaveBeenCalledWith('Agent runtime diagnostic', {
+    expect(warn).toHaveBeenCalledWith('Agent runtime diagnostic', JSON.stringify({
       stage: 'registration-fetch',
       name: 'Error',
       category: 'http-error',
       httpStatus: 401,
-    })
+    }))
   })
 
   it('does not warn when stopping aborts the in-progress request', async () => {
@@ -125,11 +125,11 @@ describe('bridge loop diagnostics', () => {
     pendingPoll.reject(new TypeError('poll fetch failed: POLL_ERROR_SECRET_MARKER'))
     await vi.waitFor(() => expect(warn).toHaveBeenCalledTimes(1))
 
-    expect(warn).toHaveBeenCalledWith('Agent runtime diagnostic', {
+    expect(warn).toHaveBeenCalledWith('Agent runtime diagnostic', JSON.stringify({
       stage: 'poll-fetch',
       name: 'TypeError',
       category: 'type-or-fetch-error',
-    })
+    }))
     expect(JSON.stringify(warn.mock.calls)).not.toContain('POLL_ERROR_SECRET_MARKER')
   })
 
@@ -149,11 +149,11 @@ describe('bridge loop diagnostics', () => {
     loop = startBridgeLoop(makeOptions({fetch: fetch as unknown as typeof globalThis.fetch}))
 
     await vi.waitFor(() => expect(warn).toHaveBeenCalledTimes(1))
-    expect(warn).toHaveBeenLastCalledWith('Agent runtime diagnostic', {
+    expect(warn).toHaveBeenLastCalledWith('Agent runtime diagnostic', JSON.stringify({
       stage: 'poll-fetch',
       name: 'TypeError',
       category: 'type-or-fetch-error',
-    })
+    }))
 
     loop.wake()
     await vi.waitFor(() => expect(pollRequests).toBe(2))
@@ -166,11 +166,11 @@ describe('bridge loop diagnostics', () => {
 
     await vi.waitFor(() => expect(pollRequests).toBe(4))
     await vi.waitFor(() => expect(warn).toHaveBeenCalledTimes(2))
-    expect(warn).toHaveBeenLastCalledWith('Agent runtime diagnostic', {
+    expect(warn).toHaveBeenLastCalledWith('Agent runtime diagnostic', JSON.stringify({
       stage: 'poll-fetch',
       name: 'TypeError',
       category: 'type-or-fetch-error',
-    })
+    }))
   })
 
   it('logs a changed diagnostic phase and category without waiting for a successful poll', async () => {
@@ -186,19 +186,19 @@ describe('bridge loop diagnostics', () => {
     }))
 
     await vi.waitFor(() => expect(warn).toHaveBeenCalledTimes(1))
-    expect(warn).toHaveBeenLastCalledWith('Agent runtime diagnostic', {
+    expect(warn).toHaveBeenLastCalledWith('Agent runtime diagnostic', JSON.stringify({
       stage: 'headers',
       name: 'Error',
       category: 'missing-browser-bridge-pairing',
-    })
+    }))
 
     pairingMissing = false
     loop.wake()
     await vi.waitFor(() => expect(warn).toHaveBeenCalledTimes(2))
-    expect(warn).toHaveBeenLastCalledWith('Agent runtime diagnostic', {
+    expect(warn).toHaveBeenLastCalledWith('Agent runtime diagnostic', JSON.stringify({
       stage: 'registration-fetch',
       name: 'TypeError',
       category: 'type-or-fetch-error',
-    })
+    }))
   })
 })
