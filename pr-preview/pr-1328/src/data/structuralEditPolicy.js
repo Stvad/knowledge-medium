@@ -1,1 +1,1 @@
-import{QT as e,ZT as t}from"../../chunks/app-D3JBDftb.js";export{t as resolveStructuralEditPolicy,e as structuralEditPolicyForBlock};
+import{QT as e,ZT as t}from"../../chunks/app-Do9-n5B1.js";export{t as resolveStructuralEditPolicy,e as structuralEditPolicyForBlock};

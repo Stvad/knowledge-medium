@@ -1,1 +1,1 @@
-import{Bp as e,Vp as t}from"../../../chunks/app-D3JBDftb.js";export{e as MOVE_BLOCKS_CONTEXT_MENU_ITEM_ID,t as moveBlocksContextMenuItem};
+import{Bp as e,Vp as t}from"../../../chunks/app-Do9-n5B1.js";export{e as MOVE_BLOCKS_CONTEXT_MENU_ITEM_ID,t as moveBlocksContextMenuItem};
