@@ -186,7 +186,19 @@ describe('runConversion: preflight → key → flip', () => {
     expect(flips()).toBe(1)
     expect(await validateCanary((await storedKey()).wk, await serverCanary(), WS)).toBe(true)
     // Marked from the server's canary as the sealing stage begins.
-    expect(localCanaries).toEqual([await serverCanary()])
+    expect(new Set(localCanaries)).toEqual(new Set([await serverCanary()]))
+  })
+
+  it('marks the local row from a flip whose response was lost, before anything else can end the run', async () => {
+    server.loseNextFlipResponse = true
+    const read = server.conversionState.bind(server)
+    let reads = 0
+    // The start, then the read that finds the flip landed; the next one fails.
+    vi.spyOn(server, 'conversionState').mockImplementation(async ws =>
+      ++reads > 2 ? {kind: 'unavailable', error: new Error('offline')} : read(ws))
+
+    expect(await run()).toMatchObject({kind: 'blocked', read: {kind: 'unavailable'}})
+    expect(localCanaries).toEqual([await read(WS).then(r => (r.kind === 'read' ? r.state.wkCanary : null))])
   })
 
   it('treats a not-plaintext refusal as a late flip when the server has moved on', async () => {

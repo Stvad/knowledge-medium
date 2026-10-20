@@ -92,10 +92,14 @@ const readStage = async (deps: ConversionFlowDeps): Promise<StageRead> => {
 
 const FLIPPED: StageOutcome = {kind: 'advanced', reached: 'sealing'}
 
-/** Whether a flip that may have been sent has landed, or else what the server shows. */
+/** Whether a flip that may have been sent has landed, or else what the server
+ *  shows. A landed one marks the local row from the server's canary here: the
+ *  run's next read may fail and end it before any stage marks it. */
 const flipLanded = async (deps: ConversionFlowDeps): Promise<StageRead | 'landed'> => {
   const read = await readStage(deps)
-  return read.kind === 'stage' && read.stage.kind !== 'plaintext' ? 'landed' : read
+  if (read.kind !== 'stage' || read.stage.kind === 'plaintext') return read
+  await deps.markLocalConverted(read.stage.canary)
+  return 'landed'
 }
 
 const runPlaintextStage = async (deps: ConversionFlowDeps): Promise<StageOutcome> => {
