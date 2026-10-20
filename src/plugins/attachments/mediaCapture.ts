@@ -51,6 +51,7 @@ import { createOrRestoreTargetBlock } from '@/data/targets'
 import { fitsObjectLimit, MAX_OBJECT_BYTES } from '@/sync/byteTransform.js'
 import { computeContentHash } from '@/sync/crypto/contentHash.js'
 import { deriveContentKey } from '@/sync/crypto/contentKey.js'
+import { orNullWhenKeyUnavailable } from '@/sync/keys/openWorkspaceKeys.js'
 import { materializabilityToMode, type GetMaterializability } from '@/sync/transform.js'
 import type { ByteStore } from './byteStore.js'
 import {
@@ -153,7 +154,7 @@ export const captureMedia = async (
     return { ok: false, reason: 'too-large' }
   }
 
-  const contentKeyHmac = mode === 'e2ee' ? await deps.getContentKeyHmac(workspaceId) : null
+  const contentKeyHmac = mode === 'e2ee' ? await orNullWhenKeyUnavailable(deps.getContentKeyHmac(workspaceId)) : null
   if (mode === 'e2ee' && !contentKeyHmac) return { ok: false, reason: 'no-content-key' }
 
   const contentHash = await computeContentHash(bytes)

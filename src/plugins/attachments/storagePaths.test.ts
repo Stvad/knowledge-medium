@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { attachmentObjectPath, authenticatedObjectUrl, deriveObjectKey } from './storagePaths.js'
 import { computeContentHash } from '@/sync/crypto/contentHash.js'
 import { deriveContentKey, deriveContentKeyHmac } from '@/sync/crypto/contentKey.js'
+import { WorkspaceKeyUnavailableError } from '@/sync/keys/openWorkspaceKeys.js'
 
 describe('attachmentObjectPath', () => {
   it('is the flat <workspaceId>/<contentKey> layout', () => {
@@ -50,6 +51,12 @@ describe('deriveObjectKey — the address, derived when used', () => {
 
   it('e2ee without K_id fails closed', async () => {
     expect(await deriveObjectKey(await computeContentHash(plain), 'e2ee', async () => null))
+      .toEqual({ok: false, reason: 'no-content-key'})
+  })
+
+  it('e2ee whose key read finds no key fails closed the same way, so a drain defers', async () => {
+    const noKey = async () => { throw new WorkspaceKeyUnavailableError('ws-1') }
+    expect(await deriveObjectKey(await computeContentHash(plain), 'e2ee', noKey))
       .toEqual({ok: false, reason: 'no-content-key'})
   })
 

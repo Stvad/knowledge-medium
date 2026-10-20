@@ -23,6 +23,7 @@ import { deriveContentKeyHmac } from '@/sync/crypto/contentKey'
 import { deriveWorkspaceIdNamespace } from '@/sync/crypto/derivedIdNamespace'
 import { getWorkspaceKeyStore } from '@/sync/keys/keyStore'
 import { setModePin } from '@/sync/keys/modePin'
+import { WorkspaceKeyUnavailableError } from '@/sync/keys/openWorkspaceKeys'
 import { PLAINTEXT_ALIAS_SEATS } from '@/data/test/plaintextAliasSeats'
 import { aliasSeatNamespacesInTx, resolveAliasSeatNamespaces } from './aliasSeatNamespace'
 
@@ -111,7 +112,7 @@ describe('resolveAliasSeatNamespaces', () => {
     await seedWorkspaceRow('e2ee')
     setModePin(USER, WS, 'e2ee')
 
-    await expect(resolveAliasSeatNamespaces(repo, WS)).rejects.toThrow(/no content key/)
+    await expect(resolveAliasSeatNamespaces(repo, WS)).rejects.toBeInstanceOf(WorkspaceKeyUnavailableError)
   })
 
   it('treats a workspace the server converted as sealed before this device upgrades its pin',
@@ -121,7 +122,7 @@ describe('resolveAliasSeatNamespaces', () => {
       await seedWorkspaceRow('e2ee')
       setModePin(USER, WS, 'plaintext')
 
-      await expect(resolveAliasSeatNamespaces(repo, WS)).rejects.toThrow(/no content key/)
+      await expect(resolveAliasSeatNamespaces(repo, WS)).rejects.toBeInstanceOf(WorkspaceKeyUnavailableError)
       await storeContentKey()
       expect((await resolveAliasSeatNamespaces(repo, WS)).mint).toBe(await derivedFor())
     })

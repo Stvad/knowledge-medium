@@ -6,7 +6,8 @@
  * SEALED unless its rows upload as plaintext ({@link uploadModeFor}) — one rule
  * with the upload path, because a public seat id on a sealed row is the leak.
  * Sealed mints under HMAC(`K_id`); plaintext keeps the public constant. Without
- * `K_id` there is no namespace: nothing falls back to the public one.
+ * `K_id` there is no namespace: nothing falls back to the public one, and the
+ * key read reports the workspace locked (`requireWorkspaceKeys`).
  *
  * `K_id` is in IndexedDB, which is never opened under the SQLite write lock:
  *  - {@link resolveAliasSeatNamespaces} (pre-lock) reads it and caches the
@@ -29,7 +30,8 @@ import { readWorkspaceEncryptionMode } from '@/data/workspaceSchema'
 import { deriveWorkspaceIdNamespace } from '@/sync/crypto/derivedIdNamespace'
 import { getWorkspaceKeyStore, keyStoreRecordId } from '@/sync/keys/keyStore'
 import { getModePin } from '@/sync/keys/modePin'
-import { readContentKeyHmac, uploadModeFor } from '@/sync/keys/resolver'
+import { requireWorkspaceKeys } from '@/sync/keys/openWorkspaceKeys'
+import { uploadModeFor } from '@/sync/keys/resolver'
 
 export interface AliasSeatNamespaces {
   /** Where a seat is minted or restored. */
@@ -52,9 +54,9 @@ const PLAINTEXT_ALIAS_SEATS: AliasSeatNamespaces = Object.freeze({
   recognized: Object.freeze([PUBLIC_ALIAS_SEAT_NS]),
 })
 
-/** A sealed workspace's namespace cannot be produced here. A caller that can
- *  leave the seat out — a derived reference — catches this; none may fall
- *  back to the public namespace. */
+/** A sealed workspace's namespace was not resolved before the write lock. A
+ *  caller that can leave the seat out — a derived reference — catches this;
+ *  none may fall back to the public namespace. */
 export class AliasSeatNamespaceUnavailableError extends Error {}
 
 const sealedAliasSeats = (derived: string): AliasSeatNamespaces => ({
@@ -76,7 +78,8 @@ const isPlaintext = async (
   (await uploadModeFor(getModePin(userId, workspaceId), readEncryptionMode)) === 'none'
 
 /** PRE-LOCK: the namespaces for `workspaceId`'s seats, deriving and caching a
- *  sealed workspace's on first use. */
+ *  sealed workspace's on first use. Throws `WorkspaceKeyUnavailableError` when
+ *  that needs a key this device does not hold. */
 export const resolveAliasSeatNamespaces = async (
   repo: Repo,
   workspaceId: string,
@@ -88,12 +91,7 @@ export const resolveAliasSeatNamespaces = async (
   const cacheKey = keyStoreRecordId(userId, workspaceId)
   let derived = derivedNamespaces.get(cacheKey)
   if (derived === undefined) {
-    const contentKeyHmac = await readContentKeyHmac(getWorkspaceKeyStore(), userId, workspaceId)
-    if (contentKeyHmac === null) {
-      throw new AliasSeatNamespaceUnavailableError(
-        `alias seats: this device holds no content key for encrypted workspace ${workspaceId}, ` +
-        'so a page it created would get an id that names it — unlock the workspace first')
-    }
+    const {contentKeyHmac} = await requireWorkspaceKeys(getWorkspaceKeyStore(), userId, workspaceId)
     derived = await deriveWorkspaceIdNamespace(contentKeyHmac, ALIAS_SEAT_NS_LABEL)
     derivedNamespaces.set(cacheKey, derived)
   }

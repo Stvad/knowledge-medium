@@ -20,6 +20,7 @@ import { hasSafeModeSearchParam } from '@/utils/safeMode.js'
 import { LayoutRootContext } from '@/components/renderer/layoutRootContext.js'
 import { WorkspaceKeyGate, workspaceGateDeps } from '@/components/workspace/WorkspaceKeyGate.js'
 import { useCloseOnServerE2ee } from '@/components/workspace/useCloseOnServerE2ee.js'
+import { useCloseOnKeyLoss } from '@/components/workspace/useCloseOnKeyLoss.js'
 import { markStartup } from '@/utils/startupTimeline.js'
 import { getCurrentHash, getInitialLayout, preparedInitialHash } from '@/bootstrap/initialLayout.js'
 
@@ -136,6 +137,8 @@ const App = () => {
   // A workspace the server converts to e2ee while it's open here closes into
   // the gate: until this device's pin is upgraded it can't sync the workspace.
   useCloseOnServerE2ee(repo.db, repo.user.id, activeWorkspaceId, initial.kind === 'ready', reResolve)
+  // So does one whose key this device stops holding: the browser evicted it.
+  useCloseOnKeyLoss(repo, initial.kind === 'ready' ? initial : null, reResolve)
   const gateDeps = useMemo(() => workspaceGateDeps(repo, activeWorkspaceId), [repo, activeWorkspaceId])
 
   if (initial.kind === 'waiting') {

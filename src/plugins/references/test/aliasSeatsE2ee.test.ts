@@ -30,6 +30,7 @@ import {
 import { dailyNotesDataExtension } from '@/plugins/daily-notes/dataExtension'
 import { getWorkspaceKeyStore } from '@/sync/keys/keyStore'
 import { setModePin, upgradeModePinToE2ee } from '@/sync/keys/modePin'
+import { onWorkspaceKeyUnavailable } from '@/sync/keys/openWorkspaceKeys'
 import { referencesDataExtension } from '../dataExtension.ts'
 
 const USER = 'user-seats-e2ee'
@@ -142,17 +143,23 @@ describe('alias seats on an encrypted workspace', () => {
     expect((await row(seat))?.deleted).toBe(1)
   })
 
-  it('mints nothing without a key, and still derives the links that need no new page',
+  it('mints nothing without a key and reports the workspace locked, still deriving the links that need no new page',
     async () => {
       await seedWorkspaceRow('e2ee')
       setModePin(USER, WS, 'e2ee')
       await createPage('known', 'Known')
-      const warnings = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const locked = vi.fn()
+      const unsubscribe = onWorkspaceKeyUnavailable(locked)
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
 
-      await write('src', '[[Known]] and [[Secret plans]]')
+      try {
+        await write('src', '[[Known]] and [[Secret plans]]')
+      } finally {
+        unsubscribe()
+      }
 
+      expect(locked).toHaveBeenCalledWith(USER, WS)
       expect(await liveClaimants('Secret plans')).toEqual([])
-      expect(warnings.mock.calls.flat().join(' ')).toMatch(/no content key/)
       expect(await targetOf('src', 'Known')).toBe('known')
     })
 

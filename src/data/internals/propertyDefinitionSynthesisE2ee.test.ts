@@ -24,6 +24,7 @@ import { deriveContentKeyHmac } from '@/sync/crypto/contentKey'
 import { deriveWorkspaceIdNamespace } from '@/sync/crypto/derivedIdNamespace'
 import { getWorkspaceKeyStore } from '@/sync/keys/keyStore'
 import { setModePin } from '@/sync/keys/modePin'
+import { onWorkspaceKeyUnavailable } from '@/sync/keys/openWorkspaceKeys'
 import {
   applyPropertyDefinitionSynthesis,
   planPropertyDefinitionSynthesis,
@@ -117,11 +118,13 @@ describe('resolveSynthesisNamespace on an e2ee workspace', () => {
   it('refuses when the device holds no content key, rather than falling back to the public one',
     async () => {
       // The whole guard: a fallback here would publish name-derived ids for the
-      // one workspace kind that must never have them. `resolveWorkspaceEntry`
-      // already locks a K_id-less e2ee record, so reaching this is a bug — and a
-      // refusal is how a bug stays a bug instead of becoming a leak.
-      const resolved = await resolveSynthesisNamespace(repo, WS)
+      // one workspace kind that must never have them. The entry gate saw a key,
+      // so the record went missing since, and the read locks the workspace too.
+      const locked = vi.fn()
+      const unsubscribe = onWorkspaceKeyUnavailable(locked)
+      const resolved = await resolveSynthesisNamespace(repo, WS).finally(unsubscribe)
       expect(resolved).toEqual({kind: 'refused', reason: expect.stringMatching(/no content key/)})
+      expect(locked).toHaveBeenCalledWith(USER, WS)
     })
 
   it('refuses when the pin says e2ee but the row reads plaintext', async () => {

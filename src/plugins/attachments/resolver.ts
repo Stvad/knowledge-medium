@@ -114,8 +114,8 @@ export interface AssetResolverDeps {
   readonly getMaterializability: GetMaterializability
   /** The workspace key for AEAD-open (e2ee only). */
   readonly getCek: GetCek
-  /** The workspace's content-key HMAC subkey K_id (§10); null on a legacy
-   *  device → e2ee fails closed (`no-content-key`). */
+  /** The workspace's content-key HMAC subkey K_id (§10). Without one, e2ee
+   *  fails closed (`no-content-key`, via `deriveObjectKey`). */
   readonly getContentKeyHmac: (workspaceId: string) => Promise<CryptoKey | null>
 }
 
@@ -201,9 +201,9 @@ export const createAssetResolver = (deps: AssetResolverDeps): AssetResolver => {
     }
 
     // (2) The content-key (§10) addresses both the local store and the remote object.
-    // E2EE needs K_id; its absence (legacy device) fails closed — and since K_id
-    // co-lives with the WK, an unlocked e2ee workspace that stored bytes always has
-    // it, so this never strands already-stored bytes.
+    // E2EE needs K_id, and fails closed without it. K_id co-lives with the WK, so
+    // an unlocked e2ee workspace that stored bytes always has it: this never
+    // strands already-stored bytes.
     const key = await deriveObjectKey(contentHash, mode, () => getContentKeyHmac(workspaceId))
     if (!key.ok) return key
     return { ok: true, userId, mode, contentKey: key.objectKey, localKeys: key.localKeys }

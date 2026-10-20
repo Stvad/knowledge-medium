@@ -14,6 +14,7 @@ import {CONTRIBUTOR_TYPE} from './schema'
 import {createContributor} from './profiles'
 import {computeAliasSeatId} from '@/data/targets'
 import {getWorkspaceKeyStore} from '@/sync/keys/keyStore'
+import {WorkspaceKeyUnavailableError} from '@/sync/keys/openWorkspaceKeys'
 import {setModePin} from '@/sync/keys/modePin'
 
 const USER = 'contributor-e2ee-user'
@@ -68,8 +69,7 @@ describe('contributor profiles in encrypted workspaces', () => {
       (caught: unknown) => caught,
     )
 
-    expect.soft(error).toBeInstanceOf(Error)
-    expect.soft(error instanceof Error ? error.message : String(error)).toMatch(/no content key/)
+    expect.soft(error).toBeInstanceOf(WorkspaceKeyUnavailableError)
     expect.soft(write).not.toHaveBeenCalled()
     expect.soft(await sharedDb.db.getAll<{id: string}>(
       `SELECT b.id FROM blocks b JOIN block_types t ON t.block_id = b.id

@@ -35,9 +35,10 @@ export type SyncMode = 'none' | 'e2ee'
  *  can't seal yet (its pin hasn't been upgraded). A held write is never sent. */
 export type UploadMode = SyncMode | 'hold'
 
-/** Resolve the workspace key for a workspace, or null if not available on
- *  this device (locked / never pasted / plaintext). Returns a usable
- *  CryptoKey handle, never raw bytes (§5). */
+/** Resolve the workspace key for a workspace. The production resolver throws
+ *  `WorkspaceKeyUnavailableError` when this device holds none; null is for a
+ *  lookup with nothing to answer (signed out, or a stub scoped to other
+ *  workspaces). Returns a usable CryptoKey handle, never raw bytes (§5). */
 export type GetCek = (workspaceId: string) => Promise<CryptoKey | null>
 
 /** How a workspace's rows should be materialized into `blocks`. This is
