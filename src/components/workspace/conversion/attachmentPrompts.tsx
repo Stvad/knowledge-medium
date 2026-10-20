@@ -9,7 +9,8 @@ import { Explanation } from '@/components/workspace/keyUi'
 import { limitToRaise, type CleanerReport, type LeftReason, type UnrecoverableMedia } from '@/sync/conversion/attachmentCleaner'
 import type { OversizedObject } from '@/sync/conversion/bundle/attachmentParts'
 import type { FinishPrompt } from '@/sync/conversion/cleaningStage'
-import { Actions, ScrollList, ConfirmCheck, formatBytes } from './flowUi'
+import { Actions, ScrollList, ConfirmCheck } from './flowUi'
+import { formatBytes } from '@/utils/formatBytes'
 
 const Mono = ({children}: {children: string}) => <span className="font-mono text-xs">{children}</span>
 

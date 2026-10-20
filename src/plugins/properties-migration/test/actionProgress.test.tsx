@@ -8,6 +8,8 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { PropertyCellBackfillProgress } from '@/data/internals/propertyCellBackfill'
+import { NOTICEABLE_LOG_BYTES, awaitWriteAheadHeadroom } from '@/data/writeAheadLog'
+import { vfsCheckpointAnswer } from '@/data/test/overfullWriteAheadLog'
 
 const openDialog = vi.fn(async () => true)
 const progressHandle = {
@@ -49,6 +51,23 @@ vi.mock('@/data/maintenance', () => ({
   oweAnalyzeInstalledTables: () => oweAnalyzeInstalledTables(),
   runAnalyzeInstalledTables: () => runAnalyzeInstalledTables(),
 }))
+/** The drain is the one thing in this gesture that takes the writer's lease:
+ *  logged when it FINISHES, like the refresh, so one left un-awaited lands after
+ *  the report. */
+let drainFails = false
+const writeLock = async <T,>(fn: (tx: {execute: (sql: string) => Promise<unknown>}) => Promise<T>): Promise<T> => {
+  const result = await fn({execute: async () => undefined})
+  await new Promise(resolve => setTimeout(resolve, 0))
+  if (drainFails) throw new Error('database is locked')
+  steps.push('drain')
+  return result
+}
+/** A writer whose log is past the limit, so a headroom check pauses on it. */
+const overLimitWriter = {
+  execute: async (sql: string) => sql === 'PRAGMA wal_checkpoint=noop'
+    ? vfsCheckpointAnswer(Math.ceil(NOTICEABLE_LOG_BYTES / 4096))
+    : sql === 'PRAGMA page_size' ? {rows: {_array: [{page_size: 4096}]}} : undefined,
+}
 // The synthesis half has its own file; here it must simply not refuse, so the
 // gesture reaches the pass.
 vi.mock('@/data/internals/propertyDefinitionSynthesis', () => ({
@@ -96,11 +115,13 @@ const progress = (over: Partial<PropertyCellBackfillProgress> = {}): PropertyCel
 let claimHeldAfterRun: false | 'this-device' | 'a-peer' = false
 let runHasHappened = false
 
-/** Emits `reported` from inside the run, the way the pass notifies. */
+/** Emits `reported` from inside the run, the way the pass notifies, then runs
+ *  `during` while the pass is still in flight. */
 const runReporting = async (
   reported: PropertyCellBackfillProgress,
   outcome: {outcome: 'ran' | 'deferred'; undoHistoryCleared: boolean; reason?: string;
             retryable?: boolean} | Error = {outcome: 'ran', undoHistoryCleared: false},
+  during: () => Promise<void> | void = () => {},
 ) => {
   const repo = {
     activeWorkspaceId: 'ws-1',
@@ -120,6 +141,7 @@ const runReporting = async (
         }
         return {properties_migration: 'cell'}
       },
+      writeLock,
     },
     isReadOnly: false,
     workspaceViewGap: async () => null,
@@ -130,6 +152,7 @@ const runReporting = async (
     withOperatorBackfillClaim: claimStub(async () => {
       steps.push('pass')
       emit?.(reported)
+      await during()
       runHasHappened = true
       if (outcome instanceof Error) throw outcome
       return outcome
@@ -163,6 +186,7 @@ const runThrowing = async (error: Error) => {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks()
   progressHandle.update.mockReset()
   progressHandle.done.mockReset()
   progressHandle.fail.mockReset()
@@ -178,6 +202,7 @@ afterEach(() => {
   runAnalyzeInstalledTables.mockImplementation(refreshFinishing)
   oweAnalyzeInstalledTables.mockReset()
   oweAnalyzeInstalledTables.mockImplementation(async () => { steps.push('owe') })
+  drainFails = false
 })
 
 describe('the migration progress path', () => {
@@ -325,18 +350,20 @@ describe('the migration progress path', () => {
   })
 })
 
-describe('planner stats after the pass', () => {
+describe('planner stats and the write-ahead log after the pass', () => {
   beforeEach(() => {
     progressHandle.done.mockImplementation(() => { steps.push('done') })
     progressHandle.fail.mockImplementation(() => { steps.push('fail') })
   })
 
-  it('records the refresh as owed before the pass, and refreshes before reporting', async () => {
+  it('records the refresh as owed before the pass, and refreshes, then drains, before reporting', async () => {
     // Owed first, so a reload, a dead tab or a failed refresh leaves it for
     // the next boot's check; refreshed before the report, so plans are good now.
+    // Drained after the refresh, which writes too, and before the report, which
+    // is what tells the operator a reload is safe.
     await runReporting(progress())
 
-    expect(steps).toEqual(['owe', 'pass', 'analyze', 'done'])
+    expect(steps).toEqual(['owe', 'pass', 'analyze', 'drain', 'done'])
   })
 
   it('refreshes them after a run that wrote nothing, which may finish one that died first', async () => {
@@ -345,13 +372,13 @@ describe('planner stats after the pass', () => {
       valuesMaterialized: 0, valuesMaterializedTotal: 0,
     }))
 
-    expect(steps).toEqual(['owe', 'pass', 'analyze', 'done'])
+    expect(steps).toEqual(['owe', 'pass', 'analyze', 'drain', 'done'])
   })
 
-  it('refreshes them when the pass throws partway, before reporting the failure', async () => {
+  it('refreshes and drains when the pass throws partway, before reporting the failure', async () => {
     await runReporting(progress(), new Error('claim write failed'))
 
-    expect(steps).toEqual(['owe', 'pass', 'analyze', 'fail'])
+    expect(steps).toEqual(['owe', 'pass', 'analyze', 'drain', 'fail'])
   })
 
   it('keeps the run\'s outcome when the refresh itself fails, leaving it owed', async () => {
@@ -368,6 +395,61 @@ describe('planner stats after the pass', () => {
 
     await runReporting(progress())
 
-    expect(steps).toEqual(['pass', 'analyze', 'done'])
+    expect(steps).toEqual(['pass', 'analyze', 'drain', 'done'])
+  })
+
+  it('keeps the run\'s outcome when the drain fails', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    drainFails = true
+
+    await runReporting(progress())
+
+    expect(progressHandle.done).toHaveBeenCalled()
+    expect(progressHandle.fail).not.toHaveBeenCalled()
+  })
+})
+
+describe('a pause for the write-ahead log', () => {
+  it('says why the migration stopped, and goes back to its count when it resumes', async () => {
+    vi.spyOn(console, 'info').mockImplementation(() => {})
+    await runReporting(progress({sweeps: 1, blocksScanned: 3}), undefined,
+      () => awaitWriteAheadHeadroom(overLimitWriter))
+
+    const lines = progressHandle.update.mock.calls.map(([line]) => line as string)
+    const counting = lines.findIndex(line => /sweep 1, 3\//.test(line))
+    expect(lines.slice(counting, counting + 3)).toEqual([
+      lines[counting],
+      expect.stringMatching(/paused.*\d+ MB/i),
+      lines[counting],
+    ])
+  })
+
+  it('hands back the line it had up when a pause ends, not the count', async () => {
+    // Another bulk writer can pause while this gesture is refreshing stats.
+    vi.spyOn(console, 'info').mockImplementation(() => {})
+    runAnalyzeInstalledTables.mockImplementation(async () => {
+      await awaitWriteAheadHeadroom(overLimitWriter)
+      steps.push('analyze')
+    })
+
+    await runReporting(progress())
+
+    const lines = progressHandle.update.mock.calls.map(([line]) => line as string)
+    const refreshing = lines.indexOf('Refreshing query statistics…')
+    expect(lines.slice(refreshing, refreshing + 3)).toEqual([
+      'Refreshing query statistics…',
+      expect.stringMatching(/paused/i),
+      'Refreshing query statistics…',
+    ])
+  })
+
+  it('listens only while the gesture runs', async () => {
+    vi.spyOn(console, 'info').mockImplementation(() => {})
+    await runReporting(progress())
+    const reported = progressHandle.update.mock.calls.length
+
+    await awaitWriteAheadHeadroom(overLimitWriter)
+
+    expect(progressHandle.update.mock.calls.length).toBe(reported)
   })
 })

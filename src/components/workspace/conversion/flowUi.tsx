@@ -35,12 +35,6 @@ export function ConfirmCheck({id, checked, onChange, children}: {
   )
 }
 
-export const formatBytes = (bytes: number): string => {
-  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`
-  if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(1)} MB`
-  return `${(bytes / 1024 ** 3).toFixed(2)} GB`
-}
-
 /** Every item, scrolled: these lists are what the conversion leaves behind,
  *  shown once, so none goes unnamed. */
 export function ScrollList<T>({items, render}: {items: readonly T[]; render: (item: T) => ReactNode}) {

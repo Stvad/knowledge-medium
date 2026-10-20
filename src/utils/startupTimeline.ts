@@ -65,6 +65,7 @@ const DB_OPEN_PHASES: readonly StartupPhase[] = [
 
 const marks: Partial<Record<StartupPhase, number>> = {}
 let dbFileBytes: DbFileBytes | undefined
+const dbFileBytesListeners = new CallbackSet('startup-db-files')
 
 const nowMs = (): number =>
   typeof performance !== 'undefined' ? performance.now() : 0
@@ -94,8 +95,20 @@ export const hasStartupMark = (phase: StartupPhase): boolean =>
  *  has to replay, which is the first suspect for a slow `dbOpened`. First write
  *  wins, like the marks. */
 export const recordStartupDbFiles = (bytes: DbFileBytes): void => {
-  dbFileBytes ??= Object.freeze({ ...bytes })
+  if (dbFileBytes) return
+  dbFileBytes = Object.freeze({ ...bytes })
+  dbFileBytesListeners.notify()
 }
+
+/** The sizes {@link recordStartupDbFiles} kept, for a view of the boot in
+ *  progress. Stable between changes, as `useSyncExternalStore` needs. */
+export const getStartupDbFileBytes = (): DbFileBytes | undefined => dbFileBytes
+
+export const onStartupDbFileBytes = (cb: () => void): (() => void) => dbFileBytesListeners.add(cb)
+
+/** Bytes in the write-ahead sidecars — everything recorded but the main file. */
+export const writeAheadSidecarBytes = (bytes: DbFileBytes | undefined): number =>
+  Object.entries(bytes ?? {}).reduce((sum, [key, size]) => key === 'main' ? sum : sum + (size ?? 0), 0)
 
 /** Forget a failed open's marks and file sizes. First-write-wins would
  *  otherwise hand them to the next attempt in this page — which, after a
@@ -103,6 +116,7 @@ export const recordStartupDbFiles = (bytes: DbFileBytes): void => {
 export const discardDbOpenTimeline = (): void => {
   for (const phase of DB_OPEN_PHASES) delete marks[phase]
   dbFileBytes = undefined
+  dbFileBytesListeners.notify()
 }
 
 /** Frozen snapshot of the timeline so far. */
