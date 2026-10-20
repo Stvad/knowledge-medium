@@ -43,7 +43,11 @@ export const listWorkspaceObjects = async ({
   isRemoteSyncActive,
   signal,
 }: ListWorkspaceObjectsInput): Promise<ObjectPath[]> => {
-  if (!isRemoteSyncActive()) throw new Error('attachments: remote sync is off')
+  // Before every request, not once: local-only mode can begin mid-listing.
+  const assertRemote = () => {
+    if (!isRemoteSyncActive()) throw new Error('attachments: remote sync is off')
+  }
+  assertRemote()
   const {session} = (await client.auth.getSession()).data
   if (!session || session.user.id !== userId) {
     throw new Error("attachments: the signed-in session is not this account's; sign in again")
@@ -55,6 +59,7 @@ export const listWorkspaceObjects = async ({
     const prefix = folder ? `${workspaceId}/${folder}` : workspaceId
     const entries = await collectPaged(async offset => {
       signal?.throwIfAborted()
+      assertRemote()
       const {data, error} = await files.list(
         prefix,
         {limit: LIST_PAGE, offset, sortBy: {column: 'name', order: 'asc'}},

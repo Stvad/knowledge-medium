@@ -183,6 +183,20 @@ describe('listWorkspaceObjects', () => {
     expect(calls).toEqual([])
   })
 
+  it('stops at the next request once remote sync goes off mid-listing', async () => {
+    const names = Array.from({length: 1500}, (_, i) => `${WS}/${String(i).padStart(6, '0')}`)
+    const {client, calls} = fakeClient(names)
+    let remote = true
+    const listing = list(client, {
+      isRemoteSyncActive: () => {
+        if (calls.length === 1) remote = false // switched off after the first page
+        return remote
+      },
+    })
+    await expect(listing).rejects.toThrow(/remote sync/)
+    expect(calls).toHaveLength(1)
+  })
+
   it('refuses an empty name segment, which would list its folder again forever', async () => {
     const {client} = fakeClient([`${WS}//x`])
     await expect(list(client)).rejects.toThrow(/empty name/)

@@ -338,6 +338,21 @@ describe('cleanAttachments: the proof', () => {
     expect(report.proof).toMatchObject({kind: 'not-passed', unverified: [await hashOf(photo)]})
   })
 
+  it('the proof judges the folder as its own rebuilds left it: a staged copy whose delete did not take fails it', async () => {
+    const store = createFakeAttachmentStorage()
+    const photo = utf8('a photo')
+    store.media.push({blockId: 'block-1', contentHash: await hashOf(photo)})
+    store.objects.set(await keyedName(photo), photo)
+    const remove = store.io.deleteObject
+    // Storage confirms the staged copy's delete but keeps it.
+    vi.spyOn(store.io, 'deleteObject').mockImplementation(async path =>
+      path === (await rawName(photo)) ? undefined : remove(path),
+    )
+    const report = await clean(store)
+    expect(store.objects.has(await rawName(photo))).toBe(true)
+    expect(report.proof).toMatchObject({kind: 'not-passed', rawRemaining: [await rawName(photo)]})
+  })
+
   it('an only copy is never deleted when its raw name already holds other bytes', async () => {
     const store = createFakeAttachmentStorage()
     const photo = utf8('a photo')

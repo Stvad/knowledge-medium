@@ -40,8 +40,8 @@ let singleton: AssetResolver | null = null
 
 /** A blob store for a build with no remote object store (local-only / unauthed):
  *  `get` always misses, so the resolver serves LOCAL byte-store hits and fails
- *  closed (`fetch-failed`) only on a true miss. `put`/`delete` are never reached
- *  via the resolver (the up-lane has its own blob store) but are total for safety. */
+ *  closed (`fetch-failed`) only on a true miss. Every write throws: a delete that
+ *  resolved here would read as confirmed with nothing deleted. */
 export const NO_REMOTE_BLOB_STORE: BlobStore = {
   put: async () => {
     throw new BlobPutError('no remote object store configured', false, undefined, 'no_remote')
@@ -56,7 +56,9 @@ export const NO_REMOTE_BLOB_STORE: BlobStore = {
   probe: async () => {
     throw new Error('no remote object store configured')
   },
-  delete: async () => {},
+  delete: async () => {
+    throw new Error('no remote object store configured')
+  },
 }
 
 /** Wrap the remote blob store so it's consulted ONLY while the active session has

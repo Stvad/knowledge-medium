@@ -114,6 +114,11 @@ describe('createAssetResolver — happy paths', () => {
 })
 
 describe('NO_REMOTE_BLOB_STORE — local-only build (no Supabase)', () => {
+  it('refuses every write, a delete included: none may read as done with nothing done', async () => {
+    await expect(NO_REMOTE_BLOB_STORE.delete('ws', 'k')).rejects.toThrow(/no remote/)
+    await expect(NO_REMOTE_BLOB_STORE.put('ws', 'k', new Uint8Array(1))).rejects.toThrow(/no remote/)
+  })
+
   it('serves a locally-captured paste from the byte store with no remote object store', async () => {
     const plain = bytes(7, 7, 7)
     const contentHash = await hashOf(plain)

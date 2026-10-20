@@ -257,6 +257,17 @@ export const cleanAttachments = async (input: CleanAttachmentsInput): Promise<Cl
   const errors: CleanerError[] = []
   /** Paths whose current occupant this run proved a genuine keyed object. */
   const provenKeyed = new Set<ObjectPath>()
+  /** Every write and delete this run makes, so the proof can tell whether the
+   *  folder changed after the listing it judged. */
+  let changes = 0
+  const writeStored = (path: ObjectPath, bytes: Uint8Array<ArrayBuffer>) => {
+    changes++
+    return io.writeObject(path, bytes)
+  }
+  const removeStored = (path: ObjectPath) => {
+    changes++
+    return io.deleteObject(path)
+  }
 
   /** A listed object's bytes. A read that finds nothing at a path a listing just
    *  showed is not absence: Storage answers a read it denies as absent. */
@@ -281,7 +292,7 @@ export const cleanAttachments = async (input: CleanAttachmentsInput): Promise<Cl
   ): Promise<Placement> => {
     const sealed = await encodeBytes(plaintext, 'e2ee', getCek, {contentHash, workspaceId})
     const writeAndCheck = async (): Promise<Placement | {readonly kind: 'occupied-by-other'}> => {
-      const write = await io.writeObject(name, sealed)
+      const write = await writeStored(name, sealed)
       if (write.kind === 'refused') return {kind: 'refused', status: write.status, sealedBytes: sealed.length}
       const stored = await io.readObject(name)
       if (!stored) return {kind: 'unverified'}
@@ -292,7 +303,7 @@ export const cleanAttachments = async (input: CleanAttachmentsInput): Promise<Cl
       // Two cleaners on one folder could each delete the copy the other just
       // verified here. The Web Lock serializes them within a browser; two
       // devices at once are outside the single-client contract.
-      if (result.kind === 'occupied-by-other') await io.deleteObject(name)
+      if (result.kind === 'occupied-by-other') await removeStored(name)
       result = await writeAndCheck()
     }
     if (result.kind === 'verified') {
@@ -315,7 +326,7 @@ export const cleanAttachments = async (input: CleanAttachmentsInput): Promise<Cl
       errors.push({path, message: 'its keyed copy did not verify after upload'})
       return
     }
-    await io.deleteObject(path)
+    await removeStored(path)
     converted.push(path)
     settled.set(path, {kind: 'removed', contentHash})
   }
@@ -334,7 +345,7 @@ export const cleanAttachments = async (input: CleanAttachmentsInput): Promise<Cl
     }
     if (!archived || !bytesEqual(archived, bytes)) return leave('archive-mismatch')
     settled.set(path, {kind: 'stays'}) // until the delete is confirmed
-    await io.deleteObject(path)
+    await removeStored(path)
     deleted.push(path)
     settled.set(path, {kind: 'removed'})
   }
@@ -396,16 +407,7 @@ export const cleanAttachments = async (input: CleanAttachmentsInput): Promise<Cl
   }
 
   // ── The proof, over a final listing taken after every delete ─────────────
-  signal?.throwIfAborted()
-  const final = await io.listObjects(signal)
-  const listed = new Set(final)
   const mediaNames = new Set(mediaNameByHash.values())
-  for (const [path, s] of settled) {
-    if (s.kind !== 'removed' && !listed.has(path)) {
-      errors.push({path, message: 'seen earlier in this run, missing from the final listing'})
-      unsettled = true
-    }
-  }
   /** A listed path that is raw, or may be: never settled (it appeared after the
    *  last pass), not converted, or deleted and still listed. */
   const maybeRaw = (path: ObjectPath): boolean => {
@@ -413,11 +415,22 @@ export const cleanAttachments = async (input: CleanAttachmentsInput): Promise<Cl
     const s = settled.get(path)
     return s === undefined || s.kind === 'unfinished' || (s.kind === 'removed' && s.contentHash !== undefined)
   }
-  const rawRemaining = final.filter(maybeRaw)
+  /** What a listing says about the folder: what is listed, what this run saw
+   *  that is gone without its delete, and what may be raw. */
+  const assess = (listing: readonly ObjectPath[]) => {
+    const listed = new Set(listing)
+    const vanished = [...settled].filter(([path, s]) => s.kind !== 'removed' && !listed.has(path)).map(([path]) => path)
+    return {listing, listed, vanished, rawRemaining: listing.filter(maybeRaw)}
+  }
+  signal?.throwIfAborted()
+  let view = assess(await io.listObjects(signal))
+  const vanishedBeforeProof = view.vanished
+  const changesAtFinal = changes
+  const listed = view.listed
   /** Hashes whose raw object is still listed: their bytes exist, so they are
    *  never unrecoverable, and a later run converts them. */
   const rawHashes = new Set(
-    rawRemaining.flatMap(path => {
+    view.rawRemaining.flatMap(path => {
       const s = settled.get(path)
       return s && s.kind !== 'stays' && s.contentHash ? [s.contentHash] : []
     }),
@@ -460,7 +473,7 @@ export const cleanAttachments = async (input: CleanAttachmentsInput): Promise<Cl
    */
   const convertOccupant = async (contentHash: string, keyedName: string, plaintext: Uint8Array<ArrayBuffer>): Promise<MediaVerdict> => {
     const rawName = await deriveContentKey({contentHash, mode: 'none', contentKeyHmac: null})
-    const write = await io.writeObject(rawName, plaintext)
+    const write = await writeStored(rawName, plaintext)
     if (write.kind === 'refused') {
       // Its sealed upload would need at least as much: the same remedy covers both.
       const sealedBytes = encodedSize(plaintext.length, 'e2ee')
@@ -529,20 +542,31 @@ export const cleanAttachments = async (input: CleanAttachmentsInput): Promise<Cl
     else if (verdict === 'unrecoverable') unrecoverable.push({contentHash, blockIds})
   }
 
-  for (const path of [...converted, ...deleted]) {
-    if (listed.has(path)) errors.push({path, message: 'deleted, but still listed'})
+  // The proof's own rebuilds write and delete after that listing; judge the
+  // folder as they left it.
+  if (changes !== changesAtFinal) {
+    signal?.throwIfAborted()
+    view = assess(await io.listObjects(signal))
   }
+  // Either listing counts: a rebuild can put back what something else removed.
+  const vanished = new Set([...vanishedBeforeProof, ...view.vanished])
+  for (const path of vanished) errors.push({path, message: 'seen earlier in this run, missing from the final listing'})
+  if (vanished.size > 0) unsettled = true
+  for (const path of [...converted, ...deleted]) {
+    if (view.listed.has(path)) errors.push({path, message: 'deleted, but still listed'})
+  }
+  const {rawRemaining} = view
   // Archived means the archived BYTES: a path whose occupant this run proved a
   // genuine keyed copy (a poisoned occupant replaced, say) no longer holds them.
-  const archivedRemaining = final.filter(path => bundle?.archivedPaths.has(path) && !provenKeyed.has(path))
+  const archivedRemaining = view.listing.filter(path => bundle?.archivedPaths.has(path) && !provenKeyed.has(path))
   const proof: CleanerProof =
     !unsettled && rawRemaining.length === 0 && archivedRemaining.length === 0 && unverified.length === 0
       ? {kind: 'passed', unrecoverable}
       : {kind: 'not-passed', rawRemaining, archivedRemaining, unverified, unsettled}
   return {
-    converted: converted.filter(path => !listed.has(path)),
+    converted: converted.filter(path => !view.listed.has(path)),
     refused,
-    deleted: deleted.filter(path => !listed.has(path)),
+    deleted: deleted.filter(path => !view.listed.has(path)),
     left,
     rebuilt,
     errors,
