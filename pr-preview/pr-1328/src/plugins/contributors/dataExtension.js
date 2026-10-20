@@ -1,1 +1,1 @@
-import{OV as e}from"../../../chunks/app-BJ4XnvfS.js";export{e as contributorsDataExtension};
+import{OV as e}from"../../../chunks/app-COXzVPtv.js";export{e as contributorsDataExtension};

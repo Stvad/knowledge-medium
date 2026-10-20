@@ -1,1 +1,1 @@
-import{GI as e,WI as t}from"../../../chunks/app-BJ4XnvfS.js";export{t as PropertyShapeButton,e as PropertyShapeGlyph};
+import{GI as e,WI as t}from"../../../chunks/app-COXzVPtv.js";export{t as PropertyShapeButton,e as PropertyShapeGlyph};

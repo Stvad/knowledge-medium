@@ -1,1 +1,1 @@
-import{Of as e}from"../../../chunks/app-BJ4XnvfS.js";export{e as useGroupedBacklinksConfig};
+import{Of as e}from"../../../chunks/app-COXzVPtv.js";export{e as useGroupedBacklinksConfig};

@@ -1,1 +1,1 @@
-import{CX as e,wX as t}from"../../../chunks/app-BJ4XnvfS.js";export{e as onFirstSync,t as onSyncSettled};
+import{CX as e,wX as t}from"../../../chunks/app-COXzVPtv.js";export{e as onFirstSync,t as onSyncSettled};

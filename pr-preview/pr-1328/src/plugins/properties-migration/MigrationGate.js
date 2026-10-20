@@ -1,1 +1,1 @@
-import{Pr as e}from"../../../chunks/app-BJ4XnvfS.js";export{e as MigrationGate};
+import{Pr as e}from"../../../chunks/app-COXzVPtv.js";export{e as MigrationGate};

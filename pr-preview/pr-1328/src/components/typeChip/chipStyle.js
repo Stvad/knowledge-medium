@@ -1,1 +1,1 @@
-import{VT as e}from"../../../chunks/app-BJ4XnvfS.js";export{e as chipStyle};
+import{VT as e}from"../../../chunks/app-COXzVPtv.js";export{e as chipStyle};
