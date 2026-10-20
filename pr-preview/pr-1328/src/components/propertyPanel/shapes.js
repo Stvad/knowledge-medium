@@ -1,1 +1,1 @@
-import{KI as e}from"../../../chunks/app-COXzVPtv.js";export{e as propertyShapeLabel};
+import{KI as e}from"../../../chunks/app-CZl6C-bg.js";export{e as propertyShapeLabel};

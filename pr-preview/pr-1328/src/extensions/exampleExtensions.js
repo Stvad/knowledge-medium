@@ -1,1 +1,1 @@
-import{vE as e,yE as t}from"../../chunks/app-COXzVPtv.js";export{e as exampleExtensions,t as insertExampleExtensionsUnder};
+import{vE as e,yE as t}from"../../chunks/app-CZl6C-bg.js";export{e as exampleExtensions,t as insertExampleExtensionsUnder};

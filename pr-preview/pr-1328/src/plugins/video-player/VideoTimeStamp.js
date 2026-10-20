@@ -1,1 +1,1 @@
-import{Ig as e}from"../../../chunks/app-COXzVPtv.js";export{e as default};
+import{Ig as e}from"../../../chunks/app-CZl6C-bg.js";export{e as default};
