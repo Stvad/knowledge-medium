@@ -1,1 +1,1 @@
-import{qp as e}from"../../../chunks/app-4iTqmRtl.js";export{e as backlinksPlugin};
+import{jp as e}from"../../../chunks/app-BtwKwYSG.js";export{e as backlinksPlugin};

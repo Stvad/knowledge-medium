@@ -1,1 +1,1 @@
-import{A$ as e,F$ as t,I$ as n,M$ as r,N$ as i,P$ as a,j$ as o}from"../../../chunks/app-4iTqmRtl.js";export{e as ENVELOPE_PREFIX,o as GCM_TAG_BYTES,r as NONCE_BYTES,i as SCHEMA_VERSION,a as decodeEnvelope,t as encodeEnvelope,n as hasEnvelopePrefix};
+import{C$ as e,S$ as t,_$ as n,b$ as r,v$ as i,x$ as a,y$ as o}from"../../../chunks/app-BtwKwYSG.js";export{n as ENVELOPE_PREFIX,i as GCM_TAG_BYTES,o as NONCE_BYTES,r as SCHEMA_VERSION,a as decodeEnvelope,t as encodeEnvelope,e as hasEnvelopePrefix};

@@ -1,1 +1,1 @@
-import{qi as e}from"../../../chunks/app-4iTqmRtl.js";export{e as propertiesMigrationPlugin};
+import{Mi as e}from"../../../chunks/app-BtwKwYSG.js";export{e as propertiesMigrationPlugin};

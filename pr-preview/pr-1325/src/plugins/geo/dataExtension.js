@@ -1,1 +1,1 @@
-import{bV as e}from"../../../chunks/app-4iTqmRtl.js";export{e as geoDataExtension};
+import{AV as e}from"../../../chunks/app-BtwKwYSG.js";export{e as geoDataExtension};
