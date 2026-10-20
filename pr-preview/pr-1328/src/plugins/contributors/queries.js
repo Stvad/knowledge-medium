@@ -1,1 +1,1 @@
-import{AV as e,kV as t}from"../../../chunks/app-CPjVYL-I.js";export{t as CONTRIBUTOR_PROFILES_BY_IDS_QUERY,e as contributorProfilesByIdsQuery};
+import{AV as e,kV as t}from"../../../chunks/app-DWyX0iga.js";export{t as CONTRIBUTOR_PROFILES_BY_IDS_QUERY,e as contributorProfilesByIdsQuery};

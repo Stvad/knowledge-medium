@@ -1,1 +1,1 @@
-import{Qc as e}from"../../../chunks/app-CPjVYL-I.js";export{e as contributorsPlugin};
+import{Qc as e}from"../../../chunks/app-DWyX0iga.js";export{e as contributorsPlugin};

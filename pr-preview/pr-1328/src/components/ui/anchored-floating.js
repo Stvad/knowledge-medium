@@ -1,1 +1,1 @@
-import{BI as e,VI as t}from"../../../chunks/app-CPjVYL-I.js";export{e as floatingAnchorFromRect,t as useAnchoredFloating};
+import{BI as e,VI as t}from"../../../chunks/app-DWyX0iga.js";export{e as floatingAnchorFromRect,t as useAnchoredFloating};

@@ -1,1 +1,1 @@
-import{JD as e,qD as t}from"../../chunks/app-CPjVYL-I.js";export{t as ClientLocalSettings,e as clientLocalSettings};
+import{JD as e,qD as t}from"../../chunks/app-DWyX0iga.js";export{t as ClientLocalSettings,e as clientLocalSettings};

@@ -1,1 +1,1 @@
-import{Ih as e}from"../../../chunks/app-CPjVYL-I.js";export{e as useAssetObjectUrl};
+import{Ih as e}from"../../../chunks/app-DWyX0iga.js";export{e as useAssetObjectUrl};

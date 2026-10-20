@@ -1,1 +1,1 @@
-import{Cs as e,Ms as t,_s as n,vs as r,ws as i,ys as a}from"../../../chunks/app-CPjVYL-I.js";export{r as ADD_TAG_ACTION_ID,a as ADD_TAG_BLOCKS_ACTION_ID,e as appendTagToBlocks,i as appendTagToContent,n as blockTaggingPlugin,t as blockTagsConfigProp};
+import{Cs as e,Ms as t,_s as n,vs as r,ws as i,ys as a}from"../../../chunks/app-DWyX0iga.js";export{r as ADD_TAG_ACTION_ID,a as ADD_TAG_BLOCKS_ACTION_ID,e as appendTagToBlocks,i as appendTagToContent,n as blockTaggingPlugin,t as blockTagsConfigProp};

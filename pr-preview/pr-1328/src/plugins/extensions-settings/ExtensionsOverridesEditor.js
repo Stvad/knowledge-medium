@@ -1,1 +1,1 @@
-import{Tt as e}from"../../../chunks/app-CPjVYL-I.js";export{e as ExtensionsOverridesEditor};
+import{Tt as e}from"../../../chunks/app-DWyX0iga.js";export{e as ExtensionsOverridesEditor};
