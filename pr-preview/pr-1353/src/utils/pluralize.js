@@ -1,0 +1,1 @@
+import{CQ as e,SQ as t}from"../../chunks/app-Defmp1AL.js";export{t as agree,e as pluralize};

@@ -1,0 +1,1 @@
+import{Dk as e,Ok as t}from"../chunks/app-Defmp1AL.js";export{e as appUpdate,t as useAppUpdateAvailable};

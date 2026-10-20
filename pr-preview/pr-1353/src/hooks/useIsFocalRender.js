@@ -1,0 +1,1 @@
+import{HP as e,VP as t}from"../../chunks/app-Defmp1AL.js";export{t as isFocalRender,e as useIsFocalRender};

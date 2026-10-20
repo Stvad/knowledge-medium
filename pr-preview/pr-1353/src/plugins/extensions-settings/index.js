@@ -1,0 +1,1 @@
+import{Jn as e,ik as t,rk as n}from"../../../chunks/app-Defmp1AL.js";export{n as extensionsOverridesProp,t as extensionsPrefsType,e as extensionsSettingsPlugin};

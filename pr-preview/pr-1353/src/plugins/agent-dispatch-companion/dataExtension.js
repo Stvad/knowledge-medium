@@ -1,0 +1,1 @@
+import{MG as e}from"../../../chunks/app-Defmp1AL.js";export{e as agentDispatchCompanionDataExtension};

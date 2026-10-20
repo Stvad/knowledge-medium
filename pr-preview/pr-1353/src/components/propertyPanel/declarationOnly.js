@@ -1,0 +1,1 @@
+import{CF as e,SF as t}from"../../../chunks/app-Defmp1AL.js";export{t as declarationOnlyDefinitionForName,e as declarationOnlyStatusText};

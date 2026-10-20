@@ -1,0 +1,1 @@
+import{_3 as e,g3 as t,h3 as n,m3 as r,p3 as i,v3 as a}from"../../chunks/app-Defmp1AL.js";export{i as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,r as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,n as __resetLayoutSessionIdForTesting,t as getLayoutSessionId,e as isInstalledAppDisplayMode,a as readOrCreateLayoutSessionId};

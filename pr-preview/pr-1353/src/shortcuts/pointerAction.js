@@ -1,0 +1,1 @@
+import{Ik as e,Lk as t}from"../../chunks/app-Defmp1AL.js";export{e as dispatchPointerAction,t as setPointerActionDispatcher};

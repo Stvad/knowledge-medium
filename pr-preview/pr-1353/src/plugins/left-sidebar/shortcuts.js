@@ -1,0 +1,1 @@
+import{gx as e,hx as t,mx as n}from"../../../chunks/app-Defmp1AL.js";export{n as getOrCreateShortcutsBlock,t as journalShortcutBlockId,e as shortcutsBlockId};

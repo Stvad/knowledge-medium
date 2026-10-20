@@ -1,0 +1,1 @@
+import{ku as e}from"../../../chunks/app-Defmp1AL.js";export{e as contributorsPlugin};

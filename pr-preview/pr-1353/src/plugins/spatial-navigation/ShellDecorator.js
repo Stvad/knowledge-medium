@@ -1,0 +1,1 @@
+import{jy as e}from"../../../chunks/app-Defmp1AL.js";export{e as SpatialNavigationShellDecorator};

@@ -1,0 +1,1 @@
+import{HL as e,VL as t}from"../../chunks/app-Defmp1AL.js";export{t as isIOS,e as isMacPlatform};

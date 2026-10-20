@@ -1,0 +1,1 @@
+"use client";import{JP as e,KP as t,qP as n}from"../../../chunks/app-Defmp1AL.js";export{t as Collapsible,n as CollapsibleContent,e as CollapsibleTrigger};

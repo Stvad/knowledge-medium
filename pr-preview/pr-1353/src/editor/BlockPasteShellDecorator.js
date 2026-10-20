@@ -1,0 +1,1 @@
+import{RO as e,zO as t}from"../../chunks/app-Defmp1AL.js";export{e as BlockPasteShellDecorator,t as blockPasteShellDecorator};

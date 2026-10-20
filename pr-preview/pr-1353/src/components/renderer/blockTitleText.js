@@ -1,0 +1,1 @@
+import{dP as e,fP as t}from"../../../chunks/app-Defmp1AL.js";export{e as BLOCK_TITLE_TEXT_CLASS,t as useBlockTitleTextClass};
