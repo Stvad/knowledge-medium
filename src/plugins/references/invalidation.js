@@ -1,1 +1,1 @@
-import{Hz as e,Uz as t}from"../../../chunks/app-D7FIG51h.js";export{e as REFERENCES_TARGET_INVALIDATION_CHANNEL,t as referencesInvalidationRule};
+import{Hz as e,Uz as t}from"../../../chunks/app-BGgtflzR.js";export{e as REFERENCES_TARGET_INVALIDATION_CHANNEL,t as referencesInvalidationRule};

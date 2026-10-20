@@ -1,1 +1,1 @@
-import{Ak as e,Ok as t,jk as n,kk as r}from"../../chunks/app-D7FIG51h.js";export{t as extensionDisplayName,r as extensionName,e as userExtensionShellToggle,n as userExtensionToggle};
+import{Ak as e,Ok as t,jk as n,kk as r}from"../../chunks/app-BGgtflzR.js";export{t as extensionDisplayName,r as extensionName,e as userExtensionShellToggle,n as userExtensionToggle};

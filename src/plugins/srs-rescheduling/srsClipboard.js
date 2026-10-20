@@ -1,1 +1,1 @@
-import{cc as e,dc as t,lc as n,uc as r}from"../../../chunks/app-D7FIG51h.js";export{e as clearSrsClipboard,n as getSrsClipboard,r as setSrsClipboard,t as subscribeSrsClipboard};
+import{cc as e,dc as t,lc as n,uc as r}from"../../../chunks/app-BGgtflzR.js";export{e as clearSrsClipboard,n as getSrsClipboard,r as setSrsClipboard,t as subscribeSrsClipboard};

@@ -1,1 +1,1 @@
-import{C3 as e,T3 as t,w3 as n}from"../../chunks/app-D7FIG51h.js";export{e as AliasSeatNamespaceUnavailableError,n as aliasSeatNamespacesInTx,t as resolveAliasSeatNamespaces};
+import{C3 as e,T3 as t,w3 as n}from"../../chunks/app-BGgtflzR.js";export{e as AliasSeatNamespaceUnavailableError,n as aliasSeatNamespacesInTx,t as resolveAliasSeatNamespaces};

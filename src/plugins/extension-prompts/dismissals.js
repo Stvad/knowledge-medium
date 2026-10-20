@@ -1,1 +1,1 @@
-import{DO as e,EO as t,TO as n}from"../../../chunks/app-D7FIG51h.js";export{n as ExtensionPromptDismissalStore,t as extensionPromptDismissals,e as useExtensionPromptDismissals};
+import{DO as e,EO as t,TO as n}from"../../../chunks/app-BGgtflzR.js";export{n as ExtensionPromptDismissalStore,t as extensionPromptDismissals,e as useExtensionPromptDismissals};

@@ -1,1 +1,1 @@
-import{GM as e,WM as t}from"../../chunks/app-D7FIG51h.js";export{t as keyboardAwareScroll,e as shouldReassertCaret};
+import{GM as e,WM as t}from"../../chunks/app-BGgtflzR.js";export{t as keyboardAwareScroll,e as shouldReassertCaret};

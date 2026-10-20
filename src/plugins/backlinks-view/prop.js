@@ -1,1 +1,1 @@
-import{Gp as e,Kp as t,Up as n,Wp as r,qp as i}from"../../../chunks/app-D7FIG51h.js";export{n as DEFAULT_BACKLINKS_VIEW_ID,r as FLAT_BACKLINKS_VIEW_ID,e as GROUPED_BACKLINKS_VIEW_ID,t as backlinksViewProp,i as defaultBacklinksViewIdForBlock};
+import{Gp as e,Kp as t,Up as n,Wp as r,qp as i}from"../../../chunks/app-BGgtflzR.js";export{n as DEFAULT_BACKLINKS_VIEW_ID,r as FLAT_BACKLINKS_VIEW_ID,e as GROUPED_BACKLINKS_VIEW_ID,t as backlinksViewProp,i as defaultBacklinksViewIdForBlock};

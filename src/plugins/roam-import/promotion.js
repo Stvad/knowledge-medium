@@ -1,1 +1,1 @@
-import{ll as e,ul as t}from"../../../chunks/app-D7FIG51h.js";export{e as computePromotedFromChildren,t as detectInlineAttribute};
+import{ll as e,ul as t}from"../../../chunks/app-BGgtflzR.js";export{e as computePromotedFromChildren,t as detectInlineAttribute};

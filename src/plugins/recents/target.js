@@ -1,1 +1,1 @@
-import{WS as e}from"../../../chunks/app-D7FIG51h.js";export{e as openRecentsPage};
+import{WS as e}from"../../../chunks/app-BGgtflzR.js";export{e as openRecentsPage};

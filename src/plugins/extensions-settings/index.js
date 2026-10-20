@@ -1,1 +1,1 @@
-import{Cn as e,bO as t,xO as n}from"../../../chunks/app-D7FIG51h.js";export{t as extensionsOverridesProp,n as extensionsPrefsType,e as extensionsSettingsPlugin};
+import{Cn as e,bO as t,xO as n}from"../../../chunks/app-BGgtflzR.js";export{t as extensionsOverridesProp,n as extensionsPrefsType,e as extensionsSettingsPlugin};
