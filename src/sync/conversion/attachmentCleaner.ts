@@ -292,6 +292,7 @@ export const cleanAttachments = async (input: CleanAttachmentsInput): Promise<Cl
   let uploadLimit: number | null | undefined
   const writeStored = async (path: ObjectPath, bytes: Uint8Array<ArrayBuffer>): Promise<ObjectWrite> => {
     if (uploadLimit === undefined) uploadLimit = await io.uploadLimit()
+    // Accepted: a valid copy already at `path` is refused too, as Storage's size check also precedes its 409.
     if (uploadLimit !== null && bytes.length > uploadLimit) return {kind: 'refused', status: 413}
     changes++
     return io.writeObject(path, bytes)
