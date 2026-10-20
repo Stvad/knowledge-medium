@@ -1,1 +1,1 @@
-import{Jk as e,Yk as t,qk as n}from"../../chunks/app-DOAEXv5k.js";export{n as defaultRegistry,e as defaultRendererContributions,t as defaultRenderersExtension};
+import{Jk as e,Yk as t,qk as n}from"../../chunks/app-B1MOfFIu.js";export{n as defaultRegistry,e as defaultRendererContributions,t as defaultRenderersExtension};

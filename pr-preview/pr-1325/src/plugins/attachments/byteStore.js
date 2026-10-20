@@ -1,1 +1,1 @@
-import{C_ as e,D_ as t,E_ as n,O_ as r,T_ as i,w_ as a}from"../../../chunks/app-DOAEXv5k.js";export{e as ASSETS_ROOT,a as InMemoryByteStore,i as OpfsByteStore,n as assetPathSegments,t as createByteStore,r as getByteStore};
+import{C_ as e,D_ as t,E_ as n,O_ as r,T_ as i,w_ as a}from"../../../chunks/app-B1MOfFIu.js";export{e as ASSETS_ROOT,a as InMemoryByteStore,i as OpfsByteStore,n as assetPathSegments,t as createByteStore,r as getByteStore};

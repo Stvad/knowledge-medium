@@ -1,1 +1,1 @@
-import{kT as e}from"../../../chunks/app-DOAEXv5k.js";export{e as useCommandPaletteActions};
+import{kT as e}from"../../../chunks/app-B1MOfFIu.js";export{e as useCommandPaletteActions};

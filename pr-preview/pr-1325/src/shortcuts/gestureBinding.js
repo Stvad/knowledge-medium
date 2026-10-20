@@ -1,1 +1,1 @@
-import{LO as e,RO as t}from"../../chunks/app-DOAEXv5k.js";export{e as gestureBindingDescriptor,t as matchesGestureEvent};
+import{LO as e,RO as t}from"../../chunks/app-B1MOfFIu.js";export{e as gestureBindingDescriptor,t as matchesGestureEvent};

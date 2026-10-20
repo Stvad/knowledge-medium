@@ -1,1 +1,1 @@
-import{AD as e,kD as t}from"../../chunks/app-DOAEXv5k.js";export{t as exampleExtensions,e as insertExampleExtensionsUnder};
+import{AD as e,kD as t}from"../../chunks/app-B1MOfFIu.js";export{t as exampleExtensions,e as insertExampleExtensionsUnder};

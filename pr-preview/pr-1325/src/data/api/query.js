@@ -1,1 +1,1 @@
-import{j5 as e}from"../../../chunks/app-DOAEXv5k.js";export{e as defineQuery};
+import{j5 as e}from"../../../chunks/app-B1MOfFIu.js";export{e as defineQuery};

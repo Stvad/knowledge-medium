@@ -1,1 +1,1 @@
-import{Iv as e,Lv as t,Rv as n}from"../../../chunks/app-DOAEXv5k.js";export{e as getVimNormalModeActions,t as jumpVisibleBlocks,n as vimNormalModeActionsExtension};
+import{Iv as e,Lv as t,Rv as n}from"../../../chunks/app-B1MOfFIu.js";export{e as getVimNormalModeActions,t as jumpVisibleBlocks,n as vimNormalModeActionsExtension};

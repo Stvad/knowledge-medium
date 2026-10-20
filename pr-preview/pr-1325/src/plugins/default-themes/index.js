@@ -1,1 +1,1 @@
-import{Xx as e,Zx as t,fS as n,pS as r}from"../../../chunks/app-DOAEXv5k.js";export{n as DEFAULT_THEME_ID_DARK,r as DEFAULT_THEME_ID_LIGHT,t as defaultThemeContributions,e as defaultThemesPlugin};
+import{Xx as e,Zx as t,fS as n,pS as r}from"../../../chunks/app-B1MOfFIu.js";export{n as DEFAULT_THEME_ID_DARK,r as DEFAULT_THEME_ID_LIGHT,t as defaultThemeContributions,e as defaultThemesPlugin};

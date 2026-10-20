@@ -1,1 +1,1 @@
-import{A as e,M as t,O as n,j as r,k as i}from"../../../../chunks/app-DOAEXv5k.js";export{n as BUNDLE_PAGE_SIZE,i as BundleRefusal,e as blockRowPages,r as historyRowPages,t as takeBundle};
+import{A as e,M as t,O as n,j as r,k as i}from"../../../../chunks/app-B1MOfFIu.js";export{n as BUNDLE_PAGE_SIZE,i as BundleRefusal,e as blockRowPages,r as historyRowPages,t as takeBundle};

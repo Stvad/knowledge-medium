@@ -1,1 +1,1 @@
-import{aO as e,cO as t,oO as n,sO as r}from"../../../chunks/app-DOAEXv5k.js";export{e as extensionsOverridesPresetCore,n as extensionsOverridesProp,r as extensionsPrefsType,t as overridesCodec};
+import{aO as e,cO as t,oO as n,sO as r}from"../../../chunks/app-B1MOfFIu.js";export{e as extensionsOverridesPresetCore,n as extensionsOverridesProp,r as extensionsPrefsType,t as overridesCodec};

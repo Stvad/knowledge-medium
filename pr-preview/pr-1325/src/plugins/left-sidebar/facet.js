@@ -1,1 +1,1 @@
-import{Hb as e,Vb as t}from"../../../chunks/app-DOAEXv5k.js";export{t as isLeftSidebarSectionContribution,e as leftSidebarSectionsFacet};
+import{Hb as e,Vb as t}from"../../../chunks/app-B1MOfFIu.js";export{t as isLeftSidebarSectionContribution,e as leftSidebarSectionsFacet};

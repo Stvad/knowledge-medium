@@ -1,1 +1,1 @@
-import{$D as e,eO as t}from"../../../chunks/app-DOAEXv5k.js";export{e as ExtensionPromptSurface,t as extensionPromptsExtension};
+import{$D as e,eO as t}from"../../../chunks/app-B1MOfFIu.js";export{e as ExtensionPromptSurface,t as extensionPromptsExtension};

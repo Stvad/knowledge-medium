@@ -1,1 +1,1 @@
-import{$n as e,Qn as t,er as n,tr as r}from"../../../chunks/app-DOAEXv5k.js";export{t as nextAnalysisDelayMs,e as perfAnalysisEffect,n as perfAnalysisEffectContribution,r as runPerfAnalysisNow};
+import{$n as e,Qn as t,er as n,tr as r}from"../../../chunks/app-B1MOfFIu.js";export{t as nextAnalysisDelayMs,e as perfAnalysisEffect,n as perfAnalysisEffectContribution,r as runPerfAnalysisNow};

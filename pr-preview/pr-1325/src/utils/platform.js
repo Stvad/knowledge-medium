@@ -1,1 +1,1 @@
-import{BI as e,zI as t}from"../../chunks/app-DOAEXv5k.js";export{t as isIOS,e as isMacPlatform};
+import{BI as e,zI as t}from"../../chunks/app-B1MOfFIu.js";export{t as isIOS,e as isMacPlatform};

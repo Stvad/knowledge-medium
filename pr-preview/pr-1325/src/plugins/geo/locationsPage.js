@@ -1,1 +1,1 @@
-import{OV as e,kV as t}from"../../../chunks/app-DOAEXv5k.js";export{e as getOrCreateLocationsPage,t as locationsPageBlockId};
+import{OV as e,kV as t}from"../../../chunks/app-B1MOfFIu.js";export{e as getOrCreateLocationsPage,t as locationsPageBlockId};
