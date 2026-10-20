@@ -4,7 +4,7 @@ import { contentColumnsOf } from '../sealing.js'
 import { flipUnder, keyOf, sealFor, seedPlaintext, WS } from '../test/conversionFixtures.js'
 import { FakeConversionServer, type FakeBlockRow } from '../test/fakeConversionServer.js'
 import { MemoryBundleFolder } from '../test/memoryBundleFolder.js'
-import { scanPart, sha256Hex } from './bundleParts.js'
+import { scanPart, sha256Hex, writeBytesPart, type BundleWritable } from './bundleParts.js'
 import { FAKE_LOCAL_DB, writeFakeLocalDb } from '../test/flowFixtures.js'
 import { BUNDLE_PARTS, type BundleManifest } from './manifest.js'
 import { BundleRefusal, takeBundle, type TakeBundleOptions } from './takeBundle.js'
@@ -49,6 +49,46 @@ const problemOf = async (promise: Promise<unknown>) => {
   if (!(error instanceof BundleInvalid)) throw new Error(`expected BundleInvalid, got ${String(error)}`)
   return error.problem
 }
+
+describe('stoppableFolder', () => {
+  const stopped = () => new DOMException('stopped', 'AbortError')
+
+  it('ends a part write on Stop while the drive is slow to open the file', async () => {
+    const stop = new AbortController()
+    folder.getFileHandle = () => new Promise(() => {})
+    const writing = writeBytesPart(folder, 'part', new Uint8Array([1]), stop.signal)
+
+    stop.abort(stopped())
+    await expect(writing).rejects.toThrow('stopped')
+  })
+
+  it('aborts a writable that opens only after the Stop', async () => {
+    const stop = new AbortController()
+    let open!: (writable: BundleWritable) => void
+    const aborted = vi.fn(async () => {})
+    folder.getFileHandle = async () => ({
+      getFile: async () => new Blob([]),
+      createWritable: () => new Promise<BundleWritable>(resolve => (open = resolve)),
+    })
+    const writing = writeBytesPart(folder, 'part', new Uint8Array([1]), stop.signal)
+    await vi.waitFor(() => expect(open).toBeDefined())
+
+    stop.abort(stopped())
+    await expect(writing).rejects.toThrow('stopped')
+    open({write: async () => {}, close: async () => {}, abort: aborted})
+    await vi.waitFor(() => expect(aborted).toHaveBeenCalled())
+  })
+
+  it('ends a bundle check on Stop while the drive is slow to answer, as a stop and not a bad bundle', async () => {
+    const stop = new AbortController()
+    folder.getFileHandle = () => new Promise(() => {})
+    const checking = verifyBundle({folder, workspaceId: WS, signal: stop.signal})
+
+    stop.abort(stopped())
+    await expect(checking).rejects.toThrow('stopped')
+    await expect(checking).rejects.not.toBeInstanceOf(BundleInvalid)
+  })
+})
 
 describe('scanPart', () => {
   it('ends on Stop even while the drive is slow to give a read', async () => {

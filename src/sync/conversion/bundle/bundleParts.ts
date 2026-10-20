@@ -61,24 +61,53 @@ export const encodeJsonlLine = (row: unknown): Uint8Array<ArrayBuffer> => encode
  *  isn't millions of writes. */
 const WRITE_CHUNK_BYTES = 1 << 20
 
-/** A step that ends with `signal`'s reason as soon as it aborts. */
-const untilStopped = <R>(step: Promise<R>, signal: AbortSignal | undefined): Promise<R> => {
+/** A step that ends with `signal`'s reason as soon as it aborts. `onLate`
+ *  gets what the step brings if it arrives after that, to undo it. */
+export const untilStopped = <R>(step: Promise<R>, signal: AbortSignal | undefined, onLate?: (value: R) => void): Promise<R> => {
   if (!signal) return step
+  let stopped = false
+  void step.then(value => { if (stopped) onLate?.(value) }, () => {})
   if (signal.aborted) {
-    step.catch(() => {})
+    stopped = true
     return Promise.reject(signal.reason)
   }
   let onAbort = () => {}
-  const stopped = new Promise<never>((_resolve, reject) => {
-    onAbort = () => reject(signal.reason)
+  const stop = new Promise<never>((_resolve, reject) => {
+    onAbort = () => {
+      stopped = true
+      reject(signal.reason)
+    }
     signal.addEventListener('abort', onAbort, {once: true})
   })
-  return Promise.race([step, stopped]).finally(() => signal.removeEventListener('abort', onAbort))
+  return Promise.race([step, stop]).finally(() => signal.removeEventListener('abort', onAbort))
+}
+
+/** `folder`, with every call on it, and on what it hands back, ending at
+ *  `signal`: a drive that stops answering can't hold a stopped run. A writable
+ *  that opens only after the stop is aborted. */
+export const stoppableFolder = (folder: BundleFolder, signal: AbortSignal | undefined): BundleFolder => {
+  if (!signal) return folder
+  const stoppableFile = (file: BundleFile): BundleFile => ({
+    getFile: () => untilStopped(file.getFile(), signal),
+    createWritable: async () => {
+      const writable = await untilStopped(file.createWritable(), signal, late => void late.abort().catch(() => {}))
+      return {
+        write: data => untilStopped(writable.write(data), signal),
+        close: () => untilStopped(writable.close(), signal),
+        abort: () => writable.abort(),
+      }
+    },
+  })
+  return {
+    name: folder.name,
+    getFileHandle: async (name, options) => stoppableFile(await untilStopped(folder.getFileHandle(name, options), signal)),
+    getDirectoryHandle: async (name, options) => stoppableFolder(await untilStopped(folder.getDirectoryHandle(name, options), signal), signal),
+    removeEntry: (name, options) => untilStopped(folder.removeEntry(name, options), signal),
+  }
 }
 
 /** Writes one part through `write`, replacing the file only if it finishes:
- *  an unfinished part is discarded, never left looking whole. A Stop ends it
- *  even while the destination is slow to take a write. */
+ *  an unfinished part is discarded, never left looking whole. */
 const writePart = async <T>(
   folder: BundleFolder,
   name: string,
@@ -86,15 +115,10 @@ const writePart = async <T>(
   signal?: AbortSignal,
 ): Promise<T> => {
   signal?.throwIfAborted()
-  const writable = await (await folder.getFileHandle(name, {create: true})).createWritable()
-  const stoppable: BundleWritable = {
-    write: data => untilStopped(writable.write(data), signal),
-    close: () => untilStopped(writable.close(), signal),
-    abort: () => writable.abort(),
-  }
+  const writable = await (await stoppableFolder(folder, signal).getFileHandle(name, {create: true})).createWritable()
   try {
-    const result = await write(stoppable)
-    await stoppable.close()
+    const result = await write(writable)
+    await writable.close()
     return result
   } catch (error) {
     // Not awaited after a Stop: a destination that hangs would hang it too.

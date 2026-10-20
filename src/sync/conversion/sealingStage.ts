@@ -6,7 +6,7 @@
  * resume just runs the stage again.
  */
 
-import type { BundleFolder, PartDigest } from './bundle/bundleParts.js'
+import { untilStopped, type BundleFolder, type PartDigest } from './bundle/bundleParts.js'
 import { bundleRecordOf, type BundleRecord, type BundleRecordStore } from './bundle/bundleRecord.js'
 import { takeBundle, type BundleProgress } from './bundle/takeBundle.js'
 import { BundleInvalid, verifyBundle, type VerifiedBundle } from './bundle/verifyBundle.js'
@@ -73,15 +73,17 @@ export type SealingPass =
 const bundleFolderName = (workspaceId: string, at: Date): string =>
   `e2ee-recovery-${workspaceId.slice(0, 8)}-${at.toISOString().replace(/[:.]/g, '-')}`
 
-const createBundleFolder = async (parent: BundleFolder, workspaceId: string, at: Date): Promise<BundleFolder> => {
+/** The handle itself, not a `stoppableFolder`: it goes into the bundle record,
+ *  which IndexedDB stores by structured clone. */
+const createBundleFolder = async (parent: BundleFolder, workspaceId: string, at: Date, signal?: AbortSignal): Promise<BundleFolder> => {
   const base = bundleFolderName(workspaceId, at)
   for (let suffix = 0; ; suffix++) {
     const name = suffix === 0 ? base : `${base}-${suffix}`
     try {
-      await parent.getDirectoryHandle(name)
+      await untilStopped(parent.getDirectoryHandle(name), signal)
     } catch (error) {
-      if (!(error instanceof DOMException)) throw error
-      if (error.name === 'NotFoundError') return parent.getDirectoryHandle(name, {create: true})
+      if (!(error instanceof DOMException) || signal?.aborted) throw error
+      if (error.name === 'NotFoundError') return untilStopped(parent.getDirectoryHandle(name, {create: true}), signal)
       // A file holds the name: try the next one.
       if (error.name !== 'TypeMismatchError') throw error
     }
@@ -134,7 +136,7 @@ const takeVerifiedBundle = async (deps: SealingDeps, reason: BundleRetakeReason 
   const {userId, workspaceId, server, ui, signal} = deps
   const parent = await ui.chooseBundleFolder({reason})
   return withScreenAwake(deps, async () => {
-    const folder = await createBundleFolder(parent, workspaceId, deps.now?.() ?? new Date())
+    const folder = await createBundleFolder(parent, workspaceId, deps.now?.() ?? new Date(), signal)
     ui.status({kind: 'taking-bundle', progress: null})
     try {
       await takeBundle({

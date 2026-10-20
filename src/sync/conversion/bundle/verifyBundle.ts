@@ -13,7 +13,7 @@
 
 import { SEALED_COLUMNS } from '../../transform.js'
 import { isSealedRow } from '../sealing.js'
-import { scanPart, sha256Hex, type BundleFolder, type PartDigest } from './bundleParts.js'
+import { scanPart, sha256Hex, stoppableFolder, untilStopped, type BundleFolder, type PartDigest } from './bundleParts.js'
 import { BUNDLE_FORMAT, BUNDLE_FORMAT_VERSION, BUNDLE_PARTS, type BundleManifest } from './manifest.js'
 
 export type BundleProblem =
@@ -187,16 +187,19 @@ const verifyHistory = async (
   return {historyRows, through}
 }
 
-const readManifest = async (folder: BundleFolder): Promise<Uint8Array> => {
+const readManifest = async (folder: BundleFolder, signal?: AbortSignal): Promise<Uint8Array> => {
   try {
-    return new Uint8Array(await (await (await folder.getFileHandle(BUNDLE_PARTS.manifest)).getFile()).arrayBuffer())
+    const file = await (await folder.getFileHandle(BUNDLE_PARTS.manifest)).getFile()
+    return new Uint8Array(await untilStopped(file.arrayBuffer(), signal))
   } catch (error) {
+    if (signal?.aborted) throw error
     throw new BundleInvalid('unreadable', `the folder can't be read (${describe(error)})`)
   }
 }
 
-export const verifyBundle = async ({folder, workspaceId, manifestSha256, signal}: VerifyBundleOptions): Promise<VerifiedBundle> => {
-  const manifestBytes = await readManifest(folder)
+export const verifyBundle = async ({folder: given, workspaceId, manifestSha256, signal}: VerifyBundleOptions): Promise<VerifiedBundle> => {
+  const folder = stoppableFolder(given, signal)
+  const manifestBytes = await readManifest(folder, signal)
   const digest = sha256Hex(manifestBytes)
   if (manifestSha256 !== undefined && digest !== manifestSha256) {
     throw new BundleInvalid('manifest-changed', `${BUNDLE_PARTS.manifest} isn't the one this device recorded`)
