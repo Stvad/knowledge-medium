@@ -32,6 +32,7 @@ import {
   backlinksForBlockQuery,
   mergeBacklinksFilters,
   propertyMachinerySourceIds,
+  workspaceHasPropertyMachinery,
 } from '../query.ts'
 import { backlinksFilterProp } from '../filterProperty.ts'
 import {
@@ -481,6 +482,48 @@ describe('backlinksDataExtension query', () => {
       const out = asIds(await env.repo.query[BACKLINKS_FOR_BLOCK_QUERY](
         {workspaceId: WS, id: 'Foo2'}).load())
       expect(out).toEqual(['src'])
+    })
+  })
+
+  describe('workspaceHasPropertyMachinery', () => {
+    const probeDb = (answer: boolean) => {
+      const reads: string[] = []
+      return {
+        reads,
+        getOptional: async <T>(_sql: string, params?: unknown[]): Promise<T | null> => {
+          reads.push(String(params?.[0]))
+          return (answer ? {one: 1} : null) as T | null
+        },
+      }
+    }
+
+    it('reads once per workspace and read surface once the answer is yes', async () => {
+      const db = probeDb(true)
+      expect(await workspaceHasPropertyMachinery(db, WS)).toBe(true)
+      expect(await workspaceHasPropertyMachinery(db, WS)).toBe(true)
+      expect(db.reads).toEqual([WS])
+
+      // Another workspace, and another read surface (another Repo), ask afresh.
+      expect(await workspaceHasPropertyMachinery(db, OTHER_WS)).toBe(true)
+      const other = probeDb(true)
+      expect(await workspaceHasPropertyMachinery(other, WS)).toBe(true)
+      expect(db.reads).toEqual([WS, OTHER_WS])
+      expect(other.reads).toEqual([WS])
+    })
+
+    it('asks again after a no, since a backfill can mint machinery at any time', async () => {
+      const db = probeDb(false)
+      expect(await workspaceHasPropertyMachinery(db, WS)).toBe(false)
+      expect(await workspaceHasPropertyMachinery(db, WS)).toBe(false)
+      expect(db.reads).toEqual([WS, WS])
+    })
+
+    it('flips to yes the first time machinery appears in a real workspace', async () => {
+      await create({id: 'plain', workspaceId: WS})
+      expect(await workspaceHasPropertyMachinery(env.repo.db, WS)).toBe(false)
+      await create({id: 'O', workspaceId: WS})
+      await create({id: 'F', workspaceId: WS, parentId: 'O', content: '::((D))'})
+      expect(await workspaceHasPropertyMachinery(env.repo.db, WS)).toBe(true)
     })
   })
 

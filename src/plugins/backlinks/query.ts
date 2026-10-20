@@ -22,6 +22,12 @@ export const BACKLINKS_FOR_BLOCK_QUERY = 'backlinks.forBlock'
  *  observer's staging reads use (`materialize.ts`). 500 keeps a wide margin. */
 const MACHINERY_SOURCE_CHUNK = 500
 
+type ProbeDb = { getOptional<T>(sql: string, params?: unknown[]): Promise<T | null> }
+
+/** Keyed by the read surface rather than held on `Repo` so the probe stays
+ *  callable from a resolver holding only `ctx.db` (as `ancestorWalk` does). */
+const workspacesWithMachinery = new WeakMap<ProbeDb, Set<string>>()
+
 /** Does this workspace hold ANY property machinery at all?
  *
  *  Data-keyed, not flip-gated — it asks about the rows that exist, so a
@@ -62,15 +68,34 @@ const MACHINERY_SOURCE_CHUNK = 500
  *  machinery (km-z2bk). That moment is a backfill writing hundreds of
  *  thousands of rows, whose invalidation traffic no mounted view outlives —
  *  and it is the same dependency gap the filters already have, not a new one.
+ *
+ *  A YES is remembered per read surface (one per `Repo`) and workspace, so a
+ *  machinery workspace pays for the probe once rather than on every resolve —
+ *  the inline badge asks twice per block, through itself and through
+ *  `backlinks.forBlock`. Remembering it obeys THE RULE: a stale yes only sends
+ *  a caller down the filtering path, which finds nothing to drop and returns
+ *  what the fast path would. It goes stale only when every marked row,
+ *  tombstones included, is physically removed (a sync-applied delete), and
+ *  lasts until the Repo is rebuilt. A NO is never remembered — a backfill can
+ *  mint machinery at any moment.
  */
 export const workspaceHasPropertyMachinery = async (
-  db: { getOptional<T>(sql: string, params?: unknown[]): Promise<T | null> },
+  db: ProbeDb,
   workspaceId: string,
-): Promise<boolean> => (await db.getOptional(
-  `SELECT 1 AS one FROM blocks
-    WHERE workspace_id = ? AND is_field_form = 1 LIMIT 1`,
-  [workspaceId],
-)) !== null
+): Promise<boolean> => {
+  if (workspacesWithMachinery.get(db)?.has(workspaceId)) return true
+  const found = (await db.getOptional(
+    `SELECT 1 AS one FROM blocks
+      WHERE workspace_id = ? AND is_field_form = 1 LIMIT 1`,
+    [workspaceId],
+  )) !== null
+  if (found) {
+    const known = workspacesWithMachinery.get(db)
+    if (known) known.add(workspaceId)
+    else workspacesWithMachinery.set(db, new Set([workspaceId]))
+  }
+  return found
+}
 
 /** Which of `sourceIds` are property-subtree INTERIOR machinery — a value child,
  *  or a row deeper inside a property subtree, whose parent chain passes through
