@@ -50,7 +50,7 @@ The user converts from **one device, in one tab**, and confirms that every other
 | Surface | What it holds | Source |
 |---|---|---|
 | `blocks` | `content`, `properties_json` and `references_json` in plaintext. Soft-deleted rows keep their content forever. | consolidated initial migration |
-| `blocks_history` | INSERT rows hold the full row. UPDATE rows hold the old and new value of every changed column. DELETE rows hold the full old row. Never pruned; in normal operation only the trigger writes it (`service_role` holds `GRANT ALL`); no foreign key to `workspaces`. | `20260522062437_add_blocks_history.sql` |
+| `blocks_history` | INSERT rows hold the full row. UPDATE rows hold the old and new value of every changed column. DELETE rows hold the full old row. Never pruned while its workspace exists; in normal operation only the trigger writes it (`service_role` holds `GRANT ALL`); no foreign key to `workspaces`. | `20260522062437_add_blocks_history.sql` |
 | Storage `attachments` | Unencrypted bytes at `<ws>/<hex(sha256(plaintext))>`. The path itself confirms the content to anyone who can guess the file. Nothing deletes these objects. | `20260625000000_add_attachments_storage.sql`, `src/sync/crypto/contentKey.ts` |
 | Derived block ids | uuidv5 ids whose keys may be user text or externally known values. Ids are plaintext in both modes. | [§7](#7-what-stays-visible-afterwards) |
 | `workspaces.name` | Plain text in both modes. | `src/data/workspaceSchema.ts` |
