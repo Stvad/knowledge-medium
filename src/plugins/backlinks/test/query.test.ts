@@ -31,9 +31,8 @@ import {
   BACKLINKS_FOR_BLOCK_QUERY,
   backlinksForBlockQuery,
   mergeBacklinksFilters,
-  propertyMachinerySourceIds,
-  workspaceHasPropertyMachinery,
 } from '../query.ts'
+import { propertyMachinerySourceIds, workspaceHasPropertyMachinery } from '../machinery.ts'
 import { backlinksFilterProp } from '../filterProperty.ts'
 import {
   dailyNoteBacklinksDefaultsProp,
@@ -474,6 +473,47 @@ describe('backlinksDataExtension query', () => {
 
       const machinery = await propertyMachinerySourceIds(env.h.db, ['under-cycle'], NO_REGISTRY_RECOGNITION_PARAMS)
       expect(machinery.size).toBe(0)
+    })
+
+    // The unfiltered list (and the inline badge) is answered by one batched
+    // statement per wave; a filtered list still goes through
+    // `core.typedBlockIds` plus the walk. A no-op exclude takes the second
+    // route, so the two must agree id for id, order included.
+    it.each([true, false])('answers unfiltered exactly as the compiler route does, machinery=%s', async (machinery) => {
+      await seedFlipped()
+      await createIn({id: 'T'})
+      await createIn({id: 'Q1', references: [{id: 'T', alias: 'T'}]})
+      await createIn({id: 'Q2', references: [{id: 'T', alias: 'T'}, {id: 'T', alias: 'T2'}]})
+      await createIn({id: 'Q3', references: [{id: 'T', alias: 'T'}]})
+      await createIn({id: 'Qdel', references: [{id: 'T', alias: 'T'}]})
+      await env.repo.tx(tx => tx.delete('Qdel'), {scope: ChangeScope.BlockDefault})
+      await env.repo.tx(tx => tx.update('T', {references: [{id: 'T', alias: 'T'}]}),
+        {scope: ChangeScope.BlockDefault})
+      await create({id: 'elsewhere', workspaceId: OTHER_WS, references: [{id: 'T', alias: 'T'}]})
+      // A created_at tie, so the id tiebreak is exercised too.
+      await sharedDb.db.execute(
+        `UPDATE blocks SET created_at = (SELECT created_at FROM blocks WHERE id = 'Q1') WHERE id = 'Q3'`)
+      if (machinery) {
+        await createIn({id: 'D', content: 'status'})
+        await typeAsDefinition('D', FLIP_WS)
+        await createIn({id: 'O'})
+        // The field row's own reference is kept (depth 0); its value row's is not.
+        await createIn({
+          id: 'F', parentId: 'O', content: '::((D))', referenceTargetId: 'D',
+          references: [{id: 'T', alias: 'T'}],
+        })
+        await createIn({id: 'V', parentId: 'F', references: [{id: 'T', alias: 'T'}]})
+      }
+
+      const unfiltered = asIds(await env.repo.query[BACKLINKS_FOR_BLOCK_QUERY](
+        {workspaceId: FLIP_WS, id: 'T'}).load())
+      const viaCompiler = asIds(await env.repo.query[BACKLINKS_FOR_BLOCK_QUERY]({
+        workspaceId: FLIP_WS, id: 'T',
+        filter: {exclude: [{scope: 'self', id: 'no-such-block'}]},
+      }).load())
+
+      expect(unfiltered).toEqual(viaCompiler)
+      expect([...unfiltered].sort()).toEqual(machinery ? ['F', 'Q1', 'Q2', 'Q3'] : ['Q1', 'Q2', 'Q3'])
     })
 
     it('leaves an ordinary source alone when there is no machinery at all', async () => {
