@@ -366,7 +366,7 @@ const runDanglingRefsCheck = async (
 }
 
 type StoredRef = { id?: string; alias?: string; sourceField?: string }
-const refKey = (r: { sourceField?: string; id?: string }): string => `${r.sourceField ?? ''} ${r.id ?? ''}`
+const refKey = (r: { sourceField?: string; id?: string }): string => `${r.sourceField ?? ''}\u0000${r.id ?? ''}`
 
 /** R4(1) — precise property-ref projection diff (active workspace, loaded ref
  *  schemas): recompute expected refs via the app's projection and diff stored.
@@ -426,12 +426,12 @@ const runPropertyRefProjectionCheck = async (
     if (missing.length) {
       blocksMissing += 1
       refsMissing += missing.length
-      if (missingSample.length < sampleLimit) missingSample.push({ id: row.id, missing: missing.map((k) => k.split(' ')) })
+      if (missingSample.length < sampleLimit) missingSample.push({ id: row.id, missing: missing.map((k) => k.split('\u0000')) })
     }
     if (extra.length) {
       blocksExtra += 1
       refsExtra += extra.length
-      if (extraSample.length < sampleLimit) extraSample.push({ id: row.id, extra: extra.map((k) => k.split(' ')) })
+      if (extraSample.length < sampleLimit) extraSample.push({ id: row.id, extra: extra.map((k) => k.split('\u0000')) })
     }
   }
   const anomalous = blocksMissing + blocksExtra > 0
