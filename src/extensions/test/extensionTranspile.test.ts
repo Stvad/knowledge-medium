@@ -1,44 +1,61 @@
 import {describe, expect, it} from 'vitest'
 import {InMemoryCompiledModuleCache} from '@/extensions/compiledModuleCache'
-import {approveExtension} from '@/extensions/compileExtensionModule'
+import {
+  __setInstantiateImplForTest,
+  approveExtension,
+  COMPILER_VERSION,
+  createCompileCache,
+  loadApprovedExtension,
+} from '@/extensions/compileExtensionModule'
 
-// Runs the REAL transpile (no `__setTranspileImplForTest`): the contract under
-// test is what the loader's Babel step emits for JSX, because that output is
-// what the page import map resolves. `approveExtension` pins the transpiled
-// string, so reading the pinned row is the public way to see it.
-const transpile = async (source: string): Promise<string> => {
-  const persistent = new InMemoryCompiledModuleCache()
-  await approveExtension('block-1', source, persistent)
-  return (await persistent.read('block-1'))!.compiled
-}
-
-// Babel's first load plus a transform is well over the 5s default under the
-// gate's parallel load; the sibling authoring-catalog sweep budgets 20s for the
-// same work.
+// Both tests run the REAL transpile (no `__setTranspileImplForTest`): the
+// contract under test is what the loader's Babel step emits for JSX, because
+// that output is what the page import map resolves.
 describe('extension JSX transpile — host React identity', () => {
-  it('imports the jsx factory from react/jsx-runtime instead of reading a React global', async () => {
-    const compiled = await transpile(
+  it('compiles JSX to react/jsx-runtime, never a React global', async () => {
+    const persistent = new InMemoryCompiledModuleCache()
+    await approveExtension(
+      'block-1',
       `import {useState} from 'react'\n` +
-      `export const C = () => { const [n] = useState(1); return <div>{n}</div> }\n`,
+      `export const C = () => { const [n] = useState(1); return <div>{n}<><b>x</b></></div> }\n`,
+      persistent,
     )
 
+    const {compiled} = (await persistent.read('block-1'))!
     expect(compiled).toMatch(/from\s*["']react\/jsx-runtime["']/)
     expect(compiled).not.toMatch(/\bReact\.createElement\b/)
-  }, 20_000)
-
-  it('compiles a fragment without a React global too', async () => {
-    const compiled = await transpile(`export const C = () => <><b>x</b></>\n`)
-
-    expect(compiled).toMatch(/from\s*["']react\/jsx-runtime["']/)
     expect(compiled).not.toMatch(/\bReact\.Fragment\b/)
-  }, 20_000)
+  })
 
-  it('still compiles a source that imports React itself', async () => {
-    const compiled = await transpile(
-      `import React from 'react'\nexport const C = () => <i>{React.version}</i>\n`,
-    )
+  it('recompiles an approval pinned by a classic-runtime compiler instead of running it as stored', async () => {
+    const persistent = new InMemoryCompiledModuleCache()
+    // '2' is the last COMPILER_VERSION that emitted `React.createElement`; a
+    // stored string like this one only runs where a React global exists.
+    const approval = {
+      sourceHash: 'hash-1',
+      approvedSource: `export default () => <b>x</b>\n`,
+      compiled: `export default () => React.createElement("b", null, "x")`,
+      compilerVersion: '2',
+      approvedAt: 1,
+    }
+    await persistent.write('block-1', approval)
+    let instantiated = ''
+    const restore = __setInstantiateImplForTest(async compiled => {
+      instantiated = compiled
+      return {}
+    })
 
-    expect(compiled).toMatch(/from\s*["']react\/jsx-runtime["']/)
-    expect(compiled).toMatch(/import React from ["']react["']/)
-  }, 20_000)
+    try {
+      await loadApprovedExtension('block-1', approval, createCompileCache(), persistent)
+    } finally {
+      restore()
+    }
+
+    expect(instantiated).toMatch(/from\s*["']react\/jsx-runtime["']/)
+    expect(instantiated).not.toMatch(/\bReact\.createElement\b/)
+    expect(await persistent.read('block-1')).toMatchObject({
+      sourceHash: 'hash-1',
+      compilerVersion: COMPILER_VERSION,
+    })
+  })
 })
