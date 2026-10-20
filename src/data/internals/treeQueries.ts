@@ -215,6 +215,20 @@ export const CHILDREN_IDS_SQL = `
    ORDER BY order_key, id
 `
 
+/** Every property FIELD ROW under `parentCount` parents, live and tombstoned
+ *  alike, bound as `[workspaceId, ...parentIds]`. Callers chunk the parents
+ *  at `MAX_IDS_PER_IN_CLAUSE`.
+ *
+ *  The `INDEXED BY` and the workspace term that reaches it are load-bearing:
+ *  every other field-row index is `WHERE deleted = 0`, so letting the planner
+ *  choose scans the whole database's field rows. */
+export const propertyFieldRowsForParentsSql = (columns: string, parentCount: number): string => `
+  SELECT ${columns} FROM blocks INDEXED BY idx_blocks_any_field_form
+   WHERE workspace_id = ? AND parent_id IN (${buildInClause(parentCount)})
+     AND is_field_form = 1 AND reference_target_id IS NOT NULL
+   ORDER BY order_key, id
+`
+
 /** The registry's half of {@link recognizedFieldRowSql}, bound in this order
  *  after the statement's own parameters: the JSON id list of `property-schema`
  *  blocks the registry cannot parse, the JSON id list of its seed definitions,

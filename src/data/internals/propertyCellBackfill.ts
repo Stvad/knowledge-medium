@@ -40,14 +40,18 @@
  * already-has-a-field-row test above is what makes revisiting a block a no-op.
  */
 
-import type { AnyPropertySchema, BlockData, NewBlockData } from '@/data/api'
+import type {
+  AnyPropertySchema, BlockData, NewBlockData, ResolvedPropertySchema,
+} from '@/data/api'
 import type { Repo } from '@/data/repo'
 import type { WorkspaceBackfill, WorkspaceBackfillContext } from '@/data/facets'
 import { CallbackSet } from '@/utils/callbackSet'
+import { chunk as chunksOf } from 'lodash-es'
 import {
   encodedPropertyValueToChildContents,
   getPropertyFieldTargetId,
   propertyCellValueRejection,
+  type PropertyCellValueRejection,
 } from '@/data/propertyChildren'
 import {
   describeCellValueRejection,
@@ -55,6 +59,9 @@ import {
   valueChildRowsFor,
   undecodableCellValueError,
 } from './propertyChildrenProcessor'
+import { requirePropertyRegistryFor } from './propertyKeyScan'
+import { MAX_IDS_PER_IN_CLAUSE } from './sqlBinds'
+import { propertyFieldRowsForParentsSql } from './treeQueries'
 import { firstFew } from '@/utils/nameList'
 import { pluralize } from '@/utils/pluralize'
 
@@ -126,6 +133,38 @@ export const CANDIDATE_SQL = `
      AND ${CARRIES_A_PROPERTY}
    ORDER BY b.id
    LIMIT ?`
+
+/** What the pass does with one cell. */
+type CellDecision =
+  /** No registered schema resolves the key, so there is no definition to
+   *  point a field row at. */
+  | {readonly kind: 'unresolved'}
+  /** The owner already has a field row for this fieldId, LIVE OR TOMBSTONED —
+   *  migrated, or deleted through its children (see the module header). */
+  | {readonly kind: 'backed'; readonly schema: ResolvedPropertySchema<unknown>}
+  | {
+    readonly kind: 'refused'
+    readonly schema: ResolvedPropertySchema<unknown>
+    readonly rejection: PropertyCellValueRejection
+  }
+  /** What the pass materializes. */
+  | {readonly kind: 'pending'; readonly schema: ResolvedPropertySchema<unknown>}
+
+/** The pass's per-cell decision, shared with {@link surveyPropertyCellCoverage}
+ *  so the report an operator sizes and closes a repair by cannot disagree with
+ *  the writer. */
+const decideCell = (
+  name: string,
+  encoded: unknown,
+  resolveNameSchema: (name: string) => ResolvedPropertySchema<unknown> | undefined,
+  hasFieldRow: (fieldId: string) => boolean,
+): CellDecision => {
+  const schema = resolveNameSchema(name)
+  if (schema === undefined) return {kind: 'unresolved'}
+  if (hasFieldRow(schema.fieldId)) return {kind: 'backed', schema}
+  const rejection = propertyCellValueRejection(schema, encoded)
+  return rejection ? {kind: 'refused', schema, rejection} : {kind: 'pending', schema}
+}
 
 /** Owners named per refused key — enough to open one and look at the value.
  *  The repair is per KEY, so these are a way in, not the work list. */
@@ -283,6 +322,145 @@ export const flipBlockedByCellValues = (
     'blocks, so this workspace can never finish the migration while they exist: ' +
     `${more > 0 ? `${named} and ${more} more key(s)` : named}. ` +
     'Repair or remove those values, then run this again.'
+}
+
+/** Cells of one key in one bucket of {@link PropertyCellCoverage}. */
+export interface PropertyCellCoverageKey {
+  key: string
+  /** Exact. */
+  cells: number
+  /** A few owners holding one, capped at {@link SAMPLE_OWNERS_PER_KEY}. */
+  blockIds: string[]
+}
+
+export interface PropertyCellCoverageBucket {
+  /** Exact. */
+  cells: number
+  /** Distinct owners. Exact. */
+  blocks: number
+  /** One entry per key, first-seen order. */
+  keys: PropertyCellCoverageKey[]
+}
+
+/** Registered cells with no live field row, by what the pass does about each. */
+export interface PropertyCellCoverage {
+  /** Every block carrying a property — the set the pass visits. */
+  blocksScanned: number
+  /** No field row, and the value carries: what a run of the pass
+   *  materializes. Zero is the "nothing left to repair" reading. */
+  missing: PropertyCellCoverageBucket
+  /** No field row, and the codec refuses the value: the pass reports these and
+   *  writes them only once the value is repaired. */
+  refused: PropertyCellCoverageBucket
+  /** The only field row is tombstoned: deleted through its children, with this
+   *  device's cell not caught up. The pass leaves these alone. */
+  deletedThroughChildren: PropertyCellCoverageBucket
+}
+
+interface CoverageTally {
+  readonly bucket: PropertyCellCoverageBucket
+  readonly byKey: Map<string, PropertyCellCoverageKey>
+  lastOwner: string | null
+}
+
+const coverageTally = (): CoverageTally =>
+  ({bucket: {cells: 0, blocks: 0, keys: []}, byKey: new Map(), lastOwner: null})
+
+/** One owner's cells are counted together, so comparing against the previous
+ *  owner is enough to count owners once. */
+const countCell = (tally: CoverageTally, key: string, ownerId: string): void => {
+  tally.bucket.cells += 1
+  if (tally.lastOwner !== ownerId) {
+    tally.bucket.blocks += 1
+    tally.lastOwner = ownerId
+  }
+  const seen = tally.byKey.get(key)
+  if (seen === undefined) {
+    const entry = {key, cells: 1, blockIds: [ownerId]}
+    tally.byKey.set(key, entry)
+    tally.bucket.keys.push(entry)
+    return
+  }
+  seen.cells += 1
+  if (seen.blockIds.length < SAMPLE_OWNERS_PER_KEY) seen.blockIds.push(ownerId)
+}
+
+const ownerField = (ownerId: string, fieldId: string): string => `${ownerId}\0${fieldId}`
+
+/**
+ * Past the flip, which registered cells have no field row — the gaps a cell-only
+ * write leaves, which a registry audit cannot see because every key registers.
+ *
+ * Read-only, over the pass's own candidate set and through {@link decideCell}:
+ * `missing` is what a re-run of the pass writes, so it sizes a repair before the
+ * run and reads zero after it.
+ *
+ * Callers wait for the registry first (`whenPropertyDefinitionsReady`): a key
+ * whose definition is still projecting reads as unresolved, and is in no bucket.
+ */
+export const surveyPropertyCellCoverage = async (
+  repo: Repo,
+  workspaceId: string,
+): Promise<PropertyCellCoverage> => {
+  // Guarded rather than trusted: past the retained previous workspace the
+  // resolver fails CLOSED, every key reads as unresolved, and every bucket
+  // reports zero — the all-clear this survey exists to withhold.
+  requirePropertyRegistryFor(repo, workspaceId)
+  const resolver = repo.propertySchemaResolverFor(workspaceId)
+  const resolveNameSchema = (name: string): ResolvedPropertySchema<unknown> | undefined => {
+    const resolution = resolver.resolve(name)
+    return resolution.status === 'resolved' ? resolution.schema : undefined
+  }
+  const missing = coverageTally()
+  const refused = coverageTally()
+  const deleted = coverageTally()
+  let blocksScanned = 0
+  let cursor = ''
+  for (;;) {
+    const page = await repo.db.getAll<{id: string; propertiesJson: string}>(
+      SURVEY_SQL, [workspaceId, cursor, SCAN_PAGE])
+    if (page.length === 0) break
+    cursor = page[page.length - 1]!.id
+    blocksScanned += page.length
+    /** {@link ownerField} for every field row on this page, and for the live ones. */
+    const anyFieldRow = new Set<string>()
+    const liveFieldRow = new Set<string>()
+    for (const owners of chunksOf(page.map(row => row.id), MAX_IDS_PER_IN_CLAUSE)) {
+      const rows = await repo.db.getAll<{parentId: string; fieldId: string; deleted: number}>(
+        propertyFieldRowsForParentsSql(
+          'parent_id AS parentId, reference_target_id AS fieldId, deleted', owners.length),
+        [workspaceId, ...owners])
+      for (const row of rows) {
+        anyFieldRow.add(ownerField(row.parentId, row.fieldId))
+        if (row.deleted === 0) liveFieldRow.add(ownerField(row.parentId, row.fieldId))
+      }
+    }
+    for (const row of page) {
+      let properties: Record<string, unknown>
+      try {
+        properties = JSON.parse(row.propertiesJson) as Record<string, unknown>
+      } catch {
+        // Unreachable past `CARRIES_A_PROPERTY`'s `json_valid`.
+        continue
+      }
+      for (const [name, encoded] of Object.entries(properties)) {
+        const decision = decideCell(
+          name, encoded, resolveNameSchema, fieldId => anyFieldRow.has(ownerField(row.id, fieldId)))
+        if (decision.kind === 'pending') countCell(missing, name, row.id)
+        else if (decision.kind === 'refused') countCell(refused, name, row.id)
+        else if (decision.kind === 'backed'
+          && !liveFieldRow.has(ownerField(row.id, decision.schema.fieldId))) {
+          countCell(deleted, name, row.id)
+        }
+      }
+    }
+  }
+  return {
+    blocksScanned,
+    missing: missing.bucket,
+    refused: refused.bucket,
+    deletedThroughChildren: deleted.bucket,
+  }
 }
 
 /** Progress fan-out for a surface that wants to show a running count. The pass
@@ -534,21 +712,21 @@ const sweep = async (
         /** Keys skipped for want of a schema, which are NOT rejections but are
          *  equally not migrated — see the acceptance test below. */
         let unresolvedHere = 0
+        const taken = takenByOwner.get(owner.id)
         for (const name of Object.keys(owner.properties)) {
-          const schema = ctx.resolveNameSchema(name)
-          // An unregistered key has no definition to point a field row AT, so
-          // it can never leave the pending set. Excluded from the MATERIALIZED
-          // counts rather than carried: convergence is "a sweep that
-          // materialized nothing", and one such key on one block kept every
-          // sweep looking like work.
+          const encoded = owner.properties[name]
+          const decision = decideCell(
+            name, encoded, ctx.resolveNameSchema, fieldId => taken?.has(fieldId) === true)
+          // Excluded from the MATERIALIZED counts rather than carried:
+          // convergence is "a sweep that materialized nothing", and one such
+          // key on one block kept every sweep looking like work.
           //
           // Counted all the same, which it was not. Skipped silently, it left
           // every surface that asks "is there anything left?" reading a zero
           // that was not true — including the runbook's stop condition, which
           // announced a finished migration over cells nothing had attempted.
-          if (schema === undefined) { recordUnresolved(name); unresolvedHere += 1; continue }
-          if (takenByOwner.get(owner.id)?.has(schema.fieldId)) continue
-          const encoded = owner.properties[name]
+          if (decision.kind === 'unresolved') { recordUnresolved(name); unresolvedHere += 1; continue }
+          if (decision.kind === 'backed') continue
           // PER-NAME ISOLATION, which the row-at-a-time retry loop this
           // replaced bought by catching around one name. One key that cannot
           // be planned must cost its own key, not every key on the block and
@@ -560,15 +738,16 @@ const sweep = async (
           // that `propertyFieldContent` cannot render back out (whitespace,
           // parentheses) throws when the field row is built, and that is a
           // property of the definition rather than of this block's value, so
-          // the value check above cannot see it coming.
-          const rejection = propertyCellValueRejection(schema, encoded)
-          if (rejection) {
+          // the value check cannot see it coming.
+          if (decision.kind === 'refused') {
             // The wrapper, not the bare cause: a `CodecError` says "expected
             // string, got object" and nothing about WHICH key on this block.
-            recordFailure(owner.id, undecodableCellValueError(name, owner.id, schema, rejection))
+            recordFailure(owner.id,
+              undecodableCellValueError(name, owner.id, decision.schema, decision.rejection))
             rejectedHere += 1
             continue
           }
+          const {schema} = decision
           let fieldRow: NewBlockData
           let contents: readonly string[]
           try {
