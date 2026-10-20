@@ -41,10 +41,9 @@
 // extensions must write its explicit `/index.js` form; every other entry here
 // is a single file.
 //
-// `react` / `react-dom` (and their subpaths, `react/jsx-runtime` included) are
-// not listed because they are not app modules: the page importmap supplies the
-// host's copies, and an extension must never bundle its own. JSX compiles to
-// `react/jsx-runtime` (EXTENSION_BABEL_PRESETS), so it needs no React import.
+// `react` / `react-dom` (and their subpaths) are not listed: they are not app
+// modules — the page importmap supplies the host's copies and an extension must
+// never bundle its own (packages/agent-cli/README.md, "React in extensions").
 
 export interface ApiModuleGroup {
   /** Coarse grouping for discovery display (facets, data, ui, navigation, …). */

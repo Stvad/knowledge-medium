@@ -31,8 +31,8 @@ import {
 //
 // The rest cover what tsc doesn't:
 //   1. Babel-transpiles each example with the presets the *dynamic extension
-//      loader* uses (`EXTENSION_BABEL_PRESETS`) — the app is compiled by tsgo, so
-//      a construct tsgo accepts and Babel rejects would still break an agent
+//      loader* uses (`EXTENSION_BABEL_PRESETS`) — the app is compiled by tsgo,
+//      so a construct tsgo accepts and Babel rejects would still break an agent
 //      that pastes the example into an extension.
 //   2. Parses every `import { ... } from '@/…'` and, for each specifier that
 //      is a curated-API module (`apiCatalog.ts`), confirms every imported name

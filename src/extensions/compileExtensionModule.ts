@@ -18,13 +18,12 @@ import { ensureExtensionUtilitiesCss } from '@/extensions/extensionUtilitiesCss.
 // map) instead of the `React` global.
 export const COMPILER_VERSION = '3'
 
-/** Babel presets the extension loader transpiles with — the one owner, so a
- *  test that claims to mirror the loader imports this instead of restating it.
- *  The AUTOMATIC JSX runtime is what keeps an extension's JSX on the host's
- *  React: it imports the factory from `react/jsx-runtime`, which the page
- *  import map resolves to the same module the app itself uses. The classic
- *  runtime would emit `React.createElement` and depend on whichever `React`
- *  global happens to be in scope. */
+/** Babel presets the extension loader transpiles with; tests that mirror the
+ *  loader import this rather than restate it. The AUTOMATIC JSX runtime keeps
+ *  an extension's JSX on the host's React: it imports its factory from
+ *  `react/jsx-runtime`, which the page import map resolves to the module the
+ *  app itself uses. The classic runtime would emit `React.createElement` and
+ *  depend on whichever `React` global happens to be in scope. */
 export const EXTENSION_BABEL_PRESETS: Array<string | [string, object]> = [
   ['react', {runtime: 'automatic'}],
   'typescript',
