@@ -1,1 +1,1 @@
-import{qS as e}from"../../../chunks/app-BXdxxiB_.js";export{e as todayDailyNoteLanding};
+import{XS as e}from"../../../chunks/app-wtxbeeMc.js";export{e as todayDailyNoteLanding};

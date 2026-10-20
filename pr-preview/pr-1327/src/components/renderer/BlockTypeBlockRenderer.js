@@ -1,1 +1,1 @@
-import{GO as e,UO as t,WO as n}from"../../../chunks/app-BXdxxiB_.js";export{t as BlockTypeBlockRenderer,n as BlockTypeContentRenderer,e as writeBlockTypeLabel};
+import{JO as e,KO as t,qO as n}from"../../../chunks/app-wtxbeeMc.js";export{t as BlockTypeBlockRenderer,n as BlockTypeContentRenderer,e as writeBlockTypeLabel};

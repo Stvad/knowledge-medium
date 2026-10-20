@@ -1,1 +1,1 @@
-import{KO as e}from"../../chunks/app-BXdxxiB_.js";export{e as trimIfEdited};
+import{YO as e}from"../../chunks/app-wtxbeeMc.js";export{e as trimIfEdited};

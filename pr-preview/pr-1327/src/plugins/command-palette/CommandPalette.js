@@ -1,1 +1,1 @@
-import{KC as e}from"../../../chunks/app-BXdxxiB_.js";export{e as CommandPalette};
+import{YC as e}from"../../../chunks/app-wtxbeeMc.js";export{e as CommandPalette};

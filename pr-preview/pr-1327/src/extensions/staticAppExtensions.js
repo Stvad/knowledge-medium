@@ -1,1 +1,1 @@
-import{C as e}from"../../chunks/app-BXdxxiB_.js";export{e as staticAppExtensions};
+import{C as e}from"../../chunks/app-wtxbeeMc.js";export{e as staticAppExtensions};

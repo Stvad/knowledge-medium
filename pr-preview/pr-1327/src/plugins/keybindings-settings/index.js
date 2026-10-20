@@ -1,1 +1,1 @@
-import{LC as e,RC as t,mt as n}from"../../../chunks/app-BXdxxiB_.js";export{e as keybindingOverridesProp,t as keybindingsPrefsType,n as keybindingsSettingsPlugin};
+import{BC as e,VC as t,mt as n}from"../../../chunks/app-wtxbeeMc.js";export{e as keybindingOverridesProp,t as keybindingsPrefsType,n as keybindingsSettingsPlugin};
