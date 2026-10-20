@@ -1,1 +1,1 @@
-import{pf as e}from"../../../chunks/app-B3MIV0i0.js";export{e as blockInfoPlugin};
+import{Hp as e}from"../../../chunks/app-D9z6ttpq.js";export{e as blockInfoPlugin};
