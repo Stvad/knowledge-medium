@@ -1,1 +1,1 @@
-import{Ix as e}from"../../../../chunks/app-CQwxEZQN.js";export{e as createEncryptedWorkspace};
+import{Ix as e}from"../../../../chunks/app-YGAjfqXo.js";export{e as createEncryptedWorkspace};

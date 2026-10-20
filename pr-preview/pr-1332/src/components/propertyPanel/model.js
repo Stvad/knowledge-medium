@@ -1,1 +1,1 @@
-import{XP as e,ZP as t}from"../../../chunks/app-CQwxEZQN.js";export{e as HIDDEN_SECTION,t as buildPropertyPanelModel};
+import{XP as e,ZP as t}from"../../../chunks/app-YGAjfqXo.js";export{e as HIDDEN_SECTION,t as buildPropertyPanelModel};

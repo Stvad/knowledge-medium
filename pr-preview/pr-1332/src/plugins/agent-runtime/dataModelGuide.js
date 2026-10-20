@@ -1,1 +1,1 @@
-import{Sp as e,xp as t}from"../../../chunks/app-CQwxEZQN.js";export{t as DATA_MODEL_GUIDE,e as dataModelGuide};
+import{Sp as e,xp as t}from"../../../chunks/app-YGAjfqXo.js";export{t as DATA_MODEL_GUIDE,e as dataModelGuide};

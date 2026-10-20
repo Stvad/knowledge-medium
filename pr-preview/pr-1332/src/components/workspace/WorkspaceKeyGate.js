@@ -1,1 +1,1 @@
-import{It as e,Lt as t}from"../../../chunks/app-CQwxEZQN.js";export{e as WorkspaceKeyGate,t as workspaceGateDeps};
+import{It as e,Lt as t}from"../../../chunks/app-YGAjfqXo.js";export{e as WorkspaceKeyGate,t as workspaceGateDeps};
