@@ -317,7 +317,9 @@ The first production run is #1288.
 
     It leaves out the server history and the Storage objects themselves, which are ciphertext by then and useless once the key is lost. A raw SQLite export isn't a recovery point. It holds only what this device has downloaded and applied, and attachment bytes live outside it (`src/plugins/attachments/byteStore.ts`).
 
-**Key-loss recovery** (#1302) **isn't a prerequisite for the first run** (the owner's call, 2026-10-20). What protects the workspace is the plaintext bundle and the key saved in two places, and both exist before the flip. The restore can be built when a key is actually lost, and nothing is lost while it doesn't exist. Until then, a lost key leaves the workspace unreadable until recovery is built, and it comes back at the newest recovery point. Before any recovery runs, every device has to run a build with #1302's client half: the canary check on entry, the upload fence with key-generation stamping, and the backlog quarantine. A device without it could upload stale or old-key writes over the restore.
+**Key-loss recovery** (#1302) **isn't a prerequisite for the first run** (the owner's call, 2026-10-20). What protects the workspace is the key saved in two places, from before the flip, and the plaintext bundle, from right after it. Until the purge, the server alone can rebuild that bundle without the key (step 3), so the window between the flip and the bundle loses nothing either. The restore can be built when a key is actually lost, and nothing is lost while it doesn't exist. Until then, a lost key leaves the workspace unreadable until recovery is built, and it comes back at the newest recovery point.
+
+No device needs #1302's build before a recovery runs either, lost ones included. Once a workspace is re-keyed, #1302's server fence refuses every write without the current key-generation stamp, which covers every write from an older build (#1316 §3.2). Such a device's writes go to the rejection quarantine instead of landing over the restore. Upgrading a device only lets it keep writing.
 
 Before the purge, nothing is lost, but a key lost during `sealing` still needs a way forward:
 - **Before the first re-sealed row,** no row is sealed. Re-key, take the bundle if it wasn't taken yet, and carry on.
@@ -331,7 +333,7 @@ After the purge, recovery **re-keys the workspace in place** from the newest rec
 - a bundle that needs no key before the purge, so a key lost during `sealing` is recoverable even without the saved bundle (step 3);
 - a re-key that the server admits during `sealing` as well as after it, with the flip's lock order;
 - recovery points that are complete, bound to this workspace, and verified (step 14);
-- the fleet gate above, before any recovery runs, for #1302's client half.
+- nothing from the fleet: #1302's server fence refuses an un-upgraded device's writes, so the conversion's deploy gate doesn't include #1302's client half.
 
 ## 9. Platform residue, and when it is "safe if breached"
 
