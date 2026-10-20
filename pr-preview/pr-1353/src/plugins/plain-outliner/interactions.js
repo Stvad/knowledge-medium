@@ -1,1 +1,1 @@
-import{Zb as e}from"../../../chunks/app-Defmp1AL.js";export{e as blockEditingContentRenderer};
+import{Zb as e}from"../../../chunks/app-G0BKury8.js";export{e as blockEditingContentRenderer};

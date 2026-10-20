@@ -1,1 +1,1 @@
-import{tr as e}from"../../../chunks/app-Defmp1AL.js";export{e as ExtensionsSettings};
+import{tr as e}from"../../../chunks/app-G0BKury8.js";export{e as ExtensionsSettings};

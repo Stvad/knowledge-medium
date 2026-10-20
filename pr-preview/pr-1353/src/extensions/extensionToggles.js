@@ -1,1 +1,1 @@
-import{dA as e,fA as t,mA as n,pA as r}from"../../chunks/app-Defmp1AL.js";export{e as extensionDisplayName,t as extensionName,r as userExtensionShellToggle,n as userExtensionToggle};
+import{dA as e,fA as t,mA as n,pA as r}from"../../chunks/app-G0BKury8.js";export{e as extensionDisplayName,t as extensionName,r as userExtensionShellToggle,n as userExtensionToggle};
