@@ -1,1 +1,1 @@
-import{$G as e,eK as t,tK as n}from"../../chunks/app-CgL16Z64.js";export{e as SYNCED_TABLES,t as syncedWriteTarget,n as writeTargets};
+import{$G as e,eK as t,tK as n}from"../../chunks/app-CshHoxB6.js";export{e as SYNCED_TABLES,t as syncedWriteTarget,n as writeTargets};

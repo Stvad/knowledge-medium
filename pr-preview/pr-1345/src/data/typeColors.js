@@ -1,1 +1,1 @@
-import{XD as e,YD as t,ZD as n}from"../../chunks/app-CgL16Z64.js";export{t as DEFAULT_TYPE_COLORS,e as defaultTypeColor,n as pickLeastUsedTypeColor};
+import{XD as e,YD as t,ZD as n}from"../../chunks/app-CshHoxB6.js";export{t as DEFAULT_TYPE_COLORS,e as defaultTypeColor,n as pickLeastUsedTypeColor};

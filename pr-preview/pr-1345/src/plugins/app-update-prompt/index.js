@@ -1,1 +1,1 @@
-import{hk as e}from"../../../chunks/app-CgL16Z64.js";export{e as appUpdatePromptExtension};
+import{hk as e}from"../../../chunks/app-CshHoxB6.js";export{e as appUpdatePromptExtension};

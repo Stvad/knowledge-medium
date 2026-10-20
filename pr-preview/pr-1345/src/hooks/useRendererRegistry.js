@@ -1,1 +1,1 @@
-import{HA as e,UA as t,VA as n}from"../../chunks/app-CgL16Z64.js";export{t as defaultRegistry,n as refreshRendererRegistry,e as useRenderer};
+import{HA as e,UA as t,VA as n}from"../../chunks/app-CshHoxB6.js";export{t as defaultRegistry,n as refreshRendererRegistry,e as useRenderer};

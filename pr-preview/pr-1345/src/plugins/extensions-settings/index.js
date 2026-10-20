@@ -1,1 +1,1 @@
-import{nk as e,qn as t,rk as n}from"../../../chunks/app-CgL16Z64.js";export{e as extensionsOverridesProp,n as extensionsPrefsType,t as extensionsSettingsPlugin};
+import{nk as e,qn as t,rk as n}from"../../../chunks/app-CshHoxB6.js";export{e as extensionsOverridesProp,n as extensionsPrefsType,t as extensionsSettingsPlugin};

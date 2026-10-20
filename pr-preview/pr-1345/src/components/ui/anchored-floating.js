@@ -1,1 +1,1 @@
-import{XR as e,YR as t}from"../../../chunks/app-CgL16Z64.js";export{t as floatingAnchorFromRect,e as useAnchoredFloating};
+import{XR as e,YR as t}from"../../../chunks/app-CshHoxB6.js";export{t as floatingAnchorFromRect,e as useAnchoredFloating};
