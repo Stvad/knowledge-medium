@@ -12,14 +12,18 @@ class FakeFileHandle {
   data = new Uint8Array(0)
   /** Fails the next write, as a full disk does. */
   static failWrites: Error | null = null
+  /** What each next writable's write waits on first, in order: a hold, or a failure. */
+  static nextWrites: Array<() => Promise<void>> = []
   async getFile() {
     // A fresh copy each read, like a real File over OPFS.
     return { arrayBuffer: async () => this.data.slice().buffer }
   }
   async createWritable() {
     const chunks: Uint8Array[] = []
+    const before = FakeFileHandle.nextWrites.shift()
     return {
       write: async (chunk: Uint8Array) => {
+        await before?.()
         if (FakeFileHandle.failWrites) throw FakeFileHandle.failWrites
         chunks.push(new Uint8Array(chunk))
       },
@@ -224,6 +228,27 @@ describe('OpfsByteStore — on-disk layout', () => {
     }
     expect(await store.get(U, WS, KEY)).toBeNull()
     expect(await store.get(U, WS, 'kept')).toEqual(bytes(1))
+  })
+
+  it('a failed write never removes the bytes a concurrent put of the same key stored', async () => {
+    const { store } = opfsWithRoot()
+    let failSecond!: () => void
+    const secondFails = new Promise<void>(resolve => { failSecond = resolve })
+    const full = async () => { throw new DOMException('full', 'QuotaExceededError') }
+    // The first put succeeds; the second, started alongside it, fails once
+    // the first has finished, and so does its retry.
+    FakeFileHandle.nextWrites = [async () => {}, () => secondFails.then(full), full]
+    try {
+      const first = store.put(U, WS, KEY, bytes(1, 2))
+      const second = store.put(U, WS, KEY, bytes(1, 2))
+      const secondRejects = expect(second).rejects.toMatchObject({name: 'QuotaExceededError'})
+      await first
+      failSecond()
+      await secondRejects
+    } finally {
+      FakeFileHandle.nextWrites = []
+    }
+    expect(await store.get(U, WS, KEY)).toEqual(bytes(1, 2))
   })
 
   it('purgeWorkspace removes the workspace subtree from disk', async () => {

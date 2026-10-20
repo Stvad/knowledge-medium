@@ -110,6 +110,32 @@ describe('verifiedCopy', () => {
     await expect(copyOf(hash, listedOf(name))).rejects.toEqual(new ListedObjectUnreadable(name))
   })
 
+  it('ends a stalled Storage read when stopped', async () => {
+    const {hash, name} = await setup('remote bytes')
+    const readObject = vi.spyOn(storage.io, 'readObject').mockReturnValue(new Promise(() => {}))
+    const stop = new AbortController()
+    const copying = verifiedCopy(storage.io, hash, listedOf(name), {sleep: noSleep, signal: stop.signal})
+    let settled = false
+    void copying.catch(() => {}).finally(() => { settled = true })
+    await vi.waitFor(() => expect(readObject).toHaveBeenCalled())
+
+    stop.abort(new DOMException('stopped', 'AbortError'))
+
+    await vi.waitFor(() => expect(settled).toBe(true))
+    await expect(copying).rejects.toThrow('stopped')
+    expect(readObject).toHaveBeenCalledTimes(1)
+  })
+
+  it('reads neither store for a malformed hash', async () => {
+    const malformed = `sha256:${'a'.repeat(300)}`
+    const readLocal = vi.spyOn(storage.io, 'readLocal')
+    const readObject = vi.spyOn(storage.io, 'readObject')
+
+    expect(await copyOf(malformed, listedOf(rawNameOf(malformed)))).toBeNull()
+    expect(readLocal).not.toHaveBeenCalled()
+    expect(readObject).not.toHaveBeenCalled()
+  })
+
   it('retries a transient read failure', async () => {
     const {bytes, hash, name} = await setup('flaky')
     storage.objects.set(name, bytes)

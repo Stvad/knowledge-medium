@@ -11,8 +11,9 @@
  */
 
 import { encodedSize, fitsObjectLimit, MAX_OBJECT_BYTES } from '../../byteTransform.js'
-import { CONTENT_HASH_PREFIX, verifyContentHash } from '../../crypto/contentHash.js'
+import { CONTENT_HASH_PREFIX, isContentHash, verifyContentHash } from '../../crypto/contentHash.js'
 import { abortableSleep } from '@/utils/abortableSleep.js'
+import { untilStopped } from '@/utils/untilStopped.js'
 import { isAddressable, type ObjectPath, type UnrecoverableMedia } from '../attachmentCleaner.js'
 import type { ConversionAttachmentsIO } from '../conversionAttachments.js'
 import { sha256Hex, stoppableFolder, writeBytesPart, type BundleFolder } from './bundleParts.js'
@@ -96,7 +97,7 @@ const readObject = async (
   for (let attempt = 1; ; attempt++) {
     signal?.throwIfAborted()
     try {
-      return await source.readObject(path)
+      return await untilStopped(source.readObject(path), signal)
     } catch (error) {
       if (attempt >= READ_ATTEMPTS) throw error
       await sleep(READ_RETRY_MS * attempt, signal)
@@ -110,14 +111,15 @@ export interface VerifiedCopy {
 }
 
 /** This device's copy, or the raw Storage object, whichever hashes to
- *  `contentHash`; null when neither does. Storage is read only when `listed`
- *  holds the raw name. */
+ *  `contentHash`; null when neither does, or for a malformed hash, which no
+ *  store is asked about. Storage is read only when `listed` holds the raw name. */
 export const verifiedCopy = async (
   source: Pick<AttachmentSource, 'readLocal' | 'readObject'>,
   contentHash: string,
   listed: ReadonlySet<ObjectPath>,
   options: ReadOptions = {},
 ): Promise<VerifiedCopy | null> => {
+  if (!isContentHash(contentHash)) return null
   const name = rawNameOf(contentHash)
   const local = await source.readLocal(name)
   if (local && (await verifyContentHash(local, contentHash))) return {bytes: local, from: 'local'}
