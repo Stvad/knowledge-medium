@@ -62,7 +62,7 @@ vi.mock('@/extensions/AppRuntimeProvider.js', () => ({
   AppRuntimeProvider: ({children}: {children: React.ReactNode}) => children,
 }))
 vi.mock('@/components/BlockComponent.tsx', () => ({
-  BlockComponent: () => <div data-testid="workspace-open"/>,
+  BlockComponent: ({blockId}: {blockId: string}) => <div data-testid="workspace-open" data-block-id={blockId}/>,
 }))
 
 import App from './App'
@@ -162,13 +162,14 @@ describe('an open encrypted workspace whose key record disappears', () => {
 
   it('still locks on a real loss after an unreadable store recovered by the time it was checked', async () => {
     await openApp()
-    vi.mocked(bootstrapWorkspace).mockClear()
+    vi.mocked(bootstrapWorkspace).mockResolvedValueOnce({id: 'reopened'} as unknown as Block)
     const failure = new Error('IndexedDB connection lost')
     vi.spyOn(getWorkspaceKeyStore(), 'get').mockRejectedValueOnce(failure).mockRejectedValueOnce(failure)
     await act(async () => { await requireWorkspaceKeys(getWorkspaceKeyStore(), USER, WS).catch(() => {}) })
-    // The re-resolve found the key and opened the workspace again.
-    await vi.waitFor(() => expect(bootstrapWorkspace).toHaveBeenCalledTimes(1))
-    await screen.findByTestId('workspace-open')
+    // The re-resolve found the key and opened the workspace again: wait for that
+    // layout to commit, then flush the effect that watches it.
+    await vi.waitFor(() => expect(screen.getByTestId('workspace-open').dataset.blockId).toBe('reopened'))
+    await act(async () => {})
 
     await loseKeyThenLink()
 
