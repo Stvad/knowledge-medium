@@ -1,1 +1,1 @@
-import{XD as e,YD as t}from"../../chunks/app-Ct1TgHt0.js";export{t as resolveAppRuntime,e as resolveAppRuntimeSync};
+import{XD as e,YD as t}from"../../chunks/app-BJ4XnvfS.js";export{t as resolveAppRuntime,e as resolveAppRuntimeSync};
