@@ -1,0 +1,1 @@
+import{ky as e}from"../../../chunks/app-CgcPgUjP.js";export{e as SpatialNavigationShellDecorator};

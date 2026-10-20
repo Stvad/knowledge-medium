@@ -1,0 +1,1 @@
+import{hu as e}from"../../../chunks/app-CgcPgUjP.js";export{e as resolveDailyPage};

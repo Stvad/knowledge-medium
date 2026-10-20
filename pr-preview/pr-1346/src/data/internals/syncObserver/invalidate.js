@@ -1,0 +1,1 @@
+import{QY as e}from"../../../../chunks/app-CgcPgUjP.js";export{e as applySyncInvalidation};

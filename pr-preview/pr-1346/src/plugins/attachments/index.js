@@ -1,0 +1,1 @@
+import{Gh as e}from"../../../chunks/app-CgcPgUjP.js";export{e as attachmentsPlugin};

@@ -1,0 +1,1 @@
+import{gd as e,hd as t}from"../../chunks/app-CgcPgUjP.js";export{t as extensionApiCatalog,e as extensionApiRuntimeExports};

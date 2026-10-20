@@ -1,0 +1,1 @@
+import{Hp as e}from"../../../chunks/app-CgcPgUjP.js";export{e as blockInfoPlugin};

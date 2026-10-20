@@ -1,0 +1,1 @@
+import{qn as e}from"../../../chunks/app-CgcPgUjP.js";export{e as extensionsDataExtension};

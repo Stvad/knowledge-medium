@@ -1,0 +1,1 @@
+import{_M as e}from"../../chunks/app-CgcPgUjP.js";export{e as ExtensionRenderBoundary};
