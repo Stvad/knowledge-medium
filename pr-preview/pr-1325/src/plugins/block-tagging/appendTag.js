@@ -1,1 +1,1 @@
-import{Dc as e,Oc as t}from"../../../chunks/app-zNHMIuBt.js";export{e as appendTagToBlocks,t as appendTagToContent};
+import{Dc as e,Oc as t}from"../../../chunks/app-CpM_1VKb.js";export{e as appendTagToBlocks,t as appendTagToContent};

@@ -1,1 +1,1 @@
-import{Hu as e,Uu as t}from"../../chunks/app-zNHMIuBt.js";export{e as extensionApiCatalog,t as extensionApiRuntimeExports};
+import{Hu as e,Uu as t}from"../../chunks/app-CpM_1VKb.js";export{e as extensionApiCatalog,t as extensionApiRuntimeExports};

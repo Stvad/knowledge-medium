@@ -1,1 +1,1 @@
-import{cA as e,oA as t,sA as n}from"../../chunks/app-zNHMIuBt.js";export{t as defaultRegistry,n as defaultRendererContributions,e as defaultRenderersExtension};
+import{cA as e,oA as t,sA as n}from"../../chunks/app-CpM_1VKb.js";export{t as defaultRegistry,n as defaultRendererContributions,e as defaultRenderersExtension};

@@ -1,1 +1,1 @@
-import{Q as e}from"../../chunks/app-zNHMIuBt.js";export{e as installIdleCallbackPolyfill};
+import{Q as e}from"../../chunks/app-CpM_1VKb.js";export{e as installIdleCallbackPolyfill};

@@ -1,1 +1,1 @@
-import{g3 as e,h3 as t}from"../../chunks/app-zNHMIuBt.js";export{t as getOrCreatePropertiesPage,e as propertiesPageBlockId};
+import{g3 as e,h3 as t}from"../../chunks/app-CpM_1VKb.js";export{t as getOrCreatePropertiesPage,e as propertiesPageBlockId};

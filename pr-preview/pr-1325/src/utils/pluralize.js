@@ -1,1 +1,1 @@
-import{$X as e,eZ as t}from"../../chunks/app-zNHMIuBt.js";export{e as agree,t as pluralize};
+import{$X as e,eZ as t}from"../../chunks/app-CpM_1VKb.js";export{e as agree,t as pluralize};
