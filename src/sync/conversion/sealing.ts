@@ -200,8 +200,11 @@ export const serverPages = (
 /** The workspace's media blocks as the server holds them, each row opened under
  *  `wk`: the set a proof covers, which neither this device's view nor a bundle
  *  can stand in for, since either may be stale. A row that doesn't open fails
- *  the read rather than be left out, and so does a pass that didn't see every
- *  row. */
+ *  the read rather than be left out, and so does a pass that missed a row the
+ *  workspace held when it began. Counted first, not after as
+ *  {@link requireWholeWorkspace} does: past the purge rows keep arriving (this
+ *  device's held writes among them), and keyset paging misses none that were
+ *  already there. */
 export const serverMediaBlocks = async (
   server: ConversionServer,
   workspaceId: string,
@@ -209,6 +212,7 @@ export const serverMediaBlocks = async (
   mediaHashOf: (propertiesJson: string) => string | null,
   signal?: AbortSignal,
 ): Promise<MediaRef[]> => {
+  const {blocks: held} = await server.workspaceCounts(workspaceId)
   const media: MediaRef[] = []
   let seen = 0
   for await (const page of serverPages(server, workspaceId, RESEAL_PAGE_SIZE, signal)) {
@@ -221,7 +225,7 @@ export const serverMediaBlocks = async (
     }
     seen += page.length
   }
-  await requireWholeWorkspace(server, workspaceId, wk, seen)
+  if (seen < held) throw new Error(`conversion: the pass saw ${seen} of the workspace's ${held} rows; run it again`)
   return media
 }
 

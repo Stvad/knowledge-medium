@@ -30,6 +30,22 @@ describe('serverMediaBlocks', () => {
     await expect(serverMediaBlocks(server, WS, wk, fakeMediaHashOf)).rejects.toThrow('other-key does not open')
   })
 
+  it('takes rows written while it reads, as past the purge they may be', async () => {
+    server.maxRows = 2
+    const read = server.readBlockPage.bind(server)
+    let pages = 0
+    vi.spyOn(server, 'readBlockPage').mockImplementation(async (...args) => {
+      // Before the cursor, so the paging never reaches it.
+      if (pages++ === 1) {
+        const row = {id: 'a-new', workspace_id: WS}
+        server.insert({...row, ...(await sealFor(wk, row, {content: 'new', properties_json: '{}', references_json: '[]'}))})
+      }
+      return read(...args)
+    })
+
+    expect(await serverMediaBlocks(server, WS, wk, fakeMediaHashOf)).toEqual([{blockId: 'media-1', contentHash: 'sha256:aa'}])
+  })
+
   it('fails a read that did not see every row', async () => {
     // A lapsed session reads as an empty table rather than as an error.
     vi.spyOn(server, 'readBlockPage').mockResolvedValue([])

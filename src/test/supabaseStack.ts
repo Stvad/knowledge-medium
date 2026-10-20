@@ -41,12 +41,16 @@ export const supabaseStack = (): SupabaseStack => {
  *  routes each request by its path, as a project's gateway does. */
 const GATEWAY = 'http://gateway.check-db.invalid'
 
+/** Stands between a client and the stack: `send` forwards the request, and a
+ *  tap may act before it, hold it, or fail it instead. */
+export type StackTap = (url: URL, init: RequestInit | undefined, send: () => Promise<Response>) => Promise<Response>
+
 /**
  * A supabase-js client over the stack, holding `key` as its API key and no
  * session until it signs in. Its requests go straight to the server the
- * gateway would route them to.
+ * gateway would route them to, through `tap` when one is given.
  */
-export const stackClient = (stack: SupabaseStack, key = stack.anonKey): SupabaseClient => {
+export const stackClient = (stack: SupabaseStack, key = stack.anonKey, tap?: StackTap): SupabaseClient => {
   const routes = [
     [`${GATEWAY}/auth/v1`, stack.authUrl],
     [`${GATEWAY}/rest/v1`, stack.restUrl],
@@ -56,7 +60,8 @@ export const stackClient = (stack: SupabaseStack, key = stack.anonKey): Supabase
     const url = String(input)
     const route = routes.find(([from]) => url.startsWith(`${from}/`) || url.startsWith(`${from}?`))
     if (!route) throw new Error(`no stack server serves ${url}`)
-    return fetch(route[1] + url.slice(route[0].length), init)
+    const send = () => fetch(route[1] + url.slice(route[0].length), init)
+    return tap ? tap(new URL(url), init, send) : send()
   }
   return createClient(GATEWAY, key, {
     auth: {persistSession: false, autoRefreshToken: false, detectSessionInUrl: false},
@@ -71,8 +76,8 @@ export interface StackUser {
 }
 
 /** A new user, signed up through GoTrue, which here confirms the address without mail. */
-export const signedInUser = async (stack: SupabaseStack): Promise<StackUser> => {
-  const client = stackClient(stack)
+export const signedInUser = async (stack: SupabaseStack, tap?: StackTap): Promise<StackUser> => {
+  const client = stackClient(stack, stack.anonKey, tap)
   const {data, error} = await client.auth.signUp({email: `user-${randomUUID()}@example.test`, password: randomUUID()})
   if (error || !data.user || !data.session) throw new Error(`sign-up failed: ${error?.message ?? 'no session'}`)
   return {id: data.user.id, client}

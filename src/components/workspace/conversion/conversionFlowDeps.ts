@@ -40,17 +40,14 @@ const uploadQueue = (repo: Repo) => async (signal?: AbortSignal): Promise<{pendi
   }
 }
 
-const preflightEnvironment = (repo: Repo): PreflightEnvironment => ({
-  canPersistPins,
-  keyStoreIsDurable: getWorkspaceKeyStore() instanceof IndexedDbWorkspaceKeyStore,
-  supportsDirectoryPicker: supportsDirectoryPicker(),
-  uploadQueue: uploadQueue(repo),
-  localDbBytes: () => localDbFileBytes(repo.user.id),
-  freeLocalBytes: async () => {
-    const {quota, usage} = await navigator.storage.estimate().catch(() => ({quota: undefined, usage: undefined}))
-    return quota === undefined || usage === undefined ? null : Math.max(0, quota - usage)
-  },
-})
+/** What only the browser gives the run: stores that outlive the page, the
+ *  bundle folder's permission and the database copy, the screen lock, and
+ *  preflight's checks of them. A run outside a browser supplies its own. */
+export interface ConversionPlatform
+  extends Pick<ConversionFlowDeps, 'keyStore' | 'bundles' | 'canReadFolder' | 'writeLocalDb' | 'keepAwake'> {
+  /** The upload queue is the repo's own, so it isn't the platform's. */
+  readonly environment: Omit<PreflightEnvironment, 'uploadQueue'>
+}
 
 export type ConversionUnavailable =
   /** Not signed in to a server: local-only, or none configured. */
@@ -95,39 +92,16 @@ export const conversionSetup = async (repo: Repo, workspaceId: string, localOnly
   if (attachments.kind === 'unavailable') {
     return {kind: 'unavailable', why: {kind: 'no-attachments', reason: attachments.reason}}
   }
+  const platform = webConversionPlatform(repo)
   return {
     kind: 'ready',
-    makeDeps: (ui, signal) => conversionFlowDeps({repo, workspaceId, client, lock, attachments: attachments.io, ui, signal}),
+    makeDeps: (ui, signal) => conversionFlowDeps({repo, workspaceId, client, lock, attachments: attachments.io, platform, ui, signal}),
   }
 }
 
-/** Every dependency that waits on the network is bound to the run's `signal`
- *  here, so Stop reaches each call: the server's requests abort, the rest race
- *  it. A raced call is abandoned, not cancelled, so a Storage delete also aborts
- *  itself (`deleteObject`'s signal); an abandoned upload is harmless, since the
- *  first write at a keyed name wins and the cleaner verifies what is there. The
- *  bundle folder, which the user picks mid-run, is bound where it's used
- *  (`stoppableFolder`). */
-const conversionFlowDeps = ({repo, workspaceId, client, lock, attachments, ui, signal}: {
-  repo: Repo
-  workspaceId: string
-  client: SupabaseClient
-  lock: ConversionLock
-  attachments: ConversionAttachmentsIO
-  ui: ConversionUi
-  signal: AbortSignal
-}): ConversionFlowDeps => ({
-  userId: repo.user.id,
-  workspaceId,
-  server: createSupabaseConversionServer(client, signal),
-  fetchConversionState: () => untilStopped(fetchWorkspaceConversionState(workspaceId), signal),
+const webConversionPlatform = (repo: Repo): ConversionPlatform => ({
   keyStore: getWorkspaceKeyStore(),
-  flipAttempts: localFlipAttempts(repo.user.id, workspaceId),
-  lock,
-  preflight: preflightEnvironment(repo),
-  markLocalConverted: canary => markLocalWorkspaceConverted(repo.db, workspaceId, canary),
   bundles: (bundleRecords ??= new IndexedDbBundleRecordStore()),
-  attachments: stoppable(attachments, signal),
   canReadFolder: async folder => (await queryDirectoryPermission(directoryHandleOf(folder), 'read')) === 'granted',
   writeLocalDb: async (folder, signal) => {
     const hasher = createPartHasher()
@@ -142,13 +116,56 @@ const conversionFlowDeps = ({repo, workspaceId, client, lock, attachments, ui, s
     return hasher.digest()
   },
   keepAwake: holdScreenWakeLock,
+  environment: {
+    canPersistPins,
+    keyStoreIsDurable: getWorkspaceKeyStore() instanceof IndexedDbWorkspaceKeyStore,
+    supportsDirectoryPicker: supportsDirectoryPicker(),
+    localDbBytes: () => localDbFileBytes(repo.user.id),
+    freeLocalBytes: async () => {
+      const {quota, usage} = await navigator.storage.estimate().catch(() => ({quota: undefined, usage: undefined}))
+      return quota === undefined || usage === undefined ? null : Math.max(0, quota - usage)
+    },
+  },
+})
+
+/** Every dependency that waits on the network is bound to the run's `signal`
+ *  here, so Stop reaches each call: the server's requests abort, the rest race
+ *  it. A raced call is abandoned, not cancelled, so a Storage delete also aborts
+ *  itself (`deleteObject`'s signal); an abandoned upload is harmless, since the
+ *  first write at a keyed name wins and the cleaner verifies what is there. The
+ *  bundle folder, which the user picks mid-run, is bound where it's used
+ *  (`stoppableFolder`). */
+export const conversionFlowDeps = ({repo, workspaceId, client, lock, attachments, platform, ui, signal}: {
+  repo: Repo
+  workspaceId: string
+  client: SupabaseClient
+  lock: ConversionLock
+  attachments: ConversionAttachmentsIO
+  platform: ConversionPlatform
+  ui: ConversionUi
+  signal: AbortSignal
+}): ConversionFlowDeps => ({
+  userId: repo.user.id,
+  workspaceId,
+  server: createSupabaseConversionServer(client, signal),
+  fetchConversionState: () => untilStopped(fetchWorkspaceConversionState(workspaceId), signal),
+  keyStore: platform.keyStore,
+  flipAttempts: localFlipAttempts(repo.user.id, workspaceId),
+  lock,
+  preflight: {...platform.environment, uploadQueue: uploadQueue(repo)},
+  markLocalConverted: canary => markLocalWorkspaceConverted(repo.db, workspaceId, canary),
+  bundles: platform.bundles,
+  attachments: stoppable(attachments, signal),
+  canReadFolder: platform.canReadFolder,
+  writeLocalDb: platform.writeLocalDb,
+  keepAwake: platform.keepAwake,
   upgradePin: async () => {
     const result = await upgradeWorkspacePin({
       userId: repo.user.id,
       workspaceId,
       ...workspaceGateDeps(repo, workspaceId),
       key: {kind: 'stored'},
-      keyStore: getWorkspaceKeyStore(),
+      keyStore: platform.keyStore,
     })
     if (result.ok) notifyWorkspaceUnlocked(workspaceId)
     return result
