@@ -1,0 +1,1 @@
+import{al as e,cl as t,dl as n,il as r,ll as i,ol as a,sl as o,ul as s}from"../../../chunks/app-CJZCqnp7.js";export{r as blockTaggingPrefsType,e as blockTagsConfigCodec,a as blockTagsConfigPresetCore,o as blockTagsConfigProp,t as isValidTagName,i as normalizeBlockTagsConfig,s as selectableTagNames,n as tagNameIssue};

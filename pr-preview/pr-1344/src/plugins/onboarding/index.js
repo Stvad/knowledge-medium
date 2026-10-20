@@ -1,0 +1,1 @@
+import{$v as e,Qv as t,Rv as n,Xv as r,Zv as i}from"../../../chunks/app-CJZCqnp7.js";export{i as EXTENSIONS_PAGE_TITLE,t as TUTORIAL_DEFAULT_TITLE,e as TUTORIAL_VIM_TITLE,n as onboardingPlugin,r as seedTutorial};

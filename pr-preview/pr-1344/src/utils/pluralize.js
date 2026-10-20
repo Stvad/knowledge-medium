@@ -1,0 +1,1 @@
+import{HZ as e,UZ as t}from"../../chunks/app-CJZCqnp7.js";export{e as agree,t as pluralize};

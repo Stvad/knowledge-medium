@@ -1,0 +1,1 @@
+import{fm as e,gm as t,hm as n,mm as r,pm as i}from"../../../chunks/app-CJZCqnp7.js";export{e as DEFAULT_BACKLINKS_VIEW_ID,i as FLAT_BACKLINKS_VIEW_ID,r as GROUPED_BACKLINKS_VIEW_ID,n as backlinksViewProp,t as defaultBacklinksViewIdForBlock};

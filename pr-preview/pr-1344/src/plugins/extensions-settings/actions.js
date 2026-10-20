@@ -1,0 +1,1 @@
+import{XO as e,ZO as t}from"../../../chunks/app-CJZCqnp7.js";export{e as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,t as openExtensionsSettingsAction};
