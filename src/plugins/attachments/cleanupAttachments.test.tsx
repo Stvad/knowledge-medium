@@ -55,6 +55,7 @@ const report = (over: Partial<CleanerReport> = {}): CleanerReport => ({
   left: [],
   rebuilt: [],
   errors: [],
+  bundleFault: null,
   proof: {kind: 'passed', unrecoverable: []},
   ...over,
 })

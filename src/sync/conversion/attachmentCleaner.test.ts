@@ -5,7 +5,7 @@ import { mintCanary } from '../crypto/canary.js'
 import { computeContentHash } from '../crypto/contentHash.js'
 import { deriveContentKey, deriveContentKeyHmac } from '../crypto/contentKey.js'
 import { importWorkspaceKey } from '../crypto/workspaceKey.js'
-import { cleanAttachments, limitToRaise, type ConversionBundle } from './attachmentCleaner.js'
+import { cleanAttachments, limitToRaise, type BundleFault, type ConversionBundle } from './attachmentCleaner.js'
 import { ConversionRefusal } from './sealing.js'
 import { createFakeAttachmentStorage, createFakeBundle, type FakeAttachmentStorage } from './test/fakeAttachmentStorage.js'
 
@@ -229,15 +229,16 @@ describe('cleanAttachments: neither objects', () => {
     const unreadable = createFakeBundle(new Map([[nested, bytes]]))
     unreadable.readable = false
     const cases = [
-      [mismatch, 'archive-mismatch'],
-      [missing, 'archive-mismatch'],
-      [unreadable, 'bundle-unreadable'],
+      [mismatch, 'archive-mismatch', 'mismatch'],
+      [missing, 'archive-mismatch', 'mismatch'],
+      [unreadable, 'bundle-unreadable', 'unreadable'],
     ] as const
-    for (const [bundle, reason] of cases) {
+    for (const [bundle, reason, fault] of cases) {
       const store = createFakeAttachmentStorage()
       store.objects.set(nested, bytes)
       const report = await clean(store, bundle)
       expect(report.left).toEqual([{path: nested, reason}])
+      expect(report.bundleFault).toBe(fault)
       expect(store.deletes).toEqual([])
     }
   })
@@ -467,16 +468,18 @@ describe('cleanAttachments: the proof', () => {
     // The manifest says the bundle holds it, but the entry is gone or corrupt.
     const missingEntry = createFakeBundle()
     const corruptEntry = createFakeBundle(new Map(), new Map([[hash, utf8('not it')]]))
-    const cases: [FakeAttachmentStorage, ConversionBundle | null][] = [
-      [unreadableLocal, null],
-      [createFakeAttachmentStorage(), unreadableBundle],
-      [createFakeAttachmentStorage(), missingEntry],
-      [createFakeAttachmentStorage(), corruptEntry],
+    // A bundle that let the run down says how, so another copy can be asked for.
+    const cases: [FakeAttachmentStorage, ConversionBundle | null, BundleFault | null][] = [
+      [unreadableLocal, null, null],
+      [createFakeAttachmentStorage(), unreadableBundle, 'unreadable'],
+      [createFakeAttachmentStorage(), missingEntry, 'mismatch'],
+      [createFakeAttachmentStorage(), corruptEntry, 'mismatch'],
     ]
-    for (const [store, bundle] of cases) {
+    for (const [store, bundle, fault] of cases) {
       store.media.push({blockId: 'block-a', contentHash: hash})
       const report = await clean(store, bundle)
       expect(report.proof).toMatchObject({kind: 'not-passed', unverified: [hash]})
+      expect(report.bundleFault).toBe(fault)
       expect(store.objects.size).toBe(0) // nothing is uploaded from a copy that didn't verify
     }
   })

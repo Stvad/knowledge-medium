@@ -192,14 +192,14 @@ const takeVerifiedBundle = async (deps: SealingDeps, reason: BundleRetakeReason 
  *  user would rather do without it. Whether it holds the bundle is the caller's
  *  check. */
 export const reopenRecordedFolder = async (
-  deps: Pick<SealingDeps, 'canReadFolder'> & {readonly ui: Pick<BundlePrompts, 'reopenBundleFolder'>},
+  deps: Pick<SealingDeps, 'canReadFolder' | 'signal'> & {readonly ui: Pick<BundlePrompts, 'reopenBundleFolder'>},
   record: BundleRecord,
   problem: string | null,
   purpose: ReopenBundlePrompt['purpose'],
 ): Promise<BundleFolder | null> => {
   if (problem === null && (await deps.canReadFolder(record.folder))) return record.folder
   const picked = await deps.ui.reopenBundleFolder({recorded: record.folder, problem, purpose, archived: record.otherObjectPaths.length})
-  return picked && picked !== record.folder ? bundleFolderIn(picked, record.folder.name) : picked
+  return picked && picked !== record.folder ? bundleFolderIn(picked, record.folder.name, deps.signal) : picked
 }
 
 /** Step 6.1. The re-seal can take hours, and the folder may have been moved

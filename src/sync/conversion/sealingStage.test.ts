@@ -7,7 +7,7 @@ import { BUNDLE_PARTS } from './bundle/manifest.js'
 import { verifyBundle } from './bundle/verifyBundle.js'
 import { runConversion, type ConversionFlowDeps, type ConversionUi } from './runConversion.js'
 import { contentColumnsOf, isSealedRow } from './sealing.js'
-import { BundleLeftBehind, type BundleRetakeReason } from './sealingStage.js'
+import { BundleLeftBehind, reopenRecordedFolder, type BundleRetakeReason } from './sealingStage.js'
 import { openRow, seedPlaintext, WS } from './test/conversionFixtures.js'
 import { fakeMediaHashOf } from './test/fakeAttachmentStorage.js'
 import { FakeConversionServer, notSealedRefusal, type FakeBlockRow } from './test/fakeConversionServer.js'
@@ -431,5 +431,28 @@ describe('the sealing stage', () => {
     expect(awakeAtPrompt).toBe(false)
     expect(awakeFor).toMatchObject({'taking-bundle': true, resealing: true, verifying: true, purging: true})
     expect(holds).toBe(0)
+  })
+})
+
+describe('reopenRecordedFolder', () => {
+  it("ends the descent into a picked folder that stopped answering on Stop", async () => {
+    const getDirectoryHandle = vi.fn(() => new Promise<never>(() => {}))
+    const picked = {name: 'parent', getDirectoryHandle} as unknown as BundleFolder
+    const record = {folder: {name: 'bundle'}, otherObjectPaths: []} as unknown as BundleRecord
+    const stop = new AbortController()
+
+    const reopening = reopenRecordedFolder(
+      {canReadFolder: async () => false, ui: {reopenBundleFolder: async () => picked}, signal: stop.signal},
+      record,
+      null,
+      'cleanup',
+    )
+    let settled = false
+    void reopening.catch(() => {}).finally(() => { settled = true })
+    await vi.waitFor(() => expect(getDirectoryHandle).toHaveBeenCalledWith('bundle'))
+    stop.abort(new DOMException('stopped', 'AbortError'))
+
+    await vi.waitFor(() => expect(settled).toBe(true))
+    await expect(reopening).rejects.toThrow('stopped')
   })
 })

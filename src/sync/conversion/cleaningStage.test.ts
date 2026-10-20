@@ -188,7 +188,7 @@ describe('runCleaningPass with this device\'s bundle record', () => {
 
     const pass = await run()
 
-    expect(reopenPrompts.map(prompt => prompt.problem)).toEqual([expect.stringMatching(/copies are missing, or differ/)])
+    expect(reopenPrompts.map(prompt => prompt.problem)).toEqual([expect.stringMatching(/copies are missing or damaged/)])
 
     // A kept archived object holds the proof back: nothing to confirm yet.
     expect(pass.kind).toBe('not-proved')
@@ -208,9 +208,20 @@ describe('runCleaningPass with this device\'s bundle record', () => {
     reopenAnswers = [intact]
 
     expect(await run()).toEqual({kind: 'proved'})
-    expect(reopenPrompts.map(prompt => prompt.problem)).toEqual([expect.stringMatching(/copies are missing, or differ/)])
+    expect(reopenPrompts.map(prompt => prompt.problem)).toEqual([expect.stringMatching(/copies are missing or damaged/)])
     expect(storage.objects.has('nested/thing')).toBe(false)
     expect((await bundles.get(USER, WS))?.folder).toBe(intact)
+  })
+
+  it('asks for an intact copy when the recorded bundle lost the only copy of an attachment, and rebuilds from it', async () => {
+    const intact = folder.copy('bundle')
+    // This device's copy is gone since the bundle was taken: only the bundle holds the bytes.
+    storage.local.clear()
+    folder.folders.get('attachments')!.files.delete(rawNameOf(localHash))
+    reopenAnswers = [intact]
+
+    expect(await run()).toEqual({kind: 'proved'})
+    expect(reopenPrompts.map(prompt => prompt.problem)).toEqual([expect.stringMatching(/copies are missing or damaged/)])
   })
 
   it('goes to a readable pick when the recorded folder is unreadable, and stores a descended-into folder', async () => {

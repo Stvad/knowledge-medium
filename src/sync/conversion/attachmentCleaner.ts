@@ -122,6 +122,11 @@ export type LeftReason =
    *  holds them, and no copy exists to replace it with. */
   | 'unverifiable'
 
+/** How the recovery bundle let this run down, which another copy of the
+ *  folder may fix: a read from it failed, or an entry it should hold is
+ *  missing or holds other bytes. */
+export type BundleFault = 'unreadable' | 'mismatch'
+
 export type CleanerProof =
   | {
       readonly kind: 'passed'
@@ -179,6 +184,10 @@ export interface CleanerReport {
   /** Work a transient failure interrupted, or a change to the folder this run
    *  did not cause; running again finishes or re-checks it. */
   readonly errors: readonly CleanerError[]
+  /** The first {@link BundleFault} of this run, whether it left an archived
+   *  object or a media hash unverified; null when the bundle held everything
+   *  asked of it, or there was no bundle. */
+  readonly bundleFault: BundleFault | null
   readonly proof: CleanerProof
 }
 
@@ -255,6 +264,8 @@ export const cleanAttachments = async (input: CleanAttachmentsInput): Promise<Cl
   const refused: CleanerReport['refused'][number][] = []
   const deleted: ObjectPath[] = []
   const left: CleanerReport['left'][number][] = []
+  let bundleFault: BundleFault | null = null
+  const faultBundle = (fault: BundleFault) => { bundleFault ??= fault }
   const rebuilt: string[] = []
   const errors: CleanerError[] = []
   /** Paths whose current occupant this run proved a genuine keyed object. */
@@ -343,9 +354,13 @@ export const cleanAttachments = async (input: CleanAttachmentsInput): Promise<Cl
     try {
       archived = await bundle.readArchivedObject(path)
     } catch {
+      faultBundle('unreadable')
       return leave('bundle-unreadable')
     }
-    if (!archived || !bytesEqual(archived, bytes)) return leave('archive-mismatch')
+    if (!archived || !bytesEqual(archived, bytes)) {
+      faultBundle('mismatch')
+      return leave('archive-mismatch')
+    }
     settled.set(path, {kind: 'stays'}) // until the delete is confirmed
     await removeStored(path)
     deleted.push(path)
@@ -458,9 +473,13 @@ export const cleanAttachments = async (input: CleanAttachmentsInput): Promise<Cl
       try {
         const entry = await bundle.readAttachment(contentHash)
         if (entry && (await verifyContentHash(entry, contentHash))) return {kind: 'copy', bytes: entry}
-        if (!bundle.noVerifiedSource.has(contentHash)) unreadable = true
+        if (!bundle.noVerifiedSource.has(contentHash)) {
+          faultBundle('mismatch')
+          unreadable = true
+        }
       } catch (err) {
         errors.push({contentHash, message: `bundle entry unreadable: ${messageOf(err)}`})
+        faultBundle('unreadable')
         unreadable = true
       }
     }
@@ -572,6 +591,7 @@ export const cleanAttachments = async (input: CleanAttachmentsInput): Promise<Cl
     left,
     rebuilt,
     errors,
+    bundleFault,
     proof,
   }
 }

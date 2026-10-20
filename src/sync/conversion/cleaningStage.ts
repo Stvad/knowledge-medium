@@ -12,8 +12,8 @@ import {
   cleanAttachments,
   type CleanerProgress,
   type CleanerReport,
+  type BundleFault,
   type ConversionBundle,
-  type LeftReason,
   type UnrecoverableMedia,
 } from './attachmentCleaner.js'
 import { ATTACHMENTS_DIR, OTHER_OBJECTS_DIR, otherObjectNameOf, rawNameOf } from './bundle/attachmentParts.js'
@@ -25,6 +25,8 @@ import type { ConversionAttachmentsIO } from './conversionAttachments.js'
 import type { ConversionLock } from './runLock.js'
 import { reopenRecordedFolder, withScreenAwake, type BundlePrompts } from './sealingStage.js'
 
+/** What stays unsealed or is lost. Not the sealed copy of a raw object no block
+ *  names: it is converted like any other and holds nothing in plaintext. */
 export interface FinishPrompt {
   /** Media whose bytes exist nowhere. */
   readonly unrecoverable: readonly UnrecoverableMedia[]
@@ -144,9 +146,9 @@ export const conversionBundleOf = (record: BundleRecord, folder: BundleFolder | 
 }
 
 /** What a pass found wrong with the bundle folder, which another pick may fix. */
-const BUNDLE_FAULT: Partial<Record<LeftReason, string>> = {
-  'bundle-unreadable': 'The recovery bundle folder could not be read.',
-  'archive-mismatch': "Some of the recovery bundle's copies are missing, or differ from the objects on the server. If you have an intact copy of the bundle, choose it.",
+const BUNDLE_FAULT: Record<BundleFault, string> = {
+  unreadable: 'The recovery bundle folder could not be read.',
+  mismatch: "Some of the recovery bundle's copies are missing or damaged. If you have an intact copy of the bundle, choose it.",
 }
 /** Cleaner passes per run after the first, each over a folder the user
  *  re-picked after a {@link BUNDLE_FAULT}: a pass downloads every attachment. */
@@ -196,8 +198,7 @@ export const runCleaningPass = async (
       })
       return {kind: 'proved'}
     }
-    const fault = report.left.map(item => BUNDLE_FAULT[item.reason]).find(message => message !== undefined)
-    if (fault === undefined || folder === null || repicks >= MAX_REPICKS) return {kind: 'not-proved', report}
-    problem = fault
+    if (report.bundleFault === null || folder === null || repicks >= MAX_REPICKS) return {kind: 'not-proved', report}
+    problem = BUNDLE_FAULT[report.bundleFault]
   }
 }
