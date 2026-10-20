@@ -1,1 +1,0 @@
-import{ek as e,nk as t,rk as n,tk as r}from"../../../chunks/app-BO1XR-rf.js";export{e as extensionsOverridesPresetCore,r as extensionsOverridesProp,t as extensionsPrefsType,n as overridesCodec};

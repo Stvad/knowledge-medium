@@ -1,1 +1,0 @@
-import{Fz as e,Iz as t,Lz as n,Mz as r,Nz as i,Pz as a,Rz as o,jz as s,zz as c}from"../../chunks/app-BO1XR-rf.js";export{s as getLastLongTaskEndMs,r as getStartupTimeline,i as hasStartupMark,a as longTasksSupported,e as markStartup,t as markStartupAt,n as onLongTask,o as resetStartupTimeline,c as startStartupObservers};

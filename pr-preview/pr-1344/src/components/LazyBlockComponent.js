@@ -1,1 +1,0 @@
-import{IA as e}from"../../chunks/app-BO1XR-rf.js";export{e as LazyBlockComponent};

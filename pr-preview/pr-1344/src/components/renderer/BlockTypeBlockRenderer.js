@@ -1,1 +1,0 @@
-import{Sj as e,bj as t,xj as n}from"../../../chunks/app-BO1XR-rf.js";export{t as BlockTypeBlockRenderer,n as BlockTypeContentRenderer,e as writeBlockTypeLabel};

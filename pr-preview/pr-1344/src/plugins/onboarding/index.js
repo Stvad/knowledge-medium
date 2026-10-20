@@ -1,1 +1,0 @@
-import{$v as e,Bv as t,Qv as n,ey as r,ty as i}from"../../../chunks/app-BO1XR-rf.js";export{e as EXTENSIONS_PAGE_TITLE,r as TUTORIAL_DEFAULT_TITLE,i as TUTORIAL_VIM_TITLE,t as onboardingPlugin,n as seedTutorial};

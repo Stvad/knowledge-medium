@@ -1,1 +1,0 @@
-import{T6 as e,w6 as t}from"../../chunks/app-BO1XR-rf.js";export{t as getOrCreatePropertiesPage,e as propertiesPageBlockId};
