@@ -1,1 +1,1 @@
-import{Ip as e}from"../../../chunks/app-BhBq_kDw.js";export{e as blockInfoPlugin};
+import{zp as e}from"../../../chunks/app-BXD4acjN.js";export{e as blockInfoPlugin};

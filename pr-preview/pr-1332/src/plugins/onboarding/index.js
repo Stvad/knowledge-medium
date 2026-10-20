@@ -1,1 +1,1 @@
-import{Av as e,Gv as t,Hv as n,Uv as r,Wv as i}from"../../../chunks/app-BhBq_kDw.js";export{r as EXTENSIONS_PAGE_TITLE,i as TUTORIAL_DEFAULT_TITLE,t as TUTORIAL_VIM_TITLE,e as onboardingPlugin,n as seedTutorial};
+import{Iv as e,Jv as t,Xv as n,Yv as r,Zv as i}from"../../../chunks/app-BXD4acjN.js";export{r as EXTENSIONS_PAGE_TITLE,n as TUTORIAL_DEFAULT_TITLE,i as TUTORIAL_VIM_TITLE,e as onboardingPlugin,t as seedTutorial};

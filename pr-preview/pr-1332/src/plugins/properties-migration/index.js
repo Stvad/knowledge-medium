@@ -1,1 +1,1 @@
-import{Qi as e,na as t}from"../../../chunks/app-BhBq_kDw.js";export{t as migratePropertiesToBlocksAction,e as propertiesMigrationPlugin};
+import{aa as e,ta as t}from"../../../chunks/app-BXD4acjN.js";export{e as migratePropertiesToBlocksAction,t as propertiesMigrationPlugin};

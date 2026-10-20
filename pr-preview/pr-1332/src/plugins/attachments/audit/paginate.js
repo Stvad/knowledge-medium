@@ -1,1 +1,1 @@
-import{Jh as e}from"../../../../chunks/app-BhBq_kDw.js";export{e as collectPaged};
+import{Zh as e}from"../../../../chunks/app-BXD4acjN.js";export{e as collectPaged};
