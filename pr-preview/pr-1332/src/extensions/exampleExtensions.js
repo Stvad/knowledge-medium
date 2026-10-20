@@ -1,1 +1,1 @@
-import{SO as e,xO as t}from"../../chunks/app-DEx6in_-.js";export{t as exampleExtensions,e as insertExampleExtensionsUnder};
+import{SO as e,xO as t}from"../../chunks/app-CQwxEZQN.js";export{t as exampleExtensions,e as insertExampleExtensionsUnder};

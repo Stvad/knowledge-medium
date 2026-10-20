@@ -1,1 +1,1 @@
-import{$v as e,Qv as t,Xv as n,Zv as r,ey as i}from"../../../chunks/app-DEx6in_-.js";export{n as EXTENSIONS_PAGE_TITLE,r as TUTORIAL_DEFAULT_TITLE,t as TUTORIAL_VIM_TITLE,e as extensionsPageOutline,i as tutorialOutline};
+import{$v as e,Qv as t,Xv as n,Zv as r,ey as i}from"../../../chunks/app-CQwxEZQN.js";export{n as EXTENSIONS_PAGE_TITLE,r as TUTORIAL_DEFAULT_TITLE,t as TUTORIAL_VIM_TITLE,e as extensionsPageOutline,i as tutorialOutline};

@@ -1,1 +1,1 @@
-import{aP as e,iP as t}from"../../../chunks/app-DEx6in_-.js";export{t as BLOCK_TITLE_TEXT_CLASS,e as useBlockTitleTextClass};
+import{aP as e,iP as t}from"../../../chunks/app-CQwxEZQN.js";export{t as BLOCK_TITLE_TEXT_CLASS,e as useBlockTitleTextClass};

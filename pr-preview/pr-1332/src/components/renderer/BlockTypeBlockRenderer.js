@@ -1,1 +1,1 @@
-import{_j as e,vj as t,yj as n}from"../../../chunks/app-DEx6in_-.js";export{e as BlockTypeBlockRenderer,t as BlockTypeContentRenderer,n as writeBlockTypeLabel};
+import{_j as e,vj as t,yj as n}from"../../../chunks/app-CQwxEZQN.js";export{e as BlockTypeBlockRenderer,t as BlockTypeContentRenderer,n as writeBlockTypeLabel};

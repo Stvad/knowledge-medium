@@ -1,1 +1,1 @@
-import{SN as e}from"../../chunks/app-DEx6in_-.js";export{e as useShortcutSurfaceActivations};
+import{SN as e}from"../../chunks/app-CQwxEZQN.js";export{e as useShortcutSurfaceActivations};

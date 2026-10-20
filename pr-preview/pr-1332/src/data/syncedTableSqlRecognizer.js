@@ -1,1 +1,1 @@
-import{AG as e,OG as t,kG as n}from"../../chunks/app-DEx6in_-.js";export{t as SYNCED_TABLES,n as syncedWriteTarget,e as writeTargets};
+import{AG as e,OG as t,kG as n}from"../../chunks/app-CQwxEZQN.js";export{t as SYNCED_TABLES,n as syncedWriteTarget,e as writeTargets};

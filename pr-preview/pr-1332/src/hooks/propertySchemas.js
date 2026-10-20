@@ -1,1 +1,1 @@
-import{qR as e}from"../../chunks/app-DEx6in_-.js";export{e as usePropertySchemas};
+import{qR as e}from"../../chunks/app-CQwxEZQN.js";export{e as usePropertySchemas};

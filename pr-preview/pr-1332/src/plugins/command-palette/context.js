@@ -1,1 +1,1 @@
-import{DE as e,EE as t,TE as n,wE as r}from"../../../chunks/app-DEx6in_-.js";export{r as COMMAND_PALETTE_ACTION_ID,n as COMMAND_PALETTE_CONTEXT,t as COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,e as commandPaletteActionContext};
+import{DE as e,EE as t,TE as n,wE as r}from"../../../chunks/app-CQwxEZQN.js";export{r as COMMAND_PALETTE_ACTION_ID,n as COMMAND_PALETTE_CONTEXT,t as COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,e as commandPaletteActionContext};

@@ -1,1 +1,1 @@
-import{qC as e}from"../../chunks/app-DEx6in_-.js";export{e as BlockCrumbs};
+import{qC as e}from"../../chunks/app-CQwxEZQN.js";export{e as BlockCrumbs};

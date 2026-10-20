@@ -1,1 +1,1 @@
-import{XI as e,ZI as t}from"../../../chunks/app-DEx6in_-.js";export{e as isPropertyPanelHiddenProperty,t as isPropertyPanelReadOnlyProperty};
+import{XI as e,ZI as t}from"../../../chunks/app-CQwxEZQN.js";export{e as isPropertyPanelHiddenProperty,t as isPropertyPanelReadOnlyProperty};

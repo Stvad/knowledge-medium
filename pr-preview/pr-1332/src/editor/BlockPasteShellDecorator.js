@@ -1,1 +1,1 @@
-import{NO as e,PO as t}from"../../chunks/app-DEx6in_-.js";export{e as BlockPasteShellDecorator,t as blockPasteShellDecorator};
+import{NO as e,PO as t}from"../../chunks/app-CQwxEZQN.js";export{e as BlockPasteShellDecorator,t as blockPasteShellDecorator};

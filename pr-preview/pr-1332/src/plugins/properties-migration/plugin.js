@@ -1,1 +1,1 @@
-import{ra as e}from"../../../chunks/app-DEx6in_-.js";export{e as propertiesMigrationPlugin};
+import{ra as e}from"../../../chunks/app-CQwxEZQN.js";export{e as propertiesMigrationPlugin};
