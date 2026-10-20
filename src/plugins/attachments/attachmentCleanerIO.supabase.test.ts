@@ -10,7 +10,6 @@
  */
 
 import { randomBytes, randomUUID } from 'node:crypto'
-import pg from 'pg'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { Repo } from '@/data/repo'
 import { verifyObjectBytes } from '@/sync/byteTransform'
@@ -20,7 +19,7 @@ import { computeContentHash } from '@/sync/crypto/contentHash'
 import { deriveContentKey, deriveContentKeyHmac } from '@/sync/crypto/contentKey'
 import { importWorkspaceKey } from '@/sync/crypto/workspaceKey'
 import { cleanAttachments, type MediaRef } from '@/sync/conversion/attachmentCleaner'
-import { signedInUser, stackClient, supabaseStack, type StackUser } from '@/test/supabaseStack'
+import { connectStackDb, signedInUser, stackClient, supabaseStack, type StackDb, type StackUser } from '@/test/supabaseStack'
 import { createAttachmentCleanerIO, listWorkspaceObjects } from './attachmentCleanerIO.js'
 import { ATTACHMENTS_BUCKET, createSupabaseBlobStore, type BlobStore } from './blobStore.js'
 import { InMemoryByteStore } from './byteStore.js'
@@ -36,14 +35,13 @@ describe('the attachment cleaner over real Storage', {timeout: 30_000}, () => {
   const stack = supabaseStack()
   /** RLS doesn't filter it: plants what only a write from outside the app makes. */
   const admin = stackClient(stack, stack.serviceKey)
-  let db: pg.Client
+  let db: StackDb
   let owner: StackUser
   let viewer: StackUser
   let outsider: StackUser
 
   beforeAll(async () => {
-    db = new pg.Client({connectionString: stack.databaseUrl})
-    await db.connect()
+    db = await connectStackDb(stack)
     ;[owner, viewer, outsider] = await Promise.all([signedInUser(stack), signedInUser(stack), signedInUser(stack)])
   })
   afterAll(() => db?.end())
@@ -51,24 +49,11 @@ describe('the attachment cleaner over real Storage', {timeout: 30_000}, () => {
     vi.restoreAllMocks()
   })
 
-  const query = async <Row extends pg.QueryResultRow>(sql: string, params: unknown[] = []): Promise<Row[]> =>
-    (await db.query<Row>(sql, params)).rows
+  const query: StackDb['query'] = (sql, params) => db.query(sql, params)
 
   /** A workspace `owner` owns and `viewer` can only read. */
   const insertWorkspace = async ({ws = randomUUID(), e2ee}: {ws?: string; e2ee?: {canary: string}} = {}) => {
-    const at = Date.now() - 60_000
-    await query(
-      `insert into public.workspaces (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary)
-       values ($1, 'attachments', $2, $3, $3, $4, $5)`,
-      [ws, owner.id, at, e2ee ? 'e2ee' : 'none', e2ee?.canary ?? null],
-    )
-    for (const [user, role] of [[owner, 'owner'], [viewer, 'viewer']] as const) {
-      await query(
-        `insert into public.workspace_members (id, workspace_id, user_id, role, create_time)
-         values (gen_random_uuid()::text, $1, $2, $3, $4)`,
-        [ws, user.id, role, at],
-      )
-    }
+    await db.insertWorkspace({id: ws, name: 'attachments', at: Date.now() - 60_000, members: [[owner.id, 'owner'], [viewer.id, 'viewer']], e2ee})
     return ws
   }
 
@@ -230,7 +215,7 @@ describe('the attachment cleaner over real Storage', {timeout: 30_000}, () => {
 
     it("keeps a raw object whose sealed copy is one byte over the bucket's limit, reporting Storage's 413", async () => {
       const {ws, keys, canary} = await e2eeWorkspace()
-      const [{file_size_limit: limit}] = await query<{file_size_limit: string}>(
+      const [{file_size_limit: limit}] = await query<{file_size_limit: number}>(
         'select file_size_limit from storage.buckets where id = $1',
         [ATTACHMENTS_BUCKET],
       )

@@ -6,14 +6,18 @@ import type { BundleFile, BundleFolder, BundleWritable } from '../bundle/bundleP
 
 const notFound = (path: string) => new DOMException(`${path} not found`, 'NotFoundError')
 
-const kindOf = async (path: string): Promise<'file' | 'directory' | null> => {
-  try {
-    return (await stat(path)).isDirectory() ? 'directory' : 'file'
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
-    throw error
-  }
+/** A filesystem error as File System Access reports it: a moved or deleted
+ *  folder, or a path inside one, is a NotFoundError. */
+const rethrowAt = (path: string) => (error: unknown): never => {
+  const code = (error as NodeJS.ErrnoException).code
+  throw code === 'ENOENT' || code === 'ENOTDIR' ? notFound(path) : error
 }
+
+const kindOf = (path: string): Promise<'file' | 'directory' | null> =>
+  stat(path).then(
+    stats => (stats.isDirectory() ? 'directory' : 'file'),
+    error => ((error as NodeJS.ErrnoException).code === 'ENOENT' ? null : Promise.reject(error)),
+  )
 
 /** A directory on disk with the File System Access semantics the bundle relies
  *  on, as Chromium implements them: a handle names a path, so a moved folder's
@@ -31,21 +35,14 @@ export class FsBundleFolder implements BundleFolder {
     const kind = await kindOf(path)
     if (kind === 'directory') throw new DOMException(`${path} is a folder`, 'TypeMismatchError')
     if (kind === null) {
-      if (!options?.create || (await kindOf(this.path)) !== 'directory') throw notFound(path)
-      await (await open(path, 'wx')).close()
+      if (!options?.create) throw notFound(path)
+      await (await open(path, 'wx').catch(rethrowAt(path))).close()
     }
     return {
-      getFile: async (): Promise<Blob> => {
-        try {
-          return await openAsBlob(path)
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw notFound(path)
-          throw error
-        }
-      },
+      getFile: () => openAsBlob(path).catch(rethrowAt(path)),
       createWritable: async (): Promise<BundleWritable> => {
         const swap = join(this.path, `.${name}.${randomUUID()}.crswap`)
-        const handle = await open(swap, 'w')
+        const handle = await open(swap, 'w').catch(rethrowAt(swap))
         return {
           write: async data => void (await handle.write(data)),
           close: async () => {
@@ -66,15 +63,14 @@ export class FsBundleFolder implements BundleFolder {
     const kind = await kindOf(path)
     if (kind === 'file') throw new DOMException(`${path} is a file`, 'TypeMismatchError')
     if (kind === null) {
-      if (!options?.create || (await kindOf(this.path)) !== 'directory') throw notFound(path)
-      await mkdir(path)
+      if (!options?.create) throw notFound(path)
+      await mkdir(path).catch(rethrowAt(path))
     }
     return new FsBundleFolder(path)
   }
 
   async removeEntry(name: string, options?: {recursive?: boolean}): Promise<void> {
     const path = join(this.path, name)
-    if ((await kindOf(path)) === null) throw notFound(path)
-    await rm(path, {recursive: options?.recursive ?? false})
+    await rm(path, {recursive: options?.recursive ?? false}).catch(rethrowAt(path))
   }
 }

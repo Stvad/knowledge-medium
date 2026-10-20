@@ -7,6 +7,7 @@
 
 import { randomUUID } from 'node:crypto'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
+import pg from 'pg'
 
 export interface SupabaseStack {
   /** Postgres as its superuser, which RLS doesn't filter. */
@@ -81,4 +82,58 @@ export const signedInUser = async (stack: SupabaseStack, tap?: StackTap): Promis
   const {data, error} = await client.auth.signUp({email: `user-${randomUUID()}@example.test`, password: randomUUID()})
   if (error || !data.user || !data.session) throw new Error(`sign-up failed: ${error?.message ?? 'no session'}`)
   return {id: data.user.id, client}
+}
+
+/** The stack's Postgres as its superuser, which RLS doesn't filter, with
+ *  bigint columns (versions, event ids, counts) read as numbers, as PostgREST
+ *  returns them. */
+export interface StackDb {
+  query<Row extends pg.QueryResultRow>(sql: string, params?: unknown[]): Promise<Row[]>
+  /** One write with triggers off: no history row, no new version, no check. */
+  writeWithoutTriggers(sql: string, params: unknown[]): Promise<void>
+  /** A workspace and its members, the first of them its owner. */
+  insertWorkspace(workspace: {
+    readonly id: string
+    readonly name: string
+    readonly at: number
+    readonly members: ReadonlyArray<readonly [userId: string, role: 'owner' | 'editor' | 'viewer']>
+    readonly e2ee?: {readonly canary: string}
+  }): Promise<void>
+  end(): Promise<void>
+}
+
+const int8AsNumber = {
+  getTypeParser: (oid: number, format?: 'text' | 'binary') =>
+    oid === pg.types.builtins.INT8 ? Number : pg.types.getTypeParser(oid, format),
+}
+
+export const connectStackDb = async (stack: SupabaseStack): Promise<StackDb> => {
+  const client = new pg.Client({connectionString: stack.databaseUrl, types: int8AsNumber})
+  await client.connect()
+  const query = async <Row extends pg.QueryResultRow>(sql: string, params: unknown[] = []): Promise<Row[]> =>
+    (await client.query<Row>(sql, params)).rows
+  return {
+    query,
+    async writeWithoutTriggers(sql, params) {
+      await query('begin')
+      await query('set local session_replication_role = replica')
+      await query(sql, params)
+      await query('commit')
+    },
+    async insertWorkspace({id, name, at, members, e2ee}) {
+      await query(
+        `insert into public.workspaces (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary)
+         values ($1, $2, $3, $4, $4, $5, $6)`,
+        [id, name, members[0][0], at, e2ee ? 'e2ee' : 'none', e2ee?.canary ?? null],
+      )
+      for (const [userId, role] of members) {
+        await query(
+          `insert into public.workspace_members (id, workspace_id, user_id, role, create_time)
+           values (gen_random_uuid()::text, $1, $2, $3, $4)`,
+          [id, userId, role, at],
+        )
+      }
+    },
+    end: () => client.end(),
+  }
 }

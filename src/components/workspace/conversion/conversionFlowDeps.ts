@@ -45,8 +45,9 @@ const uploadQueue = (repo: Repo) => async (signal?: AbortSignal): Promise<{pendi
  *  preflight's checks of them. A run outside a browser supplies its own. */
 export interface ConversionPlatform
   extends Pick<ConversionFlowDeps, 'keyStore' | 'bundles' | 'canReadFolder' | 'writeLocalDb' | 'keepAwake'> {
-  /** The upload queue is the repo's own, so it isn't the platform's. */
-  readonly environment: Omit<PreflightEnvironment, 'uploadQueue'>
+  /** The upload queue is the repo's own, and the pins are localStorage's,
+   *  which the run's other state lives in too. */
+  readonly environment: Omit<PreflightEnvironment, 'uploadQueue' | 'canPersistPins'>
 }
 
 export type ConversionUnavailable =
@@ -99,34 +100,36 @@ export const conversionSetup = async (repo: Repo, workspaceId: string, localOnly
   }
 }
 
-const webConversionPlatform = (repo: Repo): ConversionPlatform => ({
-  keyStore: getWorkspaceKeyStore(),
-  bundles: (bundleRecords ??= new IndexedDbBundleRecordStore()),
-  canReadFolder: async folder => (await queryDirectoryPermission(directoryHandleOf(folder), 'read')) === 'granted',
-  writeLocalDb: async (folder, signal) => {
-    const hasher = createPartHasher()
-    const file = await untilStopped(directoryHandleOf(folder).getFileHandle(BUNDLE_PARTS.localDb, {create: true}), signal)
-    await exportRawSqliteDbToFile(repo, file, {
-      timeoutMessage:
-        "Copying this device's database into the recovery bundle took too long. Pick a folder on a faster disk, then try again.",
-      minBytesPerSecond: SLOWEST_BUNDLE_DISK,
-      onChunk: chunk => hasher.update(chunk),
-      signal,
-    })
-    return hasher.digest()
-  },
-  keepAwake: holdScreenWakeLock,
-  environment: {
-    canPersistPins,
-    keyStoreIsDurable: getWorkspaceKeyStore() instanceof IndexedDbWorkspaceKeyStore,
-    supportsDirectoryPicker: supportsDirectoryPicker(),
-    localDbBytes: () => localDbFileBytes(repo.user.id),
-    freeLocalBytes: async () => {
-      const {quota, usage} = await navigator.storage.estimate().catch(() => ({quota: undefined, usage: undefined}))
-      return quota === undefined || usage === undefined ? null : Math.max(0, quota - usage)
+const webConversionPlatform = (repo: Repo): ConversionPlatform => {
+  const keyStore = getWorkspaceKeyStore()
+  return {
+    keyStore,
+    bundles: (bundleRecords ??= new IndexedDbBundleRecordStore()),
+    canReadFolder: async folder => (await queryDirectoryPermission(directoryHandleOf(folder), 'read')) === 'granted',
+    writeLocalDb: async (folder, signal) => {
+      const hasher = createPartHasher()
+      const file = await untilStopped(directoryHandleOf(folder).getFileHandle(BUNDLE_PARTS.localDb, {create: true}), signal)
+      await exportRawSqliteDbToFile(repo, file, {
+        timeoutMessage:
+          "Copying this device's database into the recovery bundle took too long. Pick a folder on a faster disk, then try again.",
+        minBytesPerSecond: SLOWEST_BUNDLE_DISK,
+        onChunk: chunk => hasher.update(chunk),
+        signal,
+      })
+      return hasher.digest()
     },
-  },
-})
+    keepAwake: holdScreenWakeLock,
+    environment: {
+      keyStoreIsDurable: keyStore instanceof IndexedDbWorkspaceKeyStore,
+      supportsDirectoryPicker: supportsDirectoryPicker(),
+      localDbBytes: () => localDbFileBytes(repo.user.id),
+      freeLocalBytes: async () => {
+        const {quota, usage} = await navigator.storage.estimate().catch(() => ({quota: undefined, usage: undefined}))
+        return quota === undefined || usage === undefined ? null : Math.max(0, quota - usage)
+      },
+    },
+  }
+}
 
 /** Every dependency that waits on the network is bound to the run's `signal`
  *  here, so Stop reaches each call: the server's requests abort, the rest race
@@ -152,7 +155,7 @@ export const conversionFlowDeps = ({repo, workspaceId, client, lock, attachments
   keyStore: platform.keyStore,
   flipAttempts: localFlipAttempts(repo.user.id, workspaceId),
   lock,
-  preflight: {...platform.environment, uploadQueue: uploadQueue(repo)},
+  preflight: {...platform.environment, canPersistPins, uploadQueue: uploadQueue(repo)},
   markLocalConverted: canary => markLocalWorkspaceConverted(repo.db, workspaceId, canary),
   bundles: platform.bundles,
   attachments: stoppable(attachments, signal),

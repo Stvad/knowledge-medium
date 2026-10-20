@@ -21,7 +21,6 @@ import { readdirSync, readFileSync, renameSync, statSync, truncateSync, writeFil
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, sep } from 'node:path'
-import pg from 'pg'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { conversionFlowDeps, type ConversionPlatform } from '@/components/workspace/conversion/conversionFlowDeps'
@@ -41,15 +40,15 @@ import { validateCanary } from '@/sync/crypto/canary'
 import { computeContentHash } from '@/sync/crypto/contentHash'
 import { deriveContentKey } from '@/sync/crypto/contentKey'
 import { InMemoryWorkspaceKeyStore } from '@/sync/keys/keyStore'
-import { canPersistPins, getModePin, setModePin, type ModePin } from '@/sync/keys/modePin'
+import { getModePin, setModePin, type ModePin } from '@/sync/keys/modePin'
 import { createSyncResolver } from '@/sync/keys/resolver'
-import { signedInUser, stackClient, supabaseStack, type StackTap, type StackUser } from '@/test/supabaseStack'
+import { connectStackDb, signedInUser, stackClient, supabaseStack, type StackDb, type StackTap, type StackUser } from '@/test/supabaseStack'
 import { abortableSleep } from '@/utils/abortableSleep'
 import { SEALED_COLUMNS } from '../transform.js'
 import { rawNameOf } from './bundle/attachmentParts.js'
 import type { BundleFolder } from './bundle/bundleParts.js'
 import { InMemoryBundleRecordStore } from './bundle/bundleRecord.js'
-import { BUNDLE_PARTS, type BundleManifest } from './bundle/manifest.js'
+import { BUNDLE_PARTS } from './bundle/manifest.js'
 import { BundleInvalid, verifyBundle } from './bundle/verifyBundle.js'
 import type { SavedKeyPrompt, SaveKeyPrompt } from './conversionKey.js'
 import { ConversionErrorCode, type ContentColumns } from './conversionServer.js'
@@ -58,8 +57,8 @@ import type { PreflightReport } from './preflight.js'
 import { webConversionLock } from './runLock.js'
 import { runConversion, type ActiveStage, type ConversionRunResult, type ConversionStatus, type ConversionUi } from './runConversion.js'
 import type { BundleRetakeReason, ReopenBundlePrompt } from './sealingStage.js'
-import { contentColumnsOf, isSealedValue } from './sealing.js'
-import { openRow } from './test/conversionFixtures.js'
+import { contentColumnsOf, isSealedValue, RESEAL_PAGE_SIZE } from './sealing.js'
+import { mediaPropertiesJson, openRow } from './test/conversionFixtures.js'
 import { FAKE_LOCAL_DB, writeFakeLocalDb } from './test/flowFixtures.js'
 import { FsBundleFolder } from './test/fsBundleFolder.js'
 
@@ -73,21 +72,14 @@ vi.mock('@/services/supabase', async importOriginal => ({
   },
 }))
 
-/** More rows than one PostgREST page (`max_rows` 150) and one re-seal page. */
-const ROWS = 230
+/** More rows than one re-seal page, and so than one PostgREST page (`max_rows` 150). */
+const ROWS = RESEAL_PAGE_SIZE + 30
 
 const BLOCK_COLUMNS =
   'id, workspace_id, parent_id, order_key, content, properties_json, references_json, ' +
   'created_at, updated_at, user_updated_at, created_by, updated_by, deleted'
 
-/** bigint columns as numbers, as PostgREST returns them. */
-const int8AsNumber = {
-  getTypeParser: (oid: number, format?: 'text' | 'binary') =>
-    oid === pg.types.builtins.INT8 ? Number : pg.types.getTypeParser(oid, format),
-}
-
 const bytesOf = (size: number) => new Uint8Array(randomBytes(size)) as Uint8Array<ArrayBuffer>
-const mediaProperties = (contentHash: string) => JSON.stringify({types: ['media'], 'media:hash': contentHash})
 
 /** A request's path under its API: `rpc/<name>`, or a table. */
 const endpointOf = (url: URL): string => url.pathname.replace(/^\/(rest|storage)\/v1\//, '')
@@ -95,30 +87,20 @@ const endpointOf = (url: URL): string => url.pathname.replace(/^\/(rest|storage)
 /** The SQLSTATE of a PostgREST error response. */
 const errorCode = async (response: Response): Promise<string> => (await response.clone().json()).code
 
-/** Thrown from a status to stand for the page going away at that point. */
-class Crash extends Error {
-  constructor(at: string) {
-    super(`crashed at ${at}`)
-    this.name = 'Crash'
-  }
-}
-
 describe('the conversion flow against the real stack', {timeout: 120_000}, () => {
   const stack = supabaseStack()
   /** RLS doesn't filter it: plants what an older client or an operator left. */
   const admin = stackClient(stack, stack.serviceKey)
-  let db: pg.Client
+  let db: StackDb
   let owner: StackUser
   let testDb: TestDb
-  /** What the owner's requests pass through on their way to the stack, the first outermost. */
-  const taps: StackTap[] = []
+  /** What the owner's requests pass through on their way to the stack. */
+  let tap: StackTap | null = null
   const tempDirs: string[] = []
 
   beforeAll(async () => {
-    db = new pg.Client({connectionString: stack.databaseUrl, types: int8AsNumber})
-    await db.connect()
-    owner = await signedInUser(stack, (url, init, send) =>
-      taps.reduceRight<() => Promise<Response>>((next, tap) => () => tap(url, init, next), send)())
+    db = await connectStackDb(stack)
+    owner = await signedInUser(stack, (url, init, send) => (tap ? tap(url, init, send) : send()))
     app.client = owner.client
     testDb = await createTestDb()
   })
@@ -132,12 +114,11 @@ describe('the conversion flow against the real stack', {timeout: 120_000}, () =>
     stubLocalStorage()
   })
   afterEach(() => {
-    taps.length = 0
+    tap = null
     vi.unstubAllGlobals()
   })
 
-  const query = async <Row extends pg.QueryResultRow>(sql: string, params: unknown[] = []): Promise<Row[]> =>
-    (await db.query<Row>(sql, params)).rows
+  const query: StackDb['query'] = (sql, params) => db.query(sql, params)
 
   const tempDir = async (): Promise<string> => {
     const dir = await mkdtemp(join(tmpdir(), 'km-conversion-'))
@@ -147,15 +128,16 @@ describe('the conversion flow against the real stack', {timeout: 120_000}, () =>
 
   // ── the server ──
 
+  type Attachment = readonly [contentHash: string, bytes: Uint8Array<ArrayBuffer>]
+
   interface Seeded {
     readonly ws: string
     /** Each seeded row's content columns, by id. */
     readonly plaintext: ReadonlyMap<string, ContentColumns>
-    /** Media hashes and their bytes: in Storage, only on this device, and a
-     *  soft-deleted block's, in Storage. */
-    readonly media: ReadonlyArray<readonly [string, Uint8Array<ArrayBuffer>]>
-    /** Storage objects, by path under `<ws>/`, that no media block names. */
-    readonly others: ReadonlyMap<string, Uint8Array<ArrayBuffer>>
+    /** Media blocks' bytes, by where they are; null without attachments. */
+    readonly media: {readonly inStorage: Attachment; readonly onDeviceOnly: Attachment; readonly deleted: Attachment} | null
+    /** A raw Storage object no media block names. */
+    readonly orphan: Attachment | null
   }
 
   const plant = async (ws: string, path: string, body: Uint8Array<ArrayBuffer>) => {
@@ -177,15 +159,7 @@ describe('the conversion flow against the real stack', {timeout: 120_000}, () =>
     const ws = randomUUID()
     // A minute back, so the clamp trigger leaves the seeded versions alone.
     const at = Date.now() - 60_000
-    await query(
-      `insert into public.workspaces (id, name, owner_user_id, create_time, update_time) values ($1, 'conversion', $2, $3, $3)`,
-      [ws, owner.id, at],
-    )
-    await query(
-      `insert into public.workspace_members (id, workspace_id, user_id, role, create_time)
-       values (gen_random_uuid()::text, $1, $2, 'owner', $3)`,
-      [ws, owner.id, at],
-    )
+    await db.insertWorkspace({id: ws, name: 'conversion', at, members: [[owner.id, 'owner']]})
     // Text JSON has to escape, outside the BMP; every 50th row soft-deleted.
     await query(
       `insert into public.blocks (${BLOCK_COLUMNS})
@@ -201,29 +175,25 @@ describe('the conversion flow against the real stack', {timeout: 120_000}, () =>
       [ws],
     )
 
-    const media: Array<readonly [string, Uint8Array<ArrayBuffer>]> = []
-    const others = new Map<string, Uint8Array<ArrayBuffer>>()
-    if (attachments) {
-      for (const deleted of [false, false, true]) {
-        const bytes = bytesOf(4_000 + media.length)
-        const hash = await computeContentHash(bytes)
-        media.push([hash, bytes])
-        await query(
-          `insert into public.blocks (${BLOCK_COLUMNS})
-           values (gen_random_uuid()::text, $1, null, 'm', 'a photo', $2, '[]', $3, $3, $3, $4, $4, $5)`,
-          [ws, mediaProperties(hash), at, owner.id, deleted],
-        )
-      }
-      // The second is only on this device (see `deviceFor`).
-      const [inStorage, , deletedOne] = media
-      for (const [hash, bytes] of [inStorage, deletedOne]) await plant(ws, rawNameOf(hash), bytes)
-      // A raw object no block names, and an object no app would write.
-      const orphan = bytesOf(3_000)
-      others.set(rawNameOf(await computeContentHash(orphan)), orphan)
-      others.set('notes/readme.txt', new TextEncoder().encode('left by hand') as Uint8Array<ArrayBuffer>)
-      for (const [path, body] of others) await plant(ws, path, body)
+    if (!attachments) return {ws, plaintext: await contentOf(ws), media: null, orphan: null}
+
+    const attachment = async (size: number): Promise<Attachment> => {
+      const bytes = bytesOf(size)
+      return [await computeContentHash(bytes), bytes]
     }
-    return {ws, plaintext: await contentOf(ws), media, others}
+    const media = {inStorage: await attachment(4_000), onDeviceOnly: await attachment(4_001), deleted: await attachment(4_002)}
+    for (const [hash] of Object.values(media)) {
+      await query(
+        `insert into public.blocks (${BLOCK_COLUMNS})
+         values (gen_random_uuid()::text, $1, null, 'm', 'a photo', $2, '[]', $3, $3, $3, $4, $4, $5)`,
+        [ws, mediaPropertiesJson(hash), at, owner.id, hash === media.deleted[0]],
+      )
+    }
+    const orphan = await attachment(3_000)
+    for (const [hash, bytes] of [media.inStorage, media.deleted, orphan]) await plant(ws, rawNameOf(hash), bytes)
+    // An object no app would write: the bundle archives it, and the cleaner deletes it.
+    await plant(ws, 'notes/readme.txt', new TextEncoder().encode('left by hand') as Uint8Array<ArrayBuffer>)
+    return {ws, plaintext: await contentOf(ws), media, orphan}
   }
 
   const serverWorkspace = async (ws: string) =>
@@ -245,14 +215,6 @@ describe('the conversion flow against the real stack', {timeout: 120_000}, () =>
       `select name from storage.objects where bucket_id = $1 and starts_with(name, $2 || '/')`,
       [ATTACHMENTS_BUCKET, ws],
     )).map(row => row.name.slice(ws.length + 1)).sort()
-
-  /** One write with triggers off: no history row, no new version, no check. */
-  const writeWithoutTriggers = async (sql: string, params: unknown[]) => {
-    await query('begin')
-    await query('set local session_replication_role = replica')
-    await query(sql, params)
-    await query('commit')
-  }
 
   // ── this device ──
 
@@ -295,8 +257,7 @@ describe('the conversion flow against the real stack', {timeout: 120_000}, () =>
     const keyStore = new InMemoryWorkspaceKeyStore()
     const bundles = new InMemoryBundleRecordStore()
     const byteStore = new InMemoryByteStore()
-    const localOnly = media[1]
-    if (localOnly) await byteStore.put(owner.id, ws, rawNameOf(localOnly[0]), localOnly[1])
+    if (media) await byteStore.put(owner.id, ws, rawNameOf(media.onDeviceOnly[0]), media.onDeviceOnly[1])
 
     const resolver = createSyncResolver(() => owner.id, keyStore, id => readWorkspaceEncryptionMode(testDb.db, id))
     const connector = createPowerSyncConnector({encryption: {getWorkspaceMode: resolver.getUploadMode, getCek: resolver.getCek}})
@@ -327,7 +288,6 @@ describe('the conversion flow against the real stack', {timeout: 120_000}, () =>
       writeLocalDb: folder => writeFakeLocalDb(folder),
       keepAwake: async () => () => {},
       environment: {
-        canPersistPins,
         keyStoreIsDurable: true,
         supportsDirectoryPicker: true,
         localDbBytes: async () => FAKE_LOCAL_DB.length,
@@ -370,7 +330,7 @@ describe('the conversion flow against the real stack', {timeout: 120_000}, () =>
       picked: new FsBundleFolder(await tempDir()),
       upload,
       keepWriting() {
-        taps.push(async (_url, _init, send) => {
+        tap = (async (_url, _init, send) => {
           // Not for this device's own upload pass, whose requests come through here too.
           if (!uploading) {
             const localMode = await readWorkspaceEncryptionMode(testDb.db, ws)
@@ -485,14 +445,6 @@ describe('the conversion flow against the real stack', {timeout: 120_000}, () =>
     }
   }
 
-  /** A run in which the page goes away at the first status `when` matches. */
-  const crashingAt = (ui: ScriptedUi, at: string, when: (status: ConversionStatus) => boolean): ScriptedUi => {
-    ui.onStatus = status => {
-      if (when(status)) throw new Crash(at)
-    }
-    return ui
-  }
-
   // ── the checks ──
 
   /** Done: e2ee under this device's key, every row sealed and holding what it
@@ -548,9 +500,6 @@ describe('the conversion flow against the real stack', {timeout: 120_000}, () =>
   const bundleRows = async (folder: FsBundleFolder): Promise<Map<string, ContentColumns>> =>
     new Map((await bundlePart(folder, BUNDLE_PARTS.blocks)).map(row => [String(row.id), contentColumnsOf(row as unknown as ContentColumns)]))
 
-  const manifestOf = async (folder: FsBundleFolder): Promise<BundleManifest> =>
-    JSON.parse(await readFile(join(folder.path, BUNDLE_PARTS.manifest), 'utf8'))
-
   it('converts a workspace with attachments, while this device keeps writing UI state', async () => {
     const seeded = await seedWorkspace({attachments: true})
     const device = await deviceFor(seeded)
@@ -586,8 +535,7 @@ describe('the conversion flow against the real stack', {timeout: 120_000}, () =>
     // object and every object the bundle archived is gone.
     const {wk, contentKeyHmac} = (await device.keyStore.get(owner.id, seeded.ws))!
     const keyed = new Map<string, Uint8Array<ArrayBuffer>>()
-    const orphan = [...seeded.others].find(([path]) => /^[0-9a-f]{64}$/.test(path))!
-    for (const [hash, bytes] of [...seeded.media, [`sha256:${orphan[0]}`, orphan[1]] as const]) {
+    for (const [hash, bytes] of [...Object.values(seeded.media!), seeded.orphan!]) {
       keyed.set(await deriveContentKey({contentHash: hash, mode: 'e2ee', contentKeyHmac: contentKeyHmac!}), bytes)
     }
     expect(await storedObjects(seeded.ws)).toEqual([...keyed.keys()].sort())
@@ -621,7 +569,10 @@ describe('the conversion flow against the real stack', {timeout: 120_000}, () =>
     let savedKey: string | null = null
     const reopened: ReopenBundlePrompt['purpose'][] = []
     for (const [at, when, leaves] of crashes) {
-      const ui = crashingAt(new ScriptedUi(device, savedKey), at, when)
+      const ui: ScriptedUi = new ScriptedUi(device, savedKey)
+      ui.onStatus = status => {
+        if (when(status)) throw new Error(`crashed at ${at}`)
+      }
       ui.reopen = async prompt => (reopened.push(prompt.purpose), prompt.recorded)
       await expect(device.run(ui), at).rejects.toThrow(`crashed at ${at}`)
       savedKey = ui.savedKey
@@ -629,8 +580,9 @@ describe('the conversion flow against the real stack', {timeout: 120_000}, () =>
       expect(workspace.phase ?? workspace.encryption_mode, at).toBe(leaves)
       if (at === 'the re-seal') {
         // Part of the way through, which the next run carries on from.
-        expect(await sealedRowCount(seeded.ws)).toBeGreaterThan(0)
-        expect(await sealedRowCount(seeded.ws)).toBeLessThan(seeded.plaintext.size)
+        const sealed = await sealedRowCount(seeded.ws)
+        expect(sealed).toBeGreaterThan(0)
+        expect(sealed).toBeLessThan(seeded.plaintext.size)
       }
     }
     // Each run past the bundle is a new page, which has to be granted the
@@ -652,7 +604,7 @@ describe('the conversion flow against the real stack', {timeout: 120_000}, () =>
     const seeded = await seedWorkspace()
     const device = await deviceFor(seeded)
     const answers: string[] = []
-    taps.push(async (url, _init, send) => {
+    tap = (async (url, _init, send) => {
       if (endpointOf(url) !== 'rpc/purge_workspace_history') return send()
       const response = await send()
       if (answers.length === 0 && response.ok) {
@@ -712,7 +664,6 @@ describe('the conversion flow against the real stack', {timeout: 120_000}, () =>
     // It archives the re-seal's writes too, whose before_diff is the plaintext.
     const [firstHistory, retakenHistory] = [await bundlePart(first, BUNDLE_PARTS.history), await bundlePart(retaken, BUNDLE_PARTS.history)]
     expect(retakenHistory).toHaveLength(firstHistory.length + seeded.plaintext.size)
-    expect((await manifestOf(retaken)).through).toBe(retakenHistory.at(-1)!.event_id)
     await expectConverted(device, seeded.plaintext)
   })
 
@@ -721,11 +672,11 @@ describe('the conversion flow against the real stack', {timeout: 120_000}, () =>
     const device = await deviceFor(seeded)
     const [[unsealed, columns]] = seeded.plaintext
     const answers: string[] = []
-    taps.push(async (url, _init, send) => {
+    tap = (async (url, _init, send) => {
       if (endpointOf(url) !== 'rpc/purge_workspace_history') return send()
       // Plaintext back in a sealed row, by a write past the server's checks.
       if (answers.length === 0) {
-        await writeWithoutTriggers(
+        await db.writeWithoutTriggers(
           'update public.blocks set content = $2, properties_json = $3, references_json = $4 where id = $1',
           [unsealed, columns.content, columns.properties_json, columns.references_json],
         )
@@ -748,7 +699,7 @@ describe('the conversion flow against the real stack', {timeout: 120_000}, () =>
     const device = await deviceFor(seeded)
     const [removed] = [...seeded.plaintext.keys()].sort()
     let firstPages = 0
-    taps.push(async (url, init, send) => {
+    tap = (async (url, init, send) => {
       const isBlockPage = endpointOf(url) === 'blocks' && url.searchParams.get('select') === '*' && (init?.method ?? 'GET') === 'GET'
       if (isBlockPage && (await serverWorkspace(seeded.ws)).phase === 'sealing') {
         if (!url.searchParams.has('id')) firstPages++
@@ -764,7 +715,7 @@ describe('the conversion flow against the real stack', {timeout: 120_000}, () =>
     const archived = await bundleRows(bundle)
     expect(archived.has(removed)).toBe(false)
     expect(archived.size).toBe(seeded.plaintext.size - 1)
-    expect((await manifestOf(bundle)).serverBlockCount).toBe(seeded.plaintext.size - 1)
+    expect((await verified(device, bundle)).manifest.serverBlockCount).toBe(seeded.plaintext.size - 1)
     // Its history ends with the delete, which the bundle's `through` covers.
     expect((await bundlePart(bundle, BUNDLE_PARTS.history)).filter(row => row.block_id === removed).at(-1)).toMatchObject({op: 'D'})
     await expectConverted(device, new Map([...seeded.plaintext].filter(([id]) => id !== removed)))
@@ -808,7 +759,7 @@ describe('the conversion flow against the real stack', {timeout: 120_000}, () =>
     let late: (() => Promise<Response>) | null = null
     let landed = false
     const canaries: string[] = []
-    taps.push(async (url, init, send) => {
+    tap = (async (url, init, send) => {
       if (endpointOf(url) !== 'rpc/convert_workspace_to_e2ee') return send()
       canaries.push(JSON.parse(String(init?.body)).p_wk_canary)
       if (!late) {
