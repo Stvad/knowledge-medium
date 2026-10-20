@@ -1,1 +1,1 @@
-import{FT as e,NT as t,PT as n}from"../../../chunks/app-Cf2awmR8.js";export{t as kernelPropertyUiExtension,n as typesPropertyUi,e as typesPropertyUiExtension};
+import{FT as e,NT as t,PT as n}from"../../../chunks/app-D7fAoDx_.js";export{t as kernelPropertyUiExtension,n as typesPropertyUi,e as typesPropertyUiExtension};

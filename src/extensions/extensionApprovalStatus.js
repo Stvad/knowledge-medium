@@ -1,1 +1,1 @@
-import{aD as e,iD as t,nD as n,rD as r}from"../../chunks/app-Cf2awmR8.js";export{n as ExtensionApprovalStatusProvider,r as ExtensionApprovalStatusStore,t as useExtensionApprovalStatus,e as useExtensionApprovalStatuses};
+import{aD as e,iD as t,nD as n,rD as r}from"../../chunks/app-D7fAoDx_.js";export{n as ExtensionApprovalStatusProvider,r as ExtensionApprovalStatusStore,t as useExtensionApprovalStatus,e as useExtensionApprovalStatuses};

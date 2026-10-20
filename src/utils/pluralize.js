@@ -1,1 +1,1 @@
-import{DY as e,EY as t}from"../../chunks/app-Cf2awmR8.js";export{t as agree,e as pluralize};
+import{AY as e,jY as t}from"../../chunks/app-D7fAoDx_.js";export{e as agree,t as pluralize};
