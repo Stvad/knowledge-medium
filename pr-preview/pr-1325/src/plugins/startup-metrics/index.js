@@ -1,1 +1,1 @@
-import{ri as e}from"../../../chunks/app-DfnKPIGU.js";export{e as startupMetricsPlugin};
+import{pi as e}from"../../../chunks/app-DOAEXv5k.js";export{e as startupMetricsPlugin};

@@ -1,1 +1,1 @@
-import{Pm as e}from"../../../../../chunks/app-DfnKPIGU.js";export{e as wikilinkMarkdownExtension};
+import{Wm as e}from"../../../../../chunks/app-DOAEXv5k.js";export{e as wikilinkMarkdownExtension};

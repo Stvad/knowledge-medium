@@ -1,1 +1,1 @@
-import{Xy as e}from"../../../chunks/app-DfnKPIGU.js";export{e as mobileBottomNavItemsFacet};
+import{ob as e}from"../../../chunks/app-DOAEXv5k.js";export{e as mobileBottomNavItemsFacet};

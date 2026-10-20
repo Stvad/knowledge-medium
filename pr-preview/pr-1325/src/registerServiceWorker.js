@@ -1,1 +1,1 @@
-import{vO as e,yO as t}from"../chunks/app-DfnKPIGU.js";export{e as checkForAppUpdate,t as registerServiceWorker};
+import{OO as e,kO as t}from"../chunks/app-DOAEXv5k.js";export{e as checkForAppUpdate,t as registerServiceWorker};

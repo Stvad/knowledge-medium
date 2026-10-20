@@ -1,1 +1,1 @@
-import{M_ as e,N_ as t,P_ as n}from"../../../chunks/app-DfnKPIGU.js";export{e as VideoNotesLayout,t as VideoNotesRenderer,n as videoNotesLayoutContribution};
+import{H_ as e,U_ as t,W_ as n}from"../../../chunks/app-DOAEXv5k.js";export{e as VideoNotesLayout,t as VideoNotesRenderer,n as videoNotesLayoutContribution};

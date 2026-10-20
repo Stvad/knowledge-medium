@@ -1,1 +1,1 @@
-import{En as e,XD as t,ZD as n}from"../../../chunks/app-DfnKPIGU.js";export{t as extensionsOverridesProp,n as extensionsPrefsType,e as extensionsSettingsPlugin};
+import{In as e,oO as t,sO as n}from"../../../chunks/app-DOAEXv5k.js";export{t as extensionsOverridesProp,n as extensionsPrefsType,e as extensionsSettingsPlugin};

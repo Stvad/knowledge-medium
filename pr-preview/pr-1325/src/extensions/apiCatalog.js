@@ -1,1 +1,1 @@
-import{Ju as e,qu as t}from"../../chunks/app-DfnKPIGU.js";export{t as extensionApiCatalog,e as extensionApiRuntimeExports};
+import{id as e,rd as t}from"../../chunks/app-DOAEXv5k.js";export{t as extensionApiCatalog,e as extensionApiRuntimeExports};

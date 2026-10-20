@@ -1,1 +1,1 @@
-import{RN as e}from"../../chunks/app-DfnKPIGU.js";export{e as BlockProperties};
+import{JN as e}from"../../chunks/app-DOAEXv5k.js";export{e as BlockProperties};

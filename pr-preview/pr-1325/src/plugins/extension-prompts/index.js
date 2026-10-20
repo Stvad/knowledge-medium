@@ -1,1 +1,1 @@
-import{UD as e,WD as t}from"../../../chunks/app-DfnKPIGU.js";export{e as ExtensionPromptSurface,t as extensionPromptsExtension};
+import{$D as e,eO as t}from"../../../chunks/app-DOAEXv5k.js";export{e as ExtensionPromptSurface,t as extensionPromptsExtension};

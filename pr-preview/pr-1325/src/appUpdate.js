@@ -1,1 +1,1 @@
-import{bO as e,xO as t}from"../chunks/app-DfnKPIGU.js";export{e as appUpdate,t as useAppUpdateAvailable};
+import{AO as e,jO as t}from"../chunks/app-DOAEXv5k.js";export{e as appUpdate,t as useAppUpdateAvailable};

@@ -1,1 +1,1 @@
-import{ME as e}from"../../../chunks/app-DfnKPIGU.js";export{e as BlockEmbed};
+import{HE as e}from"../../../chunks/app-DOAEXv5k.js";export{e as BlockEmbed};

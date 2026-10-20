@@ -1,1 +1,1 @@
-import{dj as e}from"../../../chunks/app-DfnKPIGU.js";export{e as BlockInfoDialog};
+import{xj as e}from"../../../chunks/app-DOAEXv5k.js";export{e as BlockInfoDialog};

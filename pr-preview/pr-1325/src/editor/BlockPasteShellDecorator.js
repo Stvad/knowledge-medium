@@ -1,1 +1,1 @@
-import{MD as e,jD as t}from"../../chunks/app-DfnKPIGU.js";export{t as BlockPasteShellDecorator,e as blockPasteShellDecorator};
+import{HD as e,VD as t}from"../../chunks/app-DOAEXv5k.js";export{t as BlockPasteShellDecorator,e as blockPasteShellDecorator};

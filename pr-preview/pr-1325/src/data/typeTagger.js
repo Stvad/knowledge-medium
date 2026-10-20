@@ -1,1 +1,1 @@
-import{PK as e}from"../../chunks/app-DfnKPIGU.js";export{e as TypeTagger};
+import{WK as e}from"../../chunks/app-DOAEXv5k.js";export{e as TypeTagger};

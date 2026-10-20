@@ -1,1 +1,1 @@
-import{_v as e,gv as t,hv as n,mv as r,nv as i}from"../../../chunks/app-DfnKPIGU.js";export{n as EXTENSIONS_PAGE_TITLE,t as TUTORIAL_DEFAULT_TITLE,e as TUTORIAL_VIM_TITLE,i as onboardingPlugin,r as seedTutorial};
+import{Dv as e,Ev as t,Tv as n,fv as r,wv as i}from"../../../chunks/app-DOAEXv5k.js";export{n as EXTENSIONS_PAGE_TITLE,t as TUTORIAL_DEFAULT_TITLE,e as TUTORIAL_VIM_TITLE,r as onboardingPlugin,i as seedTutorial};

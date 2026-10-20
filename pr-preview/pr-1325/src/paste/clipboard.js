@@ -1,1 +1,1 @@
-import{Jj as e}from"../../chunks/app-DfnKPIGU.js";export{e as readClipboardContent};
+import{iM as e}from"../../chunks/app-DOAEXv5k.js";export{e as readClipboardContent};

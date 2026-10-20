@@ -1,1 +1,1 @@
-import{lO as e}from"../../../chunks/app-DfnKPIGU.js";export{e as appUpdatePromptExtension};
+import{yO as e}from"../../../chunks/app-DOAEXv5k.js";export{e as appUpdatePromptExtension};

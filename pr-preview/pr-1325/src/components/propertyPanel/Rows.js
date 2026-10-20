@@ -1,1 +1,1 @@
-import{BN as e,zN as t}from"../../../chunks/app-DfnKPIGU.js";export{t as MetadataRow,e as PropertySectionLabel};
+import{XN as e,YN as t}from"../../../chunks/app-DOAEXv5k.js";export{t as MetadataRow,e as PropertySectionLabel};

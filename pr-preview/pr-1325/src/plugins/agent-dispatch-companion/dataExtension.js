@@ -1,1 +1,1 @@
-import{aW as e}from"../../../chunks/app-DfnKPIGU.js";export{e as agentDispatchCompanionDataExtension};
+import{hW as e}from"../../../chunks/app-DOAEXv5k.js";export{e as agentDispatchCompanionDataExtension};

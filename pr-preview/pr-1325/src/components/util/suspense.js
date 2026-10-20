@@ -1,1 +1,1 @@
-import{CR as e}from"../../../chunks/app-DfnKPIGU.js";export{e as SuspenseFallback};
+import{NR as e}from"../../../chunks/app-DOAEXv5k.js";export{e as SuspenseFallback};

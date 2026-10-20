@@ -1,1 +1,1 @@
-import{$R as e}from"../../chunks/app-DfnKPIGU.js";export{e as staticDataExtensions};
+import{lz as e}from"../../chunks/app-DOAEXv5k.js";export{e as staticDataExtensions};

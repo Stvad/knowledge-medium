@@ -1,1 +1,1 @@
-import{GD as e,KD as t}from"../../../chunks/app-DfnKPIGU.js";export{e as extensionPromptDiagnosticContribution,t as extensionPromptDiagnosticSource};
+import{nO as e,tO as t}from"../../../chunks/app-DOAEXv5k.js";export{t as extensionPromptDiagnosticContribution,e as extensionPromptDiagnosticSource};

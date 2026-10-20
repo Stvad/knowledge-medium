@@ -1,1 +1,1 @@
-import{Ap as e}from"../../../chunks/app-DfnKPIGU.js";export{e as backlinksViewPlugin};
+import{Bp as e}from"../../../chunks/app-DOAEXv5k.js";export{e as backlinksViewPlugin};

@@ -1,1 +1,1 @@
-import{FI as e}from"../../chunks/app-DfnKPIGU.js";export{e as defineVerbFacet};
+import{GI as e}from"../../chunks/app-DOAEXv5k.js";export{e as defineVerbFacet};

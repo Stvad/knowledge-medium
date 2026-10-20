@@ -1,1 +1,1 @@
-import{fb as e,hb as t,mb as n,pb as r}from"../../../chunks/app-DfnKPIGU.js";export{e as WorkspaceSwitcherSidebarSection,r as pendingInvitationsHeaderItem,n as workspaceHeaderPlugin,t as workspaceSwitcherSidebarSection};
+import{Cb as e,Sb as t,Tb as n,wb as r}from"../../../chunks/app-DOAEXv5k.js";export{t as WorkspaceSwitcherSidebarSection,e as pendingInvitationsHeaderItem,r as workspaceHeaderPlugin,n as workspaceSwitcherSidebarSection};

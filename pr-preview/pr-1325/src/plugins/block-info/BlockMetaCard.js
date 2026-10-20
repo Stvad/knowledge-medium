@@ -1,1 +1,1 @@
-import{Sp as e}from"../../../chunks/app-DfnKPIGU.js";export{e as BlockMetaCard};
+import{Mp as e}from"../../../chunks/app-DOAEXv5k.js";export{e as BlockMetaCard};

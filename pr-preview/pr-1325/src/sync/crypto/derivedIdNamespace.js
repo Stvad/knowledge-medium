@@ -1,1 +1,1 @@
-import{sd as e}from"../../../chunks/app-DfnKPIGU.js";export{e as deriveWorkspaceIdNamespace};
+import{_d as e}from"../../../chunks/app-DOAEXv5k.js";export{e as deriveWorkspaceIdNamespace};

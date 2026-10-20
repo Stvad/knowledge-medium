@@ -1,1 +1,1 @@
-import{Xk as e,Zk as t}from"../../../chunks/app-DfnKPIGU.js";export{e as PropertySchemaBlockRenderer,t as PropertySchemaContentRenderer};
+import{oA as e,sA as t}from"../../../chunks/app-DOAEXv5k.js";export{e as PropertySchemaBlockRenderer,t as PropertySchemaContentRenderer};

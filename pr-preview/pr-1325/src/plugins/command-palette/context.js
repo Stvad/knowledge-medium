@@ -1,1 +1,1 @@
-import{CT as e,ST as t,TT as n,wT as r}from"../../../chunks/app-DfnKPIGU.js";export{t as COMMAND_PALETTE_ACTION_ID,e as COMMAND_PALETTE_CONTEXT,r as COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,n as commandPaletteActionContext};
+import{FT as e,MT as t,NT as n,PT as r}from"../../../chunks/app-DOAEXv5k.js";export{t as COMMAND_PALETTE_ACTION_ID,n as COMMAND_PALETTE_CONTEXT,r as COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,e as commandPaletteActionContext};

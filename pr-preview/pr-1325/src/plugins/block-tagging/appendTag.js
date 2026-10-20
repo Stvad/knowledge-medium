@@ -1,1 +1,1 @@
-import{Mc as e,Nc as t}from"../../../chunks/app-DfnKPIGU.js";export{e as appendTagToBlocks,t as appendTagToContent};
+import{Hc as e,Uc as t}from"../../../chunks/app-DOAEXv5k.js";export{e as appendTagToBlocks,t as appendTagToContent};

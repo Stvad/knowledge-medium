@@ -1,1 +1,1 @@
-import{_M as e}from"../../chunks/app-DfnKPIGU.js";export{e as useShortcutSurfaceActivations};
+import{DM as e}from"../../chunks/app-DOAEXv5k.js";export{e as useShortcutSurfaceActivations};

@@ -1,1 +1,1 @@
-import{BD as e}from"../../chunks/app-DfnKPIGU.js";export{e as editorAutocompleteExtension};
+import{XD as e}from"../../chunks/app-DOAEXv5k.js";export{e as editorAutocompleteExtension};

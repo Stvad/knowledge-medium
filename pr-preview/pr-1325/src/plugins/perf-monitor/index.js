@@ -1,1 +1,1 @@
-import{Rn as e}from"../../../chunks/app-DfnKPIGU.js";export{e as perfMonitorPlugin};
+import{Jn as e}from"../../../chunks/app-DOAEXv5k.js";export{e as perfMonitorPlugin};

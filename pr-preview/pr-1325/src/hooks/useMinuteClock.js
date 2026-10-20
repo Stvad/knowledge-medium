@@ -1,1 +1,1 @@
-import{vS as e}from"../../chunks/app-DfnKPIGU.js";export{e as useMinuteClock};
+import{OS as e}from"../../chunks/app-DOAEXv5k.js";export{e as useMinuteClock};

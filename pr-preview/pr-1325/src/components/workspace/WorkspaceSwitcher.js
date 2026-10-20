@@ -1,1 +1,1 @@
-import{Pb as e}from"../../../chunks/app-DfnKPIGU.js";export{e as WorkspaceSwitcher};
+import{Wb as e}from"../../../chunks/app-DOAEXv5k.js";export{e as WorkspaceSwitcher};

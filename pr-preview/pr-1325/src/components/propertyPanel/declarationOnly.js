@@ -1,1 +1,1 @@
-import{dP as e,uP as t}from"../../../chunks/app-DfnKPIGU.js";export{t as declarationOnlyDefinitionForName,e as declarationOnlyStatusText};
+import{bP as e,xP as t}from"../../../chunks/app-DOAEXv5k.js";export{e as declarationOnlyDefinitionForName,t as declarationOnlyStatusText};

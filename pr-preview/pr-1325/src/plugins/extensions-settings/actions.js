@@ -1,1 +1,1 @@
-import{JD as e,qD as t}from"../../../chunks/app-DfnKPIGU.js";export{t as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,e as openExtensionsSettingsAction};
+import{iO as e,rO as t}from"../../../chunks/app-DOAEXv5k.js";export{t as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,e as openExtensionsSettingsAction};

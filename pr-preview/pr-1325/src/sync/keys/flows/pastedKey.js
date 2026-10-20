@@ -1,1 +1,1 @@
-import{Gb as e,Kb as t}from"../../../../chunks/app-DfnKPIGU.js";export{e as importPastedWorkspaceKey,t as openCanaryWithPastedKey};
+import{nx as e,tx as t}from"../../../../chunks/app-DOAEXv5k.js";export{t as importPastedWorkspaceKey,e as openCanaryWithPastedKey};

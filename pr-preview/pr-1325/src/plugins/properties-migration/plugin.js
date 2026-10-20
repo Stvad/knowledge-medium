@@ -1,1 +1,1 @@
-import{Li as e}from"../../../chunks/app-DfnKPIGU.js";export{e as propertiesMigrationPlugin};
+import{qi as e}from"../../../chunks/app-DOAEXv5k.js";export{e as propertiesMigrationPlugin};

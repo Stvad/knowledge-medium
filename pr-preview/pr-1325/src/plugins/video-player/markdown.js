@@ -1,1 +1,1 @@
-import{D_ as e}from"../../../chunks/app-DfnKPIGU.js";export{e as videoPlayerMarkdownExtension};
+import{L_ as e}from"../../../chunks/app-DOAEXv5k.js";export{e as videoPlayerMarkdownExtension};

@@ -1,1 +1,1 @@
-import{$M as e,eN as t}from"../../../chunks/app-DfnKPIGU.js";export{e as BLOCK_TITLE_TEXT_CLASS,t as useBlockTitleTextClass};
+import{lN as e,uN as t}from"../../../chunks/app-DOAEXv5k.js";export{e as BLOCK_TITLE_TEXT_CLASS,t as useBlockTitleTextClass};

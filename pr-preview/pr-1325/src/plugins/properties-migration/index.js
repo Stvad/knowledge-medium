@@ -1,1 +1,1 @@
-import{Li as e,Vi as t}from"../../../chunks/app-DfnKPIGU.js";export{t as migratePropertiesToBlocksAction,e as propertiesMigrationPlugin};
+import{Zi as e,qi as t}from"../../../chunks/app-DOAEXv5k.js";export{e as migratePropertiesToBlocksAction,t as propertiesMigrationPlugin};

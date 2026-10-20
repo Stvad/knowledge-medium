@@ -1,1 +1,1 @@
-import{E_ as e}from"../../../chunks/app-DfnKPIGU.js";export{e as videoPlayerPlugin};
+import{I_ as e}from"../../../chunks/app-DOAEXv5k.js";export{e as videoPlayerPlugin};

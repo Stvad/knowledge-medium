@@ -1,1 +1,1 @@
-import{Nn as e}from"../../../chunks/app-DfnKPIGU.js";export{e as ExtensionsSettings};
+import{Un as e}from"../../../chunks/app-DOAEXv5k.js";export{e as ExtensionsSettings};

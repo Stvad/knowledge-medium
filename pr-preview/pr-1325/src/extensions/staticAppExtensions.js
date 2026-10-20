@@ -1,1 +1,1 @@
-import{Dt as e}from"../../chunks/app-DfnKPIGU.js";export{e as staticAppExtensions};
+import{Lt as e}from"../../chunks/app-DOAEXv5k.js";export{e as staticAppExtensions};

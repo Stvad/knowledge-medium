@@ -1,1 +1,1 @@
-import{Im as e}from"../../../../../chunks/app-DfnKPIGU.js";export{e as remarkWikilinks};
+import{Km as e}from"../../../../../chunks/app-DOAEXv5k.js";export{e as remarkWikilinks};

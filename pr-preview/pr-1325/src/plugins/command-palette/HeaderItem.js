@@ -1,1 +1,1 @@
-import{VT as e}from"../../../chunks/app-DfnKPIGU.js";export{e as CommandPaletteHeaderItem};
+import{ZT as e}from"../../../chunks/app-DOAEXv5k.js";export{e as CommandPaletteHeaderItem};

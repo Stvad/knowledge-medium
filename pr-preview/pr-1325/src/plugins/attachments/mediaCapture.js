@@ -1,1 +1,1 @@
-import{$h as e,Qh as t,eg as n}from"../../../chunks/app-DfnKPIGU.js";export{t as DEFAULT_MAX_CAPTURE_BYTES,e as captureMedia,n as mediaBlockId};
+import{cg as e,lg as t,ug as n}from"../../../chunks/app-DOAEXv5k.js";export{e as DEFAULT_MAX_CAPTURE_BYTES,t as captureMedia,n as mediaBlockId};

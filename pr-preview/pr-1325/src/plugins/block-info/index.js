@@ -1,1 +1,1 @@
-import{xp as e}from"../../../chunks/app-DfnKPIGU.js";export{e as blockInfoPlugin};
+import{jp as e}from"../../../chunks/app-DOAEXv5k.js";export{e as blockInfoPlugin};

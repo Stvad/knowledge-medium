@@ -1,1 +1,1 @@
-import{S3 as e}from"../chunks/app-DfnKPIGU.js";export{e as isChildBackedPropertiesWorkspace};
+import{M3 as e}from"../chunks/app-DOAEXv5k.js";export{e as isChildBackedPropertiesWorkspace};

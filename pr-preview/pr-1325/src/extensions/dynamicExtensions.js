@@ -1,1 +1,1 @@
-import{QO as e}from"../../chunks/app-DfnKPIGU.js";export{e as dynamicExtensionsExtension};
+import{ck as e}from"../../chunks/app-DOAEXv5k.js";export{e as dynamicExtensionsExtension};

@@ -1,1 +1,1 @@
-import{Jt as e,Xt as t,Yt as n}from"../../../chunks/app-DfnKPIGU.js";export{e as WOLF_THEME_ID,n as applyWolfTheme,t as syncWolfTheme};
+import{an as e,in as t,on as n}from"../../../chunks/app-DOAEXv5k.js";export{t as WOLF_THEME_ID,e as applyWolfTheme,n as syncWolfTheme};
