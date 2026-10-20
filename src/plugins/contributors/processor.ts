@@ -77,9 +77,8 @@ export const contributorAttributionProcessor = defineSameTxProcessor({
     const context = ctx.tx.meta.context
     const selectedId = context?.contributorId ?? undefined
     const selected = selectedId ? await ctx.tx.get(selectedId) : null
-    const human = selectedId === undefined
-      ? context?.contributorFallback !== 'agent'
-      : contributorKindProp.codec.decode(selected?.properties[contributorKindProp.name] ?? 'agent') === 'human'
+    const human = context?.contributorFallback !== 'agent' && (selectedId === undefined
+      || contributorKindProp.codec.decode(selected?.properties[contributorKindProp.name] ?? 'agent') === 'human')
     const eligible: Array<[string, boolean]> = []
     for (const [id, created] of targets) {
       const row = await ctx.tx.get(id)

@@ -251,6 +251,8 @@ kmagent contributor use <id>   # or: kmagent contributor use none
 
 Contributor choices are stored separately in one file per token profile and workspace under `agent-contributors/`. `--contributor <id|none>` overrides the saved choice for one CLI invocation. An unconfigured selection is sent as no field; the runtime creates its fallback profile only when a meaningful block write occurs. `none` sends explicit null and records an intentionally unattributed write. External writers can select agent or automation profiles; human profiles are reserved for human edits. Reads and derived maintenance do not create profiles.
 
+`contributor create --kind human` creates a profile for a person without selecting it; the current agent selection stays in place.
+
 For MCP, `list_contributors` and `create_contributor` work before attribution is configured. They do not change the MCP server's selection. Set `AGENT_RUNTIME_CONTRIBUTOR_ID=<id|none>` or launch `km-mcp --contributor <id|none>` to attribute writes. Programmatic clients can pass `contributorId` to `createBridgeClient` or `GraphMcpServerOptions`; `null` opts out explicitly, while `undefined` leaves the choice unconfigured.
 
 ### 0.7.0

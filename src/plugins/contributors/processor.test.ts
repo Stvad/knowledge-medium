@@ -60,6 +60,14 @@ describe('automatic contributor attribution', () => {
     expect(await read('note', attributionEditorsProp.name)).toEqual(['atlas', HUMAN])
   })
 
+  it('rejects a human actor inside an external transaction, even without command admission', async () => {
+    await create(repo.withTxContext({contributorId: 'atlas'}))
+    await repo.tx(tx => tx.update('note', {content: 'Human revision'}), opts)
+    await expect(create(repo.withTxContext({contributorId: HUMAN, contributorFallback: 'agent'}), 'disguised'))
+      .rejects.toThrow(/agent or automation/)
+    expect(await repo.load('disguised')).toBeNull()
+  })
+
   it('deduplicates several editors without replacing earlier contributors', async () => {
     await create(repo.withTxContext({contributorId: 'atlas'}))
     for (const [id, content] of [['scout', 'Second'], ['atlas', 'Third'], ['scout', 'Fourth']]) {

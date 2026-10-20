@@ -635,13 +635,15 @@ cli
         ...(options.kind !== undefined ? {kind: options.kind} : {}),
         ...(options.role !== undefined ? {role: options.role} : {}),
       })
-      const created = await runCommand(command) as {id?: unknown; workspaceId?: unknown}
+      const created = await runCommand(command) as {id?: unknown; workspaceId?: unknown; kind?: unknown}
       if (typeof created?.id !== 'string' || created.id.trim() === '') {
         throw new Error('create-contributor returned no contributor id; selection was not changed.')
       }
       const selectedWorkspaceId = typeof created.workspaceId === 'string' ? created.workspaceId : workspaceId
-      await saveContributorSelection(selectedProfileName, selectedWorkspaceId, created.id)
-      process.stdout.write(`${toDisplayJson({...created, selected: true, profile: selectedProfileName})}\n`)
+      const kind = typeof created.kind === 'string' ? created.kind : command.kind ?? 'agent'
+      const selected = kind !== 'human'
+      if (selected) await saveContributorSelection(selectedProfileName, selectedWorkspaceId, created.id)
+      process.stdout.write(`${toDisplayJson({...created, selected, profile: selectedProfileName})}\n`)
       return
     }
 
@@ -650,9 +652,15 @@ cli
     const workspaceId = await commandWorkspaceId({type: 'list-contributors', ...workspaceOption})
     const contributorId = id === 'none' ? null : id
     if (contributorId !== null) {
-      const response = await client().runCommand({type: 'list-contributors', workspaceId}) as {contributors?: Array<{id?: unknown}>}
-      if (!response.contributors?.some(contributor => contributor.id === contributorId)) {
+      const response = await client().runCommand({type: 'list-contributors', workspaceId}) as {
+        contributors?: Array<{id?: unknown; kind?: unknown}>
+      }
+      const contributor = response.contributors?.find(item => item.id === contributorId)
+      if (!contributor) {
         throw new Error(`Contributor "${contributorId}" was not found in workspace ${workspaceId}.`)
+      }
+      if (contributor.kind === 'human') {
+        throw new Error('Human contributors cannot be selected for CLI mutations; choose an agent or automation contributor instead.')
       }
     }
     await saveContributorSelection(selectedProfileName, workspaceId, contributorId)

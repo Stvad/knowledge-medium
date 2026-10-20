@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'vitest'
+import {afterAll, beforeAll, beforeEach, describe, expect, it, vi} from 'vitest'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
 import {ChangeScope} from '@/data/api'
@@ -52,9 +52,11 @@ describe('agent contributor selection', () => {
 
   it('refuses human profiles on external writes before creating the target', async () => {
     const human = await run({type: 'create-contributor', name: 'Alice', kind: 'human'}) as ContributorProfile
+    const write = vi.spyOn(context.repo, 'tx')
     for (const contributorId of [human.id, userPageBlockId(WS, 'vlad')]) {
       await expect(run({type: 'create-page', name: 'Must not exist', contributorId})).rejects.toThrow(/agent or automation/)
     }
+    expect(write).not.toHaveBeenCalled()
     expect(await context.repo.db.getAll('SELECT id FROM blocks WHERE content = ?', ['Must not exist'])).toEqual([])
   })
 

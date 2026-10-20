@@ -23,7 +23,9 @@ const startStubBridge = async (): Promise<StubBridge> => {
   const commands: Array<Record<string, unknown>> = []
   const requests: string[] = []
   let nextCommandId = 1
+  let nextContributorId = 1
   const results = new Map<string, unknown>()
+  const contributors: Array<{id: string; name: string; kind: string; workspaceId: string}> = []
   const server = http.createServer((req, res) => {
     const chunks: Buffer[] = []
     req.on('data', (chunk: Buffer) => chunks.push(chunk))
@@ -47,11 +49,20 @@ const startStubBridge = async (): Promise<StubBridge> => {
         const command = JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>
         commands.push(command)
         const id = `command-${nextCommandId++}`
-        results.set(id, command.type === 'create-contributor'
-          ? {id: 'contributor-1', name: command.name, kind: command.kind ?? 'agent', workspaceId: command.workspaceId}
-          : command.type === 'list-contributors'
-            ? {contributors: [{id: 'contributor-1', name: 'Researcher', kind: 'agent', workspaceId: command.workspaceId}]}
-            : {id: 'page-1', created: true})
+        if (command.type === 'create-contributor') {
+          const contributor = {
+            id: `contributor-${nextContributorId++}`,
+            name: String(command.name),
+            kind: String(command.kind ?? 'agent'),
+            workspaceId: String(command.workspaceId),
+          }
+          contributors.push(contributor)
+          results.set(id, contributor)
+        } else if (command.type === 'list-contributors') {
+          results.set(id, {contributors: contributors.filter(item => item.workspaceId === command.workspaceId)})
+        } else {
+          results.set(id, {id: 'page-1', created: true})
+        }
         return send(202, {id})
       }
       const commandMatch = req.method === 'GET' && req.url?.match(/^\/runtime\/commands\/([^/]+)$/)
@@ -113,7 +124,7 @@ const runCli = (args: string[]) => execFileAsync(process.execPath, [cliScript, .
 describe('compiled CLI contributor commands', {timeout: 30_000}, () => {
   it('dispatches list/create/use and applies the saved choice to a later write', async () => {
     const listResult = await runCli(['contributor', 'list'])
-    expect(JSON.parse(listResult.stdout)).toMatchObject({contributors: [{id: 'contributor-1'}]})
+    expect(JSON.parse(listResult.stdout)).toEqual({contributors: []})
 
     const createResult = await runCli(['contributor', 'create', 'Researcher', '--kind', 'agent', '--role', 'Research'])
     expect(JSON.parse(createResult.stdout)).toMatchObject({id: 'contributor-1', selected: true})
@@ -140,6 +151,31 @@ describe('compiled CLI contributor commands', {timeout: 30_000}, () => {
     expect(healthIndexes).toHaveLength(4)
     expect(whoamiIndexes).toHaveLength(4)
     expect(whoamiIndexes.every((index, i) => healthIndexes[i]! < index)).toBe(true)
+  })
+
+  it('creates human profiles without selecting them and refuses selecting them', async () => {
+    const agentCreate = await runCli(['contributor', 'create', 'Researcher', '--kind', 'agent'])
+    const agentId = JSON.parse(agentCreate.stdout).id as string
+    expect(JSON.parse(agentCreate.stdout)).toMatchObject({id: agentId, selected: true})
+
+    const humanCreate = await runCli(['contributor', 'create', 'Vlad', '--kind', 'human'])
+    const humanId = JSON.parse(humanCreate.stdout).id as string
+    expect(humanId).not.toBe(agentId)
+    expect(JSON.parse(humanCreate.stdout)).toMatchObject({id: humanId, kind: 'human', selected: false})
+
+    await expect(runCli(['contributor', 'use', humanId])).rejects.toMatchObject({
+      stderr: expect.stringContaining('Human contributors cannot be selected'),
+    })
+
+    await runCli(['create-page', 'Inbox'])
+    expect(bridge.commands.at(-1)).toMatchObject({type: 'create-page', contributorId: agentId})
+
+    const automationCreate = await runCli(['contributor', 'create', 'Assistant', '--kind', 'automation'])
+    const automationId = JSON.parse(automationCreate.stdout).id as string
+    expect(JSON.parse(automationCreate.stdout)).toMatchObject({id: automationId, kind: 'automation', selected: true})
+    await runCli(['contributor', 'use', 'none'])
+    await runCli(['create-page', 'Unattributed'])
+    expect(bridge.commands.at(-1)).toMatchObject({type: 'create-page', contributorId: null})
   })
 
   it('prints contributor-specific help for the supported single command', async () => {
