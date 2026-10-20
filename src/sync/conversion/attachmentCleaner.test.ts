@@ -123,6 +123,19 @@ describe('cleanAttachments: raw objects', () => {
     expect(report.proof).toEqual({kind: 'passed', unrecoverable: []})
   })
 
+  it("hands every delete the run's signal, which aborts the request itself", async () => {
+    const store = createFakeAttachmentStorage()
+    const photo = utf8('a photo')
+    await putRaw(store, photo, 'block-1')
+    store.objects.set(await keyedName(photo), utf8('junk at the keyed name'))
+    const deleteObject = vi.spyOn(store.io, 'deleteObject')
+    const run = new AbortController()
+
+    await cleanAttachments({workspaceId: WS, io: store.io, ...keys, bundle: null, signal: run.signal})
+
+    expect(deleteObject.mock.calls).toEqual([[await keyedName(photo), run.signal], [await rawName(photo), run.signal]])
+  })
+
   it('a genuine occupant at the keyed path is kept as it is', async () => {
     const store = createFakeAttachmentStorage()
     const photo = utf8('a photo')
@@ -345,8 +358,8 @@ describe('cleanAttachments: the proof', () => {
     store.objects.set(await keyedName(photo), photo)
     const remove = store.io.deleteObject
     // Storage confirms the staged copy's delete but keeps it.
-    vi.spyOn(store.io, 'deleteObject').mockImplementation(async path =>
-      path === (await rawName(photo)) ? undefined : remove(path),
+    vi.spyOn(store.io, 'deleteObject').mockImplementation(async (path, signal) =>
+      path === (await rawName(photo)) ? undefined : remove(path, signal),
     )
     const report = await clean(store)
     expect(store.objects.has(await rawName(photo))).toBe(true)

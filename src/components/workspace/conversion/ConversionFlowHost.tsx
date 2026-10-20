@@ -72,6 +72,7 @@ function HostedFlow({target}: {target: ConversionFlowTarget}) {
     return (
       <GateCard title="Preparing the conversion…" wide>
         <Explanation>Checking what this device can reach.</Explanation>
+        <Button type="button" variant="secondary" onClick={closeConversionFlow}>Close</Button>
       </GateCard>
     )
   }

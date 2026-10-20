@@ -120,7 +120,7 @@ export const createAttachmentCleanerIO = (deps: AttachmentCleanerIODeps): Conver
         throw err
       }
     },
-    deleteObject: path => blobStore.delete(workspaceId, path),
+    deleteObject: (path, signal) => blobStore.delete(workspaceId, path, signal),
     async mediaBlocks() {
       // A row this device downloaded but has not applied is missing from
       // `blocks`, and its attachment would be missing from the proof.

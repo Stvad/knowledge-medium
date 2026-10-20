@@ -73,7 +73,7 @@ export const remoteSyncGated = (remote: BlobStore): BlobStore => ({
   put: (ws, key, bytes) => (isRemoteSyncActive() ? remote : NO_REMOTE_BLOB_STORE).put(ws, key, bytes),
   get: (ws, key) => (isRemoteSyncActive() ? remote : NO_REMOTE_BLOB_STORE).get(ws, key),
   probe: (ws, key) => (isRemoteSyncActive() ? remote : NO_REMOTE_BLOB_STORE).probe(ws, key),
-  delete: (ws, key) => (isRemoteSyncActive() ? remote : NO_REMOTE_BLOB_STORE).delete(ws, key),
+  delete: (ws, key, signal) => (isRemoteSyncActive() ? remote : NO_REMOTE_BLOB_STORE).delete(ws, key, signal),
 })
 
 /** The blob store half of a resolver's deps — identical construction for the

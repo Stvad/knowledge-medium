@@ -103,8 +103,11 @@ export const conversionSetup = async (repo: Repo, workspaceId: string, localOnly
 
 /** Every dependency that waits on the network is bound to the run's `signal`
  *  here, so Stop reaches each call: the server's requests abort, the rest race
- *  it. The bundle folder, which the user picks mid-run, is bound where it's
- *  used (`stoppableFolder`). */
+ *  it. A raced call is abandoned, not cancelled, so a Storage delete also aborts
+ *  itself (`deleteObject`'s signal); an abandoned upload is harmless, since the
+ *  first write at a keyed name wins and the cleaner verifies what is there. The
+ *  bundle folder, which the user picks mid-run, is bound where it's used
+ *  (`stoppableFolder`). */
 const conversionFlowDeps = ({repo, workspaceId, client, lock, attachments, ui, signal}: {
   repo: Repo
   workspaceId: string

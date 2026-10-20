@@ -5,10 +5,15 @@ import { RepoContext } from '@/context/repo'
 import type { Repo } from '@/data/repo'
 import { cancelArmedHolds } from '@/shortcuts/holdRegistry'
 import { ConversionFlowHost } from './ConversionFlowHost'
+import { conversionSetup } from './conversionFlowDeps'
 import { closeConversionFlow, conversionFlowTarget, openConversionFlow } from './conversionFlowStore'
 
 vi.mock('@/components/Login', () => ({useIsLocalOnly: () => false}))
 vi.mock('@/shortcuts/holdRegistry', () => ({cancelArmedHolds: vi.fn()}))
+vi.mock('./conversionFlowDeps', async orig => {
+  const actual = await orig<typeof import('./conversionFlowDeps')>()
+  return {...actual, conversionSetup: vi.fn(actual.conversionSetup)}
+})
 
 const USER = 'user-1'
 const repo = {user: {id: USER}} as unknown as Repo
@@ -31,6 +36,17 @@ describe('ConversionFlowHost', () => {
     renderHost()
 
     expect(screen.queryByText(/theirs/i)).toBeNull()
+    expect(conversionFlowTarget()).toBeNull()
+  })
+
+  it('can be closed while it is still preparing', async () => {
+    vi.mocked(conversionSetup).mockReturnValueOnce(new Promise(() => {}))
+    act(() => openConversionFlow({userId: USER, workspaceId: 'ws', workspaceName: 'Vault'}))
+    renderHost()
+    expect(screen.getByText('Preparing the conversion…')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', {name: 'Close'}))
+
     expect(conversionFlowTarget()).toBeNull()
   })
 

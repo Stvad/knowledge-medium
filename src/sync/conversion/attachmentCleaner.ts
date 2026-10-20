@@ -53,8 +53,10 @@ export interface AttachmentCleanerIO {
   readObject(path: ObjectPath): Promise<Uint8Array<ArrayBuffer> | null>
   /** Upload without overwriting: `exists` when the name is occupied. */
   writeObject(path: ObjectPath, bytes: Uint8Array<ArrayBuffer>): Promise<ObjectWrite>
-  /** Resolves only once Storage confirms the object is deleted. */
-  deleteObject(path: ObjectPath): Promise<void>
+  /** Resolves only once Storage confirms the object is deleted. `signal`
+   *  aborts the request itself: one only abandoned could still be sent after a
+   *  later run has put the object back. */
+  deleteObject(path: ObjectPath, signal: AbortSignal | undefined): Promise<void>
   /** Every media block of the workspace, soft-deleted ones included. Throws
    *  while this device's copy of the workspace is incomplete. */
   mediaBlocks(): Promise<readonly MediaRef[]>
@@ -266,7 +268,7 @@ export const cleanAttachments = async (input: CleanAttachmentsInput): Promise<Cl
   }
   const removeStored = (path: ObjectPath) => {
     changes++
-    return io.deleteObject(path)
+    return io.deleteObject(path, signal)
   }
 
   /** A listed object's bytes. A read that finds nothing at a path a listing just

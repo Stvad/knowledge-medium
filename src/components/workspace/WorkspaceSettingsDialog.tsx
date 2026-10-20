@@ -11,7 +11,6 @@ import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { cn } from '@/lib/utils'
 import { useRepo } from '@/context/repo'
-import { fetchWorkspaceConversionState } from '@/data/workspaceConversion'
 import {
   deleteWorkspace,
   inviteMemberByEmail,
@@ -21,8 +20,7 @@ import {
   updateWorkspaceMemberRole,
 } from '@/data/workspaces'
 import type { Workspace, WorkspaceMemberWithEmail, WorkspaceRole } from '@/types'
-import { stageOf } from '@/sync/conversion/stage'
-import { CONVERSION_START_ENABLED, openConversionFlow } from './conversion/conversionFlowStore'
+import { EncryptionSection } from './conversion/EncryptionSection'
 
 type InviteRole = Exclude<WorkspaceRole, 'owner'>
 
@@ -284,52 +282,6 @@ function MembersSection({workspace, canManage}: {workspace: Workspace, canManage
 
       {error && <p className="text-sm text-destructive">{error}</p>}
       {info && <p className="text-sm text-muted-foreground">{info}</p>}
-    </div>
-  )
-}
-
-type UnfinishedStage = 'sealing' | 'cleaning'
-
-/** The stage of a conversion the server shows still running on this e2ee workspace. */
-const useUnfinishedConversion = (workspaceId: string, userId: string, check: boolean): UnfinishedStage | null => {
-  const [unfinished, setUnfinished] = useState<UnfinishedStage | null>(null)
-  useEffect(() => {
-    if (!check) return
-    let live = true
-    void fetchWorkspaceConversionState(workspaceId).then(read => {
-      if (!live) return
-      const stage = stageOf(read, userId)
-      const kind = stage.kind === 'stage' ? stage.stage.kind : null
-      setUnfinished(kind === 'sealing' || kind === 'cleaning' ? kind : null)
-    })
-    return () => { live = false }
-  }, [workspaceId, userId, check])
-  return check ? unfinished : null
-}
-
-function EncryptionSection({workspace, userId, onStart}: {workspace: Workspace, userId: string, onStart: () => void}) {
-  const unfinished = useUnfinishedConversion(workspace.id, userId, workspace.encryptionMode === 'e2ee')
-  const canStart = CONVERSION_START_ENABLED && workspace.encryptionMode === 'none'
-  if (!canStart && !unfinished) return null
-  return (
-    <div className="space-y-2 rounded-md border p-3">
-      <Label>End-to-end encryption</Label>
-      <p className="text-sm text-muted-foreground">
-        {unfinished === 'cleaning'
-          ? "This workspace's content is encrypted, but its attachments still need converting."
-          : unfinished === 'sealing'
-          ? "This workspace's conversion to end-to-end encryption is under way."
-          : "Encrypt this workspace's content with a key only you hold. Links, ids and history on this device are kept. It can't be undone."}
-      </p>
-      <Button
-        variant="outline"
-        onClick={() => {
-          onStart()
-          openConversionFlow({userId, workspaceId: workspace.id, workspaceName: workspace.name})
-        }}
-      >
-        {unfinished === 'cleaning' ? 'Finish the conversion…' : unfinished === 'sealing' ? 'Continue the conversion…' : 'Encrypt this workspace…'}
-      </Button>
     </div>
   )
 }
