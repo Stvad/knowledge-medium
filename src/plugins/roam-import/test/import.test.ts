@@ -1592,10 +1592,12 @@ describe('importRoam', {timeout: 30_000}, () => {
 
       const descendants = events.slice(events.findIndex(e => e.startsWith('Wrote frontmatter')),
         events.findIndex(e => e.startsWith('All 3 descendants')))
-        .filter(e => e === 'checkpoint' || e.startsWith('Wrote descendants') || e.startsWith('Paused'))
+        .filter(e => e === 'checkpoint' || /^(Wrote descendants|Paused|Resum)/.test(e))
+      // Resuming is said too: otherwise the pause line stays up through
+      // whatever the import does next, which can be one long transaction.
       expect(descendants).toEqual([
-        expect.stringMatching(/^Paused/), 'checkpoint', 'Wrote descendants 2/3',
-        expect.stringMatching(/^Paused/), 'checkpoint', 'Wrote descendants 3/3',
+        expect.stringMatching(/^Paused/), 'checkpoint', expect.stringMatching(/^Resum/), 'Wrote descendants 2/3',
+        expect.stringMatching(/^Paused/), 'checkpoint', expect.stringMatching(/^Resum/), 'Wrote descendants 3/3',
       ])
     })
 

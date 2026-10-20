@@ -423,6 +423,25 @@ describe('a pause for the write-ahead log', () => {
     ])
   })
 
+  it('hands back the line it had up when a pause ends, not the count', async () => {
+    // Another bulk writer can pause while this gesture is refreshing stats.
+    vi.spyOn(console, 'info').mockImplementation(() => {})
+    runAnalyzeInstalledTables.mockImplementation(async () => {
+      await awaitWriteAheadHeadroom(overLimitWriter)
+      steps.push('analyze')
+    })
+
+    await runReporting(progress())
+
+    const lines = progressHandle.update.mock.calls.map(([line]) => line as string)
+    const refreshing = lines.indexOf('Refreshing query statistics…')
+    expect(lines.slice(refreshing, refreshing + 3)).toEqual([
+      'Refreshing query statistics…',
+      expect.stringMatching(/paused/i),
+      'Refreshing query statistics…',
+    ])
+  })
+
   it('listens only while the gesture runs', async () => {
     vi.spyOn(console, 'info').mockImplementation(() => {})
     await runReporting(progress())

@@ -58,7 +58,7 @@ import {
 } from '@/data/aliasSeatNamespace'
 import { parseLiteralDailyPageTitle } from '@/utils/relativeDate'
 import type { Repo } from '@/data/repo'
-import { awaitWriteAheadHeadroom, describeWriteAheadPause, runBulkWrite } from '@/data/writeAheadLog'
+import { awaitWriteAheadHeadroom, runBulkWrite } from '@/data/writeAheadLog'
 import {
   parseRoamImportReferences,
   planImport,
@@ -374,11 +374,7 @@ export const importRoam = async (
   // Every write phase below is one bulk write: a long read on this device
   // pauses it rather than letting the log grow, and the log is drained however
   // the import ends — a failed chunk leaves as much behind as a finished import.
-  return runBulkWrite(repo.db, {
-    // The next line of progress replaces this, so only the pause needs saying.
-    onPause: pause => { if (pause) log(describeWriteAheadPause(pause)) },
-    onDrain: () => log('Writing pending changes into the database file…'),
-  }, async () => {
+  return runBulkWrite(repo.db, line => log(line ?? 'Resuming the import.'), async () => {
     // 4. Make sure the daily-note rows referenced by daily-page
     //    reconciliations OR by daily-shaped aliases used in content
     //    exist. getOrCreateDailyNote opens its own tx, sets up the

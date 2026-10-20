@@ -1152,6 +1152,8 @@ describe('workspace backfill runner — operator trigger', () => {
 })
 
 describe('workspace backfill runner — write-ahead log', () => {
+  afterEach(() => { vi.restoreAllMocks() })
+
   it('waits for a log a long read kept growing to be checkpointed before EVERY batch', async () => {
     const events: string[] = []
     const repo = makeRepo({

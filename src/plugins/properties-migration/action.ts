@@ -35,7 +35,7 @@ import { openDialog } from '@/utils/dialogs.js'
 import { dismissToast, showInfo } from '@/utils/toast.js'
 import { reportMigrationProgress, type MigrationProgress } from './progressReport.ts'
 import { oweAnalyzeInstalledTables, runAnalyzeInstalledTables } from '@/data/maintenance'
-import { describeWriteAheadPause, runBulkWrite, type WriteAheadPause } from '@/data/writeAheadLog'
+import { runBulkWrite } from '@/data/writeAheadLog'
 import {
   ConfirmMigrationDialog, type NamedPropertyKeys,
 } from './ConfirmMigrationDialog.tsx'
@@ -394,6 +394,17 @@ interface ClaimedMigration {
   readonly banner: MigrationProgress
 }
 
+/** The banner, remembering the last line this gesture put up: what the dialog
+ *  goes back to when a pause ends. Not the sweep count, which would overwrite
+ *  a later step's line when another writer pauses during it. */
+const rememberingStatus = (banner: MigrationProgress, initial: string) => {
+  let shown = initial
+  return {
+    show: (line: string): void => { shown = line; banner.update(line) },
+    say: (line: string | null): void => banner.update(line ?? shown),
+  }
+}
+
 /** Runs the pass, then re-records planner stats for the tables it grows and
  *  drains the write-ahead log, on every ending and BEFORE the caller reports
  *  one: so the plans are good in this session, and a reload right after does
@@ -406,20 +417,16 @@ interface ClaimedMigration {
 const runPassThenTidyDatabase = async (
   pass: OperatorBackfillPass,
   repo: Repo,
-  banner: MigrationProgress,
-  onPause: (pause: WriteAheadPause | null) => void,
+  status: ReturnType<typeof rememberingStatus>,
 ): Promise<OperatorBackfillResult> => {
   await oweAnalyzeInstalledTables(repo.db).catch(error => {
     console.warn('[properties-migration] could not record the stats refresh as owed:', error)
   })
-  return runBulkWrite(repo.db, {
-    onPause,
-    onDrain: () => banner.update('Writing pending changes into the database file…'),
-  }, async () => {
+  return runBulkWrite(repo.db, status.say, async () => {
     try {
       return await pass.run()
     } finally {
-      banner.update('Refreshing query statistics…')
+      status.show('Refreshing query statistics…')
       await runAnalyzeInstalledTables(repo.db).catch(error => {
         console.warn('[properties-migration] ANALYZE after the pass failed:', error)
       })
@@ -634,8 +641,7 @@ const migrateUnderClaim = async (
    *  gesture without the gesture changing. */
   let pending = 0
   let valuesMaterializedTotal = 0
-  /** What a pause hands the status line back to when it ends. */
-  let progressLine = 'Migrating properties to blocks…'
+  const status = rememberingStatus(banner, 'Migrating properties to blocks…')
   const unsubscribe = onPropertyCellBackfillProgress(progress => {
     // The RUN's total, not this sweep's. They answer different questions: the
     // per-sweep count is "was what this sweep scanned acceptable", so on a
@@ -650,18 +656,14 @@ const migrateUnderClaim = async (
     // Counts are per-sweep, and the sweep number is shown because a second
     // pass over the same blocks is normal — without it the bar restarts from
     // zero for no reason the operator can see.
-    progressLine =
+    status.show(
       `Migrating properties to blocks… sweep ${progress.sweeps}, ` +
       `${progress.blocksScanned.toLocaleString()}/` +
-      `${Math.max(blockCount, progress.blocksScanned).toLocaleString()}`
-    banner.update(progressLine)
+      `${Math.max(blockCount, progress.blocksScanned).toLocaleString()}`,
+    )
   })
   try {
-    // Said, because a pause lasts as long as some other read does, and would
-    // otherwise leave the count frozen with no reason given.
-    const result = await runPassThenTidyDatabase(pass, repo, banner, pause => {
-      banner.update(pause ? describeWriteAheadPause(pause) : progressLine)
-    })
+    const result = await runPassThenTidyDatabase(pass, repo, status)
     const {message, failed, followUp} = describeOutcome(
       result,
       {blocksMaterializedTotal, valuesMaterializedTotal, unmigrated,

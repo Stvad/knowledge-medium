@@ -11,7 +11,8 @@
  * Both run on the WRITER connection — PowerSync's `execute` and `writeLock` —
  * because the log size and the checkpoint are per connection, and only the
  * writer's describe the log it is growing. Under `OPFSCoopSyncVFS` there is no
- * log, SQLite answers these pragmas itself, and both are no-ops.
+ * log and SQLite answers these pragmas itself: the headroom check never pauses,
+ * and the drain costs two tiny writes.
  */
 import { CallbackSet } from '@/utils/callbackSet'
 
@@ -34,29 +35,33 @@ export const asWriteLockDb = (db: unknown): WriteLockDb => {
   return db as WriteLockDb
 }
 
-/** Log size at which a bulk writer stops and waits for a checkpoint. Re-reading
- *  a log costs the next page load about 7 ms per MB, so this bounds that at a
- *  couple of seconds — and the disk the log takes at a few hundred MB. */
+/** Log size at which a bulk writer stops and waits for a checkpoint, which
+ *  bounds what the next page load has to re-read at a few seconds. Up to about
+ *  twice this can stay on disk: a checkpoint leaves the active file's bytes in
+ *  place until the writer next swaps files. */
 export const WRITE_AHEAD_HEADROOM_BYTES = 256 * 1024 * 1024
 
 /** Each logged page carries a frame header. */
 const FRAME_HEADER_BYTES = 32
 
-/** The first cell of a `PRAGMA wal_checkpoint` answer, as a number — or null
- *  when the answer has no readable first cell.
+/** The first cell of a statement's answer, as a finite number, or null. */
+const firstCellNumber = (result: unknown): number | null => {
+  const rows = (result as {rows?: {_array?: unknown[]}} | undefined)?.rows?._array
+  const row = Array.isArray(rows) ? rows[0] : undefined
+  if (!row || typeof row !== 'object') return null
+  const [value] = Object.values(row as Record<string, unknown>)
+  const number = Number(value)
+  return Number.isFinite(number) ? number : null
+}
+
+/** The pages a `PRAGMA wal_checkpoint` answer reports outstanding, or null when
+ *  it has no readable first cell.
  *
  *  Positional because the VFSes answer differently, yet zero means "nothing
  *  outstanding" under both: `OPFSWriteAheadVFS` returns one cell, named and
  *  valued as its approximate count of un-checkpointed pages, while SQLite
  *  answers its own pragma with `busy, log, checkpointed`. */
-export const checkpointResultPages = (result: unknown): number | null => {
-  const rows = (result as {rows?: {_array?: unknown[]}} | undefined)?.rows?._array
-  const row = Array.isArray(rows) ? rows[0] : undefined
-  if (!row || typeof row !== 'object') return null
-  const [value] = Object.values(row as Record<string, unknown>)
-  const pages = Number(value)
-  return Number.isFinite(pages) ? pages : null
-}
+export const checkpointResultPages = firstCellNumber
 
 export interface WriteAheadPause {
   /** Approximate size of the log the writer stopped at. */
@@ -64,22 +69,34 @@ export interface WriteAheadPause {
 }
 
 const pauseListeners = new CallbackSet<[WriteAheadPause | null]>('write-ahead-pause')
+/** Checks waiting in a checkpoint right now. Each takes the writer on its own,
+ *  so two bulk writers can both be waiting. */
+let pausedChecks = 0
 
-/** Hear when a bulk writer stops to let the log drain (`pause`), and when it
- *  resumes (`null`). The writer is the database's only one, so while a pause
- *  lasts every write on this device waits, not just the bulk writer's. */
+/** Hear when a bulk writer stops to let the log drain (`pause`, once per writer
+ *  that stops), and when writing resumes (`null`, once the last of them is done).
+ *
+ *  The pause holds the writer connection, so every write on this device waits —
+ *  not just the bulk writer's. So do the reads of the tab whose read is holding
+ *  the log: PowerSync sends a read to whichever connection comes free first, and
+ *  that tab's only reader is the one still busy. */
 export const onWriteAheadPause = (listener: (pause: WriteAheadPause | null) => void): () => void =>
   pauseListeners.add(listener)
 
 /** The status line for a pause, shared by every bulk writer that shows one. */
-export const describeWriteAheadPause = ({logBytes}: WriteAheadPause): string =>
+const describeWriteAheadPause = ({logBytes}: WriteAheadPause): string =>
   `Paused until a long-running read of the database finishes: writing on would grow its log of ` +
   `pending changes past ${Math.round(logBytes / (1024 * 1024))} MB. This continues by itself.`
 
-const pageSizeOf = async (db: WriteAheadDb): Promise<number> => {
-  const result = await db.execute('PRAGMA page_size')
-  const [size] = Object.values((result as {rows: {_array: Record<string, unknown>[]}}).rows._array[0]!)
-  return Number(size)
+/** Fixed for a database's life, so read once per connection object. */
+const pageSizes = new WeakMap<WriteAheadDb, number>()
+
+const pageSizeOf = async (db: WriteAheadDb): Promise<number | null> => {
+  const known = pageSizes.get(db)
+  if (known !== undefined) return known
+  const size = firstCellNumber(await db.execute('PRAGMA page_size'))
+  if (size !== null) pageSizes.set(db, size)
+  return size
 }
 
 /**
@@ -101,10 +118,13 @@ export const awaitWriteAheadHeadroom = async (
 ): Promise<void> => {
   const pages = checkpointResultPages(await db.execute('PRAGMA wal_checkpoint=noop')) ?? 0
   if (pages === 0) return
-  const logBytes = pages * (await pageSizeOf(db) + FRAME_HEADER_BYTES)
+  const pageSize = await pageSizeOf(db)
+  if (pageSize === null) return
+  const logBytes = pages * (pageSize + FRAME_HEADER_BYTES)
   if (logBytes < limitBytes) return
   const pausedAt = performance.now()
   console.info(`[writeAheadLog] pausing bulk writes: the log is ~${Math.round(logBytes / 1048576)} MB`)
+  pausedChecks += 1
   pauseListeners.notify({logBytes})
   try {
     await db.execute('PRAGMA wal_checkpoint=truncate')
@@ -112,7 +132,8 @@ export const awaitWriteAheadHeadroom = async (
     console.warn('[writeAheadLog] the checkpoint to bound the log failed; writing on:', error)
   } finally {
     console.info(`[writeAheadLog] resuming after ${Math.round(performance.now() - pausedAt)} ms`)
-    pauseListeners.notify(null)
+    pausedChecks -= 1
+    if (pausedChecks === 0) pauseListeners.notify(null)
   }
 }
 
@@ -157,31 +178,35 @@ export const drainWriteAheadLog = (db: WriteLockDb): Promise<void> => db.writeLo
   await tx.execute('PRAGMA wal_checkpoint=truncate')
 })
 
+const DRAINING_STATUS = 'Writing pending changes into the database file…'
+
 /**
- * Run a bulk write with both halves of the log's upkeep around it: `onPause`
- * hears every pause while it runs (see {@link onWriteAheadPause}), and the log
- * is drained when it ends — however it ends, since a write that throws after
- * some batches committed leaves as much log behind as one that finished.
- * `write` still calls {@link awaitWriteAheadHeadroom} between its batches.
+ * Run a bulk write with both halves of the log's upkeep around it, and the
+ * status lines for them: `say` gets a line when a pause starts and when the
+ * drain starts — both can wait out a read — and `null` when writing resumes,
+ * which means "show your own status again". The log is drained when the write
+ * ends, however it ends, since a write that throws after some batches committed
+ * leaves as much log behind as one that finished. `write` still calls
+ * {@link awaitWriteAheadHeadroom} between its batches.
  *
- * The drain is best-effort: a failure only warns, and never replaces the
- * write's own outcome — nor does a `db` with no `writeLock` to drain through.
+ * Neither the drain nor `say` can change the write's outcome: each failure only
+ * warns, and so does a `db` with no `writeLock` to drain through.
  */
 export const runBulkWrite = async <T,>(
   db: unknown,
-  reporting: {
-    onPause: (pause: WriteAheadPause | null) => void
-    /** Called as the drain starts, which can wait out a read like a pause does. */
-    onDrain?: () => void
-  },
+  say: (line: string | null) => void,
   write: () => Promise<T>,
 ): Promise<T> => {
-  const stopReporting = onWriteAheadPause(reporting.onPause)
+  const stopReporting = onWriteAheadPause(pause => say(pause && describeWriteAheadPause(pause)))
   try {
     return await write()
   } finally {
     stopReporting()
-    reporting.onDrain?.()
+    try {
+      say(DRAINING_STATUS)
+    } catch (error) {
+      console.warn('[writeAheadLog] a bulk write\'s status line threw:', error)
+    }
     try {
       await drainWriteAheadLog(asWriteLockDb(db))
     } catch (error) {

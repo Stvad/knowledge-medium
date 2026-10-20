@@ -116,6 +116,45 @@ describe('awaitWriteAheadHeadroom', () => {
     }
   })
 
+  it('resumes once, when the LAST of two overlapping pauses ends', async () => {
+    // Each check takes the writer separately, so two bulk writers can both be
+    // waiting; the first to finish must not announce that writing has resumed.
+    const ends: (() => void)[] = []
+    const pages = pagesOver(WRITE_AHEAD_HEADROOM_BYTES)
+    const {db} = scriptedDb({noop: vfsPages(pages), truncate: () => new Promise<void>(resolve => { ends.push(resolve) })})
+    const {pauses, off} = recordPauses()
+
+    const first = awaitWriteAheadHeadroom(db)
+    const second = awaitWriteAheadHeadroom(db)
+    await vi.waitFor(() => expect(ends).toHaveLength(2))
+    ends[0]!()
+    await first
+    expect(pauses.filter(pause => pause === null)).toEqual([])
+    ends[1]!()
+    await second
+    off()
+
+    expect(pauses.at(-1)).toBeNull()
+    expect(pauses.filter(pause => pause === null)).toHaveLength(1)
+  })
+
+  it('reads the page size once per database', async () => {
+    const {db, executed} = scriptedDb({noop: vfsPages(1000)})
+
+    await awaitWriteAheadHeadroom(db)
+    await awaitWriteAheadHeadroom(db)
+
+    expect(executed.filter(sql => sql === 'PRAGMA page_size')).toHaveLength(1)
+  })
+
+  it('never pauses on a page size it cannot read', async () => {
+    const {db, executed} = scriptedDb({noop: vfsPages(pagesOver(WRITE_AHEAD_HEADROOM_BYTES)), pageSize: Number.NaN})
+
+    await awaitWriteAheadHeadroom(db)
+
+    expect(executed).not.toContain('PRAGMA wal_checkpoint=truncate')
+  })
+
   it('a checkpoint that fails does not fail the write it was protecting', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const {db} = scriptedDb({
@@ -284,11 +323,12 @@ describe('runBulkWrite', () => {
     }
     return {db, drained: () => statements.includes('PRAGMA journal_size_limit=1')}
   }
+  const quiet = () => {}
 
   it('drains the log once the write ends', async () => {
     const {db, drained} = lockedDb()
 
-    await expect(runBulkWrite(db, {onPause: () => {}}, async () => 'written')).resolves.toBe('written')
+    await expect(runBulkWrite(db, quiet, async () => 'written')).resolves.toBe('written')
 
     expect(drained()).toBe(true)
   })
@@ -296,7 +336,7 @@ describe('runBulkWrite', () => {
   it('drains it when the write throws partway, and keeps the write\'s error', async () => {
     const {db, drained} = lockedDb()
 
-    await expect(runBulkWrite(db, {onPause: () => {}}, async () => { throw new Error('chunk 3 failed') }))
+    await expect(runBulkWrite(db, quiet, async () => { throw new Error('chunk 3 failed') }))
       .rejects.toThrow('chunk 3 failed')
 
     expect(drained()).toBe(true)
@@ -308,21 +348,31 @@ describe('runBulkWrite', () => {
     const lockless = {execute: async () => undefined}
 
     for (const db of [failing, lockless]) {
-      await expect(runBulkWrite(db, {onPause: () => {}}, async () => 'written')).resolves.toBe('written')
+      await expect(runBulkWrite(db, quiet, async () => 'written')).resolves.toBe('written')
     }
     expect(console.warn).toHaveBeenCalledTimes(2)
   })
 
-  it('says it is draining, and hears pauses only while the write runs', async () => {
+  it('a status line that throws neither skips the drain nor replaces the outcome', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const {db, drained} = lockedDb()
+    const say = (line: string | null) => { if (line !== null) throw new Error('progress sink closed') }
+
+    await expect(runBulkWrite(db, say, async () => 'written')).resolves.toBe('written')
+
+    expect(drained()).toBe(true)
+  })
+
+  it('says why it paused, when it resumed and that it is draining — pauses only while the write runs', async () => {
     const {db} = lockedDb()
-    const heard: (WriteAheadPause | null | 'draining')[] = []
+    const heard: (string | null)[] = []
     const pausing = scriptedDb({noop: vfsPages(pagesOver(WRITE_AHEAD_HEADROOM_BYTES))})
 
-    await runBulkWrite(db, {onPause: pause => heard.push(pause), onDrain: () => heard.push('draining')}, async () => {
+    await runBulkWrite(db, line => heard.push(line), async () => {
       await awaitWriteAheadHeadroom(pausing.db)
     })
     await awaitWriteAheadHeadroom(pausing.db)
 
-    expect(heard).toEqual([{logBytes: expect.any(Number)}, null, 'draining'])
+    expect(heard).toEqual([expect.stringMatching(/^Paused/), null, expect.stringMatching(/pending changes into the database file/)])
   })
 })
