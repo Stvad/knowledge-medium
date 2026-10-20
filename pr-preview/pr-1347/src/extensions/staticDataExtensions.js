@@ -1,0 +1,1 @@
+import{sB as e}from"../../chunks/app-Du_VfHOa.js";export{e as staticDataExtensions};

@@ -1,0 +1,1 @@
+import{cP as e,lP as t}from"../../../chunks/app-Du_VfHOa.js";export{e as BLOCK_TITLE_TEXT_CLASS,t as useBlockTitleTextClass};

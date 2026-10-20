@@ -1,0 +1,1 @@
+import{$P as e}from"../../../chunks/app-Du_VfHOa.js";export{e as PropertyRow};

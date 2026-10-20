@@ -1,0 +1,1 @@
+import{UX as e,WX as t}from"../../../chunks/app-Du_VfHOa.js";export{e as emitKernelInvalidations,t as kernelInvalidationRule};

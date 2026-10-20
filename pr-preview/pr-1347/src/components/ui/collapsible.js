@@ -1,0 +1,1 @@
+"use client";import{GP as e,UP as t,WP as n}from"../../../chunks/app-Du_VfHOa.js";export{t as Collapsible,n as CollapsibleContent,e as CollapsibleTrigger};

@@ -1,0 +1,1 @@
+import{IP as e,LP as t}from"../../chunks/app-Du_VfHOa.js";export{e as defineVariant,t as defineVariantFacet};

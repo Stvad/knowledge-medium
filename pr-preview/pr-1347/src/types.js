@@ -1,0 +1,1 @@
+import{k8 as e}from"../chunks/app-Du_VfHOa.js";export{e as isChildBackedPropertiesWorkspace};

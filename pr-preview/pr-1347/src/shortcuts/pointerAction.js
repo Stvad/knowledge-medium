@@ -1,0 +1,1 @@
+import{Fk as e,Ik as t}from"../../chunks/app-Du_VfHOa.js";export{e as dispatchPointerAction,t as setPointerActionDispatcher};

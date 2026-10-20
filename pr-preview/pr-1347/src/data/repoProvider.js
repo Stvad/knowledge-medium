@@ -1,0 +1,1 @@
+import{Gz as e,Jz as t,Kz as n,Qz as r,Uz as i,Wz as a,Xz as o,Yz as s,Zz as c,qz as l}from"../../chunks/app-Du_VfHOa.js";export{i as BATCH_SENTINEL_SQL,a as closePowerSyncDbIfOpen,e as ensurePowerSyncReady,n as getActiveSyncResolver,l as getActiveUserId,t as getPowerSyncDb,s as initializeClientSchema,o as isRemoteSyncActive,c as syncObserverDepsFor,r as syncResolverForUser};

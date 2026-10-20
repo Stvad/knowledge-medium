@@ -1,0 +1,1 @@
+import{Dk as e,Ek as t}from"../chunks/app-Du_VfHOa.js";export{t as appUpdate,e as useAppUpdateAvailable};

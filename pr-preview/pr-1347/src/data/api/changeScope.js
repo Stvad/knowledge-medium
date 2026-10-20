@@ -1,0 +1,1 @@
+import{_et as e,det as t,fet as n,get as r,het as i,met as a,pet as o,uet as s,vet as c}from"../../../chunks/app-Du_VfHOa.js";export{s as CHANGE_SCOPE_POLICIES,t as ChangeScope,n as isChangeScope,o as policyForScope,a as scopeAllowedInReadOnly,i as scopeIsUndoable,r as scopePoliciesEquivalent,e as scopeUploadsToServer,c as sourceForScope};

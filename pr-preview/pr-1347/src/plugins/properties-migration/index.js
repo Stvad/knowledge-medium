@@ -1,0 +1,1 @@
+import{ca as e,ia as t}from"../../../chunks/app-Du_VfHOa.js";export{e as migratePropertiesToBlocksAction,t as propertiesMigrationPlugin};
