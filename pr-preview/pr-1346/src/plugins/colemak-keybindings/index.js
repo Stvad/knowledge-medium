@@ -1,1 +1,0 @@
-import{hy as e,my as t,py as n}from"../../../chunks/app-j4aTQO0I.js";export{n as COLEMAK_KEYBINDINGS_PLUGIN_ID,t as colemakKeybindingsPlugin,e as colemakMovementKeybindingOverrides};
