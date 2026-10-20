@@ -3,6 +3,7 @@ import { deriveContentKey } from '../crypto/contentKey.js'
 import { objectKeysOf } from '../keys/keyStore.js'
 import { mintWorkspaceKey, type MintedWorkspaceKey } from '../keys/mintWorkspaceKey.js'
 import { attachmentCleanerLockName } from './attachmentCleaner.js'
+import { resealWorkspace } from './reseal.js'
 import { rawNameOf } from './bundle/attachmentParts.js'
 import { sha256Hex, type BundleFolder } from './bundle/bundleParts.js'
 import { bundleRecordOf, InMemoryBundleRecordStore, type BundleRecord } from './bundle/bundleRecord.js'
@@ -52,6 +53,7 @@ let awake: {held: number; released: number}
 const deps = (overrides: Partial<CleaningDeps> = {}): CleaningDeps => ({
   userId: USER,
   workspaceId: WS,
+  server,
   bundles,
   attachments: storage.io,
   canReadFolder: folder => canRead(folder),
@@ -127,6 +129,8 @@ beforeEach(async () => {
     attachments: {source: storage.io, confirmNoVerifiedSource: async () => {}},
   })
   record = bundleRecordOf(await verifyBundle({folder, workspaceId: WS, mediaHashOf: fakeMediaHashOf}), folder)
+  // Past the purge every row is sealed: the proof reads its media from them.
+  await resealWorkspace({server, workspaceId: WS, wk: minted.record.wk})
   server.setPhase(WS, 'cleaning')
 })
 
@@ -226,7 +230,7 @@ describe('runCleaningPass with this device\'s bundle record', () => {
     expect(reopenPrompts.map(prompt => prompt.problem)).toEqual([expect.stringMatching(/copies are missing or damaged/)])
   })
 
-  it("rebuilds media the bundle's rows hold that this device's view hasn't caught up on", async () => {
+  it("rebuilds media the server's rows hold that this device's view hasn't caught up on", async () => {
     // This device's blocks lack the row, and Storage lost its object: only the bundle holds the bytes.
     storage.media.splice(storage.media.findIndex(ref => ref.contentHash === rawHash), 1)
     storage.objects.delete(rawNameOf(rawHash))
@@ -392,7 +396,7 @@ describe('runCleaningPass with this device\'s bundle record', () => {
     expect(finishCalls()).toBe(0)
   })
 
-  it('holds keepAwake around the cleaner run and releases it', async () => {
+  it('holds keepAwake around the server read and the cleaner run, releasing each', async () => {
     lock = async (_name, runIt) => {
       events.push('lock:start')
       const value = await runIt()
@@ -400,14 +404,14 @@ describe('runCleaningPass with this device\'s bundle record', () => {
       return {acquired: true, value}
     }
     await run()
-    expect(events.slice(0, 4)).toEqual(['awake', 'lock:start', 'lock:end', 'release'])
-    expect(awake).toEqual({held: 1, released: 1})
+    expect(events.slice(0, 6)).toEqual(['awake', 'release', 'awake', 'lock:start', 'lock:end', 'release'])
+    expect(awake).toEqual({held: 2, released: 2})
   })
 
   it('releases keepAwake when the cleaner throws', async () => {
     lock = async () => { throw new Error('lock exploded') }
     await expect(run()).rejects.toThrow('lock exploded')
-    expect(awake).toEqual({held: 1, released: 1})
+    expect(awake).toEqual({held: 2, released: 2})
     expect(finishCalls()).toBe(0)
   })
 
@@ -441,13 +445,13 @@ describe('runCleaningPass without a bundle record', () => {
     // The adopted bundle was used: its archived object was deleted against it.
     expect(storage.deletes).toContain('nested/thing')
     expect(finishCalls()).toBe(0)
-    // Each pick is checked on its own, under the screen lock; the pass takes it once more.
+    // Each pick is checked on its own, under the screen lock; the server read and the pass take it once each.
     expect(events.slice(0, 12)).toEqual([
       'choose', 'status:checking-bundle', 'awake', 'release',
       'choose', 'status:checking-bundle', 'awake', 'release',
       'choose', 'status:checking-bundle', 'awake', 'release',
     ])
-    expect(awake).toEqual({held: 4, released: 4})
+    expect(awake).toEqual({held: 5, released: 5})
   })
 
   it('ends on a cancellation during the check rather than asking again', async () => {

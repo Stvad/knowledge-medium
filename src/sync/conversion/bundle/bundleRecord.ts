@@ -8,7 +8,6 @@
  */
 
 import { IdbKeyedStore, idbRecordId } from '@/utils/idbKeyedStore.js'
-import type { MediaRef } from '../attachmentCleaner.js'
 import type { BundleFolder } from './bundleParts.js'
 import type { VerifiedBundle } from './verifyBundle.js'
 
@@ -26,15 +25,12 @@ export interface BundleRecord {
   /** The Storage paths archived under `other-objects/`: the only objects the
    *  cleaner may delete without converting them. */
   readonly otherObjectPaths: readonly string[]
-  /** The bundle's media blocks, which the cleaner proves along with this
-   *  device's own. */
-  readonly media: readonly MediaRef[]
   /** The bundle's folder: a `FileSystemDirectoryHandle` in the browser. */
   readonly folder: BundleFolder
 }
 
 /** From what the read-back counted, not what the manifest claims. */
-export const bundleRecordOf = ({manifest, manifestSha256, counted, media}: VerifiedBundle, folder: BundleFolder): BundleRecord => ({
+export const bundleRecordOf = ({manifest, manifestSha256, counted}: VerifiedBundle, folder: BundleFolder): BundleRecord => ({
   workspaceId: manifest.workspaceId,
   manifestSha256,
   through: counted.through,
@@ -43,7 +39,6 @@ export const bundleRecordOf = ({manifest, manifestSha256, counted, media}: Verif
   exportedAt: manifest.exportedAt,
   noVerifiedSource: manifest.noVerifiedSource,
   otherObjectPaths: manifest.otherObjects.map(entry => entry.path),
-  media,
   folder,
 })
 
@@ -69,13 +64,11 @@ export class InMemoryBundleRecordStore implements BundleRecordStore {
   }
 }
 
-/** A stored record, or null for one without the attachment lists or the media:
- *  its bundle predates them, so it can't vouch for the cleanup. */
+/** A stored record, or null for one without the attachment lists: its bundle
+ *  predates the attachment parts, so it can't vouch for the cleanup. */
 export const storedBundleRecord = (stored: unknown): BundleRecord | null => {
   const record = stored as Partial<BundleRecord> | undefined
-  if (!record || !Array.isArray(record.otherObjectPaths) || !Array.isArray(record.noVerifiedSource) || !Array.isArray(record.media)) {
-    return null
-  }
+  if (!record || !Array.isArray(record.otherObjectPaths) || !Array.isArray(record.noVerifiedSource)) return null
   return record as BundleRecord
 }
 

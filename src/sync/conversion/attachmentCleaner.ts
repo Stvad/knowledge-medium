@@ -80,9 +80,6 @@ export interface ConversionBundle {
   /** The content hashes the manifest lists as having no verified source: the
    *  only ones with no `attachments/` entry. */
   readonly noVerifiedSource: ReadonlySet<string>
-  /** The media blocks of the server's rows the bundle holds. The proof covers
-   *  them as well as this device's own, whose view may not have caught up. */
-  readonly media: readonly MediaRef[]
   /** The `other-objects/` entry archived for `path`. */
   readArchivedObject(path: ObjectPath): Promise<Uint8Array<ArrayBuffer> | null>
   /** The `attachments/<hex>` entry for `contentHash`. */
@@ -100,6 +97,10 @@ export interface CleanAttachmentsInput {
   /** The workspace's `wk_canary`, as the server holds it now. */
   readonly canary: string
   readonly bundle: ConversionBundle | null
+  /** The workspace's media blocks, read from the server's own rows: the proof
+   *  covers exactly these. Without them each pass reads this device's
+   *  (`io.mediaBlocks`), which may lag the server. */
+  readonly media?: readonly MediaRef[]
   readonly signal?: AbortSignal
   readonly onProgress?: (progress: CleanerProgress) => void
 }
@@ -246,16 +247,6 @@ type OutsideCopy =
   | {readonly kind: 'unreadable'}
 
 type MediaVerdict = 'kept' | 'rebuilt' | 'unverified' | 'unrecoverable'
-
-/** This device's media blocks and the bundle's, each pairing of block and hash
- *  once. A block whose hash differs between the two is proved under both:
- *  either view may be the stale one. */
-const withBundleMedia = (own: readonly MediaRef[], bundle: ConversionBundle | null): readonly MediaRef[] => {
-  if (!bundle) return own
-  const pairing = (ref: MediaRef) => `${ref.blockId}\n${ref.contentHash}`
-  const held = new Set(own.map(pairing))
-  return [...own, ...bundle.media.filter(ref => !held.has(pairing(ref)))]
-}
 
 const bytesEqual = (a: Uint8Array, b: Uint8Array): boolean => {
   if (a.length !== b.length) return false
@@ -412,7 +403,7 @@ export const cleanAttachments = async (input: CleanAttachmentsInput): Promise<Cl
     signal?.throwIfAborted()
     onProgress?.({phase: 'listing', pass})
     const listing = await io.listObjects(signal)
-    media = withBundleMedia(await io.mediaBlocks(), bundle)
+    media = input.media ?? (await io.mediaBlocks())
     const mediaHashes = new Set(media.map(m => m.contentHash))
     const keyedNames = await indexKeyedNames(new Set([...mediaHashes, ...listing.map(hashNamedBy)]), keys)
     mediaNameByHash = new Map(

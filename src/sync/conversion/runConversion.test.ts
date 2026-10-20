@@ -16,7 +16,7 @@ import {
 import { rawNameOf } from './bundle/attachmentParts.js'
 import { keyOf, mediaPropertiesJson, sealFor, seedMedia, seedPlaintext, WS } from './test/conversionFixtures.js'
 import { FakeConversionServer } from './test/fakeConversionServer.js'
-import { emptyBundleRecord, FAKE_LOCAL_DB, flowDeps, passingEnvironment, USER } from './test/flowFixtures.js'
+import { emptyBundleRecord, FAKE_LOCAL_DB, flowDeps, passingEnvironment, pastThePurge, USER } from './test/flowFixtures.js'
 import { MemoryBundleFolder } from './test/memoryBundleFolder.js'
 import type { BundleFolder } from './bundle/bundleParts.js'
 import { InMemoryBundleRecordStore } from './bundle/bundleRecord.js'
@@ -138,6 +138,7 @@ const earlierAttempt = async () => {
 }
 
 const PLAINTEXT_READ = {kind: 'read' as const, state: {encryptionMode: 'none', conversionPhase: null, wkCanary: null, ownerUserId: USER}}
+
 
 describe('runConversion: preflight → key → flip', () => {
   it('flips under a key the user typed back, stores it, and marks the local row', async () => {
@@ -636,8 +637,7 @@ describe('runConversion: every run', () => {
   it('resumes from the stage the server shows', async () => {
     const minted = await mintWorkspaceKey(WS)
     await keyStore.put(USER, WS, minted.record)
-    server.flip(WS, minted.canary)
-    server.setPhase(WS, 'cleaning')
+    await pastThePurge(server, minted.record.wk, minted.canary)
     await bundles.put(USER, WS, emptyBundleRecord())
 
     expect(await run()).toMatchObject({kind: 'done'})
@@ -650,8 +650,7 @@ describe('runConversion: finishing', () => {
   beforeEach(async () => {
     const minted = await mintWorkspaceKey(WS)
     await keyStore.put(USER, WS, minted.record)
-    server.flip(WS, minted.canary)
-    server.setPhase(WS, 'cleaning')
+    await pastThePurge(server, minted.record.wk, minted.canary)
     await bundles.put(USER, WS, emptyBundleRecord())
   })
   const finishes = () => server.calls.filter(call => call.method === 'finishConversion').length

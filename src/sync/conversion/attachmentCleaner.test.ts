@@ -369,32 +369,22 @@ describe('cleanAttachments: the proof', () => {
     expect(report.proof).toEqual({kind: 'passed', unrecoverable: [{contentHash: hash, blockIds: ['block-1']}]})
   })
 
-  it("proves the bundle's media too, which this device's own view may not have caught up on", async () => {
+  it("proves exactly the media blocks the caller read from the server, not this device's view", async () => {
     const store = createFakeAttachmentStorage()
     const photo = utf8('a photo')
     const hash = await hashOf(photo)
-    // Not in this device's blocks yet: the bundle's rows carry it, and its only copy.
-    const bundle = createFakeBundle(new Map(), new Map([[hash, photo]]), new Set(), [{blockId: 'block-1', contentHash: hash}])
-    const report = await clean(store, bundle)
+    const mediaBlocks = vi.spyOn(store.io, 'mediaBlocks')
+    // This device's view lacks the block; its only copy is in the bundle.
+    const report = await cleanAttachments({
+      workspaceId: WS,
+      io: store.io,
+      ...keys,
+      bundle: createFakeBundle(new Map(), new Map([[hash, photo]])),
+      media: [{blockId: 'block-1', contentHash: hash}],
+    })
     expect(report.rebuilt).toEqual([hash])
     expect(await holdsKeyed(store, photo)).toBe(true)
-  })
-
-  it("proves a block under the bundle's hash as well as this device's, since either may be the newer", async () => {
-    const store = createFakeAttachmentStorage()
-    const before = utf8('the attachment this device last saw')
-    const current = utf8('the attachment the server holds')
-    // This device's row still carries the older hash, whose object is in place;
-    // the current one's only copy is in the bundle.
-    store.media.push({blockId: 'block-1', contentHash: await hashOf(before)})
-    store.objects.set(await keyedName(before), await seal(before))
-    const bundle = createFakeBundle(new Map(), new Map([[await hashOf(current), current]]), new Set(), [
-      {blockId: 'block-1', contentHash: await hashOf(current)},
-    ])
-    const report = await clean(store, bundle)
-    expect(report.rebuilt).toEqual([await hashOf(current)])
-    expect(await holdsKeyed(store, current)).toBe(true)
-    expect(report.proof).toEqual({kind: 'passed', unrecoverable: []})
+    expect(mediaBlocks).not.toHaveBeenCalled()
   })
 
   it('with a copy outside Storage, a plaintext occupant is replaced from that copy', async () => {

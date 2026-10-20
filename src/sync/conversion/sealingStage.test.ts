@@ -102,6 +102,13 @@ const crashMidReseal = () => {
   }
 }
 
+/** The block pages the sealing stage read: those up to the purge, before the
+ *  cleaning stage reads the rows for its media. */
+const sealingReads = () => {
+  const purged = server.calls.map(call => call.method).lastIndexOf('purgeWorkspaceHistory')
+  return server.calls.slice(0, purged).filter(call => call.method === 'readBlockPage')
+}
+
 describe('the sealing stage', () => {
   it('takes and verifies a bundle, re-seals, verifies, purges, then upgrades the pin', async () => {
     const through = Math.max(...server.history(WS).map(row => row.event_id))
@@ -224,7 +231,7 @@ describe('the sealing stage', () => {
 
     expect(ui.folderReasons).toEqual([null, 'changed'])
     // The server is as the first pass left it, so the re-seal and verify don't run again.
-    expect(server.calls.filter(call => call.method === 'readBlockPage')).toHaveLength(4)
+    expect(sealingReads()).toHaveLength(4)
     const retaken = bundleFolders()[1]
     expect(retaken.text(BUNDLE_PARTS.blocks).split('\n').filter(Boolean).map(line => contentColumnsOf(JSON.parse(line))))
       .toEqual(seeded.map(contentColumnsOf))
@@ -362,7 +369,7 @@ describe('the sealing stage', () => {
     expect(await run()).toMatchObject({kind: 'done'})
     expect(ui.folderReasons).toEqual([null, 'stale'])
     // Something wrote the workspace, so the second pass re-seals and verifies again.
-    expect(server.calls.filter(call => call.method === 'readBlockPage')).toHaveLength(8)
+    expect(sealingReads()).toHaveLength(8)
   })
 
   it('stops after repeated refusals rather than retry for ever', async () => {

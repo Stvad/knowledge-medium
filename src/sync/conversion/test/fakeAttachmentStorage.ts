@@ -65,13 +65,11 @@ export const createFakeBundle = (
   archived: ReadonlyMap<ObjectPath, Uint8Array<ArrayBuffer>> = new Map(),
   attachments: ReadonlyMap<string, Uint8Array<ArrayBuffer>> = new Map(),
   noVerifiedSource: ReadonlySet<string> = new Set(),
-  media: readonly MediaRef[] = [],
 ): ConversionBundle & {readable: boolean} => {
   const bundle = {
     readable: true,
     archivedPaths: new Set(archived.keys()),
     noVerifiedSource,
-    media,
     readArchivedObject: async (path: ObjectPath) => {
       if (!bundle.readable) throw new Error('the bundle folder is not readable')
       return archived.get(path)?.slice() ?? null

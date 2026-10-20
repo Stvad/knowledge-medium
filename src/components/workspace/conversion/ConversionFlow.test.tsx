@@ -8,7 +8,7 @@ import type { ConversionFlowDeps, ConversionUi } from '@/sync/conversion/runConv
 import { seedMedia, seedPlaintext, WS } from '@/sync/conversion/test/conversionFixtures'
 import { createFakeAttachmentStorage, type FakeAttachmentStorage } from '@/sync/conversion/test/fakeAttachmentStorage'
 import { FakeConversionServer } from '@/sync/conversion/test/fakeConversionServer'
-import { emptyBundleRecord, flowDeps, USER } from '@/sync/conversion/test/flowFixtures'
+import { emptyBundleRecord, flowDeps, pastThePurge, USER } from '@/sync/conversion/test/flowFixtures'
 import { MemoryBundleFolder } from '@/sync/conversion/test/memoryBundleFolder'
 import { ConversionFlow, PreflightPrompt } from './ConversionFlow'
 import type { ConversionSetup } from './conversionFlowDeps'
@@ -85,8 +85,7 @@ describe('ConversionFlow', () => {
   it('offers no Stop while this device decrypts the workspace, which runs to its end', async () => {
     const minted = await mintWorkspaceKey(WS)
     await keyStore.put(USER, WS, minted.record)
-    server.flip(WS, minted.canary)
-    server.setPhase(WS, 'cleaning')
+    await pastThePurge(server, minted.record.wk, minted.canary)
     await bundles.put(USER, WS, emptyBundleRecord())
     let upgrade!: () => void
     renderFlow({kind: 'ready', makeDeps: makeDepsWith({upgradePin: () => new Promise(resolve => (upgrade = () => resolve({ok: true})))})})
@@ -140,8 +139,7 @@ describe('ConversionFlow', () => {
   it('offers no Stop while the finish request is out', async () => {
     const minted = await mintWorkspaceKey(WS)
     await keyStore.put(USER, WS, minted.record)
-    server.flip(WS, minted.canary)
-    server.setPhase(WS, 'cleaning')
+    await pastThePurge(server, minted.record.wk, minted.canary)
     await bundles.put(USER, WS, emptyBundleRecord())
     let commit!: () => void
     const finish = server.finishConversion.bind(server)
@@ -208,8 +206,7 @@ describe('ConversionFlow', () => {
   it('lists what the cleanup left behind, and finishes only once the user accepts it', async () => {
     const minted = await mintWorkspaceKey(WS)
     await keyStore.put(USER, WS, minted.record)
-    server.flip(WS, minted.canary)
-    server.setPhase(WS, 'cleaning')
+    await pastThePurge(server, minted.record.wk, minted.canary)
     await bundles.put(USER, WS, emptyBundleRecord())
     // Uploaded from outside the app after the bundle was taken.
     storage.objects.set('stray', new Uint8Array([9]))

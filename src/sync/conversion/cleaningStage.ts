@@ -22,7 +22,9 @@ import { stoppableFolder, type BundleFolder } from './bundle/bundleParts.js'
 import { bundleRecordOf, type BundleRecord, type BundleRecordStore } from './bundle/bundleRecord.js'
 import { BundleInvalid, checkManifest, verifyBundle } from './bundle/verifyBundle.js'
 import type { ConversionAttachmentsIO } from './conversionAttachments.js'
+import type { ConversionServer } from './conversionServer.js'
 import type { ConversionLock } from './runLock.js'
+import { serverMediaBlocks } from './sealing.js'
 import { reopenRecordedFolder, withScreenAwake, type BundlePrompts } from './sealingStage.js'
 
 /** What stays unsealed or is lost. Not the sealed copy of a raw object no block
@@ -53,6 +55,8 @@ export type CleaningStatus =
 export interface CleaningDeps {
   readonly userId: string
   readonly workspaceId: string
+  /** Where the proof's media blocks come from: the server's own rows. */
+  readonly server: ConversionServer
   readonly bundles: BundleRecordStore
   readonly attachments: ConversionAttachmentsIO
   readonly canReadFolder: (folder: BundleFolder) => Promise<boolean>
@@ -140,7 +144,6 @@ export const conversionBundleOf = (record: BundleRecord, folder: BundleFolder | 
   return {
     archivedPaths: new Set(record.otherObjectPaths),
     noVerifiedSource: new Set(record.noVerifiedSource),
-    media: record.media,
     readArchivedObject: path => readEntry(target, OTHER_OBJECTS_DIR, otherObjectNameOf(path), signal),
     readAttachment: contentHash => readEntry(target, ATTACHMENTS_DIR, rawNameOf(contentHash), signal),
   }
@@ -164,6 +167,9 @@ export const runCleaningPass = async (
   const keys = objectKeysOf(key)
   if (!keys) throw new Error('conversion: the workspace key on this device has no K_id')
   let record = (await deps.bundles.get(userId, workspaceId)) ?? (await adoptBundle(deps))
+  ui.status({kind: 'cleaning', progress: null})
+  const media = await withScreenAwake(deps, () =>
+    serverMediaBlocks(deps.server, workspaceId, keys.cek, deps.attachments.mediaHashOf, signal))
 
   let report: CleanerReport | null = null
   for (let repicks = 0, problem: string | null = null; ; repicks++) {
@@ -183,6 +189,7 @@ export const runCleaningPass = async (
         keys,
         canary,
         bundle,
+        media,
         signal,
         onProgress: progress => ui.status({kind: 'cleaning', progress}),
       })))

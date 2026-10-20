@@ -9,6 +9,7 @@ import { open } from '../crypto/aead.js'
 import { validateCanary } from '../crypto/canary.js'
 import { ENVELOPE_PREFIX, GCM_TAG_BYTES, NONCE_BYTES } from '../crypto/envelope.js'
 import { encodeForWire, SEALED_COLUMNS, type GetCek, type WireBlockColumns } from '../transform.js'
+import type { MediaRef } from './attachmentCleaner.js'
 import type { ContentColumns, ConversionServer, ResealPatch, ServerBlockRow } from './conversionServer.js'
 import { keysetPages } from './pages.js'
 
@@ -195,6 +196,34 @@ export const serverPages = (
     pageSize,
     signal,
   })
+
+/** The workspace's media blocks as the server holds them, each row opened under
+ *  `wk`: the set a proof covers, which neither this device's view nor a bundle
+ *  can stand in for, since either may be stale. A row that doesn't open fails
+ *  the read rather than be left out, and so does a pass that didn't see every
+ *  row. */
+export const serverMediaBlocks = async (
+  server: ConversionServer,
+  workspaceId: string,
+  wk: CryptoKey,
+  mediaHashOf: (propertiesJson: string) => string | null,
+  signal?: AbortSignal,
+): Promise<MediaRef[]> => {
+  const media: MediaRef[] = []
+  let seen = 0
+  for await (const page of serverPages(server, workspaceId, RESEAL_PAGE_SIZE, signal)) {
+    const opened = await Promise.all(page.map(row => openSealed(wk, row, contentColumnsOf(row))))
+    for (const [i, row] of page.entries()) {
+      const columns = opened[i]
+      if (!columns) throw new Error(`conversion: block ${row.id} does not open under the workspace key`)
+      const contentHash = mediaHashOf(columns.properties_json)
+      if (contentHash) media.push({blockId: row.id, contentHash})
+    }
+    seen += page.length
+  }
+  await requireWholeWorkspace(server, workspaceId, wk, seen)
+  return media
+}
 
 export interface SealTarget {
   /** The server row as just read: its identity binds the AAD, and its version

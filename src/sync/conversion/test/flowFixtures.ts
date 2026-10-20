@@ -4,6 +4,7 @@ import type { BundleRecord } from '../bundle/bundleRecord.js'
 import { InMemoryBundleRecordStore } from '../bundle/bundleRecord.js'
 import { BUNDLE_PARTS } from '../bundle/manifest.js'
 import { InMemoryFlipAttempts } from '../flipAttempts.js'
+import { resealWorkspace } from '../reseal.js'
 import type { PreflightEnvironment } from '../preflight.js'
 import type { ConversionLock } from '../runLock.js'
 import type { ConversionFlowDeps, ConversionUi } from '../runConversion.js'
@@ -76,6 +77,13 @@ export const emptyBundleRecord = (): BundleRecord => {
     exportedAt: '2026-10-19T00:00:00.000Z',
     noVerifiedSource: [],
     otherObjectPaths: [],
-    media: [],
   }
+}
+
+/** The server as the sealing stage leaves it: flipped, every row sealed, and
+ *  the history purged into the cleaning phase. */
+export const pastThePurge = async (server: FakeConversionServer, wk: CryptoKey, canary: string): Promise<void> => {
+  server.flip(WS, canary)
+  await resealWorkspace({server, workspaceId: WS, wk})
+  server.setPhase(WS, 'cleaning')
 }
