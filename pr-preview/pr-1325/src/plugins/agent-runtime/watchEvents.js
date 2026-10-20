@@ -1,1 +1,1 @@
-import{Id as e,Ld as t}from"../../../chunks/app-BtwKwYSG.js";export{e as createWatchEventsRegistry,t as watchEventsRegistry};
+import{Id as e,Ld as t}from"../../../chunks/app-zNHMIuBt.js";export{e as createWatchEventsRegistry,t as watchEventsRegistry};

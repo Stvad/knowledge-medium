@@ -1,1 +1,1 @@
-import{GC as e}from"../../../chunks/app-BtwKwYSG.js";export{e as Label};
+import{KC as e}from"../../../chunks/app-zNHMIuBt.js";export{e as Label};

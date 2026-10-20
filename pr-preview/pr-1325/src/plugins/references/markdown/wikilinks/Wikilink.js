@@ -1,1 +1,1 @@
-import{km as e}from"../../../../../chunks/app-BtwKwYSG.js";export{e as Wikilink};
+import{km as e}from"../../../../../chunks/app-zNHMIuBt.js";export{e as Wikilink};
