@@ -11,7 +11,7 @@ A workspace's key is lost: no device holds it and no saved copy survives. Recove
 - the content, tree, timestamps and authorship become the recovery point's;
 - attachments are rebuilt under the new key.
 
-**It's point-in-time, not lossless.** Everything written after the recovery point is lost, because nothing else holds that plaintext. The flow says so, with the point's time, before it starts. That includes records an extension could otherwise re-fetch: a post-point record's id holds a recovery tombstone, and an extension that refuses tombstones (`getOrCreateTypedChild`) won't re-create it (open question 3).
+**It's point-in-time, not lossless.** Everything written after the recovery point is lost, because nothing else holds that plaintext. The flow says so, with the point's time, before it starts. That includes records an extension could otherwise re-fetch: a post-point record's id holds a recovery tombstone, and an extension that refuses tombstones (`getOrCreateTypedChild`) won't re-create it (open question 2).
 
 It applies to **any** e2ee workspace with a recovery point, whether it was converted (`docs/workspace-e2ee-conversion.md`) or created e2ee. A recovery point is a folder holding `blocks.jsonl` (every block row, every column, plaintext except rows its manifest lists as unreadable), the plaintext of every media block, and a manifest. It is one of:
 
@@ -104,7 +104,8 @@ Each RPC publishes them to transaction-local settings (`km.write_wk_generation`,
 **What it doesn't cover.**
 
 - **A `DELETE` on `blocks`** doesn't fire this trigger. Clients never delete (there's no delete upload trigger in `clientSchema.ts`).
-  - **During `recovering`,** a separate BEFORE DELETE trigger refuses deleting a row of the workspace with `23K01`, except as `postgres`, so `delete_workspace`'s cascade still works. Otherwise an operator's hard delete between the restore's pass and `finish_recovery` would drop a point row silently, since a pass that never saw the row counts it neither seen nor present.
+  - **During `recovering`,** a separate BEFORE DELETE trigger refuses deleting a row of the workspace with `23K01`, whoever deletes it, an operator's `postgres` session included. Otherwise a hard delete between the restore's pass and `finish_recovery` would drop a point row silently, since a pass that never saw the row counts it neither seen nor present.
+  - **The one exception** is `delete_workspace`'s cascade. That function sets a transaction-local `km.delete_workspace = ws`, as the flip sets its own, and the trigger lets that workspace's rows go.
   - **Outside it,** a delete after the restore is out of scope, as any operator delete is.
 - **Storage uploads** aren't fenced. An old-key object lands at an old-`K_id` path that no block's address derives to any more ([§5](#5-attachments)).
 
@@ -182,7 +183,7 @@ The point is verified by #1290's bundle verifier (conversion §6.3 step 3), befo
 Two checks differ from the bundle's:
 
 - **The row count** is checked against the manifest's block count, not the server's, since the server has moved on. Every row the point lacks is tombstoned, so a truncated file must never pass.
-- **The manifest's `properties_migration`** must equal the workspace's current state. The switch is forward-only, so rows from an earlier stage would read wrong (open question 2). The bundle records it at the flip.
+- **The manifest's `properties_migration`** must equal the workspace's current state. The switch is forward-only, so rows from an earlier stage would read wrong (open question 1). The bundle records it at the flip.
   - **The state can't move under a recovery.** `workspaces_prevent_properties_migration_change` refuses the switch while the workspace has any `workspace_conversions` row. That's one more condition in the trigger, and it also enforces conversion runbook step 7's "never overlap".
   - **Each attempt re-checks it** after `begin_recovery_attempt`, so a switch that landed between preflight and the re-key is caught before any restore write.
 
@@ -534,12 +535,16 @@ A row that doesn't open under the key, such as garbage a member wrote, keeps its
 
 ## 10. Fleet gate
 
-Conversion runbook step 1 requires #1302's client half on **every** device before the first production conversion. With the server fence, **that's no longer needed for safety**. A build without the client half fails closed in a re-keyed workspace:
+Conversion runbook step 1 requires #1302's client half on **every** device before the first production conversion. **That stays.**
+
+**What the server fence does cover:** a device running only builds without the client half. Such a device fails closed in a re-keyed workspace:
 
 - its writes carry no stamp, so they're refused and quarantined, whatever key it holds and however it got it;
 - its restored rows fail to decrypt.
 
-After updating, its record has no `adoptedGeneration`, so entry sends it through adoption once ([§6.2](#62-key-records)). What remains is the safety net itself: #1302's server half and flow must exist before the first conversion (runbook step 1's last bullet). Relaxing runbook step 1 is open question 1.
+After updating, its record has no `adoptedGeneration`, so entry sends it through adoption once ([§6.2](#62-key-records)).
+
+**What it doesn't cover:** an old tab running beside an updated one on the same device. The two share one local database. The old tab neither stamps nor holds the fence lock, so it can queue a stale edit after adoption's quarantine and drain. That keeps the restored row from materializing, and the updated tab could then edit the stale value at the new generation before the old write's refusal repairs it. Nothing local can fence code that predates the fence, so every device, and every tab on it, must run the client half first.
 
 ## 11. Alternatives considered
 
@@ -602,14 +607,12 @@ These are met differently from how the issue words them:
 | during `sealing`, restore from the bundle exactly as after the purge | content only; anything else means the bundle is stale and is re-taken | [§7](#7-key-loss-during-sealing) |
 | clear undo before admitting edits | every tab that held the workspace at the old generation reloads, and the adopting tab reloads after a re-key; undo goes with them | [§6.1](#61-the-tabs-generation) |
 | (from #1293) held writes upload after the pin upgrade | after a sealing re-key they're quarantined, retryable | [§7](#7-key-loss-during-sealing) |
-| fleet gate before the first conversion | not needed for safety; open question 1 | [§10](#10-fleet-gate) |
 
 ## 13. Open questions
 
-1. **Relax conversion runbook step 1?** Recommendation: yes. #1302's server half and flow must exist before the first conversion; its client half need not be on every device ([§10](#10-fleet-gate)). This changes the conversion doc, so it waits for a yes.
-2. **A point from before a properties-as-blocks switch.** [§4.1](#41-the-point-verified-and-bound) refuses it. If that's the only point left, the workspace can't be recovered. Recommendation: refuse, and have the switch prompt for a new step-14 point once it's done. The alternative is to re-run the switch's backfill after the restore, which first needs that backfill to be safe to re-run.
-3. **Extension records after the point.** Their ids hold recovery tombstones, and `getOrCreateTypedChild` refuses a tombstone, so an extension won't re-create a record it could re-fetch. Recommendation: accept, since it's within point-in-time. The alternative is a recovery tombstone that `classifyOccupant` treats as absent, which is a kernel change.
-4. **The synthesis rule's scope.** Recommendation: only re-keyed workspaces, as [§8](#8-derived-ids-across-a-k_id-change) says. Applying it everywhere would also honour a deleted hand-made definition of the same name. That may be right, but it changes behaviour for every workspace.
+1. **A point from before a properties-as-blocks switch.** [§4.1](#41-the-point-verified-and-bound) refuses it. If that's the only point left, the workspace can't be recovered. Recommendation: refuse, and have the switch prompt for a new step-14 point once it's done. The alternative is to re-run the switch's backfill after the restore, which first needs that backfill to be safe to re-run.
+2. **Extension records after the point.** Their ids hold recovery tombstones, and `getOrCreateTypedChild` refuses a tombstone, so an extension won't re-create a record it could re-fetch. Recommendation: accept, since it's within point-in-time. The alternative is a recovery tombstone that `classifyOccupant` treats as absent, which is a kernel change.
+3. **The synthesis rule's scope.** Recommendation: only re-keyed workspaces, as [§8](#8-derived-ids-across-a-k_id-change) says. Applying it everywhere would also honour a deleted hand-made definition of the same name. That may be right, but it changes behaviour for every workspace.
 
 ## 14. Tracking
 
@@ -636,7 +639,7 @@ These are met differently from how the issue words them:
   - `finish_recovery` goes to `return_phase` (`sealing`, `cleaning`, or no row) and sets `restored_generation`;
   - a create whose touch reaches another workspace's row while carrying an attempt is refused;
   - the properties-as-blocks switch is refused while a `workspace_conversions` row exists;
-  - a block delete in a `recovering` workspace is refused, except as `postgres` (`delete_workspace`'s cascade);
+  - a block delete in a `recovering` workspace is refused, a `postgres` session's included, except `delete_workspace`'s cascade;
 - the recovery runs end to end on a scratch workspace:
   - every block id is kept, and every derived id resolves;
   - moved, deleted and undeleted rows return to the point's state;
