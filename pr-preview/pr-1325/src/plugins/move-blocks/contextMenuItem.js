@@ -1,1 +1,1 @@
-import{Um as e,Wm as t}from"../../../chunks/app-fBWL315v.js";export{e as MOVE_BLOCKS_CONTEXT_MENU_ITEM_ID,t as moveBlocksContextMenuItem};
+import{Um as e,Wm as t}from"../../../chunks/app-AqB5dqed.js";export{e as MOVE_BLOCKS_CONTEXT_MENU_ITEM_ID,t as moveBlocksContextMenuItem};

@@ -1,1 +1,1 @@
-import{BD as e,HD as t,UD as n,VD as r,zD as i}from"../../chunks/app-fBWL315v.js";export{i as copyBlockIdsToClipboard,e as copyBlockToClipboard,r as copySelectedBlocksToClipboard,t as serializeBlock,n as serializeSelectedBlocks};
+import{BD as e,HD as t,UD as n,VD as r,zD as i}from"../../chunks/app-AqB5dqed.js";export{i as copyBlockIdsToClipboard,e as copyBlockToClipboard,r as copySelectedBlocksToClipboard,t as serializeBlock,n as serializeSelectedBlocks};

@@ -1,1 +1,1 @@
-import{Do as e,Eo as t,Oo as n}from"../../../chunks/app-fBWL315v.js";export{t as REMATERIALIZE_WORKSPACE_ACTION_ID,e as rematerializeWorkspaceAction,n as rematerializeWorkspaceActionContribution};
+import{Do as e,Eo as t,Oo as n}from"../../../chunks/app-AqB5dqed.js";export{t as REMATERIALIZE_WORKSPACE_ACTION_ID,e as rematerializeWorkspaceAction,n as rematerializeWorkspaceActionContribution};

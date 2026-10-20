@@ -1,1 +1,1 @@
-import{$v as e,Qv as t,ey as n,ty as r}from"../../../chunks/app-fBWL315v.js";export{t as consumeFollowOnDispatch,e as forgetFollow,n as keepFollowOnlyAt,r as rememberFollow};
+import{$v as e,Qv as t,ey as n,ty as r}from"../../../chunks/app-AqB5dqed.js";export{t as consumeFollowOnDispatch,e as forgetFollow,n as keepFollowOnlyAt,r as rememberFollow};

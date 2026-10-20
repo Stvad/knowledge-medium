@@ -1,1 +1,1 @@
-import{UO as e,WO as t}from"../chunks/app-fBWL315v.js";export{e as checkForAppUpdate,t as registerServiceWorker};
+import{UO as e,WO as t}from"../chunks/app-AqB5dqed.js";export{e as checkForAppUpdate,t as registerServiceWorker};
