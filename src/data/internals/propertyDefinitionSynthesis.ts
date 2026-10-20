@@ -55,7 +55,7 @@ import { readWorkspaceEncryptionMode } from '@/data/workspaceSchema'
 import { deriveWorkspaceIdNamespace } from '@/sync/crypto/derivedIdNamespace'
 import { getWorkspaceKeyStore } from '@/sync/keys/keyStore'
 import { getModePin, type ModePin } from '@/sync/keys/modePin'
-import { requireWorkspaceKeys, WorkspaceKeyUnavailableError } from '@/sync/keys/openWorkspaceKeys'
+import { orNullWhenKeyUnavailable, requireWorkspaceKeys } from '@/sync/keys/openWorkspaceKeys'
 import { describeNames, firstFew } from '@/utils/nameList'
 import {
   valueSurvivesChildRoundTrip,
@@ -345,17 +345,15 @@ export const resolveSynthesisNamespace = async (
   if (resolved.mode === 'plaintext') {
     return {kind: 'ready', mode: 'plaintext', namespace: PLAINTEXT_SYNTHESIZED_DEFINITION_NS}
   }
-  let contentKeyHmac: CryptoKey
-  try {
-    ({contentKeyHmac} = await requireWorkspaceKeys(getWorkspaceKeyStore(), repo.user.id, workspaceId))
-  } catch (err) {
-    if (!(err instanceof WorkspaceKeyUnavailableError)) throw err
+  const keys = await orNullWhenKeyUnavailable(
+    requireWorkspaceKeys(getWorkspaceKeyStore(), repo.user.id, workspaceId))
+  if (keys === null) {
     return {kind: 'refused', reason:
       'this device holds no content key for the encrypted workspace, so the definition ids ' +
       'it would mint could not be kept private — re-paste the workspace key, then run this again'}
   }
   return {kind: 'ready', mode: 'e2ee', namespace:
-    await deriveWorkspaceIdNamespace(contentKeyHmac, SYNTHESIZED_DEFINITION_NS_LABEL)}
+    await deriveWorkspaceIdNamespace(keys.contentKeyHmac, SYNTHESIZED_DEFINITION_NS_LABEL)}
 }
 
 /** Why this key can never have a definition of any kind, or null.

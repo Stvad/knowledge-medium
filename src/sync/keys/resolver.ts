@@ -52,7 +52,7 @@
 import type { GetCek, GetMaterializability, UploadMode } from '../transform.js'
 import type { WorkspaceKeyStore } from './keyStore.js'
 import { getModePin, type ModePin } from './modePin.js'
-import { requireWorkspaceKeys, WorkspaceKeyUnavailableError } from './openWorkspaceKeys.js'
+import { orNullWhenKeyUnavailable, requireWorkspaceKeys } from './openWorkspaceKeys.js'
 
 export interface SyncResolver {
   /** Observer: how to materialize a workspace's staging rows. */
@@ -91,17 +91,13 @@ export const createSyncResolver = (
   const serverSaysE2ee = async (workspaceId: string): Promise<boolean> =>
     (await readSyncedEncryptionMode(workspaceId)) === 'e2ee'
 
-  const getCek: GetCek = async (workspaceId) => {
+  const keysFor = (workspaceId: string) => {
     const userId = getUserId()
-    if (!userId) return null
-    return (await requireWorkspaceKeys(keyStore, userId, workspaceId)).cek
+    return userId ? requireWorkspaceKeys(keyStore, userId, workspaceId) : Promise.resolve(null)
   }
-
-  const getContentKeyHmac = async (workspaceId: string): Promise<CryptoKey | null> => {
-    const userId = getUserId()
-    if (!userId) return null
-    return (await requireWorkspaceKeys(keyStore, userId, workspaceId)).contentKeyHmac
-  }
+  const getCek: GetCek = async workspaceId => (await keysFor(workspaceId))?.cek ?? null
+  const getContentKeyHmac = async (workspaceId: string): Promise<CryptoKey | null> =>
+    (await keysFor(workspaceId))?.contentKeyHmac ?? null
 
   const getMaterializability: GetMaterializability = async (workspaceId) => {
     const userId = getUserId()
@@ -115,13 +111,7 @@ export const createSyncResolver = (
       // No key defers: the row stays staged until the gate's unlock drains it.
       // Thrown, it would abort the whole observer drain, every workspace's rows
       // with it, since this runs outside the per-row decode try/catch.
-      try {
-        await getCek(workspaceId)
-        return 'decrypt'
-      } catch (err) {
-        if (err instanceof WorkspaceKeyUnavailableError) return 'defer'
-        throw err
-      }
+      return (await orNullWhenKeyUnavailable(getCek(workspaceId))) ? 'decrypt' : 'defer'
     }
     // Unpinned: never materialize until a §8 flow resolves the first encounter.
     return 'defer'

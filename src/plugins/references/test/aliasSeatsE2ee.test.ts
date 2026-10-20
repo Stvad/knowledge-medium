@@ -143,26 +143,25 @@ describe('alias seats on an encrypted workspace', () => {
     expect((await row(seat))?.deleted).toBe(1)
   })
 
-  it('mints nothing without a key: it reports the workspace locked and writes nothing', async () => {
-    await seedWorkspaceRow('e2ee')
-    setModePin(USER, WS, 'e2ee')
-    await createPage('known', 'Known')
-    const locked = vi.fn()
-    const unsubscribe = onWorkspaceKeyUnavailable(locked)
-    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+  it('mints nothing without a key and reports the workspace locked, still deriving the links that need no new page',
+    async () => {
+      await seedWorkspaceRow('e2ee')
+      setModePin(USER, WS, 'e2ee')
+      await createPage('known', 'Known')
+      const locked = vi.fn()
+      const unsubscribe = onWorkspaceKeyUnavailable(locked)
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
 
-    try {
-      await write('src', '[[Known]] and [[Secret plans]]')
-    } finally {
-      unsubscribe()
-    }
+      try {
+        await write('src', '[[Known]] and [[Secret plans]]')
+      } finally {
+        unsubscribe()
+      }
 
-    expect(locked).toHaveBeenCalledWith(USER, WS)
-    expect(errors.mock.calls.flat().join(' ')).toMatch(/no usable workspace key/)
-    expect(await liveClaimants('Secret plans')).toEqual([])
-    // Not a partial write that drops the new page and keeps the rest.
-    await expect(targetOf('src', 'Known')).rejects.toThrow(/no reference/)
-  })
+      expect(locked).toHaveBeenCalledWith(USER, WS)
+      expect(await liveClaimants('Secret plans')).toEqual([])
+      expect(await targetOf('src', 'Known')).toBe('known')
+    })
 
   it('keeps the rest of the write when the workspace turns sealed under the lock', async () => {
     // The read phase planned under plaintext; by the time the write phase

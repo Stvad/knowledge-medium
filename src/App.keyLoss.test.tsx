@@ -25,12 +25,12 @@ import {
   __runUploadLoopForTest,
   type CompactedBlockOperation,
 } from '@/services/powersync'
-import { mintCanary } from '@/sync/crypto/canary'
-import { deriveContentKeyHmac } from '@/sync/crypto/contentKey'
+import { bootstrapWorkspace } from '@/bootstrap/workspaceBootstrap.js'
 import { hasEnvelopePrefix } from '@/sync/crypto/envelope'
-import { formatWorkspaceKey, generateWorkspaceKeyBytes, importWorkspaceKey } from '@/sync/crypto/workspaceKey'
 import { getWorkspaceKeyStore } from '@/sync/keys/keyStore'
+import { mintWorkspaceKey, type MintedWorkspaceKey } from '@/sync/keys/mintWorkspaceKey'
 import { setModePin } from '@/sync/keys/modePin'
+import { requireWorkspaceKeys } from '@/sync/keys/openWorkspaceKeys'
 import { createSyncResolver } from '@/sync/keys/resolver'
 
 const repoRef = vi.hoisted(() => ({current: undefined as Repo | undefined}))
@@ -69,22 +69,21 @@ import App from './App'
 
 let shared: TestDb
 let repo: Repo
-let keyBytes: Uint8Array<ArrayBuffer>
+let minted: MintedWorkspaceKey
 
 beforeAll(async () => { shared = await createTestDb() })
 afterAll(async () => { await shared.cleanup() })
 beforeEach(async () => {
   await resetTestDb(shared.db)
   localStorage.clear()
-  keyBytes = generateWorkspaceKeyBytes()
-  const wk = await importWorkspaceKey(keyBytes.slice())
+  minted = await mintWorkspaceKey(WS)
   await shared.db.execute(
     `INSERT INTO workspaces
        (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
      VALUES (?, 'Notes', ?, 1, 1, 'e2ee', ?, 'cell')`,
-    [WS, USER, await mintCanary(wk, WS)])
+    [WS, USER, minted.canary])
   setModePin(USER, WS, 'e2ee')
-  await getWorkspaceKeyStore().put(USER, WS, {wk, contentKeyHmac: await deriveContentKeyHmac(keyBytes.slice())})
+  await getWorkspaceKeyStore().put(USER, WS, minted.record)
   repo = createTestRepo({db: shared.db, user: {id: USER}, extensions: [referencesDataExtension]}).repo
   repoRef.current = repo
   window.location.hash = ''
@@ -114,21 +113,29 @@ const liveClaimants = async (alias: string) => (await shared.db.getAll<{id: stri
     WHERE a.workspace_id = ? AND a.alias = ? AND b.deleted = 0`,
   [WS, alias])).map(row => row.id)
 
+const openApp = async () => {
+  vi.spyOn(console, 'warn').mockImplementation(() => {})
+  vi.spyOn(console, 'error').mockImplementation(() => {})
+  // `use()` suspends on the initial layout; awaiting inside `act` flushes the retry.
+  await act(async () => { render(<Suspense fallback={null}><App/></Suspense>) })
+  await screen.findByTestId('workspace-open')
+}
+
+/** The browser drops the key record, then the user writes a link to a new page. */
+const loseKeyThenLink = async () => {
+  await getWorkspaceKeyStore().delete(USER, WS)
+  await act(async () => {
+    await repo.tx(async tx => {
+      await tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'see [[New Page]]'})
+    }, {scope: ChangeScope.BlockDefault, description: 'edit'})
+    await repo.awaitProcessors()
+  })
+}
+
 describe('an open encrypted workspace whose key record disappears', () => {
   it('locks into the key gate, writes and uploads nothing that needs the key, and resumes on a re-paste', async () => {
-    vi.spyOn(console, 'warn').mockImplementation(() => {})
-    vi.spyOn(console, 'error').mockImplementation(() => {})
-    // `use()` suspends on the initial layout; awaiting inside `act` flushes the retry.
-    await act(async () => { render(<Suspense fallback={null}><App/></Suspense>) })
-    await screen.findByTestId('workspace-open')
-
-    await getWorkspaceKeyStore().delete(USER, WS)
-    await act(async () => {
-      await repo.tx(async tx => {
-        await tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'see [[New Page]]'})
-      }, {scope: ChangeScope.BlockDefault, description: 'edit'})
-      await repo.awaitProcessors()
-    })
+    await openApp()
+    await loseKeyThenLink()
 
     // Locked: the entry gate's own state, prompting for the key.
     await screen.findByText(/"Notes" needs its key/)
@@ -141,7 +148,7 @@ describe('an open encrypted workspace whose key record disappears', () => {
     await expect(locked.pass).rejects.toThrow(/workspace key/)
     expect(locked.sent).toEqual([])
 
-    fireEvent.change(screen.getByLabelText(/workspace key/i), {target: {value: formatWorkspaceKey(keyBytes)}})
+    fireEvent.change(screen.getByLabelText(/workspace key/i), {target: {value: minted.displayed}})
     await act(async () => { fireEvent.click(screen.getByRole('button', {name: /^unlock$/i})) })
     await screen.findByTestId('workspace-open')
     expect(repo.isReadOnly).toBe(false)
@@ -151,5 +158,20 @@ describe('an open encrypted workspace whose key record disappears', () => {
     const edit = resumed.sent.find(op => op.id === 'src')
     if (edit?.kind !== 'create') throw new Error(`the edit did not upload as a create: ${JSON.stringify(edit)}`)
     expect(hasEnvelopePrefix(String(edit.payload.content))).toBe(true)
+  })
+
+  it('still locks on a real loss after an unreadable store recovered by the time it was checked', async () => {
+    await openApp()
+    vi.mocked(bootstrapWorkspace).mockClear()
+    const failure = new Error('IndexedDB connection lost')
+    vi.spyOn(getWorkspaceKeyStore(), 'get').mockRejectedValueOnce(failure).mockRejectedValueOnce(failure)
+    await act(async () => { await requireWorkspaceKeys(getWorkspaceKeyStore(), USER, WS).catch(() => {}) })
+    // The re-resolve found the key and opened the workspace again.
+    await vi.waitFor(() => expect(bootstrapWorkspace).toHaveBeenCalledTimes(1))
+    await screen.findByTestId('workspace-open')
+
+    await loseKeyThenLink()
+
+    await screen.findByText(/"Notes" needs its key/)
   })
 })

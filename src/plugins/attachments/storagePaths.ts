@@ -13,7 +13,7 @@
  */
 
 import { deriveContentKey } from '@/sync/crypto/contentKey.js'
-import { WorkspaceKeyUnavailableError } from '@/sync/keys/openWorkspaceKeys.js'
+import { orNullWhenKeyUnavailable } from '@/sync/keys/openWorkspaceKeys.js'
 import type { SyncMode } from '@/sync/transform.js'
 
 export type ObjectKeyDerivation =
@@ -42,8 +42,7 @@ export type ObjectKeyDerivation =
  * the same plaintext. It is never fetched remotely: the server's raw object is
  * the one the conversion deletes.
  *
- * E2EE needs `K_id`; without it — its read threw `WorkspaceKeyUnavailableError`,
- * which also locked the workspace — the derivation fails closed, as does a
+ * E2EE needs `K_id`; without it the derivation fails closed, as does a
  * malformed hash.
  */
 export const deriveObjectKey = async (
@@ -51,12 +50,7 @@ export const deriveObjectKey = async (
   mode: SyncMode,
   getContentKeyHmac: () => Promise<CryptoKey | null>,
 ): Promise<ObjectKeyDerivation> => {
-  const contentKeyHmac = mode === 'e2ee'
-    ? await getContentKeyHmac().catch(err => {
-        if (err instanceof WorkspaceKeyUnavailableError) return null
-        throw err
-      })
-    : null
+  const contentKeyHmac = mode === 'e2ee' ? await orNullWhenKeyUnavailable(getContentKeyHmac()) : null
   if (mode === 'e2ee' && !contentKeyHmac) return {ok: false, reason: 'no-content-key'}
   try {
     const objectKey = await deriveContentKey({contentHash, mode, contentKeyHmac})

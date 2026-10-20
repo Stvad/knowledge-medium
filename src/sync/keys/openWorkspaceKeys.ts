@@ -38,17 +38,22 @@ export const onWorkspaceKeyUnavailable = (
   listener: (userId: string, workspaceId: string) => void,
 ): (() => void) => unavailable.add(listener)
 
-/** `workspaceId`'s keys, or {@link onWorkspaceKeyUnavailable} then a throw. */
+/** `workspaceId`'s keys, or {@link onWorkspaceKeyUnavailable} then a throw. A
+ *  failed read is tried once more first: the store reopens a connection the
+ *  browser closed, and locking the workspace over that would be a false alarm. */
 export const requireWorkspaceKeys = async (
   keyStore: WorkspaceKeyStore,
   userId: string,
   workspaceId: string,
 ): Promise<WorkspaceObjectKeys> => {
+  const read = async () => {
+    const record = await keyStore.get(userId, workspaceId)
+    return record && objectKeysOf(record)
+  }
   let keys: WorkspaceObjectKeys | null = null
   let cause: unknown
   try {
-    const record = await keyStore.get(userId, workspaceId)
-    keys = record && objectKeysOf(record)
+    keys = await read().catch(read)
   } catch (err) {
     console.warn(`[workspaceKeys] key read failed for ${workspaceId}`, err)
     cause = err
@@ -56,4 +61,15 @@ export const requireWorkspaceKeys = async (
   if (keys) return keys
   unavailable.notify(userId, workspaceId)
   throw new WorkspaceKeyUnavailableError(workspaceId, {cause})
+}
+
+/** `read`'s keys, or null when it found none (and so has already signalled),
+ *  for a caller whose own result already says "no key". */
+export const orNullWhenKeyUnavailable = async <T>(read: Promise<T>): Promise<T | null> => {
+  try {
+    return await read
+  } catch (err) {
+    if (err instanceof WorkspaceKeyUnavailableError) return null
+    throw err
+  }
 }

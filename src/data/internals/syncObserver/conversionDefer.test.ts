@@ -5,11 +5,10 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import type { BlockData } from '@/data/api'
 import { readWorkspaceEncryptionMode } from '@/data/workspaceSchema'
-import { InMemoryWorkspaceKeyStore } from '@/sync/keys/keyStore'
+import { InMemoryWorkspaceKeyStore, type WorkspaceKeyRecord } from '@/sync/keys/keyStore'
+import { mintWorkspaceKey } from '@/sync/keys/mintWorkspaceKey'
 import { setModePin, upgradeModePinToE2ee } from '@/sync/keys/modePin'
 import { createSyncResolver } from '@/sync/keys/resolver'
-import { deriveContentKeyHmac } from '@/sync/crypto/contentKey'
-import { generateWorkspaceKeyBytes, importWorkspaceKey } from '@/sync/crypto/workspaceKey'
 import { encodeForWire } from '@/sync/transform'
 import { setupObserverTestDb, stagingCiphertextParams } from './test/harness.js'
 
@@ -36,15 +35,14 @@ const block = (over: Partial<BlockData> = {}): BlockData => ({
 })
 
 let keyStore: InMemoryWorkspaceKeyStore
+let record: WorkspaceKeyRecord
 let key: CryptoKey
-let contentKeyHmac: CryptoKey
 
 beforeEach(async () => {
   localStorage.clear()
   keyStore = new InMemoryWorkspaceKeyStore()
-  const keyBytes = generateWorkspaceKeyBytes()
-  key = await importWorkspaceKey(keyBytes.slice())
-  contentKeyHmac = await deriveContentKeyHmac(keyBytes)
+  record = (await mintWorkspaceKey(WS)).record
+  key = record.wk
   setModePin(USER, WS, 'plaintext')
   await env.db.execute(
     `INSERT INTO workspaces (id, name, owner_user_id, create_time, update_time, encryption_mode)
@@ -85,7 +83,7 @@ describe('materialization across an in-place conversion', () => {
       expect.objectContaining({id: 'b1', content: 'pre-conversion text', updated_at: 1000}),
     ])
 
-    await keyStore.put(USER, WS, {wk: key, contentKeyHmac})
+    await keyStore.put(USER, WS, record)
     upgradeModePinToE2ee(USER, WS)
     await observer.drainWorkspace(WS, 'all')
 

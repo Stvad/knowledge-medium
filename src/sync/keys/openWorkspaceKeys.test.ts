@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { InMemoryWorkspaceKeyStore, type WorkspaceKeyStore } from './keyStore.js'
 import {
   onWorkspaceKeyUnavailable,
+  orNullWhenKeyUnavailable,
   requireWorkspaceKeys,
   WorkspaceKeyUnavailableError,
 } from './openWorkspaceKeys.js'
@@ -45,6 +46,16 @@ describe('requireWorkspaceKeys', () => {
     expect(reported).toHaveBeenCalledWith(USER, WS)
   })
 
+  it('tries a failed read once more before reporting anything', async () => {
+    const reported = watch()
+    const store = new InMemoryWorkspaceKeyStore()
+    await store.put(USER, WS, {wk: WK, contentKeyHmac: KID})
+    vi.spyOn(store, 'get').mockRejectedValueOnce(new Error('IndexedDB connection lost'))
+
+    expect(await requireWorkspaceKeys(store, USER, WS)).toEqual({cek: WK, contentKeyHmac: KID})
+    expect(reported).not.toHaveBeenCalled()
+  })
+
   it('treats an unreadable store as no key, keeping the read failure as the cause', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const reported = watch()
@@ -61,5 +72,12 @@ describe('requireWorkspaceKeys', () => {
     expect(error).toBeInstanceOf(WorkspaceKeyUnavailableError)
     expect((error as Error).cause).toBe(failure)
     expect(reported).toHaveBeenCalledWith(USER, WS)
+  })
+})
+
+describe('orNullWhenKeyUnavailable', () => {
+  it('answers null for a read that found no key, and passes any other failure on', async () => {
+    expect(await orNullWhenKeyUnavailable(Promise.reject(new WorkspaceKeyUnavailableError(WS)))).toBeNull()
+    await expect(orNullWhenKeyUnavailable(Promise.reject(new Error('db closed')))).rejects.toThrow('db closed')
   })
 })

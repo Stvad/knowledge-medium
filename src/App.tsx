@@ -138,7 +138,7 @@ const App = () => {
   // the gate: until this device's pin is upgraded it can't sync the workspace.
   useCloseOnServerE2ee(repo.db, repo.user.id, activeWorkspaceId, initial.kind === 'ready', reResolve)
   // So does one whose key this device stops holding: the browser evicted it.
-  useCloseOnKeyLoss(repo, activeWorkspaceId, initial.kind === 'ready', reResolve)
+  useCloseOnKeyLoss(repo, initial.kind === 'ready' ? initial : null, reResolve)
   const gateDeps = useMemo(() => workspaceGateDeps(repo, activeWorkspaceId), [repo, activeWorkspaceId])
 
   if (initial.kind === 'waiting') {

@@ -82,6 +82,7 @@ import {
   type AliasSeatNamespaces,
 } from '@/data/aliasSeatNamespace'
 import { EXTENSION_TYPE } from '@/data/blockTypes'
+import { WorkspaceKeyUnavailableError } from '@/sync/keys/openWorkspaceKeys'
 import { readIsChildBackedWorkspace } from '@/data/workspaceSchema'
 import { aliasesProp, typesProp } from '@/data/properties'
 import { deleteSubtreeInTx } from '@/data/subtreeDelete'
@@ -196,11 +197,12 @@ interface SourcePlan {
   referencesChanged: boolean
 }
 
-/** A new-page mark whose namespace the read phase did not resolve — the mode
- *  turned sealed between the read phase and the lock — stays underived
- *  (`null`); any other failure is rethrown. */
+/** A new-page mark whose seat cannot be minted — no key on this device (which
+ *  has already locked the workspace), or the mode turned sealed between the
+ *  read phase and the lock — stays underived (`null`); the rest of the source
+ *  still derives. Any other failure is rethrown. */
 const leaveSeatOut = (err: unknown, sourceId: string): null => {
-  if (!(err instanceof AliasSeatNamespaceUnavailableError)) throw err
+  if (!(err instanceof AliasSeatNamespaceUnavailableError || err instanceof WorkspaceKeyUnavailableError)) throw err
   console.warn(`[references] left a new page unminted for ${sourceId}: ${err.message}`)
   return null
 }
@@ -249,9 +251,9 @@ const buildSourcePlan = async (
   const seenAliases = new Set<string>()
   // Resolved on the first lookup miss, before the lock: the write phase's
   // `ensureAliasTarget` reads it from the cache this fills, since `K_id` cannot
-  // be read under the lock (`@/data/aliasSeatNamespace`). No key on this device
-  // throws and locks the workspace; the event writes nothing.
-  let seats: AliasSeatNamespaces | undefined
+  // be read under the lock (`@/data/aliasSeatNamespace`). `null`: no key on this
+  // device, so this source's new-page marks stay underived.
+  let seats: AliasSeatNamespaces | null | undefined
 
   for (const mark of aliasMarks) {
     if (seenAliases.has(mark.alias)) continue
@@ -294,7 +296,11 @@ const buildSourcePlan = async (
     // tombstoned. We probe here (read-phase, committed state) so the
     // predicted id matches what ensureAliasTarget will pick in the
     // write phase. Convergence: same world-state → same probe answer.
-    seats ??= await resolveAliasSeatNamespaces(ctx.repo, source.workspaceId)
+    if (seats === undefined) {
+      seats = await resolveAliasSeatNamespaces(ctx.repo, source.workspaceId)
+        .catch(err => leaveSeatOut(err, source.id))
+    }
+    if (seats === null) continue
     const id = await resolveAliasSeatId(
       seats,
       aliasSeatReaderFromDb(ctx.db),

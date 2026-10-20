@@ -20,7 +20,7 @@ import {
 } from '@/sync/conversion/attachmentCleaner.js'
 import type { WorkspaceObjectKeys } from '@/sync/crypto/contentKey.js'
 import { getWorkspaceKeyStore } from '@/sync/keys/keyStore.js'
-import { requireWorkspaceKeys, WorkspaceKeyUnavailableError } from '@/sync/keys/openWorkspaceKeys.js'
+import { orNullWhenKeyUnavailable, requireWorkspaceKeys } from '@/sync/keys/openWorkspaceKeys.js'
 import { openDialog } from '@/utils/dialogs.js'
 import { stoppable } from '@/utils/untilStopped.js'
 import { showError } from '@/utils/toast.js'
@@ -47,12 +47,9 @@ const readCleanupContext = async (userId: string, workspaceId: string): Promise<
   if (state.encryptionMode !== 'e2ee' || !state.wkCanary) return 'Only an end-to-end encrypted workspace has attachments to clean up.'
   if (state.conversionPhase !== null) return 'This workspace is being converted; the conversion cleans up its attachments itself.'
   // One read, so the key and K_id come from the same record.
-  try {
-    return {keys: await requireWorkspaceKeys(getWorkspaceKeyStore(), userId, workspaceId), canary: state.wkCanary}
-  } catch (err) {
-    if (err instanceof WorkspaceKeyUnavailableError) return 'Unlock the workspace with its key first.'
-    throw err
-  }
+  const keys = await orNullWhenKeyUnavailable(requireWorkspaceKeys(getWorkspaceKeyStore(), userId, workspaceId))
+  if (!keys) return 'Unlock the workspace with its key first.'
+  return {keys, canary: state.wkCanary}
 }
 
 export type CleanupRun = (

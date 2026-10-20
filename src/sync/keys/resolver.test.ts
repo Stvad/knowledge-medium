@@ -102,19 +102,6 @@ describe('createSyncResolver — getCek', () => {
     const resolver = createSyncResolver(() => USER, keyStore, readSyncedEncryptionMode)
     await expect(resolver.getCek(WS)).rejects.toBeInstanceOf(WorkspaceKeyUnavailableError)
   })
-
-  it('throws when the key store read fails', async () => {
-    const throwingStore = {
-      get: async () => {
-        throw new Error('boom')
-      },
-      put: async () => {},
-      delete: async () => {},
-      clearForUser: async () => {},
-    }
-    const resolver = createSyncResolver(() => USER, throwingStore, readSyncedEncryptionMode)
-    await expect(resolver.getCek(WS)).rejects.toBeInstanceOf(WorkspaceKeyUnavailableError)
-  })
 })
 
 describe('createSyncResolver — getContentKeyHmac (§10 asset path)', () => {
@@ -141,19 +128,6 @@ describe('createSyncResolver — getContentKeyHmac (§10 asset path)', () => {
   it('returns null when signed out without touching the store', async () => {
     const { resolver } = build(null)
     expect(await resolver.getContentKeyHmac(WS)).toBeNull()
-  })
-
-  it('throws when the key store read fails', async () => {
-    const throwingStore = {
-      get: async () => {
-        throw new Error('boom')
-      },
-      put: async () => {},
-      delete: async () => {},
-      clearForUser: async () => {},
-    }
-    const resolver = createSyncResolver(() => USER, throwingStore, readSyncedEncryptionMode)
-    await expect(resolver.getContentKeyHmac(WS)).rejects.toBeInstanceOf(WorkspaceKeyUnavailableError)
   })
 })
 
