@@ -22,21 +22,14 @@ import {
   type SpanReplacement,
 } from './referenceParser.ts'
 import { preferredSpanReplacement } from './spanReplacement.ts'
-import { inlineDeletedBlockRefsProcessor } from './inlineDeletedBlockRefsProcessor.ts'
+import {
+  SELECT_LIVE_REFERENCE_SOURCE_IDS_SQL,
+  inlineDeletedBlockRefsProcessor,
+} from './inlineDeletedBlockRefsProcessor.ts'
 import { projectedIdOf } from './referenceProjection.ts'
 
 export const RETARGET_MERGED_BLOCK_REFERENCES_PROCESSOR =
   'references.retargetMergedBlockReferences'
-
-const SELECT_LIVE_REFERENCE_SOURCE_IDS_SQL = `
-  SELECT DISTINCT br.source_id AS id
-  FROM block_references br
-  JOIN blocks source ON source.id = br.source_id
-  WHERE br.workspace_id = ?
-    AND br.target_id = ?
-    AND source.deleted = 0
-  ORDER BY source.order_key, source.id
-`
 
 /** Resolve each `fromAlias → toAlias` pair to a verified span
  *  replacement, once per merge event (the decision depends only on
