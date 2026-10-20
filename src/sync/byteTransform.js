@@ -1,1 +1,1 @@
-import{_x as e,gx as t,hx as n,vx as r}from"../../chunks/app-BGgtflzR.js";export{n as MAX_OBJECT_BYTES,t as encodeBytes,e as fitsObjectLimit,r as verifyObjectBytes};
+import{Jx as e,Xx as t,Yx as n,Zx as r,qx as i}from"../../chunks/app-DaOxZ57R.js";export{i as MAX_OBJECT_BYTES,e as encodeBytes,n as encodedSize,t as fitsObjectLimit,r as verifyObjectBytes};

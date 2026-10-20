@@ -1,1 +1,1 @@
-import{bp as e}from"../../../chunks/app-BGgtflzR.js";export{e as UpdateIndicator};
+import{Up as e}from"../../../chunks/app-DaOxZ57R.js";export{e as UpdateIndicator};

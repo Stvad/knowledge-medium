@@ -1,1 +1,1 @@
-import{NO as e}from"../../../chunks/app-BGgtflzR.js";export{e as appUpdatePromptExtension};
+import{fk as e}from"../../../chunks/app-DaOxZ57R.js";export{e as appUpdatePromptExtension};

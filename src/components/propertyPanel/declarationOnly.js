@@ -1,1 +1,1 @@
-import{IP as e,LP as t}from"../../../chunks/app-BGgtflzR.js";export{e as declarationOnlyDefinitionForName,t as declarationOnlyStatusText};
+import{_F as e,gF as t}from"../../../chunks/app-DaOxZ57R.js";export{t as declarationOnlyDefinitionForName,e as declarationOnlyStatusText};

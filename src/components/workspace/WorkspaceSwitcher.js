@@ -1,1 +1,1 @@
-import{Zb as e}from"../../../chunks/app-BGgtflzR.js";export{e as WorkspaceSwitcher};
+import{gx as e}from"../../../chunks/app-DaOxZ57R.js";export{e as WorkspaceSwitcher};

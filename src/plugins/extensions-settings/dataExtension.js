@@ -1,1 +1,1 @@
-import{wn as e}from"../../../chunks/app-BGgtflzR.js";export{e as extensionsDataExtension};
+import{qn as e}from"../../../chunks/app-DaOxZ57R.js";export{e as extensionsDataExtension};

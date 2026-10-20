@@ -1,1 +1,1 @@
-import{Kl as e}from"../../../chunks/app-BGgtflzR.js";export{e as resolveDailyPage};
+import{hu as e}from"../../../chunks/app-DaOxZ57R.js";export{e as resolveDailyPage};
