@@ -1,1 +1,1 @@
-import{Jo as e,Yo as t,qo as n}from"../../../chunks/app-BA5WTdvB.js";export{n as REMATERIALIZE_WORKSPACE_ACTION_ID,e as rematerializeWorkspaceAction,t as rematerializeWorkspaceActionContribution};
+import{Jo as e,Yo as t,qo as n}from"../../../chunks/app-CDzWRJ3l.js";export{n as REMATERIALIZE_WORKSPACE_ACTION_ID,e as rematerializeWorkspaceAction,t as rematerializeWorkspaceActionContribution};

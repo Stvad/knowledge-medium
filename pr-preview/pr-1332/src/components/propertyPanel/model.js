@@ -1,1 +1,1 @@
-import{GP as e,KP as t}from"../../../chunks/app-BA5WTdvB.js";export{e as HIDDEN_SECTION,t as buildPropertyPanelModel};
+import{GP as e,KP as t}from"../../../chunks/app-CDzWRJ3l.js";export{e as HIDDEN_SECTION,t as buildPropertyPanelModel};

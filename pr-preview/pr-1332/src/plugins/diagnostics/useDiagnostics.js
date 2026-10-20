@@ -1,1 +1,1 @@
-import{$o as e,es as t}from"../../../chunks/app-BA5WTdvB.js";export{e as aggregateDiagnostics,t as useDiagnostics};
+import{$o as e,es as t}from"../../../chunks/app-CDzWRJ3l.js";export{e as aggregateDiagnostics,t as useDiagnostics};

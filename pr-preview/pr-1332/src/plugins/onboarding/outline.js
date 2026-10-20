@@ -1,1 +1,1 @@
-import{Jv as e,Qv as t,Xv as n,Yv as r,Zv as i}from"../../../chunks/app-BA5WTdvB.js";export{e as EXTENSIONS_PAGE_TITLE,r as TUTORIAL_DEFAULT_TITLE,n as TUTORIAL_VIM_TITLE,i as extensionsPageOutline,t as tutorialOutline};
+import{Jv as e,Qv as t,Xv as n,Yv as r,Zv as i}from"../../../chunks/app-CDzWRJ3l.js";export{e as EXTENSIONS_PAGE_TITLE,r as TUTORIAL_DEFAULT_TITLE,n as TUTORIAL_VIM_TITLE,i as extensionsPageOutline,t as tutorialOutline};

@@ -1,1 +1,1 @@
-import{IG as e}from"../../chunks/app-BA5WTdvB.js";export{e as omnilinerNamespace};
+import{IG as e}from"../../chunks/app-CDzWRJ3l.js";export{e as omnilinerNamespace};

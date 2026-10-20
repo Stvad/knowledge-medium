@@ -1,1 +1,1 @@
-import{HU as e,UU as t,VU as n}from"../../../chunks/app-BA5WTdvB.js";export{n as DAILY_NOTE_TYPE,e as dailyNoteDateProp,t as dailyNoteType};
+import{HU as e,UU as t,VU as n}from"../../../chunks/app-CDzWRJ3l.js";export{n as DAILY_NOTE_TYPE,e as dailyNoteDateProp,t as dailyNoteType};
