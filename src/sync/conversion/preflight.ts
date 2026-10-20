@@ -89,11 +89,11 @@ const SEALED_LOOKING_SAMPLE = 20
 
 const encoder = new TextEncoder()
 
-/** The dry run of the bundle's own paging, which also finds sealed-looking
- *  rows. Every read is one bounded index scan by id, where a server-side
- *  filter over the whole workspace would hit the statement timeout on a large
- *  one. */
-const scanServer = async (
+/** The dry run of the bundle's own paging, in two halves: the blocks, which
+ *  also finds sealed-looking rows and the media they carry, then the history.
+ *  Every read is one bounded index scan by id, where a server-side filter over
+ *  the whole workspace would hit the statement timeout on a large one. */
+const scanBlocks = async (
   server: ConversionServer,
   workspaceId: string,
   attachments: AttachmentSource,
@@ -113,7 +113,10 @@ const scanServer = async (
     if (sealedLooking.length < SEALED_LOOKING_SAMPLE) sealedLooking.push(...idsOf(page.filter(isSealedRow)))
     blockRows += page.length
   }
+  return {sealedLooking: sealedLooking.slice(0, SEALED_LOOKING_SAMPLE), media, sizes: {blockRows, blocksBytes, contentBytes}}
+}
 
+const scanHistory = async (server: ConversionServer, workspaceId: string, signal?: AbortSignal) => {
   const {maxEventId} = await server.workspaceCounts(workspaceId)
   let historyRows = 0
   let historyBytes = 0
@@ -121,11 +124,7 @@ const scanServer = async (
     for (const row of page) historyBytes += encodeJsonlLine(row).length
     historyRows += page.length
   }
-  return {
-    sealedLooking: sealedLooking.slice(0, SEALED_LOOKING_SAMPLE),
-    media,
-    sizes: {blockRows, blocksBytes, historyRows, historyBytes, contentBytes},
-  }
+  return {historyRows, historyBytes}
 }
 
 /** The blockers this device can change on its own at any moment: checked in
@@ -171,11 +170,13 @@ export const runPreflight = async ({
   // Before the scan, which reads every row of the workspace: these the user
   // can fix in moments.
   if (blockers.length > 0) return {kind: 'blocked', blockers}
-  const scan = await scanServer(server, workspaceId, attachments, signal)
-  if (scan.sealedLooking.length > 0) return {kind: 'blocked', blockers: [{kind: 'sealed-looking-rows', blockIds: scan.sealedLooking}]}
+  const blocks = await scanBlocks(server, workspaceId, attachments, signal)
+  // Before the history, which can be the larger read.
+  if (blocks.sealedLooking.length > 0) return {kind: 'blocked', blockers: [{kind: 'sealed-looking-rows', blockIds: blocks.sealedLooking}]}
+  const history = await scanHistory(server, workspaceId, signal)
   const free = await environment.freeLocalBytes()
   const keepBudget = free === null ? null : Math.max(0, free - LOCAL_HEADROOM_BYTES)
-  const survey = await surveyAttachments({source: attachments, mediaHashes: scan.media.hashes(), keepBudget, signal, onProgress})
+  const survey = await surveyAttachments({source: attachments, mediaHashes: blocks.media.hashes(), keepBudget, signal, onProgress})
   if (survey.unkeptBytes > 0) {
     const neededBytes = survey.unkeptBytes - survey.spareBytes
     return {kind: 'blocked', blockers: [{kind: 'local-space', neededBytes, freeBytes: survey.spareBytes}]}
@@ -183,9 +184,9 @@ export const runPreflight = async ({
   return {
     kind: 'ready',
     report: {
-      sizes: {...scan.sizes, localDbBytes: await environment.localDbBytes(), attachmentBytes: survey.bundleBytes},
+      sizes: {...blocks.sizes, ...history, localDbBytes: await environment.localDbBytes(), attachmentBytes: survey.bundleBytes},
       oversized: survey.oversized,
-      noVerifiedSource: scan.media.blocksOf(survey.noVerifiedSource),
+      noVerifiedSource: blocks.media.blocksOf(survey.noVerifiedSource),
     },
   }
 }

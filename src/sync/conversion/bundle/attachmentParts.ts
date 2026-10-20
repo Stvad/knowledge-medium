@@ -289,7 +289,7 @@ export const writeAttachmentParts = async ({
       missing.push(hash)
       continue
     }
-    await writeBytesPart(attachments, rawNameOf(hash), copy.bytes)
+    await writeBytesPart(attachments, rawNameOf(hash), copy.bytes, signal)
     onProgress?.(++written)
   }
 
@@ -298,7 +298,7 @@ export const writeAttachmentParts = async ({
   for (const path of paths) {
     const bytes = await readListed(source, path, {signal, sleep})
     const name = otherObjectNameOf(path)
-    const digest = await writeBytesPart(others, name, bytes)
+    const digest = await writeBytesPart(others, name, bytes, signal)
     otherObjects.push({name, path, ...digest})
     onProgress?.(++written)
   }

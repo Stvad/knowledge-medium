@@ -428,6 +428,14 @@ describe('runConversion: preflight', () => {
     expect(await blockers({})).toEqual([{kind: 'sealed-looking-rows', blockIds: ['looks-sealed']}])
   })
 
+  it('refuses on a sealed-looking row before reading the workspace\'s history', async () => {
+    const wk = await keyOf(9)
+    server.insert({id: 'looks-sealed', workspace_id: WS, ...await sealFor(wk, {id: 'looks-sealed', workspace_id: WS}, {content: 'a', properties_json: '{}', references_json: '[]'})})
+
+    expect(await blockers({})).toEqual([{kind: 'sealed-looking-rows', blockIds: ['looks-sealed']}])
+    expect(server.calls.filter(call => call.method === 'readHistoryPage' || call.method === 'workspaceCounts')).toEqual([])
+  })
+
   it('finds a sealed-looking row on a later page', async () => {
     server.maxRows = 2
     const wk = await keyOf(9)

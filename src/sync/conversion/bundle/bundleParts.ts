@@ -61,23 +61,47 @@ export const encodeJsonlLine = (row: unknown): Uint8Array<ArrayBuffer> => encode
  *  isn't millions of writes. */
 const WRITE_CHUNK_BYTES = 1 << 20
 
+/** A step that ends with `signal`'s reason as soon as it aborts. */
+const untilStopped = <R>(step: Promise<R>, signal: AbortSignal | undefined): Promise<R> => {
+  if (!signal) return step
+  if (signal.aborted) {
+    step.catch(() => {})
+    return Promise.reject(signal.reason)
+  }
+  let onAbort = () => {}
+  const stopped = new Promise<never>((_resolve, reject) => {
+    onAbort = () => reject(signal.reason)
+    signal.addEventListener('abort', onAbort, {once: true})
+  })
+  return Promise.race([step, stopped]).finally(() => signal.removeEventListener('abort', onAbort))
+}
+
 /** Writes one part through `write`, replacing the file only if it finishes:
- *  an unfinished part is discarded, never left looking whole. */
+ *  an unfinished part is discarded, never left looking whole. A Stop ends it
+ *  even while the destination is slow to take a write. */
 const writePart = async <T>(
   folder: BundleFolder,
   name: string,
   write: (writable: BundleWritable) => Promise<T>,
+  signal?: AbortSignal,
 ): Promise<T> => {
+  signal?.throwIfAborted()
   const writable = await (await folder.getFileHandle(name, {create: true})).createWritable()
-  let result: T
+  const stoppable: BundleWritable = {
+    write: data => untilStopped(writable.write(data), signal),
+    close: () => untilStopped(writable.close(), signal),
+    abort: () => writable.abort(),
+  }
   try {
-    result = await write(writable)
+    const result = await write(stoppable)
+    await stoppable.close()
+    return result
   } catch (error) {
-    await writable.abort().catch(() => {})
+    // Not awaited after a Stop: a destination that hangs would hang it too.
+    const discarded = writable.abort().catch(() => {})
+    if (!signal?.aborted) await discarded
     throw error
   }
-  await writable.close()
-  return result
 }
 
 /** Writes a `.jsonl` part: one JSON value per line, `\n`-terminated. */
@@ -85,6 +109,7 @@ export const writeJsonlPart = (
   folder: BundleFolder,
   name: string,
   write: (writeRow: (row: unknown) => Promise<void>) => Promise<void>,
+  signal?: AbortSignal,
 ): Promise<JsonlDigest> =>
   writePart(folder, name, async writable => {
     const hasher = createPartHasher()
@@ -113,13 +138,18 @@ export const writeJsonlPart = (
     })
     await flush()
     return {...hasher.digest(), lines}
-  })
+  }, signal)
 
-export const writeBytesPart = (folder: BundleFolder, name: string, bytes: Uint8Array<ArrayBuffer>): Promise<PartDigest> =>
+export const writeBytesPart = (
+  folder: BundleFolder,
+  name: string,
+  bytes: Uint8Array<ArrayBuffer>,
+  signal?: AbortSignal,
+): Promise<PartDigest> =>
   writePart(folder, name, async writable => {
     await writable.write(bytes)
     return {sha256: sha256Hex(bytes), bytes: bytes.length}
-  })
+  }, signal)
 
 /**
  * Stream a part once: its digest, and, for a `.jsonl` part, each line in
