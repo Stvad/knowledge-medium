@@ -478,6 +478,22 @@ describe('runConversion: every run', () => {
     expect(await keyStore.get(USER, WS)).toBeNull()
   })
 
+  it('marks the local row past the flip even when the user cancels the contract check', async () => {
+    const minted = await mintWorkspaceKey(WS)
+    server.flip(WS, minted.canary)
+    ui.cancelContract = true
+
+    await expect(run()).rejects.toThrow('cancelled')
+    expect(localCanaries).toEqual([minted.canary])
+  })
+
+  it('leaves the local row alone when a plaintext run is cancelled', async () => {
+    ui.cancelContract = true
+
+    await expect(run()).rejects.toThrow('cancelled')
+    expect(localCanaries).toEqual([])
+  })
+
   it('reports a finished conversion without asking anything, and marks the local row', async () => {
     const minted = await mintWorkspaceKey(WS)
     server.flip(WS, minted.canary)
