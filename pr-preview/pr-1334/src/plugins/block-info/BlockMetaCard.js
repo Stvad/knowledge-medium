@@ -1,1 +1,1 @@
-import{ff as e}from"../../../chunks/app-CF78nXtA.js";export{e as BlockMetaCard};
+import{ff as e}from"../../../chunks/app-C5RIHr4-.js";export{e as BlockMetaCard};

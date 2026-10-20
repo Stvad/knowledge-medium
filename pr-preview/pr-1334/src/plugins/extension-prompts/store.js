@@ -1,1 +1,1 @@
-import{XE as e,YE as t}from"../../../chunks/app-CF78nXtA.js";export{t as extensionPromptStore,e as pendingExtensionPrompts};
+import{XE as e,YE as t}from"../../../chunks/app-C5RIHr4-.js";export{t as extensionPromptStore,e as pendingExtensionPrompts};

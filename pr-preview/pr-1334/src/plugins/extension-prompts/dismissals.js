@@ -1,1 +1,1 @@
-import{$E as e,QE as t,ZE as n}from"../../../chunks/app-CF78nXtA.js";export{n as ExtensionPromptDismissalStore,t as extensionPromptDismissals,e as useExtensionPromptDismissals};
+import{$E as e,QE as t,ZE as n}from"../../../chunks/app-C5RIHr4-.js";export{n as ExtensionPromptDismissalStore,t as extensionPromptDismissals,e as useExtensionPromptDismissals};
