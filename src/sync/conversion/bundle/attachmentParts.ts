@@ -71,6 +71,10 @@ export class MediaBlocks {
 /** A plaintext workspace stores a media hash's bytes under its bare hex digest. */
 export const rawNameOf = (contentHash: string): string => contentHash.slice(CONTENT_HASH_PREFIX.length)
 
+/** The raw name a media block's hash points at, or null for a malformed hash,
+ *  which names no object: its tail may be some other object's name. */
+const mediaRawName = (contentHash: string): string | null => (isContentHash(contentHash) ? rawNameOf(contentHash) : null)
+
 const encoder = new TextEncoder()
 
 /** The `other-objects/` entry name for a Storage path. */
@@ -118,8 +122,8 @@ export const verifiedCopy = async (
   listed: ReadonlySet<ObjectPath>,
   options: ReadOptions = {},
 ): Promise<VerifiedCopy | null> => {
-  if (!isContentHash(contentHash)) return null
-  const name = rawNameOf(contentHash)
+  const name = mediaRawName(contentHash)
+  if (name === null) return null
   const local = await source.readLocal(name)
   if (local && (await verifyContentHash(local, contentHash))) return {bytes: local, from: 'local'}
   if (!listed.has(name)) return null
@@ -137,7 +141,7 @@ export const verifiedCopy = async (
  *  attachment again. */
 const listFolder = async (source: Pick<AttachmentSource, 'listObjects'>, hashes: readonly string[], signal?: AbortSignal) => {
   const listed = new Set(await source.listObjects(signal))
-  const rawNames = new Set(hashes.map(rawNameOf))
+  const rawNames = new Set(hashes.flatMap(hash => mediaRawName(hash) ?? []))
   return {listed, otherObjects: [...listed].filter(path => !rawNames.has(path) && isAddressable(path))}
 }
 

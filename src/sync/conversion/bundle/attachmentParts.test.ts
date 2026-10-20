@@ -243,6 +243,15 @@ describe('surveyAttachments', () => {
     expect(result.bundleBytes).toBe(2)
   })
 
+  it('counts an object whose name only a malformed media hash ends in', async () => {
+    storage.objects.set('orphan', bytesOf('12345'))
+
+    const result = await survey(['notsha:orphan'])
+
+    expect(result.noVerifiedSource).toEqual(['notsha:orphan'])
+    expect(result.bundleBytes).toBe(5)
+  })
+
   it('throws ListedObjectUnreadable when a listed other object reads as absent', async () => {
     storage.objects.set('ghost', bytesOf('x'))
     vi.spyOn(storage.io, 'readObject').mockResolvedValue(null)
@@ -284,6 +293,15 @@ describe('writeAttachmentParts', () => {
     expect(parts.missing).toEqual([lost])
     expect([...folder.folders.get('attachments')!.files.keys()]).toEqual([rawNameOf(keptHash)])
     expect(text(folder.folders.get('attachments')!.files.get(rawNameOf(keptHash)))).toBe('kept bytes')
+  })
+
+  it('archives an object whose name only a malformed media hash ends in', async () => {
+    storage.objects.set('orphan', bytesOf('orphan bytes'))
+
+    const parts = await write({mediaHashes: new Set(['notsha:orphan'])})
+
+    expect(parts.missing).toEqual(['notsha:orphan'])
+    expect(parts.otherObjects.map(entry => entry.path)).toEqual(['orphan'])
   })
 
   it('writes Storage-only media and other objects with their digests', async () => {
