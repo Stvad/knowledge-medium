@@ -1,1 +1,0 @@
-import{Bc as e,Fc as t,Hc as n,Ic as r,Lc as i,Rc as a,Vc as o,zc as s}from"../../../chunks/app-Cx0LSDbc.js";export{t as blockTaggingPrefsType,r as blockTagsConfigCodec,i as blockTagsConfigPresetCore,a as blockTagsConfigProp,s as isValidTagName,e as normalizeBlockTagsConfig,o as selectableTagNames,n as tagNameIssue};

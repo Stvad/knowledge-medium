@@ -1,1 +1,0 @@
-import{Gb as e,Kb as t,qb as n}from"../../../chunks/app-Cx0LSDbc.js";export{e as getOrCreateShortcutsBlock,t as journalShortcutBlockId,n as shortcutsBlockId};

@@ -1,1 +1,0 @@
-import{Cb as e,Sb as t,_b as n,bb as r,gb as i,vb as a,xb as o,yb as s}from"../../../chunks/app-Cx0LSDbc.js";export{e as BreadcrumbList,r as BreadcrumbRenderer,t as Breadcrumbs,s as PromotableBreadcrumbList,i as breadcrumbRendererContribution,n as breadcrumbsPlugin,o as getBreadcrumbContentPreview,a as usePromotableBreadcrumb};

@@ -1,1 +1,0 @@
-import{aU as e,iU as t,oU as n}from"../../../chunks/app-Cx0LSDbc.js";export{t as charLimitProp,e as charProfileProp,n as charScopeProp};

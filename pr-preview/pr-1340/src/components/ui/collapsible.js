@@ -1,1 +1,0 @@
-"use client";import{cP as e,oP as t,sP as n}from"../../../chunks/app-Cx0LSDbc.js";export{t as Collapsible,n as CollapsibleContent,e as CollapsibleTrigger};

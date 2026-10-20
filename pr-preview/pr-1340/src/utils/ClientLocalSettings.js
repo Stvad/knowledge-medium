@@ -1,1 +1,0 @@
-import{vk as e,yk as t}from"../../chunks/app-Cx0LSDbc.js";export{e as ClientLocalSettings,t as clientLocalSettings};

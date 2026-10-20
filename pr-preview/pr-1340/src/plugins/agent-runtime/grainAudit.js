@@ -1,1 +1,0 @@
-import{ad as e,cd as t,id as n,ld as r,od as i,sd as a}from"../../../chunks/app-Cx0LSDbc.js";export{n as AUDIT_BLOCK_LIMIT,e as auditBlocks,i as auditExtensionData,a as createBlockResolver,t as grainWarningsForProperties,r as writeWarnings};

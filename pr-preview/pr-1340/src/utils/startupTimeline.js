@@ -1,1 +1,0 @@
-import{$R as e,QR as t,XR as n,ZR as r,ez as i,iz as a,nz as o,rz as s,tz as c}from"../../chunks/app-Cx0LSDbc.js";export{n as getLastLongTaskEndMs,r as getStartupTimeline,t as hasStartupMark,e as longTasksSupported,i as markStartup,c as markStartupAt,o as onLongTask,s as resetStartupTimeline,a as startStartupObservers};

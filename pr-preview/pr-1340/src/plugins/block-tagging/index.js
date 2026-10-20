@@ -1,1 +1,0 @@
-import{Ac as e,Cc as t,Rc as n,Tc as r,kc as i,wc as a}from"../../../chunks/app-Cx0LSDbc.js";export{a as ADD_TAG_ACTION_ID,r as ADD_TAG_BLOCKS_ACTION_ID,i as appendTagToBlocks,e as appendTagToContent,t as blockTaggingPlugin,n as blockTagsConfigProp};

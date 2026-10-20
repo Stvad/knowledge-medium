@@ -1,1 +1,0 @@
-import{BD as e,HD as t,RD as n,VD as r,zD as i}from"../../chunks/app-Cx0LSDbc.js";export{n as copyBlockIdsToClipboard,i as copyBlockToClipboard,e as copySelectedBlocksToClipboard,r as serializeBlock,t as serializeSelectedBlocks};

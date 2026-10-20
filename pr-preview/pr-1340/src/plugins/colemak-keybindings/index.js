@@ -1,1 +1,0 @@
-import{Jv as e,Kv as t,qv as n}from"../../../chunks/app-Cx0LSDbc.js";export{t as COLEMAK_KEYBINDINGS_PLUGIN_ID,n as colemakKeybindingsPlugin,e as colemakMovementKeybindingOverrides};

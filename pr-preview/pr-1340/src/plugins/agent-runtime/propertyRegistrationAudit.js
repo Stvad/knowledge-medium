@@ -1,1 +1,0 @@
-import{Ju as e,Ku as t,Yu as n,qu as r}from"../../../chunks/app-Cx0LSDbc.js";export{t as PROVENANCE_BLOCKS_PER_KEY,r as PROVENANCE_KEY_LIMIT,e as auditPropertyRegistration,n as describeUnregisteredProperty};
