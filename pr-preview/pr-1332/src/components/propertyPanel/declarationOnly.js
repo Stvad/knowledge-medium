@@ -1,1 +1,1 @@
-import{mF as e,pF as t}from"../../../chunks/app-k7o-ugJ5.js";export{t as declarationOnlyDefinitionForName,e as declarationOnlyStatusText};
+import{hF as e,mF as t}from"../../../chunks/app-KHSELJOU.js";export{t as declarationOnlyDefinitionForName,e as declarationOnlyStatusText};
