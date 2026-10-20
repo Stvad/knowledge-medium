@@ -23,10 +23,9 @@
  * success, re-materializes the workspace via the observer's `drainWorkspace`.
  */
 
-import { validateCanary } from '../../crypto/canary.js'
 import type { WorkspaceKeyStore } from '../keyStore.js'
 import { setModePin } from '../modePin.js'
-import { importPastedWorkspaceKey } from './pastedKey.js'
+import { openCanaryWithPastedKey } from './pastedKey.js'
 
 export interface UnlockWorkspaceArgs {
   readonly userId: string
@@ -51,13 +50,9 @@ export const unlockWorkspaceWithKey = async (
 ): Promise<UnlockWorkspaceResult> => {
   const { userId, workspaceId, canary, pastedKey, keyStore } = args
 
-  const imported = await importPastedWorkspaceKey(pastedKey)
-  if (!imported) return { ok: false, reason: 'format' }
-  const { wk: key, contentKeyHmac } = imported
-
-  if (!(await validateCanary(key, canary, workspaceId))) {
-    return { ok: false, reason: 'invalid-key' }
-  }
+  const opened = await openCanaryWithPastedKey(pastedKey, canary, workspaceId)
+  if (typeof opened === 'string') return { ok: false, reason: opened }
+  const { wk: key, contentKeyHmac } = opened
 
   // Canary validated → this workspace is genuinely e2ee. Pin it FIRST (in the
   // quarantine case the pin is what defeats a server downgrade lie), then

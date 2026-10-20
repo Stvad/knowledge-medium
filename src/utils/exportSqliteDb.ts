@@ -22,6 +22,7 @@ import { Zip, ZipPassThrough } from 'fflate'
 import type { Repo } from '../data/repo'
 import { dbFilenameForUser } from '@/data/localDbStorage'
 import { supportsWriteAheadVfs } from '@/data/localDbVfs.js'
+import { untilStopped } from '@/utils/untilStopped.js'
 import {
   DB_FILE_SIBLING_SUFFIXES,
   SQLITE_JOURNAL_SUFFIXES,
@@ -93,10 +94,40 @@ export async function chooseRawSqliteExportFile(
   })
 }
 
+/** The user's database file with its write-ahead sidecars: an upper bound on
+ *  the file a checkpoint leaves, since it folds the sidecars in. */
+export async function localDbFileBytes(userId: string): Promise<number> {
+  const root = await navigator.storage.getDirectory()
+  const dbFilename = dbFilenameForUser(userId)
+  // Only a sidecar may be absent; any other failure is no size at all.
+  const sizeOf = async (name: string, optional: boolean) => {
+    try {
+      return (await (await root.getFileHandle(name)).getFile()).size
+    } catch (error) {
+      if (optional && error instanceof DOMException && error.name === 'NotFoundError') return 0
+      throw error
+    }
+  }
+  const sizes = await Promise.all([
+    sizeOf(dbFilename, false),
+    ...WRITE_AHEAD_SIDECAR_SUFFIXES.map(suffix => sizeOf(dbFilename + suffix, true)),
+  ])
+  return sizes.reduce((sum, size) => sum + size, 0)
+}
+
 export async function exportRawSqliteDbToFile(
   repo: Repo,
   destinationHandle: FileSystemFileHandle,
-  options: {timeoutMessage?: string} = {},
+  options: {
+    timeoutMessage?: string
+    /** The slowest destination to wait for: the deadline grows by the time
+     *  the copy takes at this rate, on top of the lock-and-checkpoint budget. */
+    minBytesPerSecond?: number
+    /** Each chunk as it is copied, e.g. to hash it in the same pass. */
+    onChunk?: (chunk: Uint8Array) => void
+    /** Stops the copy, and so releases the database lock, as soon as it aborts. */
+    signal?: AbortSignal
+  } = {},
 ): Promise<RawSqliteDbFileExport> {
   const userId = repo.user.id
   const dbFilename = dbFilenameForUser(userId)
@@ -104,11 +135,15 @@ export async function exportRawSqliteDbToFile(
 
   const root = await navigator.storage.getDirectory()
   const fileHandle = await root.getFileHandle(dbFilename)
+  // The checkpoint folds the sidecars into the file this copies.
+  const copyMs = options.minBytesPerSecond ? ((await localDbFileBytes(userId)) / options.minBytesPerSecond) * 1000 : 0
+  options.signal?.throwIfAborted()
+  // The callback's signal aborts on the deadline or on `options.signal`.
   const size = await withCheckpointedDbLock(repo, async signal => {
     const sourceFile = await fileHandle.getFile()
-    await pipeBlobToFileHandle(sourceFile, destinationHandle, signal)
+    await pipeBlobToFileHandle(sourceFile, destinationHandle, signal, options.onChunk)
     return sourceFile.size
-  }, options.timeoutMessage)
+  }, options.timeoutMessage, EXPORT_LOCK_TIMEOUT_MS + copyMs, options.signal)
 
   return {filename, size}
 }
@@ -762,12 +797,17 @@ const DEFAULT_LOCK_TIMEOUT_MESSAGE =
 const ABORT_SETTLE_GRACE_MS = 5_000
 
 const TIMED_OUT = Symbol('timed-out')
+const STOPPED = Symbol('stopped')
 
+/** `stop`: the caller giving up, which ends the wait as the deadline does but
+ *  rejects with its own reason. */
 const withDeadline = async <T,>(
   work: (signal: AbortSignal) => Promise<T>,
   ms: number,
   message: string,
+  stop?: AbortSignal,
 ): Promise<T> => {
+  stop?.throwIfAborted()
   const controller = new AbortController()
   const running = work(controller.signal)
   // Settled either way, so the work is never an unhandled rejection while the
@@ -779,6 +819,7 @@ const withDeadline = async <T,>(
 
   let timer: ReturnType<typeof setTimeout> | undefined
   let graceTimer: ReturnType<typeof setTimeout> | undefined
+  let onStop = () => {}
   try {
     // The race is decided by the TIMER, not by the work's rejection. Racing the
     // work itself hands back its `AbortError` — which this very deadline
@@ -788,8 +829,12 @@ const withDeadline = async <T,>(
       new Promise<typeof TIMED_OUT>(resolve => {
         timer = setTimeout(() => resolve(TIMED_OUT), ms)
       }),
+      new Promise<typeof STOPPED>(resolve => {
+        onStop = () => resolve(STOPPED)
+        stop?.addEventListener('abort', onStop, {once: true})
+      }),
     ])
-    if (outcome !== TIMED_OUT) {
+    if (outcome !== TIMED_OUT && outcome !== STOPPED) {
       if ('error' in outcome) throw outcome.error
       return outcome.value
     }
@@ -802,10 +847,11 @@ const withDeadline = async <T,>(
       settled,
       new Promise<void>(resolve => { graceTimer = setTimeout(resolve, ABORT_SETTLE_GRACE_MS) }),
     ])
-    throw new Error(message)
+    throw outcome === STOPPED ? stop!.reason : new Error(message)
   } finally {
     clearTimeout(timer)
     clearTimeout(graceTimer)
+    stop?.removeEventListener('abort', onStop)
   }
 }
 
@@ -851,6 +897,9 @@ const withCheckpointedDbLock = async <T,>(
    *  reload" is wrong for the cause it actually hits — a destination too slow
    *  to finish inside the window a background copy may hold the database. */
   timeoutMessage: string = DEFAULT_LOCK_TIMEOUT_MESSAGE,
+  deadlineMs: number = EXPORT_LOCK_TIMEOUT_MS,
+  /** Ends the wait for the lock, the checkpoint and the callback alike. */
+  stop?: AbortSignal,
 ): Promise<T> => {
   const maybeDb = repo.db as unknown as Partial<PowerSyncWriteLockDb>
   if (typeof maybeDb.writeLock !== 'function') {
@@ -891,18 +940,29 @@ const withCheckpointedDbLock = async <T,>(
     // deadline, and the copy writes to the caller's chosen destination.
     if (signal.aborted) throw new Error('Export abandoned before the copy began.')
     return callback(signal)
-  }), EXPORT_LOCK_TIMEOUT_MS, timeoutMessage)
+  }), deadlineMs, timeoutMessage, stop)
 }
 
 const pipeBlobToFileHandle = async (
   blob: Blob,
   fileHandle: FileSystemFileHandle,
   signal?: AbortSignal,
+  onChunk?: (chunk: Uint8Array) => void,
 ): Promise<void> => {
-  const writable = await fileHandle.createWritable({keepExistingData: false})
+  // Raced, so a destination that stops answering can't hold the database lock
+  // past an abort; a writable that opens after it is discarded.
+  const writable = await untilStopped(fileHandle.createWritable({keepExistingData: false}), signal, late => void late.abort().catch(() => {}))
+  const source = onChunk
+    ? blob.stream().pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+      transform: (chunk, controller) => {
+        onChunk(chunk)
+        controller.enqueue(chunk)
+      },
+    }))
+    : blob.stream()
   // Through `pipeTo`, so an abort tears down the writable too — a copy that
   // merely stops being awaited keeps writing.
-  await blob.stream().pipeTo(writable, {signal})
+  await source.pipeTo(writable, {signal})
 }
 
 const removeEntryIfExists = async (

@@ -65,8 +65,8 @@ describe('resealWorkspace', () => {
       {method: 'readBlockPage', count: 1},
       {method: 'applyBlockPatches', count: 1},
       {method: 'readBlockPage', count: 0},
-      {method: 'countBlocks', count: 1},
       {method: 'readWorkspace', count: 1},
+      {method: 'workspaceCounts', count: 1},
     ])
   })
 
@@ -143,10 +143,11 @@ describe('resealWorkspace', () => {
       server.afterPatch = undefined
       server.signedOut = true
     }
-    const countBlocks = server.countBlocks.bind(server)
-    server.countBlocks = async workspaceId => {
+    // The session comes back for the closing checks.
+    const readWorkspace = server.readWorkspace.bind(server)
+    server.readWorkspace = async workspaceId => {
       server.signedOut = false
-      return countBlocks(workspaceId)
+      return readWorkspace(workspaceId)
     }
 
     await expect(resealWorkspace({server, workspaceId: WS, wk, pageSize: 2})).rejects.toThrow('the pass saw 2 of the workspace\'s 5 rows')

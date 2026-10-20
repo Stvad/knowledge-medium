@@ -58,9 +58,9 @@ describe('parseConversionPhase', () => {
     expect(parseConversionPhase(null)).toBeNull()
   })
 
-  it('reads a value it does not know as sealing, the phase that refuses every unlock', () => {
-    expect(parseConversionPhase('verifying')).toBe('sealing')
-    expect(parseConversionPhase(7)).toBe('sealing')
+  it('reads a value it does not know as unknown, which refuses every unlock', () => {
+    expect(parseConversionPhase('verifying')).toBe('unknown')
+    expect(parseConversionPhase(7)).toBe('unknown')
   })
 })
 
@@ -98,9 +98,9 @@ describe('fetchWorkspaceConversionState', () => {
     expect(await fetchWorkspaceConversionState('ws')).toMatchObject({kind: 'read', state: {conversionPhase: null}})
   })
 
-  it('a phase value this build does not know reads as sealing', async () => {
+  it('a phase value this build does not know reads as unknown', async () => {
     query.results.push(read({phase: 'verifying'}))
-    expect(await fetchWorkspaceConversionState('ws')).toMatchObject({kind: 'read', state: {conversionPhase: 'sealing'}})
+    expect(await fetchWorkspaceConversionState('ws')).toMatchObject({kind: 'read', state: {conversionPhase: 'unknown'}})
   })
 
   it.each([

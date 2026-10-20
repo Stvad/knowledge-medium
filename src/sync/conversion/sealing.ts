@@ -9,7 +9,9 @@ import { open } from '../crypto/aead.js'
 import { validateCanary } from '../crypto/canary.js'
 import { ENVELOPE_PREFIX, GCM_TAG_BYTES, NONCE_BYTES } from '../crypto/envelope.js'
 import { encodeForWire, SEALED_COLUMNS, type GetCek, type WireBlockColumns } from '../transform.js'
+import type { MediaRef } from './attachmentCleaner.js'
 import type { ContentColumns, ConversionServer, ResealPatch, ServerBlockRow } from './conversionServer.js'
+import { keysetPages } from './pages.js'
 
 /** Patches per `apply_block_patches` call, whatever the page size: the call
  *  runs one UPDATE per patch in a single statement, and the upload path caps
@@ -167,33 +169,60 @@ export const requireWorkspaceKey = async (
 
 /** A lost session reads as an empty table rather than as an error, so each pass
  *  ends by proving it saw every row: as many as the workspace holds, counted
- *  while it is still visible to this session. */
+ *  once it is shown to be still visible to this session. */
 export const requireWholeWorkspace = async (
   server: ConversionServer,
   workspaceId: string,
   wk: CryptoKey,
   seen: number,
 ): Promise<void> => {
-  const total = await server.countBlocks(workspaceId)
   await requireWorkspaceKey(server, workspaceId, wk)
+  const total = (await server.workspaceCounts(workspaceId)).blocks
   if (total !== seen) throw new Error(`conversion: the pass saw ${seen} of the workspace's ${total} rows; run it again`)
 }
 
 /** The workspace's rows, a page at a time, read only once the previous page has
  *  been handled. */
-export async function* serverPages(
+export const serverPages = (
   server: ConversionServer,
   workspaceId: string,
   pageSize: number,
   signal?: AbortSignal,
-): AsyncGenerator<readonly ServerBlockRow[]> {
-  for (let afterId: string | null = null; ;) {
-    signal?.throwIfAborted()
-    const page = await server.readBlockPage(workspaceId, afterId, pageSize)
-    if (page.length === 0) return
-    yield page
-    afterId = page[page.length - 1].id
+): AsyncGenerator<readonly ServerBlockRow[]> =>
+  keysetPages<ServerBlockRow, string | null>({
+    read: (after, limit) => server.readBlockPage(workspaceId, after, limit),
+    first: null,
+    cursorOf: row => row.id,
+    pageSize,
+    signal,
+  })
+
+/** The workspace's media blocks as the server holds them, each row opened under
+ *  `wk`: the set a proof covers, which neither this device's view nor a bundle
+ *  can stand in for, since either may be stale. A row that doesn't open fails
+ *  the read rather than be left out, and so does a pass that didn't see every
+ *  row. */
+export const serverMediaBlocks = async (
+  server: ConversionServer,
+  workspaceId: string,
+  wk: CryptoKey,
+  mediaHashOf: (propertiesJson: string) => string | null,
+  signal?: AbortSignal,
+): Promise<MediaRef[]> => {
+  const media: MediaRef[] = []
+  let seen = 0
+  for await (const page of serverPages(server, workspaceId, RESEAL_PAGE_SIZE, signal)) {
+    const opened = await Promise.all(page.map(row => openSealed(wk, row, contentColumnsOf(row))))
+    for (const [i, row] of page.entries()) {
+      const columns = opened[i]
+      if (!columns) throw new Error(`conversion: block ${row.id} does not open under the workspace key`)
+      const contentHash = mediaHashOf(columns.properties_json)
+      if (contentHash) media.push({blockId: row.id, contentHash})
+    }
+    seen += page.length
   }
+  await requireWholeWorkspace(server, workspaceId, wk, seen)
+  return media
 }
 
 export interface SealTarget {

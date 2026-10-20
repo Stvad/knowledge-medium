@@ -4,7 +4,7 @@ import { resealWorkspace } from './reseal.js'
 import { ConversionRefusal, contentColumnsOf } from './sealing.js'
 import { flipUnder, keyOf, openRow, seedPlaintext, sealFor, WS } from './test/conversionFixtures.js'
 import { FakeConversionServer, type FakeBlockRow } from './test/fakeConversionServer.js'
-import { sealRecordOf, verifyReseal } from './verifyReseal.js'
+import { latestResealWrites, sealRecordOf, verifyReseal } from './verifyReseal.js'
 
 let wk: CryptoKey
 let server: FakeConversionServer
@@ -126,10 +126,11 @@ describe('verifyReseal', () => {
       server.signedOut = true
       return rows
     }
-    const countBlocks = server.countBlocks.bind(server)
-    server.countBlocks = async workspaceId => {
+    // The session comes back for the closing checks.
+    const readWorkspace = server.readWorkspace.bind(server)
+    server.readWorkspace = async workspaceId => {
       server.signedOut = false
-      return countBlocks(workspaceId)
+      return readWorkspace(workspaceId)
     }
 
     await expect(verify(2)).rejects.toThrow('the pass saw 2 of the workspace\'s 5 rows')
@@ -260,5 +261,27 @@ describe('sealRecordOf', () => {
   it('reads no record from a write that left a column out', async () => {
     const {after_diff: {content, properties_json}, ...write} = await resealWrite(wk)
     expect(await sealRecordOf({...write, after_diff: {content, properties_json, updated_at: 2}}, WS, wk)).toBeNull()
+  })
+})
+
+describe('latestResealWrites', () => {
+  it('takes each block\'s latest re-seal-shaped write, whatever order history arrives in', async () => {
+    const wk = await keyOf(1)
+    const write = (event_id: number, content: string) => ({
+      event_id,
+      block_id: 'b',
+      before_diff: {content, properties_json: '{}', references_json: '[]', updated_at: event_id},
+      after_diff: {content: '', properties_json: '', references_json: '', updated_at: event_id + 1},
+    })
+    const sealedAfter = async (row: ReturnType<typeof write>, plaintext: string) => ({
+      ...row,
+      after_diff: {...await sealFor(wk, {id: 'b', workspace_id: WS}, {content: plaintext, properties_json: '{}', references_json: '[]'}), updated_at: row.event_id + 1},
+    })
+    const older = await sealedAfter(write(1, 'older'), 'older')
+    const newer = await sealedAfter(write(5, 'newer'), 'newer')
+
+    for (const history of [[older, newer], [newer, older]]) {
+      expect(latestResealWrites(history).get('b')?.before.content).toBe('newer')
+    }
   })
 })

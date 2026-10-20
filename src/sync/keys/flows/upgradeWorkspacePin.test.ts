@@ -78,9 +78,16 @@ describe('checkServerE2eeEntry', () => {
     expect(await checkServerE2eeEntry(entryDeps())).toEqual({kind: 'open', canary, offerFinish: false})
   })
 
-  it('refuses while the server is sealing', async () => {
+  it('refuses while the server is sealing, telling the owner it can carry the conversion on', async () => {
     serverState = {...serverState, conversionPhase: 'sealing'}
-    expect(await checkServerE2eeEntry(entryDeps())).toEqual({kind: 'converting'})
+    expect(await checkServerE2eeEntry(entryDeps())).toEqual({kind: 'converting', owned: true})
+    serverState = {...serverState, ownerUserId: 'someone-else'}
+    expect(await checkServerE2eeEntry(entryDeps())).toEqual({kind: 'converting', owned: false})
+  })
+
+  it('refuses under a phase this build does not know, as under sealing', async () => {
+    serverState = {...serverState, conversionPhase: 'unknown'}
+    expect(await checkServerE2eeEntry(entryDeps())).toEqual({kind: 'converting', owned: true})
   })
 
   it('refuses when the phase cannot be read', async () => {
@@ -156,8 +163,8 @@ describe('upgradeWorkspacePin', () => {
     serverState = {...serverState, conversionPhase: 'sealing'}
     await keyStore.put(USER, WS, storedRecord)
 
-    expect(await upgrade({kind: 'stored'})).toEqual({ok: false, reason: 'refused', entry: {kind: 'converting'}})
-    expect(await upgrade()).toEqual({ok: false, reason: 'refused', entry: {kind: 'converting'}})
+    expect(await upgrade({kind: 'stored'})).toEqual({ok: false, reason: 'refused', entry: {kind: 'converting', owned: true}})
+    expect(await upgrade()).toEqual({ok: false, reason: 'refused', entry: {kind: 'converting', owned: true}})
 
     expect(getModePin(USER, WS)).toBe('plaintext')
     expect(hasPinUpgradeMarker(USER, WS)).toBe(false)

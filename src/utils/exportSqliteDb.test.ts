@@ -9,6 +9,7 @@ import {
   exportRawSqliteDbToFile,
   getRawSqliteDbBackup,
   importRawSqliteDb,
+  localDbFileBytes,
   removeRecoveryBackupTemps,
 } from './exportSqliteDb'
 
@@ -81,6 +82,125 @@ describe('exportRawSqliteDbToFile', () => {
         'the chosen folder is too slow for a background copy',
       )
       await vi.advanceTimersByTimeAsync(200_000)
+      await rejects
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('sizes the database with its sidecars, failing on anything but an absent sidecar', async () => {
+    const storage = (files: Record<string, number | Error>) => Object.defineProperty(navigator, 'storage', {
+      configurable: true,
+      value: {getDirectory: async () => ({
+        getFileHandle: async (name: string) => {
+          const entry = Object.entries(files).find(([suffix]) => name.endsWith(`.db${suffix}`))?.[1]
+          if (entry === undefined) throw new DOMException(name, 'NotFoundError')
+          if (entry instanceof Error) throw entry
+          return {getFile: async () => fakeFile(new Uint8Array(entry))}
+        },
+      })},
+    })
+
+    storage({'': 10, '-wa0': 5})
+    expect(await localDbFileBytes('user-1')).toBe(15)
+    storage({'-wa0': 5})
+    await expect(localDbFileBytes('user-1')).rejects.toMatchObject({name: 'NotFoundError'})
+    storage({'': 10, '-wa1': new DOMException('denied', 'NotAllowedError')})
+    await expect(localDbFileBytes('user-1')).rejects.toMatchObject({name: 'NotAllowedError'})
+  })
+
+  it('lets the caller stop the wait for the database lock, well before the deadline', async () => {
+    vi.useFakeTimers()
+    try {
+      const getFileHandle = vi.fn(async () => ({getFile: async () => fakeFile(new Uint8Array(4))}))
+      Object.defineProperty(navigator, 'storage', {
+        configurable: true,
+        value: {getDirectory: async () => ({getFileHandle})},
+      })
+      // A write lock that never grants.
+      const writeLock = vi.fn(() => new Promise<never>(() => {}))
+      const stop = new AbortController()
+      const copying = exportRawSqliteDbToFile(
+        {user: {id: 'user-1'}, db: {writeLock}} as unknown as Repo,
+        {name: 'copy.db'} as unknown as FileSystemFileHandle,
+        {signal: stop.signal},
+      )
+      const rejects = expect(copying).rejects.toThrow('stopped')
+
+      await vi.advanceTimersByTimeAsync(1_000)
+      stop.abort(new DOMException('stopped', 'AbortError'))
+      // The abort's grace period, not the three-minute deadline.
+      await vi.advanceTimersByTimeAsync(6_000)
+      await rejects
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('releases the database lock when stopped while the destination is still opening its writable', async () => {
+    Object.defineProperty(navigator, 'storage', {
+      configurable: true,
+      value: {getDirectory: async () => ({getFileHandle: async () => ({getFile: async () => fakeFile(new Uint8Array(4))})})},
+    })
+    const {execute} = fakeWriteLock()
+    let lockReleased = false
+    const writeLock = vi.fn(async <T,>(fn: (tx: {execute: typeof execute}) => Promise<T>) => {
+      try {
+        return await fn({execute})
+      } finally {
+        lockReleased = true
+      }
+    })
+    let openWritable: ((writable: FileSystemWritableFileStream) => void) | undefined
+    const destination = {
+      name: 'copy.db',
+      createWritable: () => new Promise<FileSystemWritableFileStream>(resolve => { openWritable = resolve }),
+    }
+    const stop = new AbortController()
+    const copying = exportRawSqliteDbToFile(
+      {user: {id: 'user-1'}, db: {writeLock}} as unknown as Repo,
+      destination as unknown as FileSystemFileHandle,
+      {signal: stop.signal},
+    )
+    const rejects = expect(copying).rejects.toThrow('stopped')
+    await vi.waitFor(() => expect(openWritable).toBeDefined())
+
+    stop.abort(new DOMException('stopped', 'AbortError'))
+    await vi.waitFor(() => expect(lockReleased).toBe(true))
+    await rejects
+
+    // A writable that opens after the stop is discarded, not left open.
+    const late = {abort: vi.fn(async () => {})}
+    openWritable!(late as unknown as FileSystemWritableFileStream)
+    await vi.waitFor(() => expect(late.abort).toHaveBeenCalled())
+  })
+
+  it('budgets the copy for the write-ahead sidecars the checkpoint folds in', async () => {
+    vi.useFakeTimers()
+    try {
+      const sizes: Record<string, number> = {'': 4, '-wa0': 100, '-wa1': 0}
+      const getFileHandle = vi.fn(async (name: string) => {
+        const suffix = Object.keys(sizes).find(s => s && name.endsWith(s)) ?? ''
+        return {getFile: async () => fakeFile(new Uint8Array(sizes[suffix]))}
+      })
+      Object.defineProperty(navigator, 'storage', {
+        configurable: true,
+        value: {getDirectory: async () => ({getFileHandle})},
+      })
+      const writeLock = vi.fn(() => new Promise<never>(() => {}))
+      let settled = false
+      const failing = exportRawSqliteDbToFile(
+        {user: {id: 'user-1'}, db: {writeLock}} as unknown as Repo,
+        {name: 'copy.db'} as unknown as FileSystemFileHandle,
+        {timeoutMessage: 'too slow', minBytesPerSecond: 1},
+      ).finally(() => { settled = true })
+      const rejects = expect(failing).rejects.toThrow('too slow')
+
+      // 180 s for the lock and checkpoint, then a second a byte for all 104 bytes.
+      await vi.advanceTimersByTimeAsync(180_000 + 100_000)
+      expect(settled).toBe(false)
+      // Past the deadline and the abort's grace period.
+      await vi.advanceTimersByTimeAsync(20_000)
       await rejects
     } finally {
       vi.useRealTimers()

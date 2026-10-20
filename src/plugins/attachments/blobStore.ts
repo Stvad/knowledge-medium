@@ -84,9 +84,9 @@ export interface BlobStore {
    *  a throw, which recovery branches on.) */
   probe(workspaceId: string, contentKey: string): Promise<Uint8Array<ArrayBuffer> | null>
   /** Direct RLS-gated delete (writer) of one object. Resolves only when Storage
-   *  confirms the delete; throws otherwise, a 404 included (absent, or not this
-   *  user's to delete), so a denied delete never reads as done. */
-  delete(workspaceId: string, contentKey: string): Promise<void>
+   *  confirms the delete; throws otherwise, an absent object included, so a
+   *  denied delete never reads as done. `signal` aborts the request. */
+  delete(workspaceId: string, contentKey: string, signal: AbortSignal | undefined): Promise<void>
 }
 
 /** The storage-js bucket API's own request plumbing: `url` is the Storage base,
@@ -248,7 +248,7 @@ export const createSupabaseBlobStore = (deps: SupabaseBlobStoreDeps): BlobStore 
       return new Uint8Array(await data.arrayBuffer())
     },
 
-    async delete(workspaceId, contentKey) {
+    async delete(workspaceId, contentKey, signal) {
       // The single-object route, not `remove()`: the bulk route deletes the rows,
       // then sends one backend DeleteObjects whose per-key errors it never reads,
       // so a failed key keeps its bytes with no row any listing could find. This
@@ -259,8 +259,13 @@ export const createSupabaseBlobStore = (deps: SupabaseBlobStoreDeps): BlobStore 
       const res = await files.fetch(storageObjectUrl(files.url, ATTACHMENTS_BUCKET, path), {
         method: 'DELETE',
         headers: files.headers,
+        signal,
       })
-      if (!res.ok) throw new Error(`blob delete failed (${res.status}) for ${path}`)
+      if (!res.ok) {
+        // Storage answers a denial and an absence alike with a 400; only the body's code tells them apart.
+        const code = await res.json().then((body: {code?: unknown} | null) => body?.code, () => undefined)
+        throw new Error(`blob delete failed (${res.status}${typeof code === 'string' ? ` ${code}` : ''}) for ${path}`)
+      }
     },
   }
 }

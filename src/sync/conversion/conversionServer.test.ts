@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { describe, expect, it } from 'vitest'
-import { createSupabaseConversionServer, IDS_PER_FILTER } from './conversionServer.js'
+import { describe, expect, it, vi } from 'vitest'
+import { createSupabaseConversionServer, IDS_PER_FILTER, type ConversionServer } from './conversionServer.js'
 
 type Row = Record<string, unknown>
 
@@ -15,11 +15,20 @@ const valueAt = (row: Row, path: string): unknown => {
  *  without an `order` comes back in no particular order. */
 const fakeClient = (
   tables: Record<string, Row[]>,
-  {maxRows = Infinity, error, status = 400}: {maxRows?: number; error?: {code: string; message: string}; status?: number} = {},
+  {maxRows = Infinity, error, status = 400, rpcData = {}}: {
+    maxRows?: number
+    error?: {code: string; message: string}
+    status?: number
+    rpcData?: Record<string, unknown>
+  } = {},
 ) => {
   const inListLengths: number[] = []
-  const rpcs: Array<{fn: string; args: unknown}> = []
+  const rpcs: Array<{fn: string; args: unknown; signal?: AbortSignal}> = []
+  /** Every request made, table read or RPC, with the signal it was handed. */
+  const requests: Array<{signal?: AbortSignal}> = []
   const from = (table: string) => {
+    const request: {signal?: AbortSignal} = {}
+    requests.push(request)
     const filters: Array<(row: Row) => boolean> = []
     let orderBy: string | undefined
     let limit = Infinity
@@ -41,6 +50,8 @@ const fakeClient = (
       eq: (column: string, value: unknown) => (filters.push(row => valueAt(row, column) === value), builder),
       gt: (column: string, value: string | number) =>
         (filters.push(row => (valueAt(row, column) as string | number) > value), builder),
+      lte: (column: string, value: string | number) =>
+        (filters.push(row => (valueAt(row, column) as string | number) <= value), builder),
       in: (column: string, values: unknown[]) => {
         inListLengths.push(values.length)
         filters.push(row => values.includes(valueAt(row, column)))
@@ -56,21 +67,51 @@ const fakeClient = (
       order: (column: string) => ((orderBy = column), builder),
       limit: (count: number) => ((limit = count), builder),
       maybeSingle: () => ((maybeSingle = true), builder),
+      abortSignal: (signal: AbortSignal) => ((request.signal = signal), builder),
       then: (resolve: (value: unknown) => unknown, reject: (reason: unknown) => unknown) =>
         Promise.resolve(respond()).then(resolve, reject),
     }
     return builder
   }
-  const rpc = async (fn: string, args: unknown) => {
-    rpcs.push({fn, args})
-    return {error: error ?? null, status: error ? status : 204}
+  const rpc = (fn: string, args: unknown) => {
+    const call: {fn: string; args: unknown; signal?: AbortSignal} = {fn, args}
+    rpcs.push(call)
+    requests.push(call)
+    const response = {
+      abortSignal: (signal: AbortSignal) => ((call.signal = signal), response),
+      then: (resolve: (value: unknown) => unknown, reject: (reason: unknown) => unknown) =>
+        Promise.resolve({data: error ? null : (rpcData[fn] ?? null), error: error ?? null, status: error ? status : 200}).then(resolve, reject),
+    }
+    return response
   }
-  return {client: {from, rpc} as unknown as SupabaseClient, inListLengths, rpcs}
+  return {client: {from, rpc} as unknown as SupabaseClient, inListLengths, rpcs, requests}
 }
 
 const WS = 'ws-1'
 const blockId = (i: number) => `b${String(i).padStart(3, '0')}`
 const ENVELOPE = 'enc:v1:AAAA'
+
+/** The one-way steps: Stop never cuts them, their own deadline does. */
+type OneWay = 'convertWorkspaceToE2ee' | 'finishConversion'
+type Call = (server: ConversionServer) => Promise<unknown>
+
+/** One call of every server method, typed over the interface: a method added
+ *  to it doesn't compile here until it's listed in one table or the other. */
+const cancellableCalls: {[K in Exclude<keyof ConversionServer, OneWay>]: Call} = {
+  readWorkspace: server => server.readWorkspace(WS),
+  workspaceCounts: server => server.workspaceCounts(WS),
+  readBlockPage: server => server.readBlockPage(WS, null, 1),
+  readBlocks: server => server.readBlocks(WS, [blockId(0)]),
+  readContentSealHistory: server => server.readContentSealHistory(WS, [blockId(0)]),
+  applyBlockPatches: server => server.applyBlockPatches([]),
+  readFullBlockPage: server => server.readFullBlockPage(WS, null, 1),
+  readHistoryPage: server => server.readHistoryPage(WS, 0, 1, 1),
+  purgeWorkspaceHistory: server => server.purgeWorkspaceHistory(WS, 1, 0),
+}
+const oneWayCalls: {[K in OneWay]: Call} = {
+  convertWorkspaceToE2ee: server => server.convertWorkspaceToE2ee(WS, ENVELOPE),
+  finishConversion: server => server.finishConversion(WS),
+}
 
 describe('createSupabaseConversionServer', () => {
   it('reads the history of any number of blocks, across id chunks and capped responses', async () => {
@@ -120,17 +161,55 @@ describe('createSupabaseConversionServer', () => {
     expect((await server.readBlockPage(WS, blockId(1), 9)).map(row => row.id)).toEqual([blockId(2), blockId(3), blockId(4)])
   })
 
+  it('flips with the workspace id and canary', async () => {
+    const {client, rpcs} = fakeClient({})
+
+    await createSupabaseConversionServer(client).convertWorkspaceToE2ee(WS, ENVELOPE)
+
+    expect(rpcs.map(({fn, args}) => ({fn, args}))).toEqual([{fn: 'convert_workspace_to_e2ee', args: {p_workspace_id: WS, p_wk_canary: ENVELOPE}}])
+  })
+
+  it('lets the run cancel every request but the one-way steps, which may commit with nobody waiting', async () => {
+    for (const [method, call] of Object.entries(cancellableCalls)) {
+      const {client, requests} = fakeClient({blocks: [], blocks_history: [], workspaces: []}, {rpcData: {conversion_workspace_counts: [{block_count: 0, history_count: 0, max_event_id: 0}]}})
+      const run = new AbortController()
+      await call(createSupabaseConversionServer(client, run.signal))
+      expect(requests.length, method).toBeGreaterThan(0)
+      expect(requests.map(request => request.signal), method).toEqual(requests.map(() => run.signal))
+    }
+
+    for (const [method, call] of Object.entries(oneWayCalls)) {
+      const {client, requests} = fakeClient({})
+      const run = new AbortController()
+      await call(createSupabaseConversionServer(client, run.signal))
+      run.abort()
+      expect(requests, method).toHaveLength(1)
+      expect(requests[0].signal?.aborted, method).toBe(false)
+    }
+  })
+
+  it('gives up waiting on a one-way step past its own deadline', async () => {
+    for (const [method, call] of Object.entries(oneWayCalls)) {
+      const {client, requests} = fakeClient({})
+      await call(createSupabaseConversionServer(client, undefined, {oneWayTimeoutMs: 1}))
+
+      await vi.waitFor(() => expect(requests[0].signal?.aborted, method).toBe(true))
+    }
+  })
+
   it('reads a workspace this session cannot see as null', async () => {
     const {client} = fakeClient({workspaces: [{id: 'ws-other', encryption_mode: 'e2ee', wk_canary: ENVELOPE}]})
 
     expect(await createSupabaseConversionServer(client).readWorkspace(WS)).toBeNull()
   })
 
-  it('counts the workspace\'s rows', async () => {
-    const blocks = [0, 1, 2].map(i => ({id: blockId(i), workspace_id: WS}))
-    const {client} = fakeClient({blocks: [...blocks, {id: 'x', workspace_id: 'ws-other'}]})
+  it('counts the workspace through the one owner-only RPC', async () => {
+    const {client, rpcs} = fakeClient({}, {
+      rpcData: {conversion_workspace_counts: [{block_count: 3, history_count: 7, max_event_id: 42}]},
+    })
 
-    expect(await createSupabaseConversionServer(client).countBlocks(WS)).toBe(3)
+    expect(await createSupabaseConversionServer(client).workspaceCounts(WS)).toEqual({blocks: 3, history: 7, maxEventId: 42})
+    expect(rpcs).toEqual([{fn: 'conversion_workspace_counts', args: {p_workspace_id: WS}}])
   })
 
   it('throws a server error with its code and HTTP status', async () => {
@@ -139,8 +218,9 @@ describe('createSupabaseConversionServer', () => {
     const refused = {code: '42501', status: 403}
 
     await expect(server.readWorkspace(WS)).rejects.toMatchObject(refused)
-    await expect(server.countBlocks(WS)).rejects.toMatchObject(refused)
+    await expect(server.workspaceCounts(WS)).rejects.toMatchObject(refused)
     await expect(server.readBlockPage(WS, null, 1)).rejects.toMatchObject(refused)
     await expect(server.applyBlockPatches([])).rejects.toMatchObject(refused)
+    await expect(server.convertWorkspaceToE2ee(WS, ENVELOPE)).rejects.toMatchObject(refused)
   })
 })

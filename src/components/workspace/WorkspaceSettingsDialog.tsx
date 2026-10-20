@@ -20,6 +20,7 @@ import {
   updateWorkspaceMemberRole,
 } from '@/data/workspaces'
 import type { Workspace, WorkspaceMemberWithEmail, WorkspaceRole } from '@/types'
+import { EncryptionSection } from './conversion/EncryptionSection'
 
 type InviteRole = Exclude<WorkspaceRole, 'owner'>
 
@@ -57,6 +58,9 @@ export function WorkspaceSettingsDialog({workspace, open, onOpenChange, onDelete
               subsection needs a setState-in-effect on workspace change. */}
           <RenameSection key={workspace.id} workspace={workspace} disabled={!isOwner} />
           <MembersSection key={workspace.id} workspace={workspace} canManage={isOwner} />
+          {isOwner && (
+            <EncryptionSection key={workspace.id} workspace={workspace} userId={repo.user.id} onStart={() => onOpenChange(false)} />
+          )}
           {isOwner && <DangerSection workspace={workspace} onDeleted={() => { onOpenChange(false); onDeleted() }} />}
           {!isOwner && isViewer && (
             <p className="text-sm text-muted-foreground">

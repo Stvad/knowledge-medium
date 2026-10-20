@@ -11,6 +11,7 @@ import { trackTestRepo } from '@/data/test/testRepoScope'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import type { BlobStore } from './blobStore.js'
 import { InMemoryByteStore } from './byteStore.js'
+import { InMemoryByteUploadStore } from './uploadStore.js'
 import { createAttachmentCleanerIO, listMediaBlocks, listWorkspaceObjects } from './attachmentCleanerIO.js'
 import { ASSETS_TYPE_CONTRIBUTION, MEDIA_PROPERTY_SCHEMAS, MEDIA_TYPE, MEDIA_TYPE_CONTRIBUTION, mediaHashProp } from './mediaBlock.js'
 
@@ -72,26 +73,80 @@ describe('listMediaBlocks', () => {
     )
     expect(await listMediaBlocks(repo, WS)).toHaveLength(2)
   })
+
+  it('reads a media block\'s hash from its stored row, as the bundle reads the server\'s', async () => {
+    await addMedia('photo', 'a0', 'sha256:aaaa')
+    await repo.tx(async tx => {
+      await tx.create({id: 'note', workspaceId: WS, parentId: null, orderKey: 'a1', content: 'not media'})
+      // A hash-shaped value on a block that isn't media.
+      await tx.setProperty('note', mediaHashProp, 'sha256:bbbb')
+    }, {scope: ChangeScope.BlockDefault})
+    const stored = async (id: string) =>
+      (await sharedDb.db.get<{properties_json: string}>('SELECT properties_json FROM blocks WHERE id = ?', [id])).properties_json
+    const io = cleanerIO(repo)
+
+    expect(io.mediaHashOf(await stored('photo'))).toBe('sha256:aaaa')
+    expect(io.mediaHashOf(await stored('note'))).toBeNull()
+    expect(io.mediaHashOf('enc:v1:not-json')).toBeNull()
+    expect(io.mediaHashOf('null')).toBeNull()
+  })
+})
+
+const cleanerIO = (repo: Repo, uploadStore = new InMemoryByteUploadStore()) => createAttachmentCleanerIO({
+  client: {} as SupabaseClient,
+  blobStore: {} as BlobStore,
+  byteStore: new InMemoryByteStore(),
+  uploadStore,
+  repo,
+  userId: 'user-1',
+  workspaceId: WS,
+  isRemoteSyncActive: () => true,
+})
+
+describe('createAttachmentCleanerIO pendingUploads', () => {
+  it('counts this workspace\'s staged, pending and failed uploads, and no stage whose block never committed', async () => {
+    const uploads = new InMemoryByteUploadStore()
+    const stage = (assetBlockId: string, workspaceId = WS, userId = 'user-1') =>
+      uploads.stage({userId, assetBlockId, workspaceId, contentHash: 'sha256:aaaa', contentKey: assetBlockId})
+    await stage('staged')
+    await stage('pending')
+    await uploads.promote('user-1', 'pending')
+    await stage('failed')
+    await uploads.markFailed('user-1', 'failed')
+    await stage('other-workspace', 'ws-2')
+    await stage('other-user', WS, 'user-2')
+    // A capture that crashed or threw between its stage and its block: it never uploads.
+    await stage('orphan')
+    const repo = {load: async (id: string) => (id === 'orphan' ? null : {id})} as unknown as Repo
+
+    expect(await cleanerIO(repo, uploads).pendingUploads()).toBe(3)
+  })
 })
 
 describe('listWorkspaceObjects', () => {
-  /** A Storage list over `objects`: the entries directly under a prefix, a
-   *  nested folder as an entry with a null id, by name; at most `cap` a page. */
+  type Page = {objects: {name: string}[]; folders: never[]; hasNext: boolean; nextCursor?: string}
+  /** Storage's v2 listing over `objects`: every full name under the prefix,
+   *  bytewise, at most `cap` a page, resuming after the cursor's name. With a
+   *  delimiter a nested object comes back only as its folder. A listing that
+   *  keeps asking would never yield to the test's timeout, so it is cut off. */
   const fakeClient = (objects: readonly string[], {cap = Infinity, sessionUser = 'user-1' as string | null} = {}) => {
-    const calls: {prefix: string; offset: number}[] = []
+    const calls: {prefix: string; cursor?: string}[] = []
     const headers: Record<string, string>[] = []
-    const list = async (prefix: string, {limit, offset}: {limit: number; offset: number}) => {
-      calls.push({prefix, offset})
-      const under = objects.filter(o => o.startsWith(`${prefix}/`)).map(o => o.slice(prefix.length + 1))
-      const entries = [...new Set(under.map(rest => rest.split('/')[0]))].sort().map(name => ({
-        name,
-        id: under.includes(name) ? `id-${name}` : null,
-      }))
-      return {data: entries.slice(offset, offset + Math.min(limit, cap)), error: null}
+    const listV2 = async (
+      {prefix, cursor, limit, with_delimiter}: {prefix: string; cursor?: string; limit: number; with_delimiter?: boolean},
+    ) => {
+      if (calls.push({prefix, cursor}) > 10) throw new Error('listed the folder over again')
+      const listed = (name: string) => name.startsWith(prefix) && !(with_delimiter && name.slice(prefix.length).includes('/'))
+      const under = objects.filter(listed).sort()
+      const start = cursor === undefined ? 0 : under.indexOf(cursor) + 1
+      const page = under.slice(start, start + Math.min(limit, cap))
+      const hasNext = start + page.length < under.length
+      const data: Page = {objects: page.map(name => ({name})), folders: [], hasNext, nextCursor: hasNext ? page.at(-1) : undefined}
+      return {data, error: null}
     }
     const from = () => {
       const api = {
-        list,
+        listV2,
         setHeader: (name: string, value: string) => {
           headers.push({[name]: value})
           return api
@@ -106,21 +161,35 @@ describe('listWorkspaceObjects', () => {
     } as unknown as SupabaseClient
     return {client, calls, headers}
   }
+  /** A client whose every page is `page`, for a few pages: a listing that
+   *  keeps asking would otherwise never yield to the test's timeout. */
+  const clientServing = (page: Page | Error) => {
+    let served = 0
+    const listV2 = async () => {
+      if (++served > 3) throw new Error('listed the folder over again')
+      return page instanceof Error ? {data: null, error: page} : {data: page, error: null}
+    }
+    return {
+      auth: {getSession: async () => ({data: {session: {user: {id: 'user-1'}, access_token: 't'}}})},
+      storage: {from: () => ({listV2, setHeader: () => ({listV2})})},
+    } as unknown as SupabaseClient
+  }
   const list = (client: SupabaseClient, over: {isRemoteSyncActive?: () => boolean} = {}) =>
     listWorkspaceObjects({client, userId: 'user-1', workspaceId: WS, isRemoteSyncActive: () => true, ...over})
 
-  it('lists every object, recursing into nested folders, relative to the workspace folder', async () => {
-    const {client, headers} = fakeClient([`${WS}/aa`, `${WS}/dir/bb`, `${WS}/dir/deeper/cc`, 'other-ws/dd'])
+  it('lists every object, nested ones included, relative to the workspace folder', async () => {
+    const {client, calls, headers} = fakeClient([`${WS}/dir/deeper/cc`, `${WS}/aa`, `${WS}/dir/bb`, 'other-ws/dd'])
     expect(await list(client)).toEqual(['aa', 'dir/bb', 'dir/deeper/cc'])
+    expect(calls).toEqual([{prefix: `${WS}/`, cursor: undefined}])
     // The session's own token rides the request, so it can't fall back to the anon key.
     expect(headers).toEqual([{Authorization: 'Bearer token-of-user-1'}])
   })
 
-  it('pages by the length each page actually had, until an empty page', async () => {
+  it("pages by Storage's cursor until it reports no next page", async () => {
     const names = Array.from({length: 1200}, (_, i) => `${WS}/${String(i).padStart(6, '0')}`)
-    const {client, calls} = fakeClient(names, {cap: 500}) // a server capping pages below the 1000 asked for
+    const {client, calls} = fakeClient(names, {cap: 500})
     expect(await list(client)).toHaveLength(1200)
-    expect(calls.map(c => c.offset)).toEqual([0, 500, 1000, 1200])
+    expect(calls.map(c => c.cursor)).toEqual([undefined, `${WS}/000499`, `${WS}/000999`])
   })
 
   it('refuses rather than list under no session or another account: RLS would show an empty folder', async () => {
@@ -151,33 +220,23 @@ describe('listWorkspaceObjects', () => {
     expect(calls).toHaveLength(1)
   })
 
-  it('refuses an empty name segment, which would list its folder again forever', async () => {
-    const {client} = fakeClient([`${WS}//x`])
-    await expect(list(client)).rejects.toThrow(/empty name/)
+  it('throws on a failed page rather than acting on a partial listing', async () => {
+    await expect(list(clientServing(new Error('503')))).rejects.toThrow('503')
   })
 
-  it('throws on a failed page rather than acting on a partial listing', async () => {
-    const failing = {list: async () => ({data: null, error: new Error('503')})}
-    const client = {
-      auth: {getSession: async () => ({data: {session: {user: {id: 'user-1'}, access_token: 't'}}})},
-      storage: {from: () => ({...failing, setHeader: () => failing})},
-    } as unknown as SupabaseClient
-    await expect(list(client)).rejects.toThrow('503')
+  // Defence in depth: Storage v1.80.2 does neither.
+  it('refuses a next page with no cursor, which would start the listing over', async () => {
+    await expect(list(clientServing({objects: [{name: `${WS}/aa`}], folders: [], hasNext: true}))).rejects.toThrow(/no cursor/)
+  })
+
+  it('refuses a name outside the folder rather than cut a path out of it', async () => {
+    await expect(list(clientServing({objects: [{name: 'aa'}], folders: [], hasNext: false}))).rejects.toThrow(/listed aa under/)
   })
 })
 
 describe('createAttachmentCleanerIO mediaBlocks', () => {
   it('refuses while this device has synced rows not yet applied to blocks', async () => {
     const repo = {workspaceViewGap: async () => ({reason: 'synced rows are still draining into `blocks`', transient: true})}
-    const io = createAttachmentCleanerIO({
-      client: {} as SupabaseClient,
-      blobStore: {} as BlobStore,
-      byteStore: new InMemoryByteStore(),
-      repo: repo as unknown as Repo,
-      userId: 'user-1',
-      workspaceId: WS,
-      isRemoteSyncActive: () => true,
-    })
-    await expect(io.mediaBlocks()).rejects.toThrow(/incomplete: synced rows are still draining/)
+    await expect(cleanerIO(repo as unknown as Repo).mediaBlocks()).rejects.toThrow(/incomplete: synced rows are still draining/)
   })
 })

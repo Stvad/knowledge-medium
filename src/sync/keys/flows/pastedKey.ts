@@ -1,3 +1,4 @@
+import { validateCanary } from '../../crypto/canary.js'
 import { deriveContentKeyHmac } from '../../crypto/contentKey.js'
 import { importWorkspaceKey, parseWorkspaceKey } from '../../crypto/workspaceKey.js'
 
@@ -25,4 +26,20 @@ export const importPastedWorkspaceKey = async (pastedKey: string): Promise<Paste
   } catch {
     return null
   }
+}
+
+/** Why pasted text didn't open a canary: it isn't a key at all, or it is
+ *  another workspace's key. */
+export type PastedKeyProblem = 'format' | 'invalid-key'
+
+/** The pasted key, if it opens `canary`: the one test every flow that takes a
+ *  pasted key applies before trusting it. */
+export const openCanaryWithPastedKey = async (
+  pastedKey: string,
+  canary: string,
+  workspaceId: string,
+): Promise<PastedWorkspaceKey | PastedKeyProblem> => {
+  const imported = await importPastedWorkspaceKey(pastedKey)
+  if (!imported) return 'format'
+  return (await validateCanary(imported.wk, canary, workspaceId)) ? imported : 'invalid-key'
 }

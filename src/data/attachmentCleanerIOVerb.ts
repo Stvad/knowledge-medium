@@ -1,6 +1,6 @@
 /**
  * The seam the conversion flow reaches the attachment cleaner's Storage through
- * ({@link AttachmentCleanerIO}). Core declares it; the attachments plugin, which
+ * ({@link ConversionAttachmentsIO}). Core declares it; the attachments plugin, which
  * owns Storage access, the byte store and the media type, supplies the impl.
  * Whenever it is unavailable the flow can't prove the folder clean, so it must
  * not finish the conversion; the reason says what to fix.
@@ -8,7 +8,7 @@
 
 import type { Repo } from '@/data/repo.js'
 import { defineVerbFacet } from '@/facets/verbFacet.js'
-import type { AttachmentCleanerIO } from '@/sync/conversion/attachmentCleaner.js'
+import type { ConversionAttachmentsIO } from '@/sync/conversion/conversionAttachments.js'
 
 export interface AttachmentCleanerIOInput {
   readonly repo: Repo
@@ -16,7 +16,7 @@ export interface AttachmentCleanerIOInput {
 }
 
 export type AttachmentCleanerIOResult =
-  | {readonly kind: 'ready'; readonly io: AttachmentCleanerIO}
+  | {readonly kind: 'ready'; readonly io: ConversionAttachmentsIO}
   | {readonly kind: 'unavailable'; readonly reason: string}
 
 export const attachmentCleanerIOVerb = defineVerbFacet<AttachmentCleanerIOInput, AttachmentCleanerIOResult>({

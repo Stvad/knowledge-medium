@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { Input } from '@/components/ui/input'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
-import { Label } from '@/components/ui/label'
+import { Explanation, GateCard, PASTED_KEY_PROBLEM, WorkspaceKeyField } from '@/components/workspace/keyUi'
+import { openConversionFlow } from '@/components/workspace/conversion/conversionFlowStore'
+import { useOnWorkspaceUnlocked } from '@/components/workspace/workspaceUnlocked'
 import type { Repo } from '@/data/repo'
 import { fetchWorkspaceConversionState, hasCopiedCiphertext } from '@/data/workspaceConversion'
 import type { WorkspaceConversionRead } from '@/sync/keys/conversionState'
@@ -64,6 +65,8 @@ interface Props {
  * the workspace really is plaintext.
  */
 export function WorkspaceKeyGate(props: Props) {
+  const {workspaceId, onResolved} = props
+  useOnWorkspaceUnlocked(workspaceId, useCallback(() => void onResolved(), [onResolved]))
   if (props.reason === 'server-e2ee') return <ServerE2eeGate {...props}/>
   if (props.reason === 'finishing-upgrade') return <FinishingUpgradeGate {...props}/>
   return <KeyPromptGate {...props} reason={props.reason}/>
@@ -73,21 +76,6 @@ export function WorkspaceKeyGate(props: Props) {
  *  sentence and "this workspace" inside one. */
 const displayName = (workspaceName: string | undefined, position: 'start' | 'inline' = 'start'): string =>
   workspaceName ? `"${workspaceName}"` : position === 'start' ? 'This workspace' : 'this workspace'
-
-function GateCard({title, children}: {title: string; children: ReactNode}) {
-  return (
-    <div className="flex min-h-svh items-center justify-center p-6">
-      <div className="w-full max-w-md space-y-5 rounded-lg border bg-background p-6 shadow-sm">
-        <h1 className="text-lg font-semibold">{title}</h1>
-        {children}
-      </div>
-    </div>
-  )
-}
-
-const Explanation = ({children}: {children: ReactNode}) => (
-  <p className="text-sm text-muted-foreground">{children}</p>
-)
 
 function KeyInput({
   busy,
@@ -104,18 +92,7 @@ function KeyInput({
 }) {
   return (
     <div className="space-y-2">
-      <Label htmlFor="wk-paste">Workspace key</Label>
-      <Input
-        id="wk-paste"
-        autoFocus
-        autoComplete="off"
-        placeholder="kmp-wk-1:…"
-        value={pasted}
-        disabled={busy}
-        onChange={(e) => onChange(e.target.value)}
-        onKeyDown={(e) => { if (e.key === 'Enter') onSubmit() }}
-      />
-      {error && <p className="text-sm text-destructive">{error}</p>}
+      <WorkspaceKeyField id="wk-paste" value={pasted} onChange={onChange} onSubmit={onSubmit} disabled={busy} error={error}/>
       <Button type="button" className="w-full" disabled={busy || !pasted.trim()} onClick={onSubmit}>
         {busy ? 'Unlocking…' : 'Unlock'}
       </Button>
@@ -241,9 +218,8 @@ const keyFailureMessage = (
 ): string => {
   switch (reason) {
     case 'format':
-      return "That doesn't look like a workspace key (expected kmp-wk-1:…)."
     case 'invalid-key':
-      return "That key doesn't decrypt this workspace's data."
+      return PASTED_KEY_PROBLEM[reason]
     case 'no-stored-key':
       return 'The key saved on this device is incomplete. Paste the workspace key instead.'
     case 'storage':
@@ -338,14 +314,22 @@ function ServerE2eeGate({userId, workspaceId, workspaceName, deps, onResolved}: 
     )
   }
   if (entry.kind === 'converting') {
-    // On the device running the conversion, this is where its flow resumes.
     return (
       <GateCard title={`${name} is being encrypted`}>
         <Explanation>
-          Its owner is converting it to end-to-end encryption. It stays closed on this device
-          until that's done. Changes made here meanwhile wait on this device and upload once
-          it's unlocked.
+          {entry.owned ? 'You are' : 'Its owner is'} converting it to end-to-end encryption. It
+          stays closed on this device until that's done. Changes made here meanwhile wait on this
+          device and upload once it's unlocked.
         </Explanation>
+        {entry.owned && (
+          <Button
+            type="button"
+            className="w-full"
+            onClick={() => openConversionFlow({userId, workspaceId, workspaceName: workspaceName ?? null})}
+          >
+            Continue the conversion
+          </Button>
+        )}
         {checkAgain}
       </GateCard>
     )
@@ -369,10 +353,21 @@ function ServerE2eeGate({userId, workspaceId, workspaceName, deps, onResolved}: 
         on this device only.
       </Explanation>
       {entry.offerFinish && (
-        <Explanation>
-          You own this workspace and its conversion hasn't finished: its attachments still
-          need converting. Unlock it here, then finish the conversion.
-        </Explanation>
+        <>
+          <Explanation>
+            You own this workspace and its conversion hasn't finished: its attachments still need
+            converting. Finishing it asks for the key too.
+          </Explanation>
+          <Button
+            type="button"
+            variant="secondary"
+            className="w-full"
+            disabled={busy}
+            onClick={() => openConversionFlow({userId, workspaceId, workspaceName: workspaceName ?? null})}
+          >
+            Finish the conversion
+          </Button>
+        </>
       )}
       <KeyInput
         busy={busy}

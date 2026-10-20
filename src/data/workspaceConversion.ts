@@ -10,17 +10,18 @@
  */
 
 import { supabase } from '@/services/supabase'
+import { errorCodeOf } from '@/sync/conversion/conversionServer.js'
 import { ENVELOPE_PREFIX } from '@/sync/crypto/envelope.js'
 import type {
   ConversionPhase,
   WorkspaceConversionRead,
 } from '@/sync/keys/conversionState.js'
 
-/** A value this build doesn't know is read as `sealing`, the phase that refuses
- *  every unlock and pin upgrade. */
+/** A value this build doesn't know is read as `unknown`, which refuses every
+ *  unlock and pin upgrade, as `sealing` does. */
 export const parseConversionPhase = (raw: unknown): ConversionPhase | null => {
   if (raw === null || raw === undefined) return null
-  return raw === 'cleaning' ? 'cleaning' : 'sealing'
+  return raw === 'sealing' || raw === 'cleaning' ? raw : 'unknown'
 }
 
 /** PostgREST can't resolve `workspaces` → `workspace_conversions`. That is a
@@ -49,9 +50,6 @@ const requireSupabase = () => {
   return supabase
 }
 
-const errorCode = (error: unknown): string | undefined =>
-  (error as {code?: string} | null)?.code
-
 const embeddedPhase = (row: ServerWorkspaceRow): ConversionPhase | null => {
   const embedded = row.workspace_conversions
   const conversion = Array.isArray(embedded) ? embedded[0] : embedded
@@ -75,14 +73,14 @@ export const fetchWorkspaceConversionState = async (
     // post-flip "e2ee" with a pre-flip "no conversion".
     let result = await select(`${WORKSPACE_COLUMNS}, workspace_conversions(phase)`)
     let conversionsExist = true
-    if (errorCode(result.error) === NO_CONVERSIONS_RELATIONSHIP) {
+    if (errorCodeOf(result.error) === NO_CONVERSIONS_RELATIONSHIP) {
       const table = await requireSupabase()
         .from('workspace_conversions')
         .select('phase')
         .eq('workspace_id', workspaceId)
         .abortSignal(signal)
         .maybeSingle()
-      if (errorCode(table.error) !== NO_SUCH_TABLE) {
+      if (errorCodeOf(table.error) !== NO_SUCH_TABLE) {
         return {kind: 'unavailable', error: table.error ?? result.error}
       }
       conversionsExist = false

@@ -5,7 +5,7 @@ import { mintCanary } from '../crypto/canary.js'
 import { computeContentHash } from '../crypto/contentHash.js'
 import { deriveContentKey, deriveContentKeyHmac } from '../crypto/contentKey.js'
 import { importWorkspaceKey } from '../crypto/workspaceKey.js'
-import { cleanAttachments, type ConversionBundle } from './attachmentCleaner.js'
+import { cleanAttachments, limitToRaise, type BundleFault, type ConversionBundle } from './attachmentCleaner.js'
 import { ConversionRefusal } from './sealing.js'
 import { createFakeAttachmentStorage, createFakeBundle, type FakeAttachmentStorage } from './test/fakeAttachmentStorage.js'
 
@@ -37,6 +37,8 @@ const seal = async (bytes: Uint8Array<ArrayBuffer>, k = keys) =>
   encodeBytes(bytes, 'e2ee', async () => k.keys.cek, {contentHash: await hashOf(bytes), workspaceId: WS})
 
 /** Put `bytes` in the folder at their raw name; optionally as a media block's. */
+const bytesEqual = (a: Uint8Array, b: Uint8Array): boolean => a.length === b.length && a.every((byte, i) => byte === b[i])
+
 const putRaw = async (store: FakeAttachmentStorage, bytes: Uint8Array<ArrayBuffer>, blockId?: string) => {
   store.objects.set(await rawName(bytes), bytes)
   if (blockId) store.media.push({blockId, contentHash: await hashOf(bytes)})
@@ -121,6 +123,19 @@ describe('cleanAttachments: raw objects', () => {
     expect(store.deletes).toEqual([await keyedName(photo), await rawName(photo)])
     expect(await holdsKeyed(store, photo)).toBe(true)
     expect(report.proof).toEqual({kind: 'passed', unrecoverable: []})
+  })
+
+  it("hands every delete the run's signal, which aborts the request itself", async () => {
+    const store = createFakeAttachmentStorage()
+    const photo = utf8('a photo')
+    await putRaw(store, photo, 'block-1')
+    store.objects.set(await keyedName(photo), utf8('junk at the keyed name'))
+    const deleteObject = vi.spyOn(store.io, 'deleteObject')
+    const run = new AbortController()
+
+    await cleanAttachments({workspaceId: WS, io: store.io, ...keys, bundle: null, signal: run.signal})
+
+    expect(deleteObject.mock.calls).toEqual([[await keyedName(photo), run.signal], [await rawName(photo), run.signal]])
   })
 
   it('a genuine occupant at the keyed path is kept as it is', async () => {
@@ -216,15 +231,16 @@ describe('cleanAttachments: neither objects', () => {
     const unreadable = createFakeBundle(new Map([[nested, bytes]]))
     unreadable.readable = false
     const cases = [
-      [mismatch, 'archive-mismatch'],
-      [missing, 'archive-mismatch'],
-      [unreadable, 'bundle-unreadable'],
+      [mismatch, 'archive-mismatch', 'mismatch'],
+      [missing, 'archive-mismatch', 'mismatch'],
+      [unreadable, 'bundle-unreadable', 'unreadable'],
     ] as const
-    for (const [bundle, reason] of cases) {
+    for (const [bundle, reason, fault] of cases) {
       const store = createFakeAttachmentStorage()
       store.objects.set(nested, bytes)
       const report = await clean(store, bundle)
       expect(report.left).toEqual([{path: nested, reason}])
+      expect(report.bundleFault).toBe(fault)
       expect(store.deletes).toEqual([])
     }
   })
@@ -298,14 +314,17 @@ describe('cleanAttachments: the proof', () => {
     const photo = utf8('a photo')
     store.media.push({blockId: 'block-1', contentHash: await hashOf(photo)})
     store.objects.set(await keyedName(photo), photo)
+    const write = vi.spyOn(store.io, 'writeObject')
     const report = await clean(store)
     expect(report.rebuilt).toEqual([await hashOf(photo)])
     expect(await holdsKeyed(store, photo)).toBe(true)
-    expect(store.objects.has(await rawName(photo))).toBe(false) // the staged copy is converted away
+    // Kept on this device while it was replaced; never written to Storage in plaintext.
+    expect(store.local.get(await keyedName(photo))).toEqual(photo)
+    expect(write.mock.calls.filter(([, bytes]) => bytesEqual(bytes, photo))).toEqual([])
     expect(report.proof).toEqual({kind: 'passed', unrecoverable: []})
   })
 
-  it('an only copy at the keyed name is written to its raw name before anything deletes it', async () => {
+  it('an only copy at the keyed name is kept on this device before anything deletes it, and the next run rebuilds from it', async () => {
     const store = createFakeAttachmentStorage()
     const photo = utf8('a photo')
     store.media.push({blockId: 'block-1', contentHash: await hashOf(photo)})
@@ -318,50 +337,54 @@ describe('cleanAttachments: the proof', () => {
     })
     const report = await clean(store)
     expect(report.proof).toMatchObject({kind: 'not-passed', unverified: [await hashOf(photo)]})
-    expect(store.objects.get(await rawName(photo))).toEqual(photo) // the bytes survive
+    expect(store.local.get(await keyedName(photo))).toEqual(photo) // the bytes survive
+    vi.restoreAllMocks()
+    expect((await clean(store)).proof).toEqual({kind: 'passed', unrecoverable: []})
+    expect(await holdsKeyed(store, photo)).toBe(true)
   })
 
-  it('a refused staging write is reported with the size the limits must reach, and nothing is deleted', async () => {
+  it('an only copy that cannot be kept on this device is never deleted', async () => {
     const store = createFakeAttachmentStorage()
     const photo = utf8('a photo')
     store.media.push({blockId: 'block-1', contentHash: await hashOf(photo)})
     store.objects.set(await keyedName(photo), photo)
-    const write = store.io.writeObject
-    vi.spyOn(store.io, 'writeObject').mockImplementation(async (path, bytes) =>
-      path === (await rawName(photo)) ? {kind: 'refused', status: 413} : write(path, bytes),
-    )
+    vi.spyOn(store.io, 'writeLocal').mockRejectedValue(new DOMException('full', 'QuotaExceededError'))
     const report = await clean(store)
-    expect(report.refused).toEqual([
-      {path: await keyedName(photo), status: 413, sealedBytes: photo.length + BINARY_ENVELOPE_OVERHEAD_BYTES},
-    ])
     expect(store.deletes).toEqual([])
-    expect(report.proof).toMatchObject({kind: 'not-passed', unverified: [await hashOf(photo)]})
-  })
-
-  it('the proof judges the folder as its own rebuilds left it: a staged copy whose delete did not take fails it', async () => {
-    const store = createFakeAttachmentStorage()
-    const photo = utf8('a photo')
-    store.media.push({blockId: 'block-1', contentHash: await hashOf(photo)})
-    store.objects.set(await keyedName(photo), photo)
-    const remove = store.io.deleteObject
-    // Storage confirms the staged copy's delete but keeps it.
-    vi.spyOn(store.io, 'deleteObject').mockImplementation(async path =>
-      path === (await rawName(photo)) ? undefined : remove(path),
-    )
-    const report = await clean(store)
-    expect(store.objects.has(await rawName(photo))).toBe(true)
-    expect(report.proof).toMatchObject({kind: 'not-passed', rawRemaining: [await rawName(photo)]})
-  })
-
-  it('an only copy is never deleted when its raw name already holds other bytes', async () => {
-    const store = createFakeAttachmentStorage()
-    const photo = utf8('a photo')
-    store.media.push({blockId: 'block-1', contentHash: await hashOf(photo)})
-    store.objects.set(await keyedName(photo), photo)
-    store.objects.set(await rawName(photo), utf8('a corrupt upload at the raw name'))
-    const report = await clean(store)
     expect(store.objects.get(await keyedName(photo))).toEqual(photo)
     expect(report.proof).toMatchObject({kind: 'not-passed', unverified: [await hashOf(photo)]})
+  })
+
+  it('an unverifiable occupant at a media name is deleted when the bundle archived it, and the proof passes', async () => {
+    const store = createFakeAttachmentStorage()
+    const lost = utf8('lost')
+    const hash = await hashOf(lost)
+    store.media.push({blockId: 'block-1', contentHash: hash})
+    const name = await keyedName(lost)
+    const junk = utf8('junk at the keyed name')
+    store.objects.set(name, junk)
+    const report = await clean(store, createFakeBundle(new Map([[name, junk]]), new Map(), new Set([hash])))
+    expect(report.deleted).toEqual([name])
+    expect(store.objects.has(name)).toBe(false)
+    expect(report.proof).toEqual({kind: 'passed', unrecoverable: [{contentHash: hash, blockIds: ['block-1']}]})
+  })
+
+  it("proves exactly the media blocks the caller read from the server, not this device's view", async () => {
+    const store = createFakeAttachmentStorage()
+    const photo = utf8('a photo')
+    const hash = await hashOf(photo)
+    const mediaBlocks = vi.spyOn(store.io, 'mediaBlocks')
+    // This device's view lacks the block; its only copy is in the bundle.
+    const report = await cleanAttachments({
+      workspaceId: WS,
+      io: store.io,
+      ...keys,
+      bundle: createFakeBundle(new Map(), new Map([[hash, photo]])),
+      media: [{blockId: 'block-1', contentHash: hash}],
+    })
+    expect(report.rebuilt).toEqual([hash])
+    expect(await holdsKeyed(store, photo)).toBe(true)
+    expect(mediaBlocks).not.toHaveBeenCalled()
   })
 
   it('with a copy outside Storage, a plaintext occupant is replaced from that copy', async () => {
@@ -454,16 +477,18 @@ describe('cleanAttachments: the proof', () => {
     // The manifest says the bundle holds it, but the entry is gone or corrupt.
     const missingEntry = createFakeBundle()
     const corruptEntry = createFakeBundle(new Map(), new Map([[hash, utf8('not it')]]))
-    const cases: [FakeAttachmentStorage, ConversionBundle | null][] = [
-      [unreadableLocal, null],
-      [createFakeAttachmentStorage(), unreadableBundle],
-      [createFakeAttachmentStorage(), missingEntry],
-      [createFakeAttachmentStorage(), corruptEntry],
+    // A bundle that let the run down says how, so another copy can be asked for.
+    const cases: [FakeAttachmentStorage, ConversionBundle | null, BundleFault | null][] = [
+      [unreadableLocal, null, null],
+      [createFakeAttachmentStorage(), unreadableBundle, 'unreadable'],
+      [createFakeAttachmentStorage(), missingEntry, 'mismatch'],
+      [createFakeAttachmentStorage(), corruptEntry, 'mismatch'],
     ]
-    for (const [store, bundle] of cases) {
+    for (const [store, bundle, fault] of cases) {
       store.media.push({blockId: 'block-a', contentHash: hash})
       const report = await clean(store, bundle)
       expect(report.proof).toMatchObject({kind: 'not-passed', unverified: [hash]})
+      expect(report.bundleFault).toBe(fault)
       expect(store.objects.size).toBe(0) // nothing is uploaded from a copy that didn't verify
     }
   })
@@ -611,5 +636,21 @@ describe('cleanAttachments: runs', () => {
     expect(report.converted).toEqual([])
     expect(report.errors).toEqual([{path: await rawName(photo), message: 'deleted, but still listed'}])
     expect(report.proof).toMatchObject({kind: 'not-passed', rawRemaining: [await rawName(photo)]})
+  })
+})
+
+describe('limitToRaise', () => {
+  it('is the largest sealed size among the 413 refusals only', () => {
+    expect(limitToRaise([
+      {path: 'a', status: 413, sealedBytes: 10},
+      {path: 'b', status: 413, sealedBytes: 30},
+      {path: 'c', status: 400, sealedBytes: 99},
+      {path: 'd', sealedBytes: 99},
+    ])).toBe(30)
+  })
+
+  it('is null when nothing was refused for size', () => {
+    expect(limitToRaise([])).toBeNull()
+    expect(limitToRaise([{path: 'a', status: 403, sealedBytes: 5}])).toBeNull()
   })
 })

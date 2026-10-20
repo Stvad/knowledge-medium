@@ -2,6 +2,7 @@ import { kernelDataExtension } from '@/data/kernelDataExtension.js'
 import type { AppExtension } from '@/facets/facet.js'
 import { agentDispatchCompanionDataExtension } from '@/plugins/agent-dispatch-companion/dataExtension.js'
 import { agentRuntimeDataExtension } from '@/plugins/agent-runtime/dataExtension.js'
+import { attachmentsDataExtension } from '@/plugins/attachments/dataExtension.js'
 import { aliasDataExtension } from '@/plugins/alias/dataExtension.js'
 import { backlinksDataExtension } from '@/plugins/backlinks/dataExtension.js'
 import { characterCounterDataExtension } from '@/plugins/character-counter/dataExtension.js'
@@ -36,5 +37,6 @@ export const staticDataExtensions: AppExtension[] = [
   geoDataExtension,
   agentDispatchCompanionDataExtension,
   agentRuntimeDataExtension,
+  attachmentsDataExtension,
   contributorsDataExtension,
 ]

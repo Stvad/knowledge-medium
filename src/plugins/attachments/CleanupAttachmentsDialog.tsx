@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import type { CleanerProgress, CleanerReport } from '@/sync/conversion/attachmentCleaner.js'
+import { limitToRaise, type CleanerProgress, type CleanerReport } from '@/sync/conversion/attachmentCleaner.js'
 import { ConversionRefusal } from '@/sync/conversion/sealing.js'
 import type { DialogContextProps } from '@/utils/dialogs.js'
 import type { CleanupRun } from './cleanupAttachments.js'
@@ -32,8 +32,7 @@ const count = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? on
 
 const ReportSummary = ({report}: {readonly report: CleanerReport}) => {
   const {proof} = report
-  /** The sealed size the upload limits must reach for every refused-as-too-large file. */
-  const tooLarge = Math.max(0, ...report.refused.filter(r => r.status === 413).map(r => r.sealedBytes))
+  const tooLarge = limitToRaise(report.refused)
   return (
     <div className="space-y-2 text-sm">
       <p>
@@ -47,7 +46,7 @@ const ReportSummary = ({report}: {readonly report: CleanerReport}) => {
         {report.refused.length > 0 && (
           <li>
             The server refused {count(report.refused.length, 'file')}, which stay unencrypted for now.
-            {tooLarge > 0 &&
+            {tooLarge !== null &&
               ` Raise the project’s Storage upload limit, and the attachments bucket’s limit if it is lower, to at least ${tooLarge.toLocaleString()} bytes, then run this again.`}
           </li>
         )}

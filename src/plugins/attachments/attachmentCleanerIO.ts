@@ -1,17 +1,19 @@
 /**
- * The attachment cleaner's view of one workspace ({@link AttachmentCleanerIO}),
- * over this plugin's Storage, byte store and media blocks. The pass itself is
+ * One workspace's Storage folder, byte store and media blocks, as the
+ * attachment cleaner and the conversion read them ({@link ConversionAttachmentsIO}). The pass itself is
  * core (`src/sync/conversion/attachmentCleaner.ts`); the conversion flow reaches
  * this through `attachmentCleanerIOVerb`, the owner gesture directly.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Repo } from '@/data/repo.js'
-import type { AttachmentCleanerIO, MediaRef, ObjectPath } from '@/sync/conversion/attachmentCleaner.js'
-import { collectPaged } from './audit/paginate.js'
+import type { MediaRef, ObjectPath } from '@/sync/conversion/attachmentCleaner.js'
+import type { ConversionAttachmentsIO } from '@/sync/conversion/conversionAttachments.js'
 import { ATTACHMENTS_BUCKET, BlobPutError, type BlobStore } from './blobStore.js'
 import type { ByteStore } from './byteStore.js'
-import { MEDIA_TYPE, mediaHashOf } from './mediaBlock.js'
+import { isAssetBlockPresent } from './uploadReconcile.js'
+import type { ByteUploadStore } from './uploadStore.js'
+import { MEDIA_TYPE, mediaHashOfStoredRow } from './mediaBlock.js'
 
 const LIST_PAGE = 1000
 
@@ -24,10 +26,11 @@ export interface ListWorkspaceObjectsInput {
 }
 
 /**
- * Every object under `<workspaceId>/`, relative to it. Storage's list returns
- * the entries directly under a prefix, a nested folder as an entry with no id,
- * so each folder is listed in turn. The pass acts only after this returns, so
- * offset paging sees a folder no one is writing.
+ * Every object under `<workspaceId>/`, relative to it: one flat listing of the
+ * folder by full name, nested objects included, paged by Storage's cursor.
+ * Storage's v1 `list()` matches a folder's name case-insensitively, so it lists
+ * `Dir/` and `dir/` as one folder whose objects all read as `Dir/…`; v2
+ * compares names bytewise.
  *
  * RLS filters a listing rather than refusing it: under the anon key (no
  * session) or another user's session the folder reads as empty, which would
@@ -51,29 +54,25 @@ export const listWorkspaceObjects = async ({
     throw new Error("attachments: the signed-in session is not this account's; sign in again")
   }
   const files = client.storage.from(ATTACHMENTS_BUCKET).setHeader('Authorization', `Bearer ${session.access_token}`)
+  const prefix = `${workspaceId}/`
   const out: ObjectPath[] = []
-  const folders: string[] = ['']
-  for (let folder = folders.pop(); folder !== undefined; folder = folders.pop()) {
-    const prefix = folder ? `${workspaceId}/${folder}` : workspaceId
-    const entries = await collectPaged(async offset => {
-      signal?.throwIfAborted()
-      assertRemote()
-      const {data, error} = await files.list(
-        prefix,
-        {limit: LIST_PAGE, offset, sortBy: {column: 'name', order: 'asc'}},
-        {signal},
-      )
-      if (error) throw error
-      return data
-    })
-    for (const entry of entries) {
-      // Only a write from outside the app makes one, and an empty folder name
-      // would list this folder again forever.
-      if (entry.name === '') throw new Error(`attachments: an object under ${prefix}/ has an empty name segment`)
-      const path = folder ? `${folder}/${entry.name}` : entry.name
-      if (entry.id === null) folders.push(path)
-      else out.push(path)
+  for (let cursor: string | undefined, more = true; more; ) {
+    signal?.throwIfAborted()
+    assertRemote()
+    const {data, error} = await files.listV2({prefix, cursor, limit: LIST_PAGE}, {signal})
+    if (error) throw error
+    // Without a delimiter `name` is the object's full name. Defence in depth:
+    // a Storage that named them otherwise would have paths cut out of them.
+    for (const {name} of data.objects) {
+      if (!name.startsWith(prefix)) throw new Error(`attachments: Storage listed ${name} under ${prefix}`)
+      out.push(name.slice(prefix.length))
     }
+    more = data.hasNext
+    // Defence in depth: a next page with no cursor would start the listing over.
+    // Accepted: a line break in a name can corrupt the cursor, and only a direct
+    // database write makes such a name.
+    if (more && !data.nextCursor) throw new Error(`attachments: Storage gave no cursor for the next page of ${prefix}`)
+    cursor = data.nextCursor
   }
   return out.sort()
 }
@@ -89,7 +88,7 @@ export const listMediaBlocks = async (repo: Repo, workspaceId: string): Promise<
     [workspaceId, MEDIA_TYPE],
   )
   return rows.flatMap(row => {
-    const contentHash = mediaHashOf(JSON.parse(row.properties_json) as Record<string, unknown>)
+    const contentHash = mediaHashOfStoredRow(row.properties_json)
     return contentHash ? [{blockId: row.id, contentHash}] : []
   })
 }
@@ -98,13 +97,14 @@ export interface AttachmentCleanerIODeps {
   readonly client: SupabaseClient
   readonly blobStore: BlobStore
   readonly byteStore: ByteStore
+  readonly uploadStore: ByteUploadStore
   readonly repo: Repo
   readonly userId: string
   readonly workspaceId: string
   readonly isRemoteSyncActive: () => boolean
 }
 
-export const createAttachmentCleanerIO = (deps: AttachmentCleanerIODeps): AttachmentCleanerIO => {
+export const createAttachmentCleanerIO = (deps: AttachmentCleanerIODeps): ConversionAttachmentsIO => {
   const {blobStore, byteStore, repo, userId, workspaceId} = deps
   return {
     listObjects: signal => listWorkspaceObjects({...deps, signal}),
@@ -117,7 +117,7 @@ export const createAttachmentCleanerIO = (deps: AttachmentCleanerIODeps): Attach
         throw err
       }
     },
-    deleteObject: path => blobStore.delete(workspaceId, path),
+    deleteObject: (path, signal) => blobStore.delete(workspaceId, path, signal),
     async mediaBlocks() {
       // A row this device downloaded but has not applied is missing from
       // `blocks`, and its attachment would be missing from the proof.
@@ -126,5 +126,18 @@ export const createAttachmentCleanerIO = (deps: AttachmentCleanerIODeps): Attach
       return listMediaBlocks(repo, workspaceId)
     },
     readLocal: name => byteStore.get(userId, workspaceId, name),
+    writeLocal: (name, bytes) => byteStore.put(userId, workspaceId, name, bytes),
+    mediaHashOf: mediaHashOfStoredRow,
+    async pendingUploads() {
+      const statuses = ['staged', 'pending', 'failed'] as const
+      const records = (await Promise.all(statuses.map(status => deps.uploadStore.listByStatus(userId, status))))
+        .flat()
+        .filter(record => record.workspaceId === workspaceId)
+      // A stage whose block isn't here never got one: this device's own capture
+      // writes it here. It never uploads and nothing clears it, so counting it
+      // would block the conversion for good.
+      const uploading = await Promise.all(records.map(record => record.status !== 'staged' || isAssetBlockPresent(repo, record.assetBlockId)))
+      return uploading.filter(Boolean).length
+    },
   }
 }

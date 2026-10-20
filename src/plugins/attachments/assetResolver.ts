@@ -73,7 +73,7 @@ export const remoteSyncGated = (remote: BlobStore): BlobStore => ({
   put: (ws, key, bytes) => (isRemoteSyncActive() ? remote : NO_REMOTE_BLOB_STORE).put(ws, key, bytes),
   get: (ws, key) => (isRemoteSyncActive() ? remote : NO_REMOTE_BLOB_STORE).get(ws, key),
   probe: (ws, key) => (isRemoteSyncActive() ? remote : NO_REMOTE_BLOB_STORE).probe(ws, key),
-  delete: (ws, key) => (isRemoteSyncActive() ? remote : NO_REMOTE_BLOB_STORE).delete(ws, key),
+  delete: (ws, key, signal) => (isRemoteSyncActive() ? remote : NO_REMOTE_BLOB_STORE).delete(ws, key, signal),
 })
 
 /** The blob store half of a resolver's deps — identical construction for the
@@ -81,7 +81,7 @@ export const remoteSyncGated = (remote: BlobStore): BlobStore => ({
  *  Cheap to rebuild (the Supabase wrapper is stateless — every op rides the
  *  client's own session), so callers that need a fresh one (the per-user path)
  *  just call this again rather than caching. */
-const buildBlobStore = (): BlobStore => {
+export const buildBlobStore = (): BlobStore => {
   if (!supabase) return NO_REMOTE_BLOB_STORE
   const client = supabase
   return remoteSyncGated(
