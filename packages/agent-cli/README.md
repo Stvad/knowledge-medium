@@ -241,7 +241,7 @@ Use the port from `AGENT_RUNTIME_URL` if you set one. Restart MCP clients that l
 
 ## Contributors
 
-Writes need a page-backed contributor id when the runtime's contributor support is enabled. Create one in the active workspace; creation selects it for the current CLI profile and workspace:
+Contributor support attributes external block writes to page-backed profiles. Older or unconfigured clients use an automatic "Unconfigured agent" profile per workspace and authenticated user. Create a named profile to distinguish an agent or role; creation selects it for the current CLI profile and workspace:
 
 ```bash
 kmagent contributor create "Research assistant" --kind agent --role "Research"
@@ -249,7 +249,7 @@ kmagent contributor list
 kmagent contributor use <id>   # or: kmagent contributor use none
 ```
 
-Contributor choices are stored separately in one file per token profile and workspace under `agent-contributors/`. `--contributor <id|none>` overrides the saved choice for one CLI invocation. An unconfigured selection is sent as no field and the runtime refuses writes when attribution is required; `none` sends explicit null and records an intentionally unattributed write. Reads do not need a contributor.
+Contributor choices are stored separately in one file per token profile and workspace under `agent-contributors/`. `--contributor <id|none>` overrides the saved choice for one CLI invocation. An unconfigured selection is sent as no field; the runtime creates its fallback profile only when a meaningful block write occurs. `none` sends explicit null and records an intentionally unattributed write. External writers can select agent or automation profiles; human profiles are reserved for human edits. Reads and derived maintenance do not create profiles.
 
 For MCP, `list_contributors` and `create_contributor` work before attribution is configured. They do not change the MCP server's selection. Set `AGENT_RUNTIME_CONTRIBUTOR_ID=<id|none>` or launch `km-mcp --contributor <id|none>` to attribute writes. Programmatic clients can pass `contributorId` to `createBridgeClient` or `GraphMcpServerOptions`; `null` opts out explicitly, while `undefined` leaves the choice unconfigured.
 

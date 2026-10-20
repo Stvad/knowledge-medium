@@ -36,15 +36,28 @@ const create = (host: Repo, id = 'note') => host.tx(async tx => {
 }, opts)
 
 describe('automatic contributor attribution', () => {
-  it('records the human user page on UI creation and preserves agent origin through human edits', async () => {
+  it('keeps human-only notes quiet and records human edits to agent-authored notes', async () => {
     await create(repo, 'human-note')
-    expect(await read('human-note', attributionCreatorsProp.name)).toEqual([HUMAN])
-    expect(await read(HUMAN, typesProp.name)).toContain(CONTRIBUTOR_TYPE)
-    expect(await read(HUMAN, aliasesProp.name)).toEqual(['Vlad', 'vlad'])
+    await repo.tx(tx => tx.update('human-note', {content: 'Human revision'}), opts)
+    expect(await read('human-note', attributionCreatorsProp.name)).toBeUndefined()
+    expect(await read('human-note', attributionEditorsProp.name)).toBeUndefined()
+    expect(await db.db.getAll('SELECT source_id FROM block_references WHERE target_id = ?', [HUMAN])).toEqual([])
+    expect(await repo.load(HUMAN)).toBeNull()
     await create(repo.withTxContext({contributorId: 'atlas'}))
     await repo.tx(tx => tx.update('note', {content: 'Human revision'}), opts)
     expect(await read('note', attributionCreatorsProp.name)).toEqual(['atlas'])
     expect(await read('note', attributionEditorsProp.name)).toEqual([HUMAN])
+    expect(await read(HUMAN, typesProp.name)).toContain(CONTRIBUTOR_TYPE)
+    expect(await read(HUMAN, aliasesProp.name)).toEqual(['Vlad', 'vlad'])
+  })
+
+  it('records a human edit after an agent modifies an existing human-only note', async () => {
+    await create(repo)
+    await repo.withTxContext({contributorId: 'atlas'}).tx(tx => tx.update('note', {content: 'Agent revision'}), opts)
+    expect(await read('note', attributionCreatorsProp.name)).toBeUndefined()
+    expect(await read('note', attributionEditorsProp.name)).toEqual(['atlas'])
+    await repo.tx(tx => tx.update('note', {content: 'Human follow-up'}), opts)
+    expect(await read('note', attributionEditorsProp.name)).toEqual(['atlas', HUMAN])
   })
 
   it('deduplicates several editors without replacing earlier contributors', async () => {
@@ -141,16 +154,18 @@ describe('automatic contributor attribution', () => {
           properties: {[typesProp.name]: [PAGE_TYPE], [aliasesProp.name]: ['Vlad', 'vlad']}})
       }, opts)
     } else {
-      await create(repo, 'first')
+      await create(repo.withTxContext({contributorId: 'atlas'}), 'first')
+      await repo.tx(tx => tx.update('first', {content: 'Human revision'}), opts)
       expect(await read(HUMAN, typesProp.name)).toContain(CONTRIBUTOR_TYPE)
     }
     await repo.withTxContext({contributorId: null}).tx(tx => tx.delete(HUMAN), opts)
     expect(await repo.load(HUMAN)).toBeNull()
-    await create(repo)
+    await create(repo.withTxContext({contributorId: 'atlas'}))
+    await repo.tx(tx => tx.update('note', {content: 'Human revision'}), opts)
     expect((await repo.load(HUMAN))?.deleted).toBe(false)
     expect(await read(HUMAN, typesProp.name)).toContain(CONTRIBUTOR_TYPE)
     expect(await read(HUMAN, contributorKindProp.name)).toBe('human')
-    expect(await read('note', attributionCreatorsProp.name)).toEqual([HUMAN])
+    expect(await read('note', attributionEditorsProp.name)).toEqual([HUMAN])
   })
 
   it('refuses a live foreign occupant of the deterministic user-page id before returning it', async () => {

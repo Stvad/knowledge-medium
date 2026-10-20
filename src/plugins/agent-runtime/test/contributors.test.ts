@@ -2,6 +2,7 @@
 import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'vitest'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
+import {ChangeScope} from '@/data/api'
 import {staticDataExtensions} from '@/extensions/staticDataExtensions'
 import {createAgentRuntimeContext, executeCommand} from '../commands'
 import type {AgentRuntimeContext} from '../protocol'
@@ -9,6 +10,7 @@ import type {ContributorProfile} from '@/plugins/contributors/profiles'
 import {attributionCreatorsProp, attributionEditorsProp} from '@/plugins/contributors/schema'
 import {userPageBlockId} from '@/data/stateBlocks'
 import {resolveFacetRuntimeSync} from '@/facets/facet'
+import {computeAliasSeatId, ensureAliasTarget} from '@/data/targets'
 
 const WS = 'ws'
 let db: TestDb
@@ -37,9 +39,39 @@ describe('agent contributor selection', () => {
     ])})
   })
 
-  it('refuses an unconfigured write before creating its target page', async () => {
-    await expect(run({type: 'append-markdown', target: '[[Must not exist]]', markdown: 'Note'})).rejects.toThrow(/Choose a contributor/)
+  it('creates contributor profiles at the shared alias seat and refuses an existing page', async () => {
+    const atlas = await run({type: 'create-contributor', name: 'Atlas'}) as ContributorProfile
+    expect(atlas.id).toBe(computeAliasSeatId('Atlas', WS, 0))
+    expect((await context.repo.load(atlas.id))?.updatedAt).toBeGreaterThan(0)
+    const existing = await context.repo.withTxContext({contributorId: null}).tx(tx => ensureAliasTarget(
+      tx, context.repo, 'Existing', WS,
+    ), {scope: ChangeScope.BlockDefault})
+    await expect(run({type: 'create-contributor', name: 'Existing'})).rejects.toThrow(/already exists/)
+    expect((await context.repo.query.aliasLookup({alias: 'Existing', workspaceId: WS}).load())?.id).toBe(existing.id)
+  })
+
+  it('refuses human profiles on external writes before creating the target', async () => {
+    const human = await run({type: 'create-contributor', name: 'Alice', kind: 'human'}) as ContributorProfile
+    for (const contributorId of [human.id, userPageBlockId(WS, 'vlad')]) {
+      await expect(run({type: 'create-page', name: 'Must not exist', contributorId})).rejects.toThrow(/agent or automation/)
+    }
     expect(await context.repo.db.getAll('SELECT id FROM blocks WHERE content = ?', ['Must not exist'])).toEqual([])
+  })
+
+  it('keeps inspection and watcher setup free of profiles, then attributes legacy client writes as agents', async () => {
+    await run({type: 'eval', code: 'return 1'})
+    await run({type: 'watch-events', consumer: 'contributor-test', watchers: []})
+    expect(await run({type: 'list-contributors'})).toEqual({contributors: []})
+    const page = await run({type: 'create-page', name: 'Legacy client'}) as {id: string}
+    const profiles = await run({type: 'list-contributors'}) as {contributors: ContributorProfile[]}
+    const agent = profiles.contributors.find(profile => profile.name === 'Unconfigured agent')!
+    expect(agent).toMatchObject({kind: 'agent', workspaceId: WS})
+    expect((await context.repo.load(page.id))?.properties[attributionCreatorsProp.name]).toEqual([agent.id])
+    await run({type: 'delete-block', id: agent.id, contributorId: null})
+    expect(await context.repo.load(agent.id)).toBeNull()
+    const next = await run({type: 'create-page', name: 'Legacy client again'}) as {id: string}
+    expect((await context.repo.load(next.id))?.properties[attributionCreatorsProp.name]).toEqual([agent.id])
+    expect((await context.repo.load(agent.id))?.deleted).toBe(false)
   })
 
   it('records the selected profile through multi-transaction and eval write paths', async () => {
@@ -71,7 +103,8 @@ describe('agent contributor selection', () => {
   it('leaves explicitly opted-out writes unattributed and does not leak the previous selection', async () => {
     const profile = await run({type: 'create-contributor', name: 'Atlas'}) as ContributorProfile
     await run({type: 'create-page', name: 'First', contributorId: profile.id})
-    await expect(run({type: 'create-page', name: 'Second'})).rejects.toThrow(/Choose a contributor/)
+    const second = await run({type: 'create-page', name: 'Second'}) as {id: string}
+    expect((await context.repo.load(second.id))?.properties[attributionCreatorsProp.name]).not.toContain(profile.id)
     const result = await run({type: 'create-page', name: 'Third', contributorId: null}) as {id: string}
     expect((await context.repo.load(result.id))?.properties[attributionCreatorsProp.name]).toBeUndefined()
   })

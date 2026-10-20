@@ -2257,16 +2257,13 @@ export const executeCommand = async (
   const enabled = context.runtime.read(sameTxProcessorsFacet).has(contributorAttributionProcessor.name)
   const readOnly = isReadOnlyAgentCommand(command)
   if (enabled && !readOnly && command.type !== 'create-contributor') {
-    if (command.contributorId === undefined) {
-      throw new Error('Choose a contributor before writing: run contributor create <name> or contributor use <id>; --contributor none explicitly leaves writes unattributed.')
-    }
-    if (command.contributorId !== null) {
+    if (command.contributorId !== undefined && command.contributorId !== null) {
       const id = requireString(command.contributorId, 'contributorId')
       const workspaceId = viewWorkspace(context.repo, assertedWorkspaceOverride(command.workspaceId))
-      await assertContributor({get: id => context.repo.load(id)}, id, workspaceId)
+      await assertContributor({get: id => context.repo.load(id)}, id, workspaceId, {allowHuman: false})
     }
     context = createAgentRuntimeContext({
-      repo: context.repo.withTxContext({contributorId: command.contributorId}),
+      repo: context.repo.withTxContext({contributorId: command.contributorId, contributorFallback: 'agent'}),
       runtime: context.runtime,
       safeMode: context.safeMode,
     })

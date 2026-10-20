@@ -1,29 +1,54 @@
 import {ChangeScope, type Tx, type TypeRegistrySnapshot, type User} from '@/data/api'
+import {hasBlockType} from '@/data/properties'
 import {PAGE_TYPE} from '@/data/blockTypes'
-import {aliasesProp, hasBlockType} from '@/data/properties'
+import {derivedBlockId} from '@/data/derivedIds'
 import {assertRoundTrippableReferenceLabel} from '@/data/referenceBlock'
 import {ensureUserPageInTx} from '@/data/stateBlocks'
 import type {Repo} from '@/data/repo'
-import {addTypeInTx} from '@/data/typeTagger'
+import {applyTypeTagInTx} from '@/data/typeTagger'
+import {createOrRestoreTargetBlock, ensureAliasTarget} from '@/data/targets'
 import {
   CONTRIBUTOR_TYPE, contributorForProp, contributorKindProp, contributorRoleProp,
   type ContributorKind,
 } from './schema'
 
+const UNCONFIGURED_AGENT_NS = 'd0a1624e-8baa-41d7-9a39-a7bbcfa5abb7'
+export const unconfiguredAgentPageId = (workspaceId: string, userId: string): string =>
+  derivedBlockId({namespace: UNCONFIGURED_AGENT_NS, key: JSON.stringify([workspaceId, userId])})
+
 export const ensureHumanContributor = async (tx: Tx, workspaceId: string, user: User, snapshot: TypeRegistrySnapshot): Promise<string> => {
   const id = await ensureUserPageInTx(tx, workspaceId, user, snapshot, {skipMetadata: true})
   const page = await tx.get(id)
   if (!page || !hasBlockType(page, CONTRIBUTOR_TYPE)) {
-    await addTypeInTx(tx, snapshot.types, snapshot.propertySchemas, id, CONTRIBUTOR_TYPE,
-      {[contributorKindProp.name]: 'human'}, true, {skipMetadata: true})
+    await applyTypeTagInTx(tx, snapshot, {blockId: id, typeId: CONTRIBUTOR_TYPE,
+      initialValues: {[contributorKindProp.name]: 'human'}, writeOpts: {skipMetadata: true}})
   }
   return id
 }
 
-export const assertContributor = async (tx: Pick<Tx, 'get'>, id: string, workspaceId: string): Promise<void> => {
+export const ensureUnconfiguredAgent = async (
+  tx: Tx, workspaceId: string, user: User, snapshot: TypeRegistrySnapshot,
+): Promise<string> => {
+  const id = unconfiguredAgentPageId(workspaceId, user.id)
+  const actingFor = await ensureHumanContributor(tx, workspaceId, user, snapshot)
+  await createOrRestoreTargetBlock(tx, {id, workspaceId, parentId: null, orderKey: 'a0',
+    freshContent: 'Unconfigured agent', systemMint: true})
+  const writeOpts = {skipMetadata: true}
+  await applyTypeTagInTx(tx, snapshot, {blockId: id, typeId: PAGE_TYPE, writeOpts})
+  await applyTypeTagInTx(tx, snapshot, {blockId: id, typeId: CONTRIBUTOR_TYPE, writeOpts,
+    initialValues: {[contributorKindProp.name]: 'agent', [contributorForProp.name]: actingFor}})
+  return id
+}
+
+export const assertContributor = async (
+  tx: Pick<Tx, 'get'>, id: string, workspaceId: string, options: {allowHuman?: boolean} = {},
+): Promise<void> => {
   const profile = await tx.get(id)
   if (!profile || profile.deleted || profile.workspaceId !== workspaceId || !hasBlockType(profile, CONTRIBUTOR_TYPE)) {
     throw new Error(`Contributor ${id} must be a live Contributor profile in this workspace.`)
+  }
+  if (options.allowHuman === false && contributorKindProp.codec.decode(profile.properties[contributorKindProp.name] ?? 'agent') === 'human') {
+    throw new Error('Agent writes require an agent or automation contributor, not a human profile.')
   }
 }
 
@@ -43,18 +68,18 @@ export const createContributor = async (
   const name = input.name.trim()
   if (!name) throw new Error('Contributor name must not be empty.')
   assertRoundTrippableReferenceLabel(name, 'Contributor name')
-  const id = crypto.randomUUID()
   const kind = input.kind ?? 'agent'
   const role = input.role?.trim() || undefined
   const snapshot = repo.snapshotTypeRegistries()
-  await repo.withTxContext({contributorId: null}).tx(async tx => {
-    if (await tx.aliasLookup(name, workspaceId)) throw new Error(`A page named ${name} already exists; choose a different contributor name or tag that page as a Contributor profile.`)
+  const id = await repo.withTxContext({contributorId: null}).tx(async tx => {
+    const target = await ensureAliasTarget(tx, repo, name, workspaceId, snapshot, {systemMint: false})
+    if (!target.inserted) throw new Error(`A page named ${name} already exists; choose a different contributor name or tag that page as a Contributor profile.`)
+    const id = target.id
     const actingFor = await ensureHumanContributor(tx, workspaceId, repo.user, snapshot)
-    await tx.create({id, workspaceId, parentId: null, orderKey: 'a0', content: name})
-    await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: [name]}, snapshot)
     await repo.addTypeInTx(tx, id, CONTRIBUTOR_TYPE, {[contributorKindProp.name]: kind}, snapshot)
     if (role) await tx.setProperty(id, contributorRoleProp, role)
     if (kind !== 'human') await tx.setProperty(id, contributorForProp, actingFor)
+    return id
   }, {scope: ChangeScope.BlockDefault, description: `Create contributor ${name}`})
   return {id, name, kind, role, workspaceId}
 }

@@ -36,7 +36,7 @@ import {
 } from '@/data/properties'
 import { UI_STATE_PATH_PART, USER_PREFS_PATH_PART } from '@/data/userPrefs.js'
 import { PAGE_TYPE, USER_TYPE } from '@/data/blockTypes.js'
-import {addTypeInTx} from '@/data/typeTagger'
+import {applyTypeTagInTx} from '@/data/typeTagger'
 
 // ──── Deterministic-id namespaces ────
 
@@ -263,8 +263,8 @@ export const ensureUserPageInTx = async (
   } else {
     await tx.create({id, workspaceId, parentId: null, orderKey: 'a0', content: displayName}, {systemMint: true})
   }
-  await addTypeInTx(tx, snapshot.types, snapshot.propertySchemas, id, PAGE_TYPE, {[aliasesProp.name]: aliases}, true, opts)
-  await addTypeInTx(tx, snapshot.types, snapshot.propertySchemas, id, USER_TYPE, {[userIdProp.name]: user.id}, true, opts)
+  await applyTypeTagInTx(tx, snapshot, {blockId: id, typeId: PAGE_TYPE, initialValues: {[aliasesProp.name]: aliases}, writeOpts: opts})
+  await applyTypeTagInTx(tx, snapshot, {blockId: id, typeId: USER_TYPE, initialValues: {[userIdProp.name]: user.id}, writeOpts: opts})
   return id
 }
 

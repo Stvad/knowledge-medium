@@ -3,12 +3,13 @@ import {isFieldValueChild, isPropertyFieldInstance} from '@/data/propertyChildre
 import {jsonValuesEqual} from '@/data/internals/jsonCanonical'
 import {PAGE_TYPE} from '@/data/blockTypes'
 import {hasBlockType} from '@/data/properties'
-import {assertContributor, ensureHumanContributor} from './profiles'
-import {attributionCreatorsProp, attributionEditorsProp} from './schema'
+import {assertContributor, ensureHumanContributor, ensureUnconfiguredAgent} from './profiles'
+import {attributionCreatorsProp, attributionEditorsProp, contributorKindProp} from './schema'
 
 declare module '@/data/api/tx' {
   interface TransactionContext {
     contributorId?: string | null
+    contributorFallback?: 'agent'
   }
 }
 
@@ -41,6 +42,16 @@ const targetOf = async (row: BlockData, ctx: SameTxCtx): Promise<string | undefi
   return row.id
 }
 
+const hasNonHumanAttribution = async (row: BlockData, ctx: SameTxCtx): Promise<boolean> => {
+  for (const prop of [attributionCreatorsProp, attributionEditorsProp]) {
+    for (const id of prop.codec.decode(row.properties[prop.name] ?? [])) {
+      const profile = await ctx.tx.get(id)
+      if (contributorKindProp.codec.decode(profile?.properties[contributorKindProp.name] ?? 'agent') !== 'human') return true
+    }
+  }
+  return false
+}
+
 export const contributorAttributionProcessor = defineSameTxProcessor({
   name: 'contributors.recordAttribution',
   watches: {kind: 'field', table: 'blocks', fields: ['content', 'properties', 'deleted']},
@@ -63,12 +74,26 @@ export const contributorAttributionProcessor = defineSameTxProcessor({
       if (target) targets.set(target, targets.get(target) === true || (target === change.id && change.before === null))
     }
     if (targets.size === 0 || ctx.tx.meta.context?.contributorId === null) return
-    const contributorId = ctx.tx.meta.context?.contributorId
-      ?? await ensureHumanContributor(ctx.tx, event.workspaceId, event.user, {types: ctx.types, propertySchemas: ctx.propertySchemas})
-    await assertContributor(ctx.tx, contributorId, event.workspaceId)
+    const context = ctx.tx.meta.context
+    const selectedId = context?.contributorId ?? undefined
+    const selected = selectedId ? await ctx.tx.get(selectedId) : null
+    const human = selectedId === undefined
+      ? context?.contributorFallback !== 'agent'
+      : contributorKindProp.codec.decode(selected?.properties[contributorKindProp.name] ?? 'agent') === 'human'
+    const eligible: Array<[string, boolean]> = []
     for (const [id, created] of targets) {
       const row = await ctx.tx.get(id)
       if (!row || row.deleted) continue
+      if (human && !await hasNonHumanAttribution(row, ctx)) continue
+      eligible.push([id, created])
+    }
+    if (eligible.length === 0) return
+    const snapshot = {types: ctx.types, propertySchemas: ctx.propertySchemas}
+    const contributorId = selectedId ?? (human
+      ? await ensureHumanContributor(ctx.tx, event.workspaceId, event.user, snapshot)
+      : await ensureUnconfiguredAgent(ctx.tx, event.workspaceId, event.user, snapshot))
+    await assertContributor(ctx.tx, contributorId, event.workspaceId, {allowHuman: context?.contributorFallback !== 'agent'})
+    for (const [id, created] of eligible) {
       const prop = created ? attributionCreatorsProp : attributionEditorsProp
       await ctx.tx.setProperty(id, prop, current => [...new Set([...(current ?? []), contributorId])], {skipMetadata: true})
     }

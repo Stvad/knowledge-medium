@@ -65,21 +65,25 @@ const readResolvedProperty = <T>(
 // cells into field children in children-backed workspaces. Raw writes preserve
 // the only-if-absent contract under both caller and canonical property names.
 /** Apply a type using captured registries inside an existing transaction. */
-export const addTypeInTx = async (
+export const applyTypeTagInTx = async (
   tx: Tx,
-  types: ReadonlyMap<string, TypeContribution>,
-  propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
-  blockId: string,
-  typeId: string,
-  initialValues: Readonly<Record<string, unknown>>,
-  /** When true (the default, used by `addType` / `addTypeInTx`), throw
-   *  `BlockNotFoundForTypeError` if the target block is missing or
-   *  tombstoned. Lenient callers (`addTypeInTxLenient`) pass `false`
-   *  to preserve the legacy silent-no-op behavior for sync-apply /
-   *  processor paths that may legitimately race a concurrent delete. */
-  strict: boolean,
-  writeOpts?: TxWriteOpts,
+  snapshot: TypeRegistrySnapshot,
+  {
+    blockId,
+    typeId,
+    initialValues = {},
+    /** Strict callers throw if the target is missing or tombstoned. */
+    strict = true,
+    writeOpts,
+  }: {
+    blockId: string
+    typeId: string
+    initialValues?: Readonly<Record<string, unknown>>
+    strict?: boolean
+    writeOpts?: TxWriteOpts
+  },
 ): Promise<void> => {
+  const {types, propertySchemas} = snapshot
   const contribution = requireTypeContribution(types, typeId)
   const block = await tx.get(blockId)
   if (!block) {
@@ -160,9 +164,9 @@ export class TypeTagger {
     typeId: string,
     initialValues: Readonly<Record<string, unknown>> = {},
   ): Promise<void> {
-    const {types, propertySchemas} = this.host.snapshotTypeRegistries()
+    const snapshot = this.host.snapshotTypeRegistries()
     await this.host.tx(async tx => {
-      await addTypeInTx(tx, types, propertySchemas, blockId, typeId, initialValues, true)
+      await applyTypeTagInTx(tx, snapshot, {blockId, typeId, initialValues})
     }, {scope: ChangeScope.BlockDefault, description: `addType ${typeId}`})
   }
 
@@ -177,9 +181,11 @@ export class TypeTagger {
     initialValues: Readonly<Record<string, unknown>> = {},
     snapshot?: TypeRegistrySnapshot,
   ): Promise<void> {
-    const types = snapshot?.types ?? this.host.types
-    const propertySchemas = snapshot?.propertySchemas ?? this.host.propertySchemas
-    await addTypeInTx(tx, types, propertySchemas, blockId, typeId, initialValues, true)
+    const registries = snapshot ?? {
+      types: this.host.types,
+      propertySchemas: this.host.propertySchemas,
+    }
+    await applyTypeTagInTx(tx, registries, {blockId, typeId, initialValues})
   }
 
   /** Lenient in-tx variant — silently no-ops if the target block is
@@ -195,9 +201,11 @@ export class TypeTagger {
     initialValues: Readonly<Record<string, unknown>> = {},
     snapshot?: TypeRegistrySnapshot,
   ): Promise<void> {
-    const types = snapshot?.types ?? this.host.types
-    const propertySchemas = snapshot?.propertySchemas ?? this.host.propertySchemas
-    await addTypeInTx(tx, types, propertySchemas, blockId, typeId, initialValues, false)
+    const registries = snapshot ?? {
+      types: this.host.types,
+      propertySchemas: this.host.propertySchemas,
+    }
+    await applyTypeTagInTx(tx, registries, {blockId, typeId, initialValues, strict: false})
   }
 
   async removeType(blockId: string, typeId: string): Promise<void> {
@@ -211,7 +219,7 @@ export class TypeTagger {
   }
 
   async toggleType(blockId: string, typeId: string): Promise<void> {
-    const {types, propertySchemas} = this.host.snapshotTypeRegistries()
+    const snapshot = this.host.snapshotTypeRegistries()
     await this.host.tx(async tx => {
       const block = await tx.get(blockId)
       // toggleType pre-checks the block existence itself; if it's
@@ -224,7 +232,7 @@ export class TypeTagger {
       if (readResolvedProperty(block.properties, resolvedTypes).includes(typeId)) {
         await this._removeTypeInTx(tx, blockId, typeId)
       } else {
-        await addTypeInTx(tx, types, propertySchemas, blockId, typeId, {}, false)
+        await applyTypeTagInTx(tx, snapshot, {blockId, typeId, strict: false})
       }
     }, {scope: ChangeScope.BlockDefault, description: `toggleType ${typeId}`})
   }

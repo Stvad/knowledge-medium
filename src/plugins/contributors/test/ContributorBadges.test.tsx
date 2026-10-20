@@ -88,13 +88,35 @@ describe('contributor badges', () => {
     expect(screen.getByRole('button', {name: 'Authorship details: By Research Agent · research +1'})).toBeTruthy()
   })
 
-  it('shows nonhuman creator and editor badges, then details with all linked profiles and roles', async () => {
+  it('omits a creator from the editor summary but keeps mixed editor attribution in details', async () => {
+    const Decorated = decorate({
+      [attributionCreatorsProp.name]: attributionCreatorsProp.codec.encode(['agent']),
+      [attributionEditorsProp.name]: attributionEditorsProp.codec.encode(['agent', 'writer', 'reviewer', 'human']),
+    })
+    useHandlesMock.mockImplementation((handles: readonly {id: string}[]) => handles.map(handle => ({
+      agent: profile('agent', 'Research Agent', 'agent', 'research'),
+      writer: profile('writer', 'Writer Bot', 'automation', 'writer'),
+      reviewer: profile('reviewer', 'Review Bot', 'agent', 'reviewer'),
+      human: profile('human', 'Alice', 'human'),
+    }[handle.id])))
+    render(<Decorated block={block}/>)
+    const badge = screen.getByRole('button', {name: /Authorship details/})
+    expect(badge.textContent).toBe('By Research Agent · research · Edited by Writer Bot · writer +1')
+
+    fireEvent.pointerDown(badge, {button: 0, pointerType: 'mouse'})
+    await screen.findByRole('menu')
+    expect(screen.getAllByRole('menuitem', {name: /Research Agent/})).toHaveLength(2)
+    expect(screen.getByRole('menuitem', {name: /Alice human/})).toBeTruthy()
+    expect(screen.getByRole('menuitem', {name: /Review Bot agent · reviewer/})).toBeTruthy()
+  })
+
+  it('shows each contributor once in the badge while retaining creator/editor detail records', async () => {
     const Decorated = decorate({
       [attributionCreatorsProp.name]: attributionCreatorsProp.codec.encode(['human', 'agent']),
       [attributionEditorsProp.name]: attributionEditorsProp.codec.encode(['agent']),
     })
     render(<Decorated block={block}/>)
-    expect(screen.getByRole('button', {name: 'Authorship details: By Research Agent · research · Edited by Research Agent · research'})).toBeTruthy()
+    expect(screen.getByRole('button', {name: 'Authorship details: By Research Agent · research'}).textContent).toBe('By Research Agent · research')
     fireEvent.pointerDown(screen.getByRole('button', {name: /Authorship details/}), {button: 0, pointerType: 'mouse'})
     await screen.findByRole('menu')
 

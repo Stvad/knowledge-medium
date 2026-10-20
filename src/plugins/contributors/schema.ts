@@ -37,6 +37,7 @@ export const contributorForProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 
+// Lists allow hand-recorded coauthorship; automatic creation adds one contributor.
 export const attributionCreatorsProp = seedProperty({
   seedKey: 'system:contributors/property/attribution-creators',
   revision: 1,

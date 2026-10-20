@@ -7,13 +7,14 @@ import type {BridgeClient} from '../src/client'
 import type {KnownCommand} from '../src/protocol'
 import {createGraphMcpServer, KM_MCP_INSTRUCTIONS, type GraphMcpWriteOperation} from '../src/mcpServer'
 import {KM_MCP_TOOL_NAMES} from '../src/mcpShared'
+import {GRAPH_READ_TOOLS} from '../src/readTools'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const packageJsonPath = path.resolve(here, '../package.json')
 
 interface RegisteredToolHarness {
   _registeredTools: Record<string, {
-    inputSchema: {parse: (args: unknown) => Record<string, unknown>}
+    inputSchema: {parse: (args: unknown) => Record<string, unknown>, shape?: Record<string, unknown>}
     handler: (
       args: Record<string, unknown>,
       extra: Record<string, never>,
@@ -224,6 +225,18 @@ describe('recent_changes', () => {
     })
     const tools = (server as unknown as RegisteredToolHarness)._registeredTools
     expect(new Set(Object.keys(tools))).toEqual(new Set(KM_MCP_TOOL_NAMES))
+  })
+
+  it('keeps contributor selection out of registered read tool arguments', () => {
+    const server = createGraphMcpServer({
+      client: clientFrom(vi.fn<BridgeClient['runCommand']>()),
+      serverOptions: {capabilities: {tools: {}}},
+    })
+    const tools = (server as unknown as RegisteredToolHarness)._registeredTools
+
+    for (const {name} of GRAPH_READ_TOOLS) {
+      expect(tools[name].inputSchema.shape, `${name} input schema`).not.toHaveProperty('contributorId')
+    }
   })
 
   it('lets an unconfigured MCP connection discover and create contributor profiles', async () => {

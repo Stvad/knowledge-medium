@@ -149,6 +149,7 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   dispatchQuery: 'private',
   groupedFacade: 'private (the undo-group facade factory)',
   transactionFacade: 'private (the shared transaction-host binding factory)',
+  contextFacade: 'private (the context-bound host and local Block identity factory)',
   processorFacade: 'private (the processor runtime host factory)',
   transact: 'private (reached through the tx override with real-repo this)',
   captureTransactionRuntime: 'private (readiness plus immutable runtime capture; reached on the real repo)',

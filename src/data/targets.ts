@@ -441,6 +441,7 @@ export const ensureAliasTarget = async (
   alias: string,
   workspaceId: string,
   typeSnapshot: TypeRegistrySnapshot = repo.snapshotTypeRegistries(),
+  options: {systemMint?: boolean} = {},
 ): Promise<{ id: string; inserted: boolean }> => {
   // Lookup-first INSIDE the tx, not just at the caller's read phase:
   // the read-phase lookup can go stale between plan build and apply —
@@ -465,9 +466,8 @@ export const ensureAliasTarget = async (
     orderKey: keyAtEnd(),
     freshContent: seed.content,
     stripAliasesOnRestore: true,
-    // A freshly-probed alias seat is a speculative default: if the server
-    // already has a real page for this alias, the local seat must yield.
-    systemMint: true,
+    // Reference stubs yield to an authoritative server page; explicit page creators opt out.
+    systemMint: options.systemMint ?? true,
     // The setProperty + addTypeInTx pair below must produce exactly
     // `seed.properties` on disk; the `ensureAliasTarget writes the seed
     // shape` test in targets.test.ts asserts this and is the contract

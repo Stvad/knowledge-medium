@@ -2021,8 +2021,13 @@ export class Repo {
   /** Bind plugin context to this host's writes without changing other clients. */
   withTxContext(context: NonNullable<RepoTxOptions['context']>): Repo {
     const captured = Object.freeze({...context})
-    const facade = this.transactionFacade((fn, opts) =>
+    return this.contextFacade((fn, opts) =>
       this.tx(fn, {...opts, context: {...captured, ...opts.context}}))
+  }
+
+  /** Give context-bound hosts their own Block identity without retaining them in shared caches. */
+  private contextFacade(tx: Repo['tx']): Repo {
+    const facade = this.transactionFacade(tx)
     const blocks = new Map<string, Block>()
     facade.block = id => {
       let block = blocks.get(id)
@@ -2103,8 +2108,7 @@ export class Repo {
 
   /** Follow-up transactions keep the runtime that scheduled the processor. */
   private processorFacade(runtime: TransactionRuntime): Repo {
-    const facade = this.transactionFacade((fn, opts) => this.transact(fn, opts, runtime))
-    const blocks = new Map<string, Block>()
+    const facade = this.contextFacade((fn, opts) => this.transact(fn, opts, runtime))
     facade.mutators = new Map(runtime.mutators)
     // Share invalidation, but never a loader bound to another runtime's host.
     const querySnapshot = {registry: runtime.queries, cacheScope: `processor:${uuidv4()}`}
@@ -2124,13 +2128,6 @@ export class Repo {
       runtime.propertySchemaWorkspaceId === null || workspaceId === runtime.propertySchemaWorkspaceId,
     )
     facade.snapshotTypeRegistries = () => ({types: runtime.types, propertySchemas: runtime.propertySchemas})
-    // Context-bound blocks stay local; the shared cache must never retain this host.
-    facade.block = id => {
-      let block = blocks.get(id)
-      if (!block) { block = new Block(facade, id); blocks.set(id, block) }
-      return block
-    }
-    facade.undoGroup = async fn => fn(facade.groupedFacade(this.newId()))
     return facade
   }
 

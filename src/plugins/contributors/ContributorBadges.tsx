@@ -81,8 +81,9 @@ const ContributorBadgesView = ({block, Inner}: {block: Block; Inner: BlockRender
   const [open, setOpen] = useState(false)
   if (!attribution || !visible) return <Inner block={block}/>
 
+  const creatorIds = new Set(creatorProfiles.map(profile => profile.id))
   const nonHumanCreators = [...new Map(creatorProfiles.filter(p => p.kind !== 'human').map(p => [p.id, p])).values()]
-  const nonHumanEditors = [...new Map(editorProfiles.filter(p => p.kind !== 'human').map(p => [p.id, p])).values()]
+  const nonHumanEditors = [...new Map(editorProfiles.filter(p => p.kind !== 'human' && !creatorIds.has(p.id)).map(p => [p.id, p])).values()]
   const summarize = (label: string, entries: Profile[]): string => {
     if (entries.length === 0) return ''
     const first = entries[0]
