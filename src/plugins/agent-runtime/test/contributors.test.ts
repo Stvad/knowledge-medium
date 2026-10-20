@@ -12,6 +12,8 @@ import {userPageBlockId} from '@/data/stateBlocks'
 import {resolveFacetRuntimeSync} from '@/facets/facet'
 import {computeAliasSeatId, ensureAliasTarget} from '@/data/targets'
 import {PLAINTEXT_ALIAS_SEATS} from '@/data/test/plaintextAliasSeats'
+import {actionsFacet} from '@/extensions/core'
+import {contributorsDataExtension} from '@/plugins/contributors/dataExtension'
 
 const WS = 'ws'
 let db: TestDb
@@ -68,6 +70,67 @@ describe('agent contributor selection', () => {
     await expect(run({type: 'create-page', name: 'Unconfigured client'})).rejects.toThrow(/Choose a contributor.*CLI or MCP/)
     expect(await context.repo.db.getAll('SELECT id FROM blocks WHERE content = ?', ['Unconfigured client'])).toEqual([])
     expect(await run({type: 'list-contributors'})).toEqual({contributors: []})
+  })
+
+  it.each([undefined, null, 'selected'] as const)('refuses action closures that bypass the command-bound repository (selection: %s)', async selection => {
+    const contributorId = selection === 'selected'
+      ? (await run({type: 'create-contributor', name: 'Atlas'}) as ContributorProfile).id
+      : selection
+    const capturedRepo = context.repo
+    const handler = vi.fn(async () => {
+      await capturedRepo.tx(tx => tx.create({
+        id: 'action-created', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'Captured repo write',
+      }), {scope: ChangeScope.BlockDefault})
+    })
+    const runtime = resolveFacetRuntimeSync([staticDataExtensions, actionsFacet.of({
+      id: 'test.captured-repo', description: 'Captured repository action', context: 'global', handler,
+    })], {repo: capturedRepo, workspaceId: WS, safeMode: false})
+    capturedRepo.setFacetRuntime(runtime)
+    context = createAgentRuntimeContext({repo: capturedRepo, runtime, safeMode: false})
+
+    for (const type of ['run-action', 'action']) {
+      await expect(run({type, id: 'test.captured-repo', contributorId})).rejects.toThrow(/run-action.*Contributors/)
+    }
+    expect(handler).not.toHaveBeenCalled()
+    expect(await capturedRepo.load('action-created')).toBeNull()
+  })
+
+  it('keeps action dispatch available when Contributors is disabled', async () => {
+    const capturedRepo = context.repo
+    const runtime = resolveFacetRuntimeSync([
+      staticDataExtensions.filter(extension => extension !== contributorsDataExtension),
+      actionsFacet.of({
+        id: 'test.captured-repo', description: 'Captured repository action', context: 'global',
+        handler: async () => {
+          await capturedRepo.tx(tx => tx.create({
+            id: 'action-created', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'Action write',
+          }), {scope: ChangeScope.BlockDefault})
+        },
+      }),
+    ], {repo: capturedRepo, workspaceId: WS, safeMode: false})
+    capturedRepo.setFacetRuntime(runtime)
+    context = createAgentRuntimeContext({repo: capturedRepo, runtime, safeMode: false})
+
+    await run({type: 'run-action', id: 'test.captured-repo'})
+
+    expect((await capturedRepo.load('action-created'))?.content).toBe('Action write')
+  })
+
+  it.each([
+    {id: 'unknown', dependencies: undefined, actionContext: 'global', error: /Action not found/},
+    {id: 'test.validation', dependencies: 'invalid', actionContext: 'global', error: /dependencies must be an object/},
+    {id: 'test.validation', dependencies: {}, actionContext: 'edit-mode-cm', error: /cannot provide editor/},
+  ])('preserves action validation for $id in $actionContext with $dependencies', async ({id, dependencies, actionContext, error}) => {
+    const handler = vi.fn()
+    const repo = context.repo
+    const runtime = resolveFacetRuntimeSync([staticDataExtensions, actionsFacet.of({
+      id: 'test.validation', description: 'Validate before refusal', context: actionContext, handler,
+    })], {repo, workspaceId: WS, safeMode: false})
+    repo.setFacetRuntime(runtime)
+    context = createAgentRuntimeContext({repo, runtime, safeMode: false})
+
+    await expect(run({type: 'run-action', id, dependencies})).rejects.toThrow(error)
+    expect(handler).not.toHaveBeenCalled()
   })
 
   it('records the selected profile through multi-transaction and eval write paths', async () => {

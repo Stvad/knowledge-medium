@@ -84,7 +84,7 @@ The CLI exposes both *local* commands (pairing, profile management) and *bridge*
 
 Run `kmagent <command> --help` for per-command details or `kmagent --help` for the full menu.
 
-**`kmagent sql` and synced tables:** a raw `INSERT`/`UPDATE`/`DELETE` against `blocks`, `workspaces`, or `workspace_members` bypasses `repo.tx` — it leaves `tx_context.source = NULL` (the row never uploads to the server or other clients) and skips the kernel's post-commit derivations (block_types, reference normalization, property projection), so derived state goes stale. `kmagent sql` refuses such writes by default and names the offending table in the error. Prefer `create-block` / `update-block` / `run-action` (all go through `repo.tx`) for a normal write. If you genuinely need a raw statement against one of these tables, pass `--allow-synced-write` (or `{allowSyncedWrite: true}` on a `kmagent raw` body) to opt in for that one call.
+**`kmagent sql` and synced tables:** a raw `INSERT`/`UPDATE`/`DELETE` against `blocks`, `workspaces`, or `workspace_members` bypasses `repo.tx` — it leaves `tx_context.source = NULL` (the row never uploads to the server or other clients) and skips the kernel's post-commit derivations (block_types, reference normalization, property projection), so derived state goes stale. `kmagent sql` refuses such writes by default and names the offending table in the error. Prefer `create-block` / `update-block` (which go through `repo.tx`) for a normal write. If you genuinely need a raw statement against one of these tables, pass `--allow-synced-write` (or `{allowSyncedWrite: true}` on a `kmagent raw` body) to opt in for that one call.
 
 ## Writing
 
@@ -94,7 +94,7 @@ Writes are markdown-native and conflict-safe, so an agent can treat the graph li
 - **Append.** `append-markdown` parses with the app's paste parser and inserts the whole outline in one transaction, printing the created blocks with their short ids.
 - **Edit.** `edit-block` replaces one exact occurrence inside the writing transaction; `update-block` takes `expectedContent` — the block's exact content, read whole with `get-block` — and refuses the overwrite when the content is no longer that.
 - **Todos.** A todo is a block with properties `{"types": ["todo"], "status": "open"}`; set `status` to `"done"` to complete it.
-- **Review.** Every bridge write is a transaction described `agent runtime <verb>`; `recent-changes` and `block-history` read them back from the local change log. Not attributed: `eval`, `sql execute` and `run-action`.
+- **Review.** Direct graph verbs record transactions described `agent runtime <verb>`; `recent-changes` and `block-history` read them back from the local change log. Transactions opened by `eval` and explicit raw SQL writes may not carry that description.
 
 ## MCP Server
 
@@ -254,6 +254,8 @@ kmagent contributor use <id>   # or: kmagent contributor use none
 ```
 
 Contributor choices are stored separately in one file per token profile and workspace under `agent-contributors/`. For CLI writes, `--contributor <id|none>` overrides `AGENT_RUNTIME_CONTRIBUTOR_ID`, which overrides the saved choice; an empty environment value leaves the saved choice in effect. An unconfigured selection is sent as no field; meaningful external block writes then fail with setup instructions, while reads, watcher setup and derived maintenance remain available. `none` sends explicit null and records an intentionally unattributed write. External writers can select agent or automation profiles; human profiles are reserved for human edits.
+
+`run-action` (and its raw `action` alias) refuses dispatch while Contributors is enabled: UI action handlers and middleware can retain repositories outside the command context. Use graph commands or `eval` with its supplied `repo` for attributed work.
 
 `contributor create --kind human` creates a profile for a person without selecting it; the current agent selection stays in place.
 

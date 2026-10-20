@@ -8,6 +8,7 @@ import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { staticDataExtensions } from '@/extensions/staticDataExtensions'
+import { contributorsDataExtension } from '@/plugins/contributors/dataExtension'
 import { extensionsDataExtension } from '@/plugins/extensions-settings/dataExtension'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import {
@@ -1979,7 +1980,8 @@ describe('mutating bridge commands rely on the transaction workspace guard', () 
 
     const withProbeAction = (): AgentRuntimeContext => {
       const runtime = resolveFacetRuntimeSync(
-        [staticDataExtensions, extensionsDataExtension, actionsFacet.of(probeAction, {source: 'test'})],
+        [staticDataExtensions.filter(extension => extension !== contributorsDataExtension),
+          extensionsDataExtension, actionsFacet.of(probeAction, {source: 'test'})],
         {repo: env.repo, workspaceId: WS, safeMode: false},
       )
       env.repo.setFacetRuntime(runtime)

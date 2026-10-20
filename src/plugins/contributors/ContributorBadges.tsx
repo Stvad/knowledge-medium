@@ -1,7 +1,7 @@
 import {useMemo, useState} from 'react'
 import type {Block} from '@/data/block'
 import type {BlockData} from '@/data/api'
-import {useHandle, useHandles} from '@/hooks/block.js'
+import {useHandle} from '@/hooks/block.js'
 import {useAppHashInContext} from '@/context/layoutWsContext.js'
 import {useOpenBlock} from '@/utils/navigation.js'
 import {
@@ -17,6 +17,7 @@ import {
   contributorRoleProp,
   type ContributorKind,
 } from './schema.js'
+import {CONTRIBUTOR_PROFILES_BY_IDS_QUERY} from './queries.js'
 
 type Attribution = {creators: readonly string[]; editors: readonly string[]; workspaceId: string}
 type Profile = {id: string; name: string; kind: ContributorKind; role?: string}
@@ -50,13 +51,17 @@ const ProfileLink = ({profile, workspaceId}: {profile: Profile; workspaceId: str
 const ContributorBadgesView = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
   const attribution = useAttribution(block)
   const allIds = useMemo(() => [...new Set([...(attribution?.creators ?? []), ...(attribution?.editors ?? [])])], [attribution?.creators, attribution?.editors])
-  const profileBlocks = useMemo(() => allIds.map(id => block.repo.block(id)), [allIds, block.repo])
-  const profileRows = useHandles(profileBlocks)
+  const profileRows = useHandle(
+    block.repo.query[CONTRIBUTOR_PROFILES_BY_IDS_QUERY]({
+      workspaceId: attribution?.workspaceId ?? '',
+      ids: allIds,
+    }),
+    {selector: rows => rows ?? []},
+  )
   const profiles = useMemo(() => {
     const byId = new Map<string, Profile>()
-    profileRows.forEach((row, index) => {
-      if (!row) return
-      const id = allIds[index]
+    profileRows.forEach(row => {
+      const id = row.id
       let kind: ContributorKind = 'agent'
       let role: string | undefined
       try { kind = contributorKindOf(row) } catch { /* An unreadable profile still gets a useful linked fallback. */ }
@@ -69,7 +74,7 @@ const ContributorBadgesView = ({block, Inner}: {block: Block; Inner: BlockRender
       })
     })
     return byId
-  }, [profileRows, allIds])
+  }, [profileRows])
 
   const uniqueProfiles = (ids: readonly string[]): Profile[] =>
     [...new Map(ids.map(id => profiles.get(id)).filter((p): p is Profile => Boolean(p)).map(profile => [profile.id, profile])).values()]

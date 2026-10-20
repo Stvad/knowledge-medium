@@ -356,6 +356,10 @@ const printPing = async () => {
 const whoamiWithToken = (token: string): Promise<WhoamiInfo> =>
   createBridgeClient({token}).whoami()
 
+/** Control evals act on the app tab, not graph content, so they carry no contributor. */
+const runControlEval = (code: string): Promise<unknown> =>
+  runCommand({type: 'eval', code, contributorId: null})
+
 const reloadAppAndWait = async ({timeoutMs = 30_000} = {}) => {
   const token = await resolveToken()
   if (!token) {
@@ -377,10 +381,7 @@ const reloadAppAndWait = async ({timeoutMs = 30_000} = {}) => {
   // Schedule the reload after a short delay so the eval result reaches
   // the bridge before the JS context is torn down. Otherwise the
   // bridge sees a delivered-but-never-completed command.
-  await runCommand({
-    type: 'eval',
-    code: 'setTimeout(() => window.location.reload(), 100)',
-  })
+  await runControlEval('setTimeout(() => window.location.reload(), 100)')
 
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
@@ -399,10 +400,7 @@ const navigateAppHash = async (hash: string): Promise<unknown> => {
   }
   const normalized = hash.startsWith('#') ? hash.slice(1) : hash
   // JSON.stringify both escapes and quotes the value safely.
-  return runCommand({
-    type: 'eval',
-    code: `window.location.hash = ${JSON.stringify(normalized)}`,
-  })
+  return runControlEval(`window.location.hash = ${JSON.stringify(normalized)}`)
 }
 
 const waitForTokenAudience = async (token: string): Promise<WhoamiInfo> => {

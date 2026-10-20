@@ -1,22 +1,22 @@
 // @vitest-environment happy-dom
-import {cleanup, fireEvent, render, screen} from '@testing-library/react'
+import {act, cleanup, fireEvent, render, screen} from '@testing-library/react'
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest'
 import type {Block} from '@/data/block'
 import type {BlockData} from '@/data/api'
 import {USER_TYPE} from '@/data/blockTypes'
 import {typesProp} from '@/data/properties'
 
-const {useHandleMock, useHandlesMock, useOpenBlockMock} = vi.hoisted(() => ({
+const {useHandleMock, useOpenBlockMock} = vi.hoisted(() => ({
   useHandleMock: vi.fn(),
-  useHandlesMock: vi.fn(),
   useOpenBlockMock: vi.fn(),
 }))
-vi.mock('@/hooks/block.js', () => ({useHandle: useHandleMock, useHandles: useHandlesMock}))
+vi.mock('@/hooks/block.js', () => ({useHandle: useHandleMock}))
 vi.mock('@/utils/navigation.js', () => ({useOpenBlock: useOpenBlockMock}))
 vi.mock('@/context/layoutWsContext.js', () => ({useAppHashInContext: (_ws: string, id: string) => `#${id}`}))
 
 import {contributorBadgesDecoratorContribution} from '../ContributorBadges.js'
 import {attributionCreatorsProp, attributionEditorsProp, contributorKindProp, contributorRoleProp} from '../schema.js'
+import {CONTRIBUTOR_PROFILES_BY_IDS_QUERY} from '../queries.js'
 
 const blockData = (properties: Record<string, unknown>): BlockData => ({
   id: 'note', workspaceId: 'ws', content: 'A note', parentId: null, orderKey: 'a',
@@ -29,10 +29,23 @@ const profile = (id: string, name: string, kind: string, role?: string): BlockDa
     [contributorRoleProp.name]: role,
   }), id, content: name,
 })
-const block = {id: 'note', repo: {block: (id: string) => ({id})}} as unknown as Block
+const profileRows = new Map<string, BlockData>()
+const setProfiles = (...rows: BlockData[]) => {
+  profileRows.clear()
+  for (const row of rows) profileRows.set(row.id, row)
+}
+const profileQueryHandle = {}
+const block = {id: 'note', repo: {
+  query: {
+    [CONTRIBUTOR_PROFILES_BY_IDS_QUERY]: () => profileQueryHandle,
+  },
+}} as unknown as Block
 const Inner = ({block: b}: {block: Block}) => <span>Body {b.id}</span>
 const decorate = (properties: Record<string, unknown>) => {
-  useHandleMock.mockImplementation((_block: Block, options: {selector: (data: BlockData) => unknown}) => options.selector(blockData(properties)))
+  useHandleMock.mockImplementation((handle: unknown, options: {selector: (data: unknown) => unknown}) =>
+    handle === block
+      ? options.selector(blockData(properties))
+      : options.selector([...profileRows.values()]))
   const render = contributorBadgesDecoratorContribution({block} as never)
   if (!render) throw new Error('expected contributor decorator')
   return render(Inner)
@@ -40,10 +53,8 @@ const decorate = (properties: Record<string, unknown>) => {
 
 beforeEach(() => {
   useOpenBlockMock.mockReturnValue(() => {})
-  useHandlesMock.mockImplementation((handles: readonly {id: string}[]) => handles.map(handle => ({
-    agent: profile('agent', 'Research Agent', 'agent', 'research'),
-    human: profile('human', 'Alice', 'human'),
-  }[handle.id])))
+  profileRows.clear()
+  setProfiles(profile('agent', 'Research Agent', 'agent', 'research'), profile('human', 'Alice', 'human'))
 })
 afterEach(() => {cleanup(); vi.clearAllMocks()})
 
@@ -64,12 +75,11 @@ describe('contributor badges', () => {
       [attributionCreatorsProp.name]: attributionCreatorsProp.codec.encode(['agent']),
       [attributionEditorsProp.name]: attributionEditorsProp.codec.encode([]),
     })
-    let current = profile('agent', 'Research Agent', 'agent', 'research')
-    useHandlesMock.mockImplementation((handles: readonly {id: string}[]) => handles.map(handle => handle.id === 'agent' ? current : undefined))
+    setProfiles(profile('agent', 'Research Agent', 'agent', 'research'))
     const view = render(<Decorated block={block}/>)
     expect(screen.getByRole('button', {name: 'Authorship details: By Research Agent · research'})).toBeTruthy()
 
-    current = profile('agent', 'Updated Agent', 'automation', 'summarizer')
+    act(() => setProfiles(profile('agent', 'Updated Agent', 'automation', 'summarizer')))
     view.rerender(<Decorated block={block}/>)
     expect(screen.getByRole('button', {name: 'Authorship details: By Updated Agent · summarizer'})).toBeTruthy()
     fireEvent.pointerDown(screen.getByRole('button', {name: /Authorship details/}), {button: 0, pointerType: 'mouse'})
@@ -82,18 +92,17 @@ describe('contributor badges', () => {
       [attributionCreatorsProp.name]: attributionCreatorsProp.codec.encode(['agent']),
       [attributionEditorsProp.name]: attributionEditorsProp.codec.encode([]),
     })
-    let current = profile('agent', 'Research Agent', 'agent', 'research')
-    useHandlesMock.mockImplementation((handles: readonly {id: string}[]) => handles.map(handle => handle.id === 'agent' ? current : undefined))
+    setProfiles(profile('agent', 'Research Agent', 'agent', 'research'))
     const view = render(<Decorated block={block}/>)
     expect(screen.getByRole('button', {name: /Research Agent/})).toBeTruthy()
 
-    current = {
-      ...current,
+    act(() => setProfiles({
+      ...profile('agent', 'Research Agent', 'agent', 'research'),
       properties: {
-        ...current.properties,
+        ...profile('agent', 'Research Agent', 'agent', 'research').properties,
         [typesProp.name]: typesProp.codec.encode([USER_TYPE]),
       },
-    }
+    }))
     view.rerender(<Decorated block={block}/>)
     expect(screen.queryByRole('button', {name: /Authorship details/})).toBeNull()
     expect(screen.getByText('Body note')).toBeTruthy()
@@ -104,10 +113,7 @@ describe('contributor badges', () => {
       [attributionCreatorsProp.name]: attributionCreatorsProp.codec.encode(['agent', 'agent', 'other']),
       [attributionEditorsProp.name]: attributionEditorsProp.codec.encode([]),
     })
-    useHandlesMock.mockImplementation((handles: readonly {id: string}[]) => handles.map(handle => ({
-      agent: profile('agent', 'Research Agent', 'agent', 'research'),
-      other: profile('other', 'Writer Bot', 'automation', 'writer'),
-    }[handle.id])))
+    setProfiles(profile('agent', 'Research Agent', 'agent', 'research'), profile('other', 'Writer Bot', 'automation', 'writer'))
     render(<Decorated block={block}/>)
     expect(screen.getByRole('button', {name: 'Authorship details: By Research Agent · research +1'})).toBeTruthy()
   })
@@ -117,12 +123,12 @@ describe('contributor badges', () => {
       [attributionCreatorsProp.name]: attributionCreatorsProp.codec.encode(['agent']),
       [attributionEditorsProp.name]: attributionEditorsProp.codec.encode(['agent', 'writer', 'reviewer', 'human']),
     })
-    useHandlesMock.mockImplementation((handles: readonly {id: string}[]) => handles.map(handle => ({
-      agent: profile('agent', 'Research Agent', 'agent', 'research'),
-      writer: profile('writer', 'Writer Bot', 'automation', 'writer'),
-      reviewer: profile('reviewer', 'Review Bot', 'agent', 'reviewer'),
-      human: profile('human', 'Alice', 'human'),
-    }[handle.id])))
+    setProfiles(
+      profile('agent', 'Research Agent', 'agent', 'research'),
+      profile('writer', 'Writer Bot', 'automation', 'writer'),
+      profile('reviewer', 'Review Bot', 'agent', 'reviewer'),
+      profile('human', 'Alice', 'human'),
+    )
     render(<Decorated block={block}/>)
     const badge = screen.getByRole('button', {name: /Authorship details/})
     expect(badge.textContent).toBe('By Research Agent · research · Edited by Writer Bot · writer +1')
