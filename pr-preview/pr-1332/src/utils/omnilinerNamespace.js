@@ -1,1 +1,1 @@
-import{WG as e}from"../../chunks/app-BXD4acjN.js";export{e as omnilinerNamespace};
+import{FG as e}from"../../chunks/app-BNT9rtUH.js";export{e as omnilinerNamespace};

@@ -1,1 +1,1 @@
-import{G as e,H as t,U as n,V as r,W as i}from"../../../../chunks/app-BXD4acjN.js";export{r as BUNDLE_PAGE_SIZE,t as BundleRefusal,n as blockRowPages,i as historyRowPages,e as takeBundle};
+import{G as e,H as t,U as n,V as r,W as i}from"../../../../chunks/app-BNT9rtUH.js";export{r as BUNDLE_PAGE_SIZE,t as BundleRefusal,n as blockRowPages,i as historyRowPages,e as takeBundle};

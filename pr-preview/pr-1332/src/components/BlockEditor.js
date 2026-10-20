@@ -1,1 +1,1 @@
-import{_N as e}from"../../chunks/app-BXD4acjN.js";export{e as BlockEditor};
+import{cN as e}from"../../chunks/app-BNT9rtUH.js";export{e as BlockEditor};

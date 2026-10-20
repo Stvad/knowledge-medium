@@ -1,1 +1,1 @@
-import{zD as e}from"../../../chunks/app-BXD4acjN.js";export{e as BlockEmbed};
+import{AD as e}from"../../../chunks/app-BNT9rtUH.js";export{e as BlockEmbed};

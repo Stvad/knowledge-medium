@@ -1,1 +1,1 @@
-import{XA as e}from"../../chunks/app-BXD4acjN.js";export{e as MarkdownImage};
+import{VA as e}from"../../chunks/app-BNT9rtUH.js";export{e as MarkdownImage};

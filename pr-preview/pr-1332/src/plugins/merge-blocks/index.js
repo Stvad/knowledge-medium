@@ -1,1 +1,1 @@
-import{Ch as e,Sh as t,Th as n,wh as r}from"../../../chunks/app-BXD4acjN.js";export{e as MERGE_INTO_ACTION_ID,n as MergePicker,t as mergeBlocksPlugin,r as mergeIntoAction};
+import{Ch as e,Sh as t,wh as n,xh as r}from"../../../chunks/app-BNT9rtUH.js";export{t as MERGE_INTO_ACTION_ID,n as MergePicker,r as mergeBlocksPlugin,e as mergeIntoAction};
