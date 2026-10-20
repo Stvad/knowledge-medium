@@ -592,6 +592,7 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
     // a snapshot so the command_events row written in step 4 reflects
     // every mutator the tx actually ran.
     const result = await fn(tx)
+    tx.finishUserWrites()
 
     // Step 3.5: same-tx processor pass. Runs after `fn` returns but
     // before the command_events insert — inside the writeTransaction,

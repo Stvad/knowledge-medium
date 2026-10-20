@@ -399,6 +399,26 @@ export interface BridgeClient {
   resolveToken: () => Promise<string | null>
 }
 
+/** Bind default contributor attribution without discarding prototype methods
+ * on caller-provided clients. An explicit command value, including null,
+ * remains authoritative; read commands are sent untouched. */
+export const withContributorId = (
+  client: BridgeClient,
+  contributorId: string | null | undefined,
+): BridgeClient => contributorId === undefined ? client : ({
+  bridgeUrl: client.bridgeUrl,
+  runCommand: (command, commandOptions) => client.runCommand(
+    !isReadOnlyAgentCommand(command) && command.contributorId === undefined
+      ? {...command, contributorId}
+      : command,
+    commandOptions,
+  ),
+  nextEvents: eventOptions => client.nextEvents(eventOptions),
+  whoami: () => client.whoami(),
+  health: () => client.health(),
+  resolveToken: () => client.resolveToken(),
+})
+
 export const createBridgeClient = (options: BridgeClientOptions = {}): BridgeClient => {
   const bridgeUrl = (options.bridgeUrl ?? resolveBridgeUrl()).replace(/\/+$/, '')
   // AGENT_RUNTIME_PROFILE is the documented shell default; non-CLI
@@ -451,14 +471,9 @@ export const createBridgeClient = (options: BridgeClientOptions = {}): BridgeCli
   }
 
   const submitCommand = async (command: KnownCommand): Promise<string> => {
-    const attributed = !isReadOnlyAgentCommand(command)
-      && command.contributorId === undefined
-      && options.contributorId !== undefined
-      ? {...command, contributorId: options.contributorId}
+    const pinned = pinnedWorkspaceId && namedWorkspaceId(command) === null
+      ? {...command, workspaceId: pinnedWorkspaceId}
       : command
-    const pinned = pinnedWorkspaceId && namedWorkspaceId(attributed) === null
-      ? {...attributed, workspaceId: pinnedWorkspaceId}
-      : attributed
     const response = await authedRequest<{id: string}>(`${bridgeUrl}/runtime/commands`, {
       method: 'POST',
       body: JSON.stringify(pinned),
@@ -533,7 +548,7 @@ export const createBridgeClient = (options: BridgeClientOptions = {}): BridgeCli
     }
   }
 
-  return {
+  const client: BridgeClient = {
     bridgeUrl,
     runCommand,
     nextEvents,
@@ -541,4 +556,5 @@ export const createBridgeClient = (options: BridgeClientOptions = {}): BridgeCli
     health,
     resolveToken: clientResolveToken,
   }
+  return withContributorId(client, options.contributorId)
 }

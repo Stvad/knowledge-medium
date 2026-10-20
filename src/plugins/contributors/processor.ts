@@ -45,15 +45,24 @@ export const contributorAttributionProcessor = defineSameTxProcessor({
   name: 'contributors.recordAttribution',
   watches: {kind: 'field', table: 'blocks', fields: ['content', 'properties', 'deleted']},
   apply: async (event, ctx) => {
-    if (event.scope !== ChangeScope.BlockDefault || ctx.tx.meta.context?.contributorId === null) return
+    if (event.scope !== ChangeScope.BlockDefault) return
     const targets = new Map<string, boolean>()
     for (const change of event.changedRows) {
-      if (!ctx.hasUserWrite(change.id) || !meaningfulChange(change)) continue
+      if (!ctx.hasUserWrite(change.id)) continue
+      if (change.before && change.after && !change.after.deleted) {
+        for (const prop of [attributionCreatorsProp, attributionEditorsProp]) {
+          const previous = change.before.properties[prop.name]
+          if (previous !== undefined && change.after.properties[prop.name] === undefined) {
+            await ctx.tx.setProperty(change.id, prop, prop.codec.decode(previous), {skipMetadata: true})
+          }
+        }
+      }
+      if (!meaningfulChange(change)) continue
       const target = await targetOf(change.after!, ctx)
       if (change.after!.deleted && target === change.id) continue
       if (target) targets.set(target, targets.get(target) === true || (target === change.id && change.before === null))
     }
-    if (targets.size === 0) return
+    if (targets.size === 0 || ctx.tx.meta.context?.contributorId === null) return
     const contributorId = ctx.tx.meta.context?.contributorId
       ?? await ensureHumanContributor(ctx.tx, event.workspaceId, event.user, {types: ctx.types, propertySchemas: ctx.propertySchemas})
     await assertContributor(ctx.tx, contributorId, event.workspaceId)

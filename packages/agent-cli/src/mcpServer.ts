@@ -13,7 +13,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { readFileSync } from 'node:fs'
 import { z } from 'zod'
-import { createBridgeClient, type BridgeClient } from './client.js'
+import { createBridgeClient, type BridgeClient, withContributorId } from './client.js'
 import { createBridgeGraph, type BridgeGraph } from './graph.js'
 import { type KmMcpToolName, MCP_SERVER_NAME } from './mcpShared.js'
 import {
@@ -91,13 +91,14 @@ export interface GraphMcpServerOptions {
 }
 
 export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpServer => {
-  const client = options.client ?? createBridgeClient({
+  const configuredContributorId = options.contributorId !== undefined
+    ? options.contributorId
+    : contributorFromEnvironment()
+  const baseClient = options.client ?? createBridgeClient({
     profile: options.profile ?? process.env.AGENT_RUNTIME_PROFILE,
     timeoutMs: options.timeoutMs ?? 60_000,
-    contributorId: options.contributorId !== undefined
-      ? options.contributorId
-      : contributorFromEnvironment(),
   })
+  const client = withContributorId(baseClient, configuredContributorId)
   const graph = createBridgeGraph(client)
   const writeGuard = typeof options.writeGuard === 'function'
     ? options.writeGuard({client, graph})

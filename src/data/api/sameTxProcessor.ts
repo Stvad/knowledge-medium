@@ -178,7 +178,8 @@ export interface SameTxTypeOwnership {
 }
 
 export interface SameTxCtx {
-  /** Whether this tx wrote the row without skipping user-intent metadata. */
+  /** Whether the user callback wrote the row without skipping intent metadata.
+   * Internal property materialization and processor writes do not count. */
   hasUserWrite(id: string): boolean
   /** Active `Tx` — same handle the user fn used. Reads see staged
    *  state; writes amend the same tx. Throws here roll back the

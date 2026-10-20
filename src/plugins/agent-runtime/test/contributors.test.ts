@@ -50,6 +50,24 @@ describe('agent contributor selection', () => {
     expect((await context.repo.load(result.id))?.properties[attributionEditorsProp.name]).toEqual([profile.id])
   })
 
+  it.each([false, true])('preserves provenance when properties are replaced (children: %s)', async children => {
+    if (children) {
+      await context.repo.db.execute(`INSERT INTO workspaces
+        (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+        VALUES (?, 'Test', 'vlad', 1, 1, 'none', NULL, 'children')`, [WS])
+    }
+    const atlas = await run({type: 'create-contributor', name: 'Atlas'}) as ContributorProfile
+    const scout = await run({type: 'create-contributor', name: 'Scout'}) as ContributorProfile
+    const page = await run({type: 'create-page', name: 'Research', contributorId: atlas.id}) as {id: string}
+    await run({type: 'update-block', id: page.id, contributorId: atlas.id, content: 'First revision'})
+    await run({type: 'update-block', id: page.id, contributorId: scout.id, content: 'Second revision', properties: {}, replaceProperties: true})
+    expect((await context.repo.load(page.id))?.properties[attributionCreatorsProp.name]).toEqual([atlas.id])
+    expect((await context.repo.load(page.id))?.properties[attributionEditorsProp.name]).toEqual([atlas.id, scout.id])
+    await run({type: 'update-block', id: page.id, contributorId: null, content: 'Unattributed revision', properties: {}, replaceProperties: true})
+    expect((await context.repo.load(page.id))?.properties[attributionCreatorsProp.name]).toEqual([atlas.id])
+    expect((await context.repo.load(page.id))?.properties[attributionEditorsProp.name]).toEqual([atlas.id, scout.id])
+  })
+
   it('leaves explicitly opted-out writes unattributed and does not leak the previous selection', async () => {
     const profile = await run({type: 'create-contributor', name: 'Atlas'}) as ContributorProfile
     await run({type: 'create-page', name: 'First', contributorId: profile.id})

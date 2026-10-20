@@ -619,9 +619,11 @@ cli
     }
 
     const workspaceOption = workspaceAssertion(options.workspace)
+    await ensureBridgeRunning()
     if (action === 'list') {
       const workspaceId = await commandWorkspaceId({type: 'list-contributors', ...workspaceOption})
-      await runAndPrint({type: 'list-contributors', workspaceId})
+      const result = await runCommand({type: 'list-contributors', workspaceId})
+      process.stdout.write(`${toDisplayJson(result)}\n`)
       return
     }
 

@@ -15,17 +15,20 @@ const cliScript = path.resolve(here, '../dist/cli.js')
 interface StubBridge {
   baseUrl: string
   commands: Array<Record<string, unknown>>
+  requests: string[]
   close: () => Promise<void>
 }
 
 const startStubBridge = async (): Promise<StubBridge> => {
   const commands: Array<Record<string, unknown>> = []
+  const requests: string[] = []
   let nextCommandId = 1
   const results = new Map<string, unknown>()
   const server = http.createServer((req, res) => {
     const chunks: Buffer[] = []
     req.on('data', (chunk: Buffer) => chunks.push(chunk))
     req.on('end', () => {
+      requests.push(`${req.method} ${req.url}`)
       const send = (status: number, value: unknown) => {
         res.writeHead(status, {'content-type': 'application/json'})
         res.end(JSON.stringify(value))
@@ -73,6 +76,7 @@ const startStubBridge = async (): Promise<StubBridge> => {
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
     commands,
+    requests,
     close: () => new Promise<void>(resolve => server.close(() => resolve())),
   }
 }
@@ -131,6 +135,11 @@ describe('compiled CLI contributor commands', {timeout: 30_000}, () => {
     expect(bridge.commands[3]).toMatchObject({
       workspaceId: 'workspace-1', contributorId: 'contributor-1', name: 'Inbox',
     })
+    const healthIndexes = bridge.requests.flatMap((request, index) => request === 'GET /health' ? [index] : [])
+    const whoamiIndexes = bridge.requests.flatMap((request, index) => request === 'GET /runtime/whoami' ? [index] : [])
+    expect(healthIndexes).toHaveLength(4)
+    expect(whoamiIndexes).toHaveLength(4)
+    expect(whoamiIndexes.every((index, i) => healthIndexes[i]! < index)).toBe(true)
   })
 
   it('prints contributor-specific help for the supported single command', async () => {

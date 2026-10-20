@@ -16,6 +16,8 @@ import {resolvedThenable} from '@/utils/resolvedThenable'
 import {
   ChangeScope,
   type PropertySchema,
+  type Tx,
+  type TxWriteOpts,
   type TypeContribution,
   type TypeRegistrySnapshot,
   type User,
@@ -34,6 +36,7 @@ import {
 } from '@/data/properties'
 import { UI_STATE_PATH_PART, USER_PREFS_PATH_PART } from '@/data/userPrefs.js'
 import { PAGE_TYPE, USER_TYPE } from '@/data/blockTypes.js'
+import {addTypeInTx} from '@/data/typeTagger'
 
 // ──── Deterministic-id namespaces ────
 
@@ -239,6 +242,32 @@ const reconcileUserPage = async (repo: Repo, id: string, userId: string): Promis
   }
 }
 
+/** Ensure the current user's page inside an existing transaction, including revival. */
+export const ensureUserPageInTx = async (
+  tx: Tx,
+  workspaceId: string,
+  user: User,
+  snapshot: TypeRegistrySnapshot,
+  opts?: TxWriteOpts,
+): Promise<string> => {
+  const id = userPageBlockId(workspaceId, user.id)
+  const existing = await tx.get(id)
+  if (existing && existing.workspaceId !== workspaceId) {
+    throw new Error('The user page belongs to another workspace.')
+  }
+  if (existing && !existing.deleted) return id
+  const displayName = user.name ?? user.id
+  const aliases = dedupe([displayName, user.id])
+  if (existing) {
+    await tx.restore(id, {content: displayName}, opts)
+  } else {
+    await tx.create({id, workspaceId, parentId: null, orderKey: 'a0', content: displayName}, {systemMint: true})
+  }
+  await addTypeInTx(tx, snapshot.types, snapshot.propertySchemas, id, PAGE_TYPE, {[aliasesProp.name]: aliases}, true, opts)
+  await addTypeInTx(tx, snapshot.types, snapshot.propertySchemas, id, USER_TYPE, {[userIdProp.name]: user.id}, true, opts)
+  return id
+}
+
 /** Per-user "user page" block — created (or restored) on first access.
  *  The aliases match the user's display name *and* opaque id so
  *  alias-based lookup surfaces can target it either way. Memoized per
@@ -258,41 +287,9 @@ export const getUserBlock = memoizeAsync(
       return repo.block(id)
     }
 
-    // User.name is optional in the data-layer User shape; fall back
-    // to the id so the user-page block always has *some* content
-    // and an addressable alias.
-    const displayName = user.name ?? user.id
-    // The id rides alongside the display name as an alias so the
-    // user-page is addressable both ways — by name (`[[Alice]]`) and by
-    // the opaque id stored in `created_by`/`updated_by`. Deduped for the
-    // no-name case where displayName === user.id.
-    const aliases = dedupe([displayName, user.id])
     const typeSnapshot = repo.snapshotTypeRegistries()
-
     await repo.tx(async tx => {
-      // Re-read inside the tx with the unfiltered `tx.get` so we see
-      // tombstones. (`repo.load` returned null in that case, so the
-      // outer `live` is no signal here.) Three outcomes:
-      //   1. live row appeared between load and tx open  → no-op
-      //   2. tombstoned row                              → restore
-      //   3. truly missing                               → create
-      const existing = await tx.get(id)
-      if (existing && !existing.deleted) return
-      if (existing && existing.deleted) {
-        await tx.restore(id, {content: displayName})
-        await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: aliases}, typeSnapshot)
-        await repo.addTypeInTx(tx, id, USER_TYPE, {[userIdProp.name]: user.id}, typeSnapshot)
-        return
-      }
-      await tx.create({
-        id,
-        workspaceId,
-        parentId: null,
-        orderKey: 'a0',
-        content: displayName,
-      }, {systemMint: true})
-      await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: aliases}, typeSnapshot)
-      await repo.addTypeInTx(tx, id, USER_TYPE, {[userIdProp.name]: user.id}, typeSnapshot)
+      await ensureUserPageInTx(tx, workspaceId, user, typeSnapshot)
     }, {scope: ChangeScope.UserPrefs})
 
     return repo.block(id)

@@ -1,8 +1,8 @@
 import {ChangeScope, type Tx, type TypeRegistrySnapshot, type User} from '@/data/api'
-import {PAGE_TYPE, USER_TYPE} from '@/data/blockTypes'
-import {aliasesProp, hasBlockType, userIdProp} from '@/data/properties'
+import {PAGE_TYPE} from '@/data/blockTypes'
+import {aliasesProp, hasBlockType} from '@/data/properties'
 import {assertRoundTrippableReferenceLabel} from '@/data/referenceBlock'
-import {userPageBlockId} from '@/data/stateBlocks'
+import {ensureUserPageInTx} from '@/data/stateBlocks'
 import type {Repo} from '@/data/repo'
 import {addTypeInTx} from '@/data/typeTagger'
 import {
@@ -11,17 +11,8 @@ import {
 } from './schema'
 
 export const ensureHumanContributor = async (tx: Tx, workspaceId: string, user: User, snapshot: TypeRegistrySnapshot): Promise<string> => {
-  const id = userPageBlockId(workspaceId, user.id)
+  const id = await ensureUserPageInTx(tx, workspaceId, user, snapshot, {skipMetadata: true})
   const page = await tx.get(id)
-  if (page && (page.workspaceId !== workspaceId || page.deleted)) {
-    throw new Error('The user contributor page is unavailable in this workspace.')
-  }
-  if (!page) {
-    await tx.create({id, workspaceId, parentId: null, orderKey: 'a0', content: user.name ?? user.id}, {systemMint: true})
-    await addTypeInTx(tx, snapshot.types, snapshot.propertySchemas, id, PAGE_TYPE,
-      {[aliasesProp.name]: [...new Set([user.name ?? user.id, user.id])]}, true, {skipMetadata: true})
-    await addTypeInTx(tx, snapshot.types, snapshot.propertySchemas, id, USER_TYPE, {[userIdProp.name]: user.id}, true, {skipMetadata: true})
-  }
   if (!page || !hasBlockType(page, CONTRIBUTOR_TYPE)) {
     await addTypeInTx(tx, snapshot.types, snapshot.propertySchemas, id, CONTRIBUTOR_TYPE,
       {[contributorKindProp.name]: 'human'}, true, {skipMetadata: true})

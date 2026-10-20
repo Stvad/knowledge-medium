@@ -1,6 +1,45 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createBridgeClient } from '../src/client.js'
+import { createBridgeClient, type BridgeClient, withContributorId } from '../src/client.js'
 import { attributeCommandToWorkspace } from '../src/cliOptions.js'
+import type {KnownCommand, WhoamiInfo} from '../src/protocol.js'
+
+class PrototypeBridgeClient implements BridgeClient {
+  readonly bridgeUrl = 'http://prototype.test'
+  readonly commands: KnownCommand[] = []
+  methodCalls: string[] = []
+
+  private called(name: string) {
+    this.methodCalls.push(name)
+  }
+
+  async runCommand(command: KnownCommand): Promise<unknown> {
+    this.called('runCommand')
+    this.commands.push(command)
+    return null
+  }
+
+  async nextEvents() {
+    this.called('nextEvents')
+    return {events: [], nextSeq: 0}
+  }
+
+  async whoami(): Promise<WhoamiInfo> {
+    this.called('whoami')
+    return {
+      clientId: 'client-1', audience: {userId: null, workspaceId: null, label: null},
+      scope: 'read-write', connected: true, clientLastSeen: 1,
+    }
+  }
+
+  async health() {
+    this.called('health')
+  }
+
+  async resolveToken() {
+    this.called('resolveToken')
+    return 'token'
+  }
+}
 
 // A call that names no workspace goes to whichever app tab the user focused
 // last; a pinned client names one on every call, so an unattended consumer
@@ -95,5 +134,23 @@ describe('bridge client workspace pin', () => {
     expect(submitted[0]).toMatchObject({
       type: 'update-block', workspaceId: 'workspace-from-whoami', contributorId: null,
     })
+  })
+
+  it('preserves prototype-backed client methods and their receivers while binding attribution', async () => {
+    const original = new PrototypeBridgeClient()
+    const bound = withContributorId(original, 'configured')
+
+    await bound.runCommand({type: 'search', query: 'x'})
+    await bound.runCommand({type: 'update-block', id: 'b1', content: 'x'})
+    await bound.runCommand({type: 'update-block', id: 'b1', content: 'x', contributorId: null})
+    await bound.nextEvents()
+    await bound.whoami()
+    await bound.health()
+    await bound.resolveToken()
+
+    expect(original.commands.map(command => command.contributorId)).toEqual([undefined, 'configured', null])
+    expect(original.methodCalls).toEqual([
+      'runCommand', 'runCommand', 'runCommand', 'nextEvents', 'whoami', 'health', 'resolveToken',
+    ])
   })
 })

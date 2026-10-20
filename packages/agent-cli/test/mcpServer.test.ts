@@ -62,6 +62,30 @@ describe('createGraphMcpServer', () => {
     expect((server as unknown as ServerInfoHarness).server._serverInfo.version).toBe(pkg.version)
   })
 
+  it.each([
+    ['configured contributor', 'contributor-configured'],
+    ['explicit none', null],
+  ] as const)('binds %s attribution to writes on an injected client only', async (_label, contributorId) => {
+    const commands: KnownCommand[] = []
+    const client = clientFrom(async command => {
+      commands.push(command)
+      return command.type === 'create-page' ? {id: 'page-1'} : {rows: []}
+    })
+    const server = createGraphMcpServer({
+      client,
+      contributorId,
+      serverOptions: {capabilities: {tools: {}}},
+    })
+    const tools = (server as unknown as RegisteredToolHarness)._registeredTools
+
+    await tools.sql_query.handler({sql: 'select 1'}, {})
+    await tools.create_page.handler({name: 'Inbox'}, {})
+
+    expect(commands[0]).toMatchObject({type: 'sql', mode: 'all'})
+    expect(commands[0]).not.toHaveProperty('contributorId')
+    expect(commands[1]).toMatchObject({type: 'create-page', contributorId})
+  })
+
   it('runs the optional write guard before mutating tools', async () => {
     const commands: KnownCommand[] = []
     const operations: GraphMcpWriteOperation[] = []
