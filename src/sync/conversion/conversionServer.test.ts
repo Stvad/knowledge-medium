@@ -102,6 +102,7 @@ const cancellableCalls: {[K in Exclude<keyof ConversionServer, OneWay>]: Call} =
   workspaceCounts: server => server.workspaceCounts(WS),
   readBlockPage: server => server.readBlockPage(WS, null, 1),
   readBlocks: server => server.readBlocks(WS, [blockId(0)]),
+  readLastBlockId: server => server.readLastBlockId(WS),
   readContentSealHistory: server => server.readContentSealHistory(WS, [blockId(0)]),
   applyBlockPatches: server => server.applyBlockPatches([]),
   readFullBlockPage: server => server.readFullBlockPage(WS, null, 1),

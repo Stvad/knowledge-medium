@@ -222,6 +222,9 @@ describe('the re-seal and verify through PostgREST', {timeout: 60_000}, () => {
     const firstChunk = new Set(ids.slice(0, IDS_PER_FILTER))
     expect(selected.filter(row => firstChunk.has(row.block_id)).length).toBeGreaterThan(HISTORY_PAGE)
     const read = await server.readContentSealHistory(ws, ids)
+    // The last row in the order the pages go in, which the cleaning stage's read must reach.
+    expect(await server.readLastBlockId(ws)).toBe(ids.at(-1))
+    expect(await server.readLastBlockId(randomUUID())).toBeNull()
     const byEvent = (a: number, b: number) => a - b
     expect(read.map(row => row.event_id).sort(byEvent)).toEqual(selected.map(row => row.event_id).sort(byEvent))
 

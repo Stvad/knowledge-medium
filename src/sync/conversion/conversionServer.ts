@@ -90,6 +90,9 @@ export interface ConversionServer {
    *  API caps rows per response); only an empty page means there are no more. */
   readBlockPage(workspaceId: string, afterId: string | null, limit: number): Promise<readonly ServerBlockRow[]>
   readBlocks(workspaceId: string, ids: readonly string[]): Promise<readonly ServerBlockRow[]>
+  /** The workspace's last block id in {@link readBlockPage}'s order, or null
+   *  when this session sees no rows. */
+  readLastBlockId(workspaceId: string): Promise<string | null>
   /** The UPDATE history of these blocks that wrote an envelope into `content`
    *  and changed all three content columns, in any order. A superset of the
    *  re-seal records; the caller picks them out. */
@@ -189,6 +192,17 @@ export const createSupabaseConversionServer = (
         rows.push(...data)
       }
       return rows
+    },
+
+    async readLastBlockId(workspaceId) {
+      const {data, error, status} = await cancellable(client
+        .from('blocks')
+        .select('id')
+        .eq('workspace_id', workspaceId)
+        .order('id', {ascending: false})
+        .limit(1))
+      if (error) throw failed('reading blocks', error, status)
+      return data[0]?.id ?? null
     },
 
     async readContentSealHistory(workspaceId, blockIds) {
