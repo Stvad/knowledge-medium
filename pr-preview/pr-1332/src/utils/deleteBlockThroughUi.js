@@ -1,1 +1,1 @@
-import{Cj as e,Sj as t,wj as n,xj as r}from"../../chunks/app-CT0uoyJm.js";export{r as BULK_DELETE_CONFIRM_THRESHOLD,t as deleteBlockThroughUi,e as deleteBlocksThroughUi,n as ensureDeletableThroughUi};
+import{Cj as e,Sj as t,wj as n,xj as r}from"../../chunks/app-Bjoj72GX.js";export{r as BULK_DELETE_CONFIRM_THRESHOLD,t as deleteBlockThroughUi,e as deleteBlocksThroughUi,n as ensureDeletableThroughUi};

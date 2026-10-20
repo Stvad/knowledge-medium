@@ -1,1 +1,1 @@
-import{BA as e,VA as t,zA as n}from"../../chunks/app-CT0uoyJm.js";export{n as defaultRegistry,e as defaultRendererContributions,t as defaultRenderersExtension};
+import{BA as e,VA as t,zA as n}from"../../chunks/app-Bjoj72GX.js";export{n as defaultRegistry,e as defaultRendererContributions,t as defaultRenderersExtension};

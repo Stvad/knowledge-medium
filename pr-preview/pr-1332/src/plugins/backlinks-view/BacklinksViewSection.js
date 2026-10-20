@@ -1,1 +1,1 @@
-import{dm as e,um as t}from"../../../chunks/app-CT0uoyJm.js";export{t as BacklinksViewSection,e as backlinksViewFooterContribution};
+import{dm as e,um as t}from"../../../chunks/app-Bjoj72GX.js";export{t as BacklinksViewSection,e as backlinksViewFooterContribution};

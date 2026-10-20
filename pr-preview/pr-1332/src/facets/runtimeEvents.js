@@ -1,1 +1,1 @@
-import{ez as e,tz as t}from"../../chunks/app-CT0uoyJm.js";export{e as appRuntimeUpdateEvent,t as refreshAppRuntime};
+import{ez as e,tz as t}from"../../chunks/app-Bjoj72GX.js";export{e as appRuntimeUpdateEvent,t as refreshAppRuntime};

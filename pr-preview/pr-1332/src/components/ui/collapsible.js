@@ -1,1 +1,1 @@
-"use client";import{BP as e,VP as t,zP as n}from"../../../chunks/app-CT0uoyJm.js";export{n as Collapsible,e as CollapsibleContent,t as CollapsibleTrigger};
+"use client";import{BP as e,VP as t,zP as n}from"../../../chunks/app-Bjoj72GX.js";export{n as Collapsible,e as CollapsibleContent,t as CollapsibleTrigger};
