@@ -17,7 +17,13 @@ import { obtainFlipKey, requireCanaryKey, type KeyPrompts } from './conversionKe
 import type { ConversionServer } from './conversionServer.js'
 import { flipToE2ee, type FlipOptions, type FlipWait } from './flip.js'
 import type { FlipAttempts } from './flipAttempts.js'
-import { localBlockers, runPreflight, type PreflightEnvironment, type PreflightReport } from './preflight.js'
+import {
+  localBlockers,
+  runPreflight,
+  type PreflightBlocker,
+  type PreflightEnvironment,
+  type PreflightReport,
+} from './preflight.js'
 import { conversionLockName, type ConversionLock } from './runLock.js'
 import { laterStage, stageMovedBack, stageOf, type ConversionStage, type StageKind, type StageRead } from './stage.js'
 
@@ -100,14 +106,16 @@ const runPlaintextStage = async (deps: ConversionFlowDeps): Promise<StageOutcome
   await ui.confirmPreflight(report)
 
   const key = await obtainFlipKey({...deps, prompts: ui})
-  const lastChance = await localBlockers(deps.preflight, signal)
-  if (lastChance.length > 0) return {kind: 'preflight-failed', report: {blockers: lastChance}}
+  // The prompts in between can stay open indefinitely, and so can the flip's
+  // backoff: the blockers this device can change are checked before each send.
+  let lastChance: PreflightBlocker[] = []
   let flip
   try {
     flip = await flipToE2ee({
       server,
       workspaceId,
       canary: key.canary,
+      beforeSend: async () => (lastChance = await localBlockers(deps.preflight, signal)).length === 0,
       onSend: () => {
         deps.flipAttempts.markSent()
         ui.status({kind: 'flipping', waiting: null})
@@ -123,6 +131,7 @@ const runPlaintextStage = async (deps: ConversionFlowDeps): Promise<StageOutcome
     if ((await flipLanded(deps)) === 'landed') return FLIPPED
     throw error
   }
+  if (flip.kind === 'held') return {kind: 'preflight-failed', report: {blockers: lastChance}}
   if (flip.kind === 'refused') {
     // An earlier attempt's flip may have committed after its response was lost.
     const landed = await flipLanded(deps)

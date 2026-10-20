@@ -13,6 +13,8 @@ export type FlipResult =
   | {readonly kind: 'flipped'}
   /** `KMC01`: not the owner, a malformed canary, or the workspace is not plaintext. */
   | {readonly kind: 'refused'; readonly message: string}
+  /** `beforeSend` said no: nothing was sent since the last lock refusal. */
+  | {readonly kind: 'held'}
 
 export interface FlipWait {
   /** Lock refusals so far. */
@@ -24,6 +26,9 @@ export interface FlipOptions {
   readonly server: ConversionServer
   readonly workspaceId: string
   readonly canary: string
+  /** Before every send, retries included: false holds the flip. A backoff can
+   *  last long enough for this device to queue a write meanwhile. */
+  readonly beforeSend?: () => Promise<boolean>
   /** Just before each request is sent: from then on the flip may commit. */
   readonly onSend?: () => void
   /** Each time the flip waits for the database before trying again. */
@@ -48,6 +53,7 @@ export const flipToE2ee = async ({
   server,
   workspaceId,
   canary,
+  beforeSend,
   onSend,
   onWait,
   signal,
@@ -56,6 +62,7 @@ export const flipToE2ee = async ({
 }: FlipOptions): Promise<FlipResult> => {
   for (let attempt = 1; ; attempt++) {
     signal?.throwIfAborted()
+    if (beforeSend && !(await beforeSend())) return {kind: 'held'}
     try {
       onSend?.()
       await server.convertWorkspaceToE2ee(workspaceId, canary)

@@ -240,6 +240,19 @@ describe('runConversion: preflight → key → flip', () => {
     expect(flips()).toBe(0)
   })
 
+  it('checks the upload queue again before a retry after a lock refusal', async () => {
+    server.writesInFlight = 1
+    let checks = 0
+    // Preflight and the first send see an empty queue; an upload lands during the backoff.
+    const uploadQueue = async () => ({pending: ++checks > 2 ? 1 : 0, rejected: 0})
+
+    expect(await run({preflight: passingEnvironment({uploadQueue})}))
+      .toEqual({kind: 'preflight-failed', report: {blockers: [{kind: 'pending-uploads', count: 1}]}})
+    // The refused send changed nothing; no second one went out.
+    expect(flips()).toBe(1)
+    expect(await server.conversionState(WS)).toMatchObject({kind: 'read', state: {encryptionMode: 'none'}})
+  })
+
   it('refuses before showing a key this device could not keep', async () => {
     vi.spyOn(keyStore, 'put').mockRejectedValue(new Error('QuotaExceededError'))
 
