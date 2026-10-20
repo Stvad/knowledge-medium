@@ -1,1 +1,0 @@
-import{AD as e,jD as t}from"../../../chunks/app-BNN039lb.js";export{e as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,t as openExtensionsSettingsAction};

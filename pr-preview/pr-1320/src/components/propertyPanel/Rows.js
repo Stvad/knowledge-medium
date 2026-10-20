@@ -1,1 +1,0 @@
-import{CN as e,SN as t}from"../../../chunks/app-BNN039lb.js";export{t as MetadataRow,e as PropertySectionLabel};

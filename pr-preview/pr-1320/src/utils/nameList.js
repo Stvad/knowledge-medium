@@ -1,1 +1,0 @@
-import{gX as e,hX as t,mX as n}from"../../chunks/app-BNN039lb.js";export{n as NAMES_IN_A_SENTENCE,t as describeNames,e as firstFew};

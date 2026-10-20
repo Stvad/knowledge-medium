@@ -1,1 +1,0 @@
-import{_7 as e,d7 as t,f7 as n,g7 as r,h7 as i,l7 as a,m7 as o,p7 as s,u7 as c}from"../../../chunks/app-BNN039lb.js";export{a as CHANGE_SCOPE_POLICIES,c as ChangeScope,t as isChangeScope,n as policyForScope,s as scopeAllowedInReadOnly,o as scopeIsUndoable,i as scopePoliciesEquivalent,r as scopeUploadsToServer,e as sourceForScope};

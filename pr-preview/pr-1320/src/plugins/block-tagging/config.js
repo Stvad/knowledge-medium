@@ -1,1 +1,0 @@
-import{$s as e,Qs as t,Xs as n,Ys as r,Zs as i,ec as a,nc as o,tc as s}from"../../../chunks/app-BNN039lb.js";export{r as blockTaggingPrefsType,n as blockTagsConfigCodec,i as blockTagsConfigPresetCore,t as blockTagsConfigProp,e as isValidTagName,a as normalizeBlockTagsConfig,s as selectableTagNames,o as tagNameIssue};

@@ -1,1 +1,0 @@
-import{aT as e,cT as t,oT as n,sT as r}from"../../../chunks/app-BNN039lb.js";export{e as COMMAND_PALETTE_ACTION_ID,n as COMMAND_PALETTE_CONTEXT,r as COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,t as commandPaletteActionContext};

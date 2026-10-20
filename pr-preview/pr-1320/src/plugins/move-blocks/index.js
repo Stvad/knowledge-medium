@@ -1,1 +1,0 @@
-import{am as e,cm as t,fm as n,nm as r,om as i,pm as a,sm as o}from"../../../chunks/app-BNN039lb.js";export{e as MOVE_BLOCKS_ACTION_ID,i as MULTI_SELECT_MOVE_BLOCKS_ACTION_ID,a as MoveDestinationPicker,o as moveBlockAction,t as moveBlocksAction,r as moveBlocksPlugin,n as moveBlocksTo};

@@ -1,1 +1,0 @@
-import{UX as e,WX as t}from"../../../chunks/app-BNN039lb.js";export{e as onFirstSync,t as onSyncSettled};

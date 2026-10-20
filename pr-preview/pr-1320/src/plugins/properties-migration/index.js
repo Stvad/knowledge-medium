@@ -1,1 +1,0 @@
-import{$r as e,ri as t}from"../../../chunks/app-BNN039lb.js";export{t as migratePropertiesToBlocksAction,e as propertiesMigrationPlugin};
