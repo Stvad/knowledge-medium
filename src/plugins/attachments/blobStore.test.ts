@@ -244,6 +244,7 @@ describe('SupabaseBlobStore.delete', () => {
       const {store} = makeDeleteStore(status)
       await expect(store.delete('ws', 'k')).rejects.toThrow(`(${status})`)
     }
+    await expect(makeDeleteStore(400, 'null').store.delete('ws', 'k')).rejects.toThrow('blob delete failed (400) for ws/k')
     // Storage's shape for an absent object; a denial differs only in the code.
     const {store} = makeDeleteStore(400, JSON.stringify({statusCode: '404', error: 'not_found', code: 'NoSuchKey'}))
     await expect(store.delete('ws', 'k')).rejects.toThrow('blob delete failed (400 NoSuchKey) for ws/k')

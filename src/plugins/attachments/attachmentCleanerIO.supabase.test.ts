@@ -11,7 +11,7 @@
 
 import { randomBytes, randomUUID } from 'node:crypto'
 import pg from 'pg'
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { Repo } from '@/data/repo'
 import { verifyObjectBytes } from '@/sync/byteTransform'
 import { BINARY_ENVELOPE_OVERHEAD_BYTES } from '@/sync/crypto/binaryEnvelope'
@@ -29,8 +29,8 @@ const bytes = (text: string) => new TextEncoder().encode(text) as Uint8Array<Arr
 const randomObject = (size: number) => new Uint8Array(randomBytes(size)) as Uint8Array<ArrayBuffer>
 const rawNameOf = async (body: Uint8Array<ArrayBuffer>) => (await computeContentHash(body)).slice('sha256:'.length)
 
-// Each test takes well under a second against a fresh stack, except the 413
-// one, which uploads ~100 MiB.
+// The end-to-end test takes 1–3 s against a fresh stack; the 413 one, which
+// uploads ~100 MiB, has its own budget.
 describe('the attachment cleaner over real Storage', {timeout: 30_000}, () => {
   const stack = supabaseStack()
   /** RLS doesn't filter it: plants what only a write from outside the app makes. */
@@ -46,6 +46,9 @@ describe('the attachment cleaner over real Storage', {timeout: 30_000}, () => {
     ;[owner, viewer, outsider] = await Promise.all([signedInUser(stack), signedInUser(stack), signedInUser(stack)])
   })
   afterAll(() => db?.end())
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
 
   const query = async <Row extends pg.QueryResultRow>(sql: string, params: unknown[] = []): Promise<Row[]> =>
     (await db.query<Row>(sql, params)).rows

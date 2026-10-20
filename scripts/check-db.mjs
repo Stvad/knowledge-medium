@@ -38,11 +38,12 @@ const hold = process.argv.slice(2).includes('--hold')
 
 const env = { ...process.env }
 
-/** An API key for `role`: the HS256 token the gateway hands out, signed with the stack's secret. */
+/** An API key for `role`: the HS256 token the gateway hands out, signed with the stack's secret. It outlives any
+ *  `--hold`, whose stack would otherwise refuse its own keys. */
 function apiKey(role) {
   const encode = (value) => Buffer.from(JSON.stringify(value)).toString('base64url')
   const iat = Math.floor(Date.now() / 1000)
-  const unsigned = `${encode({ alg: 'HS256', typ: 'JWT' })}.${encode({ iss: 'check-db', role, iat, exp: iat + 24 * 3600 })}`
+  const unsigned = `${encode({ alg: 'HS256', typ: 'JWT' })}.${encode({ iss: 'check-db', role, iat, exp: iat + 10 * 365 * 24 * 3600 })}`
   return `${unsigned}.${createHmac('sha256', jwtSecret).update(unsigned).digest('base64url')}`
 }
 const anonKey = apiKey('anon')
@@ -278,7 +279,8 @@ async function startPostgrest(port, postgresHost) {
 
 // Started before the migrations, as the hosted project's Storage predates every `db push`: Storage creates its own
 // tables as it starts, so the migrations' guarded Storage blocks (the attachments bucket, its policies and limit)
-// run here instead of skipping.
+// run here instead of skipping. A local `supabase start` takes the skipping branch; the migration-contracts
+// workflow runs that order.
 async function startStorage(port, postgresHost) {
   await runContainer(storageContainerName, [
     '-p',

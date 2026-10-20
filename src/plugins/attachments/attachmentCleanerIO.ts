@@ -66,6 +66,8 @@ export const listWorkspaceObjects = async ({
     }
     more = data.hasNext
     // Defence in depth: a next page with no cursor would start the listing over.
+    // Accepted: a line break in a name can corrupt the cursor, and only a direct
+    // database write makes such a name.
     if (more && !data.nextCursor) throw new Error(`attachments: Storage gave no cursor for the next page of ${prefix}`)
     cursor = data.nextCursor
   }

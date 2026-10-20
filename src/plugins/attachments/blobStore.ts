@@ -262,7 +262,7 @@ export const createSupabaseBlobStore = (deps: SupabaseBlobStoreDeps): BlobStore 
       })
       if (!res.ok) {
         // Storage answers a denial and an absence alike with a 400; only the body's code tells them apart.
-        const code = await res.json().then((body: {code?: unknown}) => body.code, () => undefined)
+        const code = await res.json().then((body: {code?: unknown} | null) => body?.code, () => undefined)
         throw new Error(`blob delete failed (${res.status}${typeof code === 'string' ? ` ${code}` : ''}) for ${path}`)
       }
     },

@@ -77,13 +77,18 @@ describe('listMediaBlocks', () => {
 describe('listWorkspaceObjects', () => {
   type Page = {objects: {name: string}[]; folders: never[]; hasNext: boolean; nextCursor?: string}
   /** Storage's v2 listing over `objects`: every full name under the prefix,
-   *  bytewise, at most `cap` a page, resuming after the cursor's name. */
+   *  bytewise, at most `cap` a page, resuming after the cursor's name. With a
+   *  delimiter a nested object comes back only as its folder. A listing that
+   *  keeps asking would never yield to the test's timeout, so it is cut off. */
   const fakeClient = (objects: readonly string[], {cap = Infinity, sessionUser = 'user-1' as string | null} = {}) => {
     const calls: {prefix: string; cursor?: string}[] = []
     const headers: Record<string, string>[] = []
-    const listV2 = async ({prefix, cursor, limit}: {prefix: string; cursor?: string; limit: number}) => {
-      calls.push({prefix, cursor})
-      const under = objects.filter(o => o.startsWith(prefix)).sort()
+    const listV2 = async (
+      {prefix, cursor, limit, with_delimiter}: {prefix: string; cursor?: string; limit: number; with_delimiter?: boolean},
+    ) => {
+      if (calls.push({prefix, cursor}) > 10) throw new Error('listed the folder over again')
+      const listed = (name: string) => name.startsWith(prefix) && !(with_delimiter && name.slice(prefix.length).includes('/'))
+      const under = objects.filter(listed).sort()
       const start = cursor === undefined ? 0 : under.indexOf(cursor) + 1
       const page = under.slice(start, start + Math.min(limit, cap))
       const hasNext = start + page.length < under.length
