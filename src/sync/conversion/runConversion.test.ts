@@ -510,6 +510,15 @@ describe('runConversion: preflight', () => {
       .toEqual([{kind: 'local-space', neededBytes: big.length - 1000, freeBytes: 1000}])
   })
 
+  it('counts the database headroom a device is already short of into how much to free', async () => {
+    const remoteOnly = new Uint8Array(1000)
+    await seedMedia(server, storage, {id: 'remote', bytes: remoteOnly, at: {remote: true}})
+    const freeLocalBytes = async () => 512 * 1024 * 1024 - 100_000
+
+    expect(await blockers({preflight: passingEnvironment({freeLocalBytes})}))
+      .toEqual([{kind: 'local-space', neededBytes: remoteOnly.length + 100_000, freeBytes: 0}])
+  })
+
   it('reports the attachment survey as it goes', async () => {
     await seedMedia(server, storage, {id: 'a', bytes: new Uint8Array([1]), at: {remote: true}})
     storage.objects.set('stray', new Uint8Array([2]))

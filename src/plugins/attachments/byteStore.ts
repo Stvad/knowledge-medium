@@ -247,14 +247,15 @@ export class OpfsByteStore implements ByteStore {
       created = true
       return dir.getFileHandle(name, { create: true })
     })
-    const writable = await fileHandle.createWritable()
+    let writable: FileSystemWritableFileStream | undefined
     try {
+      writable = await fileHandle.createWritable()
       await writable.write(bytes)
       await writable.close()
     } catch (err) {
       // The write's own error (a full disk's QuotaExceededError), not the errored
       // stream's close(); and no empty file left for a read to serve as the bytes.
-      await writable.abort().catch(() => {})
+      await writable?.abort().catch(() => {})
       if (created) await dir.removeEntry(name).catch(() => {})
       throw err
     }

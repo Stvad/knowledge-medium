@@ -177,11 +177,11 @@ export const runPreflight = async ({
   if (blocks.sealedLooking.length > 0) return {kind: 'blocked', blockers: [{kind: 'sealed-looking-rows', blockIds: blocks.sealedLooking}]}
   const history = await scanHistory(server, workspaceId, signal)
   const free = await environment.freeLocalBytes()
-  const keepBudget = free === null ? null : Math.max(0, free - LOCAL_HEADROOM_BYTES)
+  const keepBudget = free === null ? null : free - LOCAL_HEADROOM_BYTES
   const survey = await surveyAttachments({source: attachments, mediaHashes: blocks.media.hashes(), keepBudget, signal, onProgress})
   if (survey.unkeptBytes > 0) {
     const neededBytes = survey.unkeptBytes - survey.spareBytes
-    return {kind: 'blocked', blockers: [{kind: 'local-space', neededBytes, freeBytes: survey.spareBytes}]}
+    return {kind: 'blocked', blockers: [{kind: 'local-space', neededBytes, freeBytes: Math.max(0, survey.spareBytes)}]}
   }
   return {
     kind: 'ready',

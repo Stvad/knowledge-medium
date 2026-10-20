@@ -12,6 +12,8 @@ class FakeFileHandle {
   data = new Uint8Array(0)
   /** Fails the next write, as a full disk does. */
   static failWrites: Error | null = null
+  /** Fails the next writable's opening, as a full disk can. */
+  static failOpens: Error | null = null
   /** What each next writable's write waits on first, in order: a hold, or a failure. */
   static nextWrites: Array<() => Promise<void>> = []
   async getFile() {
@@ -19,6 +21,7 @@ class FakeFileHandle {
     return { arrayBuffer: async () => this.data.slice().buffer }
   }
   async createWritable() {
+    if (FakeFileHandle.failOpens) throw FakeFileHandle.failOpens
     const chunks: Uint8Array[] = []
     const before = FakeFileHandle.nextWrites.shift()
     return {
@@ -228,6 +231,18 @@ describe('OpfsByteStore — on-disk layout', () => {
     }
     expect(await store.get(U, WS, KEY)).toBeNull()
     expect(await store.get(U, WS, 'kept')).toEqual(bytes(1))
+  })
+
+  it('a writer that fails to open leaves no empty entry to read back or list', async () => {
+    const { store } = opfsWithRoot()
+    FakeFileHandle.failOpens = new DOMException('full', 'QuotaExceededError')
+    try {
+      await expect(store.put(U, WS, KEY, bytes(1, 2))).rejects.toMatchObject({name: 'QuotaExceededError'})
+    } finally {
+      FakeFileHandle.failOpens = null
+    }
+    expect(await store.has(U, WS, KEY)).toBe(false)
+    expect([...(await store.listWorkspaceKeys(U, WS))]).toEqual([])
   })
 
   it('a failed write never removes the bytes a concurrent put of the same key stored', async () => {

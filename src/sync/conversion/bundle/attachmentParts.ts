@@ -165,8 +165,8 @@ export interface AttachmentSurvey {
   readonly bundleBytes: number
   /** Storage-only copies this device had no room to keep. */
   readonly unkeptBytes: number
-  /** What was still free for them when the survey stopped keeping: the user
-   *  frees `unkeptBytes` less this. */
+  /** What was still free for them when the survey stopped keeping, below zero
+   *  when the device was already short: the user frees `unkeptBytes` less this. */
   readonly spareBytes: number
 }
 
@@ -204,7 +204,8 @@ export const surveyAttachments = async ({
 }: ReadOptions & {
   readonly source: AttachmentSource
   readonly mediaHashes: ReadonlySet<string>
-  /** Bytes this device may keep; null when it can't tell. */
+  /** Bytes this device may keep, below zero when it is already that far short;
+   *  null when it can't tell. */
   readonly keepBudget: number | null
   readonly limit?: number
   readonly onProgress?: (progress: SurveyProgress) => void
