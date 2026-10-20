@@ -75,22 +75,10 @@ export const restorePropertiesStrippingAliases = async (
   return restoredProperties
 }
 
-/** The canonical aliases `id` may claim right now: any alias a DIFFERENT live
- *  block already holds is dropped.
- *
- *  Claiming a contested alias trips `block_aliases_workspace_alias_unique`, and
- *  that rejection rolls back the CALLER's whole transaction. For a
- *  get-or-create that is fatal rather than partial: the page is minted in the
- *  same tx, so it dies with the rollback and the next call repeats it — the
- *  page becomes permanently uncreatable (issue #378). Yielding the contested
- *  alias instead keeps the page reachable; resolving the duplicate name is a
- *  separate, user-driven merge.
- *
- *  Call inside the writing transaction, so the answer reflects writes this tx
- *  has already made. That is necessary but NOT sufficient on its own: a
- *  sync-applied row can co-own an alias (the uniqueness trigger deliberately
- *  skips sync-apply), and re-writing a row's own alias bag re-inserts every
- *  entry, so a pre-existing duplicate can still abort the write. */
+/** Return aliases with no other live claimant, including sync co-claims that
+ * a single oldest-row lookup would hide. Call inside the writing transaction:
+ * rewriting an alias bag reinserts every claim, and one competing claim would
+ * abort the caller's whole transaction. Yielding it keeps the page reachable. */
 export const partitionClaimableAliases = async (
   tx: Tx,
   id: string,
@@ -99,8 +87,8 @@ export const partitionClaimableAliases = async (
 ): Promise<string[]> => {
   const claimable: string[] = []
   for (const alias of aliases) {
-    const owner = await tx.aliasLookup(alias, workspaceId)
-    if (owner === null || owner.id === id) claimable.push(alias)
+    const owners = await tx.aliasClaimants(alias, workspaceId)
+    if (owners.every(owner => owner.id === id)) claimable.push(alias)
   }
   return claimable
 }

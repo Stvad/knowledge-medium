@@ -105,6 +105,61 @@ describe('contributor profiles', () => {
     },
   )
 
+  it.each(['cell', 'children'] as const)(
+    'keeps human attribution edits working when synced data co-claims the oldest user alias (%s storage)', async mode => {
+      if (mode === 'children') {
+        await db.db.execute(`INSERT INTO workspaces
+          (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+          VALUES (?, 'Test', 'vlad', 1, 1, 'none', NULL, 'children')`, [WS])
+        repo.setActiveWorkspaceId(WS)
+      }
+      const humanId = await createAutomaticUserContributor('human')
+      await repo.withTxContext({contributorId: null}).tx(tx =>
+        tx.setProperty(humanId, contributorRoleProp, 'Owner'), opts,
+      )
+      const agent = await createContributor(repo, WS, {name: 'Research agent', kind: 'agent'})
+      await repo.withTxContext({contributorId: null}).tx(tx =>
+        tx.setProperty(humanId, aliasesProp, ['Vlad']), opts,
+      )
+      await repo.withTxContext({contributorId: agent.id}).tx(async tx => {
+        await tx.create({id: 'agent-note', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'Agent draft'})
+      }, opts)
+
+      // A sync-applied claimant can co-own an alias; raw writes deliberately
+      // bypass the local uniqueness trigger and post-commit processors.
+      await db.db.writeTransaction(async raw => {
+        await raw.execute('UPDATE blocks SET created_at = 1 WHERE id = ?', [humanId])
+        await raw.execute(`INSERT INTO blocks
+          (id, workspace_id, parent_id, order_key, content, properties_json, references_json,
+           created_at, updated_at, user_updated_at, created_by, updated_by, deleted)
+          VALUES (?, ?, NULL, ?, ?, ?, '[]', 2, 2, 2, 'sync-user', 'sync-user', 0)`, [
+          'synced-alias-owner', WS, 'k-synced-alias-owner', 'Synced page',
+          JSON.stringify({[typesProp.name]: [PAGE_TYPE], [aliasesProp.name]: ['Vlad'], 'test:unrelated': 'preserved'}),
+        ])
+      })
+      const claimants = await repo.withTxContext({contributorId: null}).tx(async tx => ({
+        oldest: await tx.aliasLookup('Vlad', WS),
+        all: await tx.aliasClaimants('Vlad', WS),
+      }), opts)
+      expect(claimants.oldest?.id).toBe(humanId)
+      expect(claimants.all.map(block => block.id)).toEqual([humanId, 'synced-alias-owner'])
+
+      await repo.tx(tx => tx.update('agent-note', {content: 'Human revision'}), opts)
+
+      const profile = await repo.load(humanId)
+      expect(profile?.properties[aliasesProp.name]).toEqual([USER.id])
+      expect(profile?.properties[userIdProp.name]).toBe(USER.id)
+      expect(profile?.properties[contributorKindProp.name]).toBe('human')
+      expect(profile?.properties[contributorRoleProp.name]).toBe('Owner')
+      expect((await repo.load('synced-alias-owner'))?.properties[aliasesProp.name]).toEqual(['Vlad'])
+      expect((await repo.load('synced-alias-owner'))?.properties['test:unrelated']).toBe('preserved')
+      const note = await repo.load('agent-note')
+      expect(note?.content).toBe('Human revision')
+      expect(note?.properties[attributionCreatorsProp.name]).toEqual([agent.id])
+      expect(note?.properties[attributionEditorsProp.name]).toEqual([humanId])
+    },
+  )
+
   it.each([
     ['absent kind', undefined],
     ['agent kind', 'agent'],
