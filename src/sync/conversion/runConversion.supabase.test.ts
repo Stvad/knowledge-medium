@@ -20,7 +20,7 @@ import { randomBytes, randomUUID } from 'node:crypto'
 import { readdirSync, readFileSync, renameSync, statSync, truncateSync, writeFileSync } from 'node:fs'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 import pg from 'pg'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -44,6 +44,7 @@ import { InMemoryWorkspaceKeyStore } from '@/sync/keys/keyStore'
 import { canPersistPins, getModePin, setModePin, type ModePin } from '@/sync/keys/modePin'
 import { createSyncResolver } from '@/sync/keys/resolver'
 import { signedInUser, stackClient, supabaseStack, type StackTap, type StackUser } from '@/test/supabaseStack'
+import { abortableSleep } from '@/utils/abortableSleep'
 import { SEALED_COLUMNS } from '../transform.js'
 import { rawNameOf } from './bundle/attachmentParts.js'
 import type { BundleFolder } from './bundle/bundleParts.js'
@@ -274,7 +275,10 @@ describe('the conversion flow against the real stack', {timeout: 120_000}, () =>
      *  UI-state write and runs its upload pass, as the app does all the time. */
     keepWriting(): void
     readonly uiWrites: UiWrite[]
-    run(ui: ScriptedUi): Promise<ConversionRunResult>
+    /** This page may read `folder` and what it holds, until the next run. */
+    grant(folder: BundleFolder): void
+    /** One page load's run: the grants of the last one are gone. */
+    run(ui: ScriptedUi, signal?: AbortSignal): Promise<ConversionRunResult>
   }
 
   /** This device, plaintext-pinned to `ws`, holding its own copy of the media
@@ -309,11 +313,17 @@ describe('the conversion flow against the real stack', {timeout: 120_000}, () =>
       workspaceId: ws,
       isRemoteSyncActive: () => true,
     })
+    // Chromium keeps a folder's grant for the page's lifetime, so a handle
+    // restored after a reload asks again; a moved folder keeps it and fails
+    // on read.
+    const granted = new Set<string>()
     const platform: ConversionPlatform = {
       keyStore,
       bundles,
-      // Access once granted stays granted; a moved folder fails on read.
-      canReadFolder: async () => true,
+      canReadFolder: async folder => {
+        const {path} = folder as FsBundleFolder
+        return [...granted].some(root => path === root || path.startsWith(root + sep))
+      },
       writeLocalDb: folder => writeFakeLocalDb(folder),
       keepAwake: async () => () => {},
       environment: {
@@ -372,16 +382,11 @@ describe('the conversion flow against the real stack', {timeout: 120_000}, () =>
         })
       },
       uiWrites,
-      run: ui => runConversion(conversionFlowDeps({
-        repo,
-        workspaceId: ws,
-        client: owner.client,
-        lock,
-        attachments,
-        platform,
-        ui,
-        signal: new AbortController().signal,
-      })),
+      grant: folder => void granted.add((folder as FsBundleFolder).path),
+      run: (ui, signal = new AbortController().signal) => {
+        granted.clear()
+        return runConversion(conversionFlowDeps({repo, workspaceId: ws, client: owner.client, lock, attachments, platform, ui, signal}))
+      },
     }
   }
 
@@ -419,6 +424,7 @@ describe('the conversion flow against the real stack', {timeout: 120_000}, () =>
     readonly finishes: FinishPrompt[] = []
     /** Runs at each status: may change the world, or throw to stand for a crash. */
     onStatus: (status: ConversionStatus) => void = () => {}
+    /** By default the user grants access to the folder the run recorded. */
     reopen: (prompt: ReopenBundlePrompt) => Promise<BundleFolder | null> = async prompt => prompt.recorded
 
     /** `savedKey`: the key the user saved from an earlier run's reveal. */
@@ -449,12 +455,15 @@ describe('the conversion flow against the real stack', {timeout: 120_000}, () =>
 
     async chooseBundleFolder({reason}: {reason: BundleRetakeReason | null}): Promise<BundleFolder> {
       this.bundleReasons.push(reason)
+      this.device.grant(this.device.picked)
       return this.device.picked
     }
 
     async reopenBundleFolder(prompt: ReopenBundlePrompt) {
       this.reopens.push(prompt)
-      return this.reopen(prompt)
+      const folder = await this.reopen(prompt)
+      if (folder) this.device.grant(folder)
+      return folder
     }
 
     async chooseExistingBundle(): Promise<BundleFolder> {
@@ -606,9 +615,14 @@ describe('the conversion flow against the real stack', {timeout: 120_000}, () =>
       ['the cleanup', status => status.kind === 'cleaning', 'cleaning'],
       ['the finish', status => status.kind === 'finishing', 'cleaning'],
     ]
+    // Thrown from a status, a crash still runs the stage's own cleanup, which a
+    // page that dies doesn't: a half-written bundle is removed here, and left
+    // there. Either way the next run reads only the folder it recorded.
     let savedKey: string | null = null
+    const reopened: ReopenBundlePrompt['purpose'][] = []
     for (const [at, when, leaves] of crashes) {
       const ui = crashingAt(new ScriptedUi(device, savedKey), at, when)
+      ui.reopen = async prompt => (reopened.push(prompt.purpose), prompt.recorded)
       await expect(device.run(ui), at).rejects.toThrow(`crashed at ${at}`)
       savedKey = ui.savedKey
       const workspace = await serverWorkspace(seeded.ws)
@@ -619,10 +633,18 @@ describe('the conversion flow against the real stack', {timeout: 120_000}, () =>
         expect(await sealedRowCount(seeded.ws)).toBeLessThan(seeded.plaintext.size)
       }
     }
-    expect(bundleFoldersOf(device)).toHaveLength(1)
+    // Each run past the bundle is a new page, which has to be granted the
+    // recorded folder again.
+    expect(new Set(reopened)).toEqual(new Set(['purge', 'cleanup']))
 
+    // With no attachments, the cleanup needs nothing from the bundle.
     const last = new ScriptedUi(device, savedKey)
-    expect(await device.run(last)).toEqual({kind: 'done', bundleFolder: bundleFoldersOf(device)[0].name})
+    last.reopen = async () => null
+    const done = await device.run(last)
+    expect(done).toMatchObject({kind: 'done'})
+    expect(last.finishes).toEqual([{unrecoverable: [], left: [], refused: [], bundleRead: false}])
+    const recorded = bundleFoldersOf(device).find(folder => done.kind === 'done' && folder.name === done.bundleFolder)
+    await verified(device, recorded!)
     await expectConverted(device, seeded.plaintext)
   })
 
@@ -653,7 +675,7 @@ describe('the conversion flow against the real stack', {timeout: 120_000}, () =>
     const ui = new ScriptedUi(device)
     ui.onStatus = status => {
       const [bundle] = bundleFoldersOf(device)
-      if (status.kind === 'verifying' && bundle) renameSync(bundle.path, join(elsewhere.path, bundle.name))
+      if (status.kind === 'resealing' && status.progress !== null && bundle) renameSync(bundle.path, join(elsewhere.path, bundle.name))
     }
     const phasesAsked: Array<string | null> = []
     ui.reopen = async () => {
@@ -675,7 +697,7 @@ describe('the conversion flow against the real stack', {timeout: 120_000}, () =>
     const ui = new ScriptedUi(device)
     let edited = false
     ui.onStatus = status => {
-      if (status.kind !== 'verifying' || edited) return
+      if (status.kind !== 'resealing' || status.progress === null || edited) return
       edited = true
       const blocks = join(bundleFoldersOf(device)[0].path, BUNDLE_PARTS.blocks)
       writeFileSync(blocks, readFileSync(blocks, 'utf8').replace('note 1 ', 'note one '))
@@ -748,18 +770,21 @@ describe('the conversion flow against the real stack', {timeout: 120_000}, () =>
     await expectConverted(device, new Map([...seeded.plaintext].filter(([id]) => id !== removed)))
   })
 
-  it('never starts the re-seal under a bundle the user cancelled, or one cut short', async () => {
+  it('never starts the re-seal under a bundle the user stopped, or one cut short', async () => {
     const seeded = await seedWorkspace()
     const device = await deviceFor(seeded)
-    const cancelled = new ScriptedUi(device)
-    cancelled.chooseBundleFolder = async () => {
-      throw new DOMException('The user aborted a request.', 'AbortError')
+    const stop = new AbortController()
+    const stopped = new ScriptedUi(device)
+    stopped.onStatus = status => {
+      if (status.kind === 'taking-bundle' && status.progress?.part === 'blocks') stop.abort(new DOMException('Stopped', 'AbortError'))
     }
-    await expect(device.run(cancelled)).rejects.toThrow('aborted')
+    await expect(device.run(stopped, stop.signal)).rejects.toThrow()
     expect(await serverWorkspace(seeded.ws)).toMatchObject({phase: 'sealing'})
     expect(await sealedRowCount(seeded.ws)).toBe(0)
+    expect(await device.bundles.get(owner.id, seeded.ws)).toBeNull()
+    expect(bundleFoldersOf(device)).toEqual([])
 
-    const cut = new ScriptedUi(device, cancelled.savedKey)
+    const cut = new ScriptedUi(device, stopped.savedKey)
     cut.onStatus = status => {
       const [bundle] = bundleFoldersOf(device)
       // Right before it is re-opened for the check.
@@ -773,7 +798,7 @@ describe('the conversion flow against the real stack', {timeout: 120_000}, () =>
     // The half bundle is plaintext nothing will use.
     expect(bundleFoldersOf(device)).toEqual([])
 
-    expect(await device.run(new ScriptedUi(device, cancelled.savedKey))).toMatchObject({kind: 'done'})
+    expect(await device.run(new ScriptedUi(device, stopped.savedKey))).toMatchObject({kind: 'done'})
     await expectConverted(device, seeded.plaintext)
   })
 
@@ -781,17 +806,25 @@ describe('the conversion flow against the real stack', {timeout: 120_000}, () =>
     const seeded = await seedWorkspace()
     const device = await deviceFor(seeded)
     let late: (() => Promise<Response>) | null = null
+    let landed = false
     const canaries: string[] = []
     taps.push(async (url, init, send) => {
       if (endpointOf(url) !== 'rpc/convert_workspace_to_e2ee') return send()
       canaries.push(JSON.parse(String(init?.body)).p_wk_canary)
-      if (canaries.length === 1) {
+      if (!late) {
         // On its way, while this device has stopped waiting for it.
         late = send
         throw new TypeError('fetch failed')
       }
-      // The first flip lands while the second waits for the database.
-      await late!()
+      if (!landed) {
+        // It lands just before the second run's flip goes out. A block write
+        // anywhere refuses either for now, which the stack's other tests make.
+        for (let response = await late(); !response.ok; response = await late()) {
+          expect(await errorCode(response)).toBe(ConversionErrorCode.lockNotAvailable)
+          await abortableSleep(100)
+        }
+        landed = true
+      }
       return send()
     })
 
@@ -802,7 +835,8 @@ describe('the conversion flow against the real stack', {timeout: 120_000}, () =>
     const second = new ScriptedUi(device, first.savedKey)
     expect(await device.run(second)).toMatchObject({kind: 'done'})
     expect(second.savedKeyPrompts).toEqual([{context: 'earlier-attempt', problem: null, canStartOver: false}])
-    expect(canaries).toHaveLength(2)
+    // The second run sends its own canary, perhaps more than once.
+    expect(new Set(canaries).size).toBe(2)
     expect((await serverWorkspace(seeded.ws)).wk_canary).toBe(canaries[0])
     await expectConverted(device, seeded.plaintext)
   })
