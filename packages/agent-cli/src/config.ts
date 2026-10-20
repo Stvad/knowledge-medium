@@ -6,6 +6,16 @@ import { randomBytes, randomUUID } from 'node:crypto'
 export const defaultBridgeHost = '127.0.0.1'
 export const defaultBridgePort = 8787
 export const defaultAppUrl = 'https://stvad.github.io/knowledge-medium/'
+export const defaultProfileName = 'default'
+
+export const normalizeProfileName = (value = ''): string => {
+  const name = value.trim()
+  if (!name) return defaultProfileName
+  if (!/^[A-Za-z0-9_.-]+$/.test(name)) {
+    throw new Error('Profile names may only contain letters, numbers, underscores, dots, and dashes.')
+  }
+  return name
+}
 
 export const agentRuntimeConfigDir = () =>
   process.env.AGENT_RUNTIME_CONFIG_DIR
@@ -27,11 +37,14 @@ export const contributorSelectionDirectory = () =>
   process.env.AGENT_RUNTIME_CONTRIBUTOR_DIR
   ?? path.join(agentRuntimeConfigDir(), 'agent-contributors')
 
-export const contributorSelectionPath = (profile: string, workspaceId: string) =>
-  path.join(
+export const contributorSelectionPath = (profile: string, workspaceId: string) => {
+  const normalizedWorkspaceId = workspaceId.trim()
+  if (!normalizedWorkspaceId) throw new Error('Contributor selection needs a non-empty workspace id.')
+  return path.join(
     contributorSelectionDirectory(),
-    `${encodeURIComponent(JSON.stringify([profile, workspaceId]))}.json`,
+    `${encodeURIComponent(JSON.stringify([normalizeProfileName(profile), normalizedWorkspaceId]))}.json`,
   )
+}
 
 /** Parse an explicit contributor setting shared by CLI flags and MCP env. */
 export const parseContributorSelection = (value: string | undefined): string | null | undefined => {
@@ -64,8 +77,8 @@ export const saveContributorSelection = async (
   workspaceId: string,
   contributorId: string | null,
 ): Promise<void> => {
-  if (!profile.trim() || !workspaceId.trim() || (contributorId !== null && !contributorId.trim())) {
-    throw new Error('Contributor selection needs non-empty profile, workspace, and contributor ids; use null for none.')
+  if (contributorId !== null && !contributorId.trim()) {
+    throw new Error('Contributor id must be non-empty; use null for none.')
   }
   const file = contributorSelectionPath(profile, workspaceId)
   const directory = path.dirname(file)

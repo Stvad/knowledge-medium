@@ -15,7 +15,7 @@ import { CHANNEL_PORT_ENV, CHANNEL_SECRET_HEADER, loadOrCreateChannelSecret } fr
 const channelPort = Number(process.env[CHANNEL_PORT_ENV] ?? '') || null
 const blockedWikilinks = decodeBlockedWikilinks(process.env[BLOCKED_WIKILINKS_ENV])
 const profile = process.env.AGENT_RUNTIME_PROFILE ?? 'default'
-const workspaceId = process.env.AGENT_RUNTIME_WORKSPACE
+const workspaceId = process.env.AGENT_RUNTIME_WORKSPACE?.trim()
 if (!workspaceId) {
   throw new Error('AGENT_RUNTIME_WORKSPACE is required by the dispatch MCP server to pin graph operations.')
 }

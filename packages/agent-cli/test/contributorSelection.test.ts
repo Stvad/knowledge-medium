@@ -1,4 +1,4 @@
-import {afterEach, describe, expect, it} from 'vitest'
+import {afterEach, describe, expect, it, vi} from 'vitest'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -9,6 +9,7 @@ describe('CLI contributor selections', () => {
   let directory: string
 
   afterEach(async () => {
+    vi.restoreAllMocks()
     if (previousDirectory === undefined) delete process.env.AGENT_RUNTIME_CONTRIBUTOR_DIR
     else process.env.AGENT_RUNTIME_CONTRIBUTOR_DIR = previousDirectory
     if (directory) await fs.rm(directory, {recursive: true, force: true})
@@ -47,7 +48,65 @@ describe('CLI contributor selections', () => {
       expect((await fs.stat(target)).mode & 0o777).toBe(0o600)
     }
     expect(contributorSelectionPath('a--b', 'c')).not.toBe(contributorSelectionPath('a', 'b--c'))
-    expect(path.dirname(contributorSelectionPath('../profile', 'workspace/../a'))).toBe(directory)
+    expect(path.dirname(contributorSelectionPath('valid-profile', 'workspace/../a'))).toBe(directory)
+  })
+
+  it('loads a canonical save through padded profile and workspace names', async () => {
+    directory = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-contributor-selection-'))
+    process.env.AGENT_RUNTIME_CONTRIBUTOR_DIR = directory
+
+    await saveContributorSelection('work', 'workspace-a', 'contributor-a')
+
+    expect(await loadContributorSelection(' work ', ' workspace-a ')).toBe('contributor-a')
+    expect(contributorSelectionPath(' work ', ' workspace-a '))
+      .toBe(contributorSelectionPath('work', 'workspace-a'))
+  })
+
+  it('loads a padded save through canonical profile and workspace names', async () => {
+    directory = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-contributor-selection-'))
+    process.env.AGENT_RUNTIME_CONTRIBUTOR_DIR = directory
+
+    await saveContributorSelection(' work ', ' workspace-a ', 'contributor-a')
+
+    expect(await loadContributorSelection('work', 'workspace-a')).toBe('contributor-a')
+    expect(contributorSelectionPath(' work ', ' workspace-a '))
+      .toBe(contributorSelectionPath('work', 'workspace-a'))
+  })
+
+  it('maps a blank profile to default and round-trips explicit none in one file', async () => {
+    directory = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-contributor-selection-'))
+    process.env.AGENT_RUNTIME_CONTRIBUTOR_DIR = directory
+
+    await saveContributorSelection('', 'workspace-a', null)
+
+    expect(contributorSelectionPath('   ', 'workspace-a')).toBe(contributorSelectionPath('default', 'workspace-a'))
+    expect(await loadContributorSelection('default', 'workspace-a')).toBeNull()
+    expect(await fs.readdir(directory)).toEqual([path.basename(contributorSelectionPath('default', 'workspace-a'))])
+  })
+
+  it('refuses invalid profiles and blank workspaces before reading or writing files', async () => {
+    directory = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-contributor-selection-'))
+    process.env.AGENT_RUNTIME_CONTRIBUTOR_DIR = directory
+    const readFile = vi.spyOn(fs, 'readFile')
+    const mkdir = vi.spyOn(fs, 'mkdir')
+
+    const results: Array<{pathRejected: boolean; loadRejected: boolean; saveRejected: boolean}> = []
+    for (const [profile, workspaceId] of [['../profile', 'workspace-a'], ['work', '   ']] as const) {
+      let pathRejected = false
+      try { contributorSelectionPath(profile, workspaceId) } catch { pathRejected = true }
+      const [loaded, saved] = await Promise.allSettled([
+        loadContributorSelection(profile, workspaceId),
+        saveContributorSelection(profile, workspaceId, 'contributor-a'),
+      ])
+      results.push({pathRejected, loadRejected: loaded.status === 'rejected', saveRejected: saved.status === 'rejected'})
+    }
+    expect(results).toEqual([
+      {pathRejected: true, loadRejected: true, saveRejected: true},
+      {pathRejected: true, loadRejected: true, saveRejected: true},
+    ])
+    expect(readFile).not.toHaveBeenCalled()
+    expect(mkdir).not.toHaveBeenCalled()
+    expect(await fs.readdir(directory)).toEqual([])
   })
 
   it('atomically replaces one profile/workspace selection without leaving temporary files', async () => {

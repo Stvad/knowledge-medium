@@ -14,7 +14,9 @@ import {
   bridgeLogPath,
   bridgeSecret as resolveBridgeSecret,
   bridgeUrl as resolveBridgeUrl,
+  defaultProfileName,
   isErrnoException,
+  normalizeProfileName,
   tokenStorePath as resolveTokenStorePath,
 } from './config.js'
 import {
@@ -30,8 +32,7 @@ import {
 } from './protocol.js'
 
 export { UNKNOWN_TOKEN_MARKER } from './protocol.js'
-
-export const defaultProfileName = 'default'
+export { defaultProfileName, normalizeProfileName } from './config.js'
 
 export const errorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error)
@@ -170,15 +171,6 @@ export interface TokenRecord {
 
 export interface TokenStore {
   profiles: Record<string, TokenRecord>
-}
-
-export const normalizeProfileName = (value = ''): string => {
-  const name = value.trim()
-  if (!name) return defaultProfileName
-  if (!/^[A-Za-z0-9_.-]+$/.test(name)) {
-    throw new Error('Profile names may only contain letters, numbers, underscores, dots, and dashes.')
-  }
-  return name
 }
 
 const normalizeTokenRecord = (value: unknown): TokenRecord | null => {
