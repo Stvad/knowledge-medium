@@ -1,0 +1,1 @@
+import{ns as e,ts as t}from"../../../chunks/app-CjHQF_KK.js";export{t as aggregateDiagnostics,e as useDiagnostics};

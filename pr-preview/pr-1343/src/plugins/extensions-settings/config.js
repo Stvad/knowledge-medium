@@ -1,0 +1,1 @@
+import{$O as e,QO as t,ek as n,tk as r}from"../../../chunks/app-CjHQF_KK.js";export{t as extensionsOverridesPresetCore,e as extensionsOverridesProp,n as extensionsPrefsType,r as overridesCodec};

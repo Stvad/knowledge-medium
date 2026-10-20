@@ -1,0 +1,1 @@
+import{FP as e,IP as t}from"../../chunks/app-CjHQF_KK.js";export{e as isFocalRender,t as useIsFocalRender};
