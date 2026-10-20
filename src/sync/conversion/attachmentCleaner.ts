@@ -22,6 +22,7 @@
  */
 
 import { encodeBytes, verifyObjectBytes } from '../byteTransform.js'
+import { BINARY_ENVELOPE_OVERHEAD_BYTES } from '../crypto/binaryEnvelope.js'
 import { validateCanary } from '../crypto/canary.js'
 import { CONTENT_HASH_PREFIX, verifyContentHash } from '../crypto/contentHash.js'
 import { classifyStoredObject, deriveContentKey, indexKeyedNames, type WorkspaceObjectKeys } from '../crypto/contentKey.js'
@@ -454,7 +455,13 @@ export const cleanAttachments = async (input: CleanAttachmentsInput): Promise<Cl
   const convertOccupant = async (contentHash: string, keyedName: string, plaintext: Uint8Array<ArrayBuffer>): Promise<MediaVerdict> => {
     const rawName = await deriveContentKey({contentHash, mode: 'none', contentKeyHmac: null})
     const write = await io.writeObject(rawName, plaintext)
-    const staged = write.kind === 'refused' ? null : await io.readObject(rawName)
+    if (write.kind === 'refused') {
+      // Its sealed upload would need at least as much: the same remedy covers both.
+      const sealedBytes = plaintext.length + BINARY_ENVELOPE_OVERHEAD_BYTES
+      refused.push({path: keyedName, status: write.status, sealedBytes})
+      return 'unverified'
+    }
+    const staged = await io.readObject(rawName)
     if (!staged || !(await verifyContentHash(staged, contentHash))) {
       errors.push({path: keyedName, message: 'its plaintext could not be staged at its raw name to convert it'})
       return 'unverified'

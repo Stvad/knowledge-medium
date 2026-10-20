@@ -321,6 +321,23 @@ describe('cleanAttachments: the proof', () => {
     expect(store.objects.get(await rawName(photo))).toEqual(photo) // the bytes survive
   })
 
+  it('a refused staging write is reported with the size the limits must reach, and nothing is deleted', async () => {
+    const store = createFakeAttachmentStorage()
+    const photo = utf8('a photo')
+    store.media.push({blockId: 'block-1', contentHash: await hashOf(photo)})
+    store.objects.set(await keyedName(photo), photo)
+    const write = store.io.writeObject
+    vi.spyOn(store.io, 'writeObject').mockImplementation(async (path, bytes) =>
+      path === (await rawName(photo)) ? {kind: 'refused', status: 413} : write(path, bytes),
+    )
+    const report = await clean(store)
+    expect(report.refused).toEqual([
+      {path: await keyedName(photo), status: 413, sealedBytes: photo.length + BINARY_ENVELOPE_OVERHEAD_BYTES},
+    ])
+    expect(store.deletes).toEqual([])
+    expect(report.proof).toMatchObject({kind: 'not-passed', unverified: [await hashOf(photo)]})
+  })
+
   it('an only copy is never deleted when its raw name already holds other bytes', async () => {
     const store = createFakeAttachmentStorage()
     const photo = utf8('a photo')
