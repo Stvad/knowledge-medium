@@ -1,1 +1,1 @@
-import{$R as e,QR as t}from"../../../chunks/app-BvcmakLQ.js";export{t as floatingAnchorFromRect,e as useAnchoredFloating};
+import{$R as e,QR as t}from"../../../chunks/app-CppWyYsS.js";export{t as floatingAnchorFromRect,e as useAnchoredFloating};

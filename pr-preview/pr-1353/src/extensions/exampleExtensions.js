@@ -1,1 +1,1 @@
-import{DO as e,EO as t}from"../../chunks/app-BvcmakLQ.js";export{t as exampleExtensions,e as insertExampleExtensionsUnder};
+import{DO as e,EO as t}from"../../chunks/app-CppWyYsS.js";export{t as exampleExtensions,e as insertExampleExtensionsUnder};

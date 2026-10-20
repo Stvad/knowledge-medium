@@ -1,1 +1,1 @@
-import{Kp as e}from"../../../chunks/app-BvcmakLQ.js";export{e as updateIndicatorPlugin};
+import{Kp as e}from"../../../chunks/app-CppWyYsS.js";export{e as updateIndicatorPlugin};

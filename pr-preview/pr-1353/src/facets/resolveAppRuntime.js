@@ -1,1 +1,1 @@
-import{iA as e,rA as t}from"../../chunks/app-BvcmakLQ.js";export{t as resolveAppRuntime,e as resolveAppRuntimeSync};
+import{iA as e,rA as t}from"../../chunks/app-CppWyYsS.js";export{t as resolveAppRuntime,e as resolveAppRuntimeSync};

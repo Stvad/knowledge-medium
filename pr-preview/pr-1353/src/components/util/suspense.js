@@ -1,1 +1,1 @@
-import{Pz as e}from"../../../chunks/app-BvcmakLQ.js";export{e as SuspenseFallback};
+import{Pz as e}from"../../../chunks/app-CppWyYsS.js";export{e as SuspenseFallback};

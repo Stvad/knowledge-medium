@@ -1,1 +1,1 @@
-import{fi as e}from"../../../chunks/app-BvcmakLQ.js";export{e as interactionMetricsPlugin};
+import{fi as e}from"../../../chunks/app-CppWyYsS.js";export{e as interactionMetricsPlugin};

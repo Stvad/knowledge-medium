@@ -1,1 +1,1 @@
-import{DQ as e,OQ as t}from"../../chunks/app-BvcmakLQ.js";export{e as getOrCreateRecentsPage,t as recentsPageBlockId};
+import{DQ as e,OQ as t}from"../../chunks/app-CppWyYsS.js";export{e as getOrCreateRecentsPage,t as recentsPageBlockId};

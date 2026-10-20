@@ -1,1 +1,1 @@
-import{nA as e,tA as t}from"../../chunks/app-BvcmakLQ.js";export{t as ClientLocalSettings,e as clientLocalSettings};
+import{nA as e,tA as t}from"../../chunks/app-CppWyYsS.js";export{t as ClientLocalSettings,e as clientLocalSettings};

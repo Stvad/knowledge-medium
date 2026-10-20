@@ -1,1 +1,1 @@
-import{JA as e,KA as t,qA as n}from"../../chunks/app-BvcmakLQ.js";export{t as defaultRegistry,n as defaultRendererContributions,e as defaultRenderersExtension};
+import{JA as e,KA as t,qA as n}from"../../chunks/app-CppWyYsS.js";export{t as defaultRegistry,n as defaultRendererContributions,e as defaultRenderersExtension};

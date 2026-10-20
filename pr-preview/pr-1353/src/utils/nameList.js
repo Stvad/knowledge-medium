@@ -1,1 +1,1 @@
-import{EQ as e,TQ as t,wQ as n}from"../../chunks/app-BvcmakLQ.js";export{n as NAMES_IN_A_SENTENCE,t as describeNames,e as firstFew};
+import{EQ as e,TQ as t,wQ as n}from"../../chunks/app-CppWyYsS.js";export{n as NAMES_IN_A_SENTENCE,t as describeNames,e as firstFew};

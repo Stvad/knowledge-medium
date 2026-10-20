@@ -1,1 +1,1 @@
-import{Wp as e}from"../../../chunks/app-BvcmakLQ.js";export{e as blockInfoPlugin};
+import{Wp as e}from"../../../chunks/app-CppWyYsS.js";export{e as blockInfoPlugin};

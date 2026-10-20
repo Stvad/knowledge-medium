@@ -1,1 +1,1 @@
-import{CX as e,wX as t}from"../../chunks/app-BvcmakLQ.js";export{e as Block,t as requireLoadedBlock};
+import{CX as e,wX as t}from"../../chunks/app-CppWyYsS.js";export{e as Block,t as requireLoadedBlock};

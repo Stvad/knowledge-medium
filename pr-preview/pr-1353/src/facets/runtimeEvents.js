@@ -1,1 +1,1 @@
-import{cz as e,sz as t}from"../../chunks/app-BvcmakLQ.js";export{t as appRuntimeUpdateEvent,e as refreshAppRuntime};
+import{cz as e,sz as t}from"../../chunks/app-CppWyYsS.js";export{t as appRuntimeUpdateEvent,e as refreshAppRuntime};

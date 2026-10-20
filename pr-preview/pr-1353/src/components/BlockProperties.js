@@ -1,1 +1,1 @@
-import{XP as e}from"../../chunks/app-BvcmakLQ.js";export{e as BlockProperties};
+import{XP as e}from"../../chunks/app-CppWyYsS.js";export{e as BlockProperties};
