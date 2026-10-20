@@ -1,1 +1,1 @@
-import{cN as e,sN as t}from"../../../chunks/app-1tipUwz4.js";export{t as declarationOnlyDefinitionForName,e as declarationOnlyStatusText};
+import{cN as e,sN as t}from"../../../chunks/app-CsXbNH-f.js";export{t as declarationOnlyDefinitionForName,e as declarationOnlyStatusText};

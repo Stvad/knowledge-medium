@@ -1,1 +1,1 @@
-import{CU as e,SU as t,xU as n}from"../../chunks/app-1tipUwz4.js";export{n as SYNCED_TABLES,t as syncedWriteTarget,e as writeTargets};
+import{CU as e,SU as t,xU as n}from"../../chunks/app-CsXbNH-f.js";export{n as SYNCED_TABLES,t as syncedWriteTarget,e as writeTargets};

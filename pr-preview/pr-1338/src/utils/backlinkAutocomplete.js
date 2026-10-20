@@ -1,1 +1,1 @@
-import{Mp as e,Np as t,Pp as n}from"../../chunks/app-1tipUwz4.js";export{e as backlinkCompletionSource,t as createBacklinkAutocomplete,n as isInsideBacklinkBrackets};
+import{Mp as e,Np as t,Pp as n}from"../../chunks/app-CsXbNH-f.js";export{e as backlinkCompletionSource,t as createBacklinkAutocomplete,n as isInsideBacklinkBrackets};
