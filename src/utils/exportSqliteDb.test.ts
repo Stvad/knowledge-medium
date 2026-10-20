@@ -86,6 +86,38 @@ describe('exportRawSqliteDbToFile', () => {
       vi.useRealTimers()
     }
   })
+
+  it('budgets the copy for the write-ahead sidecars the checkpoint folds in', async () => {
+    vi.useFakeTimers()
+    try {
+      const sizes: Record<string, number> = {'': 4, '-wa0': 100, '-wa1': 0}
+      const getFileHandle = vi.fn(async (name: string) => {
+        const suffix = Object.keys(sizes).find(s => s && name.endsWith(s)) ?? ''
+        return {getFile: async () => fakeFile(new Uint8Array(sizes[suffix]))}
+      })
+      Object.defineProperty(navigator, 'storage', {
+        configurable: true,
+        value: {getDirectory: async () => ({getFileHandle})},
+      })
+      const writeLock = vi.fn(() => new Promise<never>(() => {}))
+      let settled = false
+      const failing = exportRawSqliteDbToFile(
+        {user: {id: 'user-1'}, db: {writeLock}} as unknown as Repo,
+        {name: 'copy.db'} as unknown as FileSystemFileHandle,
+        {timeoutMessage: 'too slow', minBytesPerSecond: 1},
+      ).finally(() => { settled = true })
+      const rejects = expect(failing).rejects.toThrow('too slow')
+
+      // 180 s for the lock and checkpoint, then a second a byte for all 104 bytes.
+      await vi.advanceTimersByTimeAsync(180_000 + 100_000)
+      expect(settled).toBe(false)
+      // Past the deadline and the abort's grace period.
+      await vi.advanceTimersByTimeAsync(20_000)
+      await rejects
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })
 
 describe('exportRawSqliteDb', () => {

@@ -120,8 +120,8 @@ const BLOCK_COLUMNS = 'id,workspace_id,content,properties_json,references_json,u
 const HISTORY_COLUMNS = 'event_id,block_id,before_diff,after_diff'
 /** Ids per `in.(…)` filter. They ride in the request line, which the API
  *  gateway caps at about 8 KB. */
-const IDS_PER_FILTER = 100
-const HISTORY_PAGE = 500
+export const IDS_PER_FILTER = 100
+export const HISTORY_PAGE = 500
 
 /** Carries the PostgREST `code` and the HTTP `status` (a sibling of the error in
  *  the response, never on it), which are what tell a permanent failure from a
@@ -170,6 +170,7 @@ export const createSupabaseConversionServer = (client: SupabaseClient, signal?: 
         const {data, error, status} = await cancellable(client
           .from('blocks')
           .select(BLOCK_COLUMNS)
+          // Defence in depth: a block id is unique across workspaces.
           .eq('workspace_id', workspaceId)
           .in('id', idChunk))
         if (error) throw failed('reading blocks', error, status)
@@ -185,8 +186,11 @@ export const createSupabaseConversionServer = (client: SupabaseClient, signal?: 
           const {data, error, status} = await cancellable(client
             .from('blocks_history')
             .select(HISTORY_COLUMNS)
+            // Defence in depth: a block id is unique across workspaces.
             .eq('workspace_id', workspaceId)
             .in('block_id', idChunk)
+            // Defence in depth: INSERT and DELETE rows leave changed_columns
+            // NULL, which the containment below already excludes.
             .eq('op', 'U')
             .contains('changed_columns', [...SEALED_COLUMNS])
             .like('after_diff->>content', `${ENVELOPE_PREFIX}%`)

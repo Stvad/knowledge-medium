@@ -93,6 +93,16 @@ export async function chooseRawSqliteExportFile(
   })
 }
 
+/** The user's database file with its write-ahead sidecars: an upper bound on
+ *  the file a checkpoint leaves, since it folds the sidecars in. */
+export async function localDbFileBytes(userId: string): Promise<number> {
+  const root = await navigator.storage.getDirectory()
+  const dbFilename = dbFilenameForUser(userId)
+  const sizes = await Promise.all(['', ...WRITE_AHEAD_SIDECAR_SUFFIXES].map(suffix =>
+    root.getFileHandle(dbFilename + suffix).then(handle => handle.getFile()).then(file => file.size, () => 0)))
+  return sizes.reduce((sum, size) => sum + size, 0)
+}
+
 export async function exportRawSqliteDbToFile(
   repo: Repo,
   destinationHandle: FileSystemFileHandle,
@@ -113,7 +123,8 @@ export async function exportRawSqliteDbToFile(
 
   const root = await navigator.storage.getDirectory()
   const fileHandle = await root.getFileHandle(dbFilename)
-  const copyMs = options.minBytesPerSecond ? ((await fileHandle.getFile()).size / options.minBytesPerSecond) * 1000 : 0
+  // The checkpoint folds the sidecars into the file this copies.
+  const copyMs = options.minBytesPerSecond ? ((await localDbFileBytes(userId)) / options.minBytesPerSecond) * 1000 : 0
   options.signal?.throwIfAborted()
   const size = await withCheckpointedDbLock(repo, async deadline => {
     const sourceFile = await fileHandle.getFile()
