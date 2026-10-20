@@ -1,1 +1,1 @@
-import{UC as e}from"../../../chunks/app-BCPznZzz.js";export{e as todayDailyNoteLanding};
+import{GC as e}from"../../../chunks/app-B0xhMcxl.js";export{e as todayDailyNoteLanding};

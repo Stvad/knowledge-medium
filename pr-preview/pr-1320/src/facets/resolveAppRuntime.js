@@ -1,1 +1,1 @@
-import{bO as e,xO as t}from"../../chunks/app-BCPznZzz.js";export{e as resolveAppRuntime,t as resolveAppRuntimeSync};
+import{CO as e,SO as t}from"../../chunks/app-B0xhMcxl.js";export{t as resolveAppRuntime,e as resolveAppRuntimeSync};

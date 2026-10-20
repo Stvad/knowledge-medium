@@ -1,1 +1,1 @@
-import{Ay as e}from"../../../chunks/app-BCPznZzz.js";export{e as BreadcrumbList};
+import{My as e}from"../../../chunks/app-B0xhMcxl.js";export{e as BreadcrumbList};

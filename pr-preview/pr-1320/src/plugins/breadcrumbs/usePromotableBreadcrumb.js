@@ -1,1 +1,1 @@
-import{Ty as e}from"../../../chunks/app-BCPznZzz.js";export{e as usePromotableBreadcrumb};
+import{Dy as e}from"../../../chunks/app-B0xhMcxl.js";export{e as usePromotableBreadcrumb};

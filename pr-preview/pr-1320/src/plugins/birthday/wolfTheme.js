@@ -1,1 +1,1 @@
-import{Ct as e,Tt as t,wt as n}from"../../../chunks/app-BCPznZzz.js";export{e as WOLF_THEME_ID,n as applyWolfTheme,t as syncWolfTheme};
+import{Ct as e,Tt as t,wt as n}from"../../../chunks/app-B0xhMcxl.js";export{e as WOLF_THEME_ID,n as applyWolfTheme,t as syncWolfTheme};

@@ -1,1 +1,1 @@
-import{Vj as e}from"../../chunks/app-BCPznZzz.js";export{e as useShortcutSurfaceActivations};
+import{Uj as e}from"../../chunks/app-B0xhMcxl.js";export{e as useShortcutSurfaceActivations};

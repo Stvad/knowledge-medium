@@ -1,1 +1,1 @@
-import{fm as e,mm as t,pm as n}from"../../chunks/app-BCPznZzz.js";export{e as backlinkCompletionSource,n as createBacklinkAutocomplete,t as isInsideBacklinkBrackets};
+import{fm as e,mm as t,pm as n}from"../../chunks/app-B0xhMcxl.js";export{e as backlinkCompletionSource,n as createBacklinkAutocomplete,t as isInsideBacklinkBrackets};

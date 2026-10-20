@@ -1,1 +1,1 @@
-import{Gu as e,Ku as t,Uu as n,Wu as r,qu as i}from"../../../chunks/app-BCPznZzz.js";export{n as BLOCK_HISTORY_CONTENT_CHARS,r as LISTED_PROPERTY_NAMES,e as MAX_LISTED_CHANGES,t as blockHistory,i as recentChanges};
+import{Gu as e,Ku as t,Uu as n,Wu as r,qu as i}from"../../../chunks/app-B0xhMcxl.js";export{n as BLOCK_HISTORY_CONTENT_CHARS,r as LISTED_PROPERTY_NAMES,e as MAX_LISTED_CHANGES,t as blockHistory,i as recentChanges};

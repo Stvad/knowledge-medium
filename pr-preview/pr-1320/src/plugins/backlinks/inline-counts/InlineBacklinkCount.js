@@ -1,1 +1,1 @@
-import{lp as e,up as t}from"../../../../chunks/app-BCPznZzz.js";export{e as inlineBacklinkCountDecoratorContribution,t as inlineBacklinkExpansionFooterContribution};
+import{lp as e,up as t}from"../../../../chunks/app-B0xhMcxl.js";export{e as inlineBacklinkCountDecoratorContribution,t as inlineBacklinkExpansionFooterContribution};

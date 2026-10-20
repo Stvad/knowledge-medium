@@ -1,1 +1,1 @@
-import{Sp as e}from"../../../chunks/app-BCPznZzz.js";export{e as dailyNoteBacklinksDefaultsUi};
+import{Sp as e}from"../../../chunks/app-B0xhMcxl.js";export{e as dailyNoteBacklinksDefaultsUi};

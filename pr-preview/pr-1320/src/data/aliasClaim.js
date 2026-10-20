@@ -1,1 +1,1 @@
-import{MY as e,NY as t}from"../../chunks/app-BCPznZzz.js";export{e as assertAliasClaimable,t as claimedAliases};
+import{FY as e,PY as t}from"../../chunks/app-B0xhMcxl.js";export{t as assertAliasClaimable,e as claimedAliases};

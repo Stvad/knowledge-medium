@@ -1,1 +1,1 @@
-import{db as e}from"../../../chunks/app-BCPznZzz.js";export{e as CreateWorkspaceDialog};
+import{pb as e}from"../../../chunks/app-B0xhMcxl.js";export{e as CreateWorkspaceDialog};

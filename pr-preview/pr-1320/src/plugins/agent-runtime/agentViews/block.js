@@ -1,1 +1,1 @@
-import{Dd as e,Od as t}from"../../../../chunks/app-BCPznZzz.js";export{e as buildBlockView,t as renderBlockView};
+import{Dd as e,Od as t}from"../../../../chunks/app-B0xhMcxl.js";export{e as buildBlockView,t as renderBlockView};

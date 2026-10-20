@@ -1,1 +1,1 @@
-import{__ as e,g_ as t,h_ as n,m_ as r}from"../../../chunks/app-BCPznZzz.js";export{r as closeVideoNotesView,n as ensureEditableVideoNoteChild,t as enterVideoNotesView,e as focusVideoNote};
+import{__ as e,g_ as t,v_ as n,y_ as r}from"../../../chunks/app-B0xhMcxl.js";export{t as closeVideoNotesView,e as ensureEditableVideoNoteChild,n as enterVideoNotesView,r as focusVideoNote};

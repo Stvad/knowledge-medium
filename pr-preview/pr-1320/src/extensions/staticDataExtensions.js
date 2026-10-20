@@ -1,1 +1,1 @@
-import{CR as e}from"../../chunks/app-BCPznZzz.js";export{e as staticDataExtensions};
+import{TR as e}from"../../chunks/app-B0xhMcxl.js";export{e as staticDataExtensions};

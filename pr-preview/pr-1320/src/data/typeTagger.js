@@ -1,1 +1,1 @@
-import{iK as e}from"../../chunks/app-BCPznZzz.js";export{e as TypeTagger};
+import{oK as e}from"../../chunks/app-B0xhMcxl.js";export{e as TypeTagger};

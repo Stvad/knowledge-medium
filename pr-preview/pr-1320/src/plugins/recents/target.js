@@ -1,1 +1,1 @@
-import{Wx as e}from"../../../chunks/app-BCPznZzz.js";export{e as openRecentsPage};
+import{Kx as e}from"../../../chunks/app-B0xhMcxl.js";export{e as openRecentsPage};
