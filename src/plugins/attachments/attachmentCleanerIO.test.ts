@@ -104,7 +104,7 @@ const cleanerIO = (repo: Repo, uploadStore = new InMemoryByteUploadStore()) => c
 })
 
 describe('createAttachmentCleanerIO pendingUploads', () => {
-  it('counts this workspace\'s staged, pending and failed uploads, and nobody else\'s', async () => {
+  it('counts this workspace\'s staged, pending and failed uploads, and no stage whose block never committed', async () => {
     const uploads = new InMemoryByteUploadStore()
     const stage = (assetBlockId: string, workspaceId = WS, userId = 'user-1') =>
       uploads.stage({userId, assetBlockId, workspaceId, contentHash: 'sha256:aaaa', contentKey: assetBlockId})
@@ -115,8 +115,11 @@ describe('createAttachmentCleanerIO pendingUploads', () => {
     await uploads.markFailed('user-1', 'failed')
     await stage('other-workspace', 'ws-2')
     await stage('other-user', WS, 'user-2')
+    // A capture that crashed or threw between its stage and its block: it never uploads.
+    await stage('orphan')
+    const repo = {load: async (id: string) => (id === 'orphan' ? null : {id})} as unknown as Repo
 
-    expect(await cleanerIO({} as Repo, uploads).pendingUploads()).toBe(3)
+    expect(await cleanerIO(repo, uploads).pendingUploads()).toBe(3)
   })
 })
 

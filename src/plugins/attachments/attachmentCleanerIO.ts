@@ -12,6 +12,7 @@ import type { ConversionAttachmentsIO } from '@/sync/conversion/conversionAttach
 import { collectPaged } from './audit/paginate.js'
 import { ATTACHMENTS_BUCKET, BlobPutError, type BlobStore } from './blobStore.js'
 import type { ByteStore } from './byteStore.js'
+import { isAssetBlockPresent } from './uploadReconcile.js'
 import type { ByteUploadStore } from './uploadStore.js'
 import { MEDIA_TYPE, mediaHashOfStoredRow } from './mediaBlock.js'
 
@@ -133,8 +134,14 @@ export const createAttachmentCleanerIO = (deps: AttachmentCleanerIODeps): Conver
     mediaHashOf: mediaHashOfStoredRow,
     async pendingUploads() {
       const statuses = ['staged', 'pending', 'failed'] as const
-      const records = await Promise.all(statuses.map(status => deps.uploadStore.listByStatus(userId, status)))
-      return records.flat().filter(record => record.workspaceId === workspaceId).length
+      const records = (await Promise.all(statuses.map(status => deps.uploadStore.listByStatus(userId, status))))
+        .flat()
+        .filter(record => record.workspaceId === workspaceId)
+      // A stage whose block isn't here never got one: this device's own capture
+      // writes it here. It never uploads and nothing clears it, so counting it
+      // would block the conversion for good.
+      const uploading = await Promise.all(records.map(record => record.status !== 'staged' || isAssetBlockPresent(repo, record.assetBlockId)))
+      return uploading.filter(Boolean).length
     },
   }
 }

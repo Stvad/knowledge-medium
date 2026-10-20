@@ -169,8 +169,9 @@ export interface AttachmentSurvey {
   readonly bundleBytes: number
   /** Storage-only copies this device had no room to keep. */
   readonly unkeptBytes: number
-  /** What was still free for them when the survey stopped keeping, below zero
-   *  when the device was already short: the user frees `unkeptBytes` less this. */
+  /** What the budget had left when the survey stopped keeping, or at its end:
+   *  below zero when the device was already short, Infinity when it can't
+   *  tell. The user frees `unkeptBytes` less this. */
   readonly spareBytes: number
 }
 
@@ -260,7 +261,7 @@ export const surveyAttachments = async ({
     if (sha256Hex(bytes) === path) measure(path, bytes.length)
     else bundleBytes += bytes.length
   }
-  return {noVerifiedSource, oversized, bundleBytes, unkeptBytes, spareBytes: unkeptBytes > 0 ? budget : 0}
+  return {noVerifiedSource, oversized, bundleBytes, unkeptBytes, spareBytes: budget}
 }
 
 export interface AttachmentParts {

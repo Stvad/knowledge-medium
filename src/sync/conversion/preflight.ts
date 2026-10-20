@@ -179,8 +179,10 @@ export const runPreflight = async ({
   const free = await environment.freeLocalBytes()
   const keepBudget = free === null ? null : free - LOCAL_HEADROOM_BYTES
   const survey = await surveyAttachments({source: attachments, mediaHashes: blocks.media.hashes(), keepBudget, signal, onProgress})
-  if (survey.unkeptBytes > 0) {
-    const neededBytes = survey.unkeptBytes - survey.spareBytes
+  // The copies it couldn't keep, and any headroom the device is already short
+  // of, which a negative budget carries whether or not a copy needed keeping.
+  const neededBytes = survey.unkeptBytes - survey.spareBytes
+  if (neededBytes > 0) {
     return {kind: 'blocked', blockers: [{kind: 'local-space', neededBytes, freeBytes: Math.max(0, survey.spareBytes)}]}
   }
   return {
