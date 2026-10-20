@@ -2018,7 +2018,7 @@ export class Repo {
     return fn(this.groupedFacade(this.newId()))
   }
 
-  /** Bind plugin context to this host's writes; only explicit rebinding replaces bound keys. */
+  /** Bind plugin context; tx options cannot replace it, but explicit rebinding supports source imports. */
   withTxContext(context: NonNullable<RepoTxOptions['context']>): Repo {
     const captured = Object.freeze({...context})
     const facade = this.contextFacade((fn, opts) =>

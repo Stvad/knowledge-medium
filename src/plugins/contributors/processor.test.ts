@@ -394,6 +394,93 @@ describe('automatic contributor attribution', () => {
     expect(await read('note', attributionEditorsProp.name)).toEqual(['scout', HUMAN, 'atlas'])
   })
 
+  it('credits both owners when an agent moves a property field between them', async () => {
+    await db.db.execute(`INSERT INTO workspaces
+      (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+      VALUES (?, 'Test', 'vlad', 1, 1, 'none', NULL, 'children')`, [WS])
+    repo.setActiveWorkspaceId(WS)
+    await create(repo.withTxContext({contributorId: 'atlas'}), 'owner-a')
+    await create(repo.withTxContext({contributorId: 'atlas'}), 'owner-b')
+    await repo.withTxContext({contributorId: null}).tx(tx =>
+      tx.setProperty('owner-a', contributorRoleProp, 'Researcher'), opts,
+    )
+
+    const fieldId = propertyDefinitionBlockId(WS, contributorRoleProp.seedKey)
+    const field = await db.db.get<{id: string}>(
+      'SELECT id FROM blocks WHERE parent_id = ? AND content = ? AND deleted = 0',
+      ['owner-a', propertyFieldContent(fieldId)],
+    )
+    expect(field).toBeDefined()
+    expect(await read('owner-a', contributorRoleProp.name)).toBe('Researcher')
+    expect(await read('owner-b', contributorRoleProp.name)).toBeUndefined()
+    expect(await read('owner-a', attributionEditorsProp.name)).toBeUndefined()
+    expect(await read('owner-b', attributionEditorsProp.name)).toBeUndefined()
+
+    await repo.withTxContext({contributorId: 'scout'}).tx(tx =>
+      tx.move(field!.id, {parentId: 'owner-b', orderKey: 'a0'}), opts,
+    )
+
+    expect(await read('owner-a', contributorRoleProp.name)).toBeUndefined()
+    expect(await read('owner-b', contributorRoleProp.name)).toBe('Researcher')
+    expect(await read('owner-a', attributionEditorsProp.name)).toEqual(['scout'])
+    expect(await read('owner-b', attributionEditorsProp.name)).toEqual(['scout'])
+    expect(await read('owner-a', attributionCreatorsProp.name)).toEqual(['atlas'])
+    expect(await read('owner-b', attributionCreatorsProp.name)).toEqual(['atlas'])
+    expect(await read(field.id, attributionCreatorsProp.name)).toBeUndefined()
+    expect(await read(field.id, attributionEditorsProp.name)).toBeUndefined()
+  })
+
+  it('credits both owners when an agent moves a property value between fields', async () => {
+    await db.db.execute(`INSERT INTO workspaces
+      (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+      VALUES (?, 'Test', 'vlad', 1, 1, 'none', NULL, 'children')`, [WS])
+    repo.setActiveWorkspaceId(WS)
+    await create(repo.withTxContext({contributorId: 'atlas'}), 'owner-a')
+    await create(repo.withTxContext({contributorId: 'atlas'}), 'owner-b')
+    await repo.withTxContext({contributorId: null}).tx(async tx => {
+      await tx.setProperty('owner-a', contributorRoleProp, 'Researcher')
+      await tx.setProperty('owner-b', contributorRoleProp, 'Temporary')
+    }, opts)
+
+    const fieldId = propertyDefinitionBlockId(WS, contributorRoleProp.seedKey)
+    const fieldFor = async (ownerId: string) => db.db.get<{id: string}>(
+      'SELECT id FROM blocks WHERE parent_id = ? AND content = ? AND deleted = 0',
+      [ownerId, propertyFieldContent(fieldId)],
+    )
+    const sourceField = await fieldFor('owner-a')
+    const destinationField = await fieldFor('owner-b')
+    expect(sourceField).toBeDefined()
+    expect(destinationField).toBeDefined()
+    const sourceValue = await db.db.get<{id: string}>(
+      'SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0', [sourceField!.id],
+    )
+    const destinationValue = await db.db.get<{id: string}>(
+      'SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0', [destinationField!.id],
+    )
+    expect(sourceValue).toBeDefined()
+    expect(destinationValue).toBeDefined()
+    await repo.withTxContext({contributorId: null}).tx(tx => tx.delete(destinationValue!.id), opts)
+    expect(await read('owner-a', contributorRoleProp.name)).toBe('Researcher')
+    expect(await read('owner-b', contributorRoleProp.name)).toBeUndefined()
+    expect(await read('owner-a', attributionEditorsProp.name)).toBeUndefined()
+    expect(await read('owner-b', attributionEditorsProp.name)).toBeUndefined()
+
+    await repo.withTxContext({contributorId: 'scout'}).tx(tx =>
+      tx.move(sourceValue!.id, {parentId: destinationField!.id, orderKey: 'a0'}), opts,
+    )
+
+    expect(await read('owner-a', contributorRoleProp.name)).toBeUndefined()
+    expect(await read('owner-b', contributorRoleProp.name)).toBe('Researcher')
+    expect(await read('owner-a', attributionEditorsProp.name)).toEqual(['scout'])
+    expect(await read('owner-b', attributionEditorsProp.name)).toEqual(['scout'])
+    expect(await read('owner-a', attributionCreatorsProp.name)).toEqual(['atlas'])
+    expect(await read('owner-b', attributionCreatorsProp.name)).toEqual(['atlas'])
+    expect(await read(sourceValue!.id, attributionCreatorsProp.name)).toBeUndefined()
+    expect(await read(sourceValue!.id, attributionEditorsProp.name)).toBeUndefined()
+    expect(await read(sourceField!.id, attributionEditorsProp.name)).toBeUndefined()
+    expect(await read(destinationField!.id, attributionEditorsProp.name)).toBeUndefined()
+  })
+
   it('undoes attribution together with the content edit', async () => {
     repo.setActiveWorkspaceId(WS)
     await create(repo.withTxContext({contributorId: 'atlas'}))

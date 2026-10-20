@@ -77,16 +77,19 @@ export const contributorAttributionProcessor = defineSameTxProcessor({
         !jsonValuesEqual(change.before?.properties[prop.name], change.after?.properties[prop.name])
         && (change.after?.properties[prop.name] !== undefined || ctx.wasPropertyUnset(change.id, prop.name)))
       if (!authored && corrections.length === 0) continue
-      const target = await targetOf(change.after!, ctx)
-      if (!target) continue
-      const entry = targets.get(target.id) ?? {created: false, authored: false, corrections: new Set<AttributionProperty>()}
-      if (target.attribution) entry.corrections.add(target.attribution)
-      else {
-        entry.authored ||= authored
-        entry.created ||= target.id === change.id && change.before === null
-        for (const prop of corrections) entry.corrections.add(prop)
+      for (const row of [change.before, change.after]) {
+        if (!row) continue
+        const target = await targetOf(row, ctx)
+        if (!target) continue
+        const entry = targets.get(target.id) ?? {created: false, authored: false, corrections: new Set<AttributionProperty>()}
+        if (target.attribution) entry.corrections.add(target.attribution)
+        else {
+          entry.authored ||= authored
+          entry.created ||= target.id === change.id && change.before === null
+          for (const prop of corrections) entry.corrections.add(prop)
+        }
+        targets.set(target.id, entry)
       }
-      targets.set(target.id, entry)
     }
     if (targets.size === 0) return
     const context = ctx.tx.meta.context

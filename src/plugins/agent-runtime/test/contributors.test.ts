@@ -196,6 +196,32 @@ describe('agent contributor selection', () => {
     expect(await context.repo.load('eval-unconfigured-optout')).toBeNull()
   })
 
+  it('allows eval to explicitly rebind contributor context without changing its command binding', async () => {
+    const atlas = await run({type: 'create-contributor', name: 'Atlas'}) as ContributorProfile
+    const scout = await run({type: 'create-contributor', name: 'Scout'}) as ContributorProfile
+    await run({
+      type: 'eval',
+      contributorId: atlas.id,
+      data: {unattributedId: 'eval-explicit-none', scoutId: scout.id, scoutWriteId: 'eval-explicit-scout', atlasId: 'eval-original-atlas'},
+      code: `await repo.withTxContext({contributorId: null}).tx(tx => tx.create({
+        id: data.unattributedId, workspaceId: 'ws', parentId: null, orderKey: 'a0', content: 'Explicitly unattributed eval write'
+      }), {scope: 'block-default'})
+      await repo.withTxContext({contributorId: data.scoutId}).tx(tx => tx.create({
+        id: data.scoutWriteId, workspaceId: 'ws', parentId: null, orderKey: 'a0', content: 'Explicit Scout eval write'
+      }), {scope: 'block-default'})
+      await repo.tx(tx => tx.create({
+        id: data.atlasId, workspaceId: 'ws', parentId: null, orderKey: 'a0', content: 'Original Atlas eval write'
+      }), {scope: 'block-default'})
+      return true`,
+    })
+
+    const unattributed = await context.repo.load('eval-explicit-none')
+    expect(unattributed?.content).toBe('Explicitly unattributed eval write')
+    expect(unattributed?.properties[attributionCreatorsProp.name]).toBeUndefined()
+    expect((await context.repo.load('eval-explicit-scout'))?.properties[attributionCreatorsProp.name]).toEqual([scout.id])
+    expect((await context.repo.load('eval-original-atlas'))?.properties[attributionCreatorsProp.name]).toEqual([atlas.id])
+  })
+
   it.each(['move-parent', 'move-order', 'delete', 'restore'] as const)(
     'requires a contributor for %s and attributes surviving blocks', async operation => {
       const profile = await run({type: 'create-contributor', name: 'Atlas'}) as ContributorProfile
