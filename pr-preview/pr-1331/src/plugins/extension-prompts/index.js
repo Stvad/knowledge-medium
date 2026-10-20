@@ -1,1 +1,0 @@
-import{_E as e,vE as t}from"../../../chunks/app-CobiUJgp.js";export{e as ExtensionPromptSurface,t as extensionPromptsExtension};

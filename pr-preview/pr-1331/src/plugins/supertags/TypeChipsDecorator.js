@@ -1,1 +1,0 @@
-import{T as e}from"../../../chunks/app-CobiUJgp.js";export{e as typeChipsDecoratorContribution};

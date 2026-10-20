@@ -1,1 +1,0 @@
-import{SE as e,xE as t}from"../../../chunks/app-CobiUJgp.js";export{t as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,e as openExtensionsSettingsAction};

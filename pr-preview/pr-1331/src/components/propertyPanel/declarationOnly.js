@@ -1,1 +1,0 @@
-import{RM as e,zM as t}from"../../../chunks/app-CobiUJgp.js";export{e as declarationOnlyDefinitionForName,t as declarationOnlyStatusText};
