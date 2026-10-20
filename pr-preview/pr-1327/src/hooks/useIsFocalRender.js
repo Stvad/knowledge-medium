@@ -1,0 +1,1 @@
+import{iM as e,rM as t}from"../../chunks/app-SwspH9_3.js";export{t as isFocalRender,e as useIsFocalRender};

@@ -1,0 +1,1 @@
+import{SE as e,xE as t}from"../../../chunks/app-SwspH9_3.js";export{t as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,e as openExtensionsSettingsAction};

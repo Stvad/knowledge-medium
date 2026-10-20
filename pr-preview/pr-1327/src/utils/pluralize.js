@@ -1,0 +1,1 @@
+import{DY as e,EY as t}from"../../chunks/app-SwspH9_3.js";export{t as agree,e as pluralize};

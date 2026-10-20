@@ -1,0 +1,1 @@
+import{CD as e,SD as t}from"../../chunks/app-SwspH9_3.js";export{t as ClientLocalSettings,e as clientLocalSettings};

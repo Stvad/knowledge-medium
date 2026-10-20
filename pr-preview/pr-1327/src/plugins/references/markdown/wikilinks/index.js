@@ -1,0 +1,1 @@
+import{Tp as e}from"../../../../../chunks/app-SwspH9_3.js";export{e as wikilinkMarkdownExtension};

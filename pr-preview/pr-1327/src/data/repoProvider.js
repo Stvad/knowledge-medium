@@ -1,0 +1,1 @@
+import{_L as e,dL as t,fL as n,gL as r,hL as i,lL as a,mL as o,pL as s,uL as c,vL as l}from"../../chunks/app-SwspH9_3.js";export{a as BATCH_SENTINEL_SQL,c as closePowerSyncDbIfOpen,t as ensurePowerSyncReady,n as getActiveSyncResolver,s as getActiveUserId,o as getPowerSyncDb,i as initializeClientSchema,r as isRemoteSyncActive,e as syncObserverDepsFor,l as syncResolverForUser};
