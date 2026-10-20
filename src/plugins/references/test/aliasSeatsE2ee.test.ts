@@ -30,6 +30,7 @@ import {
 import { dailyNotesDataExtension } from '@/plugins/daily-notes/dataExtension'
 import { getWorkspaceKeyStore } from '@/sync/keys/keyStore'
 import { setModePin, upgradeModePinToE2ee } from '@/sync/keys/modePin'
+import { onWorkspaceKeyUnavailable } from '@/sync/keys/openWorkspaceKeys'
 import { referencesDataExtension } from '../dataExtension.ts'
 
 const USER = 'user-seats-e2ee'
@@ -142,19 +143,26 @@ describe('alias seats on an encrypted workspace', () => {
     expect((await row(seat))?.deleted).toBe(1)
   })
 
-  it('mints nothing without a key, and still derives the links that need no new page',
-    async () => {
-      await seedWorkspaceRow('e2ee')
-      setModePin(USER, WS, 'e2ee')
-      await createPage('known', 'Known')
-      const warnings = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  it('mints nothing without a key: it reports the workspace locked and writes nothing', async () => {
+    await seedWorkspaceRow('e2ee')
+    setModePin(USER, WS, 'e2ee')
+    await createPage('known', 'Known')
+    const locked = vi.fn()
+    const unsubscribe = onWorkspaceKeyUnavailable(locked)
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
 
+    try {
       await write('src', '[[Known]] and [[Secret plans]]')
+    } finally {
+      unsubscribe()
+    }
 
-      expect(await liveClaimants('Secret plans')).toEqual([])
-      expect(warnings.mock.calls.flat().join(' ')).toMatch(/no content key/)
-      expect(await targetOf('src', 'Known')).toBe('known')
-    })
+    expect(locked).toHaveBeenCalledWith(USER, WS)
+    expect(errors.mock.calls.flat().join(' ')).toMatch(/no usable workspace key/)
+    expect(await liveClaimants('Secret plans')).toEqual([])
+    // Not a partial write that drops the new page and keeps the rest.
+    await expect(targetOf('src', 'Known')).rejects.toThrow(/no reference/)
+  })
 
   it('keeps the rest of the write when the workspace turns sealed under the lock', async () => {
     // The read phase planned under plaintext; by the time the write phase

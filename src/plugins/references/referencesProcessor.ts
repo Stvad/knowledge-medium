@@ -196,8 +196,9 @@ interface SourcePlan {
   referencesChanged: boolean
 }
 
-/** A new-page mark whose seat cannot be minted without the public namespace
- *  stays underived (`null`); any other failure is rethrown. */
+/** A new-page mark whose namespace the read phase did not resolve — the mode
+ *  turned sealed between the read phase and the lock — stays underived
+ *  (`null`); any other failure is rethrown. */
 const leaveSeatOut = (err: unknown, sourceId: string): null => {
   if (!(err instanceof AliasSeatNamespaceUnavailableError)) throw err
   console.warn(`[references] left a new page unminted for ${sourceId}: ${err.message}`)
@@ -248,10 +249,9 @@ const buildSourcePlan = async (
   const seenAliases = new Set<string>()
   // Resolved on the first lookup miss, before the lock: the write phase's
   // `ensureAliasTarget` reads it from the cache this fills, since `K_id` cannot
-  // be read under the lock (`@/data/aliasSeatNamespace`). `null`: unavailable,
-  // so this source's new-page marks stay underived rather than failing the
-  // whole event.
-  let seats: AliasSeatNamespaces | null | undefined
+  // be read under the lock (`@/data/aliasSeatNamespace`). No key on this device
+  // throws and locks the workspace; the event writes nothing.
+  let seats: AliasSeatNamespaces | undefined
 
   for (const mark of aliasMarks) {
     if (seenAliases.has(mark.alias)) continue
@@ -294,11 +294,7 @@ const buildSourcePlan = async (
     // tombstoned. We probe here (read-phase, committed state) so the
     // predicted id matches what ensureAliasTarget will pick in the
     // write phase. Convergence: same world-state → same probe answer.
-    if (seats === undefined) {
-      seats = await resolveAliasSeatNamespaces(ctx.repo, source.workspaceId)
-        .catch(err => leaveSeatOut(err, source.id))
-    }
-    if (seats === null) continue
+    seats ??= await resolveAliasSeatNamespaces(ctx.repo, source.workspaceId)
     const id = await resolveAliasSeatId(
       seats,
       aliasSeatReaderFromDb(ctx.db),

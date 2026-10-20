@@ -55,7 +55,7 @@ import { readWorkspaceEncryptionMode } from '@/data/workspaceSchema'
 import { deriveWorkspaceIdNamespace } from '@/sync/crypto/derivedIdNamespace'
 import { getWorkspaceKeyStore } from '@/sync/keys/keyStore'
 import { getModePin, type ModePin } from '@/sync/keys/modePin'
-import { readContentKeyHmac } from '@/sync/keys/resolver'
+import { requireWorkspaceKeys, WorkspaceKeyUnavailableError } from '@/sync/keys/openWorkspaceKeys'
 import { describeNames, firstFew } from '@/utils/nameList'
 import {
   valueSurvivesChildRoundTrip,
@@ -327,10 +327,10 @@ const resolveSynthesisMode = async (
  *    all refuse; that costs nothing real, since `workspaceAccess.ts` pins every
  *    workspace at first encounter.
  *  - NO FALLBACK TO THE PLAINTEXT NAMESPACE. An E2EE workspace with no `K_id`
- *    refuses rather than minting under the public constant. `resolveWorkspaceEntry`
- *    already treats such a record as LOCKED, so this is the shape of a bug, not
- *    of a workspace the operator is looking at — and quietly publishing
- *    name-derived ids is the one outcome worse than a refusal.
+ *    refuses rather than minting under the public constant — quietly publishing
+ *    name-derived ids is the one outcome worse than a refusal. The key read
+ *    also locks the workspace (`requireWorkspaceKeys`): its record went missing
+ *    after the entry gate checked it.
  *
  * PRE-LOCK ONLY: it reads the key store, which must never run under the write
  * lock, so its own reads go through the Repo's handle.
@@ -345,9 +345,11 @@ export const resolveSynthesisNamespace = async (
   if (resolved.mode === 'plaintext') {
     return {kind: 'ready', mode: 'plaintext', namespace: PLAINTEXT_SYNTHESIZED_DEFINITION_NS}
   }
-  const contentKeyHmac = await readContentKeyHmac(
-    getWorkspaceKeyStore(), repo.user.id, workspaceId)
-  if (contentKeyHmac === null) {
+  let contentKeyHmac: CryptoKey
+  try {
+    ({contentKeyHmac} = await requireWorkspaceKeys(getWorkspaceKeyStore(), repo.user.id, workspaceId))
+  } catch (err) {
+    if (!(err instanceof WorkspaceKeyUnavailableError)) throw err
     return {kind: 'refused', reason:
       'this device holds no content key for the encrypted workspace, so the definition ids ' +
       'it would mint could not be kept private — re-paste the workspace key, then run this again'}

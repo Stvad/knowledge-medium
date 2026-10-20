@@ -19,6 +19,7 @@ import {
 import { InMemoryWorkspaceKeyStore } from '@/sync/keys/keyStore'
 import { setModePin, upgradeModePinToE2ee } from '@/sync/keys/modePin'
 import { createSyncResolver } from '@/sync/keys/resolver'
+import { deriveContentKeyHmac } from '@/sync/crypto/contentKey'
 import { generateWorkspaceKeyBytes, importWorkspaceKey } from '@/sync/crypto/workspaceKey'
 import { hasEnvelopePrefix } from '@/sync/crypto/envelope'
 import { open } from '@/sync/crypto/aead'
@@ -52,6 +53,7 @@ const fakeDb = {} as AbstractPowerSyncDatabase
 let syncedMode: Map<string, string>
 let keyStore: InMemoryWorkspaceKeyStore
 let key: CryptoKey
+let contentKeyHmac: CryptoKey
 
 const buildDeps = () => {
   const resolver = createSyncResolver(() => USER, keyStore, async ws => syncedMode.get(ws) ?? null)
@@ -75,7 +77,9 @@ beforeEach(async () => {
   localStorage.clear()
   syncedMode = new Map([[WS, 'e2ee'], [OTHER, 'none']])
   keyStore = new InMemoryWorkspaceKeyStore()
-  key = await importWorkspaceKey(generateWorkspaceKeyBytes())
+  const keyBytes = generateWorkspaceKeyBytes()
+  key = await importWorkspaceKey(keyBytes.slice())
+  contentKeyHmac = await deriveContentKeyHmac(keyBytes)
   setModePin(USER, WS, 'plaintext')
   setModePin(USER, OTHER, 'plaintext')
 })
@@ -104,7 +108,7 @@ describe('uploads for a workspace the server converted', () => {
   })
 
   it('holds even on the device that already holds the key (the converting device)', async () => {
-    await keyStore.put(USER, WS, {wk: key, contentKeyHmac: null})
+    await keyStore.put(USER, WS, {wk: key, contentKeyHmac})
     const {deps, applyOperations} = buildDeps()
     const held = fakeTx(1, [contentEdit(1, 1, WS, 'secret')])
 
@@ -142,7 +146,7 @@ describe('uploads for a workspace the server converted', () => {
       __uploadTransactionsWithFallbackForTest(fakeDb, [held] as unknown as CrudTransaction[], deps),
     ).rejects.toBeInstanceOf(UploadHeldError)
 
-    await keyStore.put(USER, WS, {wk: key, contentKeyHmac: null})
+    await keyStore.put(USER, WS, {wk: key, contentKeyHmac})
     upgradeModePinToE2ee(USER, WS)
     await __uploadTransactionsWithFallbackForTest(fakeDb, [held] as unknown as CrudTransaction[], deps)
 
@@ -165,7 +169,7 @@ describe('uploads for a workspace the server converted', () => {
       id: 'block-quarantined',
       data: {workspace_id: WS, content: 'written during the window', base_updated_at: 5},
     })
-    await keyStore.put(USER, WS, {wk: key, contentKeyHmac: null})
+    await keyStore.put(USER, WS, {wk: key, contentKeyHmac})
     upgradeModePinToE2ee(USER, WS)
 
     const {deps, applyOperations, recordRejection} = buildDeps()

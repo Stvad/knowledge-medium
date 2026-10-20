@@ -7,8 +7,9 @@
  *
  *   - getMaterializability(ws) — observer: how to turn a `blocks_synced` row
  *     into the app-visible plaintext `blocks` table (decrypt / copy / defer).
- *   - getCek(ws)               — observer + upload: the workspace CryptoKey, or
- *     null if it isn't loaded on this device.
+ *   - getCek(ws)               — observer + upload: the workspace CryptoKey,
+ *     read through `requireWorkspaceKeys`, which throws (and reports the
+ *     workspace locked) when this device holds no usable key.
  *   - getUploadMode(ws)        — upload: seal content columns on the way out
  *     ('e2ee'), pass them through ('none'), or keep them queued ('hold').
  *
@@ -49,17 +50,18 @@
  */
 
 import type { GetCek, GetMaterializability, UploadMode } from '../transform.js'
-import { readUsableKeyRecord, type WorkspaceKeyStore } from './keyStore.js'
+import type { WorkspaceKeyStore } from './keyStore.js'
 import { getModePin, type ModePin } from './modePin.js'
+import { requireWorkspaceKeys, WorkspaceKeyUnavailableError } from './openWorkspaceKeys.js'
 
 export interface SyncResolver {
   /** Observer: how to materialize a workspace's staging rows. */
   readonly getMaterializability: GetMaterializability
-  /** Observer + upload: the workspace key handle, or null if not loaded. */
+  /** Observer + upload: the workspace key handle. Null only signed out; a
+   *  missing key throws `WorkspaceKeyUnavailableError`. */
   readonly getCek: GetCek
   /** Asset read/write path (§10): the workspace's content-key HMAC subkey
-   *  `K_id`, or null when no key is loaded OR a legacy record predates K_id
-   *  (the §10 re-paste migration — media fails closed until re-unlock). */
+   *  `K_id`, under the same contract as {@link getCek}. */
   readonly getContentKeyHmac: (workspaceId: string) => Promise<CryptoKey | null>
   /** Upload: seal, pass through, or hold the workspace's content columns. */
   readonly getUploadMode: (workspaceId: string) => Promise<UploadMode>
@@ -68,21 +70,6 @@ export interface SyncResolver {
 /** The synced `workspaces.encryption_mode` for a workspace, or null when this
  *  device has no local row for it. */
 export type ReadSyncedEncryptionMode = (workspaceId: string) => Promise<string | null>
-
-/** `K_id` for one (user, workspace), or null — the asset path's content-key
- *  subkey (§10), also the PRF behind an E2EE workspace's derived-id namespaces.
- *
- *  Shared rather than re-read, because the FAIL-SAFE is the contract: an
- *  unreadable key store (IndexedDB unavailable / corrupt / quota) must answer
- *  "no `K_id`", never throw. Both callers depend on that and neither can
- *  tolerate the other's version drifting — media fails closed, and a derived-id
- *  namespace refuses rather than falling back to a public constant. */
-export const readContentKeyHmac = async (
-  keyStore: WorkspaceKeyStore,
-  userId: string,
-  workspaceId: string,
-): Promise<CryptoKey | null> =>
-  (await readUsableKeyRecord(keyStore, userId, workspaceId))?.contentKeyHmac ?? null
 
 /** The upload-mode policy (module header) for one pin, reading the synced
  *  `encryption_mode` only when the pin leaves the answer open. Throws when that
@@ -107,23 +94,13 @@ export const createSyncResolver = (
   const getCek: GetCek = async (workspaceId) => {
     const userId = getUserId()
     if (!userId) return null
-    try {
-      return (await keyStore.get(userId, workspaceId))?.wk ?? null
-    } catch (err) {
-      // A key-store read failure (IndexedDB unavailable / corrupt / quota) must
-      // never throw out of the resolver: getMaterializability (below) runs
-      // OUTSIDE materializeStagingRows' per-row decode try/catch, so a throw
-      // there aborts the entire observer drain and strands the durable change
-      // queue. Treat an unreadable store as "no key".
-      console.warn(`[syncResolver] key read failed for ${workspaceId}; treating as no key`, err)
-      return null
-    }
+    return (await requireWorkspaceKeys(keyStore, userId, workspaceId)).cek
   }
 
   const getContentKeyHmac = async (workspaceId: string): Promise<CryptoKey | null> => {
     const userId = getUserId()
     if (!userId) return null
-    return readContentKeyHmac(keyStore, userId, workspaceId)
+    return (await requireWorkspaceKeys(keyStore, userId, workspaceId)).contentKeyHmac
   }
 
   const getMaterializability: GetMaterializability = async (workspaceId) => {
@@ -135,11 +112,16 @@ export const createSyncResolver = (
     // consume it and strand a plaintext row nothing else re-reads.
     if (pin === 'plaintext') return (await serverSaysE2ee(workspaceId)) ? 'defer' : 'copy'
     if (pin === 'e2ee') {
-      // getCek swallows read failures → null, so an unreadable key store defers
-      // (leaves the row staged; retries when the store recovers / WK is pasted)
-      // instead of wedging the drain.
-      const key = await getCek(workspaceId)
-      return key ? 'decrypt' : 'defer'
+      // No key defers: the row stays staged until the gate's unlock drains it.
+      // Thrown, it would abort the whole observer drain, every workspace's rows
+      // with it, since this runs outside the per-row decode try/catch.
+      try {
+        await getCek(workspaceId)
+        return 'decrypt'
+      } catch (err) {
+        if (err instanceof WorkspaceKeyUnavailableError) return 'defer'
+        throw err
+      }
     }
     // Unpinned: never materialize until a §8 flow resolves the first encounter.
     return 'defer'

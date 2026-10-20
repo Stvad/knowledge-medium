@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { InMemoryWorkspaceKeyStore } from './keyStore.js'
 import { setModePin, upgradeModePinToE2ee } from './modePin.js'
+import { WorkspaceKeyUnavailableError } from './openWorkspaceKeys.js'
 import { createSyncResolver } from './resolver.js'
 
 const USER = 'user-1'
@@ -12,7 +13,7 @@ const WS = 'ws-A'
 // CryptoKeys — the crypto round-trip is exercised in transform/aead tests.
 const FAKE_KEY = {} as CryptoKey
 const FAKE_HMAC = { name: 'k_id' } as unknown as CryptoKey
-const record = (wk: CryptoKey, contentKeyHmac: CryptoKey | null = null) => ({ wk, contentKeyHmac })
+const record = (wk: CryptoKey, contentKeyHmac: CryptoKey | null = FAKE_HMAC) => ({ wk, contentKeyHmac })
 
 beforeEach(() => localStorage.clear())
 afterEach(() => localStorage.clear())
@@ -85,9 +86,9 @@ describe('createSyncResolver — getCek', () => {
     expect(await resolver.getCek(WS)).toBe(FAKE_KEY)
   })
 
-  it('returns null when no key is stored', async () => {
+  it('throws when no key is stored', async () => {
     const { resolver } = build()
-    expect(await resolver.getCek(WS)).toBeNull()
+    await expect(resolver.getCek(WS)).rejects.toBeInstanceOf(WorkspaceKeyUnavailableError)
   })
 
   it('returns null when signed out without touching the store', async () => {
@@ -99,10 +100,10 @@ describe('createSyncResolver — getCek', () => {
     const keyStore = new InMemoryWorkspaceKeyStore()
     await keyStore.put('other-user', WS, record(FAKE_KEY))
     const resolver = createSyncResolver(() => USER, keyStore, readSyncedEncryptionMode)
-    expect(await resolver.getCek(WS)).toBeNull()
+    await expect(resolver.getCek(WS)).rejects.toBeInstanceOf(WorkspaceKeyUnavailableError)
   })
 
-  it('returns null (does not throw) when the key store read fails', async () => {
+  it('throws when the key store read fails', async () => {
     const throwingStore = {
       get: async () => {
         throw new Error('boom')
@@ -112,7 +113,7 @@ describe('createSyncResolver — getCek', () => {
       clearForUser: async () => {},
     }
     const resolver = createSyncResolver(() => USER, throwingStore, readSyncedEncryptionMode)
-    await expect(resolver.getCek(WS)).resolves.toBeNull()
+    await expect(resolver.getCek(WS)).rejects.toBeInstanceOf(WorkspaceKeyUnavailableError)
   })
 })
 
@@ -123,18 +124,18 @@ describe('createSyncResolver — getContentKeyHmac (§10 asset path)', () => {
     expect(await resolver.getContentKeyHmac(WS)).toBe(FAKE_HMAC)
   })
 
-  it('returns null for a LEGACY record (WK present, no K_id) → media fails closed', async () => {
+  it('throws for a LEGACY record (WK present, no K_id), which the entry gate also locks', async () => {
     const { resolver, keyStore } = build()
     await keyStore.put(USER, WS, record(FAKE_KEY, null))
-    // WK still resolves (text works) but K_id is absent (media fail-closed) —
-    // the §10 re-paste migration state.
-    expect(await resolver.getCek(WS)).toBe(FAKE_KEY)
-    expect(await resolver.getContentKeyHmac(WS)).toBeNull()
+    // Text included: a half-usable record would open into broken media, so the
+    // §10 re-paste is asked for instead.
+    await expect(resolver.getCek(WS)).rejects.toBeInstanceOf(WorkspaceKeyUnavailableError)
+    await expect(resolver.getContentKeyHmac(WS)).rejects.toBeInstanceOf(WorkspaceKeyUnavailableError)
   })
 
-  it('returns null when no record is stored', async () => {
+  it('throws when no record is stored', async () => {
     const { resolver } = build()
-    expect(await resolver.getContentKeyHmac(WS)).toBeNull()
+    await expect(resolver.getContentKeyHmac(WS)).rejects.toBeInstanceOf(WorkspaceKeyUnavailableError)
   })
 
   it('returns null when signed out without touching the store', async () => {
@@ -142,7 +143,7 @@ describe('createSyncResolver — getContentKeyHmac (§10 asset path)', () => {
     expect(await resolver.getContentKeyHmac(WS)).toBeNull()
   })
 
-  it('returns null (does not throw) when the key store read fails', async () => {
+  it('throws when the key store read fails', async () => {
     const throwingStore = {
       get: async () => {
         throw new Error('boom')
@@ -152,7 +153,7 @@ describe('createSyncResolver — getContentKeyHmac (§10 asset path)', () => {
       clearForUser: async () => {},
     }
     const resolver = createSyncResolver(() => USER, throwingStore, readSyncedEncryptionMode)
-    await expect(resolver.getContentKeyHmac(WS)).resolves.toBeNull()
+    await expect(resolver.getContentKeyHmac(WS)).rejects.toBeInstanceOf(WorkspaceKeyUnavailableError)
   })
 })
 
