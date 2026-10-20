@@ -1,1 +1,1 @@
-import{LU as e}from"../../../chunks/app-Du_VfHOa.js";export{e as contributorsDataExtension};
+import{LU as e}from"../../../chunks/app-DzqisbR-.js";export{e as contributorsDataExtension};
