@@ -1128,6 +1128,13 @@ const buildRecordingDb = ({
   return {db, executed, ranAnalyze: () => executed.some(s => /^ANALYZE\b/.test(s))}
 }
 
+/** The bootstrap-db shape over a node:sqlite connection, returning rows the way
+ *  PowerSync's `execute` does. */
+const sqliteAdapter = (db: DatabaseSync) => ({
+  execute: async (sql: string) => ({rows: {_array: db.prepare(sql).all()}}),
+  getOptional: async <T,>(sql: string) => (db.prepare(sql).get() ?? null) as T | null,
+})
+
 const statRows = (db: DatabaseSync, tbl: string): Record<string, string> => {
   const present = db.prepare(
     `SELECT 1 FROM sqlite_master WHERE type='table' AND name='sqlite_stat1'`,
@@ -1275,10 +1282,7 @@ describe('runAnalyzeIfStale — arming (stale-stats axis)', () => {
     rmSync(dir, {recursive: true, force: true})
   })
 
-  const adapter = () => ({
-    execute: async (sql: string) => ({rows: {_array: db.prepare(sql).all()}}),
-    getOptional: async <T,>(sql: string) => (db.prepare(sql).get() ?? null) as T | null,
-  })
+  const adapter = () => sqliteAdapter(db)
 
   it('repairs degenerate "0 0" stats', async () => {
     expect(statRows(db, 'blocks')['idx_blocks_workspace_active']).toBe('0 0')
@@ -1343,7 +1347,7 @@ describe('runAnalyzeIfStale — arming (stale-stats axis)', () => {
 })
 
 describe('ANALYZE serialization', () => {
-  // Four schedulers point at these two functions and each statement is
+  // Several schedulers point at these functions and each statement is
   // separately awaited, so overlapping callers interleave. Two concurrent
   // passes are two multi-second parks of this tab's SQLite connection to reach
   // one settled sqlite_stat1.
@@ -1411,36 +1415,23 @@ describe('runAnalyzeTables — growth PRAGMA optimize does not see', () => {
   // was EMPTY when `blocks` was last analyzed, then the table roughly tripled
   // with rows that all land in it.
   let db: DatabaseSync
-  const cols = BLOCK_STORAGE_COLUMNS.map(c => c.name)
   const insertRows = (prefix: string, n: number, fieldForm: 0 | 1) => {
+    const cols = BLOCK_STORAGE_COLUMNS.map(c => c.name)
     const ins = db.prepare(
       `INSERT INTO blocks (${cols.join(',')}, is_field_form) ` +
       `VALUES (${cols.map(() => '?').join(',')}, ${fieldForm})`,
     )
     db.exec('BEGIN')
     for (let i = 0; i < n; i++) {
-      ins.run(...cols.map(c => {
-        if (c === 'id') return `${prefix}-${i}`
-        if (c === 'workspace_id') return 'ws1'
-        // Ten owners, so the field rows' `parent_id` has a real distribution.
-        if (c === 'parent_id') return fieldForm ? `b-${i % 10}` : null
-        if (c === 'order_key') return `a${i}`
-        if (c === 'created_at' || c === 'updated_at') return 1
-        if (c === 'created_by' || c === 'updated_by') return 'u1'
-        if (c === 'deleted') return 0
-        if (c === 'content') return 'x'
-        if (c === 'properties_json') return '{}'
-        if (c === 'references_json') return '[]'
-        return null
-      }) as Array<string | number | null>)
+      // Ten owners, so the field rows' `parent_id` has a real distribution.
+      ins.run(...blockValues({
+        ...defaultBlock, id: `${prefix}-${i}`, order_key: `a${i}`,
+        parent_id: fieldForm ? `b-${i % 10}` : null,
+      }))
     }
     db.exec('COMMIT')
   }
   const rowsPerStat = (idx: string) => statRows(db, 'blocks')[idx]?.split(' ').map(Number)
-  const adapter = () => ({
-    execute: async (sql: string) => ({rows: {_array: db.prepare(sql).all()}}),
-    getOptional: async <T,>(sql: string) => (db.prepare(sql).get() ?? null) as T | null,
-  })
 
   beforeEach(() => {
     db = new DatabaseSync(':memory:')
@@ -1457,21 +1448,39 @@ describe('runAnalyzeTables — growth PRAGMA optimize does not see', () => {
   it('re-records the grown table and the index that was empty, exactly', async () => {
     // The premise, asserted so a SQLite that starts catching this shows up
     // here rather than as a pass nobody needs.
-    await runAnalyzeIfStale(adapter())
+    await runAnalyzeIfStale(sqliteAdapter(db))
     expect(rowsPerStat('idx_blocks_field_form')?.[0]).toBe(0)
 
     // Left standing on the connection, as the agent bridge can.
     db.exec('PRAGMA analysis_limit=400')
-    await runAnalyzeTables(adapter(), ['blocks'])
+    await runAnalyzeTables(sqliteAdapter(db), ['blocks'])
 
     expect(rowsPerStat('idx_blocks_field_form')).toEqual([5000, 5000, 500, 500])
+    expect(rowsPerStat('idx_blocks_workspace_active')).toEqual([7500, 7500])
+  })
+
+  it('stays unbounded when a limit lands between two statements of one pass', async () => {
+    // The bridge runs SQL on this connection outside the ANALYZE chain, so a
+    // limit can arrive mid-pass; one reset at the top of the pass would let the
+    // second statement sample.
+    const inner = sqliteAdapter(db)
+    const interleaving = {
+      ...inner,
+      execute: async (sql: string) => {
+        const result = await inner.execute(sql)
+        if (sql.startsWith('ANALYZE')) db.exec('PRAGMA analysis_limit=400')
+        return result
+      },
+    }
+    await runAnalyzeTables(interleaving, ['blocks', 'blocks'])
+
     expect(rowsPerStat('idx_blocks_workspace_active')).toEqual([7500, 7500])
   })
 
   it('moves the schema cookie, so already-open readers re-plan', async () => {
     const cookie = () => (db.prepare('PRAGMA schema_version').get() as {schema_version: number}).schema_version
     const before = cookie()
-    await runAnalyzeTables(adapter(), ['blocks'])
+    await runAnalyzeTables(sqliteAdapter(db), ['blocks'])
     expect(cookie()).toBeGreaterThan(before)
   })
 })

@@ -32,6 +32,7 @@ import {
   markStartup,
   markStartupAt,
   onLongTask,
+  type DbFileBytes,
   type StartupTimeline,
 } from '@/utils/startupTimeline.js'
 
@@ -60,7 +61,7 @@ export interface StartupRecordData {
   clientSchemaAppliedMs?: number
   localSchemaAppliedMs?: number
   /** Database file sizes before the open, keyed `main` / sidecar suffix. */
-  dbFileBytes?: Readonly<Record<string, number | null>>
+  dbFileBytes?: DbFileBytes
   repoReadyMs?: number
   workspaceResolvedMs?: number
   bootstrapDoneMs?: number

@@ -34,9 +34,7 @@ import { ActionConfig, ActionContextTypes } from '@/shortcuts/types.js'
 import { openDialog } from '@/utils/dialogs.js'
 import { dismissToast, showInfo } from '@/utils/toast.js'
 import { reportMigrationProgress, type MigrationProgress } from './progressReport.ts'
-import { runAnalyzeTables } from '@/data/maintenance'
-import { installedAnalyzeTableNames } from '@/data/localSchema.js'
-import { CATCHUP_DEEP_IDLE, scheduleDeepIdle } from '@/utils/scheduleIdle.js'
+import { runAnalyzeInstalledTables } from '@/data/maintenance'
 import {
   ConfirmMigrationDialog, type NamedPropertyKeys,
 } from './ConfirmMigrationDialog.tsx'
@@ -395,17 +393,27 @@ interface ClaimedMigration {
   readonly banner: MigrationProgress
 }
 
-/** Re-record planner stats for what the pass grew. On a large graph it about
- *  triples `blocks` and `block_references` and fills the field-form indexes from
- *  empty — growth `PRAGMA optimize` does not react to, so the boot check would
- *  leave the pre-migration stats in place. Deep idle, like the importer's
- *  check: a full scan of the largest tables parks the writer for seconds. */
-const scheduleMigrationAnalyze = (repo: Repo): void => {
-  scheduleDeepIdle(() => {
-    void runAnalyzeTables(repo.db, installedAnalyzeTableNames()).catch(error => {
+/** Runs the pass, then re-records planner stats for the tables it grows, on
+ *  every ending and BEFORE the caller reports one. The boot check never repairs
+ *  this growth (see `runAnalyzeTables`), so a refresh deferred past the report
+ *  is one a reload can lose for good. A run that wrote nothing still refreshes:
+ *  it may be finishing one that died before its own refresh.
+ *
+ *  A failed refresh only warns — it must not turn the run's outcome into a
+ *  different one. */
+const runPassThenRefreshStats = async (
+  pass: OperatorBackfillPass,
+  repo: Repo,
+  banner: MigrationProgress,
+): Promise<OperatorBackfillResult> => {
+  try {
+    return await pass.run()
+  } finally {
+    banner.update('Refreshing query statistics…')
+    await runAnalyzeInstalledTables(repo.db).catch(error => {
       console.warn('[properties-migration] ANALYZE after the pass failed:', error)
     })
-  }, CATCHUP_DEEP_IDLE)
+  }
 }
 
 /** What the gesture WRITES, plus the report that follows it — everything that
@@ -636,7 +644,7 @@ const migrateUnderClaim = async (
     )
   })
   try {
-    const result = await pass.run()
+    const result = await runPassThenRefreshStats(pass, repo, banner)
     const {message, failed, followUp} = describeOutcome(
       result,
       {blocksMaterializedTotal, valuesMaterializedTotal, unmigrated,
@@ -680,8 +688,6 @@ const migrateUnderClaim = async (
       undoNote(undoCleared))
   } finally {
     unsubscribe()
-    // On every ending, a throw included: whatever committed grew the tables.
-    if (valuesMaterializedTotal > 0) scheduleMigrationAnalyze(repo)
   }
 }
 

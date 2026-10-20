@@ -15,7 +15,6 @@ import { syncedWriteTarget } from '@/data/syncedTableWriteGuard'
 import { POWERSYNC_STUB_TABLES_SQL } from '@/data/test/powerSyncStubTables'
 import { staticDataExtensions } from '@/extensions/staticDataExtensions.js'
 import {
-  resolveAnalyzeArmingProbes,
   resolveAnalyzeTables,
   resolveLocalSchemaContributions,
 } from './localSchema.ts'
@@ -26,9 +25,9 @@ import {
 // drift axis until some join order inverts. So the whole resolved set — core
 // plus every installed contribution — is checked against a real schema here
 // rather than by eye at each declaration.
-describe('resolveAnalyzeArmingProbes', () => {
+describe('resolveAnalyzeTables', () => {
   const contributions = resolveLocalSchemaContributions(staticDataExtensions)
-  const probes = resolveAnalyzeArmingProbes(contributions)
+  const probes = resolveAnalyzeTables(contributions).map(table => table.probe)
   let db: DatabaseSync
 
   beforeAll(() => {
@@ -84,7 +83,7 @@ describe('resolveAnalyzeArmingProbes', () => {
   })
 
   it('carries the core probes as well as the contributed ones', () => {
-    // `resolveAnalyzeArmingProbes` is the only caller-facing composition point;
+    // `resolveAnalyzeTables` is the only caller-facing composition point;
     // a bug that returned contributions ALONE would still pass the plan check
     // above for every table a plugin happens to own.
     expect(probes).toEqual(expect.arrayContaining([...ANALYZE_ARMING_PROBES]))

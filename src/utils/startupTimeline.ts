@@ -28,7 +28,7 @@ import { CallbackSet } from './callbackSet'
  *  usable" (time to interactivity). */
 export type StartupPhase =
   | 'dbRequested'         // boot asked for the local DB; earlier is page load
-  | 'dbPrepared'          // VFS chosen + on-disk handoff done; nothing opened yet
+  | 'dbPrepared'          // VFS chosen + on-disk handoff done; app connection not open yet
   | 'dbOpened'            // PowerSync `init()`: VFS open + PowerSync's own schema
   | 'clientSchemaApplied' // our tables, indexes, column migrations, triggers
   | 'localSchemaApplied'  // one-shot side-index backfills + plugin local schema
@@ -49,12 +49,22 @@ export interface StartupTimeline {
   readonly marks: Readonly<Partial<Record<StartupPhase, number>>>
   /** Sizes of the local database's files as boot found them, before anything
    *  opened them — see {@link recordStartupDbFiles}. Absent when boot never got
-   *  that far or the sizes could not be read. */
-  readonly dbFileBytes?: Readonly<Record<string, number | null>>
+   *  that far. */
+  readonly dbFileBytes?: DbFileBytes
 }
 
+/** Bytes per database file, keyed `main` plus each write-ahead sidecar suffix;
+ *  `null` = missing or unreadable. */
+export type DbFileBytes = Readonly<Record<string, number | null>>
+
+/** The phases one attempt to open the local database stamps — what
+ *  {@link discardDbOpenTimeline} forgets when that attempt fails. */
+const DB_OPEN_PHASES: readonly StartupPhase[] = [
+  'dbRequested', 'dbPrepared', 'dbOpened', 'clientSchemaApplied', 'localSchemaApplied',
+]
+
 const marks: Partial<Record<StartupPhase, number>> = {}
-let dbFileBytes: Readonly<Record<string, number | null>> | undefined
+let dbFileBytes: DbFileBytes | undefined
 
 const nowMs = (): number =>
   typeof performance !== 'undefined' ? performance.now() : 0
@@ -80,12 +90,19 @@ export const markStartupAt = (phase: StartupPhase, ms: number): void => {
 export const hasStartupMark = (phase: StartupPhase): boolean =>
   marks[phase] !== undefined
 
-/** Record the database file sizes boot found, keyed by file (`main` plus each
- *  write-ahead sidecar suffix; `null` = no such file). A large sidecar is a log
- *  the open has to replay, which is the first suspect for a slow `dbOpened`.
- *  First write wins, like the marks. */
-export const recordStartupDbFiles = (bytes: Readonly<Record<string, number | null>>): void => {
+/** Record the database file sizes boot found. A large sidecar is a log the open
+ *  has to replay, which is the first suspect for a slow `dbOpened`. First write
+ *  wins, like the marks. */
+export const recordStartupDbFiles = (bytes: DbFileBytes): void => {
   dbFileBytes ??= Object.freeze({ ...bytes })
+}
+
+/** Forget a failed open's marks and file sizes. First-write-wins would
+ *  otherwise hand them to the next attempt in this page — which, after a
+ *  sign-out from the error screen, can be another user's boot. */
+export const discardDbOpenTimeline = (): void => {
+  for (const phase of DB_OPEN_PHASES) delete marks[phase]
+  dbFileBytes = undefined
 }
 
 /** Frozen snapshot of the timeline so far. */

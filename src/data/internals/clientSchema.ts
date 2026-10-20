@@ -1644,11 +1644,11 @@ const readOptimizeRows = (result: unknown): string[] | null => {
     .filter((sql): sql is string => typeof sql === 'string')
 }
 
-/** Serializes the two ANALYZE entry points against each other and against
+/** Serializes the ANALYZE entry points against each other and against
  *  themselves.
  *
- *  Four schedulers point at them (repoProvider's boot and first-sync checks, the
- *  Roam importer, the manual command) and the boot/first-sync pair has
+ *  Several schedulers point at them (repoProvider's boot and first-sync checks,
+ *  the bulk writers, the manual command) and the boot/first-sync pair has
  *  overlapped before. Two concurrent passes are two multi-second parks of this
  *  tab's SQLite connection to reach one settled `sqlite_stat1`.
  *
@@ -1692,7 +1692,7 @@ const serializeAnalyze = <T>(run: () => Promise<T>): Promise<T> => {
  *  pause for an unbounded stretch of bad plans.
  *
  *  `probes` defaults to the CORE tables. A caller that can reach the local-schema
- *  contributions should pass `resolveAnalyzeArmingProbes` of them instead, so
+ *  contributions should pass `installedAnalyzeArmingProbes()` instead, so
  *  plugin-owned tables are armed too; the default is what a bootstrap-time
  *  caller with no runtime yet gets.
  *
@@ -1752,8 +1752,8 @@ const analyzeUnbounded = async (
  *  that tripled keeps its old count, and an index that was EMPTY when last
  *  analyzed keeps its `0 0` row and reads as empty however full it is.
  *
- *  A full scan of each table holding the single SQLite worker: schedule it off
- *  the render path. */
+ *  A full scan of each table on the writer (the only connection on CoopSync):
+ *  keep it off the render path. */
 export const runAnalyzeTables = async (
   db: ClientSchemaBootstrapDb,
   tables: readonly string[],

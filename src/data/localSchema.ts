@@ -23,17 +23,11 @@ export const resolveAnalyzeTables = (
   ...contributions.flatMap(c => c.analyzeTables ?? []),
 ]
 
-/** The probes of {@link resolveAnalyzeTables}, for `runAnalyzeIfStale`. Every
- *  caller that can reach the contributions should go through here: a plugin
- *  table left out is simply never re-analyzed on the drift axis, which is
- *  invisible until a join order inverts. */
-export const resolveAnalyzeArmingProbes = (
-  contributions: readonly LocalSchemaContribution[],
-): readonly string[] => resolveAnalyzeTables(contributions).map(table => table.probe)
-
 let installedTables: readonly LocalSchemaAnalyzeTable[] = CORE_ANALYZE_TABLES
 
-/** The arming probes for the local schema actually INSTALLED in this process.
+/** The arming probes for the local schema actually INSTALLED in this process,
+ *  for `runAnalyzeIfStale`. A plugin table left out is simply never re-analyzed
+ *  on the drift axis, which is invisible until a join order inverts.
  *
  *  Module state because it is a process-level fact — one database, one installed
  *  schema — and because deriving it twice is how it goes wrong. The tempting
@@ -49,8 +43,8 @@ let installedTables: readonly LocalSchemaAnalyzeTable[] = CORE_ANALYZE_TABLES
 export const installedAnalyzeArmingProbes = (): readonly string[] =>
   installedTables.map(table => table.probe)
 
-/** The same installed tables by name, for `runAnalyzeTables` after a bulk write
- *  that grew them. Same source, and the same reason not to read the runtime. */
+/** The same installed tables by name, for `runAnalyzeInstalledTables`. Same
+ *  source, and the same reason not to read the runtime. */
 export const installedAnalyzeTableNames = (): readonly string[] =>
   installedTables.map(table => table.name)
 

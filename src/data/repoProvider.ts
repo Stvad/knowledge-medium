@@ -78,7 +78,11 @@ import {
 import { runAnalyzeIfStale } from '@/data/maintenance'
 import { onFirstSync } from '@/data/internals/firstSync.js'
 import { CATCHUP_DEEP_IDLE, scheduleDeepIdle } from '@/utils/scheduleIdle.js'
-import { markStartup, recordStartupDbFiles } from '@/utils/startupTimeline.js'
+import {
+  discardDbOpenTimeline,
+  markStartup,
+  recordStartupDbFiles,
+} from '@/utils/startupTimeline.js'
 import { toLocalDbOpenError } from '@/utils/localDbCorruption.js'
 import {
   captureDbOpenCorruption,
@@ -313,8 +317,17 @@ export const closePowerSyncDbIfOpen = async (userId: string): Promise<void> => {
 export const ensurePowerSyncReady = async (
   userId: string,
   useRemoteSync: boolean = hasRemoteSyncConfig,
-) => {
+): Promise<void> => {
   markStartup('dbRequested')
+  try {
+    await openLocalDb(userId, useRemoteSync)
+  } catch (error) {
+    discardDbOpenTimeline()
+    throw error
+  }
+}
+
+const openLocalDb = async (userId: string, useRemoteSync: boolean): Promise<void> => {
   await assertOpfsAvailable()
 
   const dbFilename = dbFilenameForUser(userId)

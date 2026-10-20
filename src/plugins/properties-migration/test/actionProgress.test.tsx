@@ -6,7 +6,7 @@
  * that file-wide would make that file's "refuses before the scan" assertion
  * vacuous (the scan it must not run is a call into the same module).
  */
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { PropertyCellBackfillProgress } from '@/data/internals/propertyCellBackfill'
 
 const openDialog = vi.fn(async () => true)
@@ -35,6 +35,18 @@ vi.mock('@/data/workspaces', () => ({
   flipWorkspaceToChildBackedProperties: async () => ({localApplied: true}),
 }))
 vi.mock('@/data/repoProvider', () => ({isRemoteSyncActive: () => true}))
+/** Everything the gesture reports and refreshes, in order. The refresh is
+ *  logged when it FINISHES, a macrotask later, so one left un-awaited lands
+ *  after the report. */
+const steps: string[] = []
+const refreshFinishing = async () => {
+  await new Promise(resolve => setTimeout(resolve, 0))
+  steps.push('analyze')
+}
+const runAnalyzeInstalledTables = vi.fn(refreshFinishing)
+vi.mock('@/data/maintenance', () => ({
+  runAnalyzeInstalledTables: () => runAnalyzeInstalledTables(),
+}))
 // The synthesis half has its own file; here it must simply not refuse, so the
 // gesture reaches the pass.
 vi.mock('@/data/internals/propertyDefinitionSynthesis', () => ({
@@ -86,7 +98,7 @@ let runHasHappened = false
 const runReporting = async (
   reported: PropertyCellBackfillProgress,
   outcome: {outcome: 'ran' | 'deferred'; undoHistoryCleared: boolean; reason?: string;
-            retryable?: boolean} = {outcome: 'ran', undoHistoryCleared: false},
+            retryable?: boolean} | Error = {outcome: 'ran', undoHistoryCleared: false},
 ) => {
   const repo = {
     activeWorkspaceId: 'ws-1',
@@ -116,6 +128,7 @@ const runReporting = async (
     withOperatorBackfillClaim: claimStub(async () => {
       emit?.(reported)
       runHasHappened = true
+      if (outcome instanceof Error) throw outcome
       return outcome
     }),
   } as unknown as Repo
@@ -157,6 +170,9 @@ afterEach(() => {
   emit = null
   claimHeldAfterRun = false
   runHasHappened = false
+  steps.length = 0
+  runAnalyzeInstalledTables.mockReset()
+  runAnalyzeInstalledTables.mockImplementation(refreshFinishing)
 })
 
 describe('the migration progress path', () => {
@@ -301,5 +317,42 @@ describe('the migration progress path', () => {
 
     expect(progressHandle.done).toHaveBeenCalledWith(expect.stringMatching(/on 12 blocks/))
     expect(progressHandle.done).toHaveBeenCalledWith(expect.not.stringMatching(/900/))
+  })
+})
+
+describe('planner stats after the pass', () => {
+  beforeEach(() => {
+    progressHandle.done.mockImplementation(() => { steps.push('done') })
+    progressHandle.fail.mockImplementation(() => { steps.push('fail') })
+  })
+
+  it('refreshes them before reporting the run, so a reload after the report cannot lose it', async () => {
+    await runReporting(progress())
+
+    expect(steps).toEqual(['analyze', 'done'])
+  })
+
+  it('refreshes them after a run that wrote nothing, which may finish one that died first', async () => {
+    await runReporting(progress({
+      blocksMaterialized: 0, blocksMaterializedTotal: 0,
+      valuesMaterialized: 0, valuesMaterializedTotal: 0,
+    }))
+
+    expect(steps).toEqual(['analyze', 'done'])
+  })
+
+  it('refreshes them when the pass throws partway, before reporting the failure', async () => {
+    await runReporting(progress(), new Error('claim write failed'))
+
+    expect(steps).toEqual(['analyze', 'fail'])
+  })
+
+  it('keeps the run\'s outcome when the refresh itself fails', async () => {
+    runAnalyzeInstalledTables.mockRejectedValue(new Error('database is locked'))
+
+    await runReporting(progress())
+
+    expect(progressHandle.done).toHaveBeenCalled()
+    expect(progressHandle.fail).not.toHaveBeenCalled()
   })
 })
