@@ -1,0 +1,1 @@
+import{ek as e,tk as t}from"../../../chunks/app-CAQ6WP6g.js";export{e as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,t as openExtensionsSettingsAction};

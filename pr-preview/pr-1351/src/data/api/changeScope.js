@@ -1,0 +1,1 @@
+import{Aet as e,Cet as t,Det as n,Eet as r,Oet as i,Set as a,Tet as o,ket as s,wet as c}from"../../../chunks/app-CAQ6WP6g.js";export{a as CHANGE_SCOPE_POLICIES,t as ChangeScope,c as isChangeScope,o as policyForScope,r as scopeAllowedInReadOnly,n as scopeIsUndoable,i as scopePoliciesEquivalent,s as scopeUploadsToServer,e as sourceForScope};
