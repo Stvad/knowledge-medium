@@ -1,1 +1,1 @@
-import{HD as e,UD as t}from"../../chunks/app-CpM_1VKb.js";export{e as exampleExtensions,t as insertExampleExtensionsUnder};
+import{UD as e,WD as t}from"../../chunks/app-yho3hjkU.js";export{e as exampleExtensions,t as insertExampleExtensionsUnder};

@@ -1,1 +1,1 @@
-import{Mi as e}from"../../../chunks/app-CpM_1VKb.js";export{e as propertiesMigrationPlugin};
+import{Ni as e}from"../../../chunks/app-yho3hjkU.js";export{e as propertiesMigrationPlugin};

@@ -1,1 +1,1 @@
-import{IP as e}from"../../../chunks/app-CpM_1VKb.js";export{e as AddPropertyForm};
+import{LP as e}from"../../../chunks/app-yho3hjkU.js";export{e as AddPropertyForm};

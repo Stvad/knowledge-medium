@@ -1,1 +1,1 @@
-import{eA as e}from"../../chunks/app-CpM_1VKb.js";export{e as LazyBlockComponent};
+import{tA as e}from"../../chunks/app-yho3hjkU.js";export{e as LazyBlockComponent};

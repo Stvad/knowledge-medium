@@ -1,1 +1,1 @@
-import{wp as e}from"../../../chunks/app-CpM_1VKb.js";export{e as backlinksViewPlugin};
+import{Tp as e}from"../../../chunks/app-yho3hjkU.js";export{e as backlinksViewPlugin};
