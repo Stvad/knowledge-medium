@@ -1,1 +1,1 @@
-import{GD as e,KD as t}from"../../chunks/app-CtadhJ8y.js";export{e as resolveStructuralEditPolicy,t as structuralEditPolicyForBlock};
+import{JD as e,qD as t}from"../../chunks/app-Bp8Udi7e.js";export{t as resolveStructuralEditPolicy,e as structuralEditPolicyForBlock};

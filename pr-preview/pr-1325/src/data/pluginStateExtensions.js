@@ -1,1 +1,1 @@
-import{AU as e,jU as t}from"../../chunks/app-CtadhJ8y.js";export{e as pluginPrefsExtension,t as pluginUIStateExtension};
+import{MU as e,NU as t}from"../../chunks/app-Bp8Udi7e.js";export{e as pluginPrefsExtension,t as pluginUIStateExtension};

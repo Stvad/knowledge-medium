@@ -1,1 +1,1 @@
-import{hC as e}from"../../chunks/app-CtadhJ8y.js";export{e as BlockCrumbs};
+import{_C as e}from"../../chunks/app-Bp8Udi7e.js";export{e as BlockCrumbs};

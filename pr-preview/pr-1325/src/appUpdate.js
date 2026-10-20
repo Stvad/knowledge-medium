@@ -1,1 +1,1 @@
-import{GO as e,WO as t}from"../chunks/app-CtadhJ8y.js";export{t as appUpdate,e as useAppUpdateAvailable};
+import{KO as e,qO as t}from"../chunks/app-Bp8Udi7e.js";export{e as appUpdate,t as useAppUpdateAvailable};
