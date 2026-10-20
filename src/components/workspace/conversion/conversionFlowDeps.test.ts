@@ -14,6 +14,7 @@ const h = vi.hoisted(() => {
   const io: ConversionAttachmentsIO = {
     listObjects: stalled,
     readObject: stalled,
+    uploadLimit: stalled,
     writeObject: stalled,
     deleteObject: stalled,
     mediaBlocks: stalled,

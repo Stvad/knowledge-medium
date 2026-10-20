@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { ChangeScope } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
@@ -234,51 +234,49 @@ describe('listWorkspaceObjects', () => {
   })
 })
 
-describe('createAttachmentCleanerIO writeObject', () => {
+describe('createAttachmentCleanerIO uploadLimit', () => {
   /** A client whose `attachments` bucket has `limit`, or none to read. */
-  const clientWithBucket = (limit: number | null | Error) =>
-    ({
+  const clientWithBucket = (limit: number | null | Error) => {
+    const reads: string[] = []
+    const client = {
       storage: {
-        getBucket: async (id: string) =>
-          limit instanceof Error || id !== ATTACHMENTS_BUCKET
+        getBucket: async (id: string) => {
+          reads.push(id)
+          return limit instanceof Error || id !== ATTACHMENTS_BUCKET
             ? {data: null, error: limit instanceof Error ? limit : new Error('Bucket not found')}
-            : {data: {id, file_size_limit: limit}, error: null},
+            : {data: {id, file_size_limit: limit}, error: null}
+        },
       },
-    }) as unknown as SupabaseClient
-  const ioOver = (client: SupabaseClient) => {
-    const put = vi.fn<BlobStore['put']>(async () => 'written')
-    const io = createAttachmentCleanerIO({
+    } as unknown as SupabaseClient
+    return {client, reads}
+  }
+  const ioOver = (client: SupabaseClient, isRemoteSyncActive = () => true) =>
+    createAttachmentCleanerIO({
       client,
-      blobStore: {put} as unknown as BlobStore,
+      blobStore: {} as BlobStore,
       byteStore: new InMemoryByteStore(),
       uploadStore: new InMemoryByteUploadStore(),
       repo: {} as Repo,
       userId: 'user-1',
       workspaceId: WS,
-      isRemoteSyncActive: () => true,
+      isRemoteSyncActive,
     })
-    return {io, put}
-  }
-  const ofSize = (n: number) => new Uint8Array(n) as Uint8Array<ArrayBuffer>
 
-  it("refuses a body over the bucket's limit as a 413 without sending it, and sends one at the limit", async () => {
-    const {io, put} = ioOver(clientWithBucket(10))
-    expect(await io.writeObject('over', ofSize(11))).toEqual({kind: 'refused', status: 413})
-    expect(put).not.toHaveBeenCalled()
-    expect(await io.writeObject('at', ofSize(10))).toEqual({kind: 'written'})
-    expect(put).toHaveBeenCalledWith(WS, 'at', ofSize(10))
+  it("reads the attachments bucket's limit, or null when it has none of its own", async () => {
+    expect(await ioOver(clientWithBucket(10).client).uploadLimit()).toBe(10)
+    expect(await ioOver(clientWithBucket(null).client).uploadLimit()).toBeNull()
   })
 
-  it('leaves the size to Storage when the bucket has no limit of its own', async () => {
-    const {io, put} = ioOver(clientWithBucket(null))
-    expect(await io.writeObject('any', ofSize(11))).toEqual({kind: 'written'})
-    expect(put).toHaveBeenCalledOnce()
+  it('refuses while remote sync is off, before asking Storage', async () => {
+    const {client, reads} = clientWithBucket(10)
+    await expect(ioOver(client, () => false).uploadLimit()).rejects.toThrow(/remote sync/)
+    expect(reads).toEqual([])
   })
 
-  it("throws, sending nothing, when the bucket's limit can't be read", async () => {
-    const {io, put} = ioOver(clientWithBucket(new Error('Bucket not found')))
-    await expect(io.writeObject('any', ofSize(1))).rejects.toThrow(/upload limit.*Bucket not found/)
-    expect(put).not.toHaveBeenCalled()
+  it("throws, naming why, when the bucket's limit can't be read", async () => {
+    await expect(ioOver(clientWithBucket(new Error('Bucket not found')).client).uploadLimit()).rejects.toThrow(
+      /upload limit.*Bucket not found/,
+    )
   })
 })
 

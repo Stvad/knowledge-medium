@@ -51,6 +51,11 @@ export interface AttachmentCleanerIO {
   listObjects(signal?: AbortSignal): Promise<readonly ObjectPath[]>
   /** The object's bytes, or null when it is absent. */
   readObject(path: ObjectPath): Promise<Uint8Array<ArrayBuffer> | null>
+  /** The largest object, in bytes, an upload may carry, or null where no limit
+   *  is readable. The cleaner refuses a larger one as a 413 without sending
+   *  it: Storage can close the connection before its own 413 is read. A limit
+   *  the client can't read still refuses through `writeObject`. */
+  uploadLimit(): Promise<number | null>
   /** Upload without overwriting: `exists` when the name is occupied. The
    *  cleaner only ever writes a sealed object at its keyed name, so one that
    *  lands late is harmless: the first write wins, and what is there is verified. */
@@ -173,8 +178,8 @@ export interface CleanerReport {
   /** Raw objects sealed, uploaded, verified and then deleted, and gone from
    *  the final listing. */
   readonly converted: readonly ObjectPath[]
-  /** Sealed uploads refused for good, by Storage or, over a limit the adapter
-   *  can read, before sending: a raw object, still in place, or a media
+  /** Sealed uploads refused for good, by Storage or, over the IO's
+   *  `uploadLimit`, before sending: a raw object, still in place, or a media
    *  block's keyed copy that could not be rebuilt. For a 413 the remedy is to
    *  raise the project-wide upload limit, and the bucket's own limit if it is
    *  lower, to at least `sealedBytes`, then run again. */
@@ -282,7 +287,12 @@ export const cleanAttachments = async (input: CleanAttachmentsInput): Promise<Cl
   /** Every write and delete this run makes, so the proof can tell whether the
    *  folder changed after the listing it judged. */
   let changes = 0
-  const writeStored = (path: ObjectPath, bytes: Uint8Array<ArrayBuffer>) => {
+  /** Read on the run's first write, and again after a read that failed: a
+   *  limit raised after a refusal applies to the next run. */
+  let uploadLimit: number | null | undefined
+  const writeStored = async (path: ObjectPath, bytes: Uint8Array<ArrayBuffer>): Promise<ObjectWrite> => {
+    if (uploadLimit === undefined) uploadLimit = await io.uploadLimit()
+    if (uploadLimit !== null && bytes.length > uploadLimit) return {kind: 'refused', status: 413}
     changes++
     return io.writeObject(path, bytes)
   }
