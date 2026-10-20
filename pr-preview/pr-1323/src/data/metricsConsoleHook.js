@@ -1,1 +1,1 @@
-import{dE as e}from"../../chunks/app-DnOoLrnB.js";export{e as ensureMetricsConsoleHook};
+import{dE as e}from"../../chunks/app-F29I3lEh.js";export{e as ensureMetricsConsoleHook};

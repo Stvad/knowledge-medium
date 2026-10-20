@@ -1,1 +1,1 @@
-import{Lg as e,Rg as t,zg as n}from"../../../chunks/app-DnOoLrnB.js";export{e as VideoNotesLayout,t as VideoNotesRenderer,n as videoNotesLayoutContribution};
+import{Lg as e,Rg as t,zg as n}from"../../../chunks/app-F29I3lEh.js";export{e as VideoNotesLayout,t as VideoNotesRenderer,n as videoNotesLayoutContribution};

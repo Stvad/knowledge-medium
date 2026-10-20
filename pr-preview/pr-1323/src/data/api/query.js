@@ -1,1 +1,1 @@
-import{D8 as e}from"../../../chunks/app-DnOoLrnB.js";export{e as defineQuery};
+import{D8 as e}from"../../../chunks/app-F29I3lEh.js";export{e as defineQuery};
