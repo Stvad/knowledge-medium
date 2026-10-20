@@ -12,6 +12,7 @@ const h = vi.hoisted(() => ({
   read: null as unknown as WorkspaceConversionRead,
   record: null as {wk: CryptoKey; contentKeyHmac: CryptoKey | null} | null,
   clean: vi.fn(),
+  readObject: vi.fn(),
 }))
 vi.mock('@/data/workspaceConversion.js', () => ({
   fetchWorkspaceConversionState: async () => {
@@ -26,6 +27,7 @@ vi.mock('@/sync/keys/keyStore.js', async orig => ({
 vi.mock('@/services/supabase.js', () => ({supabase: {}}))
 vi.mock('./assetUpload.js', () => ({getBlobStore: () => ({})}))
 vi.mock('@/data/repoProvider.js', () => ({isRemoteSyncActive: () => h.remote}))
+vi.mock('./cleanerIO.js', () => ({cleanerIOFor: () => ({kind: 'ready', io: {readObject: h.readObject}})}))
 vi.mock('@/sync/conversion/attachmentCleaner.js', async orig => ({
   ...(await orig<typeof import('@/sync/conversion/attachmentCleaner.js')>()),
   cleanAttachments: h.clean,
@@ -63,6 +65,7 @@ beforeEach(() => {
   h.read = e2ee()
   h.record = {wk: key, contentKeyHmac: key}
   h.clean.mockReset()
+  h.readObject.mockReset()
 })
 afterEach(cleanup)
 
@@ -117,6 +120,25 @@ describe('prepareCleanup, inside the lock', () => {
     await run(() => {}, new AbortController().signal)
     expect(h.clean).toHaveBeenCalledTimes(1)
     expect(h.clean).toHaveBeenCalledWith(expect.objectContaining({canary: 'enc:v1:a-new-canary'}))
+  })
+})
+
+describe('prepareCleanup, stopped', () => {
+  it("ends the pass's stalled Storage calls", async () => {
+    h.readObject.mockReturnValue(new Promise(() => {}))
+    h.clean.mockImplementation(({io}: {io: {readObject: (path: string) => Promise<unknown>}}) => io.readObject('ws/a'))
+    const run = await prepareCleanup(repo, WS)
+    if (typeof run === 'string') throw new Error(run)
+    const stop = new AbortController()
+
+    const running = run(() => {}, stop.signal)
+    let settled = false
+    void running.catch(() => {}).finally(() => { settled = true })
+    await vi.waitFor(() => expect(h.readObject).toHaveBeenCalled())
+    stop.abort(new DOMException('stopped', 'AbortError'))
+
+    await vi.waitFor(() => expect(settled).toBe(true))
+    await expect(running).rejects.toThrow('stopped')
   })
 })
 

@@ -13,7 +13,6 @@
 import { encodedSize, fitsObjectLimit, MAX_OBJECT_BYTES } from '../../byteTransform.js'
 import { CONTENT_HASH_PREFIX, isContentHash, verifyContentHash } from '../../crypto/contentHash.js'
 import { abortableSleep } from '@/utils/abortableSleep.js'
-import { untilStopped } from '@/utils/untilStopped.js'
 import { isAddressable, type ObjectPath, type UnrecoverableMedia } from '../attachmentCleaner.js'
 import type { ConversionAttachmentsIO } from '../conversionAttachments.js'
 import { sha256Hex, stoppableFolder, writeBytesPart, type BundleFolder } from './bundleParts.js'
@@ -97,7 +96,7 @@ const readObject = async (
   for (let attempt = 1; ; attempt++) {
     signal?.throwIfAborted()
     try {
-      return await untilStopped(source.readObject(path), signal)
+      return await source.readObject(path)
     } catch (error) {
       if (attempt >= READ_ATTEMPTS) throw error
       await sleep(READ_RETRY_MS * attempt, signal)

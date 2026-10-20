@@ -21,6 +21,7 @@ import {
 import type { WorkspaceObjectKeys } from '@/sync/crypto/contentKey.js'
 import { getWorkspaceKeyStore, objectKeysOf } from '@/sync/keys/keyStore.js'
 import { openDialog } from '@/utils/dialogs.js'
+import { stoppable } from '@/utils/untilStopped.js'
 import { showError } from '@/utils/toast.js'
 import { cleanerIOFor } from './cleanerIO.js'
 import { CleanupAttachmentsDialog } from './CleanupAttachmentsDialog.js'
@@ -69,7 +70,7 @@ export const prepareCleanup = async (repo: Repo, workspaceId: string): Promise<C
     const ran = await runSingleOwner(attachmentCleanerLockName(userId, workspaceId), async () => {
       const context = await readCleanupContext(userId, workspaceId)
       if (typeof context === 'string') throw new Error(context)
-      report = await cleanAttachments({workspaceId, io: io.io, ...context, bundle: null, signal, onProgress})
+      report = await cleanAttachments({workspaceId, io: stoppable(io.io, signal), ...context, bundle: null, signal, onProgress})
     })
     return ran && report ? report : 'busy'
   }

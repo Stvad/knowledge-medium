@@ -22,7 +22,7 @@ import { abortableSleep } from '@/utils/abortableSleep'
 import { exportRawSqliteDbToFile, localDbFileBytes } from '@/utils/exportSqliteDb'
 import { queryDirectoryPermission, supportsDirectoryPicker } from '@/utils/fileSystemAccess'
 import { holdScreenWakeLock } from '@/utils/screenWakeLock'
-import { untilStopped } from '@/utils/untilStopped'
+import { stoppable, untilStopped } from '@/utils/untilStopped'
 
 /** UI-state and preference writes upload continuously, so a queue that is
  *  momentarily non-empty gets this long to drain before it counts. */
@@ -101,6 +101,10 @@ export const conversionSetup = async (repo: Repo, workspaceId: string, localOnly
   }
 }
 
+/** Every dependency that waits on the network is bound to the run's `signal`
+ *  here, so Stop reaches each call: the server's requests abort, the rest race
+ *  it. The bundle folder, which the user picks mid-run, is bound where it's
+ *  used (`stoppableFolder`). */
 const conversionFlowDeps = ({repo, workspaceId, client, lock, attachments, ui, signal}: {
   repo: Repo
   workspaceId: string
@@ -113,14 +117,14 @@ const conversionFlowDeps = ({repo, workspaceId, client, lock, attachments, ui, s
   userId: repo.user.id,
   workspaceId,
   server: createSupabaseConversionServer(client, signal),
-  fetchConversionState: () => fetchWorkspaceConversionState(workspaceId),
+  fetchConversionState: () => untilStopped(fetchWorkspaceConversionState(workspaceId), signal),
   keyStore: getWorkspaceKeyStore(),
   flipAttempts: localFlipAttempts(repo.user.id, workspaceId),
   lock,
   preflight: preflightEnvironment(repo),
   markLocalConverted: canary => markLocalWorkspaceConverted(repo.db, workspaceId, canary),
   bundles: (bundleRecords ??= new IndexedDbBundleRecordStore()),
-  attachments,
+  attachments: stoppable(attachments, signal),
   canReadFolder: async folder => (await queryDirectoryPermission(directoryHandleOf(folder), 'read')) === 'granted',
   writeLocalDb: async (folder, signal) => {
     const hasher = createPartHasher()
