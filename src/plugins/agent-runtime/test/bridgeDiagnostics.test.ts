@@ -72,6 +72,51 @@ describe('bridge loop diagnostics', () => {
     }
   })
 
+  it('reads an error name only once before logging a safe classification', async () => {
+    let nameReads = 0
+    const error = new Error('safe fetch failure')
+    Object.defineProperty(error, 'name', {
+      get: () => {
+        nameReads += 1
+        return nameReads < 3 ? 'TypeError' : 'STATEFUL_SECRET_NAME_MARKER'
+      },
+    })
+    const fetch = vi.fn(async () => { throw error })
+    loop = startBridgeLoop(makeOptions({fetch: fetch as unknown as typeof globalThis.fetch}))
+
+    await vi.waitFor(() => expect(warn).toHaveBeenCalledTimes(1))
+
+    expect(nameReads).toBe(1)
+    expect(warn).toHaveBeenCalledWith('Agent runtime diagnostic', JSON.stringify({
+      stage: 'registration-fetch',
+      name: 'TypeError',
+      category: 'type-or-fetch-error',
+    }))
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('STATEFUL_SECRET_NAME_MARKER')
+  })
+
+  it('safely handles throwing error accessors and retries after wake', async () => {
+    const error = Object.defineProperties(new Error('hidden error'), {
+      name: {get: () => { throw new Error('NAME_GETTER_SECRET_MARKER') }},
+      message: {get: () => { throw new Error('MESSAGE_GETTER_SECRET_MARKER') }},
+    })
+    const fetch = vi.fn(async () => { throw error })
+    loop = startBridgeLoop(makeOptions({fetch: fetch as unknown as typeof globalThis.fetch}))
+
+    await vi.waitFor(() => expect(warn).toHaveBeenCalledTimes(1))
+    expect(warn).toHaveBeenCalledWith('Agent runtime diagnostic', JSON.stringify({
+      stage: 'registration-fetch',
+      name: 'Error',
+      category: 'other',
+    }))
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('NAME_GETTER_SECRET_MARKER')
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('MESSAGE_GETTER_SECRET_MARKER')
+
+    loop.wake()
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(2))
+    expect(warn).toHaveBeenCalledTimes(1)
+  })
+
   it('classifies an HTTP registration error without logging its response details', async () => {
     const fetch = vi.fn(async () => ({ok: false, status: 401} as Response))
     loop = startBridgeLoop(makeOptions({fetch: fetch as unknown as typeof globalThis.fetch}))

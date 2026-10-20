@@ -75,7 +75,10 @@ const confirmAndStorePairing = async (
   persistPairing(url, secret)
 
   if (openTokensDialog) {
-    void openDialog<void, AgentTokensDialogProps>(AgentTokensDialog, {mode: 'pair-cli'})
+    void openDialog<void, AgentTokensDialogProps>(AgentTokensDialog, {
+      mode: 'pair-cli',
+      getBridgeUrl: readConfiguredBridgeUrl,
+    })
   }
 }
 
@@ -152,7 +155,10 @@ export const processBridgePairingFromHash = () => {
 
   if (openTokensDialog) {
     window.setTimeout(() => {
-      void openDialog<void, AgentTokensDialogProps>(AgentTokensDialog, {mode: 'pair-cli'})
+      void openDialog<void, AgentTokensDialogProps>(AgentTokensDialog, {
+        mode: 'pair-cli',
+        getBridgeUrl: readConfiguredBridgeUrl,
+      })
     }, 0)
   }
 }
@@ -209,6 +215,23 @@ export const bridgeUrl = () =>
     || import.meta.env.VITE_AGENT_RUNTIME_URL?.trim()
     || defaultBridgeUrl
   ).replace(/\/+$/, '')
+
+// Read the currently configured URL for explicit, token-free diagnostics.
+// Unlike bridgeUrl(), this never self-heals or mutates localStorage; the probe
+// validates the returned value before making any request.
+export const readConfiguredBridgeUrl = () => {
+  let stored: string | null = null
+  try {
+    stored = window.localStorage.getItem(bridgeUrlStorageKey)?.trim() || null
+  } catch {
+    // If storage is unavailable, match the configured env/default fallback.
+  }
+  return (
+    stored
+    || import.meta.env.VITE_AGENT_RUNTIME_URL?.trim()
+    || defaultBridgeUrl
+  ).replace(/\/+$/, '')
+}
 
 const bridgeHeaders = () => {
   const secret = getStoredBridgeSecret()

@@ -16,15 +16,18 @@ import {
   notifyAgentTokensChanged,
 } from './tokens.ts'
 import type { AgentToken } from './tokens.ts'
+import { BridgeHealthDiagnostics } from './BridgeHealthDiagnostics.tsx'
 
 export type AgentTokensDialogMode = 'manage' | 'pair-cli'
 
 export interface AgentTokensDialogProps {
   mode?: AgentTokensDialogMode
+  getBridgeUrl: () => string
 }
 
 export function AgentTokensDialog({
   mode = 'manage',
+  getBridgeUrl,
   cancel,
 }: DialogContextProps<void> & AgentTokensDialogProps) {
   const repo = useRepo()
@@ -42,6 +45,8 @@ export function AgentTokensDialog({
               : 'Tokens let a local agent process act as you in this app, in any of your workspaces. They work while a tab of the app is open in this browser profile, at this app address. Stored on this device only; each token is shown once at mint.'}
           </DialogDescription>
         </DialogHeader>
+
+        <BridgeHealthDiagnostics getBridgeUrl={getBridgeUrl} />
 
         {!userId ? (
           <p className="text-sm text-destructive">

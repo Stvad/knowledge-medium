@@ -26,10 +26,13 @@ const saturatedParkMs = 45_000
 // Keep diagnostic output bounded to safe fields, never request or error contents.
 const classifyBridgeError = (error: unknown) => {
   const value = error as {name?: unknown, message?: unknown} | null
-  const name = typeof value?.name === 'string'
-    && ['Error', 'TypeError', 'DOMException', 'AbortError', 'SecurityError', 'SyntaxError'].includes(value.name)
-    ? value.name : 'Error'
-  const message = typeof value?.message === 'string' ? value.message : ''
+  let rawName: unknown
+  let rawMessage: unknown
+  try { rawName = value?.name } catch { rawName = undefined }
+  try { rawMessage = value?.message } catch { rawMessage = undefined }
+  const safeNames = ['Error', 'TypeError', 'DOMException', 'AbortError', 'SecurityError', 'SyntaxError']
+  const name = typeof rawName === 'string' && safeNames.includes(rawName) ? rawName : 'Error'
+  const message = typeof rawMessage === 'string' ? rawMessage : ''
   if (message.startsWith('Agent runtime bridge is not paired.')) {
     return {name, category: 'missing-browser-bridge-pairing'}
   }
