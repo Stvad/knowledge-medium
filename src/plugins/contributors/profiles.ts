@@ -1,4 +1,5 @@
 import {ChangeScope, type Tx, type TypeRegistrySnapshot, type User} from '@/data/api'
+import {USER_TYPE} from '@/data/blockTypes'
 import {hasBlockType} from '@/data/properties'
 import {assertRoundTrippableReferenceLabel} from '@/data/referenceBlock'
 import {ensureUserPageInTx} from '@/data/stateBlocks'
@@ -12,11 +13,10 @@ import {
 
 export const ensureHumanContributor = async (tx: Tx, workspaceId: string, user: User, snapshot: TypeRegistrySnapshot): Promise<string> => {
   const id = await ensureUserPageInTx(tx, workspaceId, user, snapshot, {skipMetadata: true})
-  const page = await tx.get(id)
-  if (!page || !hasBlockType(page, CONTRIBUTOR_TYPE)) {
-    await applyTypeTagInTx(tx, snapshot, {blockId: id, typeId: CONTRIBUTOR_TYPE,
-      initialValues: {[contributorKindProp.name]: 'human'}, writeOpts: {skipMetadata: true}})
-  }
+  const writeOpts = {skipMetadata: true}
+  await applyTypeTagInTx(tx, snapshot, {blockId: id, typeId: CONTRIBUTOR_TYPE,
+    initialValues: {[contributorKindProp.name]: 'human'}, writeOpts})
+  await tx.setProperty(id, contributorKindProp, 'human', writeOpts)
   return id
 }
 
@@ -27,7 +27,10 @@ export const assertContributor = async (
   if (!profile || profile.deleted || profile.workspaceId !== workspaceId || !hasBlockType(profile, CONTRIBUTOR_TYPE)) {
     throw new Error(`Contributor ${id} must be a live Contributor profile in this workspace.`)
   }
-  if (options.allowHuman === false && contributorKindProp.codec.decode(profile.properties[contributorKindProp.name] ?? 'agent') === 'human') {
+  if (options.allowHuman === false && (
+    hasBlockType(profile, USER_TYPE) ||
+    contributorKindProp.codec.decode(profile.properties[contributorKindProp.name] ?? 'agent') === 'human'
+  )) {
     throw new Error('Agent writes require an agent or automation contributor, not a human profile.')
   }
 }

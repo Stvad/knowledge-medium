@@ -14,13 +14,13 @@ declare module '@/data/api/tx' {
 }
 
 const attributionNames = new Set([attributionCreatorsProp.name, attributionEditorsProp.name])
+const authoredFields = ['content', 'properties', 'deleted', 'parentId', 'orderKey'] as const
 
 const meaningfulChange = ({before, after}: ChangedRow): boolean => {
   if (!after) return false
-  if (after.deleted) return before !== null && !before.deleted
   // Alias resolution creates visible pages with the speculative-mint stamp.
   if (after.updatedAt === 0 && !hasBlockType(after, PAGE_TYPE)) return false
-  if (!before || before.content !== after.content) return true
+  if (!before || authoredFields.some(field => field !== 'properties' && before[field] !== after[field])) return true
   const keys = new Set([...Object.keys(before.properties), ...Object.keys(after.properties)])
   return [...keys].some(name => !attributionNames.has(name)
     && !jsonValuesEqual(before.properties[name], after.properties[name]))
@@ -54,7 +54,7 @@ const hasNonHumanAttribution = async (row: BlockData, ctx: SameTxCtx): Promise<b
 
 export const contributorAttributionProcessor = defineSameTxProcessor({
   name: 'contributors.recordAttribution',
-  watches: {kind: 'field', table: 'blocks', fields: ['content', 'properties', 'deleted']},
+  watches: {kind: 'field', table: 'blocks', fields: authoredFields},
   apply: async (event, ctx) => {
     if (event.scope !== ChangeScope.BlockDefault) return
     const targets = new Map<string, boolean>()
@@ -63,14 +63,14 @@ export const contributorAttributionProcessor = defineSameTxProcessor({
       if (change.before && change.after && !change.after.deleted) {
         for (const prop of [attributionCreatorsProp, attributionEditorsProp]) {
           const previous = change.before.properties[prop.name]
-          if (previous !== undefined && change.after.properties[prop.name] === undefined) {
+          if (previous !== undefined && change.after.properties[prop.name] === undefined
+            && !ctx.wasPropertyUnset(change.id, prop.name)) {
             await ctx.tx.setProperty(change.id, prop, prop.codec.decode(previous), {skipMetadata: true})
           }
         }
       }
       if (!meaningfulChange(change)) continue
       const target = await targetOf(change.after!, ctx)
-      if (change.after!.deleted && target === change.id) continue
       if (target) targets.set(target, targets.get(target) === true || (target === change.id && change.before === null))
     }
     if (targets.size === 0 || ctx.tx.meta.context?.contributorId === null) return
@@ -86,7 +86,7 @@ export const contributorAttributionProcessor = defineSameTxProcessor({
       if (human && !await hasNonHumanAttribution(row, ctx)) continue
       eligible.push([id, created])
     }
-    if (eligible.length === 0) return
+    if (eligible.length === 0 && context?.contributorSource !== 'agent') return
     if (context?.contributorSource === 'agent' && selectedId === undefined) {
       throw new Error('Choose a contributor before writing: run contributor create <name> or contributor use <id>; --contributor none opts out. A current CLI or MCP with contributor support is required; upgrade @knowledge-medium/agent-cli or use this checkout\'s pnpm agent.')
     }

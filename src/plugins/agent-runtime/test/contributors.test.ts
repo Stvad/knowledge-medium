@@ -77,6 +77,47 @@ describe('agent contributor selection', () => {
     expect((await context.repo.load(result.id))?.properties[attributionEditorsProp.name]).toEqual([profile.id])
   })
 
+  it.each(['move-parent', 'move-order', 'delete', 'restore'] as const)(
+    'requires a contributor for %s and attributes surviving blocks', async operation => {
+      const profile = await run({type: 'create-contributor', name: 'Atlas'}) as ContributorProfile
+      await context.repo.withTxContext({contributorId: null}).tx(async tx => {
+        for (const id of ['parent', 'other', 'target', 'sibling']) {
+          await tx.create({id, workspaceId: WS, parentId: id === 'target' || id === 'sibling' ? 'parent' : null,
+            orderKey: id === 'sibling' ? 'a1' : 'a0', content: id})
+        }
+        if (operation === 'restore') await tx.delete('target')
+      }, {scope: ChangeScope.BlockDefault})
+      const readState = () => context.repo.db.get<{parent_id: string | null, order_key: string, deleted: number}>(
+        'SELECT parent_id, order_key, deleted FROM blocks WHERE id = ?', ['target'],
+      )
+      const before = await readState()
+      const command = operation.startsWith('move')
+        ? {type: 'move-block', id: 'target', parentId: operation === 'move-parent' ? 'other' : 'parent', position: {kind: 'last'}}
+        : {type: `${operation}-block`, id: 'target'}
+      await expect(run(command)).rejects.toThrow(/Choose a contributor/)
+      expect(await readState()).toEqual(before)
+      await run({...command, contributorId: profile.id})
+      const after = await readState()
+      if (operation === 'move-parent') {
+        expect(after.parent_id).toBe('other')
+      } else if (operation === 'move-order') {
+        expect(after.parent_id).toBe(before.parent_id)
+        expect(after.order_key).not.toBe(before.order_key)
+      } else {
+        expect(after.deleted).toBe(operation === 'delete' ? 1 : 0)
+      }
+      if (operation !== 'delete') {
+        expect((await context.repo.load('target'))?.properties[attributionEditorsProp.name]).toEqual([profile.id])
+      }
+    },
+  )
+
+  it('allows an explicitly unattributed deletion', async () => {
+    const page = await run({type: 'create-page', name: 'Disposable', contributorId: null}) as {id: string}
+    await run({type: 'delete-block', id: page.id, contributorId: null})
+    expect(await context.repo.load(page.id)).toBeNull()
+  })
+
   it.each([false, true])('preserves provenance when properties are replaced (children: %s)', async children => {
     if (children) {
       await context.repo.db.execute(`INSERT INTO workspaces

@@ -383,6 +383,7 @@ type EngineInsertOpts = TxInsertOpts & EngineWriteOpts
 export class TxImpl implements Tx {
   readonly meta: TxMeta
   private readonly userWrittenIds = new Set<string>()
+  private readonly explicitlyUnsetProperties = new Map<string, Set<string>>()
   private userWritesFinished = false
   private readonly propertyChildTx: Tx
 
@@ -392,6 +393,18 @@ export class TxImpl implements Tx {
 
   hasUserWrite(id: string): boolean {
     return this.userWrittenIds.has(id)
+  }
+
+  wasPropertyUnset(id: string, name: string): boolean {
+    return this.explicitlyUnsetProperties.get(id)?.has(name) ?? false
+  }
+
+  private recordPropertyUnsets(id: string, names: Iterable<string>): void {
+    for (const name of names) {
+      let unsets = this.explicitlyUnsetProperties.get(id)
+      if (!unsets) this.explicitlyUnsetProperties.set(id, unsets = new Set())
+      unsets.add(name)
+    }
   }
 
   private readonly ctx: TxImplContext
@@ -1164,7 +1177,10 @@ export class TxImpl implements Tx {
     const target = await this.propertyWriteTarget(before, schema)
     const resolvedSchema = target.schema
     this.assertPropertyWriteScope(resolvedSchema)
-    if (before.properties[resolvedSchema.name] === undefined) return // absent → no-op
+    if (before.properties[resolvedSchema.name] === undefined) {
+      this.recordPropertyUnsets(id, [resolvedSchema.name])
+      return
+    }
     // Eager child delete, symmetric with setProperty's inline dual-write (see
     // deletePropertyValueChildren for why "rely on the deferred MATERIALIZE
     // pass" is unsound for a key set-then-unset in one tx).
@@ -1175,6 +1191,7 @@ export class TxImpl implements Tx {
     delete properties[resolvedSchema.name]
     this.assertWritableWorkspace(before.workspaceId)
     await this.writePropertiesBag(id, before, properties, opts)
+    this.recordPropertyUnsets(id, [resolvedSchema.name])
   }
 
   async setProperties(
@@ -1223,7 +1240,10 @@ export class TxImpl implements Tx {
     // behind the no-op check: removal is the destructive direction, and a
     // no-op batch removed nothing the cell shows.
     const unchanged = jsonValuesEqual(before.properties, properties)
-    if (unchanged && before.deleted) return
+    if (unchanged && before.deleted) {
+      this.recordPropertyUnsets(id, unsetNames)
+      return
+    }
     if (!unchanged) this.assertWritableWorkspace(before.workspaceId)
     for (const {target} of sets) {
       if (target.storage === 'children') {
@@ -1235,11 +1255,15 @@ export class TxImpl implements Tx {
         }
       }
     }
-    if (unchanged) return
+    if (unchanged) {
+      this.recordPropertyUnsets(id, unsetNames)
+      return
+    }
     for (const target of unsets) {
       if (target.storage === 'children') await this.deletePropertyValueChildren(before, target.schema)
     }
     await this.writePropertiesBag(id, before, properties, opts)
+    this.recordPropertyUnsets(id, unsetNames)
   }
 
   async getProperty<T>(id: string, schema: PropertySchema<T>): Promise<T> {

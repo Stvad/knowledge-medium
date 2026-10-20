@@ -643,6 +643,7 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
             {
               tx, db: txDb, propertySchemas, types, valuePresets,
               hasUserWrite: id => tx.hasUserWrite(id),
+              wasPropertyUnset: (id, name) => tx.wasPropertyUnset(id, name),
               // Resolved against the TX's pinned workspace, not the active one:
               // `TxImpl` pins from the first write, and the merge mutator does
               // not require the active workspace to match.

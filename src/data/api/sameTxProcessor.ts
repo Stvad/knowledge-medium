@@ -181,6 +181,9 @@ export interface SameTxCtx {
   /** Whether the user callback wrote the row without skipping intent metadata.
    * Internal property materialization and processor writes do not count. */
   hasUserWrite(id: string): boolean
+  /** Whether the typed API explicitly unset a canonical property key,
+   * rather than omitting it from a replacement bag. */
+  wasPropertyUnset(id: string, name: string): boolean
   /** Active `Tx` — same handle the user fn used. Reads see staged
    *  state; writes amend the same tx. Throws here roll back the
    *  whole user tx via SQLite's `writeTransaction` abort. */

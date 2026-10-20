@@ -11,6 +11,7 @@ import {contributorsDataExtension} from './dataExtension'
 import {attributionCreatorsProp, attributionEditorsProp, CONTRIBUTOR_TYPE, contributorKindProp, contributorRoleProp} from './schema'
 import {propertyFieldContent} from '@/data/propertyChildren'
 import {propertyDefinitionBlockId} from '@/data/definitionSeeds'
+import {deleteProperty} from '@/components/propertyPanel/actions'
 
 const WS = 'workspace'
 const HUMAN = userPageBlockId(WS, 'vlad')
@@ -88,6 +89,40 @@ describe('automatic contributor attribution', () => {
     expect(await read('note', attributionEditorsProp.name)).toEqual([])
   })
 
+  it.each([false, true])('honors property-panel removals and batch unsets (children: %s)', async children => {
+    if (children) {
+      await db.db.execute(`INSERT INTO workspaces
+        (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+        VALUES (?, 'Test', 'vlad', 1, 1, 'none', NULL, 'children')`, [WS])
+    }
+    repo.setActiveWorkspaceId(WS)
+    await create(repo.withTxContext({contributorId: 'atlas'}))
+    await repo.withTxContext({contributorId: 'scout'}).tx(tx => tx.update('note', {content: 'Revision'}), opts)
+    for (const schema of [attributionCreatorsProp, attributionEditorsProp]) {
+      await deleteProperty({block: repo.block('note'), properties: (await repo.load('note'))!.properties,
+        schemas: repo.propertySchemas, uis: new Map(), name: schema.name})
+      expect(await read('note', schema.name)).toBeUndefined()
+    }
+    await repo.tx(tx => tx.setProperties('note', {set: [
+      {schema: attributionCreatorsProp, value: ['atlas']}, {schema: attributionEditorsProp, value: ['scout']},
+    ]}), opts)
+    await repo.tx(tx => tx.setProperties('note', {unset: [attributionCreatorsProp, attributionEditorsProp]}), opts)
+    expect(await read('note', attributionCreatorsProp.name)).toBeUndefined()
+    expect(await read('note', attributionEditorsProp.name)).toBeUndefined()
+  })
+
+  it.each(['single', 'batch'] as const)('honors an explicit %s clear after replacement in the same transaction', async mode => {
+    await create(repo.withTxContext({contributorId: 'atlas'}))
+    await repo.withTxContext({contributorId: 'scout'}).tx(tx => tx.update('note', {content: 'Revision'}), opts)
+    await repo.tx(async tx => {
+      await tx.update('note', {properties: {}})
+      if (mode === 'single') await tx.unsetProperty('note', attributionCreatorsProp)
+      else await tx.setProperties('note', {unset: [attributionCreatorsProp]})
+    }, opts)
+    expect(await read('note', attributionCreatorsProp.name)).toBeUndefined()
+    expect(await read('note', attributionEditorsProp.name)).toEqual(['scout'])
+  })
+
   it('does not attribute no-ops, bookkeeping writes, or explicit unattributed work', async () => {
     await create(repo.withTxContext({contributorId: null}))
     const scout = repo.withTxContext({contributorId: 'scout'})
@@ -107,6 +142,19 @@ describe('automatic contributor attribution', () => {
       .rejects.toThrow(/Choose a contributor/)
     expect((await repo.load('note'))?.content).toBe('Derived')
     expect(await read('note', attributionEditorsProp.name)).toBeUndefined()
+  })
+
+  it.each(['parent', 'order'] as const)('requires selection and credits a pure %s move', async field => {
+    await create(repo, 'parent')
+    await create(repo)
+    const target = {parentId: field === 'parent' ? 'parent' : null, orderKey: field === 'order' ? 'a1' : 'a0'}
+    const external = repo.withTxContext({contributorSource: 'agent'})
+    await expect(external.tx(tx => tx.move('note', target), opts)).rejects.toThrow(/Choose a contributor/)
+    expect((await repo.load('note'))?.parentId).toBeNull()
+    expect((await repo.load('note'))?.orderKey).toBe('a0')
+    await external.withTxContext({contributorId: 'atlas'}).tx(tx => tx.move('note', target), opts)
+    expect(await repo.load('note')).toMatchObject(target)
+    expect(await read('note', attributionEditorsProp.name)).toEqual(['atlas'])
   })
 
   it.each(['set', 'batch', 'replace', 'unset', 'batch-unset'] as const)(
