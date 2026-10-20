@@ -1,1 +1,0 @@
-import{MA as e,jA as t}from"../../chunks/app-CZjDM-Cg.js";export{t as defaultPasteDecision,e as pasteDecisionVerb};

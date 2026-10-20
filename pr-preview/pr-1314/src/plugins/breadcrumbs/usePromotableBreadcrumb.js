@@ -1,1 +1,0 @@
-import{Uv as e}from"../../../chunks/app-CZjDM-Cg.js";export{e as usePromotableBreadcrumb};

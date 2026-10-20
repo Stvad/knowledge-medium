@@ -1,1 +1,0 @@
-import{Wv as e}from"../../../chunks/app-CZjDM-Cg.js";export{e as PromotableBreadcrumbList};

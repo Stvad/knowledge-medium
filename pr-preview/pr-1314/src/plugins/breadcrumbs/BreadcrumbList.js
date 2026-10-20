@@ -1,1 +1,0 @@
-import{Jv as e}from"../../../chunks/app-CZjDM-Cg.js";export{e as BreadcrumbList};

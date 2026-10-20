@@ -1,1 +1,0 @@
-import{hw as e}from"../../../chunks/app-CZjDM-Cg.js";export{e as CommandPaletteHeaderItem};

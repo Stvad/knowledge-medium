@@ -1,1 +1,0 @@
-import{ey as e,ny as t,ry as n,ty as r}from"../../../chunks/app-CZjDM-Cg.js";export{e as WorkspaceSwitcherSidebarSection,r as pendingInvitationsHeaderItem,t as workspaceHeaderPlugin,n as workspaceSwitcherSidebarSection};

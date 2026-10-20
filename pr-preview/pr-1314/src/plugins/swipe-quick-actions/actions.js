@@ -1,1 +1,0 @@
-import{Gw as e,Jw as t,Kw as n,qw as r}from"../../../chunks/app-CZjDM-Cg.js";export{e as DEFAULT_QUICK_ACTION_ITEMS,n as SWIPE_RIGHT_BLOCK_ACTION_ID,r as isQuickActionItem,t as quickActionItemsFacet};

@@ -1,1 +1,0 @@
-import{PC as e}from"../../../chunks/app-CZjDM-Cg.js";export{e as openKeybindingsSettingsAction};

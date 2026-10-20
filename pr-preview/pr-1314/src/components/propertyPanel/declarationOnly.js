@@ -1,1 +1,0 @@
-import{RM as e,zM as t}from"../../../chunks/app-CZjDM-Cg.js";export{e as declarationOnlyDefinitionForName,t as declarationOnlyStatusText};

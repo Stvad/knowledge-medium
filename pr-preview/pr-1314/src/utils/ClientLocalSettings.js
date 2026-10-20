@@ -1,1 +1,0 @@
-import{CD as e,SD as t}from"../../chunks/app-CZjDM-Cg.js";export{t as ClientLocalSettings,e as clientLocalSettings};

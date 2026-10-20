@@ -1,1 +1,0 @@
-import{bx as e}from"../../chunks/app-CZjDM-Cg.js";export{e as useAncestorCrumbs};

@@ -1,1 +1,0 @@
-import{gq as e}from"../../../../chunks/app-CZjDM-Cg.js";export{e as applySyncInvalidation};

@@ -1,1 +1,0 @@
-import{vM as e}from"../../../chunks/app-CZjDM-Cg.js";export{e as PropertyRow};
