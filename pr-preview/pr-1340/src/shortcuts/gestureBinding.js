@@ -1,0 +1,1 @@
+import{QO as e,ZO as t}from"../../chunks/app-Cx0LSDbc.js";export{t as gestureBindingDescriptor,e as matchesGestureEvent};

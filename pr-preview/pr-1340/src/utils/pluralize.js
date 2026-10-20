@@ -1,0 +1,1 @@
+import{aZ as e,oZ as t}from"../../chunks/app-Cx0LSDbc.js";export{e as agree,t as pluralize};

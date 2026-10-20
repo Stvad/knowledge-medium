@@ -1,0 +1,1 @@
+import{IP as e,LP as t}from"../../../chunks/app-Cx0LSDbc.js";export{e as declarationOnlyDefinitionForName,t as declarationOnlyStatusText};

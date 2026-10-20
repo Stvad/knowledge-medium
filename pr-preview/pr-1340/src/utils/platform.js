@@ -1,0 +1,1 @@
+import{nL as e,tL as t}from"../../chunks/app-Cx0LSDbc.js";export{t as isIOS,e as isMacPlatform};

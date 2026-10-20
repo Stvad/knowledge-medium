@@ -1,0 +1,1 @@
+import{a9 as e,c9 as t,i9 as n,l9 as r,n9 as i,o9 as a,r9 as o,s9 as s,u9 as c}from"../../../chunks/app-Cx0LSDbc.js";export{i as CHANGE_SCOPE_POLICIES,o as ChangeScope,n as isChangeScope,e as policyForScope,a as scopeAllowedInReadOnly,s as scopeIsUndoable,t as scopePoliciesEquivalent,r as scopeUploadsToServer,c as sourceForScope};

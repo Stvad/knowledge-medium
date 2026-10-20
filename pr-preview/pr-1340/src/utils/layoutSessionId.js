@@ -1,0 +1,1 @@
+import{$2 as e,Q2 as t,Z2 as n,e4 as r,n4 as i,t4 as a}from"../../chunks/app-Cx0LSDbc.js";export{n as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,t as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,e as __resetLayoutSessionIdForTesting,r as getLayoutSessionId,a as isInstalledAppDisplayMode,i as readOrCreateLayoutSessionId};

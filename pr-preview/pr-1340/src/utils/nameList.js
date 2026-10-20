@@ -1,0 +1,1 @@
+import{cZ as e,lZ as t,sZ as n}from"../../chunks/app-Cx0LSDbc.js";export{n as NAMES_IN_A_SENTENCE,e as describeNames,t as firstFew};

@@ -1,0 +1,1 @@
+import{EN as e,TN as t}from"../../../chunks/app-Cx0LSDbc.js";export{t as BLOCK_TITLE_TEXT_CLASS,e as useBlockTitleTextClass};

@@ -1,0 +1,1 @@
+import{GO as e,WO as t}from"../chunks/app-Cx0LSDbc.js";export{t as appUpdate,e as useAppUpdateAvailable};

@@ -1,0 +1,1 @@
+import{nO as e,tO as t}from"../../chunks/app-Cx0LSDbc.js";export{t as BlockPasteShellDecorator,e as blockPasteShellDecorator};

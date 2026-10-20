@@ -1,0 +1,1 @@
+import{Pi as e,Ri as t}from"../../../chunks/app-Cx0LSDbc.js";export{t as migratePropertiesToBlocksAction,e as propertiesMigrationPlugin};

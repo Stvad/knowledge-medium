@@ -1,0 +1,1 @@
+import{Rd as e,zd as t}from"../../../chunks/app-Cx0LSDbc.js";export{e as createWatchEventsRegistry,t as watchEventsRegistry};

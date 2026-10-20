@@ -1,0 +1,1 @@
+import{AS as e,MS as t,jS as n,kS as r}from"../../../chunks/app-Cx0LSDbc.js";export{r as OPEN_RECENTS_ACTION_ID,e as openRecentsAction,n as recentsHeaderItem,t as recentsPlugin};

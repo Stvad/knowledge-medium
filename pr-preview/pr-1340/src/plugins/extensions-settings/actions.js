@@ -1,0 +1,1 @@
+import{_O as e,vO as t}from"../../../chunks/app-Cx0LSDbc.js";export{e as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,t as openExtensionsSettingsAction};
