@@ -24,6 +24,7 @@ import {
   type Materializability,
 } from '@/sync/transform.js'
 import { BLOCK_STORAGE_COLUMNS, type BlockRow } from '@/data/blockSchema.js'
+import { PENDING_UPLOAD_IDS_SQL } from '@/data/pendingUploadsSql.js'
 
 /** Local state for the block id a staging row targets. */
 export interface LocalRowState {
@@ -193,17 +194,6 @@ const blocksReflectsStagedSql = (local: string, staged: string): string =>
 
 /** Staged row `s` has no delivery waiting in the drain's queue. */
 const NOT_QUEUED = 'NOT EXISTS (SELECT 1 FROM blocks_synced_changes c WHERE c.id = s.id)'
-
-/** Block ids with an unsent local edit in PowerSync's upload queue.
- *  `ps_crud.data` is the envelope the blocks_upload_* triggers write,
- *  `{op, type, id, data}`; DISTINCT because an editing burst fans out to many
- *  crud rows for one block. Never yields NULL, so it is safe under `NOT IN`,
- *  where one NULL makes every row's answer NULL. */
-export const PENDING_UPLOAD_IDS_SQL = `
-  SELECT DISTINCT json_extract(data, '$.id') AS id FROM ps_crud
-   WHERE json_extract(data, '$.type') = 'blocks'
-     AND json_extract(data, '$.id') IS NOT NULL
-`
 
 /**
  * Is any staged row one the drain would actually APPLY?

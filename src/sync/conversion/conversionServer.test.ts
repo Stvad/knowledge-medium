@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { describe, expect, it } from 'vitest'
-import { createSupabaseConversionServer } from './conversionServer.js'
+import { createSupabaseConversionServer, IDS_PER_FILTER } from './conversionServer.js'
 
 type Row = Record<string, unknown>
 
@@ -106,7 +106,7 @@ describe('createSupabaseConversionServer', () => {
     const rows = await createSupabaseConversionServer(client).readContentSealHistory(WS, ids)
 
     expect(rows.map(row => row.event_id).sort((a, b) => a - b)).toEqual(wanted.map(row => row.event_id))
-    expect(Math.max(...inListLengths)).toBeLessThanOrEqual(100)
+    expect(Math.max(...inListLengths)).toBeLessThanOrEqual(IDS_PER_FILTER)
   })
 
   it('reads blocks by id in chunks', async () => {
@@ -116,7 +116,7 @@ describe('createSupabaseConversionServer', () => {
     const rows = await createSupabaseConversionServer(client).readBlocks(WS, [...blocks.map(b => b.id), 'x'])
 
     expect([...rows].sort((a, b) => (a.id < b.id ? -1 : 1))).toEqual(blocks)
-    expect(Math.max(...inListLengths)).toBeLessThanOrEqual(100)
+    expect(Math.max(...inListLengths)).toBeLessThanOrEqual(IDS_PER_FILTER)
   })
 
   it('pages the workspace\'s blocks by id, after the cursor', async () => {
