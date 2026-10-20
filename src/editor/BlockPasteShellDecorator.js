@@ -1,1 +1,1 @@
-import{FO as e,PO as t}from"../../chunks/app-CDDqhtS2.js";export{t as BlockPasteShellDecorator,e as blockPasteShellDecorator};
+import{IO as e,LO as t}from"../../chunks/app-BIscmFrD.js";export{e as BlockPasteShellDecorator,t as blockPasteShellDecorator};

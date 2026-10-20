@@ -1,1 +1,1 @@
-import{eN as e}from"../../chunks/app-CDDqhtS2.js";export{e as readClipboardContent};
+import{nN as e}from"../../chunks/app-BIscmFrD.js";export{e as readClipboardContent};

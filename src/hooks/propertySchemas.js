@@ -1,1 +1,1 @@
-import{JR as e}from"../../chunks/app-CDDqhtS2.js";export{e as usePropertySchemas};
+import{XR as e}from"../../chunks/app-BIscmFrD.js";export{e as usePropertySchemas};

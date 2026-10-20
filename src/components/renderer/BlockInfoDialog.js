@@ -1,1 +1,1 @@
-import{mM as e}from"../../../chunks/app-CDDqhtS2.js";export{e as BlockInfoDialog};
+import{gM as e}from"../../../chunks/app-BIscmFrD.js";export{e as BlockInfoDialog};

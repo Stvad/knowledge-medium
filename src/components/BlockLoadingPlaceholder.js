@@ -1,1 +1,1 @@
-import{LA as e}from"../../chunks/app-CDDqhtS2.js";export{e as BlockLoadingPlaceholder};
+import{zA as e}from"../../chunks/app-BIscmFrD.js";export{e as BlockLoadingPlaceholder};

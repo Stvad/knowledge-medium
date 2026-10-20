@@ -1,1 +1,1 @@
-import{hy as e}from"../../../chunks/app-CDDqhtS2.js";export{e as PanelCursorFollowsScroll};
+import{_y as e}from"../../../chunks/app-BIscmFrD.js";export{e as PanelCursorFollowsScroll};

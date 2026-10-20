@@ -1,1 +1,1 @@
-import{hW as e,mW as t}from"../../chunks/app-CDDqhtS2.js";export{t as pluginPrefsExtension,e as pluginUIStateExtension};
+import{MW as e,NW as t}from"../../chunks/app-BIscmFrD.js";export{e as pluginPrefsExtension,t as pluginUIStateExtension};

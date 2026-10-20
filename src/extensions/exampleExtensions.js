@@ -1,1 +1,1 @@
-import{CO as e,SO as t}from"../../chunks/app-CDDqhtS2.js";export{t as exampleExtensions,e as insertExampleExtensionsUnder};
+import{TO as e,wO as t}from"../../chunks/app-BIscmFrD.js";export{t as exampleExtensions,e as insertExampleExtensionsUnder};

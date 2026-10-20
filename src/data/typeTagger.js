@@ -1,1 +1,1 @@
-import{wq as e}from"../../chunks/app-CDDqhtS2.js";export{e as TypeTagger};
+import{Uq as e,Wq as t}from"../../chunks/app-BIscmFrD.js";export{e as TypeTagger,t as applyTypeTagInTx};

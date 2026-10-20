@@ -1,1 +1,1 @@
-import{KO as e,qO as t}from"../../../chunks/app-CDDqhtS2.js";export{e as ExtensionPromptSurface,t as extensionPromptsExtension};
+import{JO as e,YO as t}from"../../../chunks/app-BIscmFrD.js";export{e as ExtensionPromptSurface,t as extensionPromptsExtension};

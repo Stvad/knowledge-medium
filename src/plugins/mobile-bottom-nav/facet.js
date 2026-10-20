@@ -1,1 +1,1 @@
-import{Mb as e}from"../../../chunks/app-CDDqhtS2.js";export{e as mobileBottomNavItemsFacet};
+import{Pb as e}from"../../../chunks/app-BIscmFrD.js";export{e as mobileBottomNavItemsFacet};

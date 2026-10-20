@@ -1,1 +1,1 @@
-import{md as e,pd as t}from"../../chunks/app-CDDqhtS2.js";export{t as extensionApiCatalog,e as extensionApiRuntimeExports};
+import{gd as e,hd as t}from"../../chunks/app-BIscmFrD.js";export{t as extensionApiCatalog,e as extensionApiRuntimeExports};

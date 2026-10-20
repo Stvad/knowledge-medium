@@ -1,1 +1,1 @@
-import{Uh as e}from"../../../chunks/app-CDDqhtS2.js";export{e as attachmentsPlugin};
+import{Gh as e}from"../../../chunks/app-BIscmFrD.js";export{e as attachmentsPlugin};
