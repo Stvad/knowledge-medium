@@ -265,6 +265,19 @@ describe('runConversion: preflight → key → flip', () => {
     expect(await server.conversionState(WS)).toMatchObject({kind: 'read', state: {encryptionMode: 'none'}})
   })
 
+  it('sends no flip once Stop lands during the check before it', async () => {
+    const stop = new AbortController()
+    let checks = 0
+    // The second check is the one right before the send.
+    const uploadQueue = async () => {
+      if (++checks > 1) stop.abort(new DOMException('stopped', 'AbortError'))
+      return {pending: 0, rejected: 0}
+    }
+
+    await expect(run({signal: stop.signal, preflight: passingEnvironment({uploadQueue})})).rejects.toThrow('stopped')
+    expect(flips()).toBe(0)
+  })
+
   it('refuses before showing a key this device could not keep', async () => {
     vi.spyOn(keyStore, 'put').mockRejectedValue(new Error('QuotaExceededError'))
 

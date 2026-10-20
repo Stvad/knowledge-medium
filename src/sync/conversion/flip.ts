@@ -63,6 +63,8 @@ export const flipToE2ee = async ({
   for (let attempt = 1; ; attempt++) {
     signal?.throwIfAborted()
     if (beforeSend && !(await beforeSend())) return {kind: 'held'}
+    // Again: a Stop during the check must not start a request that can commit.
+    signal?.throwIfAborted()
     try {
       onSend?.()
       await server.convertWorkspaceToE2ee(workspaceId, canary)
