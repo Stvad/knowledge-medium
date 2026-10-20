@@ -1,1 +1,1 @@
-import{mR as e,pR as t}from"../../../chunks/app-DWDE-jhO.js";export{t as REFERENCES_TARGET_INVALIDATION_CHANNEL,e as referencesInvalidationRule};
+import{mR as e,pR as t}from"../../../chunks/app-ia9eKbiI.js";export{t as REFERENCES_TARGET_INVALIDATION_CHANNEL,e as referencesInvalidationRule};

@@ -1,1 +1,1 @@
-import{FT as e,NT as t,PT as n}from"../../../chunks/app-DWDE-jhO.js";export{t as kernelPropertyUiExtension,n as typesPropertyUi,e as typesPropertyUiExtension};
+import{FT as e,NT as t,PT as n}from"../../../chunks/app-ia9eKbiI.js";export{t as kernelPropertyUiExtension,n as typesPropertyUi,e as typesPropertyUiExtension};

@@ -1,1 +1,1 @@
-import{DO as e,EO as t}from"../../chunks/app-DWDE-jhO.js";export{t as BlockChildren,e as BlockComponent};
+import{DO as e,EO as t}from"../../chunks/app-ia9eKbiI.js";export{t as BlockChildren,e as BlockComponent};

@@ -1,1 +1,1 @@
-import{g4 as e}from"../../../chunks/app-DWDE-jhO.js";export{e as deriveWorkspaceIdNamespace};
+import{g4 as e}from"../../../chunks/app-ia9eKbiI.js";export{e as deriveWorkspaceIdNamespace};

@@ -1,1 +1,1 @@
-import{mt as e,ow as t,sw as n}from"../../../chunks/app-DWDE-jhO.js";export{t as keybindingOverridesProp,n as keybindingsPrefsType,e as keybindingsSettingsPlugin};
+import{mt as e,ow as t,sw as n}from"../../../chunks/app-ia9eKbiI.js";export{t as keybindingOverridesProp,n as keybindingsPrefsType,e as keybindingsSettingsPlugin};
