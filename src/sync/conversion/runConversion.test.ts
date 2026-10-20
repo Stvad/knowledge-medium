@@ -436,6 +436,20 @@ describe('runConversion: preflight', () => {
     expect(server.calls.filter(call => call.method === 'readHistoryPage' || call.method === 'workspaceCounts')).toEqual([])
   })
 
+  it('stops reading blocks once its sample of sealed-looking rows is full', async () => {
+    server.maxRows = 10
+    const wk = await keyOf(9)
+    for (let i = 0; i < 40; i++) {
+      const id = `s${String(i).padStart(2, '0')}`
+      server.insert({id, workspace_id: WS, ...await sealFor(wk, {id, workspace_id: WS}, {content: 'a', properties_json: '{}', references_json: '[]'})})
+    }
+
+    const [blocker] = await blockers({})
+    expect(blocker).toMatchObject({kind: 'sealed-looking-rows'})
+    // 3 plaintext rows then 40 sealed, 10 a page: the sample of 20 fills on the third.
+    expect(server.calls.filter(call => call.method === 'readFullBlockPage')).toHaveLength(3)
+  })
+
   it('finds a sealed-looking row on a later page', async () => {
     server.maxRows = 2
     const wk = await keyOf(9)

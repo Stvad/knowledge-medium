@@ -135,36 +135,52 @@ const removedWithin = async (parent: BundleFolder, name: string): Promise<boolea
   }
 }
 
+/** The screen stays on for the work, which reads or writes for minutes to
+ *  hours (a sleeping display can take the machine down with it), and not for a
+ *  prompt, which can wait indefinitely. */
+export const withScreenAwake = async <T>(deps: Pick<SealingDeps, 'keepAwake'>, run: () => Promise<T>): Promise<T> => {
+  const release = await deps.keepAwake()
+  try {
+    return await run()
+  } finally {
+    release()
+  }
+}
+
 const takeVerifiedBundle = async (deps: SealingDeps, reason: BundleRetakeReason | null): Promise<BundleRecord> => {
   const {userId, workspaceId, server, ui, signal} = deps
   const parent = await ui.chooseBundleFolder({reason})
-  const folder = await createBundleFolder(parent, workspaceId, deps.now?.() ?? new Date())
-  ui.status({kind: 'taking-bundle', progress: null})
-  try {
-    await takeBundle({
-      server,
-      workspaceId,
-      folder,
-      writeLocalDb: deps.writeLocalDb,
-      attachments: {
-        source: deps.attachments,
-        confirmNoVerifiedSource: media => ui.confirmNoVerifiedSource({media}),
-      },
-      now: deps.now,
-      onProgress: progress => ui.status({kind: 'taking-bundle', progress}),
-      signal,
-    })
-    // Read back from the folder, not from what was written: this is what the
-    // record vouches for.
-    ui.status({kind: 'checking-bundle'})
-    const record = bundleRecordOf(await verifyBundle({folder, workspaceId, mediaHashOf: deps.attachments.mediaHashOf, signal}), folder)
-    await deps.bundles.put(userId, workspaceId, record)
-    return record
-  } catch (error) {
-    // A bundle that never verified is a plaintext copy nothing will use.
-    if (await removedWithin(parent, folder.name)) throw error
-    throw new BundleLeftBehind(folder.name, error, signal?.aborted ?? false)
-  }
+  return withScreenAwake(deps, async () => {
+    const folder = await createBundleFolder(parent, workspaceId, deps.now?.() ?? new Date())
+    ui.status({kind: 'taking-bundle', progress: null})
+    try {
+      await takeBundle({
+        server,
+        workspaceId,
+        folder,
+        writeLocalDb: deps.writeLocalDb,
+        attachments: {
+          source: deps.attachments,
+          // Accepted: this prompt, asked only for an attachment that lost its
+          // verified copy since preflight, keeps the screen awake meanwhile.
+          confirmNoVerifiedSource: media => ui.confirmNoVerifiedSource({media}),
+        },
+        now: deps.now,
+        onProgress: progress => ui.status({kind: 'taking-bundle', progress}),
+        signal,
+      })
+      // Read back from the folder, not from what was written: this is what the
+      // record vouches for.
+      ui.status({kind: 'checking-bundle'})
+      const record = bundleRecordOf(await verifyBundle({folder, workspaceId, mediaHashOf: deps.attachments.mediaHashOf, signal}), folder)
+      await deps.bundles.put(userId, workspaceId, record)
+      return record
+    } catch (error) {
+      // A bundle that never verified is a plaintext copy nothing will use.
+      if (await removedWithin(parent, folder.name)) throw error
+      throw new BundleLeftBehind(folder.name, error, signal?.aborted ?? false)
+    }
+  })
 }
 
 /** The recorded folder when it is readable and nothing was wrong with it, else
@@ -195,13 +211,13 @@ const recheckBundle = async (deps: SealingDeps, record: BundleRecord): Promise<V
     if (!folder) return 'requested'
     let verified: VerifiedBundle
     try {
-      verified = await verifyBundle({
+      verified = await withScreenAwake(deps, () => verifyBundle({
         folder,
         workspaceId,
         manifestSha256: record.manifestSha256,
         mediaHashOf: deps.attachments.mediaHashOf,
         signal,
-      })
+      }))
     } catch (error) {
       if (!(error instanceof BundleInvalid)) throw error
       if (folder === record.folder && error.problem !== 'unreadable') return 'changed'
@@ -233,14 +249,6 @@ const purge = async (deps: SealingDeps, {counted}: VerifiedBundle): Promise<void
   }
 }
 
-export const withScreenAwake = async <T>(deps: Pick<SealingDeps, 'keepAwake'>, run: () => Promise<T>): Promise<T> => {
-  const release = await deps.keepAwake()
-  try {
-    return await run()
-  } finally {
-    release()
-  }
-}
 
 export interface SealingPassOptions {
   /** Why a new bundle is needed, when the last pass dropped one. */
@@ -255,37 +263,37 @@ export const runSealingPass = async (
   {retakeReason, resealed}: SealingPassOptions,
 ): Promise<SealingPass> => {
   const {userId, workspaceId, server, ui, signal} = deps
-  // Every step reads or writes for minutes to hours; a sleeping display can
-  // take the machine down with it.
-  return withScreenAwake(deps, async (): Promise<SealingPass> => {
-    const record = (await deps.bundles.get(userId, workspaceId)) ?? (await takeVerifiedBundle(deps, retakeReason))
+  const record = (await deps.bundles.get(userId, workspaceId)) ?? (await takeVerifiedBundle(deps, retakeReason))
 
-    if (!resealed) {
+  if (!resealed) {
+    await withScreenAwake(deps, async () => {
       ui.status({kind: 'resealing', progress: null})
       await resealWorkspace({server, workspaceId, wk, signal, onProgress: progress => ui.status({kind: 'resealing', progress})})
       ui.status({kind: 'verifying', progress: null})
       await verifyReseal({server, workspaceId, wk, signal, onProgress: progress => ui.status({kind: 'verifying', progress})})
-    }
+    })
+  }
 
-    const recheck = await recheckBundle(deps, record)
-    if (typeof recheck === 'string') {
+  const recheck = await recheckBundle(deps, record)
+  if (typeof recheck === 'string') {
+    await deps.bundles.delete(userId, workspaceId)
+    return {kind: 'retake', reason: recheck}
+  }
+
+  // The purge's arguments are what the folder holds, as just counted.
+  try {
+    await withScreenAwake(deps, () => {
+      ui.status({kind: 'purging'})
+      return purge(deps, recheck)
+    })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    if (errorCodeOf(error) === ConversionErrorCode.refused) return {kind: 'purge-refused', message}
+    if (errorCodeOf(error) === ConversionErrorCode.staleBundle) {
       await deps.bundles.delete(userId, workspaceId)
-      return {kind: 'retake', reason: recheck}
+      return {kind: 'retake', reason: 'stale'}
     }
-
-    // The purge's arguments are what the folder holds, as just counted.
-    ui.status({kind: 'purging'})
-    try {
-      await purge(deps, recheck)
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      if (errorCodeOf(error) === ConversionErrorCode.refused) return {kind: 'purge-refused', message}
-      if (errorCodeOf(error) === ConversionErrorCode.staleBundle) {
-        await deps.bundles.delete(userId, workspaceId)
-        return {kind: 'retake', reason: 'stale'}
-      }
-      throw error
-    }
-    return {kind: 'purged'}
-  })
+    throw error
+  }
+  return {kind: 'purged'}
 }

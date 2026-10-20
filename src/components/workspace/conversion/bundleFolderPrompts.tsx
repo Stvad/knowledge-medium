@@ -4,7 +4,7 @@
  * why they run here rather than in the run.
  */
 
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Explanation } from '@/components/workspace/keyUi'
 import type { BundleFolder } from '@/sync/conversion/bundle/bundleParts'
@@ -14,13 +14,19 @@ import { directoryHandleOf } from './conversionFlowDeps'
 import { Actions, errorMessage } from './flowUi'
 
 /** Runs a picker or permission prompt, which must start inside the click:
- *  a dismissal is no error, anything else is shown. */
+ *  a dismissal is no error, anything else is shown. One at a time: a second
+ *  click while one is open does nothing. */
 const usePickerAction = () => {
   const [error, setError] = useState<string | null>(null)
+  const pending = useRef(false)
   const act = (pick: () => Promise<void>) => {
+    if (pending.current) return
+    pending.current = true
     setError(null)
     pick().catch((err: unknown) => {
       if (!isPickerDismissal(err)) setError(errorMessage(err))
+    }).finally(() => {
+      pending.current = false
     })
   }
   return {error, act}

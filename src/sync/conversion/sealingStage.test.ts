@@ -409,21 +409,27 @@ describe('the sealing stage', () => {
     expect(result).toEqual({kind: 'pin-upgrade-failed', result: {ok: false, reason: 'refused', entry: {kind: 'unavailable'}}})
   })
 
-  it('keeps the screen awake for the whole pass, and lets it sleep after', async () => {
-    const awake: string[] = []
+  it('keeps the screen awake for the work, not while a prompt waits, and lets it sleep after', async () => {
+    let holds = 0
     const keepAwake = vi.fn(async () => {
-      awake.push('on')
-      return () => void awake.push('off')
+      holds++
+      return () => void holds--
     })
+    const awakeFor: Record<string, boolean> = {}
+    ui.status = (status: {kind: string}) => {
+      awakeFor[status.kind] = (awakeFor[status.kind] ?? true) && holds > 0
+    }
+    let awakeAtPrompt: boolean | null = null
     ui.chooseBundleFolder = async ({reason}) => {
-      awake.push('bundle')
+      awakeAtPrompt = holds > 0
       ui.folderReasons.push(reason)
       return ui.parent
     }
 
     await run({keepAwake})
 
-    // Then again for the attachment cleanup.
-    expect(awake).toEqual(['on', 'bundle', 'off', 'on', 'off'])
+    expect(awakeAtPrompt).toBe(false)
+    expect(awakeFor).toMatchObject({'taking-bundle': true, resealing: true, verifying: true, purging: true})
+    expect(holds).toBe(0)
   })
 })

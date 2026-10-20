@@ -112,6 +112,8 @@ const scanBlocks = async (
     }
     if (sealedLooking.length < SEALED_LOOKING_SAMPLE) sealedLooking.push(...idsOf(page.filter(isSealedRow)))
     blockRows += page.length
+    // Blocked whatever the rest holds, and nothing measured is used then.
+    if (sealedLooking.length >= SEALED_LOOKING_SAMPLE) break
   }
   return {sealedLooking: sealedLooking.slice(0, SEALED_LOOKING_SAMPLE), media, sizes: {blockRows, blocksBytes, contentBytes}}
 }
