@@ -1,1 +1,1 @@
-import{D4 as e,O4 as t}from"../../chunks/app-EnQ_aCrb.js";export{e as getOrCreatePropertiesPage,t as propertiesPageBlockId};
+import{D4 as e,O4 as t}from"../../chunks/app-lsX88fbQ.js";export{e as getOrCreatePropertiesPage,t as propertiesPageBlockId};

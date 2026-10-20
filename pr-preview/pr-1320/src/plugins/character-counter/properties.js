@@ -1,1 +1,1 @@
-import{gH as e,hH as t,mH as n}from"../../../chunks/app-EnQ_aCrb.js";export{n as charLimitProp,t as charProfileProp,e as charScopeProp};
+import{gH as e,hH as t,mH as n}from"../../../chunks/app-lsX88fbQ.js";export{n as charLimitProp,t as charProfileProp,e as charScopeProp};

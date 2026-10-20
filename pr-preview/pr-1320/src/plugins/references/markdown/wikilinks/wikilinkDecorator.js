@@ -1,1 +1,1 @@
-import{GC as e,KC as t,WC as n}from"../../../../../chunks/app-EnQ_aCrb.js";export{n as isWikilinkDisplayParts,e as resolveWikilinkDisplay,t as wikilinkDisplayDecoratorFacet};
+import{GC as e,KC as t,WC as n}from"../../../../../chunks/app-lsX88fbQ.js";export{n as isWikilinkDisplayParts,e as resolveWikilinkDisplay,t as wikilinkDisplayDecoratorFacet};

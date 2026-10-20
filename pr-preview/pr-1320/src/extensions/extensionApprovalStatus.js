@@ -1,1 +1,1 @@
-import{HD as e,UD as t,VD as n,WD as r}from"../../chunks/app-EnQ_aCrb.js";export{n as ExtensionApprovalStatusProvider,e as ExtensionApprovalStatusStore,t as useExtensionApprovalStatus,r as useExtensionApprovalStatuses};
+import{HD as e,UD as t,VD as n,WD as r}from"../../chunks/app-lsX88fbQ.js";export{n as ExtensionApprovalStatusProvider,e as ExtensionApprovalStatusStore,t as useExtensionApprovalStatus,r as useExtensionApprovalStatuses};

@@ -1,1 +1,1 @@
-import{nv as e,rv as t,tv as n}from"../../../chunks/app-EnQ_aCrb.js";export{n as getVimNormalModeActions,e as jumpVisibleBlocks,t as vimNormalModeActionsExtension};
+import{nv as e,rv as t,tv as n}from"../../../chunks/app-lsX88fbQ.js";export{n as getVimNormalModeActions,e as jumpVisibleBlocks,t as vimNormalModeActionsExtension};

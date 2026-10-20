@@ -1,1 +1,1 @@
-import{$k as e,Qk as t,Zk as n}from"../../../chunks/app-EnQ_aCrb.js";export{n as BlockTypeBlockRenderer,t as BlockTypeContentRenderer,e as writeBlockTypeLabel};
+import{$k as e,Qk as t,Zk as n}from"../../../chunks/app-lsX88fbQ.js";export{n as BlockTypeBlockRenderer,t as BlockTypeContentRenderer,e as writeBlockTypeLabel};

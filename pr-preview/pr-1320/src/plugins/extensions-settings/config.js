@@ -1,1 +1,1 @@
-import{MD as e,ND as t,PD as n,jD as r}from"../../../chunks/app-EnQ_aCrb.js";export{r as extensionsOverridesPresetCore,e as extensionsOverridesProp,t as extensionsPrefsType,n as overridesCodec};
+import{MD as e,ND as t,PD as n,jD as r}from"../../../chunks/app-lsX88fbQ.js";export{r as extensionsOverridesPresetCore,e as extensionsOverridesProp,t as extensionsPrefsType,n as overridesCodec};

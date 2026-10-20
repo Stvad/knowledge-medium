@@ -1,1 +1,1 @@
-import{eO as e,tO as t}from"../chunks/app-EnQ_aCrb.js";export{e as checkForAppUpdate,t as registerServiceWorker};
+import{eO as e,tO as t}from"../chunks/app-lsX88fbQ.js";export{e as checkForAppUpdate,t as registerServiceWorker};

@@ -1,1 +1,1 @@
-import{KN as e,qN as t}from"../../../chunks/app-EnQ_aCrb.js";export{e as declarationOnlyDefinitionForName,t as declarationOnlyStatusText};
+import{KN as e,qN as t}from"../../../chunks/app-lsX88fbQ.js";export{e as declarationOnlyDefinitionForName,t as declarationOnlyStatusText};

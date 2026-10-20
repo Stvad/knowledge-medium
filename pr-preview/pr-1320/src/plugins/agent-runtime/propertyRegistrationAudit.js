@@ -1,1 +1,1 @@
-import{cu as e,lu as t,ou as n,su as r}from"../../../chunks/app-EnQ_aCrb.js";export{n as PROVENANCE_BLOCKS_PER_KEY,r as PROVENANCE_KEY_LIMIT,e as auditPropertyRegistration,t as describeUnregisteredProperty};
+import{cu as e,lu as t,ou as n,su as r}from"../../../chunks/app-lsX88fbQ.js";export{n as PROVENANCE_BLOCKS_PER_KEY,r as PROVENANCE_KEY_LIMIT,e as auditPropertyRegistration,t as describeUnregisteredProperty};

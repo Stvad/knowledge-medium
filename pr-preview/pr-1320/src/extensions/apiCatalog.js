@@ -1,1 +1,1 @@
-import{au as e,iu as t}from"../../chunks/app-EnQ_aCrb.js";export{t as extensionApiCatalog,e as extensionApiRuntimeExports};
+import{au as e,iu as t}from"../../chunks/app-lsX88fbQ.js";export{t as extensionApiCatalog,e as extensionApiRuntimeExports};

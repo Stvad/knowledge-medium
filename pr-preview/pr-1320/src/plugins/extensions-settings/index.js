@@ -1,1 +1,1 @@
-import{Ht as e,MD as t,ND as n}from"../../../chunks/app-EnQ_aCrb.js";export{t as extensionsOverridesProp,n as extensionsPrefsType,e as extensionsSettingsPlugin};
+import{Ht as e,MD as t,ND as n}from"../../../chunks/app-lsX88fbQ.js";export{t as extensionsOverridesProp,n as extensionsPrefsType,e as extensionsSettingsPlugin};

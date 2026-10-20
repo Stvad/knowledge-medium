@@ -1,1 +1,1 @@
-import{$r as e,ri as t}from"../../../chunks/app-EnQ_aCrb.js";export{t as migratePropertiesToBlocksAction,e as propertiesMigrationPlugin};
+import{$r as e,ri as t}from"../../../chunks/app-lsX88fbQ.js";export{t as migratePropertiesToBlocksAction,e as propertiesMigrationPlugin};

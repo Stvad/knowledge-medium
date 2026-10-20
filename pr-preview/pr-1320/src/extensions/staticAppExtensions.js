@@ -1,1 +1,1 @@
-import{U as e}from"../../chunks/app-EnQ_aCrb.js";export{e as staticAppExtensions};
+import{U as e}from"../../chunks/app-lsX88fbQ.js";export{e as staticAppExtensions};

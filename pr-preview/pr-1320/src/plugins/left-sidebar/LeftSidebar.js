@@ -1,1 +1,1 @@
-import{eb as e,nb as t,tb as n}from"../../../chunks/app-EnQ_aCrb.js";export{e as LeftSidebar,n as LeftSidebarCoreSection,t as LeftSidebarShortcutsSection};
+import{eb as e,nb as t,tb as n}from"../../../chunks/app-lsX88fbQ.js";export{e as LeftSidebar,n as LeftSidebarCoreSection,t as LeftSidebarShortcutsSection};

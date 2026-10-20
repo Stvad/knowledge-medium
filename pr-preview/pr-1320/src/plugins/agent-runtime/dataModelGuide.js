@@ -1,1 +1,1 @@
-import{ff as e,pf as t}from"../../../chunks/app-EnQ_aCrb.js";export{e as DATA_MODEL_GUIDE,t as dataModelGuide};
+import{ff as e,pf as t}from"../../../chunks/app-lsX88fbQ.js";export{e as DATA_MODEL_GUIDE,t as dataModelGuide};

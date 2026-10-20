@@ -1,1 +1,1 @@
-import{Au as e,Mu as t,Nu as n,ju as r,ku as i}from"../../../chunks/app-EnQ_aCrb.js";export{i as BLOCK_HISTORY_CONTENT_CHARS,e as LISTED_PROPERTY_NAMES,r as MAX_LISTED_CHANGES,t as blockHistory,n as recentChanges};
+import{Au as e,Mu as t,Nu as n,ju as r,ku as i}from"../../../chunks/app-lsX88fbQ.js";export{i as BLOCK_HISTORY_CONTENT_CHARS,e as LISTED_PROPERTY_NAMES,r as MAX_LISTED_CHANGES,t as blockHistory,n as recentChanges};

@@ -1,1 +1,1 @@
-import{gb as e}from"../../../chunks/app-EnQ_aCrb.js";export{e as CreateWorkspaceDialog};
+import{gb as e}from"../../../chunks/app-lsX88fbQ.js";export{e as CreateWorkspaceDialog};

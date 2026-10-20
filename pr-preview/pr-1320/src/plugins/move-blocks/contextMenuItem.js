@@ -1,1 +1,1 @@
-import{im as e,rm as t}from"../../../chunks/app-EnQ_aCrb.js";export{t as MOVE_BLOCKS_CONTEXT_MENU_ITEM_ID,e as moveBlocksContextMenuItem};
+import{im as e,rm as t}from"../../../chunks/app-lsX88fbQ.js";export{t as MOVE_BLOCKS_CONTEXT_MENU_ITEM_ID,e as moveBlocksContextMenuItem};

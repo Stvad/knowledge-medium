@@ -1,1 +1,1 @@
-import{CL as e,wL as t}from"../../../chunks/app-EnQ_aCrb.js";export{e as floatingAnchorFromRect,t as useAnchoredFloating};
+import{CL as e,wL as t}from"../../../chunks/app-lsX88fbQ.js";export{e as floatingAnchorFromRect,t as useAnchoredFloating};

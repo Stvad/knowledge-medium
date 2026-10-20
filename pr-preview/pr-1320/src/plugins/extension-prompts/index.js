@@ -1,1 +1,1 @@
-import{ED as e,TD as t}from"../../../chunks/app-EnQ_aCrb.js";export{t as ExtensionPromptSurface,e as extensionPromptsExtension};
+import{ED as e,TD as t}from"../../../chunks/app-lsX88fbQ.js";export{t as ExtensionPromptSurface,e as extensionPromptsExtension};

@@ -1,1 +1,1 @@
-import{mD as e,pD as t}from"../../chunks/app-EnQ_aCrb.js";export{t as BlockPasteShellDecorator,e as blockPasteShellDecorator};
+import{mD as e,pD as t}from"../../chunks/app-lsX88fbQ.js";export{t as BlockPasteShellDecorator,e as blockPasteShellDecorator};

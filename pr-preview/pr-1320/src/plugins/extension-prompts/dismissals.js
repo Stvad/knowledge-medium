@@ -1,1 +1,1 @@
-import{LD as e,RD as t,zD as n}from"../../../chunks/app-EnQ_aCrb.js";export{e as ExtensionPromptDismissalStore,t as extensionPromptDismissals,n as useExtensionPromptDismissals};
+import{LD as e,RD as t,zD as n}from"../../../chunks/app-lsX88fbQ.js";export{e as ExtensionPromptDismissalStore,t as extensionPromptDismissals,n as useExtensionPromptDismissals};

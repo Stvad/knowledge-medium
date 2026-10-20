@@ -1,1 +1,1 @@
-import{bk as e,xk as t,yk as n}from"../../chunks/app-EnQ_aCrb.js";export{n as defaultRegistry,e as defaultRendererContributions,t as defaultRenderersExtension};
+import{bk as e,xk as t,yk as n}from"../../chunks/app-lsX88fbQ.js";export{n as defaultRegistry,e as defaultRendererContributions,t as defaultRenderersExtension};

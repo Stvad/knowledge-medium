@@ -1,1 +1,1 @@
-import{X_ as e,Y_ as t}from"../../../chunks/app-EnQ_aCrb.js";export{t as vimNormalModeInteractionExtension,e as vimNormalModePlugin};
+import{X_ as e,Y_ as t}from"../../../chunks/app-lsX88fbQ.js";export{t as vimNormalModeInteractionExtension,e as vimNormalModePlugin};

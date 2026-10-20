@@ -1,1 +1,1 @@
-import{ob as e,sb as t}from"../../../chunks/app-EnQ_aCrb.js";export{e as isLeftSidebarSectionContribution,t as leftSidebarSectionsFacet};
+import{ob as e,sb as t}from"../../../chunks/app-lsX88fbQ.js";export{e as isLeftSidebarSectionContribution,t as leftSidebarSectionsFacet};
