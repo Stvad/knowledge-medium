@@ -1,1 +1,1 @@
-import{Jg as e,Xg as t,Yg as n,Zg as r}from"../../../chunks/app-Ca_KJATh.js";export{e as closeVideoNotesView,n as ensureEditableVideoNoteChild,t as enterVideoNotesView,r as focusVideoNote};
+import{Jg as e,Xg as t,Yg as n,Zg as r}from"../../../chunks/app-C3qYRxEW.js";export{e as closeVideoNotesView,n as ensureEditableVideoNoteChild,t as enterVideoNotesView,r as focusVideoNote};
