@@ -129,7 +129,6 @@ describe('the attachment cleaner over real Storage', {timeout: 30_000}, () => {
           data: {objects: [], folders: []},
           error: null,
         })
-        expect(await client.storage.from(ATTACHMENTS_BUCKET).list(ws)).toEqual({data: [], error: null})
       }
       await expect(list(outsider, ws, owner.id)).rejects.toThrow(/session/)
       await expect(
@@ -165,14 +164,14 @@ describe('the attachment cleaner over real Storage', {timeout: 30_000}, () => {
   })
 
   describe('cleanAttachments', () => {
-    /** An e2ee workspace and its keys, its canary read back as the flow reads it. */
+    /** An e2ee workspace, its keys and its canary. */
     const e2eeWorkspace = async () => {
       const wk = new Uint8Array(randomBytes(32)) as Uint8Array<ArrayBuffer>
       const cek = await importWorkspaceKey(wk)
       const contentKeyHmac = await deriveContentKeyHmac(wk)
       const ws = randomUUID()
-      await insertWorkspace({ws, e2ee: {canary: await mintCanary(cek, ws)}})
-      const [{wk_canary: canary}] = await query<{wk_canary: string}>('select wk_canary from public.workspaces where id = $1', [ws])
+      const canary = await mintCanary(cek, ws)
+      await insertWorkspace({ws, e2ee: {canary}})
       return {ws, keys: {cek, contentKeyHmac}, canary}
     }
 

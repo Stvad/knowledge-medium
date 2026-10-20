@@ -45,8 +45,8 @@ export type ObjectWrite =
 /** The workspace's Storage folder and this device's copies, as the cleaner
  *  needs them. Every method throws on a transient failure. */
 export interface AttachmentCleanerIO {
-  /** Every object in the folder, completely, as the signed-in user sees it:
-   *  paged by name, recursing into folders. Throws rather than return a listing
+  /** Every object in the folder, nested ones included, by exact name,
+   *  completely, as the signed-in user sees it. Throws rather than return a listing
    *  it can't vouch for: RLS filters a listing instead of refusing it, so one run
    *  under a lapsed session reads as an empty folder. */
   listObjects(signal?: AbortSignal): Promise<readonly ObjectPath[]>

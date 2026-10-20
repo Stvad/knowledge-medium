@@ -27,7 +27,7 @@ export interface ListWorkspaceObjectsInput {
  * folder by full name, nested objects included, paged by Storage's cursor.
  * Storage's v1 `list()` matches a folder's name case-insensitively, so it lists
  * `Dir/` and `dir/` as one folder whose objects all read as `Dir/…`; v2
- * compares names bytewise. The pass acts only after this returns.
+ * compares names bytewise.
  *
  * RLS filters a listing rather than refusing it: under the anon key (no
  * session) or another user's session the folder reads as empty, which would
