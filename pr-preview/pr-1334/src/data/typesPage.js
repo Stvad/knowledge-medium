@@ -1,0 +1,1 @@
+import{R2 as e,z2 as t}from"../../chunks/app-CF78nXtA.js";export{e as getOrCreateTypesPage,t as typesPageBlockId};

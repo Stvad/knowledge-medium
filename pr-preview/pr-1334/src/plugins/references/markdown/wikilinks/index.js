@@ -1,0 +1,1 @@
+import{wp as e}from"../../../../../chunks/app-CF78nXtA.js";export{e as wikilinkMarkdownExtension};

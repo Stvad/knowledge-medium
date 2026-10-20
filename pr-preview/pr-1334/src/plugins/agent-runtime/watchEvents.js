@@ -1,0 +1,1 @@
+import{Mu as e,Nu as t}from"../../../chunks/app-CF78nXtA.js";export{e as createWatchEventsRegistry,t as watchEventsRegistry};

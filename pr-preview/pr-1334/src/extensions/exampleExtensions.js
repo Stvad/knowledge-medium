@@ -1,0 +1,1 @@
+import{gE as e,hE as t}from"../../chunks/app-CF78nXtA.js";export{t as exampleExtensions,e as insertExampleExtensionsUnder};

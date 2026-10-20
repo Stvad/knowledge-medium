@@ -1,0 +1,1 @@
+import{rB as e}from"../../../chunks/app-CF78nXtA.js";export{e as geoDataExtension};

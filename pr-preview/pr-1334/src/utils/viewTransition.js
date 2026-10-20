@@ -1,0 +1,1 @@
+import{MF as e}from"../../chunks/app-CF78nXtA.js";export{e as withMoveTransition};
