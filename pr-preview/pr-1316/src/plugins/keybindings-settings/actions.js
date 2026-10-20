@@ -1,1 +1,1 @@
-import{PC as e}from"../../../chunks/app-ClXkRCbY.js";export{e as openKeybindingsSettingsAction};
+import{PC as e}from"../../../chunks/app-BENfKfgH.js";export{e as openKeybindingsSettingsAction};

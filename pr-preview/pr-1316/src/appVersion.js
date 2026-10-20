@@ -1,1 +1,1 @@
-import{Pa as e}from"../chunks/app-ClXkRCbY.js";export{e as appVersion};
+import{Pa as e}from"../chunks/app-BENfKfgH.js";export{e as appVersion};
