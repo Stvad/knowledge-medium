@@ -1,1 +1,0 @@
-import{b4 as e}from"../../../chunks/app-CsXbNH-f.js";export{e as deriveWorkspaceIdNamespace};

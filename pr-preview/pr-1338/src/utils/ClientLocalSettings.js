@@ -1,1 +1,0 @@
-import{GD as e,KD as t}from"../../chunks/app-CsXbNH-f.js";export{e as ClientLocalSettings,t as clientLocalSettings};

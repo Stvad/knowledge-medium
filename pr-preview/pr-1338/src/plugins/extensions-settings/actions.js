@@ -1,1 +1,0 @@
-import{GE as e,WE as t}from"../../../chunks/app-CsXbNH-f.js";export{t as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,e as openExtensionsSettingsAction};

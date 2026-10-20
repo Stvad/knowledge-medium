@@ -1,1 +1,0 @@
-import{uy as e}from"../../../chunks/app-CsXbNH-f.js";export{e as BreadcrumbList};

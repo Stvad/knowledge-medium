@@ -1,1 +1,0 @@
-import{HE as e,UE as t}from"../../../chunks/app-CsXbNH-f.js";export{e as extensionPromptDiagnosticContribution,t as extensionPromptDiagnosticSource};

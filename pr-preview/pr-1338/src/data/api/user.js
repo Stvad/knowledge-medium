@@ -1,1 +1,0 @@
-import{A8 as e,j8 as t,k8 as n}from"../../../chunks/app-CsXbNH-f.js";export{n as SYSTEM_AUTHOR_PREFIX,e as isSystemAuthor,t as systemAuthor};

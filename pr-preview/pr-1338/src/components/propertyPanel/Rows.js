@@ -1,1 +1,0 @@
-import{IM as e,LM as t}from"../../../chunks/app-CsXbNH-f.js";export{e as MetadataRow,t as PropertySectionLabel};
