@@ -66,6 +66,10 @@ describe('serverMediaBlocks', () => {
     await expect(serverMediaBlocks(server, WS, wk, fakeMediaHashOf)).rejects.toThrow('stopped before')
   })
 
+  it('reads a workspace with no rows as one with no media, not as a pass that stopped early', async () => {
+    expect(await serverMediaBlocks(server, 'ws-empty', wk, fakeMediaHashOf)).toEqual([])
+  })
+
   it('fails a read that did not see every row', async () => {
     // A lapsed session reads as an empty table rather than as an error.
     vi.spyOn(server, 'readBlockPage').mockResolvedValue([])
