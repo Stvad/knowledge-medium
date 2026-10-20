@@ -308,6 +308,20 @@ export class FakeConversionServer implements ConversionServer {
     this.phases.set(workspaceId, 'cleaning')
   }
 
+  /** `finish_conversion`. */
+  async finishConversion(workspaceId: string): Promise<void> {
+    this.calls.push({method: 'finishConversion', count: 1})
+    if (this.signedOut) throw new FakeServerError('42501', 'permission denied for function finish_conversion')
+    if (this.sessionUserId !== this.ownerUserId) {
+      throw new FakeServerError(ConversionErrorCode.refused, 'finish_conversion: only the workspace owner can finish its conversion')
+    }
+    const phase = this.phases.get(workspaceId)
+    if (phase !== 'cleaning') {
+      throw new FakeServerError(ConversionErrorCode.refused, `finish_conversion: the conversion phase is ${phase ?? 'none'}, not cleaning`)
+    }
+    this.phases.delete(workspaceId)
+  }
+
   /** Forget the workspace's history, as for rows written before the history
    *  trigger existed. */
   dropHistory(workspaceId: string): void {

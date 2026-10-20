@@ -24,6 +24,7 @@ import { signedInUser, stackClient, supabaseStack, type StackUser } from '@/test
 import { createAttachmentCleanerIO, listWorkspaceObjects } from './attachmentCleanerIO.js'
 import { ATTACHMENTS_BUCKET, createSupabaseBlobStore, type BlobStore } from './blobStore.js'
 import { InMemoryByteStore } from './byteStore.js'
+import { InMemoryByteUploadStore } from './uploadStore.js'
 
 const bytes = (text: string) => new TextEncoder().encode(text) as Uint8Array<ArrayBuffer>
 const randomObject = (size: number) => new Uint8Array(randomBytes(size)) as Uint8Array<ArrayBuffer>
@@ -144,21 +145,21 @@ describe('the attachment cleaner over real Storage', {timeout: 30_000}, () => {
       expect(await blobStoreOf(owner).put(ws, name, bytes('a photo'))).toBe('written')
 
       for (const user of [viewer, outsider]) {
-        await expect(blobStoreOf(user).delete(ws, name)).rejects.toThrow(/blob delete failed \(\d+ AccessDenied\)/)
+        await expect(blobStoreOf(user).delete(ws, name, undefined)).rejects.toThrow(/blob delete failed \(\d+ AccessDenied\)/)
       }
       expect(await storedNames(ws)).toEqual([name])
 
-      await blobStoreOf(owner).delete(ws, name)
+      await blobStoreOf(owner).delete(ws, name, undefined)
       expect(await storedNames(ws)).toEqual([])
       expect(await blobStoreOf(owner).probe(ws, name)).toBeNull()
-      await expect(blobStoreOf(owner).delete(ws, name)).rejects.toThrow(/blob delete failed \(\d+ NoSuchKey\)/)
+      await expect(blobStoreOf(owner).delete(ws, name, undefined)).rejects.toThrow(/blob delete failed \(\d+ NoSuchKey\)/)
     })
 
     it('deletes a nested object by its path', async () => {
       const ws = await insertWorkspace()
       await plant(ws, 'outside/deeper/note')
       await plant(ws, 'outside/kept')
-      await blobStoreOf(owner).delete(ws, 'outside/deeper/note')
+      await blobStoreOf(owner).delete(ws, 'outside/deeper/note', undefined)
       expect(await storedNames(ws)).toEqual(['outside/kept'])
     })
   })
@@ -180,6 +181,7 @@ describe('the attachment cleaner over real Storage', {timeout: 30_000}, () => {
         client: owner.client,
         blobStore: blobStoreOf(owner),
         byteStore: new InMemoryByteStore(),
+        uploadStore: new InMemoryByteUploadStore(),
         // Read only by `mediaBlocks`, which is given here instead.
         repo: {} as Repo,
         userId: owner.id,

@@ -1,7 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { resealWorkspace } from '../reseal.js'
 import { contentColumnsOf } from '../sealing.js'
-import { flipUnder, keyOf, sealFor, seedPlaintext, WS } from '../test/conversionFixtures.js'
+import { flipUnder, keyOf, mediaPropertiesJson, seedMedia, sealFor, seedPlaintext, WS } from '../test/conversionFixtures.js'
+import { createFakeAttachmentStorage, fakeMediaHashOf, type FakeAttachmentStorage } from '../test/fakeAttachmentStorage.js'
+import type { UnrecoverableMedia } from '../attachmentCleaner.js'
+import { computeContentHash } from '../../crypto/contentHash.js'
+import { rawNameOf } from './attachmentParts.js'
 import { FakeConversionServer, type FakeBlockRow } from '../test/fakeConversionServer.js'
 import { MemoryBundleFolder } from '../test/memoryBundleFolder.js'
 import { scanPart, sha256Hex, writeBytesPart, type BundleWritable } from './bundleParts.js'
@@ -14,18 +18,22 @@ let server: FakeConversionServer
 let folder: MemoryBundleFolder
 let seeded: FakeBlockRow[]
 let wk: CryptoKey
-
+let storage: FakeAttachmentStorage
+let confirmed: (readonly UnrecoverableMedia[])[]
 
 beforeEach(async () => {
   server = new FakeConversionServer()
   seeded = seedPlaintext(server, 5)
   folder = new MemoryBundleFolder()
   wk = await keyOf(1)
+  storage = createFakeAttachmentStorage()
+  confirmed = []
 })
 
 const take = (options: Partial<TakeBundleOptions> = {}) =>
-  takeBundle({server, workspaceId: WS, folder, writeLocalDb: writeFakeLocalDb, pageSize: 2, now: () => new Date(0), ...options})
-const verify = (manifestSha256?: string) => verifyBundle({folder, workspaceId: WS, manifestSha256})
+  takeBundle({server, workspaceId: WS, folder, writeLocalDb: writeFakeLocalDb, pageSize: 2, now: () => new Date(0),
+    attachments: {source: storage.io, confirmNoVerifiedSource: async media => { confirmed.push(media) }}, ...options})
+const verify = (manifestSha256?: string) => verifyBundle({folder, workspaceId: WS, manifestSha256, mediaHashOf: fakeMediaHashOf})
 
 const lines = (name: string) => folder.text(name).split('\n').filter(Boolean).map(line => JSON.parse(line))
 const manifestOf = (): BundleManifest => JSON.parse(folder.text(BUNDLE_PARTS.manifest))
@@ -82,7 +90,7 @@ describe('stoppableFolder', () => {
   it('ends a bundle check on Stop while the drive is slow to answer, as a stop and not a bad bundle', async () => {
     const stop = new AbortController()
     folder.getFileHandle = () => new Promise(() => {})
-    const checking = verifyBundle({folder, workspaceId: WS, signal: stop.signal})
+    const checking = verifyBundle({folder, workspaceId: WS, mediaHashOf: fakeMediaHashOf, signal: stop.signal})
 
     stop.abort(stopped())
     await expect(checking).rejects.toThrow('stopped')
@@ -300,7 +308,7 @@ describe('verifyBundle', () => {
   it('refuses rows or a manifest of another workspace', async () => {
     rewrite(BUNDLE_PARTS.blocks, rows => rows.map((row, i) => (i === 2 ? {...row, workspace_id: 'ws-other'} : row)))
     expect(await problemOf(verify())).toBe('row-other-workspace')
-    expect(await problemOf(verifyBundle({folder, workspaceId: 'ws-other'}))).toBe('other-workspace')
+    expect(await problemOf(verifyBundle({folder, workspaceId: 'ws-other', mediaHashOf: fakeMediaHashOf}))).toBe('other-workspace')
   })
 
   it('refuses history of another workspace, out of order, or not ending at through', async () => {
@@ -336,5 +344,222 @@ describe('verifyBundle', () => {
     expect(manifest.through).toBe(0)
     expect(folder.text(BUNDLE_PARTS.history)).toBe('')
     await verify()
+  })
+})
+
+const bytesOf = (text: string): Uint8Array<ArrayBuffer> => new TextEncoder().encode(text)
+const utf8Hex = (text: string): string => sha256Hex(bytesOf(text))
+const attachmentsDir = () => folder.folders.get('attachments')!
+const otherDir = () => folder.folders.get('other-objects')!
+
+describe('verifyBundle manifest shapes', () => {
+  it('refuses a manifest whose lists hold malformed entries, rather than crash on them', async () => {
+    await flipUnder(server, wk)
+    await take()
+    const manifest = manifestOf()
+    for (const broken of [
+      {...manifest, otherObjects: [null]},
+      {...manifest, otherObjects: [{name: 'x', path: 'x', sha256: 'x'}]},
+      {...manifest, noVerifiedSource: [7]},
+      {...manifest, parts: {...manifest.parts, [BUNDLE_PARTS.blocks]: null}},
+    ]) {
+      folder.setText(BUNDLE_PARTS.manifest, JSON.stringify(broken))
+      expect(await problemOf(verify())).toBe('manifest-unreadable')
+    }
+  })
+})
+
+describe('takeBundle attachments', () => {
+  it('archives media bytes held only locally, only in Storage, or in both, under their bare hex', async () => {
+    const onlyLocal = await seedMedia(server, storage, {id: 'm1', bytes: bytesOf('local only'), at: {local: true}})
+    const onlyRemote = await seedMedia(server, storage, {id: 'm2', bytes: bytesOf('remote only'), at: {remote: true}})
+    const both = await seedMedia(server, storage, {id: 'm3', bytes: bytesOf('both places'), at: {local: true, remote: true}})
+
+    const {manifest} = await take()
+
+    expect([...attachmentsDir().files.keys()].sort()).toEqual([onlyLocal, onlyRemote, both].map(rawNameOf).sort())
+    expect(new TextDecoder().decode(attachmentsDir().files.get(rawNameOf(onlyLocal)))).toBe('local only')
+    expect(new TextDecoder().decode(attachmentsDir().files.get(rawNameOf(onlyRemote)))).toBe('remote only')
+    expect(new TextDecoder().decode(attachmentsDir().files.get(rawNameOf(both)))).toBe('both places')
+    expect(manifest.noVerifiedSource).toEqual([])
+    expect(confirmed).toEqual([])
+    await verify()
+  })
+
+  it('also archives the bytes of a soft-deleted media block', async () => {
+    const bytes = bytesOf('deleted but kept')
+    const hash = await computeContentHash(bytes)
+    server.insert({id: 'gone', workspace_id: WS, deleted: true, properties_json: mediaPropertiesJson(hash)})
+    storage.objects.set(rawNameOf(hash), bytes)
+
+    await take()
+
+    expect(new TextDecoder().decode(attachmentsDir().files.get(rawNameOf(hash)))).toBe('deleted but kept')
+    await verify()
+  })
+
+  it('does not take a Storage object that does not hash to the block, and asks the user about it', async () => {
+    const hash = await seedMedia(server, storage, {id: 'bad', bytes: bytesOf('the real bytes'), at: {}})
+    storage.objects.set(rawNameOf(hash), bytesOf('swapped bytes'))
+
+    const {manifest} = await take()
+
+    expect(confirmed).toEqual([[{contentHash: hash, blockIds: ['bad']}]])
+    expect(manifest.noVerifiedSource).toEqual([hash])
+    expect(attachmentsDir().files.has(rawNameOf(hash))).toBe(false)
+    // The swapped object is not a media hash's own copy, but it has that name,
+    // so it stays out of other-objects too.
+    expect(manifest.otherObjects).toEqual([])
+    await verify()
+  })
+
+  it('fails the bundle when the user rejects the missing media', async () => {
+    await seedMedia(server, storage, {id: 'lost', bytes: bytesOf('nowhere'), at: {}})
+
+    await expect(take({
+      attachments: {source: storage.io, confirmNoVerifiedSource: async () => { throw new Error('user said no') }},
+    })).rejects.toThrow('user said no')
+    expect(folder.files.has(BUNDLE_PARTS.manifest)).toBe(false)
+  })
+
+  it('archives every object that is not a media hash\'s raw name under the digest of its path', async () => {
+    const nested = bytesOf('nested bytes')
+    const lookalikeBytes = bytesOf('some other bytes')
+    storage.objects.set('nested/thing', nested)
+    // A 64-hex name that is not the digest of any media block's bytes.
+    const lookalike = 'a'.repeat(64)
+    storage.objects.set(lookalike, lookalikeBytes)
+
+    const {manifest} = await take()
+
+    expect([...otherDir().files.keys()].sort()).toEqual([utf8Hex('nested/thing'), utf8Hex(lookalike)].sort())
+    expect(manifest.otherObjects).toEqual(expect.arrayContaining([
+      {name: utf8Hex('nested/thing'), path: 'nested/thing', sha256: sha256Hex(nested), bytes: nested.length},
+      {name: utf8Hex(lookalike), path: lookalike, sha256: sha256Hex(lookalikeBytes), bytes: lookalikeBytes.length},
+    ]))
+    expect(manifest.otherObjects).toHaveLength(2)
+    expect(otherDir().files.get(utf8Hex('nested/thing'))).toEqual(nested)
+    await verify()
+  })
+
+  it('does not archive or list an unaddressable Storage path', async () => {
+    storage.objects.set('dir/a b', bytesOf('spaced'))
+    storage.objects.set('plain', bytesOf('plain bytes'))
+
+    const {manifest} = await take()
+
+    expect(manifest.otherObjects.map(entry => entry.path)).toEqual(['plain'])
+    expect([...otherDir().files.keys()]).toEqual([utf8Hex('plain')])
+    await verify()
+  })
+
+  it('asks about the missing media only after the verified attachments are written', async () => {
+    const present = await seedMedia(server, storage, {id: 'ok', bytes: bytesOf('present'), at: {local: true}})
+    await seedMedia(server, storage, {id: 'lost', bytes: bytesOf('nowhere'), at: {}})
+    const seenAtConfirm: string[][] = []
+
+    await take({attachments: {source: storage.io, confirmNoVerifiedSource: async () => {
+      seenAtConfirm.push([...attachmentsDir().files.keys()])
+      expect(folder.files.has(BUNDLE_PARTS.manifest)).toBe(false)
+    }}})
+
+    expect(seenAtConfirm).toEqual([[rawNameOf(present)]])
+  })
+
+  it('leaves no manifest when the confirmation rejects after the files were written', async () => {
+    const present = await seedMedia(server, storage, {id: 'ok', bytes: bytesOf('present'), at: {local: true}})
+    await seedMedia(server, storage, {id: 'lost', bytes: bytesOf('nowhere'), at: {}})
+
+    await expect(take({attachments: {source: storage.io, confirmNoVerifiedSource: async () => { throw new Error('user said no') }}}))
+      .rejects.toThrow('user said no')
+
+    expect([...attachmentsDir().files.keys()]).toEqual([rawNameOf(present)])
+    expect(folder.files.has(BUNDLE_PARTS.manifest)).toBe(false)
+  })
+
+  it('rejects when a listed object reads as absent', async () => {
+    storage.objects.set('ghost', bytesOf('x'))
+    vi.spyOn(storage.io, 'readObject').mockResolvedValue(null)
+
+    await expect(take()).rejects.toMatchObject({name: 'ListedObjectUnreadable', path: 'ghost'})
+    expect(folder.files.has(BUNDLE_PARTS.manifest)).toBe(false)
+  })
+})
+
+describe('verifyBundle attachments', () => {
+  let hash: string
+  let otherName: string
+
+  beforeEach(async () => {
+    hash = await seedMedia(server, storage, {id: 'm1', bytes: bytesOf('attachment bytes'), at: {local: true}})
+    storage.objects.set('stray/file', bytesOf('stray bytes'))
+    otherName = utf8Hex('stray/file')
+    await flipUnder(server, wk)
+    await take()
+  })
+
+  it('passes a fresh bundle that holds attachments and other objects', async () => {
+    expect(manifestOf().otherObjects.map(entry => entry.path)).toEqual(['stray/file'])
+    await verify()
+  })
+
+  it('refuses an attachment whose bytes changed', async () => {
+    attachmentsDir().files.set(rawNameOf(hash), bytesOf('tampered'))
+    expect(await problemOf(verify())).toBe('attachment-mismatch')
+  })
+
+  it('refuses an attachment that is missing', async () => {
+    attachmentsDir().files.delete(rawNameOf(hash))
+    expect(await problemOf(verify())).toBe('attachment-mismatch')
+  })
+
+  it('refuses a bundle whose attachments folder is gone', async () => {
+    folder.folders.delete('attachments')
+    expect(await problemOf(verify())).toBe('part-unreadable')
+  })
+
+  it('accepts a missing attachment the manifest lists as having no verified source', async () => {
+    attachmentsDir().files.delete(rawNameOf(hash))
+    folder.setText(BUNDLE_PARTS.manifest, JSON.stringify({...manifestOf(), noVerifiedSource: [hash]}))
+    await verify()
+  })
+
+  it('refuses a no-source list naming a hash no media block carries', async () => {
+    folder.setText(BUNDLE_PARTS.manifest, JSON.stringify({...manifestOf(), noVerifiedSource: [hash, `sha256:${'b'.repeat(64)}`]}))
+    expect(await problemOf(verify())).toBe('no-source-list')
+  })
+
+  it('checks the manifest digest the device recorded before it reads the lists', async () => {
+    const recorded = (await verify()).manifestSha256
+    folder.setText(BUNDLE_PARTS.manifest, JSON.stringify({...manifestOf(), noVerifiedSource: [`sha256:${'b'.repeat(64)}`]}))
+    expect(await problemOf(verify(recorded))).toBe('manifest-changed')
+  })
+
+  it('refuses an other object whose bytes changed', async () => {
+    otherDir().files.set(otherName, bytesOf('tampered'))
+    expect(await problemOf(verify())).toBe('other-object-mismatch')
+  })
+
+  it('refuses an other object that is missing', async () => {
+    otherDir().files.delete(otherName)
+    expect(await problemOf(verify())).toBe('part-unreadable')
+  })
+
+  it('refuses an other-objects entry not named for its path', async () => {
+    const manifest = manifestOf()
+    folder.setText(BUNDLE_PARTS.manifest, JSON.stringify({
+      ...manifest,
+      otherObjects: manifest.otherObjects.map(entry => ({...entry, path: 'somewhere/else'})),
+    }))
+    expect(await problemOf(verify())).toBe('other-object-mismatch')
+  })
+
+  it('refuses an other-objects entry whose recorded size differs from the file', async () => {
+    const manifest = manifestOf()
+    folder.setText(BUNDLE_PARTS.manifest, JSON.stringify({
+      ...manifest,
+      otherObjects: manifest.otherObjects.map(entry => ({...entry, bytes: entry.bytes + 1})),
+    }))
+    expect(await problemOf(verify())).toBe('other-object-mismatch')
   })
 })

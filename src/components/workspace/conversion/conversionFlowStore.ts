@@ -32,8 +32,7 @@ export const conversionFlowTarget = (): ConversionFlowTarget | null => target
 export const useConversionFlowTarget = (): ConversionFlowTarget | null =>
   useSyncExternalStore(callback => subscribers.add(callback), conversionFlowTarget)
 
-/** Offered from workspace settings only in development builds until the flow
- *  can finish a conversion: the attachment cleanup and `finish_conversion` are
- *  not wired in yet (#1290). The gate offers to continue a conversion that has
- *  already flipped in every build. */
+/** Starting a conversion is offered from workspace settings only in
+ *  development builds until it has run against the hosted project (#1290). A
+ *  conversion already under way is offered to continue in every build. */
 export const CONVERSION_START_ENABLED = import.meta.env.DEV

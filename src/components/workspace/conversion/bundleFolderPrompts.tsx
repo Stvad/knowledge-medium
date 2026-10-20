@@ -1,5 +1,5 @@
 /**
- * The two prompts that put the recovery bundle's folder in the run's hands.
+ * The prompts that put the recovery bundle's folder in the run's hands.
  * The picker and the permission request must start inside the click, which is
  * why they run here rather than in the run.
  */
@@ -8,7 +8,7 @@ import { useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Explanation } from '@/components/workspace/keyUi'
 import type { BundleFolder } from '@/sync/conversion/bundle/bundleParts'
-import type { BundleRetakeReason } from '@/sync/conversion/sealingStage'
+import type { BundleRetakeReason, ReopenBundlePrompt } from '@/sync/conversion/sealingStage'
 import { isPickerDismissal, pickDirectory, requestDirectoryPermission } from '@/utils/fileSystemAccess'
 import { directoryHandleOf } from './conversionFlowDeps'
 import { Actions, errorMessage } from './flowUi'
@@ -69,9 +69,19 @@ export function ChooseBundleFolderPrompt({reason, answer, cancel}: {
   )
 }
 
-export function ReopenBundleFolderPrompt({recorded, problem, answer, cancel}: {
-  recorded: BundleFolder
-  problem: string | null
+const REOPEN_PURPOSE: Record<ReopenBundlePrompt['purpose'], {why: string; without: string}> = {
+  purge: {
+    why: "Before the server's history is deleted, this device reads the recovery bundle once more, to make sure it is still complete.",
+    without: 'Take a new bundle',
+  },
+  cleanup: {
+    why: 'The attachment cleanup deletes an object the recovery bundle archived only once it has read the copy in the bundle.',
+    without: 'Go on without it',
+  },
+}
+
+export function ReopenBundleFolderPrompt({prompt: {recorded, problem, purpose, archived}, answer, cancel}: {
+  prompt: ReopenBundlePrompt
   answer: (folder: BundleFolder | null) => void
   cancel: () => void
 }) {
@@ -81,16 +91,22 @@ export function ReopenBundleFolderPrompt({recorded, problem, answer, cancel}: {
   return (
     <>
       <Explanation>
-        Before the server's history is deleted, this device reads the recovery bundle once more, to
-        make sure it is still complete. Allow access to its folder, "{recorded.name}", or pick it (or
-        the folder you made it in) if it has moved.
+        {REOPEN_PURPOSE[purpose].why} Allow access to its folder, "{recorded.name}", or pick it (or the
+        folder you made it in) if it has moved.
       </Explanation>
+      {purpose === 'cleanup' && (
+        <Explanation>
+          {archived > 0
+            ? `Without it, the ${archived} object(s) it archived stay on the server, and the conversion can't finish.`
+            : "Without it, an attachment missing everywhere else can't be rebuilt from it."}
+        </Explanation>
+      )}
       {problem && <p className="text-sm text-destructive">{problem}</p>}
       {denied && <p className="text-sm text-destructive">Access wasn't granted. Choose the folder instead.</p>}
       {error && <p className="text-sm text-destructive">{error}</p>}
       <div className="flex flex-wrap justify-end gap-2">
         <Button type="button" variant="secondary" onClick={cancel}>Cancel</Button>
-        <Button type="button" variant="secondary" onClick={() => answer(null)}>Take a new bundle</Button>
+        <Button type="button" variant="secondary" onClick={() => answer(null)}>{REOPEN_PURPOSE[purpose].without}</Button>
         <Button
           type="button"
           variant="secondary"
@@ -112,6 +128,37 @@ export function ReopenBundleFolderPrompt({recorded, problem, answer, cancel}: {
           Allow access
         </Button>
       </div>
+    </>
+  )
+}
+
+/** This device has no record of the bundle: another device took it, or this
+ *  browser's storage was cleared. */
+export function ChooseExistingBundlePrompt({problem, answer, cancel}: {
+  problem: string | null
+  answer: (folder: BundleFolder) => void
+  cancel: () => void
+}) {
+  const {error, act} = usePickerAction()
+  return (
+    <>
+      <Explanation>
+        To clean up the workspace's attachments, this device needs the recovery bundle taken when the
+        conversion started, and it has no record of it. Choose the bundle's folder: the one holding
+        manifest.json.
+      </Explanation>
+      {problem && <p className="text-sm text-destructive">{problem}</p>}
+      {error && <p className="text-sm text-destructive">{error}</p>}
+      <Actions
+        primary={{
+          label: 'Choose the folder',
+          onClick: () => act(async () => {
+            const directory = await pickDirectory({id: 'km-e2ee-recovery', mode: 'read'})
+            if (directory) answer(directory)
+          }),
+        }}
+        secondary={{label: 'Cancel', onClick: cancel}}
+      />
     </>
   )
 }

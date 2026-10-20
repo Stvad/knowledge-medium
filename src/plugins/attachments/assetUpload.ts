@@ -40,7 +40,7 @@ import {
 } from './mediaCapture.js'
 import { drainUploads } from './uploadDrain.js'
 import { recoverFailedUploads } from './uploadRecovery.js'
-import { reconcileUploads } from './uploadReconcile.js'
+import { isAssetBlockPresent, reconcileUploads } from './uploadReconcile.js'
 import { getByteUploadStore } from './uploadStore.js'
 
 let blobStoreSingleton: BlobStore | null = null
@@ -156,7 +156,7 @@ export const runUploadReconcile = async (userId: string, repo: Repo): Promise<vo
   if (!getBlobStore()) return
   await reconcileUploads(userId, {
     store: getByteUploadStore(),
-    isBlockPresent: async (_ws, id) => (await repo.load(id)) != null,
+    isBlockPresent: (_ws, id) => isAssetBlockPresent(repo, id),
   })
   armUploadDrain(userId)
 }

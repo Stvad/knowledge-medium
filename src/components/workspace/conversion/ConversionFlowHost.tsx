@@ -1,14 +1,13 @@
 import * as DialogPrimitive from '@radix-ui/react-dialog'
-import { useCallback, useEffect, useMemo } from 'react'
+import { useEffect, useState } from 'react'
 import { ErrorBoundary, type FallbackProps } from 'react-error-boundary'
 import { Button } from '@/components/ui/button'
 import { useIsLocalOnly } from '@/components/Login'
 import { Explanation, GateCard } from '@/components/workspace/keyUi'
 import { useRepo } from '@/context/repo'
 import { cancelArmedHolds } from '@/shortcuts/holdRegistry'
-import type { ConversionUi } from '@/sync/conversion/runConversion'
 import { ConversionFlow } from './ConversionFlow'
-import { conversionFlowDeps, conversionUnavailable } from './conversionFlowDeps'
+import { conversionSetup, type ConversionSetup } from './conversionFlowDeps'
 import { closeConversionFlow, useConversionFlowTarget, type ConversionFlowTarget } from './conversionFlowStore'
 
 const preventDefault = (event: Event) => event.preventDefault()
@@ -60,19 +59,24 @@ export function ConversionFlowHost() {
 function HostedFlow({target}: {target: ConversionFlowTarget}) {
   const repo = useRepo()
   const localOnly = useIsLocalOnly()
-  const unavailable = useMemo(() => conversionUnavailable(localOnly), [localOnly])
-  const makeDeps = useCallback(
-    (ui: ConversionUi, signal: AbortSignal) => conversionFlowDeps(repo, target.workspaceId, ui, signal),
-    [repo, target.workspaceId],
-  )
-  return (
-    <ConversionFlow
-      workspaceName={target.workspaceName}
-      unavailable={unavailable}
-      makeDeps={makeDeps}
-      onClose={closeConversionFlow}
-    />
-  )
+  const [setup, setSetup] = useState<{for: string; setup: ConversionSetup} | null>(null)
+  const key = `${target.workspaceId}:${localOnly}`
+  useEffect(() => {
+    let live = true
+    void conversionSetup(repo, target.workspaceId, localOnly).then(next => {
+      if (live) setSetup({for: key, setup: next})
+    })
+    return () => { live = false }
+  }, [repo, target.workspaceId, localOnly, key])
+  if (setup?.for !== key) {
+    return (
+      <GateCard title="Preparing the conversion…" wide>
+        <Explanation>Checking what this device can reach.</Explanation>
+        <Button type="button" variant="secondary" onClick={closeConversionFlow}>Close</Button>
+      </GateCard>
+    )
+  }
+  return <ConversionFlow workspaceName={target.workspaceName} setup={setup.setup} onClose={closeConversionFlow}/>
 }
 
 function FlowCrashed({error}: FallbackProps) {

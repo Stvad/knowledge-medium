@@ -13,11 +13,15 @@ import {
   type ConversionStatus,
   type ConversionUi,
 } from './runConversion.js'
-import { keyOf, sealFor, seedPlaintext, WS } from './test/conversionFixtures.js'
+import { rawNameOf } from './bundle/attachmentParts.js'
+import { keyOf, mediaPropertiesJson, sealFor, seedMedia, seedPlaintext, WS } from './test/conversionFixtures.js'
 import { FakeConversionServer } from './test/fakeConversionServer.js'
-import { FAKE_LOCAL_DB, flowDeps, passingEnvironment, USER } from './test/flowFixtures.js'
+import { emptyBundleRecord, FAKE_LOCAL_DB, flowDeps, passingEnvironment, pastThePurge, USER } from './test/flowFixtures.js'
 import { MemoryBundleFolder } from './test/memoryBundleFolder.js'
 import type { BundleFolder } from './bundle/bundleParts.js'
+import { InMemoryBundleRecordStore } from './bundle/bundleRecord.js'
+import type { FinishPrompt } from './cleaningStage.js'
+import { createFakeAttachmentStorage, type FakeAttachmentStorage } from './test/fakeAttachmentStorage.js'
 
 /** A user who answers every prompt as told, and remembers what they were asked. */
 class ScriptedUi implements ConversionUi {
@@ -63,6 +67,19 @@ class ScriptedUi implements ConversionUi {
     return next
   }
 
+  async confirmNoVerifiedSource() {
+    throw new Error('every attachment has a verified copy')
+  }
+
+  async chooseExistingBundle(): Promise<BundleFolder> {
+    throw new Error('this device holds the bundle record')
+  }
+
+  readonly finishes: FinishPrompt[] = []
+  async confirmFinish(prompt: FinishPrompt) {
+    this.finishes.push(prompt)
+  }
+
   status(status: ConversionStatus) {
     this.statuses.push(status)
   }
@@ -74,6 +91,9 @@ let flipAttempts: InMemoryFlipAttempts
 let ui: ScriptedUi
 let localCanaries: string[]
 let clock: number
+let storage: FakeAttachmentStorage
+let bundles: InMemoryBundleRecordStore
+
 
 beforeEach(() => {
   server = new FakeConversionServer()
@@ -83,12 +103,16 @@ beforeEach(() => {
   flipAttempts = new InMemoryFlipAttempts(() => clock)
   ui = new ScriptedUi()
   localCanaries = []
+  storage = createFakeAttachmentStorage()
+  bundles = new InMemoryBundleRecordStore()
 })
 
 const run = (overrides: Partial<ConversionFlowDeps> = {}) =>
   runConversion(flowDeps(server, ui, {
     keyStore,
     flipAttempts,
+    attachments: storage.io,
+    bundles,
     markLocalConverted: async canary => void localCanaries.push(canary),
     ...overrides,
   }))
@@ -115,23 +139,28 @@ const earlierAttempt = async () => {
 
 const PLAINTEXT_READ = {kind: 'read' as const, state: {encryptionMode: 'none', conversionPhase: null, wkCanary: null, ownerUserId: USER}}
 
+
 describe('runConversion: preflight → key → flip', () => {
   it('flips under a key the user typed back, stores it, and marks the local row', async () => {
     const result = await run()
 
-    // Past the flip the stage runs on through the bundle, re-seal and purge.
-    expect(result).toEqual({kind: 'stopped', stage: {kind: 'cleaning', canary: await serverCanary()}})
+    // Past the flip the stage runs on through the bundle, re-seal, purge and cleanup.
+    expect(result).toMatchObject({kind: 'done'})
+    expect(ui.finishes).toEqual([{unrecoverable: [], left: [], refused: [], bundleRead: true}])
     expect(ui.contracts).toEqual(['plaintext'])
     // The dry run measures what the bundle then writes.
     const [bundle] = [...ui.bundleParent.folders.values()]
     const manifest = JSON.parse(bundle.text('manifest.json'))
     expect(ui.preflights).toEqual([{
+      oversized: [],
+      noVerifiedSource: [],
       sizes: {
         blockRows: 3,
         blocksBytes: manifest.parts['blocks.jsonl'].bytes,
         historyRows: 3,
         historyBytes: manifest.parts['server-history.jsonl'].bytes,
         localDbBytes: FAKE_LOCAL_DB.length,
+        attachmentBytes: 0,
         contentBytes: expect.any(Number),
       },
     }])
@@ -216,7 +245,7 @@ describe('runConversion: preflight → key → flip', () => {
   it('carries on past a flip that committed after its response was lost', async () => {
     server.loseNextFlipResponse = true
 
-    expect(await run()).toMatchObject({kind: 'stopped', stage: {kind: 'cleaning'}})
+    expect(await run()).toMatchObject({kind: 'done'})
     expect(flips()).toBe(1)
     expect(await validateCanary((await storedKey()).wk, await serverCanary(), WS)).toBe(true)
     // Marked from the server's canary as each stage past the flip begins.
@@ -245,7 +274,8 @@ describe('runConversion: preflight → key → flip', () => {
       return flip(workspaceId, canary)
     }
 
-    expect(await run()).toMatchObject({kind: 'stopped', stage: {kind: 'cleaning', canary: earlier.canary}})
+    expect(await run()).toMatchObject({kind: 'done'})
+    expect(await serverCanary()).toBe(earlier.canary)
   })
 
   it('reports a refusal it can\'t follow up as blocked, not as refused', async () => {
@@ -450,6 +480,91 @@ describe('runConversion: preflight', () => {
       {kind: 'rejected-uploads', count: 1},
     ])
   })
+
+  it('refuses while attachment uploads are unconfirmed, before downloading any attachment', async () => {
+    storage.pendingUploads = 3
+    await seedMedia(server, storage, {id: 'photo', bytes: new Uint8Array([1, 2, 3]), at: {remote: true}})
+    const reads = vi.spyOn(storage.io, 'readObject')
+
+    expect(await blockers({})).toEqual([{kind: 'pending-attachment-uploads', count: 3}])
+    expect(reads).not.toHaveBeenCalled()
+  })
+
+  it('checks attachment uploads again right before the flip', async () => {
+    let checks = 0
+    vi.spyOn(storage.io, 'pendingUploads').mockImplementation(async () => (++checks > 1 ? 1 : 0))
+
+    expect(await run()).toEqual({kind: 'preflight-failed', blockers: [{kind: 'pending-attachment-uploads', count: 1}]})
+    expect(ui.keyPrompts).toHaveLength(1)
+    expect(flips()).toBe(0)
+  })
+
+  it('refuses when this device has no room to keep the attachments only Storage holds, saying how much', async () => {
+    const big = new Uint8Array(3000)
+    await seedMedia(server, storage, {id: 'kept', bytes: new Uint8Array(1000), at: {remote: true}})
+    await seedMedia(server, storage, {id: 'big', bytes: big, at: {remote: true}})
+    // Room for the first, after the database's headroom.
+    const freeLocalBytes = async () => 512 * 1024 * 1024 + 2000
+
+    expect(await blockers({preflight: passingEnvironment({freeLocalBytes})}))
+      // 1000 left after the first; the second needs only what it lacks.
+      .toEqual([{kind: 'local-space', neededBytes: big.length - 1000, freeBytes: 1000}])
+  })
+
+  it('refuses when this device is already short of the database headroom, with no attachment to keep', async () => {
+    const freeLocalBytes = async () => 512 * 1024 * 1024 - 100_000
+
+    expect(await blockers({preflight: passingEnvironment({freeLocalBytes})}))
+      .toEqual([{kind: 'local-space', neededBytes: 100_000, freeBytes: 0}])
+  })
+
+  it('counts the database headroom a device is already short of into how much to free', async () => {
+    const remoteOnly = new Uint8Array(1000)
+    await seedMedia(server, storage, {id: 'remote', bytes: remoteOnly, at: {remote: true}})
+    const freeLocalBytes = async () => 512 * 1024 * 1024 - 100_000
+
+    expect(await blockers({preflight: passingEnvironment({freeLocalBytes})}))
+      .toEqual([{kind: 'local-space', neededBytes: remoteOnly.length + 100_000, freeBytes: 0}])
+  })
+
+  it('reports the attachment survey as it goes', async () => {
+    await seedMedia(server, storage, {id: 'a', bytes: new Uint8Array([1]), at: {remote: true}})
+    storage.objects.set('stray', new Uint8Array([2]))
+    ui.confirmPreflight = async () => {
+      throw new DOMException('cancelled', 'AbortError')
+    }
+
+    await expect(run()).rejects.toThrow('cancelled')
+    expect(ui.statuses.filter(status => status.kind === 'preflight')).toEqual([
+      {kind: 'preflight', progress: null},
+      {kind: 'preflight', progress: {checked: 1, total: 2}},
+      {kind: 'preflight', progress: {checked: 2, total: 2}},
+    ])
+  })
+
+  it('lists media with no verified copy with the blocks that carry it, and keeps a Storage-only copy here', async () => {
+    const remoteOnly = new Uint8Array([1, 2, 3])
+    const kept = await seedMedia(server, storage, {id: 'kept', bytes: remoteOnly, at: {remote: true}})
+    const lost = await seedMedia(server, storage, {id: 'lost', bytes: new Uint8Array([4, 5]), at: {}})
+    server.insert({id: 'lost-too', workspace_id: WS, properties_json: mediaPropertiesJson(lost)})
+    // Storage holds other bytes under the lost one's name.
+    storage.objects.set(rawNameOf(lost), new Uint8Array([6]))
+    storage.objects.set('stray', new Uint8Array(10))
+    ui.confirmPreflight = async report => {
+      ui.preflights.push(report)
+      throw new DOMException('cancelled', 'AbortError')
+    }
+
+    await expect(run()).rejects.toThrow('cancelled')
+    expect(ui.preflights[0]).toMatchObject({
+      noVerifiedSource: [{contentHash: lost, blockIds: ['lost', 'lost-too']}],
+      oversized: [],
+      // The kept copy and the stray; the object at the lost hash's name is neither.
+      sizes: {attachmentBytes: remoteOnly.length + 10},
+    })
+    expect(storage.local.get(rawNameOf(kept))).toEqual(remoteOnly)
+    expect(storage.local.has(rawNameOf(lost))).toBe(false)
+  })
 })
 
 describe('runConversion: every run', () => {
@@ -479,7 +594,7 @@ describe('runConversion: every run', () => {
 
       expect(await run({lock})).toEqual({kind: 'busy'})
       releaseFirst()
-      expect(await first).toMatchObject({kind: 'stopped'})
+      expect(await first).toMatchObject({kind: 'done'})
     } finally {
       vi.unstubAllGlobals()
     }
@@ -521,7 +636,7 @@ describe('runConversion: every run', () => {
     server.flip(WS, minted.canary)
     server.setPhase(WS, null)
 
-    expect(await run()).toEqual({kind: 'done'})
+    expect(await run()).toMatchObject({kind: 'done'})
     expect(ui.contracts).toEqual([])
     expect(localCanaries).toEqual([minted.canary])
   })
@@ -529,14 +644,56 @@ describe('runConversion: every run', () => {
   it('resumes from the stage the server shows', async () => {
     const minted = await mintWorkspaceKey(WS)
     await keyStore.put(USER, WS, minted.record)
-    server.flip(WS, minted.canary)
-    server.setPhase(WS, 'cleaning')
+    await pastThePurge(server, minted.record.wk, minted.canary)
+    await bundles.put(USER, WS, emptyBundleRecord())
 
-    expect(await run()).toEqual({kind: 'stopped', stage: {kind: 'cleaning', canary: minted.canary}})
+    expect(await run()).toMatchObject({kind: 'done'})
     expect(ui.contracts).toEqual(['cleaning'])
     expect(flips()).toBe(0)
   })
 })
+
+describe('runConversion: finishing', () => {
+  beforeEach(async () => {
+    const minted = await mintWorkspaceKey(WS)
+    await keyStore.put(USER, WS, minted.record)
+    await pastThePurge(server, minted.record.wk, minted.canary)
+    await bundles.put(USER, WS, emptyBundleRecord())
+  })
+  const finishes = () => server.calls.filter(call => call.method === 'finishConversion').length
+
+  it('finishes, names the bundle folder, and forgets the bundle record', async () => {
+    expect(await run()).toEqual({kind: 'done', bundleFolder: 'bundle'})
+    expect(finishes()).toBe(1)
+    expect(await bundles.get(USER, WS)).toBeNull()
+  })
+
+  it('takes a finish whose response was lost as done', async () => {
+    const finish = server.finishConversion.bind(server)
+    server.finishConversion = async workspaceId => {
+      await finish(workspaceId)
+      throw new Error('conversion: finish_conversion failed: the request timed out')
+    }
+
+    expect(await run()).toEqual({kind: 'done', bundleFolder: 'bundle'})
+    expect(await bundles.get(USER, WS)).toBeNull()
+  })
+
+  it('reports a finish that failed with the conversion still unfinished', async () => {
+    server.finishConversion = async () => {
+      throw new Error('conversion: finish_conversion failed: the request timed out')
+    }
+
+    await expect(run()).rejects.toThrow('timed out')
+    expect(await phaseOf()).toBe('cleaning')
+    expect(await bundles.get(USER, WS)).not.toBeNull()
+  })
+})
+
+const phaseOf = async () => {
+  const read = await server.conversionState(WS)
+  return read.kind === 'read' ? read.state.conversionPhase : null
+}
 
 describe('runConversion: the canary check past the flip', () => {
   let saved: Awaited<ReturnType<typeof mintWorkspaceKey>>
@@ -549,7 +706,7 @@ describe('runConversion: the canary check past the flip', () => {
   it('asks for the saved key when this device holds none, and stores it', async () => {
     ui.pastes = ['not a key', (await mintWorkspaceKey(WS)).displayed, saved.displayed]
 
-    expect(await run()).toMatchObject({kind: 'stopped', stage: {kind: 'cleaning'}})
+    expect(await run()).toMatchObject({kind: 'done'})
     expect(ui.savedKeyPrompts).toEqual([
       {context: 'converting', problem: null, canStartOver: false},
       {context: 'converting', problem: 'format', canStartOver: false},

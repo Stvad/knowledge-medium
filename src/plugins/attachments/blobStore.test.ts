@@ -231,7 +231,7 @@ describe('SupabaseBlobStore.delete', () => {
 
   it('deletes one object through the single-object route, never the bulk remove', async () => {
     const {store, fetch, remove} = makeDeleteStore(200)
-    await expect(store.delete('ws-A', 'dir/dead beef')).resolves.toBeUndefined()
+    await expect(store.delete('ws-A', 'dir/dead beef', undefined)).resolves.toBeUndefined()
     expect(fetch).toHaveBeenCalledWith('https://x.supabase.co/storage/v1/object/attachments/ws-A/dir/dead%20beef', {
       method: 'DELETE',
       headers: {'X-Client-Info': 't'},
@@ -239,14 +239,30 @@ describe('SupabaseBlobStore.delete', () => {
     expect(remove).not.toHaveBeenCalled()
   })
 
+  it('aborts the request itself with the signal, so a stopped delete is never sent late', async () => {
+    const {store, fetch} = makeDeleteStore(200)
+    fetch.mockImplementation((_url, init) => new Promise((_resolve, reject) => {
+      init.signal?.addEventListener('abort', () => reject(init.signal?.reason))
+    }))
+    const stop = new AbortController()
+
+    const deleting = store.delete('ws', 'k', stop.signal)
+    let settled = false
+    void deleting.catch(() => {}).finally(() => { settled = true })
+    stop.abort(new DOMException('stopped', 'AbortError'))
+
+    await vi.waitFor(() => expect(settled).toBe(true))
+    await expect(deleting).rejects.toThrow('stopped')
+  })
+
   it('throws unless Storage confirms the delete, naming the code its body gives', async () => {
     for (const status of [404, 403, 500]) {
       const {store} = makeDeleteStore(status)
-      await expect(store.delete('ws', 'k')).rejects.toThrow(`(${status})`)
+      await expect(store.delete('ws', 'k', undefined)).rejects.toThrow(`(${status})`)
     }
-    await expect(makeDeleteStore(400, 'null').store.delete('ws', 'k')).rejects.toThrow('blob delete failed (400) for ws/k')
+    await expect(makeDeleteStore(400, 'null').store.delete('ws', 'k', undefined)).rejects.toThrow('blob delete failed (400) for ws/k')
     // Storage's shape for an absent object; a denial differs only in the code.
     const {store} = makeDeleteStore(400, JSON.stringify({statusCode: '404', error: 'not_found', code: 'NoSuchKey'}))
-    await expect(store.delete('ws', 'k')).rejects.toThrow('blob delete failed (400 NoSuchKey) for ws/k')
+    await expect(store.delete('ws', 'k', undefined)).rejects.toThrow('blob delete failed (400 NoSuchKey) for ws/k')
   })
 })

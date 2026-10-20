@@ -20,6 +20,11 @@ export interface BundleRecord {
   readonly historyRows: number
   readonly blockRows: number
   readonly exportedAt: string
+  /** Media hashes the bundle holds no bytes for: confirmed before it was taken. */
+  readonly noVerifiedSource: readonly string[]
+  /** The Storage paths archived under `other-objects/`: the only objects the
+   *  cleaner may delete without converting them. */
+  readonly otherObjectPaths: readonly string[]
   /** The bundle's folder: a `FileSystemDirectoryHandle` in the browser. */
   readonly folder: BundleFolder
 }
@@ -32,6 +37,8 @@ export const bundleRecordOf = ({manifest, manifestSha256, counted}: VerifiedBund
   historyRows: counted.historyRows,
   blockRows: counted.blockRows,
   exportedAt: manifest.exportedAt,
+  noVerifiedSource: manifest.noVerifiedSource,
+  otherObjectPaths: manifest.otherObjects.map(entry => entry.path),
   folder,
 })
 
@@ -57,13 +64,20 @@ export class InMemoryBundleRecordStore implements BundleRecordStore {
   }
 }
 
+/** A stored record, or null for one without the attachment lists: its bundle
+ *  predates the attachment parts, so it can't vouch for the cleanup. */
+export const storedBundleRecord = (stored: unknown): BundleRecord | null => {
+  const record = stored as Partial<BundleRecord> | undefined
+  if (!record || !Array.isArray(record.otherObjectPaths) || !Array.isArray(record.noVerifiedSource)) return null
+  return record as BundleRecord
+}
+
 /** IndexedDB, which structured-clones the directory handle along with the record. */
 export class IndexedDbBundleRecordStore implements BundleRecordStore {
   private readonly idb = new IdbKeyedStore('km-e2ee-conversion', 'bundle_records')
 
   async get(userId: string, workspaceId: string) {
-    const record = await this.idb.tx<BundleRecord | undefined>('readonly', store => store.get(idbRecordId(userId, workspaceId)))
-    return record ?? null
+    return storedBundleRecord(await this.idb.tx<unknown>('readonly', store => store.get(idbRecordId(userId, workspaceId))))
   }
 
   async put(userId: string, workspaceId: string, record: BundleRecord) {

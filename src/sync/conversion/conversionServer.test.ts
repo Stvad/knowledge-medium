@@ -91,9 +91,13 @@ const WS = 'ws-1'
 const blockId = (i: number) => `b${String(i).padStart(3, '0')}`
 const ENVELOPE = 'enc:v1:AAAA'
 
-/** One call of every server method but the flip, typed over the interface: a
- *  method added to it doesn't compile here until it's listed. */
-const cancellableCalls: {[K in Exclude<keyof ConversionServer, 'convertWorkspaceToE2ee'>]: (server: ConversionServer) => Promise<unknown>} = {
+/** The one-way steps: Stop never cuts them, their own deadline does. */
+type OneWay = 'convertWorkspaceToE2ee' | 'finishConversion'
+type Call = (server: ConversionServer) => Promise<unknown>
+
+/** One call of every server method, typed over the interface: a method added
+ *  to it doesn't compile here until it's listed in one table or the other. */
+const cancellableCalls: {[K in Exclude<keyof ConversionServer, OneWay>]: Call} = {
   readWorkspace: server => server.readWorkspace(WS),
   workspaceCounts: server => server.workspaceCounts(WS),
   readBlockPage: server => server.readBlockPage(WS, null, 1),
@@ -103,6 +107,10 @@ const cancellableCalls: {[K in Exclude<keyof ConversionServer, 'convertWorkspace
   readFullBlockPage: server => server.readFullBlockPage(WS, null, 1),
   readHistoryPage: server => server.readHistoryPage(WS, 0, 1, 1),
   purgeWorkspaceHistory: server => server.purgeWorkspaceHistory(WS, 1, 0),
+}
+const oneWayCalls: {[K in OneWay]: Call} = {
+  convertWorkspaceToE2ee: server => server.convertWorkspaceToE2ee(WS, ENVELOPE),
+  finishConversion: server => server.finishConversion(WS),
 }
 
 describe('createSupabaseConversionServer', () => {
@@ -161,7 +169,7 @@ describe('createSupabaseConversionServer', () => {
     expect(rpcs.map(({fn, args}) => ({fn, args}))).toEqual([{fn: 'convert_workspace_to_e2ee', args: {p_workspace_id: WS, p_wk_canary: ENVELOPE}}])
   })
 
-  it('lets the run cancel every request of every method but the flip, which may commit with nobody waiting', async () => {
+  it('lets the run cancel every request but the one-way steps, which may commit with nobody waiting', async () => {
     for (const [method, call] of Object.entries(cancellableCalls)) {
       const {client, requests} = fakeClient({blocks: [], blocks_history: [], workspaces: []}, {rpcData: {conversion_workspace_counts: [{block_count: 0, history_count: 0, max_event_id: 0}]}})
       const run = new AbortController()
@@ -170,19 +178,23 @@ describe('createSupabaseConversionServer', () => {
       expect(requests.map(request => request.signal), method).toEqual(requests.map(() => run.signal))
     }
 
-    const {client, requests} = fakeClient({})
-    const run = new AbortController()
-    await createSupabaseConversionServer(client, run.signal).convertWorkspaceToE2ee(WS, ENVELOPE)
-    run.abort()
-    expect(requests).toHaveLength(1)
-    expect(requests[0].signal?.aborted).toBe(false)
+    for (const [method, call] of Object.entries(oneWayCalls)) {
+      const {client, requests} = fakeClient({})
+      const run = new AbortController()
+      await call(createSupabaseConversionServer(client, run.signal))
+      run.abort()
+      expect(requests, method).toHaveLength(1)
+      expect(requests[0].signal?.aborted, method).toBe(false)
+    }
   })
 
-  it('gives up waiting on a flip request past its own deadline', async () => {
-    const {client, rpcs} = fakeClient({workspaces: []})
-    await createSupabaseConversionServer(client, undefined, {flipTimeoutMs: 1}).convertWorkspaceToE2ee(WS, ENVELOPE)
+  it('gives up waiting on a one-way step past its own deadline', async () => {
+    for (const [method, call] of Object.entries(oneWayCalls)) {
+      const {client, requests} = fakeClient({})
+      await call(createSupabaseConversionServer(client, undefined, {oneWayTimeoutMs: 1}))
 
-    await vi.waitFor(() => expect(rpcs[0].signal?.aborted).toBe(true))
+      await vi.waitFor(() => expect(requests[0].signal?.aborted, method).toBe(true))
+    }
   })
 
   it('reads a workspace this session cannot see as null', async () => {

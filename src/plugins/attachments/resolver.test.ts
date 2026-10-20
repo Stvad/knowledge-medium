@@ -115,7 +115,7 @@ describe('createAssetResolver — happy paths', () => {
 
 describe('NO_REMOTE_BLOB_STORE — local-only build (no Supabase)', () => {
   it('refuses every write, a delete included: none may read as done with nothing done', async () => {
-    await expect(NO_REMOTE_BLOB_STORE.delete('ws', 'k')).rejects.toThrow(/no remote/)
+    await expect(NO_REMOTE_BLOB_STORE.delete('ws', 'k', undefined)).rejects.toThrow(/no remote/)
     await expect(NO_REMOTE_BLOB_STORE.put('ws', 'k', new Uint8Array(1))).rejects.toThrow(/no remote/)
   })
 

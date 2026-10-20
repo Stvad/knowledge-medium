@@ -201,4 +201,16 @@ export const scanPart = async (
   return hasher.digest()
 }
 
+/** The bundle's own folder, when the user picked the one it was made in. The
+ *  handle itself, not a {@link stoppableFolder}: it may go into the bundle
+ *  record, which IndexedDB stores by structured clone. */
+export const bundleFolderIn = async (picked: BundleFolder, name: string, signal?: AbortSignal): Promise<BundleFolder> => {
+  try {
+    return await untilStopped(picked.getDirectoryHandle(name), signal)
+  } catch (error) {
+    if (signal?.aborted) throw error
+    return picked
+  }
+}
+
 export const sha256Hex = (bytes: Uint8Array): string => bytesToHex(sha256(bytes))

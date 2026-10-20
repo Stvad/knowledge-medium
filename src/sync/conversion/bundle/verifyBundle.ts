@@ -13,6 +13,7 @@
 
 import { SEALED_COLUMNS } from '../../transform.js'
 import { isSealedRow } from '../sealing.js'
+import { ATTACHMENTS_DIR, OTHER_OBJECTS_DIR, otherObjectNameOf, rawNameOf } from './attachmentParts.js'
 import { untilStopped } from '@/utils/untilStopped.js'
 import { scanPart, sha256Hex, stoppableFolder, type BundleFolder, type PartDigest } from './bundleParts.js'
 import { BUNDLE_FORMAT, BUNDLE_FORMAT_VERSION, BUNDLE_PARTS, type BundleManifest } from './manifest.js'
@@ -34,6 +35,11 @@ export type BundleProblem =
   | 'row-count'
   | 'history-order'
   | 'history-through'
+  /** A media block's `attachments/` entry is missing or holds other bytes. */
+  | 'attachment-mismatch'
+  /** The no-verified-source list names a hash no media block carries. */
+  | 'no-source-list'
+  | 'other-object-mismatch'
 
 export class BundleInvalid extends Error {
   constructor(
@@ -61,6 +67,8 @@ export interface VerifiedBundle {
 export interface VerifyBundleOptions {
   readonly folder: BundleFolder
   readonly workspaceId: string
+  /** A stored row's media content hash, or null: `ConversionAttachmentsIO.mediaHashOf`. */
+  readonly mediaHashOf: (propertiesJson: string) => string | null
   /** The bundle record's manifest digest: the folder must be that bundle. */
   readonly manifestSha256?: string
   readonly signal?: AbortSignal
@@ -88,6 +96,17 @@ const scanFolderPart = async (
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
 
+const isOtherObjectEntry = (entry: unknown): boolean =>
+  isRecord(entry) && typeof entry.name === 'string' && typeof entry.path === 'string' &&
+  typeof entry.sha256 === 'string' && typeof entry.bytes === 'number'
+
+/** Every list and record a later check reads into, so a malformed manifest
+ *  is a bundle problem rather than a crash. */
+const hasManifestShape = (manifest: Record<string, unknown>): boolean =>
+  isRecord(manifest.parts) && Object.values(manifest.parts).every(isRecord) &&
+  Array.isArray(manifest.noVerifiedSource) && manifest.noVerifiedSource.every(hash => typeof hash === 'string') &&
+  Array.isArray(manifest.otherObjects) && manifest.otherObjects.every(isOtherObjectEntry)
+
 const parseManifest = (bytes: Uint8Array, workspaceId: string): BundleManifest => {
   let manifest: unknown
   try {
@@ -95,7 +114,7 @@ const parseManifest = (bytes: Uint8Array, workspaceId: string): BundleManifest =
   } catch {
     throw new BundleInvalid('manifest-unreadable', `${BUNDLE_PARTS.manifest} isn't JSON`)
   }
-  if (!isRecord(manifest) || manifest.format !== BUNDLE_FORMAT || manifest.version !== BUNDLE_FORMAT_VERSION || !isRecord(manifest.parts)) {
+  if (!isRecord(manifest) || manifest.format !== BUNDLE_FORMAT || manifest.version !== BUNDLE_FORMAT_VERSION || !hasManifestShape(manifest)) {
     throw new BundleInvalid('manifest-unreadable', `${BUNDLE_PARTS.manifest} isn't a version ${BUNDLE_FORMAT_VERSION} bundle manifest`)
   }
   if (manifest.workspaceId !== workspaceId) {
@@ -142,8 +161,14 @@ const verifyJsonlPart = async (
   return lines
 }
 
-const verifyBlocks = async (folder: BundleFolder, manifest: BundleManifest, signal?: AbortSignal): Promise<number> => {
+const verifyBlocks = async (
+  folder: BundleFolder,
+  manifest: BundleManifest,
+  mediaHashOf: VerifyBundleOptions['mediaHashOf'],
+  signal?: AbortSignal,
+): Promise<{blockRows: number; mediaHashes: Set<string>}> => {
   const name = BUNDLE_PARTS.blocks
+  const mediaHashes = new Set<string>()
   // Every id, not just the last: the rows come in the server's collation,
   // which a JS string comparison can't stand in for. About 40-100 MB per
   // million blocks.
@@ -161,11 +186,63 @@ const verifyBlocks = async (folder: BundleFolder, manifest: BundleManifest, sign
     if (isSealedRow(row as Record<(typeof SEALED_COLUMNS)[number], string>)) {
       throw new BundleInvalid('sealed-row', `${name} line ${line} holds sealed content`)
     }
+    const hash = mediaHashOf(row.properties_json as string)
+    if (hash) mediaHashes.add(hash)
   }, signal)
   if (lines !== manifest.serverBlockCount) {
     throw new BundleInvalid('row-count', `${name} has ${lines} rows; the server held ${manifest.serverBlockCount}`)
   }
-  return lines
+  return {blockRows: lines, mediaHashes}
+}
+
+/** Every media block's bytes, unless the manifest lists its hash as having
+ *  no verified source, and that list holds nothing else: otherwise the cleaner
+ *  could later delete a raw object whose only other copy the bundle lacks. */
+const verifyAttachments = async (
+  folder: BundleFolder,
+  manifest: BundleManifest,
+  mediaHashes: ReadonlySet<string>,
+  signal?: AbortSignal,
+): Promise<void> => {
+  const noSource = new Set(manifest.noVerifiedSource)
+  for (const hash of noSource) {
+    if (!mediaHashes.has(hash)) throw new BundleInvalid('no-source-list', `${hash} is listed as having no source, but no block carries it`)
+  }
+  const attachments = await subfolder(folder, ATTACHMENTS_DIR, signal)
+  for (const hash of mediaHashes) {
+    if (noSource.has(hash)) continue
+    const name = rawNameOf(hash)
+    const digest = await scanFolderPart(attachments, name, undefined, signal).catch((error: unknown) => {
+      if (error instanceof BundleInvalid && error.problem === 'part-unreadable') {
+        throw new BundleInvalid('attachment-mismatch', `the bytes of attachment ${hash} are missing`)
+      }
+      throw error
+    })
+    if (digest.sha256 !== name) throw new BundleInvalid('attachment-mismatch', `the bytes of attachment ${hash} are not its own`)
+  }
+}
+
+const verifyOtherObjects = async (folder: BundleFolder, manifest: BundleManifest, signal?: AbortSignal): Promise<void> => {
+  if (manifest.otherObjects.length === 0) return
+  const others = await subfolder(folder, OTHER_OBJECTS_DIR, signal)
+  for (const entry of manifest.otherObjects) {
+    if (entry.name !== otherObjectNameOf(entry.path)) {
+      throw new BundleInvalid('other-object-mismatch', `${OTHER_OBJECTS_DIR}/${entry.name} isn't named for ${entry.path}`)
+    }
+    const digest = await scanFolderPart(others, entry.name, undefined, signal)
+    if (digest.sha256 !== entry.sha256 || digest.bytes !== entry.bytes) {
+      throw new BundleInvalid('other-object-mismatch', `${OTHER_OBJECTS_DIR}/${entry.name} differs from the manifest`)
+    }
+  }
+}
+
+const subfolder = async (folder: BundleFolder, name: string, signal?: AbortSignal): Promise<BundleFolder> => {
+  try {
+    return await folder.getDirectoryHandle(name)
+  } catch (error) {
+    if (signal?.aborted) throw error
+    throw new BundleInvalid('part-unreadable', `${name}/ can't be read (${describe(error)})`)
+  }
 }
 
 const verifyHistory = async (
@@ -198,17 +275,26 @@ const readManifest = async (folder: BundleFolder, signal?: AbortSignal): Promise
   }
 }
 
-export const verifyBundle = async ({folder: given, workspaceId, manifestSha256, signal}: VerifyBundleOptions): Promise<VerifiedBundle> => {
+const manifestChanged = () =>
+  new BundleInvalid('manifest-changed', `${BUNDLE_PARTS.manifest} isn't the one this device recorded`)
+
+/** Is this the bundle the record vouches for? Its manifest pins every part's
+ *  digest, so the manifest's own hash says so without reading the parts. */
+export const checkManifest = async (folder: BundleFolder, manifestSha256: string, signal?: AbortSignal): Promise<void> => {
+  if (sha256Hex(await readManifest(stoppableFolder(folder, signal), signal)) !== manifestSha256) throw manifestChanged()
+}
+
+export const verifyBundle = async ({folder: given, workspaceId, manifestSha256, mediaHashOf, signal}: VerifyBundleOptions): Promise<VerifiedBundle> => {
   const folder = stoppableFolder(given, signal)
   const manifestBytes = await readManifest(folder, signal)
   const digest = sha256Hex(manifestBytes)
-  if (manifestSha256 !== undefined && digest !== manifestSha256) {
-    throw new BundleInvalid('manifest-changed', `${BUNDLE_PARTS.manifest} isn't the one this device recorded`)
-  }
+  if (manifestSha256 !== undefined && digest !== manifestSha256) throw manifestChanged()
   const manifest = parseManifest(manifestBytes, workspaceId)
-  const blockRows = await verifyBlocks(folder, manifest, signal)
+  const {blockRows, mediaHashes} = await verifyBlocks(folder, manifest, mediaHashOf, signal)
   const {historyRows, through} = await verifyHistory(folder, manifest, signal)
   const localDb = BUNDLE_PARTS.localDb
   requireDigest(localDb, manifest.parts[localDb], await scanFolderPart(folder, localDb, undefined, signal))
+  await verifyAttachments(folder, manifest, mediaHashes, signal)
+  await verifyOtherObjects(folder, manifest, signal)
   return {manifest, manifestSha256: digest, counted: {blockRows, historyRows, through}}
 }

@@ -21,6 +21,8 @@
  * a destruction hook.
  */
 
+import { withLock } from './laneLock.js'
+
 /** Root directory name under the OPFS root for all asset bytes. */
 export const ASSETS_ROOT = 'assets'
 
@@ -81,6 +83,11 @@ export const assetPathSegments = (userId: string, workspaceId: string, contentKe
   encodeSegment(workspaceId),
   encodeSegment(contentKey),
 ]
+
+/** One writer per object across tabs: a failed write then removes only a file
+ *  it created, never one a concurrent put of the same key has filled. */
+const writeLockName = (userId: string, workspaceId: string, contentKey: string): string =>
+  `km-asset-bytes:${userId}:${workspaceId}:${contentKey}`
 
 const isNotFound = (err: unknown): boolean =>
   err instanceof DOMException && err.name === 'NotFoundError'
@@ -213,15 +220,17 @@ export class OpfsByteStore implements ByteStore {
     }
   }
 
-  async put(userId: string, workspaceId: string, contentKey: string, bytes: Uint8Array<ArrayBuffer>): Promise<void> {
-    try {
-      await this.writeFile(userId, workspaceId, contentKey, bytes)
-    } catch {
-      // A cached ws-dir handle may be stale (the dir was removed by a purge or evicted
-      // out-of-band): drop it and retry once from a fresh resolve, which re-creates the chain.
-      this.wsDirCache.delete(this.wsCacheKey(userId, workspaceId))
-      await this.writeFile(userId, workspaceId, contentKey, bytes)
-    }
+  put(userId: string, workspaceId: string, contentKey: string, bytes: Uint8Array<ArrayBuffer>): Promise<void> {
+    return withLock(writeLockName(userId, workspaceId, contentKey), async () => {
+      try {
+        await this.writeFile(userId, workspaceId, contentKey, bytes)
+      } catch {
+        // A cached ws-dir handle may be stale (the dir was removed by a purge or evicted
+        // out-of-band): drop it and retry once from a fresh resolve, which re-creates the chain.
+        this.wsDirCache.delete(this.wsCacheKey(userId, workspaceId))
+        await this.writeFile(userId, workspaceId, contentKey, bytes)
+      }
+    })
   }
 
   private async writeFile(
@@ -231,12 +240,24 @@ export class OpfsByteStore implements ByteStore {
     bytes: Uint8Array<ArrayBuffer>,
   ): Promise<void> {
     const dir = await this.workspaceDir(userId, workspaceId, true)
-    const fileHandle = await dir.getFileHandle(encodeSegment(contentKey), { create: true })
-    const writable = await fileHandle.createWritable()
+    const name = encodeSegment(contentKey)
+    let created = false
+    const fileHandle = await dir.getFileHandle(name).catch((err: unknown) => {
+      if (!isNotFound(err)) throw err
+      created = true
+      return dir.getFileHandle(name, { create: true })
+    })
+    let writable: FileSystemWritableFileStream | undefined
     try {
+      writable = await fileHandle.createWritable()
       await writable.write(bytes)
-    } finally {
       await writable.close()
+    } catch (err) {
+      // The write's own error (a full disk's QuotaExceededError), not the errored
+      // stream's close(); and no empty file left for a read to serve as the bytes.
+      await writable?.abort().catch(() => {})
+      if (created) await dir.removeEntry(name).catch(() => {})
+      throw err
     }
   }
 
