@@ -14,10 +14,9 @@ const migrationsDir = join(repoRoot, 'supabase', 'migrations')
 const testsDir = join(repoRoot, 'supabase', 'tests')
 // Matches the hosted project's database version (`npx supabase projects list`), not the CLI's default image.
 const postgresImage = process.env.CHECK_DB_POSTGRES_IMAGE ?? 'public.ecr.aws/supabase/postgres:17.11.0.003'
-// The hosted project's auth and API servers, as a linked checkout records them (supabase/.temp/gotrue-version and
-// rest-version).
-const gotrueImage = process.env.CHECK_DB_GOTRUE_IMAGE ?? 'public.ecr.aws/supabase/gotrue:v2.189.0'
-const postgrestImage = process.env.CHECK_DB_POSTGREST_IMAGE ?? 'public.ecr.aws/supabase/postgrest:v14.5'
+// The hosted project's auth and API servers (`npx supabase services`; supabase/.temp only updates on `supabase link`).
+const gotrueImage = process.env.CHECK_DB_GOTRUE_IMAGE ?? 'public.ecr.aws/supabase/gotrue:v2.197.0'
+const postgrestImage = process.env.CHECK_DB_POSTGREST_IMAGE ?? 'public.ecr.aws/supabase/postgrest:v14.18'
 // The hosted project's Storage API (`npx supabase services`).
 const storageImage = process.env.CHECK_DB_STORAGE_IMAGE ?? 'public.ecr.aws/supabase/storage-api:v1.80.2'
 const postgresPassword = 'postgres'
