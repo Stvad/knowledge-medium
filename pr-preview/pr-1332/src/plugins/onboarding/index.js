@@ -1,0 +1,1 @@
+import{Av as e,Gv as t,Hv as n,Uv as r,Wv as i}from"../../../chunks/app-BhBq_kDw.js";export{r as EXTENSIONS_PAGE_TITLE,i as TUTORIAL_DEFAULT_TITLE,t as TUTORIAL_VIM_TITLE,e as onboardingPlugin,n as seedTutorial};

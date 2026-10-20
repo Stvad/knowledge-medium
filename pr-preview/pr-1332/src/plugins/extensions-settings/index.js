@@ -1,0 +1,1 @@
+import{GO as e,KO as t,Vn as n}from"../../../chunks/app-BhBq_kDw.js";export{e as extensionsOverridesProp,t as extensionsPrefsType,n as extensionsSettingsPlugin};

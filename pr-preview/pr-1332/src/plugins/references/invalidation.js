@@ -1,0 +1,1 @@
+import{dB as e,fB as t}from"../../../chunks/app-BhBq_kDw.js";export{e as REFERENCES_TARGET_INVALIDATION_CHANNEL,t as referencesInvalidationRule};

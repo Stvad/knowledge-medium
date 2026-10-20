@@ -1,0 +1,1 @@
+import{IS as e,QS as t,ZS as n}from"../../../chunks/app-BhBq_kDw.js";export{n as DEFAULT_THEME_ID_DARK,t as DEFAULT_THEME_ID_LIGHT,e as defaultThemeContributions};

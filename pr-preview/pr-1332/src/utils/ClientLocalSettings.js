@@ -1,0 +1,1 @@
+import{Uk as e,Wk as t}from"../../chunks/app-BhBq_kDw.js";export{e as ClientLocalSettings,t as clientLocalSettings};

@@ -1,0 +1,1 @@
+import{GR as e,KR as t}from"../../chunks/app-BhBq_kDw.js";export{e as appRuntimeUpdateEvent,t as refreshAppRuntime};

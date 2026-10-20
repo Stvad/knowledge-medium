@@ -1,0 +1,1 @@
+import{iH as e,rH as t}from"../../../chunks/app-BhBq_kDw.js";export{t as PLACES_UNDER_BLOCK_QUERY,e as placesUnderBlockQuery};

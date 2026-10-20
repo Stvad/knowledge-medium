@@ -1,0 +1,1 @@
+import{BR as e,VR as t}from"../../../chunks/app-BhBq_kDw.js";export{e as PropertyShapeButton,t as PropertyShapeGlyph};

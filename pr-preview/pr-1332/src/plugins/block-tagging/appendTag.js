@@ -1,0 +1,1 @@
+import{Jc as e,qc as t}from"../../../chunks/app-BhBq_kDw.js";export{t as appendTagToBlocks,e as appendTagToContent};

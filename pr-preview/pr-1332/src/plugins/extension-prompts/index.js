@@ -1,0 +1,1 @@
+import{RO as e,zO as t}from"../../../chunks/app-BhBq_kDw.js";export{e as ExtensionPromptSurface,t as extensionPromptsExtension};

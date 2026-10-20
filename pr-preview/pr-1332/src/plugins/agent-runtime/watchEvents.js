@@ -1,0 +1,1 @@
+import{if as e,rf as t}from"../../../chunks/app-BhBq_kDw.js";export{t as createWatchEventsRegistry,e as watchEventsRegistry};

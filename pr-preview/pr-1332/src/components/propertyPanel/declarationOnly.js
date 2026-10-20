@@ -1,0 +1,1 @@
+import{aF as e,oF as t}from"../../../chunks/app-BhBq_kDw.js";export{e as declarationOnlyDefinitionForName,t as declarationOnlyStatusText};

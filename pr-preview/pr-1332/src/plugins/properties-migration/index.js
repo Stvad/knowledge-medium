@@ -1,0 +1,1 @@
+import{Qi as e,na as t}from"../../../chunks/app-BhBq_kDw.js";export{t as migratePropertiesToBlocksAction,e as propertiesMigrationPlugin};

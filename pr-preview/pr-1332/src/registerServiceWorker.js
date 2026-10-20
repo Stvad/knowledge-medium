@@ -1,0 +1,1 @@
+import{mk as e,pk as t}from"../chunks/app-BhBq_kDw.js";export{t as checkForAppUpdate,e as registerServiceWorker};
