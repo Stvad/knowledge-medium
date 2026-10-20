@@ -1,0 +1,1 @@
+import{Jn as e,ik as t,rk as n}from"../../../chunks/app-Fth78vyt.js";export{n as extensionsOverridesProp,t as extensionsPrefsType,e as extensionsSettingsPlugin};

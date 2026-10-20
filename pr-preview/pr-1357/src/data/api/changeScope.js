@@ -1,0 +1,1 @@
+import{Aet as e,Cet as t,Det as n,Eet as r,Oet as i,Tet as a,jet as o,ket as s,wet as c}from"../../../chunks/app-Fth78vyt.js";export{t as CHANGE_SCOPE_POLICIES,c as ChangeScope,a as isChangeScope,r as policyForScope,n as scopeAllowedInReadOnly,i as scopeIsUndoable,s as scopePoliciesEquivalent,e as scopeUploadsToServer,o as sourceForScope};

@@ -1,0 +1,1 @@
+import{ew as e,iw as t,nw as n,rw as r,tw as i}from"../../chunks/app-Fth78vyt.js";export{e as CRUMB_ELLIPSIS,i as CRUMB_MAX_CHARS,n as CRUMB_MAX_SEGMENTS,r as collapseCrumbs,t as crumbsFromAncestors};

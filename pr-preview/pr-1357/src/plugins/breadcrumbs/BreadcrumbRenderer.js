@@ -1,0 +1,1 @@
+import{Ub as e}from"../../../chunks/app-Fth78vyt.js";export{e as BreadcrumbRenderer};

@@ -1,0 +1,1 @@
+import{nA as e,tA as t}from"../../chunks/app-Fth78vyt.js";export{t as ClientLocalSettings,e as clientLocalSettings};
