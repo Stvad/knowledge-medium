@@ -23,8 +23,8 @@ export const useCloseOnKeyLoss = (
     let closed = false
     return onWorkspaceKeyUnavailable((userId, lockedId) => {
       if (closed || userId !== repo.user.id || lockedId !== opening.workspaceId) return
-      // Mid-navigation the opening is still the previous workspace's.
-      if (lockedId !== repo.activeWorkspaceId) return
+      // Mid-navigation this opening is stale; the next workspace's entry check decides.
+      if (opening.workspaceId !== repo.activeWorkspaceId) return
       closed = true
       onClose()
     })
