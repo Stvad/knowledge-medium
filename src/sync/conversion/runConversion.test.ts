@@ -224,6 +224,18 @@ describe('runConversion: preflight → key → flip', () => {
     expect(new Set(localCanaries)).toEqual(new Set([await serverCanary()]))
   })
 
+  it('marks the local row from a flip whose response was lost, before anything else can end the run', async () => {
+    server.loseNextFlipResponse = true
+    const read = server.conversionState.bind(server)
+    let reads = 0
+    // The start, then the read that finds the flip landed; the next one fails.
+    vi.spyOn(server, 'conversionState').mockImplementation(async ws =>
+      ++reads > 2 ? {kind: 'unavailable', error: new Error('offline')} : read(ws))
+
+    expect(await run()).toMatchObject({kind: 'blocked', read: {kind: 'unavailable'}})
+    expect(localCanaries).toEqual([await read(WS).then(r => (r.kind === 'read' ? r.state.wkCanary : null))])
+  })
+
   it('treats a not-plaintext refusal as a late flip when the server has moved on', async () => {
     const earlier = await earlierAttempt()
     ui.pastes = [earlier.displayed]
@@ -272,6 +284,32 @@ describe('runConversion: preflight → key → flip', () => {
     expect(await run({preflight: passingEnvironment({uploadQueue})}))
       .toEqual({kind: 'preflight-failed', blockers: [{kind: 'pending-uploads', count: 2}]})
     expect(ui.keyPrompts).toHaveLength(1)
+    expect(flips()).toBe(0)
+  })
+
+  it('checks the upload queue again before a retry after a lock refusal', async () => {
+    server.writesInFlight = 1
+    let checks = 0
+    // Preflight and the first send see an empty queue; an upload lands during the backoff.
+    const uploadQueue = async () => ({pending: ++checks > 2 ? 1 : 0, rejected: 0})
+
+    expect(await run({preflight: passingEnvironment({uploadQueue})}))
+      .toEqual({kind: 'preflight-failed', blockers: [{kind: 'pending-uploads', count: 1}]})
+    // The refused send changed nothing; no second one went out.
+    expect(flips()).toBe(1)
+    expect(await server.conversionState(WS)).toMatchObject({kind: 'read', state: {encryptionMode: 'none'}})
+  })
+
+  it('sends no flip once Stop lands during the check before it', async () => {
+    const stop = new AbortController()
+    let checks = 0
+    // The second check is the one right before the send.
+    const uploadQueue = async () => {
+      if (++checks > 1) stop.abort(new DOMException('stopped', 'AbortError'))
+      return {pending: 0, rejected: 0}
+    }
+
+    await expect(run({signal: stop.signal, preflight: passingEnvironment({uploadQueue})})).rejects.toThrow('stopped')
     expect(flips()).toBe(0)
   })
 

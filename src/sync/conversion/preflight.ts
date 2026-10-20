@@ -93,8 +93,7 @@ const scanServer = async (server: ConversionServer, workspaceId: string, signal?
 }
 
 /** The blockers this device can change on its own at any moment: checked in
- *  preflight, and again right before the flip, since the prompts in between
- *  can stay open indefinitely. */
+ *  preflight, and again before every flip request. */
 export const localBlockers = async (
   environment: PreflightEnvironment,
   signal?: AbortSignal,

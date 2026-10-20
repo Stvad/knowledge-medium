@@ -117,10 +117,14 @@ const readStage = async (deps: ConversionFlowDeps): Promise<StageRead> => {
 
 const FLIPPED: StageOutcome = {kind: 'advanced', reached: 'sealing'}
 
-/** Whether a flip that may have been sent has landed, or else what the server shows. */
+/** Whether a flip that may have been sent has landed, or else what the server
+ *  shows. A landed one marks the local row from the server's canary here: the
+ *  run's next read may fail and end it before any stage marks it. */
 const flipLanded = async (deps: ConversionFlowDeps): Promise<StageRead | 'landed'> => {
   const read = await readStage(deps)
-  return read.kind === 'stage' && read.stage.kind !== 'plaintext' ? 'landed' : read
+  if (read.kind !== 'stage' || read.stage.kind === 'plaintext') return read
+  await deps.markLocalConverted(read.stage.canary)
+  return 'landed'
 }
 
 const runPlaintextStage = async (deps: ConversionFlowDeps): Promise<StageOutcome> => {
@@ -132,14 +136,16 @@ const runPlaintextStage = async (deps: ConversionFlowDeps): Promise<StageOutcome
   await ui.confirmPreflight(report)
 
   const key = await obtainFlipKey({...deps, prompts: ui})
-  const lastChance = await localBlockers(deps.preflight, signal)
-  if (lastChance.length > 0) return {kind: 'preflight-failed', blockers: lastChance}
+  // The prompts in between can stay open indefinitely, and so can the flip's
+  // backoff: the blockers this device can change are checked before each send.
+  let lastChance: PreflightBlocker[] = []
   let flip
   try {
     flip = await flipToE2ee({
       server,
       workspaceId,
       canary: key.canary,
+      beforeSend: async () => (lastChance = await localBlockers(deps.preflight, signal)).length === 0,
       onSend: () => {
         deps.flipAttempts.markSent()
         ui.status({kind: 'flipping', waiting: null})
@@ -155,6 +161,7 @@ const runPlaintextStage = async (deps: ConversionFlowDeps): Promise<StageOutcome
     if ((await flipLanded(deps)) === 'landed') return FLIPPED
     throw error
   }
+  if (flip.kind === 'held') return {kind: 'preflight-failed', blockers: lastChance}
   if (flip.kind === 'refused') {
     // An earlier attempt's flip may have committed after its response was lost.
     const landed = await flipLanded(deps)
