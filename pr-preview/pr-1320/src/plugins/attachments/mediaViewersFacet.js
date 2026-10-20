@@ -1,1 +1,1 @@
-import{cg as e,lg as t,sg as n}from"../../../chunks/app-C3eeaBtS.js";export{n as MEDIA_VIEWERS_FACET_ID,e as isMediaViewerContribution,t as mediaViewersFacet};
+import{cg as e,lg as t,sg as n}from"../../../chunks/app-oTxFWCvn.js";export{n as MEDIA_VIEWERS_FACET_ID,e as isMediaViewerContribution,t as mediaViewersFacet};

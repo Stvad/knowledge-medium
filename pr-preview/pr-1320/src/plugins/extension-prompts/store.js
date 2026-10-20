@@ -1,1 +1,1 @@
-import{ID as e,LD as t}from"../../../chunks/app-C3eeaBtS.js";export{e as extensionPromptStore,t as pendingExtensionPrompts};
+import{ID as e,LD as t}from"../../../chunks/app-oTxFWCvn.js";export{e as extensionPromptStore,t as pendingExtensionPrompts};

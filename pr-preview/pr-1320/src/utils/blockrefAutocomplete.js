@@ -1,1 +1,1 @@
-import{Zp as e}from"../../chunks/app-C3eeaBtS.js";export{e as blockrefCompletionSource};
+import{Zp as e}from"../../chunks/app-oTxFWCvn.js";export{e as blockrefCompletionSource};

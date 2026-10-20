@@ -1,1 +1,1 @@
-import{st as e}from"../../../chunks/app-C3eeaBtS.js";export{e as birthdayPlugin};
+import{st as e}from"../../../chunks/app-oTxFWCvn.js";export{e as birthdayPlugin};
