@@ -12,6 +12,7 @@
  */
 
 import { SEALED_COLUMNS } from '../../transform.js'
+import type { MediaRef } from '../attachmentCleaner.js'
 import { isSealedRow } from '../sealing.js'
 import { ATTACHMENTS_DIR, OTHER_OBJECTS_DIR, otherObjectNameOf, rawNameOf } from './attachmentParts.js'
 import { untilStopped } from '@/utils/untilStopped.js'
@@ -62,6 +63,8 @@ export interface VerifiedBundle {
     /** The last history event in the file, 0 when it holds none. */
     readonly through: number
   }
+  /** Every media block in `blocks.jsonl`: the server's rows as the bundle was taken. */
+  readonly media: readonly MediaRef[]
 }
 
 export interface VerifyBundleOptions {
@@ -166,9 +169,9 @@ const verifyBlocks = async (
   manifest: BundleManifest,
   mediaHashOf: VerifyBundleOptions['mediaHashOf'],
   signal?: AbortSignal,
-): Promise<{blockRows: number; mediaHashes: Set<string>}> => {
+): Promise<{blockRows: number; media: MediaRef[]}> => {
   const name = BUNDLE_PARTS.blocks
-  const mediaHashes = new Set<string>()
+  const media: MediaRef[] = []
   // Every id, not just the last: the rows come in the server's collation,
   // which a JS string comparison can't stand in for. About 40-100 MB per
   // million blocks.
@@ -186,13 +189,13 @@ const verifyBlocks = async (
     if (isSealedRow(row as Record<(typeof SEALED_COLUMNS)[number], string>)) {
       throw new BundleInvalid('sealed-row', `${name} line ${line} holds sealed content`)
     }
-    const hash = mediaHashOf(row.properties_json as string)
-    if (hash) mediaHashes.add(hash)
+    const contentHash = mediaHashOf(row.properties_json as string)
+    if (contentHash) media.push({blockId: row.id, contentHash})
   }, signal)
   if (lines !== manifest.serverBlockCount) {
     throw new BundleInvalid('row-count', `${name} has ${lines} rows; the server held ${manifest.serverBlockCount}`)
   }
-  return {blockRows: lines, mediaHashes}
+  return {blockRows: lines, media}
 }
 
 /** Every media block's bytes, unless the manifest lists its hash as having
@@ -290,11 +293,11 @@ export const verifyBundle = async ({folder: given, workspaceId, manifestSha256, 
   const digest = sha256Hex(manifestBytes)
   if (manifestSha256 !== undefined && digest !== manifestSha256) throw manifestChanged()
   const manifest = parseManifest(manifestBytes, workspaceId)
-  const {blockRows, mediaHashes} = await verifyBlocks(folder, manifest, mediaHashOf, signal)
+  const {blockRows, media} = await verifyBlocks(folder, manifest, mediaHashOf, signal)
   const {historyRows, through} = await verifyHistory(folder, manifest, signal)
   const localDb = BUNDLE_PARTS.localDb
   requireDigest(localDb, manifest.parts[localDb], await scanFolderPart(folder, localDb, undefined, signal))
-  await verifyAttachments(folder, manifest, mediaHashes, signal)
+  await verifyAttachments(folder, manifest, new Set(media.map(ref => ref.contentHash)), signal)
   await verifyOtherObjects(folder, manifest, signal)
-  return {manifest, manifestSha256: digest, counted: {blockRows, historyRows, through}}
+  return {manifest, manifestSha256: digest, counted: {blockRows, historyRows, through}, media}
 }

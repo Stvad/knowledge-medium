@@ -21,7 +21,7 @@
  * and the proof fails if the folder changes in a way the run did not cause.
  */
 
-import { encodeBytes, encodedSize, verifyObjectBytes } from '../byteTransform.js'
+import { encodeBytes, verifyObjectBytes } from '../byteTransform.js'
 import { validateCanary } from '../crypto/canary.js'
 import { CONTENT_HASH_PREFIX, verifyContentHash } from '../crypto/contentHash.js'
 import { classifyStoredObject, deriveContentKey, indexKeyedNames, type WorkspaceObjectKeys } from '../crypto/contentKey.js'
@@ -51,7 +51,9 @@ export interface AttachmentCleanerIO {
   listObjects(signal?: AbortSignal): Promise<readonly ObjectPath[]>
   /** The object's bytes, or null when it is absent. */
   readObject(path: ObjectPath): Promise<Uint8Array<ArrayBuffer> | null>
-  /** Upload without overwriting: `exists` when the name is occupied. */
+  /** Upload without overwriting: `exists` when the name is occupied. The
+   *  cleaner only ever writes a sealed object at its keyed name, so one that
+   *  lands late is harmless: the first write wins, and what is there is verified. */
   writeObject(path: ObjectPath, bytes: Uint8Array<ArrayBuffer>): Promise<ObjectWrite>
   /** Resolves only once Storage confirms the object is deleted. `signal`
    *  aborts the request itself: one only abandoned could still be sent after a
@@ -62,6 +64,8 @@ export interface AttachmentCleanerIO {
   mediaBlocks(): Promise<readonly MediaRef[]>
   /** This device's local byte-store entry under `name`, or null. */
   readLocal(name: string): Promise<Uint8Array<ArrayBuffer> | null>
+  /** Keep bytes, already verified, in this device's byte store under `name`. */
+  writeLocal(name: string, bytes: Uint8Array<ArrayBuffer>): Promise<void>
 }
 
 /**
@@ -76,6 +80,9 @@ export interface ConversionBundle {
   /** The content hashes the manifest lists as having no verified source: the
    *  only ones with no `attachments/` entry. */
   readonly noVerifiedSource: ReadonlySet<string>
+  /** The media blocks of the server's rows the bundle holds. The proof covers
+   *  them as well as this device's own, whose view may not have caught up. */
+  readonly media: readonly MediaRef[]
   /** The `other-objects/` entry archived for `path`. */
   readArchivedObject(path: ObjectPath): Promise<Uint8Array<ArrayBuffer> | null>
   /** The `attachments/<hex>` entry for `contentHash`. */
@@ -240,6 +247,14 @@ type OutsideCopy =
 
 type MediaVerdict = 'kept' | 'rebuilt' | 'unverified' | 'unrecoverable'
 
+/** This device's media blocks, and the bundle's for blocks this device's view
+ *  doesn't hold yet: a block it holds carries its current hash. */
+const withBundleMedia = (own: readonly MediaRef[], bundle: ConversionBundle | null): readonly MediaRef[] => {
+  if (!bundle) return own
+  const held = new Set(own.map(ref => ref.blockId))
+  return [...own, ...bundle.media.filter(ref => !held.has(ref.blockId))]
+}
+
 const bytesEqual = (a: Uint8Array, b: Uint8Array): boolean => {
   if (a.length !== b.length) return false
   for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false
@@ -344,12 +359,12 @@ export const cleanAttachments = async (input: CleanAttachmentsInput): Promise<Cl
     settled.set(path, {kind: 'removed', contentHash})
   }
 
-  const handleNeither = async (path: ObjectPath, bytes: Uint8Array<ArrayBuffer>) => {
+  const handleNeither = async (path: ObjectPath, bytes: Uint8Array<ArrayBuffer>, unarchived: LeftReason = 'not-archived') => {
     const leave = (reason: LeftReason) => {
       left.push({path, reason})
       settled.set(path, {kind: 'stays'})
     }
-    if (!bundle?.archivedPaths.has(path)) return leave('not-archived')
+    if (!bundle?.archivedPaths.has(path)) return leave(unarchived)
     let archived: Uint8Array<ArrayBuffer> | null
     try {
       archived = await bundle.readArchivedObject(path)
@@ -395,7 +410,7 @@ export const cleanAttachments = async (input: CleanAttachmentsInput): Promise<Cl
     signal?.throwIfAborted()
     onProgress?.({phase: 'listing', pass})
     const listing = await io.listObjects(signal)
-    media = await io.mediaBlocks()
+    media = withBundleMedia(await io.mediaBlocks(), bundle)
     const mediaHashes = new Set(media.map(m => m.contentHash))
     const keyedNames = await indexKeyedNames(new Set([...mediaHashes, ...listing.map(hashNamedBy)]), keys)
     mediaNameByHash = new Map(
@@ -486,28 +501,26 @@ export const cleanAttachments = async (input: CleanAttachmentsInput): Promise<Cl
     return unreadable ? {kind: 'unreadable'} : {kind: 'none'}
   }
 
+  /** Seal `plaintext`, verified, at its keyed `name`, in place of whatever is there. */
+  const rebuild = async (contentHash: string, name: string, plaintext: Uint8Array<ArrayBuffer>): Promise<MediaVerdict> =>
+    (await placeKeyed(name, contentHash, plaintext, name)).kind === 'verified' ? 'rebuilt' : 'unverified'
+
   /**
    * Seal the only copy of a block's plaintext, found unsealed at its keyed
-   * name. Replacing it there means deleting it first, so it is first written to
-   * its raw name and read back verified, and then converted like any raw object:
-   * a durable copy exists at every step.
+   * name. Replacing it there means deleting it first, so it is first kept on
+   * this device, under the name the e2ee workspace reads it by: a durable copy
+   * exists at every step, and a stopped run rebuilds from it. Never in Storage,
+   * where a write that Stop abandoned could land after a later run and put the
+   * plaintext back.
    */
-  const convertOccupant = async (contentHash: string, keyedName: string, plaintext: Uint8Array<ArrayBuffer>): Promise<MediaVerdict> => {
-    const rawName = await deriveContentKey({contentHash, mode: 'none', contentKeyHmac: null})
-    const write = await writeStored(rawName, plaintext)
-    if (write.kind === 'refused') {
-      // Its sealed upload would need at least as much: the same remedy covers both.
-      const sealedBytes = encodedSize(plaintext.length, 'e2ee')
-      refused.push({path: keyedName, status: write.status, sealedBytes})
+  const convertOccupant = async (contentHash: string, name: string, plaintext: Uint8Array<ArrayBuffer>): Promise<MediaVerdict> => {
+    try {
+      await io.writeLocal(name, plaintext)
+    } catch (err) {
+      errors.push({path: name, message: `its plaintext could not be kept on this device to convert it: ${messageOf(err)}`})
       return 'unverified'
     }
-    const staged = await io.readObject(rawName)
-    if (!staged || !(await verifyContentHash(staged, contentHash))) {
-      errors.push({path: keyedName, message: 'its plaintext could not be staged at its raw name to convert it'})
-      return 'unverified'
-    }
-    await convertRaw(rawName, staged, contentHash, keyedName)
-    return settled.get(rawName)?.kind === 'removed' ? 'rebuilt' : 'unverified'
+    return rebuild(contentHash, name, plaintext)
   }
 
   const placedThisRun = (name: string): boolean => {
@@ -531,14 +544,12 @@ export const cleanAttachments = async (input: CleanAttachmentsInput): Promise<Cl
     const copy = await outsideCopy(contentHash, name)
     if (copy.kind === 'unreadable') return 'unverified'
     // A durable copy outside Storage: replacing a failing occupant loses nothing.
-    if (copy.kind === 'copy') {
-      return (await placeKeyed(name, contentHash, copy.bytes, name)).kind === 'verified' ? 'rebuilt' : 'unverified'
-    }
+    if (copy.kind === 'copy') return rebuild(contentHash, name, copy.bytes)
     // The block's own plaintext, unsealed at its keyed name, and its only copy.
     if (occupant && (await verifyContentHash(occupant, contentHash))) return convertOccupant(contentHash, name, occupant)
-    // Nothing to replace it with. Like any neither object the bundle did not
-    // archive, it is kept and reported rather than deleted without a copy.
-    if (occupant) left.push({path: name, reason: 'unverifiable'})
+    // Nothing to replace it with. Like any object neither raw nor keyed, it goes
+    // only if the bundle archived those bytes, and is kept and reported otherwise.
+    if (occupant) await handleNeither(name, occupant, 'unverifiable')
     return 'unrecoverable'
   }
 

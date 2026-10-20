@@ -76,5 +76,6 @@ export const emptyBundleRecord = (): BundleRecord => {
     exportedAt: '2026-10-19T00:00:00.000Z',
     noVerifiedSource: [],
     otherObjectPaths: [],
+    media: [],
   }
 }

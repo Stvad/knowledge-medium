@@ -37,6 +37,8 @@ const seal = async (bytes: Uint8Array<ArrayBuffer>, k = keys) =>
   encodeBytes(bytes, 'e2ee', async () => k.keys.cek, {contentHash: await hashOf(bytes), workspaceId: WS})
 
 /** Put `bytes` in the folder at their raw name; optionally as a media block's. */
+const bytesEqual = (a: Uint8Array, b: Uint8Array): boolean => a.length === b.length && a.every((byte, i) => byte === b[i])
+
 const putRaw = async (store: FakeAttachmentStorage, bytes: Uint8Array<ArrayBuffer>, blockId?: string) => {
   store.objects.set(await rawName(bytes), bytes)
   if (blockId) store.media.push({blockId, contentHash: await hashOf(bytes)})
@@ -312,14 +314,17 @@ describe('cleanAttachments: the proof', () => {
     const photo = utf8('a photo')
     store.media.push({blockId: 'block-1', contentHash: await hashOf(photo)})
     store.objects.set(await keyedName(photo), photo)
+    const write = vi.spyOn(store.io, 'writeObject')
     const report = await clean(store)
     expect(report.rebuilt).toEqual([await hashOf(photo)])
     expect(await holdsKeyed(store, photo)).toBe(true)
-    expect(store.objects.has(await rawName(photo))).toBe(false) // the staged copy is converted away
+    // Kept on this device while it was replaced; never written to Storage in plaintext.
+    expect(store.local.get(await keyedName(photo))).toEqual(photo)
+    expect(write.mock.calls.filter(([, bytes]) => bytesEqual(bytes, photo))).toEqual([])
     expect(report.proof).toEqual({kind: 'passed', unrecoverable: []})
   })
 
-  it('an only copy at the keyed name is written to its raw name before anything deletes it', async () => {
+  it('an only copy at the keyed name is kept on this device before anything deletes it, and the next run rebuilds from it', async () => {
     const store = createFakeAttachmentStorage()
     const photo = utf8('a photo')
     store.media.push({blockId: 'block-1', contentHash: await hashOf(photo)})
@@ -332,50 +337,47 @@ describe('cleanAttachments: the proof', () => {
     })
     const report = await clean(store)
     expect(report.proof).toMatchObject({kind: 'not-passed', unverified: [await hashOf(photo)]})
-    expect(store.objects.get(await rawName(photo))).toEqual(photo) // the bytes survive
+    expect(store.local.get(await keyedName(photo))).toEqual(photo) // the bytes survive
+    vi.restoreAllMocks()
+    expect((await clean(store)).proof).toEqual({kind: 'passed', unrecoverable: []})
+    expect(await holdsKeyed(store, photo)).toBe(true)
   })
 
-  it('a refused staging write is reported with the size the limits must reach, and nothing is deleted', async () => {
+  it('an only copy that cannot be kept on this device is never deleted', async () => {
     const store = createFakeAttachmentStorage()
     const photo = utf8('a photo')
     store.media.push({blockId: 'block-1', contentHash: await hashOf(photo)})
     store.objects.set(await keyedName(photo), photo)
-    const write = store.io.writeObject
-    vi.spyOn(store.io, 'writeObject').mockImplementation(async (path, bytes) =>
-      path === (await rawName(photo)) ? {kind: 'refused', status: 413} : write(path, bytes),
-    )
+    vi.spyOn(store.io, 'writeLocal').mockRejectedValue(new DOMException('full', 'QuotaExceededError'))
     const report = await clean(store)
-    expect(report.refused).toEqual([
-      {path: await keyedName(photo), status: 413, sealedBytes: photo.length + BINARY_ENVELOPE_OVERHEAD_BYTES},
-    ])
     expect(store.deletes).toEqual([])
-    expect(report.proof).toMatchObject({kind: 'not-passed', unverified: [await hashOf(photo)]})
-  })
-
-  it('the proof judges the folder as its own rebuilds left it: a staged copy whose delete did not take fails it', async () => {
-    const store = createFakeAttachmentStorage()
-    const photo = utf8('a photo')
-    store.media.push({blockId: 'block-1', contentHash: await hashOf(photo)})
-    store.objects.set(await keyedName(photo), photo)
-    const remove = store.io.deleteObject
-    // Storage confirms the staged copy's delete but keeps it.
-    vi.spyOn(store.io, 'deleteObject').mockImplementation(async (path, signal) =>
-      path === (await rawName(photo)) ? undefined : remove(path, signal),
-    )
-    const report = await clean(store)
-    expect(store.objects.has(await rawName(photo))).toBe(true)
-    expect(report.proof).toMatchObject({kind: 'not-passed', rawRemaining: [await rawName(photo)]})
-  })
-
-  it('an only copy is never deleted when its raw name already holds other bytes', async () => {
-    const store = createFakeAttachmentStorage()
-    const photo = utf8('a photo')
-    store.media.push({blockId: 'block-1', contentHash: await hashOf(photo)})
-    store.objects.set(await keyedName(photo), photo)
-    store.objects.set(await rawName(photo), utf8('a corrupt upload at the raw name'))
-    const report = await clean(store)
     expect(store.objects.get(await keyedName(photo))).toEqual(photo)
     expect(report.proof).toMatchObject({kind: 'not-passed', unverified: [await hashOf(photo)]})
+  })
+
+  it('an unverifiable occupant at a media name is deleted when the bundle archived it, and the proof passes', async () => {
+    const store = createFakeAttachmentStorage()
+    const lost = utf8('lost')
+    const hash = await hashOf(lost)
+    store.media.push({blockId: 'block-1', contentHash: hash})
+    const name = await keyedName(lost)
+    const junk = utf8('junk at the keyed name')
+    store.objects.set(name, junk)
+    const report = await clean(store, createFakeBundle(new Map([[name, junk]]), new Map(), new Set([hash])))
+    expect(report.deleted).toEqual([name])
+    expect(store.objects.has(name)).toBe(false)
+    expect(report.proof).toEqual({kind: 'passed', unrecoverable: [{contentHash: hash, blockIds: ['block-1']}]})
+  })
+
+  it("proves the bundle's media too, which this device's own view may not have caught up on", async () => {
+    const store = createFakeAttachmentStorage()
+    const photo = utf8('a photo')
+    const hash = await hashOf(photo)
+    // Not in this device's blocks yet: the bundle's rows carry it, and its only copy.
+    const bundle = createFakeBundle(new Map(), new Map([[hash, photo]]), new Set(), [{blockId: 'block-1', contentHash: hash}])
+    const report = await clean(store, bundle)
+    expect(report.rebuilt).toEqual([hash])
+    expect(await holdsKeyed(store, photo)).toBe(true)
   })
 
   it('with a copy outside Storage, a plaintext occupant is replaced from that copy', async () => {

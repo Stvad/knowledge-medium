@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
+import { deriveContentKey } from '../crypto/contentKey.js'
+import { objectKeysOf } from '../keys/keyStore.js'
 import { mintWorkspaceKey, type MintedWorkspaceKey } from '../keys/mintWorkspaceKey.js'
 import { attachmentCleanerLockName } from './attachmentCleaner.js'
 import { rawNameOf } from './bundle/attachmentParts.js'
@@ -222,6 +224,16 @@ describe('runCleaningPass with this device\'s bundle record', () => {
 
     expect(await run()).toEqual({kind: 'proved'})
     expect(reopenPrompts.map(prompt => prompt.problem)).toEqual([expect.stringMatching(/copies are missing or damaged/)])
+  })
+
+  it("rebuilds media the bundle's rows hold that this device's view hasn't caught up on", async () => {
+    // This device's blocks lack the row, and Storage lost its object: only the bundle holds the bytes.
+    storage.media.splice(storage.media.findIndex(ref => ref.contentHash === rawHash), 1)
+    storage.objects.delete(rawNameOf(rawHash))
+    const keyed = await deriveContentKey({contentHash: rawHash, mode: 'e2ee', contentKeyHmac: objectKeysOf(minted.record)!.contentKeyHmac})
+
+    expect(await run()).toEqual({kind: 'proved'})
+    expect(storage.objects.has(keyed)).toBe(true)
   })
 
   it('goes to a readable pick when the recorded folder is unreadable, and stores a descended-into folder', async () => {

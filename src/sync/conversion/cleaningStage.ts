@@ -140,6 +140,7 @@ export const conversionBundleOf = (record: BundleRecord, folder: BundleFolder | 
   return {
     archivedPaths: new Set(record.otherObjectPaths),
     noVerifiedSource: new Set(record.noVerifiedSource),
+    media: record.media,
     readArchivedObject: path => readEntry(target, OTHER_OBJECTS_DIR, otherObjectNameOf(path), signal),
     readAttachment: contentHash => readEntry(target, ATTACHMENTS_DIR, rawNameOf(contentHash), signal),
   }
