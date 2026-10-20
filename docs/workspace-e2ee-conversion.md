@@ -305,12 +305,12 @@ The first production run is #1288.
     - **Check each of the five:**
       - **The output reports `0 dead row versions cannot be removed yet`.** A transaction older than the purge keeps alive the dead rows it can still see, and `VACUUM FULL` copies them into the new table. End that transaction, then run it again.
       - **`pg_relation_filenode()` changed.** A table the role can't vacuum is skipped with a WARNING, not an error, and keeps its filenode. `postgres` owns the database, which lets it vacuum all five ([§9.1](#91-supabase-postgres)).
-    - Record when it finished. The "safe from" date counts from that time.
+    - Record when it finished, privately ([§9.4](#94-the-safe-from-rule)). The "safe from" date counts from that time.
     - While it runs, the health probe fails `postgrest`, which reads `blocks`, and may fail `pgsql_tmp`.
     - `pg_repack`, if available, is the non-blocking alternative to the rewrite; the `ANALYZE` and the `pg_statistic` step still apply.
     - This step and the next, and step 10's Defragment, are platform operations a client can't do.
 12. **Operator:** drop leftover ad-hoc tables from past scripts (`scripts/system-author-cleanup.sql`, `scripts/roam-ts-backfill/backfill.sql`).
-13. **Record the "safe from" date** that [§9.4](#94-the-safe-from-rule) sets from step 11's finish time. It stays provisional while any [§9.5](#95-open-items) item marked *gates the date* is open.
+13. **Record the "safe from" date** privately: the date that [§9.4](#94-the-safe-from-rule) sets from step 11's finish time. It stays provisional while any [§9.5](#95-open-items) item marked *gates the date* is open.
 14. **Take later recovery points.** From time to time, on an unlocked device, take a recovery point and keep it with the key. It's a folder, like step 3's, with:
     - `blocks.jsonl`: every block row read from the server, checked for consistency and against the server's block count exactly as in step 3. History has been purged by then, so each row's content columns are opened under the key. A write from any device during the paging, this one included, makes it re-read. Taking it while other devices are idle keeps that rare;
     - **the plaintext of every media block**, soft-deleted ones included. Each comes from whichever source verifies: the local byte store, the keyed object downloaded and opened under the key, a raw object whose bytes hash to its name (a late upload from an older client), or an earlier recovery point (the conversion's bundle included). Each is hash-checked. The manifest lists only the hashes that no source verifies **now**, so a block that had no bytes at the conversion but was re-captured since is included again;
@@ -451,7 +451,7 @@ After the purge, recovery **re-keys the workspace in place** from the newest rec
 - **The date stays provisional while any [§9.5](#95-open-items) item marked *gates the date* is open.** Those items cover the copies no listing shows. A longer window from any answer moves the date, and so does turning PITR on, or adding a Log Drain.
 - **The date covers a breach through SQL, the Storage API, the sync protocol or a backup.** A breach of the provider's hosts or disks still finds the residue accepted above, past the date. That includes the host's log file, which rotates by size ([§9.5](#95-open-items) S4).
 - **Until the date, don't restore or duplicate the project from a backup.** That brings the plaintext back into a live database, and a backup from before the flip also undoes the conversion.
-- The date is recorded with the run (#1288), not here.
+- **The run's dates stay private.** The run records when `VACUUM FULL` finished, and the date that follows, in a beads memory, which syncs only to the private remote. They never go in a public issue, PR or commit. Until the date passes, they tell anyone how long a backup breach would still yield the workspace's plaintext.
 
 ### 9.5 Open items
 
