@@ -246,16 +246,14 @@ export const createSupabaseConversionServer = (
     },
 
     async readHistoryPage(workspaceId, afterEventId, throughEventId, limit) {
-      const {data, error, status} = await cancellable(client
-        .from('blocks_history')
-        .select('*')
-        .eq('workspace_id', workspaceId)
-        .gt('event_id', afterEventId)
-        .lte('event_id', throughEventId)
-        .order('event_id', {ascending: true})
-        .limit(limit))
+      const {data, error, status} = await cancellable(client.rpc('conversion_history_page', {
+        p_workspace_id: workspaceId,
+        p_after_event_id: afterEventId,
+        p_through_event_id: throughEventId,
+        p_limit: limit,
+      }))
       if (error) throw failed('reading block history', error, status)
-      return data as FullServerHistoryRow[]
+      return (data ?? []) as FullServerHistoryRow[]
     },
 
     async purgeWorkspaceHistory(workspaceId, throughEventId, archivedCount) {
