@@ -1,1 +1,1 @@
-import{Ep as e,Tp as t}from"../../../chunks/app-DCa0Eo4a.js";export{t as DATA_MODEL_GUIDE,e as dataModelGuide};
+import{Ep as e,Tp as t}from"../../../chunks/app-B_2aMVTz.js";export{t as DATA_MODEL_GUIDE,e as dataModelGuide};
