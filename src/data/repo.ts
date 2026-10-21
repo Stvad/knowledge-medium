@@ -151,7 +151,7 @@ import {
   KERNEL_FIELD_RECOGNITION_KEY,
   type InvalidationRule,
 } from './invalidation'
-import { KERNEL_PROPERTY_SEEDS } from './properties'
+import { KERNEL_PROPERTY_SEEDS, aliasesProp } from './properties'
 import { KERNEL_TYPE_CONTRIBUTIONS } from './blockTypes'
 import { propertiesPageBlockId } from './propertiesPage'
 import { typesPageBlockId } from './typesPage'
@@ -2448,6 +2448,7 @@ export class Repo {
       // the parent check, follow on the next pass. Nothing left to yield
       // means the entry itself is inconsistent, and we rethrow.
       let pending = replayApplicationOrder(replaying.snapshots, direction)
+      const yielding = new Set<string>()
       while (pending.length > 0) {
         const deferred: typeof pending = []
         let lastError: unknown = null
@@ -2469,8 +2470,13 @@ export class Repo {
         }
         const yielded = await yieldNamesHeldPastReplay(tx, deferred, replaying.snapshots, direction)
         if (yielded === null) throw lastError
-        pending = yielded
+        for (const id of yielded.yielding) yielding.add(id)
+        pending = yielded.pending
       }
+      // The yield rewrote only cells, and the entry revived the alias children
+      // verbatim — past the properties flip those children are the truth, so
+      // they must stop carrying a yielded name too.
+      for (const id of yielding) await txImpl.rematerializePropertyChildren(id, [aliasesProp.name])
     }, {scope, description: action}, {isReplay: true, lockHooks: {
       beforeCommit: () => {
         // The history was dropped while this replay held the lock — only a

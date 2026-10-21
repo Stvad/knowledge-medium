@@ -1471,6 +1471,23 @@ export class TxImpl implements Tx {
 
   // ──── Engine-internal raw row applier (UndoManager only) ────
 
+  /** Re-derive the child representation of `names` on `id` from its cell, in a
+   *  child-backed workspace (a no-op elsewhere). For a write that set the cell
+   *  raw and so skipped the dual-write: undo replay's alias yield. */
+  async rematerializePropertyChildren(id: string, names: readonly string[]): Promise<void> {
+    const row = await this.ctx.txDb.getOptional<BlockRow>(SELECT_BY_ID_SQL, [id])
+    if (row === null || row.deleted === 1) return
+    const data = parseBlockRow(row)
+    if (!(await this.isPropertyChildBackedWorkspace(data.workspaceId))) return
+    const resolver = this.propertySchemaResolverFor(data.workspaceId)
+    const schemas = new Map<string, ResolvedPropertySchema<unknown>>()
+    for (const name of names) {
+      const resolution = resolver.resolve(name)
+      if (resolution.status === 'resolved') schemas.set(name, resolution.schema)
+    }
+    await this.writePropertyBagChildren(data, schemas)
+  }
+
   /** Drive the row at `id` to exactly `target` (or soft-delete if target
    *  is null). Bypasses the public primitives — intentionally — because
    *  undo replay restores arbitrary snapshot state that the narrow patch
