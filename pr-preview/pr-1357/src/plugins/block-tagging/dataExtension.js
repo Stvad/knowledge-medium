@@ -1,1 +1,1 @@
-import{al as e}from"../../../chunks/app-BJKZtTU_.js";export{e as blockTaggingDataExtension};
+import{il as e}from"../../../chunks/app-OYev4nhW.js";export{e as blockTaggingDataExtension};

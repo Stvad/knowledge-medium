@@ -1,1 +1,1 @@
-import{Kb as e}from"../../../chunks/app-BJKZtTU_.js";export{e as BreadcrumbList};
+import{Gb as e}from"../../../chunks/app-OYev4nhW.js";export{e as BreadcrumbList};
