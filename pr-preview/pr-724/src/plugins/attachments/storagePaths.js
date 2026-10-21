@@ -1,2 +1,1 @@
-var e=(e,t)=>`${e}/${t}`,t=(e,t,n)=>`${e.replace(/\/$/,``)}/storage/v1/object/${t}/${n.split(`/`).map(encodeURIComponent).join(`/`)}`;export{e as attachmentObjectPath,t as authenticatedObjectUrl};
-//# sourceMappingURL=storagePaths.js.map
+import{cv as e,lv as t,sv as n,uv as r}from"../../../chunks/app-CaSJRXAp.js";export{n as attachmentObjectPath,e as authenticatedObjectUrl,t as deriveObjectKey,r as storageObjectUrl};

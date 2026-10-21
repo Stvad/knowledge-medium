@@ -1,2 +1,1 @@
-var e=e=>e;export{e as defineQuery};
-//# sourceMappingURL=query.js.map
+import{X9 as e}from"../../../chunks/app-CaSJRXAp.js";export{e as defineQuery};

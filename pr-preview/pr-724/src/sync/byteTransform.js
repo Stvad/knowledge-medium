@@ -1,2 +1,1 @@
-import{assetBytesAad as e}from"./crypto/aad.js";import{requireCek as t}from"./transform.js";import{openBytes as n,sealBytes as r}from"./crypto/byteAead.js";var i=async(n,i,a,o)=>i===`none`?n:r(await t(a,o.workspaceId,`byte transform`),n,e(o.contentHash,o.workspaceId)),a=async(r,i,a,o)=>i===`none`?r:n(await t(a,o.workspaceId,`byte transform`),r,e(o.contentHash,o.workspaceId));export{a as decodeBytes,i as encodeBytes};
-//# sourceMappingURL=byteTransform.js.map
+import{$x as e,Qx as t,Xx as n,Yx as r,Zx as i}from"../../chunks/app-CaSJRXAp.js";export{r as MAX_OBJECT_BYTES,n as encodeBytes,i as encodedSize,t as fitsObjectLimit,e as verifyObjectBytes};

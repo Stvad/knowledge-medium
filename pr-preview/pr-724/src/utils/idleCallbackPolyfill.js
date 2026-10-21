@@ -1,0 +1,1 @@
+import{Ct as e}from"../../chunks/app-CaSJRXAp.js";export{e as installIdleCallbackPolyfill};

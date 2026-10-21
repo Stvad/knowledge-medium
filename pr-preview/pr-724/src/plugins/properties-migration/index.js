@@ -1,1 +1,1 @@
-import{migratePropertiesToBlocksAction as e}from"./action.js";import{propertiesMigrationPlugin as t}from"./plugin.js";export{e as migratePropertiesToBlocksAction,t as propertiesMigrationPlugin};
+import{ca as e,ia as t}from"../../../chunks/app-CaSJRXAp.js";export{e as migratePropertiesToBlocksAction,t as propertiesMigrationPlugin};

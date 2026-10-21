@@ -1,2 +1,1 @@
-import{ChangeScope as e}from"../../data/api/changeScope.js";import{seedProperty as t}from"../../data/propertySeeds.js";import"../../data/api/index.js";var n=t({seedKey:`system:agent-runtime/property/subtree-key`,revision:1,name:`agent:subtreeKey`,preset:`string`,defaultValue:``,changeScope:e.BlockDefault,hidden:!0});export{n as agentSubtreeKeyProp};
-//# sourceMappingURL=schema.js.map
+import{jG as e}from"../../../chunks/app-CaSJRXAp.js";export{e as agentSubtreeKeyProp};

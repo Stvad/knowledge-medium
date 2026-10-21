@@ -1,2 +1,1 @@
-var e=null,t=t=>{e=t},n=(t,n,r)=>e?e(t,n,r):!1,r=`gesture-progress-cancel`,i=e=>new CustomEvent(r,{detail:{gesture:e}}),a=null,o=e=>{a=e},s=(e,t)=>a?a(e,t):null;export{r as GESTURE_PROGRESS_CANCEL_EVENT,s as beginGestureProgress,n as dispatchGesture,i as gestureProgressCancelEvent,t as setGestureActionDispatcher,o as setGestureProgressDispatcher};
-//# sourceMappingURL=gestureAction.js.map
+import{Gj as e,Jj as t,Kj as n,Uj as r,Wj as i,qj as a}from"../../chunks/app-CaSJRXAp.js";export{r as GESTURE_PROGRESS_CANCEL_EVENT,i as beginGestureProgress,e as dispatchGesture,n as gestureProgressCancelEvent,a as setGestureActionDispatcher,t as setGestureProgressDispatcher};

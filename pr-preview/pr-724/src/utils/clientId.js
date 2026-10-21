@@ -1,2 +1,1 @@
-import e from"../../node_modules/.pnpm/uuid@14.0.0/node_modules/uuid/dist/v4.js";var t=`km:client-id`,n,r=()=>{if(n!==void 0)return n;try{let r=globalThis.localStorage?.getItem(t);if(r)return n=r;let i=e();return globalThis.localStorage?.setItem(t,i),n=i}catch{return n??=e()}},i=()=>{n=void 0};export{r as getClientId,i as resetClientIdCache};
-//# sourceMappingURL=clientId.js.map
+import{C3 as e,S3 as t,b3 as n,x3 as r,y3 as i}from"../../chunks/app-CaSJRXAp.js";export{i as deviceSurface,n as getClientId,r as getDeviceLabel,t as isClientIdPersistent,e as resetClientIdCache};

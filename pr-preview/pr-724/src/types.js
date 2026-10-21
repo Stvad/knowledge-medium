@@ -1,2 +1,1 @@
-var e=e=>e===`children`||e===`cell-off`;export{e as isChildBackedPropertiesWorkspace};
-//# sourceMappingURL=types.js.map
+import{e5 as e}from"../chunks/app-CaSJRXAp.js";export{e as isChildBackedPropertiesWorkspace};
