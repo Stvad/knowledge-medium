@@ -78,11 +78,12 @@
  *    bug this pass exists to fix.
  *
  * The FAN-OUT is dormant until a definition has field rows — see
- * `consumingParentIds`, which is its gate. The refusals split on that gate and
+ * `consumingParentIds`, which is its gate. The refusals split on field rows and
  * the split is deliberate: `MIGRATION_RUNNING_REFUSAL` exists precisely because
- * a consumer with no field row YET is invisible to it, while the unconvertible
- * refusal is a fact about values this pass actually read and so can only be
- * reached through it.
+ * a consumer with no field row YET is invisible to them, while the
+ * unconvertible refusal is a fact about values this pass actually read and so
+ * can only be reached through the walk. The contested and shared-name refusals
+ * ask the wider `anyBlockHoldsFieldRowFor`.
  */
 
 import {
@@ -106,6 +107,10 @@ import {
   definitionSchema,
   type UnbuildableCause,
 } from '@/data/userSchemasService'
+import {
+  FANOUT_REPORT_STRIDE,
+  reportPropertyDefinitionFanout,
+} from '@/data/propertyDefinitionFanout'
 import {
   STRANDED_CLAIM_RECOVERY,
   isGraphBackfillClaimActive,
@@ -580,19 +585,9 @@ const collectChanges = (
  *  throw would take their entire edit down. */
 export const FIELD_PROBE_CHUNK = 500
 
-/** §9 selection discipline, binding the workspace then `targetCount` field
- *  ids: field-row discovery keys on the BIT plus the target (an unmarked
- *  `((fieldId))` link row is not a consumer), and `parent_id IS NOT NULL` — a
- *  marked workspace-root row is user content, not a field row (§9 root half) —
- *  never re-key it. */
-const liveFieldRowsWhere = (targetCount: number): string =>
-  `workspace_id = ? AND reference_target_id IN (${
-    Array.from({length: targetCount}, () => '?').join(', ')})
-    AND is_field_form = 1
-    AND deleted = 0 AND parent_id IS NOT NULL`
-
-/** Parents holding a live field row for any of `fieldIds` — and the only gate
- *  this pass has.
+/** Live parents holding a live field row for any of `fieldIds` — the fan-out's
+ *  gate, and what it walks. The refusals ask the wider
+ *  {@link anyBlockHoldsFieldRowFor}.
  *
  *  Deliberately NOT `isPropertyChildBackedWorkspace`. That flag lives on the
  *  workspace ROW, which syncs like any other, so a device lagging on it reads
@@ -605,49 +600,130 @@ const liveFieldRowsWhere = (targetCount: number): string =>
  *  Field rows only, which means a parent the cell-to-children backfill has not
  *  reached yet is NOT a consumer here. The runbook flips before backfilling, so
  *  that window is real and a definition edit inside it strands those cells
- *  permanently — #1029. */
+ *  permanently — #1029.
+ *
+ *  The Set is load-bearing across chunks, not tidiness:
+ *  `SELECT DISTINCT` dedupes only WITHIN one statement, so a parent consuming
+ *  two changed definitions that land in different chunks would otherwise be
+ *  visited — and re-keyed — twice. */
 export const consumingParentIds = async (
   db: Pick<SameTxCtx['db'], 'getAll'>,
   workspaceId: string,
   fieldIds: readonly string[],
   chunkSize = FIELD_PROBE_CHUNK,
-): Promise<string[]> =>
-  [...await distinctOverLiveFieldRows(db, workspaceId, fieldIds, 'parent_id', chunkSize)]
+): Promise<string[]> => {
+  const set = new Set<string>()
+  for (let i = 0; i < fieldIds.length; i += chunkSize) {
+    const chunk = fieldIds.slice(i, i + chunkSize)
+    const rows = await db.getAll<{parent_id: string | null}>(
+      `SELECT DISTINCT field.parent_id FROM ${consumingParentsFromSql(chunk.length)}`,
+      [workspaceId, ...chunk],
+    )
+    for (const row of rows) if (row.parent_id !== null) set.add(row.parent_id)
+  }
+  return [...set]
+}
 
-/** Which of `fieldIds` have consumers at all, by the same rows
- *  {@link consumingParentIds} reads — the per-definition answer it folds away,
- *  for a caller that must say WHICH definition holds a transaction up. */
-export const fieldIdsWithConsumers = (
+/** §9 selection discipline: field-row discovery keys on the BIT plus the
+ *  target (an unmarked `((fieldId))` link row is not a consumer), and
+ *  `parent_id IS NOT NULL` — a marked workspace-root row is user content, not
+ *  a field row (§9 root half) — never re-key it. Every field-row question this
+ *  pass asks starts here. */
+const fieldRowsFromSql = (targetCount: number): string =>
+  `blocks field
+    WHERE field.workspace_id = ?
+      AND field.reference_target_id IN (${Array.from({length: targetCount}, () => '?').join(', ')})
+      AND field.is_field_form = 1
+      AND field.deleted = 0 AND field.parent_id IS NOT NULL`
+
+/** The OWNER must be live too, and that is the half a `deleted = 0` on the
+ *  field row does not cover: a soft-deleted block can still own live field
+ *  rows. Its bag is history and re-keying it is declined — the live set is
+ *  bounded by current usage while the tombstoned set is bounded by ALL-TIME
+ *  usage, so re-keying it would put an unbounded write in the user's own
+ *  transaction, and #1023 fixes the restore case where it belongs, at
+ *  restore. Asked HERE rather than skipped during the walk, so that the
+ *  COUNT excludes them as well: on a graph with a long delete history that
+ *  number is what decides whether the user is asked at all, and it must not
+ *  promise blocks the change will pass over.
+ *
+ *  Spelled once because two callers ask the same question for one gesture:
+ *  {@link countConsumingParents} sizes the fan-out for the confirmation, and
+ *  {@link consumingParentIds} then walks it. A drifted copy would show the
+ *  user a number that is not the work they consented to. */
+const consumingParentsFromSql = (targetCount: number): string =>
+  `${fieldRowsFromSql(targetCount)}
+      AND EXISTS (
+        SELECT 1 FROM blocks owner
+         WHERE owner.id = field.parent_id AND owner.deleted = 0
+      )`
+
+/** Whether any block holds a live field row for one of `fieldIds`, a DELETED
+ *  owner included — the question the contested and shared-name refusals ask,
+ *  which is wider than the fan-out's. Declining to re-key a deleted owner is a
+ *  cost bound, not independence from the definition: while its field rows are
+ *  live they still bind it by id, and a restore brings it back reading
+ *  whatever the name resolves to then.
+ *
+ *  Only that shape: a subtree delete tombstones the field rows with the owner,
+ *  so a block deleted through the UI is not counted here, and a later restore
+ *  of it is #1023's to reconcile. */
+export const anyBlockHoldsFieldRowFor = async (
+  db: Pick<SameTxCtx['db'], 'getOptional'>,
+  workspaceId: string,
+  fieldIds: readonly string[],
+  chunkSize = FIELD_PROBE_CHUNK,
+): Promise<boolean> => {
+  for (let i = 0; i < fieldIds.length; i += chunkSize) {
+    const chunk = fieldIds.slice(i, i + chunkSize)
+    const row = await db.getOptional<{held: number}>(
+      `SELECT 1 AS held FROM ${fieldRowsFromSql(chunk.length)} LIMIT 1`,
+      [workspaceId, ...chunk],
+    )
+    if (row !== null) return true
+  }
+  return false
+}
+
+/** Which of `fieldIds` any block holds a live field row for — the same rows,
+ *  deleted owners included, that {@link anyBlockHoldsFieldRowFor} asks about,
+ *  answered per definition for a caller that must say WHICH one holds a
+ *  transaction up. */
+export const fieldIdsHeldByAnyBlock = async (
   db: Pick<SameTxCtx['db'], 'getAll'>,
   workspaceId: string,
   fieldIds: readonly string[],
   chunkSize = FIELD_PROBE_CHUNK,
-): Promise<Set<string>> =>
-  distinctOverLiveFieldRows(db, workspaceId, fieldIds, 'reference_target_id', chunkSize)
-
-/** One column of the live field rows for `fieldIds`, one query per chunk.
- *
- *  The Set is load-bearing across chunks, not tidiness: `SELECT DISTINCT`
- *  dedupes only WITHIN one statement, so a parent consuming two changed
- *  definitions that land in different chunks would otherwise be visited — and
- *  re-keyed — twice. */
-const distinctOverLiveFieldRows = async (
-  db: Pick<SameTxCtx['db'], 'getAll'>,
-  workspaceId: string,
-  fieldIds: readonly string[],
-  column: 'parent_id' | 'reference_target_id',
-  chunkSize: number,
 ): Promise<Set<string>> => {
-  const values = new Set<string>()
+  const held = new Set<string>()
   for (let i = 0; i < fieldIds.length; i += chunkSize) {
     const chunk = fieldIds.slice(i, i + chunkSize)
-    const rows = await db.getAll<Record<typeof column, string>>(
-      `SELECT DISTINCT ${column} FROM blocks WHERE ${liveFieldRowsWhere(chunk.length)}`,
+    const rows = await db.getAll<{reference_target_id: string}>(
+      `SELECT DISTINCT field.reference_target_id FROM ${fieldRowsFromSql(chunk.length)}`,
       [workspaceId, ...chunk],
     )
-    for (const row of rows) values.add(row[column])
+    for (const row of rows) held.add(row.reference_target_id)
   }
-  return values
+  return held
+}
+
+/** How many parents a change to ONE definition would re-key.
+ *
+ *  Single definition rather than the set {@link consumingParentIds} takes: a
+ *  count across several needs that function's cross-chunk `Set` to avoid
+ *  double-counting a parent consuming two of them, and no caller has that
+ *  question — a gesture edits one definition row. */
+export const countConsumingParents = async (
+  db: Pick<SameTxCtx['db'], 'getOptional'>,
+  workspaceId: string,
+  fieldId: string,
+): Promise<number> => {
+  const row = await db.getOptional<{count: number}>(
+    `SELECT COUNT(DISTINCT field.parent_id) AS count
+       FROM ${consumingParentsFromSql(1)}`,
+    [workspaceId, fieldId],
+  )
+  return row?.count ?? 0
 }
 
 /** How many values this change takes away from ONE parent, comparing what the
@@ -702,14 +778,10 @@ const applyToParent = async (
   lostParents: Set<string>,
 ): Promise<void> => {
   const parent = await ctx.tx.get(parentId)
-  // A soft-deleted parent can still own live field rows, so the query that
-  // found it does return one. Skipped by choice, not by necessity — `tx.update`
-  // accepts a tombstone: a deleted block's bag is history, and the live set is
-  // bounded by current usage while the tombstoned set is bounded by ALL-TIME
-  // usage, so re-keying it would put an unbounded write in the user's own
-  // transaction. The cost is that restoring such a block revives it under the
-  // old key; #1023 fixes that where it belongs, at restore.
-  if (parent === null || parent.deleted) return
+  // Tombstoned owners are excluded by `consumingParentsFromSql`, which is the
+  // one place that decides what a consumer is — so this is only the row
+  // vanishing between the probe and here.
+  if (parent === null) return
   const referenceLookups = sameTxReferenceTargetLookups(ctx.tx)
   const siblings = await ctx.tx.childrenOf(parentId, undefined)
   // Collected across EVERY change, then applied in two phases below — see the
@@ -868,12 +940,12 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
       )
     }
     const {changes, unfanoutable, sharedNameClaimants} = collected
-    // ABOVE the refusal below and above the two dormancy returns under it: every
-    // one of those consults `consumingParentIds`, which sees FIELD ROWS, and the
-    // hazard here is a consumer that has none. The runbook flips before
-    // backfilling, so a chunked backfill's un-reached parents hold cells for
-    // this definition and no field row — which makes a definition with NO field
-    // rows the WORST case rather than an exempt one.
+    // ABOVE the refusal below and above the two dormancy returns under it:
+    // every one of those asks about FIELD ROWS, and the hazard here is a
+    // consumer that has none. The runbook flips before backfilling, so a
+    // chunked backfill's un-reached parents hold cells for this definition and
+    // no field row — which makes a definition with NO field rows the WORST
+    // case rather than an exempt one.
     //
     // Permanent rather than late, and NOT because later batches stop resolving
     // the old name — the pass holds ONE resolver for its whole run (see where
@@ -921,12 +993,13 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
     if (unfanoutable.length > 0) {
       // Only a change with CONSUMERS strands anything of its own; one on an
       // unused definition is the user's to make, and telling them to fix
-      // something first would be friction for nothing. So the refusal is
-      // named for the first held change that HAS consumers — an unused one
-      // ahead of it would pass alone, and its way out would not be this
-      // edit's. The consumers of a definition it would SHARE a name with are
-      // the next check's.
-      const consumed = await fieldIdsWithConsumers(
+      // something first would be friction for nothing. Asked as widely as the
+      // other refusals — a deleted owner still binds the definition by its
+      // field rows — and per definition, so the refusal is named for the first
+      // held change that has consumers: an unused one ahead of it would pass
+      // alone, and its way out would not be this edit's. The consumers of a
+      // definition it would SHARE a name with are the next check's.
+      const consumed = await fieldIdsHeldByAnyBlock(
         ctx.db, event.workspaceId, unfanoutable.map(held => held.fieldId),
       )
       const blocking = unfanoutable.find(held => consumed.has(held.fieldId))
@@ -940,9 +1013,9 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
         )
       }
     }
-    if (sharedNameClaimants.length > 0 && (await consumingParentIds(
+    if (sharedNameClaimants.length > 0 && await anyBlockHoldsFieldRowFor(
       ctx.db, event.workspaceId, sharedNameClaimants,
-    )).length > 0) {
+    )) {
       throw new ProcessorRejection(
         SHARED_NAME_REFUSAL.message, SHARED_NAME_REFUSAL.code,
         {fieldIds: sharedNameClaimants},
@@ -966,10 +1039,20 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
       )
     const lostByField = new Map<string, number>()
     const lostParents = new Set<string>()
+    const changingFieldIds = changes.map(change => change.fieldId)
+    let done = 0
     for (const parentId of parentIds) {
       await applyToParent(
         ctx, parentId, changes, isFieldDefinition, lostByField, lostParents,
       )
+      done += 1
+      // No-op unless a gesture's run is open. The first report replaces
+      // 'Starting…', every stride moves the bar, and the last keeps a total
+      // that is not a multiple of the stride from sitting short while the
+      // transaction commits.
+      if (done === 1 || done === parentIds.length || done % FANOUT_REPORT_STRIDE === 0) {
+        reportPropertyDefinitionFanout(changingFieldIds, done, parentIds.length)
+      }
     }
     // REFUSE rather than commit a change that takes a value away. Every write
     // above rolls back with the definition row, so the graph is left exactly as

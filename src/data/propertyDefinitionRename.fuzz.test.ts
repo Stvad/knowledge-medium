@@ -269,8 +269,9 @@ const defStatesOf = (snap: Snapshot, defIds: readonly string[]): Map<string, Def
     }]
   }))
 
-/** Parents holding a live field row for `fieldId` — the processor's own
- *  consumer gate (`consumingParentIds`), deleted parents included. */
+/** Parents holding a live field row for `fieldId` — the question the
+ *  processor's refusals ask (`anyBlockHoldsFieldRowFor`), deleted parents
+ *  included. */
 const hasConsumers = (snap: Snapshot, fieldId: string): boolean =>
   [...snap.values()].some(row =>
     row.reference_target_id === fieldId && row.is_field_form === 1

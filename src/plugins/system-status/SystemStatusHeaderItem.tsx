@@ -22,9 +22,9 @@ import {
   type SyncIndicatorIcon,
   type SyncIndicatorTone,
 } from './model.ts'
+import { useMaterializeBacklog } from '@/hooks/useMaterializeBacklog.js'
 import {
   formatPendingChanges,
-  materializeQueueCountSql,
   uploadQueueCountCap,
   uploadQueueExactCountSql,
   uploadQueuePreviewCountSql,
@@ -215,18 +215,7 @@ function RemoteSyncStatusHeaderContent({
   const pendingChangesApproximate = previewCount > uploadQueueCountCap
   const pendingChanges = pendingChangesApproximate ? uploadQueueCountCap : previewCount
 
-  // Staged rows the Layout B observer hasn't applied to `blocks` yet. The change
-  // queue mutates every drain window, so watch it throttled like the upload
-  // preview; it counts down to 0 as the backlog materializes.
-  const materializeQueue = useQuery<UploadQueueCountRow>(
-    materializeQueueCountSql,
-    [],
-    {
-      reportFetching: false,
-      throttleMs: uploadQueuePreviewThrottleMs,
-    },
-  )
-  const materializingChanges = Number(materializeQueue.data[0]?.count ?? 0)
+  const materializingChanges = useMaterializeBacklog()
 
   return (
     <SyncStatusHeaderContent

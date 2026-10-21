@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { fetchWorkspaceConversionState } from '@/data/workspaceConversion'
 import { stageOf } from '@/sync/conversion/stage'
+import { getModePin } from '@/sync/keys/modePin'
 import type { Workspace } from '@/types'
 import { openConversionFlow } from './conversionFlowStore'
 
@@ -29,7 +30,9 @@ const useConversionCheck = (workspaceId: string, userId: string, check: boolean)
 
 export function EncryptionSection({workspace, userId, onStart}: {workspace: Workspace, userId: string, onStart: () => void}) {
   const {result, retry} = useConversionCheck(workspace.id, userId, workspace.encryptionMode === 'e2ee')
-  const canStart = workspace.encryptionMode === 'none'
+  // Only from a device that has verified the workspace is plaintext: an unpinned
+  // one (the quarantine gate) can't trust the server's 'none'.
+  const canStart = workspace.encryptionMode === 'none' && getModePin(userId, workspace.id) === 'plaintext'
   if (!canStart && !result) return null
   if (result === 'unavailable') {
     return (

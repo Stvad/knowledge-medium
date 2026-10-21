@@ -10,6 +10,24 @@ import type { WorkspaceConversionState } from '@/sync/keys/conversionState'
 import { mintCanary } from '@/sync/crypto/canary'
 import { deriveContentKeyHmac } from '@/sync/crypto/contentKey'
 import { formatWorkspaceKey, generateWorkspaceKeyBytes, importWorkspaceKey } from '@/sync/crypto/workspaceKey'
+import { MATERIALIZE_QUEUE_COUNT_SQL } from '@/data/internals/syncObserver/observer'
+import type { RematerializeProgressListener } from '@/data/internals/syncObserver/observer'
+
+// What the unlock progress reads of the device's sync: PowerSync's status and
+// the observer's apply backlog.
+const sync = vi.hoisted(() => ({
+  downloading: false,
+  downloadedFraction: null as number | null,
+  backlog: 0,
+}))
+
+vi.mock('@powersync/react', () => ({
+  useStatus: () => ({
+    dataFlowStatus: {downloading: sync.downloading},
+    downloadProgress: sync.downloadedFraction === null ? null : {downloadedFraction: sync.downloadedFraction},
+  }),
+  useQuery: (sql: string) => ({data: sql === MATERIALIZE_QUEUE_COUNT_SQL ? [{count: sync.backlog}] : []}),
+}))
 
 // The confirm-plaintext branch does real async work in onResolved (the host
 // re-materializes the workspace's staged synced rows, then re-resolves to swap
@@ -64,6 +82,8 @@ describe('WorkspaceKeyGate — confirm plaintext feedback', () => {
 
     expect(onResolved).toHaveBeenCalledTimes(1)
     expect(button).toBeDisabled()
+    // Only the action that is running says so.
+    expect(screen.getByRole('button', {name: /^unlock$/i})).toBeDisabled()
 
     // A second click while the drain is in flight must not enqueue another one.
     fireEvent.click(button)
@@ -131,6 +151,148 @@ describe('WorkspaceKeyGate — drains before handing back', () => {
     await vi.waitFor(() => expect(onResolved).toHaveBeenCalled())
     expect(order).toEqual(['drain', 'resolved'])
   })
+})
+
+describe('WorkspaceKeyGate — unlock progress', () => {
+  afterEach(() => {
+    cleanup()
+    sync.downloading = false
+    sync.downloadedFraction = null
+    sync.backlog = 0
+  })
+
+  it('shows what the unlock is waiting on while the drain runs, not just a busy button', async () => {
+    window.localStorage.clear()
+    const bytes = generateWorkspaceKeyBytes()
+    const canary = await mintCanary(await importWorkspaceKey(bytes.slice()), 'w1')
+    let report!: RematerializeProgressListener
+    const finished = makeDeferred()
+    const drainWorkspace = vi.fn(async (onProgress?: RematerializeProgressListener) => {
+      report = onProgress!
+      await finished.promise
+      return {deferred: 0}
+    })
+    sync.downloading = true
+    sync.downloadedFraction = 0.45
+    sync.backlog = 12_345
+    render(
+      <WorkspaceKeyGate
+        userId="u1"
+        workspaceId="w1"
+        reason="key-required"
+        canary={canary}
+        deps={{...idleDeps, drainWorkspace}}
+        onResolved={async () => {}}
+      />,
+    )
+    fireEvent.change(screen.getByLabelText(/workspace key/i), {target: {value: formatWorkspaceKey(bytes)}})
+    fireEvent.click(screen.getByRole('button', {name: /^unlock$/i}))
+
+    const progress = await screen.findByRole('status')
+    expect(progress).toHaveTextContent(/45%/)
+    expect(progress).toHaveTextContent(/12,345/)
+    expect(progress).toHaveTextContent(/waiting/i)
+
+    act(() => report({done: 1_000, total: 4_000}))
+    expect(progress).toHaveTextContent(/1,000 of 4,000/)
+  })
+
+  it('hides the progress once the drain fails, leaving the error', async () => {
+    window.localStorage.clear()
+    const failed = makeDeferred()
+    const drainWorkspace = vi.fn(async () => {
+      await failed.promise
+      return {deferred: 0}
+    })
+    render(
+      <WorkspaceKeyGate
+        userId="u1"
+        workspaceId="w1"
+        reason="quarantine"
+        canary={null}
+        deps={{...idleDeps, drainWorkspace}}
+        onResolved={async () => {}}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', {name: /this workspace is not encrypted/i}))
+    expect(await screen.findByRole('status')).toBeInTheDocument()
+
+    await act(async () => {
+      failed.reject(new Error('drain blew up'))
+      await failed.promise.catch(() => {})
+    })
+    expect(screen.getByText('drain blew up')).toBeInTheDocument()
+    expect(screen.queryByRole('status')).toBeNull()
+  })
+
+  const renderConfirming = (drained: ReturnType<typeof makeDeferred>, onResolved: () => Promise<void>) => {
+    window.localStorage.clear()
+    const drainWorkspace = vi.fn(async () => {
+      await drained.promise
+      return {deferred: 0}
+    })
+    const view = render(
+      <WorkspaceKeyGate
+        userId="u1"
+        workspaceId="w1"
+        reason="quarantine"
+        canary={null}
+        deps={{...idleDeps, drainWorkspace}}
+        onResolved={onResolved}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', {name: /this workspace is not encrypted/i}))
+    return view
+  }
+
+  it('shows no progress once its drain has settled, whatever the gate does next', async () => {
+    const drained = makeDeferred()
+    const onResolved = vi.fn(() => new Promise<void>(() => {}))
+    renderConfirming(drained, onResolved)
+    expect(await screen.findByRole('status')).toBeInTheDocument()
+
+    await act(async () => drained.resolve())
+    await vi.waitFor(() => expect(onResolved).toHaveBeenCalled())
+    expect(screen.queryByRole('status')).toBeNull()
+  })
+
+  it('does not re-resolve the host for a gate the user left mid-drain', async () => {
+    const drained = makeDeferred()
+    const onResolved = vi.fn(async () => {})
+    const {unmount} = renderConfirming(drained, onResolved)
+    await screen.findByRole('status')
+
+    unmount()
+    // A macrotask, so every promise job the drain's settling queues has run.
+    await act(async () => {
+      drained.resolve()
+      await new Promise(resolve => setTimeout(resolve, 0))
+    })
+    expect(onResolved).not.toHaveBeenCalled()
+  })
+})
+
+describe('WorkspaceKeyGate — footer', () => {
+  afterEach(() => cleanup())
+
+  it.each(['key-required', 'quarantine', 'server-e2ee', 'finishing-upgrade'] as const)(
+    'offers the host footer on the %s gate',
+    async reason => {
+      window.localStorage.clear()
+      render(
+        <WorkspaceKeyGate
+          userId="u1"
+          workspaceId="w1"
+          reason={reason}
+          canary={null}
+          deps={{...idleDeps, drainWorkspace: () => new Promise(() => {})}}
+          onResolved={async () => {}}
+          footer={<button type="button">Workspace settings</button>}
+        />,
+      )
+      expect(await screen.findByRole('button', {name: 'Workspace settings'})).toBeInTheDocument()
+    },
+  )
 })
 
 // The server says e2ee while this device's pin doesn't (docs/workspace-e2ee-conversion.md §6.2).
@@ -250,6 +412,14 @@ describe('WorkspaceKeyGate — server-e2ee', () => {
     expect(hasPinUpgradeMarker(USER, WS)).toBe(false)
   })
 
+  it('shows the progress of the drain the pin upgrade runs', async () => {
+    deps.drainWorkspace.mockImplementation(() => new Promise(() => {}))
+    renderGate()
+    fireEvent.change(await screen.findByLabelText(/workspace key/i), {target: {value: wkString}})
+    fireEvent.click(screen.getByRole('button', {name: /^unlock$/i}))
+    expect(await screen.findByRole('status')).toHaveTextContent(/waiting/i)
+  })
+
   it('the converting device unlocks with the key it already holds, once past sealing', async () => {
     await storeKey()
     const onResolved = renderGate()
@@ -320,6 +490,24 @@ describe('WorkspaceKeyGate — finishing-upgrade', () => {
     await vi.waitFor(() => expect(onResolved).toHaveBeenCalledTimes(1))
     expect(drainWorkspace).toHaveBeenCalledTimes(1)
     expect(hasPinUpgradeMarker(USER, WS)).toBe(false)
+  })
+
+  it('shows the progress of the drain it resumes', async () => {
+    window.localStorage.clear()
+    setModePin(USER, WS, 'e2ee')
+    writePinUpgradeMarker(USER, WS)
+    await getWorkspaceKeyStore().put(USER, WS, {wk: {} as CryptoKey, contentKeyHmac: {} as CryptoKey})
+    render(
+      <WorkspaceKeyGate
+        userId={USER}
+        workspaceId={WS}
+        reason="finishing-upgrade"
+        canary={null}
+        deps={{...idleDeps, drainWorkspace: () => new Promise(() => {})}}
+        onResolved={async () => {}}
+      />,
+    )
+    expect(await screen.findByRole('status')).toBeInTheDocument()
   })
 
   it('a drain that left rows deferred says so and offers a retry, rather than re-resolving into itself', async () => {

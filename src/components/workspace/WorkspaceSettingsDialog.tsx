@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { cn } from '@/lib/utils'
 import { useRepo } from '@/context/repo'
+import { useMyWorkspaceRoles } from '@/hooks/useWorkspaces'
 import {
   deleteWorkspace,
   inviteMemberByEmail,
@@ -41,8 +42,10 @@ interface Props {
 
 export function WorkspaceSettingsDialog({workspace, open, onOpenChange, onDeleted}: Props) {
   const repo = useRepo()
+  const {rolesByWorkspaceId} = useMyWorkspaceRoles()
   const isOwner = workspace.ownerUserId === repo.user.id
-  const isViewer = repo.isReadOnly
+  // The role, not `repo.isReadOnly`: a locked workspace is read-only for everyone.
+  const isViewer = rolesByWorkspaceId.get(workspace.id) === 'viewer'
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
