@@ -129,11 +129,11 @@ describe('a revival yields a name taken while the block was dead (#883)', () => 
   })
 
   // The trigger indexes text from a malformed bag too, so a taken name is
-  // yielded in whatever shape it is stored, and nothing else in it is touched.
+  // found in whatever shape it is stored; the names left come back as a list.
   it.each([
-    {shape: 'a bare string', stored: 'Inbox', restored: undefined},
-    {shape: 'an array with a non-string entry', stored: ['Inbox', 7, 'Mine'], restored: [7, 'Mine']},
-    {shape: 'an object', stored: {a: 'Inbox', b: 'Mine'}, restored: {b: 'Mine'}},
+    {shape: 'a bare string', stored: 'Inbox', restored: []},
+    {shape: 'an array with a non-string entry', stored: ['Inbox', 7, 'Mine'], restored: ['Mine']},
+    {shape: 'an object', stored: {a: 'Inbox', b: 'Mine'}, restored: ['Mine']},
   ])('restores a page whose bag is $shape with a taken name in it', async ({stored: storedBag, restored}) => {
     await sharedDb.db.execute(
       `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json,
@@ -206,6 +206,80 @@ describe('a revival yields a name taken while the block was dead (#883)', () => 
       await repo.mutate.restore({id: PAGE})
       expect(await stored(PAGE)).toMatchObject({deleted: false, aliases: ['My Page']})
     })
+  })
+})
+
+// Past the properties flip the alias list also lives as a field row with one
+// value child per name, and those children are the source of truth. A yielded
+// name has to leave them too, or the next projection hands it back to the cell.
+describe('a revival yields in a workspace whose properties are child blocks', () => {
+  beforeEach(async () => {
+    await sharedDb.db.execute(
+      `INSERT INTO workspaces
+         (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+       VALUES (?, 'test ws', 'user-1', 1, 1, 'none', NULL, 'children')`,
+      [WS],
+    )
+  })
+
+  /** The names the owner's live alias value children carry. */
+  const aliasChildren = async (ownerId: string): Promise<string[]> => {
+    const resolution = repo.propertySchemaResolverFor(WS).resolve(aliasesProp.name)
+    if (resolution.status !== 'resolved') throw new Error('alias property does not resolve')
+    const {fieldId} = resolution.schema
+    return (await sharedDb.db.getAll<{content: string}>(
+      `SELECT v.content FROM blocks f JOIN blocks v ON v.parent_id = f.id
+       WHERE f.parent_id = ? AND f.reference_target_id = ? AND f.deleted = 0
+         AND v.deleted = 0 AND v.is_field_form IS NOT 1
+       ORDER BY v.order_key`,
+      [ownerId, fieldId],
+    )).map(row => row.content)
+  }
+
+  const pageWithChildren = async () => {
+    await repo.tx(async tx => {
+      await tx.create({id: PAGE, workspaceId: WS, parentId: null, orderKey: 'a0', content: 'My Page'})
+      await tx.setProperty(PAGE, aliasesProp, ['My Page', 'Inbox'])
+    }, {scope: ChangeScope.BlockDefault})
+    await repo.awaitProcessors()
+    expect(await aliasChildren(PAGE)).toEqual(['My Page', 'Inbox'])
+  }
+
+  it('restores a page whose name another page took', async () => {
+    await pageWithChildren()
+    await repo.mutate.delete({id: PAGE})
+    await createPage('q', 'Q', ['Q', 'Inbox'], 'a1')
+
+    await repo.mutate.restore({id: PAGE})
+
+    expect(await stored(PAGE)).toMatchObject({deleted: false, aliases: ['My Page']})
+    expect(await aliasChildren(PAGE)).toEqual(['My Page'])
+  })
+
+  it('undoes the delete of a page whose name a synced block took', async () => {
+    await pageWithChildren()
+    await repo.mutate.delete({id: PAGE})
+    await insertSynced('q', 'Q', ['Inbox'], 5_000)
+
+    expect(await repo.undo()).toBe(true)
+
+    expect(await stored(PAGE)).toMatchObject({deleted: false, aliases: ['My Page']})
+    expect(await aliasChildren(PAGE)).toEqual(['My Page'])
+  })
+
+  it('restores a malformed bag with a taken name in it', async () => {
+    await sharedDb.db.execute(
+      `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json,
+        references_json, created_at, updated_at, user_updated_at, created_by, updated_by, deleted)
+       VALUES (?, ?, NULL, 'a0', 'My Page', ?, '[]', 1, 1, 1, 'u', 'u', 1)`,
+      [PAGE, WS, JSON.stringify({[aliasesProp.name]: ['Inbox', 7, 'Mine']})],
+    )
+    await createPage('q', 'Q', ['Inbox'], 'a1')
+
+    await repo.mutate.restore({id: PAGE})
+
+    expect(await stored(PAGE)).toMatchObject({deleted: false, aliases: ['Mine']})
+    expect(await aliasChildren(PAGE)).toEqual(['Mine'])
   })
 })
 
