@@ -32,6 +32,7 @@ export type Gh = (args: string[]) => string
 
 /** `updatedAt` is GitHub's: comments, reviews and edits bump it as well as pushes. */
 export type OpenPr = { number: number; updatedAt: Date }
+type OpenPull = OpenPr & { fork: boolean }
 
 export const gitIn = (cwd: string): Git => (args, opts = {}) =>
   execFileSync('git', args, {
@@ -134,12 +135,16 @@ export function sweepPreviews<P extends OpenPr>({ git, openPrs, idleBefore, also
   }
 }
 
-function expiredPreviewComment(number: number, repository: string, idleDays: number): string {
-  const headSha = `"$(gh pr view ${number} --repo ${repository} --json headRefOid --jq .headRefOid)"`
+function expiredPreviewComment({ number, fork }: Pick<OpenPull, 'number' | 'fork'>, repository: string, idleDays: number): string {
+  // Approving a fork is approving one reviewed commit, so its command must not fill in whatever the head is now.
+  const [how, headSha] = fork
+    ? ['A maintainer can approve a reviewed head to bring it back:', '<reviewed head SHA>']
+    : ['A push brings it back. To redeploy the current head without one:',
+        `"$(gh pr view ${number} --repo ${repository} --json headRefOid --jq .headRefOid)"`]
   return [
     '### PR preview expired',
     `This PR had no activity for ${idleDays} days, so its preview was removed to keep the Pages site small.`,
-    'A push to a same-repository PR brings it back. To redeploy the current head without one:',
+    how,
     [
       '```sh',
       `gh workflow run approved-pr-preview.yml --repo ${repository} --ref master -f pr_number=${number} -f head_sha=${headSha}`,
@@ -154,24 +159,24 @@ function expiredPreviewComment(number: number, repository: string, idleDays: num
  * next deploy updates it rather than adding another. Editing notifies nobody,
  * which a new comment on every expired PR would.
  */
-export function markPreviewExpired(gh: Gh, repository: string, number: number, idleDays: number): boolean {
-  const pages = JSON.parse(gh(['api', '--paginate', '--slurp', `repos/${repository}/issues/${number}/comments?per_page=100`])) as
+export function markPreviewExpired(gh: Gh, repository: string, pr: Pick<OpenPull, 'number' | 'fork'>, idleDays: number): boolean {
+  const pages = JSON.parse(gh(['api', '--paginate', '--slurp', `repos/${repository}/issues/${pr.number}/comments?per_page=100`])) as
     { id: number; user: { login: string } | null; body?: string }[][]
   const comment = pages.flat().find(c => c.user?.login === PREVIEW_COMMENT_AUTHOR && c.body?.includes(PREVIEW_COMMENT_MARKER))
   if (comment === undefined) return false
   gh(['api', '--method', 'PATCH', `repos/${repository}/issues/comments/${comment.id}`,
-    '-f', `body=${expiredPreviewComment(number, repository, idleDays)}`])
+    '-f', `body=${expiredPreviewComment(pr, repository, idleDays)}`])
   return true
 }
 
 // A PR opening or closing between pages can shift another past the page boundary;
 // accepted while the open PRs fit on one page.
-function openPullRequests(gh: Gh, repository: string): OpenPr[] {
+function openPullRequests(gh: Gh, repository: string): OpenPull[] {
   const out = gh(['api', '--paginate', `repos/${repository}/pulls?state=open&per_page=100`,
-    '--jq', '.[] | [.number, .updated_at] | @tsv'])
+    '--jq', '.[] | [.number, .updated_at, .head.repo.full_name // ""] | @tsv'])
   return out.split('\n').filter(Boolean).map(line => {
-    const [number, updatedAt] = line.split('\t')
-    return { number: Number(number), updatedAt: new Date(updatedAt) }
+    const [number, updatedAt, headRepository] = line.split('\t')
+    return { number: Number(number), updatedAt: new Date(updatedAt), fork: headRepository !== repository }
   })
 }
 
@@ -191,7 +196,7 @@ if (isMainModule(import.meta.url)) {
     git: gitIn(process.cwd()), openPrs: () => openPullRequests(gh, repository),
     idleBefore: new Date(Date.now() - idleDays * DAY_MS), alsoRemove,
     markExpired: pr => {
-      if (!markPreviewExpired(gh, repository, pr.number, idleDays)) console.log(`PR ${pr.number} has no preview comment to update`)
+      if (!markPreviewExpired(gh, repository, pr, idleDays)) console.log(`PR ${pr.number} has no preview comment to update`)
     },
   })
   console.log(removed.length > 0 ? `Removed ${removed.length} previews: ${removed.join(', ')}` : 'No stale previews.')

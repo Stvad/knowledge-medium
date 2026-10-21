@@ -210,14 +210,18 @@ avoid issuing another manual request while one is pending.
 ### Redeploying an expired preview
 
 A push to a same-repository PR redeploys its preview as usual. To bring one
-back without a push, for a fork or a same-repository PR, approve its current
-head with **Deploy approved PR preview**. The expired comment carries the
-command with the PR number filled in:
+back without a push, approve its head with **Deploy approved PR preview**. The
+expired comment carries the command with the PR number filled in; for a
+same-repository PR it reads the current head itself:
 
 ```sh
 gh workflow run approved-pr-preview.yml --repo Stvad/knowledge-medium --ref master \
   -f pr_number=<n> -f head_sha="$(gh pr view <n> --repo Stvad/knowledge-medium --json headRefOid --jq .headRefOid)"
 ```
+
+On a fork PR the comment leaves `head_sha` as a placeholder instead, because
+approving a fork means approving the one commit you reviewed, not whatever the
+head is when you paste the command.
 
 This also works while the PR has a merge conflict and `pull_request` workflows
 do not run. It builds the PR **head**, not the merge with `master` that a push

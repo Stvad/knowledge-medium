@@ -208,7 +208,7 @@ describe('markPreviewExpired', () => {
       { id: 12, user: bot, body: `View preview\n${marker}` },
     ])
 
-    expect(markPreviewExpired(gh, 'o/r', 5, 30)).toBe(true)
+    expect(markPreviewExpired(gh, 'o/r', { number: 5, fork: false }, 30)).toBe(true)
     expect(patches).toHaveLength(1)
     expect(patches[0]).toContain('repos/o/r/issues/comments/12')
     expect(body()).toContain(marker)
@@ -217,7 +217,19 @@ describe('markPreviewExpired', () => {
   it('edits nothing when the PR has no preview comment', () => {
     const { gh, patches } = fakeGh([{ id: 11, user: bot, body: 'another bot comment' }])
 
-    expect(markPreviewExpired(gh, 'o/r', 5, 30)).toBe(false)
+    expect(markPreviewExpired(gh, 'o/r', { number: 5, fork: false }, 30)).toBe(false)
     expect(patches).toEqual([])
+  })
+
+  // Approving a fork is approving one reviewed commit, so its command must not fill in whatever the head is now.
+  it('leaves the head SHA for a maintainer to fill in on a fork PR', () => {
+    const sameRepo = fakeGh([{ id: 12, user: bot, body: marker }])
+    const fork = fakeGh([{ id: 12, user: bot, body: marker }])
+    markPreviewExpired(sameRepo.gh, 'o/r', { number: 5, fork: false }, 30)
+    markPreviewExpired(fork.gh, 'o/r', { number: 5, fork: true }, 30)
+
+    expect(sameRepo.body()).toContain('head_sha="$(gh pr view 5')
+    expect(fork.body()).not.toContain('$(')
+    expect(fork.body()).toContain('head_sha=<reviewed head SHA>')
   })
 })
