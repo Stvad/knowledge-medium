@@ -21,6 +21,7 @@ import {
   validateMaterializeDb,
   type MaterializeMode,
 } from './materialize-benchmark-core.js'
+import { runMaterializeWorkflowBench } from './materialize-workflow.js'
 
 const parseArgs = (argv: string[]) => {
   const value = (flag: string, fallback: number) => {
@@ -29,9 +30,10 @@ const parseArgs = (argv: string[]) => {
   }
   const records = value('--records', 10_000)
   const reps = value('--reps', 3)
+  const workflow = argv.includes('--workflow')
   if (!Number.isInteger(records) || records < 1) throw new Error('--records must be a positive integer')
   if (!Number.isInteger(reps) || reps < 1) throw new Error('--reps must be a positive integer')
-  return {records, reps}
+  return {records, reps, workflow}
 }
 
 const round = (n: number) => Math.round(n * 100) / 100
@@ -59,7 +61,7 @@ const printMetric = (
 }
 
 const main = async () => {
-  const {records, reps} = parseArgs(process.argv.slice(2))
+  const {records, reps, workflow} = parseArgs(process.argv.slice(2))
   const fixture = makeMaterializeFixture(records)
   const key = await crypto.subtle.generateKey({name: 'AES-GCM', length: 256}, false, ['encrypt', 'decrypt'])
   const env = await createTestDb()
@@ -83,7 +85,11 @@ const main = async () => {
         }
       }
     }
-    console.log(JSON.stringify({complete: true, records, reps, warmups: 1, windowSize: 1000, fixture: {
+    const workflowSamples = workflow
+      ? await runMaterializeWorkflowBench(db, () => resetTestDb(env.db), fixture, prepared.get('e2ee')!, key, reps)
+      : undefined
+    if (workflowSamples) for (const sample of workflowSamples) console.log(JSON.stringify({workflowSample: sample}))
+    console.log(JSON.stringify({complete: true, records, reps, warmups: 1, windowSize: 1000, workflow, fixture: {
       plainTextRows: records - fixture.aliasCount - fixture.referenceCount,
       aliasRows: fixture.aliasCount, referenceRows: fixture.referenceCount, fieldRows: fixture.fieldCount,
     }}))

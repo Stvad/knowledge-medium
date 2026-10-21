@@ -120,6 +120,7 @@ import {
   type ReferenceTargetLookups,
 } from './internals/referenceTargetProcessor'
 import { parseExactReferenceBlockContent } from './referenceBlock'
+import {referenceTargetLookupsVia} from './internals/referenceTargetLookups'
 import type { BlockIdPolicy } from './blockId'
 import {
   reprojectOwnersForRowStates,
@@ -139,12 +140,11 @@ import { replayApplicationOrder } from './internals/txSnapshots'
 import { CallbackSet } from '@/utils/callbackSet'
 import { scheduleDeepIdle, CATCHUP_DEEP_IDLE } from '@/utils/scheduleIdle'
 import { ClientContext, type ClientContextReader, type LayoutSessionRouter } from './clientContext'
-import type { TxImpl } from './internals/txEngine'
+import type { TxDb, TxImpl } from './internals/txEngine'
 import { CHILDREN_SQL, SUBTREE_SQL } from './internals/treeQueries'
 import { ancestorWalk } from './internals/ancestorBatch'
 import {
   SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_EXCLUDING_SQL,
-  SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL,
   SELECT_BLOCK_BY_ID_SQL,
 } from './internals/kernelQueries'
 import {
@@ -1298,8 +1298,7 @@ export class Repo {
         // LOCAL `reference_target_id` column must track content for
         // sync-applied rows on every device, e2ee included (derivation runs
         // over decrypted content). Resolution mirrors
-        // `core.deriveReferenceTarget`: schema-name winner map first, then
-        // the `block_aliases` index read on the open write tx (so
+        // `core.deriveReferenceTarget`: the `block_aliases` index on the open write tx (so
         // same-window alias/definition arrivals resolve).
         referenceTargetLookups: policyDeps.referenceTargetLookups
           ?? (tx => this.referenceTargetLookupsVia(tx)),
@@ -1340,22 +1339,20 @@ export class Repo {
     if (this.syncObserver) await this.syncObserver.flush()
   }
 
-  /** Re-materialize a workspace's staged `blocks_synced` rows after it becomes
-   *  materializable (WK pasted / plaintext confirmed via the §8.2 gate). No-op
-   *  if the observer isn't running.
-   *
-   *  `'all'`, not `'unapplied'`: this and the reconcile rescan are the paths for
-   *  a workspace whose FLAGS may be wrong — the deterministic-id shadow this
-   *  predates the flag entirely — so trusting the flag to name the work is the
-   *  one thing they must not do. Unpinned by any test (the two scopes agree on
-   *  every shape a test can build), which is why it is written here.
-   *
+  /** Re-materialize all staged rows after workspace unlock/verification.
+   *  Read every row: legacy shadows can incorrectly have `needs_apply = 0`.
+   *  A pass with no deferred/quarantined rows also satisfies one-time recovery.
    *  Returns the pass's report, or null when no observer is running. */
   async drainSyncWorkspace(
     workspaceId: string,
     onProgress?: RematerializeProgressListener,
   ): Promise<RematerializeReport | null> {
-    return this.syncObserver ? this.syncObserver.drainWorkspace(workspaceId, 'all', onProgress) : null
+    if (!this.syncObserver) return null
+    const report = await this.syncObserver.drainWorkspace(workspaceId, 'all', onProgress)
+    if (report.deferred === 0 && report.quarantined === 0) {
+      await this.db.execute(RECORD_RECONCILE_RESCAN_MARKER_SQL, [`${RECONCILE_RESCAN_MARKER_PREFIX}${workspaceId}`])
+    }
+    return report
   }
 
   /** Frozen snapshot of internal data-layer counters + timings
@@ -4403,25 +4400,11 @@ export class Repo {
     this.pendingNameRederives.delete(workspaceId)
   }
 
-  /** The one construction site for reference-target resolution outside a
-   *  repo.tx: the `block_aliases` index read on `reader` —
-   *  the open sync-arrival write tx, or the auto-commit connection for the
-   *  idle passes. Mirrors `core.deriveReferenceTarget` (a `((id))` block-ref
-   *  resolves textually, `[[alias]]` through this lookup); the two must
-   *  resolve identically or the column diverges across write paths. */
+  /** Use the open arrival transaction, or this DB's snapshot for idle passes. */
   private referenceTargetLookupsVia(
-    reader: {getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>} = this.db,
+    reader: Pick<TxDb, 'getAll'> = this.db,
   ): ReferenceTargetLookups {
-    return {
-      aliasTargetId: async (alias, workspaceId) => {
-        if (alias === '' || workspaceId === '') return null
-        const row = await reader.getOptional<{id: string}>(
-          SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL,
-          [workspaceId, alias],
-        )
-        return row?.id ?? null
-      },
-    }
+    return referenceTargetLookupsVia(reader)
   }
 
   /** Chunked raw column stamps, materializer-style: source-NULL (upload
@@ -4715,9 +4698,6 @@ export class Repo {
     if (done) return
     try {
       await this.drainSyncWorkspace(workspaceId)
-      // Marker only after a clean pass — a thrown/interrupted re-scan leaves it
-      // unset so the next open retries (drainSyncWorkspace is resumable + idempotent).
-      await this.db.execute(RECORD_RECONCILE_RESCAN_MARKER_SQL, [key])
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err)
       console.error(`[reconcileRescan] workspace ${workspaceId} failed (will retry next open): ${reason}`)

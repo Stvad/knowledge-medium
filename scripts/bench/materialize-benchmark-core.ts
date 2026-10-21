@@ -1,12 +1,11 @@
 import { BLOCKS_SYNCED_RAW_TABLE, blockToSyncedRowParams, type BlockRow } from '@/data/blockSchema.js'
 import { materializeStagingRows, type MaterializeDeps } from '@/data/internals/syncObserver/materialize.js'
 import type { PowerSyncDb } from '@/data/internals/commitPipeline.js'
+import { referenceTargetLookupsVia } from '@/data/internals/referenceTargetLookups.js'
 import { encodeForWire, type GetCek } from '@/sync/transform.js'
 import type { MaterializeFixture } from './materialize-fixture.js'
 
 export const DEFAULT_MATERIALIZE_WINDOW_SIZE = 1000
-const ALIAS_SQL = 'SELECT block_id AS id FROM block_aliases WHERE workspace_id = ? AND alias = ? LIMIT 1'
-
 export interface QueryMetric { count: number; elapsedMs: number }
 export interface MaterializeMetrics {
   calls: Record<string, QueryMetric>
@@ -46,7 +45,7 @@ const sqlKey = (sql: string) => sql.replace(/\s+/g, ' ').trim().replace(
   },
 )
 
-const instrument = (
+export const instrumentMaterializeDb = (
   raw: PowerSyncDb, metrics: MaterializeMetrics, onFirstTransaction?: () => void,
 ): PowerSyncDb => {
   let sawTransaction = false
@@ -70,6 +69,7 @@ const instrument = (
       }
     return {
       ...db,
+      onChange: db.onChange?.bind(db),
       execute: method('execute') as T['execute'],
       getAll: method('getAll') as T['getAll'],
       getOptional: method('getOptional') as T['getOptional'],
@@ -154,13 +154,7 @@ export const runMaterializePass = async (
   const deps: MaterializeDeps = {
     getMaterializability: () => mode === 'none' ? 'copy' as const : 'decrypt' as const,
     getCek,
-    referenceTargetLookups: tx => ({
-      aliasTargetId: async (alias: string, workspaceId: string) => {
-        if (!alias || !workspaceId) return null
-        const row = await tx.getOptional<{id: string}>(ALIAS_SQL, [workspaceId, alias])
-        return row?.id ?? null
-      },
-    }),
+    referenceTargetLookups: tx => referenceTargetLookupsVia(tx),
   }
   const overallStart = performance.now()
   let totalPhase1Ms = 0
@@ -169,7 +163,7 @@ export const runMaterializePass = async (
   let skippedStale = 0
   for (const upserted of idsByWindow(fixture, windowSize)) {
     let firstTxAt: number | null = null
-    const instrumented = instrument(db, metrics, () => { firstTxAt = performance.now() })
+    const instrumented = instrumentMaterializeDb(db, metrics, () => { firstTxAt = performance.now() })
     const beforeTx = metrics.txElapsedMs
     const started = performance.now()
     const outcome = await materializeStagingRows(instrumented, {upserted, removed: []}, deps)
