@@ -23,7 +23,8 @@ const PREVIEW_DIR = /^pr-([1-9][0-9]*)$/
 const PUSH_ATTEMPTS = 5
 const DEFAULT_IDLE_DAYS = 30
 const DAY_MS = 24 * 60 * 60 * 1000
-// The hidden header marocchino/sticky-pull-request-comment finds the preview comment by.
+// The hidden header marocchino/sticky-pull-request-comment finds the preview comment by: what
+// `header: pr-preview` in the preview workflows, and rossjrw's own comment step, write.
 const PREVIEW_COMMENT_MARKER = '<!-- Sticky Pull Request Commentpr-preview -->'
 const PREVIEW_COMMENT_AUTHOR = 'github-actions[bot]'
 const EXPIRED_HEADING = '### PR preview expired'
@@ -32,43 +33,20 @@ export type Git = (args: string[], opts?: { env?: NodeJS.ProcessEnv }) => string
 export type Gh = (args: string[]) => string
 
 /** `updatedAt` is GitHub's: comments, reviews and edits bump it as well as pushes. */
-export type OpenPr = { number: number; updatedAt: Date }
-type OpenPull = OpenPr & { fork: boolean; base: string }
+export type OpenPr = { number: number; updatedAt: Date; fork: boolean; base: string }
+type NoticeTarget = Pick<OpenPr, 'number' | 'fork' | 'base'>
 
 export const gitIn = (cwd: string): Git => (args, opts = {}) =>
   execFileSync('git', args, {
     cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...opts.env },
   }).trim()
 
-const isIdle = (pr: OpenPr, idleBefore: Date) => pr.updatedAt < idleBefore
-
-/**
- * The pr-<n> directory names to remove: the PR is not open, is named in
- * `alsoRemove`, or is idle. Any other name is never touched.
- */
-export function previewsToRemove(names: string[], open: readonly OpenPr[], { idleBefore, alsoRemove }: {
-  idleBefore: Date
-  alsoRemove: readonly number[]
-}): string[] {
-  const byNumber = new Map(open.map(pr => [pr.number, pr]))
+/** The pr-<n> directory names whose PR is not in `keep`; any other name is never touched. */
+export function stalePreviewDirs(names: string[], keep: ReadonlySet<number>): string[] {
   return names.filter(name => {
     const match = PREVIEW_DIR.exec(name)
-    if (match === null) return false
-    const pr = byNumber.get(Number(match[1]))
-    return pr === undefined || alsoRemove.includes(pr.number) || isIdle(pr, idleBefore)
+    return match !== null && !keep.has(Number(match[1]))
   })
-}
-
-/**
- * The open PRs that idled and have no preview among `names`: those whose
- * comment should say it expired. Derived from what is left rather than from
- * what one run removed, so a notice that failed is retried by the next run.
- */
-export function expiredPrs<P extends OpenPr>(names: readonly string[], open: readonly P[], { idleBefore, alsoRemove }: {
-  idleBefore: Date
-  alsoRemove: readonly number[]
-}): P[] {
-  return open.filter(pr => isIdle(pr, idleBefore) && !alsoRemove.includes(pr.number) && !names.includes(`pr-${pr.number}`))
 }
 
 function commitWithout(git: Git, tip: string, dirs: string[]): string {
@@ -97,22 +75,23 @@ function commitWithout(git: Git, tip: string, dirs: string[]): string {
  * and the push is still swept; accepted, since only a maintainer redeploying
  * an unchanged head in those seconds meets it.
  */
-export function sweepPreviews<P extends OpenPr>({ git, openPrs, idleBefore, alsoRemove = [] }: {
+export function sweepPreviews({ git, openPrs, idleBefore, alsoRemove = [] }: {
   git: Git
-  openPrs: () => readonly P[]
+  openPrs: () => readonly OpenPr[]
   idleBefore: Date
   alsoRemove?: number[]
-}): { removed: string[]; expired: P[] } {
+}): { removed: string[]; expired: OpenPr[] } {
   for (let attempt = 1; ; attempt++) {
     // Not blobless: that needs partial-clone config, and every later step would lazily fetch what it touches.
     git(['fetch', '--quiet', '--depth', '1', 'origin', `+refs/heads/${BRANCH}:${REMOTE_REF}`])
     const tip = git(['rev-parse', REMOTE_REF])
-    const open = openPrs()
+    const open = openPrs().filter(pr => !alsoRemove.includes(pr.number))
+    // Every idle PR, not only those this run removes, so a notice that failed is retried.
+    const expired = open.filter(pr => pr.updatedAt < idleBefore)
     const names = git(['ls-tree', '-d', '--name-only', tip, `${PREVIEW_ROOT}/`])
       .split('\n').filter(Boolean).map(path => path.slice(PREVIEW_ROOT.length + 1))
-    const removed = previewsToRemove(names, open, { idleBefore, alsoRemove })
-    const left = names.filter(name => !removed.includes(name))
-    const result = { removed, expired: expiredPrs(left, open, { idleBefore, alsoRemove }) }
+    const removed = stalePreviewDirs(names, new Set(open.filter(pr => !expired.includes(pr)).map(pr => pr.number)))
+    const result = { removed, expired }
     if (removed.length === 0) return result
     const commit = commitWithout(git, tip, removed)
     try {
@@ -125,7 +104,7 @@ export function sweepPreviews<P extends OpenPr>({ git, openPrs, idleBefore, also
   }
 }
 
-function redeployInstructions({ number, fork, base }: Pick<OpenPull, 'number' | 'fork' | 'base'>, repository: string): string[] {
+function redeployInstructions({ number, fork, base }: NoticeTarget, repository: string): string[] {
   const push = 'A push brings it back once the PR has no merge conflict.'
   // The approval flow refuses a PR that does not target master.
   if (base !== 'master') return [push]
@@ -140,7 +119,7 @@ function redeployInstructions({ number, fork, base }: Pick<OpenPull, 'number' | 
     command(`"$(gh pr view ${number} --repo ${repository} --json headRefOid --jq .headRefOid)"`)]
 }
 
-function expiredPreviewComment(pr: Pick<OpenPull, 'number' | 'fork' | 'base'>, repository: string, idleDays: number): string {
+function expiredPreviewComment(pr: NoticeTarget, repository: string, idleDays: number): string {
   return [
     EXPIRED_HEADING,
     `This PR had no activity for ${idleDays} days, so its preview was removed to keep the Pages site small.`,
@@ -156,7 +135,7 @@ function expiredPreviewComment(pr: Pick<OpenPull, 'number' | 'fork' | 'base'>, r
  * skips a minimized comment and posts a fresh one. Editing notifies nobody,
  * which a new comment on every expired PR would.
  */
-export function markPreviewExpired(gh: Gh, repository: string, pr: Pick<OpenPull, 'number' | 'fork' | 'base'>, idleDays: number): boolean {
+export function markPreviewExpired(gh: Gh, repository: string, pr: NoticeTarget, idleDays: number): boolean {
   const pages = JSON.parse(gh(['api', '--paginate', '--slurp', `repos/${repository}/issues/${pr.number}/comments?per_page=100`])) as
     { id: number; user: { login: string } | null; body?: string }[][]
   const stale = pages.flat().filter(c =>
@@ -169,7 +148,7 @@ export function markPreviewExpired(gh: Gh, repository: string, pr: Pick<OpenPull
 }
 
 /** One `number, updated_at, head repository, base branch` line per PR; a deleted head repository is empty, so a fork. */
-export function parseOpenPulls(tsv: string, repository: string): OpenPull[] {
+export function parseOpenPulls(tsv: string, repository: string): OpenPr[] {
   return tsv.split('\n').filter(Boolean).map(line => {
     const [number, updatedAt, headRepository, base] = line.split('\t')
     return { number: Number(number), updatedAt: new Date(updatedAt), fork: headRepository !== repository, base }
@@ -178,7 +157,7 @@ export function parseOpenPulls(tsv: string, repository: string): OpenPull[] {
 
 // A PR opening or closing between pages can shift another past the page boundary;
 // accepted while the open PRs fit on one page.
-function openPullRequests(gh: Gh, repository: string): OpenPull[] {
+function openPullRequests(gh: Gh, repository: string): OpenPr[] {
   return parseOpenPulls(gh(['api', '--paginate', `repos/${repository}/pulls?state=open&per_page=100`,
     '--jq', '.[] | [.number, .updated_at, .head.repo.full_name // "", .base.ref] | @tsv']), repository)
 }

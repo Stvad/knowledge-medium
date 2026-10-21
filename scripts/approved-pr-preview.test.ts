@@ -72,7 +72,7 @@ describe('commit-pinned preview approval', () => {
   })
 
   // Same-repository PRs come here to redeploy a preview the idle sweep expired.
-  it('builds a same-repository PR head from this repository', async () => {
+  it('accepts a same-repository PR head, checked out from this repository', async () => {
     await expect(approve(vi.fn(async () => ({
       ...pull(),
       head: { sha, repo: { full_name: repository } },

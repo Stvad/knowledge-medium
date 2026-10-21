@@ -3,7 +3,7 @@ import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import {
-  expiredPrs, type Gh, type Git, gitIn, markPreviewExpired, type OpenPr, parseOpenPulls, previewsToRemove, sweepPreviews,
+  type Gh, type Git, gitIn, markPreviewExpired, type OpenPr, parseOpenPulls, stalePreviewDirs, sweepPreviews,
 } from './sweep-pr-previews.ts'
 
 const git = (cwd: string, ...args: string[]) => gitIn(cwd)(args)
@@ -65,26 +65,16 @@ const tip = () => git(origin, 'rev-parse', 'gh-pages')
 const workGit = (): Git => gitIn(work)
 
 const idleBefore = new Date('2026-09-21T00:00:00Z')
-const active = (number: number): OpenPr => ({ number, updatedAt: new Date('2026-10-20T00:00:00Z') })
-const idle = (number: number): OpenPr => ({ number, updatedAt: new Date('2026-09-01T00:00:00Z') })
+const openPr = (number: number, updatedAt: string): OpenPr => ({ number, updatedAt: new Date(updatedAt), fork: false, base: 'master' })
+const active = (number: number) => openPr(number, '2026-10-20T00:00:00Z')
+const idle = (number: number) => openPr(number, '2026-09-01T00:00:00Z')
 
 const sweep = (options: Omit<Parameters<typeof sweepPreviews>[0], 'git' | 'idleBefore'> & { git?: Git }) =>
   sweepPreviews({ git: workGit(), idleBefore, ...options })
 
-describe('previewsToRemove', () => {
-  it('names only pr-<n> directories whose PR is closed, named, or idle', () => {
-    const names = ['pr-1', 'pr-2', 'pr-3', 'pr-4', 'pr-03', 'pr-x', 'shared']
-
-    expect(previewsToRemove(names, [active(2), idle(3), active(4)], { idleBefore, alsoRemove: [4] }))
-      .toEqual(['pr-1', 'pr-3', 'pr-4'])
-  })
-})
-
-describe('expiredPrs', () => {
-  it('names the idle open PRs left without a preview, except those removed by name', () => {
-    const open = [active(2), idle(3), active(4), idle(5), idle(6)]
-
-    expect(expiredPrs(['pr-2', 'pr-5'], open, { idleBefore, alsoRemove: [6] })).toEqual([idle(3)])
+describe('stalePreviewDirs', () => {
+  it('names only pr-<n> directories whose PR is not kept', () => {
+    expect(stalePreviewDirs(['pr-1', 'pr-2', 'pr-03', 'pr-x', 'shared'], new Set([2]))).toEqual(['pr-1'])
   })
 })
 
@@ -107,8 +97,10 @@ describe('sweepPreviews', { timeout: 20_000 }, () => {
     expect(tip()).toBe(before)
   })
 
-  it('also removes explicitly named PRs, open or not', () => {
-    sweep({ openPrs: () => [active(1), active(2), active(3)], alsoRemove: [2] })
+  it('also removes explicitly named PRs, open or not, without reporting them expired', () => {
+    const result = sweep({ openPrs: () => [active(1), idle(2), active(3)], alsoRemove: [2] })
+
+    expect(result.expired).toEqual([])
 
     expect(publishedFiles()).toEqual([
       '.nojekyll', 'index.html', 'pr-preview/README.md', 'pr-preview/pr-1/index.html', 'pr-preview/pr-3/.nojekyll',
@@ -199,7 +191,7 @@ describe('markPreviewExpired', () => {
       }
       return JSON.stringify([comments])
     }
-    const body = (index = 0) => patches[index]?.find(arg => arg.startsWith('body='))
+    const body = () => patches[0]?.find(arg => arg.startsWith('body='))
     return { gh, patches, body }
   }
 
@@ -252,7 +244,6 @@ describe('markPreviewExpired', () => {
     expect(again.patches).toEqual([])
   })
 
-  // Approving a fork is approving one reviewed commit, so its command must not fill in whatever the head is now.
   it('leaves the head SHA for a maintainer to fill in on a fork PR', () => {
     const sameRepo = fakeGh([{ id: 12, user: bot, body: marker }])
     const fork = fakeGh([{ id: 12, user: bot, body: marker }])
