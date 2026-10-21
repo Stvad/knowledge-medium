@@ -320,6 +320,28 @@ describe('auditPropertyRegistration', () => {
     expect(audit.propertyCells).toBeGreaterThanOrEqual(2)
   })
 
+  it('reports cells with no property blocks past the flip, even when every key registers', async () => {
+    // Written before the flip, so the cell has no children — the shape a
+    // cell-only write past the flip leaves too, and one the key scan cannot see.
+    await create({id: 'b1', properties: {[declaredProp.name]: 'v'}})
+    await sharedDb.db.execute(
+      `INSERT INTO workspaces (id, name, owner_user_id, create_time, update_time, properties_migration)
+       VALUES (?, 'ws', 'user-1', 1, 1, 'children')`, [WS])
+
+    const audit = await auditPropertyRegistration(repo, WS)
+
+    expect(audit.unregistered).toEqual([])
+    expect(audit.coverage?.missing).toEqual({
+      cells: 1, blocks: 1, keys: [{key: declaredProp.name, cells: 1, blockIds: ['b1']}],
+    })
+  })
+
+  it('leaves coverage out before the flip, where no cell is expected to have blocks', async () => {
+    await create({id: 'b1', properties: {[declaredProp.name]: 'v'}})
+
+    expect((await auditPropertyRegistration(repo, WS)).coverage).toBeNull()
+  })
+
   it('ranks by cell count so the biggest exposure reads first', async () => {
     // Names chosen so alphabetical order CONTRADICTS cell order: SQLite's
     // GROUP BY hands rows back sorted by key, which would make this pass
