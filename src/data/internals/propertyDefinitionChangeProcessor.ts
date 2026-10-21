@@ -103,7 +103,7 @@ import {
 } from './referenceTargetProcessor'
 import {
   buildSchemaOrNull,
-  unbuildableCause,
+  definitionSchema,
   type UnbuildableCause,
 } from '@/data/userSchemasService'
 import {
@@ -270,24 +270,34 @@ const REFUSALS: Record<'unbuildable' | 'contested', {code: string; message: stri
  *  message offers making that codec available where that is possible, or
  *  deleting the definition — never a re-type, which this same refusal would
  *  stop (#1077). */
+const DELETE_KEEPS_VALUES = 'or delete the property definition; the values blocks '
+  + 'hold under it stay.'
+/** Under version skew a definition that fails here works on a newer device, and
+ *  deleting it deletes it there too — so updating comes first wherever it can
+ *  help. */
+const UPDATE_FIRST = `Update the plugin or the app on this device and try again, ${DELETE_KEEPS_VALUES}`
+
 const CURRENT_TYPE_UNAVAILABLE: Record<UnbuildableCause, {
   problem: (type: string) => string
   wayOut: string
 }> = {
+  'no-preset': {
+    problem: () => 'it has no type set',
+    wayOut: `Delete the property definition instead; the values blocks hold under it stay.`,
+  },
   'preset-not-loaded': {
-    problem: type => `its type ${type}comes from a plugin that is not loaded on this device`,
-    wayOut: 'Enable that plugin on this device and try again, or delete the property '
-      + 'definition.',
+    problem: type => `its type ${type}comes from a plugin, or a newer version of the `
+      + 'app, that is not loaded on this device',
+    wayOut: `Enable that plugin or update the app on this device and try again, ${
+      DELETE_KEEPS_VALUES}`,
   },
   'config-unreadable': {
     problem: type => `the stored settings of its type ${type}cannot be read on this device`,
-    wayOut: 'Delete the property definition instead; the values blocks hold under it '
-      + 'stay.',
+    wayOut: UPDATE_FIRST,
   },
   'build-failed': {
     problem: type => `its type ${type}fails to build on this device`,
-    wayOut: 'Delete the property definition instead; the values blocks hold under it '
-      + 'stay.',
+    wayOut: UPDATE_FIRST,
   },
 }
 
@@ -457,18 +467,19 @@ const collectChanges = (
     // Above the destination's check: with no codec for what is stored, no
     // destination would let this change land, so the way out to name is the
     // one that does.
-    const beforeSchema = buildSchemaOrNull(before, ctx.valuePresets, beforeMeta)
-    if (beforeSchema === null) {
+    const beforeBuild = definitionSchema(before, ctx.valuePresets, beforeMeta)
+    if (beforeBuild.schema === null) {
       const presetId = before.properties[presetIdProp.name]
       unfanoutable.push({
         fieldId: after.id,
         reason: 'current-type-unavailable',
         name: beforeMeta.name,
         presetId: typeof presetId === 'string' ? presetId : '',
-        cause: unbuildableCause(before, ctx.valuePresets),
+        cause: beforeBuild.cause,
       })
       continue
     }
+    const beforeSchema = beforeBuild.schema
     const afterSchema = buildSchemaOrNull(after, ctx.valuePresets, afterMeta)
     if (afterSchema === null) {
       // This tx leaves the row naming a codec that does not build, so nothing

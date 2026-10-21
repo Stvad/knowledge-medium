@@ -1222,7 +1222,7 @@ describe('while the definition\'s CURRENT preset does not build (#1077, #1090)',
 
     await expect(retype(repo, FIELD_ID, 'another-missing-preset')).rejects.toMatchObject({
       code: CURRENT_TYPE_UNAVAILABLE,
-      message: expect.stringContaining('Enable that plugin on this device'),
+      message: expect.stringContaining('Enable that plugin or update the app on this device'),
     })
     expect((await cell(FIELD_ID))[presetIdProp.name]).toBe(UNLOADABLE_PRESET)
   })
@@ -1281,12 +1281,40 @@ describe('while the definition\'s CURRENT preset does not build (#1077, #1090)',
       message: expect.stringContaining('the stored settings of its type "ref" cannot be read'),
     })
     await expect(refusal).rejects.toMatchObject({
+      message: expect.stringContaining('Update the plugin or the app on this device'),
+    })
+    await expect(refusal).rejects.toMatchObject({
       message: expect.not.stringContaining('Enable'),
     })
     await repo.awaitProcessors()
 
     expect(await graphState()).toEqual(before)
     expect(await rowContent(valueRowId)).toBe('((target))')
+  })
+
+  it('REFUSES a re-type of a used definition that names no preset, saying so', async () => {
+    // Synced in that way: locally, clearing the preset of a used definition is
+    // itself refused. No plugin is involved, so none is blamed.
+    await seedWorkspace('children')
+    const repo = await setupDefinition()
+    await seedProperty(repo, 'p', 'status', 'done')
+    await sharedDb.db.execute(
+      `UPDATE blocks SET properties_json = json_remove(properties_json, '$."${presetIdProp.name}"')
+        WHERE id = ?`,
+      [FIELD_ID])
+    const before = await graphState()
+
+    const refusal = retype(repo, FIELD_ID, 'number')
+    await expect(refusal).rejects.toMatchObject({
+      code: CURRENT_TYPE_UNAVAILABLE,
+      message: expect.stringContaining('it has no type set'),
+    })
+    await expect(refusal).rejects.toMatchObject({
+      message: expect.not.stringContaining('plugin'),
+    })
+    await repo.awaitProcessors()
+
+    expect(await graphState()).toEqual(before)
   })
 
   it('REFUSES a re-type off a LOADED preset whose build throws', async () => {
@@ -1305,6 +1333,9 @@ describe('while the definition\'s CURRENT preset does not build (#1077, #1090)',
     await expect(refusal).rejects.toMatchObject({
       code: CURRENT_TYPE_UNAVAILABLE,
       message: expect.stringContaining(`its type "${UNLOADABLE_PRESET}" fails to build`),
+    })
+    await expect(refusal).rejects.toMatchObject({
+      message: expect.stringContaining('Update the plugin or the app on this device'),
     })
     await expect(refusal).rejects.toMatchObject({
       message: expect.not.stringContaining('Enable'),

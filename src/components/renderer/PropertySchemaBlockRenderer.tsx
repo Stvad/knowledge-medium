@@ -11,11 +11,7 @@ import { useHandle } from '@/hooks/block.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import {readValuePresetRegistry, readValuePresets} from '@/data/valuePresetRegistry'
 import { parsePropertyDefinitionMetadata } from '@/data/propertyDefinitionMetadata'
-import {
-  buildSchemaOrNull,
-  unbuildableCause,
-  type UnbuildableCause,
-} from '@/data/userSchemasService'
+import { definitionSchema, type UnbuildableCause } from '@/data/userSchemasService'
 import { openExtensionsSettings } from '@/extensions/openExtensionsSettings.js'
 import { isValidSeededDefinition } from '@/data/definitionSeeds.js'
 import { isGrammarShapedLabel, isRoundTrippableReferenceLabel } from '@/data/referenceBlock'
@@ -46,63 +42,81 @@ const renderConfigEditor = (
 
 /** The question the definition-change processor refuses on, asked of the
  *  definition row as it stands: does its CURRENT type build a codec here, and
- *  if not, why. `null` when it builds. */
+ *  if not, why. `null` when the controls stay: the type builds, or the row
+ *  names no type yet — choosing one is how such a definition is finished. */
 const useCurrentTypeUnavailable = (
   block: BlockRendererProps['block'],
-): UnbuildableCause | null => {
+): Exclude<UnbuildableCause, 'no-preset'> | null => {
   const cores = readValuePresetRegistry(useAppRuntime()).cores
   return useHandle(block, {
     selector: row => {
       if (!row) return null
       const metadata = parsePropertyDefinitionMetadata(row)
-      if (metadata === null || buildSchemaOrNull(row, cores, metadata) !== null) return null
-      return unbuildableCause(row, cores)
+      if (metadata === null) return null
+      const built = definitionSchema(row, cores, metadata)
+      return built.schema !== null || built.cause === 'no-preset' ? null : built.cause
     },
   })
 }
 
-/** Why this definition's type and config are locked, and the way out. */
-const CurrentTypeUnavailableNotice = ({presetId, cause, seedBacked, canDelete}: {
+/** Who is looking decides which ways out this editor can offer. A seed is
+ *  code-owned, so its only way out is its plugin or the app. */
+type NoticeAudience = 'editor' | 'viewer' | 'seed'
+
+const NOTICE_PROBLEM: Record<
+  Exclude<UnbuildableCause, 'no-preset'>,
+  (type: React.ReactNode) => React.ReactNode
+> = {
+  'preset-not-loaded': type => <>This property uses {type}, from a plugin, or a newer
+    version of the app, that isn&rsquo;t loaded on this device.</>,
+  'config-unreadable': type => <>The stored settings of {type} can&rsquo;t be read on
+    this device.</>,
+  'build-failed': type => <>This property uses {type}, which fails to build on this
+    device.</>,
+}
+
+const noticeWayOut = (
+  cause: Exclude<UnbuildableCause, 'no-preset'>,
+  audience: NoticeAudience,
+): string => {
+  // Updating first: under version skew this definition works on a newer
+  // device, and deleting it here deletes it there too.
+  const fix = cause === 'preset-not-loaded'
+    ? 'Enable the plugin or update the app on this device'
+    : 'Update the plugin or the app on this device'
+  if (audience === 'seed') return `${fix}.`
+  if (audience === 'viewer') {
+    return `${fix}, or ask someone who can edit this workspace to delete the schema.`
+  }
+  return `${fix}, or delete the schema; the values blocks hold under it stay.`
+}
+
+/** Why this definition's type and config are locked, and the ways out. */
+const CurrentTypeUnavailableNotice = ({presetId, cause, audience}: {
   presetId: string
-  cause: UnbuildableCause
-  /** A code-owned definition: its way out is the plugin, never an edit here. */
-  seedBacked: boolean
-  /** Whether this editor offers the delete button at all. */
-  canDelete: boolean
+  cause: Exclude<UnbuildableCause, 'no-preset'>
+  audience: NoticeAudience
 }) => {
   const type = presetId
     ? <>the <code className="font-mono">{presetId}</code> type</>
     : <>this property&rsquo;s type</>
-  const offersPlugin = cause === 'preset-not-loaded' || seedBacked
-  const wayOut = cause === 'preset-not-loaded'
-    ? `Enable the plugin on this device${canDelete ? ', or delete the schema' : ''}.`
-    : seedBacked
-      ? 'Update or repair the plugin that provides it.'
-      : canDelete
-        ? 'Delete the schema instead; the values blocks hold under it stay.'
-        : 'Someone who can edit this workspace can delete the schema.'
   return (
     <div className="space-y-1 text-xs text-muted-foreground">
       <div>
-        {cause === 'preset-not-loaded'
-          ? <>This property uses {type}, from a plugin that isn&rsquo;t loaded on this device.</>
-          : cause === 'config-unreadable'
-            ? <>The stored settings of {type} can&rsquo;t be read on this device.</>
-            : <>This property uses {type}, which fails to build on this device.</>}
-        {' '}Its type and settings can&rsquo;t be changed here: only that type can
-        read the values blocks hold under it. {wayOut}
+        {NOTICE_PROBLEM[cause](type)}
+        {' '}Its type and settings can&rsquo;t be changed here, and while blocks use
+        it, it can&rsquo;t be renamed either: only that type can read the values they
+        hold under it. {noticeWayOut(cause, audience)}
       </div>
-      {offersPlugin && (
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="h-7 text-xs"
-          onClick={() => openExtensionsSettings('property-schema-type-unavailable')}
-        >
-          Manage extensions
-        </Button>
-      )}
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="h-7 text-xs"
+        onClick={() => openExtensionsSettings('property-schema-type-unavailable')}
+      >
+        Manage extensions
+      </Button>
     </div>
   )
 }
@@ -301,7 +315,9 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
           placeholder="property name"
           disabled={readOnly}
           onChange={(e: ChangeEvent<HTMLInputElement>) => setDraftName(e.target.value)}
-          onBlur={() => { void writeName(draftName) }}
+          // A refused rename is already surfaced by `repo.tx`; putting the
+          // stored name back keeps the field from showing one that never landed.
+          onBlur={() => { writeName(draftName).catch(() => setDraftName(propertyName)) }}
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
               e.preventDefault()
@@ -379,8 +395,7 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
         <CurrentTypeUnavailableNotice
           presetId={presetId}
           cause={typeUnavailable}
-          seedBacked={isSeedBacked}
-          canDelete={!readOnly}
+          audience={isSeedBacked ? 'seed' : readOnly ? 'viewer' : 'editor'}
         />
       )}
 
