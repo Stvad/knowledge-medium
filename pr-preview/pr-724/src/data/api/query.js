@@ -1,1 +1,1 @@
-import{X9 as e}from"../../../chunks/app-CaSJRXAp.js";export{e as defineQuery};
+import{Y9 as e}from"../../../chunks/app-DCgdxjjZ.js";export{e as defineQuery};

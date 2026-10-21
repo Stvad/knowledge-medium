@@ -1,1 +1,1 @@
-import{hE as e,mE as t,zn as n}from"../../../chunks/app-CaSJRXAp.js";export{t as keybindingOverridesProp,e as keybindingsPrefsType,n as keybindingsSettingsPlugin};
+import{hE as e,mE as t,zn as n}from"../../../chunks/app-DCgdxjjZ.js";export{t as keybindingOverridesProp,e as keybindingsPrefsType,n as keybindingsSettingsPlugin};
