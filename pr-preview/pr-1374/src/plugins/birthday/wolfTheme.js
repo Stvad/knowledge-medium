@@ -1,0 +1,1 @@
+import{_n as e,gn as t,hn as n}from"../../../chunks/app-BLfGv6Ln.js";export{n as WOLF_THEME_ID,t as applyWolfTheme,e as syncWolfTheme};

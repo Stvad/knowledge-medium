@@ -1,0 +1,1 @@
+import{XR as e,ZR as t}from"../../../chunks/app-BLfGv6Ln.js";export{e as floatingAnchorFromRect,t as useAnchoredFloating};

@@ -1,0 +1,1 @@
+import{_x as e,gx as t}from"../../../chunks/app-BLfGv6Ln.js";export{t as isLeftSidebarSectionContribution,e as leftSidebarSectionsFacet};

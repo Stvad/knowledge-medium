@@ -1,0 +1,1 @@
+import{ca as e,ia as t}from"../../../chunks/app-BLfGv6Ln.js";export{e as migratePropertiesToBlocksAction,t as propertiesMigrationPlugin};

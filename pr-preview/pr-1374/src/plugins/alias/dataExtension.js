@@ -1,0 +1,1 @@
+import{_G as e}from"../../../chunks/app-BLfGv6Ln.js";export{e as aliasDataExtension};
