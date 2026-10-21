@@ -1,0 +1,1 @@
+import{IO as e,LO as t}from"../../chunks/app-Clq05uUp.js";export{e as BlockPasteShellDecorator,t as blockPasteShellDecorator};

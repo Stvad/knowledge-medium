@@ -1,0 +1,1 @@
+import{_G as e}from"../../../chunks/app-Clq05uUp.js";export{e as aliasDataExtension};

@@ -1,0 +1,1 @@
+import{q2 as e}from"../../../chunks/app-Clq05uUp.js";export{e as ancestorWalk};

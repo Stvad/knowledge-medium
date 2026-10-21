@@ -1,0 +1,1 @@
+import{Bet as e,Fet as t,Het as n,Iet as r,Let as i,Ret as a,Uet as o,Vet as s,zet as c}from"../../../chunks/app-Clq05uUp.js";export{t as CHANGE_SCOPE_POLICIES,r as ChangeScope,i as isChangeScope,a as policyForScope,c as scopeAllowedInReadOnly,e as scopeIsUndoable,s as scopePoliciesEquivalent,n as scopeUploadsToServer,o as sourceForScope};
