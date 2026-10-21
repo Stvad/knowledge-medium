@@ -1,1 +1,1 @@
-import{bF as e,xF as t}from"../../../chunks/app-C7tIVCev.js";export{e as declarationOnlyDefinitionForName,t as declarationOnlyStatusText};
+import{bF as e,xF as t}from"../../../chunks/app-B0lLxz0c.js";export{e as declarationOnlyDefinitionForName,t as declarationOnlyStatusText};

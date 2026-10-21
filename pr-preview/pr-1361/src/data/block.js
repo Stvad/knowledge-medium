@@ -1,1 +1,1 @@
-import{NX as e,PX as t}from"../../chunks/app-C7tIVCev.js";export{e as Block,t as requireLoadedBlock};
+import{NX as e,PX as t}from"../../chunks/app-B0lLxz0c.js";export{e as Block,t as requireLoadedBlock};
