@@ -5,8 +5,8 @@
 //   GITHUB_REPOSITORY=owner/repo node scripts/sweep-pr-previews.ts [pr-number ...]
 //
 // Works from any clone whose `origin` can push gh-pages: it fetches only the
-// branch tip and builds the commit through a scratch index, so the multi-GB
-// site is never checked out.
+// branch tip and builds the commit through a scratch index, so the full site
+// is never checked out.
 import { execFileSync } from 'node:child_process'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -60,6 +60,7 @@ export function sweepPreviews({ git, branch, openPrs, alsoRemove = [] }: {
 }): { removed: string[] } {
   const remoteRef = `refs/remotes/origin/${branch}`
   for (let attempt = 1; ; attempt++) {
+    // Not blobless: that needs partial-clone config, and every later step would lazily fetch what it touches.
     git(['fetch', '--quiet', '--depth', '1', 'origin', `+refs/heads/${branch}:${remoteRef}`])
     const tip = git(['rev-parse', remoteRef])
     const keep = new Set([...openPrs()].filter(number => !alsoRemove.includes(number)))

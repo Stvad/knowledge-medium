@@ -44,7 +44,7 @@ echo "waiting for ${url} to serve sha=${want}"
 builds="https://api.github.com/repos/${GITHUB_REPOSITORY}/pages/builds"
 auth=(-H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json")
 
-# A whole-site build takes ~3-4 minutes; one in flight longer than this has stalled.
+# Well past a normal build's duration: a build in flight longer than this has stalled.
 STALL_SECS="${PAGES_BUILD_STALL_SECS:-600}"
 
 # Prints e.g. "building for 95s" while the latest Pages build is in flight and
