@@ -1,1 +1,1 @@
-import{Df as e,Of as t}from"../../../../chunks/app-QxvdFvHz.js";export{e as buildBlockView,t as renderBlockView};
+import{Df as e,Of as t}from"../../../../chunks/app-DCa0Eo4a.js";export{e as buildBlockView,t as renderBlockView};

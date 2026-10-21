@@ -1,1 +1,1 @@
-import{Cg as e,Tg as t,wg as n}from"../../../chunks/app-QxvdFvHz.js";export{e as insertImageAction,n as insertImageNormalModeAction,t as insertImageToolbarItem};
+import{Cg as e,Tg as t,wg as n}from"../../../chunks/app-DCa0Eo4a.js";export{e as insertImageAction,n as insertImageNormalModeAction,t as insertImageToolbarItem};
