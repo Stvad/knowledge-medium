@@ -101,7 +101,7 @@ import {
   deriveReferenceColumns,
   sameTxReferenceTargetLookups,
 } from './referenceTargetProcessor'
-import { tryBuildSchema } from '@/data/userSchemasService'
+import { buildSchemaOrNull } from '@/data/userSchemasService'
 import {
   STRANDED_CLAIM_RECOVERY,
   isGraphBackfillClaimActive,
@@ -154,24 +154,6 @@ const codecInputsChanged = (before: BlockData, after: BlockData): boolean =>
     peekRowProperty(before, presetConfigProp),
     peekRowProperty(after, presetConfigProp),
   )
-
-/** `tryBuildSchema` answers `null` for a preset it cannot find or configure, but
- *  `preset.build` is extension code and can THROW. The projector already treats
- *  that as "no behaviour" and publishes metadata only; here an escape would
- *  abort the USER'S transaction — and for a definition whose preset throws, the
- *  transaction it would abort is the one repairing it. Same answer as null. Not
- *  logged: the projector warns for the same row on its own rebuild. */
-const buildSchemaOrNull = (
-  row: BlockData,
-  presets: SameTxCtx['valuePresets'],
-  metadata: NonNullable<ReturnType<typeof parsePropertyDefinitionMetadata>>,
-): AnyPropertySchema | null => {
-  try {
-    return tryBuildSchema(row, presets, metadata)
-  } catch {
-    return null
-  }
-}
 
 /**
  * Changes whose destination, or whose vacated name, is not this definition's to
@@ -244,22 +226,29 @@ export const contestedChanges = <T extends {
   })
 }
 
-/** Why a change's fan-out could not run. Both end in the same refusal, and
- *  differ only in what the user is told to do about it. */
-type RefusalReason = 'unbuildable' | 'contested'
+/** A change whose fan-out cannot run. Every reason ends in the same refusal,
+ *  and they differ only in what the user is told to do about it. */
+type HeldChange =
+  | {
+      readonly fieldId: string
+      /** The definition's CURRENT row builds no codec here, so nothing can
+       *  read what its consumers hold (#1077, #1090). */
+      readonly reason: 'current-type-unavailable'
+      readonly name: string
+      readonly presetId: string
+      /** The preset is registered and its config or build fails, rather than
+       *  its plugin being absent — which decides the way out offered. */
+      readonly presetLoaded: boolean
+    }
+  | {readonly fieldId: string; readonly reason: 'unbuildable' | 'contested'}
 
-/** ONE refusal per transaction, whichever cause is found first — the user
- *  fixes one at a time either way, and a combined message would describe a
- *  state that no longer exists after the first fix. The unconvertible-values
- *  refusal in `apply` follows the same rule; its message is not here only
- *  because it is parameterized by a count. */
-const REFUSALS: Record<RefusalReason, {code: string; message: string}> = {
+const REFUSALS: Record<'unbuildable' | 'contested', {code: string; message: string}> = {
   unbuildable: {
     code: 'property.definition-change.unbuildable',
     message:
-      'cannot change a property definition whose value type does not load: the '
-      + 'blocks using it could not be updated to match. Fix the property type '
-      + 'first, then rename or re-type it.',
+      'cannot give a property definition a value type that does not load on '
+      + 'this device: the blocks using it could not be updated to match. Choose '
+      + 'a type that loads, or enable the plugin that provides it first.',
   },
   contested: {
     code: 'property.definition-change.contested',
@@ -271,6 +260,36 @@ const REFUSALS: Record<RefusalReason, {code: string; message: string}> = {
       + 'changes in separate edits.',
   },
 }
+
+/** Only the codec that WROTE a value child can say what it holds — the JSON
+ *  `"x"` and the three-character string `"x"` are the same text (#1055), and
+ *  one member row of a list reads like a scalar's only row (#1090). So the one
+ *  way to change such a definition is to make that codec available, and the
+ *  message offers exactly that or deleting the definition — never a re-type,
+ *  which this same refusal would stop (#1077). */
+const currentTypeUnavailableRefusal = (
+  held: Extract<HeldChange, {reason: 'current-type-unavailable'}>,
+): {code: string; message: string} => ({
+  code: 'property.definition-change.current-type-unavailable',
+  message:
+    `cannot rename or re-type property "${held.name}": its current type `
+    + `${held.presetId ? `"${held.presetId}" ` : ''}does not load on this device, `
+    + 'so the blocks using it could not be updated to match. '
+    + (held.presetLoaded
+      ? 'Make the change on a device where that type loads, or delete the '
+        + 'property definition.'
+      : 'Enable the plugin that provides that type on this device and try '
+        + 'again, or delete the property definition.'),
+})
+
+/** ONE refusal per transaction, whichever cause is found first — the user
+ *  fixes one at a time either way, and a combined message would describe a
+ *  state that no longer exists after the first fix. The unconvertible-values
+ *  refusal in `apply` follows the same rule. */
+const refusalFor = (held: HeldChange): {code: string; message: string} =>
+  held.reason === 'current-type-unavailable'
+    ? currentTypeUnavailableRefusal(held)
+    : REFUSALS[held.reason]
 
 /** Refusing every definition rename and re-type, and every rename or revival
  *  that leaves a name shared, for as long as the cell-to-children backfill
@@ -324,7 +343,7 @@ type CollectedChanges =
        *  each leaves consumers holding values in an encoding the registry will
        *  not be reading them with, so the caller refuses the transaction once
        *  any of them has a consumer. */
-      readonly unfanoutable: ReadonlyArray<{fieldId: string; reason: RefusalReason}>
+      readonly unfanoutable: readonly HeldChange[]
       /** Every claimant of a name that an EXISTING definition arrives at — by
        *  rename or revival — and that more than one definition will hold once
        *  the tx commits. The registry ranks claimants oldest first, so the
@@ -346,9 +365,8 @@ interface DefinitionChange {
   /** The codec the definition was PUBLISHING, which is what says what a stored
    *  value child HOLDS — the schema `convertValueChildContent` re-spells FROM,
    *  and what tells a value this edit takes away from one that was already
-   *  unreadable. `null` when the before row's preset does not build, where
-   *  nothing records the stored encoding. */
-  readonly beforeSchema: AnyPropertySchema | null
+   *  unreadable. A change whose before row builds none is held instead. */
+  readonly beforeSchema: AnyPropertySchema
   /** The stored ENCODING may now differ, so value-child content is rewritten.
    *  False for a pure rename, where the encoding is untouched and the stored
    *  text is already what this codec writes. */
@@ -367,7 +385,7 @@ const collectChanges = (
 ): CollectedChanges => {
   // Pass 1: candidate changes (name or codec inputs differ, after row builds).
   const candidates: DefinitionChange[] = []
-  const unfanoutable: Array<{fieldId: string; reason: RefusalReason}> = []
+  const unfanoutable: HeldChange[] = []
   /** Any name this tx touches — enough to ask whether the WORKSPACE can be
    *  judged at all, which is not a question about the name. */
   let probeName: string | null = null
@@ -402,14 +420,6 @@ const collectChanges = (
     // at-or-older than `before` — a change an earlier tx already fanned out
     // would read as this one's and be re-encoded against the wrong before-state.
     //
-    // Nothing asks whether the BEFORE row built a codec to DETECT a change,
-    // because detection is a function of the two properties compared here: a
-    // definition whose broken preset has just been fixed already reports its
-    // inputs as changed. The old codec is carried for the CONVERSION, as the
-    // only record of what encoding the stored text is in, and `null` there
-    // costs the value route rather than the change — the text route still
-    // answers.
-    //
     // ACCEPTED: a bag edited while the row was UNPUBLISHED (a tombstone, or a
     // row stripped of its metadata) is judged against the MOVED bag, and
     // nothing remembers the encoding its consumers are in. Re-encoding on every
@@ -421,32 +431,40 @@ const collectChanges = (
     // MATERIALIZE's own field-row bookkeeping included. Without this, each one
     // would sweep every consumer of that definition inside the user's tx.
     if (!renamed && !encodingChanged) continue
+    probeName ??= afterMeta.name
+    // Above the destination's check: with no codec for what is stored, no
+    // destination would let this change land, so the way out to name is the
+    // one that does.
+    const beforeSchema = buildSchemaOrNull(before, ctx.valuePresets, beforeMeta)
+    if (beforeSchema === null) {
+      const presetId = before.properties[presetIdProp.name]
+      unfanoutable.push({
+        fieldId: after.id,
+        reason: 'current-type-unavailable',
+        name: beforeMeta.name,
+        presetId: typeof presetId === 'string' ? presetId : '',
+        presetLoaded: typeof presetId === 'string' && ctx.valuePresets.has(presetId),
+      })
+      continue
+    }
     const afterSchema = buildSchemaOrNull(after, ctx.valuePresets, afterMeta)
     if (afterSchema === null) {
       // This tx leaves the row naming a codec that does not build, so nothing
       // here can reproject a single cell — and the row is the ONLY durable
-      // record of what encoding its consumers are in. Whether the OLD preset
-      // built is beside the point: the edit overwrites that record either way,
-      // and the destination preset can arrive later with no definition-row
-      // transaction at all — an extension registering, a code fix — at which
-      // point the registry publishes its codec straight over values nothing
-      // re-encoded. Held for the caller, which refuses if it has consumers.
-      //
-      // Repairing a broken definition is unaffected: a preset that BUILDS is
-      // not this branch, and with no old codec to read the value with,
-      // re-encoding falls to the child's TEXT. What is refused is trading one
-      // unavailable preset for another.
+      // record of what encoding its consumers are in. The destination preset
+      // can arrive later with no definition-row transaction at all — an
+      // extension registering, a code fix — at which point the registry
+      // publishes its codec straight over values nothing re-encoded. Held for
+      // the caller, which refuses if it has consumers.
       unfanoutable.push({fieldId: after.id, reason: 'unbuildable'})
-      probeName ??= afterMeta.name
       continue
     }
-    probeName ??= afterMeta.name
     candidates.push({
       fieldId: after.id,
       oldName: beforeMeta.name,
       newName: afterMeta.name,
       schema: afterSchema,
-      beforeSchema: buildSchemaOrNull(before, ctx.valuePresets, beforeMeta),
+      beforeSchema,
       encodingChanged,
     })
   }
@@ -595,13 +613,9 @@ export const consumingParentIds = async (
  *
  *  THE BEFORE SIDE IS THE CHILDREN, not the stored cell: the cell is derived,
  *  and one that disagrees with its children is stale by definition — the next
- *  projection drops the difference whether or not this edit happens. The one
- *  exception is a definition whose previous preset does not BUILD, where
- *  nothing can read the children at all; {@link heldValueCount} owns what is
- *  countable there and why it is deliberately weak. */
+ *  projection drops the difference whether or not this edit happens. */
 const valuesLostBy = (
   change: DefinitionChange,
-  parent: BlockData,
   perFieldRow: readonly (readonly BlockData[])[],
   projected: unknown,
 ): number => {
@@ -610,47 +624,12 @@ const valuesLostBy = (
   // rebuilding the before-projection over every value of every consumer on the
   // commonest edit there is.
   if (!change.encodingChanged) return 0
-  const after = projectedValueCount(change.schema, projected)
-  return Math.max(0, heldValueCount(change, parent, perFieldRow, after) - after)
-}
-
-/** How many values the property held BEFORE this change, at the same grain
- *  {@link projectedValueCount} answers in — or, where nothing can read the
- *  children, the most this can claim it held without inventing a loss. */
-const heldValueCount = (
-  change: DefinitionChange,
-  parent: BlockData,
-  perFieldRow: readonly (readonly BlockData[])[],
-  after: number,
-): number => {
-  if (change.beforeSchema !== null) {
-    return projectedValueCount(change.beforeSchema, childContentsToEncodedPropertyValue(
-      change.beforeSchema,
-      unionValuesAcrossFieldRows(change.beforeSchema, perFieldRow)
-        .map(value => value.content),
-    ))
-  }
-  // No old codec, so this number has to be a LOWER bound on what was held or
-  // its slack becomes a phantom loss, and nothing available here measures one
-  // tightly. The cell's LENGTH is an upper bound, because the cell cannot say
-  // arity — an array is N members of a list, or ONE value of a scalar holding
-  // an array. The ROW COUNT is another, because a peer or a duplicate field
-  // row was never in the cell while a row this device has not received is
-  // missing from it. Combining two upper bounds does not make a lower one.
-  //
-  // `null` is likewise unreadable at this grain: the cleared sentinel and a
-  // real JSON null are the same bytes, and only the codec that wrote them
-  // could say which. Counted as a value, because over-refusing costs a
-  // repair while under-counting deletes one.
-  //
-  // So the claim is the weakest sound one: a loss only where the projection
-  // comes out EMPTY over a cell that held anything. It misses a narrowing
-  // that keeps one member (#1090) and it refuses a repair over a genuinely
-  // cleared value (#1077), and both are the same gap — counting this needs
-  // the children rebuilt FROM the cell rather than guessed at.
-  const held = parent.properties[change.oldName]
-  if (held === undefined) return 0
-  return after > 0 ? 0 : 1
+  const held = projectedValueCount(change.beforeSchema, childContentsToEncodedPropertyValue(
+    change.beforeSchema,
+    unionValuesAcrossFieldRows(change.beforeSchema, perFieldRow)
+      .map(value => value.content),
+  ))
+  return Math.max(0, held - projectedValueCount(change.schema, projected))
 }
 
 /** Apply every change that owns a field row under ONE parent, in one cell write.
@@ -770,7 +749,7 @@ const applyToParent = async (
     const canonicalContents = unionValuesAcrossFieldRows(change.schema, canonicalized)
       .map(value => value.content)
     const projected = childContentsToEncodedPropertyValue(change.schema, canonicalContents)
-    const lost = valuesLostBy(change, parent, perFieldRow, projected)
+    const lost = valuesLostBy(change, perFieldRow, projected)
     if (lost > 0) {
       lostByField.set(change.fieldId, (lostByField.get(change.fieldId) ?? 0) + lost)
       lostParents.add(parentId)
@@ -899,8 +878,8 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
         ctx.db, event.workspaceId, unfanoutable.map(held => held.fieldId),
       )
       if (stranded.length > 0) {
-        // Named for the first reason held, per `REFUSALS`.
-        const {code, message} = REFUSALS[unfanoutable[0]!.reason]
+        // Named for the first reason held, per `refusalFor`.
+        const {code, message} = refusalFor(unfanoutable[0]!)
         throw new ProcessorRejection(
           message, code, {fieldIds: unfanoutable.map(held => held.fieldId)},
         )
@@ -948,7 +927,7 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
     // projected until something reprojects it, and then the value is gone with
     // no record of what it was, which is #1024.
     //
-    // One refusal per transaction, per `REFUSALS`. The property is named by the
+    // One refusal per transaction, per `refusalFor`. The property is named by the
     // name it STILL ANSWERS TO after the rollback, never the one this tx tried
     // to give it, and the blocks ride on `meta` so a surface can offer them:
     // "fix those values" is not actionable without them.

@@ -344,6 +344,7 @@ const applyOp = async (u: Universe, op: Op): Promise<void> => {
 
 const DEFINITION_CHANGE_REFUSALS = new Set([
   'property.definition-change.unbuildable',
+  'property.definition-change.current-type-unavailable',
   'property.definition-change.contested',
   'property.definition-change.unconvertible',
   'property.definition-change.shared-name',

@@ -153,6 +153,19 @@ const liveFieldRow = async (blockId: string, fieldId: string): Promise<string | 
     [blockId, fieldId],
   ))?.id
 
+/** Every live value child under `blockId`'s field row for `fieldId`, in
+ *  sibling order. */
+const valueRowsOf = (
+  blockId: string, fieldId = FIELD_ID,
+): Promise<Array<{id: string; content: string}>> =>
+  sharedDb.db.getAll<{id: string; content: string}>(
+    `SELECT v.id, v.content FROM blocks v JOIN blocks f ON v.parent_id = f.id
+      WHERE f.parent_id = ? AND f.reference_target_id = ?
+        AND f.deleted = 0 AND v.deleted = 0
+      ORDER BY v.order_key, v.id`,
+    [blockId, fieldId],
+  )
+
 const createHost = (repo: Repo, blockId: string): Promise<void> =>
   repo.tx(async tx => {
     await tx.create({
@@ -657,21 +670,6 @@ describe('codec change', () => {
     expect(await cell('p')).toEqual({status: 42})
   })
 
-  it('re-encodes on the tx that REPAIRS a definition with no buildable codec', async () => {
-    // A preset that cannot build leaves the definition behaviour-less: the
-    // registry publishes metadata only, and nothing on this device can say what
-    // codec its stored values are in. Repairing it to a working preset is the
-    // only moment the re-encode can happen, and the old codec is not needed to
-    // do it — the conversion parses the child's TEXT under the new one.
-    await seedWorkspace('children')
-    const {repo, valueRowId} = await withPresetUnloaded(' 42 ')
-
-    await retype(repo, FIELD_ID, 'number')
-
-    expect(await cell('p')).toEqual({status: 42})
-    expect(await rowContent(valueRowId)).toBe('42')
-  })
-
   it('canonicalizes a tolerant spelling where the OLD codec normalizes', async () => {
     // `date` decode CANONICALIZES a tolerant instant, so carrying the value
     // rewrites the row text: the cell survives, and the spelling a person
@@ -690,72 +688,6 @@ describe('codec change', () => {
 
     expect(await cell('p')).toEqual({status: '2024-01-02T00:00:00.000Z'})
     expect(await rowContent(valueRowId)).toBe('2024-01-02T00:00:00.000Z')
-  })
-
-  it('does NOT refuse a repair over a SCALAR cell that happens to hold an array', async () => {
-    // The cell cannot say the property's arity. An identity codec holds an
-    // array as ONE value in ONE row, so reading the cell's length as a member
-    // count refused a repair that republishes the cell byte-identical — and
-    // the same data with the old codec available commits, which is the
-    // contradiction that gives it away.
-    await seedWorkspace('children')
-    const {repo} = await withPresetUnloaded(
-      [1, 2, 3], {build: () => codecs.unsafeIdentity<unknown>(), defaultValue: null})
-    expect(await cell('p')).toEqual({status: [1, 2, 3]})
-
-    await retype(repo, FIELD_ID, 'json')
-    await repo.awaitProcessors()
-
-    expect(await cell('p')).toEqual({status: [1, 2, 3]})
-  })
-
-  it('KEEPS a bare `null` a repair cannot classify, refusing rather than deleting it', async () => {
-    // The cleared sentinel and a real JSON null are the same bytes, and with
-    // the preset gone nothing can say which this is. Counted as a value: the
-    // cost is refusing a repair over a genuinely cleared one (#1077), and the
-    // alternative cost is deleting a real one.
-    await seedWorkspace('children')
-    const {repo} = await withPresetUnloaded(
-      null, {build: () => codecs.unsafeIdentity<unknown>(), defaultValue: null})
-    expect(await cell('p')).toEqual({status: null})
-
-    await expect(retype(repo, FIELD_ID, 'number')).rejects.toMatchObject({
-      code: 'property.definition-change.unconvertible',
-    })
-    expect(await cell('p')).toEqual({status: null})
-  })
-
-  it('ACCEPTS a narrowing with no old codec, losing members silently (#1090)', async () => {
-    // Pinned as an accepted weakness, not as a good answer. With no codec the
-    // only records of what the property held — the cell's length and the row
-    // count — are both UPPER bounds, and a loss count built from those refuses
-    // repairs that lose nothing. So a loss is claimed only where the
-    // projection comes out EMPTY, which misses this one. #1077 is the fix:
-    // rebuild the children FROM the cell, and the counting problem goes away.
-    await seedWorkspace('children')
-    const {repo} = await withPresetUnloaded(
-      ['1', '2', '3'], {build: () => codecs.list(codecs.string), defaultValue: []})
-    expect(await cell('p')).toEqual({status: ['1', '2', '3']})
-
-    await retype(repo, FIELD_ID, 'number')
-    await repo.awaitProcessors()
-
-    expect(await cell('p')).toEqual({status: 1})
-  })
-
-  it('REFUSES when the projection comes out empty over a cell that held a value', async () => {
-    // The one loss the no-codec branch can still see, and the reason it is not
-    // simply `return 0`: the row is unreadable under the new codec, so the
-    // projection is empty while the cell plainly holds something. Committing
-    // on that answer unsets a populated key, and nothing follows this pass to
-    // notice.
-    await seedWorkspace('children')
-    const {repo} = await withPresetUnloaded('prose value')
-
-    await expect(retype(repo, FIELD_ID, 'number')).rejects.toMatchObject({
-      code: 'property.definition-change.unconvertible',
-    })
-    expect(await cell('p')).toEqual({status: 'prose value'})
   })
 
   it('re-stamps the reference columns when a ref value becomes plain text', async () => {
@@ -837,28 +769,6 @@ describe('codec change', () => {
     await repo.awaitProcessors()
 
     expect((await cell(FIELD_ID))[presetIdProp.name]).toBe('number')
-  })
-
-  it('REFUSES a re-type it cannot read the old values with at all', async () => {
-    // A definition whose preset does not build is the one case where the cell
-    // is the only record: PROJECT skips the key for want of a schema, so the
-    // cell keeps what the preset published while it still loaded, and reading
-    // the children answers "no values" about a cell plainly holding one.
-    // Treating that as "nothing was there" committed the re-type and emptied
-    // the cell silently — strictly worse than the report it replaced.
-    await seedWorkspace('children')
-    const {repo, valueRowId} = await withPresetUnloaded('prose value')
-    expect(await cell('p')).toEqual({status: 'prose value'})
-
-    await expect(retype(repo, FIELD_ID, 'number')).rejects.toMatchObject({
-      code: 'property.definition-change.unconvertible',
-      meta: {name: 'status', count: 1},
-    })
-    await repo.awaitProcessors()
-
-    expect(await cell('p')).toEqual({status: 'prose value'})
-    expect(await rowContent(valueRowId)).toBe('prose value')
-    expect((await cell(FIELD_ID))[presetIdProp.name]).toBe(UNLOADABLE_PRESET)
   })
 
   it('does not refuse over a divergent PEER row the cell never projected', async () => {
@@ -1136,35 +1046,6 @@ describe('codec change', () => {
     expect(await isLive(valueRowId)).toBe(true)
   })
 
-  it('refuses a rename when NEITHER row builds a codec and consumers exist', async () => {
-    // Nothing can reproject the cell, and the transaction that eventually
-    // repairs the preset cannot drop the old key either — by then both sides
-    // carry the new name. Refusing keeps the two halves together.
-    await seedWorkspace('children')
-    const {repo} = await withPresetUnloaded()
-
-    await expect(rename(repo, FIELD_ID, 'state')).rejects.toMatchObject({
-      code: 'property.definition-change.unbuildable',
-    })
-    expect((await cell(FIELD_ID))[propertyNameProp.name]).toBe('status')
-    expect(await cell('p')).toEqual({status: 'done'})
-  })
-
-  it('refuses a RE-TYPE between two presets that BOTH fail to build', async () => {
-    // The row is the only durable record of what encoding its consumers are in,
-    // and it is that record whether or not the preset it names loads today.
-    // Trading one unavailable preset for another overwrites it, so whichever of
-    // the two eventually registers, its codec is published over values nothing
-    // re-encoded.
-    await seedWorkspace('children')
-    const {repo} = await withPresetUnloaded()
-
-    await expect(retype(repo, FIELD_ID, 'another-missing-preset')).rejects.toMatchObject({
-      code: 'property.definition-change.unbuildable',
-    })
-    expect((await cell(FIELD_ID))[presetIdProp.name]).toBe(UNLOADABLE_PRESET)
-  })
-
   it('still allows that re-type when the definition has no consumers', async () => {
     // Nothing to strand, so the refusal would be friction for nothing — and
     // this is the path a user takes to point a definition at a preset whose
@@ -1237,6 +1118,174 @@ describe('codec change', () => {
     expect((await cell(FIELD_ID))[propertyNameProp.name]).toBe('status')
     expect(await cell('p')).toEqual({status: 'not a number'})
     expect(await rowContent(valueRowId)).toBe('not a number')
+  })
+})
+
+describe('while the definition\'s CURRENT preset does not build (#1077, #1090)', () => {
+  const CURRENT_TYPE_UNAVAILABLE = 'property.definition-change.current-type-unavailable'
+
+  /** #1077's measured shape: member-wise, each member stored as its verbatim
+   *  text — `codecs.list(codecs.string)`, what the kernel's string-list builds. */
+  const TEXT_LIST = {build: () => codecs.list(codecs.string), defaultValue: []}
+
+  /** Everything a refused edit must leave as it was. */
+  const graphState = async () => ({
+    definition: await cell(FIELD_ID),
+    parent: await cell('p'),
+    values: await valueRowsOf('p'),
+  })
+
+  it.each([
+    'string', 'number', 'boolean', 'date', 'url', 'enum', 'list', 'json', 'ref',
+    'refList', 'string-list',
+  ])('REFUSES re-typing a two-member text list to %s, writing nothing', async target => {
+    await seedWorkspace('children')
+    const {repo} = await withPresetUnloaded(['a', 'b'], TEXT_LIST)
+    const before = await graphState()
+    expect(before.parent).toEqual({status: ['a', 'b']})
+    expect(before.values.map(value => value.content)).toEqual(['a', 'b'])
+
+    await expect(retype(repo, FIELD_ID, target)).rejects.toMatchObject({
+      code: CURRENT_TYPE_UNAVAILABLE,
+      message: expect.stringContaining(`"${UNLOADABLE_PRESET}"`),
+    })
+    await repo.awaitProcessors()
+
+    expect(await graphState()).toEqual(before)
+  })
+
+  it('REFUSES narrowing a three-member list to a scalar, keeping every member (#1090)', async () => {
+    await seedWorkspace('children')
+    const {repo} = await withPresetUnloaded(['1', '2', '3'], TEXT_LIST)
+    const before = await graphState()
+    expect(before.parent).toEqual({status: ['1', '2', '3']})
+
+    await expect(retype(repo, FIELD_ID, 'number')).rejects.toMatchObject({
+      code: CURRENT_TYPE_UNAVAILABLE,
+    })
+    await repo.awaitProcessors()
+
+    expect(await graphState()).toEqual(before)
+  })
+
+  it('REFUSES a CONFIG change, which moves the encoding as a re-type does', async () => {
+    await seedWorkspace('children')
+    const {repo} = await withPresetUnloaded(['a', 'b'], TEXT_LIST)
+    const before = await graphState()
+
+    await expect(repo.tx(tx => tx.setProperty(FIELD_ID, presetConfigProp, {any: 'config'}),
+      {scope: ChangeScope.BlockDefault})).rejects.toMatchObject({
+      code: CURRENT_TYPE_UNAVAILABLE,
+    })
+    await repo.awaitProcessors()
+
+    expect(await graphState()).toEqual(before)
+  })
+
+  it('REFUSES a scalar re-type the stored text alone would seem to answer', async () => {
+    // ` 42 ` reads as 42 under `number` whatever wrote it, which is what the
+    // repair used to commit — but the text cannot say what the property held,
+    // so this is refused like every other change.
+    await seedWorkspace('children')
+    const {repo} = await withPresetUnloaded(' 42 ')
+    const before = await graphState()
+
+    await expect(retype(repo, FIELD_ID, 'number')).rejects.toMatchObject({
+      code: CURRENT_TYPE_UNAVAILABLE,
+    })
+    await repo.awaitProcessors()
+
+    expect(await graphState()).toEqual(before)
+  })
+
+  it('names the way out of THIS refusal over a re-type to a preset that does not build either', async () => {
+    // Position: above the destination's own check. A different destination
+    // cannot make this edit land, so the message must not suggest one.
+    await seedWorkspace('children')
+    const {repo} = await withPresetUnloaded()
+
+    await expect(retype(repo, FIELD_ID, 'another-missing-preset')).rejects.toMatchObject({
+      code: CURRENT_TYPE_UNAVAILABLE,
+      message: expect.stringContaining('Enable the plugin'),
+    })
+    expect((await cell(FIELD_ID))[presetIdProp.name]).toBe(UNLOADABLE_PRESET)
+  })
+
+  it('refuses a RENAME while consumers exist, since nothing can project their cells', async () => {
+    // Renames are refused here as before this rule: re-keying a cell means
+    // projecting it from the children under the new name, through the same
+    // codec a re-type needs.
+    await seedWorkspace('children')
+    const {repo} = await withPresetUnloaded()
+    const before = await graphState()
+
+    await expect(rename(repo, FIELD_ID, 'state')).rejects.toMatchObject({
+      code: CURRENT_TYPE_UNAVAILABLE,
+    })
+    await repo.awaitProcessors()
+
+    expect(await graphState()).toEqual(before)
+  })
+
+  it('REFUSES a re-type off a LOADED preset whose stored config does not decode', async () => {
+    // The other way a current row builds nothing: the preset is registered,
+    // its config is not one it reads. No plugin to enable, so the message
+    // offers the other device and deletion instead.
+    await seedWorkspace('children')
+    const repo = await setupDefinition('ref')
+    await createHost(repo, 'target')
+    const {valueRowId} = await seedProperty(repo, 'p', 'status', 'target')
+    await sharedDb.db.execute(
+      `UPDATE blocks SET properties_json = json_set(properties_json, '$."${presetConfigProp.name}"',
+         json('{"targetTypes":"not-a-list"}')) WHERE id = ?`,
+      [FIELD_ID])
+    const before = await graphState()
+
+    await expect(retype(repo, FIELD_ID, 'string')).rejects.toMatchObject({
+      code: CURRENT_TYPE_UNAVAILABLE,
+      message: expect.stringContaining('on a device where that type loads'),
+    })
+    await repo.awaitProcessors()
+
+    expect(await graphState()).toEqual(before)
+    expect(await rowContent(valueRowId)).toBe('((target))')
+  })
+
+  it('runs the change once the preset loads again, counting a narrowing\'s loss exactly', async () => {
+    // Enabling the plugin is the way out: the same core registered again, and
+    // the re-type runs under the codec that wrote the values. The loss count is
+    // now exact — two members of three — where the old no-codec rule saw none.
+    await seedWorkspace('children')
+    await withPresetUnloaded(['1', '2', '3'], TEXT_LIST)
+    const repo = makeRepo([
+      {id: UNLOADABLE_PRESET, ...TEXT_LIST} as unknown as AnyValuePresetCore,
+    ])
+    await awaitDefinition(repo, 'status', TEXT_LIST.build().type)
+
+    await expect(retype(repo, FIELD_ID, 'number')).rejects.toMatchObject({
+      code: 'property.definition-change.unconvertible',
+      meta: {count: 2},
+    })
+
+    await retype(repo, FIELD_ID, 'list')
+    await repo.awaitProcessors()
+
+    expect((await cell(FIELD_ID))[presetIdProp.name]).toBe('list')
+    expect(await cell('p')).toEqual({status: ['1', '2', '3']})
+  })
+
+  it('runs a rename once the preset loads again', async () => {
+    await seedWorkspace('children')
+    await withPresetUnloaded(['a', 'b'], TEXT_LIST)
+    const repo = makeRepo([
+      {id: UNLOADABLE_PRESET, ...TEXT_LIST} as unknown as AnyValuePresetCore,
+    ])
+    await awaitDefinition(repo, 'status', TEXT_LIST.build().type)
+
+    await rename(repo, FIELD_ID, 'state')
+    await repo.awaitProcessors()
+
+    expect(await cell('p')).toEqual({state: ['a', 'b']})
   })
 })
 

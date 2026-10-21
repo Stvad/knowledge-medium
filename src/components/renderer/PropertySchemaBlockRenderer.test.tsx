@@ -3,7 +3,8 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { ChangeScope } from '@/data/api'
+import { ChangeScope, codecs, type AnyValuePresetCore } from '@/data/api'
+import { valuePresetCoresFacet } from '@/data/facets'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
@@ -42,6 +43,8 @@ const refSeed = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 const REF_SEED_ID = propertyDefinitionBlockId(WS, refSeed.seedKey)
+
+const UNLOADED_PRESET = 'test-unloaded-preset'
 
 describe('PropertySchemaContentRenderer read-only for code-owned seeds', () => {
   let sharedDb: TestDb
@@ -94,6 +97,35 @@ describe('PropertySchemaContentRenderer read-only for code-owned seeds', () => {
           'property-schema:name': 'test:myRef',
           'property-schema:preset': 'ref',
           'property-schema:config': {},
+        },
+      })
+      // A user schema on a preset no plugin on this device provides (#1077).
+      await tx.create({
+        id: 'missing-preset-schema',
+        workspaceId: WS,
+        parentId: 'root',
+        orderKey: 'a5',
+        content: 'test:broken',
+        properties: {
+          types: ['property-schema'],
+          'property-schema:name': 'test:broken',
+          'property-schema:preset': UNLOADED_PRESET,
+          'property-schema:config': {},
+        },
+      })
+      // A LOADED preset whose stored config it cannot decode — the other way a
+      // definition's current type builds nothing.
+      await tx.create({
+        id: 'bad-config-schema',
+        workspaceId: WS,
+        parentId: 'root',
+        orderKey: 'a6',
+        content: 'test:badConfig',
+        properties: {
+          types: ['property-schema'],
+          'property-schema:name': 'test:badConfig',
+          'property-schema:preset': 'ref',
+          'property-schema:config': {targetTypes: 'not-a-list'},
         },
       })
       // User-created schema: no seed marker.
@@ -228,6 +260,61 @@ describe('PropertySchemaContentRenderer read-only for code-owned seeds', () => {
     await vi.waitFor(() => {
       expect(repo.block('user-ref-schema').peek()?.properties['property-schema:config'])
         .toEqual({targetTypes: ['page']})
+    })
+  })
+  describe('while the definition\'s current type does not load (#1077, #1090)', () => {
+    it('offers no type picker or config editor, naming the preset and both ways out', () => {
+      renderSchema('missing-preset-schema')
+
+      // Positive first: the editor rendered this definition at all.
+      const notice = screen.getByText(/comes from a plugin that isn.t loaded on this device/)
+      expect(notice.textContent).toContain(UNLOADED_PRESET)
+      expect(notice.textContent).toMatch(/Enable the plugin on this device, or delete the schema/)
+      expect(screen.getByRole('button', {name: 'Manage extensions'})).toBeTruthy()
+      expect(screen.getByText(/Delete schema/)).toBeTruthy()
+
+      expect(screen.queryByRole('combobox')).toBeNull()
+      // Renames stay the transaction's call: one that strands nothing lands.
+      expect((screen.getByPlaceholderText('property name') as HTMLInputElement).disabled)
+        .toBe(false)
+    })
+
+    it('locks a LOADED preset whose stored config does not decode, config editor included', () => {
+      renderSchema('bad-config-schema')
+
+      expect(screen.getByText(/can.t be built from its stored settings on this device/))
+        .toBeTruthy()
+      expect(screen.queryByRole('combobox')).toBeNull()
+      expect(screen.queryByPlaceholderText('Add a block type…')).toBeNull()
+      // No plugin to enable — the preset is loaded.
+      expect(screen.queryByRole('button', {name: 'Manage extensions'})).toBeNull()
+    })
+
+    it('offers the picker again once the preset loads', async () => {
+      const withPreset = createTestRepo({
+        db: sharedDb.db,
+        user: {id: 'user-1'},
+        extensions: [
+          kernelPropertyUiExtension,
+          kernelValuePresetsExtension,
+          valuePresetCoresFacet.of({
+            id: UNLOADED_PRESET, build: () => codecs.string, defaultValue: '',
+          } as unknown as AnyValuePresetCore, {source: 'test'}),
+        ],
+      }).repo
+      withPreset.setActiveWorkspaceId(WS)
+      await withPreset.load('missing-preset-schema')
+
+      render(
+        <RepoContext value={withPreset}>
+          <AppRuntimeContextProvider value={withPreset.facetRuntime!}>
+            <PropertySchemaContentRenderer block={withPreset.block('missing-preset-schema')} />
+          </AppRuntimeContextProvider>
+        </RepoContext>,
+      )
+
+      expect(screen.getByRole('combobox')).toBeTruthy()
+      expect(screen.queryByText(/isn.t loaded on this device/)).toBeNull()
     })
   })
 })

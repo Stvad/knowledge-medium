@@ -9,7 +9,10 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } f
 import { ChevronDown } from 'lucide-react'
 import { useHandle } from '@/hooks/block.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
-import {readValuePresets} from '@/data/valuePresetRegistry'
+import {readValuePresetRegistry, readValuePresets} from '@/data/valuePresetRegistry'
+import { parsePropertyDefinitionMetadata } from '@/data/propertyDefinitionMetadata'
+import { buildSchemaOrNull } from '@/data/userSchemasService'
+import { openExtensionsSettings } from '@/extensions/openExtensionsSettings.js'
 import { isValidSeededDefinition } from '@/data/definitionSeeds.js'
 import { isGrammarShapedLabel, isRoundTrippableReferenceLabel } from '@/data/referenceBlock'
 import { selectablePresets } from '@/components/propertyEditors/selectablePresets.js'
@@ -37,6 +40,52 @@ const renderConfigEditor = (
   return <ConfigEditor value={value} onChange={onChange} />
 }
 
+/** The question the definition-change processor refuses on, asked of the
+ *  definition row as it stands: does its CURRENT type build a codec here? */
+const useCurrentTypeBuilds = (block: BlockRendererProps['block']): boolean => {
+  const cores = readValuePresetRegistry(useAppRuntime()).cores
+  return useHandle(block, {
+    selector: row => {
+      if (!row) return true
+      const metadata = parsePropertyDefinitionMetadata(row)
+      return metadata === null || buildSchemaOrNull(row, cores, metadata) !== null
+    },
+  })
+}
+
+/** Why this definition's type and config are locked, and the two ways out. */
+const CurrentTypeUnavailableNotice = ({presetId}: {presetId: string}) => {
+  // Registered, but its config or build fails: there is no plugin to enable.
+  const presetLoaded = readValuePresetRegistry(useAppRuntime()).cores.has(presetId)
+  const type = presetId
+    ? <>The <code className="font-mono">{presetId}</code> type</>
+    : <>This property&rsquo;s type</>
+  return (
+    <div className="space-y-1 text-xs text-muted-foreground">
+      <div>
+        {presetLoaded
+          ? <>{type} can&rsquo;t be built from its stored settings on this device.</>
+          : <>{type} comes from a plugin that isn&rsquo;t loaded on this device.</>}
+        {' '}Its type and settings can&rsquo;t be changed here: only that type can
+        read the values blocks hold under it. {presetLoaded
+          ? 'Change it on a device where it loads, or delete the schema.'
+          : 'Enable the plugin on this device, or delete the schema.'}
+      </div>
+      {!presetLoaded && (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="h-7 text-xs"
+          onClick={() => openExtensionsSettings('property-schema-type-unavailable')}
+        >
+          Manage extensions
+        </Button>
+      )}
+    </div>
+  )
+}
+
 /** Exported for the read-only regression test; production mounts it only
  *  through `PropertySchemaBlockRenderer` below. */
 export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRendererProps) => {
@@ -49,6 +98,10 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
   })
   const runtime = useAppRuntime()
   const presets = readValuePresets(runtime)
+  // With no codec for what its consumers hold, every re-type and config change
+  // is refused, so the controls that make one are not offered. Renames stay
+  // with the transaction, which allows one that strands nothing.
+  const currentTypeBuilds = useCurrentTypeBuilds(block)
 
   // A materialized seed row is a kernel/plugin property *defined in code*.
   // In v1 these are code-owned and unshadowable: their name, type, config,
@@ -238,37 +291,41 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
 
       <div className="grid grid-cols-[6rem,minmax(0,1fr)] items-center gap-3">
         <label className="text-xs font-semibold text-muted-foreground">Type</label>
-        <div className="relative max-w-xs">
-          <select
-            className="h-9 w-full appearance-none rounded-md border border-input bg-background px-2 pr-9 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
-            value={presetId}
-            disabled={readOnly}
-            onChange={(e) => {
-              // A refusal is already surfaced: `repo.tx` notifies the
-              // user-error channel before it rethrows, and the toast layer
-              // listens. Catching keeps the rethrow from becoming an unhandled
-              // rejection — nothing here has anything to add to it. Routine
-              // now that a re-type over values the new type cannot read is one
-              // of the refusals (#1024).
-              writePresetId(e.target.value).catch(() => {})
-            }}
-          >
-            {presetEntries.map(p => (
-              <option key={p.id} value={p.id}>{p.label}</option>
-            ))}
-            {!preset && presetId !== '' && (
-              <option value={presetId}>{presetId} (unknown)</option>
-            )}
-          </select>
-          <ChevronDown
-            className={`pointer-events-none absolute right-2.5 top-1/2 h-4 w-4 -translate-y-1/2 ${
-              readOnly ? 'text-muted-foreground/45' : 'text-foreground/70'
-            }`}
-          />
-        </div>
+        {!currentTypeBuilds ? (
+          <code className="font-mono text-sm text-muted-foreground">{presetId || 'none'}</code>
+        ) : (
+          <div className="relative max-w-xs">
+            <select
+              className="h-9 w-full appearance-none rounded-md border border-input bg-background px-2 pr-9 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
+              value={presetId}
+              disabled={readOnly}
+              onChange={(e) => {
+                // A refusal is already surfaced: `repo.tx` notifies the
+                // user-error channel before it rethrows, and the toast layer
+                // listens. Catching keeps the rethrow from becoming an unhandled
+                // rejection — nothing here has anything to add to it. Routine
+                // now that a re-type over values the new type cannot read is one
+                // of the refusals (#1024).
+                writePresetId(e.target.value).catch(() => {})
+              }}
+            >
+              {presetEntries.map(p => (
+                <option key={p.id} value={p.id}>{p.label}</option>
+              ))}
+              {!preset && presetId !== '' && (
+                <option value={presetId}>{presetId} (unknown)</option>
+              )}
+            </select>
+            <ChevronDown
+              className={`pointer-events-none absolute right-2.5 top-1/2 h-4 w-4 -translate-y-1/2 ${
+                readOnly ? 'text-muted-foreground/45' : 'text-foreground/70'
+              }`}
+            />
+          </div>
+        )}
       </div>
 
-      {preset?.ConfigEditor && (
+      {currentTypeBuilds && preset?.ConfigEditor && (
         <div className="grid grid-cols-[6rem,minmax(0,1fr)] gap-3">
           <label className="pt-1 text-xs font-semibold text-muted-foreground">Config</label>
           {/* A real `fieldset[disabled]`, which is what makes the descendant
@@ -295,11 +352,8 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
         </div>
       )}
 
-      {!preset && presetId !== '' && (
-        <div className="text-xs text-muted-foreground">
-          The plugin contributing preset <code className="font-mono">{presetId}</code> is not loaded.
-          Schemas using this preset stay registered when the plugin loads.
-        </div>
+      {!currentTypeBuilds && (
+        <CurrentTypeUnavailableNotice presetId={presetId} />
       )}
 
       {!readOnly && (

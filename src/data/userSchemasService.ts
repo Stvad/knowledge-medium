@@ -181,6 +181,27 @@ export const tryBuildSchema = (
   }
 }
 
+/** {@link tryBuildSchema} for a caller that must not throw: `preset.build` is
+ *  extension code, and a throwing one is the same answer as a missing preset —
+ *  no codec on this device. Not logged: the projector warns for the same row on
+ *  its own rebuild.
+ *
+ *  The one answer to "can this device read a definition's values": the
+ *  definition-change processor refuses every change to a definition whose
+ *  CURRENT row builds nothing here, and the schema editor locks its type and
+ *  config controls on the same question. */
+export const buildSchemaOrNull = (
+  row: BlockData,
+  presets: ReadonlyMap<string, AnyValuePresetCore>,
+  metadata: PropertyDefinitionMetadata,
+): AnyPropertySchema | null => {
+  try {
+    return tryBuildSchema(row, presets, metadata)
+  } catch {
+    return null
+  }
+}
+
 /** Descriptor wiring the schema bridge into the shared projector
  *  lifecycle. Raw `BlockData` rows (no hydrate — see `peekRowProperty`);
  *  re-resolves on `onValuePresetsChange` so a schema skipped for an
