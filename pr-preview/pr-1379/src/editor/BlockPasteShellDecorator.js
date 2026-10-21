@@ -1,1 +1,1 @@
-import{HO as e,UO as t}from"../../chunks/app-BEE_jMdz.js";export{e as BlockPasteShellDecorator,t as blockPasteShellDecorator};
+import{HO as e,UO as t}from"../../chunks/app-BCCkWGwN.js";export{e as BlockPasteShellDecorator,t as blockPasteShellDecorator};
