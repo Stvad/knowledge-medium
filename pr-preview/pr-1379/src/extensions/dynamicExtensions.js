@@ -1,1 +1,1 @@
-import{Yk as e}from"../../chunks/app-CXiUbIY5.js";export{e as dynamicExtensionsExtension};
+import{Yk as e}from"../../chunks/app-CA3UwrDS.js";export{e as dynamicExtensionsExtension};

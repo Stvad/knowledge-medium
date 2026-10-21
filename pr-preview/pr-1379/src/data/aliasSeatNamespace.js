@@ -1,1 +1,1 @@
-import{S8 as e,b8 as t,x8 as n}from"../../chunks/app-CXiUbIY5.js";export{t as AliasSeatNamespaceUnavailableError,n as aliasSeatNamespacesInTx,e as resolveAliasSeatNamespaces};
+import{S8 as e,b8 as t,x8 as n}from"../../chunks/app-CA3UwrDS.js";export{t as AliasSeatNamespaceUnavailableError,n as aliasSeatNamespacesInTx,e as resolveAliasSeatNamespaces};
