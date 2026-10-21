@@ -1,1 +1,1 @@
-import{$g as e}from"../../../chunks/app-B9-cTzvE.js";export{e as blockEditingContentRenderer};
+import{Xb as e}from"../../../chunks/app-Bw1JXwhx.js";export{e as blockEditingContentRenderer};
