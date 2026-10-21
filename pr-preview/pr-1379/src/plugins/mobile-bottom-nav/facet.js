@@ -1,1 +1,1 @@
-import{Fb as e}from"../../../chunks/app-CJInHjyj.js";export{e as mobileBottomNavItemsFacet};
+import{Fb as e}from"../../../chunks/app-BtfVhhJW.js";export{e as mobileBottomNavItemsFacet};

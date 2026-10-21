@@ -1,1 +1,1 @@
-import{DN as e}from"../../chunks/app-CJInHjyj.js";export{e as useShortcutSurfaceActivations};
+import{DN as e}from"../../chunks/app-BtfVhhJW.js";export{e as useShortcutSurfaceActivations};
