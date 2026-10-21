@@ -230,19 +230,6 @@ export const getOrCreateDailyNote = async (
       if (!current || current.deleted) return
       refuseForeign(current)
       const currentAliases = stringListProperty(current.properties[aliasesProp.name])
-      // A name this row already co-claims with another live block wedges EVERY
-      // properties write on it, this repair included: the alias trigger deletes
-      // and re-inserts the row's whole bag, so the duplicate collides and
-      // aborts the caller's transaction — which here is the navigation that
-      // opened the day. Skip the repair rather than take the day down with it.
-      // The row is live and reachable; it just stays unrepaired until the
-      // duplicate is resolved. Latent cross-client duplicates are accepted by
-      // design (the uniqueness trigger skips sync-apply) and the general wedge
-      // they cause is its own issue.
-      for (const alias of currentAliases) {
-        const claimants = await tx.aliasClaimants(alias, workspaceId)
-        if (claimants.some(claimant => claimant.id !== id)) return
-      }
       const claimable = await partitionClaimableAliases(tx, id, dailyAliases, workspaceId)
       const merged = mergeStrings([...claimable, ...currentAliases])
       // Compare against the MERGED set, not the canonical one: while an alias

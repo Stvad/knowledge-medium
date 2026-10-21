@@ -13,7 +13,7 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
-import { aliasesProp } from '@/data/properties'
+import { aliasesProp, hasBlockType } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
@@ -25,8 +25,9 @@ import {
   dailyNoteIso,
   dailyNotesDataExtension,
   getOrCreateDailyNote,
+  journalBlockId,
 } from '@/plugins/daily-notes'
-import { dailyNoteDateProp } from '@/plugins/daily-notes/schema.js'
+import { DAILY_NOTE_TYPE, dailyNoteDateProp } from '@/plugins/daily-notes/schema.js'
 
 const WS = 'ws-1'
 const ISO = '2026-04-28'
@@ -106,19 +107,6 @@ describe('reading a day\'s identity', () => {
     })).toBeNull()
   })
 
-  it('opens a day that co-claims one of its names with another live block', async () => {
-    // The alias trigger deletes and re-inserts the row's WHOLE bag on any
-    // properties write, so a name the row already shares with another live
-    // block aborts the repair — and with it the navigation that opened the
-    // day. Skipping the repair leaves the row unrepaired but reachable.
-    const id = dailyNoteBlockId(WS, ISO)
-    await rawRow(id, LONG, [ISO, 'Dup'])
-    await rawRow('other', 'Other', ['Dup'])
-
-    await expect(getOrCreateDailyNote(repo, WS, ISO)).resolves.toBeDefined()
-    expect(await repo.load(id)).not.toBeNull()
-  })
-
   it('reports rather than handing a viewer a day that does not exist', async () => {
     // The read-only short-circuit must not answer for a row that was never
     // created: `todayDailyNoteLanding` would return the deterministic id and
@@ -144,6 +132,20 @@ describe('reading a day\'s identity', () => {
 })
 
 describe('opening a day whose name another page owns', () => {
+  it('repairs a day that co-claims one of its names with a synced block', async () => {
+    // Keeping a name the day already holds is not a new claim, so the repair
+    // commits with it rather than standing down and leaving the day unrepaired.
+    const id = dailyNoteBlockId(WS, ISO)
+    await rawRow(id, LONG, [ISO, 'Dup'])
+    await rawRow('other', 'Other', ['Dup'])
+
+    const note = await getOrCreateDailyNote(repo, WS, ISO)
+
+    expect(note.peek()?.parentId).toBe(journalBlockId(WS))
+    expect(hasBlockType(note.peek()!, DAILY_NOTE_TYPE)).toBe(true)
+    expect(await aliasesOf(id)).toEqual([LONG, ISO, 'Dup'])
+  })
+
   it('creates the day rather than dying on the contested name', async () => {
     // #378 for daily notes: the page is minted in the same transaction that
     // claims its aliases, so the collision rollback destroys it and the next
