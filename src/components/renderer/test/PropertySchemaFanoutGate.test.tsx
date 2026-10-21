@@ -512,16 +512,58 @@ describe('a change that cannot go ahead', () => {
     expect(await storedName()).toBe('test:myProp')
   })
 
+  /** A schema block with no name yet: unpublished, so it has no consumers and
+   *  nothing is ever confirmed — the window is the count. */
+  const createUnnamedSchema = (): Promise<void> => repo.tx(async tx => {
+    await tx.create({
+      id: 'unnamed-schema', workspaceId: WS, parentId: 'root', orderKey: 'a4', content: '',
+      properties: {types: ['property-schema'], 'property-schema:preset': 'string'},
+    })
+  }, {scope: ChangeScope.BlockDefault})
+
+  const stripSchemaTag = (blockId: string): Promise<void> => repo.tx(async tx => {
+    const properties = {...(await tx.get(blockId))!.properties}
+    delete properties.types
+    await tx.update(blockId, {properties})
+  }, {scope: ChangeScope.BlockDefault})
+
+  it('writes no schema metadata onto a block whose schema tag went while it was planned', async () => {
+    await createUnnamedSchema()
+    vi.spyOn(repo, 'countPropertyDefinitionConsumers').mockImplementation(async () => {
+      await stripSchemaTag('unnamed-schema')
+      return 0
+    })
+    renderSchema('unnamed-schema')
+
+    await renameTo('test:named')
+
+    await waitFor(() => { expect(showError).toHaveBeenCalledOnce() })
+    expect(await storedName('unnamed-schema')).toBeUndefined()
+  })
+
+  it('plans nothing for a block that stopped being a schema before its turn', async () => {
+    await createUnnamedSchema()
+    consumersAre(0)
+    renderSchema('unnamed-schema')
+    let release!: () => void
+    void queueDefinitionChange(() => new Promise<void>(resolve => { release = resolve }))
+    await Promise.resolve()
+
+    fireEvent.change(nameInput(), {target: {value: 'test:named'}})
+    fireEvent.blur(nameInput())
+    await stripSchemaTag('unnamed-schema')
+    release()
+
+    // FIFO: this completes only after the rename queued ahead of it has.
+    await queueDefinitionChange(async () => {})
+    expect(await storedName('unnamed-schema')).toBeUndefined()
+  })
+
   it('names a schema block that has no name yet', async () => {
     // A block tagged `property-schema` before it is named is a live editor
     // subject that is not a PUBLISHED definition yet; the first name is what
     // publishes it.
-    await repo.tx(async tx => {
-      await tx.create({
-        id: 'unnamed-schema', workspaceId: WS, parentId: 'root', orderKey: 'a4', content: '',
-        properties: {types: ['property-schema'], 'property-schema:preset': 'string'},
-      })
-    }, {scope: ChangeScope.BlockDefault})
+    await createUnnamedSchema()
     consumersAre(0)
     renderSchema('unnamed-schema')
 

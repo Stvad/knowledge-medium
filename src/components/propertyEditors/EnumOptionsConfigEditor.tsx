@@ -32,6 +32,12 @@
  * this editor had just kept focused, and the commit behind it would queue a
  * second change that puts back the choice the first one removed.
  *
+ * One slot, not a list like the name field's, because a list would not save
+ * anything here: with two requests in flight the host refuses the second
+ * (it was planned against a row the first has since moved, and only the
+ * seam could tell it this payload is cumulative), and says so. That gap is
+ * #1117.
+ *
  * ADDING OR REMOVING A CHOICE CARRIES THE PENDING EDIT rather than racing it.
  * Those buttons would otherwise blur whatever input was being typed in, and
  * one user action would be two writes — the second judged against a

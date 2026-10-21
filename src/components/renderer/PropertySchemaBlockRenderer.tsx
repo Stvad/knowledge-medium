@@ -14,10 +14,12 @@ import { isValidSeededDefinition } from '@/data/definitionSeeds.js'
 import { isGrammarShapedLabel, isRoundTrippableReferenceLabel } from '@/data/referenceBlock'
 import { selectablePresets } from '@/components/propertyEditors/selectablePresets.js'
 import {
+  hasBlockType,
   presetConfigProp,
   presetIdProp,
   propertyNameProp,
 } from '@/data/properties.js'
+import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes.js'
 import {
   ChangeScope,
   ProcessorRejection,
@@ -94,10 +96,20 @@ const OVERTAKEN = (name: string): string =>
   `“${name}” changed before this was applied, so nothing was written. `
   + 'The editor is showing where it stands now — make the change again from there.'
 
-/** What the processor fans a change out from: only a published definition's
- *  edit reaches its consumers. */
-const isPublishedDefinition = (row: BlockData): boolean =>
-  parsePropertyDefinitionMetadata(row) !== null
+/** What a row is, as far as an edit from this editor goes. A change is planned
+ *  against one kind and lands only on that kind: a published definition's
+ *  edit fans out to its consumers, a schema block not yet published (no name
+ *  yet) has none, and anything else — a tombstone, a block whose schema tag
+ *  is gone — is not this editor's to write. Crossing between them meanwhile
+ *  would land the edit without the fan-out the plan assumed, or write schema
+ *  metadata onto an ordinary block. */
+type RowKind = 'definition' | 'unpublished-schema' | 'other'
+
+const rowKind = (row: BlockData): RowKind => {
+  if (parsePropertyDefinitionMetadata(row) !== null) return 'definition'
+  if (!row.deleted && hasBlockType(row, PROPERTY_SCHEMA_TYPE)) return 'unpublished-schema'
+  return 'other'
+}
 
 const withoutFirst = (names: readonly string[], name: string): readonly string[] => {
   const at = names.indexOf(name)
@@ -203,7 +215,8 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
       // The definition's OWN workspace — this renderer is mounted per block.
       const ws = atStart.workspaceId
       workspaceId = ws
-      const publishedAtStart = isPublishedDefinition(atStart)
+      const kindAtStart = rowKind(atStart)
+      if (kindAtStart === 'other') return false
       const planned = plan(definitionFacts(atStart.properties))
       if ('skip' in planned) {
         if (planned.skip !== null) showError(planned.skip)
@@ -231,15 +244,10 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
       let applied = false
       await block.repo.tx(async tx => {
         const current = await tx.get(block.id)
-        // The row must still be what the change was planned against. `tx.get`
-        // hands back a TOMBSTONE with its bag intact, and a definition whose
-        // type tag or metadata was taken away meanwhile reads as unpublished:
-        // either way the edit would land with no fan-out, leaving consumers
-        // under the old name or encoding once it is a definition again. A
-        // schema block that was never published — one with no name yet — is
-        // still this editor's to name.
-        if (current === null || current.deleted) return
-        if (isPublishedDefinition(current) !== publishedAtStart) return
+        // The kind the change was planned against — see `RowKind`. `tx.get`
+        // hands back a tombstone with its bag intact, so this is what keeps
+        // a deleted definition out too.
+        if (current === null || rowKind(current) !== kindAtStart) return
         if (!stillCurrent(definitionFacts(current.properties))) return
         // Makes this transaction's reports attributable; see
         // `PropertyDefinitionFanoutSnapshot.transactionRunning`.
