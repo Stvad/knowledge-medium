@@ -1,0 +1,1 @@
+import{di as e}from"../../../chunks/app-DXouewMG.js";export{e as interactionMetricsPlugin};

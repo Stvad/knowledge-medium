@@ -1,0 +1,1 @@
+import{Sl as e,xl as t}from"../../../chunks/app-DXouewMG.js";export{t as collectTypeCandidates,e as formatTypeCandidateReport};

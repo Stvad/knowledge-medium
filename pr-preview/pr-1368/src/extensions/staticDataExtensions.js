@@ -1,0 +1,1 @@
+import{tB as e}from"../../chunks/app-DXouewMG.js";export{e as staticDataExtensions};

@@ -1,0 +1,1 @@
+import{Jn as e}from"../../../chunks/app-DXouewMG.js";export{e as extensionsDataExtension};

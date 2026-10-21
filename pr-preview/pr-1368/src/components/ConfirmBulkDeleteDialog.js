@@ -1,0 +1,1 @@
+import{jj as e}from"../../chunks/app-DXouewMG.js";export{e as ConfirmBulkDeleteDialog};

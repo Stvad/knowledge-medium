@@ -1,0 +1,1 @@
+import{fn as e}from"../../../chunks/app-DXouewMG.js";export{e as birthdayPlugin};

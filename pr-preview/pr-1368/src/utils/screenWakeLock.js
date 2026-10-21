@@ -1,0 +1,1 @@
+import{d as e}from"../../chunks/app-DXouewMG.js";export{e as holdScreenWakeLock};

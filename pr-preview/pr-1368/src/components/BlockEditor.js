@@ -1,0 +1,1 @@
+import{bN as e}from"../../chunks/app-DXouewMG.js";export{e as BlockEditor};

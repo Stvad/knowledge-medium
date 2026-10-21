@@ -1,0 +1,1 @@
+import{Bo as e}from"../../../chunks/app-DXouewMG.js";export{e as requestPersistenceActionContribution};

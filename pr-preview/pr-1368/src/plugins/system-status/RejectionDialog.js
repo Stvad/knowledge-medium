@@ -1,0 +1,1 @@
+import{is as e}from"../../../chunks/app-DXouewMG.js";export{e as RejectionDialog};

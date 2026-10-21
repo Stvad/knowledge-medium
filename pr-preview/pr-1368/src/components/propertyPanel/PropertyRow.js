@@ -1,0 +1,1 @@
+import{tF as e}from"../../../chunks/app-DXouewMG.js";export{e as PropertyRow};

@@ -1,0 +1,1 @@
+import{i5 as e}from"../chunks/app-DXouewMG.js";export{e as isChildBackedPropertiesWorkspace};

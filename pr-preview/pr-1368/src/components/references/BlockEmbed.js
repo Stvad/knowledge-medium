@@ -1,0 +1,1 @@
+import{LD as e}from"../../../chunks/app-DXouewMG.js";export{e as BlockEmbed};
