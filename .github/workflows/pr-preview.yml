@@ -4,13 +4,12 @@ name: PR Preview
 # change is clickable at:
 #   https://stvad.github.io/knowledge-medium/pr-preview/pr-<n>/
 # rossjrw/pr-preview-action posts/updates a sticky comment with that URL on
-# every push and tears the preview down when the PR closes.
+# every push. Removal on close lives in remove-pr-previews.yml.
 # See docs/pr-preview-deployments.md for the one-time Pages setup.
 
 on:
   pull_request:
-    # `closed` is required so action:auto can remove the preview on merge/close.
-    types: [opened, reopened, synchronize, closed]
+    types: [opened, reopened, synchronize]
 
 permissions:
   contents: write # push the preview subtree to the gh-pages branch
@@ -20,11 +19,10 @@ permissions:
 jobs:
   preview:
     # Fork builds need explicit commit approval via approved-pr-preview.yml.
-    # Their trusted close handler lives in remove-approved-pr-preview.yml.
     if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     concurrency:
-      # Only eligible jobs enter the queue; skipped fork events must not cancel cleanup.
+      # Shared with remove-pr-previews.yml's close handler for this PR.
       group: pr-preview-${{ github.event.pull_request.number }}
       cancel-in-progress: false
     env:
@@ -43,18 +41,15 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Set up pnpm
-        if: github.event.action != 'closed'
         uses: pnpm/action-setup@v4
 
       - name: Set up Node.js
-        if: github.event.action != 'closed'
         uses: actions/setup-node@v6
         with:
           node-version: 26
           cache: pnpm
 
       - name: Validate build variables
-        if: github.event.action != 'closed'
         run: |
           test -n "$VITE_SUPABASE_URL"
           test -n "$VITE_SUPABASE_ANON_KEY"
@@ -62,14 +57,11 @@ jobs:
           test -n "$VITE_GOOGLE_MAPS_API_KEY"
 
       - name: Install dependencies
-        if: github.event.action != 'closed'
         run: pnpm install --frozen-lockfile
 
       - name: Build
-        if: github.event.action != 'closed'
         run: pnpm run build
 
-      # deploy on opened/reopened/synchronize, remove on closed (action: auto).
       # source-dir must match the build output; umbrella-dir + the pr-<n>/ subdir
       # must match APP_BASE_PATH above.
       - name: Deploy preview
@@ -78,17 +70,15 @@ jobs:
           source-dir: ./dist/
           preview-branch: gh-pages
           umbrella-dir: pr-preview
-          action: auto
+          action: deploy
 
       # The push above only updates gh-pages; GitHub's auto-triggered "pages
       # build and deployment" is what actually serves it, and that publisher is
       # intermittently flaky ("Deployment failed, try again later."). Without
       # this, a flaked publish leaves the preview 404 until some later push
       # happens to sweep it live. This waits for the publish and re-requests it
-      # on failure. Skipped on `closed`: a failed *removal* self-heals on the
-      # next publish and isn't worth failing the teardown run over.
+      # on failure.
       - name: Ensure Pages published
-        if: github.event.action != 'closed'
         env:
           GH_TOKEN: ${{ github.token }}
         run: bash scripts/ensure-pages-published.sh
