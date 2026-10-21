@@ -30,6 +30,11 @@ import {
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { valuePresetCoresFacet } from '@/data/facets'
+import { resolveFacetRuntimeSync } from '@/facets/facet'
+import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
+import { selectablePresets } from '@/components/propertyEditors/selectablePresets'
+import { kernelDataExtension } from './kernelDataExtension'
+import { readValuePresets } from './valuePresetRegistry'
 import { isGrammarShapedLabel, isRoundTrippableReferenceLabel } from '@/data/referenceBlock'
 import {
   presetConfigProp,
@@ -152,6 +157,16 @@ const liveFieldRow = async (blockId: string, fieldId: string): Promise<string | 
     'SELECT id FROM blocks WHERE parent_id = ? AND reference_target_id = ? AND deleted = 0',
     [blockId, fieldId],
   ))?.id
+
+/** A list-valued property's value rows' text, in tree order — a list stores N
+ *  sibling value children (#1010). */
+const liveMembers = async (owner: string): Promise<string[]> =>
+  (await sharedDb.db.getAll<{content: string}>(
+    `SELECT v.content FROM blocks v JOIN blocks f ON v.parent_id = f.id
+      WHERE f.parent_id = ? AND f.reference_target_id = ? AND f.deleted = 0
+        AND v.deleted = 0 AND v.is_field_form IS NOT 1
+      ORDER BY v.order_key, v.id`,
+    [owner, FIELD_ID])).map(row => row.content)
 
 const createHost = (repo: Repo, blockId: string): Promise<void> =>
   repo.tx(async tx => {
@@ -741,6 +756,29 @@ describe('codec change', () => {
     await repo.awaitProcessors()
 
     expect(await cell('p')).toEqual({status: 1})
+  })
+
+  it('repairs a broken text list onto the Text list the picker OFFERS, keeping every member (#1077)', async () => {
+    // A member-wise codec that stored each member as verbatim text, two members
+    // held: an offered scalar either refuses or keeps only the first (#1090), so
+    // the repair the schema editor invites needs a list target the picker
+    // shows. The text list reads each child's text as the member it already
+    // is — nothing is respelled, and the cell republishes unchanged.
+    await seedWorkspace('children')
+    const {repo} = await withPresetUnloaded(
+      ['a', 'b'], {build: () => codecs.list(codecs.string), defaultValue: []})
+    expect(await cell('p')).toEqual({status: ['a', 'b']})
+    const offered = selectablePresets(readValuePresets(resolveFacetRuntimeSync([
+      kernelDataExtension, kernelValuePresetsExtension,
+    ])), UNLOADABLE_PRESET).map(preset => preset.id)
+    expect(offered).toContain('string-list')
+
+    await retype(repo, FIELD_ID, 'string-list')
+    await repo.awaitProcessors()
+
+    await awaitDefinition(repo, 'status', 'list')
+    expect(await cell('p')).toEqual({status: ['a', 'b']})
+    expect(await liveMembers('p')).toEqual(['a', 'b'])
   })
 
   it('REFUSES when the projection comes out empty over a cell that held a value', async () => {
@@ -1708,14 +1746,6 @@ describe('the multi-value boundary (#1010)', () => {
         [`dupmember-${i}`, WS, `a${i}`, member])
     }
   }
-
-  const liveMembers = async (owner: string): Promise<string[]> =>
-    (await sharedDb.db.getAll<{content: string}>(
-      `SELECT v.content FROM blocks v JOIN blocks f ON v.parent_id = f.id
-        WHERE f.parent_id = ? AND f.reference_target_id = ? AND f.deleted = 0
-          AND v.deleted = 0 AND v.is_field_form IS NOT 1
-        ORDER BY v.order_key, v.id`,
-      [owner, FIELD_ID])).map(row => row.content)
 
   it('re-encodes EVERY member, not just the first', async () => {
     // The scalar rule — take the first value child that parses — truncates a
