@@ -101,7 +101,11 @@ import {
   deriveReferenceColumns,
   sameTxReferenceTargetLookups,
 } from './referenceTargetProcessor'
-import { buildSchemaOrNull } from '@/data/userSchemasService'
+import {
+  buildSchemaOrNull,
+  unbuildableCause,
+  type UnbuildableCause,
+} from '@/data/userSchemasService'
 import {
   STRANDED_CLAIM_RECOVERY,
   isGraphBackfillClaimActive,
@@ -236,9 +240,8 @@ type HeldChange =
       readonly reason: 'current-type-unavailable'
       readonly name: string
       readonly presetId: string
-      /** The preset is registered and its config or build fails, rather than
-       *  its plugin being absent — which decides the way out offered. */
-      readonly presetLoaded: boolean
+      /** Decides the way out the message offers, and nothing else. */
+      readonly cause: UnbuildableCause
     }
   | {readonly fieldId: string; readonly reason: 'unbuildable' | 'contested'}
 
@@ -263,24 +266,43 @@ const REFUSALS: Record<'unbuildable' | 'contested', {code: string; message: stri
 
 /** Only the codec that WROTE a value child can say what it holds — the JSON
  *  `"x"` and the three-character string `"x"` are the same text (#1055), and
- *  one member row of a list reads like a scalar's only row (#1090). So the one
- *  way to change such a definition is to make that codec available, and the
- *  message offers exactly that or deleting the definition — never a re-type,
- *  which this same refusal would stop (#1077). */
+ *  one member row of a list reads like a scalar's only row (#1090). So the
+ *  message offers making that codec available where that is possible, or
+ *  deleting the definition — never a re-type, which this same refusal would
+ *  stop (#1077). */
+const CURRENT_TYPE_UNAVAILABLE: Record<UnbuildableCause, {
+  problem: (type: string) => string
+  wayOut: string
+}> = {
+  'preset-not-loaded': {
+    problem: type => `its type ${type}comes from a plugin that is not loaded on this device`,
+    wayOut: 'Enable that plugin on this device and try again, or delete the property '
+      + 'definition.',
+  },
+  'config-unreadable': {
+    problem: type => `the stored settings of its type ${type}cannot be read on this device`,
+    wayOut: 'Delete the property definition instead; the values blocks hold under it '
+      + 'stay.',
+  },
+  'build-failed': {
+    problem: type => `its type ${type}fails to build on this device`,
+    wayOut: 'Delete the property definition instead; the values blocks hold under it '
+      + 'stay.',
+  },
+}
+
 const currentTypeUnavailableRefusal = (
   held: Extract<HeldChange, {reason: 'current-type-unavailable'}>,
-): {code: string; message: string} => ({
-  code: 'property.definition-change.current-type-unavailable',
-  message:
-    `cannot rename or re-type property "${held.name}": its current type `
-    + `${held.presetId ? `"${held.presetId}" ` : ''}does not load on this device, `
-    + 'so the blocks using it could not be updated to match. '
-    + (held.presetLoaded
-      ? 'Make the change on a device where that type loads, or delete the '
-        + 'property definition.'
-      : 'Enable the plugin that provides that type on this device and try '
-        + 'again, or delete the property definition.'),
-})
+): {code: string; message: string} => {
+  const {problem, wayOut} = CURRENT_TYPE_UNAVAILABLE[held.cause]
+  return {
+    code: 'property.definition-change.current-type-unavailable',
+    message:
+      `cannot rename or re-type property "${held.name}": `
+      + `${problem(held.presetId ? `"${held.presetId}" ` : '')}, so the blocks using it `
+      + `could not be updated to match. ${wayOut}`,
+  }
+}
 
 /** ONE refusal per transaction, whichever cause is found first — the user
  *  fixes one at a time either way, and a combined message would describe a
@@ -443,7 +465,7 @@ const collectChanges = (
         reason: 'current-type-unavailable',
         name: beforeMeta.name,
         presetId: typeof presetId === 'string' ? presetId : '',
-        presetLoaded: typeof presetId === 'string' && ctx.valuePresets.has(presetId),
+        cause: unbuildableCause(before, ctx.valuePresets),
       })
       continue
     }

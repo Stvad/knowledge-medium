@@ -1206,7 +1206,7 @@ describe('while the definition\'s CURRENT preset does not build (#1077, #1090)',
 
     await expect(retype(repo, FIELD_ID, 'another-missing-preset')).rejects.toMatchObject({
       code: CURRENT_TYPE_UNAVAILABLE,
-      message: expect.stringContaining('Enable the plugin'),
+      message: expect.stringContaining('Enable that plugin on this device'),
     })
     expect((await cell(FIELD_ID))[presetIdProp.name]).toBe(UNLOADABLE_PRESET)
   })
@@ -1230,7 +1230,7 @@ describe('while the definition\'s CURRENT preset does not build (#1077, #1090)',
   it('REFUSES a re-type off a LOADED preset whose stored config does not decode', async () => {
     // The other way a current row builds nothing: the preset is registered,
     // its config is not one it reads. No plugin to enable, so the message
-    // offers the other device and deletion instead.
+    // says what is wrong and offers deletion.
     await seedWorkspace('children')
     const repo = await setupDefinition('ref')
     await createHost(repo, 'target')
@@ -1241,14 +1241,43 @@ describe('while the definition\'s CURRENT preset does not build (#1077, #1090)',
       [FIELD_ID])
     const before = await graphState()
 
-    await expect(retype(repo, FIELD_ID, 'string')).rejects.toMatchObject({
+    const refusal = retype(repo, FIELD_ID, 'string')
+    await expect(refusal).rejects.toMatchObject({
       code: CURRENT_TYPE_UNAVAILABLE,
-      message: expect.stringContaining('on a device where that type loads'),
+      message: expect.stringContaining('the stored settings of its type "ref" cannot be read'),
+    })
+    await expect(refusal).rejects.toMatchObject({
+      message: expect.not.stringContaining('Enable'),
     })
     await repo.awaitProcessors()
 
     expect(await graphState()).toEqual(before)
     expect(await rowContent(valueRowId)).toBe('((target))')
+  })
+
+  it('REFUSES a re-type off a LOADED preset whose build throws', async () => {
+    // The third way: the plugin is here and reads its config, and its `build`
+    // fails. Neither "enable the plugin" nor "unreadable settings" is true.
+    await seedWorkspace('children')
+    await withPresetUnloaded()
+    const repo = makeRepo([{
+      id: UNLOADABLE_PRESET,
+      build: () => { throw new Error('[test] preset build failed') },
+      defaultValue: '',
+    } as unknown as AnyValuePresetCore])
+    const before = await graphState()
+
+    const refusal = retype(repo, FIELD_ID, 'number')
+    await expect(refusal).rejects.toMatchObject({
+      code: CURRENT_TYPE_UNAVAILABLE,
+      message: expect.stringContaining(`its type "${UNLOADABLE_PRESET}" fails to build`),
+    })
+    await expect(refusal).rejects.toMatchObject({
+      message: expect.not.stringContaining('Enable'),
+    })
+    await repo.awaitProcessors()
+
+    expect(await graphState()).toEqual(before)
   })
 
   it('runs the change once the preset loads again, counting a narrowing\'s loss exactly', async () => {

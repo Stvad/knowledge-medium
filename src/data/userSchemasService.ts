@@ -202,6 +202,32 @@ export const buildSchemaOrNull = (
   }
 }
 
+/** Why a definition row whose {@link buildSchemaOrNull} is `null` builds
+ *  nothing here. For what the user is told — the way out differs — never for
+ *  whether anything is refused, which `buildSchemaOrNull` alone decides. */
+export type UnbuildableCause =
+  /** No plugin on this device registers the preset (or the row names none). */
+  | 'preset-not-loaded'
+  /** The preset is registered and cannot decode the row's stored config. */
+  | 'config-unreadable'
+  /** The preset is registered, reads its config, and `build` throws. */
+  | 'build-failed'
+
+export const unbuildableCause = (
+  row: Pick<BlockData, 'properties'>,
+  presets: ReadonlyMap<string, AnyValuePresetCore>,
+): UnbuildableCause => {
+  const presetId = row.properties[presetIdProp.name]
+  const preset = typeof presetId === 'string' ? presets.get(presetId) : undefined
+  if (preset === undefined) return 'preset-not-loaded'
+  try {
+    decodePresetConfig(preset, peekRowProperty(row, presetConfigProp))
+  } catch {
+    return 'config-unreadable'
+  }
+  return 'build-failed'
+}
+
 /** Descriptor wiring the schema bridge into the shared projector
  *  lifecycle. Raw `BlockData` rows (no hydrate — see `peekRowProperty`);
  *  re-resolves on `onValuePresetsChange` so a schema skipped for an

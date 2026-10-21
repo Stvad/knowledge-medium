@@ -11,7 +11,11 @@ import { useHandle } from '@/hooks/block.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import {readValuePresetRegistry, readValuePresets} from '@/data/valuePresetRegistry'
 import { parsePropertyDefinitionMetadata } from '@/data/propertyDefinitionMetadata'
-import { buildSchemaOrNull } from '@/data/userSchemasService'
+import {
+  buildSchemaOrNull,
+  unbuildableCause,
+  type UnbuildableCause,
+} from '@/data/userSchemasService'
 import { openExtensionsSettings } from '@/extensions/openExtensionsSettings.js'
 import { isValidSeededDefinition } from '@/data/definitionSeeds.js'
 import { isGrammarShapedLabel, isRoundTrippableReferenceLabel } from '@/data/referenceBlock'
@@ -41,37 +45,44 @@ const renderConfigEditor = (
 }
 
 /** The question the definition-change processor refuses on, asked of the
- *  definition row as it stands: does its CURRENT type build a codec here? */
-const useCurrentTypeBuilds = (block: BlockRendererProps['block']): boolean => {
+ *  definition row as it stands: does its CURRENT type build a codec here, and
+ *  if not, why. `null` when it builds. */
+const useCurrentTypeUnavailable = (
+  block: BlockRendererProps['block'],
+): UnbuildableCause | null => {
   const cores = readValuePresetRegistry(useAppRuntime()).cores
   return useHandle(block, {
     selector: row => {
-      if (!row) return true
+      if (!row) return null
       const metadata = parsePropertyDefinitionMetadata(row)
-      return metadata === null || buildSchemaOrNull(row, cores, metadata) !== null
+      if (metadata === null || buildSchemaOrNull(row, cores, metadata) !== null) return null
+      return unbuildableCause(row, cores)
     },
   })
 }
 
-/** Why this definition's type and config are locked, and the two ways out. */
-const CurrentTypeUnavailableNotice = ({presetId}: {presetId: string}) => {
-  // Registered, but its config or build fails: there is no plugin to enable.
-  const presetLoaded = readValuePresetRegistry(useAppRuntime()).cores.has(presetId)
+/** Why this definition's type and config are locked, and the way out. */
+const CurrentTypeUnavailableNotice = ({presetId, cause}: {
+  presetId: string
+  cause: UnbuildableCause
+}) => {
   const type = presetId
-    ? <>The <code className="font-mono">{presetId}</code> type</>
-    : <>This property&rsquo;s type</>
+    ? <>the <code className="font-mono">{presetId}</code> type</>
+    : <>this property&rsquo;s type</>
   return (
     <div className="space-y-1 text-xs text-muted-foreground">
       <div>
-        {presetLoaded
-          ? <>{type} can&rsquo;t be built from its stored settings on this device.</>
-          : <>{type} comes from a plugin that isn&rsquo;t loaded on this device.</>}
+        {cause === 'preset-not-loaded'
+          ? <>This property uses {type}, from a plugin that isn&rsquo;t loaded on this device.</>
+          : cause === 'config-unreadable'
+            ? <>The stored settings of {type} can&rsquo;t be read on this device.</>
+            : <>This property uses {type}, which fails to build on this device.</>}
         {' '}Its type and settings can&rsquo;t be changed here: only that type can
-        read the values blocks hold under it. {presetLoaded
-          ? 'Change it on a device where it loads, or delete the schema.'
-          : 'Enable the plugin on this device, or delete the schema.'}
+        read the values blocks hold under it. {cause === 'preset-not-loaded'
+          ? 'Enable the plugin on this device, or delete the schema.'
+          : 'Delete the schema instead; the values blocks hold under it stay.'}
       </div>
-      {!presetLoaded && (
+      {cause === 'preset-not-loaded' && (
         <Button
           type="button"
           variant="outline"
@@ -101,7 +112,7 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
   // With no codec for what its consumers hold, every re-type and config change
   // is refused, so the controls that make one are not offered. Renames stay
   // with the transaction, which allows one that strands nothing.
-  const currentTypeBuilds = useCurrentTypeBuilds(block)
+  const typeUnavailable = useCurrentTypeUnavailable(block)
 
   // A materialized seed row is a kernel/plugin property *defined in code*.
   // In v1 these are code-owned and unshadowable: their name, type, config,
@@ -291,7 +302,7 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
 
       <div className="grid grid-cols-[6rem,minmax(0,1fr)] items-center gap-3">
         <label className="text-xs font-semibold text-muted-foreground">Type</label>
-        {!currentTypeBuilds ? (
+        {typeUnavailable !== null ? (
           <code className="font-mono text-sm text-muted-foreground">{presetId || 'none'}</code>
         ) : (
           <div className="relative max-w-xs">
@@ -325,7 +336,7 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
         )}
       </div>
 
-      {currentTypeBuilds && preset?.ConfigEditor && (
+      {typeUnavailable === null && preset?.ConfigEditor && (
         <div className="grid grid-cols-[6rem,minmax(0,1fr)] gap-3">
           <label className="pt-1 text-xs font-semibold text-muted-foreground">Config</label>
           {/* A real `fieldset[disabled]`, which is what makes the descendant
@@ -352,8 +363,8 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
         </div>
       )}
 
-      {!currentTypeBuilds && (
-        <CurrentTypeUnavailableNotice presetId={presetId} />
+      {typeUnavailable !== null && (
+        <CurrentTypeUnavailableNotice presetId={presetId} cause={typeUnavailable} />
       )}
 
       {!readOnly && (

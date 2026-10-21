@@ -267,7 +267,7 @@ describe('PropertySchemaContentRenderer read-only for code-owned seeds', () => {
       renderSchema('missing-preset-schema')
 
       // Positive first: the editor rendered this definition at all.
-      const notice = screen.getByText(/comes from a plugin that isn.t loaded on this device/)
+      const notice = screen.getByText(/from a plugin that isn.t loaded on this device/)
       expect(notice.textContent).toContain(UNLOADED_PRESET)
       expect(notice.textContent).toMatch(/Enable the plugin on this device, or delete the schema/)
       expect(screen.getByRole('button', {name: 'Manage extensions'})).toBeTruthy()
@@ -282,11 +282,41 @@ describe('PropertySchemaContentRenderer read-only for code-owned seeds', () => {
     it('locks a LOADED preset whose stored config does not decode, config editor included', () => {
       renderSchema('bad-config-schema')
 
-      expect(screen.getByText(/can.t be built from its stored settings on this device/))
-        .toBeTruthy()
+      expect(screen.getByText(/The stored settings of .* can.t be read on this device/).textContent)
+        .toMatch(/Delete the schema instead/)
       expect(screen.queryByRole('combobox')).toBeNull()
       expect(screen.queryByPlaceholderText('Add a block type…')).toBeNull()
       // No plugin to enable — the preset is loaded.
+      expect(screen.queryByRole('button', {name: 'Manage extensions'})).toBeNull()
+    })
+
+    it('locks a LOADED preset whose build throws, without offering a plugin to enable', async () => {
+      const throwing = createTestRepo({
+        db: sharedDb.db,
+        user: {id: 'user-1'},
+        extensions: [
+          kernelPropertyUiExtension,
+          kernelValuePresetsExtension,
+          valuePresetCoresFacet.of({
+            id: UNLOADED_PRESET,
+            build: () => { throw new Error('[test] preset build failed') },
+            defaultValue: '',
+          } as unknown as AnyValuePresetCore, {source: 'test'}),
+        ],
+      }).repo
+      throwing.setActiveWorkspaceId(WS)
+      await throwing.load('missing-preset-schema')
+
+      render(
+        <RepoContext value={throwing}>
+          <AppRuntimeContextProvider value={throwing.facetRuntime!}>
+            <PropertySchemaContentRenderer block={throwing.block('missing-preset-schema')} />
+          </AppRuntimeContextProvider>
+        </RepoContext>,
+      )
+
+      expect(screen.getByText(/which fails to build on this device/)).toBeTruthy()
+      expect(screen.queryByRole('combobox')).toBeNull()
       expect(screen.queryByRole('button', {name: 'Manage extensions'})).toBeNull()
     })
 
