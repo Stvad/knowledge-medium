@@ -37,7 +37,8 @@ export type { Togglable } from '@/facets/togglable.js'
 
 export type {
   Variant,
-  VariantContribution,
+  VariantFacts,
+  VariantRegistration,
   VariantResolver,
   VariantSelection,
 } from '@/facets/variantFacet.js'
@@ -59,7 +60,6 @@ export type {
   HeaderItemContribution,
   HeaderItemRegion,
   PanelMountContribution,
-  RendererContribution,
 } from '@/extensions/core.js'
 
 export type {
@@ -71,7 +71,9 @@ export type {
   BlockHeaderContribution,
   BlockContentDecorator,
   BlockContentDecoratorContribution,
-  BlockContentRendererContribution,
+  BlockContentRendererRegistration,
+  BlockRendererContext,
+  BlockRendererRegistration,
   BlockContentRendererSlot,
   BlockContentSurfaceContribution,
   BlockContentSurfaceProps,
@@ -80,7 +82,7 @@ export type {
   BlockInteractionContext,
   BlockResolveContext,
   BlockLayout,
-  BlockLayoutContribution,
+  BlockLayoutRegistration,
   BlockLayoutSlots,
   BlockShellProps,
   ShortcutActivationContribution,

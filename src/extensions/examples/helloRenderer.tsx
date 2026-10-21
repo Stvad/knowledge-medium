@@ -2,7 +2,6 @@ import { ChangeScope, seedProperty } from '@/data/api/index.js'
 import { definitionSeedsFacet } from '@/data/facets.js'
 import { blockContentRendererFacet } from '@/extensions/blockInteraction.js'
 import { extensionPropertySeedKey } from '@/extensions/dynamicExtensionSeeds.js'
-import { defineVariant } from '@/facets/variantFacet.js'
 import type { BlockRenderer, BlockRendererProps } from '@/types.js'
 
 // Variant on blockContentRendererFacet: contributes an alternative
@@ -35,8 +34,10 @@ export default [
   // Register the schema so the value-preset / property-editor lookups
   // can find this prop, and describeRuntime can list it.
   definitionSeedsFacet.of(helloProp),
-  blockContentRendererFacet.of((ctx) => {
-    if (!ctx.block.peekProperty(helloProp)) return null
-    return defineVariant('user.hello', 'Hello', HelloContent)
+  blockContentRendererFacet.of({
+    id: 'user.hello',
+    label: 'Hello',
+    resolve: (ctx) =>
+      ctx.block.peekProperty(helloProp) ? { render: HelloContent } : null,
   }),
 ]

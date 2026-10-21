@@ -1,6 +1,7 @@
 import { BlockRendererProps } from '@/types.js'
 import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRenderer.js'
 import { getBreadcrumbContentPreview } from './breadcrumbPreview.ts'
+import type { BlockRendererRegistration } from '@/extensions/blockInteraction.js'
 
 export const BreadcrumbRenderer = (props: BlockRendererProps) => (
   <MarkdownContentRenderer
@@ -11,5 +12,8 @@ export const BreadcrumbRenderer = (props: BlockRendererProps) => (
   />
 )
 
-BreadcrumbRenderer.canRender = ({context} : BlockRendererProps) => !!context?.isBreadcrumb
-BreadcrumbRenderer.priority = () => 10
+export const breadcrumbRendererRegistration: BlockRendererRegistration = {
+  id: 'breadcrumb',
+  label: 'Breadcrumb',
+  resolve: ctx => ctx.blockContext?.isBreadcrumb ? {render: BreadcrumbRenderer} : null,
+}

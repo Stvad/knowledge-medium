@@ -37,6 +37,7 @@ import {
 } from '@/utils/panelLayoutProjection.js'
 import { outlineRenderScopeId, panelRenderScopeId } from '@/utils/renderScope.js'
 import type { MouseEvent, PointerEvent } from 'react'
+import type { BlockRendererRegistration } from '@/extensions/blockInteraction.js'
 
 const SCROLL_WRITE_DELAY_MS = 200
 const PANEL_ACTION_BUTTON_CLASS =
@@ -402,5 +403,11 @@ export function PanelRenderer({block}: BlockRendererProps) {
   )
 }
 
-PanelRenderer.canRender = ({context}: BlockRendererProps) => !!(context?.layoutBoundary && context.panelId)
-PanelRenderer.priority = () => 5
+export const panelRendererRegistration: BlockRendererRegistration = {
+  id: 'panel',
+  label: 'Panel',
+  resolve: ctx =>
+    ctx.blockContext?.layoutBoundary && ctx.blockContext.panelId
+      ? {render: PanelRenderer}
+      : null,
+}

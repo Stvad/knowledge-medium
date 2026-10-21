@@ -15,7 +15,8 @@ import { definitionSeedsFacet, typeSeedsFacet } from '@/data/facets'
 import { resolveFacetRuntimeSync, type FacetRuntime } from '@/facets/facet'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
 import { ActiveContextsProvider } from '@/shortcuts/ActiveContexts'
-import { actionContextsFacet, blockRenderersFacet } from '@/extensions/core'
+import { actionContextsFacet } from '@/extensions/core'
+import { blockRendererFacet } from '@/extensions/blockInteraction'
 import { defaultActionContextConfigs } from '@/shortcuts/defaultContexts'
 import { BlockProperties } from './BlockProperties'
 import { degradedFallbackSchema } from './propertyEditors/defaults'
@@ -153,7 +154,7 @@ describe('BlockProperties component', () => {
       kernelDataExtension,
       kernelPropertyUiExtension,
       kernelValuePresetsExtension,
-      blockRenderersFacet.of({id: 'default', renderer: TestBlockRenderer}, {source: 'test'}),
+      blockRendererFacet.of({id: 'default', label: 'Test', render: TestBlockRenderer}, {source: 'test'}),
       reviewTypeProps.map(prop => definitionSeedsFacet.of(prop, {source: 'test'})),
       typeSeedsFacet.of(reviewType, {source: 'test'}),
       typeSeedsFacet.of(assignmentType, {source: 'test'}),

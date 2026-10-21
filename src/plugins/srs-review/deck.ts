@@ -20,7 +20,7 @@ export const reviewDeckBlockId = (workspaceId: string): string =>
 /** Get-or-create the workspace's singleton review-deck page. Shares the
  *  kernel-page bootstrap (deterministic id, PAGE_TYPE + marker type,
  *  restore-on-reach) with Recents / Properties / Types. The
- *  `srs-review-deck` marker is what `SrsReviewDeckRenderer.canRender`
+ *  `srs-review-deck` marker is what `srsReviewDeckRendererRegistration`
  *  keys on. */
 export const getOrCreateReviewDeck = (repo: Repo, workspaceId: string): Promise<Block> =>
   getOrCreateKernelPage(repo, workspaceId, {

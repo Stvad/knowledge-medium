@@ -31,7 +31,7 @@ export const groupedBacklinksPlugin: AppExtension = systemToggle({
     {source: 'grouped-backlinks'},
   ),
   backlinksViewFacet.of(
-    () => defineVariant('grouped', 'Grouped', GroupedLinkedReferences),
+    defineVariant('grouped', 'Grouped', GroupedLinkedReferences),
     {source: 'grouped-backlinks'},
   ),
 ])

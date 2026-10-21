@@ -51,8 +51,8 @@ describe('BacklinksViewSection', () => {
       </div>
     )
     const runtime = resolveFacetRuntimeSync([
-      backlinksViewFacet.of(() => defineVariant('empty', 'Empty', EmptyVariant), {source: 'test'}),
-      backlinksViewFacet.of(() => defineVariant('visible', 'Visible', VisibleVariant), {source: 'test'}),
+      backlinksViewFacet.of(defineVariant('empty', 'Empty', EmptyVariant), {source: 'test'}),
+      backlinksViewFacet.of(defineVariant('visible', 'Visible', VisibleVariant), {source: 'test'}),
     ])
 
     const view = render(
@@ -78,8 +78,8 @@ describe('BacklinksViewSection', () => {
     const FlatVariant = () => <div>flat backlinks</div>
     const GroupedVariant = () => <div>grouped backlinks</div>
     const runtime = resolveFacetRuntimeSync([
-      backlinksViewFacet.of(() => defineVariant('flat', 'Flat', FlatVariant), {source: 'test'}),
-      backlinksViewFacet.of(() => defineVariant('grouped', 'Grouped', GroupedVariant), {source: 'test'}),
+      backlinksViewFacet.of(defineVariant('flat', 'Flat', FlatVariant), {source: 'test'}),
+      backlinksViewFacet.of(defineVariant('grouped', 'Grouped', GroupedVariant), {source: 'test'}),
     ])
 
     hookState.blockData.current = {properties: {types: ['daily-note']}}
@@ -107,8 +107,8 @@ describe('BacklinksViewSection', () => {
     const FlatVariant = () => <div>flat backlinks</div>
     const GroupedVariant = () => <div>grouped backlinks</div>
     const runtime = resolveFacetRuntimeSync([
-      backlinksViewFacet.of(() => defineVariant('flat', 'Flat', FlatVariant), {source: 'test'}),
-      backlinksViewFacet.of(() => defineVariant('grouped', 'Grouped', GroupedVariant), {source: 'test'}),
+      backlinksViewFacet.of(defineVariant('flat', 'Flat', FlatVariant), {source: 'test'}),
+      backlinksViewFacet.of(defineVariant('grouped', 'Grouped', GroupedVariant), {source: 'test'}),
     ])
 
     render(
@@ -134,8 +134,8 @@ describe('BacklinksViewSection', () => {
       </div>
     )
     const runtime = resolveFacetRuntimeSync([
-      backlinksViewFacet.of(() => defineVariant('flat', 'Flat', FlatVariant), {source: 'test'}),
-      backlinksViewFacet.of(() => defineVariant('grouped', 'Grouped', GroupedVariant), {source: 'test'}),
+      backlinksViewFacet.of(defineVariant('flat', 'Flat', FlatVariant), {source: 'test'}),
+      backlinksViewFacet.of(defineVariant('grouped', 'Grouped', GroupedVariant), {source: 'test'}),
     ])
 
     render(
@@ -165,8 +165,8 @@ describe('BacklinksViewSection', () => {
       </div>
     )
     const runtime = resolveFacetRuntimeSync([
-      backlinksViewFacet.of(() => defineVariant('flat', 'Flat', FlatVariant), {source: 'test'}),
-      backlinksViewFacet.of(() => defineVariant('grouped', 'Grouped', GroupedVariant), {source: 'test'}),
+      backlinksViewFacet.of(defineVariant('flat', 'Flat', FlatVariant), {source: 'test'}),
+      backlinksViewFacet.of(defineVariant('grouped', 'Grouped', GroupedVariant), {source: 'test'}),
     ])
 
     render(
@@ -189,7 +189,7 @@ describe('BacklinksViewSection', () => {
       </div>
     )
     const runtime = resolveFacetRuntimeSync([
-      backlinksViewFacet.of(() => defineVariant('empty', 'Empty', BacklinkVariant), {source: 'test'}),
+      backlinksViewFacet.of(defineVariant('empty', 'Empty', BacklinkVariant), {source: 'test'}),
     ])
 
     render(

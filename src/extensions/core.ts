@@ -9,7 +9,6 @@ import {
   ActionContextType,
   type ActionTransform,
 } from '@/shortcuts/types.js'
-import { BlockRenderer, RendererRegistry } from '@/types.js'
 import type { ComponentType, ReactElement } from 'react'
 
 export interface AppEffectContext {
@@ -133,23 +132,11 @@ export interface HeaderItemContribution {
   component: ComponentType
 }
 
-export interface RendererContribution {
-  id: string
-  renderer: BlockRenderer
-  aliases?: readonly string[]
-}
-
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null
 
 const isStringArray = (value: unknown): value is string[] =>
   Array.isArray(value) && value.every(item => typeof item === 'string')
-
-export const isRendererContribution = (value: unknown): value is RendererContribution =>
-  isRecord(value) &&
-  typeof value.id === 'string' &&
-  typeof value.renderer === 'function' &&
-  (value.aliases === undefined || isStringArray(value.aliases))
 
 const isActionContextType = (value: unknown): value is ActionContextType =>
   typeof value === 'string' && value.length > 0
@@ -175,28 +162,6 @@ const isActionTransform = (value: unknown): value is ActionTransform =>
   typeof value.actionId === 'string' &&
   (value.context === undefined || isActionContextType(value.context)) &&
   typeof value.apply === 'function'
-
-export const createRendererRegistry = (
-  contributions: readonly RendererContribution[],
-): RendererRegistry => {
-  const registry: RendererRegistry = {}
-
-  for (const contribution of contributions) {
-    registry[contribution.id] = contribution.renderer
-    for (const alias of contribution.aliases ?? []) {
-      registry[alias] = contribution.renderer
-    }
-  }
-
-  return registry
-}
-
-export const blockRenderersFacet = defineFacet<RendererContribution, RendererRegistry>({
-  id: 'core.block-renderers',
-  combine: createRendererRegistry,
-  empty: () => ({}),
-  validate: isRendererContribution,
-})
 
 export const actionsFacet = defineFacet<ActionConfig, readonly ActionConfig[]>({
   id: 'core.actions',

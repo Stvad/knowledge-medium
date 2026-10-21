@@ -1,5 +1,5 @@
 import type {
-  BlockLayoutContribution,
+  BlockLayoutRegistration,
   BlockLayoutSlots,
 } from '@/extensions/blockInteraction.js'
 
@@ -45,15 +45,17 @@ const AnswerLayout = ({Content, Children, Shell}: BlockLayoutSlots) => (
   </Shell>
 )
 
-export const srsReviewCardLayoutContribution: BlockLayoutContribution = ctx => {
+export const srsReviewCardLayoutRegistration: BlockLayoutRegistration = {
+  id: 'srs-review.card',
+  label: 'SRS review card',
   // Only the card root — descendants never match (their id differs from
   // cardId), so they keep the default layout. The card itself uses a
   // dedicated layout for each phase rather than ever falling through to
   // the default (which would respect collapse and could hide the answer).
-  const cardId = ctx.blockContext?.[SRS_REVIEW_CARD_ID]
-  if (cardId !== ctx.block.id) return null
-  const revealed = Boolean(ctx.blockContext?.[SRS_REVIEW_REVEALED])
-  return revealed
-    ? {id: 'srs-review.answer', label: 'SRS review answer', render: AnswerLayout}
-    : {id: 'srs-review.question-only', label: 'SRS review question', render: QuestionOnlyLayout}
+  resolve: ctx => {
+    if (ctx.blockContext?.[SRS_REVIEW_CARD_ID] !== ctx.block.id) return null
+    return {
+      render: ctx.blockContext?.[SRS_REVIEW_REVEALED] ? AnswerLayout : QuestionOnlyLayout,
+    }
+  },
 }

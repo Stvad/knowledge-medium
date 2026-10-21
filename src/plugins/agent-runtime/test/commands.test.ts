@@ -19,7 +19,8 @@ import {
   readApproval,
 } from '@/extensions/compileExtensionModule'
 import { getCompiledModuleCache } from '@/extensions/compiledModuleCache'
-import { actionsFacet, appMountsFacet, blockRenderersFacet } from '@/extensions/core'
+import { actionsFacet, appMountsFacet } from '@/extensions/core'
+import { blockRendererFacet } from '@/extensions/blockInteraction'
 import { definitionSeedsFacet, valuePresetCoresFacet } from '@/data/facets'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
 import { getPluginPrefsBlock } from '@/data/stateBlocks'
@@ -1552,7 +1553,7 @@ describe('agent runtime commands', () => {
     const Component = () => null
     const restore = __setCompileImplForTest(async () => ({
       default: [
-        blockRenderersFacet.of({id: 'demo-renderer', renderer}),
+        blockRendererFacet.of({id: 'demo-renderer', label: 'Demo renderer', render: renderer}),
         appMountsFacet.of({id: 'demo-mount', component: Component}),
       ],
     }))

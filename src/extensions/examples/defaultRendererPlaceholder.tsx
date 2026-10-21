@@ -1,6 +1,6 @@
 import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.js'
 import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRenderer.js'
-import { blockRenderersFacet } from '@/extensions/core.js'
+import { blockRendererFacet } from '@/extensions/blockInteraction.js'
 import type { BlockRenderer, BlockRendererProps } from '@/types.js'
 
 // Replaces the fallback renderer registered under id 'default'.
@@ -27,7 +27,13 @@ const PlaceholderDefaultRenderer: BlockRenderer = (props: BlockRendererProps) =>
   <DefaultBlockRenderer {...props} ContentRenderer={PlaceholderContent} />
 )
 
-export default blockRenderersFacet.of({
+// No precedence: the host's 'default' sits at the implicit 0 and an equal
+// precedence goes to whoever registered later, so this replaces it. Raising
+// it would ALSO lift the default renderer above the ladder above it — the
+// not-yet-loaded placeholder at 1, the extension editor at 5 — which is a
+// different change than replacing the fallback.
+export default blockRendererFacet.of({
   id: 'default',
-  renderer: PlaceholderDefaultRenderer,
+  label: 'Block',
+  render: PlaceholderDefaultRenderer,
 })

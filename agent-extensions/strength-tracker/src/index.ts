@@ -19,7 +19,8 @@
  *  file is only wiring.
  */
 
-import {actionsFacet, blockRenderersFacet} from '@/extensions/core.js'
+import {actionsFacet} from '@/extensions/core.js'
+import {blockRendererFacet} from '@/extensions/blockInteraction.js'
 import {definitionSeedsFacet, typeSeedsFacet} from '@/data/facets.js'
 import {dialogAppMountExtension} from '@/extensions/dialogAppMount.js'
 import {ActionContextTypes, type ActionConfig} from '@/shortcuts/types.js'
@@ -28,7 +29,7 @@ import {STRENGTH_PROPS, STRENGTH_TYPES} from './km/schema'
 import {findStrengthLogPage} from './km/page'
 import {ensureStrengthHome} from './km/tonight'
 import {strengthDecorations} from './ui/decorations'
-import {StrengthLogRenderer} from './ui/StrengthPageRenderer'
+import {strengthLogRendererRegistration} from './ui/StrengthPageRenderer'
 import {showSession} from './ui/showSession'
 import {startSessionAction} from './ui/startAction'
 
@@ -83,7 +84,7 @@ export default [
   ...STRENGTH_TYPES.map(type => typeSeedsFacet.of(type, {source})),
 
   strengthDecorations,
-  blockRenderersFacet.of({id: 'strengthLog', renderer: StrengthLogRenderer}, {source}),
+  blockRendererFacet.of(strengthLogRendererRegistration, {source, precedence: 100}),
 
   actionsFacet.of(startSessionAction, {source}),
   actionsFacet.of(openStrengthLogAction, {source}),

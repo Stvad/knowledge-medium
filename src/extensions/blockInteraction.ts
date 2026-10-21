@@ -24,7 +24,7 @@ import { combineLastContributionResult, defineFacet, isFunction } from '@/facets
 import {
   defineVariantFacet,
   type Variant,
-  type VariantContribution,
+  type VariantRegistration,
   type VariantResolver,
 } from '@/facets/variantFacet.js'
 import type { ActionContextActivation, BlockPointerDependencies } from '@/shortcuts/types.js'
@@ -34,6 +34,22 @@ import type { BlockContextType, BlockRenderer } from '@/types.js'
 export interface BlockContentRendererSlot {
   id: string
   renderer: BlockRenderer
+}
+
+/**
+ * What is knowable about a block BEFORE a renderer has been chosen for
+ * it — the context `blockRendererFacet` registrations resolve against.
+ * Narrower than `BlockResolveContext` by necessity: the richer context
+ * is built by the chosen renderer and includes slots derived from it
+ * (`contentRenderers`), so it cannot exist before the choice is made.
+ */
+export interface BlockRendererContext {
+  block: Block
+  repo: Repo
+  /** The block's `types` property. Every per-type renderer gate used to
+   *  re-derive this from `block.peek()` with its own null handling. */
+  types: readonly string[]
+  blockContext?: BlockContextType
 }
 
 /**
@@ -71,11 +87,8 @@ export interface BlockContentRendererSlot {
  * reactive read — see `blockTextClassFacet` / `blockBulletClassFacet`,
  * which is how page-ness reaches the alias plugin's styling.
  */
-export interface BlockResolveContext {
-  block: Block
-  repo: Repo
+export interface BlockResolveContext extends BlockRendererContext {
   uiStateBlock: Block
-  types: readonly string[]
   topLevelBlockId?: string
   /** Root of the visible subtree this mount renders (see
    *  `BlockContextType.scopeRootId`). Equals `topLevelBlockId` on the
@@ -89,7 +102,6 @@ export interface BlockResolveContext {
    *  pure helper `isFocalRender(ctx)` answers the same question for
    *  facet contributions that receive a `BlockResolveContext`. */
   isTopLevel: boolean
-  blockContext?: BlockContextType
   contentRenderers?: readonly BlockContentRendererSlot[]
 }
 
@@ -124,8 +136,8 @@ export type BlockContentRendererVariant = Variant<BlockRenderer>
 // is set), and the consumer picks `last` to preserve the legacy "last
 // truthy contribution wins" behavior. Adding a user-facing picker
 // later means reading a saved id and calling `byId` instead.
-export type BlockContentRendererContribution =
-  VariantContribution<BlockResolveContext, BlockRenderer>
+export type BlockContentRendererRegistration =
+  VariantRegistration<BlockResolveContext, BlockRenderer>
 
 export type BlockContentRendererResolver =
   VariantResolver<BlockResolveContext, BlockRenderer>
@@ -356,8 +368,8 @@ export type BlockLayoutVariant = Variant<BlockLayout>
 // layout. Plugins typically self-gate by context (e.g. the video
 // player layout only contributes for the video block); the consumer
 // picks `last` to preserve last-wins behavior.
-export type BlockLayoutContribution =
-  VariantContribution<BlockResolveContext, BlockLayout>
+export type BlockLayoutRegistration =
+  VariantRegistration<BlockResolveContext, BlockLayout>
 
 export type BlockLayoutResolver =
   VariantResolver<BlockResolveContext, BlockLayout>
@@ -499,6 +511,32 @@ export const getBlockContentRendererSlot = (
 
 export const blockContentRendererFacet = defineVariantFacet<BlockResolveContext, BlockRenderer>({
   id: 'core.block-content-renderer',
+})
+
+/**
+ * Which component draws a whole block — the outermost choice, made in
+ * `useRenderer` before any of the facets above are consulted.
+ *
+ * One registration per renderer: `{id, label}` names it (a user's
+ * `renderer` property and any picker address it by `id`), and either a
+ * static `render` or a `resolve` that claims the blocks it wants.
+ * `resolve` returning null means "not this block"; returning facts with
+ * `claims: false` means "available if asked for by id, but do not take
+ * the block on my own" — which is how a renderer that could draw
+ * ANYTHING (a raw-JSON view, a table view) gets offered without
+ * claiming everything.
+ *
+ * Ranking is facet precedence: the last claiming registration in
+ * precedence order wins, so the plain default renderer sits at the
+ * implicit 0 and every specialization registers above it. Precedence is
+ * fixed at registration; a renderer that must outrank a peer only for
+ * SOME blocks registers twice, gated.
+ */
+export type BlockRendererRegistration =
+  VariantRegistration<BlockRendererContext, BlockRenderer>
+
+export const blockRendererFacet = defineVariantFacet<BlockRendererContext, BlockRenderer>({
+  id: 'core.block-renderer',
 })
 
 // Layered decoration on top of the chosen content renderer. Lower

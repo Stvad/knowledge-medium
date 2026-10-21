@@ -5,7 +5,7 @@ import type { OperatorBackfillResult, Repo, WorkspaceRematerialization } from '@
 import type { PropertyCellBackfillProgress } from '@/data/internals/propertyCellBackfill'
 import type { BlockData, SubtreeRow } from '@/data/api'
 import type { FacetRuntime } from '@/facets/facet.js'
-import type { blockRenderersFacet } from '@/extensions/core.js'
+import type { readRuntimeRenderers } from '@/extensions/runtimeRenderers.js'
 import type { ActionConfig } from '@/shortcuts/types.js'
 import type { BlockProperties } from '@/types.js'
 import type { refreshAppRuntime } from '@/facets/runtimeEvents.js'
@@ -318,7 +318,7 @@ export interface AgentRuntimeContext {
   runBackfill: (input: RunBackfillInput) => Promise<RunBackfillResult>
   rematerializeWorkspace: (input: RematerializeWorkspaceInput) => Promise<WorkspaceRematerialization>
   actions: readonly ActionConfig[]
-  renderers: ReturnType<typeof blockRenderersFacet.empty>
+  renderers: ReturnType<typeof readRuntimeRenderers>
   refreshAppRuntime: typeof refreshAppRuntime
   React: typeof React
   ReactDOM: typeof ReactDOM

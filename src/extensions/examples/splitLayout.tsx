@@ -2,7 +2,6 @@ import { ChangeScope, seedProperty } from '@/data/api/index.js'
 import { definitionSeedsFacet } from '@/data/facets.js'
 import { blockLayoutFacet, type BlockLayout, type BlockLayoutSlots } from '@/extensions/blockInteraction.js'
 import { extensionPropertySeedKey } from '@/extensions/dynamicExtensionSeeds.js'
-import { defineVariant } from '@/facets/variantFacet.js'
 
 // blockLayoutFacet contributions arrange the four slots (Content,
 // Properties, Children, Footer) inside a block's body. Each slot is
@@ -44,16 +43,19 @@ const SplitLayout: BlockLayout = ({ Content, Children, Properties, Footer }: Blo
 // is 'split'. Returning null for everything else lets ordinary blocks
 // fall through to the default vertical layout.
 //
-// blockLayoutFacet is a variant facet — contributions return
-// {id, label, render} (or use defineVariant() sugar) so a future
-// picker UI could enumerate them. Returning null still means "this
-// variant doesn't apply here".
+// blockLayoutFacet is a variant facet — a contribution is
+// {id, label, resolve} (or {id, label, render} / defineVariant() sugar
+// when it applies everywhere), so a picker UI can enumerate what is
+// installed without a block in hand. resolve returning null still means
+// "this variant doesn't apply here".
 export default [
   // Register the schema so describeRuntime / property-editor lookups
   // know about this property.
   definitionSeedsFacet.of(layoutProp),
-  blockLayoutFacet.of((ctx) => {
-    if (ctx.block.peekProperty(layoutProp) !== 'split') return null
-    return defineVariant('split', 'Split (content / children)', SplitLayout)
+  blockLayoutFacet.of({
+    id: 'split',
+    label: 'Split (content / children)',
+    resolve: (ctx) =>
+      ctx.block.peekProperty(layoutProp) === 'split' ? { render: SplitLayout } : null,
   }),
 ]

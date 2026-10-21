@@ -1,5 +1,5 @@
-import { LayoutRenderer } from '@/components/renderer/LayoutRenderer.js'
-import { blockRenderersFacet } from '@/extensions/core.js'
+import { LayoutRenderer, layoutRendererRegistration } from '@/components/renderer/LayoutRenderer.js'
+import { blockRendererFacet } from '@/extensions/blockInteraction.js'
 import type { BlockRenderer, BlockRendererProps } from '@/types.js'
 
 // Replaces the app-wide renderer registered under id 'layout', so
@@ -26,10 +26,14 @@ const DemoLayoutRenderer: BlockRenderer = (props: BlockRendererProps) => (
   </div>
 )
 
-DemoLayoutRenderer.canRender = LayoutRenderer.canRender
-DemoLayoutRenderer.priority = LayoutRenderer.priority
-
-export default blockRenderersFacet.of({
+// Same id as the host's layout renderer, at the precedence the host holds:
+// among registrations sharing an id only the strongest survives, and an
+// equal precedence goes to whoever registered later (extensions register
+// after core). Reusing the host's resolve keeps the gate identical too —
+// only the component differs.
+export default blockRendererFacet.of({
   id: 'layout',
-  renderer: DemoLayoutRenderer,
-})
+  label: 'Panel layout (demo)',
+  resolve: (ctx) =>
+    layoutRendererRegistration.resolve?.(ctx) ? { render: DemoLayoutRenderer } : null,
+}, { precedence: 20 })

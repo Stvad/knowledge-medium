@@ -30,7 +30,7 @@ export const backlinksPlugin: AppExtension = systemToggle({
     {source: 'backlinks'},
   ),
   backlinksViewFacet.of(
-    () => defineVariant('flat', 'Flat', LinkedReferences),
+    defineVariant('flat', 'Flat', LinkedReferences),
     {source: 'backlinks'},
   ),
   inlineBacklinkCountsExtension,

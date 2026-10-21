@@ -40,9 +40,10 @@ import {
   actionsFacet,
   appEffectsFacet,
   appMountsFacet,
-  blockRenderersFacet,
 } from '@/extensions/core.js'
+import { blockRendererFacet } from '@/extensions/blockInteraction.js'
 import { readRuntimeActions } from '@/extensions/runtimeActions.js'
+import { readRuntimeRenderers } from '@/extensions/runtimeRenderers.js'
 import { invokeAction } from '@/shortcuts/actionDispatch.js'
 import type { BaseShortcutDependencies } from '@/shortcuts/types.js'
 import { refreshAppRuntime } from '@/facets/runtimeEvents.js'
@@ -505,7 +506,7 @@ const describeVerification = (
 ): ExtensionVerificationResult => {
   const {runtime: verificationRuntime, errors} = resolution
   const blockId = block.id
-  const renderersContribs = verificationRuntime.contributionsById(blockRenderersFacet.id)
+  const renderersContribs = verificationRuntime.contributionsById(blockRendererFacet.id)
   const appMountsContribs = verificationRuntime.contributionsById(appMountsFacet.id)
   const appEffectsContribs = verificationRuntime.contributionsById(appEffectsFacet.id)
 
@@ -2247,7 +2248,7 @@ export const createAgentRuntimeContext = ({
     runBackfill: input => runRuntimeBackfill(repo, input),
     rematerializeWorkspace: input => rematerializeRuntimeWorkspace(repo, input),
     actions: readRuntimeActions(runtime),
-    renderers: runtime.read(blockRenderersFacet),
+    renderers: readRuntimeRenderers(runtime),
     refreshAppRuntime,
     React,
     ReactDOM,

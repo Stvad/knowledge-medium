@@ -2,8 +2,8 @@ import { ArchiveX, GraduationCap } from 'lucide-react'
 import type { Repo } from '@/data/repo'
 import type { AppExtension } from '@/facets/facet.js'
 import { systemToggle } from '@/facets/togglable.js'
-import { actionContextsFacet, actionsFacet, blockRenderersFacet } from '@/extensions/core.js'
-import { blockContentDecoratorsFacet, blockLayoutFacet } from '@/extensions/blockInteraction.js'
+import { actionContextsFacet, actionsFacet } from '@/extensions/core.js'
+import { blockContentDecoratorsFacet, blockLayoutFacet, blockRendererFacet } from '@/extensions/blockInteraction.js'
 import {
   ActionConfig,
   ActionContextTypes,
@@ -17,8 +17,8 @@ import { referencesDataExtension } from '@/plugins/references/dataExtension.js'
 import { blockTaggingDataExtension } from '@/plugins/block-tagging/dataExtension.js'
 import { srsReviewDataExtension } from './dataExtension.ts'
 import { srsDailyNoteReviewHintDecorator } from './DailyNoteReviewHint.tsx'
-import { SrsReviewDeckRenderer } from './ReviewDeckRenderer.tsx'
-import { srsReviewCardLayoutContribution } from './reviewCardLayout.tsx'
+import { srsReviewDeckRendererRegistration } from './ReviewDeckRenderer.tsx'
+import { srsReviewCardLayoutRegistration } from './reviewCardLayout.tsx'
 import { getOrCreateReviewDeck } from './deck.ts'
 import { archiveSrsCard } from './archive.ts'
 import { srsReviewActionContext, srsReviewActions } from './actions.ts'
@@ -79,11 +79,11 @@ export const srsReviewPlugin = ({repo}: {repo: Repo}): AppExtension =>
     referencesDataExtension,
     blockTaggingDataExtension,
     srsReviewDataExtension,
-    blockRenderersFacet.of(
-      {id: 'srsReviewDeck', renderer: SrsReviewDeckRenderer},
-      {source: 'srs-review'},
+    blockRendererFacet.of(
+      srsReviewDeckRendererRegistration,
+      {source: 'srs-review', precedence: 100},
     ),
-    blockLayoutFacet.of(srsReviewCardLayoutContribution, {source: 'srs-review'}),
+    blockLayoutFacet.of(srsReviewCardLayoutRegistration, {source: 'srs-review'}),
     // "N cards to review →" under today's daily-note title, one line per
     // selected deck. Default precedence keeps it OUTSIDE the date-nav
     // arrows' row (-50), so the lines start at the block's edge — see the

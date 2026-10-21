@@ -121,9 +121,9 @@ const planBasisOf = (row: BlockData): string =>
  *  instead. It stays because the total read costs nothing, and because a
  *  wrong-shaped value reading as "not an extension" is the right answer
  *  anyway — the block gets parsed like ordinary content, exactly as
- *  before this gate existed. Same shape as `MediaBlockRenderer.canRender`,
- *  which documents the identical `getBlockTypes` hazard on the render
- *  side. */
+ *  before this gate existed. The render side meets the identical
+ *  `getBlockTypes` hazard once, in `useRenderer`'s `typesOf`, which every
+ *  renderer gate now reads `ctx.types` from. */
 export const isExtensionSource = (source: Pick<BlockData, 'properties'>): boolean => {
   const types = source.properties[typesProp.name]
   return Array.isArray(types) && types.includes(EXTENSION_TYPE)

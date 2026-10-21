@@ -1,8 +1,8 @@
 import {
   blockLayoutFacet,
+  blockRendererFacet,
   shortcutSurfaceActivationsFacet,
 } from '@/extensions/blockInteraction.js'
-import { blockRenderersFacet } from '@/extensions/core.js'
 import { definitionSeedsFacet } from '@/data/facets.js'
 import { AppExtension } from '@/facets/facet.js'
 import { systemToggle } from '@/facets/togglable.js'
@@ -11,10 +11,10 @@ import {
   videoPlayerActionsExtension,
   videoPlayerShortcutActivation,
 } from './actions.ts'
-import { VideoPlayerRenderer } from './VideoPlayerRenderer.tsx'
+import { videoPlayerRendererRegistration } from './VideoPlayerRenderer.tsx'
 import {
-  VideoNotesRenderer,
-  videoNotesLayoutContribution,
+  videoNotesLayoutRegistration,
+  videoNotesRendererRegistration,
 } from './VideoNotesRenderer.tsx'
 import { videoPlayerMarkdownExtension } from './markdown.tsx'
 import { videoNotesPaneRatioProp } from './view.ts'
@@ -25,9 +25,10 @@ export const videoPlayerPlugin: AppExtension = systemToggle({
   description: 'Inline playback for blocks whose content is a video URL.',
 }).of([
   definitionSeedsFacet.of(videoNotesPaneRatioProp, {source: 'video-player'}),
-  blockRenderersFacet.of({id: 'videoPlayer', renderer: VideoPlayerRenderer}, {source: 'video-player'}),
-  blockRenderersFacet.of({id: 'videoNotes', renderer: VideoNotesRenderer}, {source: 'video-player'}),
-  blockLayoutFacet.of(videoNotesLayoutContribution, {source: 'video-player'}),
+  blockRendererFacet.of(videoPlayerRendererRegistration, {source: 'video-player', precedence: 5}),
+  // Above the plain player: in video-notes mode the notes arrangement wins.
+  blockRendererFacet.of(videoNotesRendererRegistration, {source: 'video-player', precedence: 10}),
+  blockLayoutFacet.of(videoNotesLayoutRegistration, {source: 'video-player'}),
   markdownExtensionsFacet.of(videoPlayerMarkdownExtension, {source: 'video-player'}),
   shortcutSurfaceActivationsFacet.of(videoPlayerShortcutActivation, {source: 'video-player'}),
   videoPlayerActionsExtension,

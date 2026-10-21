@@ -1,5 +1,5 @@
 import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.js'
-import { blockRenderersFacet } from '@/extensions/core.js'
+import { blockRendererFacet } from '@/extensions/blockInteraction.js'
 import { defineFacet } from '@/facets/facet.js'
 import type { BlockRenderer, BlockRendererProps } from '@/types.js'
 
@@ -38,8 +38,12 @@ const KudosBannerRenderer: BlockRenderer = (props: BlockRendererProps) =>
 
 export default [
   kudosFacet.of({ from: 'self', message: 'Hello from the defining block' }),
-  blockRenderersFacet.of({
+  blockRendererFacet.of({
     id: 'kudos-banner',
-    renderer: KudosBannerRenderer,
+    label: 'Kudos banner',
+    // No resolve: this one is only ever reached through the block's
+    // 'renderer' property, so it must not claim blocks on its own.
+    render: KudosBannerRenderer,
+    claims: false,
   }),
 ]

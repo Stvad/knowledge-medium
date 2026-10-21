@@ -8,7 +8,7 @@
 // which resolve through the page-global importmap to the same module
 // instances the running app uses.
 //
-// Renderer-bearing examples register a renderer via blockRenderersFacet
+// Renderer-bearing examples register a renderer via blockRendererFacet
 // and compose with the default block chrome by delegating to
 // DefaultBlockRenderer with a custom ContentRenderer prop — same shape
 // as plugins/video-player/VideoPlayerRenderer. The block keeps its

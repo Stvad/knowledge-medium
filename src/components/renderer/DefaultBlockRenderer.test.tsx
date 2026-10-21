@@ -142,7 +142,7 @@ describe('DefaultBlockRenderer paste handling', () => {
       defaultEditorInteractionExtension,
       definitionSeedsFacet.of(statusProp, {source: 'test'}),
       blockLayoutFacet.of(
-        () => ({id: 'property-only', label: 'Property only', render: propertyOnlyLayout}),
+        {id: 'property-only', label: 'Property only', render: propertyOnlyLayout},
         {source: 'test'},
       ),
     ]
@@ -342,7 +342,7 @@ describe('DefaultBlockRenderer slot identity', () => {
         // the page case below a live-data scenario and not a synthetic one.
         aliasDataExtension,
         blockLayoutFacet.of(
-          () => ({id: 'content-shell', label: 'Content + shell', render: ContentShellLayout}),
+          {id: 'content-shell', label: 'Content + shell', render: ContentShellLayout},
           {source: 'test'},
         ),
       ],
@@ -649,13 +649,15 @@ describe('title typography', () => {
       extensions: [
         defaultEditorInteractionExtension,
         blockLayoutFacet.of(
-          () => ({id: 'content-shell', label: 'Content + shell', render: ContentShellLayout}),
+          {id: 'content-shell', label: 'Content + shell', render: ContentShellLayout},
           {source: 'test'},
         ),
         blockContentRendererFacet.of(
-          ctx => ctx.block.id === 'surface-root'
-            ? defineVariant('test.surface', 'Surface', FacetSurfaceRenderer)
-            : null,
+          {
+            id: 'test.surface',
+            label: 'Surface',
+            resolve: ctx => ctx.block.id === 'surface-root' ? {render: FacetSurfaceRenderer} : null,
+          },
           {source: 'test'},
         ),
       ],
@@ -806,9 +808,13 @@ describe('content-view marking', () => {
       extensions: [
         defaultEditorInteractionExtension,
         blockContentRendererFacet.of(
-          ctx => ctx.block.id === 'view-root'
-            ? {...defineVariant('test.view', 'View', ViewSurfaceRenderer), showsOtherBlocks: true}
-            : null,
+          {
+            id: 'test.view',
+            label: 'View',
+            resolve: ctx => ctx.block.id === 'view-root'
+              ? {render: ViewSurfaceRenderer, showsOtherBlocks: true}
+              : null,
+          },
           {source: 'test'},
         ),
       ],
@@ -827,7 +833,7 @@ describe('content-view marking', () => {
       extensions: [
         defaultEditorInteractionExtension,
         blockContentRendererFacet.of(
-          () => defineVariant('test.override', 'Override', FacetSurfaceRenderer),
+          defineVariant('test.override', 'Override', FacetSurfaceRenderer),
           {source: 'test'},
         ),
       ],
@@ -1009,7 +1015,7 @@ describe('a layout that drops shellProps', () => {
       extensions: [
         defaultEditorInteractionExtension,
         blockLayoutFacet.of(
-          () => ({id: 'dropped', label: 'Dropped shell', render: DroppedShellLayout}),
+          {id: 'dropped', label: 'Dropped shell', render: DroppedShellLayout},
           {source: 'test'},
         ),
       ],
@@ -1022,7 +1028,7 @@ describe('a layout that drops shellProps', () => {
       extensions: [
         defaultEditorInteractionExtension,
         blockLayoutFacet.of(
-          () => ({id: 'shortcuts-only', label: 'Shortcuts only', render: ShortcutsOnlyLayout}),
+          {id: 'shortcuts-only', label: 'Shortcuts only', render: ShortcutsOnlyLayout},
           {source: 'test'},
         ),
       ],
