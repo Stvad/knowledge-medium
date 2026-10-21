@@ -230,46 +230,37 @@ export const contestedChanges = <T extends {
   })
 }
 
-/** A change whose fan-out cannot run. Every reason ends in the same refusal,
- *  and they differ only in what the user is told to do about it. */
-type HeldChange =
-  | {
-      readonly fieldId: string
-      /** The definition's CURRENT row builds no codec here, so nothing can
-       *  read what its consumers hold (#1077, #1090). */
-      readonly reason: 'current-type-unavailable'
-      readonly name: string
-      readonly presetId: string
-      /** Decides the way out the message offers, and nothing else. */
-      readonly cause: UnbuildableCause
-    }
-  | {readonly fieldId: string; readonly reason: 'unbuildable' | 'contested'}
-
-const REFUSALS: Record<'unbuildable' | 'contested', {code: string; message: string}> = {
-  unbuildable: {
-    code: 'property.definition-change.unbuildable',
-    message:
-      'cannot give a property definition a value type that does not load on '
-      + 'this device: the blocks using it could not be updated to match. Choose '
-      + 'a type that loads, or enable the plugin that provides it first.',
-  },
-  contested: {
-    code: 'property.definition-change.contested',
-    message:
-      'cannot rename or re-type a property definition while another definition '
-      + 'claims one of the names involved: which of them the property answers '
-      + 'to afterwards is not this edit\'s to decide, so the blocks using it '
-      + 'could not be updated. Resolve the duplicate name first, or make the '
-      + 'changes in separate edits.',
-  },
+/** What the user is told when a transaction is refused. */
+interface Refusal {
+  readonly code: string
+  readonly message: string
 }
 
-/** Only the codec that WROTE a value child can say what it holds — the JSON
- *  `"x"` and the three-character string `"x"` are the same text (#1055), and
- *  one member row of a list reads like a scalar's only row (#1090). So the
- *  message offers making that codec available where that is possible, or
- *  deleting the definition — never a re-type, which this same refusal would
- *  stop (#1077). */
+/** A change whose fan-out cannot run, held with the refusal it ends in: the
+ *  caller refuses the transaction once any held change has a consumer. */
+interface HeldChange {
+  readonly fieldId: string
+  readonly refusal: Refusal
+}
+
+const UNBUILDABLE_REFUSAL: Refusal = {
+  code: 'property.definition-change.unbuildable',
+  message:
+    'cannot give a property definition a value type that does not load on '
+    + 'this device: the blocks using it could not be updated to match. Choose '
+    + 'a type that loads, or enable the plugin that provides it first.',
+}
+
+const CONTESTED_REFUSAL: Refusal = {
+  code: 'property.definition-change.contested',
+  message:
+    'cannot rename or re-type a property definition while another definition '
+    + 'claims one of the names involved: which of them the property answers '
+    + 'to afterwards is not this edit\'s to decide, so the blocks using it '
+    + 'could not be updated. Resolve the duplicate name first, or make the '
+    + 'changes in separate edits.',
+}
+
 const DELETE_KEEPS_VALUES = 'or delete the property definition; the values blocks '
   + 'hold under it stay.'
 /** Under version skew a definition that fails here works on a newer device, and
@@ -301,27 +292,26 @@ const CURRENT_TYPE_UNAVAILABLE: Record<UnbuildableCause, {
   },
 }
 
+/** Only the codec that WROTE a value child can say what it holds — the JSON
+ *  `"x"` and the three-character string `"x"` are the same text (#1055), and
+ *  one member row of a list reads like a scalar's only row (#1090). So the
+ *  message offers making that codec available where that is possible, or
+ *  deleting the definition — never a re-type, which this same refusal would
+ *  stop (#1077). */
 const currentTypeUnavailableRefusal = (
-  held: Extract<HeldChange, {reason: 'current-type-unavailable'}>,
-): {code: string; message: string} => {
-  const {problem, wayOut} = CURRENT_TYPE_UNAVAILABLE[held.cause]
+  name: string,
+  presetId: string,
+  cause: UnbuildableCause,
+): Refusal => {
+  const {problem, wayOut} = CURRENT_TYPE_UNAVAILABLE[cause]
   return {
     code: 'property.definition-change.current-type-unavailable',
     message:
-      `cannot rename or re-type property "${held.name}": `
-      + `${problem(held.presetId ? `"${held.presetId}" ` : '')}, so the blocks using it `
+      `cannot rename or re-type property "${name}": `
+      + `${problem(presetId ? `"${presetId}" ` : '')}, so the blocks using it `
       + `could not be updated to match. ${wayOut}`,
   }
 }
-
-/** ONE refusal per transaction, whichever cause is found first — the user
- *  fixes one at a time either way, and a combined message would describe a
- *  state that no longer exists after the first fix. The unconvertible-values
- *  refusal in `apply` follows the same rule. */
-const refusalFor = (held: HeldChange): {code: string; message: string} =>
-  held.reason === 'current-type-unavailable'
-    ? currentTypeUnavailableRefusal(held)
-    : REFUSALS[held.reason]
 
 /** Refusing every definition rename and re-type, and every rename or revival
  *  that leaves a name shared, for as long as the cell-to-children backfill
@@ -415,7 +405,7 @@ const collectChanges = (
   workspaceId: string,
   changedRows: ReadonlyArray<{before: BlockData | null; after: BlockData | null}>,
 ): CollectedChanges => {
-  // Pass 1: candidate changes (name or codec inputs differ, after row builds).
+  // Pass 1: candidate changes (name or codec inputs differ, both rows build).
   const candidates: DefinitionChange[] = []
   const unfanoutable: HeldChange[] = []
   /** Any name this tx touches — enough to ask whether the WORKSPACE can be
@@ -446,8 +436,8 @@ const collectChanges = (
     // peer claims the name it vacates, and one re-typing in place is refused
     // because it is not the head claimant of the name it keeps — and asking the
     // resolver "does this fieldId resolve" instead would conflate shadowing
-    // with having no buildable codec, which is the repair case below and must
-    // NOT be skipped.
+    // with having no buildable codec, which is held below with a refusal of
+    // its own.
     // Off the block's own rows, never the registry, whose tx-start snapshot is
     // at-or-older than `before` — a change an earlier tx already fanned out
     // would read as this one's and be re-encoded against the wrong before-state.
@@ -469,13 +459,12 @@ const collectChanges = (
     // one that does.
     const beforeBuild = definitionSchema(before, ctx.valuePresets, beforeMeta)
     if (beforeBuild.schema === null) {
+      // The cause decides only the way out offered, never whether to refuse.
       const presetId = before.properties[presetIdProp.name]
       unfanoutable.push({
         fieldId: after.id,
-        reason: 'current-type-unavailable',
-        name: beforeMeta.name,
-        presetId: typeof presetId === 'string' ? presetId : '',
-        cause: beforeBuild.cause,
+        refusal: currentTypeUnavailableRefusal(
+          beforeMeta.name, typeof presetId === 'string' ? presetId : '', beforeBuild.cause),
       })
       continue
     }
@@ -489,7 +478,7 @@ const collectChanges = (
       // extension registering, a code fix — at which point the registry
       // publishes its codec straight over values nothing re-encoded. Held for
       // the caller, which refuses if it has consumers.
-      unfanoutable.push({fieldId: after.id, reason: 'unbuildable'})
+      unfanoutable.push({fieldId: after.id, refusal: UNBUILDABLE_REFUSAL})
       continue
     }
     candidates.push({
@@ -568,7 +557,7 @@ const collectChanges = (
   // definition also claims — see `contestedChanges` for the two halves.
   const contested = contestedChanges(candidates, claimOf)
   for (const candidate of contested) {
-    unfanoutable.push({fieldId: candidate.fieldId, reason: 'contested'})
+    unfanoutable.push({fieldId: candidate.fieldId, refusal: CONTESTED_REFUSAL})
   }
   // Defence in depth, and unpinnable through the public path: a contested
   // change either has a consumer, and then the caller refuses the whole tx, or
@@ -614,50 +603,49 @@ const liveFieldRowsWhere = (targetCount: number): string =>
  *  Field rows only, which means a parent the cell-to-children backfill has not
  *  reached yet is NOT a consumer here. The runbook flips before backfilling, so
  *  that window is real and a definition edit inside it strands those cells
- *  permanently — #1029.
- *
- *  The Set is load-bearing across chunks, not tidiness:
- *  `SELECT DISTINCT` dedupes only WITHIN one statement, so a parent consuming
- *  two changed definitions that land in different chunks would otherwise be
- *  visited — and re-keyed — twice. */
+ *  permanently — #1029. */
 export const consumingParentIds = async (
   db: Pick<SameTxCtx['db'], 'getAll'>,
   workspaceId: string,
   fieldIds: readonly string[],
   chunkSize = FIELD_PROBE_CHUNK,
-): Promise<string[]> => {
-  const set = new Set<string>()
-  for (let i = 0; i < fieldIds.length; i += chunkSize) {
-    const chunk = fieldIds.slice(i, i + chunkSize)
-    const rows = await db.getAll<{parent_id: string | null}>(
-      `SELECT DISTINCT parent_id FROM blocks WHERE ${liveFieldRowsWhere(chunk.length)}`,
-      [workspaceId, ...chunk],
-    )
-    for (const row of rows) if (row.parent_id !== null) set.add(row.parent_id)
-  }
-  return [...set]
-}
+): Promise<string[]> =>
+  [...await distinctOverLiveFieldRows(db, workspaceId, fieldIds, 'parent_id', chunkSize)]
 
 /** Which of `fieldIds` have consumers at all, by the same rows
  *  {@link consumingParentIds} reads — the per-definition answer it folds away,
- *  for a caller that must say WHICH definition holds a transaction up. One
- *  query per chunk, so a scripted edit of a whole registry stays as cheap. */
-export const fieldIdsWithConsumers = async (
+ *  for a caller that must say WHICH definition holds a transaction up. */
+export const fieldIdsWithConsumers = (
   db: Pick<SameTxCtx['db'], 'getAll'>,
   workspaceId: string,
   fieldIds: readonly string[],
   chunkSize = FIELD_PROBE_CHUNK,
+): Promise<Set<string>> =>
+  distinctOverLiveFieldRows(db, workspaceId, fieldIds, 'reference_target_id', chunkSize)
+
+/** One column of the live field rows for `fieldIds`, one query per chunk.
+ *
+ *  The Set is load-bearing across chunks, not tidiness: `SELECT DISTINCT`
+ *  dedupes only WITHIN one statement, so a parent consuming two changed
+ *  definitions that land in different chunks would otherwise be visited — and
+ *  re-keyed — twice. */
+const distinctOverLiveFieldRows = async (
+  db: Pick<SameTxCtx['db'], 'getAll'>,
+  workspaceId: string,
+  fieldIds: readonly string[],
+  column: 'parent_id' | 'reference_target_id',
+  chunkSize: number,
 ): Promise<Set<string>> => {
-  const consumed = new Set<string>()
+  const values = new Set<string>()
   for (let i = 0; i < fieldIds.length; i += chunkSize) {
     const chunk = fieldIds.slice(i, i + chunkSize)
-    const rows = await db.getAll<{reference_target_id: string}>(
-      `SELECT DISTINCT reference_target_id FROM blocks WHERE ${liveFieldRowsWhere(chunk.length)}`,
+    const rows = await db.getAll<Record<typeof column, string>>(
+      `SELECT DISTINCT ${column} FROM blocks WHERE ${liveFieldRowsWhere(chunk.length)}`,
       [workspaceId, ...chunk],
     )
-    for (const row of rows) consumed.add(row.reference_target_id)
+    for (const row of rows) values.add(row[column])
   }
-  return consumed
+  return values
 }
 
 /** How many values this change takes away from ONE parent, comparing what the
@@ -941,7 +929,10 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
       )
       const blocking = unfanoutable.find(held => consumed.has(held.fieldId))
       if (blocking !== undefined) {
-        const {code, message} = refusalFor(blocking)
+        // ONE refusal per transaction, whichever is found first — the user
+        // fixes one at a time either way, and a combined message would
+        // describe a state that no longer exists after the first fix.
+        const {code, message} = blocking.refusal
         throw new ProcessorRejection(
           message, code, {fieldIds: unfanoutable.map(held => held.fieldId)},
         )
@@ -960,11 +951,11 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
       ctx.db, event.workspaceId, changes.map(c => c.fieldId),
     )
     if (parentIds.length === 0) return
-    // This tx PARSED each changing definition's row, so its field rows are
-    // recognized without asking the resolver — which would answer
-    // `definition-unavailable` for exactly the one being repaired, and its
-    // consumers are the ones the repair exists to reach. Every OTHER fieldId
-    // encountered walking a parent's children is the resolver's to classify.
+    // This tx PARSED and BUILT each changing definition's row, so its field
+    // rows are recognized without asking the resolver — whose tx-start registry
+    // can still answer `definition-unavailable` for it while the projector has
+    // not yet rebuilt after its preset loaded. Every OTHER fieldId encountered
+    // walking a parent's children is the resolver's to classify.
     const changing = new Set(changes.map(change => change.fieldId))
     const isFieldDefinition: IsPropertyFieldDefinition = (fieldId) =>
       changing.has(fieldId)
@@ -989,7 +980,7 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
     // projected until something reprojects it, and then the value is gone with
     // no record of what it was, which is #1024.
     //
-    // One refusal per transaction, per `refusalFor`. The property is named by the
+    // One refusal per transaction, as for the held changes. The property is named by the
     // name it STILL ANSWERS TO after the rollback, never the one this tx tried
     // to give it, and the blocks ride on `meta` so a surface can offer them:
     // "fix those values" is not actionable without them.

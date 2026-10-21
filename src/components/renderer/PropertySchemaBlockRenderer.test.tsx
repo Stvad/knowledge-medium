@@ -70,7 +70,6 @@ const BAD_CONFIG_SEED_ID = propertyDefinitionBlockId(WS, badConfigSeed.seedKey)
 describe('PropertySchemaContentRenderer read-only for code-owned seeds', () => {
   let sharedDb: TestDb
   let repo: Repo
-  let runtime: FacetRuntime
 
   beforeAll(async () => { sharedDb = await createTestDb() })
   afterAll(async () => { await sharedDb.cleanup() })
@@ -82,7 +81,6 @@ describe('PropertySchemaContentRenderer read-only for code-owned seeds', () => {
       user: {id: 'user-1'},
       extensions: [kernelPropertyUiExtension, kernelValuePresetsExtension],
     }).repo
-    runtime = repo.facetRuntime!
     repo.setActiveWorkspaceId(WS)
 
     await repo.tx(async tx => {

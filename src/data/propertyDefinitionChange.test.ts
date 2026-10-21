@@ -1199,9 +1199,8 @@ describe('while the definition\'s CURRENT preset does not build (#1077, #1090)',
   })
 
   it('REFUSES a scalar re-type the stored text alone would seem to answer', async () => {
-    // ` 42 ` reads as 42 under `number` whatever wrote it, which is what the
-    // repair used to commit — but the text cannot say what the property held,
-    // so this is refused like every other change.
+    // ` 42 ` reads as 42 under `number` whatever wrote it, but the text cannot
+    // say what the property held, so this is refused like every other change.
     await seedWorkspace('children')
     const {repo} = await withPresetUnloaded(' 42 ')
     const before = await graphState()
@@ -1246,9 +1245,8 @@ describe('while the definition\'s CURRENT preset does not build (#1077, #1090)',
   })
 
   it('refuses a RENAME while consumers exist, since nothing can project their cells', async () => {
-    // Renames are refused here as before this rule: re-keying a cell means
-    // projecting it from the children under the new name, through the same
-    // codec a re-type needs.
+    // Re-keying a cell means projecting it from the children under the new
+    // name, through the same codec a re-type needs.
     await seedWorkspace('children')
     const {repo} = await withPresetUnloaded()
     const before = await graphState()
@@ -1347,8 +1345,8 @@ describe('while the definition\'s CURRENT preset does not build (#1077, #1090)',
 
   it('runs the change once the preset loads again, counting a narrowing\'s loss exactly', async () => {
     // Enabling the plugin is the way out: the same core registered again, and
-    // the re-type runs under the codec that wrote the values. The loss count is
-    // now exact — two members of three — where the old no-codec rule saw none.
+    // the re-type runs under the codec that wrote the values, so the loss count
+    // is exact — two members of three.
     await seedWorkspace('children')
     await withPresetUnloaded(['1', '2', '3'], TEXT_LIST)
     const repo = makeRepo([
