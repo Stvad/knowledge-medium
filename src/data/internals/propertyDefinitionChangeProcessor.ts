@@ -894,16 +894,17 @@ export const MIGRATE_PROPERTY_DEFINITION_PROCESSOR = defineSameTxProcessor({
     if (unfanoutable.length > 0) {
       // Only a change with CONSUMERS strands anything of its own; one on an
       // unused definition is the user's to make, and telling them to fix
-      // something first would be friction for nothing. The consumers of a
-      // definition it would SHARE a name with are the next check's.
-      const stranded = await consumingParentIds(
-        ctx.db, event.workspaceId, unfanoutable.map(held => held.fieldId),
-      )
-      if (stranded.length > 0) {
-        // Named for the first reason held, per `refusalFor`.
-        const {code, message} = refusalFor(unfanoutable[0]!)
+      // something first would be friction for nothing. So the refusal is
+      // named for the first held change that HAS consumers — an unused one
+      // ahead of it would pass alone, and its way out would not be this
+      // edit's. The consumers of a definition it would SHARE a name with are
+      // the next check's.
+      for (const held of unfanoutable) {
+        const stranded = await consumingParentIds(ctx.db, event.workspaceId, [held.fieldId])
+        if (stranded.length === 0) continue
+        const {code, message} = refusalFor(held)
         throw new ProcessorRejection(
-          message, code, {fieldIds: unfanoutable.map(held => held.fieldId)},
+          message, code, {fieldIds: unfanoutable.map(each => each.fieldId)},
         )
       }
     }

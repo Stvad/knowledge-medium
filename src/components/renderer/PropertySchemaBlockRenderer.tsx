@@ -62,13 +62,25 @@ const useCurrentTypeUnavailable = (
 }
 
 /** Why this definition's type and config are locked, and the way out. */
-const CurrentTypeUnavailableNotice = ({presetId, cause}: {
+const CurrentTypeUnavailableNotice = ({presetId, cause, seedBacked, canDelete}: {
   presetId: string
   cause: UnbuildableCause
+  /** A code-owned definition: its way out is the plugin, never an edit here. */
+  seedBacked: boolean
+  /** Whether this editor offers the delete button at all. */
+  canDelete: boolean
 }) => {
   const type = presetId
     ? <>the <code className="font-mono">{presetId}</code> type</>
     : <>this property&rsquo;s type</>
+  const offersPlugin = cause === 'preset-not-loaded' || seedBacked
+  const wayOut = cause === 'preset-not-loaded'
+    ? `Enable the plugin on this device${canDelete ? ', or delete the schema' : ''}.`
+    : seedBacked
+      ? 'Update or repair the plugin that provides it.'
+      : canDelete
+        ? 'Delete the schema instead; the values blocks hold under it stay.'
+        : 'Someone who can edit this workspace can delete the schema.'
   return (
     <div className="space-y-1 text-xs text-muted-foreground">
       <div>
@@ -78,11 +90,9 @@ const CurrentTypeUnavailableNotice = ({presetId, cause}: {
             ? <>The stored settings of {type} can&rsquo;t be read on this device.</>
             : <>This property uses {type}, which fails to build on this device.</>}
         {' '}Its type and settings can&rsquo;t be changed here: only that type can
-        read the values blocks hold under it. {cause === 'preset-not-loaded'
-          ? 'Enable the plugin on this device, or delete the schema.'
-          : 'Delete the schema instead; the values blocks hold under it stay.'}
+        read the values blocks hold under it. {wayOut}
       </div>
-      {cause === 'preset-not-loaded' && (
+      {offersPlugin && (
         <Button
           type="button"
           variant="outline"
@@ -364,7 +374,12 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
       )}
 
       {typeUnavailable !== null && (
-        <CurrentTypeUnavailableNotice presetId={presetId} cause={typeUnavailable} />
+        <CurrentTypeUnavailableNotice
+          presetId={presetId}
+          cause={typeUnavailable}
+          seedBacked={isSeedBacked}
+          canDelete={!readOnly}
+        />
       )}
 
       {!readOnly && (

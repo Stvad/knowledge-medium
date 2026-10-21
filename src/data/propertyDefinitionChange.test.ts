@@ -1211,6 +1211,24 @@ describe('while the definition\'s CURRENT preset does not build (#1077, #1090)',
     expect((await cell(FIELD_ID))[presetIdProp.name]).toBe(UNLOADABLE_PRESET)
   })
 
+  it('names the held change that HAS consumers, not an unused one held ahead of it', async () => {
+    // Re-typing an UNUSED definition onto a missing preset is allowed alone, so
+    // its reason and way out are not why this transaction is refused.
+    await seedWorkspace('children')
+    const {repo} = await withPresetUnloaded()
+    await createDefinition(repo, 'field-unused', 'unused', 'string')
+    await awaitDefinition(repo, 'unused', 'string')
+
+    await expect(repo.tx(async tx => {
+      await tx.setProperty('field-unused', presetIdProp, 'no-such-preset')
+      await tx.setProperty(FIELD_ID, presetIdProp, 'number')
+    }, {scope: ChangeScope.BlockDefault})).rejects.toMatchObject({
+      code: CURRENT_TYPE_UNAVAILABLE,
+      message: expect.stringContaining('property "status"'),
+    })
+    expect((await cell('field-unused'))[presetIdProp.name]).toBe('string')
+  })
+
   it('refuses a RENAME while consumers exist, since nothing can project their cells', async () => {
     // Renames are refused here as before this rule: re-keying a cell means
     // projecting it from the children under the new name, through the same

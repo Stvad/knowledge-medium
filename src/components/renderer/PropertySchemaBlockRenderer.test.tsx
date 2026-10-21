@@ -46,6 +46,27 @@ const REF_SEED_ID = propertyDefinitionBlockId(WS, refSeed.seedKey)
 
 const UNLOADED_PRESET = 'test-unloaded-preset'
 
+// Seeds whose materialized rows name a type that does not build here — a
+// plugin-owned preset gone from this device, and one whose stored config its
+// loaded preset cannot read. The preset is overridden in the row, since a
+// declaration only takes kernel presets.
+const missingPresetSeed = seedProperty({
+  seedKey: 'system:test/property/missing-preset-seed',
+  revision: 1,
+  name: 'test:seedMissing',
+  preset: 'string',
+  changeScope: ChangeScope.BlockDefault,
+})
+const MISSING_PRESET_SEED_ID = propertyDefinitionBlockId(WS, missingPresetSeed.seedKey)
+const badConfigSeed = seedProperty({
+  seedKey: 'system:test/property/bad-config-seed',
+  revision: 1,
+  name: 'test:seedBadConfig',
+  preset: 'ref',
+  changeScope: ChangeScope.BlockDefault,
+})
+const BAD_CONFIG_SEED_ID = propertyDefinitionBlockId(WS, badConfigSeed.seedKey)
+
 describe('PropertySchemaContentRenderer read-only for code-owned seeds', () => {
   let sharedDb: TestDb
   let repo: Repo
@@ -125,6 +146,28 @@ describe('PropertySchemaContentRenderer read-only for code-owned seeds', () => {
           types: ['property-schema'],
           'property-schema:name': 'test:badConfig',
           'property-schema:preset': 'ref',
+          'property-schema:config': {targetTypes: 'not-a-list'},
+        },
+      })
+      await tx.create({
+        id: MISSING_PRESET_SEED_ID,
+        workspaceId: WS,
+        parentId: 'root',
+        orderKey: 'a7',
+        content: missingPresetSeed.name,
+        properties: {
+          ...canonicalPropertySeedProperties(missingPresetSeed),
+          'property-schema:preset': UNLOADED_PRESET,
+        },
+      })
+      await tx.create({
+        id: BAD_CONFIG_SEED_ID,
+        workspaceId: WS,
+        parentId: 'root',
+        orderKey: 'a8',
+        content: badConfigSeed.name,
+        properties: {
+          ...canonicalPropertySeedProperties(badConfigSeed),
           'property-schema:config': {targetTypes: 'not-a-list'},
         },
       })
@@ -318,6 +361,50 @@ describe('PropertySchemaContentRenderer read-only for code-owned seeds', () => {
       expect(screen.getByText(/which fails to build on this device/)).toBeTruthy()
       expect(screen.queryByRole('combobox')).toBeNull()
       expect(screen.queryByRole('button', {name: 'Manage extensions'})).toBeNull()
+    })
+
+    it('points a SEED whose plugin is not loaded at the plugin, not at deleting it', () => {
+      // A seed is code-owned and renders read-only, with no delete button.
+      renderSchema(MISSING_PRESET_SEED_ID)
+
+      const notice = screen.getByText(/from a plugin that isn.t loaded on this device/)
+      expect(notice.textContent).toMatch(/Enable the plugin on this device\./)
+      expect(notice.textContent).not.toMatch(/delete/)
+      expect(screen.getByRole('button', {name: 'Manage extensions'})).toBeTruthy()
+      expect(screen.queryByText(/Delete schema/)).toBeNull()
+    })
+
+    it('points a SEED whose stored config does not decode at its plugin', () => {
+      renderSchema(BAD_CONFIG_SEED_ID)
+
+      const notice = screen.getByText(/The stored settings of .* can.t be read on this device/)
+      expect(notice.textContent).toMatch(/Update or repair the plugin that provides it/)
+      expect(notice.textContent).not.toMatch(/delete/)
+      expect(screen.getByRole('button', {name: 'Manage extensions'})).toBeTruthy()
+    })
+
+    it('does not offer a VIEWER the delete it cannot make', async () => {
+      const viewer = createTestRepo({
+        db: sharedDb.db,
+        user: {id: 'user-1'},
+        isReadOnly: true,
+        extensions: [kernelPropertyUiExtension, kernelValuePresetsExtension],
+      }).repo
+      viewer.setActiveWorkspaceId(WS)
+      await viewer.load('bad-config-schema')
+
+      render(
+        <RepoContext value={viewer}>
+          <AppRuntimeContextProvider value={viewer.facetRuntime!}>
+            <PropertySchemaContentRenderer block={viewer.block('bad-config-schema')} />
+          </AppRuntimeContextProvider>
+        </RepoContext>,
+      )
+
+      const notice = screen.getByText(/The stored settings of .* can.t be read on this device/)
+      expect(notice.textContent)
+        .toMatch(/Someone who can edit this workspace can delete the schema/)
+      expect(screen.queryByText(/Delete schema/)).toBeNull()
     })
 
     it('offers the picker again once the preset loads', async () => {
