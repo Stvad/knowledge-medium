@@ -1,1 +1,1 @@
-import{Ek as e,Tk as t}from"../chunks/app-DCgdxjjZ.js";export{t as appUpdate,e as useAppUpdateAvailable};
+import{Ek as e,Tk as t}from"../chunks/app-CcW5i1_E.js";export{t as appUpdate,e as useAppUpdateAvailable};

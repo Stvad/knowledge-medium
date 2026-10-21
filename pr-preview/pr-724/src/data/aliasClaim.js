@@ -1,1 +1,1 @@
-import{a5 as e,i5 as t,n5 as n,o5 as r,r5 as i,t5 as a}from"../../chunks/app-DCgdxjjZ.js";export{a as aliasClaimConflicts,n as assertAliasClaimable,i as claimedAliases,t as restorePropertiesYieldingTakenAliases,e as storedAliasNames,r as yieldNamesHeldPastReplay};
+import{a5 as e,i5 as t,n5 as n,o5 as r,r5 as i,s5 as a,t5 as o}from"../../chunks/app-CcW5i1_E.js";export{o as aliasClaimConflicts,n as appendDerivedAliasClaims,i as assertAliasClaimable,t as claimedAliases,e as restorePropertiesYieldingTakenAliases,r as storedAliasNames,a as yieldNamesHeldPastReplay};
