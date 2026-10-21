@@ -47,6 +47,10 @@ it('batches reference stamps and alias reads within the bind limit, preserving S
     const aliasReads = statements.filter(s => /FROM block_aliases/.test(s.sql))
     expect(stamps.length).toBeGreaterThan(0)
     expect(stamps.length).toBeLessThan(10)
+    const plan = await h.env.db.getAll<{detail: string}>(
+      `EXPLAIN QUERY PLAN ${stamps[0]!.sql}`, Array(stamps[0]!.binds).fill(null),
+    )
+    expect(plan.some(row => row.detail.includes('CORRELATED SCALAR SUBQUERY'))).toBe(false)
     expect(aliasReads.length).toBeLessThan(5)
     expect(Math.max(...statements.map(s => s.binds))).toBeLessThanOrEqual(MAX_IDS_PER_IN_CLAUSE)
     for (let i = 0; i < 520; i++) {

@@ -95,3 +95,75 @@ Key lookup failures abort the materialization window before its write transactio
 leaving the delivery queued for retry. Per-row quarantine is reserved for ciphertext
 decode failures. A regression test fails the first key read, verifies that the queue
 and local table are untouched, then retries the same delivery successfully.
+
+## Follow-up: batch arrival derivation and reuse a completed scan
+
+Measured 2026-10-21 with the same machine, fixture, and three measured samples
+per case. Baseline production source is `origin/master` `772111c`; optimized
+source is `0acb0c4` plus the joined stamp update (`UPDATE … FROM stamps`) that
+passed the final targeted plan test. Before and after captures ran sequentially
+in adjacent pairs. Each table cell gives median wall time and the full sample
+range. SQL counts are exact; wall time includes the local SQLite worker and is
+specific to this synthetic fixture.
+
+| Runtime / case | Records | Before ms (range) | After ms (range) | SQL calls before → after |
+| --- | ---: | ---: | ---: | ---: |
+| Node, plaintext initial | 3,000 | 356.44 (356.36–357.81) | 222.14 (214.66–227.51) | 1,275 → 141 |
+| Node, encrypted initial | 3,000 | 492.59 (491.81–503.79) | 360.89 (358.77–361.03) | 1,275 → 141 |
+| Node, plaintext echo/repass | 3,000 | 45.58 (41.39–45.73) | 47.52 (44.22–49.92) | 33 → 33 |
+| Node, encrypted echo/repass | 3,000 | 177.68 (175.30–185.66) | 184.75 (177.40–203.35) | 33 → 33 |
+| WebKit, plaintext initial | 1,000 | 238 (223–260) | 122 (112–124) | 425 → 47 |
+| WebKit, encrypted initial | 1,000 | 266 (259–267) | 150 (142–167) | 425 → 47 |
+| WebKit, plaintext echo/repass | 1,000 | 42 (39–46) | 37 (37–38) | 11 → 11 |
+| WebKit, encrypted echo/repass | 1,000 | 82 (81–83) | 80 (77–81) | 11 → 11 |
+
+The initial materialization batches now resolve alias references in one CTE
+query per window and stamp derived columns in joined batches. At 3,000 Node rows,
+alias lookups fell from 231 individual queries to 3 batched queries, and stamp
+writes fell from 924 row updates to 6 batched statements. WebKit's 1,000-row
+case fell from 77 alias queries and 308 row updates to 1 alias query and 2
+batched stamp statements. The no-op echo case kept the same total SQL count.
+
+The Repo workflow case measures the first complete `drainSyncWorkspace` and the
+scheduled reconciliation job that follows it:
+
+| Workflow phase | Before ms (range) | After ms (range) | Full scans | SQL calls | Key reads | Derivation SQL calls |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Initial drain | 624.46 (612.26–664.61) | 349.95 (347.47–353.26) | 1 → 1 | 1,277 → 144 | 6 → 6 | 1,155 → 9 |
+| Scheduled rescan | 170.85 (170.72–172.54) | 1.60 (1.51–1.65) | 1 → 0 | 30 → 1 | 6 → 0 | 0 → 0 |
+
+The clean initial drain now records the completion marker. The scheduled job
+reads that marker and skips the repeated workspace scan. Both workflow versions
+validated 3,000 materialized rows, zero unapplied staging rows, zero uploads,
+924 derived reference targets, and 231 field forms. Invalidation counters were
+zero because this benchmark registers no query handles; the Repo observer and
+its invalidation path ran, but the fixture had no subscribers to notify.
+
+One after-only 100,000-row encrypted initial sample completed in 13,023.71 ms
+(7,678 rows/s), with 4,700 SQL calls and 100 key reads. Validation passed for all
+100,000 rows, with zero backlog or uploads, 30,771 reference targets, and 7,692
+field forms. A previous 15.85-second scale sample exists, but it was not captured
+as a paired before/after run, so treat this as scale context only.
+
+Raw paired reports are `tmp/followup-native-before-adjacent.json`,
+`tmp/followup-native-after-final.json`, `tmp/followup-webkit-before-adjacent.json`,
+`tmp/followup-webkit-after-final.json`, `tmp/followup-workflow-before-adjacent.json`,
+and `tmp/followup-workflow-after-final.json`. The 100k report is
+`tmp/followup-native-100k-after-final.json`.
+
+The clean baseline snapshot is `tmp/followup-baseline-final`, extracted from
+`772111c`; its production source files are unchanged. The baseline benchmark core
+keeps that revision's original single-alias SQL and `getOptional` lookup. The
+archive-only compatibility diff is retained at `tmp/followup-baseline-shim.diff`:
+it exports the existing SQL instrumentation wrapper and copies `onChange` across
+its wrapper so the Repo workflow can start, and allows the archive's symlinked
+shared `node_modules` directory through Vite's file server. The optimized runs
+use the shared production lookup factory and joined stamp SQL.
+
+An earlier paired capture overlapped an independent full Vitest run and showed
+inflated native times; those raw reports remain in `tmp/followup-*-quiet.json`
+and the earlier `tmp/followup-*-before.json` files, but are not used above. The
+benchmark runner could not inspect other processes, so unrelated load cannot be ruled
+out for the adjacent captures either. The tight sample ranges and exact SQL
+counts support the work reduction; use timings as local comparisons, not device
+throughput predictions.

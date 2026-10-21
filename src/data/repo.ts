@@ -1339,17 +1339,9 @@ export class Repo {
     if (this.syncObserver) await this.syncObserver.flush()
   }
 
-  /** Re-materialize a workspace's staged `blocks_synced` rows after it becomes
-   *  materializable (WK pasted / plaintext confirmed via the §8.2 gate). No-op
-   *  if the observer isn't running.
-   *
-   *  `'all'`, not `'unapplied'`: this and the reconcile rescan are the paths for
-   *  a workspace whose FLAGS may be wrong — the deterministic-id shadow this
-   *  predates the flag entirely — so trusting the flag to name the work is the
-   *  one thing they must not do. Unpinned by any test (the two scopes agree on
-   *  every shape a test can build), which is why it is written here.
-   *
-   *  A complete pass also satisfies the one-time shadow-recovery rescan.
+  /** Re-materialize all staged rows after workspace unlock/verification.
+   *  Read every row: legacy shadows can incorrectly have `needs_apply = 0`.
+   *  A pass with no deferred/quarantined rows also satisfies one-time recovery.
    *  Returns the pass's report, or null when no observer is running. */
   async drainSyncWorkspace(
     workspaceId: string,
@@ -4408,12 +4400,7 @@ export class Repo {
     this.pendingNameRederives.delete(workspaceId)
   }
 
-  /** The one construction site for reference-target resolution outside a
-   *  repo.tx: the `block_aliases` index read on `reader` —
-   *  the open sync-arrival write tx, or the auto-commit connection for the
-   *  idle passes. Mirrors `core.deriveReferenceTarget` (a `((id))` block-ref
-   *  resolves textually, `[[alias]]` through this lookup); the two must
-   *  resolve identically or the column diverges across write paths. */
+  /** Use the open arrival transaction, or this DB's snapshot for idle passes. */
   private referenceTargetLookupsVia(
     reader: Pick<TxDb, 'getAll'> = this.db,
   ): ReferenceTargetLookups {

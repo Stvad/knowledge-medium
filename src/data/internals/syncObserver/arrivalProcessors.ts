@@ -94,9 +94,8 @@ export const deriveReferenceTargetsAtArrival = async (
     try {
       await tx.execute(`
         WITH stamps(id, target_id, field_form) AS (VALUES ${rows.map(() => '(?, ?, ?)').join(', ')})
-        UPDATE blocks SET reference_target_id = (SELECT target_id FROM stamps WHERE stamps.id = blocks.id),
-          is_field_form = (SELECT field_form FROM stamps WHERE stamps.id = blocks.id)
-        WHERE id IN (SELECT id FROM stamps)
+        UPDATE blocks SET reference_target_id = stamps.target_id, is_field_form = stamps.field_form
+        FROM stamps WHERE blocks.id = stamps.id
       `, rows.flatMap(row => [row.id, row.after.referenceTargetId ?? null, row.after.isFieldForm ? 1 : null]))
     } catch (error) {
       await tx.execute('ROLLBACK TO sync_arrival_derivation')

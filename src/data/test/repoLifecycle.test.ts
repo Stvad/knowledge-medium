@@ -53,6 +53,7 @@ import {seedProperty} from '@/data/propertySeeds'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import {kernelDataExtension} from '@/data/kernelDataExtension'
+import {BLOCKS_SYNCED_RAW_TABLE, blockToSyncedRowParams} from '@/data/blockSchema'
 import {defineFacet, resolveFacetRuntimeSync} from '@/facets/facet'
 import { Repo } from '../repo'
 import { ClientContext, type ClientContextReader } from '../clientContext'
@@ -655,7 +656,6 @@ describe('repo.scheduleReconcileRescan — one-time shadow recovery', () => {
     env.repo.scheduleReconcileRescan('ws-1')
     await settle(env.repo)
     expect(spy).toHaveBeenCalledTimes(1)
-    expect(spy).toHaveBeenCalledWith('ws-1', 'all', undefined)
 
     // Marker now present → a later open is a no-op.
     env.repo.scheduleReconcileRescan('ws-1')
@@ -692,7 +692,7 @@ describe('repo.scheduleReconcileRescan — one-time shadow recovery', () => {
     const spy = stubDrain()
     const progress = vi.fn()
     await env.repo.drainSyncWorkspace('ws-1', progress)
-    expect(spy).toHaveBeenCalledWith('ws-1', 'all', progress)
+    expect(spy.mock.calls[0]![2]).toBe(progress)
     env.repo.scheduleReconcileRescan('ws-1')
     await settle(env.repo)
     expect(spy).toHaveBeenCalledTimes(1)
@@ -719,5 +719,25 @@ describe('repo.scheduleReconcileRescan — one-time shadow recovery', () => {
     env.repo.scheduleReconcileRescan('ws-1')
     await settle(env.repo)
     expect(spy).toHaveBeenCalledTimes(1)
+  })
+
+  it('recovers stranded staging rows even when their apply flag is incorrectly clear', async () => {
+    const staged: BlockData = {
+      id: 'stranded', workspaceId: 'ws-1', parentId: null, orderKey: 'a0',
+      content: 'Recovered from staging', properties: {}, references: [],
+      createdAt: 1, updatedAt: 1000, userUpdatedAt: 1000, createdBy: 'peer', updatedBy: 'peer', deleted: false,
+    }
+    await env.h.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToSyncedRowParams(staged))
+    await env.h.db.execute('UPDATE blocks_synced SET needs_apply = 0 WHERE id = ?', [staged.id])
+    await env.h.db.execute('DELETE FROM blocks_synced_changes')
+    const observer = env.repo.startSyncObserver()
+    const scan = vi.spyOn(observer, 'drainWorkspace')
+    const report = await env.repo.drainSyncWorkspace(staged.workspaceId)
+    expect(report).toMatchObject({scanned: 1, applied: 1})
+    expect(await env.h.db.get<{content: string}>('SELECT content FROM blocks WHERE id = ?', [staged.id]))
+      .toEqual({content: staged.content})
+    env.repo.scheduleReconcileRescan(staged.workspaceId)
+    await settle(env.repo)
+    expect(scan).toHaveBeenCalledTimes(1)
   })
 })
