@@ -125,23 +125,16 @@ function expiredPreviewComment(repository: string, idleDays: number): string {
  * edit bumps `updatedAt` and ends the PR's retries, so a failure after it can
  * only leave a hidden comment stale.
  */
-export function markPreviewExpired(gh: Gh, repository: string, number: number, { idleDays, idleBefore }: {
-  idleDays: number
-  idleBefore: Date
-}): boolean {
+export function markPreviewExpired(gh: Gh, repository: string, number: number, idleDays: number): boolean {
   const pages = JSON.parse(gh(['api', '--paginate', '--slurp', `repos/${repository}/issues/${number}/comments?per_page=100`])) as
     { id: number; user: { login: string } | null; body?: string }[][]
   const stale = pages.flat().filter(c =>
     c.user?.login === PREVIEW_COMMENT_AUTHOR && c.body?.includes(PREVIEW_COMMENT_MARKER) && !c.body.startsWith(EXPIRED_HEADING))
-  if (stale.length === 0) return false
-  // A push since the sweep read the PR may already have redeployed it and relinked these comments.
-  const updatedAt = new Date(gh(['api', `repos/${repository}/pulls/${number}`, '--jq', '.updated_at']).trim())
-  if (!(updatedAt < idleBefore)) return false
   for (const comment of stale.reverse()) {
     gh(['api', '--method', 'PATCH', `repos/${repository}/issues/comments/${comment.id}`,
       '-f', `body=${expiredPreviewComment(repository, idleDays)}`])
   }
-  return true
+  return stale.length > 0
 }
 
 // A PR opening or closing between pages can shift another past the page boundary;
@@ -179,10 +172,13 @@ if (isMainModule(import.meta.url)) {
   })
   console.log(removed.length > 0 ? `Removed ${removed.length} previews: ${removed.join(', ')}` : 'No stale previews.')
   // A failure only warns, since a failing exit would skip the workflow's own comment
-  // cleanup; the next run retries it for as long as the PR stays idle.
+  // cleanup; the next run retries it for as long as the PR stays idle. No re-read of the
+  // PR's activity before editing: a push after the sweep's read cannot redeploy first,
+  // since its build outlasts this loop, and the re-read would also skip a PR that only
+  // got a comment, leaving a link to the removed preview.
   for (const pr of expired) {
     try {
-      if (markPreviewExpired(gh, repository, pr.number, { idleDays, idleBefore })) console.log(`Marked PR ${pr.number}'s preview expired`)
+      if (markPreviewExpired(gh, repository, pr.number, idleDays)) console.log(`Marked PR ${pr.number}'s preview expired`)
     } catch (error) {
       const cause = (error as { stderr?: string }).stderr?.trim() || String(error)
       console.log(`::warning::${workflowCommandData(`Could not mark PR ${pr.number}'s preview expired: ${cause}`)}`)

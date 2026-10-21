@@ -168,16 +168,14 @@ describe('markPreviewExpired', () => {
   const marker = '<!-- Sticky Pull Request Commentpr-preview -->'
   const bot = { login: 'github-actions[bot]' }
 
-  const window = { idleDays: 30, idleBefore }
-
-  function fakeGh(comments: object[], prUpdatedAt = '2026-09-01T00:00:00Z') {
+  function fakeGh(comments: object[]) {
     const patches: string[][] = []
     const gh: Gh = args => {
       if (args.includes('PATCH')) {
         patches.push(args)
         return '{}'
       }
-      return args.some(arg => /\/pulls\/\d+$/.test(arg)) ? `${prUpdatedAt}\n` : JSON.stringify([comments])
+      return JSON.stringify([comments])
     }
     const body = () => patches[0]?.find(arg => arg.startsWith('body='))
     return { gh, patches, body }
@@ -190,7 +188,7 @@ describe('markPreviewExpired', () => {
       { id: 12, user: bot, body: `View preview\n${marker}` },
     ])
 
-    expect(markPreviewExpired(gh, 'o/r', 5, window)).toBe(true)
+    expect(markPreviewExpired(gh, 'o/r', 5, 30)).toBe(true)
     expect(patches).toHaveLength(1)
     expect(patches[0]).toContain('repos/o/r/issues/comments/12')
     expect(body()).toContain(marker)
@@ -198,18 +196,10 @@ describe('markPreviewExpired', () => {
     expect(body()).toContain('docs/pr-preview-deployments.md#redeploying-an-expired-preview')
   })
 
-  // A push since the sweep read the PR may already have redeployed it and relinked this comment.
-  it('edits nothing when the PR has become active since the sweep read it', () => {
-    const { gh, patches } = fakeGh([{ id: 12, user: bot, body: `View preview\n${marker}` }], '2026-10-20T00:00:00Z')
-
-    expect(markPreviewExpired(gh, 'o/r', 5, window)).toBe(false)
-    expect(patches).toEqual([])
-  })
-
   it('edits nothing when the PR has no preview comment', () => {
     const { gh, patches } = fakeGh([{ id: 11, user: bot, body: 'another bot comment' }])
 
-    expect(markPreviewExpired(gh, 'o/r', 5, window)).toBe(false)
+    expect(markPreviewExpired(gh, 'o/r', 5, 30)).toBe(false)
     expect(patches).toEqual([])
   })
 
@@ -217,7 +207,7 @@ describe('markPreviewExpired', () => {
   it('rewrites every preview comment that does not already say it expired, newest first', () => {
     const expiredBody = () => {
       const probe = fakeGh([{ id: 1, user: bot, body: marker }])
-      markPreviewExpired(probe.gh, 'o/r', 5, window)
+      markPreviewExpired(probe.gh, 'o/r', 5, 30)
       return probe.body()!.slice('body='.length)
     }
     const { gh, patches } = fakeGh([
@@ -226,7 +216,7 @@ describe('markPreviewExpired', () => {
       { id: 14, user: bot, body: `View preview\n${marker}` },
     ])
 
-    expect(markPreviewExpired(gh, 'o/r', 5, window)).toBe(true)
+    expect(markPreviewExpired(gh, 'o/r', 5, 30)).toBe(true)
     expect(patches.map(args => args.find(arg => arg.includes('/comments/')))).toEqual([
       'repos/o/r/issues/comments/14', 'repos/o/r/issues/comments/12',
     ])
@@ -235,10 +225,10 @@ describe('markPreviewExpired', () => {
   // Every run re-notifies every expired PR, so an edit that already landed must not be repeated.
   it('edits nothing when the comment already says the preview expired', () => {
     const first = fakeGh([{ id: 12, user: bot, body: marker }])
-    markPreviewExpired(first.gh, 'o/r', 5, window)
+    markPreviewExpired(first.gh, 'o/r', 5, 30)
     const again = fakeGh([{ id: 12, user: bot, body: first.body()!.slice('body='.length) }])
 
-    expect(markPreviewExpired(again.gh, 'o/r', 5, window)).toBe(false)
+    expect(markPreviewExpired(again.gh, 'o/r', 5, 30)).toBe(false)
     expect(again.patches).toEqual([])
   })
 })

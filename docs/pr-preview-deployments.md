@@ -203,9 +203,8 @@ comment. Once the sweep is done, including its push if it removed anything,
 every run rewrites the preview comments of each idle open PR in place, to say
 the preview expired and link the redeploy steps below. The steps live here
 rather than in the comment because they depend on the PR's base and head
-repository, which can change after the comment is written. It re-reads the PR's `updated_at`
-just before editing, so a push that redeployed the PR meanwhile keeps its link.
-A comment that already says so is left as it is. That set is every idle open PR, not only those this run removed,
+repository, which can change after the comment is written. A comment that
+already says so is left as it is. That set is every idle open PR, not only those this run removed,
 so an edit that failed is retried by later runs for as long as the PR stays
 idle. A failure only warns, so it never skips the workflow's own comment
 cleanup. The edit waits for the push because it bumps the PR's `updated_at`,
