@@ -1,0 +1,1 @@
+import{ej as e,tj as t}from"../../chunks/app-8SStuPs6.js";export{e as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,t as openExtensionsSettings};

@@ -1,0 +1,1 @@
+import{nl as e,rl as t}from"../../../chunks/app-8SStuPs6.js";export{e as appendTagToBlocks,t as appendTagToContent};
