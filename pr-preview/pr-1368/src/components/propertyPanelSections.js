@@ -1,1 +1,1 @@
-import{vF as e}from"../../chunks/app-Dx3NBMU7.js";export{e as buildPropertyPanelSections};
+import{xF as e}from"../../chunks/app-CedqaPWb.js";export{e as buildPropertyPanelSections};
