@@ -1,1 +1,0 @@
-import{cQ as e,sQ as t}from"../../chunks/app-2fQUNOZ1.js";export{t as agree,e as pluralize};

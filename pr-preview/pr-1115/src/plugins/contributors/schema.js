@@ -1,1 +1,0 @@
-import{GU as e,JU as t,KU as n,UU as r,WU as i,XU as a,YU as o,qU as s}from"../../../chunks/app-2fQUNOZ1.js";export{r as CONTRIBUTOR_TYPE,i as attributionCreatorsProp,e as attributionEditorsProp,n as contributorForProp,s as contributorKindOf,t as contributorKindProp,o as contributorProfileType,a as contributorRoleProp};

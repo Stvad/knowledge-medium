@@ -1,1 +1,0 @@
-import{gM as e,hM as t}from"../../chunks/app-2fQUNOZ1.js";export{t as useIsMobile,e as usePointerCoarse};
