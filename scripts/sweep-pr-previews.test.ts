@@ -1,16 +1,10 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { execFileSync } from 'node:child_process'
 import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { type Git, gitIn, stalePreviewDirs, sweepPreviews } from './sweep-pr-previews.ts'
 
-const identity = {
-  GIT_AUTHOR_NAME: 'test', GIT_AUTHOR_EMAIL: 'test@example.invalid',
-  GIT_COMMITTER_NAME: 'test', GIT_COMMITTER_EMAIL: 'test@example.invalid',
-}
-const git = (cwd: string, ...args: string[]) =>
-  execFileSync('git', args, { cwd, env: { ...process.env, ...identity }, encoding: 'utf8' }).trim()
+const git = (cwd: string, ...args: string[]) => gitIn(cwd)(args)
 
 function commitFiles(repo: string, files: Record<string, string>, remove: string[] = []) {
   for (const path of remove) git(repo, 'rm', '-r', '--quiet', path)
@@ -39,6 +33,8 @@ beforeAll(() => {
   for (const repo of ['publisher', 'work']) {
     git(root, 'init', '--quiet', '--initial-branch', 'gh-pages', join(template, repo))
     git(join(template, repo), 'remote', 'add', 'origin', '../origin.git')
+    git(join(template, repo), 'config', 'user.name', 'test')
+    git(join(template, repo), 'config', 'user.email', 'test@example.invalid')
   }
   commitFiles(join(template, 'publisher'), {
     'index.html': 'production',
@@ -64,7 +60,7 @@ const publish = (files: Record<string, string>, remove: string[] = []) => commit
 const publishedFiles = () => git(origin, 'ls-tree', '-r', '--name-only', 'gh-pages').split('\n')
 const tip = () => git(origin, 'rev-parse', 'gh-pages')
 
-const workGit = (): Git => gitIn(work, identity)
+const workGit = (): Git => gitIn(work)
 
 describe('stalePreviewDirs', () => {
   it('names only pr-<n> directories whose PR is not kept', () => {
@@ -76,7 +72,7 @@ describe('stalePreviewDirs', () => {
 describe('sweepPreviews', { timeout: 20_000 }, () => {
   it('removes closed previews in one fast-forward commit and leaves everything else', () => {
     const before = tip()
-    const result = sweepPreviews({ git: workGit(), branch: 'gh-pages', openPrs: () => new Set([2]) })
+    const result = sweepPreviews({ git: workGit(), openPrs: () => new Set([2]) })
 
     expect(result.removed).toEqual(['pr-1', 'pr-3'])
     expect(publishedFiles()).toEqual(['.nojekyll', 'index.html', 'pr-preview/README.md', 'pr-preview/pr-2/index.html'])
@@ -85,14 +81,14 @@ describe('sweepPreviews', { timeout: 20_000 }, () => {
 
   it('pushes nothing when no preview is stale', () => {
     const before = tip()
-    const result = sweepPreviews({ git: workGit(), branch: 'gh-pages', openPrs: () => new Set([1, 2, 3]) })
+    const result = sweepPreviews({ git: workGit(), openPrs: () => new Set([1, 2, 3]) })
 
     expect(result.removed).toEqual([])
     expect(tip()).toBe(before)
   })
 
   it('also removes explicitly named PRs, open or not', () => {
-    sweepPreviews({ git: workGit(), branch: 'gh-pages', openPrs: () => new Set([1, 2, 3]), alsoRemove: [2] })
+    sweepPreviews({ git: workGit(), openPrs: () => new Set([1, 2, 3]), alsoRemove: [2] })
 
     expect(publishedFiles()).toEqual([
       '.nojekyll', 'index.html', 'pr-preview/README.md', 'pr-preview/pr-1/index.html', 'pr-preview/pr-3/.nojekyll',
@@ -117,14 +113,14 @@ describe('sweepPreviews', { timeout: 20_000 }, () => {
   }
 
   it('reads open PRs after fetching, so a preview deployed just before the fetch is kept', () => {
-    const result = sweepPreviews({ ...openingMidSweep('fetch'), branch: 'gh-pages' })
+    const result = sweepPreviews({ ...openingMidSweep('fetch') })
 
     expect(result.removed).toEqual(['pr-1', 'pr-3'])
     expect(publishedFiles()).toContain('pr-preview/pr-4/index.html')
   })
 
   it('rebuilds on the new tip when a deploy lands mid-sweep, keeping that deploy', () => {
-    const result = sweepPreviews({ ...openingMidSweep('push'), branch: 'gh-pages' })
+    const result = sweepPreviews({ ...openingMidSweep('push') })
 
     expect(result.removed).toEqual(['pr-1', 'pr-3'])
     expect(publishedFiles()).toEqual([
@@ -137,7 +133,7 @@ describe('sweepPreviews', { timeout: 20_000 }, () => {
     publish({}, ['pr-preview'])
     const before = tip()
 
-    expect(sweepPreviews({ git: workGit(), branch: 'gh-pages', openPrs: () => new Set() }).removed).toEqual([])
+    expect(sweepPreviews({ git: workGit(), openPrs: () => new Set() }).removed).toEqual([])
     expect(tip()).toBe(before)
   })
 })

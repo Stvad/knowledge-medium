@@ -14,15 +14,17 @@ import { join } from 'node:path'
 import { parsePrNumber } from './approved-pr-preview.ts'
 import { isMainModule } from './is-main-module.mjs'
 
+const BRANCH = 'gh-pages'
+const REMOTE_REF = `refs/remotes/origin/${BRANCH}`
 const PREVIEW_ROOT = 'pr-preview'
 const PREVIEW_DIR = /^pr-([1-9][0-9]*)$/
 const PUSH_ATTEMPTS = 5
 
 export type Git = (args: string[], opts?: { env?: NodeJS.ProcessEnv }) => string
 
-export const gitIn = (cwd: string, env: NodeJS.ProcessEnv = {}): Git => (args, opts = {}) =>
+export const gitIn = (cwd: string): Git => (args, opts = {}) =>
   execFileSync('git', args, {
-    cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...env, ...opts.env },
+    cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...opts.env },
   }).trim()
 
 /** The pr-<n> directory names whose PR is not in `keep`; any other name is never touched. */
@@ -52,17 +54,15 @@ function commitWithout(git: Git, tip: string, dirs: string[]): string {
  * after each fetch, so every preview in the fetched tip was deployed while its
  * PR was open and still counts as open unless it has since closed.
  */
-export function sweepPreviews({ git, branch, openPrs, alsoRemove = [] }: {
+export function sweepPreviews({ git, openPrs, alsoRemove = [] }: {
   git: Git
-  branch: string
   openPrs: () => ReadonlySet<number>
   alsoRemove?: number[]
 }): { removed: string[] } {
-  const remoteRef = `refs/remotes/origin/${branch}`
   for (let attempt = 1; ; attempt++) {
     // Not blobless: that needs partial-clone config, and every later step would lazily fetch what it touches.
-    git(['fetch', '--quiet', '--depth', '1', 'origin', `+refs/heads/${branch}:${remoteRef}`])
-    const tip = git(['rev-parse', remoteRef])
+    git(['fetch', '--quiet', '--depth', '1', 'origin', `+refs/heads/${BRANCH}:${REMOTE_REF}`])
+    const tip = git(['rev-parse', REMOTE_REF])
     const keep = new Set([...openPrs()].filter(number => !alsoRemove.includes(number)))
     const names = git(['ls-tree', '-d', '--name-only', tip, `${PREVIEW_ROOT}/`])
       .split('\n').filter(Boolean).map(path => path.slice(PREVIEW_ROOT.length + 1))
@@ -70,11 +70,11 @@ export function sweepPreviews({ git, branch, openPrs, alsoRemove = [] }: {
     if (removed.length === 0) return { removed }
     const commit = commitWithout(git, tip, removed)
     try {
-      git(['push', '--quiet', 'origin', `${commit}:refs/heads/${branch}`])
+      git(['push', '--quiet', 'origin', `${commit}:refs/heads/${BRANCH}`])
       return { removed }
     } catch (error) {
       if (attempt === PUSH_ATTEMPTS) throw error
-      console.warn(`push to ${branch} rejected (attempt ${attempt}/${PUSH_ATTEMPTS}); rebuilding on the new tip`)
+      console.warn(`push to ${BRANCH} rejected (attempt ${attempt}/${PUSH_ATTEMPTS}); rebuilding on the new tip`)
     }
   }
 }
@@ -93,7 +93,7 @@ if (isMainModule(import.meta.url)) {
   if (!repository) throw new Error('set GITHUB_REPOSITORY (owner/repo)')
   const alsoRemove = process.argv.slice(2).map(parsePrNumber)
   const { removed } = sweepPreviews({
-    git: gitIn(process.cwd()), branch: 'gh-pages', openPrs: () => openPullRequests(repository), alsoRemove,
+    git: gitIn(process.cwd()), openPrs: () => openPullRequests(repository), alsoRemove,
   })
   console.log(removed.length > 0 ? `Removed ${removed.length} previews: ${removed.join(', ')}` : 'No stale previews.')
 }

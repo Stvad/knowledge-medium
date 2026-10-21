@@ -31,6 +31,9 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+    env:
+      # The PR this run is about, if any: the closed PR, or the dispatch's pr_number.
+      PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
     steps:
       - name: Require the trusted workflow branch
         if: github.event_name == 'workflow_dispatch'
@@ -65,9 +68,9 @@ jobs:
       # a closed PR's stale link merely 404s. A close drops the link even if the PR was
       # reopened since; its next deploy posts it again.
       - name: Remove the preview link from the PR
-        if: github.event.pull_request.number || inputs.pr_number
+        if: env.PR_NUMBER != ''
         uses: marocchino/sticky-pull-request-comment@v2
         with:
-          number: ${{ github.event.pull_request.number || inputs.pr_number }}
+          number: ${{ env.PR_NUMBER }}
           header: pr-preview
           delete: true
