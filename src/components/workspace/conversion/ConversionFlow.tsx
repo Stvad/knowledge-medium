@@ -525,7 +525,8 @@ function ResultView({result, retry, onClose}: {result: ConversionRunResult; retr
   }
 }
 
-/** Step 9: what is left to do, by the user and by the server's operator. */
+/** Step 9: what is left for the user to do. The operator's follow-ups live in
+ *  the runbook, not here. */
 function DoneView({bundleFolder, onClose}: {bundleFolder: string | null; onClose: () => void}) {
   return (
     <>
@@ -535,15 +536,6 @@ function DoneView({bundleFolder, onClose}: {bundleFolder: string | null; onClose
         <li>
           Keep the recovery bundle{bundleFolder && <> (the folder "{bundleFolder}")</>} with the key: if
           the key is lost, the workspace is restored from the newest one.
-        </li>
-        <li>
-          For the server's operator: <span className="font-mono text-xs">VACUUM FULL</span> on blocks,
-          blocks_history, storage.objects and workspaces (it locks each table while it runs), and drop
-          leftover ad-hoc tables.
-        </li>
-        <li>
-          Server backups keep the old plaintext until they age out. A breach of a backup is safe only
-          once the longest retention window has passed since that clean-up.
         </li>
       </ul>
       <Actions secondary={{label: 'Close', onClick: onClose}}/>

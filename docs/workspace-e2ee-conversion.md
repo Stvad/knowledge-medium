@@ -231,7 +231,7 @@ Resuming just runs this again. It can take hours for a large workspace, so the f
   So the proof's result is **passed, with these blocks unrecoverable**. The flow lists them together with every object the pass kept and reported, and `finish_conversion` follows the user's confirmation, so nothing left behind is silent. Preflight already lists the same blocks before the flip (step 0).
 - **Media block ids don't change.** The app derives an attachment's path from `media:hash`, the mode and `K_id`. Re-capturing a pre-conversion file mints a second block, which is accepted.
 
-**9. Done.** The flow calls `finish_conversion`, then reports the operator follow-ups ([§8](#8-runbook)) and how they set the "safe from" date ([§9.4](#94-the-safe-from-rule)).
+**9. Done.** The flow calls `finish_conversion`, then tells the user to open each other device with the key and to keep the bundle with it. The operator's follow-ups ([§8](#8-runbook) steps 10–13) and the "safe from" date they set ([§9.4](#94-the-safe-from-rule)) belong to this runbook, not to the app.
 
 ### 6.4 Other devices
 
