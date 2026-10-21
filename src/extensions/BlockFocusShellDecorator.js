@@ -1,1 +1,1 @@
-import{BO as e,RO as t,zO as n}from"../../chunks/app-7KlH0q-n.js";export{t as BlockFocusShellDecorator,n as blockFocusShellDecorator,e as shouldScrollFocusedBlockIntoView};
+import{BO as e,VO as t,zO as n}from"../../chunks/app-CTPbtAv5.js";export{n as BlockFocusShellDecorator,e as blockFocusShellDecorator,t as shouldScrollFocusedBlockIntoView};

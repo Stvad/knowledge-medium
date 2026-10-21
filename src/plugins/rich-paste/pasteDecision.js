@@ -1,1 +1,1 @@
-import{Uh as e}from"../../../chunks/app-7KlH0q-n.js";export{e as richPasteDecisionContribution};
+import{Wh as e}from"../../../chunks/app-CTPbtAv5.js";export{e as richPasteDecisionContribution};

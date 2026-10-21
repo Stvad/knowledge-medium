@@ -1,1 +1,1 @@
-import{DI as e,OI as t}from"../../chunks/app-7KlH0q-n.js";export{e as anyBlockTombstoned,t as isBlockTombstoned};
+import{OI as e,kI as t}from"../../chunks/app-CTPbtAv5.js";export{e as anyBlockTombstoned,t as isBlockTombstoned};

@@ -1,1 +1,1 @@
-import{ns as e,rs as t}from"../../../chunks/app-7KlH0q-n.js";export{e as aggregateDiagnostics,t as useDiagnostics};
+import{is as e,rs as t}from"../../../chunks/app-CTPbtAv5.js";export{t as aggregateDiagnostics,e as useDiagnostics};
