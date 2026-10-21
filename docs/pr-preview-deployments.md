@@ -23,7 +23,7 @@ GitHub Pages serves a single site per repo:
 
 - `gh-pages` **root** — production (`.github/workflows/deploy-pages.yml`, on push
   to `master`). Built with `APP_BASE_PATH=/knowledge-medium/`.
-- `gh-pages` **`pr-preview/pr-<n>/`** — one subtree per open PR. Same-repo PRs
+- `gh-pages` **`pr-preview/pr-<n>/`** — one subtree per previewed open PR. Same-repo PRs
   use `.github/workflows/pr-preview.yml` on `pull_request`. Maintainer-approved
   fork PRs, and any PR whose expired preview a maintainer redeploys
   ([Redeploying an expired preview](#redeploying-an-expired-preview)), use
@@ -113,9 +113,8 @@ A different host (Netlify/Vercel/`*.pages.dev`) would have needed both updated.
 ## Maintainer-approved previews
 
 **Deploy approved PR preview** is a manual workflow for a fork PR, and the way
-to redeploy any PR's expired preview. The workflow is available in the Actions UI
-only after this change is merged to `master`; run it from the selected `master`
-branch, never from a PR branch. It takes:
+to redeploy any PR's expired preview. Run it from the selected `master` branch,
+never from a PR branch. It takes:
 
 - `pr_number`
 - `head_sha`, the full, lowercase, 40-character head SHA to approve
@@ -130,7 +129,7 @@ fallback.
 The build intentionally runs the approved contributor commit's install and build
 scripts. It has no publishing credentials, disables dependency caching, and
 uses `cache-mode: none`, GitHub Actions' enforced runtime cache restriction, so
-fork code cannot use the dispatch on `master` to poison a cache. The separate
+PR code cannot use the dispatch on `master` to poison a cache. The separate
 fresh publishing job checks out the trusted workflow commit, consumes only the
 static artifact, and never checks out or executes contributor code or scripts.
 Before publishing, it requires `version.json` to contain the approved head's
@@ -143,25 +142,28 @@ namespaces prevent routine state collisions; their path-based DB naming is not a
 security boundary against a frontend trusted on that origin.
 
 Fork pushes never auto-update an approved preview. The URL keeps serving the
-last approved SHA until a maintainer runs this workflow again with the new head.
+last approved SHA until a maintainer runs this workflow again with the new head,
+or until the idle sweep expires it.
 The sticky comment records the approved SHA and the deployment run URL.
 
 To approve a fork head in the GitHub UI:
 
-1. Open the PR and copy its current **head commit** SHA. Confirm it is open and
-   targets `master`.
+1. Open the PR and copy the SHA of the **head commit you reviewed**. Confirm it
+   is still the PR's head, and that the PR is open and targets `master`.
 2. Open **Actions → Deploy approved PR preview → Run workflow**, then select
    `master` as the workflow branch.
 3. Enter the PR number and the complete lowercase 40-character SHA, then run
    the workflow.
 4. Open the sticky preview comment to confirm its SHA and deployment-run link.
 
-With GitHub CLI, this approves PR 1128's current head and explicitly dispatches
-the trusted `master` workflow:
+With GitHub CLI, this approves the head you reviewed of PR 1128 and explicitly
+dispatches the trusted `master` workflow. The SHA is typed in, not looked up,
+because approving a fork means approving that one commit, not whatever the head
+is when the command runs:
 
 ```sh
 pr_number=1128
-head_sha="$(gh pr view "$pr_number" --repo Stvad/knowledge-medium --json headRefOid --jq .headRefOid)"
+head_sha=<the 40-character SHA you reviewed>
 gh workflow run "Deploy approved PR preview" \
   --repo Stvad/knowledge-medium \
   --ref master \
@@ -182,8 +184,8 @@ or is open but **idle**: its GitHub `updated_at` is older than
 and variables → Actions → Variables), 30 when unset. Pushes, comments, reviews
 and edits all count as activity, so a PR under discussion keeps its preview.
 The sweep never force-pushes: if a deploy lands mid-sweep, it starts again from
-the new tip and re-reads the open PRs, so a PR redeployed meanwhile is kept. It
-runs:
+the new tip and re-reads the open PRs, so a PR pushed to or re-approved
+meanwhile is kept. It runs:
 
 - on **PR close**, through `pull_request_target`. A `pull_request` workflow does
   not run at all while the PR has a merge conflict, which is how abandoned,
@@ -197,11 +199,12 @@ runs:
   removes that PR's preview while the PR is still open.
 
 A close or a dispatch with `pr_number` also deletes that PR's preview-link
-comment. After its push, every run rewrites the preview comment of each open
-PR that idled and has no preview, in place, to say the preview expired and how
-to redeploy it. A comment that already says so is left as it is. Because that
-set is derived from what is left on `gh-pages`, an edit that failed is retried
-by the next run, and only warns, so it never skips the workflow's own comment
+comment. Once the sweep is done, including its push if it removed anything,
+every run rewrites the preview comments of each idle open PR in place, to say
+the preview expired and how to redeploy it. A comment that already says so is
+left as it is. That set is every idle open PR, not only those this run removed,
+so an edit that failed is retried by later runs for as long as the PR stays
+idle. A failure only warns, so it never skips the workflow's own comment
 cleanup. The edit waits for the push because it bumps the PR's `updated_at`,
 which a retried push would otherwise read as activity. An edit notifies nobody,
 where a new comment on each expired PR would. A closed PR's comment is left
@@ -214,34 +217,31 @@ avoid issuing another manual request while one is pending.
 
 A push to a same-repository PR redeploys its preview as usual, once the PR has
 no merge conflict. To bring one back without a push, approve its head with
-**Deploy approved PR preview**. The
-expired comment carries the command with the PR number filled in; for a
-same-repository PR it reads the current head itself:
-
-```sh
-gh workflow run approved-pr-preview.yml --repo Stvad/knowledge-medium --ref master \
-  -f pr_number=<n> -f head_sha="$(gh pr view <n> --repo Stvad/knowledge-medium --json headRefOid --jq .headRefOid)"
-```
-
-On a fork PR the comment leaves `head_sha` as a placeholder instead, because
-approving a fork means approving the one commit you reviewed, not whatever the
-head is when you paste the command.
+**Deploy approved PR preview**, as in the CLI example above. The expired comment
+carries that command with the PR number filled in. For a same-repository PR it
+looks up the current head itself, since a push would deploy that head anyway.
+For a fork PR it leaves the SHA for you to fill in with the commit you
+reviewed. A PR stacked on a branch other than `master` comes back only by push,
+because the approval flow requires `master`, and its comment says so.
 
 This also works while the PR has a merge conflict and `pull_request` workflows
 do not run. It builds the PR **head**, not the merge with `master` that a push
-builds, and it requires the PR to target `master`. It goes through the approval
-flow rather than through **PR Preview** even for a same-repository PR, so the
-PR's code never runs with write credentials, and the publishing step uses
-`master`'s helper scripts rather than whatever an old head carries. The
-publish job rewrites the sticky comment twice. The first edit lands before the
-deploy, and it bumps the PR's `updated_at`, so the redeployed preview lasts
-another idle period and a sweep that sees the new deploy also sees the PR as
-active. If the run fails, that edit tells you to run it again. The second edit lands after publishing, so the live link replaces an
-expiry notice a concurrent sweep wrote meanwhile.
+builds. It goes through the approval flow rather than through **PR Preview**
+even for a same-repository PR, so the PR's code never runs with write
+credentials, and the publishing step uses `master`'s helper scripts rather than
+whatever an old head carries. The publish job rewrites the sticky comment
+twice. The first edit lands before the deploy, and it bumps the PR's
+`updated_at`, so the redeployed preview lasts another idle period and a sweep
+that sees the new deploy also sees the PR as active. It names the preview URL
+and says to run the workflow again if the run fails. The second edit lands
+after publishing, so the live link replaces an expiry notice a concurrent sweep
+wrote meanwhile.
 
-Re-running the PR's last **PR Preview** run is not a substitute: GitHub allows a
-re-run only within 30 days of the original run, and an expired preview's last
-run is older than that.
+Re-running the PR's last **PR Preview** run is not a substitute. GitHub allows a
+re-run only within 30 days of the original run, which at the default threshold
+an expired preview's last run is past. At any threshold, a re-run lands its
+deploy before anything refreshes the PR's activity, so a sweep in between can
+remove it again.
 
 ## One-time setup (required — the workflows don't work until this is done)
 

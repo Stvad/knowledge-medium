@@ -33,7 +33,7 @@ export type Gh = (args: string[]) => string
 
 /** `updatedAt` is GitHub's: comments, reviews and edits bump it as well as pushes. */
 export type OpenPr = { number: number; updatedAt: Date }
-type OpenPull = OpenPr & { fork: boolean }
+type OpenPull = OpenPr & { fork: boolean; base: string }
 
 export const gitIn = (cwd: string): Git => (args, opts = {}) =>
   execFileSync('git', args, {
@@ -125,76 +125,96 @@ export function sweepPreviews<P extends OpenPr>({ git, openPrs, idleBefore, also
   }
 }
 
-function expiredPreviewComment({ number, fork }: Pick<OpenPull, 'number' | 'fork'>, repository: string, idleDays: number): string {
+function redeployInstructions({ number, fork, base }: Pick<OpenPull, 'number' | 'fork' | 'base'>, repository: string): string[] {
+  const push = 'A push brings it back once the PR has no merge conflict.'
+  // The approval flow refuses a PR that does not target master.
+  if (base !== 'master') return [push]
+  const command = (headSha: string) => [
+    '```sh',
+    `gh workflow run approved-pr-preview.yml --repo ${repository} --ref master -f pr_number=${number} -f head_sha=${headSha}`,
+    '```',
+  ].join('\n')
   // Approving a fork is approving one reviewed commit, so its command must not fill in whatever the head is now.
-  const [how, headSha] = fork
-    ? ['A maintainer can approve a reviewed head to bring it back:', '<reviewed head SHA>']
-    : ['A push brings it back once the PR has no merge conflict. To redeploy the current head without one:',
-        `"$(gh pr view ${number} --repo ${repository} --json headRefOid --jq .headRefOid)"`]
+  if (fork) return ['A maintainer can approve a reviewed head to bring it back:', command('<reviewed head SHA>')]
+  return [`${push} To redeploy the current head without one:`,
+    command(`"$(gh pr view ${number} --repo ${repository} --json headRefOid --jq .headRefOid)"`)]
+}
+
+function expiredPreviewComment(pr: Pick<OpenPull, 'number' | 'fork' | 'base'>, repository: string, idleDays: number): string {
   return [
     EXPIRED_HEADING,
     `This PR had no activity for ${idleDays} days, so its preview was removed to keep the Pages site small.`,
-    how,
-    [
-      '```sh',
-      `gh workflow run approved-pr-preview.yml --repo ${repository} --ref master -f pr_number=${number} -f head_sha=${headSha}`,
-      '```',
-    ].join('\n'),
+    ...redeployInstructions(pr, repository),
     PREVIEW_COMMENT_MARKER,
   ].join('\n\n')
 }
 
 /**
- * Rewrites the PR's preview-link comment in place, unless it already says the
- * preview expired, keeping the marker so the next deploy updates it rather
- * than adding another. Editing notifies nobody, which a new comment on every
- * expired PR would.
+ * Rewrites the PR's preview-link comments in place, skipping any that already
+ * say the preview expired, and keeps the marker so the next deploy updates
+ * them rather than adding another. There can be several, because marocchino
+ * skips a minimized comment and posts a fresh one. Editing notifies nobody,
+ * which a new comment on every expired PR would.
  */
-export function markPreviewExpired(gh: Gh, repository: string, pr: Pick<OpenPull, 'number' | 'fork'>, idleDays: number): boolean {
+export function markPreviewExpired(gh: Gh, repository: string, pr: Pick<OpenPull, 'number' | 'fork' | 'base'>, idleDays: number): boolean {
   const pages = JSON.parse(gh(['api', '--paginate', '--slurp', `repos/${repository}/issues/${pr.number}/comments?per_page=100`])) as
     { id: number; user: { login: string } | null; body?: string }[][]
-  const comment = pages.flat().find(c => c.user?.login === PREVIEW_COMMENT_AUTHOR && c.body?.includes(PREVIEW_COMMENT_MARKER))
-  if (comment === undefined || comment.body?.startsWith(EXPIRED_HEADING)) return false
-  gh(['api', '--method', 'PATCH', `repos/${repository}/issues/comments/${comment.id}`,
-    '-f', `body=${expiredPreviewComment(pr, repository, idleDays)}`])
-  return true
+  const stale = pages.flat().filter(c =>
+    c.user?.login === PREVIEW_COMMENT_AUTHOR && c.body?.includes(PREVIEW_COMMENT_MARKER) && !c.body.startsWith(EXPIRED_HEADING))
+  for (const comment of stale) {
+    gh(['api', '--method', 'PATCH', `repos/${repository}/issues/comments/${comment.id}`,
+      '-f', `body=${expiredPreviewComment(pr, repository, idleDays)}`])
+  }
+  return stale.length > 0
+}
+
+/** One `number, updated_at, head repository, base branch` line per PR; a deleted head repository is empty, so a fork. */
+export function parseOpenPulls(tsv: string, repository: string): OpenPull[] {
+  return tsv.split('\n').filter(Boolean).map(line => {
+    const [number, updatedAt, headRepository, base] = line.split('\t')
+    return { number: Number(number), updatedAt: new Date(updatedAt), fork: headRepository !== repository, base }
+  })
 }
 
 // A PR opening or closing between pages can shift another past the page boundary;
 // accepted while the open PRs fit on one page.
 function openPullRequests(gh: Gh, repository: string): OpenPull[] {
-  const out = gh(['api', '--paginate', `repos/${repository}/pulls?state=open&per_page=100`,
-    '--jq', '.[] | [.number, .updated_at, .head.repo.full_name // ""] | @tsv'])
-  return out.split('\n').filter(Boolean).map(line => {
-    const [number, updatedAt, headRepository] = line.split('\t')
-    return { number: Number(number), updatedAt: new Date(updatedAt), fork: headRepository !== repository }
-  })
+  return parseOpenPulls(gh(['api', '--paginate', `repos/${repository}/pulls?state=open&per_page=100`,
+    '--jq', '.[] | [.number, .updated_at, .head.repo.full_name // "", .base.ref] | @tsv']), repository)
 }
 
-function idleDaysFromEnv(): number {
+function idleWindowFromEnv(): { idleDays: number; idleBefore: Date } {
   const value = process.env.PR_PREVIEW_IDLE_DAYS || String(DEFAULT_IDLE_DAYS)
-  if (!/^[1-9][0-9]*$/.test(value)) throw new Error('PR_PREVIEW_IDLE_DAYS must be a positive whole number of days')
-  return Number(value)
+  const idleBefore = new Date(Date.now() - Number(value) * DAY_MS)
+  // An out-of-range day count makes an Invalid Date, which no `<` matches, so expiry would silently stop.
+  if (!/^[1-9][0-9]*$/.test(value) || Number.isNaN(idleBefore.getTime())) {
+    throw new Error('PR_PREVIEW_IDLE_DAYS must be a positive whole number of days')
+  }
+  return { idleDays: Number(value), idleBefore }
 }
+
+// A workflow command ends at the first newline, so the cause is encoded onto one line.
+const workflowCommandData = (text: string) => text.replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A')
 
 if (isMainModule(import.meta.url)) {
   const repository = process.env.GITHUB_REPOSITORY
   if (!repository) throw new Error('set GITHUB_REPOSITORY (owner/repo)')
-  const idleDays = idleDaysFromEnv()
+  const { idleDays, idleBefore } = idleWindowFromEnv()
   const alsoRemove = process.argv.slice(2).map(parsePrNumber)
   const gh: Gh = args => execFileSync('gh', args, { encoding: 'utf8' })
   const { removed, expired } = sweepPreviews({
     git: gitIn(process.cwd()), openPrs: () => openPullRequests(gh, repository),
-    idleBefore: new Date(Date.now() - idleDays * DAY_MS), alsoRemove,
+    idleBefore, alsoRemove,
   })
   console.log(removed.length > 0 ? `Removed ${removed.length} previews: ${removed.join(', ')}` : 'No stale previews.')
-  // A failure only warns: the PR stays expired, so the next run retries it, and a
-  // failing exit would skip the workflow's own comment cleanup.
+  // A failure only warns, since a failing exit would skip the workflow's own comment
+  // cleanup; the next run retries it for as long as the PR stays idle.
   for (const pr of expired) {
     try {
       if (markPreviewExpired(gh, repository, pr, idleDays)) console.log(`Marked PR ${pr.number}'s preview expired`)
     } catch (error) {
-      console.log(`::warning::Could not mark PR ${pr.number}'s preview expired; the next run retries: ${error}`)
+      const cause = (error as { stderr?: string }).stderr?.trim() || String(error)
+      console.log(`::warning::${workflowCommandData(`Could not mark PR ${pr.number}'s preview expired: ${cause}`)}`)
     }
   }
 }

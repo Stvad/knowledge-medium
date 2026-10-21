@@ -166,7 +166,7 @@ jobs:
           header: pr-preview
           message: |
             ### Deploying approved PR preview
-            Commit `${{ needs.approve.outputs.sha }}` is being published by [this run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}), requested by @${{ github.actor }}. If that run fails, run **Deploy approved PR preview** again.
+            Commit `${{ needs.approve.outputs.sha }}` is being published to https://${{ github.repository_owner }}.github.io${{ needs.approve.outputs.base-path }} by [this run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}), requested by @${{ github.actor }}. Until it finishes, that URL serves the previous build, if there is one. If the run fails, run **Deploy approved PR preview** again.
       - name: Deploy approved preview
         id: deploy
         uses: rossjrw/pr-preview-action@v1

@@ -3,7 +3,7 @@ import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import {
-  expiredPrs, type Gh, type Git, gitIn, markPreviewExpired, type OpenPr, previewsToRemove, sweepPreviews,
+  expiredPrs, type Gh, type Git, gitIn, markPreviewExpired, type OpenPr, parseOpenPulls, previewsToRemove, sweepPreviews,
 } from './sweep-pr-previews.ts'
 
 const git = (cwd: string, ...args: string[]) => gitIn(cwd)(args)
@@ -172,6 +172,20 @@ describe('sweepPreviews', { timeout: 20_000 }, () => {
   })
 })
 
+describe('parseOpenPulls', () => {
+  it('reads a PR from another repository, or from a deleted one, as a fork', () => {
+    const at = '2026-09-01T00:00:00Z'
+    const tsv = [`5\t${at}\to/r\tmaster`, `6\t${at}\tcontributor/r\tmaster`, `7\t${at}\t\tmaster`, `8\t${at}\to/r\tfeature`, '']
+
+    expect(parseOpenPulls(tsv.join('\n'), 'o/r')).toEqual([
+      { number: 5, updatedAt: new Date(at), fork: false, base: 'master' },
+      { number: 6, updatedAt: new Date(at), fork: true, base: 'master' },
+      { number: 7, updatedAt: new Date(at), fork: true, base: 'master' },
+      { number: 8, updatedAt: new Date(at), fork: false, base: 'feature' },
+    ])
+  })
+})
+
 describe('markPreviewExpired', () => {
   const marker = '<!-- Sticky Pull Request Commentpr-preview -->'
   const bot = { login: 'github-actions[bot]' }
@@ -196,7 +210,7 @@ describe('markPreviewExpired', () => {
       { id: 12, user: bot, body: `View preview\n${marker}` },
     ])
 
-    expect(markPreviewExpired(gh, 'o/r', { number: 5, fork: false }, 30)).toBe(true)
+    expect(markPreviewExpired(gh, 'o/r', { number: 5, fork: false, base: 'master' }, 30)).toBe(true)
     expect(patches).toHaveLength(1)
     expect(patches[0]).toContain('repos/o/r/issues/comments/12')
     expect(body()).toContain(marker)
@@ -205,17 +219,36 @@ describe('markPreviewExpired', () => {
   it('edits nothing when the PR has no preview comment', () => {
     const { gh, patches } = fakeGh([{ id: 11, user: bot, body: 'another bot comment' }])
 
-    expect(markPreviewExpired(gh, 'o/r', { number: 5, fork: false }, 30)).toBe(false)
+    expect(markPreviewExpired(gh, 'o/r', { number: 5, fork: false, base: 'master' }, 30)).toBe(false)
     expect(patches).toEqual([])
   })
 
   // Every run re-notifies every expired PR, so an edit that already landed must not be repeated.
+  // marocchino skips a minimized comment and posts a fresh one, so a PR can carry several.
+  it('rewrites every preview comment that does not already say it expired', () => {
+    const expiredBody = () => {
+      const probe = fakeGh([{ id: 1, user: bot, body: marker }])
+      markPreviewExpired(probe.gh, 'o/r', { number: 5, fork: false, base: 'master' }, 30)
+      return probe.body()!.slice('body='.length)
+    }
+    const { gh, patches } = fakeGh([
+      { id: 12, user: bot, body: `View preview\n${marker}` },
+      { id: 13, user: bot, body: expiredBody() },
+      { id: 14, user: bot, body: `View preview\n${marker}` },
+    ])
+
+    expect(markPreviewExpired(gh, 'o/r', { number: 5, fork: false, base: 'master' }, 30)).toBe(true)
+    expect(patches.map(args => args.find(arg => arg.includes('/comments/')))).toEqual([
+      'repos/o/r/issues/comments/12', 'repos/o/r/issues/comments/14',
+    ])
+  })
+
   it('edits nothing when the comment already says the preview expired', () => {
     const first = fakeGh([{ id: 12, user: bot, body: marker }])
-    markPreviewExpired(first.gh, 'o/r', { number: 5, fork: false }, 30)
+    markPreviewExpired(first.gh, 'o/r', { number: 5, fork: false, base: 'master' }, 30)
     const again = fakeGh([{ id: 12, user: bot, body: first.body()!.slice('body='.length) }])
 
-    expect(markPreviewExpired(again.gh, 'o/r', { number: 5, fork: false }, 30)).toBe(false)
+    expect(markPreviewExpired(again.gh, 'o/r', { number: 5, fork: false, base: 'master' }, 30)).toBe(false)
     expect(again.patches).toEqual([])
   })
 
@@ -223,11 +256,20 @@ describe('markPreviewExpired', () => {
   it('leaves the head SHA for a maintainer to fill in on a fork PR', () => {
     const sameRepo = fakeGh([{ id: 12, user: bot, body: marker }])
     const fork = fakeGh([{ id: 12, user: bot, body: marker }])
-    markPreviewExpired(sameRepo.gh, 'o/r', { number: 5, fork: false }, 30)
-    markPreviewExpired(fork.gh, 'o/r', { number: 5, fork: true }, 30)
+    markPreviewExpired(sameRepo.gh, 'o/r', { number: 5, fork: false, base: 'master' }, 30)
+    markPreviewExpired(fork.gh, 'o/r', { number: 5, fork: true, base: 'master' }, 30)
 
     expect(sameRepo.body()).toContain('head_sha="$(gh pr view 5')
     expect(fork.body()).not.toContain('$(')
     expect(fork.body()).toContain('head_sha=<reviewed head SHA>')
+  })
+
+  // The approval flow refuses a PR that does not target master.
+  it('offers only a push to a PR that targets another branch', () => {
+    const stacked = fakeGh([{ id: 12, user: bot, body: marker }])
+    markPreviewExpired(stacked.gh, 'o/r', { number: 5, fork: false, base: 'feature' }, 30)
+
+    expect(stacked.body()).toContain('A push brings it back')
+    expect(stacked.body()).not.toContain('gh workflow run')
   })
 })
