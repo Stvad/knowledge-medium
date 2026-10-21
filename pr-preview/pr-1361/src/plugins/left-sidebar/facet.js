@@ -1,1 +1,1 @@
-import{_x as e,gx as t}from"../../../chunks/app-Clq05uUp.js";export{t as isLeftSidebarSectionContribution,e as leftSidebarSectionsFacet};
+import{_x as e,gx as t}from"../../../chunks/app-v7aPa-EP.js";export{t as isLeftSidebarSectionContribution,e as leftSidebarSectionsFacet};
