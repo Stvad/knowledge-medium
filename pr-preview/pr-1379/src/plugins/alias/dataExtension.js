@@ -1,1 +1,1 @@
-import{_G as e}from"../../../chunks/app-BnN0vjVh.js";export{e as aliasDataExtension};
+import{_G as e}from"../../../chunks/app-DB6NNAPp.js";export{e as aliasDataExtension};

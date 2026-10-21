@@ -1,1 +1,1 @@
-import{BP as e,zP as t}from"../../chunks/app-BnN0vjVh.js";export{t as isFocalRender,e as useIsFocalRender};
+import{BP as e,zP as t}from"../../chunks/app-DB6NNAPp.js";export{t as isFocalRender,e as useIsFocalRender};

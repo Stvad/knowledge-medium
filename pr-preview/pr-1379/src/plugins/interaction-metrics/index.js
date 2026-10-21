@@ -1,1 +1,1 @@
-import{di as e}from"../../../chunks/app-BnN0vjVh.js";export{e as interactionMetricsPlugin};
+import{di as e}from"../../../chunks/app-DB6NNAPp.js";export{e as interactionMetricsPlugin};
