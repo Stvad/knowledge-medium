@@ -1,1 +1,1 @@
-import{$U as e}from"../../../chunks/app-Bw1JXwhx.js";export{e as backlinksDataExtension};
+import{iW as e}from"../../../chunks/app-BkILKF0j.js";export{e as backlinksDataExtension};

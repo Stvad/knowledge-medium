@@ -1,1 +1,1 @@
-import{net as e,tet as t}from"../../../chunks/app-Bw1JXwhx.js";export{t as CORE_BLOCK_DELETED_EVENT,e as CORE_BLOCK_MERGED_EVENT};
+import{Cet as e,wet as t}from"../../../chunks/app-BkILKF0j.js";export{e as CORE_BLOCK_DELETED_EVENT,t as CORE_BLOCK_MERGED_EVENT};
