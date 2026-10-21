@@ -7,7 +7,7 @@ import type { Repo } from '@/data/repo'
 import { aliasesProp, hasBlockType } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
 import { keyAtEnd } from '@/data/orderKey'
-import { createOrRestoreTargetBlock } from '@/data/targets'
+import { createOrRestoreTargetBlock, restorePropertiesStrippingAliases } from '@/data/targets'
 import { parseAliasCollisionError } from '@/data/internals/raiseProtocol.js'
 import { dailyPageAliases, formatIsoDate } from '@/utils/dailyPage'
 import { DAILY_NOTE_TYPE, dailyNoteDateProp } from './schema.ts'
@@ -158,6 +158,9 @@ export const getOrCreateDailyNote = async (
   repo: Repo,
   workspaceId: string,
   iso: string,
+  /** Describes the note's own create / repair txs (the agent bridge marks its
+   *  writes this way); the Journal bootstrap keeps its own. */
+  {description}: {description?: string} = {},
 ): Promise<Block> => repo.undoGroup(async repo => {
   const id = dailyNoteBlockId(workspaceId, iso)
   const orderKey = dailyNoteOrderKey(iso)
@@ -216,7 +219,7 @@ export const getOrCreateDailyNote = async (
       if (current.parentId !== journal.id || current.orderKey !== orderKey) {
         await tx.move(id, {parentId: journal.id, orderKey}, {skipMetadata: true})
       }
-    }, {scope: ChangeScope.BlockDefault})
+    }, {scope: ChangeScope.BlockDefault, description})
     return repo.block(id)
   }
 
@@ -228,7 +231,13 @@ export const getOrCreateDailyNote = async (
     if (existing) refuseForeign(existing)
     if (existing && !existing.deleted) return
     if (existing && existing.deleted) {
-      await tx.restore(id, {content: longLabel})
+      // The tombstone's stored alias bag can hold an entry a different
+      // live block claimed while the daily note was dead (issue #378) —
+      // restoring it as-is would re-insert that stale claim and abort
+      // the whole tx. Strip it here; the setProperty below re-claims
+      // exactly the canonical long-form + ISO aliases.
+      const restoredProperties = await restorePropertiesStrippingAliases(tx, id)
+      await tx.restore(id, {content: longLabel, properties: restoredProperties})
       await tx.setProperty(id, aliasesProp, dailyAliases)
       await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: dailyAliases}, typeSnapshot)
       await repo.addTypeInTx(
@@ -255,7 +264,7 @@ export const getOrCreateDailyNote = async (
       {[dailyNoteDateProp.name]: dateValue},
       typeSnapshot,
     )
-  }, {scope: ChangeScope.BlockDefault})
+  }, {scope: ChangeScope.BlockDefault, description})
 
   return repo.block(id)
 })

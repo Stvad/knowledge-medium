@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { cn } from '@/lib/utils'
 import { useRepo } from '@/context/repo'
+import { useMyWorkspaceRoles } from '@/hooks/useWorkspaces'
 import {
   deleteWorkspace,
   inviteMemberByEmail,
@@ -20,6 +21,7 @@ import {
   updateWorkspaceMemberRole,
 } from '@/data/workspaces'
 import type { Workspace, WorkspaceMemberWithEmail, WorkspaceRole } from '@/types'
+import { EncryptionSection } from './conversion/EncryptionSection'
 
 type InviteRole = Exclude<WorkspaceRole, 'owner'>
 
@@ -40,8 +42,10 @@ interface Props {
 
 export function WorkspaceSettingsDialog({workspace, open, onOpenChange, onDeleted}: Props) {
   const repo = useRepo()
+  const {rolesByWorkspaceId} = useMyWorkspaceRoles()
   const isOwner = workspace.ownerUserId === repo.user.id
-  const isViewer = repo.isReadOnly
+  // The role, not `repo.isReadOnly`: a locked workspace is read-only for everyone.
+  const isViewer = rolesByWorkspaceId.get(workspace.id) === 'viewer'
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -57,6 +61,9 @@ export function WorkspaceSettingsDialog({workspace, open, onOpenChange, onDelete
               subsection needs a setState-in-effect on workspace change. */}
           <RenameSection key={workspace.id} workspace={workspace} disabled={!isOwner} />
           <MembersSection key={workspace.id} workspace={workspace} canManage={isOwner} />
+          {isOwner && (
+            <EncryptionSection key={workspace.id} workspace={workspace} userId={repo.user.id} onStart={() => onOpenChange(false)} />
+          )}
           {isOwner && <DangerSection workspace={workspace} onDeleted={() => { onOpenChange(false); onDeleted() }} />}
           {!isOwner && isViewer && (
             <p className="text-sm text-muted-foreground">
@@ -305,7 +312,7 @@ function DangerSection({workspace, onDeleted}: {workspace: Workspace, onDeleted:
     <div className="space-y-2 rounded-md border border-destructive/40 p-3">
       <Label className="text-destructive">Delete workspace</Label>
       <p className="text-sm text-muted-foreground">
-        This permanently deletes the workspace and all its blocks. To confirm, type the workspace name below.
+        This permanently deletes the workspace for everyone in it: all its blocks and their edit history. It can't be undone. To confirm, type the workspace name below.
       </p>
       <Input
         placeholder={workspace.name}

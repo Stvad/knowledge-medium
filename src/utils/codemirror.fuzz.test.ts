@@ -53,8 +53,7 @@
  * identity property below, and the mixed-corruption 2-range case from
  * `codemirror.test.ts` remains as a concrete example of it.
  *
- * ──── Single-range properties: spec-level, not the formula
- *      (PR #454 review comment 3676886063) ────
+ * ──── Single-range properties: spec-level, not the formula ────
  *
  * A third describe block here used to assert
  * `clamped.ranges[0].anchor === Math.max(0, Math.min(anchor, docLength))`

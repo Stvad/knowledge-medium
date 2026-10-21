@@ -39,10 +39,10 @@
  * right after its FIRST successful `recordRejection` (the exact window
  * powersync.ts:485-490 documents: the write succeeds, then the separate
  * `complete()` step fails, so the tx stays pending and legitimately
- * re-quarantines — calling the idempotent writer again — on the next pass;
- * PR #448 review comment 3676858232). `complete()` has TWO further
- * independent failure sites, injected separately (comment 3677128003):
- * `Scenario.batchCompletionFailures` fails the BATCH's own `complete()`
+ * re-quarantines — calling the idempotent writer again — on the next
+ * pass). `complete()` has TWO further independent failure sites,
+ * injected separately: `Scenario.batchCompletionFailures` fails the
+ * BATCH's own `complete()`
  * (powersync.ts:647) even though the batch upload succeeded — an
  * unclassified failure that lands in the same generic catch as a batch
  * upload failure and falls through to the per-tx loop with `attemptIndex`
@@ -62,12 +62,12 @@
  * doc at :622-623) until every transaction is drained OR the simulation
  * detects a genuine fixed point — no pending tx's state changed at all this
  * pass, which (since every piece of state here is monotonic) proves no
- * FUTURE pass could change anything either (comment 3677128006; see the
- * `progressSignature` doc comment in `runSimulationUnspied` for the full
- * argument). That's deliberately NOT a fixed numeric pass cap: one went
- * stale the moment this file's own round 3 added a new injectable failure
- * mode, and a hand-derived replacement has the same risk for whatever gets
- * added next. Running out of *possible* progress with a tx still undrained
+ * FUTURE pass could change anything either (see the `progressSignature`
+ * doc comment in `runSimulationUnspied` for the full argument). That's
+ * deliberately NOT a fixed numeric pass cap: a fixed cap has previously
+ * gone stale when a new injectable failure mode was added, and a
+ * hand-derived replacement has the same risk for whatever gets added
+ * next. Running out of *possible* progress with a tx still undrained
  * is not a failure — "still pending" is a valid terminal fate per property
  * (a) (a script whose repeating `tail` is always 'transient' retries
  * forever in the real system too).
@@ -130,7 +130,7 @@
  * `completionFailsOnceAfterRejection` flag models exactly that. The
  * contract this exercises is the inverse of the write-failure one: repeated
  * `recordRejection` SUCCESSES are legitimate (bounded by `1 +
- * completionFailures`, PR #448 review comment 3676858232), while the tx
+ * completionFailures`), while the tx
  * still only ever drains in exactly one pass.
  *
  * ## Explicit scope exclusion
@@ -204,8 +204,8 @@ const PERMANENT_CODES = [
 const AMBIGUOUS_HTTP_STATUSES = [400, 404, 409, 413, 422] as const
 
 // ──────────────────────────────────────────────────────────────────────
-// Range contracts (PR #448 review comment 3676858229): the named pools
-// above are hand-picked EXAMPLES, but two of the classifier's rules are
+// Range contracts: the named pools above are hand-picked EXAMPLES, but
+// two of the classifier's rules are
 // genuine RANGES, not enumerations — `isClientErrorStatus` (400 <= status <
 // 500) and `isPermanentSqlState`'s string-prefix match on the 22xxx/23xxx/
 // 42xxx SQLSTATE classes (any subclass suffix). A regression narrowing
@@ -417,12 +417,11 @@ interface TxModel {
   // a SEPARATE step, not wrapped in its own try/catch (powersync.ts:
   // 700-702) — itself throws. The tx is never marked drained, stays
   // `pending`, and the next pass legitimately calls the idempotent
-  // rejection writer again (PR #448 review comment 3676858232). Fires at
-  // most once per tx, and only on the FIRST successful recordRejection
-  // call for it.
+  // rejection writer again. Fires at most once per tx, and only on the
+  // FIRST successful recordRejection call for it.
   readonly completionFailsOnceAfterRejection: boolean
-  // A SECOND, independent completion-failure site (PR #448 review comment
-  // 3677128003): `complete()` right after a successful PER-TX upload
+  // A SECOND, independent completion-failure site: `complete()` right
+  // after a successful PER-TX upload
   // (powersync.ts:676) can ALSO fail — and unlike the post-rejection one,
   // that thrown error is NOT generic, it goes through the SAME
   // `classifyUploadError` + transient/ambiguous/permanent decision tree a
@@ -453,9 +452,8 @@ interface Scenario {
   // `batchExogenousFailures`. That failure lands in the SAME generic catch
   // as a batch upload failure (:654) and falls through to the per-tx loop,
   // but with `attemptIndex` already advanced for every tx (the upload DID
-  // go through) — a "prefix re-upload" scenario PR #448 review comment
-  // 3677128003 named explicitly. Only takes effect when the batch upload
-  // would otherwise succeed; a no-op otherwise (can't fail the completion
+  // go through) — a "prefix re-upload" scenario. Only takes effect when
+  // the batch upload would otherwise succeed; a no-op otherwise (can't fail the completion
   // of an upload that never happened).
   readonly batchCompletionFailures: readonly boolean[]
 }
@@ -525,8 +523,8 @@ interface Prediction {
   readonly rejectedBlockIds: readonly string[]
   readonly rejectionFailureBlockId: string | null
   // The tx whose `complete()` call failed AFTER its recordRejection
-  // succeeded this pass (PR #448 review comment 3676858232) — a second,
-  // independent way the pass can legitimately stop besides a write failure.
+  // succeeded this pass — a second, independent way the pass can
+  // legitimately stop besides a write failure.
   readonly completionFailureBlockId: string | null
   readonly passThrows: boolean
   readonly stoppingBlockId: string | null
@@ -747,7 +745,7 @@ const EXPECTED_LOG_PATTERNS: readonly RegExp[] = [
 const isExpectedLog = (args: readonly unknown[]): boolean =>
   typeof args[0] === 'string' && EXPECTED_LOG_PATTERNS.some(re => re.test(args[0] as string))
 
-// SUITE-scoped, not per-case (PR #448 review comment 3676858226): under
+// SUITE-scoped, not per-case: under
 // FUZZ_TIME_MS, fast-check's `interruptAfterTimeLimit` can let `fc.assert`
 // return while its final async case is still executing (documented in
 // `fuzzTestTimeout`'s own docblock above and `statefulFuzzGuard`'s, both in
@@ -762,15 +760,15 @@ const isExpectedLog = (args: readonly unknown[]): boolean =>
 // entire run, so there's nothing for a late-arriving abandoned case to
 // clobber.
 //
-// That still leaves the BUFFER itself and teardown exposed (PR #448 review
-// comment 3677127994): the buffer swap in `runSimulation` below is a plain
+// That still leaves the BUFFER itself and teardown exposed: the buffer
+// swap in `runSimulation` below is a plain
 // reassignment, so an abandoned case can append to a buffer a LATER case has
 // already checked (and moved past) — a genuinely unexpected log silently
 // lost — and an abandoned FINAL case can keep running past `afterAll`'s
 // spy restore. `statefulFuzzGuard` (`@/test/fuzz`, docs/fuzzing.md §6) is
-// the repo's existing fix for exactly this class of hazard — the same
-// mechanism PR #449 adopted — so reuse it rather than inventing a second
-// one: `guard.run` serializes every simulation (barrier-before-body, so a
+// the repo's existing fix for exactly this class of hazard — so reuse it
+// rather than inventing a second one: `guard.run` serializes every
+// simulation (barrier-before-body, so a
 // new case's buffer swap can never happen until the PREVIOUS case, abandoned
 // or not, has fully finished appending to its OWN buffer), and `afterAll`
 // awaits `guard.barrier()` before restoring the spies, so a truly abandoned
@@ -817,11 +815,11 @@ const runSimulationUnspied = async (
   const applyOperationsTouchLog: Array<{pass: number; blockIds: readonly string[]}> = []
   const drainedBlockIds = new Set<string>()
 
-  // Fixed-point detector (PR #448 review comment 3677128006): a hand-derived
+  // Fixed-point detector: a hand-derived
   // numeric pass cap has to be re-verified every time a new injectable
   // failure mode is added — which is exactly how this file's PREVIOUS cap
-  // (AMBIGUOUS_RETRY_BUDGET + 4) went stale the moment round 3 added
-  // completion-failure injection: 3 transient prefix steps + 5 ambiguous
+  // (AMBIGUOUS_RETRY_BUDGET + 4) went stale when completion-failure
+  // injection was added: 3 transient prefix steps + 5 ambiguous
   // attempts to exhaust the budget + a rejection-write-failure retry + a
   // completion-failure retry = 10 passes needed, 9 allowed. Every mutable
   // piece of per-simulation state below is MONOTONIC — `attemptIndex` only
@@ -959,7 +957,7 @@ const runSimulationUnspied = async (
           pendingBatchCompletionFailure = false
           throw new Error('simulated batch complete() failure')
         }
-        // Site (c, round 3): post-rejection complete() (powersync.ts:701).
+        // Site (c): post-rejection complete() (powersync.ts:701).
         if (pendingCompletionFailure.has(tx.blockId)) {
           pendingCompletionFailure.delete(tx.blockId)
           completionFailRemaining.set(tx.blockId, (completionFailRemaining.get(tx.blockId) ?? 0) - 1)
@@ -982,9 +980,9 @@ const runSimulationUnspied = async (
           successCompletionFailRemaining.set(tx.blockId, 0)
           successCompletionFailureCounts.set(tx.blockId, (successCompletionFailureCounts.get(tx.blockId) ?? 0) + 1)
           const traceEntry = perTxTraceEntryByBlockId.get(tx.blockId)
-          // OBSERVED side must observe (PR #448 review comment 3677492553,
-          // the same discipline `classificationOf` follows for every other
-          // path): call the REAL classifyUploadError on the thrown error,
+          // OBSERVED side must observe (the same discipline `classificationOf`
+          // follows for every other path): call the REAL classifyUploadError
+          // on the thrown error,
           // never the generator's own `bucket` label. `predictPass` is the
           // only place allowed to trust `bucket` directly (that's the
           // ground truth `expectedClassOf` branches on) — recording it here
@@ -1054,7 +1052,7 @@ const runSimulationUnspied = async (
     // What `recordRejection` was actually called with, per blockId — diffed
     // against `thrownErrorByBlockId` below so a refactor that forwards the
     // wrong error (the batch's, or another tx's) fails the oracle instead of
-    // passing silently (PR #448 review comment 3676698835).
+    // passing silently.
     const recordRejectionErrorByBlockId = new Map<string, unknown>()
     const recordRejection = async (
       _database: AbstractPowerSyncDatabase,
@@ -1183,9 +1181,8 @@ describe('uploadTransactionsWithFallback — retry/classification state machine'
         const result = await runSimulation(scenario)
 
         // Ground-truth guard for the fixed-point pass-cap detector
-        // (`progressSignature` in `runSimulationUnspied` — PR #448 review
-        // comment 3677128006's own follow-up ask). If that detector is ever
-        // missing a piece of relevant state, the loop could stop EARLY —
+        // (`progressSignature` in `runSimulationUnspied`). If that detector
+        // is ever missing a piece of relevant state, the loop could stop EARLY —
         // and nothing else here would catch it, because "still pending" is
         // already a valid, asserted-nowhere-to-be-wrong terminal fate (this
         // file's own docblock). That failure mode is silent by

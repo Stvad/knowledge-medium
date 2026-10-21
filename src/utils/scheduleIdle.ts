@@ -25,7 +25,7 @@ export const scheduleIdle = (fn: () => void): void => {
 }
 
 /** The idle window a `requestIdleCallback` invocation reports. */
-interface IdleDeadlineLike {
+export interface IdleDeadlineLike {
   /** True when the browser fired the callback because its `timeout`
    *  elapsed (no genuine idle window arrived), not because the thread
    *  went idle. */
@@ -34,7 +34,7 @@ interface IdleDeadlineLike {
   timeRemaining: () => number
 }
 
-type RequestIdleCallback = (
+export type RequestIdleCallback = (
   cb: (deadline: IdleDeadlineLike) => void,
   opts?: {timeout: number},
 ) => number
@@ -72,11 +72,10 @@ export interface DeepIdleOptions {
  *      lull rather than running mid-load;
  *    - force-runs by `fallbackMs` only if asked to.
  *
- *  Test / Node path (no `requestIdleCallback`): a `setTimeout(0)` macrotask
- *  defer, identical to `scheduleIdle`, so the existing drain helpers
- *  (`vi.runAllTimersAsync`, real-timer `setTimeout(0)` + drain) keep working
- *  unchanged. The floor + genuine-idle gating are a production concern that
- *  needs a real idle primitive. */
+ *  Test / Node path (no `requestIdleCallback`): a `setTimeout(0)` defer so the
+ *  fake-timer drain helpers work unchanged. This branch must never run in a
+ *  browser — WebKit lacks the primitive too, and `installIdleCallbackPolyfill`
+ *  (main.tsx) exists so the floor still applies there. */
 export const scheduleDeepIdle = (fn: () => void, opts: DeepIdleOptions): void => {
   const ric = (globalThis as {requestIdleCallback?: RequestIdleCallback}).requestIdleCallback
   if (typeof ric !== 'function') {

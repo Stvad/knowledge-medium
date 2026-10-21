@@ -40,8 +40,8 @@ let singleton: AssetResolver | null = null
 
 /** A blob store for a build with no remote object store (local-only / unauthed):
  *  `get` always misses, so the resolver serves LOCAL byte-store hits and fails
- *  closed (`fetch-failed`) only on a true miss. `put`/`delete` are never reached
- *  via the resolver (the up-lane has its own blob store) but are total for safety. */
+ *  closed (`fetch-failed`) only on a true miss. Every write throws: a delete that
+ *  resolved here would read as confirmed with nothing deleted. */
 export const NO_REMOTE_BLOB_STORE: BlobStore = {
   put: async () => {
     throw new BlobPutError('no remote object store configured', false, undefined, 'no_remote')
@@ -56,14 +56,16 @@ export const NO_REMOTE_BLOB_STORE: BlobStore = {
   probe: async () => {
     throw new Error('no remote object store configured')
   },
-  delete: async () => {},
+  delete: async () => {
+    throw new Error('no remote object store configured')
+  },
 }
 
 /** Wrap the remote blob store so it's consulted ONLY while the active session has
  *  remote sync on; in local-only mode it behaves as {@link NO_REMOTE_BLOB_STORE} (a
  *  remote miss), so the resolver still serves local OPFS hits but never makes a
  *  Supabase request — the read-side half of the "no remote requests in local-only"
- *  contract (Codex P1). Checked PER CALL, so a re-login mode switch is respected
+ *  contract. Checked PER CALL, so a re-login mode switch is respected
  *  without rebuilding the singleton. Shared with the up-lane (assetUpload's
  *  getBlobStore) so the WRITE side gets the same per-call gate: an arm-time-only
  *  check can go stale if remote sync is toggled off while a drain lock is held. */
@@ -71,7 +73,7 @@ export const remoteSyncGated = (remote: BlobStore): BlobStore => ({
   put: (ws, key, bytes) => (isRemoteSyncActive() ? remote : NO_REMOTE_BLOB_STORE).put(ws, key, bytes),
   get: (ws, key) => (isRemoteSyncActive() ? remote : NO_REMOTE_BLOB_STORE).get(ws, key),
   probe: (ws, key) => (isRemoteSyncActive() ? remote : NO_REMOTE_BLOB_STORE).probe(ws, key),
-  delete: (ws, key) => (isRemoteSyncActive() ? remote : NO_REMOTE_BLOB_STORE).delete(ws, key),
+  delete: (ws, key, signal) => (isRemoteSyncActive() ? remote : NO_REMOTE_BLOB_STORE).delete(ws, key, signal),
 })
 
 /** The blob store half of a resolver's deps — identical construction for the
@@ -79,7 +81,7 @@ export const remoteSyncGated = (remote: BlobStore): BlobStore => ({
  *  Cheap to rebuild (the Supabase wrapper is stateless — every op rides the
  *  client's own session), so callers that need a fresh one (the per-user path)
  *  just call this again rather than caching. */
-const buildBlobStore = (): BlobStore => {
+export const buildBlobStore = (): BlobStore => {
   if (!supabase) return NO_REMOTE_BLOB_STORE
   const client = supabase
   return remoteSyncGated(
@@ -115,8 +117,8 @@ const resolversByUser = new Map<string, AssetResolver>()
 
 /**
  * A resolver bound to ONE user for the lifetime of a background pass, instead of
- * the ambient active account. Fixes a review finding (PR #424 P2): the down-lane
- * pass reads `repo.user.id` ONCE at its boundary (see assetDownLane.ts) for its
+ * the ambient active account. The down-lane pass reads `repo.user.id` ONCE at
+ * its boundary (see assetDownLane.ts) for its
  * lock name and its one-shot OPFS presence enumeration, but used to hand that
  * work to {@link getAssetResolver}'s singleton, whose `getUserId` — and its §6
  * materializability/CEK/K_id lookups — re-read the AMBIENT active user on every

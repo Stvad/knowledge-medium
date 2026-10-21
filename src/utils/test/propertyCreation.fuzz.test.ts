@@ -1,7 +1,7 @@
 // @vitest-environment node
 /**
  * Fuzz suite for `convertEmptyChildBlockToProperty`
- * (`src/utils/propertyCreation.ts`) — the `>`-on-empty-block gesture that
+ * (`src/utils/propertyCreation.ts`) — the `::`-on-empty-block gesture that
  * `delete()`s a scaffold block and turns it into a property-create request
  * on its parent. Two independent holes were already found and fixed in
  * this one small guard:
@@ -18,7 +18,7 @@
  *
  * `src/utils/test/propertyCreation.test.ts` pins one fixed example per
  * fix. This suite sweeps the full lattice the guard's own two checks
- * define (propertyCreation.ts:29-35):
+ * define (`canConvertEmptyChildBlockToProperty`):
  *   convert  ⟺  structural childIds EMPTY  ∧  cell (`data.properties`) EMPTY
  * across {cell state} × {structural-child-row state} × {workspace flip
  * state} — the flip axis matters because it's what makes the diverged
@@ -87,6 +87,7 @@ const runCase = async (
   const repo = createTestRepo({
     db: sharedDb.db, user: {id: 'user-1'}, newId: () => crypto.randomUUID(), startSyncObserver: false,
   }).repo
+  repo.setActiveWorkspaceId('ws-1')
 
   await repo.tx(async tx => {
     await tx.create({id: 'parent', workspaceId: 'ws-1', parentId: null, orderKey: 'a0', content: 'Parent'})
@@ -97,8 +98,11 @@ const runCase = async (
   //    suite) never grows structural children on its own — keeps the two
   //    dimensions independent regardless of flip state. ──
   if (cellState === 'orphanKey') {
-    await repo.tx(tx => tx.update('child', {properties: {'unregistered-note': noise}}),
-      {scope: ChangeScope.BlockDefault})
+    await sharedDb.db.writeTransaction(tx => tx.execute(
+      'UPDATE blocks SET properties_json = ?, updated_at = updated_at + 1 WHERE id = ?',
+      [JSON.stringify({'unregistered-note': noise}), 'child'],
+    ))
+    await repo.load('child')
   }
 
   // ── structural dimension, independent of the cell ──
@@ -115,13 +119,13 @@ const runCase = async (
     // FIELD_ID must be a REGISTERED property-schema definition: the
     // VISIBLE-children predicate only excludes a field row when its
     // `reference_target_id` resolves to a live `block_types`
-    // 'property-schema' entry (`recognizedFieldRowSql`,
-    // treeQueries.ts:285-299). An unregistered FIELD_ID leaves `hand-field`
+    // 'property-schema' entry (`recognizedFieldRowSql` in
+    // treeQueries.ts). An unregistered FIELD_ID leaves `hand-field`
     // visible like any ordinary content child, degenerating this axis into
     // the `contentChild` case and leaving the b0392a7c9 regression (hidden
     // rows, empty cell) untested — the pre-fix guard would pass this case
     // too, since it never sees a divergence between the visible and
-    // structural lists (Codex review, comment 3672657052).
+    // structural lists.
     await repo.tx(async tx => {
       await tx.create({
         id: FIELD_ID, workspaceId: 'ws-1', parentId: null, orderKey: 'a1',
@@ -137,14 +141,12 @@ const runCase = async (
     }, {scope: ChangeScope.BlockDefault})
   }
 
-  // Non-vacuity check for the `handAuthoredFieldRow` axis: in a flipped
-  // workspace, the row registered above must actually be hidden from the
-  // VISIBLE facade before conversion runs — otherwise the case below isn't
-  // exercising the diverged state (structural rows live, visible list AND
-  // cell both empty) at all. `flip === 'cell'` workspaces recognize no
-  // field rows by design (VISIBLE_CHILD_PREDICATE_SQL short-circuits on the
-  // un-flipped probe), so this only applies once flipped.
-  if (structState === 'handAuthoredFieldRow' && flip === 'children') {
+  // Non-vacuity check for the `handAuthoredFieldRow` axis: the row registered
+  // above must actually be hidden from the VISIBLE facade before conversion
+  // runs — otherwise the case below isn't exercising the diverged state
+  // (structural rows live, visible list AND cell both empty) at all.
+  // Recognition is not flip-gated, so this holds in both flip states.
+  if (structState === 'handAuthoredFieldRow') {
     const visibleIds = await repo.query.childIds({id: 'child', hidePropertyChildren: true}).load()
     expect(visibleIds, 'hand-authored field row must be hidden from the visible facade').toEqual([])
   }

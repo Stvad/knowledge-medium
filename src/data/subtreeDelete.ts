@@ -1,7 +1,7 @@
 import type { BlockData, Tx } from '@/data/api'
 
 /** Soft-delete `rootId` and every descendant, INCLUDING property field/value
- *  rows (machinery traversal — PR #288 §9: a bare delete strands live rows
+ *  rows (machinery traversal — docs/properties-as-blocks-migration.html §9: a bare delete strands live rows
  *  under a tombstone; the visible-children default would skip hidden field
  *  rows entirely). Iterative — a comment thread under a property value child
  *  is arbitrarily deep user content, so recursion depth is not bounded.

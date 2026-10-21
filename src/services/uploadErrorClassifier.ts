@@ -47,8 +47,9 @@ const isObjectWith = <K extends string>(
  *     schema drift).
  *
  *  `P0002` (`no_data_found`) is raised by `apply_block_patches` when a
- *  patch's target row is missing — retrying the same batch cannot make
- *  the missing row reappear, so it belongs in the permanent bucket. */
+ *  patch's target row is missing or hidden by RLS from an authenticated
+ *  non-writer — retrying the same batch cannot make it reappear, so it
+ *  belongs in the permanent bucket. */
 const PERMANENT_PLPGSQL_SQLSTATES = new Set(['P0002'])
 
 const isPermanentSqlState = (code: string): boolean =>
@@ -83,20 +84,29 @@ const PERMANENT_POSTGREST_CODES = new Set([
  *     re-authenticates and the retry succeeds. Dropping a write on an expired
  *     token is exactly the silent data-loss this module exists to avoid; a
  *     genuine authorization revocation (a workspace un-shared out from under a
- *     pending write) surfaces as the Postgres SQLSTATE `42501` instead — told
- *     apart by the precise CODE, not the coarse 401/403.
+ *     pending write) surfaces as a Postgres SQLSTATE instead — `42501` on a
+ *     create, `P0002` on a patch whose target RLS hides — told apart by the
+ *     precise CODE, not the coarse 401/403.
  *   - `PGRST202` ("function not found" — a stale RPC signature after a
  *     migration, surfaced as HTTP 404): self-heals once PostgREST reloads its
  *     schema cache, so it must be retried, not quarantined. */
 const RECOVERABLE_POSTGREST_CODES = new Set(['PGRST301', 'PGRST302', 'PGRST202'])
+
+/** Postgres SQLSTATEs that are RECOVERABLE — retry forever. `25006`
+ *  (read_only_sql_transaction) is what a full Supabase disk produces: the
+ *  project flips read-only until space frees up. PostgREST returns it as HTTP
+ *  405, a 4xx that would otherwise be `ambiguous` and quarantined. */
+const RECOVERABLE_SQLSTATES = new Set(['25006'])
 
 /** HTTP 4xx statuses that are RECOVERABLE (retry forever) rather than a
  *  suspected-permanent client error:
  *    - 408 (timeout) / 429 (rate limit): the server invites a later retry.
  *    - 401 (unauthorized) / 403 (forbidden): an expired / not-yet-refreshed
  *      session or a gateway-auth blip — recoverable once the token refreshes or
- *      the user re-authenticates. (A real authorization revocation carries the
- *      SQLSTATE `42501`, caught as permanent by the code branch.) */
+ *      the user re-authenticates. `PT401`, the server's refusal of an anon-key
+ *      write to `blocks`, is deliberately in no code set, so this status
+ *      decides it. A real authorization revocation carries a SQLSTATE instead
+ *      (see RECOVERABLE_POSTGREST_CODES). */
 const RETRYABLE_HTTP_STATUSES = new Set([401, 403, 408, 429])
 
 const isClientErrorStatus = (status: number): boolean => status >= 400 && status < 500
@@ -108,6 +118,7 @@ export const classifyUploadError = (err: unknown): UploadErrorClass => {
     if (isPermanentSqlState(err.code)) return 'permanent'
     if (PERMANENT_POSTGREST_CODES.has(err.code)) return 'permanent'
     if (RECOVERABLE_POSTGREST_CODES.has(err.code)) return 'transient'
+    if (RECOVERABLE_SQLSTATES.has(err.code)) return 'transient'
     // An unrecognised code falls through to the status buckets below. A 4xx
     // becomes `ambiguous` (retry-budget) — not an immediate drop (which would
     // lose a recoverable code we haven't catalogued yet, e.g. a new

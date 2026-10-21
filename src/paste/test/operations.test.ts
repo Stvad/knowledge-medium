@@ -13,6 +13,7 @@ import {
   pasteEditModeMultilineText,
   pasteFromClipboard,
   pasteMultilineText,
+  pasteResolvedDecision,
   planEditModeMultilinePaste,
   planSingleBlockPaste,
   resolvePasteWithMediaCapture,
@@ -79,6 +80,43 @@ describe('pasteMultilineText', () => {
     expect(env.repo.block('empty').peek()?.content).toBe('Alpha')
     expect(await childContents('empty')).toEqual(['Detail'])
     expect(await childContents('root')).toEqual(['Alpha', 'Beta', 'Next'])
+  })
+
+  it('keeps a paste contiguous when a blank target WITH children absorbs the first root', async () => {
+    // A FLAT clipboard comes out NESTED here: Beta lands as Alpha's child,
+    // because the blank target absorbed Alpha. Accepted — keeping the pasted
+    // run together beats preserving its flatness.
+    await createBlock('root', 'Root', null, 'a0')
+    await createBlock('empty', '', 'root', 'a1')
+    await createBlock('kid', 'Kid', 'empty', 'a0')
+    await createBlock('next', 'Next', 'root', 'a2')
+
+    await pasteMultilineText('Alpha\nBeta', env.repo.block('empty'), env.repo, {scopeRootId: 'root'})
+
+    expect(env.repo.block('empty').peek()?.content).toBe('Alpha')
+    expect(await childContents('empty')).toEqual(['Beta', 'Kid'])
+    expect(await childContents('root')).toEqual(['Alpha', 'Next'])
+  })
+
+  it('keeps a NESTED paste at its clipboard depth when a blank target with children absorbs', async () => {
+    // Same collision as the editor path: the blank target becomes `Project`,
+    // whose own tasks claim the first-child slot, so `Notes` must stay a peer
+    // of the target rather than joining the task list.
+    await createBlock('root', 'Root', null, 'a0')
+    await createBlock('empty', '', 'root', 'a1')
+    await createBlock('kid', 'Kid', 'empty', 'a0')
+    await createBlock('next', 'Next', 'root', 'a2')
+
+    await pasteMultilineText(
+      '- Project\n  - Task 1\n  - Task 2\n- Notes',
+      env.repo.block('empty'),
+      env.repo,
+      {scopeRootId: 'root'},
+    )
+
+    expect(env.repo.block('empty').peek()?.content).toBe('Project')
+    expect(await childContents('empty')).toEqual(['Task 1', 'Task 2', 'Kid'])
+    expect(await childContents('root')).toEqual(['Project', 'Notes', 'Next'])
   })
 
   it('inserts a multi-block paste between tied siblings without losing content (#198)', async () => {
@@ -200,36 +238,158 @@ describe('pasteMultilineText', () => {
     expect(await childContents('parent')).toEqual(['Old child'])
   })
 
-  it('pastes the whole text as one block when asSingleBlock is set', async () => {
+  describe("position: 'before'", () => {
+    const abcWithBlankB = async (): Promise<void> => {
+      await createBlock('root', 'Root', null, 'a0')
+      await createBlock('a', 'A', 'root', 'a0')
+      await createBlock('b', '', 'root', 'a1')
+      await createBlock('c', 'C', 'root', 'a2')
+    }
+
+    it('keeps a multi-root paste in clipboard order onto a blank target (#497)', async () => {
+      // The target absorbs a root but its order key does NOT move, so absorbing
+      // the FIRST root put it after roots #2..N — the run came out reversed.
+      await abcWithBlankB()
+
+      await pasteMultilineText(
+        'Alpha\nBeta\nGamma',
+        env.repo.block('b'),
+        env.repo,
+        {position: 'before', scopeRootId: 'root'},
+      )
+
+      expect(await childContents('root')).toEqual(['A', 'Alpha', 'Beta', 'Gamma', 'C'])
+      expect(env.repo.block('b').peek()?.content).toBe('Gamma')
+    })
+
+    it('returns the pasted roots in clipboard order, absorbed root included', async () => {
+      // Callers focus `pasted[0]` (vim Shift+P, paste_before_selection), so the
+      // absorbed root must appear at ITS position in the run, not first.
+      await abcWithBlankB()
+
+      const pasted = await pasteMultilineText(
+        'Alpha\nBeta\nGamma',
+        env.repo.block('b'),
+        env.repo,
+        {position: 'before', scopeRootId: 'root'},
+      )
+
+      expect(pasted.map(block => block.peek()?.content)).toEqual(['Alpha', 'Beta', 'Gamma'])
+      expect(pasted.at(-1)?.id).toBe('b')
+    })
+
+    it('reparents the absorbed root\'s children onto the target', async () => {
+      await abcWithBlankB()
+
+      await pasteMultilineText(
+        '- Alpha\n  - A1\n- Gamma\n  - G1',
+        env.repo.block('b'),
+        env.repo,
+        {position: 'before', scopeRootId: 'root'},
+      )
+
+      expect(await childContents('root')).toEqual(['A', 'Alpha', 'Gamma', 'C'])
+      expect(await childContents('b')).toEqual(['G1'])
+    })
+
+    it('inserts before a non-blank target without absorbing', async () => {
+      await createBlock('root', 'Root', null, 'a0')
+      await createBlock('a', 'A', 'root', 'a0')
+      await createBlock('b', 'B', 'root', 'a1')
+
+      await pasteMultilineText(
+        'Alpha\nBeta',
+        env.repo.block('b'),
+        env.repo,
+        {position: 'before', scopeRootId: 'root'},
+      )
+
+      expect(await childContents('root')).toEqual(['A', 'Alpha', 'Beta', 'B'])
+    })
+
+    it('absorbs the FIRST root on a blank scope root, whose run lands inside it', async () => {
+      // No sibling slot, so the roots become first CHILDREN — after the target
+      // whatever `position` says. Taking the last root there would invert it.
+      await createBlock('root', 'Root', null, 'a0')
+      await createBlock('sr', '', 'root', 'a0')
+      await createBlock('existing', 'Existing', 'sr', 'a0')
+
+      await pasteMultilineText(
+        'Alpha\nBeta\nGamma',
+        env.repo.block('sr'),
+        env.repo,
+        {position: 'before', scopeRootId: 'sr'},
+      )
+
+      expect(env.repo.block('sr').peek()?.content).toBe('Alpha')
+      expect(await childContents('sr')).toEqual(['Beta', 'Gamma', 'Existing'])
+    })
+
+    it('breaks a tie below the target when pasting before it', async () => {
+      await createBlock('root', 'Root', null, 'a0')
+      await createBlock('a', 'A', 'root', 'a1')
+      await createBlock('b', '', 'root', 'a1') // tied with A
+      await createBlock('c', 'C', 'root', 'a2')
+
+      await pasteMultilineText(
+        'Alpha\nBeta',
+        env.repo.block('b'),
+        env.repo,
+        {position: 'before', scopeRootId: 'root'},
+      )
+
+      expect(await childContents('root')).toEqual(['A', 'Alpha', 'Beta', 'C'])
+    })
+  })
+
+})
+
+describe('pasteResolvedDecision', () => {
+  // `text` is what a parse would have used; the tree must win over it.
+  const treeDecision = {
+    decision: {
+      kind: 'split' as const,
+      blocks: [
+        {content: '## Heading', children: [{content: 'line one\nline two'}, {content: '- not a bullet'}]},
+        {content: 'Second root'},
+      ],
+    },
+    text: 'IGNORED',
+  }
+
+  it('creates the decision tree as-is: no markdown parse, multi-line content kept', async () => {
+    await createBlock('root', 'Root', null, 'a0')
+    await createBlock('target', 'Target', 'root', 'a0')
+    await createBlock('next', 'Next', 'root', 'a1')
+
+    const pasted = await pasteResolvedDecision(treeDecision, env.repo.block('target'), env.repo, {scopeRootId: 'root'})
+
+    expect(pasted.map(block => block.peek()?.content)).toEqual(['## Heading', 'Second root'])
+    expect(await childContents('root')).toEqual(['Target', '## Heading', 'Second root', 'Next'])
+    expect(await childContents(pasted[0].id)).toEqual(['line one\nline two', '- not a bullet'])
+  })
+
+  const singleBlock = (text: string) => ({decision: {kind: 'single-block' as const}, text})
+
+  it('pastes a single-block decision\'s text whole as one block', async () => {
     await createBlock('root', 'Root', null, 'a0')
     await createBlock('target', 'Target', 'root', 'a0')
     await createBlock('sibling', 'Sibling', 'root', 'a1')
 
-    const pasted = await pasteMultilineText(
-      '- Alpha\n- Beta',
-      env.repo.block('target'),
-      env.repo,
-      {scopeRootId: 'root', asSingleBlock: true},
-    )
+    const pasted = await pasteResolvedDecision(singleBlock('- Alpha\n- Beta'), env.repo.block('target'), env.repo, {scopeRootId: 'root'})
 
-    // No markdown split, no bullet stripping — the whole clipboard becomes
-    // one block (the block-shell "single-block" override path).
+    // No markdown split, no bullet stripping.
     expect(pasted).toHaveLength(1)
     expect(pasted[0]?.peek()?.content).toBe('- Alpha\n- Beta')
     expect(await childContents('root')).toEqual(['Target', '- Alpha\n- Beta', 'Sibling'])
   })
 
-  it('absorbs an asSingleBlock paste into a blank target, keeping newlines', async () => {
+  it('absorbs a single-block paste into a blank target, keeping newlines', async () => {
     await createBlock('root', 'Root', null, 'a0')
     await createBlock('empty', '', 'root', 'a0')
     await createBlock('next', 'Next', 'root', 'a1')
 
-    const pasted = await pasteMultilineText(
-      '- Alpha\n- Beta',
-      env.repo.block('empty'),
-      env.repo,
-      {scopeRootId: 'root', asSingleBlock: true},
-    )
+    const pasted = await pasteResolvedDecision(singleBlock('- Alpha\n- Beta'), env.repo.block('empty'), env.repo, {scopeRootId: 'root'})
 
     expect(pasted).toHaveLength(1)
     expect(pasted[0]?.id).toBe('empty')
@@ -237,20 +397,16 @@ describe('pasteMultilineText', () => {
     expect(await childContents('root')).toEqual(['- Alpha\n- Beta', 'Next'])
   })
 
-  it('no-ops an asSingleBlock paste of blank text (matches the parse path)', async () => {
+  it('no-ops a single-block paste of blank text, as a parse would', async () => {
     await createBlock('root', 'Root', null, 'a0')
     await createBlock('target', 'Target', 'root', 'a0')
 
-    const pasted = await pasteMultilineText(
-      '   \n  ',
-      env.repo.block('target'),
-      env.repo,
-      {scopeRootId: 'root', asSingleBlock: true},
-    )
+    const pasted = await pasteResolvedDecision(singleBlock('   \n  '), env.repo.block('target'), env.repo, {scopeRootId: 'root'})
 
     expect(pasted).toEqual([])
     expect(await childContents('root')).toEqual(['Target'])
   })
+
 })
 
 describe('pasteEditModeMultilineText', () => {
@@ -302,6 +458,24 @@ describe('pasteEditModeMultilineText', () => {
     expect(await childContents('root')).toEqual([`note: ${fence}`])
   })
 
+  it('merges a pre-built tree root whole at the caret — no first-line or bullet rule', async () => {
+    await createBlock('root', 'Root', null, 'a0')
+    await createBlock('target', 'see  now', 'root', 'a0')
+
+    const plan = planEditModeMultilinePaste(
+      [{content: '- kept\nverbatim', children: [{content: 'child'}]}, {content: 'last'}],
+      'see  now',
+      {from: 'see '.length, to: 'see '.length},
+    )
+    expect(plan?.targetContent).toBe('see - kept\nverbatim')
+    expect(plan?.suffix).toBe(' now')
+
+    await pasteEditModeMultilineText(plan!, env.repo.block('target'), env.repo, {scopeRootId: 'root'})
+
+    expect(await childContents('root')).toEqual(['see - kept\nverbatim', 'last now'])
+    expect(await childContents('target')).toEqual(['child'])
+  })
+
   it('inserts edit-mode paste siblings between tied neighbours without losing content (#198)', async () => {
     // The edited block ties with its next sibling, so the trailing pasted
     // sibling's order_key bounds are equal — the old keysBetween threw and rolled
@@ -351,6 +525,92 @@ describe('pasteEditModeMultilineText', () => {
     expect(await childContents('target')).toEqual(['Child'])
     expect(await childContents('root')).toEqual(['prefix Parent', 'Sibling', 'Next'])
     expect(result?.focusBlock.peek()?.content).toBe('Sibling')
+  })
+
+  it('lands a FLAT paste as first children when the edited block has children', async () => {
+    // The caret split's tail follows the edited line instead of jumping past
+    // its subtree. Safe to nest here because the absorbed root is childless,
+    // so nothing else is competing for the first-child slot.
+    await createBlock('root', 'Root', null, 'a0')
+    await createBlock('target', 'hello world', 'root', 'a1')
+    await createBlock('kid', 'Kid', 'target', 'a0')
+    await createBlock('next', 'Next', 'root', 'a2')
+
+    const plan = planEditModeMultilinePaste('alpha\nbeta', 'hello world', {
+      from: 'hello '.length,
+      to: 'hello '.length,
+    })
+
+    await pasteEditModeMultilineText(plan!, env.repo.block('target'), env.repo, {scopeRootId: 'root'})
+
+    expect(env.repo.block('target').peek()?.content).toBe('hello alpha')
+    expect(await childContents('target')).toEqual(['betaworld', 'Kid'])
+    expect(await childContents('root')).toEqual(['hello alpha', 'Next'])
+  })
+
+  it('still nests a paste whose LATER root has children — only root #1 contests the slot', async () => {
+    // Pins whose children matter. Root #1 (`alpha`) is childless, so nothing
+    // competes for the first-child slot and the run stays contiguous, even
+    // though the clipboard is nested further down. Widening the rule to "the
+    // clipboard is nested anywhere" would wrongly push this run out to sibling
+    // placement.
+    await createBlock('root', 'Root', null, 'a0')
+    await createBlock('target', 'Header ', 'root', 'a1')
+    await createBlock('kid', 'Kid', 'target', 'a0')
+    await createBlock('next', 'Next', 'root', 'a2')
+
+    const plan = planEditModeMultilinePaste('alpha\n- beta\n  - b1\n- gamma', 'Header ', {
+      from: 'Header '.length,
+      to: 'Header '.length,
+    })
+
+    await pasteEditModeMultilineText(plan!, env.repo.block('target'), env.repo, {scopeRootId: 'root'})
+
+    expect(env.repo.block('target').peek()?.content).toBe('Header alpha')
+    expect(await childContents('target')).toEqual(['beta', 'gamma', 'Kid'])
+    expect(await childContents('root')).toEqual(['Header alpha', 'Next'])
+  })
+
+  it('reveals a collapsed target whose absorbed root brings children', async () => {
+    // The absorbed root's children reparent onto the target no matter how
+    // placement resolves, so a collapsed target must be revealed or the paste
+    // lands invisible — with focus on a block that isn't rendered.
+    await createBlock('root', 'Root', null, 'a0')
+    await createBlock('target', 'Header ', 'root', 'a1')
+    await createBlock('kid', 'Kid', 'target', 'a0')
+    await env.repo.block('target').set(isCollapsedProp, true)
+
+    const plan = planEditModeMultilinePaste('- P\n  - T1\n  - T2', 'Header ', {
+      from: 'Header '.length,
+      to: 'Header '.length,
+    })
+
+    await pasteEditModeMultilineText(plan!, env.repo.block('target'), env.repo, {scopeRootId: 'root'})
+
+    expect(env.repo.block('target').peek()?.properties[isCollapsedProp.name]).toBe(false)
+    expect(await childContents('target')).toEqual(['T1', 'T2', 'Kid'])
+  })
+
+  it('keeps a NESTED paste at its clipboard depth when the edited block has a parent in scope', async () => {
+    // The absorbed root owns the first-child slot, so `Notes` — a peer of
+    // `Project` in the clipboard — must stay a peer of the edited block, not
+    // join `Project`'s task list where nothing distinguishes it from a task.
+    await createBlock('root', 'Root', null, 'a0')
+    await createBlock('target', 'Header ', 'root', 'a1')
+    await createBlock('kid', 'Kid', 'target', 'a0')
+    await createBlock('next', 'Next', 'root', 'a2')
+
+    const plan = planEditModeMultilinePaste(
+      '- Project\n  - Task 1\n  - Task 2\n- Notes',
+      'Header ',
+      {from: 'Header '.length, to: 'Header '.length},
+    )
+
+    await pasteEditModeMultilineText(plan!, env.repo.block('target'), env.repo, {scopeRootId: 'root'})
+
+    expect(env.repo.block('target').peek()?.content).toBe('Header Project')
+    expect(await childContents('target')).toEqual(['Task 1', 'Task 2', 'Kid'])
+    expect(await childContents('root')).toEqual(['Header Project', 'Notes', 'Next'])
   })
 
   it('keeps remaining lines visible when editing the zoomed top-level block', async () => {
@@ -418,9 +678,8 @@ describe('pasteFromClipboard (shortcut/programmatic paste)', () => {
     vi.stubGlobal('navigator', {clipboard: {readText: async () => text}})
 
   it('honors a forced single-block override from the verb (no split)', async () => {
-    // The gap Codex flagged: shortcut paste used to bypass pasteDecisionVerb,
-    // so a plugin preference like "always paste verbatim" was silently
-    // ignored. It must now apply here too.
+    // Shortcut paste goes through pasteDecisionVerb too, so a plugin
+    // preference like "always paste verbatim" applies here as well.
     stubClipboard('alpha\nbeta')
     await createBlock('root', 'Root', null, 'a0')
     await createBlock('target', 'Target', 'root', 'a0')
@@ -447,6 +706,20 @@ describe('pasteFromClipboard (shortcut/programmatic paste)', () => {
     const pasted = await pasteFromClipboard(env.repo.block('target'), env.repo, {scopeRootId: 'root'})
 
     expect(pasted[0]?.peek()?.content).toBe('one-rewritten')
+  })
+
+  it('pastes a block tree a verb override built', async () => {
+    stubClipboard('ignored')
+    await createBlock('root', 'Root', null, 'a0')
+    await createBlock('target', 'Target', 'root', 'a0')
+    env.repo.setRuntimeContributions(pasteDecisionVerb.implFacet, 'test-paste', [
+      () => ({kind: 'split', blocks: [{content: 'Parent', children: [{content: 'Child'}]}]}),
+    ])
+
+    const pasted = await pasteFromClipboard(env.repo.block('target'), env.repo, {scopeRootId: 'root'})
+
+    expect(await childContents('root')).toEqual(['Target', 'Parent'])
+    expect(await childContents(pasted[0].id)).toEqual(['Child'])
   })
 
   it('defaults to the historical outline paste with no contributions', async () => {
@@ -499,6 +772,39 @@ describe('resolvePasteWithMediaCapture', () => {
     // Re-decided with files stripped → no longer media; clipboard text then one reference/line.
     expect(r?.decision.kind).toBe('split')
     expect(r?.text).toBe('note\n((a))\n((b))')
+  })
+
+  it('re-decides without the html, which describes the text before the references were spliced in', async () => {
+    const htmlSeen: (string | undefined)[] = []
+    const runtime = resolveFacetRuntimeSync([
+      mediaWhenFiles,
+      pasteDecisionVerb.before(r => { htmlSeen.push(r.html) }),
+      captureMediaVerb.impl(() => ({ references: ['((a))'] })),
+    ])
+    const r = await resolvePasteWithMediaCapture(
+      runtime,
+      { ...req({ text: 'note', files }), html: '<img src="https://e.com/a.png">' },
+      { repo, workspaceId: 'ws' },
+    )
+    expect(htmlSeen).toEqual(['<img src="https://e.com/a.png">', undefined])
+    expect(r?.text).toBe('note\n((a))')
+  })
+
+  it('keeps the html for the re-decision when nothing was captured', async () => {
+    const htmlSeen: (string | undefined)[] = []
+    const runtime = resolveFacetRuntimeSync([
+      mediaWhenFiles,
+      pasteDecisionVerb.before(r => { htmlSeen.push(r.html) }),
+      captureMediaVerb.impl(() => ({ references: [] })),
+    ])
+    const r = await resolvePasteWithMediaCapture(
+      runtime,
+      { ...req({ text: '', files }), html: '<h1>Doc</h1>' },
+      { repo, workspaceId: 'ws' },
+    )
+    // Not null: the html alone is still something to paste.
+    expect(r).not.toBeNull()
+    expect(htmlSeen).toEqual(['<h1>Doc</h1>', '<h1>Doc</h1>'])
   })
 
   it('returns null when capture yields no references and there is no text', async () => {

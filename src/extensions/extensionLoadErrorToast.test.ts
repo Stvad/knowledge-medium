@@ -2,9 +2,9 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { toastExtensionLoadError } from './extensionLoadErrorToast.ts'
 
 vi.mock('@/utils/toast.js', () => ({ showError: vi.fn() }))
-vi.mock('@/shortcuts/runAction.js', () => ({ runActionById: vi.fn() }))
+vi.mock('@/shortcuts/runAction.js', () => ({ runActionByIdSafely: vi.fn() }))
 const { showError } = await import('@/utils/toast.js')
-const { runActionById } = await import('@/shortcuts/runAction.js')
+const { runActionByIdSafely } = await import('@/shortcuts/runAction.js')
 
 describe('toastExtensionLoadError', () => {
   beforeEach(() => vi.clearAllMocks())
@@ -45,7 +45,7 @@ describe('toastExtensionLoadError', () => {
     const [, opts] = vi.mocked(showError).mock.calls[0]!
     opts!.action!.onClick()
 
-    expect(runActionById).toHaveBeenCalledWith(
+    expect(runActionByIdSafely).toHaveBeenCalledWith(
       'open_extensions_settings',
       expect.anything(),
     )

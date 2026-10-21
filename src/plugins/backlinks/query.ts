@@ -11,84 +11,11 @@ import {
   TYPED_BLOCKS_STRUCTURE_CHANNEL,
   typedBlocksStructureKey,
 } from '@/data/invalidation'
-import { readIsChildBackedWorkspace } from '@/data/workspaceSchema'
+import { dependOnRecognitionParams } from '@/data/internals/kernelQueries'
+import { propertyMachinerySourceIds, workspaceHasPropertyMachinery } from './machinery.ts'
+import { backlinkSourceIds } from './sourceBatch.ts'
 
 export const BACKLINKS_FOR_BLOCK_QUERY = 'backlinks.forBlock'
-
-/** The seed `IN (?, …)` list binds one variable per source id, so a heavily
- *  backlinked block must be chunked under SQLite's `SQLITE_MAX_VARIABLE_NUMBER`
- *  (999 on older builds, 32766 since 3.32) — the same discipline the sync
- *  observer's staging reads use (`materialize.ts`). 500 keeps a wide margin. */
-const MACHINERY_SOURCE_CHUNK = 500
-
-/** Which of `sourceIds` are property-subtree INTERIOR machinery — a value child,
- *  or a row deeper inside a property subtree, whose parent chain passes through
- *  a §9 field row. Same recognition as `VISIBLE_CHILD_PREDICATE_SQL`: a
- *  workspace-scoped `block_types = 'property-schema'` probe on a non-null
- *  `reference_target_id`, root rows exempt via `parent_id IS NOT NULL`.
- *
- *  STRICTLY INTERIOR (`depth > 0`): the field row ITSELF is deliberately NOT
- *  matched. The de-dup this filter exists for only applies to interiors — a
- *  value row's `[[X]]` duplicates the owner's reprojected `O --prop--> X`, so
- *  showing both would state one fact twice and attribute a copy to a hidden
- *  row. A field row has no such duplicate: its only edge is to its OWN
- *  definition, which is the "used by" backlink (every block using this
- *  property), and nothing else projects that edge. Suppressing it would make a
- *  property definition's backlinks empty — the opposite of why field rows were
- *  put in `block_references` in the first place.
- *
- *  PRECONDITION — the caller MUST flip-gate this. There is no internal
- *  `properties_migration` check (unlike `VISIBLE_CHILD_PREDICATE_SQL`, which
- *  embeds one), because `reference_target_id` derivation and `property-schema`
- *  types both exist independent of the flip. Calling it for an UN-flipped
- *  workspace would misclassify an ordinary `((definitionId))` reference as
- *  machinery and silently drop a real backlink.
- *
- *  The `up` walk carries the same per-seed `path` visited-guard as
- *  `manyAncestorsSql` (treeQueries.ts) — issue #404 item 8b: without it a
- *  cyclic `parent_id` chain (issue #183) still terminates on `depth < 100`,
- *  but re-emits every cycle member on each loop iteration instead of
- *  stopping the moment a walk revisits a row it's already seen. */
-export const propertyMachinerySourceIds = async (
-  db: { getAll<T>(sql: string, params?: unknown[]): Promise<T[]> },
-  sourceIds: readonly string[],
-  chunkSize: number = MACHINERY_SOURCE_CHUNK,
-): Promise<Set<string>> => {
-  const machinery = new Set<string>()
-  for (let i = 0; i < sourceIds.length; i += chunkSize) {
-    const chunk = sourceIds.slice(i, i + chunkSize)
-    const placeholders = chunk.map(() => '?').join(', ')
-    const rows = await db.getAll<{ id: string }>(
-      `WITH RECURSIVE up(start_id, id, reference_target_id, parent_id, workspace_id, path, depth) AS (
-         SELECT id, id, reference_target_id, parent_id, workspace_id,
-                '!' || hex(id) || '/',
-                0
-           FROM blocks WHERE id IN (${placeholders})
-         UNION ALL
-         SELECT up.start_id, b.id, b.reference_target_id, b.parent_id, b.workspace_id,
-                up.path || '!' || hex(b.id) || '/',
-                up.depth + 1
-           FROM blocks AS b JOIN up ON b.id = up.parent_id
-          WHERE up.depth < 100
-            AND INSTR(up.path, '!' || hex(b.id) || '/') = 0
-       )
-       SELECT DISTINCT up.start_id AS id
-         FROM up
-        WHERE up.depth > 0
-          AND up.reference_target_id IS NOT NULL
-          AND up.parent_id IS NOT NULL
-          AND EXISTS (
-            SELECT 1 FROM block_types bt
-             WHERE bt.block_id = up.reference_target_id
-               AND bt.type = 'property-schema'
-               AND bt.workspace_id = up.workspace_id
-          )`,
-      [...chunk],
-    )
-    for (const r of rows) machinery.add(r.id)
-  }
-  return machinery
-}
 
 /** Filter applied on top of the base "blocks that reference target X"
  *  set. Each entry is a `BlockPredicate` from the unified typed-query
@@ -153,14 +80,12 @@ export const hasBacklinksFilter = (filter: BacklinksFilter | undefined): boolean
   return n.include.length > 0 || n.exclude.length > 0
 }
 
-/** Backlinks: blocks whose references point at `id`. Thin wrapper
- *  around `resolveTypedBlocks` — the typed-query compiler drives from
- *  the indexed `block_references` lookup when `referencedBy` is set,
- *  preserving the perf shape of the previous dedicated SQL.
- *
- *  Self-reference (the target block referencing itself) is filtered
- *  out post-fetch — it's a one-line check, not worth a special SQL
- *  predicate. */
+/** Backlinks: blocks whose references point at `id`, self-reference excluded.
+ *  Unfiltered, it is answered by the inline badge's batched statement
+ *  (`sourceBatch.ts`), so the list on expand and the count on the badge are two
+ *  projections of one query. Filtered (or `rawSources`), it is a wrapper around
+ *  `core.typedBlockIds`, which drives from the indexed `block_references`
+ *  lookup when `referencedBy` is set. */
 // Explicit const type so `typeof backlinksForBlockQuery` (it augments
 // QueryRegistry below) is knowable without inferring this initializer —
 // otherwise the `ctx.run` call here resolves QueryRegistry, which loops
@@ -198,6 +123,25 @@ export const backlinksForBlockQuery: Query<
       key: typedBlocksStructureKey(workspaceId, id),
     })
     const normalized = normalizeBacklinksFilter(filter)
+    // The machinery exclusion on both routes below is NOT flip-gated. The
+    // gate's premise — an un-flipped workspace has no property value children
+    // — is what the cell→children backfill breaks: it mints them while the
+    // workspace still reads cells, and a ref-typed value row's `[[X]]` then
+    // duplicates the owner's projected property edge on a surface that had
+    // stopped filtering.
+    //
+    // KNOWN, pre-existing: the exclusion walks each SOURCE's ancestry, but the
+    // only structural dep declared above is the TARGET's. Moving a source out
+    // from under a field row — or editing an ancestor between `((D))` and
+    // `::((D))` — changes membership with nothing to invalidate on, so the
+    // list stays stale until the next reference change or a reload. Un-gating
+    // makes it reachable in every workspace rather than only flipped ones.
+    // Not fixed here: the honest fix is a dep per candidate source and walked
+    // ancestor, and the unfiltered view is what the inline badge on every
+    // visible block counts. km-nc46.
+    if (!rawSources && normalized.include.length === 0 && normalized.exclude.length === 0) {
+      return backlinkSourceIds(ctx, workspaceId, id)
+    }
     const ids = (await ctx.run('core.typedBlockIds', {
       workspaceId,
       referencedBy: {id},
@@ -205,12 +149,9 @@ export const backlinksForBlockQuery: Query<
       exclude: normalized.exclude,
       order: 'created-desc',
     })).filter(sourceId => sourceId !== id)
-    // Machinery-source exclusion is flip-gated: an un-flipped workspace (all of
-    // prod) has no property value children, so there is nothing to exclude and
-    // this pays only the cached flip read.
     if (rawSources || ids.length === 0) return ids
-    if (!(await readIsChildBackedWorkspace(ctx.db, workspaceId))) return ids
-    const machinery = await propertyMachinerySourceIds(ctx.db, ids)
+    if (!(await workspaceHasPropertyMachinery(ctx.db, workspaceId))) return ids
+    const machinery = await propertyMachinerySourceIds(ctx.db, ids, dependOnRecognitionParams(ctx))
     return machinery.size === 0 ? ids : ids.filter(sourceId => !machinery.has(sourceId))
   },
 })

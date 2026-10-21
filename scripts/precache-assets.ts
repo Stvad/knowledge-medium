@@ -4,7 +4,7 @@
  * module graph into each generation's cache — not just the first-paint set.
  *
  * Why full precache: the prod build ships modules at UNHASHED, stable URLs
- * (`preserveModules` + `[name].js`), so cross-build consistency rests entirely
+ * (every module is an entry, `[name].js`), so cross-build consistency rests entirely
  * on the SW pinning each deploy to its own generation cache and never grafting
  * foreign-generation bytes onto a page. That invariant only holds for assets
  * that are actually IN the generation cache. Anything lazy — e.g. the extension
@@ -47,6 +47,25 @@ const EXCLUDE_PATHS = new Set(['sw.js'])
 /** True for a dist-relative path the SW would serve from the generation cache. */
 export const isPrecacheableAsset = (relPath: string): boolean =>
   ASSET_EXTENSION.test(relPath) && !EXCLUDE_PATHS.has(relPath)
+
+/** The local-database worker's graph, which a cold launch needs before first
+ *  paint but which no HTML tag names: the DB and VFS-probe worker scripts, the
+ *  VFS variants the app can select (`src/data/localDbVfs.ts`), and the
+ *  matching wa-sqlite builds with their wasm. The `mc-` (cipher) builds are
+ *  never selected (no `encryptionKey` is passed) and stay in the rest list.
+ *  Dist-relative POSIX paths in, the matching subset out. Name-pinned, so a
+ *  rename in `@powersync/web` fails the build here instead of silently
+ *  moving the DB worker back behind Cache Storage. */
+const BOOT_WORKER_ASSET = /^assets\/(?:(?:WASQLiteDB|writeAheadVfsProbe)\.worker-[^/]+\.js|(?:OPFSCoopSyncVFS|OPFSWriteAheadVFS|FacadeVFS)-[^/]+\.js|wa-sqlite(?:-async)?-[^/]+\.(?:js|wasm))$/
+const BOOT_WORKER_REQUIRED = [/WASQLiteDB\.worker-/, /writeAheadVfsProbe\.worker-/, /OPFSCoopSyncVFS-/, /\.wasm$/]
+export const bootWorkerAssets = (allFiles: readonly string[]): string[] => {
+  const selected = allFiles.filter(rel => BOOT_WORKER_ASSET.test(rel)).sort()
+  const missing = BOOT_WORKER_REQUIRED.filter(required => !selected.some(rel => required.test(rel)))
+  if (missing.length > 0) {
+    throw new Error(`boot worker set is missing ${missing.map(String).join(', ')}; PowerSync's emitted names changed?`)
+  }
+  return selected
+}
 
 /**
  * Partition the emitted graph into the "rest" precache list — every

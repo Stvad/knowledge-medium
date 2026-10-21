@@ -1,6 +1,7 @@
 import {describe, expect, it, vi} from 'vitest'
 import {createServiceWorker, type SwConfig, type SwEnv} from './worker'
 import {previewDatabaseRecordUrl} from './previewDatabases'
+import {bootKey} from './bootStore'
 
 // --- in-memory CacheStorage mock -------------------------------------------
 // Enough of the Cache / CacheStorage surface for the worker: open/keys/has/
@@ -113,6 +114,21 @@ class MockIndexedDB {
       request.onsuccess?.(new Event('success'))
     })
     return request
+  }
+}
+
+class MockBootStore {
+  entries = new Map<string, {status: number; contentType: string; body: ArrayBuffer}>()
+  failGet = false
+  async get(key: string) {
+    if (this.failGet) throw new Error('simulated idb failure')
+    return this.entries.get(key)
+  }
+  async putAll(list: ReadonlyArray<readonly [string, {status: number; contentType: string; body: ArrayBuffer}]>) {
+    for (const [k, v] of list) this.entries.set(k, v)
+  }
+  async deletePrefix(prefix: string) {
+    for (const k of [...this.entries.keys()]) if (k.startsWith(prefix)) this.entries.delete(k)
   }
 }
 
@@ -795,4 +811,92 @@ describe('touch-on-use keeps a live preview from being reaped', () => {
     expect(extended).toHaveLength(1) // unchanged — a throttled fetch schedules nothing
   })
 
+})
+
+describe('boot store (IndexedDB copy of the boot set)', () => {
+  const withStore = (configOverrides: Partial<SwConfig> = {}) => {
+    const bootStore = new MockBootStore()
+    const built = build(
+      {precacheVendor: ['https://esm.sh/react@19.2.6'], ...configOverrides},
+      async (req) => new Response(`body of ${req.url}`, {status: 200, headers: {'content-type': 'text/javascript'}}),
+      () => NOW,
+      {bootStore},
+    )
+    return {...built, bootStore}
+  }
+
+  it('install copies the shell, first-paint assets and vendor set into the store, keyed by build id', async () => {
+    const {sw, bootStore} = withStore()
+    await sw.install()
+    const keys = [...bootStore.entries.keys()]
+    expect(keys).toContain(bootKey('gen1', abs('./index.html')))
+    expect(keys).toContain(bootKey('gen1', 'https://app.example/knowledge-medium/src/main.js'))
+    expect(keys).toContain(bootKey('gen1', 'https://esm.sh/react@19.2.6'))
+    expect(keys).not.toContain(bootKey('gen1', 'https://app.example/knowledge-medium/src/lazy.js'))
+    expect(bootStore.entries.get(bootKey('gen1', abs('./index.html')))?.contentType).toBe('text/javascript')
+  })
+
+  it('answers a navigation and a boot-set asset from the store without touching Cache Storage', async () => {
+    const {sw, caches} = withStore()
+    await sw.install()
+    const openSpy = vi.spyOn(caches, 'open')
+    const nav = await sw.handleFetch(new Request(abs('./'), {headers: {accept: 'text/html'}}))!
+    expect(await nav.text()).toBe(`body of ${abs('./index.html')}`)
+    const asset = await sw.handleFetch(new Request('https://app.example/knowledge-medium/src/main.js'))!
+    expect(await asset.text()).toBe('body of https://app.example/knowledge-medium/src/main.js')
+    expect(asset.headers.get('content-type')).toBe('text/javascript')
+    expect(openSpy).not.toHaveBeenCalled()
+  })
+
+  it('serves a deeper navigation path from the shell cache, whose response carries the shell URL', async () => {
+    const {sw, caches} = withStore()
+    await sw.install()
+    const openSpy = vi.spyOn(caches, 'open')
+    const nav = await sw.handleFetch(new Request(abs('./some/route'), {headers: {accept: 'text/html'}}))!
+    expect(await nav.text()).toBe(`body of ${abs('./index.html')}`)
+    expect(openSpy).toHaveBeenCalled()
+  })
+
+  it('falls back to the caches for a URL outside the boot set, on a miss, and on a store error', async () => {
+    const {sw, bootStore, caches} = withStore()
+    await sw.install()
+    const openSpy = vi.spyOn(caches, 'open')
+    const lazy = await sw.handleFetch(new Request('https://app.example/knowledge-medium/src/lazy.js'))!
+    expect(await lazy.text()).toContain('lazy.js')
+    expect(openSpy).toHaveBeenCalled()
+
+    bootStore.entries.clear()
+    const miss = await sw.handleFetch(new Request(abs('./'), {headers: {accept: 'text/html'}}))!
+    expect(await miss.text()).toBe(`body of ${abs('./index.html')}`)
+
+    await sw.install()
+    bootStore.failGet = true
+    const errored = await sw.handleFetch(new Request(abs('./'), {headers: {accept: 'text/html'}}))!
+    expect(await errored.text()).toBe(`body of ${abs('./index.html')}`)
+  })
+
+  it('activate reaps an expired generation from the store along with its caches', async () => {
+    const {sw, bootStore} = withStore({keepGenerations: 1})
+    await bootStore.putAll([[bootKey('gen0', abs('./index.html')), {status: 200, contentType: 'text/html', body: new ArrayBuffer(1)}]])
+    await sw.writeLedger(['gen0', 'gen1'])
+    await sw.activate()
+    expect(bootStore.entries.has(bootKey('gen0', abs('./index.html')))).toBe(false)
+  })
+
+  it('the stale-preview sweep reaps a merged preview’s entries too, and keeps a live scope’s', async () => {
+    const {sw, bootStore, caches} = withStore()
+    const previewLedger = (n: number) => `${ORIGIN}/knowledge-medium/pr-preview/pr-${n}/__km_generations__`
+    const meta = await caches.open('km-meta')
+    meta.store.set(previewLedger(1), new Response(JSON.stringify({ids: ['pvStale'], updatedAt: NOW - 15 * DAY})))
+    meta.store.set(previewLedger(2), new Response(JSON.stringify({ids: ['pvFresh'], updatedAt: NOW - DAY})))
+    const entry = {status: 200, contentType: 'text/html', body: new ArrayBuffer(1)}
+    await bootStore.putAll([
+      [bootKey('pvStale', `${ORIGIN}/knowledge-medium/pr-preview/pr-1/index.html`), entry],
+      [bootKey('pvFresh', `${ORIGIN}/knowledge-medium/pr-preview/pr-2/index.html`), entry],
+    ])
+    await sw.install()
+    await sw.activate()
+    expect([...bootStore.entries.keys()].some(k => k.startsWith(bootKey('pvStale', '')))).toBe(false)
+    expect([...bootStore.entries.keys()].some(k => k.startsWith(bootKey('pvFresh', '')))).toBe(true)
+  })
 })

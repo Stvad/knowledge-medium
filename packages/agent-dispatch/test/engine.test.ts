@@ -147,6 +147,7 @@ const okRun = (overrides: Partial<AgentRunResult> = {}): AgentRunResult => ({
 })
 
 const mentionConfig = (overrides: object = {}) => parseConfig({
+    workspaceId: 'ws-test',
   watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0}],
   ...overrides,
 })
@@ -471,7 +472,7 @@ describe('mention lifecycle', () => {
     const engine = engineWith({
       graph,
       runTask,
-      config: parseConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 15_000}]}),
+      config: parseConfig({workspaceId: 'ws-test', watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 15_000}]}),
     })
 
     await engine.tick()
@@ -710,6 +711,7 @@ describe('mention lifecycle', () => {
     // up under a codex watcher: `codex exec resume <claude-id>` would
     // fail the run outright, so it must start FRESH instead.
     const codexConfig = () => parseConfig({
+    workspaceId: 'ws-test',
       watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, runner: {executor: 'codex'}}],
     })
     {
@@ -779,7 +781,7 @@ describe('mention lifecycle', () => {
       const engine = engineWith({
         graph,
         runTask,
-        config: parseConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, runner: {executor}}]}),
+        config: parseConfig({workspaceId: 'ws-test', watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, runner: {executor}}]}),
       })
       await engine.tick()
       await engine.drain()
@@ -957,6 +959,7 @@ describe('mention lifecycle', () => {
       graph,
       runTask,
       config: parseConfig({
+    workspaceId: 'ws-test',
         watchers: [{
           kind: 'backlinks',
           name: 'mentions',
@@ -987,6 +990,7 @@ describe('mention lifecycle', () => {
       graph,
       runTask,
       config: parseConfig({
+    workspaceId: 'ws-test',
         defaultAllowedTools: [],
         watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0}],
       }),
@@ -1011,6 +1015,7 @@ describe('mention lifecycle', () => {
       graph,
       runTask,
       config: parseConfig({
+    workspaceId: 'ws-test',
         watchers: [{
           kind: 'backlinks',
           name: 'mentions',
@@ -1052,6 +1057,7 @@ describe('mention lifecycle', () => {
       graph,
       runTask,
       config: parseConfig({
+    workspaceId: 'ws-test',
         watchers: [{
           kind: 'backlinks',
           name: 'mentions',
@@ -1125,6 +1131,7 @@ describe('live progress streaming', () => {
     })
     const engine = createEngine({
       config: parseConfig({
+    workspaceId: 'ws-test',
         watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, streamReply: true, splitReply: false}],
       }),
       state: memoryState(),
@@ -1163,7 +1170,7 @@ describe('live progress streaming', () => {
     })
     const engine = engineWith({
       graph, runTask,
-      config: parseConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, splitReply: false}]}),
+      config: parseConfig({workspaceId: 'ws-test', watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, splitReply: false}]}),
     })
 
     await engine.tick()
@@ -1183,6 +1190,7 @@ describe('live progress streaming', () => {
       graph,
       runTask: vi.fn(async () => okRun({ok: false, exitCode: 1, stderr: 'boom', resultText: ''})),
       config: parseConfig({
+    workspaceId: 'ws-test',
         watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, streamReply: true}],
       }),
     })
@@ -1210,7 +1218,7 @@ describe('live progress streaming', () => {
     })
     const engine = engineWith({
       graph, runTask,
-      config: parseConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, streamReply: true}]}),
+      config: parseConfig({workspaceId: 'ws-test', watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, streamReply: true}]}),
     })
 
     await engine.tick()
@@ -1239,7 +1247,7 @@ describe('live progress streaming', () => {
     const engine = engineWith({
       graph,
       runTask: vi.fn(async () => okRun({resultText: 'the answer'})),
-      config: parseConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, splitReply: false}]}),
+      config: parseConfig({workspaceId: 'ws-test', watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, splitReply: false}]}),
     })
 
     await engine.tick()
@@ -1269,7 +1277,7 @@ describe('live progress streaming', () => {
       graph,
       delay: async () => {},
       runTask: vi.fn(async () => okRun({resultText: 'the answer'})),
-      config: parseConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, splitReply: false}]}),
+      config: parseConfig({workspaceId: 'ws-test', watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, splitReply: false}]}),
     })
 
     await engine.tick()
@@ -1317,6 +1325,7 @@ describe('splitReply (reply as a block hierarchy)', () => {
     const runTask = vi.fn(async () => okRun({resultText: OUTLINE}))
     const engine = createEngine({
       config: parseConfig({
+    workspaceId: 'ws-test',
         watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, splitReply: false}],
       }),
       state: memoryState(),
@@ -1346,6 +1355,7 @@ describe('splitReply (reply as a block hierarchy)', () => {
     const runTask = vi.fn(async () => okRun({resultText: OUTLINE}))
     const engine = createEngine({
       config: parseConfig({
+    workspaceId: 'ws-test',
         watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, streamReply: true}],
       }),
       state: memoryState(),
@@ -1457,6 +1467,7 @@ describe('backlink watcher baseline (stamp timing)', () => {
 
 describe('channel delivery (experimental)', () => {
   const channelConfig = () => parseConfig({
+    workspaceId: 'ws-test',
     watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, delivery: 'channel'}],
   })
 
@@ -1502,6 +1513,7 @@ describe('channel delivery (experimental)', () => {
 
 describe('query watcher lifecycle', () => {
   const queryConfig = (overrides: object = {}) => parseConfig({
+    workspaceId: 'ws-test',
     watchers: [{kind: 'query', name: 'inbox', sql: 'SELECT id FROM blocks', ...overrides}],
   })
 

@@ -52,9 +52,9 @@ const GATE_STALE_MS = 10_000
  *   wx) would let a rival read the empty window, parse pid 0 = "stale",
  *   and steal a live daemon's fresh pidfile.
  * - TAKEOVER is rename(tmp, file) under the gate: an atomic replace of
- *   content judged stale, with no absent window. The old rm-then-create
- *   takeover let a rival's ungated create land in the gap after a
- *   recheck that saw absence, where the rm then deleted the winner.
+ *   content judged stale, with no absent window. An rm-then-create
+ *   takeover would let a rival's ungated create land in the gap after a
+ *   recheck that saw absence, where the rm then deletes the winner.
  * With no unlink in acquire, the file can only become absent via
  * releasePidfile by its live holder — so two creates can't both win,
  * and a rename can only replace the dead pid its holder just judged.

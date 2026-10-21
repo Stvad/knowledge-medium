@@ -260,7 +260,7 @@ export const runHandleBenches = async (): Promise<BenchResult[]> => {
       await env.repo.mutate['core.setContent']({id: chain.leafId, content: `c-${counter++}`})
       // Wait at most 1s for a handle listener to fire. Children handle
       // should re-resolve and notify once; ancestors handle for a
-      // leaf doesn't fire (ANCESTORS_SQL excludes the start id, and
+      // leaf doesn't fire (the ancestor chain excludes the start id, and
       // ancestor content didn't change). If neither fires, the timeout
       // catches it instead of a busy-wait.
       await Promise.race([

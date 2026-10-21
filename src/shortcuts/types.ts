@@ -5,6 +5,7 @@ import type {
   SVGProps,
 } from 'react';
 import { Block } from '../data/block';
+import type { FocusedBlockLocation } from '../data/properties';
 import { EditorView } from '@codemirror/view'
 import type { PointerBindingSpec } from './canonicalizeChord.js'
 import type { GestureBindingSpec } from './gestureBinding.js'
@@ -127,6 +128,15 @@ export const ActionContextTypes = {
    * give those actions a home + a dependency validator.
    */
   BLOCK_POINTER: 'block-pointer',
+  /**
+   * Active while any `openDialog` dialog is on screen. Carries no actions —
+   * it exists to be MODAL, so the surface underneath stops claiming keys the
+   * dialog's own controls need. Without it a dialog inherits whatever context
+   * was active when it opened: the editor's Enter binding still matches a
+   * keypress aimed at a dialog button, because a context's `eventFilter` is
+   * additive and the default heuristic admits any non-editable target.
+   */
+  DIALOG: 'dialog',
 } as const;
 
 export interface BaseShortcutDependencies {
@@ -180,6 +190,11 @@ export interface MultiSelectModeDependencies extends BaseShortcutDependencies {
  */
 export interface BlockPointerDependencies extends BlockShortcutDependencies {
   targetElement: HTMLElement;
+  /** The cursor a range gesture extends from when no selection is active, in
+   *  place of the focused row. Set by a dispatch decorator that knows focus was
+   *  moved without the user choosing it (cursor-follows-scroll), so the range
+   *  starts where the user left the cursor rather than where it was carried. */
+  rangeOrigin?: FocusedBlockLocation;
 }
 
 export interface ShortcutDependenciesMap {

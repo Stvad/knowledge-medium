@@ -43,11 +43,34 @@ export interface ResolvedPropertySchema<T> extends PropertySchemaEntry<T> {
   readonly [resolvedPropertySchemaBrand]: true
 }
 
+/** `behavior-unavailable`: the winning definition exists and is readable, but
+ *  this device cannot build its codec (its preset is not loaded here, or its
+ *  stored config does not decode). Distinct from `definition-unavailable` —
+ *  no definition at all — because §9 recognition classifies the first and not
+ *  the second. */
 export type PropertySchemaIdentityUnavailableReason =
   | 'registry-not-workspace-keyed'
   | 'definition-unavailable'
+  | 'behavior-unavailable'
   | 'shadowed'
   | 'ambiguous'
+
+/** Why a WRITE/READ boundary refused the schema object a caller passed —
+ *  `PropertySchemaIdentityUnavailableReason` plus the one failure only the
+ *  boundary can have, since only it is handed an object rather than a name or
+ *  a field id.
+ *
+ *  `stale-schema`: the plain schema passed is not the entry this workspace
+ *  publishes under that name, and nothing else claims that name. A block-built
+ *  entry is a fresh object per projection, so a legitimately-obtained copy
+ *  stops being it at the next rebuild; a lookalike that never was it lands
+ *  here too, because a plain schema carries no identity to tell the two apart.
+ *  A contested name keeps reporting `shadowed` — that one says a duplicate
+ *  definition is there to resolve, and sending a reader after one that does
+ *  not exist is what this reason exists to stop. */
+export type PropertyBoundaryIdentityUnavailableReason =
+  | PropertySchemaIdentityUnavailableReason
+  | 'stale-schema'
 
 /** Result of the workspace-bound identity resolver. Unbound/stage-0 callers
  * and definitions without locally-buildable behavior report identity as
@@ -124,9 +147,8 @@ export type PropertyEditor<T> = (props: PropertyEditorProps<T>) => JSX.Element
 
 /** Plugin-augmentable type registry for property schemas — mirrors
  *  `MutatorRegistry` and `QueryRegistry`. Static plugins augment via
- *  `declare module '@/data/api'`; dynamic plugins use string-keyed access. */
-/** Plugin-augmentable type registry. Empty body is intentional —
- *  declaration merging requires interface. */
+ *  `declare module '@/data/api'`; dynamic plugins use string-keyed access.
+ *  Empty body is intentional — declaration merging requires interface. */
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface PropertySchemaRegistry { /* augmented per plugin */ }
 
@@ -201,6 +223,14 @@ export const isPropertyEditorOverride = (
  *  The `any` escape mirrors `AnyMutator` / `AnyPostCommitProcessor`. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type AnyPropertySchema = PropertySchema<any>
+
+/** Variance-erased resolved schema, for the same reason and with the same
+ *  `any` escape as `AnyPropertySchema`. A return type of this rather than
+ *  `AnyPropertySchema` is a promise that the value carries durable identity:
+ *  it keeps resolving by field id across registry rebuilds, where a plain
+ *  schema object stops being the entry its name publishes. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type AnyResolvedPropertySchema = ResolvedPropertySchema<any>
 
 /** Variance-erased editor-override type for storage in
  *  `propertyEditorOverridesFacet`'s contributions. `PropertyEditor<T>` is

@@ -61,7 +61,7 @@ const idCandidates = (value: unknown): string[] => {
 }
 
 const unknownPropertyMessage = (name: string): string =>
-  `No registered schema for \`${name}\` — the value is stored raw: no codec (so it never decodes to a typed value), and if it holds a block id it will NOT project into references. Usually this means the owning extension isn't running on this device (install → enable → reload), or the name is a typo of a declared property.`
+  `No registered schema for \`${name}\` — the value is stored raw: no codec (so it never decodes to a typed value), and if it holds a block id it will NOT project into references. Usually this means the owning extension isn't running on this device (install → enable → reload), or the name is a typo of a declared property. Property migration also skips this key, so it stays cell-only in a child-backed workspace; \`audit-properties\` lists every such key in the workspace with the fix for each.`
 
 const blockIdMessage = (name: string, targetId: string): string =>
   `\`${name}\` holds ${targetId}, which is a live block, but its schema is not ref-typed — so the target's backlinks will never show this block, and the link won't survive a merge or retarget. Declare the property with the \`ref\` / \`optional-ref\` / \`refList\` preset and \`config: {targetTypes: [...]}\`.`

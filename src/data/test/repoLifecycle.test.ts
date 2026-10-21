@@ -520,8 +520,16 @@ describe('repo.instanceId', () => {
 describe('repo.metrics() / resetMetrics()', () => {
   it('exposes all subsections; all start empty / at zero', () => {
     const m = env.repo.metrics()
-    expect(Object.keys(m).sort()).toEqual(['blockCache', 'db', 'handleStore', 'handleStoreInventory', 'queries', 'reprojection', 'slowestTx', 'txLog'])
+    expect(Object.keys(m).sort()).toEqual(['blockCache', 'db', 'dbContention', 'epoch', 'epochStartedAt', 'epochWorkspaceId', 'excludingTelemetry', 'handleStore', 'handleStoreInventory', 'queries', 'reprojection', 'slowestTx', 'txLog'])
     expect(Object.isFrozen(m)).toBe(true)
+    expect(m.epoch).toBe(0)
+    expect(m.epochWorkspaceId).toBeNull()
+    expect(m.excludingTelemetry.writes).toBe(0)
+    expect(m.excludingTelemetry.handleStore).toEqual({})
+    expect(m.dbContention.calls).toBe(0)
+    expect(m.dbContention.busyMs).toBe(0)
+    expect(m.dbContention.uncontendedRead.sampleCount).toBe(0)
+    expect(Object.isFrozen(m.excludingTelemetry)).toBe(true)
     expect(m.handleStore.invalidations).toBe(0)
     expect(m.handleStoreInventory.handleCount).toBe(0)
     expect(m.handleStoreInventory.topHeavy).toEqual([])
@@ -632,7 +640,7 @@ describe('repo.scheduleReconcileRescan — one-time shadow recovery', () => {
   it('re-scans a workspace once, marks it done, and no-ops on the next open', async () => {
     // The rescan re-reads blocks_synced directly via drainSyncWorkspace; the
     // server-monotonic gate heals shadows without a separate mode.
-    const spy = vi.spyOn(env.repo, 'drainSyncWorkspace').mockResolvedValue()
+    const spy = vi.spyOn(env.repo, 'drainSyncWorkspace').mockResolvedValue(null)
 
     env.repo.scheduleReconcileRescan('ws-1')
     await settle(env.repo)
@@ -646,7 +654,7 @@ describe('repo.scheduleReconcileRescan — one-time shadow recovery', () => {
   })
 
   it('re-scans each workspace independently (per-workspace marker)', async () => {
-    const spy = vi.spyOn(env.repo, 'drainSyncWorkspace').mockResolvedValue()
+    const spy = vi.spyOn(env.repo, 'drainSyncWorkspace').mockResolvedValue(null)
 
     env.repo.scheduleReconcileRescan('ws-1')
     await settle(env.repo)
@@ -659,7 +667,7 @@ describe('repo.scheduleReconcileRescan — one-time shadow recovery', () => {
   it('leaves the marker unset on failure so the next open retries', async () => {
     const spy = vi.spyOn(env.repo, 'drainSyncWorkspace')
       .mockRejectedValueOnce(new Error('drain failed'))
-      .mockResolvedValue()
+      .mockResolvedValue(null)
     vi.spyOn(console, 'error').mockImplementation(() => {})
 
     env.repo.scheduleReconcileRescan('ws-1')

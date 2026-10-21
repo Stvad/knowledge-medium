@@ -5,8 +5,8 @@
  *   - BUILD_ID (injected per build) namespaces this generation's caches:
  *     km-shell-<id> (HTML shell + icons) and km-assets-<id> (JS/CSS/fonts).
  *   - Same-origin app assets are served CACHE-FIRST with no revalidation.
- *     The Vite preserveModules build emits modules at UNHASHED, stable URLs
- *     (so plugins can import them through the import map), which means a
+ *     The build emits every module at an UNHASHED, stable URL (so plugins
+ *     can import them through the import map), which means a
  *     URL's *bytes* differ between deploys. Pinning each generation to its
  *     own cache and never overwriting an entry in place is what keeps a
  *     generation internally consistent — a page only ever sees the single
@@ -60,12 +60,21 @@
  * SW build. In dev the placeholders are harmless (the SW isn't registered there).
  */
 import {createServiceWorker} from './worker'
+import {idbBootStore} from './bootStore'
 
 // The worker's global scope. `sw.ts` is a module (it imports), so this ambient
 // declaration shadows lib.webworker's generic `self` with the service-worker
 // type — giving `self.registration`, `self.skipWaiting()`, and correctly-typed
 // install/activate/fetch/message events.
 declare const self: ServiceWorkerGlobalScope
+
+// Boot marks for on-device profiling (ios-device-debug skill): a page asks with
+// `BOOT_MARKS` over a MessageChannel and gets this worker's own start time,
+// when this script finished evaluating, and when the first navigation fetch
+// arrived and was answered — all ms, `timeOrigin` as epoch so the page can
+// place them on its own clock.
+const bootMarks: Record<string, number> = {timeOrigin: performance.timeOrigin, evaluatedAt: 0, firstNavReceivedAt: 0, firstNavAnsweredAt: 0}
+const mark = (name: string): void => { if (!bootMarks[name]) bootMarks[name] = performance.now() }
 
 const sw = createServiceWorker(
   {
@@ -103,8 +112,16 @@ const sw = createServiceWorker(
     now: () => Date.now(),
     storage: navigator.storage,
     indexedDB,
+    mark,
+    // WebKit only: the ~600 ms it saves is WebKit's Cache Storage start-up
+    // cost, and a synthesised Response forfeits Chromium's V8 code cache,
+    // which only rides on a `cache.match()` response. Every iOS browser is
+    // WebKit; desktop Chrome and Android are not.
+    bootStore: /AppleWebKit/.test(navigator.userAgent) && !/Chrom/.test(navigator.userAgent) ? idbBootStore() : undefined,
   },
 )
+
+
 
 self.addEventListener('install', (event) => {
   event.waitUntil(sw.install())
@@ -119,11 +136,18 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('message', (event) => {
   if (event.data === 'SKIP_WAITING') self.skipWaiting()
+  if (event.data === 'BOOT_MARKS') event.ports[0]?.postMessage(bootMarks)
 })
 
 self.addEventListener('fetch', (event) => {
   // Pass waitUntil so the preview ledger heartbeat (maybeTouchOwnLedger) is tied
   // to this event's lifetime and can't be dropped by early worker termination.
   const response = sw.handleFetch(event.request, (p) => event.waitUntil(p))
+  if (response && event.request.mode === 'navigate' && !bootMarks.firstNavReceivedAt) {
+    mark('firstNavReceivedAt')
+    void response.then(() => mark('firstNavAnsweredAt'), () => {})
+  }
   if (response) event.respondWith(response)
 })
+
+mark('evaluatedAt')

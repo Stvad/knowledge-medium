@@ -29,6 +29,7 @@ import { FloatingListbox } from '@/components/ui/floating-listbox.js'
 import { cn } from '@/lib/utils.js'
 import {
   labelForBlockData,
+  linkTargetCandidateDetail,
   searchLinkTargetIdCandidates,
   type LinkTargetIdCandidate,
 } from '@/utils/linkTargetAutocomplete.js'
@@ -347,14 +348,20 @@ const RefPredicateInput = ({
             )}
           >
             <span className="truncate font-medium">{result.label}</span>
-            {result.detail && result.detail !== result.label && (
-              <span className="truncate text-muted-foreground">{truncate(result.detail, 72)}</span>
-            )}
+            {renderDetail(result)}
           </button>
         ))}
       </FloatingListbox>
     </form>
   )
+}
+
+/** The muted second line of a result row, or nothing when it would only
+ *  repeat the label. */
+const renderDetail = (result: LinkTargetIdCandidate) => {
+  const detail = linkTargetCandidateDetail(result)
+  if (!detail || detail === result.label) return null
+  return <span className="truncate text-muted-foreground">{truncate(detail, 72)}</span>
 }
 
 const htmlInputType = (kind: PropertyFilterInputKind): 'date' | 'number' | 'text' =>

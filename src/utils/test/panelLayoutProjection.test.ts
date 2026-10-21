@@ -820,6 +820,110 @@ describe('applyCurrentLayoutUrl', () => {
   })
 })
 
+describe('reconcilePanelRows: no-op guard', () => {
+  it('does not open a tx when rows already match the target slots and active pointer', async () => {
+    await createPanelRows(['a', 'b'])
+    const txSpy = vi.spyOn(env.repo, 'tx')
+    try {
+      const result = await reconcilePanelRows(env.repo, layoutSessionBlock(), ['a', 'b'])
+      expect(result).toEqual({changed: false})
+      expect(txSpy).not.toHaveBeenCalled()
+    } finally {
+      txSpy.mockRestore()
+    }
+  })
+
+  it('opens a tx while another write is in flight, even though the cached rows already match', async () => {
+    await createPanelRows(['a', 'b'])
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    // An uncommitted layout write: the query cache still shows ['a', 'b'].
+    const inFlight = env.repo.tx(async tx => {
+      await gate
+      const rows = await tx.childrenOf(env.layoutSessionBlockId)
+      await tx.delete(rows[1].id)
+    }, {scope: ChangeScope.UiState, description: 'in-flight layout write'})
+    const txSpy = vi.spyOn(env.repo, 'tx')
+    try {
+      const pending = reconcilePanelRows(env.repo, layoutSessionBlock(), ['a', 'b'])
+      await vi.waitFor(() => expect(txSpy).toHaveBeenCalledTimes(1))
+      release()
+      await inFlight
+      expect(await pending).toEqual({changed: true})
+    } finally {
+      txSpy.mockRestore()
+    }
+  })
+
+  it('counts a repo transaction as in flight from its request, before it reaches the database', async () => {
+    // A transaction waits for definition readiness before it touches the
+    // database; hold that wait so the request is pending with no db write.
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    expect(env.repo.activeWorkspaceId).toBeTruthy()
+    const held = vi.spyOn(env.repo, 'whenPropertyDefinitionsReady').mockImplementation(() => gate)
+    try {
+      const requested = env.repo.tx(async () => {}, {scope: ChangeScope.UiState, description: 'requested write'})
+      expect(env.repo.hasWriteInFlight).toBe(true)
+      release()
+      await requested
+      expect(env.repo.hasWriteInFlight).toBe(false)
+    } finally {
+      held.mockRestore()
+    }
+  })
+
+  it('opens a tx while a raw database write is in flight (the sync materialization shape)', async () => {
+    await createPanelRows(['a', 'b'])
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const inFlight = env.repo.db.writeTransaction(async () => { await gate })
+    const txSpy = vi.spyOn(env.repo, 'tx')
+    try {
+      const pending = reconcilePanelRows(env.repo, layoutSessionBlock(), ['a', 'b'])
+      await vi.waitFor(() => expect(txSpy).toHaveBeenCalledTimes(1))
+      release()
+      await inFlight
+      await pending
+    } finally {
+      txSpy.mockRestore()
+    }
+  })
+
+  it('positive control: a differing target still opens exactly one tx', async () => {
+    await createPanelRows(['a', 'b'])
+    const txSpy = vi.spyOn(env.repo, 'tx')
+    try {
+      const result = await reconcilePanelRows(env.repo, layoutSessionBlock(), ['a', 'c'])
+      expect(result).toEqual({changed: true})
+      expect(txSpy).toHaveBeenCalledTimes(1)
+    } finally {
+      txSpy.mockRestore()
+    }
+  })
+
+  it('still opens a tx to clear a dangling active-panel pointer even though slots already match exactly', async () => {
+    // 'exact' slot equality alone would miss this: neither side marks any
+    // leaf `active` (the target URL carries none, and the dangling pointer
+    // matches no current row either), so the guard must also re-run the
+    // hygiene branch's own check — a real row-property write is still
+    // needed even though it isn't counted as a layout change.
+    await createPanelRows(['a', 'b'])
+    await env.repo.tx(async tx => {
+      await tx.setProperty(env.layoutSessionBlockId, activePanelIdProp, 'ghost-row-id')
+    }, {scope: ChangeScope.UiState, description: 'stale active pointer probe'})
+
+    const txSpy = vi.spyOn(env.repo, 'tx')
+    try {
+      const result = await reconcilePanelRows(env.repo, layoutSessionBlock(), ['a', 'b'])
+      expect(result).toEqual({changed: false})
+      expect(txSpy).toHaveBeenCalledTimes(1)
+    } finally {
+      txSpy.mockRestore()
+    }
+  })
+})
+
 describe('reconcilePanelRows failure safety', () => {
   it('keeps panel history for rows whose delete is rolled back by a mid-tx throw', async () => {
     await createPanelRows(['a', 'b'])

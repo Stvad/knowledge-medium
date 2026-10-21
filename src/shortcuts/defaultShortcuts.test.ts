@@ -31,6 +31,8 @@ import {
   insertPanelRow,
   panelBlockId,
   allPanelRowsInLayoutOrder,
+  layoutSlotsFromRows,
+  insertSidebarStackedPanel,
 } from '@/utils/panelLayoutProjection'
 import { panelRenderScopeId } from '@/utils/renderScope'
 import {
@@ -43,6 +45,9 @@ import {
 } from '@/shortcuts/types'
 import { createSharedBlockActions } from '@/shortcuts/blockActions'
 import { blockDeletionGuardsFacet } from '@/extensions/core'
+import { BULK_DELETE_CONFIRM_THRESHOLD } from '@/utils/deleteBlockThroughUi'
+import { __resetDialogsForTests, getDialogQueue } from '@/utils/dialogs'
+import * as viewTransition from '@/utils/viewTransition'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 
@@ -202,6 +207,7 @@ beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => {
   __resetLayoutSessionIdForTesting()
+  __resetDialogsForTests()
   env = await setup()
 })
 
@@ -385,6 +391,68 @@ describe('default CodeMirror shortcuts', () => {
     } satisfies BlockShortcutDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
 
     expect(await isBlockDeleted(env.repo, 'panel')).toBe(true)
+  })
+
+  it.each([
+    {context: 'normal mode', actionId: 'open_focused_in_panel'},
+    {context: 'CodeMirror edit mode', actionId: 'edit.cm.open_focused_in_panel'},
+  ])('opens the focused block in the existing sidebar stack from $context', async ({actionId, context}) => {
+    await env.repo.tx(async tx => {
+      for (const [id, orderKey] of [
+        ['source', 'a0'],
+        ['focused', 'b0'],
+        ['right', 'c0'],
+        ['last', 'd0'],
+      ] as const) {
+        await tx.create({id, workspaceId: WS, parentId: null, orderKey, content: id})
+      }
+    }, {scope: ChangeScope.BlockDefault})
+
+    const uiState = await getUIStateBlock(env.repo, WS, USER, {})
+    const layoutSession = await getLayoutSessionBlock(uiState, env.repo.activeLayoutSessionId)
+    const sourcePanelId = await insertPanelRow(env.repo, layoutSession, 'source')
+    const rightPanelId = await insertSidebarStackedPanel(env.repo, layoutSession, 'right', {sourcePanelId})
+    await insertPanelRow(env.repo, layoutSession, 'last')
+    const rightPanel = await env.repo.block(rightPanelId).load()
+    const existingStackId = rightPanel?.parentId
+    if (!existingStackId) throw new Error('Expected the right panel to belong to a sidebar stack')
+    const topLevelRowIds = await childIds(layoutSession.id)
+    expect(topLevelRowIds).toHaveLength(3)
+    const action = context === 'normal mode'
+      ? findNormalModeAction(env.repo, actionId)
+      : findEditModeAction(env.repo, actionId)
+    const dependencies = context === 'normal mode'
+      ? {block: env.repo.block('focused'), uiStateBlock: env.repo.block(sourcePanelId)}
+      : {
+          block: env.repo.block('focused'),
+          editorView: emptyEditorView(),
+          uiStateBlock: env.repo.block(sourcePanelId),
+        }
+
+    await action.handler(
+      dependencies as BlockShortcutDependencies & CodeMirrorEditModeDependencies,
+      {preventDefault: vi.fn()} as unknown as ActionTrigger,
+    )
+
+    await waitFor(async () => {
+      const rows = await env.repo.query.subtree({id: layoutSession.id}).load()
+      expect(await childIds(layoutSession.id)).toEqual(topLevelRowIds)
+      expect((await env.repo.block(existingStackId).load())?.parentId).toBe(layoutSession.id)
+      expect(layoutSlotsFromRows(layoutSession.id, rows)).toEqual([
+        {kind: 'leaf', blockId: 'source'},
+        {
+          kind: 'stack',
+          children: [
+            {kind: 'leaf', blockId: 'focused', active: true},
+            {kind: 'leaf', blockId: 'right'},
+          ],
+        },
+        {kind: 'leaf', blockId: 'last'},
+      ])
+      const panelRows = allPanelRowsInLayoutOrder(layoutSession.id, rows)
+      expect(panelRows.map(panelBlockId)).toEqual(['source', 'focused', 'right', 'last'])
+      expect((await env.repo.block(rightPanelId).load())?.parentId).toBe(existingStackId)
+    })
   })
 
   it('closes the current panel from CodeMirror edit mode', async () => {
@@ -601,7 +669,7 @@ describe('default CodeMirror shortcuts', () => {
     // Reachable from the keyboard: split the zoomed page at cursor 0 (its
     // content moves down), then Backspace at 0 in the now-empty root —
     // without the canMergeUp guard the handler tombstoned the whole
-    // rendered surface (Codex review on the interaction fuzzer, PR #371).
+    // rendered surface.
     // This gates the BACKSPACE gesture, which means "consume this block and
     // put the cursor on the previous visible one" and has nowhere to land at
     // the scope root. An explicit Delete on the same block IS allowed — that's
@@ -666,6 +734,120 @@ describe('default CodeMirror shortcuts', () => {
     expect(await isBlockDeleted(env.repo, 'protected')).toBe(false)
     // Focus must not have moved for a delete that never happened.
     expect(peekFocusedBlockLocation(uiStateBlock)?.blockId).not.toBe('first')
+  })
+
+  it('Backspace on an emptied block with a big subtree asks before moving the cursor', async () => {
+    // An emptied block can still hold a page's worth of content. Deleting that
+    // line of the confirm call leaves every existing test here green, because
+    // they all use fixtures far below the threshold.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'r'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'first', content: 'first'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'emptied', content: ''})
+    for (let i = 0; i < BULK_DELETE_CONFIRM_THRESHOLD; i++) {
+      await env.repo.mutate.createChild({parentId: 'emptied', id: `kid-${i}`, content: `kid ${i}`})
+    }
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+
+    const action = findEditModeAction(env.repo, 'delete_empty_block_cm')
+    const handling = action.handler({
+      block: env.repo.block('emptied'),
+      editorView: emptyEditorView(),
+      uiStateBlock,
+      scopeRootId: 'root',
+    } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+
+    await vi.waitFor(() => expect(getDialogQueue()).toHaveLength(1))
+    // The cursor must still be where the user left it while the question is up.
+    expect(peekFocusedBlockLocation(uiStateBlock)?.blockId).not.toBe('first')
+    getDialogQueue()[0].finalize(null)
+    await handling
+
+    expect(await isBlockDeleted(env.repo, 'emptied')).toBe(false)
+    expect(await isBlockDeleted(env.repo, 'kid-0')).toBe(false)
+    expect(peekFocusedBlockLocation(uiStateBlock)?.blockId).not.toBe('first')
+  })
+
+  it('leaves the cursor put when the delete is refused after the landing spot is read', async () => {
+    // The landing spot must be read while the tree is live, but moving the
+    // cursor there before the delete is confirmed is how a block that survives
+    // looks like it vanished.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'r'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'first', content: 'first'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'emptied', content: ''})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+    await focusBlock(uiStateBlock, 'emptied')
+
+    // Start refusing from inside the landing read — the window this ordering
+    // exists for. `repo.block(id)` is identity-stable, so the instance spy
+    // catches the load `beforeWrite` actually makes.
+    const prev = env.repo.block('first')
+    const realLoad = prev.load.bind(prev)
+    vi.spyOn(prev, 'load').mockImplementation(async () => {
+      const data = await realLoad()
+      env.repo.setFacetRuntime(resolveFacetRuntimeSync([
+        kernelDataExtension,
+        blockDeletionGuardsFacet.of(
+          block => (block.id === 'emptied' ? 'Nope.' : null),
+          {source: 'test'},
+        ),
+      ]))
+      return data
+    })
+
+    const action = findEditModeAction(env.repo, 'delete_empty_block_cm')
+    await action.handler({
+      block: env.repo.block('emptied'),
+      editorView: emptyEditorView(),
+      uiStateBlock,
+      scopeRootId: 'root',
+    } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+
+    expect(await isBlockDeleted(env.repo, 'emptied')).toBe(false)
+    expect(peekFocusedBlockLocation(uiStateBlock)?.blockId).toBe('emptied')
+  })
+
+  it('Delete on a big subtree raises its question outside the view transition', async () => {
+    // Pins the call site, not just the choke point: wrapping this handler in
+    // `withMoveTransition` again — the shape it had before — renders the dialog
+    // under the frozen snapshot, where it can never be clicked.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'r'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'doomed', content: 'doomed'})
+    for (let i = 0; i < BULK_DELETE_CONFIRM_THRESHOLD; i++) {
+      await env.repo.mutate.createChild({parentId: 'doomed', id: `kid-${i}`, content: `kid ${i}`})
+    }
+
+    const seen: string[] = []
+    vi.spyOn(viewTransition, 'withMoveTransition').mockImplementation(async run => {
+      seen.push(`transition:${getDialogQueue().length} pending`)
+      await run()
+    })
+
+    const {deleteBlock} = createSharedBlockActions({repo: env.repo})
+    const handling = deleteBlock.handler(
+      {block: env.repo.block('doomed'), uiStateBlock: env.repo.block('ui'), scopeRootId: 'root'},
+      {preventDefault: vi.fn()} as unknown as ActionTrigger,
+    )
+
+    await vi.waitFor(() => expect(getDialogQueue()).toHaveLength(1))
+    expect(seen).toEqual([])
+    getDialogQueue()[0].finalize(true)
+    await handling
+
+    expect(seen).toEqual(['transition:0 pending'])
+    expect(await isBlockDeleted(env.repo, 'doomed')).toBe(true)
   })
 
   it('multi-select Delete refuses the whole selection when one block is guarded', async () => {
@@ -787,6 +969,49 @@ describe('default CodeMirror shortcuts', () => {
     // The selection survives too, so the user can narrow it and retry.
     expect(uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds)
       .toEqual(['ordinary', 'protected'])
+    vi.unstubAllGlobals()
+  })
+
+  it('cut asks for confirmation BEFORE writing the clipboard', async () => {
+    // Same ordering rule as the guards, for the same reason plus one: a cut the
+    // user calls off must not have replaced whatever their clipboard held.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'r'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    const ids: string[] = []
+    for (let i = 0; i < BULK_DELETE_CONFIRM_THRESHOLD; i++) {
+      const id = `bulk-${i}`
+      await env.repo.mutate.createChild({parentId: 'root', id, content: id})
+      ids.push(id)
+    }
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(selectionStateProp, {
+      ...selectionStateProp.defaultValue,
+      selectedBlockIds: ids,
+    })
+    const write = vi.fn(async () => {})
+    vi.stubGlobal('ClipboardItem', class { })
+    vi.stubGlobal('navigator', {clipboard: {write}})
+
+    const action = findMultiSelectAction(env.repo, 'cut_selected_blocks')
+    const cutting = action.handler({
+      uiStateBlock,
+      selectedBlocks: ids.map(id => env.repo.block(id)),
+      anchorBlock: null,
+    } as MultiSelectModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+
+    await vi.waitFor(() => expect(getDialogQueue()).toHaveLength(1))
+    expect(write).not.toHaveBeenCalled()
+    // Cancel. `null` is the dialog queue's cancel value.
+    getDialogQueue()[0].finalize(null)
+    await cutting
+
+    expect(write).not.toHaveBeenCalled()
+    for (const id of ids) expect(await isBlockDeleted(env.repo, id)).toBe(false)
+    // And the selection survives, so the user can narrow it and retry.
+    expect(uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual(ids)
     vi.unstubAllGlobals()
   })
 

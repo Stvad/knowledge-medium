@@ -10,7 +10,7 @@
 import type { Repo } from '@/data/repo'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.js'
 import { activeWorkspaceIdPreferringHash, navigateFromGlobalCommand } from '@/utils/navigation.js'
-import { showProgress } from '@/utils/toast.js'
+import { showError, showProgress, type ProgressToast } from '@/utils/toast.js'
 import { GraduationCap } from 'lucide-react'
 import { seedTutorial } from './seed.ts'
 import { TUTORIAL_DEFAULT_TITLE } from './outline.ts'
@@ -25,16 +25,24 @@ export const INSERT_TUTORIAL_ACTION_ID = 'onboarding.insert_tutorial'
  * seed immediately. Returns the default Tutorial page id (the existing
  * one when present) plus whether it was already there, so the caller can
  * route to it either way.
+ *
+ * `onSeedStart` fires only on the branch that actually seeds, once the
+ * guard has cleared. From the outside a call is indistinguishable between
+ * a ~1.2s subtree write and a single alias lookup, and that is exactly the
+ * difference between owing the user progress feedback and owing them
+ * silence.
  */
 export const insertTutorialIntoWorkspace = async (
   repo: Repo,
   workspaceId: string,
+  onSeedStart?: () => void,
 ): Promise<{ tutorialId: string; alreadyExisted: boolean }> => {
   const existing = await repo.query
     .aliasLookup({ workspaceId, alias: TUTORIAL_DEFAULT_TITLE })
     .load()
   if (existing) return { tutorialId: existing.id, alreadyExisted: true }
 
+  onSeedStart?.()
   const tutorialId = await seedTutorial(repo, workspaceId)
   return { tutorialId, alreadyExisted: false }
 }
@@ -57,24 +65,47 @@ export const insertTutorialIntoWorkspace = async (
 export const openTutorialInActiveWorkspace = async (repo: Repo): Promise<boolean> => {
   const workspaceId = activeWorkspaceIdPreferringHash(repo)
   if (!workspaceId) {
-    showProgress('Insert tutorial').fail('Insert tutorial failed: no active workspace')
+    showError('Insert tutorial failed: no active workspace')
     return false
   }
 
-  const banner = showProgress('Inserting tutorial…')
+  // Success is silent: the tutorial landing on screen IS the confirmation,
+  // so a toast announcing it only adds something to read and dismiss. The
+  // progress toast is not that announcement — it exists to cover the seed's
+  // ~1.2s of tx work, which is why it starts from `onSeedStart` rather than
+  // up front: opening an already-present tutorial is a lookup plus a
+  // navigation and must not flash one.
+  let banner: ProgressToast | undefined
+  // Silence is only right when the tutorial actually arrives; a failure has
+  // nothing on screen to speak for it. Routes through whichever toast exists:
+  // the seed branch owns a progress toast to resolve, the already-present
+  // branch never opened one.
+  const reportFailure = (message: string): false => {
+    if (banner) banner.fail(message)
+    else showError(message)
+    return false
+  }
+
   try {
-    const { tutorialId, alreadyExisted } = await insertTutorialIntoWorkspace(repo, workspaceId)
-    banner.done(alreadyExisted ? 'Tutorial already present — opening it' : 'Tutorial inserted')
+    const { tutorialId } = await insertTutorialIntoWorkspace(repo, workspaceId, () => {
+      banner = showProgress('Inserting tutorial…')
+    })
     // `navigateFromGlobalCommand` resolves `NavigationResult | null` and never
-    // rejects — a vetoed/suppressed gesture comes back as `null`. Discarding it
-    // would report success for a tutorial that was seeded but never opened,
-    // which is the same lie this function exists to stop telling.
+    // rejects — `null` is a vetoed/suppressed gesture OR a navigation that
+    // threw and was caught inside `navigate`. Under the default policy a plain
+    // navigator gesture always resolves to `navigate`, so `null` here means the
+    // tutorial did not open, and reporting success (or nothing) for it is the
+    // lie this function exists to stop telling.
     const navigated = await navigateFromGlobalCommand(repo, { blockId: tutorialId, workspaceId })
-    return navigated !== null
+    if (navigated === null) return reportFailure('Insert tutorial failed: could not open the tutorial')
+
+    banner?.done()
+    return true
   } catch (err) {
     console.error('[onboarding] insert tutorial failed:', err)
-    banner.fail(`Insert tutorial failed: ${err instanceof Error ? err.message : String(err)}`)
-    return false
+    return reportFailure(
+      `Insert tutorial failed: ${err instanceof Error ? err.message : String(err)}`,
+    )
   }
 }
 

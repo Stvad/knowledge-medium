@@ -14,6 +14,7 @@
 
 import { ChangeScope, seedProperty, seedType, INFRASTRUCTURE_TYPE_DISPLAY } from '@/data/api'
 import type { TypeSeedDeclaration } from '@/data/api'
+import { hasBlockType } from '@/data/properties'
 
 export const MEDIA_TYPE = 'media'
 
@@ -28,6 +29,33 @@ export const mediaHashProp = seedProperty({
   defaultValue: '',
   changeScope: ChangeScope.BlockDefault,
 })
+
+/** A media block's content hash from its stored properties, or null when it
+ *  has none yet. Total: a legacy or hand-edited row can hold a value the codec
+ *  throws on, and one such row must not abort a walk over the workspace. */
+export const mediaHashOf = (properties: Readonly<Record<string, unknown>>): string | null => {
+  const encoded = properties[mediaHashProp.name]
+  if (encoded === undefined) return null
+  try {
+    return mediaHashProp.codec.decode(encoded) || null
+  } catch {
+    return null
+  }
+}
+
+/** The content hash of a stored `properties_json` that is a media block's, or
+ *  null for any other row. Total: an unparsable or non-object value is no media
+ *  block. */
+export const mediaHashOfStoredRow = (propertiesJson: string): string | null => {
+  try {
+    const properties: unknown = JSON.parse(propertiesJson)
+    if (typeof properties !== 'object' || properties === null || Array.isArray(properties)) return null
+    const record = properties as Record<string, unknown>
+    return hasBlockType({properties: record}, MEDIA_TYPE) ? mediaHashOf(record) : null
+  } catch {
+    return null
+  }
+}
 
 /** The object's MIME type — drives the renderer branch (image / file). Defaults
  *  to the bytes' on-the-wire type; the real value is set at capture (§11). */

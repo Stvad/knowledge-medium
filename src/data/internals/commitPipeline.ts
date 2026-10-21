@@ -3,19 +3,20 @@
  *
  *   1. Validate scope vs. read-only mode.
  *   2. Open `db.writeTransaction(fn)`.
- *      a. Set `tx_context` (tx_id, user_id, scope, source).
+ *      a. Set `tx_context` (tx_id, tx_seq, user_id, scope, source,
+ *         group_id).
  *      b. Construct TxImpl + snapshots map.
  *      c. Run user fn (primitives write through to SQL inline).
  *      d. INSERT command_events row.
- *      e. Clear `tx_context` (all four → NULL).
+ *      e. Clear `tx_context` (all fields → NULL).
  *   3. On COMMIT (post-fn-resolve, before promise resolves):
  *      a. Walk snapshots map: update cache to `after` per id (or evict
  *         on hard-delete).
- *      b. (Future) record undo entry.
+ *      b. Undo entry recorded by the caller (`Repo`, via `UndoManager`)
+ *         from the returned snapshots — not here.
  *      c. Resolve repo.tx promise with user fn's return.
  *   4. Post-resolve: dispatch afterCommit jobs (their own
- *      writeTransactions). (Stage 1.3: jobs collected only; the
- *      processor framework that actually fires them lands in 1.5.)
+ *      writeTransactions).
  *
  * Failure modes:
  *   - User fn throws → SQLite rolls back the writeTransaction. Snapshots
@@ -30,11 +31,15 @@ import type {
   AnyPostCommitProcessor,
   AnyPropertySchema,
   AnySameTxProcessor,
+  AnyValuePresetCore,
+  SameTxTypeOwnership,
   BlockData,
+  BlockReference,
   ChangedRow,
   RepoTxOptions,
   SameTxEmittedEvent,
   Tx,
+  TypeContribution,
   User,
 } from '@/data/api'
 import {
@@ -55,7 +60,10 @@ import { newSnapshotsMap, type SnapshotsMap } from './txSnapshots'
 import { propertySchemaResolverForWorkspace } from './propertySchemaResolution'
 import type { BlockCache } from '@/data/blockCache'
 import type { BlockIdPolicy } from '@/data/blockId'
-import type {PropertyDefinitionRegistrySnapshot} from '@/data/propertyDefinitionRegistry'
+import {
+  propertyDefinitionClaimantsForName,
+  type PropertyDefinitionRegistrySnapshot,
+} from '@/data/propertyDefinitionRegistry'
 
 /** Minimal subset of the full PowerSync DB our pipeline + Repo talks
  *  to. The test harness (`createTestDb`) returns a real
@@ -77,6 +85,10 @@ export interface PowerSyncDbChangeOptions {
 
 export interface PowerSyncDb {
   writeTransaction<R>(fn: (tx: TxDb) => Promise<R>): Promise<R>
+  /** One lease on the writer connection, with no transaction opened: for
+   *  statements that must run back to back with no other writer between them
+   *  (`writeAheadLog`'s drain, the raw-file export). */
+  writeLock<R>(fn: (tx: TxDb) => Promise<R>): Promise<R>
   getAll<T>(sql: string, params?: unknown[]): Promise<T[]>
   getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>
   get<T>(sql: string, params?: unknown[]): Promise<T>
@@ -183,7 +195,7 @@ const jsonEq = (a: unknown, b: unknown): boolean =>
  *  against the net `after` iff it changed since TX START **or** since
  *  the processor's WATERMARK — and never when its last writer was a
  *  `settledWrites` processor. Two baselines because each alone hides a
- *  real case (both found on PR #428):
+ *  real case:
  *   - tx-start alone: a later processor restoring a field to its
  *     tx-start value after the derivation ran on the intermediate value
  *     nets to zero — invisible to an apply that diffs field content
@@ -254,7 +266,7 @@ const rerunBefore = (
   return merged
 }
 
-/** Per-same-tx-processor timing sample for one tx (PR #288 §12: the
+/** Per-same-tx-processor timing sample for one tx (docs/properties-as-blocks-migration.html §12: the
  *  property-children processors add write amplification at parents —
  *  this is the counter that watches it). Collected only for processors
  *  that matched rows (or whose collect scan itself cost ≥1ms). */
@@ -269,6 +281,30 @@ export interface TxTimingDiagnostics {
   sameTxMs: number
   sameTxChangedRows: number
   sameTxProcessorRuns: SameTxProcessorTiming[]
+}
+
+/** Callbacks run INSIDE the write lock, so across transactions they run in the
+ *  order those transactions commit. Nothing after the lock's release can recover
+ *  that order — continuations of two transactions resolve in whatever order the
+ *  scheduler picks — which is why the undo stacks are moved here and not after
+ *  `runTx` returns (#227). Both are synchronous: awaiting would hand the
+ *  ordering back to the scheduler. */
+export interface TxLockHooks {
+  /** The last step before COMMIT: every write and the audit row are in.
+   *  Throwing rolls the transaction back.
+   *
+   *  ACCEPTED RESIDUAL: a COMMIT that fails after this ran is not reported, so
+   *  whatever this did stands for a transaction that did not land. That is
+   *  storage failing at the commit statement itself; reporting it needs the
+   *  commit inside this callback, which the `TxDb` contract does not offer. */
+  beforeCommit?(committing: {
+    txId: string
+    workspaceId: string | null
+    snapshots: SnapshotsMap
+  }): void
+  /** The transaction failed — in its body, in the pipeline, or in
+   *  `beforeCommit` — and is about to roll back. */
+  aborted?(): void
 }
 
 export interface RunTxParams<R> {
@@ -302,6 +338,9 @@ export interface RunTxParams<R> {
    *  Throws (e.g. `ProcessorRejection`) propagate out and roll back
    *  the user's tx atomically. */
   sameTxProcessors: ReadonlyMap<string, AnySameTxProcessor>
+  /** Content → the `references` it already implies, snapshotted at tx start
+   *  alongside the registries above — see `Tx.derivedReferencesFor`. */
+  contentReferencePrefill?: (content: string) => BlockReference[] | undefined
   /** When true this tx is an undo/redo replay driven by
    *  `TxImpl.applyRaw` (see `Repo._replay`). The same-tx processor
    *  pass is SKIPPED for replays: `applyRaw` is contracted to drive
@@ -313,10 +352,20 @@ export interface RunTxParams<R> {
    *  state being restored to. Post-commit processors are unaffected;
    *  they dispatch from `_runAndDispatch` regardless. Default false. */
   isReplay?: boolean
+  lockHooks?: TxLockHooks
   /** Merged property-schema registry snapshot, captured at the same
    *  boundary as `processors` so processor code sees a consistent
    *  runtime bundle. */
   propertySchemas: ReadonlyMap<string, AnyPropertySchema>
+  types: ReadonlyMap<string, TypeContribution>
+  /** Registered value presets, captured at that same boundary. Lets a same-tx
+   *  processor build a codec the frozen `propertySchemas` cannot answer for —
+   *  see `SameTxCtx.valuePresets`. */
+  valuePresets: ReadonlyMap<string, AnyValuePresetCore>
+  /** Tx-start-captured type-ownership factory, resolved once the tx's workspace
+   *  is known — the same shape (and the same fail-closed rule) as
+   *  `propertyDefinitionRegistryForWorkspace`. */
+  typeDefinitionsForWorkspace: (workspaceId: string) => SameTxTypeOwnership | null
   /** Tx-start-captured workspace registry factory. It reads no live runtime
    * state when the target row's workspace becomes known inside the tx. */
   propertyDefinitionRegistryForWorkspace: (
@@ -324,6 +373,8 @@ export interface RunTxParams<R> {
   ) => PropertyDefinitionRegistrySnapshot | null
   /** Active workspace captured with the registry factory at tx start. */
   propertySchemaWorkspaceId: string | null
+  /** False only before any workspace registry has been loaded (stage 0). */
+  propertyRegistryInitialized: boolean
   /** Original declaration-name multiplicity paired with the runtime snapshot. */
   propertySeedNameCounts: ReadonlyMap<string, number>
 }
@@ -346,6 +397,9 @@ export interface TxResult<R> {
   workspaceId: string | null
   /** Tx id (for processor CommittedEvent.txId). */
   txId: string
+  /** What the `command_events` row recorded — `meta.description` as of commit,
+   *  which a replay sets only once it holds the lock. */
+  description: string | undefined
   /** User who ran the tx (for processor CommittedEvent.user). */
   user: User
   /** Processor registry snapshot taken at tx start. The runner walks
@@ -357,7 +411,7 @@ export interface TxResult<R> {
   /** Merged property-schema registry snapshot paired with `processors`. */
   propertySchemas: ReadonlyMap<string, AnyPropertySchema>
   /** Same-tx step timings for diagnostics (write-amplification watch —
-   *  PR #288 §12). Internal callers attribute slow writeTransactions
+   *  docs/properties-as-blocks-migration.html §12). Internal callers attribute slow writeTransactions
    *  without changing tx semantics. */
   timing: Readonly<TxTimingDiagnostics>
 }
@@ -366,11 +420,15 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
   const {
     db, cache, fn, opts, user, isReadOnly,
     newTxId, newTxSeq, newId, blockIdPolicy, now,
-    mutators, processors, sameTxProcessors, propertySchemas,
+    mutators, processors, sameTxProcessors, propertySchemas, types, valuePresets,
+    contentReferencePrefill,
+    typeDefinitionsForWorkspace,
     propertyDefinitionRegistryForWorkspace,
     propertySchemaWorkspaceId,
+    propertyRegistryInitialized,
     propertySeedNameCounts,
     isReplay = false,
+    lockHooks,
   } = params
   const {scope, description} = opts
 
@@ -420,12 +478,14 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
   // processor can restore a field to its tx-start value after the
   // derivation ran on the intermediate value, and a tx-start baseline
   // makes that restore invisible to an apply that diffs field content
-  // internally (MATERIALIZE's changedPropertyNames — Codex review on PR
-  // #428: pass two fired on the dirty row but computed no changed names,
-  // leaving value children synced to the intermediate bag). Entries hold
+  // internally (MATERIALIZE's changedPropertyNames: pass two fired on
+  // the dirty row but computed no changed names, leaving value children
+  // synced to the intermediate bag). Entries hold
   // references to the same `after` objects the primitives built — no
-  // copying.
-  const rowWriteLog = new Map<string, Array<{gen: number, after: BlockData | null}>>()
+  // copying. `seq` is the write's place in the tx, which `gen` is not:
+  // settled writes share the generation they were made under.
+  const rowWriteLog = new Map<string, Array<{gen: number, seq: number, after: BlockData | null}>>()
+  let writeSeq = 0
   const afterCommitJobs: AfterCommitJob[] = []
   const sameTxEvents: SameTxEmittedEvent[] = []
   // `tx.run` pushes onto this list each time a mutator runs (including
@@ -433,7 +493,7 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
   // the tx with `fn = tx => tx.run(m, args)`). Pipeline serializes
   // the list at commit time into command_events.mutator_calls.
   const mutatorCalls: MutatorCallRecord[] = []
-  const meta = newTxMeta({txId, scope, source, user, description})
+  const meta = newTxMeta({txId, scope, source, user, description, context: opts.context})
   const timing: TxTimingDiagnostics = {
     sameTxMs: 0,
     sameTxChangedRows: 0,
@@ -451,13 +511,30 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
       propertySeedNameCounts,
       propertySchemaWorkspaceId === null || workspaceId === propertySchemaWorkspaceId,
     )
+  const writableWorkspace = !propertyRegistryInitialized || opts.allowUnloadedWorkspace
+    ? null
+    : {workspaceId: propertySchemaWorkspaceId}
   const resolvePropertySchemaName = (workspaceId: string, name: string) =>
     resolverFor(workspaceId).resolve(name)
   const resolvePropertySchemaField = (workspaceId: string, fieldId: string) =>
     resolverFor(workspaceId).resolveField(fieldId)
+  const propertyDefinitionsClaimingName = (
+    workspaceId: string, name: string,
+  ): readonly string[] | null => {
+    // ACTIVE workspace only, which is stricter than the resolvers beside it.
+    // They serve the immediately-previous workspace from a retained snapshot so
+    // a cross-workspace seed write still resolves; that snapshot is frozen —
+    // `ProjectorRuntime.pinWorkspace` disposes the outgoing subscription — so
+    // it cannot see a definition sync created, revived, renamed or deleted
+    // there afterwards, and can be arbitrarily stale. Good enough to decode a
+    // known handle, not to decide who OWNS a name.
+    if (propertySchemaWorkspaceId !== workspaceId) return null
+    const snapshot = propertyDefinitionRegistryForWorkspace(workspaceId)
+    return snapshot === null ? null : propertyDefinitionClaimantsForName(snapshot, name)
+  }
 
   // Run inside writeTransaction. Steps 1-5 commit or roll back atomically.
-  const value = await db.writeTransaction(async (txDb): Promise<R> => {
+  const runSteps = async (txDb: TxDb): Promise<R> => {
     // Step 1: set tx_context — triggers read this for source-tagging
     // row_events + gating upload routing + gating workspace-invariant
     // checks (§4.1.1, §4.3, §4.5). tx_seq is the integer key the
@@ -478,7 +555,10 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
       mutatorCalls,
       mutators,
       processors,
+      contentReferencePrefill,
       propertySchemaResolverFor: resolverFor,
+      writableWorkspace,
+      propertyWritesAreSettled: () => settleWrites,
       sameTxEvents,
       now,
       newId,
@@ -507,7 +587,7 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
         // grounds would break this pairing.
         let log = rowWriteLog.get(id)
         if (log === undefined) rowWriteLog.set(id, log = [])
-        log.push({gen: writeGen, after})
+        log.push({gen: writeGen, seq: ++writeSeq, after})
       },
     })
     // Important: any tx.run calls in the user fn push onto
@@ -516,6 +596,7 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
     // a snapshot so the command_events row written in step 4 reflects
     // every mutator the tx actually ran.
     const result = await fn(tx)
+    tx.finishUserWrites()
 
     // Step 3.5: same-tx processor pass. Runs after `fn` returns but
     // before the command_events insert — inside the writeTransaction,
@@ -564,8 +645,46 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
               emittedEvents,
             },
             {
-              tx, db: txDb, propertySchemas,
+              tx, db: txDb, propertySchemas, types, valuePresets,
+              hasUserWrite: id => tx.hasUserWrite(id),
+              wasPropertyUnset: (id, name) => tx.wasPropertyUnset(id, name),
+              // Resolved against the TX's pinned workspace, not the active one:
+              // `TxImpl` pins from the first write, and the merge mutator does
+              // not require the active workspace to match.
+              typeDefinitions: typeDefinitionsForWorkspace(meta.workspaceId),
               resolvePropertySchemaName, resolvePropertySchemaField,
+              propertyDefinitionsClaimingName,
+              txBaselineOf: id => {
+                const entry = snapshots.get(id)
+                // `rerunBefore` with the watermark AT tx start: the tx-start
+                // row with only the settled-last paths overlaid.
+                return entry === undefined
+                  ? undefined
+                  : rerunBefore(entry.before, entry.before, entry.after, settledFieldPaths.get(id))
+              },
+              tombstonedDuringTx: id => snapshots.get(id)?.before?.deleted === true
+                || (rowWriteLog.get(id)?.some(record => record.after?.deleted === true) ?? false),
+              parentLivenessWhenTombstoned: async id => {
+                let previous = snapshots.get(id)?.before ?? null
+                let death: {seq: number; parentId: string | null} | undefined
+                for (const record of rowWriteLog.get(id) ?? []) {
+                  if (record.after?.deleted === true && previous?.deleted === false) {
+                    death = {seq: record.seq, parentId: record.after.parentId}
+                  }
+                  previous = record.after
+                }
+                if (death === undefined || death.parentId === null) return undefined
+                const parentEntry = snapshots.get(death.parentId)
+                // A parent this tx never wrote was as it is now throughout.
+                let parent = parentEntry === undefined
+                  ? await tx.get(death.parentId)
+                  : parentEntry.before
+                for (const record of rowWriteLog.get(death.parentId) ?? []) {
+                  if (record.seq > death.seq) break
+                  parent = record.after
+                }
+                return parent !== null && !parent.deleted ? 'live' : 'tombstoned'
+              },
             },
           )
         } finally {
@@ -609,35 +728,23 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
       // derivation that ran early in the pass can have its INPUT
       // rewritten by a later processor in the same tx (a plugin content
       // rewrite after PROJECT, a raw properties write after MATERIALIZE,
-      // a kernel stamp after MATERIALIZE's ancestry read) — leaving the
-      // derived state describing pre-rewrite content. Rather than
-      // hand-patching each such cell (three ad-hoc idioms existed, and
-      // three consecutive reviews each found a matrix cell the audits
-      // missed), re-run the opted-in derivation processors over just the
-      // rows written after their first run.
+      // a kernel stamp after MATERIALIZE's ancestry read), leaving the
+      // derived state describing pre-rewrite content — so we re-run the
+      // opted-in derivation processors over just the rows written after
+      // their first run.
       //
-      // Bounded at ONE re-run — no fixpoint, per the single-pass
-      // contract. Convergence rests on the opted-in processors'
-      // idempotence (§5 invariant 1): a residual write left by a
-      // pass-two processor for an EARLIER pass-two processor is by
-      // construction already convergent (MATERIALIZE/PROJECT are mutual
-      // inverses whose round-trip no-ops; DERIVE/NORMALIZE re-derive to
-      // the same value), so a third pass would no-op. Writes from
-      // `settledWrites` processors (the rename re-key, PROJECT's cell
-      // writes) never mark rows dirty, AND their field paths are masked
-      // out of the re-run diff below (`maskSettledPaths`) — dirtiness
-      // suppression alone leaks the moment an unsettled co-writer
-      // dirties the same row (see the `settledFieldPaths` declaration
-      // for the laundering failure this closes).
-      // Dispatch on DIRTINESS, not on the net tx field diff: a later
-      // writer can revert a watched field to its tx-start value after a
-      // derivation ran on the intermediate value (net diff empty, derived
-      // state stale — Codex review on PR #428), so any post-watermark
-      // write makes the row eligible. `before` is the tx-start state
-      // (same event shape as pass one) except for settled-last field
-      // paths, which read as their net-after values; rows whose watched
-      // fields are truly untouched no-op inside the idempotent
-      // processors.
+      // Bounded at ONE re-run — no fixpoint; convergence rests on the
+      // opted-in processors' idempotence (§5 invariant 1), so a third
+      // pass would no-op. `settledWrites` processor writes never mark
+      // rows dirty and are masked out of the re-run diff (see
+      // `settledFieldPaths` and `rerunBefore`) — dirtiness suppression
+      // alone would leak the moment an unsettled co-writer dirties the
+      // same row.
+      //
+      // Dispatch on DIRTINESS, not the net tx field diff: a later writer
+      // can revert a watched field to its tx-start value after a
+      // derivation ran on the intermediate one, so any post-watermark
+      // write makes the row eligible even though the net diff is empty.
       for (const processor of sameTxProcessors.values()) {
         if (processor.rerunOnDirtyRows !== true) continue
         // Field-watch on the blocks table only. defineSameTxProcessor
@@ -698,13 +805,15 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
     // (per §4.4). workspace_id is the pinned value (or NULL on
     // zero-write txs). source is uniformly 'user' for every repo.tx
     // invocation; sync-applied writes don't go through repo.tx.
+    // The description is read from `meta`, not `opts`: an undo/redo replay
+    // learns which entry it is replaying only once it holds the lock.
     await txDb.execute(
       `INSERT INTO command_events
         (tx_id, description, scope, user_id, workspace_id, mutator_calls, source, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         txId,
-        description ?? null,
+        meta.description ?? null,
         scope,
         user.id,
         meta.workspaceId,
@@ -729,6 +838,16 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
     )
 
     return result
+  }
+  const value = await db.writeTransaction(async (txDb): Promise<R> => {
+    try {
+      const result = await runSteps(txDb)
+      lockHooks?.beforeCommit?.({txId, workspaceId: meta.workspaceId, snapshots})
+      return result
+    } catch (err) {
+      lockHooks?.aborted?.()
+      throw err
+    }
   })
 
   // Step 6: post-COMMIT cache walk. Update cache to `after` per id
@@ -753,6 +872,7 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
     snapshots,
     workspaceId: meta.workspaceId,
     txId,
+    description: meta.description,
     user,
     processors,
     propertySchemas,

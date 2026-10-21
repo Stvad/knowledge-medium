@@ -1,8 +1,8 @@
 import type {
   AnyPropertySchema,
+  PropertyBoundaryIdentityUnavailableReason,
   PropertyHandle,
   PropertySchema,
-  PropertySchemaIdentityUnavailableReason,
   PropertySchemaResolution,
   ResolvedPropertySchema,
 } from '@/data/api'
@@ -16,7 +16,7 @@ export type PropertyBoundaryResolution<T> =
   | {readonly status: 'available'; readonly schema: PropertySchema<T>}
   | {
       readonly status: 'identity-unavailable'
-      readonly reason: PropertySchemaIdentityUnavailableReason
+      readonly reason: PropertyBoundaryIdentityUnavailableReason
     }
 
 const isPropertyHandle = <T>(schema: PropertySchema<T>): schema is PropertyHandle<T> =>
@@ -28,6 +28,26 @@ export const isResolvedPropertySchema = <T>(
   const candidate = schema as Partial<ResolvedPropertySchema<T>>
   return typeof candidate.fieldId === 'string' && typeof candidate.workspaceId === 'string'
 }
+
+/** §9 recognition, fieldId half: does this resolution name a definition the
+ *  workspace's registry can answer for? Shadowed losers COUNT — their field
+ *  rows keep classifying, and are excluded only from the name map and the
+ *  projection. So does a winner whose codec this device cannot build:
+ *  classification needs the definition, not the plugin that owns its preset.
+ *
+ *  ONE owner for a rule three sites ask, because each holds a DIFFERENT
+ *  resolver — the live one, a tx-start snapshot, a migration batch's captured
+ *  one — so what they can share is the predicate, not the checker. Written out
+ *  per site, the shadow clause is what drifts, and dropping it detaches every
+ *  shadowed definition's field rows from their owners. The outline SQL answers
+ *  the same question from `block_types`, corrected by the registry's
+ *  `unparseableDefinitionIds` (`recognizedFieldRowSql`). */
+export const isResolvableFieldDefinition = (
+  resolution: PropertySchemaResolution<unknown>,
+): boolean =>
+  resolution.status === 'resolved'
+  || (resolution.status === 'identity-unavailable'
+    && (resolution.reason === 'shadowed' || resolution.reason === 'behavior-unavailable'))
 
 /** A resolver is created for an owning transaction/workspace registry
  * snapshot; callers supply only the definition handle or name, never a
@@ -303,7 +323,7 @@ class SnapshotPropertySchemaResolver implements PropertySchemaResolver {
       ? this.snapshot.seedsByKey.get(metadata.seedKey)
       : undefined
     const behavior = declaration ?? this.snapshot.schemasByFieldId.get(fieldId)
-    if (!behavior) return {status: 'identity-unavailable', reason: 'definition-unavailable'}
+    if (!behavior) return {status: 'identity-unavailable', reason: 'behavior-unavailable'}
     return resolved<T>(this.snapshot.workspaceId, fieldId, behavior, metadata)
   }
 
@@ -336,20 +356,35 @@ class SnapshotPropertySchemaResolver implements PropertySchemaResolver {
 
     if (exactSelected) return {status: 'available', schema}
 
-    const winner = this.snapshot.definitionsByName.get(schema.name)?.[0]
+    const claimants = this.snapshot.definitionsByName.get(schema.name) ?? []
+    const winner = claimants[0]
     if (winner) {
       const winnerBehavior = winner.seedKey
         ? this.snapshot.seedsByKey.get(winner.seedKey)
         : this.snapshot.schemasByFieldId.get(winner.fieldId)
+      if (winnerBehavior && winnerBehavior === schema) {
+        return this.asBoundaryResolution(
+          resolved<T>(this.snapshot.workspaceId, winner.fieldId, winnerBehavior, winner),
+        )
+      }
+      // Refusing a plain schema states ONE fact, so they are ordered: who owns
+      // the name, then whether that owner can be built, then the object. A
+      // plain schema carries no identity, so the first two read the snapshot
+      // alone — a rebuild leaves the caller's object unrecognizable either way,
+      // and ordering ownership first is what `resolveField` already does.
+      // Contested means a rival really does shadow whichever of them the
+      // caller held: a second definition claiming the name, or a seed
+      // declaration owning it (handles never reach here, and a declaration is
+      // a module constant, so a plain object never was one). With a lone
+      // claimant nothing rivals it, and what is left is its own state — a
+      // winner that cannot be built here, else its per-projection rebuild.
+      const contested = claimants.length > 1
+        || (winnerBehavior !== undefined && isPropertyHandle(winnerBehavior))
+      if (contested) return {status: 'identity-unavailable', reason: 'shadowed'}
       if (!winnerBehavior) {
-        return {status: 'identity-unavailable', reason: 'definition-unavailable'}
+        return {status: 'identity-unavailable', reason: 'behavior-unavailable'}
       }
-      if (winnerBehavior !== schema) {
-        return {status: 'identity-unavailable', reason: 'shadowed'}
-      }
-      return this.asBoundaryResolution(
-        resolved<T>(this.snapshot.workspaceId, winner.fieldId, winnerBehavior, winner),
-      )
+      return {status: 'identity-unavailable', reason: 'stale-schema'}
     }
 
     const synthesized = this.snapshot.seedsByName.get(schema.name) ?? []
@@ -386,6 +421,15 @@ export const createPropertySchemaResolver = (
   snapshot: PropertyDefinitionRegistrySnapshot,
 ): PropertySchemaResolver => new SnapshotPropertySchemaResolver(snapshot, new Map(), false)
 
+/** The schema a write may use for the identity `schema` carries, or throw
+ *  `PropertySchemaIdentityError`. A resolved schema follows its durable field
+ *  id, so the returned name — the bag key a caller writes or deletes — can
+ *  differ from the one passed.
+ *
+ *  Admission is `resolveBoundary`'s call: it turns on schema kind, on whether a
+ *  faithful snapshot exists, and on what else claims the name. That matrix is
+ *  stated there, beside the code that decides it, and is deliberately not
+ *  mirrored here — a copy of it drifts in a different corner each time. */
 export const requireWritablePropertySchema = <T>(
   schema: PropertySchema<T>,
   resolver: PropertySchemaResolver,
@@ -404,4 +448,26 @@ export const requireWritablePropertySchema = <T>(
     resolution.schema as PropertySchema<unknown>,
   )
   return (strict as PropertySchema<T> | undefined) ?? resolution.schema
+}
+
+export type PropertyWriteTarget<T> =
+  | {readonly storage: 'cell'; readonly schema: PropertySchema<T>}
+  | {readonly storage: 'children'; readonly schema: ResolvedPropertySchema<T>}
+
+/** Readable behavior alone cannot authorize a children-backed write. */
+export const requirePropertyWriteTarget = <T>(
+  schema: PropertySchema<T>,
+  resolver: PropertySchemaResolver,
+  storage: 'cell' | 'children',
+): PropertyWriteTarget<T> => {
+  const writable = requireWritablePropertySchema(schema, resolver)
+  if (storage === 'cell') return {storage, schema: writable}
+  if (!isResolvedPropertySchema(writable)) {
+    const identity = resolver.resolve(schema.name)
+    throw new PropertySchemaIdentityError(
+      schema.name,
+      identity.status === 'identity-unavailable' ? identity.reason : 'definition-unavailable',
+    )
+  }
+  return {storage, schema: writable}
 }

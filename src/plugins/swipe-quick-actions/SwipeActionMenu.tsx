@@ -36,7 +36,7 @@ import { SWIPE_TRIGGER_PX } from './swipeRecognizer.ts'
  *  properties or children.
  *
  *  `panelRoot` scopes the lookup so the same block id rendered in
- *  another panel can't be picked up here — Codex's panel-disambiguation
+ *  another panel can't be picked up here — the panel-disambiguation
  *  guard. The panel-local event listener means each panel's menu only
  *  opens from its own swiped block id, but the scope still matters inside
  *  one panel: if a block is transcluded via embed, renderScopeId narrows

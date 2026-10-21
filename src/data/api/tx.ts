@@ -1,6 +1,7 @@
 import type {
   BlockData,
   BlockDataPatch,
+  BlockReference,
   NewBlockData,
 } from './blockData'
 import type { ChangeScope, TxSource } from './changeScope'
@@ -42,6 +43,10 @@ export interface TxInsertOpts extends TxWriteOpts {
   sourceTimestamps?: {createdAt: number; userUpdatedAt: number}
 }
 
+/** Plugin-owned context captured for one transaction or a bound Repo host. */
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+export interface TransactionContext { /* augmented by plugins */ }
+
 /** Tx metadata exposed to mutators / processor `apply` bodies.
  *  - `txId` — uuid for this tx; written into `command_events.tx_id` and
  *    every `row_events.tx_id` for this tx.
@@ -50,6 +55,7 @@ export interface TxInsertOpts extends TxWriteOpts {
  *    lands. `tx.afterCommit` throws `WorkspaceNotPinnedError` if called
  *    before that. */
 export interface TxMeta {
+  context?: Readonly<TransactionContext>
   description?: string
   scope: ChangeScope
   user: User
@@ -90,6 +96,10 @@ export interface Tx {
 
   // ──── Lifecycle ────
 
+  /** Assert that a workspace may be written by this transaction without
+   *  pinning it. Use before expensive preparation that will lead to writes. */
+  assertWritableWorkspace(workspaceId: string): void
+
   /** Insert a new block. Throws `DuplicateIdError` on PK conflict.
    *  The engine preflights non-null parents and throws
    *  `ParentNotFoundError` / `ParentWorkspaceMismatchError` before the
@@ -97,6 +107,33 @@ export interface Tx {
    *  Soft-deleted-parent is a kernel-mutator UX rule and does NOT fire on
    *  raw `tx.create` — see §4.7 Layer 1 (v4.30). */
   create(data: NewBlockData, opts?: TxInsertOpts): Promise<string>
+
+  /** `create` for a caller that already knows its whole write set: one
+   *  batched parent check and one multi-row INSERT per chunk in place of a
+   *  SELECT and an INSERT per row. Same refusals, same id policy, same
+   *  `record` per row, so the same-tx processors see exactly what they would
+   *  see one at a time.
+   *
+   *  A row may name a parent created earlier in the SAME call, so rows are
+   *  inserted in the order given and a forward reference is a
+   *  `ParentNotFoundError`. Returns the ids in that order. */
+  createMany(rows: readonly NewBlockData[], opts?: TxInsertOpts): Promise<string[]>
+
+  /** Live rows for ids already known to the caller, batched through the shared
+   *  `IN (…)` cap rather than a number stated here — see `sqlBinds`.
+   *  Missing and soft-deleted ids are simply absent from the result — the
+   *  caller is a pass that expects some of its candidates to have moved on. */
+  liveRowsForIds(workspaceId: string, ids: readonly string[]): Promise<BlockData[]>
+
+  /** Every property FIELD ROW under any of `parentIds`, live and tombstoned
+   *  alike, batched through the same shared cap. The union is deliberate: "this owner
+   *  already has a field row for this fieldId" and "this owner had one that was
+   *  reaped" are the two reasons a pass must leave a cell key alone, and asking
+   *  for them separately is two queries per owner to answer one question. */
+  propertyFieldRowsForParents(
+    workspaceId: string,
+    parentIds: readonly string[],
+  ): Promise<BlockData[]>
 
   /** Insert OR fetch the live row at a deterministic id. **No tombstone
    *  resurrection in the primitive** — see §10.4. Throws
@@ -130,21 +167,27 @@ export interface Tx {
   update(id: string, patch: BlockDataPatch, opts?: TxWriteOpts): Promise<void>
 
   /** Stamp the LOCAL derived columns — `reference_target_id` and
-   *  `is_field_form`, and ONLY those — without advancing `updated_at`. This
-   *  is the write mode for `core.deriveReferenceTarget`'s same-tx amendment:
-   *  both columns are per-device reflections of `content` (never in
-   *  `BLOCK_UPLOAD_COLUMNS`, never uploaded), so re-deriving them is not a
-   *  synced edit and must not mint an upload PATCH. Because the UPDATE
-   *  touches no upload column and leaves `updated_at` untouched,
-   *  `blocks_upload_update`'s diff predicate stays false and nothing is
-   *  enqueued — whereas `update(..., {skipMetadata})` still bumps
-   *  `updated_at` (an upload column) and ships a redundant PATCH (PR #288
-   *  §5, Decision A). Same-tab reactivity still fires (the write records a
-   *  `referenceTargetId`/`isFieldForm`-changed snapshot); cross-tab rides
-   *  the accompanying content edit's row_event. No-op when both columns
-   *  already match. Not for content-bundled retargets — those change a
-   *  synced column and go through `update`, which correctly uploads. */
+   *  `is_field_form` — and ONLY those, without advancing `updated_at`.
+   *  Both are per-device reflections of `content` and are never
+   *  uploaded, so re-deriving them (in `core.deriveReferenceTarget`'s
+   *  same-tx amendment) must not mint an upload PATCH; `update(...,
+   *  {skipMetadata})` would, because it still bumps `updated_at`. No-op
+   *  when both already match. NOT for content-bundled retargets — those
+   *  change a synced column and go through `update`. */
   stampReferenceTarget(id: string, targetId: string | null, isFieldForm: boolean): Promise<void>
+
+  /** The `references` this content already implies, for a row core is about to
+   *  mint with content it wrote itself — a field row addressing its definition,
+   *  a ref value child addressing its target.
+   *
+   *  Answered by whoever parses content into references in this configuration
+   *  (`contentReferencePrefillsFacet`, snapshotted at tx start like every other
+   *  registry the tx reads), so that the row can be BORN correct and the parse
+   *  never has to write it a second time. `undefined` — including whenever
+   *  nothing contributes, which is what References being off looks like — means
+   *  create the row without references and leave the content to whatever reads
+   *  it afterwards. */
+  derivedReferencesFor(content: string): BlockReference[] | undefined
 
   // ──── Tree moves (structural) ────
 
@@ -173,7 +216,10 @@ export interface Tx {
    *  into the row's `properties` map, and writes through immediately.
    *  The updater overload runs inside this serialized tx after identity is
    *  accepted and receives `undefined` (not `defaultValue`) when absent.
-   *  Bypassing codecs (raw `properties` writes) goes through `tx.update`. */
+   *  In a child-backed workspace a live owner's field/value children
+   *  converge to the value even when the cell already holds it — that only
+   *  skips the bag write. Bypassing codecs (raw `properties` writes) goes
+   *  through `tx.update`. */
   setProperty<T>(
     id: string,
     schema: PropertySchema<T>,
@@ -196,9 +242,11 @@ export interface Tx {
    *  with setProperty's inline dual-write, recoverable via history — eager
    *  rather than left to the deferred MATERIALIZE pass, whose net-diff would
    *  miss a key set-then-unset in one tx); un-flipped it is a cell-only
-   *  removal. No-op when the key is already absent. Throws
-   *  `PropertySchemaIdentityError` if the schema has no resolvable definition,
-   *  same as `setProperty`. */
+   *  removal. No-op when the key is already absent.
+   *
+   *  In children mode, the schema must resolve to the workspace's durable
+   *  definition. An orphan cell can be removed through a targeted bag update
+   *  without inventing a definition for it. */
   unsetProperty<T>(id: string, schema: PropertySchema<T>, opts?: TxWriteOpts): Promise<void>
 
   /** Atomically set and/or unset several properties in ONE bag rewrite. This
@@ -211,7 +259,8 @@ export interface Tx {
    *  write on an unresolvable/mis-scoped entry). In a child-backed workspace it
    *  EAGERLY reconciles children in the same tx — creating/updating for sets,
    *  soft-deleting for unsets (unset wins on a key in both) — symmetric with
-   *  `setProperty`/`unsetProperty`. A net no-op (bag unchanged) is skipped.
+   *  `setProperty`/`unsetProperty`. A net no-op (bag unchanged) writes no bag
+   *  and deletes nothing, but its sets' children still converge.
    *  `set` values are literals, not updater functions — read via `getProperty`
    *  first if you need the current value. */
   setProperties(
@@ -230,9 +279,10 @@ export interface Tx {
   /** Resolve a durable fieldId (definition block id) to its WINNING schema
    *  against `workspaceId`'s registry snapshot — the §9 recognition/
    *  projection primitive at tx level. Returns null for shadowed losers,
-   *  orphans, and foreign workspaces (their field rows keep classifying at
-   *  read sites but never project, so machinery that folds values into
-   *  cells treats null as "this value exists only in the tree"). */
+   *  winners whose codec this device cannot build, orphans, and foreign
+   *  workspaces (the first two keep their field rows classifying at read
+   *  sites but never project, so machinery that folds values into cells
+   *  treats null as "this value exists only in the tree"). */
   resolvePropertyFieldSchema(
     workspaceId: string,
     fieldId: string,
@@ -241,7 +291,8 @@ export interface Tx {
   /** §9 recognition, condition-3 checker: does `fieldId` name a definition
    *  this workspace's registry can resolve — shadow-tolerant (a shadowed
    *  loser COUNTS: its field rows keep classifying; only the name map and
-   *  projection exclude it, §6). This is the classification predicate's
+   *  projection exclude it, §6), and so does a winner whose codec this
+   *  device cannot build (`isResolvableFieldDefinition`). This is the classification predicate's
    *  fieldId half, exposed so `isPropertyFieldRow` reads the ONE checker
    *  instead of restating the disjunction. (The rename processor and the
    *  deferred migration batch answer the same question from their own
@@ -250,13 +301,92 @@ export interface Tx {
    *  the tx-start registry snapshot. */
   isPropertyFieldDefinition(workspaceId: string, fieldId: string): boolean
 
-  /** The one properties-as-blocks predicate (PR #288 §6): is `workspaceId`
+  /** The one properties-as-blocks predicate (docs/properties-as-blocks-migration.html §6): is `workspaceId`
    *  flipped to child-backed properties (`workspaces.properties_migration`
-   *  at or past 'children' — never an equality test)? Shared by
-   *  recognition, the dual-write, and the projection processors; cached
-   *  per tx. Reads the local synced `workspaces` row; a missing row/column
+   *  at or past 'children' — never an equality test)? It governs the
+   *  read/write DIRECTION — the dual-write gate, the projection processors,
+   *  the property-rename processor and the cell backfill — NOT whether a row
+   *  is recognized as machinery, which is data-keyed. Cached per tx. Reads the local synced `workspaces` row; a missing row/column
    *  reads as un-flipped ('cell'). */
   isPropertyChildBackedWorkspace(workspaceId: string): Promise<boolean>
+
+  /** The workspace's `encryption_mode`, read through THIS transaction's
+   *  handle, or null when this device has no local row for it.
+   *
+   *  On Tx, not read from the Repo, because a caller re-checking the mode
+   *  immediately before it mints under a mode-derived namespace has to read it
+   *  under the write lock it already holds — and that read cannot be served on
+   *  the Repo's handle at all (`Repo.assertBackfillMayWrite` states the rule;
+   *  `@/data/localDbVfs` has the mechanism). */
+  workspaceEncryptionMode(workspaceId: string): Promise<string | null>
+
+  /** The two database reads behind `Repo.workspaceViewGap` (`ViewGapReads`,
+   *  which owns why they go together), served by THIS transaction's handle so
+   *  the whole question can be asked under the lock the answer has to hold
+   *  for. Pass the transaction to `repo.workspaceViewGap(workspaceId, tx)`
+   *  rather than calling these.
+   *
+   *  Both REFUSE once this transaction has written: they would then be
+   *  answering about its own uncommitted rows. Ask before the first write. */
+  stagedSyncViewGap(): Promise<string | null>
+  workspaceUnappliedCount(workspaceId: string): Promise<number>
+
+  /** The fieldIds `parentId` holds a TOMBSTONED field row for.
+   *
+   *  The one thing that separates "a cell key was never materialized" from "the
+   *  property was DELETED through its children and this device's cell has not
+   *  caught up" — the cell backfill's create-only path needs it before it may
+   *  treat a key as history. On Tx rather than read alongside the candidate scan
+   *  because the answer has to be taken under the same write lock as the
+   *  materialization it gates: a tombstone arriving while the batch waits for the
+   *  writer would otherwise be missed, and the pass would recreate the property
+   *  and upload it.
+   *
+   *  Deleted rows only, since `childrenOf` already covers the live ones. Ordered
+   *  `(order_key, id)`, and whole rows rather than a target set because the
+   *  revival path (#787) restores these rather than only counting them: a
+   *  restore that minted replacements abandoned the originals, so a property's
+   *  row identity did not survive a delete→restore and two devices restoring
+   *  the same block minted rival field rows for one definition. */
+  tombstonedPropertyFieldRows(workspaceId: string, parentId: string): Promise<BlockData[]>
+
+  /** Tombstoned children of `parentId`, ordered `(order_key, id)` — the
+   *  complement of `childrenOf`, which is live-only. Exists for the revival
+   *  path: bringing a tombstoned field row back means bringing its value
+   *  children back with it, and those are invisible to every live-only read. */
+  deletedChildrenOf(parentId: string): Promise<BlockData[]>
+
+  /** For each of `names` that has a LIVE `property-schema` block in this
+   *  workspace, the ids of those blocks — read inside the transaction.
+   *
+   *  Ids rather than a bare name set so a caller can tell the holders apart —
+   *  de-duplicate against the row its own projection selected, and name the
+   *  others when it has to report a collision.
+   *
+   *  DO NOT exclude your own deterministic id from this answer when the
+   *  question is "who holds this name". That exclusion is only meaningful where
+   *  the id is about to be WRITTEN, and as an answer about a NAME it hides the
+   *  one holder guaranteed to win: a `systemMint` row is born at `createdAt` 0
+   *  and `buildPropertyDefinitionRegistry` sorts ascending, so an unprojected
+   *  copy at that id takes the name on the next rebuild while the caller
+   *  backfills against whatever its projection picked. Keep "is this id mine to
+   *  write through?" as its own question — `classifyOccupant` answers it.
+   *
+   *  Exists because the property-definition registry is a projector-driven
+   *  PROJECTION: a definition applied by sync commits in its own transaction
+   *  and is invisible to the registry until the projector ticks. A caller about
+   *  to mint a definition cannot ask the registry whether the name is taken —
+   *  it would mint a rival, and the loser of the winner machinery strands every
+   *  field row bound to its fieldId. Inside the write lock no other writer can
+   *  commit, so this answer holds for the rest of the transaction.
+   *
+   *  A bag with a repeated name key resolves to its LAST occurrence, which is
+   *  the one the runtime reads — `readPropertyDefinitionBags` owns that rule
+   *  and this goes through it. */
+  livePropertyDefinitionNames(
+    workspaceId: string,
+    names: readonly string[],
+  ): Promise<Map<string, string[]>>
 
   // ──── Composition ────
 
@@ -274,10 +404,10 @@ export interface Tx {
    *  This is the structural view: the actual tree, no hidden rows, so a
    *  traversal can never silently miss machinery it needs to carry (delete
    *  cascade, copy, merge). The display-visible view — which excludes
-   *  recognized property field rows in a child-backed workspace (PR #288
-   *  §9) — is opt-IN via `{hidePropertyChildren: true}`. In an un-flipped
-   *  workspace nothing is recognized, so `hidePropertyChildren` is a no-op
-   *  (dormant).
+   *  recognized property field rows (docs/properties-as-blocks-migration.html §9) — is opt-IN via
+   *  `{hidePropertyChildren: true}`. Recognition is data-keyed, not
+   *  flip-gated, so it prunes in every workspace: the cell→children backfill
+   *  mints field rows while the workspace still reads cells.
    *
    *  Pass `null` to enumerate workspace-root rows (rows with
    *  `parent_id IS NULL`); the result is scoped to a workspace by
@@ -355,6 +485,32 @@ export interface Tx {
    *  happens to be the oldest. Sees this tx's own writes. */
   aliasClaimants(alias: string, workspaceId: string): Promise<BlockData[]>
 
+  /** Every alias `blockId` claims, straight out of the trigger-maintained
+   *  index. `[]` for a tombstoned or missing row — a soft delete drops its
+   *  entries while leaving the stored property bag alone.
+   *
+   *  The authoritative answer to "what names does this row hold", and not the
+   *  same question as decoding its `alias` property. The trigger indexes
+   *  `json_each(properties_json, '$.alias')` filtered to `typeof 'text'`,
+   *  which yields values from a bare scalar and from an OBJECT as well as from
+   *  an array, and stringifies a nested array. The string-list codec accepts
+   *  none of those and throws for the whole bag if any entry is not a string.
+   *  Re-deriving those semantics in TypeScript is whack-a-mole, and each shape
+   *  missed silently RELEASES a name when the row is deleted. Sees this tx's
+   *  own writes. */
+  aliasesOf(blockId: string): Promise<string[]>
+
+  /** Does any LIVE block in `workspaceId` reference `targetId` by an edge in
+   *  `block_references`? Edges mirror the `references` column — committed, or
+   *  written in this tx — and the references parse derives that column
+   *  post-commit, so a link written into content or a property in THIS tx has
+   *  no edge yet and reads as no referrer.
+   *
+   *  The in-tx half of a delete-if-unreferenced decision: a probe taken before
+   *  the tx is stale by the time the lock is held, because a reference can
+   *  commit in between. */
+  hasLiveReferrer(targetId: string, workspaceId: string): Promise<boolean>
+
   // ──── Post-commit scheduling ────
 
   /** Schedule a follow-up post-commit job. Runs in its own
@@ -378,11 +534,53 @@ export interface Tx {
 }
 
 export interface RepoTxOptions {
+  context?: Readonly<TransactionContext>
   scope: ChangeScope
   description?: string
+  /** Permit deliberate writes outside the captured open workspace. The caller
+   *  accepts unavailable or stale registry behavior, must verify target write
+   *  access, and must account for this option not loading target membership.
+   *  This changes only workspace admission: it does not load definitions or
+   *  relax property-schema validation, the client's read-only mode, or
+   *  single-workspace checks. Intended for controlled background seeding and
+   *  repair tooling. */
+  allowUnloadedWorkspace?: boolean
   /** Undo-group token (issue #306). Txs sharing a `groupId` merge into
    *  one undo entry at record time and stamp `group_id` into
    *  `tx_context` / `row_events`. Minted by `repo.undoGroup` and
    *  injected by its facade — callers don't set this by hand. */
   groupId?: string
+  /** This transaction is the app MEASURING ITSELF, not doing the user's work.
+   *
+   *  Kept out of `repo.metrics().excludingTelemetry`, so a feature that reports
+   *  performance figures does not report its own bookkeeping as load. Set it on
+   *  every transaction such a feature issues, including its cleanup passes;
+   *  anything left unflagged is counted as the user's work, which is the
+   *  direction that under-reports a problem rather than inventing one.
+   *
+   *  Orthogonal to `scope`: telemetry writes are still gated, still synced,
+   *  still non-undoable or not on their own terms. This flag only decides which
+   *  side of the metrics they land on.
+   *
+   *  Covers THIS transaction, not the cascade it may schedule: a post-commit
+   *  processor opens its own tx with opts it constructs, and nothing propagates
+   *  the flag into it. A feature whose writes trigger writing processors would
+   *  see those counted as the user's work. */
+  telemetry?: boolean
+
+  /** Skip recording an undo entry for this tx, without changing its scope.
+   *
+   *  For writes the program makes on the user's behalf while they are doing
+   *  something else — a one-shot `WorkspaceBackfill` firing seconds after
+   *  workspace open is the motivating case. Such a batch is a document edit in
+   *  every other respect (it must stay read-only-gated and seed-guarded, so it
+   *  keeps `BlockDefault`), but putting it on the undo stack means a cmd-Z
+   *  aimed at the user's own edit silently reverts the whole pass — and with
+   *  the pass's completion marker already recorded, permanently.
+   *
+   *  Prefer a non-undoable SCOPE when the write genuinely is not a document
+   *  edit (`UiState`, `UserPrefs`, `Automation`). This flag exists for the case
+   *  where the scope must stay `BlockDefault` for gating reasons but the entry
+   *  would be a trap. Default false (entries are recorded as usual). */
+  skipUndo?: boolean
 }

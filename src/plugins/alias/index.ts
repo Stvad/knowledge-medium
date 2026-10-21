@@ -18,6 +18,8 @@
 import type { AppExtension } from '@/facets/facet.js'
 import { systemToggle } from '@/facets/togglable.js'
 import { rejectionToastFacet } from '@/extensions/core.js'
+import { blockHeaderFacet } from '@/extensions/blockInteraction.js'
+import { duplicateNameBannerHeader } from './DuplicateNameBanner.tsx'
 import { aliasDataExtension } from './dataExtension.ts'
 import { aliasCollisionRejectionToast } from './rejectionToast.tsx'
 import { aliasPageBulletContribution, aliasPageStylingContribution } from './pageStyling.ts'
@@ -29,6 +31,7 @@ export const aliasPlugin: AppExtension = systemToggle({
 }).of([
   aliasDataExtension,
   rejectionToastFacet.of(aliasCollisionRejectionToast, {source: 'alias'}),
+  blockHeaderFacet.of(duplicateNameBannerHeader, {source: 'alias'}),
   aliasPageStylingContribution,
   aliasPageBulletContribution,
 ])

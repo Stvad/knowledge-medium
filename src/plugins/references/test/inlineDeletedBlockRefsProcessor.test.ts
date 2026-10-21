@@ -77,7 +77,7 @@ describe('references.inlineDeletedBlockReferences', () => {
     expect(env.read('s')!.references).toEqual([])
   })
 
-  // Regression (PR #386 review): `core.deriveReferenceTarget` runs earlier
+  // Regression: `core.deriveReferenceTarget` runs earlier
   // in the same-tx processor pass and stamps `referenceTargetId` from the
   // PRE-inline content. Without recomputing it here, a whole-block
   // `((deletedId))` row would keep `referenceTargetId: deletedId` even
@@ -275,7 +275,8 @@ describe('references.inlineDeletedBlockReferences', () => {
 })
 
 /**
- * #404 item 4 / PR #288 §9: a ref-typed property VALUE is `((targetId))`.
+ * #404 item 4 / docs/properties-as-blocks-migration.html §9: a ref-typed
+ * property VALUE is `((targetId))`.
  * Inlining it would rewrite the value into prose, clear its derived column,
  * and silently drop the property key at the next projection — irreversibly,
  * since the id is gone. Cell-era semantics were the opposite: a deleted
@@ -375,6 +376,32 @@ describe('property value children keep a dangling ref instead of inlining (#404)
     expect(env.read('field')!.referenceTargetId).toBe(DEF)
   })
 
+  // A refList's members are N sibling value rows (km-h1hy), so the exemption
+  // has to hold at EVERY position rather than for a first primary value.
+  // Nothing in it is positional — it asks whether the row's parent is a field
+  // row — and this is what proves that rather than assuming it: the target
+  // deleted here belongs to the SECOND member.
+  it('leaves a LATER refList member dangling too', async () => {
+    await seedFlippedWorkspaceWithRefValue()
+    const second = '55555555-5555-4555-8555-555555555555'
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: second, workspaceId: WS, parentId: null, orderKey: 'a3',
+        content: 'second target body',
+      })
+      await tx.create({
+        id: 'member2', workspaceId: WS, parentId: 'field', orderKey: 'a2',
+        content: `((${second}))`, references: [{id: second, alias: second}],
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.awaitProcessors()
+
+    await env.repo.mutate.delete({id: second})
+
+    expect(env.read('member2')!.content).toBe(`((${second}))`)
+    expect(env.read('member2')!.referenceTargetId).toBe(second)
+  })
+
   // The exemption is for VALUES, not for everything under a property: a
   // comment beneath a value row is ordinary prose and still inlines, exactly
   // as it would anywhere else in the outline.
@@ -394,10 +421,13 @@ describe('property value children keep a dangling ref instead of inlining (#404)
     expect(env.read('comment')!.references).toEqual([])
   })
 
-  // Dormancy: the exemption is flip-gated like every other §9 recognition —
-  // an un-flipped workspace has no property machinery to recognize, so the
-  // same shape inlines as ordinary content.
-  it('is dormant in an un-flipped workspace', async () => {
+  // The exemption is NOT flip-gated: the cell->children backfill mints real
+  // field and value rows while the workspace still reads cells, and inlining
+  // one detaches the property from its owner irreversibly. The fixture below
+  // is a REAL field row (marked `::`), which is what the bit keys on — the
+  // earlier version used an unmarked `((DEF))` and so proved nothing about
+  // the gate it claimed to exercise.
+  it('protects a backfilled field row in an un-flipped workspace', async () => {
     await env.h.db.execute(
       `INSERT INTO workspaces
          (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
@@ -412,7 +442,7 @@ describe('property value children keep a dangling ref instead of inlining (#404)
       })
       await tx.create({id: D, workspaceId: WS, parentId: null, orderKey: 'a1', content: 'target body'})
       await tx.create({id: 'p', workspaceId: WS, parentId: null, orderKey: 'a2', content: 'owner'})
-      await tx.create({id: 'field', workspaceId: WS, parentId: 'p', orderKey: 'a1', content: `((${DEF}))`})
+      await tx.create({id: 'field', workspaceId: WS, parentId: 'p', orderKey: 'a1', content: `::((${DEF}))`})
       await tx.create({
         id: 'value', workspaceId: WS, parentId: 'field', orderKey: 'a1',
         content: `((${D}))`, references: [{id: D, alias: D}],
@@ -422,7 +452,12 @@ describe('property value children keep a dangling ref instead of inlining (#404)
 
     await env.repo.mutate.delete({id: D})
 
-    expect(env.read('value')!.content).toBe('target body')
-    expect(env.read('value')!.referenceTargetId).toBeNull()
+    // The value row keeps its reference rather than being inlined to text.
+    expect(env.read('value')!.content).toBe(`((${D}))`)
+
+    // And deleting the DEFINITION must not rewrite the field row, which would
+    // strip the `::` marker and detach the property from its owner entirely.
+    await env.repo.mutate.delete({id: DEF})
+    expect(env.read('field')!.content).toBe(`::((${DEF}))`)
   })
 })

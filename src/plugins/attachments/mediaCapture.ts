@@ -48,9 +48,10 @@ import type { Repo } from '@/data/repo'
 import { getOrCreateKernelPage, kernelPageBlockId } from '@/data/kernelPage'
 import { keyAtEnd } from '@/data/orderKey'
 import { createOrRestoreTargetBlock } from '@/data/targets'
-import { BINARY_ENVELOPE_OVERHEAD_BYTES } from '@/sync/crypto/binaryEnvelope.js'
+import { fitsObjectLimit, MAX_OBJECT_BYTES } from '@/sync/byteTransform.js'
 import { computeContentHash } from '@/sync/crypto/contentHash.js'
 import { deriveContentKey } from '@/sync/crypto/contentKey.js'
+import { orNullWhenKeyUnavailable } from '@/sync/keys/openWorkspaceKeys.js'
 import { materializabilityToMode, type GetMaterializability } from '@/sync/transform.js'
 import type { ByteStore } from './byteStore.js'
 import {
@@ -65,12 +66,10 @@ import {
 } from './mediaBlock.js'
 import type { ByteUploadStore } from './uploadStore.js'
 
-/** The bucket's `file_size_limit` (§10) — 50 MiB. The client guard rejects an
- *  oversize capture BEFORE staging, so we never queue an upload the server's 413
- *  would only quarantine — and it bounds the ENCODED object (e2ee adds the
- *  envelope overhead, {@link BINARY_ENVELOPE_OVERHEAD_BYTES}), not just the
- *  plaintext, so an e2ee file just under the cap can't 413 at upload. */
-export const DEFAULT_MAX_CAPTURE_BYTES = 50 * 1024 * 1024
+/** The capture cap (§10). The client guard rejects an oversize capture BEFORE
+ *  staging, so we never queue an upload the server's 413 would only quarantine;
+ *  it bounds the ENCODED object ({@link fitsObjectLimit}). */
+export const DEFAULT_MAX_CAPTURE_BYTES = MAX_OBJECT_BYTES
 
 /** uuid v5 namespace for media asset block ids (distinct from ASSETS_NS). */
 const MEDIA_BLOCK_NS = 'a1f4c7e2-9b3d-4e6a-8c5f-2d0b1e7a4c93'
@@ -151,15 +150,11 @@ export const captureMedia = async (
   const mode = materializabilityToMode(await deps.getMaterializability(workspaceId))
   if (mode === null) return { ok: false, reason: 'workspace-locked' }
 
-  // The uploaded OBJECT is the encoded bytes: e2ee wraps the plaintext in the
-  // encb:v1 envelope (magic+nonce+GCM tag); copy is passthrough. Guard the ENCODED
-  // size against the bucket's file_size_limit so an e2ee file in the top envelope-
-  // overhead bytes of the allowance can't pass here, then 413 (permanent) at upload.
-  const maxBytes = deps.maxBytes ?? DEFAULT_MAX_CAPTURE_BYTES
-  const encodedSize = mode === 'e2ee' ? size + BINARY_ENVELOPE_OVERHEAD_BYTES : size
-  if (encodedSize > maxBytes) return { ok: false, reason: 'too-large' }
+  if (!fitsObjectLimit(size, mode, deps.maxBytes)) {
+    return { ok: false, reason: 'too-large' }
+  }
 
-  const contentKeyHmac = mode === 'e2ee' ? await deps.getContentKeyHmac(workspaceId) : null
+  const contentKeyHmac = mode === 'e2ee' ? await orNullWhenKeyUnavailable(deps.getContentKeyHmac(workspaceId)) : null
   if (mode === 'e2ee' && !contentKeyHmac) return { ok: false, reason: 'no-content-key' }
 
   const contentHash = await computeContentHash(bytes)

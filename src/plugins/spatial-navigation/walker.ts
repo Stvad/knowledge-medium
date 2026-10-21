@@ -5,6 +5,7 @@ import {
   type FocusedBlockLocation,
   sameFocusedBlockLocation,
 } from '@/data/properties.js'
+import type { SelectionRangeRow } from '@/utils/selection.js'
 
 /**
  * Spatial-navigation walker — pure DOM queries, no in-memory registry.
@@ -64,6 +65,10 @@ const NAV_ITEM_SELECTOR = '[data-block-nav-item="true"]'
 const PANEL_SELECTOR = '[data-panel-id]'
 const COLUMN_SELECTOR = '[data-layout-column-id]'
 const VISIBILITY_TARGET_SELECTOR = '[data-block-visibility-target="true"]'
+/** A deferred row's slot, and one that also names the occurrence it holds a
+ *  place for. */
+const SLOT_SELECTOR = '[data-lazy-block-id]'
+const LABELLED_SLOT_SELECTOR = '[data-lazy-block-id][data-lazy-render-scope-id]'
 
 /** Default exclusion set used whenever a caller doesn't thread a resolved
  *  one through (e.g. a direct unit-test call, or the early-boot path with
@@ -205,6 +210,47 @@ export const panelInstances = (
   })
 }
 
+export interface PanelRow extends SelectionRangeRow {
+  element: HTMLElement
+}
+
+/**
+ * Every row the panel holds a place for, in document order: the mounted rows
+ * `panelInstances` returns, plus the slots of rows still deferred. What a RANGE
+ * between two rows spans — which rows happen to have mounted is not something
+ * the user chose, and a range over mounted rows alone has holes wherever a
+ * scroll jumped past rows without mounting them.
+ *
+ * Unlike navigation, a range takes a slot that names no scope (a backlink
+ * entry's, a recents row's): it needs the block, not the occurrence, so it
+ * reads the block id and guesses nothing about the scope.
+ *
+ * Rows nested under a still-deferred row have no slot of their own; they are
+ * part of the range through that row, whose selection takes its subtree.
+ */
+export const panelRowsInOrder = (
+  panel: HTMLElement,
+  excludedSurfaces: ReadonlySet<string> = DEFAULT_NON_NAVIGABLE_SURFACES,
+): PanelRow[] => {
+  const mounted = new Set(panelInstances(panel, excludedSurfaces))
+  // The same two filters `panelInstances` applies to mounted rows.
+  const isOwnSlot = (slot: HTMLElement): boolean =>
+    slot.closest<HTMLElement>(PANEL_SELECTOR) === panel && !isInExcludedSurface(slot, excludedSurfaces)
+  const rows: PanelRow[] = []
+  for (const element of panel.querySelectorAll<HTMLElement>(`${NAV_ITEM_SELECTOR}, ${SLOT_SELECTOR}`)) {
+    if (element.matches(NAV_ITEM_SELECTOR)) {
+      const location = mounted.has(element) ? locationOf(element) : null
+      if (location) rows.push({element, ...location})
+      continue
+    }
+    const {lazyBlockId, lazyRenderScopeId} = element.dataset
+    if (lazyBlockId && isOwnSlot(element)) {
+      rows.push({element, blockId: lazyBlockId, renderScopeId: lazyRenderScopeId})
+    }
+  }
+  return rows
+}
+
 export const panelOf = (el: HTMLElement): HTMLElement | null =>
   el.closest<HTMLElement>(PANEL_SELECTOR)
 
@@ -268,6 +314,8 @@ const collectAncestorLocations = (
   let el = closestBlockAncestor(instanceEl, panel)
   while (el) {
     const location = locationOf(el)
+    // Defence in depth: `findByLocation` treats a missing location as no
+    // match anyway, so a pushed null would change nothing.
     if (location) ancestors.push(location)
     el = closestBlockAncestor(el, panel)
   }
@@ -297,6 +345,8 @@ const findSameDepthSibling = (
   direction: 'prev' | 'next',
 ): FocusedBlockLocation | undefined => {
   const idx = instances.indexOf(instanceEl)
+  // Defence in depth: the only caller already returned if `indexOf` on this
+  // same array was negative.
   if (idx < 0) return undefined
   const own = closestBlockAncestor(instanceEl, panel)
   if (direction === 'prev') {
@@ -317,9 +367,9 @@ const findSameDepthSibling = (
 
 /**
  * Record the focused instance's neighborhood (siblings + ancestors +
- * positional index) inside its panel. Called whenever spatial
- * navigation (or the proactive focus-recovery watcher) confirms that
- * the focused block has a live DOM instance. The hint is consumed by
+ * positional index) inside its panel. Called by the proactive focus-recovery
+ * watcher whenever it confirms that the focused block has a live DOM
+ * instance. The hint is consumed by
  * `findRecoveryAnchor` (and `locateInstance`'s positional tier) when
  * that block later disappears.
  */
@@ -332,6 +382,11 @@ export const rememberInstancePosition = (
   if (!panel) return
   const instances = panelInstances(panel, excludedSurfaces)
   const idx = instances.indexOf(instanceEl)
+  // Defence in depth, unreached by any test: every in-repo caller passes an
+  // element it just found in this panel. `index.ts` re-exports this, so an
+  // extension is the real blast radius — without the guard a hint lands with
+  // BOTH indexes at -1, which either clamp reads as 0: a wrong recovery
+  // target, not none.
   if (idx < 0) return
   const location = locationOf(instanceEl)
   if (!location) return
@@ -391,12 +446,9 @@ export const findRecoveryAnchor = (
   const panel = panelById(panelId)
   if (!panel) return null
   const instances = panelInstances(panel, excludedSurfaces)
-  if (instances.length === 0) return null
-
   const hint = lastPositionByPanel.get(panelId)
   if (!hint || !sameFocusedBlockLocation(hint.location, forLocation)) return null
   const candidates = sameSurfaceInstances(instances, hint.surface)
-  if (candidates.length === 0) return null
 
   const findByLocation = (location: FocusedBlockLocation | undefined): HTMLElement | undefined =>
     location
@@ -419,8 +471,7 @@ export const findRecoveryAnchor = (
     if (ancestor) return ancestor
   }
 
-  const positionalIndex = hint.surfaceIndex >= 0 ? hint.surfaceIndex : hint.index
-  const positionalChoice = candidates[clamp(positionalIndex, 0, candidates.length - 1)] ?? null
+  const positionalChoice = candidates[clamp(hint.surfaceIndex, 0, candidates.length - 1)] ?? null
   return pickViewportFallback(candidates, positionalChoice)
 }
 
@@ -514,9 +565,7 @@ export const reservedRowBetween = (
   const panel = panelOf(from)
   if (!panel) return null
   const fromScope = from.dataset.renderScopeId
-  const slots = Array.from(panel.querySelectorAll<HTMLElement>(
-    '[data-lazy-block-id][data-lazy-render-scope-id]',
-  )).filter(slot =>
+  const slots = Array.from(panel.querySelectorAll<HTMLElement>(LABELLED_SLOT_SELECTOR)).filter(slot =>
     aheadOf(from, slot, direction) &&
     // Past the mounted neighbour it isn't "between" — the neighbour is then the
     // nearer answer and nothing is missing before it.

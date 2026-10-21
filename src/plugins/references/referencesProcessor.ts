@@ -56,7 +56,6 @@ import {
   type AnyPostCommitProcessor,
   type CommittedEvent,
   type ProcessorCtx,
-  type ProcessorReadDb,
   type TypeRegistrySnapshot,
   type Tx,
 } from '@/data/api'
@@ -67,6 +66,7 @@ import {
 import { isRetainableAbsentRef, projectPropertyReferences } from './referenceProjection.ts'
 import { devAssertionsEnabled } from '@/data/internals/devAssertions.js'
 import { parseAliasCollisionError } from '@/data/internals/raiseProtocol.js'
+import { readHasLiveReferrer } from '@/data/internals/kernelQueries.js'
 import {
   aliasSeatReaderFromDb,
   ensureAliasTarget,
@@ -75,7 +75,15 @@ import {
   matchesAliasSeatSeed,
   resolveAliasSeatId,
 } from '@/data/targets'
+import {
+  AliasSeatNamespaceUnavailableError,
+  aliasSeatNamespacesInTx,
+  resolveAliasSeatNamespaces,
+  type AliasSeatNamespaces,
+} from '@/data/aliasSeatNamespace'
 import { EXTENSION_TYPE } from '@/data/blockTypes'
+import { WorkspaceKeyUnavailableError } from '@/sync/keys/openWorkspaceKeys'
+import { readIsChildBackedWorkspace } from '@/data/workspaceSchema'
 import { aliasesProp, typesProp } from '@/data/properties'
 import { deleteSubtreeInTx } from '@/data/subtreeDelete'
 import {
@@ -83,33 +91,9 @@ import {
   ensureDailyNoteTarget,
 } from '@/plugins/daily-notes/dailyNotes.js'
 import { parseLiteralDailyPageTitle } from '@/utils/relativeDate.js'
-import { readIsChildBackedWorkspace } from '@/data/workspaceSchema'
 
 export const PARSE_REFERENCES_PROCESSOR = 'references.parseReferences'
 export const CLEANUP_ORPHAN_ALIASES_PROCESSOR = 'references.cleanupOrphanAliases'
-
-const SELECT_LIVE_REFERENCE_SOURCE_SQL = `
-  SELECT 1 AS present
-  FROM block_references br
-  JOIN blocks source ON source.id = br.source_id
-  WHERE br.workspace_id = ?
-    AND br.target_id = ?
-    AND source.deleted = 0
-  LIMIT 1
-`
-
-/** Committed-state probe: does any LIVE source still reference
- *  `targetId`? Shared by the mint-time orphan cleanup and the
- *  reference-drop reaper. */
-const hasLiveReferrer = async (
-  db: ProcessorReadDb,
-  workspaceId: string,
-  targetId: string,
-): Promise<boolean> =>
-  (await db.getOptional<{present: number}>(
-    SELECT_LIVE_REFERENCE_SOURCE_SQL,
-    [workspaceId, targetId],
-  )) !== null
 
 /** Parse-basis fingerprint of a row's parse-relevant columns (content,
  *  properties, references), serialized together so the write phase can
@@ -137,9 +121,9 @@ const planBasisOf = (row: BlockData): string =>
  *  instead. It stays because the total read costs nothing, and because a
  *  wrong-shaped value reading as "not an extension" is the right answer
  *  anyway — the block gets parsed like ordinary content, exactly as
- *  before this gate existed. Same shape as `MediaBlockRenderer.canRender`,
- *  which documents the identical `getBlockTypes` hazard on the render
- *  side. */
+ *  before this gate existed. The render side meets the identical
+ *  `getBlockTypes` hazard once, in `useRenderer`'s `typesOf`, which every
+ *  renderer gate now reads `ctx.types` from. */
 export const isExtensionSource = (source: Pick<BlockData, 'properties'>): boolean => {
   const types = source.properties[typesProp.name]
   return Array.isArray(types) && types.includes(EXTENSION_TYPE)
@@ -164,8 +148,7 @@ interface SourcePlan {
    *  portion covers writers that touch ONLY the references column — the
    *  ref-backfill reprojection on schema load, raw bridge writes: their
    *  entries would otherwise be silently dropped by a plan built from the
-   *  pre-write row, with no watched-field change left to re-derive them
-   *  (Codex review on PR #371). */
+   *  pre-write row, with no watched-field change left to re-derive them. */
   basis: string
   /** Resolved-or-to-be-created refs the source's `references` column
    *  should end up with. The id may name a non-yet-existing target if
@@ -189,6 +172,16 @@ interface SourcePlan {
    *  the row — used to skip a no-op write that would re-fire the
    *  field-watcher and produce a useless row_events / ps_crud entry. */
   referencesChanged: boolean
+}
+
+/** A new-page mark whose seat cannot be minted — no key on this device (which
+ *  has already locked the workspace), or the mode turned sealed between the
+ *  read phase and the lock — stays underived (`null`); the rest of the source
+ *  still derives. Any other failure is rethrown. */
+const leaveSeatOut = (err: unknown, sourceId: string): null => {
+  if (!(err instanceof AliasSeatNamespaceUnavailableError || err instanceof WorkspaceKeyUnavailableError)) throw err
+  console.warn(`[references] left a new page unminted for ${sourceId}: ${err.message}`)
+  return null
 }
 
 /** Read phase: parse refs, resolve existing alias targets via committed-
@@ -233,6 +226,11 @@ const buildSourcePlan = async (
   const aliasesToEnsure: Array<{alias: string; id: string}> = []
   const datesToEnsure: Array<{iso: string; alias: string}> = []
   const seenAliases = new Set<string>()
+  // Resolved on the first lookup miss, before the lock: the write phase's
+  // `ensureAliasTarget` reads it from the cache this fills, since `K_id` cannot
+  // be read under the lock (`@/data/aliasSeatNamespace`). `null`: no key on this
+  // device, so this source's new-page marks stay underived.
+  let seats: AliasSeatNamespaces | null | undefined
 
   for (const mark of aliasMarks) {
     if (seenAliases.has(mark.alias)) continue
@@ -275,7 +273,13 @@ const buildSourcePlan = async (
     // tombstoned. We probe here (read-phase, committed state) so the
     // predicted id matches what ensureAliasTarget will pick in the
     // write phase. Convergence: same world-state → same probe answer.
+    if (seats === undefined) {
+      seats = await resolveAliasSeatNamespaces(ctx.repo, source.workspaceId)
+        .catch(err => leaveSeatOut(err, source.id))
+    }
+    if (seats === null) continue
     const id = await resolveAliasSeatId(
+      seats,
       aliasSeatReaderFromDb(ctx.db),
       mark.alias,
       source.workspaceId,
@@ -357,11 +361,6 @@ const buildSourcePlan = async (
   }
 }
 
-/** Write phase: apply one source's plan inside the active tx. Returns
- *  the list of alias-target ids this tx actually inserted (for
- *  cleanup-eligibility filtering — only `ensureAliasTarget`'s
- *  `inserted: true` results count; date results never feed cleanup per
- *  §7.6). */
 /** Make the resolved date target CLAIM each long-form literal spelling
  *  that bound to it (e.g. "January 5th, 2026" alongside the ISO
  *  "2026-01-05"), so the binding gets the same
@@ -384,7 +383,7 @@ const buildSourcePlan = async (
  *  `tx.aliasLookup` recheck, so within this tx the literal is known
  *  unclaimed — the uniqueness trigger backstops same-device racers.
  *
- *  Documented residuals (adversarial review, PR #384):
+ *  Documented residuals:
  *  - The claim outlives the referencing edit: undo of the source (or a
  *    later removal of the ISO alias from a user-page target) leaves the
  *    auto-claimed literal in place — orphan cleanup exempts dates
@@ -442,12 +441,16 @@ const claimLiteralDateAliases = async (
     // (ABORT) backs out only this statement (tx stays open) and
     // setProperty records bookkeeping only after a successful execute,
     // so skipping is clean: the claim degrades to the pre-claim
-    // first-writer behavior for this target only (adversarial review
-    // on PR #384).
+    // first-writer behavior for this target only.
     if (parseAliasCollisionError(err) === null) throw err
   }
 }
 
+/** Write phase: apply one source's plan inside the active tx. Returns
+ *  the list of alias-target ids this tx actually inserted (for
+ *  cleanup-eligibility filtering — only `ensureAliasTarget`'s
+ *  `inserted: true` results count; date results never feed cleanup per
+ *  §7.6). */
 const applySourcePlan = async (
   tx: Tx,
   ctx: ProcessorCtx,
@@ -485,8 +488,7 @@ const applySourcePlan = async (
   // long-form, e.g. "May 20th, 2026") can be claimed mid-plan too —
   // ensureDailyNoteTarget's internal lookup-first only rechecks the ISO,
   // so a long-form claimant would otherwise be missed and the entry left
-  // bound to the daily seat where a fresh parse would bind the claimant
-  // (Codex review on PR #371).
+  // bound to the daily seat where a fresh parse would bind the claimant.
   const seatAliasesByIso = new Map<string, string[]>()
   for (const {iso, alias} of plan.datesToEnsure) {
     const claimant = await tx.aliasLookup(alias, plan.workspaceId)
@@ -520,7 +522,18 @@ const applySourcePlan = async (
     await claimLiteralDateAliases(tx, ensured.id, iso, aliases)
   }
   for (const {alias, id: predicted} of plan.aliasesToEnsure) {
+    // The mode can turn sealed between the read phase and this lock. The
+    // throw precedes every write in the ensure, so dropping just this
+    // reference leaves the rest of the transaction sound.
     const ensured = await ensureAliasTarget(tx, ctx.repo, alias, plan.workspaceId, typeSnapshot)
+      .catch(err => leaveSeatOut(err, plan.sourceId))
+    if (ensured === null) {
+      // DEFENCE IN DEPTH: left in, this dangling reference re-fires the
+      // processor, whose next read phase mints the page or leaves it out.
+      references = references.filter(ref =>
+        !(ref.sourceField === undefined && ref.id === predicted && ref.alias === alias))
+      continue
+    }
     if (ensured.inserted) newlyInserted.push(ensured.id)
     retarget(predicted, ensured.id, alias)
     // The §9 arrival-order repair (late-binding rederive of NULL-stamped
@@ -567,7 +580,7 @@ export const parseReferencesProcessor = definePostCommitProcessor({
   // (isRetainableAbsentRef) keeps entries the parse can't re-derive.
   // No self-loop: this processor's own references write re-fires one
   // read phase that comes out idempotent (planNeedsWrite false) and
-  // stops. (Codex review on PR #371.)
+  // stops.
   watches: { kind: 'field', table: 'blocks', fields: ['content', 'properties', 'references', 'deleted'] },
   apply: async (event: CommittedEvent<undefined>, ctx: ProcessorCtx) => {
     // Read phase — outside any tx; bare-connection reads, no writer
@@ -643,7 +656,7 @@ export const cleanupOrphanAliasesProcessor = definePostCommitProcessor<CleanupAr
     // Read phase — gather actual orphans without holding a writer slot.
     const orphans: string[] = []
     for (const id of ids) {
-      if (!(await hasLiveReferrer(ctx.db, workspaceId, id))) orphans.push(id)
+      if (!(await readHasLiveReferrer(ctx.db, id, workspaceId))) orphans.push(id)
     }
     if (orphans.length === 0) return
 
@@ -653,16 +666,37 @@ export const cleanupOrphanAliasesProcessor = definePostCommitProcessor<CleanupAr
   },
 })
 
+/** Is `child` a field row this workspace's own seat machinery generated?
+ *
+ *  BOTH terms are load-bearing, and each fails a different way. Without the
+ *  `::` bit an ordinary `((aliasesFieldId))` child — a user linking to the
+ *  definition — reads as machinery and is swept with the seat. Without the id
+ *  check a `::` field row for ANY OTHER definition reads as machinery, and
+ *  then the seat is tombstoned while that row and its value stay live
+ *  underneath it, because the delete sweep still filters on the generated
+ *  ids. */
+const isGeneratedSeatFieldRow = (
+  child: {referenceTargetId?: string | null; isFieldForm?: boolean},
+  generatedFieldIds: ReadonlySet<string>,
+): boolean =>
+  child.isFieldForm === true
+  && child.referenceTargetId != null
+  && generatedFieldIds.has(child.referenceTargetId)
+
 /** Soft-delete orphaned seats in one tx (shared by the mint-time cleanup
- *  above and the reference-drop reaper below). In a child-backed
- *  workspace a seat's OWN generated properties (alias / types)
- *  materialize as hidden field rows (PR #288 §9) — delete those
- *  alongside the seat or they dangle live under the tombstone. Only
- *  machinery-generated field rows go; user content under a seat is left
- *  alone. Flip-gated (§9): generated field rows exist only in
- *  child-backed workspaces — in an un-flipped one, a column match under
- *  a seat is by construction user-authored content, never machinery's
- *  to delete. */
+ *  above and the reference-drop reaper below). A seat's OWN generated
+ *  properties (alias / types) materialize as hidden field rows
+ *  (docs/properties-as-blocks-migration.html §9) —
+ *  delete those alongside the seat or they dangle live under the tombstone.
+ *  Only machinery-generated field rows go; user content under a seat is left
+ *  alone.
+ *
+ *  FLIP-GATED, and that is the data-loss guard — do not "fix" it to match the
+ *  data-keyed recognition everywhere else in this file. Post-flip an edit to a
+ *  generated value row reprojects into the seat's cell, so `matchesAliasSeatSeed`
+ *  sees the drift; pre-flip the projection is dormant and nothing can vouch for
+ *  the subtree, so ANY child blocks. The full reasoning, and why a
+ *  per-attribute guard is the wrong answer, is at the gate itself. */
 const reapSeatsInTx = async (
   ctx: ProcessorCtx,
   workspaceId: string,
@@ -670,45 +704,69 @@ const reapSeatsInTx = async (
   processorName: string,
 ): Promise<void> => {
   await ctx.repo.tx(async tx => {
-    const sweepGeneratedFieldRows = await tx.isPropertyChildBackedWorkspace(workspaceId)
     const generatedFieldIds = generatedSeatFieldIds(workspaceId)
+    const seats = await aliasSeatNamespacesInTx(tx, ctx.repo, workspaceId)
     for (const id of ids) {
       // Re-read in-tx: a racer may have deleted (or hard-removed) the
       // seat since the read phase — nothing to reap then.
       const current = await tx.get(id)
       if (current === null || current.deleted) continue
-      // In-tx SHAPE re-check (PR #428 adversarial review): a queued
-      // user tx can ADOPT the seat between the read phase and this
-      // write lock — rename it (quick-find, title edit) or set a
-      // property — and the children guard below can't see either. The
-      // referrer probe genuinely can't run in-tx (`Tx` can't read
-      // `block_references`), but the shape gates CAN, so re-run them
-      // on the in-tx row: still byte-identical to the machine seed,
-      // and still sitting at a deterministic slot id for its OWN
-      // current content (a rename moves content off the slot-id
-      // namespace, failing the second check). Safe for the mint-time
-      // caller too — its ids are always fresh `ensureAliasTarget`
-      // mints (date-shaped aliases never enter its list, per the §7.6
-      // routing in targets.ts), which pass unless a user adopted the
-      // seat inside the 4s window: exactly the case to skip.
+      // The caller's referrer probe predates this lock; re-ask under it.
+      if (await tx.hasLiveReferrer(id, workspaceId)) continue
+      // In-tx SHAPE re-check: a queued user tx can ADOPT the seat between
+      // the read phase and this write lock — rename it (quick-find, title
+      // edit) or set a property — and the children guard below can't see
+      // either. So re-run the shape gates on the in-tx row: still
+      // byte-identical to the machine seed, and still sitting at a
+      // deterministic slot id for its OWN current content (a rename moves
+      // content off the slot-id namespace, failing the second check). Safe
+      // for the mint-time caller too — its ids are always fresh
+      // `ensureAliasTarget` mints (date-shaped aliases never enter its list,
+      // per the §7.6 routing in targets.ts), which pass unless a user
+      // adopted the seat inside the 4s window: exactly the case to skip.
       if (!matchesAliasSeatSeed(current)) continue
-      if (!isAliasSeatSlotId(id, current.content, workspaceId)) continue
+      if (!isAliasSeatSlotId(seats, id, current.content, workspaceId)) continue
       // In-tx children guard, for BOTH callers: a live child that isn't
       // the seat's own generated machinery is user content (someone
       // nested notes under the fresh page — reachable inside the
       // mint-time 4s window too, which predates the reaper), and
       // tombstoning its parent would strand it live under a tombstone.
       // Skipping the whole seat is the safe miss.
+      //
+      // FLIP-GATED, deliberately, and this is the one place in this branch
+      // where a seat's generated-LOOKING children are not treated as machinery.
+      //
+      // Post-flip, an edit to a generated value row reprojects into the seat's
+      // cell, so `matchesAliasSeatSeed` above sees the drift and refuses. That
+      // is what makes tolerating machine children safe there. Pre-flip the
+      // projection is dormant, so the cell cannot speak for the subtree, and
+      // the only alternative is to enumerate every way a user could have
+      // touched it — shape, content, the property bag, and so on. Getting that
+      // enumeration wrong is a silent soft-delete of a user's edit, so do not
+      // attempt it: an incomplete guard here is worse than no reaping.
+      //
+      // The BACKFILL no longer puts those rows under an un-flipped seat — it and
+      // the dual-write both refuse an un-flipped workspace — but two paths still
+      // reach the shape there, so the gate is not dead. `is_field_form` is
+      // stamped from CONTENT by the derive pass, so a user who writes
+      // `::((aliases-definition))` under a seat and gives it a value has one; and
+      // `blockMerge`'s pre-backfill catch-up mints them un-flipped BY DESIGN
+      // (gating it there loses the merge target's value — see its comment).
+      // Either way the cell stays pristine and the projection is dormant, so
+      // the seed match cannot see an edit.
+      //
+      // Not reaping is the documented SAFE MISS (see the gate list below): the
+      // seat squats until the alias is re-typed and re-dropped, and normal
+      // reaping resumes the moment the workspace flips. Bounded cost, no
+      // data-loss surface, nothing to keep exhaustive. km-mzsv.
+      const sweepGeneratedFieldRows = await tx.isPropertyChildBackedWorkspace(workspaceId)
       const children = await tx.childrenOf(id, undefined)
       const blockingChildren = sweepGeneratedFieldRows
-        ? children.filter(child => {
-            const target = child.referenceTargetId ?? null
-            return target === null || !generatedFieldIds.has(target)
-          })
+        ? children.filter(child => !isGeneratedSeatFieldRow(child, generatedFieldIds))
         : children
       if (blockingChildren.length > 0) continue
-      // Deep guard (PR #428 adversarial review, both rounds): the
-      // direct-children gate can't see user content nested INSIDE a
+      // Deep guard: the direct-children gate can't see user content
+      // nested INSIDE a
       // generated field row's subtree — §9 keeps value children
       // visible, so "a comment thread under a property value child is
       // arbitrarily deep user content" (subtreeDelete.ts) is reachable
@@ -785,7 +843,8 @@ const liveReferenceTargetIds = (row: BlockData | null): ReadonlySet<string> =>
  *  remember a schedule call.
  *
  *  Collection gate — ALL of, checked per dropped target:
- *   - no live source still references it (committed-state index probe);
+ *   - no live source still references it (committed-state index probe,
+ *     re-asked under the write lock by `reapSeatsInTx`);
  *   - the row is live and matches `aliasSeatSeed` exactly (shape);
  *   - its id is a deterministic seat-slot id for its own content
  *     (machine-mint discriminator — a user-created page can share the
@@ -793,29 +852,32 @@ const liveReferenceTargetIds = (row: BlockData | null): ReadonlySet<string> =>
  *     never the uuidv5 slot id);
  *   - not date-shaped (§7.6 daily-note exemption — belt on top of the
  *     id gate, which already excludes the daily namespace);
- *   - no live children AT ALL in an un-flipped workspace; in a
- *     child-backed one, none beyond the seat's own generated field
- *     rows (which only machinery mints there — in an un-flipped
- *     workspace a column match under a seat is by construction
- *     user-authored, and `reapSeatsInTx` wouldn't sweep it, so it
- *     would strand live under the tombstone; Codex review on PR #428).
+ *   - no live children at all in an un-flipped workspace; in a child-backed
+ *     one, none beyond the seat's own generated field rows
+ *     (`isGeneratedSeatFieldRow` — the `::` bit AND the generated id).
+ *     Anything else would strand live under the tombstone, since the delete
+ *     sweep takes only what that predicate matches.
+ *     The un-flipped half is a deliberate data-loss guard, not dormancy —
+ *     see `reapSeatsInTx`.
  *  A wrongly-skipped seat is the safe miss (it just keeps squatting
  *  until the alias is re-typed and re-dropped); a wrong DELETE of a
  *  user page is the failure this gate stack exists to make unreachable.
  *
- *  Documented residual (same as the mint-time cleanup's): the referrer
- *  probe runs outside the write tx — the `Tx` surface can't read the
- *  `block_references` index, so a parse tx re-referencing the alias in
- *  the window between the (re-)probe below and the delete tx's commit
- *  still loses its target. The re-probe immediately before the write
- *  phase narrows the window to roughly write-lock acquisition; a loss
- *  degrades to the standard wikilink-at-pristine-tombstone state, which
- *  the seat-slot probe restores on the next parse of that alias —
- *  convergent, never data loss.
+ *  Referrer races (shared with the mint-time cleanup): the in-tx re-check
+ *  sees every reference EDGE committed before the reap takes the lock. What
+ *  it cannot see is a source whose parse has not committed yet — the parse
+ *  resolved `[[alias]]` to this seat, or has not run at all — and the reap
+ *  wins the lock. That source's next read phase (in the first case, re-fired
+ *  by the parse's own `references` write) misses the alias, and the seat-slot
+ *  probe restores the tombstone, or mints afresh when the seat sat under a
+ *  non-mint namespace. So the wikilink case converges unaided rather than
+ *  needing a guard in the parse's write phase. Accepted: an id-based pointer
+ *  (`((id))`, a ref property) to the seat written in that window stays bound
+ *  to the tombstone, since only an alias mark is re-resolved.
  *
- *  Second documented residual (cross-device; PR #428 adversarial
- *  review): the reap is a LOCAL decision against this device's
- *  committed state. A peer that nested user content under the seat
+ *  Documented residual (cross-device): the reap is a LOCAL
+ *  decision against this device's committed state. A peer that nested
+ *  user content under the seat
  *  while offline syncs those children in AFTER the tombstone — sync
  *  arrival bypasses the `parent_deleted` trigger — leaving them live
  *  under a deleted parent, and the stranded subtree breaks the
@@ -846,24 +908,34 @@ export const reapOrphanAliasSeatsProcessor = definePostCommitProcessor({
     const readSeat = aliasSeatReaderFromDb(ctx.db)
     const isChildBacked = await readIsChildBackedWorkspace(ctx.db, workspaceId)
     const generatedFieldIds = generatedSeatFieldIds(workspaceId)
+    let seats: AliasSeatNamespaces | undefined
     const candidates: string[] = []
     for (const id of dropped) {
-      if (await hasLiveReferrer(ctx.db, workspaceId, id)) continue
+      if (await readHasLiveReferrer(ctx.db, id, workspaceId)) continue
       const seat = await readSeat(id)
       if (seat === null || seat.deleted) continue
       if (parseLiteralDailyPageTitle(seat.content) !== null) continue
       if (!matchesAliasSeatSeed(seat)) continue
-      if (!isAliasSeatSlotId(id, seat.content, workspaceId)) continue
+      seats ??= await resolveAliasSeatNamespaces(ctx.repo, workspaceId)
+      if (!isAliasSeatSlotId(seats, id, seat.content, workspaceId)) continue
       if (seat.hasLiveChildren) {
-        // Generated-machinery tolerance is flip-gated — see the gate list
-        // in the docblock.
+        // DEFENCE IN DEPTH, not load-bearing: `reapSeatsInTx` re-reads the
+        // children in-tx and applies the same rule, so replacing this whole
+        // branch with `true` fails nothing. It exists to keep an obviously-
+        // blocked seat out of the write path — and it must agree with that
+        // rule, including its flip gate (see the long note there).
         if (!isChildBacked) continue
-        const children = await ctx.db.getAll<{reference_target_id: string | null}>(
-          'SELECT reference_target_id FROM blocks WHERE parent_id = ? AND deleted = 0',
+        // Raw-row twin of `isGeneratedSeatFieldRow`: `is_field_form` is 1 or
+        // NULL here, never 0 (see BLOCK_LOCAL_COLUMNS).
+        const children = await ctx.db.getAll<{
+          reference_target_id: string | null; is_field_form: number | null
+        }>(
+          'SELECT reference_target_id, is_field_form FROM blocks WHERE parent_id = ? AND deleted = 0',
           [id],
         )
         const onlyGeneratedChildren = children.every(child =>
-          child.reference_target_id !== null
+          child.is_field_form === 1
+          && child.reference_target_id !== null
           && generatedFieldIds.has(child.reference_target_id))
         if (!onlyGeneratedChildren) continue
       }
@@ -871,15 +943,7 @@ export const reapOrphanAliasSeatsProcessor = definePostCommitProcessor({
     }
     if (candidates.length === 0) return
 
-    // Last-moment referrer re-probe — narrows the read-outside-tx race
-    // window to roughly write-lock acquisition (docblock residual).
-    const orphans: string[] = []
-    for (const id of candidates) {
-      if (!(await hasLiveReferrer(ctx.db, workspaceId, id))) orphans.push(id)
-    }
-    if (orphans.length === 0) return
-
-    await reapSeatsInTx(ctx, workspaceId, orphans, REAP_ORPHAN_ALIAS_SEATS_PROCESSOR)
+    await reapSeatsInTx(ctx, workspaceId, candidates, REAP_ORPHAN_ALIAS_SEATS_PROCESSOR)
   },
 })
 

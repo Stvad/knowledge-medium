@@ -1,4 +1,4 @@
-# Roam timestamp backfill (ff-vlad-dev)
+# Roam timestamp backfill
 
 One-time restore of real Roam `create-time`/`edit-time` onto the ~312K
 already-imported blocks (currently all stamped at the 2026-05-13 import time).
@@ -58,11 +58,15 @@ still preserves.
   the map ids.
 - `backfill.sql` — staging load + backup + UPDATE + verify + rollback
 - `build_ts_map.mjs` — regenerates the map from a Roam export:
-  `node build_ts_map.mjs <export.json>`
+  `node build_ts_map.mjs <workspace-id> <export.json>`
 - `preserve_list.sql` — the preserve classifier (`row_events` ⋈ `command_events`).
   Run via the agent bridge, then intersect its output with `roam_ts_map` ids
   locally (only imported blocks can be in the backfill set; this drops native
-  UI/prefs noise). Starts with `WITH` so it passes the bridge cleanly.
+  UI/prefs noise). Starts with `WITH` so it passes the bridge cleanly; the
+  workspace is its one bound parameter:
+  `pnpm agent --profile <profile> sql all "$(cat preserve_list.sql)" '["<workspace-id>"]'`,
+  where `<profile>` is paired to the client whose `row_events` history is
+  being classified (a bare `pnpm agent` targets the `default` profile).
 
 ## Run (held)
 1. Drain clients (coordinated window). **Drain = each client's upload queue
@@ -70,7 +74,7 @@ still preserves.
    unsent local edit at execution time would race the `updated_at` bump. The
    client reconcile gate (`syncObserver/reconcile.ts`) skips down-applying a
    row with a pending local upload, so a flushed queue is the safe state.
-2. `psql <supabase-url> -f backfill.sql` (or via the supabase skill) — it loads
+2. `psql <supabase-url> -v ws=<workspace-id> -f backfill.sql` (or via the supabase skill) — it loads
    staging, snapshots `blocks_ts_backup_20260613`, runs the UPDATE inside a
    `BEGIN`, and prints a verify row. Inspect it, then uncomment `COMMIT`.
 3. Clients re-sync corrected rows (expect a one-time `row_events` burst per

@@ -1,3 +1,17 @@
+/** Does `value` contain a UTF-16 code unit with no partner — the artefact of
+ *  cutting a string mid-character, or of text that was never well-formed?
+ *
+ *  `String.prototype.isWellFormed` is exactly this predicate, but it is ES2024
+ *  and this project's `lib` is ES2023. Worth having in one place rather than
+ *  per-caller: an ill-formed string is not merely ugly, it does not SURVIVE —
+ *  `TextEncoder` and the SQLite text columns both replace a lone surrogate
+ *  with U+FFFD, so anything that stores or hashes such text loses it. */
+export const hasLoneSurrogate = (value: string): boolean =>
+  LONE_SURROGATE_RE.test(value)
+
+const LONE_SURROGATE_RE =
+  /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
+
 /** Truncate `value` to at most `max` characters, replacing the overflow with a
  *  single ellipsis (`…`). Strings already within `max` are returned unchanged.
  *  The result is always ≤ `max` chars — the ellipsis occupies the last slot. */
@@ -18,6 +32,14 @@ export const truncate = (value: string, max: number): string => {
  *  needs — a crumb, a breadcrumb label, a collapsed row — where multi-line
  *  content has to render as a single line without wrapping. */
 export const firstLine = (value: string): string => value.match(/^[^\r\n]*/)?.[0] ?? ''
+
+/** Runs of whitespace — line breaks included — flattened to single spaces,
+ *  ends trimmed. What every one-line PREVIEW of block content needs so that
+ *  authored indentation and blank lines don't render as gaps. One owner
+ *  because the regex is the whole rule, and three surfaces were spelling it
+ *  out. */
+export const collapseWhitespace = (value: string): string =>
+  value.replace(/\s+/g, ' ').trim()
 
 /** Truncate from the MIDDLE, keeping both ends (`Quarterly Plan…2026`).
  *  Result is always ≤ `max` chars, like {@link truncate}.

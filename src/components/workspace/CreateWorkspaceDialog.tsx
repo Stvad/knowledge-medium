@@ -11,6 +11,7 @@ import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { createWorkspace, primeLocalWorkspaceAndMember } from '@/data/workspaces'
+import { WorkspaceKeyDisplay } from './keyUi'
 import { createEncryptedWorkspace } from '@/sync/keys/flows/createEncryptedWorkspace'
 import { getWorkspaceKeyStore } from '@/sync/keys/keyStore'
 import { setModePin } from '@/sync/keys/modePin'
@@ -183,22 +184,11 @@ function RevealWorkspaceKey({
   workspaceKey: string
   onConfirm: () => void
 }) {
-  const [copyState, setCopyState] = useState<'idle' | 'copied'>('idle')
   const [confirmInput, setConfirmInput] = useState('')
 
   const suffix = workspaceKey.slice(-CONFIRM_SUFFIX_LEN)
   // Case/whitespace tolerant, mirroring parseWorkspaceKey's leniency.
   const confirmed = confirmInput.trim().toUpperCase() === suffix.toUpperCase()
-
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(workspaceKey)
-      setCopyState('copied')
-      window.setTimeout(() => setCopyState('idle'), 1500)
-    } catch (err) {
-      console.error('Clipboard write failed', err)
-    }
-  }
 
   return (
     <>
@@ -211,14 +201,7 @@ function RevealWorkspaceKey({
         </DialogDescription>
       </DialogHeader>
 
-      <div className="min-w-0 space-y-2 rounded-md border bg-muted/40 p-3">
-        <div className="flex min-w-0 items-center gap-2">
-          <code className="min-w-0 flex-1 break-all font-mono text-xs">{workspaceKey}</code>
-          <Button type="button" variant="secondary" size="sm" className="shrink-0" onClick={copy}>
-            {copyState === 'copied' ? 'Copied' : 'Copy'}
-          </Button>
-        </div>
-      </div>
+      <WorkspaceKeyDisplay workspaceKey={workspaceKey}/>
 
       <div className="space-y-2">
         <Label htmlFor="wk-confirm">

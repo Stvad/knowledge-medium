@@ -1,4 +1,4 @@
-/**
+/*
  * Type declarations for the plain-JS recognizer in
  * `syncedTableSqlRecognizer.js`. Kept separate (rather than converting that
  * file to `.ts`) so `eslint-rules/no-raw-synced-table-writes.js` can import

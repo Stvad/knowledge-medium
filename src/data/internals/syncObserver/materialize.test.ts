@@ -65,6 +65,99 @@ const racingDb = (real: PowerSyncDb, raceOnce: () => Promise<unknown>): PowerSyn
   }) as PowerSyncDb
 }
 
+/** The staging row's `needs_apply` flag — the drain's durable record of what it
+ *  has and has not applied, which every one-way pass refuses on. */
+const needsApply = async (id: string): Promise<number | null> =>
+  (await env.db.getOptional<{needs_apply: number}>(
+    'SELECT needs_apply FROM blocks_synced WHERE id = ?', [id],
+  ))?.needs_apply ?? null
+
+describe('materializeStagingRows — the needs_apply flag', () => {
+  it('leaves the flag on a version that landed after this pass read the row', async () => {
+    // Phase 1 reads staging OUTSIDE the write lock. A delivery that lands in
+    // that window has already reset the flag — correctly, for a version nobody
+    // has judged — and clearing by id alone would wipe that reset and leave the
+    // newer row reading as applied while `blocks` holds the older content.
+    await stageRow(blockData({ id: 'b1', content: 'v1', updatedAt: 5 }))
+
+    const out = await materializeStagingRows(
+      racingDb(env.db, () => stageRow(blockData({ id: 'b1', content: 'v2', updatedAt: 9 }))),
+      { upserted: ['b1'], removed: [] },
+      { getMaterializability: constMat('copy'), getCek: noKey },
+    )
+
+    expect(out.applied).toEqual([])              // v1 is no longer staged, so not written
+    expect(out.resolved).toEqual([])             // and nothing was marked applied
+    expect(await needsApply('b1')).toBe(1)
+  })
+
+  it('puts the flag BACK when a row it ruled invisible becomes visible again', async () => {
+    // The exemption is a decision about the current state, not a one-way
+    // ratchet. A staged tombstone whose local row is also gone shows the block
+    // to nobody, so the drain clears it — but if the local row comes back and
+    // the tombstone still cannot be applied, that is a real gap again, and
+    // nothing but this re-examines it short of a fresh delivery.
+    await stageRow(blockData({ id: 'b1', deleted: true, updatedAt: 5 }))
+    const deferred = { getMaterializability: constMat('defer'), getCek: noKey }
+
+    const first = await materializeStagingRows(env.db, { upserted: ['b1'], removed: [] }, deferred)
+    expect(first.resolved).toEqual(['b1'])
+    expect(await needsApply('b1')).toBe(0)
+
+    await seedLocalBlock(blockData({ id: 'b1', content: 'restored' }))
+    const second = await materializeStagingRows(env.db, { upserted: ['b1'], removed: [] }, deferred)
+
+    expect(second.resolved).toEqual([])
+    // And it SAYS it put the flag back. This is the direction that makes a
+    // rematerialization leave the gap bigger than it found it, so an operator
+    // watching the count go up has something to attribute it to.
+    expect(second.reflagged).toEqual(['b1'])
+    expect(await needsApply('b1')).toBe(1)
+  })
+
+  it('clears the flag for a re-delivery `blocks` already holds, even while deferring', async () => {
+    // Whether `blocks` is behind is answerable without knowing whether the
+    // workspace can be materialized: equal NONZERO stamps mean identical
+    // content (I1), so this row has nothing to apply on any path. Left flagged
+    // it would be a durable gap with nothing in flight — and `defer` is not
+    // only the locked-workspace case, it is also where a failed key-store read
+    // lands, so an ordinary re-delivery can arrive in that window.
+    await seedLocalBlock(blockData({ id: 'b1', content: 'v1', updatedAt: 5 }))
+    await stageRow(blockData({ id: 'b1', content: 'v1', updatedAt: 5 }))
+
+    const out = await materializeStagingRows(
+      env.db,
+      { upserted: ['b1'], removed: [] },
+      { getMaterializability: constMat('defer'), getCek: noKey },
+    )
+
+    expect(out.deferred).toEqual(['b1'])
+    expect(out.resolved).toEqual(['b1'])
+    expect(await needsApply('b1')).toBe(0)
+  })
+
+  it('does not re-report a row whose flag was already clear', async () => {
+    // `resolved` is the flag MOVING, not the decision that would have moved it.
+    // The re-pass is the normal shape of a workspace rematerialization at
+    // `scope: 'all'`, where every row is re-judged and almost none are behind —
+    // counting decisions there would report a settled workspace as one this
+    // pass had just repaired in full, which is the opposite diagnosis.
+    await seedLocalBlock(blockData({ id: 'b1', content: 'v1', updatedAt: 5 }))
+    await stageRow(blockData({ id: 'b1', content: 'v1', updatedAt: 5 }))
+    const deps = { getMaterializability: constMat('copy'), getCek: noKey }
+
+    const first = await materializeStagingRows(env.db, { upserted: ['b1'], removed: [] }, deps)
+    expect(first.resolved).toEqual(['b1'])
+    expect(await needsApply('b1')).toBe(0)
+
+    // Same row, same decision, nothing left to clear.
+    const second = await materializeStagingRows(env.db, { upserted: ['b1'], removed: [] }, deps)
+    expect(second.skippedStale).toEqual(['b1'])
+    expect(second.resolved).toEqual([])
+    expect(await needsApply('b1')).toBe(0)
+  })
+})
+
 describe('materializeStagingRows — copy-through (plaintext workspace)', () => {
   it('copies a staged plaintext row into blocks verbatim, with no upload echo', async () => {
     await stageRow(blockData({ content: 'plain text', properties: { alias: ['Inbox'] } }))
@@ -223,6 +316,72 @@ describe('materializeStagingRows — skip-stale (local edit must win)', () => {
 
     expect(out.applied).toEqual(['b1'])
     expect((await allBlocks())[0]!.content).toBe('new from server')
+  })
+})
+
+describe('materializeStagingRows — an equal stamp is not an equal row (#1163)', () => {
+  it('applies an equal-stamp row that differs from the local one', async () => {
+    // A peer's write landed on a stamp this device already held: same version,
+    // different row. Skipping it would keep the stale row on disk for good.
+    await seedLocalBlock(blockData({ content: 'mine', updatedAt: 300 }))
+    await stageRow(blockData({ content: 'theirs', updatedAt: 300, userUpdatedAt: 1 }))
+
+    const out = await materializeStagingRows(
+      env.db,
+      { upserted: ['b1'], removed: [] },
+      { getMaterializability: constMat('copy'), getCek: noKey },
+    )
+
+    expect(out.applied).toEqual(['b1'])
+    expect(await env.db.getAll('SELECT content, user_updated_at FROM blocks'))
+      .toEqual([{ content: 'theirs', user_updated_at: 1 }])
+  })
+
+  it('writes nothing for an identical row — the echo of this device\'s own write', async () => {
+    await seedLocalBlock(blockData({ updatedAt: 300 }))
+    await stageRow(blockData({ updatedAt: 300 }))
+
+    const out = await materializeStagingRows(
+      env.db,
+      { upserted: ['b1'], removed: [] },
+      { getMaterializability: constMat('copy'), getCek: noKey },
+    )
+
+    expect(out.skippedStale).toEqual(['b1'])
+    expect(out.applied).toEqual([])
+    expect(out.snapshots.size).toBe(0)
+  })
+
+  it('compares an e2ee row after decoding it: identical is a no-op, differing applies', async () => {
+    const key = await importWorkspaceKey(generateWorkspaceKeyBytes())
+    const getCek: GetCek = async () => key
+    const stageSealed = async (plain: BlockData) => {
+      const wire = await encodeForWire({
+        id: plain.id,
+        workspace_id: plain.workspaceId,
+        content: plain.content,
+        properties_json: JSON.stringify(plain.properties),
+        references_json: JSON.stringify(plain.references),
+      }, 'e2ee', getCek)
+      await stageRow(plain, stagingCiphertextParams(plain, wire))
+    }
+    const echo = blockData({ id: 'same', workspaceId: 'ws-e2ee', content: 'secret', updatedAt: 300 })
+    await seedLocalBlock(echo)
+    await stageSealed(echo)
+    await seedLocalBlock(blockData({ id: 'diff', workspaceId: 'ws-e2ee', content: 'mine', updatedAt: 300 }))
+    await stageSealed(blockData({ id: 'diff', workspaceId: 'ws-e2ee', content: 'theirs', updatedAt: 300 }))
+
+    const out = await materializeStagingRows(
+      env.db,
+      { upserted: ['same', 'diff'], removed: [] },
+      { getMaterializability: constMat('decrypt'), getCek },
+    )
+
+    expect(out.skippedStale).toEqual(['same'])
+    expect(out.applied).toEqual(['diff'])
+    expect(await allBlocks()).toMatchObject([
+      { id: 'diff', content: 'theirs' }, { id: 'same', content: 'secret' },
+    ])
   })
 })
 
@@ -402,15 +561,13 @@ describe('materializeStagingRows — removed (stream-exit)', () => {
 })
 
 describe('materializeStagingRows — Phase-1/Phase-2 TOCTOU re-gate', () => {
-  // The Phase-1 staleness reads run outside the write tx, so a local edit can
-  // land between them and the lock. These cover the race the second phase exists
-  // to close — Phase 1 sees a clean gate, something changes in the window, and
-  // the in-tx re-gate re-reads the AUTHORITATIVE state (both updated_at and
-  // updated_by). Two ways a window change protects the local row: a pending
-  // upload, and — under the strict provenance gate — a real (non-system) edit
-  // that bumps the stamp strictly above staging. A window change to an own
-  // system mint instead heals (applies), proving the re-gate isn't a mere
-  // skip-detector.
+  // The Phase-1 reads run outside the write tx, so the local row or the staged
+  // row can change between them and the lock. These cover the race the second
+  // phase exists to close — Phase 1 judges one state, something changes in the
+  // window, and the in-tx re-gate decides on what is there NOW: a pending
+  // upload wins, a local row that has become the staged one needs no write, and
+  // a staged row replaced in the window is left for its own delivery. A
+  // strictly newer local row that is NOT pending gets no protection here.
 
   it('skips a candidate when a local edit is queued for upload in the window', async () => {
     await seedLocalBlock(blockData({ content: 'local v1', updatedAt: 200 }))
@@ -428,25 +585,85 @@ describe('materializeStagingRows — Phase-1/Phase-2 TOCTOU re-gate', () => {
     expect((await allBlocks())[0]!.content).toBe('local v1')
   })
 
-  it('skips when a racing write bumps the local stamp to EQUAL the staging stamp in the window', async () => {
+  it('leaves a candidate whose staged row was replaced in the window to that row\'s own delivery', async () => {
+    // Replaced at the SAME stamp, so the stamp cannot tell the two versions
+    // apart — the row is what identifies the version that was judged.
+    await seedLocalBlock(blockData({ content: 'local v1', updatedAt: 200 }))
+    await stageRow(blockData({ content: 'server v2', updatedAt: 300 }))
+    const deps = { getMaterializability: constMat('copy'), getCek: noKey }
+
+    const out = await materializeStagingRows(
+      racingDb(env.db, () => stageRow(blockData({ content: 'server v3', updatedAt: 300 }))),
+      { upserted: ['b1'], removed: [] },
+      deps,
+    )
+
+    expect(out.applied).toEqual([])
+    expect(out.snapshots.size).toBe(0)
+    expect((await allBlocks())[0]!.content).toBe('local v1')
+    expect(await needsApply('b1'), 'the replacement was never judged').toBe(1)
+
+    const next = await materializeStagingRows(env.db, { upserted: ['b1'], removed: [] }, deps)
+    expect(next.applied).toEqual(['b1'])
+    expect((await allBlocks())[0]!.content).toBe('server v3')
+  })
+
+  it('does not write a version another drain superseded and resolved in the window', async () => {
+    // Two drains over one database, as two tabs run. Once the other drain has
+    // resolved the newer row, its flag is clear (and in the observer its queue
+    // entry consumed), so nothing would undo an older write here (#1226).
+    await seedLocalBlock(blockData({ content: 'edited', updatedAt: 300 }))
+    await stageRow(blockData({ content: 'created', updatedAt: 200 }))
+    const deps = { getMaterializability: constMat('copy'), getCek: noKey }
+
+    await materializeStagingRows(
+      racingDb(env.db, async () => {
+        await stageRow(blockData({ content: 'edited', updatedAt: 300 }))
+        await materializeStagingRows(env.db, { upserted: ['b1'], removed: [] }, deps)
+      }),
+      { upserted: ['b1'], removed: [] },
+      deps,
+    )
+
+    expect((await allBlocks())[0]!.content).toBe('edited')
+    expect(await needsApply('b1')).toBe(0)
+  })
+
+  it('does not record a judgment for a staged row replaced in the window', async () => {
+    // Phase 1 finds the row already held and clears nothing yet; the
+    // replacement arriving before the lock must keep its own flag.
+    await seedLocalBlock(blockData({ updatedAt: 300 }))
+    await stageRow(blockData({ updatedAt: 300 }))
+
+    await materializeStagingRows(
+      racingDb(env.db, () => stageRow(blockData({ content: 'changed', updatedAt: 300 }))),
+      { upserted: ['b1'], removed: [] },
+      { getMaterializability: constMat('copy'), getCek: noKey },
+    )
+
+    expect(await needsApply('b1')).toBe(1)
+  })
+
+  it('writes nothing when a racing write makes the local row the staged one in the window', async () => {
     await seedLocalBlock(blockData({ content: 'local v1', updatedAt: 200 }))
     await stageRow(blockData({ content: 'server v2', updatedAt: 300 }))
 
     const out = await materializeStagingRows(
       racingDb(env.db, async () => {
-        await env.db.execute('UPDATE blocks SET updated_at = ? WHERE id = ?', [300, 'b1'])
+        await env.db.execute(
+          'UPDATE blocks SET content = ?, updated_at = ? WHERE id = ?', ['server v2', 300, 'b1'],
+        )
       }),
       { upserted: ['b1'], removed: [] },
       { getMaterializability: constMat('copy'), getCek: noKey },
     )
 
-    // Phase 1 saw local@200 < staging@300 (applyable). The window bumped the
-    // local stamp to 300 — now EQUAL (and nonzero) to staging — so the re-gate's
-    // equal-stamp guard skips it. Proves Phase 2 uses authoritative in-tx state,
-    // not the stale Phase-1 read.
+    // Phase 1 saw a different row (applyable). The window made the local row
+    // identical to staging, so the re-gate writes nothing — Phase 2 judges the
+    // row it would overwrite, not the stale Phase-1 read.
     expect(out.applied).toEqual([])
     expect(out.skippedStale).toEqual(['b1'])
-    expect((await allBlocks())[0]!.content).toBe('local v1')
+    expect(out.snapshots.size).toBe(0)
   })
 })
 

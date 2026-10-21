@@ -149,12 +149,12 @@ interface RawRow {
   workspace_id: string
 }
 
-/** `sweepDerivedIndexes` (block_aliases/block_types/block_references/
- *  blocks_fts vs a from-scratch recompute) now lives in
- *  `@/data/test/fuzzKernelHarness` (Batch 3) so `twoRepoConvergence` can
- *  reuse it — see its docblock there for the workspace-agnostic-recompute
- *  argument for why that's safe to share across suites with different
- *  workspace counts. */
+// `sweepDerivedIndexes` (block_aliases/block_types/block_references/
+// blocks_fts vs a from-scratch recompute) lives in
+// `@/data/test/fuzzKernelHarness` so `twoRepoConvergence` can
+// reuse it — see its docblock there for the workspace-agnostic-recompute
+// argument for why that's safe to share across suites with different
+// workspace counts.
 
 /** SUBTREE_SQL-vs-JS-walk differential for one workspace's rooted
  *  subtree. Also the workspace-uniformity check: `live` is filtered to
@@ -289,6 +289,35 @@ const drainAllWorkspaces = async (repo: Repo, direction: 'undo' | 'redo'): Promi
   }
 }
 
+/** Open the pool an op writes to so this cross-workspace fuzzer exercises
+ *  ordinary writes under the active workspace's registry. Multi-pool
+ *  combinations still reach the mutator's workspace-mismatch checks. */
+const openOpWorkspace = (repo: Repo, op: KernelOpSpec): void => {
+  const pool = (() => {
+    switch (op.op) {
+      case 'createChild':
+      case 'insertChildren': return op.parent.pool
+      case 'createSiblingAbove':
+      case 'createSiblingBelow': return op.sibling.pool
+      case 'merge': return op.from.pool
+      case 'move': return op.id.pool
+      case 'setContent':
+      case 'indent':
+      case 'outdent':
+      case 'deleteBlock':
+      case 'restoreBlock':
+      case 'moveVertical':
+      case 'split':
+      case 'setAlias':
+      case 'setType':
+      case 'setReferences': return op.id.pool
+      case 'undo':
+      case 'redo': return 0
+    }
+  })()
+  repo.setActiveWorkspaceId(WORKSPACES[pool]!)
+}
+
 // ──── the property ────
 
 let sharedDb: TestDb
@@ -314,9 +343,11 @@ const runCase = async ({ops, withUndoRedo}: CaseArgs): Promise<void> => {
   // Separate tx: each tx pins to the workspace of its first write, so
   // seeding both roots in one tx would itself throw
   // WorkspaceMismatchError.
+  repo.setActiveWorkspaceId(WS2)
   await repo.tx(async tx => {
     await tx.create({id: ROOT2, workspaceId: WS2, parentId: null, orderKey: 'a0'})
   }, {scope: ChangeScope.BlockDefault})
+  repo.setActiveWorkspaceId(WS)
   // The seed txs record their own undo entries — ONE PER WORKSPACE
   // (each tx's undo entry lands in the manager for the workspace it
   // pinned to, not the "active" one) — so both must be dropped
@@ -333,6 +364,7 @@ const runCase = async ({ops, withUndoRedo}: CaseArgs): Promise<void> => {
   for (const op of ops) {
     if ((op.op === 'undo' || op.op === 'redo') && !withUndoRedo) continue
     if (op.op === 'undo' || op.op === 'redo') ranUndoRedo = true
+    openOpWorkspace(repo, op)
     try {
       const created = await applyKernelOp(repo, op, pools)
       for (const {id, pool} of created) pools[pool].push(id)

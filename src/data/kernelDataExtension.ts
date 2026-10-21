@@ -38,10 +38,12 @@ import {
   systemPagesFacet,
   typeSeedsFacet,
   valuePresetCoresFacet,
+  workspaceBackfillsFacet,
 } from './facets'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
 import { getOrCreateTypesPage } from '@/data/typesPage'
 import { getOrCreateRecentsPage } from '@/data/recentsPage'
+import { propertyCellBackfill } from './internals/propertyCellBackfill'
 import { KERNEL_MUTATORS } from './mutators'
 import { KERNEL_PROCESSORS } from './internals/kernelProcessors'
 import { KERNEL_SAME_TX_PROCESSORS } from './internals/normalizeReferencesProcessor'
@@ -74,6 +76,8 @@ export const kernelDataExtension: AppExtension = systemToggle({
   KERNEL_TYPE_CONTRIBUTIONS.map(t => typeSeedsFacet.of(t, {source: 'kernel'})),
   kernelValuePresetCores.map(core => valuePresetCoresFacet.of(core, {source: 'kernel'})),
   invalidationRulesFacet.of(kernelInvalidationRule, {source: 'kernel'}),
+  // Operator-triggered: registering it makes it RUNNABLE, never scheduled.
+  workspaceBackfillsFacet.of(propertyCellBackfill, {source: 'kernel'}),
   // Kernel singleton pages, materialised eagerly at workspace bootstrap via
   // `Repo.ensureSystemPages` (before the landing/seed) so wiki-links to their
   // reserved aliases resolve to the canonical page instead of auto-creating a

@@ -6,6 +6,8 @@ import { missingDataRendererRegistration } from '@/components/renderer/MissingDa
 import { panelRendererRegistration } from '@/components/renderer/PanelRenderer.js'
 import { propertySchemaRendererRegistration } from '@/components/renderer/PropertySchemaBlockRenderer.js'
 import { topLevelRendererRegistration } from '@/components/renderer/TopLevelRenderer.js'
+import { dialogAppMountExtension } from '@/extensions/dialogAppMount.js'
+import { definitionFanoutAppMountExtension } from '@/extensions/definitionFanoutAppMount.js'
 import { blockRendererFacet, type BlockRendererRegistration } from '@/extensions/blockInteraction.js'
 import { systemToggle } from '@/facets/togglable.js'
 import { markdownExtensionsFacet } from '@/markdown/extensions.js'
@@ -47,6 +49,17 @@ export const defaultRenderersExtension = systemToggle({
   description: 'Block renderer registry and the fallback renderer used when no plugin claims a block.',
   essential: true,
 }).of([
+  // The type / property-schema renderers offer a delete button, and a big
+  // enough delete opens a confirmation via `openDialog` — inert without
+  // DialogHost mounted, which would leave the gesture waiting on a promise
+  // nobody can resolve. The mount's `core.dialogs` id dedupes, so contributing
+  // it from every extension that needs it registers DialogHost once.
+  dialogAppMountExtension,
+  // Same reasoning one step further on: the property-schema renderer's name
+  // and type gestures OPEN a fan-out run once the user has agreed to wait for
+  // one, and without this mount that run has nowhere to show. A confirmation
+  // that promises progress and then shows none is worse than not asking.
+  definitionFanoutAppMountExtension,
   markdownExtensionsFacet.of(gfmMarkdownExtension, {source: 'defaultRenderers'}),
   ...coreRendererLadder.map(([registration, precedence]) =>
     blockRendererFacet.of(registration, {precedence, source: 'defaultRenderers'}),

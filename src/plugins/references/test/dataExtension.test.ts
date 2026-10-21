@@ -4,6 +4,7 @@ import { codeMirrorExtensionsFacet } from '@/editor/codeMirrorExtensions.js'
 import { resolveFacetRuntimeSync } from '@/facets/facet.js'
 import { markdownExtensionsFacet } from '@/markdown/extensions.js'
 import {
+  contentReferencePrefillsFacet,
   invalidationRulesFacet,
   localSchemaFacet,
   sameTxProcessorsFacet,
@@ -14,6 +15,7 @@ import { ALIAS_SYNC_PROCESSOR } from '@/plugins/alias'
 import { aliasDataExtension } from '@/plugins/alias/dataExtension.js'
 import { referencesDataExtension } from '../dataExtension.ts'
 import { referencesPlugin } from '../index.ts'
+import { exactBlockRefPrefill } from '../contentPrefill.ts'
 import { referencesInvalidationRule } from '../invalidation.ts'
 import { referencesLocalSchema } from '../localSchema.ts'
 import { RENAME_BACKLINKS_PROCESSOR } from '../renameProcessor.ts'
@@ -33,13 +35,33 @@ describe('referencesDataExtension', () => {
   // DIFFERENT extension. It gets there by precedence, so it stays inside
   // this extension — and therefore inside the references plugin's
   // `systemToggle` boundary, which is what makes disabling References
-  // actually stop it (Codex on PR #444: a bare contribution placed by hand
-  // in the composition roots kept rewriting spans and invalidating edges
-  // with `parseReferences` gone).
+  // actually stop it: a bare contribution placed by hand in the
+  // composition roots kept rewriting spans and invalidating edges with
+  // `parseReferences` gone.
   it('keeps the rename rewriter inside the plugin extension', () => {
     const runtime = resolveFacetRuntimeSync(referencesDataExtension)
     expect([...runtime.read(sameTxProcessorsFacet).keys()])
       .toContain(RENAME_BACKLINKS_PROCESSOR)
+  })
+
+  // Core mints property machinery rows with a reference span in their content
+  // and fills `references` at create, so the parse never writes them a second
+  // time. The ANSWER is this plugin's — core holding a second reading of the
+  // grammar could drift from the parse it is predicting, and would keep
+  // extracting references from those rows with References switched off, where
+  // nothing is left to retract one.
+  it('contributes the create-time prefill the parse would recompute', () => {
+    const runtime = resolveFacetRuntimeSync(referencesDataExtension)
+    expect(runtime.read(contentReferencePrefillsFacet)).toEqual([exactBlockRefPrefill])
+  })
+
+  it('drops the prefill when the References plugin is toggled off', () => {
+    const off = resolveAppRuntimeSync([referencesPlugin], {
+      overrides: new Map([['system:references', false]]),
+    })
+    expect(off.read(contentReferencePrefillsFacet)).toEqual([])
+    const on = resolveAppRuntimeSync([referencesPlugin], {overrides: new Map()})
+    expect(on.read(contentReferencePrefillsFacet)).toEqual([exactBlockRefPrefill])
   })
 
   it('drops the rename rewriter when the References plugin is toggled off', () => {

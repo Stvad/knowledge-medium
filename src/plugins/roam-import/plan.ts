@@ -4,7 +4,8 @@ import { PAGE_TYPE } from '@/data/blockTypes'
 import { srsNextReviewDateProp } from '@/plugins/srs-rescheduling/schema'
 import type { RoamTodoState } from '@/plugins/todo/schema'
 import { applyHeading, collectContentRefUids, rewriteRoamContent } from './content'
-import { resolveDailyPage, roamBlockId } from './ids'
+import { roamBlockId } from './blockIds'
+import { resolveDailyPage } from './ids'
 import { getExtraRoamProps, type RoamBlock, type RoamExport, type RoamPage, type RoamUidRef } from './types'
 import {
   collectAliasesFromPropertyValues,
@@ -56,6 +57,30 @@ export {
   type PromotionOptions,
   type PromotionResult,
 } from './promotion'
+// Re-exported alongside promotion deliberately: promoting a `key:: value`
+// attribute without registering a definition for the key it invents is the
+// footgun this pairs with (issue #501). A consumer that finds one should
+// find the other.
+//
+// It does NOT drop keys it cannot register — it reports them and leaves them
+// in place, because it cannot know whether the caller kept the source block
+// (a subtractive consumer has already dropped the bullet, so deleting would
+// destroy the text). Declining such keys is the CALLER's job, upstream, via
+// `PromotionOptions.acceptKey` + `isRegistrablePropertyName`. What it does
+// mutate is values, normalizing them to match the codec it registered — so
+// pass the blocks you are about to write, not copies.
+//
+// The same shape one level down, for the same reason: a key whose definition
+// already exists and is NARROWER than the text (a `number` meeting "many")
+// cannot be reshaped to fit, and post-flip that write is rejected outright.
+// Decline those upstream too, via `PromotionOptions.acceptValue` +
+// `promotedValueAcceptorFor` (#594).
+export {
+  ensurePromotedPropertySchemas,
+  isRegistrablePropertyName,
+  promotedValueAcceptorFor,
+  type PromotedPropertyBag,
+} from './schemaReconciliation'
 export {
   type PreparedRoamMemoEntry,
   type PreparedRoamMemoSnapshot,

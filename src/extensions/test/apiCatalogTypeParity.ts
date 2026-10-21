@@ -90,6 +90,7 @@ export type {
 } from '@/extensions/blockInteraction.js'
 
 export type {
+  OutlineNode,
   PasteDecision,
   PasteRequest,
   PasteSurface,

@@ -6,6 +6,10 @@
  *  cannot be tested through the same seam, and blocks the whole tab.
  */
 
+import {Button} from '@/components/ui/button.js'
+import {
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+} from '@/components/ui/dialog.js'
 import type {DialogContextProps} from '@/utils/dialogs.js'
 
 export interface ConfirmProps {
@@ -24,25 +28,22 @@ export const ConfirmDialog = ({
   resolve,
   cancel,
 }: DialogContextProps<true> & ConfirmProps) => (
-  <div className="flex max-w-sm flex-col gap-3 p-4">
-    <div>
-      <h2 className="text-base font-semibold">{title}</h2>
-      <p className="text-sm text-muted-foreground">{body}</p>
-    </div>
-    <div className="flex justify-end gap-2">
-      <button
-        type="button"
-        className="rounded border border-border px-3 py-1.5 text-sm hover:bg-muted"
-        onClick={() => cancel()}
-      >Keep it</button>
-      <button
-        type="button"
-        className={destructive
-          ? 'rounded bg-destructive px-3 py-1.5 text-sm font-medium text-destructive-foreground hover:opacity-90'
-          : 'rounded bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:opacity-90'}
-        onClick={() => resolve(true)}
-      >{confirmLabel}</button>
-    </div>
-  </div>
+  // The app's modal chrome — see `StartSessionDialog` for why a dialog that
+  // brings none of its own lands stacked above the outline instead of over it.
+  <Dialog open onOpenChange={next => { if (!next) cancel() }}>
+    <DialogContent className="max-w-sm">
+      <DialogHeader>
+        <DialogTitle>{title}</DialogTitle>
+        <DialogDescription>{body}</DialogDescription>
+      </DialogHeader>
+      <DialogFooter>
+        <Button variant="outline" onClick={() => cancel()}>Keep it</Button>
+        <Button
+          variant={destructive ? 'destructive' : 'default'}
+          onClick={() => resolve(true)}
+        >{confirmLabel}</Button>
+      </DialogFooter>
+    </DialogContent>
+  </Dialog>
 )
 ConfirmDialog.displayName = 'ConfirmDialog'

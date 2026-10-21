@@ -13,6 +13,7 @@ import { instanceIn, panelById } from '@/plugins/spatial-navigation/walker.js'
 import { resolveSpatialNavExclusions } from '@/plugins/spatial-navigation/exclusionsFacet.js'
 import { isCursorRowSettled, isRowInViewport, resolveSettledAnchor } from './viewportAnchor.ts'
 import { createSettleScheduler } from './settleScheduler.ts'
+import { forgetFollow, keepFollowOnlyAt, rememberFollow } from './followOrigin.ts'
 
 /** Re-anchor once scrolling has stopped, not while it's happening. Two reasons:
  *  a fling would otherwise write a focus location per frame, and the row we
@@ -85,10 +86,14 @@ export function PanelCursorFollowsScroll({block}: {block: Block}) {
   // mid-scroll, which reads as "the cursor was never on screen" and silently
   // switches the behaviour off until the next focus change.
   useEffect(() => {
-    if (!focusedBlockId || !renderScopeId) return
+    const cursor = focusedBlockId && renderScopeId
+      ? {blockId: focusedBlockId, renderScopeId}
+      : undefined
+    keepFollowOnlyAt(block.id, cursor)
+    if (!cursor) return
     const panelEl = panelById(block.id)
     if (!panelEl) return
-    const location = {blockId: focusedBlockId, renderScopeId}
+    const location = cursor
 
     let retriesLeft = 0
     let seenOnScreen = false
@@ -127,6 +132,7 @@ export function PanelCursorFollowsScroll({block}: {block: Block}) {
         excludedSurfaces: excluded(),
       })
       if (next) {
+        rememberFollow(block.id, location, next)
         void focusBlock(block, next.blockId, {renderScopeId: next.renderScopeId})
         return
       }
@@ -231,6 +237,8 @@ export function PanelCursorFollowsScroll({block}: {block: Block}) {
       settleRef.current = null
     }
   }, [block, focusedBlockId, renderScopeId])
+
+  useEffect(() => () => forgetFollow(block.id), [block])
 
   // Leaving the editor re-runs the decision once, which is what makes the
   // edit-mode refusal a DEFERRAL rather than a silent drop: a scroll while the

@@ -30,7 +30,7 @@ const withinAliasCap = (alias: string) => alias.length <= MAX_ALIAS_LENGTH
  *  string. Flattening looked simpler but silently dropped any leaf that
  *  carries neither `value` nor `children` — an `image` is exactly that
  *  shape, so `[![alt](pic.png)]([[…]])` degraded to `[]([[…]])`, losing
- *  the picture and its alt text (Codex on PR #540). Splicing the original
+ *  the picture and its alt text. Splicing the original
  *  children back in cannot lose content, and it preserves emphasis and
  *  inline code as rendered marks instead of as stringified source.
  *
@@ -42,8 +42,7 @@ const withinAliasCap = (alias: string) => alias.length <= MAX_ALIAS_LENGTH
  *  (`[d](<[[a b]]>)`) comes back without them. mdast does not record that
  *  spelling, and recovering it would mean slicing the original source,
  *  which would also turn the display back into literal text and undo the
- *  content preservation above. The title IS recorded, so it is kept
- *  (Codex on PR #540). */
+ *  content preservation above. The title IS recorded, so it is kept. */
 const degradedLinkNodes = (node: Link): RootContent[] => [
   {type: 'text', value: '['},
   ...(node.children as RootContent[]),
@@ -189,8 +188,8 @@ export const remarkWikilinks: Plugin<[RemarkWikilinksOptions?]> = (options) => (
     // alias class excluded `[`/`]`, which is narrower than the grammar the
     // scanner accepts: after `closingDelimiterFor` let an alias close its own
     // bracket, `[short]([[Book [x]]])` stopped being recognized here and
-    // rendered as literal markup with the author's display text lost (Codex on
-    // PR #548). One definition means the two sides cannot disagree again.
+    // rendered as literal markup with the author's display text lost. One
+    // definition means the two sides cannot disagree again.
     for (const ref of parseOutermostReferences(src)) {
       // `continue` leaves `last` where it was, so a skipped span's text is
       // carried through verbatim by the next match's prefix slice (or the

@@ -2,10 +2,7 @@ import { FacetRuntime } from '@/facets/facet.js'
 import { ActionConfig, ActionContextTypes } from '@/shortcuts/types.js'
 import { Repo } from '@/data/repo'
 import { truncate } from '@/utils/string'
-import {
-  describeAuthoringCatalog,
-  type AuthoringCatalog,
-} from './authoringCatalog.ts'
+import type { AuthoringCatalog } from './authoringCatalog.ts'
 import {
   extensionApiCatalog,
   extensionApiRuntimeExports,
@@ -22,6 +19,11 @@ import {
   getCommandMeta,
   type KnownCommandType,
 } from '@knowledge-medium/agent-cli/protocol'
+
+// Dynamic on purpose: the catalog embeds a glob of the app's module graph
+// (~1 MB built) that only the describe commands read; a static import here
+// puts it in every device's boot graph.
+const loadAuthoringCatalog = () => import('./authoringCatalog.ts')
 
 interface ContextDependencySchema {
   acceptedKeys: readonly string[]
@@ -432,15 +434,14 @@ export const describeRuntime = async (
       : describeFacets(context.runtime)
         .filter(facet => matchesAnyFilter(filters.facets, facet.id)),
     apiSurface,
-    authoring: describeAuthoringCatalog({
+    authoring: (await loadAuthoringCatalog()).describeAuthoringCatalog({
       guides: filters.guides,
       modules: filters.modules,
       components: filters.components,
-      // In brief mode, suppress the module/component glob dumps —
-      // they're 150KB of internal paths the agent doesn't need while
-      // reading a guide. The guide's `preferredModules` field already
-      // names what matters.
-      omitDiscoverableModules: briefMode,
+      // In brief mode, suppress the module/component glob dumps — 150KB of
+      // internal paths the agent doesn't need while reading a guide. The
+      // guide's `preferredModules` field already names what matters.
+      brief: briefMode,
     }, context.document),
     ...(includeDataModel ? {dataModel: DATA_MODEL_GUIDE} : {}),
   }
@@ -458,7 +459,7 @@ export const describeRuntimeSummary = async (
 ): Promise<RuntimeSummary> => {
   const apiSurface = getApiSurface()
   const renderers = Object.keys(context.renderers)
-  const authoring = describeAuthoringCatalog({}, context.document)
+  const authoring = (await loadAuthoringCatalog()).describeAuthoringCatalog({}, context.document)
 
   return {
     activeWorkspaceId: context.repo.activeWorkspaceId,
@@ -503,8 +504,12 @@ export const describeRuntimeSummary = async (
     },
     more: [
       {
-        need: "Understand the data model (blocks, references, pages vs daily-notes, backlinks vs grouped-backlinks, source_field, done-status, deep-links) before reading or writing a user's data",
-        command: 'pnpm agent data-model',
+        need: 'Read a workspace other than activeWorkspaceId. The token reaches every workspace of its user; writes act on activeWorkspaceId only, because they resolve through the open workspace\'s registries.',
+        command: 'pnpm agent search <query> --workspace <id>  # get-block, subtree, backlinks, grouped-backlinks, search, page, daily-note; the first five need an app tab with it open, page / daily-note / --raw do not; sql sees every workspace in the local database',
+      },
+      {
+        need: "Understand the data model (blocks, pages, daily notes, references, backlinks, types and properties) before reading or writing a user's data",
+        command: 'pnpm agent data-model  # an index of topics; --topic <id> reads one, --topic all everything',
       },
       {
         need: 'Full runtime diagnostic dump with action, facet, renderer, and API export details',

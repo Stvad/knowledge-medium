@@ -4,16 +4,6 @@
  * object remains the typed, workspace-agnostic handle passed to block.get/set.
  * Per-definition editor overrides for the rare property that needs one live
  * separately under `propertyEditorOverridesFacet` during the B3 cutover.
- *
- * Migration note (1.6): legacy creator helpers (`stringProperty`,
- * `boolProp`, `objectProperty`, etc.) returned a record-shape
- * `{name, type, value}` that doubled as schema AND value. The new
- * shape is flat — `block.set(schema, value)` / `block.get(schema)`
- * encode/decode through the codec; storage holds the encoded value
- * directly. Helpers like `aliasProp(['x','y'])` (which embedded a
- * default value into the descriptor) are gone — the handle's
- * `defaultValue` is the single source of truth, callers pass values
- * via `block.set(schema, value)`.
  */
 import type { Block } from './block'
 import type { BlockData, ChangedRow } from '@/data/api'
@@ -215,6 +205,11 @@ export const isCollapsedProp = seedProperty({
   hidden: true,
 })
 
+/** Deliberately NOT a `refList`, though the value children are now N siblings
+ *  either way: a seeded type's token is a short string that must resolve with
+ *  no backing block, so a ref codec would point every membership at a block
+ *  that does not exist. `mergeTypeMembershipProcessor`'s header has the second
+ *  reason and what covers merge retargeting instead. */
 export const typesProp = seedProperty({
   seedKey: 'system:kernel-data/property/types',
   revision: 1,
@@ -474,6 +469,38 @@ export const userIdProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 
+/** Fields of a `per-graph` backfill claim (see
+ *  `internals/graphBackfillClaim.ts`). Declared as seeds rather than written
+ *  as raw keys because an unregistered key is exactly what property
+ *  migration skips silently — a migration's own bookkeeping must not be the
+ *  thing a migration cannot carry. Hidden: this is machinery, not content. */
+export const migrationClaimantProp = seedProperty({
+  seedKey: 'system:kernel-data/property/migration-claimant',
+  revision: 1,
+  name: 'migration:claimant',
+  preset: 'string',
+  changeScope: ChangeScope.BlockDefault,
+  hidden: true,
+})
+
+export const migrationClaimedAtProp = seedProperty({
+  seedKey: 'system:kernel-data/property/migration-claimed-at',
+  revision: 1,
+  name: 'migration:claimed-at',
+  preset: 'number',
+  changeScope: ChangeScope.BlockDefault,
+  hidden: true,
+})
+
+export const migrationCompletedAtProp = seedProperty({
+  seedKey: 'system:kernel-data/property/migration-completed-at',
+  revision: 1,
+  name: 'migration:completed-at',
+  preset: 'optional-number',
+  changeScope: ChangeScope.BlockDefault,
+  hidden: true,
+})
+
 /** Alias list stored on alias-target / daily-note blocks (§7). The
  *  encoded shape in `properties_json` is `string[]`; the codec is the
  *  list-of-strings combinator.
@@ -550,6 +577,22 @@ export const addBlockTypeToProperties = (
     [typesProp.name]: typesProp.codec.encode([...current, typeId]),
   }
 }
+
+/** Raw membership writer that REPLACES the whole list, for callers holding a
+ *  properties bag and no Repo (the merge membership retarget). Unlike
+ *  `TypeTagger.setBlockTypes` it neither validates the tokens against the type
+ *  registry nor seeds a type's initial values — deliberately: a retarget moves
+ *  an EXISTING tag onto a merge survivor whose definition the post-commit
+ *  registry rebuild has not published yet, so registry validation would reject
+ *  the very write that keeps membership alive, and initial-value seeding would
+ *  invent user data during a repair. */
+export const setBlockTypesInProperties = (
+  properties: Record<string, unknown>,
+  typeIds: readonly string[],
+): Record<string, unknown> => ({
+  ...properties,
+  [typesProp.name]: typesProp.codec.encode([...typeIds]),
+})
 
 /** Set the editing flag on the UI-state block. Refuses to enter edit
  *  mode in a read-only repo (workspace viewer) — the wrappers also
@@ -728,6 +771,9 @@ export const KERNEL_PROPERTY_SEEDS: readonly AnyPropertySeedDeclaration[] = [
   createdAtProp,
   sourceBlockIdProp,
   aliasesProp,
+  migrationClaimantProp,
+  migrationClaimedAtProp,
+  migrationCompletedAtProp,
   // extension block fields
   extensionNameProp,
   extensionDescriptionProp,

@@ -27,7 +27,13 @@ import { keyAtEnd, keysBetween } from '@/data/orderKey.js'
 import { createOrRestoreTargetBlock } from '@/data/targets.js'
 import { addBlockTypeToProperties, showPropertiesProp } from '@/data/properties.js'
 import { dailyNoteBlockId, getOrCreateDailyNote, todayIso } from '@/plugins/daily-notes/index.js'
-import { computePromotedFromChildren } from '@/plugins/roam-import/plan.js'
+import {
+  computePromotedFromChildren,
+  ensurePromotedPropertySchemas,
+  isRegistrablePropertyName,
+  promotedValueAcceptorFor,
+  type PromotionOptions,
+} from '@/plugins/roam-import/plan.js'
 import { navigate } from '@/utils/navigation.js'
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
@@ -92,7 +98,7 @@ const RESTART_EVENT = 'matrix:ingest:restart'
 // attributes promoted out of message *content* (which keep the `matrix:*`
 // namespace — see matrixPromotionOptions below).
 
-const homeserverProp = seedProperty({
+export const homeserverProp = seedProperty({
   seedKey: extensionPropertySeedKey('homeserver'),
   revision: 1,
   name: 'matrix:homeserver',
@@ -100,7 +106,7 @@ const homeserverProp = seedProperty({
   defaultValue: 'https://matrix.org',
   changeScope: ChangeScope.BlockDefault,
 })
-const roomIdProp = seedProperty({
+export const roomIdProp = seedProperty({
   seedKey: extensionPropertySeedKey('room-id'),
   revision: 1,
   name: 'matrix:roomId',
@@ -108,7 +114,7 @@ const roomIdProp = seedProperty({
   defaultValue: '',
   changeScope: ChangeScope.BlockDefault,
 })
-const autoStartProp = seedProperty({
+export const autoStartProp = seedProperty({
   seedKey: extensionPropertySeedKey('auto-start'),
   revision: 1,
   name: 'matrix:autoStart',
@@ -169,7 +175,7 @@ const eventTimestampProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 
-const matrixChatPrefsType = seedType({
+export const matrixChatPrefsType = seedType({
   seedKey: extensionTypeSeedKey('prefs'),
   revision: 1,
   id: 'matrix-chat-prefs',
@@ -513,10 +519,16 @@ const parseMarkdownToBlockDefinitions = (markdownText: string): BlockDef[] => {
 // event's own timestamp.
 
 const matrixEventUrl = (roomId: string, eventId: string) => `https://matrix.to/#/${roomId}/${eventId}`
-const matrixPromotionOptions = {
+/** Ingest promotes SUBTRACTIVELY, so both declines have to happen here, before
+ *  bubbling — see `PromotionOptions.acceptKey` / `acceptValue` for why. By
+ *  NAME: `[[Page]]:: value`, whose name would contain `]]`. By VALUE:
+ *  `count:: many` under an existing `number` definition (#594). */
+const matrixPromotionOptions = (repo: any): PromotionOptions => ({
   namespacePrefix: 'matrix',
   transformKey: (key: string) => key.toLowerCase(),
-}
+  acceptKey: isRegistrablePropertyName,
+  acceptValue: promotedValueAcceptorFor(repo),
+})
 
 const propertyValues = (value: unknown): unknown[] => Array.isArray(value) ? value : [value]
 
@@ -553,19 +565,37 @@ const toRoamBlock = (block: BlockDef, path: number[]): any => ({
   children: (block.children ?? []).map((child, index) => toRoamBlock(child, [...path, index])),
 })
 
-const withPromotedMatrixProperties = (blocks: BlockDef[], bubbled = new Set<string>(), path: number[] = []): BlockDef[] =>
+interface PromotionWalk {
+  options: PromotionOptions
+  /** Uids whose own text was hoisted — their bullets are subtracted. */
+  bubbled: Set<string>
+  /** Every uid the walk has already decided about, bubbled or declined. This
+   *  is what deeper passes are given, NOT `bubbled`: a declined bullet that
+   *  stayed eligible would be re-judged one level down against fewer of its
+   *  key's values, accepted there, and hoisted onto a parent this level is
+   *  already dropping. */
+  settled: Set<string>
+  diagnostics: string[]
+}
+
+const withPromotedMatrixProperties = (blocks: BlockDef[], walk: PromotionWalk, path: number[] = []): BlockDef[] =>
   blocks.flatMap((block, index) => {
     const blockPath = [...path, index]
     const children = Array.isArray(block.children) ? block.children : []
     const promotion = computePromotedFromChildren(
       children.map((child, childIndex) => toRoamBlock(child, [...blockPath, childIndex])),
-      bubbled,
-      matrixPromotionOptions,
+      walk.settled,
+      walk.options,
     )
 
-    for (const uid of promotion.bubbled) bubbled.add(uid)
+    for (const uid of promotion.bubbled) {
+      walk.bubbled.add(uid)
+      walk.settled.add(uid)
+    }
+    for (const uid of promotion.declined) walk.settled.add(uid)
+    walk.diagnostics.push(...promotion.diagnostics)
 
-    const promotedChildren = withPromotedMatrixProperties(children, bubbled, blockPath)
+    const promotedChildren = withPromotedMatrixProperties(children, walk, blockPath)
     const next: BlockDef = {
       ...block,
       properties: mergeProperties(block.properties, promotion.promoted),
@@ -576,9 +606,15 @@ const withPromotedMatrixProperties = (blocks: BlockDef[], bubbled = new Set<stri
     // its parent's props AND whose whole subtree was consumed — the value lives
     // on as the derived prop. The anchor (root) is never bubbled, so it always
     // survives; a consumed attr that still has non-attr children is kept so they
-    // aren't orphaned. (Diverges from the Roam importer, which preserves attr
-    // blocks for fidelity; chat ingest wants the literal bullet gone.)
-    if (bubbled.has(blockPathUid(blockPath)) && !next.children) return []
+    // aren't orphaned, which is also what keeps a DECLINED bullet nested under a
+    // bubbled one. (Diverges from the Roam importer, which preserves attr blocks
+    // for fidelity; chat ingest wants the literal bullet gone.)
+    //
+    // `!next.properties` is defence in depth, and deleting it fails no test:
+    // `settled` already stops a deeper pass promoting anything onto a node this
+    // one consumed. It is here because dropping a node discards its properties
+    // silently, so the day that stops holding should not be a data-loss day.
+    if (walk.bubbled.has(blockPathUid(blockPath)) && !next.children && !next.properties) return []
     return [next]
   })
 
@@ -591,11 +627,29 @@ const nestTopLevelBlocksUnderFirst = (blocks: BlockDef[]): BlockDef[] => {
   }]
 }
 
-const createBlocksFromEvent = (event: any, matrixClient: any): BlockDef[] => {
+/** Every node in a built tree, so promoted keys at any depth get a
+ *  definition. `ensurePromotedPropertySchemas` normalizes in place, so these
+ *  must be the SAME objects that are about to be written, not copies. */
+const flattenBlockDefs = (blocks: BlockDef[]): BlockDef[] =>
+  blocks.flatMap(block => [block, ...flattenBlockDefs(block.children ?? [])])
+
+const createBlocksFromEvent = (
+  event: any,
+  matrixClient: any,
+  repo: any,
+): {tree: BlockDef[]; diagnostics: string[]} => {
   const text = getMessageText(event, matrixClient)
-  return withPromotedMatrixProperties(
+  const walk: PromotionWalk = {
+    options: matrixPromotionOptions(repo),
+    bubbled: new Set<string>(),
+    settled: new Set<string>(),
+    diagnostics: [],
+  }
+  const tree = withPromotedMatrixProperties(
     nestTopLevelBlocksUnderFirst(parseMarkdownToBlockDefinitions(text)),
+    walk,
   )
+  return {tree, diagnostics: walk.diagnostics}
 }
 
 // ---------------------------------------------------------------------------
@@ -679,9 +733,16 @@ const ensureMatrixTagBlock = async (
   return id
 }
 
-const appendMatrixMessage = async (repo: any, config: MatrixConfig, event: any, matrixClient: any): Promise<void> => {
+/** `'deferred'` means nothing was written and the caller MUST NOT advance the
+ *  sync cursor — Matrix only offers an event once, so treating a deferral as
+ *  handled loses the message permanently. `'done'` covers both a successful
+ *  ingest and a deliberate skip (no event id, already ingested). */
+type IngestOutcome = 'done' | 'deferred'
+
+const appendMatrixMessage = async (repo: any, config: MatrixConfig, event: any, matrixClient: any): Promise<IngestOutcome> => {
   const eventId = typeof event.event_id === 'string' ? event.event_id : null
-  if (!eventId) return
+  // Unprocessable forever, not deferrable — must not hold the cursor.
+  if (!eventId) return 'done'
 
   const workspaceId = repo.activeWorkspaceId
   if (!workspaceId) throw new Error('Matrix message ingest requires an active workspace')
@@ -689,6 +750,25 @@ const appendMatrixMessage = async (repo: any, config: MatrixConfig, event: any, 
   const iso = todayIso(new Date(eventTimestamp(event)))
   await getOrCreateDailyNote(repo, workspaceId, iso)
   const dailyId = dailyNoteBlockId(workspaceId, iso)
+
+  // Promotion INVENTS property names from message text (`key:: value`), so no
+  // code seed can declare them. Mint their definitions BEFORE the write:
+  // `addSchema` does its own writes and cannot run inside the tx below, and a
+  // key that lands definition-less is skipped by property migration forever
+  // (#501). Built out here so the same tree is registered and then written.
+  const {tree: messageTree, diagnostics: promotionDiagnostics} =
+    createBlocksFromEvent(event, matrixClient, repo)
+  for (const note of promotionDiagnostics) console.warn('[matrix] promotion:', note)
+  // `addSchema` targets whatever workspace is ACTIVE, while the write below
+  // targets the `workspaceId` captured above. A switch during the awaits
+  // already behind us would register these names into the new workspace and
+  // write the message into the old one — polluting one and leaving the other
+  // definition-less. Ingest is idempotent (deterministic message ids), so
+  // bailing here just defers this event to the next poll.
+  if (repo.activeWorkspaceId !== workspaceId) return 'deferred'
+  const promotionNotes = await ensurePromotedPropertySchemas(repo, flattenBlockDefs(messageTree))
+  for (const note of promotionNotes) console.warn('[matrix] promoted property:', note)
+  if (repo.activeWorkspaceId !== workspaceId) return 'deferred'
 
   await repo.tx(async (tx: any) => {
     const tagBlockId = await ensureMatrixTagBlock(tx, workspaceId, dailyId, iso)
@@ -712,7 +792,7 @@ const appendMatrixMessage = async (repo: any, config: MatrixConfig, event: any, 
       tx,
       workspaceId,
       tagBlockId,
-      createBlocksFromEvent(event, matrixClient),
+      messageTree,
       eventId,
       {
         [eventIdProp.name]: eventId,
@@ -723,6 +803,7 @@ const appendMatrixMessage = async (repo: any, config: MatrixConfig, event: any, 
       },
     )
   }, {scope: ChangeScope.BlockDefault, description: 'matrix message ingest'})
+  return 'done'
 }
 
 // ---------------------------------------------------------------------------
@@ -852,12 +933,27 @@ const pollLoop = async (repo: any, config: MatrixConfig, signal: AbortSignal, ma
       const syncBody = await fetchMatrixSync(config, nextBatch, signal, matrixClient)
       const events = nextBatch ? roomEventsFromSync(syncBody, config.roomId) : []
 
+      // A deferral must STOP the batch and leave the cursor where it is.
+      // `next_batch` is saved below for the whole batch, and Matrix offers an
+      // event exactly once — so advancing past a message we chose not to
+      // write loses it permanently rather than retrying it.
+      let deferred = false
       for (const event of events) {
         if (event?.type !== 'm.room.message') continue
-        await appendMatrixMessage(repo, config, event, matrixClient)
+        if (await appendMatrixMessage(repo, config, event, matrixClient) === 'deferred') {
+          deferred = true
+          break
+        }
       }
 
       const newBatch = syncBody?.next_batch
+      if (deferred) {
+        // Back off rather than re-fetching the same batch immediately — the
+        // condition that deferred us (a workspace switch) is user-paced.
+        console.warn('[matrix-messages] deferring batch; sync cursor held')
+        await sleep(POLL_ERROR_DELAY_MS, signal).catch(() => undefined)
+        continue
+      }
       if (typeof newBatch === 'string') {
         nextBatch = newBatch
         saveNextBatch(config, newBatch)
@@ -894,7 +990,7 @@ const pollLoop = async (repo: any, config: MatrixConfig, signal: AbortSignal, ma
 // the effect runtime calls our cleanup on hot-reload / disable, and we abort
 // the in-flight poll there.
 
-const matrixIngestEffect = {
+export const matrixIngestEffect = {
   id: 'matrix-chat-client.ingest',
   start: ({repo}: {repo: any}) => {
     let currentAbort: AbortController | null = null

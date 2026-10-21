@@ -15,6 +15,6 @@ The installable artifact is built at `agent-extensions/social-media-publisher/di
 To install the bundled version into a live agent profile:
 
 ```sh
-pnpm agent --profile chrome-t2 install-extension --verify "agent-extensions/social-media-publisher/dist/Social Media Publisher.js"
-pnpm agent --profile chrome-t2 enable-extension "Social Media Publisher"
+pnpm agent --profile <profile> install-extension --verify "agent-extensions/social-media-publisher/dist/Social Media Publisher.js"
+pnpm agent --profile <profile> enable-extension "Social Media Publisher"
 ```

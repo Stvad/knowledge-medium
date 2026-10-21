@@ -7,8 +7,8 @@ import type { Block } from '@/data/block'
 import { PropertyRow } from './PropertyRow'
 import type { PropertyPanelModelRow } from './model'
 
-// PropertyRow calls `usePropertyEditingActivation` for the rename input and
-// the value cell; stub it rather than mocking the deep useRepo /
+// PropertyRow calls `usePropertyEditingActivation` for the value cell; stub
+// it rather than mocking the deep useRepo /
 // useUIStateBlock / useActiveContextsDispatch chain underneath. Stable spies
 // (not fresh ones per call) so the value-cell wiring can be asserted.
 const activation = {onFocus: vi.fn(), onBlur: vi.fn()}
@@ -36,7 +36,6 @@ describe('PropertyRow', () => {
       value: ['a@example.com', 'b@example.com'],
       Editor: undefined,
       Glyph: undefined,
-      canRename: false,
       canDelete: true,
       canChangeShape: false,
       isHidden: false,
@@ -52,7 +51,6 @@ describe('PropertyRow', () => {
         onNavigate={vi.fn()}
         onConfigure={vi.fn()}
         onChange={vi.fn()}
-        onRename={vi.fn()}
         onDelete={vi.fn()}
       />,
     )
@@ -79,7 +77,6 @@ describe('PropertyRow', () => {
       value: {tti: 42},
       Editor: undefined, // no preset/override for codec type 'object'
       Glyph: undefined,
-      canRename: false,
       canDelete: true,
       canChangeShape: false,
       isHidden: false,
@@ -95,7 +92,6 @@ describe('PropertyRow', () => {
         onNavigate={vi.fn()}
         onConfigure={vi.fn()}
         onChange={vi.fn()}
-        onRename={vi.fn()}
         onDelete={vi.fn()}
       />,
     )
@@ -126,7 +122,6 @@ describe('PropertyRow', () => {
       // Row-level read-only is the defensive boundary. Keep capability flags
       // true here so the component test proves it suppresses every affordance
       // independently of the model's declaration-only capability policy.
-      canRename: true,
       canDelete: true,
       canChangeShape: true,
       isHidden: false,
@@ -143,7 +138,6 @@ describe('PropertyRow', () => {
         onNavigate={vi.fn()}
         onConfigure={vi.fn()}
         onChange={vi.fn()}
-        onRename={vi.fn()}
         onDelete={vi.fn()}
       />,
     )
@@ -151,7 +145,7 @@ describe('PropertyRow', () => {
     expect(screen.getByText('{"queue":["block-1"],"threshold":2}')).toBeTruthy()
     expect(screen.getByText('Provided by srs-rescheduling — not installed/disabled')).toBeTruthy()
     expect(screen.queryByTestId('unexpected-editor')).toBeNull()
-    expect(screen.queryByLabelText('Field srs:config')).toBeNull()
+    expect(screen.getByText('srs:config')).toBeTruthy()
     expect(screen.queryByTitle('Delete srs:config')).toBeNull()
   })
 
@@ -177,7 +171,6 @@ describe('PropertyRow', () => {
       value: 'a@example.com',
       Editor: CustomEditor,
       Glyph: undefined,
-      canRename: false,
       canDelete: false,
       canChangeShape: false,
       isHidden: false,
@@ -193,7 +186,6 @@ describe('PropertyRow', () => {
         onNavigate={vi.fn()}
         onConfigure={vi.fn()}
         onChange={vi.fn()}
-        onRename={vi.fn()}
         onDelete={vi.fn()}
       />,
     )
@@ -204,4 +196,5 @@ describe('PropertyRow', () => {
     fireEvent.blur(screen.getByLabelText('custom editor'))
     expect(activation.onBlur).toHaveBeenCalledTimes(1)
   })
+
 })

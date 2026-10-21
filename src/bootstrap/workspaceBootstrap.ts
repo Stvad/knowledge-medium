@@ -11,6 +11,7 @@ import { getLayoutSessionId } from '@/utils/layoutSessionId.js'
 import { applyCurrentLayoutUrl, createPanelRowInTx } from '@/utils/panelLayoutProjection.js'
 import { keyAtEnd } from '@/data/orderKey.js'
 import { ChangeScope } from '@/data/api'
+import { resolveAliasSeatNamespaces } from '@/data/aliasSeatNamespace.js'
 
 const replaceHash = (hash: string): void => {
   if (typeof window === 'undefined') return
@@ -119,9 +120,18 @@ export const bootstrapWorkspace = async ({
   // that completeness boundary; the shared Repo tx path queues other callers.
   await repo.whenPropertyDefinitionsReady(workspaceId)
 
+  // An encrypted workspace's alias-seat namespace needs `K_id`, which a seat
+  // written inside a transaction cannot read, so it is resolved here for
+  // every in-transaction writer of the open workspace. NOT awaited: it opens
+  // IndexedDB, which can hang rather than fail, and a writer that runs before
+  // it lands refuses rather than minting a public id.
+  void resolveAliasSeatNamespaces(repo, workspaceId).catch(err => {
+    console.warn(`[bootstrap] alias-seat namespace for ${workspaceId} is unresolved`, err)
+  })
+
   // Only NOW remember it as the default. Remembering a locked/waiting workspace
-  // would make the next empty-hash visit re-select it and render only the key
-  // gate (no switcher), trapping the user away from accessible spaces.
+  // would open every empty-hash visit (a PWA launch) on its key gate rather
+  // than on a workspace the user can work in.
   rememberWorkspace(workspaceId)
 
   // Workspace-scoped one-shot data backfills (workspaceBackfillsFacet) — e.g.
@@ -140,9 +150,10 @@ export const bootstrapWorkspace = async ({
   // own rows. Marker-gated once per workspace, deferred off this critical path.
   repo.scheduleWorkspaceRefBackfill(workspaceId)
 
-  // One-time catch-up derive of the LOCAL `reference_target_id` column for
-  // rows that predate it (PR #288 slice A). Marker-gated per workspace,
-  // deferred off this critical path; placed after `whenPropertyDefinitionsReady`
+  // Catch-up derive of the LOCAL `reference_target_id` column for rows that
+  // predate it. Once per SESSION per workspace (an in-memory gate, not a
+  // persisted marker — every boot re-scans), deferred off this critical path;
+  // placed after `whenPropertyDefinitionsReady`
   // above so the `[[name]]` tier resolves against the primed name-winner map.
   repo.scheduleReferenceTargetDerivePass(workspaceId)
 

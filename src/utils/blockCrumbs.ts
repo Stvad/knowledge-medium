@@ -17,7 +17,11 @@
 import type { BlockData } from '@/data/api'
 import { aliasesProp } from '@/data/properties.js'
 import { labelForBlockData } from '@/utils/linkTargetAutocomplete.js'
-import { firstLine, truncate, truncateMiddle } from '@/utils/string.js'
+import {
+  recognizePropertyField,
+  type PropertyNameResolver,
+} from '@/utils/propertyValueContext.js'
+import { collapseWhitespace, firstLine, truncate, truncateMiddle } from '@/utils/string.js'
 
 /** Longest a single crumb renders before it is ellipsised. Small on
  *  purpose: the whole chain shares one line, and a page title long enough
@@ -31,6 +35,13 @@ import { firstLine, truncate, truncateMiddle } from '@/utils/string.js'
  *  resolve, so the year has to survive. See `crumbLabel` for why prose
  *  ancestors are cut at the end instead. */
 export const CRUMB_MAX_CHARS = 24
+
+/** What a crumb is made from: the fields read here, so a caller may pass a
+ *  bounded projection of each ancestor instead of its whole row. */
+export type CrumbAncestor = Pick<
+  BlockData,
+  'workspaceId' | 'parentId' | 'isFieldForm' | 'referenceTargetId' | 'content' | 'properties'
+>
 
 /** Most crumbs shown before the middle collapses to `…`.
  *
@@ -51,14 +62,14 @@ export const CRUMB_MAX_CHARS = 24
  *  cheap end win is the right trade. */
 export const CRUMB_MAX_SEGMENTS = 4
 
-const CRUMB_ELLIPSIS = '…'
+export const CRUMB_ELLIPSIS = '…'
 
 /** Whether this block has a real alias, i.e. whether `labelForBlockData`
  *  below will return a NAME rather than a line of body text. Mirrors that
  *  function's own filter (a raw properties-bag write can leave a
  *  non-array, or an array with blanks and non-strings in it) rather than
  *  going through `getAliases`, which throws on exactly those shapes. */
-const hasAlias = (data: BlockData): boolean => {
+const hasAlias = (data: CrumbAncestor): boolean => {
   const aliases = data.properties[aliasesProp.name]
   return Array.isArray(aliases) &&
     aliases.some(alias => typeof alias === 'string' && alias.trim() !== '')
@@ -76,16 +87,36 @@ const hasAlias = (data: BlockData): boolean => {
  *  such tail; its last few characters are wherever the sentence happened
  *  to be, so splicing them on reads as damage ("Fold a block…llet below.")
  *  and cutting the end is both honest and easier to read. */
-const crumbLabel = (data: BlockData): string => {
-  const label = firstLine(labelForBlockData(data, '')).replace(/\s+/g, ' ').trim()
+const crumbLabel = (data: CrumbAncestor): string => {
+  const label = collapseWhitespace(firstLine(labelForBlockData(data, '')))
   if (!label) return ''
   return hasAlias(data)
     ? truncateMiddle(label, CRUMB_MAX_CHARS)
     : truncate(label, CRUMB_MAX_CHARS)
 }
 
-/** Root→immediate-parent crumbs for one `core.manyAncestors` chain,
- *  ready to render.
+/** A property FIELD ROW's crumb: the name of the property it is.
+ *
+ *  A value row's content can repeat its owner's label exactly — a page's
+ *  `alias` row does — so the property is what tells the two apart:
+ *  `Tutorial › alias` places a row that `Tutorial › Tutorial` would not.
+ *
+ *  `''` whenever `recognizePropertyField` does not answer, which includes
+ *  having no resolver bound. Raw `::((…))` is never a crumb, so an
+ *  unrecognized marked row drops rather than falling back to its content.
+ *
+ *  Ellipsised from the middle, like an aliased block: a property name is a
+ *  NAME, and names are told apart by their tails. */
+const propertyCrumbLabel = (
+  data: CrumbAncestor,
+  propertyName: PropertyNameResolver | undefined,
+): string => {
+  const name = propertyName && recognizePropertyField(data, propertyName)?.name
+  return name ? truncateMiddle(collapseWhitespace(name), CRUMB_MAX_CHARS) : ''
+}
+
+/** Root→immediate-parent crumbs for one `core.ancestors` chain, ready to
+ *  render.
  *
  *  The chain arrives leaf-to-root (depth ascending, self excluded), which
  *  is the reverse of reading order, hence the backwards walk.
@@ -94,11 +125,9 @@ const crumbLabel = (data: BlockData): string => {
  *   - blank ones. The crumb line is a locator hint, and
  *     `Project Alpha › › Notes` locates nothing `Project Alpha › Notes`
  *     doesn't.
- *   - property field rows (`isFieldForm`). Their content is literally
- *     `::((fieldId))`, and the rest of the app treats them as invisible
- *     machinery (see `VISIBLE_CHILD_PREDICATE_SQL`) — a crumb reading
- *     `Task Board › ::((field-def-status-00…` names no place a person
- *     could go. Their owner is further up the same chain and still shows.
+ *   - property field rows (`isFieldForm`) that `propertyName` cannot name.
+ *     A NAMED one renders as its property (`Task Board › status`); see
+ *     {@link propertyCrumbLabel} for why, and for what "cannot name" covers.
  *
  *  A chain that does NOT reach a root is marked with a leading `…`
  *  instead of being presented as if its topmost surviving ancestor were
@@ -116,10 +145,17 @@ const crumbLabel = (data: BlockData): string => {
  *  re-validation — so this display-time consumer declines to render
  *  another workspace's content rather than trusting that invariant. */
 export const crumbsFromAncestors = (
-  ancestors: readonly BlockData[],
-  {workspaceId, parentId}: {workspaceId: string; parentId: string | null},
+  ancestors: readonly CrumbAncestor[],
+  {workspaceId, stoppedAtParentId, propertyName}: {
+    workspaceId: string
+    stoppedAtParentId: string | null
+    /** Names a property field row in this workspace. Optional because
+     *  omitting it degrades to dropping every field row, which is the safe
+     *  direction — never raw `::((…))` in a crumb. */
+    propertyName?: PropertyNameResolver
+  },
 ): string[] => {
-  const chain: BlockData[] = []
+  const chain: CrumbAncestor[] = []
   for (const ancestor of ancestors) {
     if (ancestor.workspaceId !== workspaceId) break
     chain.push(ancestor)
@@ -127,19 +163,17 @@ export const crumbsFromAncestors = (
 
   const crumbs: string[] = []
   for (let i = chain.length - 1; i >= 0; i--) {
-    if (chain[i].isFieldForm) continue
-    const label = crumbLabel(chain[i])
+    const label = chain[i].isFieldForm
+      ? propertyCrumbLabel(chain[i], propertyName)
+      : crumbLabel(chain[i])
     if (label) crumbs.push(label)
   }
 
-  const highest = chain[chain.length - 1]
-  // With no ancestors at all the array cannot answer whether the block is
-  // a root or an orphan — both arrive as `[]` — so the block's OWN parent
-  // edge decides. That case is not exotic: it is what a cut at the very
-  // first hop looks like, i.e. exactly the `core.restore` scenario this
-  // marker exists for, and the most likely one in practice.
-  const reachesRoot = chain.length === ancestors.length &&
-    (highest ? highest.parentId === null : parentId === null)
+  // Two independent ways to fall short of the root: leaving the workspace
+  // (the loop above stopped early) and the walk itself stopping, which
+  // only the walk can report — an empty chain is a root and a cut at the
+  // very first hop alike.
+  const reachesRoot = chain.length === ancestors.length && stoppedAtParentId === null
   // A cut chain has no root worth preserving, so the collapse that keeps
   // both ends doesn't apply — keep the nearest ancestors and let the
   // marker stand in for everything above them.

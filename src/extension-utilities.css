@@ -11,9 +11,26 @@
  *
  * To let extensions rely on Tailwind the same way first-party code does, we
  * force-generate a broad, stable utility vocabulary here with `@source
- * inline(...)`. These classes ship in the app's CSS unconditionally, so an
- * extension can use standard utilities and they just work — no per-extension
- * rebuild, redeploy, or scanning config.
+ * inline(...)`. These classes ship unconditionally in THIS file's output, so
+ * an extension can use standard utilities and they just work — no
+ * per-extension rebuild, redeploy, or scanning config.
+ *
+ * A SEPARATE ENTRY, NOT PART OF index.css
+ * Its only consumer is dynamically-loaded extensions, which cannot render
+ * before the DB opens — well after first paint — and it dwarfs the rest of the
+ * stylesheet. extensionUtilitiesCss.ts loads it on demand: the extension
+ * compile path starts the load and the runtime apply waits for it.
+ *
+ * BUILD SHAPE
+ * This entry keeps automatic content detection, so it re-emits every utility
+ * index.css generates from the app's source alongside the classes listed
+ * below. It loads after index.css into the same `utilities` layer and so wins
+ * every specificity tie; only as a superset does its own ordering decide all
+ * of them. So no `source(none)` to shrink it: an app variant it would then
+ * lack loses to a safelisted base utility. `@reference` makes index.css's
+ * theme (tokens, the custom dark variant, plugins) resolvable here without
+ * re-emitting any of its CSS. Order matters: `@reference` after the utilities
+ * import, or the file emits nothing.
  *
  * SCOPE
  * Base utilities are covered broadly (layout, spacing, sizing, typography,
@@ -26,6 +43,9 @@
  * them from the extension's own compiled output when it ships one; or extend
  * this file. Keep additions grouped and re-measure the output size.
  * ═══════════════════════════════════════════════════════════════════════ */
+
+@import "tailwindcss/utilities" layer(utilities);
+@reference "./index.css";
 
 /* ── Display / box ─────────────────────────────────────────────────────── */
 @source inline("block inline-block inline flex inline-flex grid inline-grid hidden contents flow-root table table-cell table-row table-caption table-column list-item");

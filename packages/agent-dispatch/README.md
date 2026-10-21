@@ -41,6 +41,26 @@ By default a watcher runs `claude`. Configure `"runner": {"executor": "codex"}` 
 - **Tools:** the km MCP server is injected into the codex run via `-c mcp_servers.*` config overrides (not a config file), alongside codex's own built-in tools. Claude's `runner.allowedTools` and the top-level `defaultAllowedTools` are **claude-only** and are ignored for a codex watcher — there's no equivalent allowlist gate at the codex CLI layer today.
 - **Sessions don't cross executors:** `agent:session` ids are executor-scoped — codex thread ids are stored as `codex:<id>`, claude session ids bare (matching every pre-executor session). A follow-up whose nearest thread session belongs to the *other* executor starts a **fresh** thread instead of forwarding the foreign id to `--resume`/`resume` (which would fail the run outright). Switching a watcher's `runner.executor` therefore drops thread continuity, never mixes histories, and never burns retries on doomed resumes.
 
+## Upgrade to 0.3.0
+
+0.3.0 requires `@knowledge-medium/agent-cli` 0.8.0. Before starting active watchers, save an agent or automation contributor for the daemon's configured profile and workspace with `kmagent --profile agent-dispatch contributor use <id> --workspace <workspace-id>`; `contributor use none` explicitly opts out by sending null attribution. You can also create and select an automation profile with `contributor create`.
+
+Upgrade both packages, restart the bridge as described in the agent-cli README's [Upgrading](https://github.com/Stvad/knowledge-medium/tree/master/packages/agent-cli#upgrading) section, save the choice, then restart the daemon. It and its spawned agents use the same saved profile/workspace selection. The ambient channel MCP reads the saved choice when it starts, so restart that MCP client after changing the selection. With no saved choice, active dispatch exits with setup instructions before contacting the bridge; all-disabled watcher cleanup still works without attribution.
+
+```bash
+npm i -g @knowledge-medium/agent-dispatch @knowledge-medium/agent-cli
+launchctl kickstart -k gui/$(id -u)/org.knowledge-medium.agent-dispatch
+```
+
+## Upgrade to 0.2.0
+
+0.2.0 requires `@knowledge-medium/agent-cli` 0.7, and a config that names its workspace. A config without `workspaceId` is now a config error: the daemon logs a `config error` saying `workspaceId is required` and exits cleanly, so launchd does not restart it and dispatch stops until the field is added.
+
+1. Add `"workspaceId"` to `~/.config/knowledge-medium/agent-dispatch.json` (step 2 of [Setup](#setup-from-a-repo-checkout)). List your workspaces with `kmagent --profile agent-dispatch sql all "SELECT id, name FROM workspaces"`.
+2. Upgrade both packages: `npm i -g @knowledge-medium/agent-dispatch @knowledge-medium/agent-cli`.
+3. Stop the old bridge, as the agent-cli README's [Upgrading](https://github.com/Stvad/knowledge-medium/tree/master/packages/agent-cli#upgrading) section says; the daemon starts the new one.
+4. Restart the daemon: `launchctl kickstart -k gui/$(id -u)/org.knowledge-medium.agent-dispatch`.
+
 ## Upgrade from claude-tasks
 
 This rename intentionally does **not** carry a permanent `claude:*` compatibility layer in app or daemon code. Do the migration once before loading the new LaunchAgent:
@@ -107,6 +127,16 @@ This rename intentionally does **not** carry a permanent `claude:*` compatibilit
    return {scanned: rows.length, updated}
    ```
 
+## Contributor selection
+
+Before starting active watchers, save a contributor for the configured profile and workspace:
+
+```bash
+kmagent --profile agent-dispatch contributor create "Dispatch" --kind automation --workspace <workspace-id>
+```
+
+Creation selects the profile. To reuse one, run `contributor use <id>` with the same profile/workspace flags; `contributor use none` explicitly opts out. From a repo checkout, use `pnpm agent` in place of `kmagent`. The daemon and its spawned agents use this saved choice; restart the daemon after changing it. Without a choice, active dispatch stops with setup instructions before contacting the bridge. Disabling all watchers can still clear their registration without a contributor.
+
 ## Install from npm
 
 If you only want to *run* the daemon (not hack on the repo), install the published packages instead of cloning. You need **both**: `agent-dispatch` (the daemon) and `agent-cli` (the `kmagent` bridge it reaches the live app through).
@@ -160,6 +190,7 @@ That puts `km-agent-dispatch` and `kmagent` on your PATH. Then:
    ```jsonc
    {
      "profile": "agent-dispatch",
+     "workspaceId": "YOUR_WORKSPACE_ID", // required: the workspace the daemon acts on
      "pollIntervalMs": 5000,
      "maxConcurrent": 2,
      "watchers": [
@@ -210,7 +241,11 @@ That puts `km-agent-dispatch` and `kmagent` on your PATH. Then:
 
    The `claude` page must exist (type `[[claude]]` once and click it).
 
-   **Always scope query watchers to a `workspace_id`** — the local `blocks` table holds *every* synced workspace, so an unscoped query fires runs (and their `update_block` writes) against workspaces you aren't working in. Get yours from `kmagent runtime-summary`. Backlink watchers don't need this (a page alias resolves within the active workspace).
+   **`workspaceId` is required.** It is the workspace the daemon acts on. List yours with `pnpm agent --profile agent-dispatch sql all "SELECT id, name FROM workspaces"`.
+   - Every graph call the daemon and its runs make names this workspace. Backlink watchers resolve their page alias in it, whatever workspace the app tab has open.
+   - Its writes (claims, replies) only run while an app tab has this workspace open. While none does, it claims nothing and starts no runs.
+
+   **Also scope query watchers' SQL to the same `workspace_id`.** The local `blocks` table holds *every* synced workspace, and a query watcher's SQL runs as written, so an unscoped query fires runs against workspaces you aren't working in.
 
    Set `"disabled": true` on any watcher to keep it parked in the config without registering it, blocking its target wikilinks, affecting billing posture, or processing tasks. Disabled watchers still have to be valid watcher objects, so broken parked config is caught at startup instead of drifting silently. They also still reserve their `name`, because cursors and baselines are keyed by watcher name. If every configured watcher is disabled, the daemon clears its existing push registration and stops.
 
@@ -291,7 +326,7 @@ The same generic graph tools work from any MCP client — e.g. Claude Desktop / 
     "km": {
       "command": "node",
       "args": ["<repo>/packages/agent-cli/dist/mcp.js"],
-      "env": {"AGENT_RUNTIME_PROFILE": "agent-dispatch"}
+      "env": {"AGENT_RUNTIME_PROFILE": "agent-dispatch", "AGENT_RUNTIME_CONTRIBUTOR_ID": "<contributor-id>"}
     }
   }
 }
@@ -314,8 +349,10 @@ Claude Code's channels primitive (research preview, v2.1.80+) can push watcher e
 1. Register km in the project's `.mcp.json` with the channel port:
 
    ```json
-   {"mcpServers": {"km": {"command": "node", "args": ["<repo>/packages/agent-dispatch/dist/mcp.js"], "env": {"AGENT_RUNTIME_PROFILE": "agent-dispatch", "KM_AGENT_DISPATCH_CHANNEL_PORT": "8790", "KM_MCP_BLOCKED_WIKILINKS": "[\"claude\"]"}}}}
+   {"mcpServers": {"km": {"command": "node", "args": ["<repo>/packages/agent-dispatch/dist/mcp.js"], "env": {"AGENT_RUNTIME_PROFILE": "agent-dispatch", "AGENT_RUNTIME_WORKSPACE": "<workspace-id>", "KM_AGENT_DISPATCH_CHANNEL_PORT": "8790", "KM_MCP_BLOCKED_WIKILINKS": "[\"claude\"]"}}}}
    ```
+
+   `AGENT_RUNTIME_WORKSPACE` pins the ambient session to the daemon's workspace. The dispatch MCP server reads the contributor selection saved for that profile and workspace; create/select it first with `kmagent --profile agent-dispatch contributor use <id|none> --workspace <workspace-id>`. An explicit `AGENT_RUNTIME_CONTRIBUTOR_ID` in this MCP config overrides the saved choice (`none` opts out of attribution).
 
    (`KM_MCP_BLOCKED_WIKILINKS` is consumed by the dispatch wrapper — without it the ambient session's write tools would happily write `[[claude]]` and re-trigger the watcher.)
 

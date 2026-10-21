@@ -2,12 +2,22 @@ import type { BlockData, TypeContribution } from '@/data/api'
 import type { Repo } from '@/data/repo'
 import { aliasesProp, typesProp } from '@/data/properties.js'
 import {
+  isActiveSearchFilter,
+  matchesTypeFilter,
+  searchSourceHealthFacet,
   searchSourcesFacet,
   type SearchSourceArgs,
   type SearchSourceCandidate,
   type SearchSourceContribution,
+  type SearchSourceHealthReport,
+  type SearchSourceOutcome,
 } from '@/data/facets.js'
 import { buildFilterPrefixes, rankCandidates } from '@/utils/fuzzyRank.js'
+import {
+  propertyValueContexts,
+  type PropertyValueContext,
+} from '@/utils/propertyValueContext.js'
+import { collapseWhitespace, firstLine, truncate } from '@/utils/string.js'
 
 /** How many candidate rows to pull from SQL before JS ranking. The pre-
  *  filter is permissive (token-prefix LIKE), so over-fetching gives the
@@ -63,10 +73,12 @@ export interface LinkTargetBlockMatch {
   blockId: string
   content: string
   label: string
-  /** The block's own parent edge. Carried so a consumer showing the
-   *  block's ancestry can tell "this block has no parent" from "its
-   *  parent was excluded from the ancestor walk" — an empty ancestor
-   *  chain looks identical either way (see `crumbsFromAncestors`). */
+  /** The block's own parent edge. Carried because it is settled at first
+   *  paint, which the ancestor walk is not: a consumer can reserve the
+   *  line its crumbs will land on without waiting (see `hasCrumbLine`).
+   *  Not a source of truth about the chain — this rides on a payload with
+   *  no row dep, so a block moved since the query still claims its old
+   *  parent here. */
   parentId: string | null
   /** Raw type ids, for a consumer that wants to show what KIND of thing
    *  the row is alongside where it lives. Free here — these rows are
@@ -92,7 +104,24 @@ export interface LinkTargetIdCandidate {
   id: string
   label: string
   detail: string
+  /** For a row that lives under a property FIELD ROW, where it belongs —
+   *  `alias of Tutorial`. Absent for an ordinary block.
+   *
+   *  A picker without it presents a page and that page's own `alias` value
+   *  row as two rows with the SAME label and nothing to choose between them
+   *  (km-1iia). Property rows are ordinary blocks and belong in search — the
+   *  answer is to say which is which, not to hide one. */
+  context?: string
 }
+
+/** The muted secondary text a picker shows beside a candidate's label.
+ *  A property row's CONTEXT wins over its content, because that content is
+ *  exactly what makes the row ambiguous — a page's `alias` value row repeats
+ *  the page's own label, so echoing it says nothing while "alias of <page>"
+ *  says which row this is. One owner, because every picker over these
+ *  candidates asks the same question. */
+export const linkTargetCandidateDetail = (candidate: LinkTargetIdCandidate): string =>
+  candidate.context ?? candidate.detail
 
 export interface LinkTargetValueCandidate {
   key: string
@@ -102,7 +131,7 @@ export interface LinkTargetValueCandidate {
 }
 
 export const labelForBlockData = (
-  data: BlockData | null | undefined,
+  data: Pick<BlockData, 'properties' | 'content'> | null | undefined,
   fallback: string,
 ): string => {
   const aliases = data?.properties[aliasesProp.name]
@@ -502,7 +531,8 @@ const blockSearchTextScore = (content: string, query: string): number => {
  *  defaults are wired. */
 export const coreContentSearchSource: SearchSourceContribution = {
   id: 'core.content',
-  search: async (repo, {workspaceId, query, limit, recentBlockIds}) => {
+  supportsFilter: true,
+  search: async (repo, {workspaceId, query, limit, recentBlockIds, filter}) => {
     // Over-fetch so the score below (which promotes exact/prefix/recent
     // hits over the SQL engine's own rank) has room to reorder before the
     // merge point's final slice to `limit`. Same multiplier/ceiling as the
@@ -512,7 +542,12 @@ export const coreContentSearchSource: SearchSourceContribution = {
     // the ceiling (the ceiling is a headroom cap for the common case, not
     // a hard maximum on the result size).
     const fetchLimit = Math.max(limit, Math.min(limit * ALIAS_CANDIDATE_MULTIPLIER, ALIAS_CANDIDATE_CEILING))
-    const rows = await repo.query.searchByContent({workspaceId, query, limit: fetchLimit}).load()
+    const rows = await repo.query.searchByContent({
+      workspaceId,
+      query,
+      limit: fetchLimit,
+      ...(isActiveSearchFilter(filter) ? {filter} : {}),
+    }).load()
     return rows.map((block): SearchSourceCandidate => ({
       block,
       score: blockSearchTextScore(block.content, query) +
@@ -521,25 +556,112 @@ export const coreContentSearchSource: SearchSourceContribution = {
   },
 }
 
-/** Of two candidates for the SAME block id, pick which one's `block`
- *  payload should survive the merge. Ranking always uses the max score
- *  across duplicates (see `searchBlocksAcrossSources`), but the payload
- *  itself can come from a stale index copy — e.g. a semantic-search
- *  source's own snapshot of the block lagging live data — so prefer
- *  whichever candidate's `block.userUpdatedAt` (the user-facing
- *  "last edited" timestamp, `src/data/api/blockData.ts`) is newest,
- *  falling back to the higher-scored candidate when timestamps tie or
- *  either is missing/non-numeric. */
+/** Of every candidate contributed for the SAME block id, pick which one's
+ *  `block` payload the user sees. Ranking is separate and unaffected: the
+ *  merged row is always scored at the MAX across the group, so nothing
+ *  here changes which blocks appear or in what order — only WHICH COPY of
+ *  a block's content is displayed.
+ *
+ *  The rule, over the whole group at once:
+ *   1. Candidates carrying a finite `userUpdatedAt` outrank every
+ *      candidate that doesn't. Newest wins; a timestamp tie falls back to
+ *      higher score; a full tie keeps the earliest-encountered candidate
+ *      (group order is registration-then-within-source, see
+ *      `searchBlocksAcrossSources`).
+ *   2. Only when NO candidate in the group carries one does score decide.
+ *
+ *  Timestamp-less candidates lose rather than sending the whole group to
+ *  score because `BlockData.userUpdatedAt` is REQUIRED
+ *  (`src/data/api/blockData.ts`), so a candidate without one is a source
+ *  contract violation, not a legitimate competitor. Were it allowed to
+ *  decide, one malformed candidate would disable the anti-staleness
+ *  guarantee for every well-formed candidate beside it — the same failure
+ *  this file already refuses for a source that throws: one bad source
+ *  degrades itself, never its neighbours.
+ *
+ *  FINITE, not `typeof === 'number'`: `NaN` passes typeof and then loses
+ *  every comparison including `NaN !== NaN`, so the winner would depend on
+ *  fold position; `Infinity` is order-independent but wins
+ *  unconditionally. Both count as absent.
+ *
+ *  Must see the raw group, never a pairwise running fold: a fold
+ *  overwrites the survivor's `score` with the running max, so a later
+ *  comparison pairs one candidate's timestamp with a score belonging to a
+ *  different, already-eliminated one. Here only real candidates' own
+ *  (timestamp, score) pairs are ever compared. */
 const freshestCandidatePayload = (
-  a: SearchSourceCandidate,
-  b: SearchSourceCandidate,
+  candidates: readonly SearchSourceCandidate[],
 ): SearchSourceCandidate => {
-  const aTime = a.block.userUpdatedAt
-  const bTime = b.block.userUpdatedAt
-  if (typeof aTime === 'number' && typeof bTime === 'number' && aTime !== bTime) {
-    return aTime > bTime ? a : b
+  const timed = candidates.filter(c => Number.isFinite(c.block.userUpdatedAt))
+  if (timed.length === 0) {
+    return candidates.reduce((best, candidate) => candidate.score > best.score ? candidate : best)
   }
-  return a.score >= b.score ? a : b
+  return timed.reduce((best, candidate) => {
+    const bestTime = best.block.userUpdatedAt
+    const time = candidate.block.userUpdatedAt
+    if (time !== bestTime) return time > bestTime ? candidate : best
+    return candidate.score > best.score ? candidate : best
+  })
+}
+
+/** Console-warn once per source per session, alongside the health report.
+ *  Search runs on every keystroke, so an unguarded warning would bury the
+ *  one line a plugin author needs under thousands of copies. Reporters
+ *  still see the outcome on every search — they need the repeats to know a
+ *  source is still broken; only the console is deduped. */
+const offContractSourcesWarned = new Set<string>()
+
+/** `BlockData.userUpdatedAt` is a required number, so a candidate without a
+ *  finite one is a bug in the source that produced it — and an invisible
+ *  one, since the merge point can still rank and even display the block.
+ *  Returns the offending detail line, or null when the batch is clean.
+ *  `freshestCandidatePayload` handles the consequence: such a candidate
+ *  keeps its score but loses the payload to any well-formed duplicate. */
+const offContractCandidateDetail = (
+  sourceId: string,
+  candidates: readonly SearchSourceCandidate[],
+): string | null => {
+  const offender = candidates.find(c => !Number.isFinite(c.block.userUpdatedAt))
+  if (!offender) return null
+  const detail =
+    `returned block ${offender.block.id} with a non-finite userUpdatedAt ` +
+    `(${String(offender.block.userUpdatedAt)}). BlockData.userUpdatedAt is required; ` +
+    `this candidate still counts toward ranking, but its copy of the block will not ` +
+    `be displayed over a well-formed duplicate.`
+  if (!offContractSourcesWarned.has(sourceId)) {
+    offContractSourcesWarned.add(sourceId)
+    console.warn(`[searchBlocksAcrossSources] source "${sourceId}" ${detail}`)
+  }
+  return detail
+}
+
+/** Orders health reports so a slow search settling after a faster later one
+ *  can't publish stale state. Module-scoped rather than per-repo: it only
+ *  has to be monotonic, and reports from two repos never share a consumer.
+ *
+ *  Claim it when the search STARTS, never when it reports — allocating after
+ *  the barrier numbers reports by completion order, which is the very thing
+ *  the generation exists to see past. */
+let searchHealthGeneration = 0
+
+/** Fan one search's outcomes out to every contributed reporter. Isolated per
+ *  reporter: a reporter that throws must not take down the search it is
+ *  only observing, nor the reporters after it. */
+const reportSearchSourceHealth = (
+  repo: Repo,
+  generation: number,
+  outcomes: readonly SearchSourceOutcome[],
+): void => {
+  const reporters = repo.facetRuntime?.read(searchSourceHealthFacet)
+  if (!reporters || reporters.size === 0) return
+  const report: SearchSourceHealthReport = {generation, outcomes}
+  for (const reporter of reporters.values()) {
+    try {
+      reporter.report(report)
+    } catch (error) {
+      console.error(`[searchBlocksAcrossSources] health reporter "${reporter.id}" threw`, error)
+    }
+  }
 }
 
 /** Fan out `query` to every contributed `searchSourcesFacet` source (core's
@@ -562,12 +684,13 @@ const freshestCandidatePayload = (
  *  the order candidates were produced in — `Array.prototype.sort` is
  *  stable, and that order is source-registration order then
  *  within-source order — so a single-source call reproduces that
- *  source's own ordering exactly. Same block id from two sources
- *  survives once, ranked at the MAX score across the duplicates; its
- *  `block` payload is picked by `freshestCandidatePayload` (newest
- *  `userUpdatedAt` wins, falling back to the higher-scored candidate on
- *  a tie/missing timestamp) so a stale index copy can't shadow live
- *  data just because it scored higher.
+ *  source's own ordering exactly. Same block id contributed by two or
+ *  more sources survives once, ranked at the MAX score across the whole
+ *  duplicate group; its `block` payload is picked by
+ *  `freshestCandidatePayload` per the contract on `SearchSourceContribution`
+ *  (`src/data/facets.ts`), evaluated over the WHOLE group at once
+ *  (order-independent — see that function's docblock and issue #450 for
+ *  why a pairwise fold over 3+ duplicates isn't).
  *
  *  A `repo` with no `FacetRuntime` wired (a hand-built test double, or a
  *  `Repo` read before its first `setFacetRuntime`) still gets core
@@ -579,23 +702,51 @@ export const searchBlocksAcrossSources = async (
 ): Promise<BlockData[]> => {
   if (args.limit <= 0) return []
 
+  const generation = ++searchHealthGeneration
+
   const sources = repo.facetRuntime?.read(searchSourcesFacet)
-  const contributions = sources && sources.size > 0
+  const registered = sources && sources.size > 0
     ? [...sources.values()]
     : [coreContentSearchSource]
+  const filter = isActiveSearchFilter(args.filter) ? args.filter : undefined
+  const contributions = filter?.underId !== undefined
+    ? registered.filter(source => source.supportsFilter === true)
+    : registered
+  if (contributions.length === 0) return []
+  const keep = (source: SearchSourceContribution, candidates: readonly SearchSourceCandidate[]) =>
+    filter && source.supportsFilter !== true
+      ? candidates.filter(candidate => matchesTypeFilter(readTypeIds(candidate.block), filter))
+      : candidates
 
   const failures: {index: number; error: unknown}[] = []
+  // Written by INDEX, not pushed: a push orders outcomes by settle order, so
+  // two identical searches can produce differently-ordered reports and a
+  // consumer diffing them sees a change that isn't one.
+  const outcomes = new Array<SearchSourceOutcome>(contributions.length)
   const candidateLists = await Promise.all(
     contributions.map(async (source, index) => {
       try {
-        return await source.search(repo, args)
+        const candidates = await source.search(repo, args)
+        const detail = offContractCandidateDetail(source.id, candidates)
+        outcomes[index] = detail === null
+          ? {sourceId: source.id, kind: 'ok'}
+          : {sourceId: source.id, kind: 'malformed-candidate', detail}
+        return keep(source, candidates)
       } catch (error) {
         console.error(`[searchBlocksAcrossSources] source "${source.id}" threw`, error)
+        outcomes[index] = {sourceId: source.id, kind: 'threw', error}
         failures.push({index, error})
         return []
       }
     }),
   )
+
+  // After the barrier, so the report names exactly the set of sources this
+  // search ran — a source that has left the runtime is absent from it, which
+  // is how a consumer retires state it could never be told to clear.
+  // A report names the whole set of sources (an absent one reads as having
+  // left the runtime), so a filtered search that skipped some reports nothing.
+  if (contributions.length === registered.length) reportSearchSourceHealth(repo, generation, outcomes)
 
   // Every source failed (including the single-source case) — there is
   // nothing to rank, and silently returning [] would hide the failure
@@ -608,21 +759,24 @@ export const searchBlocksAcrossSources = async (
 
   const merged = candidateLists.flat()
 
-  const byId = new Map<string, SearchSourceCandidate>()
+  // Group first, fold second: `freshestCandidatePayload` needs the whole
+  // duplicate-id group's raw candidates at once to stay order-independent
+  // (see its docblock) — a single-pass running fold over the flat list
+  // would re-decouple payload selection from the real per-candidate
+  // (timestamp, score) pairs, same as the bug it replaces.
+  const groups = new Map<string, SearchSourceCandidate[]>()
   for (const candidate of merged) {
-    const existing = byId.get(candidate.block.id)
-    if (!existing) {
-      byId.set(candidate.block.id, candidate)
-      continue
-    }
-    const payload = freshestCandidatePayload(existing, candidate)
-    byId.set(candidate.block.id, {
-      block: payload.block,
-      score: Math.max(existing.score, candidate.score),
-    })
+    const bucket = groups.get(candidate.block.id)
+    if (bucket) bucket.push(candidate)
+    else groups.set(candidate.block.id, [candidate])
   }
 
-  return [...byId.values()]
+  const byId = [...groups.values()].map((group): SearchSourceCandidate => ({
+    block: freshestCandidatePayload(group).block,
+    score: group.reduce((max, c) => Math.max(max, c.score), -Infinity),
+  }))
+
+  return byId
     .sort((a, b) => b.score - a.score)
     .slice(0, args.limit)
     .map(candidate => candidate.block)
@@ -742,6 +896,67 @@ export const searchLinkTargetsProgressively = async (
   return result
 }
 
+/** Longest owner name a context line carries before it is ellipsised. The
+ *  owner is there to identify the row, and a whole paragraph of body text
+ *  identifies nothing a phrase doesn't — while the line shares its width with
+ *  the label the user actually searched for. */
+const CONTEXT_OWNER_MAX_CHARS = 40
+
+/** The context line for a row under a property field row: the property, and
+ *  the block it is on. Falls back to the property alone when the owner has
+ *  nothing to show — a nameless owner is still better identified by "alias"
+ *  than by a blank. */
+const describePropertyValueContext = (context: PropertyValueContext): string => {
+  const ownerLabel = truncate(
+    collapseWhitespace(firstLine(labelForBlockData(context.owner, ''))),
+    CONTEXT_OWNER_MAX_CHARS,
+  )
+  return ownerLabel ? `${context.propertyName} of ${ownerLabel}` : context.propertyName
+}
+
+/** Put every block that owns a property row in this list ahead of that row.
+ *
+ *  A page and its own `alias` value row match the same query text with the
+ *  same content, so nothing in the text ranking can separate them and the
+ *  winner falls out of SQL order — which the migration that minted the value
+ *  row leaves pointing at the machinery. Picking the preselected default then
+ *  stores a property row's id as the reference. The owner is the thing a
+ *  picker is for; its machinery goes under it.
+ *
+ *  Moves the OWNER UP rather than pushing the property row down, and that
+ *  direction is the load-bearing part: a caller may FILTER this result
+ *  afterwards — the ref editor drops candidates failing the property's
+ *  `targetTypes` — and dropping an owner this moved leaves every other row in
+ *  the order it already had. Pushing the row down instead stranded it behind
+ *  blocks it had outranked, on behalf of an owner no longer on screen.
+ *
+ *  A row whose owner is absent keeps its rank; there is nothing to rank it
+ *  against. Marking a candidate before recursing is what keeps the walk
+ *  total — ownership is a tree so it cannot cycle, but a cycle would
+ *  otherwise recur forever rather than merely ordering two rows oddly. */
+const ownersBeforeTheirPropertyRows = (
+  candidates: readonly LinkTargetIdCandidate[],
+  contexts: ReadonlyMap<string, PropertyValueContext>,
+): LinkTargetIdCandidate[] => {
+  const byId = new Map(candidates.map(candidate => [candidate.id, candidate]))
+  const ordered: LinkTargetIdCandidate[] = []
+  // By identity, not by id: two rows for one block would be a bug upstream,
+  // but dropping one here would turn it into a missing candidate.
+  const emitted = new Set<LinkTargetIdCandidate>()
+
+  const emit = (candidate: LinkTargetIdCandidate): void => {
+    if (emitted.has(candidate)) return
+    emitted.add(candidate)
+    const ownerId = contexts.get(candidate.id)?.ownerId
+    const owner = ownerId === undefined ? undefined : byId.get(ownerId)
+    if (owner) emit(owner)
+    ordered.push(candidate)
+  }
+
+  candidates.forEach(candidate => emit(candidate))
+  return ordered
+}
+
 export const searchLinkTargetIdCandidates = async (
   repo: Repo,
   args: {
@@ -758,7 +973,7 @@ export const searchLinkTargetIdCandidates = async (
     excludeBlockIds: args.excludeIds,
   })
 
-  return [
+  const candidates = [
     ...matches.aliases.map((row): LinkTargetIdCandidate => ({
       id: row.blockId,
       label: row.alias,
@@ -770,6 +985,22 @@ export const searchLinkTargetIdCandidates = async (
       detail: block.content,
     })),
   ].slice(0, args.limit)
+
+  // Resolved on the sliced list, not the whole result: this annotates the rows
+  // that will be shown, and a row past the cut has neither a label to carry
+  // nor an owner to sit under.
+  const contexts = await propertyValueContexts(
+    repo,
+    args.workspaceId,
+    candidates.map(candidate => candidate.id),
+  )
+  return ownersBeforeTheirPropertyRows(
+    candidates.map(candidate => {
+      const context = contexts.get(candidate.id)
+      return context ? {...candidate, context: describePropertyValueContext(context)} : candidate
+    }),
+    contexts,
+  )
 }
 
 export const searchLinkTargetValueCandidates = async (

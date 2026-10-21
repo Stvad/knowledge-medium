@@ -22,7 +22,7 @@
  *  be guessed at, and so program edits happen in your notes.
  *
  *  There is also a small **settings** block for the engine knobs the plan
- *  prose doesn't state (rollover hour, per-lift cadence, plan-root id).
+ *  prose doesn't state (rollover hour, per-lift cadence, which plan).
  */
 
 import {ChangeScope, seedProperty, seedType} from '@/data/api/index.js'
@@ -31,10 +31,13 @@ import {
   extensionTypeSeedKey,
 } from '@/extensions/dynamicExtensionSeeds.js'
 
+import {ASSESSMENT_MEASURES, type AssessmentMeasure} from '../engine/assessment'
 import type {SessionType} from '../engine/types'
 import {
   ALT_CHOICE_TYPE,
   ALT_GROUP_TYPE,
+  ASSESSMENT_RESULT_TYPE,
+  ASSESSMENT_TYPE,
   EXERCISE_DEF_TYPE,
   EXERCISE_ENTRY_TYPE,
   FIELD,
@@ -50,6 +53,8 @@ import {
 export {
   ALT_CHOICE_TYPE,
   ALT_GROUP_TYPE,
+  ASSESSMENT_RESULT_TYPE,
+  ASSESSMENT_TYPE,
   EXERCISE_DEF_TYPE,
   EXERCISE_ENTRY_TYPE,
   LAYOFF_TYPE,
@@ -327,15 +332,16 @@ export const layoffPctProp = seedProperty({
 
 // ──── Settings ────
 
-/** Block id of the plan outline root the config is read from. Defaults to
- *  the known Strength Plan v2 root; editable so the same extension works in
- *  a workspace where the plan lives elsewhere. */
-export const planRootProp = seedProperty({
-  seedKey: extensionPropertySeedKey('plan-root'),
+/** The plan outline root the config is read from. Unset, the plan is found
+ *  by its alias (`PLAN_ALIAS` in config.ts). Retired and not to be reclaimed:
+ *  the name `strength:planRoot` and the seed key `plan-root`, the same pointer
+ *  as an id in a string. */
+export const planProp = seedProperty({
+  seedKey: extensionPropertySeedKey('plan'),
   revision: 1,
-  name: FIELD.planRoot,
-  preset: 'string',
-  defaultValue: '',
+  name: FIELD.plan,
+  preset: 'optional-ref',
+  defaultValue: undefined,
   changeScope: ChangeScope.UserPrefs,
 })
 
@@ -453,9 +459,9 @@ export const perSideProp = seedProperty({
 })
 
 /** main | accessory | carry | bodyweight — kept as free text rather than an
- *  enum: it's a human classification the parser only consults for the two
- *  values that change behaviour, and a plan should be able to invent a word
- *  without the property rejecting the write. */
+ *  enum: it's a human classification, and a plan should be able to invent a
+ *  word without the property rejecting the write. `alt-group` is the one value
+ *  the parser reads (the older way to mark an or-group). */
 export const kindProp = seedProperty({
   seedKey: extensionPropertySeedKey('kind'),
   revision: 1,
@@ -478,6 +484,44 @@ export const catchUpRpeProp = seedProperty({
   seedKey: extensionPropertySeedKey('catch-up-rpe'),
   revision: 1,
   name: FIELD.catchUpRpe,
+  preset: 'optional-number',
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+
+export const totalRepsThresholdProp = seedProperty({
+  seedKey: extensionPropertySeedKey('total-reps-threshold'),
+  revision: 1,
+  name: FIELD.totalRepsThreshold,
+  preset: 'optional-number',
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+
+export const microIncrementProp = seedProperty({
+  seedKey: extensionPropertySeedKey('micro-increment'),
+  revision: 1,
+  name: FIELD.microIncrement,
+  preset: 'optional-number',
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+
+/** A list of strings because that is what the list editor writes; the parser
+ *  reads each entry as a number and ignores anything that is not one. */
+export const ladderProp = seedProperty({
+  seedKey: extensionPropertySeedKey('ladder'),
+  revision: 1,
+  name: FIELD.ladder,
+  preset: 'string-list',
+  defaultValue: [],
+  changeScope: ChangeScope.BlockDefault,
+})
+
+export const startWeightProp = seedProperty({
+  seedKey: extensionPropertySeedKey('start-weight'),
+  revision: 1,
+  name: FIELD.startWeight,
   preset: 'optional-number',
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
@@ -559,6 +603,60 @@ export const rampPerSessionProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 
+// ──── Assessment result ────
+
+const MEASURE_LABEL: Record<AssessmentMeasure, string> = {
+  'reps': 'Reps',
+  'seconds': 'Seconds',
+  'cm': 'cm',
+  'pass-fail': 'Pass / fail',
+}
+
+/** `enum`, so a hand edit picks from the set the row knows how to render;
+ *  empty is "unknown", which renders as plain text. */
+export const measureProp = seedProperty({
+  seedKey: extensionPropertySeedKey('measure'),
+  revision: 1,
+  name: FIELD.measure,
+  preset: 'enum',
+  config: {options: ASSESSMENT_MEASURES.map(value => ({value, label: MEASURE_LABEL[value]}))},
+  defaultValue: '',
+  changeScope: ChangeScope.BlockDefault,
+})
+
+export const leftProp = seedProperty({
+  seedKey: extensionPropertySeedKey('left'),
+  revision: 1,
+  name: FIELD.left,
+  preset: 'optional-number',
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+
+export const rightProp = seedProperty({
+  seedKey: extensionPropertySeedKey('right'),
+  revision: 1,
+  name: FIELD.right,
+  preset: 'optional-number',
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+
+/** `enum`, not `strict-enum`: its empty value is the "not tested yet" a
+ *  freshly stamped result has to start from. */
+export const outcomeProp = seedProperty({
+  seedKey: extensionPropertySeedKey('outcome'),
+  revision: 1,
+  name: FIELD.outcome,
+  preset: 'enum',
+  config: {options: [
+    {value: 'pass', label: 'Pass'},
+    {value: 'fail', label: 'Fail'},
+  ]},
+  defaultValue: '',
+  changeScope: ChangeScope.BlockDefault,
+})
+
 // ──── Types ────
 
 export const strengthLogType = seedType({
@@ -615,7 +713,8 @@ export const exerciseEntryType = seedType({
  *  block, and the property editors then spell out what the parser reads. */
 export const exerciseDefType = seedType({
   seedKey: extensionTypeSeedKey('exercise-def'),
-  revision: 1,
+  // 2: the total-reps rule, the ladder and the start weight joined.
+  revision: 2,
   id: EXERCISE_DEF_TYPE,
   label: 'Exercise (program)',
   description: 'An exercise the program prescribes — a line in the plan outline.',
@@ -628,6 +727,10 @@ export const exerciseDefType = seedType({
     kindProp,
     catchUpIncrementProp,
     catchUpRpeProp,
+    totalRepsThresholdProp,
+    microIncrementProp,
+    ladderProp,
+    startWeightProp,
   ],
 })
 
@@ -700,12 +803,33 @@ export const layoffType = seedType({
 
 export const settingsType = seedType({
   seedKey: extensionTypeSeedKey('settings'),
-  revision: 1,
+  // 2: `plan` (a ref) replaces `planRoot` (a string).
+  revision: 2,
   id: SETTINGS_TYPE,
   label: 'Strength settings',
   description: 'Engine knobs the plan prose does not state.',
   hideFromCompletion: true,
-  properties: [planRootProp, rolloverHourProp, cadenceDaysProp, roundToProp],
+  properties: [planProp, rolloverHourProp, cadenceDaysProp, roundToProp],
+})
+
+export const assessmentType = seedType({
+  seedKey: extensionTypeSeedKey('assessment'),
+  revision: 1,
+  id: ASSESSMENT_TYPE,
+  label: 'Assessment',
+  description: 'One sitting of the quarterly assessment battery; its children are the results.',
+  hideFromCompletion: true,
+  properties: [dateProp],
+})
+
+export const assessmentResultType = seedType({
+  seedKey: extensionTypeSeedKey('assessment-result'),
+  revision: 1,
+  id: ASSESSMENT_RESULT_TYPE,
+  label: 'Assessment result',
+  description: 'One test of the battery: a number per side, or pass / fail.',
+  hideFromCompletion: true,
+  properties: [measureProp, leftProp, rightProp, outcomeProp],
 })
 
 export const altChoiceType = seedType({
@@ -729,6 +853,8 @@ export const STRENGTH_TYPES = [
   altGroupType,
   altChoiceType,
   reentryTierType,
+  assessmentType,
+  assessmentResultType,
 ]
 
 export const STRENGTH_PROPS = [
@@ -754,7 +880,7 @@ export const STRENGTH_PROPS = [
   layoffDaysProp,
   layoffTierProp,
   layoffPctProp,
-  planRootProp,
+  planProp,
   rolloverHourProp,
   cadenceDaysProp,
   roundToProp,
@@ -768,6 +894,10 @@ export const STRENGTH_PROPS = [
   kindProp,
   catchUpIncrementProp,
   catchUpRpeProp,
+  totalRepsThresholdProp,
+  microIncrementProp,
+  ladderProp,
+  startWeightProp,
   altDefaultProp,
   tierIdProp,
   maxGapDaysProp,
@@ -775,4 +905,8 @@ export const STRENGTH_PROPS = [
   setsOverrideSessionsProp,
   sessionsToNormalProp,
   rampPerSessionProp,
+  measureProp,
+  leftProp,
+  rightProp,
+  outcomeProp,
 ]

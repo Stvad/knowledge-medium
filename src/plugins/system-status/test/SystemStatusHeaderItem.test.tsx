@@ -6,8 +6,8 @@ import {
   resetConsistencyAuditStore,
 } from '@/plugins/data-integrity/store'
 import { SystemStatusHeaderItem } from '../SystemStatusHeaderItem.tsx'
+import { MATERIALIZE_QUEUE_COUNT_SQL } from '@/data/internals/syncObserver/observer'
 import {
-  materializeQueueCountSql,
   uploadQueueCountCap,
   uploadQueueExactCountSql,
   uploadQueuePreviewCountSql,
@@ -187,7 +187,7 @@ describe('SystemStatusHeaderItem', () => {
   it('surfaces the materialization backlog as a processing state with a count', async () => {
     // No pending uploads — just a staged backlog the observer hasn't applied yet.
     mocks.queryResponses.set(uploadQueuePreviewCountSql, {data: [{count: 0}]})
-    mocks.queryResponses.set(materializeQueueCountSql, {data: [{count: 12_340}]})
+    mocks.queryResponses.set(MATERIALIZE_QUEUE_COUNT_SQL, {data: [{count: 12_340}]})
 
     render(<SystemStatusHeaderItem/>)
 
@@ -201,7 +201,7 @@ describe('SystemStatusHeaderItem', () => {
   it('shows the materializing state over a pending upload backlog (content is still missing)', () => {
     // Default mock has a capped (1000+) pending-upload count → would be "pending";
     // an unapplied staged backlog is the more important signal.
-    mocks.queryResponses.set(materializeQueueCountSql, {data: [{count: 5}]})
+    mocks.queryResponses.set(MATERIALIZE_QUEUE_COUNT_SQL, {data: [{count: 5}]})
 
     render(<SystemStatusHeaderItem/>)
 
@@ -214,7 +214,7 @@ describe('SystemStatusHeaderItem', () => {
 
     render(<SystemStatusHeaderItem/>)
 
-    expect(mocks.queryCalls.some(call => call.sql === materializeQueueCountSql)).toBe(false)
+    expect(mocks.queryCalls.some(call => call.sql === MATERIALIZE_QUEUE_COUNT_SQL)).toBe(false)
   })
 
   it('shows a calm "offline" state instead of the websocket error when the device is offline', () => {
