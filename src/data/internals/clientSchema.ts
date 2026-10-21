@@ -842,18 +842,35 @@ export const CREATE_BLOCKS_ALIAS_INSERT_TRIGGER_SQL = `
 
 /** Fires only when `properties_json`, `deleted`, or `workspace_id`
  *  changes — content edits, parent moves, and order_key changes don't
- *  touch the alias index. Always wipes the row's prior aliases first
- *  (cheap: PK lookup), then re-inserts unless the row is now soft-
- *  deleted. Restoring a tombstone re-populates via the same path. */
+ *  touch the alias index. Releases only the names leaving the row (all of
+ *  them when it is soft-deleted or changes workspace) and inserts only the
+ *  names it does not hold yet, so a name the row keeps is never re-checked
+ *  as a new claim — wiping and re-inserting the whole bag would make every
+ *  properties write on a sync co-claimant abort (#185). Restoring a
+ *  tombstone holds nothing, so every name in its bag is a new claim. */
 export const CREATE_BLOCKS_ALIAS_UPDATE_TRIGGER_SQL = `
   CREATE TRIGGER IF NOT EXISTS blocks_alias_update
   AFTER UPDATE OF properties_json, deleted, workspace_id ON blocks
   BEGIN
-    DELETE FROM block_aliases WHERE block_id = NEW.id;
+    DELETE FROM block_aliases
+    WHERE block_id = NEW.id
+      AND (
+        NEW.deleted = 1
+        OR workspace_id != NEW.workspace_id
+        OR alias NOT IN (
+          SELECT je.value FROM json_each(NEW.properties_json, '$.alias') AS je
+          WHERE typeof(je.value) = 'text'
+        )
+      );
     INSERT OR IGNORE INTO block_aliases (block_id, workspace_id, alias, alias_lower)
-    SELECT NEW.id, NEW.workspace_id, je.value, LOWER(je.value)
+    SELECT DISTINCT NEW.id, NEW.workspace_id, je.value, LOWER(je.value)
     FROM json_each(NEW.properties_json, '$.alias') AS je
-    WHERE NEW.deleted = 0 AND typeof(je.value) = 'text';
+    WHERE NEW.deleted = 0
+      AND typeof(je.value) = 'text'
+      AND NOT EXISTS (
+        SELECT 1 FROM block_aliases held
+        WHERE held.block_id = NEW.id AND held.alias = je.value
+      );
   END
 `
 
@@ -894,16 +911,16 @@ export const CREATE_BLOCKS_ALIAS_DELETE_TRIGGER_SQL = `
  *
  *  Skipped when `tx_context.source IS NULL` so PowerSync sync-apply
  *  doesn't fail on dupes propagating from other clients (mirrors the
- *  workspace-invariant trigger's policy). V1 leaves cross-client
- *  alias merges as latent; the user-facing merge flow is V2.
- *  Backfill (`BACKFILL_BLOCK_ALIASES_SQL`) also runs outside a
- *  `tx_context.source` setting, so the one-time index re-population
- *  on schema upgrade is tolerant of any latent dupes that predate
- *  this trigger.
+ *  workspace-invariant trigger's policy). Such a co-claim is resolved by
+ *  the user, through the duplicate-name banner's merge. Backfill
+ *  (`BACKFILL_BLOCK_ALIASES_SQL`) also runs outside a `tx_context.source`
+ *  setting, so the one-time index re-population on schema upgrade is
+ *  tolerant of any latent dupes that predate this trigger.
  *
- *  Self-reclaim is handled naturally: `blocks_alias_update` DELETEs
- *  the row's prior aliases before re-inserting, so a row rewriting
- *  its own alias sees no other claimant at INSERT time. */
+ *  Only a NEW claim reaches this check: `blocks_alias_update` never
+ *  re-inserts a name the row already holds, so a local write can keep a
+ *  co-claimed name but can never add one. `contestedAliasClaims`
+ *  (`src/data/aliasClaim.ts`) is this rule for writers that ask first. */
 export const CREATE_BLOCK_ALIASES_WORKSPACE_UNIQUE_TRIGGER_SQL = `
   CREATE TRIGGER IF NOT EXISTS block_aliases_workspace_alias_unique
   BEFORE INSERT ON block_aliases

@@ -8,7 +8,6 @@ import { aliasesProp, hasBlockType } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
 import { keyAtEnd } from '@/data/orderKey'
 import { createOrRestoreTargetBlock, restorePropertiesStrippingAliases } from '@/data/targets'
-import { parseAliasCollisionError } from '@/data/internals/raiseProtocol.js'
 import { dailyPageAliases, formatIsoDate } from '@/utils/dailyPage'
 import { DAILY_NOTE_TYPE, dailyNoteDateProp } from './schema.ts'
 
@@ -409,21 +408,5 @@ const ensureSeatClaimsIso = async (tx: Tx, id: string, iso: string): Promise<voi
     return
   }
   if (existing.includes(iso)) return
-  try {
-    await tx.setProperty(id, aliasesProp, [...existing, iso], {skipMetadata: true})
-  } catch (err) {
-    // Swallow ONLY alias-collision aborts (mirrors claimLiteralDateAliases,
-    // referencesProcessor.ts). setProperty rewrites the whole `alias`
-    // property, so the block_aliases trigger re-inserts every PRE-EXISTING
-    // alias before adding the ISO — and a pre-existing alias that's latently
-    // duplicated on another live block (a cross-client dupe synced in
-    // trigger-free, clientSchema.ts) collides on RE-insert. Letting that
-    // propagate would roll back the whole reference-parse tx (references for
-    // every other changed row) and recur on every re-edit — a silent recompute
-    // outage keyed to someone else's dupe. RAISE backs out only this
-    // statement, so degrade to leaving the ISO unclaimed for this seat. The
-    // ISO append can't be the colliding row: the caller's in-tx aliasLookup
-    // proved it unclaimed and `existing` doesn't contain it.
-    if (parseAliasCollisionError(err) === null) throw err
-  }
+  await tx.setProperty(id, aliasesProp, [...existing, iso], {skipMetadata: true})
 }

@@ -29,6 +29,7 @@ import {
   keysImmediatelyBefore,
 } from './orderKeyPlacement'
 import { isCollapsedProp } from '@/data/properties'
+import { restorePropertiesYieldingTakenAliases } from '@/data/aliasClaim'
 import { visibleChildrenOf } from '@/data/visibleChildren'
 import {
   mergeBlocksInTx,
@@ -255,7 +256,8 @@ export const restoreBlock = defineMutator<{id: string}, void>({
   scope: ChangeScope.BlockDefault,
   describe: ({id}) => `restore ${id}`,
   apply: async (tx, {id}) => {
-    await tx.restore(id)
+    const properties = await restorePropertiesYieldingTakenAliases(tx, id)
+    await tx.restore(id, properties === undefined ? undefined : {properties})
   },
 })
 
