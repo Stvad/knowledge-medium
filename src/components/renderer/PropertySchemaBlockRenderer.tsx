@@ -121,7 +121,9 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
   const presets = readValuePresets(runtime)
   // With no codec for what its consumers hold, every re-type and config change
   // is refused, so the controls that make one are not offered. Renames stay
-  // with the transaction, which allows one that strands nothing.
+  // with the transaction, which allows one that strands nothing. Not gated on
+  // consumers as the transaction is: an unused definition loses nothing to
+  // delete-and-recreate, and the gate would be an async count the tx re-checks.
   const typeUnavailable = useCurrentTypeUnavailable(block)
 
   // A materialized seed row is a kernel/plugin property *defined in code*.
