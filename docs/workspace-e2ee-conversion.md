@@ -280,8 +280,56 @@ The first production run is #1288.
    - The re-seal writes new row versions (about 1.33×), history rows holding both old and new values (about 2.3×), and WAL for all of it.
    - So confirm free disk of about **6×** that figure, plus room for `VACUUM FULL` to copy each table it rewrites. Auto-scaling disk grows only on a cooldown.
 7. **Ordering against the properties-as-blocks switch** is an open decision (#1288). Converting first keeps the ids of definitions synthesized at the switch keyed under `K_id`. Switching first leaves them name-derived ([§7](#7-what-stays-visible-afterwards)). The two must never overlap.
-8. **Rehearse** the conversion on a scratch workspace first, ideally a full copy of the real one. Time the purge there against its 5-minute `statement_timeout`: it deletes the whole history, plus one re-seal row per block, in one statement. Confirm the hosted PostgREST applies a function's own `statement_timeout`, as v14.13 does locally.
+8. **Rehearse** the conversion on a scratch workspace first. The rehearsal of 2026-10-21 is below the checklist. Run it again after a change to the flow, to the conversion's server functions, or to the hosted Postgres or PostgREST version.
 9. Run from desktop Chromium, on the device that holds the most attachment bytes locally.
+
+**Run-day checklist.** The steps above in the order they're done:
+1. Every device is on a build with #1293. Check each one's version, PWAs and phones included.
+2. Disk headroom is confirmed (step 6), with room for `VACUUM FULL` on top.
+3. The key's two places are ready (step 4), and so is an encrypted volume with room for the bundle. Preflight shows the bundle's size.
+4. The workspace is renamed if its name is sensitive (step 5).
+5. Every device's queue is drained. Then every other tab and device is closed: PWA windows, other browser profiles, phones and tablets, and any agent-bridge tab.
+6. The operator runs `ANALYZE public.blocks_history;`. It takes seconds and blocks no reads or writes. Preflight and the bundle page through the workspace's history, and a stale estimate can make every page cost the whole rest of it (below).
+7. On the desktop Chromium profile from step 9: workspace settings → **Encrypt this workspace…**. Keep the tab in front and the machine awake until the flow says it's done.
+   - If a history read times out, run step 6's `ANALYZE` again and retry. Nothing is lost: before the flip, preflight just stops; after it, a retry takes the bundle again.
+   - If the purge times out, raise `purge_workspace_history`'s `statement_timeout` before retrying, because each attempt repeats the whole delete. The rehearsal puts that past 3 million history rows.
+8. Then the **After** steps, in order.
+
+**Rehearsal of 2026-10-21.**
+
+**Setup.**
+- **Where:** the hosted project, on the production build, in desktop Chrome.
+- **Workspace:** a synthetic scratch workspace of 50,281 blocks, written through the app. 7% of them are soft-deleted. There were also 66,407 history rows, and 12 attachments totalling 12 MB, one of them on a soft-deleted media block.
+- **Result:** every step passed on the first try.
+  - Afterwards, every block row's three content columns were envelopes, and the history was empty.
+  - Every Storage object was under its keyed name, 36 bytes larger than its plaintext.
+  - A second browser unlocked the workspace with the key and showed its content and images.
+
+| Phase | Measured | Per 100k |
+|---|---|---|
+| Preflight: blocks | 15 s | 30 s of blocks |
+| Preflight: history (slow plan, below) | 2 min 3 s | 3.1 min of history rows |
+| Flip | 11 ms on the server, no lock retries | — |
+| Bundle: this device's database | 11 s | grows with the device's database, not the workspace |
+| Bundle: history (slow plan) | 2 min 0 s | 3 min of history rows |
+| Bundle: blocks, attachments, check | 12 s, 15 s, 7 s | 24 s of blocks |
+| Re-seal | 2 min 53 s, 290 rows/s | 5.7 min of blocks |
+| Verify | 3 min 49 s, 220 rows/s | 7.6 min of blocks |
+| Purge, 116,696 history rows | 11.0 s on the server | 9.4 s of history rows |
+| Pin upgrade on this device | 58 s | 1.9 min of blocks |
+| Attachments, 12 objects | 46 s | grows with attachment bytes |
+
+What it showed:
+- **The hosted PostgREST (v14.18) applies a function's own `statement_timeout`.**
+  - The purge ran 11 s, past `authenticated`'s 8 s limit, and succeeded.
+  - Before the run, a refused anonymous call of `conversion_workspace_counts` left a transaction prelude in `pg_stat_statements` with the function's setting hoisted after `request.cookies`.
+- **History reads depend on the planner's statistics.**
+  - The scratch workspace's history was written after the table's last `ANALYZE`. Its pages never used the `(workspace_id, event_id)` index; the index's scan counter showed none from them.
+  - Each page cost the rows still ahead of it, so the read sped up from 327 rows/s at the start to 1,645 rows/s at the end.
+  - With current statistics, the planner picks that index, and a page of 500 took 26–78 ms on the server.
+  - That is why the checklist's step 6 runs `ANALYZE`. On a history of hundreds of thousands of rows, the slow plan would put every page past the 8 s limit, and halving the page size does not shrink that cost.
+- **Re-seal and verify set the length of the run:** about 13 minutes per 100k blocks between them.
+- **A device whose local database is gone re-downloads everything before it can ask for the key.** It shows only "Loading workspace…" while it does, about 2.3 minutes for 50k sealed rows.
 
 **After:**
 
