@@ -1,1 +1,1 @@
-import{rh as e}from"../../../../../chunks/app-BjZQ5SAh.js";export{e as Wikilink};
+import{rh as e}from"../../../../../chunks/app-D68uCpQc.js";export{e as Wikilink};
