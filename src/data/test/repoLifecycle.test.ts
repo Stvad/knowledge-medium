@@ -56,6 +56,7 @@ import {kernelDataExtension} from '@/data/kernelDataExtension'
 import {defineFacet, resolveFacetRuntimeSync} from '@/facets/facet'
 import { Repo } from '../repo'
 import { ClientContext, type ClientContextReader } from '../clientContext'
+import type {RematerializeReport} from '../internals/syncObserver/observer'
 
 interface Harness {
   h: TestDb
@@ -630,22 +631,31 @@ describe('repo.metrics() / resetMetrics()', () => {
 })
 
 describe('repo.scheduleReconcileRescan — one-time shadow recovery', () => {
+  const completed: RematerializeReport = {
+    scope: 'all', scanned: 1, applied: 1, deferred: 0, skippedStale: 0,
+    quarantined: 0, resolved: 1, reflagged: 0,
+  }
   // Let the deferred run() fire (setTimeout(0) under node, no requestIdleCallback)
   // and then await the drainWorkspace it enqueues.
   const settle = async (repo: Repo) => {
-    await new Promise(resolve => setTimeout(resolve, 0))
+    await vi.runOnlyPendingTimersAsync()
     await repo.awaitReconcileRescans()
   }
+
+  beforeEach(() => vi.useFakeTimers({toFake: ['setTimeout', 'clearTimeout']}))
+  afterEach(() => vi.useRealTimers())
+
+  const stubDrain = () => vi.spyOn(env.repo.startSyncObserver(), 'drainWorkspace').mockResolvedValue(completed)
 
   it('re-scans a workspace once, marks it done, and no-ops on the next open', async () => {
     // The rescan re-reads blocks_synced directly via drainSyncWorkspace; the
     // server-monotonic gate heals shadows without a separate mode.
-    const spy = vi.spyOn(env.repo, 'drainSyncWorkspace').mockResolvedValue(null)
+    const spy = stubDrain()
 
     env.repo.scheduleReconcileRescan('ws-1')
     await settle(env.repo)
     expect(spy).toHaveBeenCalledTimes(1)
-    expect(spy).toHaveBeenCalledWith('ws-1')
+    expect(spy).toHaveBeenCalledWith('ws-1', 'all', undefined)
 
     // Marker now present → a later open is a no-op.
     env.repo.scheduleReconcileRescan('ws-1')
@@ -654,7 +664,7 @@ describe('repo.scheduleReconcileRescan — one-time shadow recovery', () => {
   })
 
   it('re-scans each workspace independently (per-workspace marker)', async () => {
-    const spy = vi.spyOn(env.repo, 'drainSyncWorkspace').mockResolvedValue(null)
+    const spy = stubDrain()
 
     env.repo.scheduleReconcileRescan('ws-1')
     await settle(env.repo)
@@ -665,9 +675,8 @@ describe('repo.scheduleReconcileRescan — one-time shadow recovery', () => {
   })
 
   it('leaves the marker unset on failure so the next open retries', async () => {
-    const spy = vi.spyOn(env.repo, 'drainSyncWorkspace')
+    const spy = stubDrain()
       .mockRejectedValueOnce(new Error('drain failed'))
-      .mockResolvedValue(null)
     vi.spyOn(console, 'error').mockImplementation(() => {})
 
     env.repo.scheduleReconcileRescan('ws-1')
@@ -677,5 +686,38 @@ describe('repo.scheduleReconcileRescan — one-time shadow recovery', () => {
     env.repo.scheduleReconcileRescan('ws-1')
     await settle(env.repo)
     expect(spy).toHaveBeenCalledTimes(2) // retried
+  })
+
+  it('reuses a successful unlock scan, while an explicit drain still scans again', async () => {
+    const spy = stubDrain()
+    const progress = vi.fn()
+    await env.repo.drainSyncWorkspace('ws-1', progress)
+    expect(spy).toHaveBeenCalledWith('ws-1', 'all', progress)
+    env.repo.scheduleReconcileRescan('ws-1')
+    await settle(env.repo)
+    expect(spy).toHaveBeenCalledTimes(1)
+    await env.repo.drainSyncWorkspace('ws-1')
+    expect(spy).toHaveBeenCalledTimes(2)
+  })
+
+  it.each(['deferred', 'quarantined'] as const)('does not retire recovery after an unlock scan with %s rows', async reason => {
+    const spy = stubDrain().mockResolvedValueOnce({...completed, applied: 0, [reason]: 1})
+    await env.repo.drainSyncWorkspace('ws-1')
+    env.repo.scheduleReconcileRescan('ws-1')
+    await settle(env.repo)
+    expect(spy).toHaveBeenCalledTimes(2)
+    env.repo.scheduleReconcileRescan('ws-1')
+    await settle(env.repo)
+    expect(spy).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not retire recovery when the observer is stopped', async () => {
+    await expect(env.repo.drainSyncWorkspace('ws-1')).resolves.toBeNull()
+    env.repo.scheduleReconcileRescan('ws-1')
+    await settle(env.repo)
+    const spy = stubDrain()
+    env.repo.scheduleReconcileRescan('ws-1')
+    await settle(env.repo)
+    expect(spy).toHaveBeenCalledTimes(1)
   })
 })

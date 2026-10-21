@@ -5,6 +5,7 @@ Run from the repository root after `pnpm install --frozen-lockfile`:
 ```sh
 pnpm exec vite-node --config vitest.config.ts scripts/bench/bench-materialize.ts --records 3000 --reps 3
 node scripts/bench/bench-materialize-browser.mjs 1000 3 tmp/materialize-webkit.json
+node node_modules/vite-node/dist/cli.mjs --config vitest.config.ts scripts/bench/bench-materialize.ts --records 3000 --reps 3 --workflow
 ```
 
 The browser runner requires Playwright WebKit (`pnpm exec playwright install webkit`).
@@ -40,6 +41,17 @@ This isolates materialization from network download, React rendering, observer
 invalidation, and deferred alias-repair work. Desktop WebKit measurements explain
 the code's costs but do not predict a particular iPad's throughput. Run comparisons
 sequentially on the same machine and summarize medians, retaining raw samples.
+
+The optional Node-only `--workflow` case adds a separate Repo-level path using the
+same synthetic fixture and test database: `drainSyncWorkspace` followed by the
+scheduled one-time reconciliation rescan. It uses `createSyncResolver` with an
+in-memory key store and a generated workspace key, measures both phases and their
+SQL/key/derivation calls, and records Repo invalidation counters. The scheduled
+phase is fenced on its reconciliation-marker read before `awaitReconcileRescans`
+drains the fired job. It excludes app startup, React, device storage, and network
+sync; no query handles are registered, so the invalidation counter is expected to
+remain zero in this harness. WebKit remains focused on the lower-level materializer
+path.
 
 ## Measured comparison
 

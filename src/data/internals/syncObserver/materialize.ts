@@ -49,10 +49,7 @@ import {
   localHoldsStagedRow,
   syncedColumnsEqual,
 } from './reconcile.js'
-import {
-  ARRIVAL_PROCESSORS,
-  runArrivalProcessors,
-} from './arrivalProcessors.js'
+import {deriveReferenceTargetsAtArrival} from './arrivalProcessors.js'
 import {
   decodeFromWire,
   requireCek,
@@ -549,14 +546,8 @@ export const materializeStagingRows = async (
       await tx.execute(upsertBlocksSql(rows.length), rows.flatMap(blockRowParams))
     }
 
-    // ── Arrival-processor pass (`arrivalProcessors.ts`): runs AFTER every
-    // upsert in the window so a definition/alias target arriving alongside
-    // its referencing rows resolves (the alias index triggers fired on the
-    // upserts above), and INSIDE this write tx — strictly before
-    // `applyOutcome`'s invalidation fan-out, so readers never see a content
-    // change whose derived column lags. `deriveReferenceTargetArrivalProcessor`
-    // is currently the seam's only registered member.
-    await runArrivalProcessors(tx, snapshots, deps, ARRIVAL_PROCESSORS)
+    // Resolve against this window's complete alias index before invalidation.
+    await deriveReferenceTargetsAtArrival(tx, snapshots, deps)
 
     const removedBeforeById = await readBlocksByIds(tx, change.removed, readChunkSize)
     // A 'delete' whose staging row still exists is an INSERT OR REPLACE

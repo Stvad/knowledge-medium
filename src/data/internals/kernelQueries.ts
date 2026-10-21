@@ -454,15 +454,26 @@ export const SELECT_ALIASES_IN_WORKSPACE_SQL = `
  *  about where `[[Name]]` points. Lookups go through
  *  `idx_block_aliases_ws_alias`; the blocks JOIN reads the row by
  *  primary key. */
-export const SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL = `
-  SELECT ${buildQualifiedBlockColumnsSql('blocks')}
+const liveAliasLookupSql = (aliasExpression: string) => `
   FROM block_aliases ba
   JOIN blocks ON blocks.id = ba.block_id
   WHERE ba.workspace_id = ?
-    AND ba.alias = ?
+    AND ba.alias = ${aliasExpression}
     AND blocks.deleted = 0
   ORDER BY blocks.created_at, blocks.id
   LIMIT 1
+`
+
+export const SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL = `
+  SELECT ${buildQualifiedBlockColumnsSql('blocks')}
+  ${liveAliasLookupSql('?')}
+`
+
+/** Each requested alias uses the same winner policy as a single lookup. */
+export const selectAliasTargetIdsSql = (count: number): string => `
+  WITH requested(alias) AS (VALUES ${Array.from({length: count}, () => '(?)').join(', ')})
+  SELECT requested.alias, (SELECT blocks.id ${liveAliasLookupSql('requested.alias')}) AS id
+  FROM requested
 `
 
 /** ALL live claimants of an exact alias in a workspace — no `LIMIT 1`.
