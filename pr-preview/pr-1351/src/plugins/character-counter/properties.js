@@ -1,1 +1,0 @@
-import{QU as e,XU as t,ZU as n}from"../../../chunks/app-CFQV-KMb.js";export{t as charLimitProp,n as charProfileProp,e as charScopeProp};

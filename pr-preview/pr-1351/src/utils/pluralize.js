@@ -1,1 +1,0 @@
-import{NQ as e,PQ as t}from"../../chunks/app-CFQV-KMb.js";export{e as agree,t as pluralize};

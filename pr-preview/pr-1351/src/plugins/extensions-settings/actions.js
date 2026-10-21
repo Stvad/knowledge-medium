@@ -1,1 +1,0 @@
-import{$O as e,QO as t}from"../../../chunks/app-CFQV-KMb.js";export{t as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,e as openExtensionsSettingsAction};

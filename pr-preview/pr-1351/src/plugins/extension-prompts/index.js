@@ -1,1 +1,0 @@
-import{JO as e,YO as t}from"../../../chunks/app-CFQV-KMb.js";export{e as ExtensionPromptSurface,t as extensionPromptsExtension};

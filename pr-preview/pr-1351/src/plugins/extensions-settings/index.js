@@ -1,1 +1,0 @@
-import{nk as e,qn as t,tk as n}from"../../../chunks/app-CFQV-KMb.js";export{n as extensionsOverridesProp,e as extensionsPrefsType,t as extensionsSettingsPlugin};

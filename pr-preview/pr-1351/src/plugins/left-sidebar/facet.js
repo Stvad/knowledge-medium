@@ -1,1 +1,0 @@
-import{_x as e,gx as t}from"../../../chunks/app-CFQV-KMb.js";export{t as isLeftSidebarSectionContribution,e as leftSidebarSectionsFacet};
