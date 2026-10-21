@@ -1,1 +1,1 @@
-import{HP as e,VP as t}from"../../chunks/app-BtfVhhJW.js";export{t as markdownExtensionsFacet,e as resolveMarkdownRenderConfig};
+import{HP as e,VP as t}from"../../chunks/app-LKCqb8PF.js";export{t as markdownExtensionsFacet,e as resolveMarkdownRenderConfig};
