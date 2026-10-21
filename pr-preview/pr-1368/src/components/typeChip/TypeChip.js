@@ -1,1 +1,1 @@
-import{KD as e}from"../../../chunks/app-D68uCpQc.js";export{e as TypeChip};
+import{QD as e}from"../../../chunks/app-BYq4CgbF.js";export{e as TypeChip};

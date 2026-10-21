@@ -1,1 +1,1 @@
-import{ZA as e}from"../../chunks/app-D68uCpQc.js";export{e as openExtensionsSettings};
+import{QA as e,ZA as t}from"../../chunks/app-BYq4CgbF.js";export{t as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,e as openExtensionsSettings};
