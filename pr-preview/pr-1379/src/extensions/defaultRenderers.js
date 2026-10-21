@@ -1,1 +1,1 @@
-import{GA as e,KA as t,WA as n}from"../../chunks/app-CTOU3s52.js";export{n as defaultRegistry,e as defaultRendererContributions,t as defaultRenderersExtension};
+import{GA as e,KA as t,WA as n}from"../../chunks/app-BnN0vjVh.js";export{n as defaultRegistry,e as defaultRendererContributions,t as defaultRenderersExtension};
