@@ -16,6 +16,7 @@ import {
   type Tx,
   type TypeRegistrySnapshot,
 } from '@/data/api'
+import { aliasClaimConflicts } from '@/data/aliasClaim'
 import { derivedBlockId } from '@/data/derivedIds'
 import { aliasSeatNamespacesInTx, type AliasSeatNamespaces } from '@/data/aliasSeatNamespace'
 import type { Repo } from '@/data/repo'
@@ -75,22 +76,18 @@ export const restorePropertiesStrippingAliases = async (
   return restoredProperties
 }
 
-/** Return aliases with no other live claimant, including sync co-claims that
- * a single oldest-row lookup would hide. Call inside the writing transaction:
- * rewriting an alias bag reinserts every claim, and one competing claim would
- * abort the caller's whole transaction. Yielding it keeps the page reachable. */
+/** Return the aliases `id` can claim without aborting: those it already holds,
+ * co-claimed or not, and those no other live block holds. Call inside the
+ * writing transaction, where the answer matches the trigger's. Yielding the
+ * rest keeps the page reachable. */
 export const partitionClaimableAliases = async (
   tx: Tx,
   id: string,
   aliases: readonly string[],
   workspaceId: string,
 ): Promise<string[]> => {
-  const claimable: string[] = []
-  for (const alias of aliases) {
-    const owners = await tx.aliasClaimants(alias, workspaceId)
-    if (owners.every(owner => owner.id === id)) claimable.push(alias)
-  }
-  return claimable
+  const taken = new Set((await aliasClaimConflicts(tx, id, workspaceId, aliases)).map(conflict => conflict.alias))
+  return aliases.filter(alias => !taken.has(alias))
 }
 
 /** Shared primitive — see file header. Returns `{id, inserted}`;

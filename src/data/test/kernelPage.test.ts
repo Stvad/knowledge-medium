@@ -153,7 +153,7 @@ describe('getOrCreateKernelPage', () => {
       expect(page.peekProperty(aliasesProp)).toEqual(['Foo', 'My Foo'])
     })
 
-    it('drops a sync-co-owned canonical alias while repairing marker and preserving its custom alias', async () => {
+    it('keeps a sync-co-owned canonical alias while repairing its marker and preserving its custom alias', async () => {
       env.repo.startSyncObserver()
       const id = kernelPageBlockId(WS, FOO_PAGE_NS)
       const syncedRow = (
@@ -206,14 +206,16 @@ describe('getOrCreateKernelPage', () => {
         namespace: FOO_PAGE_NS, alias: 'Foo', markerType: FOO_PAGE_TYPE,
       })
 
-      expect(page.peekProperty(aliasesProp)).toEqual(['My Foo'])
+      // The page already holds Foo, so keeping it is not a new claim and the
+      // repair need not release its own name to commit.
+      expect(page.peekProperty(aliasesProp)).toEqual(['Foo', 'My Foo'])
       expect(page.peekProperty(typesProp)).toEqual([PAGE_TYPE, FOO_PAGE_TYPE])
       expect(env.repo.block('remote-foo-claimant').peekProperty(aliasesProp)).toEqual(['Foo'])
       const remainingFooClaimants = await sharedDb.db.get<{count: number}>(
         'SELECT COUNT(*) AS count FROM block_aliases WHERE workspace_id = ? AND alias = ?',
         [WS, 'Foo'],
       )
-      expect(remainingFooClaimants.count).toBe(1)
+      expect(remainingFooClaimants.count).toBe(2)
     })
   })
 
