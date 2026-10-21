@@ -16,7 +16,7 @@ import {
   type Tx,
   type TypeRegistrySnapshot,
 } from '@/data/api'
-import { aliasClaimConflicts } from '@/data/aliasClaim'
+import { aliasClaimConflicts, restorePropertiesYieldingTakenAliases } from '@/data/aliasClaim'
 import { derivedBlockId } from '@/data/derivedIds'
 import { aliasSeatNamespacesInTx, type AliasSeatNamespaces } from '@/data/aliasSeatNamespace'
 import type { Repo } from '@/data/repo'
@@ -49,7 +49,8 @@ export interface CreateOrRestoreArgs {
   /** Strip the tombstone's `aliases` in the same restore UPDATE. Set it
    *  iff your `onInsertedOrRestored` re-writes the alias list (alias/daily
    *  seats); leave it unset so a user-set alias survives (shortcuts,
-   *  media). See {@link restorePropertiesStrippingAliases}. */
+   *  media) — all but a name another live block took meanwhile, which is
+   *  yielded. See {@link restorePropertiesStrippingAliases}. */
   stripAliasesOnRestore?: boolean
   /** Optional callback invoked after the row is inserted OR restored
    *  (NOT on the live-row-hit path). Used by per-domain wrappers to
@@ -116,7 +117,8 @@ export const createOrRestoreTargetBlock = async (
         const restoredProperties = await restorePropertiesStrippingAliases(tx, args.id)
         await tx.restore(args.id, {content: args.freshContent, properties: restoredProperties})
       } else {
-        await tx.restore(args.id, {content: args.freshContent})
+        const properties = await restorePropertiesYieldingTakenAliases(tx, args.id)
+        await tx.restore(args.id, {content: args.freshContent, ...(properties === undefined ? {} : {properties})})
       }
       if (args.onInsertedOrRestored) {
         await args.onInsertedOrRestored(tx, args.id)
