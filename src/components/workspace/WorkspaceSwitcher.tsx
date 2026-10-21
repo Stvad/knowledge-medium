@@ -16,8 +16,21 @@ import { forgetRememberedWorkspace } from '@/utils/lastWorkspace'
 import { CreateWorkspaceDialog } from '@/components/workspace/CreateWorkspaceDialog'
 import { WorkspaceSettingsDialog } from '@/components/workspace/WorkspaceSettingsDialog'
 import { useIsLocalOnly } from '@/components/Login'
+import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import type { Workspace } from '@/types'
+
+/** Leave the workspace that was just deleted. It must NOT come back as the
+ *  "remembered" default on the next render — clear it before emptying the hash,
+ *  so App.tsx's bootstrap falls through to ensure_personal_workspace and lands
+ *  on the user's next-oldest workspace (or creates a fresh one). */
+const useLeaveDeletedWorkspace = (): (() => void) => {
+  const [, setHash] = useHash()
+  return useCallback(() => {
+    forgetRememberedWorkspace()
+    setHash('')
+  }, [setHash])
+}
 
 export function WorkspaceSwitcher({
   triggerClassName,
@@ -63,14 +76,7 @@ export function WorkspaceSwitcher({
     setHash(buildAppHash(workspace.id))
   }, [activeWorkspaceId, repo, setHash])
 
-  const handleDeleted = useCallback(() => {
-    // The deleted workspace must NOT come back as the "remembered" default on
-    // the next render — clear it before emptying the hash, so App.tsx's
-    // bootstrap falls through to ensure_personal_workspace and lands on the
-    // user's next-oldest workspace (or creates a fresh one).
-    forgetRememberedWorkspace()
-    setHash('')
-  }, [setHash])
+  const handleDeleted = useLeaveDeletedWorkspace()
 
   return (
     <>
@@ -158,5 +164,37 @@ export function WorkspaceSwitcher({
         />
       )}
     </>
+  )
+}
+
+/** What a screen standing in for the open workspace (the key gate) offers
+ *  without opening it: the workspace menu, to leave for another, and its
+ *  settings — rename, members and delete are server calls that need no key. */
+export function WorkspaceGateActions() {
+  const activeWorkspaceId = useActiveWorkspaceId()
+  const {workspaces} = useWorkspaces()
+  const localOnly = useIsLocalOnly()
+  const leaveDeletedWorkspace = useLeaveDeletedWorkspace()
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const workspace = workspaces.find((w) => w.id === activeWorkspaceId)
+
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2">
+      <WorkspaceSwitcher/>
+      {workspace && !localOnly && (
+        <>
+          <Button type="button" variant="ghost" size="sm" className="gap-1.5" onClick={() => setSettingsOpen(true)}>
+            <Settings className="h-3.5 w-3.5"/>
+            Workspace settings
+          </Button>
+          <WorkspaceSettingsDialog
+            workspace={workspace}
+            open={settingsOpen}
+            onOpenChange={setSettingsOpen}
+            onDeleted={leaveDeletedWorkspace}
+          />
+        </>
+      )}
+    </div>
   )
 }

@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 import { Explanation, GateCard, PASTED_KEY_PROBLEM, WorkspaceKeyField } from '@/components/workspace/keyUi'
 import { openConversionFlow } from '@/components/workspace/conversion/conversionFlowStore'
+import { UnlockProgress, type DrainProgress } from '@/components/workspace/UnlockProgress'
 import { useOnWorkspaceUnlocked } from '@/components/workspace/workspaceUnlocked'
+import type { RematerializeProgressListener } from '@/data/internals/syncObserver/observer'
 import type { Repo } from '@/data/repo'
 import { fetchWorkspaceConversionState, hasCopiedCiphertext } from '@/data/workspaceConversion'
 import type { WorkspaceConversionRead } from '@/sync/keys/conversionState'
@@ -25,14 +27,14 @@ export type GateReason = EntryLockReason
 /** What the gate needs from outside the key layer. */
 export interface WorkspaceGateDeps {
   /** Re-materialize the workspace's staged rows (`repo.drainSyncWorkspace`). */
-  readonly drainWorkspace: WorkspaceDrain
+  readonly drainWorkspace: (onProgress?: RematerializeProgressListener) => ReturnType<WorkspaceDrain>
   /** The server's mode, canary, owner and conversion phase, read now — the phase isn't synced. */
   readonly fetchConversionState: () => Promise<WorkspaceConversionRead>
   readonly hasCopiedCiphertext: () => Promise<boolean>
 }
 
 export const workspaceGateDeps = (repo: Repo, workspaceId: string): WorkspaceGateDeps => ({
-  drainWorkspace: () => repo.drainSyncWorkspace(workspaceId),
+  drainWorkspace: onProgress => repo.drainSyncWorkspace(workspaceId, onProgress),
   fetchConversionState: () => fetchWorkspaceConversionState(workspaceId),
   hasCopiedCiphertext: () => hasCopiedCiphertext(repo.db, workspaceId),
 })
@@ -54,6 +56,8 @@ interface Props {
   /** Called once the gate is resolved and the workspace drained, so the host
    *  re-resolves the layout. The gate awaits it so a failure resets the button. */
   onResolved: () => void | Promise<void>
+  /** The host's way out that needs no key — its workspace menu and settings. */
+  footer?: ReactNode
 }
 
 /**
@@ -72,6 +76,21 @@ export function WorkspaceKeyGate(props: Props) {
   return <KeyPromptGate {...props} reason={props.reason}/>
 }
 
+/** `deps` whose drain reports where it is. `progress` is null until the gate
+ *  drains, then holds the last report: a resolved gate unmounts, and a failed
+ *  one shows its error in place of the progress. */
+const useTrackedDrain = (deps: WorkspaceGateDeps): {deps: WorkspaceGateDeps; progress: DrainProgress | null} => {
+  const [progress, setProgress] = useState<DrainProgress | null>(null)
+  const tracked = useMemo<WorkspaceGateDeps>(() => ({
+    ...deps,
+    drainWorkspace: () => {
+      setProgress({kind: 'waiting'})
+      return deps.drainWorkspace(reported => setProgress({kind: 'running', ...reported}))
+    },
+  }), [deps])
+  return {deps: tracked, progress}
+}
+
 /** The workspace as a title names it: quoted, or "This workspace" opening a
  *  sentence and "this workspace" inside one. */
 const displayName = (workspaceName: string | undefined, position: 'start' | 'inline' = 'start'): string =>
@@ -79,12 +98,15 @@ const displayName = (workspaceName: string | undefined, position: 'start' | 'inl
 
 function KeyInput({
   busy,
+  unlocking,
   error,
   pasted,
   onChange,
   onSubmit,
 }: {
   busy: boolean
+  /** The busy work is this unlock, not another of the gate's actions. */
+  unlocking: boolean
   error: string | null
   pasted: string
   onChange: (value: string) => void
@@ -94,7 +116,7 @@ function KeyInput({
     <div className="space-y-2">
       <WorkspaceKeyField id="wk-paste" value={pasted} onChange={onChange} onSubmit={onSubmit} disabled={busy} error={error}/>
       <Button type="button" className="w-full" disabled={busy || !pasted.trim()} onClick={onSubmit}>
-        {busy ? 'Unlocking…' : 'Unlock'}
+        {unlocking ? 'Unlocking…' : 'Unlock'}
       </Button>
     </div>
   )
@@ -109,17 +131,19 @@ function KeyPromptGate({
   workspaceName,
   reason,
   canary,
-  deps,
+  deps: gateDeps,
   onResolved,
+  footer,
 }: Props & {reason: 'key-required' | 'quarantine'}) {
   const [pasted, setPasted] = useState('')
   const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
+  const [busy, setBusy] = useState<'unlocking' | 'confirming' | null>(null)
+  const {deps, progress} = useTrackedDrain(gateDeps)
 
   const submitKey = async () => {
     const trimmed = pasted.trim()
     if (!trimmed || busy) return
-    setBusy(true)
+    setBusy('unlocking')
     setError(null)
     try {
       const result = await unlockWorkspaceWithKey({
@@ -137,18 +161,18 @@ function KeyPromptGate({
         await onResolved()
         return
       }
-      setBusy(false)
+      setBusy(null)
       setError(keyFailureMessage(result.reason))
     } catch (err) {
       // Defensive: never leave the button stuck on "Unlocking…" with no message.
-      setBusy(false)
+      setBusy(null)
       setError(errorMessage(err, 'Could not unlock this workspace.'))
     }
   }
 
   const confirmPlaintext = async () => {
     if (busy) return
-    setBusy(true)
+    setBusy('confirming')
     setError(null)
     try {
       setModePin(userId, workspaceId, 'plaintext')
@@ -170,7 +194,7 @@ function KeyPromptGate({
     } catch (err) {
       // Drain/re-resolve failed — recover the button and say why, rather than
       // leaving it stuck mid-"Confirming…" with no recourse.
-      setBusy(false)
+      setBusy(null)
       setError(errorMessage(err, 'Could not load this workspace.'))
     }
   }
@@ -178,7 +202,7 @@ function KeyPromptGate({
   const name = displayName(workspaceName)
 
   return (
-    <GateCard title={reason === 'key-required' ? `${name} needs its key` : `${name} isn't verified`}>
+    <GateCard title={reason === 'key-required' ? `${name} needs its key` : `${name} isn't verified`} footer={footer}>
       <Explanation>
         {reason === 'key-required' ? (
           <>
@@ -194,7 +218,14 @@ function KeyPromptGate({
         )}
       </Explanation>
 
-      <KeyInput busy={busy} error={error} pasted={pasted} onChange={setPasted} onSubmit={() => void submitKey()}/>
+      <KeyInput
+        busy={busy !== null}
+        unlocking={busy === 'unlocking'}
+        error={error}
+        pasted={pasted}
+        onChange={setPasted}
+        onSubmit={() => void submitKey()}
+      />
 
       {reason === 'quarantine' && (
         <div className="border-t pt-4">
@@ -202,11 +233,12 @@ function KeyPromptGate({
             No key because it's not encrypted? Confirm to load it as a plain workspace. This
             choice is permanent for this workspace on every device.
           </p>
-          <Button type="button" variant="secondary" className="w-full" disabled={busy} onClick={() => void confirmPlaintext()}>
-            {busy ? 'Confirming…' : 'This workspace is not encrypted'}
+          <Button type="button" variant="secondary" className="w-full" disabled={busy !== null} onClick={() => void confirmPlaintext()}>
+            {busy === 'confirming' ? 'Confirming…' : 'This workspace is not encrypted'}
           </Button>
         </div>
       )}
+      {progress && !error && <UnlockProgress progress={progress}/>}
     </GateCard>
   )
 }
@@ -233,13 +265,14 @@ const keyFailureMessage = (
  * "Check again": no device unlocks while the server is sealing — the converting
  * device included — and a device that copied ciphertext is sent to the reset.
  */
-function ServerE2eeGate({userId, workspaceId, workspaceName, deps, onResolved}: Props) {
+function ServerE2eeGate({userId, workspaceId, workspaceName, deps, onResolved, footer}: Props) {
   const [entry, setEntry] = useState<ServerE2eeEntry | null>(null)
   const [checks, setChecks] = useState(0)
   const [hasStoredKey, setHasStoredKey] = useState(false)
   const [pasted, setPasted] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const tracked = useTrackedDrain(deps)
 
   useEffect(() => {
     let cancelled = false
@@ -262,7 +295,7 @@ function ServerE2eeGate({userId, workspaceId, workspaceName, deps, onResolved}: 
       const result = await upgradeWorkspacePin({
         userId,
         workspaceId,
-        ...deps,
+        ...tracked.deps,
         key,
         keyStore: getWorkspaceKeyStore(),
       })
@@ -297,14 +330,14 @@ function ServerE2eeGate({userId, workspaceId, workspaceName, deps, onResolved}: 
 
   if (entry === null) {
     return (
-      <GateCard title={`Opening ${inlineName}…`}>
+      <GateCard title={`Opening ${inlineName}…`} footer={footer}>
         <Explanation>Checking this workspace's encryption status.</Explanation>
       </GateCard>
     )
   }
   if (entry.kind === 'unavailable') {
     return (
-      <GateCard title={`Can't check ${inlineName} right now`}>
+      <GateCard title={`Can't check ${inlineName} right now`} footer={footer}>
         <Explanation>
           This workspace is end-to-end encrypted on the server, and this device has to confirm
           its encryption status before unlocking it. Check your connection and try again.
@@ -315,7 +348,7 @@ function ServerE2eeGate({userId, workspaceId, workspaceName, deps, onResolved}: 
   }
   if (entry.kind === 'converting') {
     return (
-      <GateCard title={`${name} is being encrypted`}>
+      <GateCard title={`${name} is being encrypted`} footer={footer}>
         <Explanation>
           {entry.owned ? 'You are' : 'Its owner is'} converting it to end-to-end encryption. It
           stays closed on this device until that's done. Changes made here meanwhile wait on this
@@ -336,7 +369,7 @@ function ServerE2eeGate({userId, workspaceId, workspaceName, deps, onResolved}: 
   }
   if (entry.kind === 'copied-ciphertext') {
     return (
-      <GateCard title={`This device needs a reset for ${inlineName}`}>
+      <GateCard title={`This device needs a reset for ${inlineName}`} footer={footer}>
         <Explanation>
           An older version of the app copied encrypted data into this device's local copy of
           the workspace, and unlocking can't repair it. Make sure every change on this device
@@ -347,7 +380,7 @@ function ServerE2eeGate({userId, workspaceId, workspaceName, deps, onResolved}: 
     )
   }
   return (
-    <GateCard title={`${name} is now end-to-end encrypted`}>
+    <GateCard title={`${name} is now end-to-end encrypted`} footer={footer}>
       <Explanation>
         Paste the workspace key you saved (or were sent) to unlock it on this device. It stays
         on this device only.
@@ -371,6 +404,7 @@ function ServerE2eeGate({userId, workspaceId, workspaceName, deps, onResolved}: 
       )}
       <KeyInput
         busy={busy}
+        unlocking={busy}
         error={error}
         pasted={pasted}
         onChange={setPasted}
@@ -384,16 +418,18 @@ function ServerE2eeGate({userId, workspaceId, workspaceName, deps, onResolved}: 
           Unlock with the key saved on this device
         </Button>
       )}
+      {tracked.progress && !error && <UnlockProgress progress={tracked.progress}/>}
     </GateCard>
   )
 }
 
 /** A pin upgrade a crash interrupted after its marker: finish it — upgrade the
  *  pin if it hadn't moved, drain, clear the marker — then re-resolve. */
-function FinishingUpgradeGate({userId, workspaceId, workspaceName, deps, onResolved}: Props) {
+function FinishingUpgradeGate({userId, workspaceId, workspaceName, deps: gateDeps, onResolved, footer}: Props) {
   const [error, setError] = useState<string | null>(null)
   const [attempt, setAttempt] = useState(0)
   const started = useRef(-1)
+  const {deps, progress} = useTrackedDrain(gateDeps)
 
   useEffect(() => {
     if (started.current === attempt) return
@@ -416,8 +452,9 @@ function FinishingUpgradeGate({userId, workspaceId, workspaceName, deps, onResol
   }, [userId, workspaceId, deps, onResolved, attempt])
 
   return (
-    <GateCard title={`Finishing unlocking ${displayName(workspaceName, 'inline')}…`}>
-      <Explanation>Decrypting this workspace on this device. This can take a while for a large workspace.</Explanation>
+    <GateCard title={`Finishing unlocking ${displayName(workspaceName, 'inline')}…`} footer={footer}>
+      <Explanation>Decrypting this workspace on this device.</Explanation>
+      {progress && !error && <UnlockProgress progress={progress}/>}
       {error && (
         <>
           <p className="text-sm text-destructive">{error}</p>

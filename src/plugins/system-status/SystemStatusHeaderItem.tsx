@@ -22,9 +22,9 @@ import {
   type SyncIndicatorIcon,
   type SyncIndicatorTone,
 } from './model.ts'
+import { MATERIALIZE_QUEUE_COUNT_SQL } from '@/data/internals/syncObserver/observer.js'
 import {
   formatPendingChanges,
-  materializeQueueCountSql,
   uploadQueueCountCap,
   uploadQueueExactCountSql,
   uploadQueuePreviewCountSql,
@@ -219,7 +219,7 @@ function RemoteSyncStatusHeaderContent({
   // queue mutates every drain window, so watch it throttled like the upload
   // preview; it counts down to 0 as the backlog materializes.
   const materializeQueue = useQuery<UploadQueueCountRow>(
-    materializeQueueCountSql,
+    MATERIALIZE_QUEUE_COUNT_SQL,
     [],
     {
       reportFetching: false,

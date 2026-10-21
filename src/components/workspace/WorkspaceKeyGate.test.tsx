@@ -10,6 +10,24 @@ import type { WorkspaceConversionState } from '@/sync/keys/conversionState'
 import { mintCanary } from '@/sync/crypto/canary'
 import { deriveContentKeyHmac } from '@/sync/crypto/contentKey'
 import { formatWorkspaceKey, generateWorkspaceKeyBytes, importWorkspaceKey } from '@/sync/crypto/workspaceKey'
+import { MATERIALIZE_QUEUE_COUNT_SQL } from '@/data/internals/syncObserver/observer'
+import type { RematerializeProgressListener } from '@/data/internals/syncObserver/observer'
+
+// What the unlock progress reads of the device's sync: PowerSync's status and
+// the observer's apply backlog.
+const sync = vi.hoisted(() => ({
+  downloading: false,
+  downloadedFraction: null as number | null,
+  backlog: 0,
+}))
+
+vi.mock('@powersync/react', () => ({
+  useStatus: () => ({
+    dataFlowStatus: {downloading: sync.downloading},
+    downloadProgress: sync.downloadedFraction === null ? null : {downloadedFraction: sync.downloadedFraction},
+  }),
+  useQuery: (sql: string) => ({data: sql === MATERIALIZE_QUEUE_COUNT_SQL ? [{count: sync.backlog}] : []}),
+}))
 
 // The confirm-plaintext branch does real async work in onResolved (the host
 // re-materializes the workspace's staged synced rows, then re-resolves to swap
@@ -64,6 +82,8 @@ describe('WorkspaceKeyGate — confirm plaintext feedback', () => {
 
     expect(onResolved).toHaveBeenCalledTimes(1)
     expect(button).toBeDisabled()
+    // Only the action that is running says so.
+    expect(screen.getByRole('button', {name: /^unlock$/i})).toBeDisabled()
 
     // A second click while the drain is in flight must not enqueue another one.
     fireEvent.click(button)
@@ -131,6 +151,102 @@ describe('WorkspaceKeyGate — drains before handing back', () => {
     await vi.waitFor(() => expect(onResolved).toHaveBeenCalled())
     expect(order).toEqual(['drain', 'resolved'])
   })
+})
+
+describe('WorkspaceKeyGate — unlock progress', () => {
+  afterEach(() => {
+    cleanup()
+    sync.downloading = false
+    sync.downloadedFraction = null
+    sync.backlog = 0
+  })
+
+  it('shows what the unlock is waiting on while the drain runs, not just a busy button', async () => {
+    window.localStorage.clear()
+    const bytes = generateWorkspaceKeyBytes()
+    const canary = await mintCanary(await importWorkspaceKey(bytes.slice()), 'w1')
+    let report!: RematerializeProgressListener
+    const finished = makeDeferred()
+    const drainWorkspace = vi.fn(async (onProgress?: RematerializeProgressListener) => {
+      report = onProgress!
+      await finished.promise
+      return {deferred: 0}
+    })
+    sync.downloading = true
+    sync.downloadedFraction = 0.45
+    sync.backlog = 12_345
+    render(
+      <WorkspaceKeyGate
+        userId="u1"
+        workspaceId="w1"
+        reason="key-required"
+        canary={canary}
+        deps={{...idleDeps, drainWorkspace}}
+        onResolved={async () => {}}
+      />,
+    )
+    fireEvent.change(screen.getByLabelText(/workspace key/i), {target: {value: formatWorkspaceKey(bytes)}})
+    fireEvent.click(screen.getByRole('button', {name: /^unlock$/i}))
+
+    const progress = await screen.findByRole('status')
+    expect(progress).toHaveTextContent(/45%/)
+    expect(progress).toHaveTextContent(/12,345/)
+    expect(progress).toHaveTextContent(/waiting/i)
+
+    act(() => report({done: 1_000, total: 4_000}))
+    expect(progress).toHaveTextContent(/1,000 of 4,000/)
+  })
+
+  it('hides the progress once the drain fails, leaving the error', async () => {
+    window.localStorage.clear()
+    const failed = makeDeferred()
+    const drainWorkspace = vi.fn(async () => {
+      await failed.promise
+      return {deferred: 0}
+    })
+    render(
+      <WorkspaceKeyGate
+        userId="u1"
+        workspaceId="w1"
+        reason="quarantine"
+        canary={null}
+        deps={{...idleDeps, drainWorkspace}}
+        onResolved={async () => {}}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', {name: /this workspace is not encrypted/i}))
+    expect(await screen.findByRole('status')).toBeInTheDocument()
+
+    await act(async () => {
+      failed.reject(new Error('drain blew up'))
+      await failed.promise.catch(() => {})
+    })
+    expect(screen.getByText('drain blew up')).toBeInTheDocument()
+    expect(screen.queryByRole('status')).toBeNull()
+  })
+})
+
+describe('WorkspaceKeyGate — footer', () => {
+  afterEach(() => cleanup())
+
+  it.each(['key-required', 'quarantine', 'server-e2ee', 'finishing-upgrade'] as const)(
+    'offers the host footer on the %s gate',
+    async reason => {
+      window.localStorage.clear()
+      render(
+        <WorkspaceKeyGate
+          userId="u1"
+          workspaceId="w1"
+          reason={reason}
+          canary={null}
+          deps={{...idleDeps, drainWorkspace: () => new Promise(() => {})}}
+          onResolved={async () => {}}
+          footer={<button type="button">Workspace settings</button>}
+        />,
+      )
+      expect(await screen.findByRole('button', {name: 'Workspace settings'})).toBeInTheDocument()
+    },
+  )
 })
 
 // The server says e2ee while this device's pin doesn't (docs/workspace-e2ee-conversion.md §6.2).

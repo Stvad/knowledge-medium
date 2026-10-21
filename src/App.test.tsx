@@ -63,6 +63,12 @@ vi.mock('react-use', () => ({
   useSearchParam: () => null,
 }))
 
+// The gate's footer (workspace menu + settings) reads the workspace list and
+// the hash, which this file doesn't mock; it isn't what these tests are about.
+vi.mock('@/components/workspace/WorkspaceSwitcher.js', () => ({
+  WorkspaceGateActions: () => null,
+}))
+
 // AppRuntimeProvider pulls in the full extension-resolution machinery
 // (staticAppExtensions, dynamic-extension loading, localStorage-backed
 // overrides). That's the exact kind of thing this test isn't about — swap it

@@ -19,6 +19,7 @@ import { useMyWorkspaceRoles } from '@/hooks/useWorkspaces.js'
 import { hasSafeModeSearchParam } from '@/utils/safeMode.js'
 import { LayoutRootContext } from '@/components/renderer/layoutRootContext.js'
 import { WorkspaceKeyGate, workspaceGateDeps } from '@/components/workspace/WorkspaceKeyGate.js'
+import { WorkspaceGateActions } from '@/components/workspace/WorkspaceSwitcher.js'
 import { useCloseOnServerE2ee } from '@/components/workspace/useCloseOnServerE2ee.js'
 import { useCloseOnKeyLoss } from '@/components/workspace/useCloseOnKeyLoss.js'
 import { markStartup } from '@/utils/startupTimeline.js'
@@ -161,6 +162,7 @@ const App = () => {
         // than racing it.
         deps={gateDeps}
         onResolved={reResolve}
+        footer={<WorkspaceGateActions/>}
       />
     )
   }

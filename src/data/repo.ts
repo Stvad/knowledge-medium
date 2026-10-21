@@ -91,6 +91,7 @@ import {
   startBlocksSyncedObserver,
   type BlocksSyncedObserver,
   type BlocksSyncedObserverArgs,
+  type RematerializeProgressListener,
   type RematerializeReport,
   type RematerializeScope,
 } from '@/data/internals/syncObserver/observer'
@@ -1349,8 +1350,11 @@ export class Repo {
    *  every shape a test can build), which is why it is written here.
    *
    *  Returns the pass's report, or null when no observer is running. */
-  async drainSyncWorkspace(workspaceId: string): Promise<RematerializeReport | null> {
-    return this.syncObserver ? this.syncObserver.drainWorkspace(workspaceId, 'all') : null
+  async drainSyncWorkspace(
+    workspaceId: string,
+    onProgress?: RematerializeProgressListener,
+  ): Promise<RematerializeReport | null> {
+    return this.syncObserver ? this.syncObserver.drainWorkspace(workspaceId, 'all', onProgress) : null
   }
 
   /** Frozen snapshot of internal data-layer counters + timings

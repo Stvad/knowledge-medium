@@ -66,6 +66,11 @@ const DEFAULT_THROTTLE_MS = 100
  *  resumes from the last committed window instead of restarting from zero. */
 const DEFAULT_DRAIN_CHUNK = 1000
 
+/** The device's materialization backlog: staged changes the drain hasn't
+ *  applied to `blocks` yet. Counts down to 0 as the drain catches up; a plain
+ *  single-table COUNT(*), cheap even at a large initial-sync backlog. */
+export const MATERIALIZE_QUEUE_COUNT_SQL = 'SELECT COUNT(*) AS count FROM blocks_synced_changes'
+
 export interface BlocksSyncedObserverArgs {
   readonly db: PowerSyncDb
   readonly cache: SyncCache
@@ -134,6 +139,15 @@ export interface RematerializeReport {
   readonly reflagged: number
 }
 
+/** How far a {@link BlocksSyncedObserver.drainWorkspace} pass has got: `done`
+ *  of the `total` staged rows its id set holds. */
+export interface RematerializeProgress {
+  readonly done: number
+  readonly total: number
+}
+
+export type RematerializeProgressListener = (progress: RematerializeProgress) => void
+
 export interface BlocksSyncedObserver {
   /** Drain the pending queue once. Awaitable settle barrier (awaits every
    *  drain enqueued before it). */
@@ -145,8 +159,13 @@ export interface BlocksSyncedObserver {
    *  separate healing mode.
    *
    *  REJECTS if the pass did not finish — see {@link startBlocksSyncedObserver}'s
-   *  enqueue. */
-  drainWorkspace(workspaceId: string, scope: RematerializeScope): Promise<RematerializeReport>
+   *  enqueue. `onProgress` hears nothing while the pass waits its turn on the
+   *  chain, then once with `done: 0` and after every committed window. */
+  drainWorkspace(
+    workspaceId: string,
+    scope: RematerializeScope,
+    onProgress?: RematerializeProgressListener,
+  ): Promise<RematerializeReport>
   /** Is a {@link drainWorkspace} pass for `workspaceId` outstanding (running OR
    *  queued behind another unit)? The one thing a reader cannot learn from the
    *  queue: that path rewrites `blocks` straight from `blocks_synced` and
@@ -311,6 +330,7 @@ export const startBlocksSyncedObserver = (
   const materializeWorkspace = async (
     workspaceId: string,
     scope: RematerializeScope,
+    onProgress: RematerializeProgressListener | undefined,
   ): Promise<RematerializeReport> => {
     if (disposed) throw disposedMidDrain()
     // The id set is read ONCE, before the first window. A delivery that lands
@@ -326,11 +346,14 @@ export const startBlocksSyncedObserver = (
     const totals = {
       applied: 0, deferred: 0, skippedStale: 0, quarantined: 0, resolved: 0, reflagged: 0,
     }
+    onProgress?.({ done: 0, total: ids.length })
     // Same bounded windows as the queue drain; a re-invocation resumes because
     // already-materialized rows LWW-skip.
     for (let i = 0; i < ids.length; i += drainChunk) {
       if (disposed) throw disposedMidDrain()
-      const outcome = await applyWindow(ids.slice(i, i + drainChunk), [])
+      const batch = ids.slice(i, i + drainChunk)
+      const outcome = await applyWindow(batch, [])
+      onProgress?.({ done: i + batch.length, total: ids.length })
       totals.applied += outcome.applied.length
       totals.deferred += outcome.deferred.length
       totals.skippedStale += outcome.skippedStale.length
@@ -383,6 +406,7 @@ export const startBlocksSyncedObserver = (
     // defaults to 'unapplied' — so a reader who learned one would have the
     // other wrong.
     scope: RematerializeScope,
+    onProgress?: RematerializeProgressListener,
   ): Promise<RematerializeReport> => {
     // Counted from ENQUEUE rather than from the first window: a rescan waiting
     // its turn on the chain will still rewrite `blocks` with nothing in the
@@ -396,7 +420,7 @@ export const startBlocksSyncedObserver = (
     const bump = (by: number) =>
       workspaceRescans.set(workspaceId, (workspaceRescans.get(workspaceId) ?? 0) + by)
     bump(1)
-    const done = enqueue(() => materializeWorkspace(workspaceId, scope))
+    const done = enqueue(() => materializeWorkspace(workspaceId, scope, onProgress))
     void done.finally(() => bump(-1)).catch(() => {})
     return done
   }
