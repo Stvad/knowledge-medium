@@ -1,1 +1,0 @@
-import{FP as e,IP as t}from"../../chunks/app-6w_nX4Fa.js";export{e as defineVariant,t as defineVariantFacet};
